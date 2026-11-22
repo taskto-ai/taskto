@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -565,6 +566,14 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 			return ErrStale
 		}
 		if ch.Definition != nil {
+			// A new collection is checked against every row, and its refusal names the rows
+			// and why they don't fit: tightening a field's bounds, again and again, would read
+			// its values out. So only who reads all the records may change the collection;
+			// the screen, actions and summaries are design alone (an unchanged collection
+			// always fits).
+			if !sameCollection(cur.Definition.Collection, checked.Collection) && acc.ReadRecords != access.ScopeAll {
+				return forbidden(capReadRecords)
+			}
 			if err := rowsFit(ctx, tx, appID, checked.Collection); err != nil {
 				return err
 			}
@@ -591,6 +600,13 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		return App{}, err
 	}
 	return updated, nil
+}
+
+// sameCollection reports whether two collections are the same, field for field.
+func sameCollection(a, b Collection) bool {
+	x, errA := json.Marshal(a)
+	y, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(x, y)
 }
 
 // rowsFit checks every row of appID against a new collection, so changing an app's

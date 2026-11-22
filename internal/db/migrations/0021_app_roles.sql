@@ -29,3 +29,23 @@ CREATE INDEX app_roles_by_user ON app_roles (user_id) WHERE user_id IS NOT NULL;
 
 -- Reading only one's own records filters an app's rows by their creator.
 CREATE INDEX app_rows_by_creator ON app_rows (app_id, created_by);
+
+-- Roles are given to members of the app's space, for that space. Someone who leaves the
+-- space (removed, or leaving the workspace, whose trigger removes their space memberships)
+-- loses their roles in its apps, so rejoining later, or the app moving to a space they are
+-- in, never brings back what they had.
+CREATE TRIGGER space_members_leave_app_roles
+AFTER DELETE ON space_members
+BEGIN
+    DELETE FROM app_roles
+    WHERE user_id = OLD.user_id AND app_id IN (SELECT id FROM apps WHERE space_id = OLD.space_id);
+END;
+
+-- An app moved to another space leaves its roles behind: they were set for the old space's
+-- members, and the new space's access decides until someone sets roles there.
+CREATE TRIGGER apps_move_drops_roles
+AFTER UPDATE OF space_id ON apps
+WHEN OLD.space_id IS NOT NEW.space_id
+BEGIN
+    DELETE FROM app_roles WHERE app_id = NEW.id;
+END;

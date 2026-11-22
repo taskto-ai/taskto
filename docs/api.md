@@ -1337,7 +1337,9 @@ own. Once an app has **any** assignment it is restricted for everyone: a member 
 own roles, else the default's, else **none**, and then the app answers them `404` and is left
 out of their list, like an app of a space they can't open. So restricting an app never leaves
 someone it doesn't name (a member who joins the space later included) with every role. The agent acts as the user who started it, with
-exactly their roles; it has no tool to set roles, and a definition grants none.
+exactly their roles; it has no tool to set roles, and a definition grants none. Roles
+belong to the space they were set in: someone who leaves the space (or the workspace) loses
+their roles in its apps, so rejoining gives back nothing.
 
 An app as one caller sees it has `access`, what they may do:
 
@@ -1447,7 +1449,10 @@ The app, with its definition.
 ### `PATCH …/apps/{app}`
 
 Writers. With the `version`: `name` renames it and `definition` replaces its screen,
-collection, actions and summaries (these take the design capability), `archived` takes it
+collection, actions and summaries (these take the design capability; changing the
+collection also takes reading all records, `403 app_forbidden` with `read_records`
+otherwise, since its check against every row would tell of rows the caller can't read),
+`archived` takes it
 offline (`true`) or restores it (`false`; the publish capability). A new definition must fit the app's rows: every row must still satisfy the
 collection (`400` otherwise, naming the rows), so new fields are added as optional.
 Fields no longer declared stay in the rows, unseen, and come back if declared again.
@@ -1455,8 +1460,9 @@ Fields no longer declared stay in the rows, unseen, and come back if declared ag
 
 ### `POST …/apps/{app}/move`
 
-Writers of both spaces, with the design capability in the app. Its role assignments move
-with it. `{"version": 1, "space_id": 7}`: moves the app, with its rows,
+Writers of both spaces, with the design capability in the app. Its role assignments stay
+behind: they were set for the old space's members, so the moved app is unrestricted until
+roles are set in the new space. `{"version": 1, "space_id": 7}`: moves the app, with its rows,
 to another space of the workspace the caller may write (`404` for one they can't read or
 of another workspace, `403` for one they may only read). `200` with the app.
 

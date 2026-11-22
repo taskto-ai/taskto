@@ -3,6 +3,7 @@ package apps
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -507,5 +508,79 @@ func TestUnnamedMembersOfARestrictedAppSeeNothing(t *testing.T) {
 	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder), fallback(access.AppReader))
 	if got := w.view(w.bob, s, a).Access; !got.View || got.ReadRecords != access.ScopeAll || got.Submit {
 		t.Fatalf("bob with the default = %+v", got)
+	}
+}
+
+// A builder who can't read the records can't change the collection: its check against every
+// row would name the rows that don't fit, and a bound tightened again and again would read
+// their values out. The rest of the definition stays theirs to change.
+func TestBuilderWithoutDataCantProbeRowsThroughTheCollection(t *testing.T) {
+	w := newWorld(t)
+	s, a := w.shared, w.sharedApp
+	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder))
+	cur := w.view(w.alice, s, a)
+	if cur.Access.ReadRecords != access.ScopeNone {
+		t.Fatalf("builder reads %s", cur.Access.ReadRecords)
+	}
+	patch := func(def *Definition) *httptest.ResponseRecorder {
+		return w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": cur.Version, "definition": def})
+	}
+	// "team-lunch" has amount 3: a max of 1 would not fit it.
+	tight := *cur.Definition
+	tight.Collection.Fields = append([]Field(nil), cur.Definition.Collection.Fields...)
+	one := 1.0
+	for i := range tight.Collection.Fields {
+		if tight.Collection.Fields[i].Name == "amount" {
+			tight.Collection.Fields[i].Max = &one
+		}
+	}
+	rec := patch(&tight)
+	expectForbidden(t, rec, "read_records")
+	if strings.Contains(rec.Body.String(), "row") {
+		t.Fatalf("the refusal tells of rows: %s", rec.Body)
+	}
+	// The same collection: allowed, and nothing to tell.
+	expect(t, patch(cur.Definition), http.StatusOK)
+	// With the data, the collection is theirs to change, and its check is theirs to see.
+	cur = w.view(w.alice, s, a)
+	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder, access.AppDataManager))
+	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": cur.Version, "definition": &tight}), http.StatusBadRequest)
+}
+
+// Roles are for members of the app's space: leaving it drops them, so rejoining, or the app
+// moving to a space where they are, gives back nothing; and a moved app leaves its roles.
+func TestRolesDontOutliveTheSpaceTheyWereSetIn(t *testing.T) {
+	w := newWorld(t)
+	s, a := w.shared, w.sharedApp
+	w.e.addMember(w.owner, s, w.mallory, access.RoleEditor)
+	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppRoles...), grant(w.mallory.id, access.AppDataManager))
+	roleRows := func() (n int) {
+		t.Helper()
+		if err := w.e.db.QueryRow(`SELECT count(*) FROM app_roles WHERE app_id = ? AND user_id = ?`, a.ID, w.mallory.id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", s.WorkspaceID, s.ID, w.mallory.id), nil), http.StatusNoContent)
+	if n := roleRows(); n != 0 {
+		t.Fatalf("Mallory kept %d roles after leaving the space", n)
+	}
+	// Back as a viewer: no role of his own, and the app is restricted, so he doesn't see it.
+	w.e.addMember(w.owner, s, w.mallory, access.RoleViewer)
+	expect(t, w.mallory.do(http.MethodGet, appPath(s, a.ID, ""), nil), http.StatusNotFound)
+
+	// A moved app leaves its roles behind; the new space's access decides.
+	dest := w.e.createShared(w.owner, w.ws, "Elsewhere team")
+	w.e.addMember(w.owner, dest, w.alice, access.RoleEditor)
+	w.e.addMember(w.owner, dest, w.mallory, access.RoleViewer)
+	cur := w.view(w.alice, s, a)
+	rec := w.alice.do(http.MethodPost, appPath(s, a.ID, "/move"), map[string]any{"version": cur.Version, "space_id": dest.ID})
+	expect(t, rec, http.StatusOK)
+	var n int
+	if err := w.e.db.QueryRow(`SELECT count(*) FROM app_roles WHERE app_id = ?`, a.ID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("a moved app kept %d roles (%v)", n, err)
+	}
+	if got := w.view(w.mallory, dest, a).Access; got.Restricted || got.ModifyRecords != access.ScopeNone {
+		t.Fatalf("Mallory in the new space = %+v; want a viewer's access", got)
 	}
 }
