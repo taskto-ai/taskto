@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -74,6 +75,12 @@ type helperRequest struct {
 // RunHelper is the helper's main: call it when os.Args[1] is HelperArg, and exit with what
 // it returns. An exec never returns: the CLI has taken the process over.
 func RunHelper() int {
+	// no_new_privs (unprivileged) is a property of the OS thread that sets it, and the program
+	// exec'd gets the attributes of the thread that calls execve. Without this lock the
+	// goroutine may move to another thread between the two (the helper does file I/O in
+	// between), and the CLI or browser would then run without no_new_privs. Never unlocked:
+	// the exec replaces the process, and an error ends it.
+	runtime.LockOSThread()
 	if err := runHelper(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "cli-helper:", err)
 		return 2
