@@ -140,13 +140,35 @@ export type Card = {
   updated_by: Author
 }
 
+// The roles of an app, inside its space: who may build, publish and use it, and read its records.
+export type AppRole = 'builder' | 'publisher' | 'user' | 'data_manager' | 'reader'
+export type RecordScope = 'none' | 'own' | 'all'
+
+// What the caller may do in an app (the server works it out: the space's rules, then the roles).
+export type AppAccess = {
+  roles: AppRole[]
+  restricted: boolean
+  view: boolean
+  design: boolean
+  publish: boolean
+  submit: boolean
+  manage_roles: boolean
+  read_records: RecordScope
+  modify_records: RecordScope
+}
+
+// Roles of one user (or, with a null user_id, of every member without roles of their own).
+export type AppGrant = { user_id: number | null; roles: AppRole[] }
+
 export type App = {
   id: number
   space_id: number
   name: string
   archived_at: string | null
   version: number
+  // Rows the caller may read.
   rows: number
+  access: AppAccess
 }
 
 export type Comment = { id: number; card_id: number; author: Author; body: string; created_at: string }

@@ -1188,6 +1188,20 @@ button.tt-card[aria-current] {
   gap: 0.4rem;
 }
 
+.tt-app-roles {
+  flex-basis: 100%;
+  display: grid;
+  gap: 0.5rem;
+  overflow-x: auto;
+}
+
+.tt-app-roles th,
+.tt-app-roles td {
+  padding-block: 0.15rem;
+  padding-inline: 0.4rem;
+  text-align: start;
+}
+
 .tt-app-rename {
   flex: 1;
 }
