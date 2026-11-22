@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit's pull request reviews (free for public repositories). Reviews are in English,
+# like the code and docs; translations are reviewed too, lock files aren't.
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  path_filters:
+    - "!pnpm-lock.yaml"
+    - "!go.sum"
+    - "!tools/go.sum"
+  auto_review:
+    enabled: true
+    drafts: false
+chat:
+  auto_reply: true

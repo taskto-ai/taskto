@@ -2,7 +2,6 @@
 # data, builds and secrets.
 .git
 .github
-.forgejo
 **/node_modules
 **/dist
 !internal/webui/dist/.gitkeep

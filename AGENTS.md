@@ -137,9 +137,8 @@ installed).
 - When CI's Go job fails, its "Test results" step prints each package's result and the whole
   output of every failing test (`.github/scripts/gotest-report.go`), and the run keeps
   `go test -json`'s output as the `go-test-json` artifact for 30 days.
-- CI is `.github/workflows/`. `.forgejo/workflows/` runs the same jobs on a self-hosted
-  Forgejo; a change to one goes to the other too. Their shared scripts are in
-  `.github/scripts/`.
+- CI is `.github/workflows/`, on GitHub-hosted runners only: never a self-hosted runner,
+  since fork pull requests run there. Its scripts are in `.github/scripts/`.
 - Docs, comments and tests explain themselves inside the repository: no issue or ticket
   numbers, links to private notes, private hostnames or people's names. CI's reference
   check (`.github/scripts/refguard.go`) fails on them.

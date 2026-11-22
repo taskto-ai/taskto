@@ -1,8 +1,7 @@
 #!/bin/sh
 # Builds TaskTo.AI's three images from the Dockerfile and pushes them to a container
-# registry with immutable tags. Run by .github/workflows/images.yml (to ghcr.io) and by
-# .forgejo/workflows/images.yml (to a Forgejo's registry); see them for when, and
-# docs/install.md#prebuilt-images for how the images are used.
+# registry with immutable tags. Run by .github/workflows/images.yml (to ghcr.io); see it for
+# when, and docs/install.md#prebuilt-images for how the images are used.
 #
 #   <registry>/<owner>/taskto             the server (the Dockerfile's last stage)
 #   <registry>/<owner>/taskto-cli-worker  --target cli-worker

@@ -3,7 +3,7 @@
 # browser's code, the worker it runs in or this file change, and on demand. CI's main
 # workflow (ci.yml) runs the rest, the browser package's unit tests among them.
 #
-# The same job as .forgejo/workflows/browser.yml; keep the two in step. It runs as root in a
+# It runs as root in a
 # throwaway container on a GitHub-hosted Ubuntu runner, so the worker's browser isolation
 # test (internal/cliworker) runs too, and must actually run, not skip.
 name: Browser

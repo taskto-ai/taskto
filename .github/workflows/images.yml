@@ -14,8 +14,6 @@
 # It pushes with the workflow's own GITHUB_TOKEN (packages: write), no other secret. A new
 # package on ghcr.io starts private: after the first push, set each of the three to public
 # in its package settings, once, so installs pull them without a token.
-#
-# .forgejo/workflows/images.yml is the same job for a Forgejo's registry.
 name: Images
 
 on:
@@ -36,10 +34,10 @@ on:
 permissions:
   contents: read
 
-# Unlike the Forgejo workflow, a fork's pull request builds too: the build runs the
-# Dockerfile's RUN steps, which on a self-hosted runner would be the fork's code on a shared
-# Docker daemon, but here it is a throwaway GitHub-hosted VM, and a pull request never gets a
-# token that can push (REGISTRY_TOKEN is empty for it, below).
+# A fork's pull request builds too: the build runs the Dockerfile's RUN steps, which is
+# safe on a throwaway GitHub-hosted VM (never run this on a self-hosted runner, where it would
+# be the fork's code on a shared Docker daemon), and a pull request never gets a token that
+# can push (REGISTRY_TOKEN is empty for it, below).
 jobs:
   images:
     name: Images (build, push on main and tags)
