@@ -81,12 +81,19 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
     void setPreferences({ workspace: workspaceLocale })
   }, [workspaceLocale])
   // A page picked in the drawer closes it, and focus goes to the page, since the link that
-  // had it is hidden with the drawer.
+  // had it is hidden with the drawer. The page is inert while the drawer is open, and an inert
+  // element can't take focus: it is focused once the drawer has closed (the effect below).
+  const focusPage = useRef(false)
   // biome-ignore lint/correctness/useExhaustiveDependencies: closes on every path change
   useEffect(() => {
-    if (drawerOpen.current) main.current?.focus({ preventScroll: true })
+    if (drawerOpen.current) focusPage.current = true
     setDrawer(false)
   }, [path])
+  useEffect(() => {
+    if (drawer || !focusPage.current) return
+    focusPage.current = false
+    main.current?.focus({ preventScroll: true })
+  }, [drawer])
   // An open drawer takes focus, Escape closes it and gives focus back to its button.
   useEffect(() => {
     if (!drawer) return

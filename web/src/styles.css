@@ -359,14 +359,20 @@ textarea {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  /* env()'s insets are the screen's left and right whatever the language's direction: a
-     notch in landscape. */
+  /* env()'s insets are the screen's left and right whatever the language's direction (a
+     notch in landscape), so these are physical, with the start and end padding swapped for
+     right-to-left below. */
   padding-block-start: env(safe-area-inset-top);
-  padding-inline-start: max(0.75rem, env(safe-area-inset-left));
-  padding-inline-end: max(0.5rem, env(safe-area-inset-right));
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+  padding-right: max(0.5rem, env(safe-area-inset-right));
   background: var(--tt-bar);
   color: var(--tt-on-bar);
   min-width: 0;
+}
+
+[dir="rtl"] .tt-topbar {
+  padding-left: max(0.5rem, env(safe-area-inset-left));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
 }
 
 .tt-topbar select {

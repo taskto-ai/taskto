@@ -361,8 +361,18 @@ test('picking a page in the drawer moves focus to the page', async () => {
   await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull())
   await screen.findByText('Pick a conversation, or start a new one.')
   fireEvent.click(screen.getByRole('button', { name: 'Open the menu' }))
+  // jsdom doesn't make inert elements unfocusable, as browsers do: check the page isn't inert
+  // when it is focused.
+  const real = HTMLElement.prototype.focus
+  const inertWhenFocused: boolean[] = []
+  const focus = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options) {
+    if (this.tagName === 'MAIN') inertWhenFocused.push(this.hasAttribute('inert'))
+    real.call(this, options)
+  })
   fireEvent.click(within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('link', { name: 'Boards' }))
   await waitFor(() => expect(document.activeElement).toBe(container.querySelector('main')))
+  expect(inertWhenFocused).toEqual([false])
+  focus.mockRestore()
 })
 
 test('the skip link is the first stop and moves focus to the page', async () => {

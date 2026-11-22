@@ -120,14 +120,31 @@ test('an update waits: it does not take over by itself, and does when asked', as
   expect(sw.self.skipWaiting).toHaveBeenCalledOnce()
 })
 
-test('activate keeps this version and the previous one, drops older ones, and claims', async () => {
+test('activate keeps this version and the previous active one, drops older ones, and claims', async () => {
   const caches = new FakeCaches()
-  for (const old of ['taskto-shell-v0', 'taskto-shell-v1', 'other-app-cache']) await caches.open(old)
+  for (const old of ['taskto-shell-v0', 'taskto-shell-v1']) {
+    await (await caches.open(old)).put('/__taskto-activated', new Response(''))
+  }
+  await caches.open('other-app-cache')
   const v2 = boot('v2', undefined, caches)
   await caches.open('taskto-shell-v2')
   await v2.dispatchWait('activate')
   expect(await caches.keys()).toEqual(['taskto-shell-v1', 'other-app-cache', 'taskto-shell-v2'])
   expect(v2.self.clients.claim).toHaveBeenCalled()
+})
+
+test('two deploys before an update: the version tabs still run keeps its cache', async () => {
+  const caches = new FakeCaches()
+  // v1 is active, with tabs open; v2 installed and waited, then v3 installed over it.
+  await (await caches.open('taskto-shell-v1')).put('/__taskto-activated', new Response(''))
+  await (await caches.open('taskto-shell-v1')).put('/assets/Apps-v1.js', new Response('v1 chunk'))
+  await caches.open('taskto-shell-v2')
+  const v3 = boot('v3', async () => new Response('missing', { status: 404 }), caches)
+  await caches.open('taskto-shell-v3')
+  await v3.dispatchWait('activate')
+  expect(await caches.keys()).toEqual(['taskto-shell-v1', 'taskto-shell-v3'])
+  // A v1 tab, now controlled by v3, still gets its lazy chunk.
+  expect(await text(await v3.request('/assets/Apps-v1.js'))).toBe('v1 chunk')
 })
 
 test('precached files are answered from the cache, and an old tab still gets its old chunks', async () => {

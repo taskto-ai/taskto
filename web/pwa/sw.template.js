@@ -61,13 +61,23 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(cleanUp())
 })
 
-// Keeps this version's cache and the one before it. Another tab may still run the previous
-// version's page, which loads its lazy chunks by their old names: they stay answerable.
+// Marks a cache whose version has been active: only such a version can have pages open.
+const ACTIVATED = '/__taskto-activated'
+
+// Keeps this version's cache and that of the last version that was active before it.
+// Another tab may still run that version's page, which loads its lazy chunks by their old
+// names: they stay answerable. A version that installed but never took over (a second deploy
+// came before anyone updated) has no page open anywhere, and its cache goes; keeping it in
+// place of the active one would break the open tabs' lazy chunks.
 async function cleanUp() {
+  await (await caches.open(CACHE)).put(ACTIVATED, new Response(''))
   const ours = (await caches.keys()).filter((k) => k.startsWith(PREFIX))
-  // Caches come back in the order they were created.
-  const previous = ours.filter((k) => k !== CACHE).slice(-1)
-  await Promise.all(ours.filter((k) => k !== CACHE && !previous.includes(k)).map((k) => caches.delete(k)))
+  // Caches come back in the order they were created: the last activated one before ours.
+  let previous = null
+  for (const k of ours) {
+    if (k !== CACHE && (await (await caches.open(k)).match(ACTIVATED))) previous = k
+  }
+  await Promise.all(ours.filter((k) => k !== CACHE && k !== previous).map((k) => caches.delete(k)))
   // The first install takes over the page that registered it, so it works offline at once.
   // An update never gets here before the page asked for it (see "message").
   await self.clients.claim()
