@@ -25,16 +25,16 @@ import (
 // The agent browser inside the container mode's OS boundary (docs/agent-browser.md): each
 // user's Xvfb, Chromium and x11vnc run as their own Unix user, and another user's process can
 // reach none of it. These need root and the programs: CI's browser job (browser.yml) runs
-// them; without the programs they are skipped, unless TASKTO_BROWSER_IT=1.
+// them; they run only with TASKTO_BROWSER_IT=1.
 
 func browserBins(t *testing.T) map[browser.Program]string {
 	t.Helper()
+	if os.Getenv("TASKTO_BROWSER_IT") != "1" {
+		t.Skip("a real browser test: set TASKTO_BROWSER_IT=1 to run it")
+	}
 	bins := browser.FindBins("")
 	if bins[browser.Chromium] == "" || bins[browser.Xvfb] == "" || bins[browser.X11vnc] == "" {
-		if os.Getenv("TASKTO_BROWSER_IT") == "1" {
-			t.Fatalf("TASKTO_BROWSER_IT=1 but the browser's programs aren't all installed: %v", bins)
-		}
-		t.Skip("Chromium, Xvfb or x11vnc isn't installed (TASKTO_BROWSER_IT=1 makes this a failure)")
+		t.Fatalf("TASKTO_BROWSER_IT=1 but the browser's programs aren't all installed: %v", bins)
 	}
 	return bins
 }

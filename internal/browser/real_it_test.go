@@ -17,19 +17,19 @@ import (
 )
 
 // These tests drive a real Chromium (and, for the personal browser, Xvfb and x11vnc) against
-// local test pages, a fake login page among them: no real site, no real account. They are
-// skipped where the programs aren't installed, unless TASKTO_BROWSER_IT=1, which CI's browser
-// job sets so they must run. TASKTO_BROWSER_CHROMIUM names another Chromium (or Chrome).
+// local test pages, a fake login page among them: no real site, no real account. They run
+// only with TASKTO_BROWSER_IT=1, which CI's browser job sets, and then must not be skipped: a
+// Chromium found on the PATH elsewhere (a CI image's, whose sandbox the host may block) is
+// no reason to run them. TASKTO_BROWSER_CHROMIUM names another Chromium (or Chrome).
 
 func realHost(t *testing.T, needDisplay bool) *LocalHost {
 	t.Helper()
+	if os.Getenv("TASKTO_BROWSER_IT") != "1" {
+		t.Skip("a real browser test: set TASKTO_BROWSER_IT=1 to run it")
+	}
 	bins := FindBins(os.Getenv("TASKTO_BROWSER_CHROMIUM"))
-	missing := bins[Chromium] == "" || (needDisplay && (bins[Xvfb] == "" || bins[X11vnc] == ""))
-	if missing {
-		if os.Getenv("TASKTO_BROWSER_IT") == "1" {
-			t.Fatalf("TASKTO_BROWSER_IT=1 but the programs aren't all installed: %v", bins)
-		}
-		t.Skip("Chromium, Xvfb or x11vnc isn't installed (TASKTO_BROWSER_IT=1 makes this a failure)")
+	if bins[Chromium] == "" || (needDisplay && (bins[Xvfb] == "" || bins[X11vnc] == "")) {
+		t.Fatalf("TASKTO_BROWSER_IT=1 but the programs aren't all installed: %v", bins)
 	}
 	return &LocalHost{Root: t.TempDir(), Bins: bins, Path: os.Getenv("PATH")}
 }
