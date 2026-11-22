@@ -9,6 +9,7 @@ import { BoardsPage } from '../boards/BoardsPage'
 import { ConversationsPage } from '../conversations/ConversationsPage'
 import { automaticLocale, type Key, LOCALES, localeName, setPreferences, type T, useLocale, useT } from '../i18n'
 import { KnowledgePage } from '../knowledge/KnowledgePage'
+import { useInstall } from '../pwa/install'
 import { Link, navigate, parseRoute, type Route, routePath, type Section, usePath } from '../router'
 import { SettingsPage } from '../settings/SettingsPage'
 import { type Theme, useTheme } from '../theme'
@@ -58,6 +59,11 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
         ? { workspace: fallback.id, section: parsed?.section ?? 'conversations' }
         : null
   const [drawer, setDrawer] = useState(false)
+  const drawerOpen = useRef(false)
+  drawerOpen.current = drawer
+  const menuButton = useRef<HTMLButtonElement>(null)
+  const sidebar = useRef<HTMLElement>(null)
+  const main = useRef<HTMLElement>(null)
   const [theme, setTheme] = useTheme()
   const t = useT()
 
@@ -74,9 +80,25 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   useEffect(() => {
     void setPreferences({ workspace: workspaceLocale })
   }, [workspaceLocale])
-  // A page picked in the drawer closes it.
+  // A page picked in the drawer closes it, and focus goes to the page, since the link that
+  // had it is hidden with the drawer.
   // biome-ignore lint/correctness/useExhaustiveDependencies: closes on every path change
-  useEffect(() => setDrawer(false), [path])
+  useEffect(() => {
+    if (drawerOpen.current) main.current?.focus({ preventScroll: true })
+    setDrawer(false)
+  }, [path])
+  // An open drawer takes focus, Escape closes it and gives focus back to its button.
+  useEffect(() => {
+    if (!drawer) return
+    sidebar.current?.querySelector<HTMLElement>('[aria-current="page"], a')?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setDrawer(false)
+      menuButton.current?.focus()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [drawer])
 
   if (!route) {
     return (
@@ -94,8 +116,12 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
 
   return (
     <div className="tt-shell" data-drawer={drawer ? 'open' : 'closed'}>
+      <button type="button" className="tt-skip" onClick={() => main.current?.focus()}>
+        {t('shell.skipToContent')}
+      </button>
       <header className="tt-topbar">
         <button
+          ref={menuButton}
           type="button"
           className="tt-icon-button tt-menu-button"
           aria-label={drawer ? t('shell.closeMenu') : t('shell.openMenu')}
@@ -122,11 +148,11 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
         <span className="tt-topbar-section">{section && t(section.label)}</span>
         <div className="tt-topbar-end">
           <ThemeSelect theme={theme} onChange={setTheme} t={t} />
-          <AccountMenu me={me} onLogout={onLogout} t={t} />
+          <AccountMenu me={me} workspace={workspace.id} onLogout={onLogout} t={t} />
         </div>
       </header>
       <div className="tt-body">
-        <nav id="tt-sidebar" className="tt-sidebar" aria-label={t('shell.sectionsNav')}>
+        <nav id="tt-sidebar" ref={sidebar} className="tt-sidebar" aria-label={t('shell.sectionsNav')}>
           {NAV.map((n) => (
             <Link
               key={n.section}
@@ -147,7 +173,14 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             onClick={() => setDrawer(false)}
           />
         )}
-        <main className="tt-page" key={`${workspace.id}/${route.section}`}>
+        <main
+          id="tt-main"
+          ref={main}
+          tabIndex={-1}
+          className="tt-page"
+          inert={drawer || undefined}
+          key={`${workspace.id}/${route.section}`}
+        >
           <Page route={route} me={me} workspace={workspace} />
         </main>
       </div>
@@ -193,8 +226,9 @@ function ThemeSelect({ theme, onChange, t }: { theme: Theme; onChange: (theme: T
   )
 }
 
-function AccountMenu({ me, onLogout, t }: { me: Me; onLogout: () => void; t: T }) {
+function AccountMenu({ me, workspace, onLogout, t }: { me: Me; workspace: number; onLogout: () => void; t: T }) {
   const { name, email } = me.user
+  const { installed } = useInstall()
   return (
     <details className="tt-account">
       <summary aria-label={t('shell.account', { name })}>
@@ -209,6 +243,15 @@ function AccountMenu({ me, onLogout, t }: { me: Me; onLogout: () => void; t: T }
           <span className="tt-muted">{email}</span>
         </p>
         <LanguageSelect initial={me.user.locale ?? ''} t={t} />
+        {!installed && (
+          <Link
+            className="tt-button"
+            href={routePath({ workspace, section: 'settings', item: 'about' })}
+            onClick={(e) => e.currentTarget.closest('details')?.removeAttribute('open')}
+          >
+            {t('shell.installApp')}
+          </Link>
+        )}
         <button type="button" className="tt-button" onClick={onLogout}>
           {t('shell.logOut')}
         </button>
