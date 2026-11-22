@@ -226,8 +226,8 @@ func TestCLIWorkerIsPinnedAndHardened(t *testing.T) {
 	}
 }
 
-// The CI workflows: GitHub's, and Forgejo's, which runs the same jobs.
-var ciFiles = []string{".github/workflows/ci.yml", ".forgejo/workflows/ci.yml"}
+// The CI workflows.
+var ciFiles = []string{".github/workflows/ci.yml"}
 
 // The CI job that tests backups downloads the restic the backup image has, and the
 // backup host runs the same restic for pruning: one version everywhere.

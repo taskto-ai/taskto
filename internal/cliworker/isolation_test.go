@@ -18,7 +18,7 @@ import (
 )
 
 // The container mode's OS boundary: each user's CLIs run as a Unix user of their own. These
-// tests need root on Linux (CI runs them in a container, see .forgejo/workflows/ci.yml);
+// tests need root on Linux (CI runs them in a container, see .github/workflows/ci.yml);
 // elsewhere they are skipped.
 
 const isoBase = 200000

@@ -1,7 +1,6 @@
 # CI for TaskTo.AI: the Go server, the web app and the agent runtime, plus a secret scan.
 #
-# The same jobs as .forgejo/workflows/ci.yml, on GitHub's hosted runners; keep the two in
-# step. Every job runs on a GitHub-hosted Ubuntu runner, which is a whole VM with Docker and
+# Every job runs on a GitHub-hosted Ubuntu runner, which is a whole VM with Docker and
 # passwordless sudo. Three jobs depend on that and won't run on a runner without it:
 # - cli-isolation runs the isolation tests as root in a throwaway container;
 # - worker-network needs privileged Docker: it starts a Docker-in-Docker host
@@ -151,7 +150,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The container mode's OS boundary (internal/cliworker/isolation_test.go): the tests make
       # Unix users and run the fake CLIs as them, so they need root. They run in a throwaway
-      # container, with the source piped in as on the Forgejo runners, and must actually run,
+      # container, with the source piped in, and must actually run,
       # not skip.
       - name: Isolation tests as root
         run: |
@@ -190,7 +189,7 @@ jobs:
           go-version-file: go.mod
       # The real restic and rest-server, release binaries checked against the sha256 sums
       # pinned here (from each release's SHA256SUMS). restic is the version compose.yaml's
-      # backup image has; bump them together, here and in .forgejo/workflows/ci.yml.
+      # backup image has; bump them together.
       - name: Install restic and rest-server
         run: |
           set -eu
@@ -228,9 +227,9 @@ jobs:
           fetch-depth: 0
       - name: Gitleaks
         # Pinned by tag and digest (multi-arch index) so an upstream change can't alter or
-        # compromise the scan. Bump both together, here and in .forgejo/workflows/ci.yml.
-        # The rules are .gitleaks.toml's. The source, .git included, is piped in as on the
-        # Forgejo runners (and so owned by the container's user, which git requires). The job
+        # compromise the scan. Bump both together.
+        # The rules are .gitleaks.toml's. The source, .git included, is piped in (and so
+        # owned by the container's user, which git requires). The job
         # fails unless commits were actually scanned.
         run: |
           tar -c . | docker run -i --rm --entrypoint sh \

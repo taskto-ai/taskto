@@ -94,8 +94,8 @@ docker compose up -d --no-build
 ```
 
 The images are public, so pulling needs no login. If you publish them to a private
-registry of your own instead (`.forgejo/workflows/images.yml` does that for a Forgejo
-instance), set `TASKTO_IMAGE_PREFIX` to it and `docker login` with a **read-only** token
+registry of your own instead (`.github/scripts/images.sh` builds and pushes them to any
+registry), set `TASKTO_IMAGE_PREFIX` to it and `docker login` with a **read-only** token
 before you pull.
 
 The Compose file still needs to match the image: use the `compose.yaml` of the same
