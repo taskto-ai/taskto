@@ -101,7 +101,7 @@ func TestAppWithoutRolesIsAsTheSpaceAllows(t *testing.T) {
 func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 	w := newWorld(t)
 	s, a := w.shared, w.sharedApp
-	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppUser))
+	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppUser), grant(w.alice.id, access.AppRoles...))
 
 	got := w.view(w.owner, s, a)
 	if x := got.Access; !x.Restricted || !x.View || x.Design || x.Publish || !x.Submit || x.ManageRoles ||
@@ -192,7 +192,7 @@ func TestOwnRecordsAreTheOnesTheUserCreated(t *testing.T) {
 	a := decode[App](t, rec)
 	w.add(w.alice, s, a, "alice-row", "1")
 	w.add(w.owner, s, a, "owner-row", "2")
-	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppUser))
+	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppUser), grant(w.alice.id, access.AppRoles...))
 
 	edit := func(id any) *httptest.ResponseRecorder {
 		return w.owner.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "edit_expense", map[string]any{"id": id, "amount": "9"}))
@@ -287,7 +287,7 @@ func TestAppRolesOnlyNarrowTheSpace(t *testing.T) {
 	w := newWorld(t)
 	s, a := w.shared, w.sharedApp
 	// Bob views the space: every role there is gives him no more than reading.
-	w.mustSetRoles(w.alice, s, a, grant(w.bob.id, access.AppBuilder, access.AppPublisher, access.AppDataManager, access.AppUser))
+	w.mustSetRoles(w.alice, s, a, grant(w.bob.id, access.AppBuilder, access.AppPublisher, access.AppDataManager, access.AppUser), grant(w.alice.id, access.AppRoles...))
 	got := w.view(w.bob, s, a)
 	if x := got.Access; !x.View || x.Design || x.Publish || x.Submit || x.ManageRoles || x.ModifyRecords != access.ScopeNone || x.ReadRecords != access.ScopeAll {
 		t.Fatalf("a viewer's access with every role = %+v", x)
@@ -397,7 +397,7 @@ func TestSettingRoles(t *testing.T) {
 // Roles can't be reached from another space or workspace, and don't outlive their app.
 func TestAppRolesStayInTheirApp(t *testing.T) {
 	w := newWorld(t)
-	w.mustSetRoles(w.alice, w.shared, w.sharedApp, grant(w.owner.id, access.AppUser))
+	w.mustSetRoles(w.alice, w.shared, w.sharedApp, grant(w.owner.id, access.AppUser), grant(w.alice.id, access.AppRoles...))
 	// Alice manages the team app, but not through her private space's address.
 	expect(t, w.setRoles(w.alice, w.alicePrivate, w.sharedApp), http.StatusNotFound)
 	expect(t, w.alice.do(http.MethodGet, rolesPath(w.alicePrivate, w.sharedApp), nil), http.StatusNotFound)
@@ -422,7 +422,7 @@ func TestRolesAreCheckedAgainUnderTheWriteLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppReader))
+	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppReader), grant(w.alice.id, access.AppRoles...))
 	name := "late"
 	if _, err := w.e.s.updateApp(ctx, snapshot, owner, a.ID, Changes{Version: 1, Name: &name}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("update with a stale snapshot = %v, want ErrForbidden", err)
@@ -485,4 +485,27 @@ func TestAgentActsWithItsUsersRoles(t *testing.T) {
 	raw := example(t)
 	def["definition"] = map[string]any{"components": raw.Components, "collection": raw.Collection, "actions": raw.Actions, "roles": []string{"builder"}}
 	expect(t, w.alice.do(http.MethodPost, appsPath(s, ""), def), http.StatusBadRequest)
+}
+
+// Restricting an app restricts it for everyone: a member it names nowhere, with no default,
+// holds no role and doesn't see the app, rather than keeping every role.
+func TestUnnamedMembersOfARestrictedAppSeeNothing(t *testing.T) {
+	w := newWorld(t)
+	s, a := w.shared, w.sharedApp
+	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder), grant(w.owner.id, access.AppUser))
+	// Bob reads the space but is named nowhere: the app is as unseen as one of another space.
+	expect(t, w.bob.do(http.MethodGet, appPath(s, a.ID, ""), nil), http.StatusNotFound)
+	expect(t, w.bob.do(http.MethodGet, appPath(s, a.ID, "/surface"), nil), http.StatusNotFound)
+	rec := w.bob.do(http.MethodGet, appsPath(s, ""), nil)
+	expect(t, rec, http.StatusOK)
+	for _, ap := range decode[struct{ Apps []App }](t, rec).Apps {
+		if ap.ID == a.ID {
+			t.Fatalf("bob's list shows the app: %s", rec.Body)
+		}
+	}
+	// A default brings unnamed members back, with its roles only.
+	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder), fallback(access.AppReader))
+	if got := w.view(w.bob, s, a).Access; !got.View || got.ReadRecords != access.ScopeAll || got.Submit {
+		t.Fatalf("bob with the default = %+v", got)
+	}
 }

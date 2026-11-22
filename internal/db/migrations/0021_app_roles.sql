@@ -2,6 +2,9 @@
 -- boundary (internal/access, apps.go). Space membership stays the outer boundary: a role
 -- here only narrows what the user's role in the space already allows, never widens it.
 --
+-- Once an app has any row here it is restricted for every member: their own roles, else the
+-- default's (user_id NULL), else none (they don't see the app).
+--
 -- An app without any row here is unrestricted, which is exactly what every app is today: the
 -- space's editors (and a private space's owner) build, publish, submit and manage all its
 -- records, and its viewers read all of them. This migration adds no row, so nothing changes

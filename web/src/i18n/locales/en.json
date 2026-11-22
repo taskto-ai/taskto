@@ -42,7 +42,7 @@
       "openNamed": "Roles of {name}",
       "close": "Close",
       "saved": "Saved.",
-      "intro": "Roles narrow what a member’s role in the space allows, never widen it. A member with no roles here (and no “Everyone else” row) keeps everything the space gives them.",
+      "intro": "Roles narrow what a member’s role in the space allows, never widen it. Once any roles are set, a member with no roles here (and no “Everyone else” row) can’t use or see the app. Clear every role to give the app back to the whole space.",
       "member": "Member",
       "everyoneElse": "Everyone else",
       "checkbox": "{role}: {name}",

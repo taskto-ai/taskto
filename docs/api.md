@@ -1331,9 +1331,12 @@ caller may not change is answered as `app_row_not_found`.
 
 An app **without role assignments is unrestricted**, as every app was before roles: for a
 user who may write the space it is every role, for one who may only read it, `reader`. So
-nothing changes for an app until someone sets roles, and then only for the people it names.
-An assignment is for one user, or with `"user_id": null` the default, for every member of
-the space who has no assignment of their own. The agent acts as the user who started it, with
+nothing changes for an app until someone sets roles. An assignment is for one user, or with
+`"user_id": null` the default, for every member of the space who has no assignment of their
+own. Once an app has **any** assignment it is restricted for everyone: a member holds their
+own roles, else the default's, else **none**, and then the app answers them `404` and is left
+out of their list, like an app of a space they can't open. So restricting an app never leaves
+someone it doesn't name (a member who joins the space later included) with every role. The agent acts as the user who started it, with
 exactly their roles; it has no tool to set roles, and a definition grants none.
 
 An app as one caller sees it has `access`, what they may do:

@@ -259,6 +259,9 @@ func TestAppToolsKeepToTheirUsersRoles(t *testing.T) {
 	def := expenses(t)
 	def["roles"] = []string{"builder"}
 	w.status(http.StatusBadRequest, w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Sneaky", "definition": def})
+	// Bob, named nowhere, sees nothing of the restricted app until a default names everyone else.
+	w.status(http.StatusNotFound, w.bobConv, "list_app_rows", ref)
+	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, NULL, 'reader')`, app)
 	// Bob's agent, a viewer, reads the space's records and changes nothing.
 	if rows := w.ok(w.bobConv, "list_app_rows", ref)["rows"].([]any); len(rows) != 2 {
 		t.Fatalf("a viewer's agent reads %v", rows)

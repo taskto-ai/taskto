@@ -43,7 +43,7 @@
       "openNamed": "Papéis de {name}",
       "close": "Fechar",
       "saved": "Salvo.",
-      "intro": "Os papéis restringem o que o papel do membro no espaço permite, nunca ampliam. Quem não tem papéis aqui (e não há linha “Todos os demais”) mantém tudo o que o espaço lhe dá.",
+      "intro": "Os papéis restringem o que o papel do membro no espaço permite, nunca ampliam. Depois que algum papel é definido, quem não tem papéis aqui (e não há linha “Todos os demais”) não vê nem usa o app. Remova todos os papéis para devolver o app a todo o espaço.",
       "member": "Membro",
       "everyoneElse": "Todos os demais",
       "checkbox": "{role}: {name}",

@@ -214,11 +214,15 @@ func (s *Service) recheck(ctx context.Context, a Actor, ids ...int64) error {
 }
 
 // appAccess returns what a may do in appID of spaceID now: ErrNotFound if they can't read
-// the space or it has no such app. It asks package access, which answers for requests and
-// the agent alike.
+// the space, it has no such app, or they hold no role in it (an app restricted to others is
+// as unseen as one of a space they can't open). It asks package access, which answers for
+// requests and the agent alike.
 func (s *Service) appAccess(ctx context.Context, a Actor, spaceID, appID int64) (access.AppAccess, error) {
 	acc, err := s.access.App(ctx, a.UserID, spaceID, appID)
 	if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {
+		return access.AppAccess{}, ErrNotFound
+	}
+	if err == nil && !acc.View {
 		return access.AppAccess{}, ErrNotFound
 	}
 	return acc, err
@@ -374,6 +378,14 @@ func (s *Service) listApps(ctx context.Context, sp access.Space, a Actor, withAr
 	if err != nil {
 		return nil, err
 	}
+	// Apps the caller holds no role in are left out, as appAccess answers them ErrNotFound.
+	visible := all[:0]
+	for _, ap := range all {
+		if accs[ap.ID].View {
+			visible = append(visible, ap)
+		}
+	}
+	all = visible
 	for i := range all {
 		acc := accs[all[i].ID]
 		all[i].Access = acc

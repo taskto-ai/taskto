@@ -13,7 +13,8 @@ import (
 // whatever app roles they hold; nobody writes in an archived space).
 //
 // An app without any role assignment is unrestricted: its users have what their role in the
-// space allows. That is what every app had before roles existed, and what apps keep until
+// space allows. Once it has one, it is restricted for everyone: a member holds their own
+// roles, else the default's, else none (they don't see the app). That is what every app had before roles existed, and what apps keep until
 // someone sets roles on them.
 //
 // A role is a set of capabilities, and a user may hold several:
@@ -218,7 +219,8 @@ func sortedRoles(roles []AppRole) []AppRole {
 }
 
 // AppGrant assigns roles of an app to one user, or with a nil UserID to every member of
-// the space who has no assignment of their own.
+// the space who has no assignment of their own. Once an app has any assignment, a member
+// with neither theirs nor a default holds no role in it, and doesn't see it.
 type AppGrant struct {
 	UserID *int64    `json:"user_id"`
 	Roles  []AppRole `json:"roles"`
@@ -231,8 +233,11 @@ type grantRow struct {
 }
 
 // resolve picks the roles that apply to userID among an app's rows: their own if they have
-// any, else the default's, else the app is unrestricted.
-func resolve(rows []grantRow, userID int64) (roles []AppRole, restricted bool) {
+// any, else the default's. anyGrants is whether the app has any assignment at all, anyone's:
+// without one the app is unrestricted; with one, a user named nowhere and with no default
+// holds no role, so restricting an app never leaves a member it doesn't name (one who joins
+// the space later included) with every role.
+func resolve(rows []grantRow, userID int64, anyGrants bool) (roles []AppRole, restricted bool) {
 	var own, def []AppRole
 	for _, r := range rows {
 		switch {
@@ -247,6 +252,8 @@ func resolve(rows []grantRow, userID int64) (roles []AppRole, restricted bool) {
 		return own, true
 	case len(def) > 0:
 		return def, true
+	case anyGrants:
+		return []AppRole{}, true
 	}
 	return nil, false
 }
@@ -274,7 +281,12 @@ func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAcc
 	if err != nil {
 		return AppAccess{}, err
 	}
-	roles, restricted := resolve(rows, userID)
+	var anyGrants bool
+	if err := c.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM app_roles WHERE app_id = ?)`,
+		appID).Scan(&anyGrants); err != nil {
+		return AppAccess{}, err
+	}
+	roles, restricted := resolve(rows, userID, anyGrants)
 	return appAccess(sp.Access, roles, restricted), nil
 }
 
@@ -282,7 +294,7 @@ func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAcc
 // can read (as Check returned it), in one query: every app of the space has an entry.
 func (c *Checker) AppsIn(ctx context.Context, userID int64, sp Space) (map[int64]AppAccess, error) {
 	rows, err := c.db.QueryContext(ctx, `
-		SELECT a.id, r.user_id, r.role
+		SELECT a.id, EXISTS (SELECT 1 FROM app_roles x WHERE x.app_id = a.id), r.user_id, r.role
 		FROM apps a LEFT JOIN app_roles r ON r.app_id = a.id AND (r.user_id = ? OR r.user_id IS NULL)
 		WHERE a.space_id = ?`, userID, sp.ID)
 	if err != nil {
@@ -290,13 +302,16 @@ func (c *Checker) AppsIn(ctx context.Context, userID int64, sp Space) (map[int64
 	}
 	defer rows.Close()
 	byApp := map[int64][]grantRow{}
+	anyGrants := map[int64]bool{}
 	for rows.Next() {
 		var id int64
+		var has bool
 		var g grantRow
 		var role sql.NullString
-		if err := rows.Scan(&id, &g.userID, &role); err != nil {
+		if err := rows.Scan(&id, &has, &g.userID, &role); err != nil {
 			return nil, err
 		}
+		anyGrants[id] = has
 		if _, seen := byApp[id]; !seen {
 			byApp[id] = nil
 		}
@@ -310,7 +325,7 @@ func (c *Checker) AppsIn(ctx context.Context, userID int64, sp Space) (map[int64
 	}
 	out := make(map[int64]AppAccess, len(byApp))
 	for id, gs := range byApp {
-		roles, restricted := resolve(gs, userID)
+		roles, restricted := resolve(gs, userID, anyGrants[id])
 		out[id] = appAccess(sp.Access, roles, restricted)
 	}
 	return out, nil
@@ -465,7 +480,7 @@ func (c *Checker) SetAppGrants(ctx context.Context, actorID, spaceID, appID int6
 				return err
 			}
 		}
-		roles, restricted := resolve(rows, actorID)
+		roles, restricted := resolve(rows, actorID, len(rows) > 0)
 		if !appAccess(sp.Access, roles, restricted).ManageRoles {
 			return ErrGrantLockout
 		}

@@ -66,20 +66,28 @@ func TestUnrestrictedAppIsTheSpaceAlone(t *testing.T) {
 	}
 }
 
-// A user's own assignment replaces the default's; with neither, the app is unrestricted.
+// A user's own assignment replaces the default's; with neither, an app with assignments
+// gives them no role, and only an app without any is unrestricted.
 func TestResolvePicksOwnThenDefault(t *testing.T) {
 	row := func(user int64, role AppRole) grantRow {
 		return grantRow{userID: sql.NullInt64{Int64: user, Valid: user != 0}, role: role}
 	}
 	rows := []grantRow{row(0, AppReader), row(7, AppUser), row(7, AppBuilder), row(8, AppDataManager)}
-	if roles, restricted := resolve(rows, 7); !restricted || !slices.Equal(roles, []AppRole{AppUser, AppBuilder}) {
+	if roles, restricted := resolve(rows, 7, true); !restricted || !slices.Equal(roles, []AppRole{AppUser, AppBuilder}) {
 		t.Fatalf("own = %v, %v", roles, restricted)
 	}
 	// Another's assignment is not theirs.
-	if roles, restricted := resolve(rows, 9); !restricted || !slices.Equal(roles, []AppRole{AppReader}) {
+	if roles, restricted := resolve(rows, 9, true); !restricted || !slices.Equal(roles, []AppRole{AppReader}) {
 		t.Fatalf("default = %v, %v", roles, restricted)
 	}
-	if _, restricted := resolve(rows[1:], 9); restricted {
-		t.Fatal("another user's assignment restricted someone else")
+	// Another's assignment and no default: they hold nothing (fail closed), never every role.
+	if roles, restricted := resolve(rows[1:], 9, true); !restricted || len(roles) != 0 {
+		t.Fatalf("unnamed member = %v, %v; want no roles", roles, restricted)
+	}
+	if a := appAccess(Write, []AppRole{}, true); a.View || a.Submit || a.ReadRecords != ScopeNone {
+		t.Fatalf("unnamed space editor = %+v; want nothing", a)
+	}
+	if _, restricted := resolve(nil, 9, false); restricted {
+		t.Fatal("an app without assignments is restricted")
 	}
 }
