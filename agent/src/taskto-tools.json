@@ -1,0 +1,1112 @@
+[
+  {
+    "name": "list_spaces",
+    "description": "List the spaces of the knowledge base and boards the user can read: their private space and the shared spaces they belong to, with whether they may write each.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_docs",
+    "description": "Search the knowledge base: every space the user can read, or one space. Returns paths, titles and the passages that matched; read a document with read_doc.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_docs",
+    "description": "List the documents and files of a space, by path, a page at a time: pass the reply's \"next\" as \"after\" for the next page. Each has its size and \"versioned\": false for large files and audio and video, of which only the current version is kept.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "folder": {
+          "type": "string",
+          "description": "only what is in this folder"
+        },
+        "after": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      },
+      "required": ["space_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "read_doc",
+    "description": "Read a Markdown document (.md). Long documents come in pieces of 32 KiB: pass \"next_offset\" as \"offset\" for the next piece. \"version\" is what write_doc needs to change it.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": ["space_id", "path"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "write_doc",
+    "description": "Create or replace a Markdown document (.md) in a space the user may write. To create one, leave out base_version; to replace one, pass the version you read. The change is the user's, made by their agent, and kept in the history.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "like notes/plan.md"
+        },
+        "content": {
+          "type": "string"
+        },
+        "base_version": {
+          "type": "string",
+          "description": "the version from read_doc, to replace a document"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "what changed, for the history"
+        }
+      },
+      "required": ["space_id", "path", "content"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_boards",
+    "description": "List a space's boards: its personal board, or its team boards.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        }
+      },
+      "required": ["space_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_cards",
+    "description": "List a board's cards in board order (bodies shortened). Filter by column, assignee (\"user\" with assignee_id, \"agent\" or \"none\"), blocked, or text in the title or body.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "column": {
+          "enum": ["backlog", "todo", "doing", "review", "done", "archived"]
+        },
+        "assignee": {
+          "enum": ["user", "agent", "none"]
+        },
+        "assignee_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "blocked": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": ["space_id", "board_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "show_card",
+    "description": "Show a card with its whole body and its comment thread (the newest comments, if there are many).",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        }
+      },
+      "required": ["space_id", "board_id", "card_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "create_card",
+    "description": "Add a card to a board. Only the title is required; it goes last in the backlog unless told otherwise.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "body": {
+          "type": "string",
+          "description": "Markdown"
+        },
+        "column": {
+          "enum": ["backlog", "todo", "doing", "review", "done"]
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based place in the column"
+        },
+        "assignee": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": ["user", "agent"]
+                },
+                "id": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "the user, for kind \"user\""
+                }
+              },
+              "required": ["kind"],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "who the card is for: a member who can see the space, or the agent; null for nobody"
+        },
+        "blocked_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blocked_by": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxItems": 50,
+          "description": "cards of the same board this one waits for"
+        },
+        "docs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "description": "paths of documents in the same space"
+        },
+        "conversations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "maxItems": 50,
+          "description": "conversation IDs; only the user's own conversations can be added"
+        }
+      },
+      "required": ["space_id", "board_id", "title"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "update_card",
+    "description": "Change a card: only the fields given change; lists (blocked_by, docs, conversations) replace the whole list, null clears a field.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the card you last read; if it changed since, the call fails: read it again first"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "body": {
+          "type": "string"
+        },
+        "assignee": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": ["user", "agent"]
+                },
+                "id": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "the user, for kind \"user\""
+                }
+              },
+              "required": ["kind"],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "who the card is for: a member who can see the space, or the agent; null for nobody"
+        },
+        "blocked_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blocked_by": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxItems": 50,
+          "description": "cards of the same board this one waits for"
+        },
+        "docs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "description": "paths of documents in the same space"
+        },
+        "conversations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "maxItems": 50,
+          "description": "conversation IDs; only the user's own conversations can be added"
+        }
+      },
+      "required": ["space_id", "board_id", "card_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "move_card",
+    "description": "Move a card to a column, at a 0-based position (last if left out).",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the card you last read; if it changed since, the call fails: read it again first"
+        },
+        "column": {
+          "enum": ["backlog", "todo", "doing", "review", "done"]
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": ["space_id", "board_id", "card_id", "version", "column"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "comment_card",
+    "description": "Add a comment to a card's thread.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["space_id", "board_id", "card_id", "body"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_blocked",
+    "description": "Say why a card is blocked and which cards of the board it waits for; reason null and no cards unblock it.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the card you last read; if it changed since, the call fails: read it again first"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blocked_by": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxItems": 50
+        }
+      },
+      "required": ["space_id", "board_id", "card_id", "version", "reason"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "app_catalog",
+    "description": "What a personal app may be made of: the components and their props, the functions, the collection's field types, the actions, the rules, and an example app. Read it before create_app or update_app.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_apps",
+    "description": "List a space's personal apps (without their definitions); archived: true includes the ones taken offline. A list too long for one reply is cut short, with truncated: true and next_offset: call again with that offset for the rest.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "apps to skip, from a previous reply's next_offset; 0 by default"
+        }
+      },
+      "required": ["space_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "show_app",
+    "description": "Show an app with its definition: its screen, collection, actions and summaries, and its version.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_app_rows",
+    "description": "Read an app's data: its rows, oldest first, each with its id and the fields its collection declares. An offline app's rows are kept and read too. A list too long for one reply is cut short, with truncated: true and next_after: call again with after set to it for the rest.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        },
+        "after": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "only rows after this row id, from a previous reply's next_after: rows added or removed meanwhile don't shift the pages"
+        }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "create_app",
+    "description": "Save a new personal app in a space the user may write: a private space's apps are the user's, a shared space's are its members'. The server checks the definition against the catalog and says what is wrong if it doesn't fit.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "definition": {
+          "type": "object",
+          "description": "what the app is made of: read app_catalog first. The server checks it strictly against the catalog.",
+          "properties": {
+            "components": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 300,
+              "items": {
+                "type": "object"
+              },
+              "description": "the screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\""
+            },
+            "collection": {
+              "type": "object",
+              "properties": {
+                "fields": {
+                  "type": "array",
+                  "maxItems": 50,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]{0,39}$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": ["string", "number", "boolean", "date"]
+                      },
+                      "required": {
+                        "type": "boolean"
+                      },
+                      "max_length": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10000,
+                        "description": "string fields; 1000 if left out"
+                      },
+                      "min": {
+                        "type": "number",
+                        "description": "number fields"
+                      },
+                      "max": {
+                        "type": "number",
+                        "description": "number fields"
+                      }
+                    },
+                    "required": ["name", "type"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["fields"],
+              "additionalProperties": false
+            },
+            "actions": {
+              "type": "object",
+              "description": "event name → what it does; a Button's event must name one",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["insert", "update", "delete"]
+                  }
+                },
+                "required": ["kind"],
+                "additionalProperties": false
+              }
+            },
+            "summaries": {
+              "type": "object",
+              "description": "values computed from the rows, at /<name> in the data model",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["count", "sum"]
+                  },
+                  "field": {
+                    "type": "string",
+                    "description": "the number field a sum adds"
+                  }
+                },
+                "required": ["kind"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["components", "collection", "actions"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["space_id", "name", "definition"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "update_app",
+    "description": "Change an app: rename it, replace its definition (its rows must fit the new collection: add new fields as optional), or take it offline (archived: true; its rows are kept) and back. Only what is given changes.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the app you last read; if it changed since, the call fails: read it again first"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "definition": {
+          "type": "object",
+          "description": "what the app is made of: read app_catalog first. The server checks it strictly against the catalog.",
+          "properties": {
+            "components": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 300,
+              "items": {
+                "type": "object"
+              },
+              "description": "the screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\""
+            },
+            "collection": {
+              "type": "object",
+              "properties": {
+                "fields": {
+                  "type": "array",
+                  "maxItems": 50,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]{0,39}$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": ["string", "number", "boolean", "date"]
+                      },
+                      "required": {
+                        "type": "boolean"
+                      },
+                      "max_length": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10000,
+                        "description": "string fields; 1000 if left out"
+                      },
+                      "min": {
+                        "type": "number",
+                        "description": "number fields"
+                      },
+                      "max": {
+                        "type": "number",
+                        "description": "number fields"
+                      }
+                    },
+                    "required": ["name", "type"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["fields"],
+              "additionalProperties": false
+            },
+            "actions": {
+              "type": "object",
+              "description": "event name → what it does; a Button's event must name one",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["insert", "update", "delete"]
+                  }
+                },
+                "required": ["kind"],
+                "additionalProperties": false
+              }
+            },
+            "summaries": {
+              "type": "object",
+              "description": "values computed from the rows, at /<name> in the data model",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["count", "sum"]
+                  },
+                  "field": {
+                    "type": "string",
+                    "description": "the number field a sum adds"
+                  }
+                },
+                "required": ["kind"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["components", "collection", "actions"],
+          "additionalProperties": false
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": ["space_id", "app_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_tabs",
+    "description": "List the open tabs of the user's browser: id, title, URL, and whether you opened it. Doesn't start the browser.",
+    "read_only": true,
+    "conversation_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "browser": {
+          "type": "string",
+          "enum": ["personal", "testing"],
+          "description": "personal (the default): the user's own browser, with their logins, which they can watch and take over; testing: a clean headless browser with no profile, emptied each time it starts, for trying apps"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_open",
+    "description": "Open a URL in a new tab of the user's browser, starting it if it isn't running. Returns the tab; then read the page with browser_snapshot. Use the personal browser for the user's own accounts (it keeps their logins) and the testing one to try apps with nothing of the user's in it.",
+    "read_only": false,
+    "conversation_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "description": "an http or https address, or about:blank"
+        },
+        "browser": {
+          "type": "string",
+          "enum": ["personal", "testing"],
+          "description": "personal (the default): the user's own browser, with their logins, which they can watch and take over; testing: a clean headless browser with no profile, emptied each time it starts, for trying apps"
+        }
+      },
+      "required": ["url"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_navigate",
+    "description": "Load a URL in a tab.",
+    "read_only": false,
+    "conversation_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "tab": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{1,64}$",
+          "description": "the tab's id, from browser_tabs or browser_open"
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "description": "an http or https address, or about:blank"
+        },
+        "browser": {
+          "type": "string",
+          "enum": ["personal", "testing"],
+          "description": "personal (the default): the user's own browser, with their logins, which they can watch and take over; testing: a clean headless browser with no profile, emptied each time it starts, for trying apps"
+        }
+      },
+      "required": ["tab", "url"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_snapshot",
+    "description": "Read a tab's page as text: its title, URL and visible text, with each link, button and field on a line that starts with its ref, such as [e12] button \"Sign in\". Use the refs with browser_click and browser_type, and take a new snapshot after the page changes. Password values are never shown, and frames (such as captchas) are named but not read.",
+    "read_only": true,
+    "conversation_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "tab": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{1,64}$",
+          "description": "the tab's id, from browser_tabs or browser_open"
+        },
+        "browser": {
+          "type": "string",
+          "enum": ["personal", "testing"],
+          "description": "personal (the default): the user's own browser, with their logins, which they can watch and take over; testing: a clean headless browser with no profile, emptied each time it starts, for trying apps"
+        }
+      },
+      "required": ["tab"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_click",
+    "description": "Click an element of a tab, by its ref from the last snapshot, with a real mouse click. Returns the tab as it is after the click.",
+    "read_only": false,
+    "conversation_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "tab": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{1,64}$",
+          "description": "the tab's id, from browser_tabs or browser_open"
+        },
+        "ref": {
+          "type": "string",
+          "pattern": "^e[0-9]{1,6}$",
+          "description": "the element's ref from the last browser_snapshot of the tab, such as e12"
+        },
+        "browser": {
+          "type": "string",
+          "enum": ["personal", "testing"],
+          "description": "personal (the default): the user's own browser, with their logins, which they can watch and take over; testing: a clean headless browser with no profile, emptied each time it starts, for trying apps"
+        }
+      },
+      "required": ["tab", "ref"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_type",
+    "description": "Type text into a field of a tab, by its ref from the last snapshot, replacing what is in it; with submit, press Enter after. Never type a password, a 2FA code or anything secret: ask the user to do it with browser_help.",
+    "read_only": false,
+    "conversation_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "tab": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{1,64}$",
+          "description": "the tab's id, from browser_tabs or browser_open"
+        },
+        "ref": {
+          "type": "string",
+          "pattern": "^e[0-9]{1,6}$",
+          "description": "the element's ref from the last browser_snapshot of the tab, such as e12"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "submit": {
+          "type": "boolean",
+          "description": "press Enter after typing"
+        },
+        "browser": {
+          "type": "string",
+          "enum": ["personal", "testing"],
+          "description": "personal (the default): the user's own browser, with their logins, which they can watch and take over; testing: a clean headless browser with no profile, emptied each time it starts, for trying apps"
+        }
+      },
+      "required": ["tab", "ref", "text"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_press",
+    "description": "Press a key in a tab: Enter, Tab, Escape, Backspace, Delete, Space, the arrows, PageUp, PageDown, Home or End.",
+    "read_only": false,
+    "conversation_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "tab": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{1,64}$",
+          "description": "the tab's id, from browser_tabs or browser_open"
+        },
+        "key": {
+          "type": "string",
+          "enum": [
+            "Enter",
+            "Tab",
+            "Escape",
+            "Backspace",
+            "Delete",
+            "Space",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "PageUp",
+            "PageDown",
+            "Home",
+            "End"
+          ]
+        },
+        "browser": {
+          "type": "string",
+          "enum": ["personal", "testing"],
+          "description": "personal (the default): the user's own browser, with their logins, which they can watch and take over; testing: a clean headless browser with no profile, emptied each time it starts, for trying apps"
+        }
+      },
+      "required": ["tab", "key"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_close",
+    "description": "Close a tab you opened. The user's own tabs can't be closed.",
+    "read_only": false,
+    "conversation_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "tab": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{1,64}$",
+          "description": "the tab's id, from browser_tabs or browser_open"
+        },
+        "browser": {
+          "type": "string",
+          "enum": ["personal", "testing"],
+          "description": "personal (the default): the user's own browser, with their logins, which they can watch and take over; testing: a clean headless browser with no profile, emptied each time it starts, for trying apps"
+        }
+      },
+      "required": ["tab"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_help",
+    "description": "Ask the user to take over the personal browser when a site needs them: to sign in, solve a captcha, enter a 2FA code or anything secret, or decide something. The tab is brought to the front, and the user sees a card with your message and a live view of the browser. Then end your turn at once, saying in one short sentence what they need to do. They will tell you when they are done (or that they won't do it now); take a new snapshot before you go on.",
+    "read_only": false,
+    "conversation_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "tab": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{1,64}$",
+          "description": "the tab's id, from browser_tabs or browser_open"
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["login", "captcha", "two_factor", "other"]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "what the user should do, in a sentence or two"
+        }
+      },
+      "required": ["tab", "reason", "message"],
+      "additionalProperties": false
+    }
+  }
+]

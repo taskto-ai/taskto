@@ -1,0 +1,205 @@
+# TaskTo.AI with Docker Compose. See docs/install.md.
+#
+#   docker compose up -d                                       # the server, on 127.0.0.1:8080
+#   TASKTO_DOMAIN=tasks.example.com docker compose --profile https up -d   # and Caddy, for HTTPS
+#   docker compose --profile ollama up -d                      # and Ollama, for local models
+#   TASKTO_CLI_WORKERS=container docker compose --profile cli up -d   # and the CLI worker
+#   docker compose run --rm -T backup                          # a backup, to an append-only repository
+#   COMPOSE_PROFILES=backup-schedule docker compose up -d      # and a backup every night
+#
+# Settings go in a .env file next to this one, or in compose.override.yaml. Compose builds
+# the images from this checkout; to run the published ones instead, set TASKTO_IMAGE_PREFIX
+# (TASKTO_IMAGE_PREFIX=ghcr.io/taskto-ai/, docs/install.md#prebuilt-images) and
+# `docker compose pull`.
+name: taskto
+
+services:
+  taskto:
+    build:
+      context: .
+      args:
+        VERSION: ${TASKTO_VERSION:-dev}
+    image: ${TASKTO_IMAGE_PREFIX:-}taskto:${TASKTO_VERSION:-dev}
+    restart: unless-stopped
+    # Only this machine can reach it directly. Others come through the reverse proxy.
+    ports:
+      - "127.0.0.1:${TASKTO_PORT:-8080}:8080"
+    volumes:
+      - data:/data
+      # The CLI worker's socket (the cli profile): only this container's user can open it.
+      - cli-run:/run/taskto-cli
+    environment:
+      # Caddy's address on this project's network (below): the only proxy whose
+      # X-Forwarded-For the server believes, for the login limits.
+      TASKTO_TRUSTED_PROXIES: 172.29.80.10
+      # CLI workers (docs/cli-workers.md): "container" with the cli profile.
+      TASKTO_CLI_WORKERS: ${TASKTO_CLI_WORKERS:-off}
+      TASKTO_CLI_WORKER_SOCKET: /run/taskto-cli/worker.sock
+      # The proxy of workspaces' shared CLI accounts (docs/account-switching.md): a socket in
+      # the volume the worker shares, which the worker relays to its CLIs on 127.0.0.1:8081.
+      # The worker's network has no route to this container.
+      TASKTO_CLI_PROXY_LISTEN: unix:/run/taskto-cli/proxy/proxy.sock
+      TASKTO_CLI_PROXY_URL: http://127.0.0.1:8081
+      # The agent browser (docs/agent-browser.md): a browser per user in the CLI worker.
+      TASKTO_BROWSER: ${TASKTO_BROWSER:-false}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # The CLI worker (docs/cli-workers.md): the users' own Claude Code, Codex and Grok Build
+  # logins. Each TaskTo user's CLIs run as a Unix user of their own, here, away from the
+  # server's data. It runs as root to make those users, with only the capabilities that
+  # takes; the CLIs run with none, and no setuid program is left in the image.
+  #
+  # Its network is its own (`worker`, below): the CLIs and the agent browser reach the
+  # internet, and the server's proxy through the socket volume, nothing else. Not the other
+  # services, and with deploy/worker-firewall.sh on the host, not the host or its LAN either
+  # (docs/cli-workers.md#the-workers-network).
+  cli-worker:
+    profiles: [cli]
+    build:
+      context: .
+      target: cli-worker
+      args:
+        VERSION: ${TASKTO_VERSION:-dev}
+    image: ${TASKTO_IMAGE_PREFIX:-}taskto-cli-worker:${TASKTO_VERSION:-dev}
+    restart: unless-stopped
+    command:
+      - -socket
+      - /run/taskto-cli/worker.sock
+      - -socket-owner
+      - "65532:65532"
+      - -homes
+      - /homes
+      - -proxy-socket
+      - /run/taskto-cli/proxy/proxy.sock
+      - -proxy-listen
+      - 127.0.0.1:8081
+    volumes:
+      # The users' CLI logins and sessions: not in `taskto backup` (docs/install.md).
+      - cli-homes:/homes
+      - cli-run:/run/taskto-cli
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID, CHOWN, KILL]
+    security_opt: ["no-new-privileges:true"]
+    # The CLIs' share of the machine; the server, in its own container, keeps the rest.
+    mem_limit: ${TASKTO_CLI_WORKER_MEMORY:-4g}
+    cpus: ${TASKTO_CLI_WORKER_CPUS:-2}
+    pids_limit: 2048
+    networks: [worker]
+    # Public resolvers: the host's may be on its LAN, which the firewall closes to the worker.
+    # Behind a network that allows only its own resolver, set yours in compose.override.yaml.
+    dns: [9.9.9.9, 1.1.1.1]
+
+  caddy:
+    profiles: [https]
+    image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
+    restart: unless-stopped
+    depends_on: [taskto]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      TASKTO_DOMAIN: ${TASKTO_DOMAIN:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      default:
+        ipv4_address: 172.29.80.10
+
+  ollama:
+    profiles: [ollama]
+    image: ollama/ollama:0.40.16@sha256:910d0d8107b538fb0894e63163eb195de0cc7aefcbc666dc62d3b18f71124592
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+
+  # Backups to an append-only restic repository (docs/install.md#backups), by hand:
+  #   docker compose run --rm -T backup
+  # It reads the data volume beside the running server, and stores the snapshot `taskto
+  # backup` makes with a user that can add snapshots but never delete them. The repository's
+  # address (with that user) and its password are files in ./backup, owned by 65532 and
+  # readable by it only: never in this file, .env or the repository.
+  backup: &backup
+    profiles: [backup]
+    build:
+      context: .
+      target: backup
+      args:
+        VERSION: ${TASKTO_VERSION:-dev}
+    image: ${TASKTO_IMAGE_PREFIX:-}taskto-backup:${TASKTO_VERSION:-dev}
+    volumes:
+      - data:/data
+      - ./backup:/run/taskto-backup:ro
+    environment: &backup-env
+      RESTIC_REPOSITORY_FILE: /run/taskto-backup/repository
+      RESTIC_PASSWORD_FILE: /run/taskto-backup/password
+    # restic runs `taskto backup` and stores its output only if it exits cleanly. The host
+    # name is fixed: each run is a new container with a new one.
+    command:
+      - backup
+      - --host=taskto
+      - --tag=taskto
+      - --stdin-filename=taskto.tar
+      - --stdin-from-command
+      - --
+      - taskto
+      - backup
+      - -uncompressed
+      - "-"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # The same backup every night, with the backup-schedule profile (docs/install.md#backups):
+  # `taskto backup-schedule` checks that the repository answers, runs the backup above,
+  # retries a failed night, and writes how it went into the data volume, where the server
+  # shows it to admins (Settings > About) and to monitoring (/healthz/backup).
+  #   docker compose run --rm -T backup-schedule -now           # one now, recorded the same way
+  backup-schedule:
+    <<: *backup
+    profiles: [backup-schedule]
+    restart: unless-stopped
+    entrypoint: [taskto, backup-schedule]
+    command: []
+    environment:
+      <<: *backup-env
+      # When, in UTC, how a failed night is retried (every hour, six times), and how long
+      # one backup may take.
+      TASKTO_BACKUP_AT: ${TASKTO_BACKUP_AT:-03:15}
+      TASKTO_BACKUP_RETRIES: ${TASKTO_BACKUP_RETRIES:-6}
+      TASKTO_BACKUP_RETRY_EVERY: ${TASKTO_BACKUP_RETRY_EVERY:-1h}
+      TASKTO_BACKUP_TIMEOUT: ${TASKTO_BACKUP_TIMEOUT:-4h}
+
+# A fixed subnet, so Caddy has a known address the server can trust. Other containers get
+# addresses from ip_range, which leaves Caddy's out, so no other container can have it. If
+# the subnet collides with a network of yours, change it and the addresses above together.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.29.80.0/24
+          ip_range: 172.29.80.128/25
+  # The CLI worker's alone. Docker keeps it apart from the other networks; the bridge has a
+  # fixed name so deploy/worker-firewall.sh can close the host and every non-public address to
+  # it. No IPv6, so the firewall drops all of it.
+  worker:
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: taskto-worker
+      com.docker.network.bridge.enable_icc: "false"
+
+volumes:
+  data:
+  cli-homes:
+  cli-run:
+  caddy-data:
+  caddy-config:
+  ollama:

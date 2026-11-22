@@ -1,0 +1,42 @@
+version: "2"
+
+linters:
+  # standard: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - bodyclose     # HTTP response bodies are closed
+    - errorlint     # errors compared and wrapped with errors.Is/As and %w
+    - gosec         # common security mistakes
+    - misspell
+    - nilerr        # returning nil after checking err != nil
+    - noctx         # HTTP requests carry a context
+    - unconvert
+  settings:
+    gosec:
+      excludes:
+        - G104 # unchecked errors: errcheck reports these, with its own exclusions
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      # Tests read their own fixtures, start local helper processes, and draw random data
+      # from fixed seeds, to be reproducible.
+      - path: _test\.go
+        linters: [gosec]
+        text: "G204|G301|G302|G304|G306|G404|G703"
+      # The fake CLIs for tests (internal/cliworker/clitest) run as the test binary: they read
+      # and write their own test directories and start sleep, like a test does.
+      - path: internal/cliworker/clitest/
+        linters: [gosec, noctx]
+      # httptest requests in tests don't need a context.
+      - path: _test\.go
+        linters: [noctx]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - taskto.ai/taskto

@@ -1,0 +1,148 @@
+// The stream fixture is what the server sent for one message to the scripted model (with the
+// reply's text growing in one append, as a real model's does), so these follow a real view.
+
+import { applyImmutable, type Op } from '@earendil-works/chord/delta'
+import { expect, test } from 'vitest'
+import stream from './testdata/stream.json'
+import { type ConversationView, transcript } from './transcript'
+
+type Event = { type: string; value?: ConversationView; ops?: Op[] }
+
+// The view after each event, as the client builds it.
+function views(): ConversationView[] {
+  const out: ConversationView[] = []
+  let view: ConversationView | undefined
+  for (const event of stream as Event[]) {
+    if (event.type === 'value') view = event.value
+    else if (event.type === 'ops' && view) view = applyImmutable(view, event.ops ?? [])
+    else continue
+    if (view) out.push(view)
+  }
+  return out
+}
+
+test('follows a message and its reply through the stream', () => {
+  const steps = views().map(transcript)
+  expect(steps[0]).toEqual({ messages: [], running: false, truncated: false })
+
+  // The message is in, and the agent is working.
+  expect(steps[1].running).toBe(true)
+  expect(steps[1].messages.map((m) => [m.role, m.text])).toEqual([['user', 'Hello there, agent']])
+
+  // The system entry the run adds isn't shown.
+  expect(steps[2].messages).toHaveLength(1)
+
+  // The reply as it is written: pending, then growing.
+  expect(steps[4].messages.at(-1)).toMatchObject({ role: 'assistant', text: '', pending: true })
+  expect(steps[5].messages.at(-1)).toMatchObject({ role: 'assistant', text: 'echo: Hello', pending: true })
+
+  // Done: the reply is an entry, nothing is live.
+  const done = steps[6]
+  expect(done.running).toBe(false)
+  expect(done.messages.map((m) => [m.role, m.text, m.pending ?? false])).toEqual([
+    ['user', 'Hello there, agent', false],
+    ['assistant', 'echo: Hello there, agent', false],
+  ])
+})
+
+test('shows tool calls, failures, and that earlier entries are left out', () => {
+  const t = transcript({
+    before: 3,
+    entries: [
+      {
+        id: 4,
+        kind: 'pi.assistant',
+        model: [
+          { role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'search_docs', arguments: {} }] },
+          { role: 'toolResult', content: [{ type: 'text', text: 'secret result' }] },
+        ],
+      },
+      {
+        id: 5,
+        kind: 'pi.assistant',
+        model: [{ role: 'assistant', content: [], stopReason: 'error', errorMessage: 'rate limited' }],
+      },
+      { id: 6, kind: 'something.new', model: [{ role: 'user', content: [{ type: 'image', data: '…' }] }] },
+    ],
+  })
+  expect(t.truncated).toBe(true)
+  expect(t.messages).toEqual([
+    { key: '4.0', role: 'assistant', text: '', tools: [{ id: 'c1', name: 'search_docs' }] },
+    { key: '5.0', role: 'assistant', text: '', tools: [], error: 'rate limited' },
+  ])
+})
+
+test('passes over what it does not know', () => {
+  expect(transcript(null).messages).toEqual([])
+  expect(transcript({ entries: [{ id: 1, kind: 'x' }], docs: { 'pi.live': 'odd' } }).messages).toEqual([])
+})
+
+test('a tool use names the app only from a saved result, never from its arguments', () => {
+  const call = (id: string, name: string, args: unknown = { space_id: 9, app_id: 9 }) => ({
+    type: 'toolCall',
+    id,
+    name,
+    arguments: args,
+  })
+  const result = (toolCallId: string, toolName: string, text: string, isError = false) => ({
+    role: 'toolResult',
+    toolCallId,
+    toolName,
+    content: [{ type: 'text', text }],
+    isError,
+  })
+  const saved = JSON.stringify({ id: 1, space_id: 2, name: 'Expenses', version: 1 })
+  const t = transcript({
+    entries: [
+      {
+        id: 1,
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            content: [
+              call('ok', 'create_app'),
+              call('refused', 'create_app'),
+              call('odd', 'update_app'),
+              call('other', 'show_app'),
+            ],
+          },
+          result('refused', 'create_app', 'error: the definition has no root', true),
+          result('odd', 'update_app', 'not JSON'),
+          result('other', 'show_app', saved),
+        ],
+      },
+      // The result can come in a later entry.
+      { id: 2, kind: 'pi.tool', model: [result('ok', 'create_app', saved)] },
+    ],
+  })
+  expect(t.messages[0].tools).toEqual([
+    { id: 'ok', name: 'create_app', app: { space: 2, app: 1 } },
+    { id: 'refused', name: 'create_app' },
+    { id: 'odd', name: 'update_app' },
+    { id: 'other', name: 'show_app' },
+  ])
+})
+
+test('a result answers the latest call with its id: ids can repeat across turns', () => {
+  // Some providers number a turn's calls from 0, so two turns both have a "call_0".
+  const call = (name: string) => ({ type: 'toolCall', id: 'call_0', name, arguments: {} })
+  const result = (name: string, app: number) => ({
+    role: 'toolResult',
+    toolCallId: 'call_0',
+    toolName: name,
+    content: [{ type: 'text', text: JSON.stringify({ id: app, space_id: 2, name: 'x', version: 1 }) }],
+  })
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'pi.assistant', model: [{ role: 'assistant', content: [call('create_app')] }] },
+      { id: 2, kind: 'pi.tool', model: [result('create_app', 1)] },
+      { id: 3, kind: 'pi.assistant', model: [{ role: 'assistant', content: [call('update_app')] }] },
+      { id: 4, kind: 'pi.tool', model: [result('update_app', 5)] },
+    ],
+  })
+  expect(t.messages.map((m) => m.tools)).toEqual([
+    [{ id: 'call_0', name: 'create_app', app: { space: 2, app: 1 } }],
+    [{ id: 'call_0', name: 'update_app', app: { space: 2, app: 5 } }],
+  ])
+})

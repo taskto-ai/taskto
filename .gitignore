@@ -1,0 +1,28 @@
+# Go
+/taskto
+/bin/
+*.test
+*.out
+
+# JavaScript
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local config and data
+.env
+.env.*
+!.env.example
+/data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Backup credentials (compose.yaml backup service, deploy/backup-host)
+/backup/
+/deploy/backup-host/prune/
+
+# CI's test reports (.forgejo/workflows/ci.yml)
+vitest-results.json

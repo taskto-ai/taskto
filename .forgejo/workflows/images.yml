@@ -1,0 +1,52 @@
+# The images: the server, the CLI worker and the backup job, built from the Dockerfile and
+# pushed to this Forgejo's container registry (.github/scripts/images.sh,
+# docs/install.md#prebuilt-images).
+#
+# - A push to main publishes <owner>/taskto*:<full commit SHA>.
+# - A version tag (v*) publishes <owner>/taskto*:<tag>, built with that version.
+# - A pull request that changes the Dockerfile, the CLI pins or this workflow builds them,
+#   without pushing, so a broken image is caught before it merges.
+#
+# Tags are immutable: one already in the registry is never pushed again. Only amd64 for
+# now: arm64 would need QEMU on the runner for the CLI worker's apt-get.
+#
+# Pushing needs the repository secret REGISTRY_TOKEN, a Forgejo access token with
+# write:package, of a user allowed to write the owner's packages (the repository variable
+# REGISTRY_USER names that user; default, the owner). Without it the images are built and
+# the push is skipped with a warning, and the job stays green.
+#
+# .github/workflows/images.yml is the same job, publishing the public images to ghcr.io.
+#
+# As in ci.yml: the runner's Docker daemon builds, with the source sent as the build
+# context, so no bind mount is needed.
+name: Images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "deploy/cli-workers.json"
+      - "deploy/cli-workers.sh"
+      - ".forgejo/workflows/images.yml"
+      - ".github/scripts/images.sh"
+  workflow_dispatch:
+
+jobs:
+  images:
+    name: Images (build, push on main and tags)
+    runs-on: [self-hosted, docker]
+    # Pull requests from forks don't build here: the build runs the Dockerfile's RUN steps
+    # on the runner's Docker daemon.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, and push when allowed
+        env:
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          REGISTRY_USER: ${{ vars.REGISTRY_USER }}
+        run: sh .github/scripts/images.sh

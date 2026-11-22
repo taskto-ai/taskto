@@ -1,0 +1,167 @@
+# TaskTo.AI
+
+An open-source, self-hosted workspace for one person or a whole company:
+
+- **A knowledge base**: Markdown documents and files in spaces, private or shared, each
+  space a git repository with its history, and search (full text, and optional semantic
+  search).
+- **An agent that works with it**: a chat agent that reads and writes the knowledge base,
+  works the boards and builds apps, on the model providers you choose, or on the official
+  Claude Code, Codex and Grok CLIs signed in with each user's own account.
+- **Boards** for everyone's tasks, personal and per team, that people and agents share.
+- **Personal apps** you build by asking the agent: small tools with their own data,
+  checked against a fixed component catalog.
+- **Dictation**, on a local speech model by default, and **MCP** access for your own
+  agents.
+- **Languages**: English and Brazilian Portuguese so far, built to take more
+  ([docs/i18n.md](docs/i18n.md)).
+
+It is one Go binary with the web app inside, a Node.js sidecar for the agent runtime, and
+SQLite. Isolation between users, workspaces and spaces is checked on every route, agents
+never run as root, and no secret reaches an agent's environment
+([docs/agent-safety.md](docs/agent-safety.md)).
+
+**Status: early development.** It runs, and the install guide below sets up a server
+behind HTTPS with backups, but expect breaking changes before a first release.
+
+## Quick start
+
+With Docker and Compose v2, from a checkout:
+
+```sh
+docker compose up -d                  # builds the image, listens on 127.0.0.1:8080
+curl http://127.0.0.1:8080/healthz
+docker compose logs taskto | grep setup_token
+```
+
+Open <http://localhost:8080> and create the first account with the setup token from the
+log. To serve it over HTTPS, add CLI workers, local models and backups, or to run the
+published images (`ghcr.io/taskto-ai/taskto`, no build needed), follow
+[docs/install.md](docs/install.md). [deploy/INSTALL.md](deploy/INSTALL.md) is a
+step-by-step install on a fresh Ubuntu VM.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | how it fits together |
+| [docs/install.md](docs/install.md) | install, HTTPS, backups, upgrades |
+| [docs/api.md](docs/api.md) | the HTTP API |
+| [docs/mcp.md](docs/mcp.md) | using it from your own agents (Claude Code, Codex, any MCP client) with an access token |
+| [docs/cli-workers.md](docs/cli-workers.md), [docs/account-switching.md](docs/account-switching.md), [docs/cli-tools.md](docs/cli-tools.md) | the official CLIs on users' own accounts, with TaskTo's tools |
+| [docs/agent-safety.md](docs/agent-safety.md), [docs/agent-browser.md](docs/agent-browser.md) | what agents may do, and the agent's browser |
+| [docs/dictation.md](docs/dictation.md), [docs/i18n.md](docs/i18n.md) | dictation, and languages |
+| [docs/credits.md](docs/credits.md) | third-party models and their licences |
+
+## Development
+
+Needs Go (version in `go.mod`), Node 22.19+ and the pnpm version in `package.json`
+(`packageManager`).
+
+```sh
+make install      # JavaScript dependencies
+make check        # what CI runs: lint, tests, web + agent build
+make fmt          # format Go and TypeScript
+make dev-server   # Go server on 127.0.0.1:8080, with the agent runtime
+make dev-web      # web app with hot reload, proxying the API to the Go server
+make build        # bin/taskto, with the web app inside
+```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest: how to send a change, and how to add a
+language. Report security issues privately, as [SECURITY.md](SECURITY.md) says.
+
+## Running
+
+`bin/taskto` is the whole server: the HTTP API, the web app and the database. It keeps
+its data in one directory (`./data` by default), with the SQLite database in
+`taskto.db`, and brings the database schema up to date when it starts.
+
+Each setting can be given as a flag, an environment variable or a line in a config
+file. A flag beats an environment variable, which beats the config file, which beats
+the default.
+
+| Flag | Environment | Config file | Default | |
+|---|---|---|---|---|
+| `-addr` | `TASKTO_ADDR` | `addr` | `127.0.0.1:8080` | address to listen on |
+| `-data-dir` | `TASKTO_DATA_DIR` | `data_dir` | `data` | where the database and other data live |
+| `-insecure-cookies` | `TASKTO_INSECURE_COOKIES` | `insecure_cookies` | `false` | send the session cookie over plain http (local development only) |
+| `-trusted-proxies` | `TASKTO_TRUSTED_PROXIES` | `trusted_proxies` | | reverse proxies whose `X-Forwarded-For` gives the client's address: comma-separated IP addresses or CIDR prefixes ([docs/install.md](docs/install.md#the-clients-address-behind-a-proxy)) |
+| `-provider-egress-workspace` | `TASKTO_PROVIDER_EGRESS_WORKSPACE` | `provider_egress_workspace` | `any` | where workspaces' provider accounts may connect: `any`, `public`, or a comma-separated list of `public`, hosts, IP addresses and CIDR prefixes ([docs/install.md](docs/install.md#where-provider-accounts-may-connect)) |
+| `-provider-egress-personal` | `TASKTO_PROVIDER_EGRESS_PERSONAL` | `provider_egress_personal` | `any` | the same for members' personal provider accounts |
+| `-agent` | `TASKTO_AGENT` | `agent` | `false` | run the agent runtime (see below) |
+| `-agent-node` | `TASKTO_AGENT_NODE` | `agent_node` | `node` | Node.js executable for the agent runtime, looked up in `PATH` unless it is a path |
+| `-agent-entry` | `TASKTO_AGENT_ENTRY` | `agent_entry` | see below | the agent runtime's entry point |
+| `-agent-providers` | `TASKTO_AGENT_PROVIDERS` | `agent_providers` | | the operator's model providers file ([docs/agent-providers.md](docs/agent-providers.md)), offered to everyone before the providers users and workspaces add; without it, the scripted offline model |
+| `-unsafe-privileged-agents` | `TASKTO_UNSAFE_PRIVILEGED_AGENTS` | `unsafe_privileged_agents` | `false` | development only: start the agent runtime and `local` CLI workers even when the server runs as root or has a passwordless `sudo` ([docs/agent-safety.md](docs/agent-safety.md)) |
+| `-kb-max-file-size` | `TASKTO_KB_MAX_FILE_SIZE` | `kb_max_file_size` | `2GiB` | largest file of any kind in the knowledge base (bytes, or with `KiB`, `MiB`, `GiB`) |
+| `-kb-large-file-size` | `TASKTO_KB_LARGE_FILE_SIZE` | `kb_large_file_size` | `50MiB` | files other than Markdown over this size are kept out of git, unversioned, as audio, video and heavy binaries such as archives always are; also the largest Markdown document ([docs/api.md](docs/api.md#unversioned-files)) |
+| `-kb-max-repo-size` | `TASKTO_KB_MAX_REPO_SIZE` | `kb_max_repo_size` | `1GiB` | cap on each space's knowledge-base repository, history included (unversioned files' bytes aside) |
+| `-kb-max-unversioned-size` | `TASKTO_KB_MAX_UNVERSIONED_SIZE` | `kb_max_unversioned_size` | `20GiB` | cap on the bytes of each space's unversioned files together |
+| `-search-vector-cache` | `TASKTO_SEARCH_VECTOR_CACHE` | `search_vector_cache` | `1GiB` | most memory semantic search keeps vectors in, or `off`; a passage of 768 dimensions takes about 3 KiB, so 200,000 take about 600 MiB. Spaces that don't fit are read from the database at each search, about 25 times slower |
+| `-dictation-local` | `TASKTO_DICTATION_LOCAL` | `dictation_local` | `parakeet-v3` | the local speech model, every workspace's default dictation engine unless an admin picks the hosted API: `parakeet-v3`, `whistle` or `off`; downloaded on first use ([docs/install.md](docs/install.md#dictation)) |
+| `-dictation-cache` | `TASKTO_DICTATION_CACHE` | `dictation_cache` | `<data-dir>/cache/dictation` | where the local speech model's files are kept |
+| `-addons-dir` | `TASKTO_ADDONS_DIR` | `addons_dir` | `<data-dir>/addons` | where the operator installs add-ons such as Desert Ant Voz ([docs/install.md](docs/install.md#dictation)) |
+| `-config` | `TASKTO_CONFIG` | | | config file to read |
+
+The config file is a small subset of TOML: `key = value` lines, strings in double
+quotes, `true`/`false`, and `#` comments.
+
+```toml
+# taskto.toml
+addr = "0.0.0.0:8080"
+data_dir = "/var/lib/taskto"
+```
+
+`GET /healthz` reports the version, whether the database answers, and the agent runtime's
+state (`agent`: `off`, `starting`, `ready` or `stopped`). It returns 503 when the database
+doesn't answer; the agent runtime doesn't change the status, because the server works
+without it.
+
+### The agent runtime
+
+The agent runs in a Node.js sidecar (`agent/`, Node 22.19+) that the server starts,
+restarts when it exits, and stops. It is off by default; `make dev-server` turns it on.
+It keeps its state in the data directory: its database in `agent/agent.db`, its socket
+in `agent/run/agent.sock`, in a directory only the server's user may enter, and the
+providers file the server writes for it, `agent/providers.json`, with its API keys in
+`agent/keys/`. None of these is configured separately. A Unix socket path can't be longer than 103 bytes, so if the data
+directory's path is too long the server stops and says so: choose a shorter one.
+
+Without `-agent-entry`, the server looks for `agent/dist/index.js` (built by
+`pnpm --filter @taskto/agent build`) next to its binary, one directory above it (as with
+`bin/taskto` in a checkout), then in the working directory. If the Node.js executable, the
+entry point or the providers file is missing, the server doesn't start. The sidecar's
+stdin is a pipe from the server, and it exits when that closes, so it never outlives the
+server, even one killed with `kill -9`.
+
+The data directory also holds `server.key`, which encrypts the provider API keys stored in
+the database. Without it those keys are lost, and with both anyone can read them: `taskto
+backup` includes it, so keep backups as private as the server and encrypt them before they
+leave the machine.
+
+On first start the server has no users, and prints a one-time setup token to its log.
+`POST /api/setup` with that token creates the owner and the first workspace, so only
+someone who can read the server's log can set it up. The owner invites the rest. Serve it
+over HTTPS: the session cookie is `Secure`. See [docs/install.md](docs/install.md) and
+[docs/api.md](docs/api.md).
+
+### Backups
+
+`taskto backup [-config file] [-data-dir dir] [-uncompressed] FILE|-` writes a consistent
+snapshot of the data directory while the server runs: SQLite databases through `VACUUM
+INTO`, other files (`server.key`, the spaces) as they are; `-uncompressed` writes a plain
+tar, for restic. `taskto restore [-config file] [-data-dir dir] FILE|-` restores one into
+an empty data directory. Both find the data directory as the server does. The install
+guide sets up backups the server can't delete: restic into an append-only rest-server, or
+a bucket with object lock, with pruning done elsewhere. `taskto backup-schedule` sends one
+there every night, retries a failed night, and keeps the outcome where admins see it
+(Settings → About) and monitoring can (`/healthz/backup`). See
+[docs/install.md](docs/install.md#backups).
+
+`taskto conversations check` finds conversations the server and the agent runtime disagree
+about, and `taskto conversations -lost -orphans clean` removes them. See
+[docs/install.md](docs/install.md#conversations-out-of-step-with-the-agent-runtime).
+
+## Licence
+
+[MIT](LICENSE)

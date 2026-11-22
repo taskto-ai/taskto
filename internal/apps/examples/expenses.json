@@ -1,0 +1,46 @@
+{
+  "name": "Expense tracker",
+  "definition": {
+    "components": [
+      { "id": "root", "component": "Column", "children": ["title", "total", "items", "form"] },
+      { "id": "title", "component": "Text", "text": "Expense tracker", "variant": "h2" },
+      { "id": "total", "component": "Stat", "label": "Total spent", "value": { "path": "/total" } },
+      { "id": "items", "component": "List", "children": { "componentId": "item", "path": "/items" } },
+      { "id": "item", "component": "Row", "justify": "spaceBetween", "children": ["item-description", "item-amount", "item-delete"] },
+      { "id": "item-description", "component": "Text", "text": { "path": "description" } },
+      { "id": "item-amount", "component": "Text", "text": { "path": "amount" } },
+      { "id": "item-delete-label", "component": "Text", "text": "Delete" },
+      {
+        "id": "item-delete",
+        "component": "Button",
+        "variant": "borderless",
+        "child": "item-delete-label",
+        "action": { "event": { "name": "delete_expense", "context": { "id": { "path": "id" } } } }
+      },
+      { "id": "form", "component": "Row", "children": ["description", "amount", "add"] },
+      { "id": "description", "component": "TextField", "label": "Description", "value": { "path": "/draft/description" } },
+      { "id": "amount", "component": "TextField", "label": "Amount", "variant": "number", "value": { "path": "/draft/amount" } },
+      { "id": "add-label", "component": "Text", "text": "Add" },
+      {
+        "id": "add",
+        "component": "Button",
+        "variant": "primary",
+        "child": "add-label",
+        "action": {
+          "event": {
+            "name": "add_expense",
+            "context": { "description": { "path": "/draft/description" }, "amount": { "path": "/draft/amount" } }
+          }
+        }
+      }
+    ],
+    "collection": {
+      "fields": [
+        { "name": "description", "type": "string", "required": true, "max_length": 200 },
+        { "name": "amount", "type": "number", "required": true }
+      ]
+    },
+    "actions": { "add_expense": { "kind": "insert" }, "delete_expense": { "kind": "delete" } },
+    "summaries": { "total": { "kind": "sum", "field": "amount" } }
+  }
+}

@@ -1,0 +1,116 @@
+[
+  {
+    "type": "value",
+    "value": {
+      "conversation": { "id": 2 },
+      "entries": [],
+      "docs": {
+        "pi.agent": { "model": { "provider": "script", "modelId": "script-1" } },
+        "pi.live": {},
+        "pi.inbox": { "items": [] },
+        "pi.usage": { "models": {}, "tools": {} }
+      }
+    }
+  },
+  {
+    "type": "ops",
+    "ops": [
+      ["s", ["docs", "pi.live", "run"], { "taskId": 10, "inputs": [9], "turns": 0, "first": 8 }],
+      [
+        "p",
+        ["entries"],
+        0,
+        0,
+        [
+          {
+            "model": [{ "role": "user", "content": "Hello there, agent", "timestamp": 1795037371212 }],
+            "kind": "pi.user",
+            "id": 8,
+            "conversationId": 2
+          }
+        ]
+      ]
+    ]
+  },
+  {
+    "type": "ops",
+    "ops": [
+      [
+        "p",
+        ["entries"],
+        1,
+        0,
+        [
+          {
+            "model": [
+              {
+                "role": "system",
+                "content": "",
+                "toolsAdded": [{ "name": "pause_safe", "description": "Wait", "parameters": { "type": "object" } }],
+                "timestamp": 1795037371216
+              }
+            ],
+            "kind": "pi.system",
+            "id": 11,
+            "conversationId": 2,
+            "byTaskId": 10
+          }
+        ]
+      ]
+    ]
+  },
+  { "type": "ops", "ops": [["s", ["docs", "pi.live", "generation"], { "attempt": 1 }]] },
+  {
+    "type": "ops",
+    "ops": [
+      [
+        "s",
+        ["docs", "pi.live", "generation", "message"],
+        {
+          "role": "assistant",
+          "content": [{ "type": "text", "text": "" }],
+          "provider": "script",
+          "model": "script-1",
+          "stopReason": "pending",
+          "timestamp": 1795037371218
+        }
+      ]
+    ]
+  },
+  {
+    "type": "ops",
+    "ops": [["a", ["docs", "pi.live", "generation", "message", "content", 0, "text"], "echo: Hello"]]
+  },
+  {
+    "type": "ops",
+    "ops": [
+      ["d", ["docs", "pi.live", "run"]],
+      ["d", ["docs", "pi.live", "generation"]],
+      [
+        "p",
+        ["entries"],
+        2,
+        0,
+        [
+          {
+            "model": [
+              {
+                "role": "assistant",
+                "content": [{ "type": "text", "text": "echo: Hello there, agent" }],
+                "provider": "script",
+                "model": "script-1",
+                "stopReason": "stop",
+                "timestamp": 1795037371218
+              }
+            ],
+            "kind": "pi.assistant",
+            "id": 12,
+            "conversationId": 2,
+            "byTaskId": 10
+          }
+        ]
+      ]
+    ]
+  },
+  { "type": "end", "kind": "interrupted" }
+]

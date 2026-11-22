@@ -1,0 +1,1779 @@
+/* The app's look. Colours are tokens on :root, set again for dark: by the system's setting,
+   unless the viewer picked a theme (data-theme on <html>, theme.ts). Below 48rem the sidebar
+   is a drawer and the conversations page shows the list or the open conversation. */
+
+:root {
+  color-scheme: light;
+  --tt-canvas: #f6f6f3;
+  --tt-surface: #ffffff;
+  --tt-hover: rgba(30, 30, 28, 0.06);
+  --tt-fg: #1e1e1c;
+  --tt-muted: rgba(30, 30, 28, 0.64);
+  --tt-line: rgba(30, 30, 28, 0.12);
+  --tt-line-strong: rgba(30, 30, 28, 0.24);
+  --tt-accent: #1e1e1c;
+  --tt-on-accent: #ffffff;
+  --tt-accent-soft: rgba(47, 111, 235, 0.12);
+  --tt-bar: #24477f;
+  --tt-on-bar: #ffffff;
+  --tt-on-bar-muted: rgba(255, 255, 255, 0.72);
+  --tt-user: #e8eefb;
+  --tt-danger: #b42318;
+  --tt-success: #197734;
+  --tt-warning: #9e4a00;
+  --tt-focus: #2f6feb;
+  --tt-scrim: rgba(20, 20, 18, 0.42);
+
+  --tt-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --tt-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --tt-radius: 8px;
+  --tt-topbar-h: 52px;
+  --tt-sidebar-w: 232px;
+  --tt-touch: 44px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --tt-canvas: #161615;
+    --tt-surface: #1f1f1d;
+    --tt-hover: rgba(237, 237, 234, 0.07);
+    --tt-fg: #ededea;
+    --tt-muted: rgba(237, 237, 234, 0.64);
+    --tt-line: rgba(237, 237, 234, 0.12);
+    --tt-line-strong: rgba(237, 237, 234, 0.24);
+    --tt-accent: #ededea;
+    --tt-on-accent: #161615;
+    --tt-accent-soft: rgba(92, 148, 255, 0.18);
+    --tt-bar: #1b2c4a;
+    --tt-user: #24324a;
+    --tt-danger: #ff6e66;
+    --tt-success: #30d158;
+    --tt-warning: #ff9f0a;
+    --tt-focus: #79a6ff;
+    --tt-scrim: rgba(0, 0, 0, 0.6);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --tt-canvas: #161615;
+  --tt-surface: #1f1f1d;
+  --tt-hover: rgba(237, 237, 234, 0.07);
+  --tt-fg: #ededea;
+  --tt-muted: rgba(237, 237, 234, 0.64);
+  --tt-line: rgba(237, 237, 234, 0.12);
+  --tt-line-strong: rgba(237, 237, 234, 0.24);
+  --tt-accent: #ededea;
+  --tt-on-accent: #161615;
+  --tt-accent-soft: rgba(92, 148, 255, 0.18);
+  --tt-bar: #1b2c4a;
+  --tt-user: #24324a;
+  --tt-danger: #ff6e66;
+  --tt-success: #30d158;
+  --tt-warning: #ff9f0a;
+  --tt-focus: #79a6ff;
+  --tt-scrim: rgba(0, 0, 0, 0.6);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--tt-canvas);
+  color: var(--tt-fg);
+  font: 15px / 1.5 var(--tt-font);
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  line-height: 1.3;
+}
+
+h2 {
+  font-size: 1rem;
+}
+
+h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+code,
+pre {
+  font-family: var(--tt-mono);
+  font-size: 0.9em;
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--tt-focus);
+  outline-offset: 2px;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+select,
+textarea {
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line-strong);
+  border-radius: var(--tt-radius);
+  padding: 0.45rem 0.6rem;
+  min-height: 2.4rem;
+}
+
+/* Inputs under 16px make iOS zoom in on focus. */
+@media (max-width: 48rem) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+.tt-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.tt-muted {
+  color: var(--tt-muted);
+}
+
+.tt-small {
+  font-size: 0.85rem;
+}
+
+.tt-error {
+  color: var(--tt-danger);
+  margin: 0.25rem 0;
+}
+
+.tt-center {
+  min-height: 100%;
+  display: grid;
+  place-content: center;
+  gap: 1rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+.tt-center-text {
+  text-align: center;
+}
+
+.tt-brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+/* Buttons. */
+
+.tt-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 2.4rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--tt-line-strong);
+  border-radius: var(--tt-radius);
+  background: var(--tt-surface);
+  cursor: pointer;
+}
+
+.tt-button:hover:not(:disabled) {
+  background: var(--tt-hover);
+}
+
+.tt-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tt-primary {
+  background: var(--tt-accent);
+  color: var(--tt-on-accent);
+  border-color: var(--tt-accent);
+}
+
+.tt-primary:hover:not(:disabled) {
+  background: var(--tt-accent);
+  opacity: 0.88;
+}
+
+.tt-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 0;
+  border-radius: var(--tt-radius);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tt-icon-button:hover {
+  background: var(--tt-hover);
+}
+
+.tt-icon {
+  flex-shrink: 0;
+}
+
+@media (pointer: coarse) {
+  .tt-button,
+  .tt-icon-button,
+  input,
+  select {
+    min-height: var(--tt-touch);
+  }
+}
+
+/* Setup and login. */
+
+.tt-auth {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.tt-auth-card {
+  width: min(100%, 26rem);
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: 12px;
+  padding: 1.5rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.tt-auth-card .tt-brand {
+  color: var(--tt-bar);
+}
+
+:root[data-theme="dark"] .tt-auth-card .tt-brand {
+  color: var(--tt-focus);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tt-auth-card .tt-brand {
+    color: var(--tt-focus);
+  }
+}
+
+.tt-auth-card p {
+  margin: 0;
+}
+
+.tt-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.tt-form label {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 500;
+}
+
+.tt-language {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 500;
+}
+
+.tt-hint {
+  margin-top: -0.55rem;
+  font-weight: 400;
+  font-size: 0.85rem;
+  color: var(--tt-muted);
+}
+
+/* The shell. */
+
+.tt-shell {
+  height: 100%;
+  display: grid;
+  grid-template-rows: var(--tt-topbar-h) minmax(0, 1fr);
+}
+
+.tt-topbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0 0.5rem 0 0.75rem;
+  background: var(--tt-bar);
+  color: var(--tt-on-bar);
+  min-width: 0;
+}
+
+.tt-topbar select {
+  background: transparent;
+  color: inherit;
+  border-color: rgba(255, 255, 255, 0.3);
+  min-height: 2.2rem;
+  max-width: 12rem;
+}
+
+.tt-topbar option {
+  background: var(--tt-surface);
+  color: var(--tt-fg);
+}
+
+.tt-topbar-section {
+  color: var(--tt-on-bar-muted);
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tt-topbar-end {
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-theme {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.tt-menu-button {
+  display: none;
+}
+
+.tt-topbar .tt-icon-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.tt-account {
+  position: relative;
+}
+
+.tt-account summary {
+  list-style: none;
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.tt-account summary::-webkit-details-marker {
+  display: none;
+}
+
+.tt-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+  font-weight: 600;
+}
+
+.tt-menu {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + 0.4rem);
+  z-index: 30;
+  min-width: 14rem;
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  color: var(--tt-fg);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.35);
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tt-menu p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-body {
+  position: relative;
+  display: flex;
+  min-height: 0;
+}
+
+.tt-sidebar {
+  width: var(--tt-sidebar-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0.5rem;
+  background: var(--tt-surface);
+  border-inline-end: 1px solid var(--tt-line);
+  overflow-y: auto;
+}
+
+.tt-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 2.4rem;
+  padding: 0 0.6rem;
+  border-radius: var(--tt-radius);
+  color: var(--tt-muted);
+  text-decoration: none;
+}
+
+.tt-nav-link:hover {
+  background: var(--tt-hover);
+  color: var(--tt-fg);
+}
+
+.tt-nav-link[aria-current="page"] {
+  background: var(--tt-accent-soft);
+  color: var(--tt-fg);
+  font-weight: 600;
+}
+
+.tt-scrim {
+  display: none;
+}
+
+.tt-page {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.tt-section {
+  padding: 1rem 1.25rem;
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.tt-pane-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.tt-pane-head h1,
+.tt-pane-head h2 {
+  margin-inline-end: auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-inline-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--tt-muted);
+}
+
+/* Lists. */
+
+.tt-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+}
+
+.tt-list a,
+.tt-list button {
+  display: grid;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 0;
+  border-radius: var(--tt-radius);
+  background: transparent;
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.tt-list a:hover,
+.tt-list button:hover {
+  background: var(--tt-hover);
+}
+
+.tt-list [aria-current] {
+  background: var(--tt-accent-soft);
+}
+
+.tt-list-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Conversations. */
+
+.tt-chat-layout {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr);
+}
+
+.tt-chat-list {
+  border-inline-end: 1px solid var(--tt-line);
+  padding: 1rem 0.75rem;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+/* A column: the head, any banners (Reconnect, the browser's help card and panel), the
+   transcript (.tt-transcript takes what is left), and the composer. */
+.tt-chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.tt-chat > * {
+  min-width: 0;
+  flex: none;
+}
+
+.tt-chat > .tt-pane-head {
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--tt-line);
+}
+
+.tt-chat > .tt-pane-head {
+  flex-wrap: nowrap;
+}
+
+.tt-chat-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tt-chat-empty {
+  display: grid;
+  place-items: center;
+}
+
+.tt-back {
+  display: none;
+}
+
+.tt-status {
+  font-size: 0.8rem;
+  color: var(--tt-muted);
+}
+
+.tt-status[data-status="live"] {
+  color: var(--tt-success);
+}
+
+.tt-status[data-status="reconnecting"] {
+  color: var(--tt-warning);
+}
+
+/* In the chat's column it takes what the head, banners and composer leave. */
+.tt-transcript {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tt-message {
+  max-width: min(46rem, 100%);
+  display: grid;
+  gap: 0.3rem;
+}
+
+.tt-message[data-role="user"] {
+  align-self: flex-end;
+  max-width: min(36rem, 88%);
+  padding: 0.55rem 0.85rem;
+  border-radius: 14px 14px 4px 14px;
+  background: var(--tt-user);
+}
+
+.tt-message-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tt-tool {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--tt-muted);
+}
+
+.tt-tool::before {
+  content: "⚙ ";
+}
+
+.tt-tool-use {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-composer {
+  padding: 0.75rem 1.25rem calc(0.75rem + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--tt-line);
+  background: var(--tt-surface);
+}
+
+.tt-composer p {
+  margin: 0 0 0.4rem;
+}
+
+.tt-composer-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.tt-composer textarea {
+  flex: 1;
+  min-width: 0; /* Queue, Stop and Send beside it still fit a phone */
+  resize: none;
+  max-height: 12rem;
+}
+
+/* Dictating: the clock and the stop button, in the danger colour so it's plain the
+   microphone is on. */
+.tt-recording {
+  color: var(--tt-danger);
+  align-self: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+button.tt-recording {
+  border-color: var(--tt-danger);
+}
+
+.tt-pane-head > .tt-error {
+  flex-basis: 100%;
+  order: 1;
+}
+
+.tt-rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
+}
+
+.tt-rename input {
+  flex: 1;
+  min-width: 8rem;
+}
+
+.tt-rename .tt-error {
+  flex-basis: 100%;
+}
+
+.tt-earlier {
+  display: grid;
+  justify-items: center;
+}
+
+.tt-model {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--tt-muted);
+}
+
+.tt-model select {
+  min-height: 2rem;
+  padding: 0.2rem 0.4rem;
+  max-width: 100%;
+  color: var(--tt-fg);
+}
+
+/* Knowledge base and boards. */
+
+.tt-split {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.tt-doc {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  min-width: 0;
+}
+
+.tt-media {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
+.tt-doc-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tt-columns {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(14rem, 1fr);
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.tt-column {
+  display: grid;
+  gap: 0.5rem;
+  align-content: start;
+  padding: 0.6rem;
+  background: var(--tt-hover);
+  border-radius: var(--tt-radius);
+}
+
+.tt-column h2 {
+  font-size: 0.9rem;
+}
+
+.tt-column ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-card {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.55rem 0.65rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  overflow-wrap: anywhere;
+}
+
+.tt-card[data-blocked] {
+  border-inline-start: 3px solid var(--tt-danger);
+}
+
+/* Editing the knowledge base and boards, and search. */
+
+.tt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tt-notice,
+.tt-conflict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--tt-radius);
+  border-inline-start: 3px solid var(--tt-focus);
+  background: var(--tt-accent-soft);
+}
+
+.tt-conflict {
+  border-inline-start-color: var(--tt-warning);
+  background: var(--tt-hover);
+}
+
+.tt-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tt-search input {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.tt-search-results {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-snippet {
+  color: var(--tt-muted);
+  overflow-wrap: anywhere;
+}
+
+.tt-snippet mark {
+  background: var(--tt-accent-soft);
+  color: var(--tt-fg);
+  font-weight: 600;
+}
+
+.tt-kb-side {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.tt-editor {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-editor textarea {
+  width: 100%;
+  min-height: 16rem;
+  resize: vertical;
+  font-family: var(--tt-mono);
+  font-size: 0.9rem;
+}
+
+.tt-view-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.tt-view-tabs button {
+  padding: 0.3rem 0.8rem;
+  border: 0;
+  border-radius: var(--tt-radius);
+  background: transparent;
+  color: var(--tt-muted);
+  cursor: pointer;
+}
+
+.tt-view-tabs button[aria-pressed="true"] {
+  background: var(--tt-accent-soft);
+  color: var(--tt-fg);
+  font-weight: 600;
+}
+
+.tt-preview {
+  padding: 0.75rem;
+  border: 1px dashed var(--tt-line-strong);
+  border-radius: var(--tt-radius);
+  min-width: 0;
+}
+
+.tt-history {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-history-entry {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--tt-radius);
+  overflow-wrap: anywhere;
+}
+
+.tt-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.tt-board[data-open="card"] {
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 26rem);
+}
+
+button.tt-card {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+button.tt-card:hover {
+  background: var(--tt-hover);
+}
+
+button.tt-card[aria-current] {
+  border-color: var(--tt-focus);
+}
+
+.tt-add-card {
+  justify-content: flex-start;
+  border-style: dashed;
+  background: transparent;
+  color: var(--tt-muted);
+}
+
+.tt-blocked {
+  margin: 0;
+  color: var(--tt-danger);
+}
+
+.tt-card-view {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tt-column[data-drop] {
+  outline: 2px dashed var(--tt-focus);
+  outline-offset: -2px;
+}
+
+.tt-column li[draggable="true"] {
+  cursor: grab;
+}
+
+.tt-column li[data-dragged] {
+  opacity: 0.5;
+}
+
+.tt-link-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.tt-link-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+.tt-blocked-section,
+.tt-links,
+.tt-thread {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-comment {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--tt-line);
+}
+
+.tt-checks {
+  display: grid;
+  gap: 0.3rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-checks label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 400;
+}
+
+.tt-checks input {
+  min-height: 0;
+}
+
+/* Markdown, as previews show it. */
+
+.tt-markdown {
+  overflow-wrap: anywhere;
+}
+
+.tt-markdown > :first-child {
+  margin-top: 0;
+}
+
+.tt-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.tt-markdown h1,
+.tt-markdown h2,
+.tt-markdown h3,
+.tt-markdown h4,
+.tt-markdown h5,
+.tt-markdown h6 {
+  margin: 1rem 0 0.4rem;
+}
+
+.tt-markdown h1 {
+  font-size: 1.35rem;
+}
+
+.tt-markdown h3,
+.tt-markdown h4,
+.tt-markdown h5,
+.tt-markdown h6 {
+  font-size: 0.95rem;
+}
+
+.tt-markdown p,
+.tt-markdown ul,
+.tt-markdown ol,
+.tt-markdown pre,
+.tt-markdown blockquote {
+  margin: 0 0 0.75rem;
+}
+
+.tt-markdown pre {
+  padding: 0.6rem 0.75rem;
+  background: var(--tt-hover);
+  border-radius: var(--tt-radius);
+  overflow-x: auto;
+}
+
+.tt-markdown :not(pre) > code {
+  padding: 0.1rem 0.3rem;
+  background: var(--tt-hover);
+  border-radius: 4px;
+}
+
+.tt-markdown blockquote {
+  padding-inline-start: 0.75rem;
+  border-inline-start: 3px solid var(--tt-line-strong);
+  color: var(--tt-muted);
+}
+
+.tt-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--tt-line);
+}
+
+.tt-markdown a {
+  color: var(--tt-focus);
+}
+
+/* A personal app's screen. */
+
+.tt-app {
+  padding: 1rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+/* An app the agent saved, launched in the conversation: compact, scrolling within itself. */
+.tt-app-preview {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+}
+
+.tt-app-preview .tt-app {
+  max-height: 28rem;
+  overflow: auto;
+}
+
+.tt-app-space {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-app-space h2 {
+  font-size: 1rem;
+  margin: 0.5rem 0 0;
+}
+
+.tt-app-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-app-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-app-row[data-offline] .tt-list-title {
+  color: var(--tt-muted);
+}
+
+.tt-app-name {
+  display: grid;
+  flex: 1;
+  min-width: 10rem;
+}
+
+.tt-app-actions,
+.tt-app-rename,
+.tt-app-move {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tt-app-rename {
+  flex: 1;
+}
+
+a.tt-button {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.tt-button.tt-primary {
+  color: var(--tt-on-accent);
+}
+
+.tt-app-offline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* Settings: tabs, panels of rows, forms in a row, and the consent to an endpoint. */
+
+.tt-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--tt-line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tt-tabs a {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.4rem;
+  padding: 0 0.75rem;
+  border-bottom: 2px solid transparent;
+  color: var(--tt-muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tt-tabs a:hover {
+  color: var(--tt-fg);
+}
+
+.tt-tabs a[aria-current="page"] {
+  border-bottom-color: var(--tt-focus);
+  color: var(--tt-fg);
+  font-weight: 600;
+}
+
+.tt-settings {
+  display: grid;
+  gap: 1rem;
+  max-width: 52rem;
+}
+
+.tt-panel {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+  padding: 1rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  min-width: 0;
+}
+
+.tt-panel p {
+  margin: 0;
+}
+
+.tt-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+
+.tt-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--tt-line);
+}
+
+.tt-row:first-child {
+  border-top: 0;
+}
+
+.tt-row-open {
+  display: block;
+}
+
+.tt-row-main {
+  flex: 1 1 16rem;
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+
+.tt-form-row label {
+  flex: 1 1 12rem;
+}
+
+.tt-form textarea {
+  resize: vertical;
+}
+
+.tt-form .tt-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 400;
+}
+
+.tt-check input {
+  min-height: 0;
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.tt-danger {
+  color: var(--tt-danger);
+  border-color: var(--tt-danger);
+}
+
+fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.tt-confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-ok {
+  color: var(--tt-success);
+}
+
+.tt-warning {
+  color: var(--tt-warning);
+}
+
+.tt-notice,
+.tt-confirm-box {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  border-radius: var(--tt-radius);
+  background: var(--tt-accent-soft);
+}
+
+.tt-copy {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.tt-copy input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--tt-mono);
+  font-size: 0.85rem;
+}
+
+.tt-snippet {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.tt-snippet pre {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  background: var(--tt-hover);
+  border-radius: var(--tt-radius);
+  overflow-x: auto;
+}
+
+/* CLI accounts, and a CLI's work in a conversation. */
+
+/* A CLI's accounts and the button that adds another, in the settings' grid. */
+.tt-cli-accounts {
+  display: contents;
+}
+
+.tt-cli-add {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0 0.25rem;
+}
+
+.tt-cli-add p {
+  margin: 0;
+}
+
+.tt-terms {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.tt-cli-modes {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.tt-cli-modes h3 {
+  margin: 0;
+}
+
+.tt-cli-modes label {
+  display: grid;
+  gap: 0.25rem;
+  max-width: 24rem;
+}
+
+.tt-form.tt-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.5rem;
+}
+
+.tt-form.tt-inline label {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.tt-cli-login {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.tt-cli-login p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-cli-url {
+  overflow-wrap: anywhere;
+}
+
+.tt-cli-limits {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-cli-limits h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.tt-cli-meter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-cli-meter meter {
+  width: min(16rem, 60%);
+}
+
+.tt-cli-limit[data-status="allowed_warning"] strong {
+  color: var(--tt-warning);
+}
+
+.tt-cli-limit[data-status="rejected"] strong {
+  color: var(--tt-danger);
+}
+
+.tt-cli-banner {
+  display: grid;
+  margin: 0.75rem 1.25rem 0;
+}
+
+.tt-cli-banner p {
+  margin: 0;
+}
+
+.tt-cli-output {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  max-height: 16rem;
+  overflow: auto;
+  font-family: var(--tt-mono);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--tt-hover);
+  border-radius: var(--tt-radius);
+}
+
+.tt-consent {
+  display: grid;
+  gap: 0.6rem;
+  padding-block: 0.75rem;
+  padding-inline-start: 0.75rem;
+  border-inline-start: 3px solid var(--tt-line-strong);
+}
+
+.tt-consent[data-enabled] {
+  border-inline-start-color: var(--tt-success);
+}
+
+.tt-consent p {
+  margin: 0;
+}
+
+.tt-endpoint {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  font-size: 0.9rem;
+}
+
+.tt-endpoint dt {
+  color: var(--tt-muted);
+}
+
+.tt-endpoint dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Phones: the sidebar is a drawer, and one pane at a time. */
+
+@media (max-width: 48rem) {
+  .tt-menu-button {
+    display: inline-grid;
+  }
+
+  .tt-topbar {
+    gap: 0.4rem;
+    padding-inline-start: 0.25rem;
+  }
+
+  .tt-topbar > .tt-brand,
+  .tt-topbar-section,
+  .tt-theme .tt-icon {
+    display: none;
+  }
+
+  .tt-topbar select {
+    max-width: 8.5rem;
+  }
+
+  .tt-sidebar {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 20;
+    width: min(80vw, var(--tt-sidebar-w));
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition:
+      transform 0.18s ease-out,
+      visibility 0.18s;
+  }
+
+  /* Right to left, the drawer comes from the right. */
+  [dir="rtl"] .tt-sidebar {
+    transform: translateX(100%);
+  }
+
+  .tt-shell[data-drawer="open"] .tt-sidebar {
+    transform: none;
+    visibility: visible;
+  }
+
+  .tt-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    border: 0;
+    background: var(--tt-scrim);
+  }
+
+  .tt-nav-link {
+    min-height: var(--tt-touch);
+  }
+
+  .tt-section {
+    padding: 0.75rem;
+  }
+
+  .tt-chat-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tt-chat-list {
+    border-inline-end: 0;
+  }
+
+  .tt-chat-layout[data-open="conversation"] .tt-chat-list,
+  .tt-chat-layout[data-open="list"] .tt-chat {
+    display: none;
+  }
+
+  .tt-back {
+    display: inline-grid;
+  }
+
+  .tt-chat > .tt-pane-head,
+  .tt-transcript,
+  .tt-composer {
+    padding-inline-start: 0.75rem;
+    padding-inline-end: 0.75rem;
+  }
+
+  .tt-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tt-split[data-open="doc"] > .tt-kb-side {
+    display: none;
+  }
+
+  .tt-board[data-open="card"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tt-board[data-open="card"] > .tt-columns {
+    display: none;
+  }
+
+  .tt-panel {
+    padding: 0.75rem;
+  }
+
+  .tt-endpoint {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tt-endpoint dd + dt {
+    margin-top: 0.3rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tt-sidebar {
+    transition: none;
+  }
+}
+
+/* Markdown tables (GitHub's), which scroll sideways rather than widen the page. */
+
+.tt-markdown .tt-md-table {
+  margin: 0 0 0.75rem;
+  overflow-x: auto;
+}
+
+.tt-markdown table {
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.tt-markdown th,
+.tt-markdown td {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--tt-line);
+  text-align: start;
+}
+
+/* Settings → Dictation: a checkbox on one line, a group of fields, and the credits. */
+
+.tt-form label.tt-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 400;
+}
+
+.tt-form label.tt-check input {
+  min-height: 0;
+}
+
+.tt-fieldset {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-credits {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding-inline-start: 1.25rem;
+}
+
+/* The agent browser: the help card, the panel and its live view (docs/agent-browser.md). */
+.tt-help {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.75rem 1.25rem 0;
+}
+
+.tt-help p {
+  margin: 0;
+}
+
+.tt-help .tt-row,
+.tt-browser-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tt-browser {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 1.25rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 8px;
+}
+
+.tt-browser p {
+  margin: 0;
+}
+
+.tt-browser-head h3 {
+  margin: 0 auto 0 0;
+  font-size: 1rem;
+}
+
+.tt-live {
+  display: grid;
+  gap: 0.4rem;
+}
+
+/* noVNC scales the screen to fit this box (scaleViewport). */
+.tt-live-screen {
+  height: min(45vh, 460px);
+  background: var(--tt-line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tt-live[data-interactive] .tt-live-screen {
+  outline: 2px solid var(--tt-accent, currentColor);
+}
+
+@media (max-width: 640px) {
+  .tt-help,
+  .tt-browser {
+    margin-inline-start: 0.75rem;
+    margin-inline-end: 0.75rem;
+  }
+
+  .tt-live-screen {
+    height: 40vh;
+  }
+}

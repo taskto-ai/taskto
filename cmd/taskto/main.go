@@ -1,0 +1,349 @@
+// Command taskto is the single TaskTo.AI binary.
+package main
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/agentrt"
+	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apps"
+	"taskto.ai/taskto/internal/auth"
+	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/cliworker"
+	"taskto.ai/taskto/internal/config"
+	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/dictation"
+	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/lockfile"
+	"taskto.ai/taskto/internal/privcheck"
+	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/search"
+	"taskto.ai/taskto/internal/server"
+	"taskto.ai/taskto/internal/serverkey"
+	"taskto.ai/taskto/internal/webui"
+)
+
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
+func main() {
+	// The CLI workers' helper: starts one CLI for one user (internal/cliworker).
+	if len(os.Args) > 1 && os.Args[1] == cliworker.HelperArg {
+		os.Exit(cliworker.RunHelper())
+	}
+	// The CLIs' permission hook: asks the worker whether a tool may run (docs/agent-safety.md).
+	if len(os.Args) > 1 && os.Args[1] == cliworker.ApproveArg {
+		os.Exit(cliworker.RunApprove(os.Args[2:]))
+	}
+	// The CLI worker of container mode, in a container of its own (docs/cli-workers.md).
+	if len(os.Args) > 1 && os.Args[1] == "cli-worker" {
+		if err := runCLIWorker(os.Args[2:], os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(os.Stderr, "taskto cli-worker:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && (os.Args[1] == "backup" || os.Args[1] == "backup-schedule" || os.Args[1] == "restore" || os.Args[1] == "conversations") {
+		os.Exit(subcommand(os.Args[1], os.Args[2:]))
+	}
+
+	cfg, err := config.Load(os.Args[1:], os.Getenv, os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
+	if err != nil {
+		// The flag package has already printed the usage for a bad flag.
+		fmt.Fprintln(os.Stderr, "taskto:", err)
+		os.Exit(2)
+	}
+	if cfg.ShowVersion {
+		fmt.Println(version)
+		return
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, cfg, nil); err != nil {
+		stop()
+		slog.Error("taskto stopped", "err", err)
+		os.Exit(1)
+	}
+}
+
+// subcommand runs `taskto backup`, `taskto backup-schedule`, `taskto restore` or `taskto
+// conversations` and returns the exit code.
+func subcommand(name string, args []string) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	var err error
+	switch name {
+	case "backup":
+		err = runBackup(ctx, args, os.Getenv, os.Stdout, os.Stderr)
+	case "backup-schedule":
+		err = runBackupSchedule(ctx, args, os.Getenv, os.Stderr)
+	case "restore":
+		err = runRestore(ctx, args, os.Getenv, os.Stdin, os.Stderr)
+	case "conversations":
+		err = runConversations(ctx, args, os.Getenv, os.Stdout, os.Stderr)
+	}
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		return 0
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "taskto %s: %v\n", name, err)
+		return 1
+	}
+	return 0
+}
+
+// agentRuntime is a running agent runtime. The zero value is the agent runtime off.
+type agentRuntime struct {
+	state func() string                                  // for /healthz
+	ready func(context.Context) (*agentrt.Client, error) // waits until the sidecar answers
+	feed  *providers.Feed                                // keeps its providers in step with the accounts
+	stop  func()
+}
+
+// run serves until ctx is done. If listening isn't nil, it is called with the
+// address once the server accepts connections.
+func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error {
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		return fmt.Errorf("data directory: %w", err)
+	}
+	// The agent sidecar and local CLI workers run as this server's own user, so it must not
+	// be able to act as root (docs/agent-safety.md): checked before anything starts.
+	if cfg.Agent || cfg.CLIWorkers == "local" || cfg.CLIWorkers == "local-unsafe" {
+		what := "this server, whose user the agent sidecar and local CLI workers run as,"
+		if err := privcheck.Enforce(what, privcheck.Process{}.Problems(ctx), cfg.UnsafePrivilegedAgents); err != nil {
+			return err
+		}
+	}
+	// One server per data directory, enforced before anything in it is opened. Deferred
+	// first, so the lock goes last, after the sidecar has stopped and the database closed.
+	lock, err := lockfile.DataDir(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	dbPath := filepath.Join(cfg.DataDir, db.FileName)
+	sqlDB, err := db.Open(ctx, dbPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+	applied, err := db.Migrate(ctx, sqlDB)
+	if err != nil {
+		return err
+	}
+	for _, name := range applied {
+		slog.Info("applied migration", "name", name)
+	}
+
+	// Provider API keys are sealed with the server key; it is created on first run.
+	key, err := serverkey.Load(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	store := providers.NewStore(sqlDB, key)
+
+	// The search index catches up with the knowledge base in the background; it stops
+	// before the database closes.
+	kb := knowledge.New(cfg.DataDir, knowledge.Options{
+		MaxFileSize: cfg.KBMaxFileSize, LargeFileSize: cfg.KBLargeFileSize,
+		MaxRepoSize: cfg.KBMaxRepoSize, MaxUnversionedSize: cfg.KBMaxUnversionedSize,
+	})
+	// A history rewrite a stopped process left half done is finished before anyone reads.
+	if err := kb.Recover(ctx); err != nil {
+		return err
+	}
+	// Embeddings are made with workspaces' accounts, under their egress policy.
+	index := search.New(sqlDB, kb, store, search.Options{
+		HTTPClient:  egressOf(cfg).Workspace.Client(search.EmbedTimeout),
+		VectorCache: cfg.SearchVectorCache,
+	})
+	stopSearch := index.Start(ctx)
+	defer stopSearch()
+
+	// CLI workers: the users' own Claude Code, Codex and Grok Build logins. Deferred before
+	// the agent runtime, so their turns stop after it.
+	cliAccounts, stopCLI, err := startCLIWorkers(ctx, cfg, sqlDB, key)
+	if err != nil {
+		return err
+	}
+	defer stopCLI()
+	// The agent browser, in the CLI worker (or with it, in local mode).
+	browsers, stopBrowsers := startBrowsers(cfg, cliAccounts)
+	defer stopBrowsers()
+
+	// The knowledge-base, board, app and browser tools, for the sidecar and the MCP endpoint:
+	// they act for each conversation's owner, or each access token's user, with that user's
+	// access.
+	spaces := access.New(sqlDB, nil)
+	tools := agenttools.New(agenttools.Options{
+		DB: sqlDB, Key: key, Access: spaces, Boards: boards.New(sqlDB, spaces), Apps: apps.New(sqlDB, spaces),
+		Knowledge: kb, Search: index, Browser: browsers,
+	})
+	// The same tools for the CLIs of conversations' turns, on the per-turn proxy's listener.
+	enableCLITools(cfg, cliAccounts, tools)
+
+	// Deferred after the database's Close, so the sidecar stops first.
+	var agent agentRuntime
+	var convAgent conversations.Agent // nil: the conversation API answers 503
+	if cfg.Agent {
+		agent, err = startAgent(ctx, cfg, store, toolsSocket(tools, cliAccounts), cliAccounts.Providers())
+		if err != nil {
+			return err
+		}
+		defer agent.stop()
+		// A turn that switches to another CLI shows it in the conversation's model.
+		cliAccounts.SetModelSetter(func(ctx context.Context, conversation int64, cli cliworker.CLI) error {
+			c, err := agent.ready(ctx)
+			if err != nil {
+				return err
+			}
+			return c.SetModel(ctx, conversation, agentrt.ModelRef{Provider: "cli-" + string(cli), ModelID: "default"})
+		})
+		convAgent = func(ctx context.Context) (conversations.Runtime, error) {
+			c, err := agent.ready(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return conversations.Client(c), nil
+		}
+	}
+	convs := conversations.New(sqlDB, convAgent)
+	convs.SetCapabilities(tools.Capability)
+	convs.SetCLIQuestions(cliAccounts)
+
+	if cfg.InsecureCookies {
+		slog.Warn("the session cookie is sent over plain http (insecure_cookies): use this only on localhost")
+	}
+	authOpts := auth.Options{InsecureCookies: cfg.InsecureCookies, TrustedProxies: cfg.TrustedProxyPrefixes()}
+	for _, p := range authOpts.TrustedProxies {
+		// Anyone inside a trusted range can claim any address in X-Forwarded-For, and so
+		// dodge the per-address login limits: trust the proxy, not a whole network.
+		if (p.Addr().Is4() && p.Bits() < 24) || (!p.Addr().Is4() && p.Bits() < 64) {
+			slog.Warn("trusted_proxies includes a broad range: every client inside it can set its own address for the login limits; list only your reverse proxy's address",
+				"range", p.String())
+		}
+	}
+	if e := egressOf(cfg); !e.Workspace.IsAny() || !e.Personal.IsAny() {
+		slog.Info("provider accounts connect only where their egress policy allows",
+			"workspace_accounts", e.Workspace.String(), "personal_accounts", e.Personal.String())
+	}
+	// Until someone sets the server up, setup needs a token only its operator can read,
+	// here in the log. Each start makes a new one, and it stops working once setup is done.
+	needed, err := auth.SetupNeeded(ctx, sqlDB)
+	if err != nil {
+		return err
+	}
+	if needed {
+		authOpts.SetupToken = auth.NewSetupToken()
+		slog.Info("first-run setup: no account exists yet; set up the owner with this setup token (POST /api/setup, see docs/install.md); it works until setup is done or the server restarts",
+			"setup_token", authOpts.SetupToken)
+	}
+	handler, err := server.New(version, sqlDB, server.Options{
+		Auth:          authOpts,
+		AgentState:    agent.state,
+		Providers:     providerAPI(store, agent.feed, egressOf(cfg)),
+		Search:        index,
+		Conversations: convs,
+		Tools:         tools,
+		CLIAccounts:   cliAccounts,
+		Browser:       browsers,
+		Dictation:     dictationService(cfg, sqlDB, key, kb),
+		BackupDataDir: cfg.DataDir,
+	})
+	if err != nil {
+		return err
+	}
+
+	// No server-wide ReadTimeout or WriteTimeout: agent replies stream for minutes and
+	// knowledge-base uploads can be large, so those limits belong on individual handlers.
+	srv := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+	// Event streams last until their client leaves: end them, so they don't hold up a shutdown.
+	srv.RegisterOnShutdown(convs.EndStreams)
+	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.Addr)
+	if err != nil {
+		return err
+	}
+
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Serve(ln) }()
+	_, webBuilt := webui.FS()
+	slog.Info("taskto listening", "addr", ln.Addr().String(), "version", version,
+		"database", dbPath, "web_app_built", webBuilt, "agent", cfg.Agent, "cli_workers", cliAccounts.Mode(),
+		"trusted_proxies", cfg.TrustedProxies)
+	if listening != nil {
+		listening(ln.Addr())
+	}
+
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			// Graceful shutdown timed out: drop the connections that are still open.
+			return errors.Join(err, srv.Close())
+		}
+		if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
+}
+
+// egressOf is the provider accounts' egress policies of cfg.
+func egressOf(cfg config.Config) providers.Egress {
+	ws, personal := cfg.Egress()
+	return providers.Egress{Workspace: ws, Personal: personal}
+}
+
+// providerAPI is the provider account API, checking saves and tests against e.
+func providerAPI(store *providers.Store, feed *providers.Feed, e providers.Egress) *providers.Service {
+	s := providers.New(store, feed)
+	s.SetEgress(e)
+	return s
+}
+
+// dictationService is dictation with the operator's local model and add-ons. The local
+// model's files aren't fetched here: the first dictation that needs them starts that.
+func dictationService(cfg config.Config, sqlDB *sql.DB, key *serverkey.Key, kb *knowledge.Store) *dictation.Service {
+	c := dictation.Config{
+		DB: sqlDB, Key: key, Docs: kb, Egress: egressOf(cfg).Workspace,
+		Addons: dictation.DetectAddons(cfg.AddonsDirectory()), Scratch: cfg.DictationCacheDir(),
+	}
+	if model := cfg.LocalDictation(); model != "off" {
+		local, err := dictation.NewLocal(model, cfg.DictationCacheDir())
+		if err != nil {
+			slog.Error("dictation: no local speech model", "err", err) // config.Load checks the name
+		} else {
+			c.Local = local
+			slog.Info("dictation: local speech model", "model", model, "state", local.State().State, "dir", cfg.DictationCacheDir())
+		}
+	}
+	for _, a := range c.Addons {
+		slog.Info("dictation: add-on installed", "addon", a.ID, "path", a.Path)
+	}
+	return dictation.New(c)
+}

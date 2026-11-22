@@ -1,0 +1,133 @@
+# Architecture
+
+TaskTo.AI combines three things that feed each other:
+
+1. **Knowledge base:** the docs, decisions, processes and notes of a person or a team.
+2. **Agent:** a chat agent that reads and writes the knowledge base, works the boards and
+   builds apps. It cites its sources.
+3. **Boards:** a personal board for every user and boards for teams. Cards link to docs and
+   conversations, and agents can be assigned cards, like people.
+
+On top of these, users build **personal apps** by asking the agent.
+
+## Principles
+
+- **The same binary works for one person or a company.** The data model has workspaces and
+  members from day one. Going from solo to a team means adding members, not migrating.
+- **Real separation between people.** Every user has a private space, a personal board and
+  personal apps. Permissions are enforced on files, conversations, boards and apps, and an
+  agent only sees what its user may see.
+- **Users choose how they reach their models.** Providers, accounts and account switching
+  are the user's choice. Each provider's terms are linked in the UI.
+- **Agent-first.** Nearly everything can be done by asking the agent. Screens are there for
+  speed and overview.
+
+## Components
+
+```
+browser ── React app: OpenAgentUI chat + A2UI renderer
+   │
+   ▼
+Go server (single binary) ── auth, workspaces, permissions, knowledge base,
+   │                         boards, app registry + app data, MCP + REST,
+   │                         serves the built frontend
+   ▼
+agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
+   │
+   ├─ model API worker ── API keys, OpenAI-compatible endpoints, local models
+   │                      (Ollama, vLLM), subscription logins the provider allows
+   └─ CLI worker ──────── official Claude Code / Codex / Grok CLIs on the user's
+                          own login
+```
+
+- **Go server:** one binary with the frontend embedded. SQLite by default, Postgres later.
+- **Agent runtime:** [Pi Durable](https://earendil.com/posts/pi-durable/) in a Node sidecar
+  that only the Go server talks to, over a Unix socket. The server starts it, restarts it
+  when it exits and stops it; it never outlives the server. Conversations survive crashes
+  and restarts, can fork, and can move between accounts and agents. The agent's
+  knowledge-base and board tools call back into the server on a second owner-only socket,
+  naming their conversation with a capability the server issued for it; the server acts
+  for the conversation's owner, checking their access on every call
+  ([agent-tools.md](agent-tools.md)).
+- **Spaces and access:** a workspace contains spaces: a private one per member, and shared
+  ones with editors and viewers. Everything people store lives in a space, and one
+  package, `internal/access`, decides who may read and write each, for the API and for
+  the agent acting for a user. Admins don't get into private spaces. Each space has its
+  own directory, `<data>/workspaces/<id>/spaces/<id>/`, reached only through paths that
+  can't lead out of it. See [api.md](api.md#spaces-and-access).
+- **Model providers:** workspaces and users add their own provider accounts (any
+  OpenAI-compatible endpoint, local or hosted). The server stores them with their API keys
+  encrypted under its own key, writes them into the sidecar's providers file and has it
+  reload, so changes apply without interrupting conversations
+  ([agent-providers.md](agent-providers.md#provider-accounts)). An egress policy per scope
+  (workspaces' accounts, personal ones) limits which addresses the server and the sidecar
+  may connect to for them, checked on every connection
+  ([install.md](install.md#where-provider-accounts-may-connect)).
+- **Knowledge base:** Markdown files in git, one repository per space, in the space's
+  directory: the files are its working tree, so agents can read them directly, and every
+  change is a commit with its author, person or agent. `internal/knowledge` runs git in
+  pure Go (go-git, no git binary, so no hook or repository config ever runs), over the
+  space's `os.Root`, and never on a caller's raw path. Large files (over 50 MiB by
+  default), audio and video, and heavy binaries (archives, disk images, design files) are
+  unversioned: git records a Git LFS pointer to them,
+  and their bytes stay beside it in the space's `.git/lfs/objects/`, only the current
+  version of each, so they don't bloat the history; a versioned file that becomes
+  unversioned has its older versions taken out of history too, by a rewrite of the
+  space's commits ([api.md](api.md#unversioned-files)). See [api.md](api.md#knowledge-base).
+- **Search:** `internal/search` indexes every space's documents in SQLite: FTS5 full-text
+  search (scripts written without spaces, such as Chinese and Thai, indexed a character at
+  a time), and, where a workspace has chosen an embeddings model (from one of its provider
+  accounts), vectors of their passages, compared in Go since the pure-Go driver can't load
+  `sqlite-vec`, from an in-memory cache of them (bounded by `-search-vector-cache`, sound
+  since one server owns the data directory) that every write to them updates; the two
+  rankings are fused. Git stays the truth: the index records the
+  commit of `main` it reflects per space and catches up from the diff, after every change
+  and before every search. Embeddings are made in the background, and only of spaces whose
+  owner or editors consented to that very endpoint, so an admin can't route a space's text
+  elsewhere. A search only ever looks in spaces the caller can read. See
+  [api.md](api.md#search).
+- **Boards:** backlog → todo → doing → review → done. Cards have an assignee (person or
+  agent), links to docs and conversations, and a blocked reason.
+- **Personal apps:** saved [A2UI](https://a2ui.org/) screens built from a fixed component
+  catalog, a data collection with a schema, and actions served by Go (add, change or
+  delete a row). No generated code runs. `internal/apps` checks every saved screen
+  strictly against the catalog, and every row against the schema; the browser's renderer
+  checks again. An app lives in a space, so its access and its rows' are the space's, and
+  sharing an app is moving it to a shared space. The agent builds and changes apps with
+  its app tools, and the conversation shows each app it saved there, launched from the
+  server like on the Apps page (never from the tool call's arguments), with a link to it.
+  See [api.md](api.md#personal-apps). Sandboxed code apps may come later,
+  enabled by an admin.
+- **Integrations:** people's own agents (Claude Code, Codex, any MCP client) use the
+  knowledge base, boards and apps through the MCP endpoint, `/mcp`, with the conversation
+  agent's tools, or the knowledge base and boards through the REST API. They authenticate
+  with a personal access token: one user's in one workspace, with exactly their access,
+  checked on every request, and never good for the account itself ([mcp.md](mcp.md),
+  [api.md](api.md#access-tokens)). The app routes take a session only, for now.
+- **CLI workers:** a conversation can run on the official Claude Code, Codex or Grok Build
+  CLI, signed in with the user's own subscription. Go runs the CLIs: in a worker container
+  where each user is a Unix user of their own, or, on a one-user install, in the server
+  itself. The sidecar records each turn in the conversation through a replay-safe tool
+  ([cli-workers.md](cli-workers.md)).
+- **Agent browser:** a Chromium per user, run in the CLI worker as the user's own Unix user,
+  with a profile kept between runs. The agent drives it over a DevTools pipe only the worker
+  holds. The user watches it, or takes over for a login, in a live view in the page (VNC
+  through the Go server). A clean, profile-less headless browser is for testing apps
+  ([agent-browser.md](agent-browser.md)).
+- **Install:** `docker compose up` (Go binary + agent sidecar + optional Ollama); see [install.md](install.md).
+
+## Agent safety
+
+Agents read text other people wrote, so any of them can carry a prompt injection. One
+injection must not become root, or read every secret of a team
+([agent-safety.md](agent-safety.md)):
+
+- **No root, no sudo.** The sidecar, the CLI workers' CLIs and every command they run are
+  never root and can't escalate: the server and the worker check this at start and refuse,
+  and the CLIs run with `no_new_privs`, as a Unix user of their own in `container` mode.
+- **No secrets in agents' environments.** A CLI gets a clean environment and only its user's
+  own login. Secrets stay with the server, which uses them in tools it runs for the
+  conversation's owner.
+- **Permission prompts.** A CLI asks before it runs a command or edits a file, through a
+  hook that reaches the conversation's owner in the web app. Only the owner turns this off,
+  for one conversation.

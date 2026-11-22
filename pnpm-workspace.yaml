@@ -1,0 +1,9 @@
+packages:
+  - web
+  - agent
+
+# Install scripts are off unless listed here as true. These come in through pi-ai's
+# provider SDKs and aren't needed to run.
+allowBuilds:
+  "@google/genai": false
+  protobufjs: false

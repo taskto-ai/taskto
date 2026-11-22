@@ -1,0 +1,46 @@
+# The agent browser's tests against a real Chromium, Xvfb and x11vnc (docs/agent-browser.md).
+# They install Debian's packages each run (a few hundred MB), so they run only when the
+# browser's code, the worker it runs in or this file change, and on demand. CI's main
+# workflow (ci.yml) runs the rest, the browser package's unit tests among them.
+#
+# The same job as .forgejo/workflows/browser.yml; keep the two in step. It runs as root in a
+# throwaway container on a GitHub-hosted Ubuntu runner, so the worker's browser isolation
+# test (internal/cliworker) runs too, and must actually run, not skip.
+name: Browser
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "internal/browser/**"
+      - "internal/cliworker/**"
+      - "Dockerfile"
+      - ".github/workflows/browser.yml"
+  push:
+    branches: [main]
+    paths:
+      - "internal/browser/**"
+      - "internal/cliworker/**"
+      - "Dockerfile"
+      - ".github/workflows/browser.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    name: Agent browser (real Chromium, root, Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Real browser tests as root
+        run: |
+          tar -c --exclude=.git --exclude=node_modules . | docker run -i --rm \
+            golang:1.27.4-trixie@sha256:f18c3d73a184fb0582828510722e723b63a93f7188d11dd223d9be6f6880e65d \
+            sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends chromium xvfb x11vnc fonts-liberation >/dev/null \
+              && mkdir -p /w && tar -x -C /w && cd /w \
+              && { TASKTO_BROWSER_IT=1 go test -count=1 -v ./internal/browser/ > /tmp/out 2>&1; s=$?; \
+                   TASKTO_BROWSER_IT=1 go test -count=1 -v -run IsolationBrowser ./internal/cliworker/ >> /tmp/out 2>&1; s2=$?; cat /tmp/out; \
+                   [ $s -eq 0 ] && [ $s2 -eq 0 ] && grep -q -- "--- PASS: TestRealPersonalBrowser" /tmp/out \
+                     && grep -q -- "--- PASS: TestRealTestingBrowser" /tmp/out && grep -q -- "--- PASS: TestIsolationBrowser" /tmp/out; }'

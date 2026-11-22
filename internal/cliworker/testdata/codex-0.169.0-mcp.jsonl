@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"01a1f9f4-3f08-7662-9650-1dfaab0cefef"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"item.completed","item":{"id":"item_2","type":"error","message":"Model metadata for `probe` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_3","type":"mcp_tool_call","server":"taskto","tool":"write_doc","arguments":{"path":"notes.md"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"taskto","tool":"write_doc","arguments":{"path":"notes.md"},"result":{"content":[{"type":"text","text":"{\"ok\":\"write_doc\"}"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":2,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2,"reasoning_output_tokens":0}}

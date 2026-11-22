@@ -1,0 +1,162 @@
+[
+  {
+    "createSurface": {
+      "catalogId": "https://taskto.ai/catalogs/apps/v1.json",
+      "surfaceId": "app-1"
+    },
+    "version": "v0.9"
+  },
+  {
+    "updateComponents": {
+      "components": [
+        {
+          "children": [
+            "title",
+            "total",
+            "items",
+            "form"
+          ],
+          "component": "Column",
+          "id": "root"
+        },
+        {
+          "component": "Text",
+          "id": "title",
+          "text": "Expense tracker",
+          "variant": "h2"
+        },
+        {
+          "component": "Stat",
+          "id": "total",
+          "label": "Total spent",
+          "value": {
+            "path": "/total"
+          }
+        },
+        {
+          "children": {
+            "componentId": "item",
+            "path": "/items"
+          },
+          "component": "List",
+          "id": "items"
+        },
+        {
+          "children": [
+            "item-description",
+            "item-amount",
+            "item-delete"
+          ],
+          "component": "Row",
+          "id": "item",
+          "justify": "spaceBetween"
+        },
+        {
+          "component": "Text",
+          "id": "item-description",
+          "text": {
+            "path": "description"
+          }
+        },
+        {
+          "component": "Text",
+          "id": "item-amount",
+          "text": {
+            "path": "amount"
+          }
+        },
+        {
+          "component": "Text",
+          "id": "item-delete-label",
+          "text": "Delete"
+        },
+        {
+          "action": {
+            "event": {
+              "context": {
+                "id": {
+                  "path": "id"
+                }
+              },
+              "name": "delete_expense"
+            }
+          },
+          "child": "item-delete-label",
+          "component": "Button",
+          "id": "item-delete",
+          "variant": "borderless"
+        },
+        {
+          "children": [
+            "description",
+            "amount",
+            "add"
+          ],
+          "component": "Row",
+          "id": "form"
+        },
+        {
+          "component": "TextField",
+          "id": "description",
+          "label": "Description",
+          "value": {
+            "path": "/draft/description"
+          }
+        },
+        {
+          "component": "TextField",
+          "id": "amount",
+          "label": "Amount",
+          "value": {
+            "path": "/draft/amount"
+          },
+          "variant": "number"
+        },
+        {
+          "component": "Text",
+          "id": "add-label",
+          "text": "Add"
+        },
+        {
+          "action": {
+            "event": {
+              "context": {
+                "amount": {
+                  "path": "/draft/amount"
+                },
+                "description": {
+                  "path": "/draft/description"
+                }
+              },
+              "name": "add_expense"
+            }
+          },
+          "child": "add-label",
+          "component": "Button",
+          "id": "add",
+          "variant": "primary"
+        }
+      ],
+      "surfaceId": "app-1"
+    },
+    "version": "v0.9"
+  },
+  {
+    "updateDataModel": {
+      "path": "/",
+      "surfaceId": "app-1",
+      "value": {
+        "draft": {},
+        "items": [
+          {
+            "amount": 4.5,
+            "description": "Coffee",
+            "id": 1
+          }
+        ],
+        "total": "4.50"
+      }
+    },
+    "version": "v0.9"
+  }
+]

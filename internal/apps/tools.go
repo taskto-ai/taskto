@@ -1,0 +1,192 @@
+package apps
+
+import (
+	"bytes"
+	"context"
+	"embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"taskto.ai/taskto/internal/access"
+)
+
+// The agent's app tools (docs/agent-tools.md) call the methods below. The agent works for
+// one user at a time, in that user's conversation, and has exactly that user's access:
+// each method checks a.UserID's access to the space through package access, as
+// RequireSpace does for a request. A space or app the user can't read is ErrNotFound; a
+// change they can't make is ErrReadOnly. Changes are recorded as a.UserID's, marked as the
+// agent's when a.Agent is set.
+
+// space returns spaceID as a's user sees it, or ErrNotFound.
+func (s *Service) space(ctx context.Context, a Actor, spaceID int64) (access.Space, error) {
+	sp, err := s.access.Check(ctx, a.UserID, spaceID)
+	if errors.Is(err, access.ErrNotFound) {
+		return access.Space{}, ErrNotFound
+	}
+	return sp, err
+}
+
+// ListApps lists a space's apps, the offline ones too if withArchived.
+func (s *Service) ListApps(ctx context.Context, a Actor, spaceID int64, withArchived bool) ([]App, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return s.listApps(ctx, sp, withArchived)
+}
+
+// ShowApp returns an app with its definition.
+func (s *Service) ShowApp(ctx context.Context, a Actor, spaceID, appID int64) (App, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return App{}, err
+	}
+	return s.getApp(ctx, sp, appID)
+}
+
+// CreateApp saves a new app in a space.
+func (s *Service) CreateApp(ctx context.Context, a Actor, spaceID int64, na NewApp) (App, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return App{}, err
+	}
+	return s.createApp(ctx, sp, a, na)
+}
+
+// UpdateApp changes an app: ch.Version must be its current version, or ErrStale.
+func (s *Service) UpdateApp(ctx context.Context, a Actor, spaceID, appID int64, ch Changes) (App, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return App{}, err
+	}
+	return s.updateApp(ctx, sp, a, appID, ch)
+}
+
+// ListRows returns an app's rows as the app shows them (Items), oldest first. An offline
+// app's rows are kept, so they are read too.
+func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) ([]map[string]any, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	ap, err := app(ctx, s.db, sp.ID, appID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := loadRows(ctx, s.db, ap.ID)
+	if err != nil {
+		return nil, err
+	}
+	return Items(*ap.Definition, rows), nil
+}
+
+//go:embed examples/*.json
+var examplesFS embed.FS
+
+// Example is a bundled app, to start from or learn the format.
+type Example struct {
+	Name       string     `json:"name"`
+	Definition Definition `json:"definition"`
+}
+
+// Examples returns the bundled example apps, each checked as a saved app is.
+func Examples() ([]Example, error) {
+	entries, err := examplesFS.ReadDir("examples")
+	if err != nil {
+		return nil, err
+	}
+	var all []Example
+	for _, e := range entries {
+		raw, err := examplesFS.ReadFile("examples/" + e.Name())
+		if err != nil {
+			return nil, err
+		}
+		var ex Example
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&ex); err != nil {
+			return nil, fmt.Errorf("example %s: %w", e.Name(), err)
+		}
+		if ex.Definition, err = ex.Definition.Check(); err != nil {
+			return nil, fmt.Errorf("example %s: %w", e.Name(), err)
+		}
+		all = append(all, ex)
+	}
+	return all, nil
+}
+
+// CatalogReference describes what an app may be made of, for the agent: the components
+// and their props, the functions, the field types and the actions.
+type CatalogReference struct {
+	Protocol   string                       `json:"protocol"`
+	Components map[string]map[string]string `json:"components"`
+	Functions  map[string]map[string]string `json:"functions"`
+	Rules      []string                     `json:"rules"`
+	Examples   []Example                    `json:"examples"`
+}
+
+// Reference returns the catalog's reference, with the bundled examples.
+func Reference() (CatalogReference, error) {
+	ex, err := Examples()
+	if err != nil {
+		return CatalogReference{}, err
+	}
+	ref := CatalogReference{
+		Protocol:   "A2UI " + ProtocolVersion + ": each component is {\"id\", \"component\", …props}; children are referred to by id",
+		Components: map[string]map[string]string{},
+		Functions:  map[string]map[string]string{},
+		Rules:      rules,
+		Examples:   ex,
+	}
+	for name, spec := range components {
+		ref.Components[name] = describeProps(spec)
+	}
+	for name, fn := range functions {
+		args := describeProps(fn.args)
+		args["(returns)"] = fn.returns
+		ref.Functions[name] = args
+	}
+	return ref, nil
+}
+
+var rules = []string{
+	`An app is {"name", "definition": {"components", "collection", "actions", "summaries"}}.`,
+	`components: the screen, at most 300; one has the id "root". Use only the components and props listed; anything else is refused.`,
+	`Dynamic values are a literal, a data binding {"path": "/abs/path"} (or a path relative to the item inside a List template), or a function call {"call", "args"}.`,
+	`A child list is ["id", …] or a template {"componentId", "path": "/items"} drawing the component once per row; inside it, paths like "amount" or "id" are the row's.`,
+	`The data model: /items is the rows, each with its "id" and the collection's fields; /draft is an empty form to bind inputs to; each summary is at /<name>, as text.`,
+	`collection.fields: [{"name", "type": "string"|"number"|"boolean"|"date", "required"?, "max_length"? (string, default 1000, at most 10000), "min"?/"max"? (number)}], at most 50; a date is YYYY-MM-DD; names are lowercase letters, digits and _, not id, items or draft.`,
+	`actions: {"<event name>": {"kind": "insert"|"update"|"delete"}}. A Button's action {"event": {"name", "context"}} must name one. insert adds a row from the context's fields and clears /draft; update changes the fields the context gives of the row whose "id" it gives; delete removes the row whose "id" it gives.`,
+	`summaries: {"<name>": {"kind": "count"} | {"kind": "sum", "field": "<number field>"}}.`,
+	`Changing a definition: the app's rows must still fit the new collection, so add new fields as optional.`,
+	`Image, Video, AudioPlayer and openUrl are not available: an app never loads or opens outside addresses.`,
+}
+
+func describeProps(spec map[string]prop) map[string]string {
+	out := map[string]string{}
+	for name, p := range spec {
+		d := kindNames[p.kind]
+		if p.kind == kEnum {
+			d = fmt.Sprintf("one of %q", p.values)
+		}
+		if p.required {
+			d += " (required)"
+		}
+		out[name] = d
+	}
+	return out
+}
+
+var kindNames = map[kind]string{
+	kString: "string", kNumber: "number", kInteger: "integer ≥ 0", kBool: "boolean",
+	kDynString: "dynamic string", kDynNumber: "dynamic number", kDynBool: "dynamic boolean",
+	kDynStringList: "dynamic list of strings", kDynValue: "dynamic value", kDynBoolList: "list of ≥ 2 dynamic booleans",
+	kComponentID: "component id", kChildList: "child list", kAction: `{"event": {"name", "context"}} or {"functionCall"}`,
+	kChecks:        `[{"condition": dynamic boolean, "message"}]`,
+	kAccessibility: `{"label"?, "description"?: dynamic string}`,
+	kTabs:          `[{"title": dynamic string, "child": component id}], at least one`,
+	kOptions:       `[{"label": dynamic string, "value": string}]`,
+	kIconName:      `an icon name (` + strings.Join(iconNames, ", ") + `), {"svgPath"} or a data binding`,
+}

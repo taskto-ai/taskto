@@ -1,0 +1,10 @@
+{
+  "name": "add_expense",
+  "surfaceId": "app-1",
+  "sourceComponentId": "add",
+  "timestamp": "2026-11-18T00:00:00.000Z",
+  "context": {
+    "description": "Lunch",
+    "amount": "12.25"
+  }
+}

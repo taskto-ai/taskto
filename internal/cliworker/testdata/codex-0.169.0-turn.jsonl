@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a1f475-29de-7321-a396-a9604888dacd"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `gpt-oss-120b` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo hi > b.txt && cat b.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo hi > b.txt && cat b.txt'","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":11603,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":211,"reasoning_output_tokens":209}}

@@ -1,0 +1,16 @@
+# Caddy in front of TaskTo.AI (compose.yaml's https profile): HTTPS with a certificate it
+# obtains and renews itself, for the domain in TASKTO_DOMAIN. Point the domain's DNS at this
+# machine and open ports 80 and 443 first. See docs/install.md.
+{$TASKTO_DOMAIN} {
+	encode zstd gzip
+
+	# The browser may only use HTTPS for this site from now on.
+	header Strict-Transport-Security "max-age=31536000"
+
+	# Caddy passes the Host header through and sets X-Forwarded-For to the client's address;
+	# the server trusts Caddy's (TASKTO_TRUSTED_PROXIES). Agent replies stream, so nothing
+	# is buffered.
+	reverse_proxy taskto:8080 {
+		flush_interval -1
+	}
+}

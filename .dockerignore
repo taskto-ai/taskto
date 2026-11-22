@@ -1,0 +1,15 @@
+# Only what the Dockerfile copies matters; keep the build context small and free of local
+# data, builds and secrets.
+.git
+.github
+.forgejo
+**/node_modules
+**/dist
+!internal/webui/dist/.gitkeep
+bin
+data
+.env
+.env.*
+*.tar.gz
+*.test
+*.out

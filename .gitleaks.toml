@@ -1,0 +1,16 @@
+# The secret scan (CI's gitleaks job): gitleaks' default rules, with this repository's
+# known false positives allowed, each by its exact line. Add one only for a line that is
+# certainly not a secret, and say what it is.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Not secrets: an environment variable named in prose, and a model file's sha256"
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = [
+  # docs/install.md: the dictation child's environment.
+  '''clean environment \(no keys, `CACTUS_TELEMETRY=0`''',
+  # internal/dictation/manifest.go: the pinned sha256 of Parakeet's tokens.txt.
+  '''parakeetFile\("tokens\.txt", "[0-9a-f]{64}", [0-9]+\)''',
+]

@@ -1,0 +1,145 @@
+// Package server is the HTTP side of the TaskTo.AI binary.
+package server
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"io/fs"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/agentbrowser"
+	"taskto.ai/taskto/internal/agenttools"
+	"taskto.ai/taskto/internal/apps"
+	"taskto.ai/taskto/internal/auth"
+	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/cliaccounts"
+	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/dictation"
+	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/mcpserver"
+	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/search"
+	"taskto.ai/taskto/internal/webui"
+)
+
+// Options are the server's switches.
+type Options struct {
+	// WebUI is the built web app to serve; nil means the one embedded in the binary.
+	WebUI fs.FS
+	// Auth configures accounts and sessions.
+	Auth auth.Options
+	// AgentState reports the agent runtime's state for /healthz; nil means it is off.
+	AgentState func() string
+	// DataDir holds the spaces' files, the knowledge base's repositories among them.
+	// Empty leaves the knowledge base's routes out.
+	DataDir string
+	// Knowledge sets the knowledge base's limits.
+	Knowledge knowledge.Options
+	// Providers serves the provider account API; nil leaves it out.
+	Providers *providers.Service
+	// Search serves knowledge base search. Its knowledge base then serves the knowledge
+	// routes in place of one made from DataDir and Knowledge, so the index hears of every
+	// change. nil leaves search out.
+	Search *search.Index
+	// Conversations serves the conversation API; nil leaves it out.
+	Conversations *conversations.Service
+	// Tools serves the MCP endpoint (mcpserver.Path) to access tokens; nil leaves it out.
+	Tools *agenttools.Service
+	// CLIAccounts serves the users' CLI accounts (/api/me/cli-accounts); nil leaves it out.
+	CLIAccounts *cliaccounts.Service
+	// Dictation serves speech to text for the chat box; nil leaves it out.
+	Dictation *dictation.Service
+	// Browser serves the agent browser (/api/me/browser and its live view); nil leaves it out.
+	Browser *agentbrowser.Service
+	// BackupDataDir is the data directory whose scheduled backups /healthz/backup and the
+	// admins' backup route report (internal/backup.Status). Empty reports none.
+	BackupDataDir string
+}
+
+// New returns the root HTTP handler, backed by the database sqlDB, which must be
+// migrated.
+func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
+	mux := http.NewServeMux()
+	mux.Handle("GET /healthz", healthz(version, sqlDB, opts.AgentState))
+	mux.Handle("GET /healthz/backup", backupHealth(opts.BackupDataDir))
+	accounts := auth.New(sqlDB, opts.Auth)
+	accounts.Routes(mux)
+	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireAdmin(backupStatus(opts.BackupDataDir)))
+	spaces := access.New(sqlDB, accounts)
+	spaces.Routes(mux)
+	boards.New(sqlDB, spaces).Routes(mux)
+	apps.New(sqlDB, spaces).Routes(mux)
+	if opts.Search != nil {
+		opts.Search.Knowledge().Routes(mux, spaces)
+		opts.Search.Routes(mux, accounts, spaces)
+	} else if opts.DataDir != "" {
+		knowledge.New(opts.DataDir, opts.Knowledge).Routes(mux, spaces)
+	}
+	if opts.Providers != nil {
+		opts.Providers.Routes(mux, accounts)
+	}
+	if opts.Conversations != nil {
+		opts.Conversations.Routes(mux, accounts)
+	}
+	if opts.CLIAccounts != nil {
+		opts.CLIAccounts.Routes(mux, accounts)
+		opts.CLIAccounts.SharedRoutes(mux, accounts)
+		opts.CLIAccounts.SwitchingRoutes(mux, accounts)
+	}
+	if opts.Dictation != nil {
+		opts.Dictation.Routes(mux, accounts, spaces)
+	}
+	if opts.Browser != nil {
+		opts.Browser.Routes(mux, accounts)
+	}
+	if opts.Tools != nil {
+		mux.Handle(mcpserver.Path, mcpserver.New(version, accounts, opts.Tools))
+	}
+
+	// An unknown API path is a 404, not the web app's page.
+	mux.Handle("/api/", http.NotFoundHandler())
+	mux.Handle("/api", http.NotFoundHandler())
+
+	webFS := opts.WebUI
+	if webFS == nil {
+		webFS, _ = webui.FS()
+	}
+	web, err := webui.Handler(webFS)
+	if err != nil {
+		return nil, err
+	}
+	mux.Handle("/", web)
+
+	// Every state-changing /api request, of any route, goes through the CSRF checks.
+	return auth.CSRF(mux, knowledge.RawBodyRoutes...), nil
+}
+
+// healthz reports the version, whether the database answers, and the agent runtime's state.
+// It answers 503 when the database doesn't, so a load balancer or container runtime can
+// tell. The agent runtime doesn't change the code: the server works without it, and the
+// supervisor restarts it on its own.
+func healthz(version string, sqlDB *sql.DB, agentState func() string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		status, database, code := "ok", "ok", http.StatusOK
+		if err := sqlDB.PingContext(ctx); err != nil {
+			// The error can name paths on the server: it goes to the log, not the reply.
+			slog.Warn("healthz: database unreachable", "err", err)
+			status, database, code = "unavailable", "unreachable", http.StatusServiceUnavailable
+		}
+		agent := "off"
+		if agentState != nil {
+			agent = agentState()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": status, "version": version, "database": database, "agent": agent})
+	})
+}

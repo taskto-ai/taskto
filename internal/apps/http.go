@@ -1,0 +1,267 @@
+package apps
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"strconv"
+
+	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/auth"
+)
+
+// Routes mounts the app endpoints on mux, each behind access.Checker.RequireSpace, so
+// they need a session, and the CSRF guard (auth.CSRF) checks every one that isn't a GET.
+// docs/api.md describes them.
+func (s *Service) Routes(mux *http.ServeMux) {
+	read := func(h http.HandlerFunc) http.Handler { return s.access.RequireSpace(access.Read, h) }
+	write := func(h http.HandlerFunc) http.Handler { return s.access.RequireSpace(access.Write, h) }
+	const apps = "/api/workspaces/{workspace}/spaces/{space}/apps"
+
+	mux.Handle("GET "+apps, read(s.handleList))
+	mux.Handle("POST "+apps, write(s.handleCreate))
+	mux.Handle("GET "+apps+"/{app}", read(s.handleGet))
+	mux.Handle("PATCH "+apps+"/{app}", write(s.handleUpdate))
+	mux.Handle("POST "+apps+"/{app}/move", write(s.handleMove))
+	mux.Handle("GET "+apps+"/{app}/surface", read(s.handleSurface))
+	mux.Handle("POST "+apps+"/{app}/actions", write(s.handleAction))
+}
+
+// maxBody bounds a request: a definition is at most MaxDefinitionSize, with room for the
+// JSON around it.
+const maxBody = MaxDefinitionSize + 16<<10
+
+// request is what every app handler starts from: the space RequireSpace checked, the
+// caller, and the app in the path, if the route has one.
+type request struct {
+	space access.Space
+	actor Actor
+	app   int64
+}
+
+func parse(w http.ResponseWriter, r *http.Request, withApp bool) (request, bool) {
+	sp, _ := access.SpaceFrom(r.Context())
+	u, _ := auth.UserFrom(r.Context())
+	req := request{space: sp, actor: Actor{UserID: u.ID}}
+	if withApp {
+		id, err := strconv.ParseInt(r.PathValue("app"), 10, 64)
+		if err != nil {
+			writeError(w, http.StatusNotFound, apierr.CodeNotFound, ErrNotFound.Error())
+			return request{}, false
+		}
+		req.app = id
+	}
+	return req, true
+}
+
+func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
+	req, _ := parse(w, r, false)
+	withArchived := false
+	switch r.URL.Query().Get("archived") {
+	case "", "false":
+	case "true":
+		withArchived = true
+	default:
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, `archived must be "true" or "false"`)
+		return
+	}
+	all, err := s.listApps(r.Context(), req.space, withArchived)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]App{"apps": all})
+}
+
+func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
+	req, _ := parse(w, r, false)
+	var na NewApp
+	if !readJSON(w, r, &na) {
+		return
+	}
+	a, err := s.createApp(r.Context(), req.space, req.actor, na)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, a)
+}
+
+func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	a, err := s.getApp(r.Context(), req.space, req.app)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	var ch Changes
+	if !readJSON(w, r, &ch) {
+		return
+	}
+	a, err := s.updateApp(r.Context(), req.space, req.actor, req.app, ch)
+	s.result(w, r, req, a, err)
+}
+
+func (s *Service) handleMove(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	var body struct {
+		Version int64 `json:"version"`
+		SpaceID int64 `json:"space_id"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	// The space it goes to, as the caller sees it: one they can't read is not found.
+	to, err := s.access.Check(r.Context(), req.actor.UserID, body.SpaceID)
+	if errors.Is(err, access.ErrNotFound) {
+		err = ErrNotFound
+	}
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	a, err := s.moveApp(r.Context(), req.space, req.actor, req.app, body.Version, to)
+	s.result(w, r, req, a, err)
+}
+
+func (s *Service) handleSurface(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	msgs, err := s.surface(r.Context(), req.space, req.app)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
+func (s *Service) handleAction(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	var action ClientAction
+	if !readJSON(w, r, &action) {
+		return
+	}
+	msgs, err := s.act(r.Context(), req.space, req.actor, req.app, action)
+	if errors.Is(err, ErrInvalid) {
+		// The screen sent something the app doesn't allow: the request was well formed.
+		invalid(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
+// result answers a change to an app: the app, or for ErrStale a 409 with the app as it is
+// now, or the error's status.
+func (s *Service) result(w http.ResponseWriter, r *http.Request, req request, a App, err error) {
+	switch {
+	case errors.Is(err, ErrStale):
+		current, cerr := app(r.Context(), s.db, req.space.ID, req.app)
+		if cerr != nil {
+			fail(w, r, cerr)
+			return
+		}
+		writeJSON(w, http.StatusConflict, map[string]any{"error": ErrStale.Error(), "code": apierr.CodeAppChanged, "current": current})
+	case err != nil:
+		fail(w, r, err)
+	default:
+		writeJSON(w, http.StatusOK, a)
+	}
+}
+
+// fail answers with the status for one of the package's errors, or 500.
+func fail(w http.ResponseWriter, r *http.Request, err error) {
+	var full *fullError
+	switch {
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, apierr.CodeNotFound, ErrNotFound.Error())
+	case errors.Is(err, errSpaceArchived):
+		writeError(w, http.StatusForbidden, apierr.CodeSpaceArchived, err.Error())
+	case errors.Is(err, ErrReadOnly):
+		writeError(w, http.StatusForbidden, apierr.CodeSpaceReadOnly, err.Error())
+	case errors.Is(err, ErrOffline):
+		writeError(w, http.StatusConflict, apierr.CodeAppOffline, err.Error())
+	case errors.Is(err, ErrStale):
+		// Not reached: changes go through result, which sends the current app too.
+		writeError(w, http.StatusConflict, apierr.CodeAppChanged, err.Error())
+	case errors.As(err, &full):
+		writeError(w, http.StatusConflict, full.code, err.Error(), full.params)
+	case errors.Is(err, ErrInvalid):
+		invalid(w, http.StatusBadRequest, err)
+	default:
+		if r.Context().Err() != nil {
+			return // the client went away
+		}
+		slog.Error("apps: request failed", "method", r.Method, "path", r.URL.Path, "err", err)
+		apierr.Internal(w)
+	}
+}
+
+// invalid answers a validation error with status, its code and its params.
+func invalid(w http.ResponseWriter, status int, err error) {
+	var bad *invalidError
+	if !errors.As(err, &bad) {
+		writeError(w, status, apierr.CodeBadRequest, err.Error())
+		return
+	}
+	writeError(w, status, bad.code, bad.msg, bad.params)
+}
+
+// readJSON decodes the request body into v, strictly: unknown fields and trailing data
+// are errors. It answers 400 and returns false on failure.
+func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		writeError(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: "+err.Error())
+		return false
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: one object expected")
+		return false
+	}
+	return true
+}
+
+// writeJSON encodes before writing, so an encoding failure is a 500 rather than a 200
+// with a broken body.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("apps: encode response", "err", err)
+		status, body = http.StatusInternalServerError, []byte(`{"error":"could not encode the response","code":"internal"}`)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(append(body, '\n'))
+}
+
+func writeError(w http.ResponseWriter, status int, code apierr.Code, msg string, params ...apierr.Params) {
+	apierr.Write(w, status, code, msg, params...)
+}

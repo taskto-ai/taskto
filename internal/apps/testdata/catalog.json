@@ -1,0 +1,130 @@
+{
+  "components": {
+    "Button": [
+      "accessibility",
+      "action",
+      "checks",
+      "child",
+      "variant",
+      "weight"
+    ],
+    "Card": [
+      "accessibility",
+      "child",
+      "weight"
+    ],
+    "CheckBox": [
+      "accessibility",
+      "checks",
+      "label",
+      "value",
+      "weight"
+    ],
+    "ChoicePicker": [
+      "accessibility",
+      "checks",
+      "displayStyle",
+      "filterable",
+      "label",
+      "options",
+      "value",
+      "variant",
+      "weight"
+    ],
+    "Column": [
+      "accessibility",
+      "align",
+      "children",
+      "justify",
+      "weight"
+    ],
+    "DateTimeInput": [
+      "accessibility",
+      "checks",
+      "enableDate",
+      "enableTime",
+      "label",
+      "max",
+      "min",
+      "value",
+      "weight"
+    ],
+    "Divider": [
+      "accessibility",
+      "axis",
+      "weight"
+    ],
+    "Icon": [
+      "accessibility",
+      "name",
+      "weight"
+    ],
+    "List": [
+      "accessibility",
+      "align",
+      "children",
+      "direction",
+      "weight"
+    ],
+    "Modal": [
+      "accessibility",
+      "content",
+      "trigger",
+      "weight"
+    ],
+    "Row": [
+      "accessibility",
+      "align",
+      "children",
+      "justify",
+      "weight"
+    ],
+    "Slider": [
+      "accessibility",
+      "checks",
+      "label",
+      "max",
+      "min",
+      "value",
+      "weight"
+    ],
+    "Stat": [
+      "label",
+      "value"
+    ],
+    "Tabs": [
+      "accessibility",
+      "tabs",
+      "weight"
+    ],
+    "Text": [
+      "accessibility",
+      "text",
+      "variant",
+      "weight"
+    ],
+    "TextField": [
+      "accessibility",
+      "checks",
+      "label",
+      "value",
+      "variant",
+      "weight"
+    ]
+  },
+  "functions": [
+    "and",
+    "email",
+    "formatCurrency",
+    "formatDate",
+    "formatNumber",
+    "formatString",
+    "length",
+    "not",
+    "numeric",
+    "or",
+    "pluralize",
+    "required"
+  ],
+  "id": "https://taskto.ai/catalogs/apps/v1.json"
+}

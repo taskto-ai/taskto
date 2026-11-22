@@ -1,0 +1,59 @@
+# The images: the server, the CLI worker and the backup job, built from the Dockerfile and
+# pushed to the GitHub Container Registry as ghcr.io/<owner>/taskto, taskto-cli-worker and
+# taskto-backup, <owner> being this repository's organisation, lowercased
+# (.github/scripts/images.sh, docs/install.md#prebuilt-images).
+#
+# - A push to main publishes ghcr.io/<owner>/taskto*:<full commit SHA>.
+# - A version tag (v*) publishes ghcr.io/<owner>/taskto*:<tag>, built with that version.
+# - A pull request that changes the Dockerfile, the CLI pins or this workflow builds them,
+#   without pushing, so a broken image is caught before it merges.
+#
+# Tags are immutable: one already in the registry is never pushed again. Only amd64 for
+# now: arm64 would need QEMU for the CLI worker's apt-get.
+#
+# It pushes with the workflow's own GITHUB_TOKEN (packages: write), no other secret. A new
+# package on ghcr.io starts private: after the first push, set each of the three to public
+# in its package settings, once, so installs pull them without a token.
+#
+# .forgejo/workflows/images.yml is the same job for a Forgejo's registry.
+name: Images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "deploy/cli-workers.json"
+      - "deploy/cli-workers.sh"
+      - ".github/workflows/images.yml"
+      - ".github/scripts/images.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Unlike the Forgejo workflow, a fork's pull request builds too: the build runs the
+# Dockerfile's RUN steps, which on a self-hosted runner would be the fork's code on a shared
+# Docker daemon, but here it is a throwaway GitHub-hosted VM, and a pull request never gets a
+# token that can push (REGISTRY_TOKEN is empty for it, below).
+jobs:
+  images:
+    name: Images (build, push on main and tags)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build, and push when allowed
+        env:
+          REGISTRY: ghcr.io
+          # Only pushes (main, v* tags, or a manual run of one) use it; the script builds
+          # without pushing otherwise. A fork's pull request gets a read-only token.
+          REGISTRY_TOKEN: ${{ github.event_name != 'pull_request' && secrets.GITHUB_TOKEN || '' }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: sh .github/scripts/images.sh

@@ -1,0 +1,51 @@
+# The backup host: where TaskTo.AI's backups go, on a machine other than the server.
+# See docs/install.md#backups-the-server-cant-delete.
+#
+#   echo 'TASKTO_BACKUP_ADDR=<private-address>' >> .env    # required: where to listen
+#   docker compose up -d                                   # the REST server, append-only
+#   docker compose exec rest-server create_user taskto     # the server's user (asks a password)
+#   docker compose run --rm prune                          # forget old snapshots, prune
+#   docker compose run --rm prune check                    # check the repository
+#
+# The REST server only adds: with --append-only it refuses to delete or overwrite anything
+# but restic's lock files, whoever asks. So the user the TaskTo.AI server has can add
+# snapshots and read them, never remove them. Removing old ones is the prune job's, which
+# works on the repository's files directly, on this machine: that power never leaves it.
+# Settings go in a .env file next to this one; TASKTO_BACKUP_ADDR is required.
+name: taskto-backup-host
+
+services:
+  rest-server:
+    image: restic/rest-server:0.14.0@sha256:d2aff06f47eb38637dff580c3e6bce4af98f386c396a25d32eb6727ec96214a5
+    restart: unless-stopped
+    ports:
+      # Let only the TaskTo.AI servers reach it. TASKTO_BACKUP_ADDR has no default: this
+      # host's address on a private network, or 0.0.0.0 with TLS and a firewall
+      # (docs/install.md).
+      - "${TASKTO_BACKUP_ADDR:?set TASKTO_BACKUP_ADDR: this host's private-network address, or 0.0.0.0 with TLS and a firewall (docs/install.md)}:${TASKTO_BACKUP_PORT:-8000}:8000"
+    environment:
+      # --append-only and --private-repos are fixed here: each user has its own repository
+      # (/<user>/), and none can delete. Add TLS with TASKTO_BACKUP_TLS, for example
+      # "--tls --tls-cert /data/tls/cert.pem --tls-key /data/tls/key.pem".
+      OPTIONS: --append-only --private-repos ${TASKTO_BACKUP_TLS:-}
+    volumes:
+      # The repositories, and the users' .htpasswd. A path (/srv/restic) or a volume name.
+      - ${TASKTO_BACKUP_REPOS:-repos}:/data
+
+  # Forgets snapshots older than the window and prunes what they alone used. Run it from
+  # cron on this machine, or by hand. --keep-within is the only rule that a server able to
+  # add forged snapshots can't game (restic's "Security considerations in append-only mode").
+  prune:
+    profiles: [prune]
+    image: restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510
+    volumes:
+      - ${TASKTO_BACKUP_REPOS:-repos}:/repos
+      # The repository's password, owner-only; never on the TaskTo.AI server's side of this.
+      - ./prune:/run/taskto-prune:ro
+    environment:
+      RESTIC_REPOSITORY: /repos/${TASKTO_BACKUP_USER:-taskto}
+      RESTIC_PASSWORD_FILE: /run/taskto-prune/password
+    command: [forget, "--keep-within=${TASKTO_BACKUP_KEEP:-90d}", --prune]
+
+volumes:
+  repos:
