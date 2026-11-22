@@ -56,7 +56,9 @@ func mustSub(fsys fs.FS, dir string) fs.FS {
 //     cached for a year, and a missing one is a 404 (not the page, which would be
 //     served as a script or stylesheet by mistake);
 //   - any other path serves index.html, so the app's own router can handle it. The page
-//     and other unhashed files are revalidated on every load (ETag).
+//     and other unhashed files are revalidated on every load (ETag): among them the
+//     service worker (sw.js) and the manifest, which must never be served stale, or an
+//     installed app would not learn of a new version.
 //
 // Routes the API owns are the caller's business: mount Handler on "/" only after them,
 // and keep it from answering their unknown paths with the page.
@@ -81,6 +83,14 @@ func Handler(fsys fs.FS) (http.Handler, error) {
 		return nil, errors.New("webui: no index.html")
 	}
 	return &handler{files: files}, nil
+}
+
+// contentTypes are set by extension where the system's MIME table, which Go reads, may lack
+// the type or differ: the manifest has none in Go's own table, and a service worker must be
+// served as JavaScript.
+var contentTypes = map[string]string{
+	".webmanifest": "application/manifest+json",
+	".js":          "text/javascript; charset=utf-8",
 }
 
 type file struct {
@@ -116,6 +126,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("ETag", f.etag)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if ct, ok := contentTypes[path.Ext(name)]; ok {
+		w.Header().Set("Content-Type", ct)
+	}
 	// ServeContent sets the content type from the name's extension and answers
 	// If-None-Match and Range requests.
 	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(f.data))

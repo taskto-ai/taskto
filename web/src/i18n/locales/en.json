@@ -792,6 +792,33 @@
       "yes": "Yes, send them there"
     }
   },
+  "pwa": {
+    "update": {
+      "message": "A new version of TaskTo.AI is ready. Reloading closes anything you haven't saved.",
+      "reload": "Reload to update",
+      "later": "Later"
+    },
+    "install": {
+      "title": "Install the app",
+      "intro": "Add TaskTo.AI to this device to open it like an app, in a window of its own.",
+      "installed": "TaskTo.AI is installed on this device: you are using the installed app.",
+      "insecure": "This server isn't on a secure connection (HTTPS), so this browser can't install it or keep it for offline use. Ask whoever runs the server to serve it over HTTPS.",
+      "button": "Install TaskTo.AI",
+      "ios": {
+        "share": "Tap the Share button, in Safari's toolbar or your browser's menu.",
+        "add": "Choose “Add to Home Screen”.",
+        "confirm": "Tap Add. TaskTo.AI opens from the Home Screen like an app."
+      },
+      "android": {
+        "menu": "Open the browser's menu (⋮) and choose “Install app” or “Add to Home screen”.",
+        "confirm": "Confirm. TaskTo.AI opens from your apps like any other."
+      },
+      "desktop": {
+        "menu": "Look for the install icon at the end of the address bar, or open the browser's menu and choose “Install TaskTo.AI” (in Safari: File, then “Add to Dock”)."
+      },
+      "offline": "Offline, the app's screens still open, but your conversations, documents and boards need the connection to the server."
+    }
+  },
   "shell": {
     "sections": {
       "conversations": "Conversations",
@@ -812,7 +839,9 @@
       "light": "Light",
       "dark": "Dark"
     },
-    "account": "Account: {name}"
+    "account": "Account: {name}",
+    "skipToContent": "Skip to the content",
+    "installApp": "Install the app"
   },
   "common": {
     "cancel": "Cancel",

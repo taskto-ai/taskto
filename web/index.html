@@ -2,8 +2,24 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- viewport-fit=cover: the app lays itself out inside the safe areas (notch, home bar).
+         interactive-widget=resizes-content: on Android the on-screen keyboard shrinks the page, so the
+         composer stays above it. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#24477f" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1b2c4a" media="(prefers-color-scheme: dark)" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <!-- Added to the Home Screen on iOS, it opens like an app, with the page under the status bar. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="TaskTo" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>TaskTo.AI</title>
   </head>
   <body>

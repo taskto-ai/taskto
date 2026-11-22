@@ -800,6 +800,33 @@
       "yes": "Sim, enviar para lá"
     }
   },
+  "pwa": {
+    "update": {
+      "message": "Há uma nova versão do TaskTo.AI. Recarregar fecha o que você não salvou.",
+      "reload": "Recarregar para atualizar",
+      "later": "Depois"
+    },
+    "install": {
+      "title": "Instalar o app",
+      "intro": "Adicione o TaskTo.AI a este dispositivo para abri-lo como um app, em uma janela própria.",
+      "installed": "O TaskTo.AI está instalado neste dispositivo: você está usando o app instalado.",
+      "insecure": "Este servidor não está em uma conexão segura (HTTPS), então este navegador não consegue instalá-lo nem guardá-lo para uso offline. Peça a quem administra o servidor que o sirva por HTTPS.",
+      "button": "Instalar o TaskTo.AI",
+      "ios": {
+        "share": "Toque no botão Compartilhar, na barra do Safari ou no menu do seu navegador.",
+        "add": "Escolha “Adicionar à Tela de Início”.",
+        "confirm": "Toque em Adicionar. O TaskTo.AI abre pela Tela de Início como um app."
+      },
+      "android": {
+        "menu": "Abra o menu do navegador (⋮) e escolha “Instalar app” ou “Adicionar à tela inicial”.",
+        "confirm": "Confirme. O TaskTo.AI abre pelos seus apps como qualquer outro."
+      },
+      "desktop": {
+        "menu": "Procure o ícone de instalação no fim da barra de endereço, ou abra o menu do navegador e escolha “Instalar TaskTo.AI” (no Safari: Arquivo, depois “Adicionar ao Dock”)."
+      },
+      "offline": "Offline, as telas do app ainda abrem, mas suas conversas, documentos e quadros precisam da conexão com o servidor."
+    }
+  },
   "shell": {
     "sections": {
       "conversations": "Conversas",
@@ -820,7 +847,9 @@
       "light": "Claro",
       "dark": "Escuro"
     },
-    "account": "Conta: {name}"
+    "account": "Conta: {name}",
+    "skipToContent": "Pular para o conteúdo",
+    "installApp": "Instalar o app"
   },
   "common": {
     "cancel": "Cancelar",

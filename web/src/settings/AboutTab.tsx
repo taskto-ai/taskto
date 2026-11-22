@@ -5,6 +5,7 @@
 import { ApiError, api, type BackupStatus, backupPath, type Credit, type DictationStatus, dictationPath } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
+import { InstallPanel } from '../pwa/InstallPanel'
 import { Alert } from './parts'
 
 export function AboutTab({ workspace, admin }: { workspace: number; admin: boolean }) {
@@ -21,6 +22,7 @@ export function AboutTab({ workspace, admin }: { workspace: number; admin: boole
   const t = useT()
   return (
     <div className="tt-settings">
+      <InstallPanel />
       <section className="tt-panel" aria-labelledby="tt-about">
         <h2 id="tt-about">{t('settings.about.title')}</h2>
         <p>{t('settings.about.licence')}</p>
