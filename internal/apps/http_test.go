@@ -352,6 +352,8 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 			{http.MethodPost, appPath(s, a.ID, "/move"), map[string]any{"version": a.Version, "space_id": s.ID}},
 			{http.MethodGet, appPath(s, a.ID, "/surface"), nil},
 			{http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{"description": "x", "amount": "1"})},
+			{http.MethodGet, appPath(s, a.ID, "/roles"), nil},
+			{http.MethodPut, appPath(s, a.ID, "/roles"), map[string]any{"grants": []any{}}},
 		}
 	}
 	cases := []struct {
@@ -556,6 +558,8 @@ func TestRoutesNeedASessionAndSameOrigin(t *testing.T) {
 		{http.MethodPost, appPath(s, a.ID, "/move"), map[string]any{"version": 1, "space_id": s.ID}},
 		{http.MethodGet, appPath(s, a.ID, "/surface"), nil},
 		{http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{"description": "x", "amount": "1"})},
+		{http.MethodGet, appPath(s, a.ID, "/roles"), nil},
+		{http.MethodPut, appPath(s, a.ID, "/roles"), map[string]any{"grants": []any{}}},
 	} {
 		if rec := anonymous.do(r.method, r.path, r.body); rec.Code != http.StatusUnauthorized {
 			t.Errorf("without a session, %s %s = %d, want 401", r.method, r.path, rec.Code)

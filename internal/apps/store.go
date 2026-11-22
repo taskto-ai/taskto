@@ -42,13 +42,16 @@ type App struct {
 	// ArchivedAt is when the app was taken offline, or nil.
 	ArchivedAt *string `json:"archived_at"`
 	Version    int64   `json:"version"`
-	// Rows is how many rows its collection has.
-	Rows       int         `json:"rows"`
-	CreatedAt  string      `json:"created_at"`
-	CreatedBy  *Author     `json:"created_by"`
-	UpdatedAt  string      `json:"updated_at"`
-	UpdatedBy  *Author     `json:"updated_by"`
-	Definition *Definition `json:"definition,omitempty"`
+	// Rows is how many rows its collection has that the caller may read: all of them, only
+	// their own, or none (see Access.ReadRecords).
+	Rows      int     `json:"rows"`
+	CreatedAt string  `json:"created_at"`
+	CreatedBy *Author `json:"created_by"`
+	UpdatedAt string  `json:"updated_at"`
+	UpdatedBy *Author `json:"updated_by"`
+	// Access is what the caller may do in the app: their roles and capabilities.
+	Access     access.AppAccess `json:"access"`
+	Definition *Definition      `json:"definition,omitempty"`
 }
 
 var (
@@ -65,7 +68,59 @@ var (
 	// ErrFull is for a row that would take an app over MaxRows or MaxDataSize, or an app
 	// that would take a space over maxApps.
 	ErrFull = errors.New("full")
+	// ErrForbidden is for something the caller's roles in the app don't allow, though the
+	// space does: a user who may submit records may not change the app, for instance.
+	ErrForbidden = errors.New("your role in this app doesn't allow this")
 )
+
+// forbiddenError is ErrForbidden, saying which capability the caller lacks.
+type forbiddenError struct{ capability string }
+
+func (e *forbiddenError) Error() string        { return ErrForbidden.Error() + " (" + e.capability + ")" }
+func (e *forbiddenError) Is(target error) bool { return target == ErrForbidden }
+
+func forbidden(capability string) error { return &forbiddenError{capability: capability} }
+
+// records names the capability of reading or changing the app's records, for ErrForbidden.
+const (
+	capReadRecords   = "read_records"
+	capModifyRecords = "modify_records"
+)
+
+// need checks that acc has capability c.
+func need(acc access.AppAccess, c access.Capability) error {
+	if !acc.Has(c) {
+		return forbidden(string(c))
+	}
+	return nil
+}
+
+// visibility says which of an app's rows a caller reads: all of them, those they created, or
+// none. Every way to read rows goes through it, so what a screen shows, its summaries, the
+// counts in lists and the agent's reads agree.
+type visibility struct {
+	scope access.Scope
+	user  int64
+}
+
+func readable(acc access.AppAccess, userID int64) visibility {
+	return visibility{scope: acc.ReadRecords, user: userID}
+}
+
+// everything is the view of the server's own checks, which read every row.
+var everything = visibility{scope: access.ScopeAll}
+
+// sees reports whether the caller reads a row created by creator (nil: its creator's
+// account is gone, which only a caller who reads all rows sees).
+func (v visibility) sees(creator sql.NullInt64) bool {
+	switch v.scope {
+	case access.ScopeAll:
+		return true
+	case access.ScopeOwn:
+		return creator.Valid && creator.Int64 == v.user
+	}
+	return false
+}
 
 // fullError is ErrFull, saying which limit, with the API's code for it.
 type fullError struct {
@@ -158,6 +213,52 @@ func (s *Service) recheck(ctx context.Context, a Actor, ids ...int64) error {
 	return nil
 }
 
+// appAccess returns what a may do in appID of spaceID now: ErrNotFound if they can't read
+// the space or it has no such app. It asks package access, which answers for requests and
+// the agent alike.
+func (s *Service) appAccess(ctx context.Context, a Actor, spaceID, appID int64) (access.AppAccess, error) {
+	acc, err := s.access.App(ctx, a.UserID, spaceID, appID)
+	if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {
+		return access.AppAccess{}, ErrNotFound
+	}
+	return acc, err
+}
+
+// recheckApp is recheck for one app: a may still write its space, and what they may do in it
+// is returned, as of now.
+func (s *Service) recheckApp(ctx context.Context, a Actor, spaceID, appID int64) (access.AppAccess, error) {
+	if err := s.recheck(ctx, a, spaceID); err != nil {
+		return access.AppAccess{}, err
+	}
+	return s.appAccess(ctx, a, spaceID, appID)
+}
+
+// present fills in what only the caller's access decides about an app they were handed: what
+// they may do in it, and how many of its rows they may read.
+func (s *Service) present(ctx context.Context, a Actor, ap *App) error {
+	acc, err := s.appAccess(ctx, a, ap.SpaceID, ap.ID)
+	if err != nil {
+		return err
+	}
+	ap.Access = acc
+	ap.Rows, err = countRows(ctx, s.db, ap.ID, readable(acc, a.UserID))
+	return err
+}
+
+// countRows counts the rows of appID that v reads.
+func countRows(ctx context.Context, q queryer, appID int64, v visibility) (int, error) {
+	var n int
+	switch v.scope {
+	case access.ScopeAll:
+		err := q.QueryRowContext(ctx, `SELECT count(*) FROM app_rows WHERE app_id = ?`, appID).Scan(&n)
+		return n, err
+	case access.ScopeOwn:
+		err := q.QueryRowContext(ctx, `SELECT count(*) FROM app_rows WHERE app_id = ? AND created_by = ?`, appID, v.user).Scan(&n)
+		return n, err
+	}
+	return 0, nil
+}
+
 func may(sp access.Space, need access.Access) error {
 	switch {
 	case !sp.Access.Allows(access.Read):
@@ -198,7 +299,6 @@ func via(a Actor) any {
 // 48 KiB) only to throw it away.
 const (
 	appFields = `a.id, a.space_id, a.name, a.archived_at, a.version,
-	(SELECT count(*) FROM app_rows r WHERE r.app_id = a.id),
 	a.created_at, a.created_by, coalesce(cu.name, ''), a.created_by_agent, a.created_via,
 	a.updated_at, a.updated_by, coalesce(uu.name, ''), a.updated_by_agent, a.updated_via, `
 	appFrom = `
@@ -216,7 +316,7 @@ func scanApp(row scanner, withDefinition bool) (App, error) {
 	var createdName, updatedName, def string
 	var createdAgent, updatedAgent bool
 	var createdVia, updatedVia sql.NullString
-	if err := row.Scan(&a.ID, &a.SpaceID, &a.Name, &a.ArchivedAt, &a.Version, &a.Rows,
+	if err := row.Scan(&a.ID, &a.SpaceID, &a.Name, &a.ArchivedAt, &a.Version,
 		&a.CreatedAt, &createdBy, &createdName, &createdAgent, &createdVia,
 		&a.UpdatedAt, &updatedBy, &updatedName, &updatedAgent, &updatedVia, &def); err != nil {
 		return App{}, err
@@ -242,7 +342,7 @@ func app(ctx context.Context, q queryer, spaceID, appID int64) (App, error) {
 	return a, err
 }
 
-func (s *Service) listApps(ctx context.Context, sp access.Space, withArchived bool) ([]App, error) {
+func (s *Service) listApps(ctx context.Context, sp access.Space, a Actor, withArchived bool) ([]App, error) {
 	if err := may(sp, access.Read); err != nil {
 		return nil, err
 	}
@@ -255,20 +355,74 @@ func (s *Service) listApps(ctx context.Context, sp access.Space, withArchived bo
 	defer rows.Close()
 	all := []App{}
 	for rows.Next() {
-		a, err := scanApp(rows, false)
+		ap, err := scanApp(rows, false)
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, a)
+		all = append(all, ap)
 	}
-	return all, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// What the caller may do in each app, and so how many of its rows they may count: a
+	// total over rows they can't read would tell them what those hold.
+	accs, err := s.access.AppsIn(ctx, a.UserID, sp)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := s.rowCounts(ctx, sp.ID, a.UserID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		acc := accs[all[i].ID]
+		all[i].Access = acc
+		switch acc.ReadRecords {
+		case access.ScopeAll:
+			all[i].Rows = counts[all[i].ID].all
+		case access.ScopeOwn:
+			all[i].Rows = counts[all[i].ID].own
+		}
+	}
+	return all, nil
 }
 
-func (s *Service) getApp(ctx context.Context, sp access.Space, appID int64) (App, error) {
+type rowCount struct{ all, own int }
+
+// rowCounts counts each app of spaceID's rows: all of them, and those userID created.
+func (s *Service) rowCounts(ctx context.Context, spaceID, userID int64) (map[int64]rowCount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.app_id, count(*), coalesce(sum(r.created_by = ?), 0)
+		FROM app_rows r JOIN apps a ON a.id = r.app_id
+		WHERE a.space_id = ? GROUP BY r.app_id`, userID, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := map[int64]rowCount{}
+	for rows.Next() {
+		var id int64
+		var c rowCount
+		if err := rows.Scan(&id, &c.all, &c.own); err != nil {
+			return nil, err
+		}
+		counts[id] = c
+	}
+	return counts, rows.Err()
+}
+
+func (s *Service) getApp(ctx context.Context, sp access.Space, a Actor, appID int64) (App, error) {
 	if err := may(sp, access.Read); err != nil {
 		return App{}, err
 	}
-	return app(ctx, s.db, sp.ID, appID)
+	ap, err := app(ctx, s.db, sp.ID, appID)
+	if err != nil {
+		return App{}, err
+	}
+	if err := s.present(ctx, a, &ap); err != nil {
+		return App{}, err
+	}
+	return ap, nil
 }
 
 // NewApp is a new app: its name and definition.
@@ -317,6 +471,9 @@ func (s *Service) createApp(ctx context.Context, sp access.Space, a Actor, na Ne
 		return err
 	})
 	if err != nil {
+		return App{}, err
+	}
+	if err := s.present(ctx, a, &created); err != nil {
 		return App{}, err
 	}
 	return created, nil
@@ -373,8 +530,20 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 	}
 	var updated App
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		if err := s.recheck(ctx, a, sp.ID); err != nil {
+		acc, err := s.recheckApp(ctx, a, sp.ID, appID)
+		if err != nil {
 			return err
+		}
+		// Changing what the app is, and taking it offline or back, are different rights.
+		if ch.Name != nil || ch.Definition != nil {
+			if err := need(acc, access.CapDesign); err != nil {
+				return err
+			}
+		}
+		if ch.Archived != nil {
+			if err := need(acc, access.CapPublish); err != nil {
+				return err
+			}
 		}
 		cur, err := app(ctx, tx, sp.ID, appID)
 		if err != nil {
@@ -406,13 +575,16 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 	if err != nil {
 		return App{}, err
 	}
+	if err := s.present(ctx, a, &updated); err != nil {
+		return App{}, err
+	}
 	return updated, nil
 }
 
 // rowsFit checks every row of appID against a new collection, so changing an app's
 // definition never leaves rows its screen and actions can't handle.
 func rowsFit(ctx context.Context, q queryer, appID int64, c Collection) error {
-	rows, err := loadRows(ctx, q, appID)
+	rows, err := loadRows(ctx, q, appID, everything) // the check is the server's, over every row
 	if err != nil {
 		return err
 	}
@@ -449,7 +621,15 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 	}
 	var moved App
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		if err := s.recheck(ctx, a, sp.ID, to.ID); err != nil {
+		acc, err := s.recheckApp(ctx, a, sp.ID, appID)
+		if err != nil {
+			return err
+		}
+		// Moving an app changes who can reach it: it is the builder's to do.
+		if err := need(acc, access.CapDesign); err != nil {
+			return err
+		}
+		if err := s.recheck(ctx, a, to.ID); err != nil {
 			return err
 		}
 		cur, err := app(ctx, tx, sp.ID, appID)
@@ -483,12 +663,24 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 	if err != nil {
 		return App{}, err
 	}
+	if err := s.present(ctx, a, &moved); err != nil {
+		return App{}, err
+	}
 	return moved, nil
 }
 
-// loadRows returns an app's rows, oldest first.
-func loadRows(ctx context.Context, q queryer, appID int64) ([]Row, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, data FROM app_rows WHERE app_id = ? ORDER BY id`, appID)
+// loadRows returns the rows of an app that v reads, oldest first.
+func loadRows(ctx context.Context, q queryer, appID int64, v visibility) ([]Row, error) {
+	var rows *sql.Rows
+	var err error
+	switch v.scope {
+	case access.ScopeAll:
+		rows, err = q.QueryContext(ctx, `SELECT id, data FROM app_rows WHERE app_id = ? ORDER BY id`, appID)
+	case access.ScopeOwn:
+		rows, err = q.QueryContext(ctx, `SELECT id, data FROM app_rows WHERE app_id = ? AND created_by = ? ORDER BY id`, appID, v.user)
+	default:
+		return []Row{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -518,15 +710,23 @@ func launchable(ctx context.Context, q queryer, spaceID, appID int64) (App, erro
 }
 
 // surface returns the messages that draw an app with its rows.
-func (s *Service) surface(ctx context.Context, sp access.Space, appID int64) ([]Message, error) {
+func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, appID int64) ([]Message, error) {
 	if err := may(sp, access.Read); err != nil {
+		return nil, err
+	}
+	acc, err := s.appAccess(ctx, actor, sp.ID, appID)
+	if err != nil {
+		return nil, err
+	}
+	if err := need(acc, access.CapView); err != nil {
 		return nil, err
 	}
 	a, err := launchable(ctx, s.db, sp.ID, appID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := loadRows(ctx, s.db, appID)
+	// The screen's rows, and with them its summaries, are those the caller reads.
+	rows, err := loadRows(ctx, s.db, appID, readable(acc, actor.UserID))
 	if err != nil {
 		return nil, err
 	}
@@ -541,8 +741,10 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 		return nil, err
 	}
 	var def Definition
+	var acc access.AppAccess
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		if err := s.recheck(ctx, actor, sp.ID); err != nil {
+		var err error
+		if acc, err = s.recheckApp(ctx, actor, sp.ID, appID); err != nil {
 			return err
 		}
 		a, err := launchable(ctx, tx, sp.ID, appID)
@@ -550,11 +752,18 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 			return err
 		}
 		def = *a.Definition
+		// What the action does decides which right it needs: adding a row is the user's,
+		// changing or removing one is the user's own or the data manager's all.
+		if kind := def.Actions[action.Name].Kind; kind == ActionInsert && !acc.Submit {
+			return forbidden(string(access.CapSubmit))
+		} else if (kind == ActionUpdate || kind == ActionDelete) && acc.ModifyRecords == access.ScopeNone {
+			return forbidden(capModifyRecords)
+		}
 		ch, err := Plan(SurfaceID(a.ID), def, action)
 		if err != nil {
 			return err
 		}
-		return apply(ctx, tx, actor, appID, def, ch)
+		return apply(ctx, tx, actor, appID, def, ch, visibility{scope: acc.ModifyRecords, user: actor.UserID})
 	})
 	if err != nil {
 		return nil, err
@@ -563,15 +772,19 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	// write on the server waits for: an app's rows can be up to MaxDataSize, and the next
 	// writer needn't wait while they are read and encoded. It shows the latest rows, a change
 	// committed meanwhile included.
-	rows, err := loadRows(ctx, s.db, appID)
+	// The answer carries the rows, and summaries, the caller reads: a user who adds a record
+	// to an app where they read only their own is not shown anyone else's.
+	rows, err := loadRows(ctx, s.db, appID, readable(acc, actor.UserID))
 	if err != nil {
 		return nil, err
 	}
 	return []Message{DataModel(SurfaceID(appID), def, rows)}, nil
 }
 
-// apply makes a change to an app's rows, within its bounds.
-func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change) error {
+// apply makes a change to an app's rows, within its bounds. modify is the rows the actor may
+// change: a row outside it is answered as one the app doesn't have, so which rows exist
+// isn't told to someone who may not touch them.
+func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change, modify visibility) error {
 	var count, size int
 	// In bytes, as len() counts below: length() of TEXT counts characters, which would let
 	// non-ASCII rows hold more than MaxDataSize.
@@ -593,8 +806,9 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		return err
 	case ActionUpdate:
 		var data string
-		err := tx.QueryRowContext(ctx, `SELECT data FROM app_rows WHERE id = ? AND app_id = ?`, ch.ID, appID).Scan(&data)
-		if errors.Is(err, sql.ErrNoRows) {
+		var creator sql.NullInt64
+		err := tx.QueryRowContext(ctx, `SELECT data, created_by FROM app_rows WHERE id = ? AND app_id = ?`, ch.ID, appID).Scan(&data, &creator)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && !modify.sees(creator)) {
 			return invalidAs(apierr.CodeAppRowNotFound, nil, "the app has no row %d", ch.ID)
 		}
 		if err != nil {
@@ -619,6 +833,14 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 			string(raw), now(), actor.UserID, ch.ID)
 		return err
 	case ActionDelete:
+		var creator sql.NullInt64
+		err := tx.QueryRowContext(ctx, `SELECT created_by FROM app_rows WHERE id = ? AND app_id = ?`, ch.ID, appID).Scan(&creator)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && !modify.sees(creator)) {
+			return invalidAs(apierr.CodeAppRowNotFound, nil, "the app has no row %d", ch.ID)
+		}
+		if err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM app_rows WHERE id = ? AND app_id = ?`, ch.ID, appID)
 		if err != nil {
 			return err

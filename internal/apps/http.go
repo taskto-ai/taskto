@@ -28,6 +28,8 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("POST "+apps+"/{app}/move", write(s.handleMove))
 	mux.Handle("GET "+apps+"/{app}/surface", read(s.handleSurface))
 	mux.Handle("POST "+apps+"/{app}/actions", write(s.handleAction))
+	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
+	mux.Handle("PUT "+apps+"/{app}/roles", write(s.handleSetRoles))
 }
 
 // maxBody bounds a request: a definition is at most MaxDefinitionSize, with room for the
@@ -68,7 +70,7 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, `archived must be "true" or "false"`)
 		return
 	}
-	all, err := s.listApps(r.Context(), req.space, withArchived)
+	all, err := s.listApps(r.Context(), req.space, req.actor, withArchived)
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -95,7 +97,7 @@ func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a, err := s.getApp(r.Context(), req.space, req.app)
+	a, err := s.getApp(r.Context(), req.space, req.actor, req.app)
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -146,7 +148,7 @@ func (s *Service) handleSurface(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	msgs, err := s.surface(r.Context(), req.space, req.app)
+	msgs, err := s.surface(r.Context(), req.space, req.actor, req.app)
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -176,12 +178,54 @@ func (s *Service) handleAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msgs)
 }
 
+// handleRoles answers the app's role assignments, to whoever manages them.
+func (s *Service) handleRoles(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	grants, err := s.appRoles(r.Context(), req.space, req.actor, req.app)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rolesReply{Grants: grants, Roles: access.AppRoles})
+}
+
+// rolesReply is an app's role assignments, with every role there is.
+type rolesReply struct {
+	Grants []access.AppGrant `json:"grants"`
+	Roles  []access.AppRole  `json:"roles"`
+}
+
+func (s *Service) handleSetRoles(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	var body struct {
+		Grants []access.AppGrant `json:"grants"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	grants, err := s.setAppRoles(r.Context(), req.space, req.actor, req.app, body.Grants)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rolesReply{Grants: grants, Roles: access.AppRoles})
+}
+
 // result answers a change to an app: the app, or for ErrStale a 409 with the app as it is
 // now, or the error's status.
 func (s *Service) result(w http.ResponseWriter, r *http.Request, req request, a App, err error) {
 	switch {
 	case errors.Is(err, ErrStale):
 		current, cerr := app(r.Context(), s.db, req.space.ID, req.app)
+		if cerr == nil {
+			cerr = s.present(r.Context(), req.actor, &current)
+		}
 		if cerr != nil {
 			fail(w, r, cerr)
 			return
@@ -204,6 +248,13 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusForbidden, apierr.CodeSpaceArchived, err.Error())
 	case errors.Is(err, ErrReadOnly):
 		writeError(w, http.StatusForbidden, apierr.CodeSpaceReadOnly, err.Error())
+	case errors.Is(err, ErrForbidden):
+		var f *forbiddenError
+		params := apierr.Params{}
+		if errors.As(err, &f) {
+			params["capability"] = f.capability
+		}
+		writeError(w, http.StatusForbidden, apierr.CodeAppForbidden, err.Error(), params)
 	case errors.Is(err, ErrOffline):
 		writeError(w, http.StatusConflict, apierr.CodeAppOffline, err.Error())
 	case errors.Is(err, ErrStale):

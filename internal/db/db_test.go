@@ -551,3 +551,53 @@ func TestDictationAutoBecomesLocal(t *testing.T) {
 		t.Fatalf("settings after the upgrade = %q, want %q", got, want)
 	}
 }
+
+// TestAppRolesMigrationAddsNoAssignments upgrades a database that has apps with rows from
+// before app roles: no app gets a role assignment, which is what keeps every app as
+// unrestricted as it was, and the rows keep the creators that own-record reading needs.
+func TestAppRolesMigrationAddsNoAssignments(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
+	if _, err := migrate(ctx, sqlDB, upTo(t, 20)); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (id, email, name, password_hash) VALUES (1, 'a@example.com', 'A', 'x'), (2, 'b@example.com', 'B', 'x')`,
+		`INSERT INTO workspaces (id, name) VALUES (1, 'One')`,
+		`INSERT INTO memberships (workspace_id, user_id, role) VALUES (1, 1, 'admin'), (1, 2, 'member')`,
+		`INSERT INTO spaces (id, workspace_id, kind, name) VALUES (10, 1, 'shared', 'Team')`,
+		`INSERT INTO space_members (space_id, user_id, role) VALUES (10, 1, 'editor'), (10, 2, 'viewer')`,
+		`INSERT INTO apps (id, space_id, name, definition) VALUES (5, 10, 'Tracker', '{}')`,
+		`INSERT INTO app_rows (app_id, data, created_by) VALUES (5, '{}', 1), (5, '{}', 2), (5, '{}', NULL)`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Migrate(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	var roles, rows, creators int
+	if err := sqlDB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM app_roles), count(*), count(created_by) FROM app_rows`).
+		Scan(&roles, &rows, &creators); err != nil {
+		t.Fatal(err)
+	}
+	if roles != 0 || rows != 3 || creators != 2 {
+		t.Fatalf("role assignments %d, rows %d with %d creators; want 0, 3 and 2", roles, rows, creators)
+	}
+	// A role is one of the five, and held once per user.
+	for _, bad := range []string{
+		`INSERT INTO app_roles (app_id, user_id, role) VALUES (5, 1, 'owner')`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, bad); err == nil {
+			t.Fatalf("%s was accepted", bad)
+		}
+	}
+	const assign = `INSERT INTO app_roles (app_id, user_id, role) VALUES (5, NULL, 'reader')`
+	if _, err := sqlDB.ExecContext(ctx, assign); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, assign); err == nil {
+		t.Fatal("a role was assigned twice to the same user")
+	}
+}
