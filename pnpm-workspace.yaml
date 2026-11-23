@@ -7,3 +7,7 @@ packages:
 allowBuilds:
   "@google/genai": false
   protobufjs: false
+
+# Patched versions of transitive dependencies with published advisories.
+overrides:
+  dompurify: ^3.4.18
