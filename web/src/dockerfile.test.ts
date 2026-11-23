@@ -23,7 +23,11 @@ test('the image copies every directory of internal/ the web app imports', () => 
     }
   }
   const dockerfile = readFileSync(join(repo, 'Dockerfile'), 'utf8')
-  const copied = [...dockerfile.matchAll(/^COPY (internal\/\S+?)\/? /gm)].map(([, dir]) => dir)
+  // A COPY counts only if it puts the directory where the relative imports look for it: the
+  // same path under the stage's working directory.
+  const copied = [...dockerfile.matchAll(/^COPY (internal\/\S+?)\/? (\S+?)\/?$/gm)]
+    .filter(([, src, dest]) => src === dest)
+    .map(([, src]) => src)
   const missing = [...imported].filter((dir) => !copied.some((c) => dir === c || dir.startsWith(`${c}/`)))
   expect(imported.size).toBeGreaterThan(0)
   expect(missing).toEqual([])
