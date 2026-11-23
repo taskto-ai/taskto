@@ -104,8 +104,12 @@ func CheckName(name string) error {
 // or shadow what the server keeps, so CheckName refuses it in every spelling it refuses ".git" in.
 const ManagedDir = ".taskto"
 
-// isManagedDir reports whether a path element names ManagedDir on some file system.
-func isManagedDir(elem string) bool { return normalizedElem(elem) == ManagedDir }
+// isManagedDir reports whether a path element names ManagedDir on some file system: in the
+// spellings isGitDir refuses, and by its 8.3 short name (Windows).
+func isManagedDir(elem string) bool {
+	elem = normalizedElem(elem)
+	return elem == ManagedDir || elem == "taskto~1"
+}
 
 // isGitDir reports whether a path element names a git directory on some file system:
 // case-insensitive, ignoring trailing dots and spaces (Windows), the code points HFS+

@@ -18,7 +18,7 @@ func TestCheckName(t *testing.T) {
 	ok := []string{
 		"a", "notes/plan.md", "a b/c d.md", "ü/日本語.md", "..a", "a..", "...", "a/b/c/d/e",
 		// Look like git's, but aren't its directory.
-		".gitignore", ".github/workflows/ci.yml", "git", "a/.gitkeep", "gitx", ".gitx", ".taskto-notes", "taskto", "a/.tasktox",
+		".gitignore", ".github/workflows/ci.yml", "git", "a/.gitkeep", "gitx", ".gitx", ".taskto-notes", "taskto", "a/.tasktox", "taskto~2", "taskto~10", "xtaskto~1",
 	}
 	for _, name := range ok {
 		if err := CheckName(name); err != nil {
@@ -43,6 +43,8 @@ func TestCheckName(t *testing.T) {
 		".g\u200cit", "\ufeff.git", ".gi\u206at/hooks", "git~1/config", "GIT~1",
 		// The server's managed storage, spelled as the same file systems read it.
 		".taskto", ".taskto/app-files/1/x", "a/.TASKTO/x", ".Taskto.", ".taskto ", ".task\u200cto/x", "\ufeff.taskto",
+		// ... and by its 8.3 short name, as with git's.
+		"taskto~1", "TASKTO~1", "taskto~1/app-files/1/x", "TASKTO~1.", "a/taskto~1",
 	}
 	for _, name := range refused {
 		if err := CheckName(name); !errors.Is(err, ErrUnsafePath) {

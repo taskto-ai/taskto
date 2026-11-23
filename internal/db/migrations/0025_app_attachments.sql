@@ -32,8 +32,11 @@ CREATE TABLE app_attachments (
     -- The uploader. If their account goes, nobody can attach it, and it is removed as an orphan.
     owner        INTEGER REFERENCES users (id) ON DELETE SET NULL,
     status       TEXT NOT NULL CHECK (status IN ('uploading', 'ready')),
-    -- The size the upload declared: what finalizing needs to have received.
+    -- The declared size of the upload while it is uploading: what finalizing needs to have
+    -- received. Once ready, the stored size: the bytes of the picture as it is kept (its metadata
+    -- removed), and the length it is served with.
     size         INTEGER NOT NULL CHECK (size >= 1),
+    -- How many bytes of the upload the server has; once ready, the same as size.
     received     INTEGER NOT NULL DEFAULT 0 CHECK (received >= 0 AND received <= size),
     -- Once ready: the type found in the bytes (image/jpeg, image/png or image/gif), the
     -- pixels, and the thumbnail's size in bytes.
@@ -56,11 +59,20 @@ CREATE INDEX app_attachments_by_row ON app_attachments (row_id);
 CREATE INDEX app_attachments_orphans ON app_attachments (updated_at) WHERE row_id IS NULL;
 CREATE INDEX app_attachments_by_space ON app_attachments (space_id);
 
--- An attachment belongs to one app, and once attached to one record, for good.
+-- An attachment belongs to one app and field, and once attached to one record, for good. Its
+-- uploader can't be changed either, but an account that goes leaves it unattributed (owner ON
+-- DELETE SET NULL is an update of owner to NULL, which the second trigger lets through).
 CREATE TRIGGER app_attachments_fixed_app
-BEFORE UPDATE OF app_id, owner, field ON app_attachments
+BEFORE UPDATE OF app_id, field ON app_attachments
 BEGIN
-    SELECT RAISE(ABORT, 'an attachment cannot move to another app, uploader or field');
+    SELECT RAISE(ABORT, 'an attachment cannot move to another app or field');
+END;
+
+CREATE TRIGGER app_attachments_fixed_owner
+BEFORE UPDATE OF owner ON app_attachments
+WHEN NEW.owner IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'an attachment cannot change its uploader');
 END;
 
 CREATE TRIGGER app_attachments_attached_once
