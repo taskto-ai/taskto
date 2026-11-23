@@ -449,6 +449,9 @@ func (s *Service) previewAction(ctx context.Context, sp access.Space, a Actor, a
 
 // previewTarget is the code an effect would fail with for lack of access to its target, or "".
 func (s *Service) previewTarget(ctx context.Context, userID int64, e Effect, p payload) apierr.Code {
+	if e.targetUnset() {
+		return "" // a draft whose board isn't chosen yet: nothing is aimed at, so nothing is refused
+	}
 	targetsSpace := e.Kind == EffectCreateCard || e.Kind == EffectCreateDocument || (e.Kind == EffectOpenRoute && p.SpaceID != 0)
 	if !targetsSpace {
 		return ""

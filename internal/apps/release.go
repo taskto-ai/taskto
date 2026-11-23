@@ -360,6 +360,9 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 		}
 		// What the draft's effects target is the publisher's to use, checked as of now, with the
 		// write lock held (only a publisher gets here: the draft is not theirs to read otherwise).
+		if unset := cur.draftDef.unsetTargets(); len(unset) > 0 {
+			return unsetError(unset)
+		}
 		if err := s.checkEffectTargets(ctx, a, cur.draftDef); err != nil {
 			return err
 		}

@@ -78,7 +78,8 @@ from the downloaded release by the same renderer, from the service worker's prec
 **Numbers are labelled.** A list or a total drawn offline covers the downloaded records and the
 records queued on the device, and the view says so, with the counts: *Offline copy: lists and
 numbers cover the records downloaded {when} (downloaded: N) and those saved on this device (saved
-here: M). They are not the server's totals.* The summaries (count, sum, with their `where`) are
+here: M). They are not the server's totals.* The summaries (count, sum, with their `where` and `month_of`, which
+uses the device's clock for the current month) are
 recomputed from those records with the same rules the server uses
 ([`rules.ts`](../web/src/apps/rules.ts)).
 

@@ -145,6 +145,61 @@ func (e Effect) given() []string {
 	return out
 }
 
+// targetUnset is whether the effect names a space and board of TaskTo.AI to act on, and none has
+// been chosen yet: what a template, or a copy of an app whose boards its copier can't write,
+// holds until someone picks one. Such a definition is a draft that can be saved and read but not
+// published (unsetTargets, checked when it is), and one half chosen is refused like any other.
+func (e Effect) targetUnset() bool {
+	return e.SpaceID == 0 && e.BoardID == 0 && targetKinds(e)
+}
+
+// targetKinds is whether the effect has a space (and for a card or a board route, a board) to name.
+func targetKinds(e Effect) bool {
+	switch e.Kind {
+	case EffectCreateCard, EffectCreateDocument:
+		return true
+	case EffectOpenRoute:
+		return e.Route == RouteBoard || e.Route == RouteDocument
+	}
+	return false
+}
+
+// unsetTargets lists, as "action name", the effects of the definition that still have no target
+// chosen, in the order of the actions' names.
+func (d Definition) unsetTargets() []string {
+	var out []string
+	for _, name := range sortedKeys(d.Actions) {
+		for _, e := range d.Actions[name].Effects {
+			if e.targetUnset() {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
+// setTargets gives every effect that has no target the board of space, and returns how many it
+// changed. A document effect takes only the space.
+func (d *Definition) setTargets(spaceID, boardID int64) int {
+	n := 0
+	for name, a := range d.Actions {
+		effects := slices.Clone(a.Effects)
+		for i, e := range effects {
+			if !e.targetUnset() {
+				continue
+			}
+			effects[i].SpaceID = spaceID
+			if e.Kind == EffectCreateCard || (e.Kind == EffectOpenRoute && e.Route == RouteBoard) {
+				effects[i].BoardID = boardID
+			}
+			n++
+		}
+		a.Effects = effects
+		d.Actions[name] = a
+	}
+	return n
+}
+
 // effectSpec says which fields of a kind of effect may be set and which must be.
 type effectSpec struct{ allowed, required []string }
 
@@ -259,7 +314,8 @@ func (e Effect) check(c Collection, creators map[string]bool) error {
 		required = append(slices.Clone(required), routeFields[e.Route]...)
 	}
 	for _, f := range required {
-		if !slices.Contains(given, f) {
+		unchosen := e.targetUnset() && (f == "space_id" || f == "board_id")
+		if !slices.Contains(given, f) && !unchosen {
 			return fmt.Errorf("%s needs %s", e.Kind, f)
 		}
 	}
