@@ -1958,7 +1958,12 @@ the record, so sending it again (the answer was lost, the page was reopened) cha
 is answered `200` with the rows the caller reads **as they are now**, not with the first answer's
 body (the receipt remembers the request and the record it made, not what was answered; a record
 deleted since is simply not among the rows); another request under the same key is `409
-app_operation_reused`.
+app_operation_reused`. A request that **committed** is answered with its receipt even when the
+caller's access has changed since (a role narrowed or removed, a space archived or made read-only):
+where the access checks would now refuse it (`403`, `404`), a request that names the `release` and
+repeats the same `operation`, action and context gets `200` with an empty list of messages, never the
+rows, so a device that lost the answer learns that the change is in. The operation is the caller's own
+(it is looked up by user and app), and a request that was not made is refused as it ever was.
 
 **Replaying an offline edit or deletion.** The client sends the `update` or `delete` action it
 queued to [`…/actions`](#post-appsappactions) like an insert (the `release` its screen was drawn
