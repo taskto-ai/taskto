@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"taskto.ai/taskto/internal/access"
@@ -133,8 +134,26 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	}
 	mux.Handle("/", web)
 
-	// Every state-changing /api request, of any route, goes through the CSRF checks.
-	return auth.CSRF(mux, append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...), nil
+	// Every state-changing /api request, of any route, goes through the CSRF checks, and every
+	// /api request that names the account it is for (the offline code does, on every request:
+	// downloads, revalidation, the queue) is refused for any other session.
+	return auth.CSRF(expectAccount(spaces, mux), append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...), nil
+}
+
+// expectAccount applies access.Checker.ExpectUser to every /api request, so a client that names
+// the account it is for (X-Taskto-Expected-User) is refused with 409 session_account_changed
+// for any other session on any route, whatever the route's own checks: nothing is read or
+// written as the wrong person. Requests without the header, and everything outside /api, pass
+// unchanged.
+func expectAccount(spaces *access.Checker, next http.Handler) http.Handler {
+	expect := spaces.ExpectUser(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if (r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/")) && r.Header.Get(access.ExpectedUserHeader) != "" {
+			expect.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // healthz reports the version, whether the database answers, and the agent runtime's state.
