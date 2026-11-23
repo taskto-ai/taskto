@@ -402,6 +402,9 @@
         "draft": {},
         "items": [
           {
+            "_labels": {
+              "category": "home"
+            },
             "_revision": 1,
             "category": "home",
             "due_time": "09:30",
@@ -409,6 +412,9 @@
             "title": "Pay rent"
           },
           {
+            "_labels": {
+              "category": "other"
+            },
             "_revision": 1,
             "category": "other",
             "category_note": "errand",

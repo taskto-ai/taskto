@@ -296,7 +296,21 @@ export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
       items = overlay(download.definition, items, q, kind)
     }
   }
-  return [...items, ...created]
+  return [...items, ...created].map((i) => withLabels(download.definition, i))
+}
+
+// The item with how its choices read (`_labels`, as the server's items have it): worked out here from
+// the downloaded definition, so a record changed or made on this device reads as the server's do.
+function withLabels(def: Definition, item: Item): Item {
+  const { _labels: _was, ...rest } = item
+  const labels: Record<string, string> = {}
+  for (const f of def.collection.fields) {
+    const v = item[f.name]
+    if (f.type === 'choice' && typeof v === 'string') {
+      labels[f.name] = f.option_labels && Object.hasOwn(f.option_labels, v) ? f.option_labels[v] : v
+    }
+  }
+  return Object.keys(labels).length > 0 ? { ...rest, _labels: labels } : rest
 }
 
 // One waiting change to a downloaded record, applied to what is shown. A change is applied only to

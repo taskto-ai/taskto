@@ -12,6 +12,9 @@
       "path": "/record",
       "surfaceId": "app-1",
       "value": {
+        "_labels": {
+          "category": "other"
+        },
         "_revision": 1,
         "category": "other",
         "category_note": "errand",

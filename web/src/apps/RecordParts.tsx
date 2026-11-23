@@ -18,9 +18,23 @@ function calendarDay(s: string): Date | null {
   return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null
 }
 
-// One value in the person's language: numbers, dates and yes/no as they read.
-export function shown(v: unknown, type: AppField['type'] | undefined, f: Format, t: T): string {
+// How a stored option of a choice field reads: its label, or the option itself where it has none.
+export function optionLabel(field: Pick<AppField, 'option_labels'> | undefined, option: string): string {
+  const labels = field?.option_labels
+  return labels && Object.hasOwn(labels, option) ? labels[option] : option
+}
+
+// One value in the person's language: numbers, dates and yes/no as they read, and a choice by its
+// label (field is the field it is the value of, where there is one).
+export function shown(
+  v: unknown,
+  type: AppField['type'] | undefined,
+  f: Format,
+  t: T,
+  field?: Pick<AppField, 'option_labels'>,
+): string {
   if (v === undefined || v === null || v === '') return ''
+  if (type === 'choice' && typeof v === 'string') return optionLabel(field, v)
   // A captured location, in coordinates; a signature, as what it is (the picture is shown where there is room).
   if (type === 'location' && isLocation(v)) return coordinates(v, f)
   if (type === 'signature' && typeof v === 'string') return t('apps.signature.signed')
@@ -38,9 +52,10 @@ export function shown(v: unknown, type: AppField['type'] | undefined, f: Format,
 
 // A record's fields in one line: "name: value" for each.
 export function preview(data: Record<string, unknown>, f: Format, t: T, fields?: AppField[]): string {
-  const parts = Object.entries(data).map(
-    ([name, v]) => `${name}: ${shown(v, fields?.find((x) => x.name === name)?.type, f, t)}`,
-  )
+  const parts = Object.entries(data).map(([name, v]) => {
+    const field = fields?.find((x) => x.name === name)
+    return `${name}: ${shown(v, field?.type, f, t, field)}`
+  })
   return parts.length > 0 ? parts.join(' · ') : t('apps.records.empty')
 }
 

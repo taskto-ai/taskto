@@ -828,6 +828,11 @@
                         "items": { "type": "string" },
                         "description": "a choice field's options: different texts, at most 100 characters each"
                       },
+                      "option_labels": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" },
+                        "description": "a choice field's labels, as {\"<option>\": \"<label>\"} (each key one of the options, each label 1 to 100 characters): how a stored value reads to people. A screen shows a choice's label by binding to _labels/<field> (in a List template) or /record/_labels/<field>, never the field itself, which holds the stored text"
+                      },
                       "max_length": {
                         "type": "integer",
                         "minimum": 1,
@@ -1229,6 +1234,11 @@
                         "maxItems": 50,
                         "items": { "type": "string" },
                         "description": "a choice field's options: different texts, at most 100 characters each"
+                      },
+                      "option_labels": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" },
+                        "description": "a choice field's labels, as {\"<option>\": \"<label>\"} (each key one of the options, each label 1 to 100 characters): how a stored value reads to people. A screen shows a choice's label by binding to _labels/<field> (in a List template) or /record/_labels/<field>, never the field itself, which holds the stored text"
                       },
                       "max_length": {
                         "type": "integer",

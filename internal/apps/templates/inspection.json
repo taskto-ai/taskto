@@ -25,7 +25,7 @@
           { "id": "list-items", "component": "List", "children": { "componentId": "row", "path": "/items" } },
           { "id": "row", "component": "Row", "justify": "spaceBetween", "align": "center", "children": ["row-site", "row-result", "row-open"] },
           { "id": "row-site", "component": "Text", "text": { "path": "site" } },
-          { "id": "row-result", "component": "Text", "text": { "path": "result" }, "variant": "caption" },
+          { "id": "row-result", "component": "Text", "text": { "path": "_labels/result" }, "variant": "caption" },
           { "id": "row-open-label", "component": "Text", "text": "Open" },
           {
             "id": "row-open",
@@ -102,7 +102,7 @@
             "children": ["detail-title", "detail-result", "detail-notes", "detail-place", "detail-signed", "detail-resolve-when", "detail-back"]
           },
           { "id": "detail-title", "component": "Text", "text": { "path": "/record/site" }, "variant": "h2" },
-          { "id": "detail-result", "component": "Stat", "label": "Result", "value": { "path": "/record/result" } },
+          { "id": "detail-result", "component": "Stat", "label": "Result", "value": { "path": "/record/_labels/result" } },
           { "id": "detail-notes", "component": "Stat", "label": "Notes", "value": { "path": "/record/notes" } },
           { "id": "detail-place", "component": "LocationInput", "field": "place", "label": "Where", "readOnly": true, "value": { "path": "/record/place" } },
           { "id": "detail-signed", "component": "Photos", "label": "Signature", "value": { "path": "/record/signed" } },
@@ -140,7 +140,7 @@
     "collection": {
       "fields": [
         { "name": "site", "type": "string", "required": true, "max_length": 100 },
-        { "name": "result", "type": "choice", "required": true, "options": ["pass", "fail"] },
+        { "name": "result", "type": "choice", "required": true, "options": ["pass", "fail"], "option_labels": { "pass": "Pass", "fail": "Fail" } },
         {
           "name": "notes",
           "type": "string",
@@ -149,7 +149,7 @@
         },
         { "name": "place", "type": "location", "capture": "submit", "required": true },
         { "name": "signed", "type": "signature", "required": true },
-        { "name": "status", "type": "choice", "options": ["open", "closed"] }
+        { "name": "status", "type": "choice", "options": ["open", "closed"], "option_labels": { "open": "Open", "closed": "Closed" } }
       ]
     },
     "actions": {

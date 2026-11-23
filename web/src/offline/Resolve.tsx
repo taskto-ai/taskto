@@ -5,6 +5,7 @@
 
 import { useEffect, useId, useState } from 'react'
 import { ApiError, errorText } from '../api'
+import { optionLabel } from '../apps/RecordParts'
 import { type Format, useFormat, useT } from '../i18n'
 import {
   type Deleted,
@@ -26,14 +27,15 @@ import { type Download, kindOf, type OutboxItem, type Problem, seenOf, versionOf
 
 type Field = Download['definition']['collection']['fields'][number]
 
-// A value as it is shown: a number in the person's format, yes or no, the text as it is.
-function ValueText({ value, f }: { value: unknown; f: Format }) {
+// A value as it is shown: a number in the person's format, yes or no, a choice by its label, the text as it is.
+function ValueText({ value, f, field }: { value: unknown; f: Format; field?: Field }) {
   const t = useT()
   if (value === undefined || value === null || value === '')
     return <span className="tt-muted">{t('offline.resolve.empty')}</span>
   if (typeof value === 'number') return <>{f.number(value)}</>
   if (typeof value === 'boolean') return <>{value ? t('offline.resolve.yes') : t('offline.resolve.no')}</>
   if (Array.isArray(value)) return <>{t('offline.resolve.photos', { count: value.length })}</>
+  if (field?.type === 'choice' && typeof value === 'string') return <>{optionLabel(field, value)}</>
   return <>{String(value)}</>
 }
 
@@ -360,17 +362,21 @@ function ConflictTable({
           <tr key={field.name}>
             <th scope="row">{field.name}</th>
             <td>
-              <ValueText value={original[field.name]} f={f} />
+              <ValueText value={original[field.name]} f={f} field={field} />
             </td>
             <td>
               {del ? (
                 <span className="tt-muted">{t('offline.resolve.deletedMark')}</span>
               ) : (
-                <ValueText value={field.name in changed ? changed[field.name] : original[field.name]} f={f} />
+                <ValueText
+                  value={field.name in changed ? changed[field.name] : original[field.name]}
+                  f={f}
+                  field={field}
+                />
               )}
             </td>
             <td>
-              <ValueText value={server[field.name]} f={f} />
+              <ValueText value={server[field.name]} f={f} field={field} />
             </td>
           </tr>
         ))}
@@ -392,7 +398,7 @@ function ChangeSummary({ fields, changed, f }: { fields: Field[]; changed: Recor
         <div key={n}>
           <dt>{n}</dt>
           <dd>
-            <ValueText value={changed[n]} f={f} />
+            <ValueText value={changed[n]} f={f} field={fields.find((x) => x.name === n)} />
             {!known.has(n) && <span className="tt-muted tt-small"> {t('offline.resolve.notInApp')}</span>}
           </dd>
         </div>
@@ -458,7 +464,7 @@ function EditForm({
                 <option value="" />
                 {(x.options ?? []).map((o) => (
                   <option key={o} value={o}>
-                    {o}
+                    {optionLabel(x, o)}
                   </option>
                 ))}
               </select>

@@ -14,7 +14,7 @@ import { toText } from './explorer'
 import { LocationField } from './LocationInput'
 import { PhotoStrip } from './PhotoInput'
 import { photoIds, signatureId } from './photos'
-import { HistoryList, shown, who } from './RecordParts'
+import { HistoryList, optionLabel, shown, who } from './RecordParts'
 import { SignatureField } from './SignaturePad'
 
 const RECORD_CONFLICT = 'app_record_conflict'
@@ -113,8 +113,9 @@ export function RecordDetail({
   const adoptCurrent = async (e: ApiError) => {
     const item = (e.body as { current?: Record<string, unknown> } | undefined)?.current
     if (item && typeof item._revision === 'number') {
-      const { id: _id, _revision, ...data } = item
-      setConflict({ revision: _revision, data })
+      // The record's own fields: not its id, nor the keys the server adds (its revision, its choices' labels).
+      const data = Object.fromEntries(Object.entries(item).filter(([k]) => k !== 'id' && !k.startsWith('_')))
+      setConflict({ revision: item._revision, data })
       return
     }
     try {
@@ -234,7 +235,7 @@ export function RecordDetail({
                       <tr key={field.name}>
                         <th scope="row">{field.name}</th>
                         <td>{shownText(edits[field.name], field, f, t) || t('apps.explorer.empty')}</td>
-                        <td>{shown(conflict.data[field.name], field.type, f, t) || t('apps.explorer.empty')}</td>
+                        <td>{shown(conflict.data[field.name], field.type, f, t, field) || t('apps.explorer.empty')}</td>
                       </tr>
                     ),
                 )}
@@ -325,7 +326,7 @@ function shownText(
   if (text === undefined || text === '') return ''
   if (field.type === 'number' && !Number.isNaN(Number(text))) return f.number(Number(text))
   if (field.type === 'boolean') return t(text === 'true' ? 'apps.records.yes' : 'apps.records.no')
-  return shown(text, field.type, f, t)
+  return shown(text, field.type, f, t, field)
 }
 
 function FieldRow({
@@ -400,7 +401,7 @@ function FieldRow({
       <div className="tt-record-field">
         <span className="tt-record-field-name">{field.name}</span>
         <span className="tt-record-data">
-          {(field.type === 'number' && text !== '' ? f.number(Number(text)) : shown(text, field.type, f, t)) ||
+          {(field.type === 'number' && text !== '' ? f.number(Number(text)) : shown(text, field.type, f, t, field)) ||
             t('apps.explorer.empty')}
         </span>
       </div>
@@ -415,7 +416,7 @@ function FieldRow({
               { value: 'true', label: t('apps.records.yes') },
               { value: 'false', label: t('apps.records.no') },
             ]
-          : (field.options ?? []).map((o) => ({ value: o, label: o }))
+          : (field.options ?? []).map((o) => ({ value: o, label: optionLabel(field, o) }))
       // A stored choice the options no longer list stays selectable as it is.
       if (text !== '' && !options.some((o) => o.value === text)) options.push({ value: text, label: text })
       return (
