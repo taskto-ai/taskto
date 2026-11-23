@@ -257,3 +257,24 @@ func TestValuesOfARetypedFieldStayUnseen(t *testing.T) {
 		}
 	}
 }
+
+// A field that is retyped and newly required, or required when a rule holds, needs those
+// acknowledged too: the type change doesn't hide what the field now requires of rows that
+// have no value for it.
+func TestARetypedFieldIsStillJudgedForWhatItRequires(t *testing.T) {
+	live := Collection{Fields: []Field{{Name: "kind", Type: TypeString}, {Name: "note", Type: TypeString}}}
+	next := Collection{Fields: []Field{
+		{Name: "kind", Type: TypeString},
+		{Name: "note", Type: TypeNumber, RequiredWhen: &Rule{Field: "kind", Op: OpEq, Value: "a"}},
+	}}
+	rows := []Row{{ID: 1, Data: map[string]any{"kind": "a"}}}
+	got := breakingChanges(&live, next, rows, false)
+	if want := []SchemaChange{{ChangeFieldRequiredWhen, "note"}}; !slices.Equal(got, want) {
+		t.Fatalf("retyped and required when: %v, want %v", got, want)
+	}
+	next.Fields[1].RequiredWhen, next.Fields[1].Required = nil, true
+	got = breakingChanges(&live, next, rows, false)
+	if want := []SchemaChange{{ChangeFieldRequired, "note"}}; !slices.Equal(got, want) {
+		t.Fatalf("retyped and required: %v, want %v", got, want)
+	}
+}

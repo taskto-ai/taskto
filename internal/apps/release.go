@@ -525,22 +525,22 @@ func breakingChanges(live *Collection, next Collection, rows []Row, blind bool) 
 	anyRow := func(test func(Row) bool) bool { return blind || slices.ContainsFunc(rows, test) }
 	for _, was := range live.Fields {
 		nf, kept := next.field(was.Name)
-		switch {
-		case !kept:
+		if !kept {
 			if anyRow(func(r Row) bool { return holds(r, was.Name) }) {
 				out = append(out, SchemaChange{ChangeFieldRemoved, was.Name})
 			}
 			continue
-		case nf.Type != was.Type:
-			if anyRow(func(r Row) bool { return holds(r, was.Name) }) {
-				out = append(out, SchemaChange{ChangeFieldTypeChanged, was.Name})
-			}
-			continue
+		}
+		// A retyped field is still judged for what it now requires; its limits, of another
+		// type, are not compared.
+		retyped := nf.Type != was.Type
+		if retyped && anyRow(func(r Row) bool { return holds(r, was.Name) }) {
+			out = append(out, SchemaChange{ChangeFieldTypeChanged, was.Name})
 		}
 		if nf.Required && !was.Required && anyRow(func(r Row) bool { return !holds(r, was.Name) }) {
 			out = append(out, SchemaChange{ChangeFieldRequired, was.Name})
 		}
-		if blind && narrower(was, nf) || !blind && anyRow(func(r Row) bool {
+		if !retyped && (blind && narrower(was, nf) || !blind && anyRow(func(r Row) bool {
 			v, ok := r.Data[was.Name]
 			if !ok || v == nil {
 				return false
@@ -548,7 +548,7 @@ func breakingChanges(live *Collection, next Collection, rows []Row, blind bool) 
 			_, _, errNow := nf.parse(v)
 			_, _, errWas := was.parse(v)
 			return errNow != nil && errWas == nil
-		}) {
+		})) {
 			out = append(out, SchemaChange{ChangeFieldNarrowed, was.Name})
 		}
 		// A conditional requirement that is new or changed. Judged blind, it counts whenever the

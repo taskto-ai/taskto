@@ -1571,7 +1571,8 @@ action). The answer to the action is two `updateDataModel` messages, `/screen` a
 not, or that isn't there): **nothing else in the data model is touched**, so what was typed
 into `/draft` is still there when the person comes back. Navigating changes no row, so it is
 open to everyone who may open the app, a viewer included; a screen drawn from an older release
-is navigated as that release defines it (`409 app_release_outdated` if it can't be found).
+is navigated as that release defines it (a release the app doesn't have is answered as for any
+action: `404 app_release_not_found` to those who may run actions, a refusal to the others).
 Anything else an action answers, in an app with screens, replaces `/items` and the summaries
 only (and `/draft`, for an insert); an update also sends `/record` again, a delete empties it,
 and `then` opens its screen.
