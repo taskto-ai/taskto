@@ -3,6 +3,7 @@ package apps
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -30,6 +31,9 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	// Actions are the readers' route too: navigating changes nothing, and act asks for the
 	// right to write the space itself for every other kind of action.
 	mux.Handle("POST "+apps+"/{app}/actions", read(s.handleAction))
+	// The draft's preview runs on sample rows the caller holds and writes nothing, so it is the
+	// readers' route as far as the space goes; the app's roles say who may see a draft.
+	mux.Handle("POST "+apps+"/{app}/preview", read(s.handlePreview))
 	mux.Handle("POST "+apps+"/{app}/publish", write(s.handlePublish))
 	mux.Handle("POST "+apps+"/{app}/rollback", write(s.handleRollback))
 	mux.Handle("GET "+apps+"/{app}/releases", read(s.handleReleases))
@@ -213,6 +217,28 @@ func (s *Service) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, msgs)
+}
+
+// handlePreview draws the draft, or runs one of its actions, on sample rows (preview.go).
+func (s *Service) handlePreview(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	var body PreviewRequest
+	if !readJSONLimit(w, r, &body, previewMaxBody) {
+		return
+	}
+	reply, err := s.preview(r.Context(), req.space, req.actor, req.app, body)
+	if errors.Is(err, ErrInvalid) {
+		invalid(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, reply)
 }
 
 // handlePublish makes the app's draft its live release.
@@ -513,9 +539,21 @@ func invalid(w http.ResponseWriter, status int, err error) {
 // readJSON decodes the request body into v, strictly: unknown fields and trailing data
 // are errors. It answers 400 and returns false on failure.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
+	return readJSONLimit(w, r, v, maxBody)
+}
+
+// readJSONLimit is readJSON for a body of up to limit bytes. A preview's body carries all its
+// sample rows, so it is bigger than a definition's: its own limit, and its own answer to a body over it.
+func readJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) && limit == previewMaxBody {
+			writeError(w, http.StatusRequestEntityTooLarge, apierr.CodeAppPreviewTooLarge,
+				fmt.Sprintf("a preview's request is at most %d MiB", previewMaxBody>>20), apierr.Params{"max_mib": previewMaxBody >> 20})
+			return false
+		}
 		writeError(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: "+err.Error())
 		return false
 	}

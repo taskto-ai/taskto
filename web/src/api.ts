@@ -193,6 +193,18 @@ export type AppDefinition = { collection: { fields: AppField[] }; actions: Recor
 // A change of a collection a publish must acknowledge, by kind and field.
 export type SchemaChange = { change: string; field: string }
 
+// The parts of an app's definition the builder tells people about: what its rows hold (AppField)
+// and what its buttons may do to them. Nothing else of a definition is read here.
+export type AppActionKind = 'insert' | 'update' | 'delete' | 'navigate'
+export type AppDraft = DefinitionNeeds & {
+  collection?: { fields: AppField[] }
+  actions?: Record<string, { kind: AppActionKind }>
+}
+
+// One sample row of a draft's preview: it lives in the browser, never on the server's disk.
+export type PreviewRow = { id: number; revision: number; data: Record<string, unknown> }
+export type PreviewReply = { messages: unknown[]; rows: PreviewRow[] }
+
 export type App = {
   id: number
   space_id: number
@@ -208,7 +220,7 @@ export type App = {
   // The draft differs from the live release (told only to those who may design or publish).
   unpublished_changes: boolean
   // The definition being edited, in a single app's reply, for those who may design or publish.
-  draft?: DefinitionNeeds
+  draft?: AppDraft
 }
 
 // A widget an app offers for Home (docs/api.md, Home): a bounded view, never markup of its own.

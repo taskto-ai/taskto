@@ -164,6 +164,14 @@ now). A CLI turn is one `cli_turn` call, so the card needs to come from it:
   asked, whatever the call's result;
 - Done or Not now sends a message, which starts the next CLI turn, as before.
 
+An app the CLI saves with TaskTo's `create_app` or `update_app` is shown the same way, so the app
+builder's preview fills in after a CLI turn: the worker reads the app's `id` and `space_id` from
+the whole of a finished, successful call's answer (the event's `output` is cut, so it can't be read
+from there; each CLI's form of the name is accepted, as above) and sends them in the tool event's
+`saved`; the sidecar keeps the turn's saved apps, last 20, in the `cli_turn` result's details, as
+`apps`, and the web app launches or links the last one. What the CLI's own answer said plays no
+part.
+
 The CLI is told, by the tool's result and the endpoint's instructions, to end its turn after
 `browser_help`. It doesn't ask the owner's permission first, unlike the other browser tools
 that aren't read-only: it changes nothing but which tab is in front, and asks the user to act,

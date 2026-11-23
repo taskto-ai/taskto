@@ -281,12 +281,91 @@ test('the app is drawn from the release it names, and its actions name that rele
   })
   expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${base}/surface?release=3`, `POST ${base}/actions`])
   expect(calls[1].body).toMatchObject({ name: 'add_expense', release: 3 })
-  // A draft is drawn, never acted on.
+  expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${base}/surface?release=3`, `POST ${base}/actions`])
+})
+
+test("a draft is tried on sample rows the server makes, and its actions never reach the app's own", async () => {
+  const sample = [{ id: 1, revision: 1, data: { description: 'Coffee' } }]
+  const grown = [...sample, { id: 2, revision: 1, data: { description: 'Tea' } }]
+  const calls = fakeFetch({
+    'POST /api/workspaces/1/spaces/2/apps/1/preview': (call) =>
+      (call.body as { action?: unknown }).action
+        ? { body: { messages: afterAdd, rows: grown } }
+        : { body: { messages: surface, rows: sample } },
+  })
+  const base = '/api/workspaces/1/spaces/2/apps/1'
   const preview = httpTransport(base, 'draft')
-  await expect(
-    preview.act({ name: 'x', surfaceId: 'app-1', sourceComponentId: 'x', timestamp: 't', context: {} }),
-  ).rejects.toThrow('draft preview')
-  expect(calls).toHaveLength(2)
+  expect(await preview.load()).toEqual(surface)
+  const action = { name: 'add_expense', surfaceId: 'app-1', sourceComponentId: 'add', timestamp: 't', context: {} }
+  expect(await preview.act(action)).toEqual(afterAdd)
+  await preview.act(action)
+  // The first step sends nothing; the next ones send back the rows the last one left, with the action.
+  expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+    `POST ${base}/preview`,
+    `POST ${base}/preview`,
+    `POST ${base}/preview`,
+  ])
+  expect(calls[0].body).toEqual({})
+  expect(calls[1].body).toEqual({ rows: sample, action })
+  expect(calls[2].body).toEqual({ rows: grown, action })
+  // Loading again starts over from fresh sample rows.
+  await preview.load()
+  expect(calls[3].body).toEqual({})
+})
+
+test('two taps on a preview in quick succession each go on from the rows the other left', async () => {
+  const base = '/api/workspaces/1/spaces/2/apps/1'
+  const sent: { rows?: unknown[]; action?: { name: string } }[] = []
+  const answers: ((rows: unknown[] | 'fail') => void)[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      sent.push(body)
+      const rows = await new Promise<unknown[] | 'fail'>((resolve) => answers.push(resolve))
+      return new Response(JSON.stringify(rows === 'fail' ? { error: 'x', code: 'internal' } : { messages: [], rows }), {
+        status: rows === 'fail' ? 500 : 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }),
+  )
+  const preview = httpTransport(base, 'draft')
+  const tap = (name: string) => ({ name, surfaceId: 'app-1', sourceComponentId: 'b', timestamp: 't', context: {} })
+  const load = preview.load()
+  await vi.waitFor(() => expect(sent).toHaveLength(1))
+  answers[0]([{ id: 1, revision: 1, data: {} }])
+  await load
+
+  const first = preview.act(tap('one'))
+  const second = preview.act(tap('two'))
+  // The second waits for the first: it must start from the rows the first leaves.
+  await vi.waitFor(() => expect(sent).toHaveLength(2))
+  await new Promise((r) => setTimeout(r, 20))
+  expect(sent).toHaveLength(2)
+  const afterOne = [
+    { id: 1, revision: 1, data: {} },
+    { id: 2, revision: 1, data: { by: 'one' } },
+  ]
+  answers[1](afterOne)
+  await first
+  await vi.waitFor(() => expect(sent).toHaveLength(3))
+  expect(sent[2]).toMatchObject({ rows: afterOne, action: { name: 'two' } })
+  answers[2]([...afterOne, { id: 3, revision: 1, data: { by: 'two' } }])
+  await second
+
+  // A step that fails leaves the next one to go on from the rows as they were.
+  const failing = preview.act(tap('three'))
+  await vi.waitFor(() => expect(sent).toHaveLength(4))
+  const fine = preview.act(tap('four'))
+  answers[3]('fail')
+  await expect(failing).rejects.toBeTruthy()
+  await vi.waitFor(() => expect(sent).toHaveLength(5))
+  expect(sent[4]).toMatchObject({
+    rows: [...afterOne, { id: 3, revision: 1, data: { by: 'two' } }],
+    action: { name: 'four' },
+  })
+  answers[4]([])
+  await fine
 })
 
 for (const [name, component] of [

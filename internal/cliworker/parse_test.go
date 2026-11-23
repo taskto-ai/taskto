@@ -2,9 +2,11 @@ package cliworker
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -337,5 +339,59 @@ func TestParseGrokNotSignedIn(t *testing.T) {
 	}
 	if got := types(events); !slices.Contains(got, EventLoginRequired) {
 		t.Fatalf("events = %v", got)
+	}
+}
+
+// The app a CLI saved through TaskTo's create_app or update_app is named in the tool event, read
+// from the whole answer even where the event's output is cut, so the conversation can show it.
+func TestParseSavedApps(t *testing.T) {
+	big := strings.Repeat("x", 3*maxToolText)
+	answer := `{"id":7,"space_id":3,"name":"Tracker","definition":{"note":"` + big + `"}}`
+	quote := func(s string) string { b, _ := json.Marshal(s); return string(b) }
+	saved := func(cli CLI, lines ...string) []*SavedApp {
+		var out []*SavedApp
+		p := newParser(cli, func(e Event) {
+			if e.Type == EventTool && e.Tool.Status != "in_progress" {
+				out = append(out, e.Tool.Saved)
+			}
+		})
+		for _, l := range lines {
+			p.line([]byte(l))
+		}
+		return out
+	}
+	claude := func(tool, input, content string, isError bool) []string {
+		return []string{
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"` + tool + `","input":` + input + `}]}}`,
+			`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":` + strconv.FormatBool(isError) + `,"content":` + quote(content) + `}]}}`,
+		}
+	}
+	want := &SavedApp{Space: 3, App: 7}
+	for name, c := range map[string]struct {
+		cli   CLI
+		lines []string
+	}{
+		"Claude Code create":  {Claude, claude("mcp__taskto__create_app", `{}`, answer, false)},
+		"Claude Code update":  {Claude, claude("mcp__taskto__update_app", `{}`, answer, false)},
+		"Grok Build":          {Grok, claude("taskto__create_app", `{}`, answer, false)},
+		"Grok Build use_tool": {Grok, claude("use_tool", `{"tool_name":"taskto__update_app","tool_input":{}}`, answer, false)},
+		"Codex": {Codex, []string{
+			`{"type":"item.completed","item":{"id":"i1","type":"mcp_tool_call","server":"taskto","tool":"create_app","arguments":{},"status":"completed","result":{"content":[{"type":"text","text":` + quote(answer) + `}]}}}`,
+		}},
+	} {
+		got := saved(c.cli, c.lines...)
+		if len(got) != 1 || got[0] == nil || *got[0] != *want {
+			t.Errorf("%s: saved = %+v", name, got)
+		}
+	}
+	for name, lines := range map[string][]string{
+		"a failed save":        claude("mcp__taskto__create_app", `{}`, answer, true),
+		"another tool":         claude("mcp__taskto__read_doc", `{}`, answer, false),
+		"another server":       claude("mcp__other__create_app", `{}`, answer, false),
+		"an answer not an app": claude("mcp__taskto__create_app", `{}`, "error: nope", false),
+	} {
+		if got := saved(Claude, lines...); len(got) != 1 || got[0] != nil {
+			t.Errorf("%s: saved = %+v", name, got)
+		}
 	}
 }

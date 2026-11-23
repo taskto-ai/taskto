@@ -26,10 +26,11 @@ type parser struct {
 	// activity: the CLI did something (answered, thought, ran a tool) before it ended.
 	activity bool
 	tools    map[string]string
+	inputs   map[string]string // a tool call's input, by its ID, for the meta-tool that names its tool there
 }
 
 func newParser(cli CLI, emit func(Event)) *parser {
-	p := &parser{cli: cli, tools: map[string]string{}}
+	p := &parser{cli: cli, tools: map[string]string{}, inputs: map[string]string{}}
 	p.emit = func(e Event) {
 		if e.Type == EventText || e.Type == EventThinking || e.Type == EventTool {
 			p.activity = true
@@ -155,9 +156,10 @@ func (p *parser) streamJSON(typ string, b []byte) {
 			if bl.IsError {
 				status = "failed"
 			}
+			text := contentText(bl.Content)
 			p.emit(Event{Type: EventTool, Tool: &Tool{
 				ID: bl.ToolUseID, Name: p.tools[bl.ToolUseID], Status: status,
-				Output: cut(contentText(bl.Content), maxToolText),
+				Output: cut(text, maxToolText), Saved: savedApp(p.tools[bl.ToolUseID], p.inputs[bl.ToolUseID], text, !bl.IsError),
 			}})
 		}
 	case "rate_limit_event":
@@ -261,6 +263,7 @@ func (p *parser) assistantBlock(raw json.RawMessage) {
 		}
 	case "tool_use", "server_tool_use":
 		p.tools[bl.ID] = bl.Name
+		p.inputs[bl.ID] = compactJSON(bl.Input)
 		p.emit(Event{Type: EventTool, Tool: &Tool{
 			ID: bl.ID, Name: bl.Name, Status: "in_progress", Input: cut(compactJSON(bl.Input), maxToolText),
 		}})
@@ -341,13 +344,16 @@ type codexItem struct {
 	Tool             string `json:"tool"`
 	// Arguments are an MCP tool call's (TaskTo's own tools among them: docs/cli-tools.md).
 	Arguments json.RawMessage `json:"arguments"`
-	Changes   []struct {
+	// Result is an MCP tool call's answer: {"content": [{"type": "text", "text": …}]}.
+	Result  json.RawMessage `json:"result"`
+	Changes []struct {
 		Path string `json:"path"`
 		Kind string `json:"kind"`
 	} `json:"changes"`
 }
 
 func (p *parser) codexItem(it codexItem, completed bool) {
+	var saved *SavedApp
 	tool := func(name, input, output string, failed bool) {
 		status := "in_progress"
 		if completed {
@@ -358,6 +364,7 @@ func (p *parser) codexItem(it codexItem, completed bool) {
 		}
 		p.emit(Event{Type: EventTool, Tool: &Tool{
 			ID: it.ID, Name: name, Status: status, Input: cut(input, maxToolText), Output: cut(output, maxToolText),
+			Saved: saved,
 		}})
 	}
 	switch it.Type {
@@ -384,7 +391,13 @@ func (p *parser) codexItem(it codexItem, completed bool) {
 		if input == "null" {
 			input = ""
 		}
-		tool(it.Server+"."+it.Tool, input, "", it.Status == "failed")
+		name := it.Server + "." + it.Tool
+		var answer struct {
+			Content json.RawMessage `json:"content"`
+		}
+		_ = json.Unmarshal(it.Result, &answer)
+		saved = savedApp(name, input, contentText(answer.Content), completed && it.Status != "failed")
+		tool(name, input, "", it.Status == "failed")
 	case "web_search":
 		tool("web_search", it.Query, "", false)
 	case "error":
@@ -470,4 +483,43 @@ func cut(s string, n int) string {
 		s = s[:len(s)-1]
 	}
 	return s + mark
+}
+
+// saveTools are TaskTo's tools that save an app, answering with it.
+var saveTools = map[string]bool{"create_app": true, "update_app": true}
+
+// savedApp is the app a finished call of TaskTo's create_app or update_app saved, if the call was
+// one and it succeeded, from the whole of its answer (an app's JSON: its id and its space_id). The
+// CLIs name TaskTo's tools mcp__taskto__<tool> (Claude Code), taskto.<tool> (Codex's server and
+// tool) and taskto__<tool> (Grok Build, which may also call it through use_tool, with the name
+// in the input).
+func savedApp(name, input, answer string, ok bool) *SavedApp {
+	if !ok {
+		return nil
+	}
+	tool, found := strings.CutPrefix(name, "mcp__"+toolsServer+"__")
+	if !found {
+		tool, found = strings.CutPrefix(name, toolsServer+"__")
+	}
+	if !found {
+		tool, found = strings.CutPrefix(name, toolsServer+".")
+	}
+	if name == "use_tool" {
+		var call struct {
+			ToolName string `json:"tool_name"`
+		}
+		_ = json.Unmarshal([]byte(input), &call)
+		tool, found = strings.CutPrefix(call.ToolName, toolsServer+"__")
+	}
+	if !found || !saveTools[tool] {
+		return nil
+	}
+	var app struct {
+		ID      int64 `json:"id"`
+		SpaceID int64 `json:"space_id"`
+	}
+	if json.Unmarshal([]byte(answer), &app) != nil || app.ID < 1 || app.SpaceID < 1 {
+		return nil
+	}
+	return &SavedApp{Space: app.SpaceID, App: app.ID}
 }

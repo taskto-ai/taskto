@@ -1,7 +1,7 @@
 // Draws one personal app: the server sends A2UI messages, button actions go back to it,
 // and the messages it answers with update the screen.
 //
-// An app is drawn from one of its releases (or, to preview it, its draft), and its buttons name the
+// An app is drawn from one of its releases (or, to try it, its draft on sample data), and its buttons name the
 // release they were drawn from, so the server can tell an action of an older screen from the live
 // one's. A release that needs more than this client's catalog has (a component, a function, a
 // newer definition format) isn't drawn: the app says the client must be updated.
@@ -9,7 +9,7 @@
 import { A2uiSurface, type ReactCatalogComponent } from '@a2ui/react/v0_9'
 import { MessageProcessor, STRICT_VALIDATION, type SurfaceModel } from '@a2ui/web_core/v0_9'
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, api, type DefinitionNeeds, errorText } from '../api'
+import { ApiError, api, type DefinitionNeeds, errorText, type PreviewReply, type PreviewRow } from '../api'
 import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
 import { appsCatalog, unsupportedBy } from './catalog'
@@ -26,9 +26,41 @@ export type AppTransport = {
   files?: AppFiles
 }
 
+// The draft's preview: its screen and its buttons work, on sample rows the server makes and this
+// transport keeps (the server holds nothing of a preview and writes none of the app's rows:
+// docs/api.md, …/preview). A new transport starts a new preview, so a caller keeps one while the
+// preview is in use.
+//
+// The steps go one at a time, each on the rows the one before left: two taps in quick succession
+// would otherwise both start from the same rows, and whichever answer came last would drop the
+// other's change.
+export function previewTransport(base: string): AppTransport {
+  let rows: PreviewRow[] | undefined
+  let queue: Promise<unknown> = Promise.resolve()
+  const step = (action?: ActionPayload, fresh = false): Promise<unknown[]> => {
+    const run = queue.then(async () => {
+      // Loading starts over from the sample rows.
+      if (fresh) rows = undefined
+      const reply = await api<PreviewReply>(`${base}/preview`, {
+        method: 'POST',
+        body: action && rows ? { rows, action } : {},
+      })
+      rows = reply.rows
+      return reply.messages
+    })
+    // A step that failed leaves the rows as they were, and the next goes on from them.
+    queue = run.catch(() => undefined)
+    return run
+  }
+  return {
+    load: () => step(undefined, true),
+    act: (action) => step(action),
+  }
+}
+
 // The app's routes on the server: base is …/spaces/{space}/apps/{app}. release is the live
-// release's number, which the screen is drawn from and its actions name; 'draft' draws the draft, a
-// preview whose actions don't run. screen opens an app with screens on one of them (a pin's); widget
+// release's number, which the screen is drawn from and its actions name; 'draft' is the draft's
+// preview, whose actions run on sample rows (previewTransport) and never on the app's own. screen opens an app with screens on one of them (a pin's); widget
 // draws one of the live release's Home widgets instead (a bounded view whose actions are the app's
 // own, answered with the rows it holds).
 export function httpTransport(
@@ -42,13 +74,8 @@ export function httpTransport(
     const text = q.toString()
     return text ? `?${text}` : ''
   }
-  if (release === 'draft') {
-    return {
-      load: () => api<unknown[]>(`${base}/surface${query({ release: 'draft', screen: opts.screen })}`),
-      act: () => Promise.reject(new Error(translate('apps.stage.draftNoActions'))),
-      files: { base, uploads: false },
-    }
-  }
+  // The draft is its preview, on sample rows (previewTransport), and opens on its entry screen.
+  if (release === 'draft') return previewTransport(base)
   if (opts.widget !== undefined) {
     return {
       load: () => api<unknown[]>(`${base}/surface${query({ widget: opts.widget })}`),

@@ -136,6 +136,15 @@ type Tool struct {
 	Input  string `json:"input,omitempty"`
 	Status string `json:"status"` // running, done or failed
 	Output string `json:"output,omitempty"`
+	// Saved is the app a finished create_app or update_app of TaskTo's tools answered with, read
+	// from the whole result (Output is cut), so the conversation can show the app the CLI saved.
+	Saved *SavedApp `json:"saved,omitempty"`
+}
+
+// SavedApp names an app a CLI turn saved: its space and its id.
+type SavedApp struct {
+	Space int64 `json:"space"`
+	App   int64 `json:"app"`
 }
 
 // Tokens is a turn's token use, as the CLI reported it.

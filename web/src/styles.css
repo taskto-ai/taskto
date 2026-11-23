@@ -1980,6 +1980,205 @@ fieldset {
   overflow-wrap: anywhere;
 }
 
+/* The app builder: the conversation beside a live preview of the draft; on a phone, Build and
+   Preview are tabs, and both panes stay drawn (the hidden one is only out of sight and out of
+   reach) so neither loses its scroll or its form when you switch. */
+
+.tt-builder {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.tt-builder-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 1.25rem;
+  border-block-end: 1px solid var(--tt-line);
+}
+
+.tt-builder-bar h1 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.tt-builder-tabs {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.tt-builder-tabs [role="tab"] {
+  min-height: var(--tt-touch);
+  position: relative;
+}
+
+.tt-builder-tabs [role="tab"][aria-selected="true"] {
+  border-color: var(--tt-accent);
+  font-weight: 600;
+}
+
+.tt-builder-dot {
+  display: inline-block;
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  margin-inline-start: 0.4rem;
+  border-radius: 50%;
+  background: var(--tt-accent);
+}
+
+.tt-builder-panes {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(18rem, 1fr) minmax(0, 1fr);
+}
+
+.tt-builder-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.tt-builder-pane:focus {
+  outline: none;
+}
+
+.tt-builder-pane:focus-visible {
+  outline: 2px solid var(--tt-accent);
+  outline-offset: -2px;
+}
+
+.tt-builder-pane[data-pane="build"] {
+  border-inline-end: 1px solid var(--tt-line);
+}
+
+.tt-builder-pane[data-pane="build"] > .tt-chat {
+  height: 100%;
+}
+
+.tt-builder-preview {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+  padding: 0.75rem 1.25rem calc(1rem + env(safe-area-inset-bottom));
+}
+
+.tt-builder-preview .tt-app {
+  overflow: auto;
+}
+
+.tt-builder-app {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.tt-stage[data-stage="draft"] {
+  padding: 0.6rem;
+  border: 1px dashed var(--tt-warning);
+  border-radius: var(--tt-radius);
+}
+
+.tt-publish {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-publish h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.tt-publish-summary {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+}
+
+.tt-publish-summary dt {
+  font-weight: 600;
+}
+
+.tt-publish-summary dd {
+  margin: 0 0 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+.tt-publish-summary p,
+.tt-publish-summary ul {
+  margin: 0 0 0.25rem;
+}
+
+.tt-published {
+  margin: 0;
+  color: var(--tt-success);
+}
+
+.tt-builder-start {
+  max-inline-size: 42rem;
+}
+
+.tt-builder-form,
+.tt-builder-where {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tt-builder-where {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-builder-where p {
+  margin: 0;
+}
+
+.tt-field {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.tt-field textarea {
+  inline-size: 100%;
+  resize: vertical;
+}
+
+/* A phone: one pane at a time. The one that isn't shown is still laid out and keeps its scroll,
+   only out of sight and out of reach (it is also `inert`, so it can't be tabbed to or heard). */
+.tt-builder[data-narrow] .tt-builder-bar {
+  padding-inline: 0.75rem;
+}
+
+.tt-builder[data-narrow] .tt-builder-panes {
+  position: relative;
+  display: block;
+}
+
+.tt-builder[data-narrow] .tt-builder-pane {
+  position: absolute;
+  inset: 0;
+}
+
+.tt-builder[data-narrow] .tt-builder-pane[data-active="false"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.tt-builder[data-narrow] .tt-builder-pane[data-pane="build"] {
+  border-inline-end: 0;
+}
+
+.tt-builder[data-narrow] .tt-builder-preview {
+  padding-inline: 0.75rem;
+}
+
 /* Phones: the sidebar is a drawer, and one pane at a time. */
 
 @media (max-width: 48rem) {
