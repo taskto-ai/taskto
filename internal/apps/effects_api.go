@@ -77,6 +77,8 @@ func detailOf(p payload) EffectDetail {
 // EffectList is a page of effects, newest first, with how many of the app's wait and failed.
 type EffectList struct {
 	Effects []EffectView `json:"effects"`
+	// More is whether older effects than the page's last match too (ask again with before).
+	More bool `json:"more"`
 	// Active and Failed count the entries the caller may see that wait or run, and that failed.
 	Active int `json:"active"`
 	Failed int `json:"failed"`
@@ -88,17 +90,36 @@ type EffectFilter struct {
 	Record int64
 	Status string
 	Limit  int
+	// Before, if set, lists only the effects older than this one (the ID of the last of the page
+	// before), to read on past a page.
+	Before int64
 }
 
 var effectStatuses = []string{StatePending, StateRunning, StateDone, StateFailed, "active"}
 
-// view presents an entry to a caller. canRead says whether they may read a space.
-func (s *Service) view(ctx context.Context, e effectRow, caller Actor, canRead func(int64) bool) (EffectView, error) {
+// view presents an entry to a caller. canRead says whether they may read a space; live is the
+// collection the app declares now, nil if it has none.
+//
+// What an entry says of its target (what it makes, why it failed) is for those who may read the
+// target now, exactly as its result is: a person whose access to the space ended is told the entry's
+// status and code, and nothing of the place. And what the templates made of the record's fields is
+// shown only while the live release still declares those fields as they were: a field the release
+// removed or retyped is not for people to read, however it got into a title or a path.
+func (s *Service) view(e effectRow, caller Actor, canRead func(int64) bool, live *Collection) (EffectView, error) {
+	targetReadable := canRead(e.payload.SpaceID)
+	fieldsHold := live != nil && e.payload.usesHold(*live)
 	v := EffectView{
 		ID: e.id, Operation: e.operation, Position: e.position, Kind: e.kind, Name: e.name, Action: e.action,
 		Record: e.recordID, RecordRevision: e.recordRevision, Status: e.state, Attempts: e.attempts,
-		Detail: detailOf(e.payload), CreatedAt: e.createdAt, UpdatedAt: e.updatedAt,
+		CreatedAt: e.createdAt, UpdatedAt: e.updatedAt,
 		CanRetry: e.state == StateFailed && e.userID == caller.UserID,
+	}
+	v.Detail = EffectDetail{Route: e.payload.Route}
+	if targetReadable {
+		v.Detail = detailOf(e.payload)
+		if !fieldsHold {
+			v.Detail.Title, v.Detail.Path = "", ""
+		}
 	}
 	if e.doneAt.Valid {
 		v.DoneAt = &e.doneAt.String
@@ -108,7 +129,7 @@ func (s *Service) view(ctx context.Context, e effectRow, caller Actor, canRead f
 	}
 	if e.errCode.Valid && (e.state == StateFailed || e.state == StatePending) {
 		v.Error = &EffectError{Code: apierr.Code(e.errCode.String)}
-		if e.errParams.Valid {
+		if e.errParams.Valid && targetReadable {
 			_ = json.Unmarshal([]byte(e.errParams.String), &v.Error.Params)
 		}
 	}
@@ -118,10 +139,23 @@ func (s *Service) view(ctx context.Context, e effectRow, caller Actor, canRead f
 			return EffectView{}, err
 		}
 		if canRead(resultSpace(res)) {
+			if !fieldsHold {
+				withheld(res)
+			}
 			v.Result = res
 		}
 	}
 	return v, nil
+}
+
+// withheld removes from a result what was made from the record's fields (a card's title, a
+// document's path), at the top and in a route.
+func withheld(res map[string]any) {
+	delete(res, "title")
+	delete(res, "path")
+	if route, ok := res["route"].(map[string]any); ok {
+		delete(route, "path")
+	}
 }
 
 // resultSpace is the space a result points into.
@@ -175,11 +209,18 @@ func (s *Service) listEffects(ctx context.Context, sp access.Space, a Actor, app
 	if f.Status != "" && !slices.Contains(effectStatuses, f.Status) {
 		return EffectList{}, invalidf("status is one of %v", effectStatuses)
 	}
+	if f.Before < 0 {
+		return EffectList{}, invalidf("before is an effect's ID")
+	}
 	if f.Limit < 0 || f.Limit > maxListed {
 		return EffectList{}, invalidf("limit is 1 to %d", maxListed)
 	}
 	if f.Limit == 0 {
 		f.Limit = defaultListed
+	}
+	var live *Collection
+	if ap, err := launchable(ctx, s.db, sp.ID, appID); err == nil && ap.liveDef != nil {
+		live = &ap.liveDef.Collection
 	}
 	where, args := `e.app_id = ?`, []any{appID}
 	if v.scope == access.ScopeOwn {
@@ -210,6 +251,9 @@ func (s *Service) listEffects(ctx context.Context, sp access.Space, a Actor, app
 	if f.Record != 0 {
 		where, args = where+` AND e.record_id = ?`, append(args, f.Record)
 	}
+	if f.Before != 0 {
+		where, args = where+` AND e.id < ?`, append(args, f.Before)
+	}
 	switch f.Status {
 	case "":
 	case "active":
@@ -218,7 +262,7 @@ func (s *Service) listEffects(ctx context.Context, sp access.Space, a Actor, app
 		where, args = where+` AND e.state = ?`, append(args, f.Status)
 	}
 	// #nosec G202 -- the conditions joined are constants above; values go in args.
-	rows, err := s.db.QueryContext(ctx, `SELECT `+effectColumns+effectFrom+` WHERE `+where+` ORDER BY e.id DESC LIMIT ?`, append(args, f.Limit)...)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+effectColumns+effectFrom+` WHERE `+where+` ORDER BY e.id DESC LIMIT ?`, append(args, f.Limit+1)...)
 	if err != nil {
 		return EffectList{}, err
 	}
@@ -229,13 +273,19 @@ func (s *Service) listEffects(ctx context.Context, sp access.Space, a Actor, app
 		if err != nil {
 			return EffectList{}, err
 		}
-		view, err := s.view(ctx, e, a, canRead)
+		view, err := s.view(e, a, canRead, live)
 		if err != nil {
 			return EffectList{}, err
 		}
 		out.Effects = append(out.Effects, view)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return EffectList{}, err
+	}
+	if len(out.Effects) > f.Limit {
+		out.Effects, out.More = out.Effects[:f.Limit], true
+	}
+	return out, nil
 }
 
 // retryEffect puts a failed effect back to be done, with its attempts counted afresh. It is for
@@ -272,13 +322,25 @@ func (s *Service) retryEffect(ctx context.Context, sp access.Space, a Actor, app
 		if e.userID != a.UserID {
 			return forbidden("retry_effect")
 		}
-		// The right the action needed.
+		// The right the action needed, over the record as the role says now.
+		var creator sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT created_by FROM app_rows WHERE id = ?`, e.recordID).Scan(&creator); err != nil {
+			return err
+		}
 		if e.actionKind == ActionInsert {
 			if err := need(acc, access.CapSubmit); err != nil {
 				return err
 			}
-		} else if acc.ModifyRecords == access.ScopeNone {
+		} else if !(visibility{scope: acc.ModifyRecords, user: a.UserID}).sees(creator) {
 			return forbidden(capModifyRecords)
+		}
+		// A retry is waiting work like any other: the app's bound holds.
+		var waiting int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM app_effects WHERE app_id = ? AND state IN ('pending', 'running')`, appID).Scan(&waiting); err != nil {
+			return err
+		}
+		if waiting >= maxOutstanding {
+			return backlogError()
 		}
 		res, err := tx.ExecContext(ctx, `
 			UPDATE app_effects SET state = 'pending', attempts = 0, next_attempt_at = ?, lease_until = NULL,
@@ -300,7 +362,11 @@ func (s *Service) retryEffect(ctx context.Context, sp access.Space, a Actor, app
 		return EffectView{}, err
 	}
 	s.poke()
-	return s.view(ctx, e, a, s.readability(ctx, a.UserID))
+	var live *Collection
+	if ap, err := launchable(ctx, s.db, sp.ID, appID); err == nil && ap.liveDef != nil {
+		live = &ap.liveDef.Collection
+	}
+	return s.view(e, a, s.readability(ctx, a.UserID), live)
 }
 
 // Preview is what an action would set going, simulated.
@@ -393,20 +459,25 @@ func (s *Service) previewTarget(ctx context.Context, userID int64, e Effect, p p
 // themselves. It tells nothing about a space the author can't read that they couldn't tell from
 // the refusal for any other. (Whoever acts is checked again when an effect runs.)
 func (s *Service) checkEffectTargets(ctx context.Context, a Actor, def Definition) error {
-	type target struct{ space, board int64 }
+	// A target is checked for each permission an effect needs of it: a route that only reads a
+	// board must not stand in for a card made on the same board, which writes.
+	type target struct {
+		space, board int64
+		write        bool
+	}
 	var seen []target
 	for _, name := range sortedKeys(def.Actions) {
 		for _, e := range def.Actions[name].Effects {
 			if e.SpaceID == 0 {
 				continue
 			}
-			t := target{e.SpaceID, e.BoardID}
+			write := e.Kind == EffectCreateCard || e.Kind == EffectCreateDocument
+			t := target{e.SpaceID, e.BoardID, write}
 			if slices.Contains(seen, t) {
 				continue
 			}
 			seen = append(seen, t)
-			write := e.Kind == EffectCreateCard || e.Kind == EffectCreateDocument
-			if err := s.targetOfDefinition(ctx, a, t.space, t.board, write); err != nil {
+			if err := s.targetOfDefinition(ctx, a, t.space, t.board, t.write); err != nil {
 				return err
 			}
 		}
@@ -464,6 +535,14 @@ func (s *Service) handleRecordEffects(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) listed(w http.ResponseWriter, r *http.Request, req request, record int64) {
 	f := EffectFilter{Record: record, Status: r.URL.Query().Get("status")}
+	if b := r.URL.Query().Get("before"); b != "" {
+		n, err := strconv.ParseInt(b, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "before is an effect's ID")
+			return
+		}
+		f.Before = n
+	}
 	if l := r.URL.Query().Get("limit"); l != "" {
 		n, err := strconv.Atoi(l)
 		if err != nil {

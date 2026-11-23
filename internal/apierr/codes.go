@@ -121,6 +121,7 @@ const (
 	CodeAppEffectNoCard       Code = "app_effect_no_card"       // the card to change was never made for the record
 	CodeAppEffectCardArchived Code = "app_effect_card_archived" // the card to change is archived
 	CodeAppEffectAppOffline   Code = "app_effect_app_offline"   // the app is offline or its space archived
+	CodeAppEffectRecordGone   Code = "app_effect_record_gone"   // the record it came from was deleted: restore it and retry
 	CodeAppEffectGaveUp       Code = "app_effect_gave_up"       // it kept failing for a reason that may pass: retry it
 
 	// Querying an app's records (internal/apps/query.go).

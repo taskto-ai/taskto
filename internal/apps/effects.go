@@ -175,6 +175,18 @@ func (d Definition) effectNames() map[string]bool {
 	return names
 }
 
+// cardMaker finds the create_card effect named name.
+func (d Definition) cardMaker(name string) (Effect, bool) {
+	for _, key := range sortedKeys(d.Actions) {
+		for _, e := range d.Actions[key].Effects {
+			if e.Kind == EffectCreateCard && e.Name == name {
+				return e, true
+			}
+		}
+	}
+	return Effect{}, false
+}
+
 // checkEffects validates the effects of every action against the collection and returns the
 // capabilities they need. Effects belong to an insert or an update (a delete leaves no record to
 // act on, a navigate changes nothing).
@@ -508,6 +520,56 @@ type payload struct {
 	Path    string   `json:"path,omitempty"`
 	Content string   `json:"content,omitempty"`
 	Route   string   `json:"route,omitempty"`
+	// Uses names the fields of the record whose values the templates were filled with, and their
+	// types then: what is shown of the entry is shown only while the live release still declares
+	// them so (usesHold), as a field the release removed or retyped is not for people to read.
+	Uses map[string]string `json:"uses,omitempty"`
+}
+
+// templatesOf lists the templates of the effect that its payload is filled from.
+func (e Effect) templatesOf() []string {
+	switch e.Kind {
+	case EffectCreateCard:
+		return append([]string{e.Title, e.Body}, e.Docs...)
+	case EffectCreateDocument:
+		return []string{e.Path, e.Content}
+	case EffectOpenRoute:
+		if e.Route == RouteDocument {
+			return []string{e.Path}
+		}
+	}
+	return nil
+}
+
+// usedFields is the fields of c the effect's templates have holes for, with their types.
+func (e Effect) usedFields(c Collection) map[string]string {
+	var uses map[string]string
+	for _, tpl := range e.templatesOf() {
+		_ = holes(tpl, func(text string, isHole bool) error {
+			if !isHole || text == "id" {
+				return nil
+			}
+			if f, ok := c.field(text); ok {
+				if uses == nil {
+					uses = map[string]string{}
+				}
+				uses[text] = string(f.Type)
+			}
+			return nil
+		})
+	}
+	return uses
+}
+
+// usesHold reports whether every field the entry was filled from is still declared by c with the
+// type it had.
+func (p payload) usesHold(c Collection) bool {
+	for name, typ := range p.Uses {
+		if f, ok := c.field(name); !ok || string(f.Type) != typ {
+			return false
+		}
+	}
+	return true
 }
 
 // applies reports whether the effect applies to the record as the change leaves it.
@@ -517,7 +579,7 @@ func (e Effect) applies(c Collection, data map[string]any) bool {
 
 // payload fills in the effect from the record.
 func (e Effect) payload(c Collection, data map[string]any, id int64) payload {
-	p := payload{SpaceID: e.SpaceID, BoardID: e.BoardID, Card: e.Card, Route: e.Route}
+	p := payload{SpaceID: e.SpaceID, BoardID: e.BoardID, Card: e.Card, Route: e.Route, Uses: e.usedFields(c)}
 	switch e.Kind {
 	case EffectCreateCard:
 		p.Column = e.Column

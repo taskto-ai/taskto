@@ -377,8 +377,13 @@ func TestAnEntryThatKeepsFailingFailsForGoodAndIsRetriedOnPurpose(t *testing.T) 
 	}
 	l := f.effects(f.alice, "")
 	card := only(t, l, EffectCreateCard)
-	if card.Status != StateFailed || card.Attempts != maxAttempts || card.Error == nil || card.Error.Code != "app_effect_gave_up" || !card.CanRetry || l.Failed != 2 {
+	if card.Status != StateFailed || card.Attempts != maxAttempts || card.Error == nil || card.Error.Code != "app_effect_gave_up" || !card.CanRetry || l.Failed != 1 {
 		t.Fatalf("card effect = %+v, list %+v", card, l)
+	}
+	// The card was made before the failure was noted, and the record's link knows it: the route
+	// to it is done, not failed for a card nobody noted.
+	if route := only(t, l, EffectOpenRoute); route.Status != StateDone {
+		t.Fatalf("route effect = %+v", route)
 	}
 	// Nothing tries a failed entry again by itself.
 	f.work()

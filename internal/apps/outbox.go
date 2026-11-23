@@ -121,10 +121,12 @@ func operationKey(action ClientAction, hasEffects bool) (string, error) {
 	return "srv-" + hex.EncodeToString(b[:]), nil
 }
 
-// requestHash says what a request asked for: the action and its context.
-func requestHash(action ClientAction) string {
+// requestHash says what a request asked for: the release it runs from (the one that decides what
+// the action does, the effects included), the action and its context.
+func requestHash(release int64, action ClientAction) string {
 	ctx, _ := json.Marshal(action.Context)
 	h := sha256.New()
+	fmt.Fprintf(h, "release:%d\x00", release)
 	h.Write([]byte(action.Name))
 	h.Write([]byte{0})
 	h.Write(ctx)
@@ -137,8 +139,8 @@ func requestHash(action ClientAction) string {
 // beginOperation records the operation of a request, in the request's transaction. replay is true
 // if the same request was made under it before (its change and effects are in already), and a
 // different one is errOperationReused.
-func beginOperation(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, key string, action ClientAction) (id int64, replay bool, err error) {
-	hash := requestHash(action)
+func beginOperation(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, key string, release int64, action ClientAction) (id int64, replay bool, err error) {
+	hash := requestHash(release, action)
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO app_operations (app_id, user_id, operation, action, request_hash, created_at)
 		VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (app_id, user_id, operation) DO NOTHING`,
@@ -209,7 +211,15 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 	at := now()
 	for _, i := range queued {
 		e := action.Effects[i]
-		raw, err := json.Marshal(e.payload(def.Collection, ap.data, ap.id))
+		p := e.payload(def.Collection, ap.data, ap.id)
+		if e.Card != "" {
+			// An update_card or a route to a card has no target of its own: it is the one of the
+			// effect that makes the card, kept here so who may be told about it is known.
+			if maker, ok := def.cardMaker(e.Card); ok {
+				p.SpaceID, p.BoardID = maker.SpaceID, maker.BoardID
+			}
+		}
+		raw, err := json.Marshal(p)
 		if err != nil {
 			return err
 		}
@@ -344,43 +354,66 @@ func (s *Service) drain(ctx context.Context) {
 	}
 }
 
-// purge removes the entries and operations nobody needs any more: finished ones after keepDone,
-// whatever their state after keepAll.
+// purge removes the entries and operations nobody needs any more. An entry is judged by its own
+// last activity (updated_at: queued, tried, retried), never by the age of the operation that queued
+// it, so an entry retried today is not erased before it runs because its request is old: finished
+// ones go after keepDone, whatever their state after keepAll. An operation goes once it has no
+// entries left and keepDone has passed since its request. The link of a record to the card made
+// for it (app_effect_cards) is never purged: it goes with its record or app.
 func (s *Service) purge(ctx context.Context) error {
 	t := s.clock()
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM app_effects
+		WHERE updated_at < ? OR (state = 'done' AND updated_at < ?)`,
+		s.stamp(t.Add(-keepAll)), s.stamp(t.Add(-keepDone))); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx, `
 		DELETE FROM app_operations
-		WHERE created_at < ? OR (created_at < ? AND NOT EXISTS (
-			SELECT 1 FROM app_effects e WHERE e.operation_id = app_operations.id AND e.state <> 'done'))`,
-		s.stamp(t.Add(-keepAll)), s.stamp(t.Add(-keepDone)))
+		WHERE created_at < ? AND NOT EXISTS (SELECT 1 FROM app_effects e WHERE e.operation_id = app_operations.id)`,
+		s.stamp(t.Add(-keepDone)))
 	return err
 }
 
 // claim takes the next entry that is due: one that waits, or one whose worker's lease has run out.
+// An entry whose lease ran out after its last permitted try isn't tried again: it has failed.
 func (s *Service) claim(ctx context.Context) (effectRow, bool, error) {
 	var e effectRow
 	var found bool
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		t := s.clock()
 		at := s.stamp(t)
-		var id int64
-		err := tx.QueryRowContext(ctx, `
-			SELECT id FROM app_effects
-			WHERE (state = 'pending' AND next_attempt_at <= ?) OR (state = 'running' AND lease_until <= ?)
-			ORDER BY id LIMIT 1`, at, at).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
+		for {
+			var id int64
+			var state string
+			var attempts int
+			err := tx.QueryRowContext(ctx, `
+				SELECT id, state, attempts FROM app_effects
+				WHERE (state = 'pending' AND next_attempt_at <= ?) OR (state = 'running' AND lease_until <= ?)
+				ORDER BY id LIMIT 1`, at, at).Scan(&id, &state, &attempts)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if attempts >= maxAttempts {
+				// Its worker died (or kept being stopped) on the last try: the bound holds.
+				if _, err := tx.ExecContext(ctx, `
+					UPDATE app_effects SET state = 'failed', lease_until = NULL, error_code = ?, error_params = NULL, updated_at = ?
+					WHERE id = ?`, string(apierr.CodeAppEffectGaveUp), at, id); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE app_effects SET state = 'running', attempts = attempts + 1, lease_until = ?, updated_at = ? WHERE id = ?`,
+				s.stamp(t.Add(leaseTime)), at, id); err != nil {
+				return err
+			}
+			e, err = scanEffect(tx.QueryRowContext(ctx, `SELECT `+effectColumns+effectFrom+` WHERE e.id = ?`, id))
+			found = err == nil
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE app_effects SET state = 'running', attempts = attempts + 1, lease_until = ?, updated_at = ? WHERE id = ?`,
-			s.stamp(t.Add(leaseTime)), at, id); err != nil {
-			return err
-		}
-		e, err = scanEffect(tx.QueryRowContext(ctx, `SELECT `+effectColumns+effectFrom+` WHERE e.id = ?`, id))
-		found = err == nil
-		return err
 	})
 	return e, found, err
 }
@@ -450,11 +483,11 @@ func (s *Service) fail(ctx context.Context, e effectRow, cause error) error {
 }
 
 // perform does one entry: it checks, as the user who acted and as of now, that they may still do
-// what the action did and what the effect does, and then does it.
+// what the action did and what the effect does, and then does it. The checks are repeated as close
+// to the write as the data allows: inside the transaction of a card's change (where the write lock
+// holds, so nothing they rely on changes before the card does), and, for a document, which git
+// holds, right before it is written.
 func (s *Service) perform(ctx context.Context, e effectRow) (map[string]any, error) {
-	if err := s.authorizeApp(ctx, e); err != nil {
-		return nil, err
-	}
 	switch e.kind {
 	case EffectCreateCard:
 		return s.createCard(ctx, e)
@@ -468,8 +501,11 @@ func (s *Service) perform(ctx context.Context, e effectRow) (map[string]any, err
 	return nil, refuse(apierr.CodeAppEffectInvalid)
 }
 
-// authorizeApp checks that the user who acted still may do, in the app, what the action did: they
-// may write its space and hold the right the kind of action needs. An offline app does nothing.
+// authorizeApp checks that the user who acted still may do, in the app, what the action did, as of
+// now: the app is there and online, they may write its space and open the app, they hold the right
+// the kind of action needed, over the record the entry came from (the user's own or all, as the
+// role now says: an update needs the right to change that record, and to read it), and the record
+// is still there. An offline app does nothing.
 func (s *Service) authorizeApp(ctx context.Context, e effectRow) error {
 	var spaceID int64
 	var archived sql.NullString
@@ -500,12 +536,35 @@ func (s *Service) authorizeApp(ctx context.Context, e effectRow) error {
 	if err != nil {
 		return err
 	}
-	allowed := acc.View && ((e.actionKind == ActionInsert && acc.Submit) || (e.actionKind == ActionUpdate && acc.ModifyRecords != access.ScopeNone))
-	if !allowed {
+	if !acc.View {
 		return refuse(apierr.CodeAppEffectAppAccess)
 	}
 	if archived.Valid {
 		return refuse(apierr.CodeAppEffectAppOffline)
+	}
+	var creator sql.NullInt64
+	var deleted sql.NullString
+	err = s.db.QueryRowContext(ctx, `SELECT created_by, deleted_at FROM app_rows WHERE id = ? AND app_id = ?`, e.recordID, e.appID).Scan(&creator, &deleted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return refuse(apierr.CodeAppEffectRecordGone)
+	}
+	if err != nil {
+		return err
+	}
+	if deleted.Valid {
+		return refuse(apierr.CodeAppEffectRecordGone)
+	}
+	switch e.actionKind {
+	case ActionInsert:
+		if !acc.Submit {
+			return refuse(apierr.CodeAppEffectAppAccess)
+		}
+	case ActionUpdate:
+		if !(visibility{scope: acc.ModifyRecords, user: e.userID}).sees(creator) || !readable(acc, e.userID).sees(creator) {
+			return refuse(apierr.CodeAppEffectAppAccess)
+		}
+	default:
+		return refuse(apierr.CodeAppEffectAppAccess)
 	}
 	return nil
 }
@@ -553,7 +612,9 @@ func (s *Service) boardSvc() (*boards.Service, error) {
 	return s.platform.Boards, nil
 }
 
-// cardOrigin is the key a card made by entry id carries.
+// cardOrigin is the key a card made by entry id carries. An entry's number is never given again
+// (the table's rows are numbered with AUTOINCREMENT), so no later entry can find an earlier one's
+// card as its own.
 func cardOrigin(id int64) string { return fmt.Sprintf("app-effect:%d", id) }
 
 func (s *Service) createCard(ctx context.Context, e effectRow) (map[string]any, error) {
@@ -562,53 +623,74 @@ func (s *Service) createCard(ctx context.Context, e effectRow) (map[string]any, 
 		return nil, err
 	}
 	p := e.payload
-	if _, err := s.target(ctx, e.userID, p.SpaceID, true); err != nil {
+	sp, err := s.target(ctx, e.userID, p.SpaceID, true)
+	if err != nil {
 		return nil, err
 	}
 	card, err := b.CreateCard(ctx, boards.Actor(e.actor()), p.SpaceID, p.BoardID, boards.NewCard{
 		Title: p.Title, Body: p.Body, Column: boards.Column(p.Column), Docs: p.Docs, Origin: cardOrigin(e.id),
+		// In the transaction that makes the card, which holds the write lock: nothing that
+		// authorized the entry changes before the card is there, and the record's link to the card
+		// is made with it, so there is never a card the record doesn't know of.
+		Check: func(*sql.Tx) error {
+			if err := s.authorizeApp(ctx, e); err != nil {
+				return err
+			}
+			_, err := s.target(ctx, e.userID, p.SpaceID, true)
+			return err
+		},
+		Created: func(tx *sql.Tx, cardID int64) error {
+			if e.name == "" {
+				return nil
+			}
+			// A newer card for the name replaces the link and starts its moves afresh; an older
+			// entry done again late never takes it back.
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO app_effect_cards (app_id, record_id, name, space_id, board_id, card_id, made_by, last_move)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (app_id, record_id, name) DO UPDATE SET
+					space_id = excluded.space_id, board_id = excluded.board_id, card_id = excluded.card_id,
+					made_by = excluded.made_by, last_move = excluded.made_by
+				WHERE excluded.made_by > app_effect_cards.made_by`,
+				e.appID, e.recordID, e.name, p.SpaceID, p.BoardID, cardID, e.id, e.id)
+			return err
+		},
 	})
 	if err != nil {
 		return nil, boardsError(err)
 	}
-	return map[string]any{"space_id": p.SpaceID, "board_id": p.BoardID, "card_id": card.ID, "title": card.Title}, nil
+	return map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "board_id": p.BoardID, "card_id": card.ID, "title": card.Title}, nil
 }
 
-// cardRef is a card an entry made.
-type cardRef struct{ spaceID, boardID, cardID int64 }
+// cardRef is a card an entry made, and where its record's link to it is.
+type cardRef struct {
+	workspaceID, spaceID, boardID, cardID int64
+	lastMove                              int64
+}
 
-// linkedCard finds the card the create_card effect called name made for the entry's record. A card
-// that is still being made is waited for (a transient failure); one that wasn't made, or won't be,
-// is the entry's failure.
+// linkedCard finds the card the create_card effect called name made for the entry's record, in the
+// record's durable link (which the cleanup of entries leaves alone). A card still to be made by an
+// entry queued before this one is waited for (a transient failure); one that was not made, or
+// won't be, is the entry's failure.
 func (s *Service) linkedCard(ctx context.Context, e effectRow, name string) (cardRef, error) {
-	var state string
-	var result sql.NullString
+	var waiting bool
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM app_effects
+			WHERE app_id = ? AND record_id = ? AND kind = 'create_card' AND name = ? AND id < ? AND state IN ('pending', 'running'))`,
+		e.appID, e.recordID, name, e.id).Scan(&waiting); err != nil {
+		return cardRef{}, err
+	}
+	if waiting {
+		return cardRef{}, &effectError{code: apierr.CodeAppEffectNoCard, transient: true}
+	}
+	var ref cardRef
 	err := s.db.QueryRowContext(ctx, `
-		SELECT state, result FROM app_effects
-		WHERE app_id = ? AND record_id = ? AND kind = 'create_card' AND name = ? AND id <> ?
-		ORDER BY (state = 'done') DESC, id DESC LIMIT 1`, e.appID, e.recordID, name, e.id).Scan(&state, &result)
+		SELECT space_id, board_id, card_id, last_move FROM app_effect_cards WHERE app_id = ? AND record_id = ? AND name = ?`,
+		e.appID, e.recordID, name).Scan(&ref.spaceID, &ref.boardID, &ref.cardID, &ref.lastMove)
 	if errors.Is(err, sql.ErrNoRows) {
 		return cardRef{}, refuse(apierr.CodeAppEffectNoCard)
 	}
-	if err != nil {
-		return cardRef{}, err
-	}
-	switch state {
-	case StateDone:
-	case StatePending, StateRunning:
-		return cardRef{}, &effectError{code: apierr.CodeAppEffectNoCard, transient: true}
-	default:
-		return cardRef{}, refuse(apierr.CodeAppEffectNoCard)
-	}
-	var made struct {
-		SpaceID int64 `json:"space_id"`
-		BoardID int64 `json:"board_id"`
-		CardID  int64 `json:"card_id"`
-	}
-	if err := json.Unmarshal([]byte(result.String), &made); err != nil || made.CardID == 0 {
-		return cardRef{}, refuse(apierr.CodeAppEffectNoCard)
-	}
-	return cardRef{made.SpaceID, made.BoardID, made.CardID}, nil
+	return ref, err
 }
 
 func (s *Service) updateCard(ctx context.Context, e effectRow) (map[string]any, error) {
@@ -620,33 +702,40 @@ func (s *Service) updateCard(ctx context.Context, e effectRow) (map[string]any, 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.target(ctx, e.userID, ref.spaceID, true); err != nil {
+	sp, err := s.target(ctx, e.userID, ref.spaceID, true)
+	if err != nil {
 		return nil, err
 	}
 	column := boards.Column(e.payload.Column)
-	result := map[string]any{"space_id": ref.spaceID, "board_id": ref.boardID, "card_id": ref.cardID, "column": e.payload.Column}
-	// A card changed by someone meanwhile is read again: the move is made against what is there.
-	for range 3 {
-		th, err := b.ShowCard(ctx, boards.Actor(e.actor()), ref.spaceID, ref.boardID, ref.cardID)
+	result := map[string]any{"workspace_id": sp.WorkspaceID, "space_id": ref.spaceID, "board_id": ref.boardID, "card_id": ref.cardID, "column": e.payload.Column}
+	// The move is made in one transaction with the note of it on the record's link: a move is
+	// made only if no later entry's move was made before, so one that is done again late (its
+	// worker died before it noted it done) never undoes what a newer one did. An entry that has
+	// nothing to do (superseded, or the card is already there) is a success all the same.
+	_, _, err = b.MoveCardIf(ctx, boards.Actor(e.actor()), ref.spaceID, ref.boardID, ref.cardID, column, func(tx *sql.Tx, c boards.Card) (bool, error) {
+		if err := s.authorizeApp(ctx, e); err != nil {
+			return false, err
+		}
+		if _, err := s.target(ctx, e.userID, ref.spaceID, true); err != nil {
+			return false, err
+		}
+		if c.Column == boards.Archived {
+			return false, refuse(apierr.CodeAppEffectCardArchived)
+		}
+		res, err := tx.ExecContext(ctx, `
+			UPDATE app_effect_cards SET last_move = ?
+			WHERE app_id = ? AND record_id = ? AND name = ? AND card_id = ? AND last_move < ?`,
+			e.id, e.appID, e.recordID, e.payload.Card, ref.cardID, e.id)
 		if err != nil {
-			return nil, boardsError(err)
+			return false, err
 		}
-		if th.Column == boards.Archived {
-			return nil, refuse(apierr.CodeAppEffectCardArchived)
-		}
-		if th.Column == column {
-			return result, nil // already there: nothing to do
-		}
-		_, err = b.MoveCard(ctx, boards.Actor(e.actor()), ref.spaceID, ref.boardID, ref.cardID, boards.Move{Version: th.Version, Column: column})
-		if errors.Is(err, boards.ErrStale) {
-			continue
-		}
-		if err != nil {
-			return nil, boardsError(err)
-		}
-		return result, nil
+		n, err := res.RowsAffected()
+		return n == 1, err
+	})
+	if err != nil {
+		return nil, boardsError(err)
 	}
-	return nil, &effectError{code: apierr.CodeAppEffectGaveUp, transient: true}
+	return result, nil
 }
 
 // documentMessage is the commit message of a document an effect makes.
@@ -661,6 +750,14 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 	if err != nil {
 		return nil, err
 	}
+	// The checks are repeated right before the write: a document is in git, outside the database's
+	// transactions, so this is as close to it as they can be.
+	if err := s.authorizeApp(ctx, e); err != nil {
+		return nil, err
+	}
+	if _, err := s.target(ctx, e.userID, p.SpaceID, true); err != nil {
+		return nil, err
+	}
 	by := knowledge.Author{Agent: "TaskTo app"}
 	if err := s.db.QueryRowContext(ctx, `SELECT name, email FROM users WHERE id = ?`, e.userID).Scan(&by.Name, &by.Email); err != nil {
 		return nil, err
@@ -668,15 +765,15 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 	res, err := s.platform.Docs.Put(ctx, sp, p.Path, []byte(p.Content), "", by, documentMessage)
 	switch {
 	case err == nil && res.Doc != nil:
-		return map[string]any{"space_id": p.SpaceID, "path": p.Path, "version": res.Doc.Version}, nil
+		return map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "path": p.Path, "version": res.Doc.Version}, nil
 	case err == nil:
-		return map[string]any{"space_id": p.SpaceID, "path": p.Path}, nil
+		return map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "path": p.Path}, nil
 	case errors.Is(err, knowledge.ErrConflict):
 		// A document is there. Made by an earlier try that never noted it, if it is exactly what
 		// this entry writes; someone else's if not, and never overwritten.
 		doc, rerr := s.platform.Docs.Read(ctx, sp, p.Path, "")
 		if rerr == nil && bytes.Equal(doc.Content, []byte(p.Content)) {
-			return map[string]any{"space_id": p.SpaceID, "path": p.Path, "version": doc.Version}, nil
+			return map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "path": p.Path, "version": doc.Version}, nil
 		}
 		return nil, refuse(apierr.CodeAppEffectDocExists, apierr.Params{"path": p.Path})
 	case errors.Is(err, knowledge.ErrInvalid), errors.Is(err, knowledge.ErrTooLarge):
@@ -692,6 +789,9 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 // openRoute resolves a route: the user must be able to read where it goes, and what it says is
 // kind and IDs, which the web app turns into its own address. It makes nothing.
 func (s *Service) openRoute(ctx context.Context, e effectRow) (map[string]any, error) {
+	if err := s.authorizeApp(ctx, e); err != nil {
+		return nil, err
+	}
 	p := e.payload
 	route := map[string]any{"kind": p.Route}
 	switch p.Route {
@@ -700,7 +800,8 @@ func (s *Service) openRoute(ctx context.Context, e effectRow) (map[string]any, e
 		if err != nil {
 			return nil, err
 		}
-		if _, err := s.target(ctx, e.userID, p.SpaceID, false); err != nil {
+		sp, err := s.target(ctx, e.userID, p.SpaceID, false)
+		if err != nil {
 			return nil, err
 		}
 		all, err := b.ListBoards(ctx, boards.Actor(e.actor()), p.SpaceID)
@@ -714,21 +815,23 @@ func (s *Service) openRoute(ctx context.Context, e effectRow) (map[string]any, e
 		if !found {
 			return nil, refuse(apierr.CodeAppEffectTargetGone)
 		}
-		route["space_id"], route["board_id"] = p.SpaceID, p.BoardID
+		route["workspace_id"], route["space_id"], route["board_id"] = sp.WorkspaceID, p.SpaceID, p.BoardID
 	case RouteCard:
 		ref, err := s.linkedCard(ctx, e, p.Card)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := s.target(ctx, e.userID, ref.spaceID, false); err != nil {
+		sp, err := s.target(ctx, e.userID, ref.spaceID, false)
+		if err != nil {
 			return nil, err
 		}
-		route["space_id"], route["board_id"], route["card_id"] = ref.spaceID, ref.boardID, ref.cardID
+		route["workspace_id"], route["space_id"], route["board_id"], route["card_id"] = sp.WorkspaceID, ref.spaceID, ref.boardID, ref.cardID
 	case RouteDocument:
-		if _, err := s.target(ctx, e.userID, p.SpaceID, false); err != nil {
+		sp, err := s.target(ctx, e.userID, p.SpaceID, false)
+		if err != nil {
 			return nil, err
 		}
-		route["space_id"], route["path"] = p.SpaceID, p.Path
+		route["workspace_id"], route["space_id"], route["path"] = sp.WorkspaceID, p.SpaceID, p.Path
 	default:
 		return nil, refuse(apierr.CodeAppEffectInvalid)
 	}

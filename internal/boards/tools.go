@@ -2,6 +2,7 @@ package boards
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
 	"taskto.ai/taskto/internal/access"
@@ -77,6 +78,21 @@ func (s *Service) MoveCard(ctx context.Context, a Actor, spaceID, boardID, cardI
 		return Card{}, err
 	}
 	return s.moveCard(ctx, sp, a, boardID, cardID, m)
+}
+
+// MoveCardIf is the move the app effects make: it puts the card in column as the card is when the
+// write lock is held (whatever its version), after guard, which runs in the same transaction with
+// the card as it is and says whether to go on. What guard writes is committed with the move, or
+// without one if it says not to or the card is already there; an archived card is never moved
+// (guard sees it and may refuse). moved says whether the card changed.
+func (s *Service) MoveCardIf(ctx context.Context, a Actor, spaceID, boardID, cardID int64, column Column,
+	guard func(tx *sql.Tx, c Card) (bool, error),
+) (Card, bool, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return Card{}, false, err
+	}
+	return s.moveCardIf(ctx, sp, a, boardID, cardID, column, guard)
 }
 
 // Comment adds a comment to a card's thread. It doesn't change the card's version.

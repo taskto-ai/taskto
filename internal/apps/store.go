@@ -938,8 +938,13 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 		}
 		var opID int64
 		if key != "" {
+			// A key is for one request: the release it runs from is part of it.
+			release := a.Live.Number
+			if action.Release != nil {
+				release = *action.Release
+			}
 			var replay bool
-			if opID, replay, err = beginOperation(ctx, tx, actor, appID, key, action); err != nil {
+			if opID, replay, err = beginOperation(ctx, tx, actor, appID, key, release, action); err != nil {
 				return err
 			}
 			if replay {

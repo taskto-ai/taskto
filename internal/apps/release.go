@@ -345,16 +345,6 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 	if err := checkAcknowledge(req.Acknowledge); err != nil {
 		return App{}, err
 	}
-	// What the draft's effects target is the publisher's to use: checked before the write lock is
-	// taken (an app that isn't there is answered below, as always).
-	// Only for a caller who may publish: the draft is not theirs to read otherwise.
-	if acc, err := s.appAccess(ctx, a, sp.ID, appID); err == nil && acc.Publish {
-		if draft, err := app(ctx, s.db, sp.ID, appID); err == nil {
-			if err := s.checkEffectTargets(ctx, a, draft.draftDef); err != nil {
-				return App{}, err
-			}
-		}
-	}
 	var published App
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		acc, err := s.recheckApp(ctx, a, sp.ID, appID)
@@ -366,6 +356,11 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 		}
 		cur, err := app(ctx, tx, sp.ID, appID)
 		if err != nil {
+			return err
+		}
+		// What the draft's effects target is the publisher's to use, checked as of now, with the
+		// write lock held (only a publisher gets here: the draft is not theirs to read otherwise).
+		if err := s.checkEffectTargets(ctx, a, cur.draftDef); err != nil {
 			return err
 		}
 		if cur.Version != req.Version {
@@ -464,6 +459,10 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 		}
 		if cur.Live != nil && cur.Live.Number == target.Number {
 			return ErrReleaseLive
+		}
+		// An earlier release's effects are the one who makes it live's to use, as at publishing.
+		if err := s.checkEffectTargets(ctx, a, *target.Definition); err != nil {
+			return err
 		}
 		// A release with the live release's collection changes nothing about how the rows are
 		// read or written, so there is nothing to check and nothing to tell: the answer is the
