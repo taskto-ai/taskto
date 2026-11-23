@@ -163,6 +163,67 @@
       "message": "This app was published with features this version of TaskTo.AI doesn’t have yet, so it can’t be shown here.",
       "needs": "Needs: {needs}",
       "update": "Update TaskTo.AI"
+    },
+    "explorer": {
+      "back": "Back to the records",
+      "saved": "Saved.",
+      "save": "Save changes",
+      "delete": "Delete",
+      "deleteConfirm": "Yes, delete this record",
+      "cancel": "Cancel",
+      "empty": "—",
+      "unset": "Not set",
+      "fields": "Fields of record {id}",
+      "conflict": {
+        "title": "Someone else changed this record meanwhile",
+        "keep": "What you typed is still in the form. Below are the fields where it differs from the record as it is now. Save yours over the current version, or drop yours and use the current one.",
+        "field": "Field",
+        "yours": "What you typed",
+        "current": "Current value",
+        "reapply": "Save my changes over the current version",
+        "discard": "Drop my changes and use the current record"
+      },
+      "search": "Search the records",
+      "searchGo": "Search",
+      "sortBy": "Sort by",
+      "changedAt": "Changed",
+      "deletedAt": "Deleted",
+      "ascending": "Ascending",
+      "descending": "Descending",
+      "noMatch": "No record matches.",
+      "showing": "Showing {from}–{to} of {total} matching records",
+      "total": "{total} matching records",
+      "previous": "Previous page",
+      "next": "Next page",
+      "first": "First page",
+      "totalsLabel": "Totals",
+      "totalsOf": "Totals of",
+      "totalsNone": "No totals",
+      "totalsScope": "Over all {total} matching records, not just this page.",
+      "agg": {
+        "sum": "Sum",
+        "avg": "Average",
+        "min": "Smallest",
+        "max": "Largest"
+      },
+      "filters": "Filter the records",
+      "filterField": "Field",
+      "filterOp": "Condition",
+      "filterValue": "Value",
+      "addFilter": "Add filter",
+      "activeFilters": "Filters in use",
+      "removeFilter": "Remove filter {filter}",
+      "id": "Record",
+      "openRecord": "Open record {id}",
+      "op": {
+        "eq": "is",
+        "ne": "is not",
+        "lt": "is less than",
+        "lte": "is at most",
+        "gt": "is more than",
+        "gte": "is at least",
+        "contains": "contains"
+      }
     }
   },
   "auth": {
@@ -501,7 +562,10 @@
     "app_upload_chunk": "That part of the upload is too large.",
     "app_uploads_pending": "You have {max} photos waiting to be saved in a record: save or remove some first.",
     "app_files_full": "This app’s photos have reached their limit of {max_mib} MiB.",
-    "app_files_unavailable": "This server doesn’t keep photos for apps."
+    "app_files_unavailable": "This server doesn’t keep photos for apps.",
+    "app_query_cursor": "That page can no longer be found. Start again from the first page.",
+    "app_query_field": "The app has no field “{field}” that can be used here.",
+    "app_query_condition": "The filter on “{field}” doesn’t fit the field."
   },
   "language": {
     "label": "Language",

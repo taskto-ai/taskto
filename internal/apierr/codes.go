@@ -104,6 +104,12 @@ const (
 	CodeAppRolesNotMember    Code = "app_roles_not_member" // 400: a role for someone who can't read the space
 	CodeAppRolesLockout      Code = "app_roles_lockout"    // 400: the change would take the caller's own right to manage roles
 
+	// Querying an app's records (internal/apps/query.go).
+
+	CodeAppQueryCursor    Code = "app_query_cursor"    // 400: the cursor isn't one this query gave; start again from the first page
+	CodeAppQueryField     Code = "app_query_field"     // 400: a field the live release doesn't declare, or can't be used so; params: field
+	CodeAppQueryCondition Code = "app_query_condition" // 400: an operator or value that doesn't fit the field; params: field, op
+
 	// Drafts and releases of apps (internal/apps/release.go).
 
 	CodeAppDefinitionVersion   Code = "app_definition_version"   // 400: params: version, supported

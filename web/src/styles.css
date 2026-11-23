@@ -1346,6 +1346,205 @@ a.tt-button.tt-primary {
   border-inline-start: 2px solid var(--tt-line);
 }
 
+/* The records explorer: a table on a wide screen, cards on a phone, and one record's editor. */
+
+.tt-explorer,
+.tt-record-detail,
+.tt-explorer-foot,
+.tt-explorer-filters,
+.tt-explorer-totals {
+  display: grid;
+  gap: 0.6rem;
+  min-inline-size: 0;
+}
+
+.tt-explorer-search,
+.tt-explorer-filter-form,
+.tt-explorer-sort {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tt-explorer-search input[type="search"] {
+  flex: 1 1 12rem;
+  min-inline-size: 0;
+}
+
+.tt-explorer-filter-form > * {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.tt-explorer-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tt-explorer-chips li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline-start: 0.6rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 999px;
+  overflow-wrap: anywhere;
+}
+
+.tt-table-scroll {
+  overflow-x: auto;
+  max-inline-size: 100%;
+}
+
+.tt-explorer-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+}
+
+.tt-explorer-table th,
+.tt-explorer-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: start;
+  border-block-end: 1px solid var(--tt-line);
+  vertical-align: baseline;
+}
+
+.tt-explorer-table td.tt-num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.tt-sort {
+  all: unset;
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tt-sort:focus-visible {
+  outline: 2px solid var(--tt-accent, currentColor);
+  outline-offset: 2px;
+}
+
+.tt-explorer-aggregates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0;
+}
+
+.tt-explorer-aggregates dt {
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.tt-explorer-aggregates dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.tt-record-open {
+  all: unset;
+  cursor: pointer;
+  display: block;
+  padding-block: 0.2rem;
+  min-block-size: 2.75rem;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
+.tt-record-open:focus-visible {
+  outline: 2px solid var(--tt-accent, currentColor);
+  outline-offset: 2px;
+}
+
+.tt-record-fields {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+}
+
+.tt-record-fields > div,
+.tt-record-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: baseline;
+}
+
+.tt-record-fields dt {
+  opacity: 0.75;
+}
+
+.tt-record-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-record-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tt-record-field {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.tt-record-field input,
+.tt-record-field select {
+  inline-size: 100%;
+  box-sizing: border-box;
+  min-block-size: 2.5rem;
+}
+
+.tt-record-field-label {
+  display: flex;
+  gap: 0.25rem;
+  align-items: baseline;
+}
+
+.tt-record-field-name {
+  font-weight: 600;
+}
+
+.tt-conflict {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  border: 2px solid var(--tt-accent, currentColor);
+  border-radius: var(--tt-radius);
+}
+
+.tt-conflict-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+}
+
+.tt-conflict-table th,
+.tt-conflict-table td {
+  text-align: start;
+  padding: 0.25rem 0.4rem;
+  border-block-end: 1px solid var(--tt-line);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 48rem) {
+  .tt-records-panel {
+    padding: 0.5rem;
+  }
+
+  .tt-explorer-filter-form select,
+  .tt-explorer-filter-form input {
+    flex: 1 1 8rem;
+  }
+}
+
 .tt-app-offline {
   display: flex;
   align-items: center;

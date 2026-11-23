@@ -171,7 +171,24 @@ export type AppRelease = DefinitionNeeds & {
   published_by: Author
   live: boolean
   live_since?: string
+  // In a single app's reply, for the live release.
+  definition?: AppDefinition
 }
+
+// A field of an app's collection, as its definition declares it.
+export type FieldType = 'string' | 'number' | 'boolean' | 'date' | 'time' | 'choice' | 'attachment'
+export type AppField = {
+  name: string
+  type: FieldType
+  required?: boolean
+  max_length?: number
+  min?: number
+  max?: number
+  options?: string[]
+}
+
+// What the records explorer needs of an app's definition: its fields, and which actions change records.
+export type AppDefinition = { collection: { fields: AppField[] }; actions: Record<string, { kind: string }> }
 
 // A change of a collection a publish must acknowledge, by kind and field.
 export type SchemaChange = { change: string; field: string }
@@ -209,6 +226,22 @@ export type AppRecord = {
   updated_by: RecordAuthor | null
   deleted_at: string | null
   deleted_by: RecordAuthor | null
+}
+
+// One value over every record a query matches: its count is how many records it was computed from.
+export type RecordAggregate = {
+  kind: 'count' | 'sum' | 'min' | 'max' | 'avg'
+  field?: string
+  value: number | string | null
+  count: number
+}
+
+// A page of an app's records, with the totals of all that match the query (…/records/query).
+export type RecordPage = {
+  records: AppRecord[]
+  next_cursor: string | null
+  total: number
+  aggregates: RecordAggregate[]
 }
 
 // One revision of a record: what was done, by whom, and the data it left.

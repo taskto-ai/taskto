@@ -62,7 +62,7 @@ tools again after a crash (`replay: 'safe'`), and never a write. Change a tool i
   agent builds and changes apps; it doesn't run their actions, which are for the people
   using them. It has exactly its user's roles in an app ([App roles](api.md#app-roles)): a
   user who may only submit records can't have it change the app (`403`), and one who reads
-  only their own records gets only those from `list_app_rows`. It has no tool to set roles,
+  only their own records gets only those from `list_app_rows` and `query_app_rows`, and totals of those alone. It has no tool to set roles,
   and nothing in a definition grants any.
 
 Refusals are `4xx {"error": "…"}` with a message for the model: `400` invalid arguments,
@@ -84,6 +84,7 @@ results, `error: <message>`.
 | `list_apps` | `space_id`, `archived`? | A space's apps, without definitions; `archived: true` includes the offline ones. |
 | `show_app` | `space_id`, `app_id` | An app with its draft definition, its `version`, and the live release (number and needs, not its definition) with `unpublished_changes`. |
 | `list_app_rows` | `space_id`, `app_id` | An app's data: the rows the user may read (all, or only their own: [App roles](api.md#app-roles)), oldest first, each with its `id`, its `_revision` and the fields its live release's collection declares (deleted rows are not listed); an offline app's too. An attachment field (photos) holds a list of `{id, content_type, size, width, height}`: the agent sees what photos a row has, never their bytes, and can't upload or attach one ([Photo attachments](api.md#photo-attachments)). |
+| `query_app_rows` | `space_id`, `app_id`, `state`?, `filters`?, `search`?, `sort`?, `dir`?, `limit`? (1–200, default 50), `cursor`?, `aggregates`? | A page of an app's rows with filters, search and an order, and `total` and `aggregates` over **all** the rows that match ([api.md](api.md#get-appsapprecordsquery) has the filters, the order and the paging): the rows the user may read, each as `list_app_rows` has them. `next_cursor` goes back as `cursor` with the same query for the next page; a page too long for one reply is made shorter, and the cursor continues after the last row sent. |
 | `create_app` | `space_id`, `name`, `definition` | Saves a new app, as a draft, in a space the user may write, checked strictly against the catalog ([api.md](api.md#personal-apps)); it is launched once a person publishes it. |
 | `update_app` | `space_id`, `app_id`, `version`, `name`?, `definition`?, `archived`? | Renames an app, replaces its **draft** definition (the user must hold the design right; the live release, which people use, is untouched until a person publishes the draft, [api.md](api.md#drafts-and-releases)), or takes it offline and back (the publish right). The agent has no tool to publish or roll back. |
 
@@ -138,7 +139,8 @@ most 128 KiB of a reply:
   stopped;
 - `search_docs` returns at most 20 results, each passage at most 1000 bytes;
 - an app's definition is at most 48 KiB, so `show_app` returns one whole; `list_apps`
-  and `list_app_rows` shorten a list that doesn't fit, with `"truncated": true`;
+  and `list_app_rows` shorten a list that doesn't fit, with `"truncated": true`, and
+  `query_app_rows` a page, whose `next_cursor` then continues after the last row sent;
 - anything still larger is refused (`413`), so no reply is ever over the bound.
 
 ## Conversations on cards

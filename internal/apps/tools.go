@@ -118,6 +118,37 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 	return items, nil
 }
 
+// QueryRows is a page of an app's rows as the app shows them (Items), filtered, searched and
+// sorted, with the totals of everything that matches, for the rows the user may read (query.go).
+// An offline app's rows are kept, so they are read too.
+func (s *Service) QueryRows(ctx context.Context, a Actor, spaceID, appID int64, q Query) (RowsPage, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return RowsPage{}, err
+	}
+	res, err := s.queryRecords(ctx, sp, a, appID, q)
+	if err != nil {
+		return RowsPage{}, err
+	}
+	page := RowsPage{Rows: make([]map[string]any, len(res.Records)), NextCursor: res.NextCursor, Total: res.Total, Aggregates: res.Aggregates}
+	for i, rec := range res.Records {
+		it := map[string]any{"id": rec.ID, RevisionKey: rec.Revision}
+		for name, v := range rec.Data {
+			it[name] = v
+		}
+		page.Rows[i] = it
+	}
+	return page, nil
+}
+
+// RowsPage is QueryResult with its records as items.
+type RowsPage struct {
+	Rows       []map[string]any  `json:"rows"`
+	NextCursor *string           `json:"next_cursor"`
+	Total      int               `json:"total"`
+	Aggregates []AggregateResult `json:"aggregates"`
+}
+
 //go:embed examples/*.json
 var examplesFS embed.FS
 
