@@ -189,9 +189,9 @@ func planNavigate(def Definition, a Action, ch Change, action ClientAction) (Cha
 	if !ok {
 		return Change{}, invalidf("the screen %q is not one of the app's", a.Screen)
 	}
-	if action.ExpectedRevision != nil {
-		return Change{}, invalidf("expectedRevision is for an update or a delete, not for navigating")
-	}
+	// A navigate reads, so a revision it carries is ignored: the web app names the revision of the
+	// record a button is on for every action, as it can't tell what an action does.
+	action.ExpectedRevision = nil
 	for name := range action.Context {
 		if name != "id" {
 			return Change{}, invalidf("navigate takes only the record's id, not %s", name)
