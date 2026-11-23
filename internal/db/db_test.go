@@ -703,4 +703,24 @@ func TestAppReleasesMigrationMakesEveryAppRelease1(t *testing.T) {
 	if _, err := sqlDB.ExecContext(ctx, `UPDATE apps SET live_release = 3 WHERE id = 5`); err == nil {
 		t.Fatal("an app served a release it doesn't have")
 	}
+	// Its publisher can't be changed, but an account that goes leaves it unattributed
+	// (published_by ON DELETE SET NULL).
+	for _, q := range []string{
+		`INSERT INTO users (id, email, name, password_hash) VALUES (30, 'p@example.com', 'P', 'x')`,
+		`INSERT INTO app_releases (app_id, number, definition, definition_version, requires, published_by) VALUES (5, 3, '{}', 1, '[]', 30)`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE app_releases SET published_by = 30 WHERE number = 3`); err == nil {
+		t.Fatal("a release's publisher was changed")
+	}
+	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM users WHERE id = 30`); err != nil {
+		t.Fatalf("deleting a user who published a release: %v", err)
+	}
+	var by sql.NullInt64
+	if err := sqlDB.QueryRowContext(ctx, `SELECT published_by FROM app_releases WHERE app_id = 5 AND number = 3`).Scan(&by); err != nil || by.Valid {
+		t.Fatalf("release's publisher after the user went = %v, %v", by, err)
+	}
 }

@@ -62,8 +62,17 @@ FROM apps;
 UPDATE apps SET live_release = 1, live_at = updated_at;
 
 -- A release never changes, and goes only with its app.
+-- The one change allowed is the publisher's account going (published_by ON DELETE SET NULL).
 CREATE TRIGGER app_releases_immutable
-BEFORE UPDATE ON app_releases
+BEFORE UPDATE OF id, app_id, number, definition, definition_version, requires, published_at
+ON app_releases
+BEGIN
+    SELECT RAISE(ABORT, 'a release cannot be changed');
+END;
+
+CREATE TRIGGER app_releases_publisher_only_cleared
+BEFORE UPDATE OF published_by ON app_releases
+WHEN NEW.published_by IS NOT NULL
 BEGIN
     SELECT RAISE(ABORT, 'a release cannot be changed');
 END;
