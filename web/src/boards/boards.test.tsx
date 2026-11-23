@@ -543,7 +543,7 @@ test('reading the thread backs off after failures, and stops for good when acces
   const answered = globalThis.fetch
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     if (failing && String(input) === `${C}/1` && init?.method === 'GET') {
-      calls.push({ method: 'GET', path: `${C}/1`, body: undefined })
+      calls.push({ method: 'GET', path: `${C}/1`, body: undefined, headers: {} })
       return new Response(JSON.stringify({ error: failing === 404 ? 'not found' : 'boom' }), { status: failing })
     }
     return answered(input, init)
@@ -570,4 +570,28 @@ test('reading the thread backs off after failures, and stops for good when acces
   await after(10_000, 6)
   expect((await within(view).findByRole('alert')).textContent).toBe("This card's comments stopped updating: not found")
   await after(120_000, 6)
+})
+
+test('a link to a board archived since says so, and never opens another board in its place', async () => {
+  const { boards } = server('write')
+  boards[0].archived_at = '2026-01-04T00:00:00Z'
+  boards.push({ ...board, id: 9, name: 'Other board', archived_at: null })
+  render(<BoardsPage workspace={1} open="3:7:1" />)
+  expect((await screen.findByRole('status')).textContent).toContain('archived or no longer available')
+  expect(screen.queryByText('Other board', { selector: 'strong' })).toBeNull()
+  expect(screen.queryByText('Write the post')).toBeNull()
+
+  // Looking among the archived boards finds it, and opens the card the link names.
+  fireEvent.click(screen.getByRole('button', { name: 'Show archived boards' }))
+  await screen.findByText('This board is archived: it is read-only.')
+  await screen.findByRole('article', { name: 'Write the post' })
+})
+
+test('a link to a board that is gone says so even among the archived', async () => {
+  server('write')
+  render(<BoardsPage workspace={1} open="3:55:1" />)
+  await screen.findByText(/archived or no longer available/)
+  fireEvent.click(screen.getByLabelText('Show archived boards'))
+  await screen.findByText('The board this link points to is no longer available.')
+  expect(screen.queryByText('Launch', { selector: 'strong' })).toBeNull()
 })

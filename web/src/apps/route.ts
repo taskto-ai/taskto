@@ -18,3 +18,25 @@ export function parseItem(item: string | undefined): { space: number; app: numbe
 export function appPath(workspace: number, space: number, app: number, screen?: string): string {
   return routePath({ workspace, section: 'apps', item: appItem(space, app, screen) })
 }
+
+// The builder's addresses, under the Apps page: "build" starts a new app in a new conversation,
+// "build-{conversation}" builds in a conversation (the one that is already there), and
+// "edit-{space}-{app}" asks the agent to change an app's draft.
+export type BuilderRoute =
+  | { kind: 'new' }
+  | { kind: 'conversation'; conversation: number }
+  | { kind: 'edit'; space: number; app: number }
+
+export function parseBuilder(item: string | undefined): BuilderRoute | null {
+  if (item === 'build') return { kind: 'new' }
+  const conversation = item ? /^build-(\d+)$/.exec(item) : null
+  if (conversation) return { kind: 'conversation', conversation: Number(conversation[1]) }
+  const edit = item ? /^edit-(\d+)-(\d+)$/.exec(item) : null
+  return edit ? { kind: 'edit', space: Number(edit[1]), app: Number(edit[2]) } : null
+}
+
+export function builderPath(workspace: number, to: BuilderRoute = { kind: 'new' }): string {
+  const item =
+    to.kind === 'new' ? 'build' : to.kind === 'conversation' ? `build-${to.conversation}` : `edit-${to.space}-${to.app}`
+  return routePath({ workspace, section: 'apps', item })
+}

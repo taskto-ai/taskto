@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"taskto.ai/taskto/internal/access"
@@ -22,6 +23,7 @@ import (
 	"taskto.ai/taskto/internal/dictation"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/mcpserver"
+	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/providers"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/webui"
@@ -56,6 +58,8 @@ type Options struct {
 	Dictation *dictation.Service
 	// Browser serves the agent browser (/api/me/browser and its live view); nil leaves it out.
 	Browser *agentbrowser.Service
+	// Notifications serves the notification inbox and Web Push subscriptions; nil leaves them out.
+	Notifications *notifications.Service
 	// AppsReady, if set, is called with the apps service the server made, which keeps attachments
 	// in DataDir (none if that is empty), so its caller can run its maintenance
 	// (apps.Service.Maintain) for as long as it serves.
@@ -76,12 +80,18 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireAdmin(backupStatus(opts.BackupDataDir)))
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
-	boards.New(sqlDB, spaces).Routes(mux)
-	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir)
+	boardSvc := boards.New(sqlDB, spaces)
+	boardSvc.Routes(mux)
+	// The apps' routes list and retry their effects and check the targets they name; the
+	// server's own worker, which does them, is the one the command starts (apps.StartOutbox).
+	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(apps.Platform{Boards: boardSvc})
 	appsService.Routes(mux)
 	appsService.HomeRoutes(mux, accounts)
 	if opts.AppsReady != nil {
 		opts.AppsReady(appsService)
+	}
+	if opts.Notifications != nil {
+		opts.Notifications.Routes(mux, accounts)
 	}
 	if opts.Search != nil {
 		opts.Search.Knowledge().Routes(mux, spaces)
@@ -124,8 +134,26 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	}
 	mux.Handle("/", web)
 
-	// Every state-changing /api request, of any route, goes through the CSRF checks.
-	return auth.CSRF(mux, append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...), nil
+	// Every state-changing /api request, of any route, goes through the CSRF checks, and every
+	// /api request that names the account it is for (the offline code does, on every request:
+	// downloads, revalidation, the queue) is refused for any other session.
+	return auth.CSRF(expectAccount(spaces, mux), append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...), nil
+}
+
+// expectAccount applies access.Checker.ExpectUser to every /api request, so a client that names
+// the account it is for (X-Taskto-Expected-User) is refused with 409 session_account_changed
+// for any other session on any route, whatever the route's own checks: nothing is read or
+// written as the wrong person. Requests without the header, and everything outside /api, pass
+// unchanged.
+func expectAccount(spaces *access.Checker, next http.Handler) http.Handler {
+	expect := spaces.ExpectUser(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if (r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/")) && r.Header.Get(access.ExpectedUserHeader) != "" {
+			expect.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // healthz reports the version, whether the database answers, and the agent runtime's state.

@@ -70,6 +70,51 @@
       "synthetic": "Made before history was kept: this is the record as it was then.",
       "versionsTruncated": "Only the {count} latest versions are shown."
     },
+    "effects": {
+      "open": "Effects",
+      "close": "Hide effects",
+      "summary": "{active} waiting, {failed} failed",
+      "title": "Effects of actions",
+      "intro": "What this app’s actions set going: cards, documents and places to open. They run in the background as the person who acted, so they carry on when the app is closed. A failed one stays here until you retry it.",
+      "none": "Nothing has been set going yet.",
+      "kind": {
+        "create_card": "Create a card",
+        "update_card": "Move a card",
+        "create_document": "Create a document",
+        "open_route": "Open a place"
+      },
+      "status": {
+        "pending": "Waiting",
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed",
+        "simulated": "Simulated"
+      },
+      "record": "Record {id}",
+      "recordAction": "Record {id} · {action}",
+      "toColumn": "to {column}",
+      "tries_one": "{count} try",
+      "tries_other": "{count} tries",
+      "nextTry": "Next try {when}",
+      "retry": "Retry",
+      "retryNamed": "Retry: {what}",
+      "retried": "It will be tried again shortly.",
+      "failedOnly": "Only the failed ({count})",
+      "older": "Show older effects",
+      "list": "The app’s effects",
+      "result": {
+        "card": "Card {id}: open the boards",
+        "document": "{path}: open the knowledge base",
+        "board": "Open the boards",
+        "documentRoute": "Open the knowledge base"
+      },
+      "preview": {
+        "title": "Preview: nothing was saved",
+        "intro": "This action would set going:",
+        "none": "This action would set nothing going.",
+        "wouldFail": "It would fail for you: {error}"
+      }
+    },
     "roles": {
       "open": "Roles",
       "openNamed": "Roles of {name}",
@@ -99,13 +144,13 @@
     "previewDraftNamed": "Preview the draft of {name}",
     "stage": {
       "live": "Live · release {number}",
-      "draft": "Draft · not published",
+      "draft": "Preview · sample data",
       "showDraft": "Preview the draft",
       "showLive": "Back to the live release",
-      "draftNote": "This is a preview of changes that aren’t published yet. Nobody else sees it, and its buttons don’t change any data.",
+      "draftNote": "This is a preview of changes that aren’t published yet, on sample data. Try it: its buttons work, but they change nothing real, and nobody else sees it.",
       "unpublishedNote": "You are looking at the live release, which everyone uses. It has changes that aren’t published yet.",
       "notPublished": "This app isn’t published yet: it can be launched once someone who may publish it does.",
-      "draftNoActions": "This is a draft preview: publish the app to use it."
+      "liveNote": "This is the live release. Its buttons change real data."
     },
     "photos": {
       "label": "Photos",
@@ -163,6 +208,97 @@
       "message": "This app was published with features this version of TaskTo.AI doesn’t have yet, so it can’t be shown here.",
       "needs": "Needs: {needs}",
       "update": "Update TaskTo.AI"
+    },
+    "builder": {
+      "build": "Build an app",
+      "continue": "Continue building",
+      "title": "Build an app",
+      "intro": "Describe the app you want. The agent makes a draft with sample data in a conversation, and you try it here before anyone else can use it. Nothing you try in the preview changes real data.",
+      "editTitle": "Edit with AI",
+      "editIntro": "Describe what should change. The agent changes a new draft of the app; the published app keeps working as it is until you publish the draft.",
+      "editing": "Editing {name}, in {space}.",
+      "edit": "Edit with AI",
+      "editNamed": "Edit {name} with AI",
+      "what": "What should the app do?",
+      "whatChange": "What should change?",
+      "placeholder": "For example: a tracker for my gym sessions, with the date, the exercise and how it went",
+      "changePlaceholder": "For example: add a notes field and a button to mark an item as done",
+      "where": "Where should it live?",
+      "wherePrivate": "In my private space",
+      "whereShared": "In a shared space",
+      "sharedSpace": "Shared space",
+      "privateNote": "Only you can see and use it. You can share it later by moving it to a shared space.",
+      "sharedNote": "Everyone who can open that space may use it once it is published, and only someone with the publisher role in the app can publish it.",
+      "noSharedSpaces": "You can’t change any shared space, so the app can only go in your private space.",
+      "inThisConversation": "The agent will build in this conversation.",
+      "backToConversation": "Back to the conversation",
+      "start": "Start building",
+      "startEdit": "Start editing",
+      "buildHere": "Build an app in this conversation",
+      "panes": "Builder view",
+      "tab": {
+        "build": "Build",
+        "preview": "Preview",
+        "updated": "(updated)"
+      },
+      "showingBuild": "Showing Build: the conversation with the agent.",
+      "showingPreview": "Showing Preview: the draft of the app.",
+      "preview": {
+        "empty": "Nothing to preview yet. Describe the app in Build: the agent’s draft shows here, with sample data."
+      },
+      "prompt": {
+        "private": "my private space (space id {id})",
+        "shared": "the shared space “{space}” (space id {id})",
+        "build": "Build me an app: {description}\n\nSave it in {where}, as a draft with a few rows of sample data so I can try it. Don’t publish it: I will try the draft and publish it myself. When it is saved, tell me in plain words what the app can read and change, and anything it needs that I should know about.",
+        "edit": "Change my app “{name}” (app id {app}, in space id {space}): {description}\n\nChange its draft only. The published release must keep working as it is until I publish the draft. Tell me what you changed and anything new it needs."
+      },
+      "audience": {
+        "title": "Who can use it",
+        "private": "Only you: it is in your private space.",
+        "space": "Everyone who can open {space}: its editors can add and change records, and its viewers can only look.",
+        "restricted": "Only people who have a role in this app. Its builders set the roles.",
+        "person": "{name}: {roles}"
+      },
+      "can": {
+        "title": "What it can read and change",
+        "read": "It reads and keeps records with these fields: {fields}.",
+        "insert": "Add records.",
+        "update": "Change records.",
+        "delete": "Delete records (a deleted record can be restored).",
+        "readOnly": "It only shows records: it can’t add, change or delete any.",
+        "nothingElse": "It can’t reach anything else: no other app, document or account."
+      },
+      "field": "{name} ({type})",
+      "publish": {
+        "title": "Publish",
+        "review": "Review and publish…",
+        "now": "Publish",
+        "confirmShared": "This makes the app live for everyone in {space} who may use it.",
+        "confirm": "Publish for {space}",
+        "donePersonal": "Published as release {number}. It is live in your private space.",
+        "doneShared": "Published as release {number}. It is live for the people who may use it in {space}.",
+        "needsPublisher": "You can build the draft, but publishing it needs the publisher role in this app. Ask someone who has it to publish.",
+        "readOnly": "You can only read this space, so you can’t publish here.",
+        "nothing": "Nothing new to publish: the draft is the live release.",
+        "moved": "The draft changed while you were reviewing it, so nothing was published. What it can read and change above is up to date: review it again before you publish."
+      }
+    },
+    "fieldType": {
+      "string": "text",
+      "number": "number",
+      "boolean": "yes or no",
+      "date": "date",
+      "time": "time",
+      "choice": "choice",
+      "attachment": "photos"
+    },
+    "needs": {
+      "design": "You can’t change this app: that needs the builder role in it.",
+      "publish": "You can’t publish this app: that needs the publisher role in it.",
+      "submit": "You can’t add records to this app: that needs a role that adds records.",
+      "modify_records": "You can’t change or delete records in this app with your role.",
+      "read_records": "Your role in this app doesn’t let you read its records.",
+      "manage_roles": "You can’t manage this app’s roles: that needs the builder role."
     },
     "explorer": {
       "back": "Back to the records",
@@ -367,6 +503,8 @@
     "newBoard": "New board",
     "showArchived": "Show archived boards",
     "archivedNotice": "This board is archived: it is read-only.",
+    "linkedArchivedOrGone": "The board this link points to is archived or no longer available.",
+    "linkedUnavailable": "The board this link points to is no longer available.",
     "rename": "Rename",
     "renameBoard": "Rename the board",
     "archiveBoard": "Archive the board",
@@ -516,6 +654,8 @@
     "app_name_length": "An app name needs 1 to {max} characters.",
     "too_many_apps": "A space can have at most {max} apps.",
     "app_full": "This app is full: it holds at most {max_rows} rows and {max_mib} MiB of data.",
+    "app_preview_full": "The preview is full: it holds at most {max_rows} sample rows. Start it again.",
+    "app_preview_too_large": "The preview’s sample data is too large (at most {max_mib} MiB). Start it again.",
     "app_row_not_found": "That row is no longer in the app: someone may have deleted it.",
     "app_record_conflict": "Someone else changed this record meanwhile. It is shown as it is now: check it and try again.",
     "app_field_required": "{field} is required.",
@@ -632,6 +772,22 @@
     "app_roles_invalid": "Those roles can’t be saved: pick known roles, once per member.",
     "app_roles_not_member": "Roles can only go to members of the space.",
     "app_roles_lockout": "You can’t remove your own right to manage this app’s roles.",
+    "app_effect_target": "An effect of this app targets a space or board you can’t write to: choose one you can.",
+    "app_operation_invalid": "The operation key must be 8 to 64 letters, digits, - or _.",
+    "app_operation_reused": "That operation was already used for a different request.",
+    "app_effects_backlog": "This app has {max} effects waiting: try again once they are done.",
+    "app_effect_not_failed": "Only a failed effect can be retried.",
+    "app_effect_app_access": "The person who acted no longer has the access to this app that the action needs.",
+    "app_effect_target_access": "The person who acted can no longer write to the board or space this effect targets.",
+    "app_effect_target_gone": "The board or card this effect targets is no longer there.",
+    "app_effect_board_offline": "The board or space this effect targets is archived.",
+    "app_effect_invalid": "What this effect would make isn’t accepted (a title or a path, for instance).",
+    "app_effect_doc_exists": "A different document is already where this effect writes; it wasn’t overwritten.",
+    "app_effect_no_card": "No card was made for this record to change.",
+    "app_effect_card_archived": "The card to change is archived.",
+    "app_effect_app_offline": "The app is offline or its space is archived.",
+    "app_effect_record_gone": "The record this came from was deleted. Restore it and retry.",
+    "app_effect_gave_up": "It kept failing for a reason that may pass: retry it.",
     "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
     "app_not_published": "This app isn’t published yet: it can be launched once someone who may publish it does.",
     "app_release_not_found": "That release of the app doesn’t exist.",
@@ -664,7 +820,15 @@
     "app_field_not_signature": "{field} must be one signature picture.",
     "app_field_not_barcode": "{field} must be the text of a valid code (a code with the right check digit, if the field reads EAN or UPC).",
     "app_field_locked": "{field} was captured and can’t be changed afterwards.",
-    "app_signature_type": "A signature must be a PNG picture."
+    "app_signature_type": "A signature must be a PNG picture.",
+    "offline_downloads_disabled": "An admin turned off offline downloads for this space.",
+    "session_account_changed": "This browser is signed in as a different account than the one these records belong to.",
+    "offline_unsupported": "This needs a connection. Offline, you can add records and look around the downloaded copy.",
+    "notification_not_found": "That notification isn't available.",
+    "push_endpoint_invalid": "This browser's push address isn't valid.",
+    "push_keys_invalid": "This browser's push keys aren't valid.",
+    "push_too_many_subscriptions": "You already have push turned on for {max} devices. Turn it off on one of them first.",
+    "push_no_workspace": "Push notifications are for people who are in a workspace."
   },
   "language": {
     "label": "Language",
@@ -683,7 +847,8 @@
       "dictation": "Dictation",
       "password": "Password",
       "tokens": "Access tokens",
-      "about": "About"
+      "about": "About",
+      "notifications": "Notifications"
     },
     "general": {
       "language": "Default language",
@@ -767,7 +932,9 @@
       "person": "{name} ({email})",
       "as": "As",
       "add": "Add",
-      "rolesHelp": "Editors read and write; viewers read. A change takes effect at the member's next request."
+      "rolesHelp": "Editors read and write; viewers read. A change takes effect at the member's next request.",
+      "offlineDownloads": "Allow offline downloads",
+      "offlineHelp": "Members can keep this space’s apps and records on their devices to use without a connection. Turn it off for sensitive data: new downloads are refused, and a device removes its copy the next time it connects."
     },
     "tokens": {
       "title": "Access tokens",
@@ -1119,7 +1286,8 @@
       "boards": "Boards",
       "apps": "Apps",
       "settings": "Settings",
-      "home": "Home"
+      "home": "Home",
+      "notifications": "Notifications"
     },
     "noWorkspace": "You aren't a member of any workspace. Ask an admin for an invite.",
     "logOut": "Log out",
@@ -1456,5 +1624,163 @@
       "pin": "pin"
     },
     "removePinNamed": "Remove {name} from the menu"
+  },
+  "offline": {
+    "title": "Offline use",
+    "download": "Download for offline use",
+    "downloadNamed": "Download {name} for offline use",
+    "downloading": "Downloading…",
+    "downloadAgain": "Download again",
+    "downloadAgainNamed": "Download {name} again",
+    "remove": "Remove download",
+    "removeNamed": "Remove the download of {name}",
+    "notDownloaded": "Not downloaded yet. Download this app to open it and add records without a connection.",
+    "ready": "Ready for offline use",
+    "readyDetail": "Release {release}, downloaded {when}. {records} of {total} records are on this device.",
+    "newerRelease": "A newer release (number {live}) is live. Download again to use it offline.",
+    "truncated": "Only the latest {records} of your {total} records are downloaded.",
+    "ownOnly": "Only the records you added are downloaded.",
+    "cantInsert": "You can look at this copy offline, but not add records.",
+    "storage": "Storage on this device: about {usage} used of {quota}.",
+    "storageUnknown": "This browser doesn’t say how much storage is left.",
+    "persisted": "This browser has agreed to keep downloaded data.",
+    "notPersisted": "This browser may clear downloaded data when the device runs low on space.",
+    "disabled": "An admin turned off offline downloads for this space.",
+    "onlineOnly": "Building with AI, publishing and sharing need a connection. Offline, you can open downloaded apps and add records.",
+    "unavailable": "Offline storage isn’t available in this browser, so apps can’t be downloaded.",
+    "schemaNewer": "This device holds offline data written by a newer version of TaskTo.AI. Update the app to use it. Nothing was changed.",
+    "reload": "Reload to update",
+    "needsConnection": "This needs a connection. Offline, you can add records and look around the downloaded copy.",
+    "notSaved": {
+      "quota": "This device has no room left, so the record was NOT saved. Free some space or remove a download, then try again.",
+      "unavailable": "Offline storage isn’t available, so the record was NOT saved.",
+      "failed": "The record could not be written to this device and was NOT saved."
+    },
+    "saved": "Saved on this device. It is sent when you are back online.",
+    "localCopy": "Offline copy: lists and numbers cover the records downloaded {when} (downloaded: {records}) and those saved on this device (saved here: {queued}). They are not the server’s totals.",
+    "localTruncated": "The download holds only the latest {records} of {total} records.",
+    "state": {
+      "draft": "Draft on this device",
+      "queued": "Saved on this device, waiting to sync",
+      "syncing": "Syncing…",
+      "synced": "Synced",
+      "attention": "Needs attention"
+    },
+    "queue": {
+      "title": "On this device",
+      "none": "Nothing is waiting to be sent.",
+      "item": "{app}: {summary}",
+      "itemNew": "{app}: new record",
+      "photos": "Photos: {uploaded} of {total} sent",
+      "syncedNote": "The server has it.",
+      "next": "Next try {when}.",
+      "attempts_one": "Tried once so far.",
+      "attempts_other": "Tried {count} times so far.",
+      "retry": "Try again now",
+      "retryNamed": "Try {name} again now",
+      "hold": "Keep as draft",
+      "holdNamed": "Keep {name} as a draft",
+      "send": "Send",
+      "sendNamed": "Send {name}",
+      "discard": "Discard",
+      "discardNamed": "Discard {name}",
+      "discardQuestion": "Discard this record? It is deleted from this device and never sent.",
+      "discardConfirm": "Yes, discard",
+      "clearSynced": "Clear synced records",
+      "waiting_one": "{count} record waiting to sync",
+      "waiting_other": "{count} records waiting to sync"
+    },
+    "attention": {
+      "refused": "The server did not accept it: {error}",
+      "access": "You no longer have access to this app or space. What you entered is kept here.",
+      "archived": "The app or its space is archived or offline, so it can’t take records now.",
+      "outdated": "The app changed after this record was made. Download it again, then try again.",
+      "gave_up": "The server couldn’t be reached after several tries.",
+      "photo": "A photo couldn’t be sent, so the record wasn’t."
+    },
+    "sync": {
+      "paused": "Sync is paused: sign in again to send what is waiting.",
+      "account": "Sync is paused: this browser is signed in as someone else. Sign in as the account these records belong to, to send them.",
+      "offline": "You’re offline. Waiting records are sent when you reconnect.",
+      "running": "Syncing…",
+      "now": "Sync now"
+    },
+    "shell": {
+      "title": "Offline",
+      "intro": "TaskTo.AI can’t reach the server. The apps you downloaded open here, and records you add are kept on this device until you are back online.",
+      "none": "Nothing is downloaded on this device. Download an app while you are online to use it here.",
+      "reconnect": "Try to reconnect",
+      "open": "Open",
+      "openNamed": "Open {name}",
+      "back": "Back to the downloaded apps",
+      "needsUpdate": "This version of TaskTo.AI can’t draw {name}."
+    },
+    "accountChanged": {
+      "title": "The account changed",
+      "body": "Another account was signed in on this browser, or this one signed out, in another tab. Nothing is shown here until you reload this page.",
+      "reload": "Reload this page"
+    },
+    "foreign": {
+      "title": "Records of another account",
+      "body_one": "This browser holds {count} unsent record of another account. Sign in as that account to send it, or discard it.",
+      "body_other": "This browser holds {count} unsent records of another account. Sign in as that account to send them, or discard them.",
+      "signOut": "Sign out to sign in as that account",
+      "discard": "Discard them",
+      "discardQuestion_one": "Discard {count} record that was never sent? It can’t be recovered.",
+      "discardQuestion_other": "Discard {count} records that were never sent? They can’t be recovered."
+    },
+    "logout": {
+      "title": "Records not sent yet",
+      "body_one": "{count} record on this device hasn’t reached the server. Signing out now would lose it unless you sync or discard it.",
+      "body_other": "{count} records on this device haven’t reached the server. Signing out now would lose them unless you sync or discard them.",
+      "sync": "Sync now",
+      "syncing": "Syncing…",
+      "discard": "Discard and sign out",
+      "cancel": "Cancel",
+      "stillWaiting": "Some records are still waiting: the server couldn’t take them yet. Try again, or discard them.",
+      "unreadableSchema": "Records you made on this device may not have reached the server, and this version of TaskTo.AI can’t check: they were saved by a newer version. You can keep them and sign out without deleting anything, then sign in with the newer version to send them, or discard them.",
+      "unreadableStorage": "Records you made on this device may not have reached the server, and the device’s storage can’t be read right now to check. You can keep them and sign out without deleting anything, or discard them.",
+      "keep": "Keep them and sign out"
+    }
+  },
+  "notifications": {
+    "title": "Notifications",
+    "bell": "Notifications",
+    "bellUnread": "Notifications, {count} unread",
+    "intro": "What happened that you may want to see. Push notifications are optional and only a prompt to look here.",
+    "pushSettings": "Notification settings",
+    "none": "No notifications yet.",
+    "markAllRead": "Mark all as read",
+    "older": "Show older",
+    "unread": "Unread:",
+    "unavailable": "This notification isn't available any more.",
+    "openInbox": "Open your notifications",
+    "kind": {
+      "card_assigned": "A card was assigned to you: {title}",
+      "app_effect_failed": "An action in {app} didn't finish and needs you to retry it",
+      "changed": "Something changed. Open it to see what you can still see."
+    },
+    "push": {
+      "card_assigned": "A card was assigned to you",
+      "app_effect_failed": "An app action needs your attention",
+      "changed": "Something changed"
+    },
+    "settings": {
+      "title": "Your notifications",
+      "inbox": "Notifications always appear in your inbox, whether or not this browser can show push notifications.",
+      "openInbox": "Open the inbox",
+      "pushTitle": "Push notifications on this device",
+      "pushIntro": "Optional. When on, this device is told about a new notification even when TaskTo.AI isn't open. Nothing is sent to it until you turn this on.",
+      "unsupported": "This browser can't receive push notifications here. Your notifications still appear in the inbox.",
+      "iosInstall": "On iPhone and iPad, push notifications work only in the installed app. Add TaskTo.AI to your Home Screen (see About), open it from there and come back to this page. Your notifications appear in the inbox either way.",
+      "denied": "Notifications are blocked for this site in your browser. To turn push on, allow notifications for this site in the browser's settings, then come back. Your notifications still appear in the inbox.",
+      "dismissed": "You didn't answer the browser's question, so push is still off.",
+      "off": "Push is off on this device.",
+      "on": "Push is on for this device.",
+      "turnOn": "Turn on push on this device",
+      "turnOff": "Turn off push on this device",
+      "turnOffFailed": "This device's browser wouldn't end its push subscription, so push is still on. Try again.",
+      "caveat": "A push says only that something is new, never what it is, and opens the app, which checks what you may see. It can arrive late, or not at all: the inbox is the record. Signing out turns push off on that device."
+    }
   }
 }

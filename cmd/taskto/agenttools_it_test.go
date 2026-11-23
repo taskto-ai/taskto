@@ -42,7 +42,9 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 	server, addr := startServer(t, bin, "-addr", "127.0.0.1:0", "-data-dir", dataDir, "-agent", "-agent-entry", entry, "-insecure-cookies")
 	_, socketDir, _ := agentPaths(dataDir)
 	sidecar := agentrt.New(filepath.Join(socketDir, "agent.sock"))
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// Every tool call below is a whole model turn in one conversation that keeps growing: on CI's
+	// runners the test takes about three minutes, so it has twice that before it gives up.
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
 	// The tools socket is owner-only, next to the sidecar's.

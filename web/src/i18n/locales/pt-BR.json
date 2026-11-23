@@ -71,6 +71,52 @@
       "synthetic": "Criado antes de o histórico ser guardado: este é o registro como estava então.",
       "versionsTruncated": "Só as {count} versões mais recentes são mostradas."
     },
+    "effects": {
+      "open": "Efeitos",
+      "close": "Ocultar efeitos",
+      "summary": "{active} aguardando, {failed} com falha",
+      "title": "Efeitos das ações",
+      "intro": "O que as ações deste app colocam em andamento: cartões, documentos e lugares para abrir. Elas rodam em segundo plano como a pessoa que agiu, então continuam com o app fechado. Uma que falhou fica aqui até você tentar de novo.",
+      "none": "Nada foi colocado em andamento ainda.",
+      "kind": {
+        "create_card": "Criar um cartão",
+        "update_card": "Mover um cartão",
+        "create_document": "Criar um documento",
+        "open_route": "Abrir um lugar"
+      },
+      "status": {
+        "pending": "Aguardando",
+        "running": "Em execução",
+        "done": "Concluído",
+        "failed": "Falhou",
+        "simulated": "Simulado"
+      },
+      "record": "Registro {id}",
+      "recordAction": "Registro {id} · {action}",
+      "toColumn": "para {column}",
+      "tries_one": "{count} tentativa",
+      "tries_other": "{count} tentativas",
+      "tries_many": "{count} tentativas",
+      "nextTry": "Próxima tentativa {when}",
+      "retry": "Tentar de novo",
+      "retryNamed": "Tentar de novo: {what}",
+      "retried": "Será tentado de novo em instantes.",
+      "failedOnly": "Só os que falharam ({count})",
+      "older": "Mostrar efeitos mais antigos",
+      "list": "Os efeitos do app",
+      "result": {
+        "card": "Cartão {id}: abrir os quadros",
+        "document": "{path}: abrir a base de conhecimento",
+        "board": "Abrir os quadros",
+        "documentRoute": "Abrir a base de conhecimento"
+      },
+      "preview": {
+        "title": "Prévia: nada foi salvo",
+        "intro": "Esta ação colocaria em andamento:",
+        "none": "Esta ação não colocaria nada em andamento.",
+        "wouldFail": "Falharia para você: {error}"
+      }
+    },
     "roles": {
       "open": "Papéis",
       "openNamed": "Papéis de {name}",
@@ -100,13 +146,13 @@
     "previewDraftNamed": "Ver o rascunho de {name}",
     "stage": {
       "live": "No ar · versão {number}",
-      "draft": "Rascunho · não publicado",
+      "draft": "Prévia · dados de exemplo",
       "showDraft": "Ver o rascunho",
       "showLive": "Voltar à versão no ar",
-      "draftNote": "Esta é uma prévia de alterações ainda não publicadas. Mais ninguém a vê, e os botões dela não alteram nenhum dado.",
+      "draftNote": "Esta é uma prévia de alterações ainda não publicadas, com dados de exemplo. Experimente: os botões funcionam, mas não alteram nada real, e mais ninguém a vê.",
       "unpublishedNote": "Você está vendo a versão no ar, a que todos usam. Ela tem alterações que ainda não foram publicadas.",
       "notPublished": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer.",
-      "draftNoActions": "Esta é uma prévia do rascunho: publique o app para usá-lo."
+      "liveNote": "Esta é a versão no ar. Os botões dela alteram dados reais."
     },
     "photos": {
       "label": "Fotos",
@@ -166,6 +212,97 @@
       "message": "Este app foi publicado com recursos que esta versão do TaskTo.AI ainda não tem, então não pode ser mostrado aqui.",
       "needs": "Precisa de: {needs}",
       "update": "Atualizar o TaskTo.AI"
+    },
+    "builder": {
+      "build": "Criar um app",
+      "continue": "Continuar criando",
+      "title": "Criar um app",
+      "intro": "Descreva o app que você quer. O agente faz um rascunho com dados de exemplo em uma conversa, e você o experimenta aqui antes de qualquer outra pessoa poder usá-lo. Nada que você testar na prévia altera dados reais.",
+      "editTitle": "Editar com IA",
+      "editIntro": "Descreva o que deve mudar. O agente altera um novo rascunho do app; o app publicado continua funcionando como está até você publicar o rascunho.",
+      "editing": "Editando {name}, em {space}.",
+      "edit": "Editar com IA",
+      "editNamed": "Editar {name} com IA",
+      "what": "O que o app deve fazer?",
+      "whatChange": "O que deve mudar?",
+      "placeholder": "Por exemplo: um controle dos meus treinos, com a data, o exercício e como foi",
+      "changePlaceholder": "Por exemplo: incluir um campo de observações e um botão para marcar um item como feito",
+      "where": "Onde ele deve ficar?",
+      "wherePrivate": "No meu espaço privado",
+      "whereShared": "Em um espaço compartilhado",
+      "sharedSpace": "Espaço compartilhado",
+      "privateNote": "Só você pode ver e usar. Você pode compartilhá-lo depois, movendo-o para um espaço compartilhado.",
+      "sharedNote": "Quem pode abrir esse espaço poderá usar o app depois de publicado, e só quem tem o papel de publicador no app pode publicá-lo.",
+      "noSharedSpaces": "Você não pode alterar nenhum espaço compartilhado, então o app só pode ficar no seu espaço privado.",
+      "inThisConversation": "O agente vai criar o app nesta conversa.",
+      "backToConversation": "Voltar à conversa",
+      "start": "Começar a criar",
+      "startEdit": "Começar a editar",
+      "buildHere": "Criar um app nesta conversa",
+      "panes": "Visão do criador",
+      "tab": {
+        "build": "Criar",
+        "preview": "Prévia",
+        "updated": "(atualizada)"
+      },
+      "showingBuild": "Mostrando Criar: a conversa com o agente.",
+      "showingPreview": "Mostrando Prévia: o rascunho do app.",
+      "preview": {
+        "empty": "Ainda não há nada para ver. Descreva o app em Criar: o rascunho do agente aparece aqui, com dados de exemplo."
+      },
+      "prompt": {
+        "private": "meu espaço privado (id do espaço {id})",
+        "shared": "o espaço compartilhado “{space}” (id do espaço {id})",
+        "build": "Crie um app para mim: {description}\n\nSalve em {where}, como rascunho com algumas linhas de dados de exemplo para eu testar. Não publique: eu vou testar o rascunho e publicar eu mesmo. Quando estiver salvo, diga em palavras simples o que o app pode ler e alterar, e qualquer coisa que ele precise e que eu deva saber.",
+        "edit": "Altere o meu app “{name}” (id do app {app}, no espaço de id {space}): {description}\n\nAltere somente o rascunho dele. A versão publicada deve continuar funcionando como está até eu publicar o rascunho. Diga o que você mudou e o que há de novo que ele precise."
+      },
+      "audience": {
+        "title": "Quem pode usar",
+        "private": "Só você: ele está no seu espaço privado.",
+        "space": "Todos que podem abrir {space}: os editores adicionam e alteram registros, e os leitores só olham.",
+        "restricted": "Só quem tem um papel neste app. Os criadores do app definem os papéis.",
+        "person": "{name}: {roles}"
+      },
+      "can": {
+        "title": "O que ele pode ler e alterar",
+        "read": "Lê e guarda registros com estes campos: {fields}.",
+        "insert": "Adicionar registros.",
+        "update": "Alterar registros.",
+        "delete": "Excluir registros (um registro excluído pode ser restaurado).",
+        "readOnly": "Só mostra registros: não pode adicionar, alterar nem excluir nenhum.",
+        "nothingElse": "Não alcança mais nada: nenhum outro app, documento ou conta."
+      },
+      "field": "{name} ({type})",
+      "publish": {
+        "title": "Publicar",
+        "review": "Revisar e publicar…",
+        "now": "Publicar",
+        "confirmShared": "Isso coloca o app no ar para todos em {space} que podem usá-lo.",
+        "confirm": "Publicar para {space}",
+        "donePersonal": "Publicado como versão {number}. Ele está no ar no seu espaço privado.",
+        "doneShared": "Publicado como versão {number}. Ele está no ar para quem pode usá-lo em {space}.",
+        "needsPublisher": "Você pode criar o rascunho, mas publicá-lo exige o papel de publicador neste app. Peça a alguém que o tenha para publicar.",
+        "readOnly": "Você só pode ler este espaço, então não pode publicar aqui.",
+        "nothing": "Nada de novo para publicar: o rascunho é a versão no ar.",
+        "moved": "O rascunho mudou enquanto você o revisava, então nada foi publicado. O que ele pode ler e alterar, acima, está atualizado: revise de novo antes de publicar."
+      }
+    },
+    "fieldType": {
+      "string": "texto",
+      "number": "número",
+      "boolean": "sim ou não",
+      "date": "data",
+      "time": "hora",
+      "choice": "escolha",
+      "attachment": "fotos"
+    },
+    "needs": {
+      "design": "Você não pode alterar este app: isso exige o papel de criador nele.",
+      "publish": "Você não pode publicar este app: isso exige o papel de publicador nele.",
+      "submit": "Você não pode adicionar registros a este app: isso exige um papel que adicione registros.",
+      "modify_records": "Seu papel neste app não permite alterar nem excluir registros.",
+      "read_records": "Seu papel neste app não permite ler os registros dele.",
+      "manage_roles": "Você não pode gerenciar os papéis deste app: isso exige o papel de criador."
     },
     "explorer": {
       "back": "Voltar aos registros",
@@ -370,6 +507,8 @@
     "newBoard": "Novo quadro",
     "showArchived": "Mostrar quadros arquivados",
     "archivedNotice": "Este quadro está arquivado: só pode ser lido.",
+    "linkedArchivedOrGone": "O quadro para o qual este link aponta está arquivado ou não está mais disponível.",
+    "linkedUnavailable": "O quadro para o qual este link aponta não está mais disponível.",
     "rename": "Renomear",
     "renameBoard": "Renomear o quadro",
     "archiveBoard": "Arquivar o quadro",
@@ -519,6 +658,8 @@
     "app_name_length": "O nome do app precisa ter de 1 a {max} caracteres.",
     "too_many_apps": "Um espaço pode ter no máximo {max} apps.",
     "app_full": "Este app está cheio: ele comporta no máximo {max_rows} linhas e {max_mib} MiB de dados.",
+    "app_preview_full": "A prévia está cheia: ela comporta no máximo {max_rows} linhas de exemplo. Comece de novo.",
+    "app_preview_too_large": "Os dados de exemplo da prévia são grandes demais (no máximo {max_mib} MiB). Comece de novo.",
     "app_row_not_found": "Essa linha não está mais no app: alguém pode tê-la excluído.",
     "app_record_conflict": "Outra pessoa alterou este registro enquanto isso. Ele aparece como está agora: confira e tente de novo.",
     "app_field_required": "{field} é obrigatório.",
@@ -635,6 +776,22 @@
     "app_roles_invalid": "Não dá para salvar esses papéis: escolha papéis conhecidos, uma vez por membro.",
     "app_roles_not_member": "Papéis só podem ser dados a membros do espaço.",
     "app_roles_lockout": "Você não pode remover o seu próprio direito de gerenciar os papéis deste app.",
+    "app_effect_target": "Um efeito deste app aponta para um espaço ou quadro em que você não pode escrever: escolha um em que possa.",
+    "app_operation_invalid": "A chave da operação deve ter de 8 a 64 letras, dígitos, - ou _.",
+    "app_operation_reused": "Essa operação já foi usada para outra requisição.",
+    "app_effects_backlog": "Este app tem {max} efeitos aguardando: tente de novo quando terminarem.",
+    "app_effect_not_failed": "Só um efeito que falhou pode ser tentado de novo.",
+    "app_effect_app_access": "Quem agiu não tem mais o acesso a este app que a ação exige.",
+    "app_effect_target_access": "Quem agiu não pode mais escrever no quadro ou espaço que este efeito tem como alvo.",
+    "app_effect_target_gone": "O quadro ou cartão que este efeito tem como alvo não existe mais.",
+    "app_effect_board_offline": "O quadro ou espaço que este efeito tem como alvo está arquivado.",
+    "app_effect_invalid": "O que este efeito criaria não é aceito (um título ou um caminho, por exemplo).",
+    "app_effect_doc_exists": "Já existe um documento diferente onde este efeito escreve; ele não foi sobrescrito.",
+    "app_effect_no_card": "Nenhum cartão foi criado para este registro alterar.",
+    "app_effect_card_archived": "O cartão a alterar está arquivado.",
+    "app_effect_app_offline": "O app está offline ou o seu espaço está arquivado.",
+    "app_effect_record_gone": "O registro de onde isto veio foi excluído. Restaure-o e tente de novo.",
+    "app_effect_gave_up": "Continuou falhando por um motivo que pode passar: tente de novo.",
     "app_definition_version": "Este app usa um formato de definição (versão {version}) que o servidor não lê; ele lê até a {supported}.",
     "app_not_published": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer.",
     "app_release_not_found": "Essa versão do app não existe.",
@@ -667,7 +824,15 @@
     "app_field_not_signature": "{field} deve ser uma imagem de assinatura.",
     "app_field_not_barcode": "{field} deve ser o texto de um código válido (com o dígito verificador certo, se o campo lê EAN ou UPC).",
     "app_field_locked": "{field} foi capturado e não pode ser alterado depois.",
-    "app_signature_type": "Uma assinatura deve ser uma imagem PNG."
+    "app_signature_type": "Uma assinatura deve ser uma imagem PNG.",
+    "offline_downloads_disabled": "Um administrador desativou os downloads offline deste espaço.",
+    "session_account_changed": "Este navegador está conectado como uma conta diferente daquela a que estes registros pertencem.",
+    "offline_unsupported": "Isto exige conexão. Offline, você pode adicionar registros e navegar pela cópia baixada.",
+    "notification_not_found": "Essa notificação não está disponível.",
+    "push_endpoint_invalid": "O endereço de push deste navegador não é válido.",
+    "push_keys_invalid": "As chaves de push deste navegador não são válidas.",
+    "push_too_many_subscriptions": "Você já ativou o push em {max} dispositivos. Desative em um deles primeiro.",
+    "push_no_workspace": "O push é para quem participa de um espaço de trabalho."
   },
   "language": {
     "label": "Idioma",
@@ -686,7 +851,8 @@
       "dictation": "Ditado",
       "password": "Senha",
       "tokens": "Tokens de acesso",
-      "about": "Sobre"
+      "about": "Sobre",
+      "notifications": "Notificações"
     },
     "general": {
       "language": "Idioma padrão",
@@ -770,7 +936,9 @@
       "person": "{name} ({email})",
       "as": "Como",
       "add": "Adicionar",
-      "rolesHelp": "Editores leem e escrevem; leitores só leem. Uma mudança vale a partir da próxima solicitação do membro."
+      "rolesHelp": "Editores leem e escrevem; leitores só leem. Uma mudança vale a partir da próxima solicitação do membro.",
+      "offlineDownloads": "Permitir downloads offline",
+      "offlineHelp": "Os membros podem manter os apps e registros deste espaço nos próprios dispositivos para usar sem conexão. Desative para dados sensíveis: novos downloads são recusados, e o dispositivo remove a cópia na próxima vez que se conectar."
     },
     "tokens": {
       "title": "Tokens de acesso",
@@ -1129,7 +1297,8 @@
       "boards": "Quadros",
       "apps": "Apps",
       "settings": "Configurações",
-      "home": "Início"
+      "home": "Início",
+      "notifications": "Notificações"
     },
     "noWorkspace": "Você não é membro de nenhum espaço de trabalho. Peça um convite a um administrador.",
     "logOut": "Sair",
@@ -1468,5 +1637,168 @@
       "pin": "fixação"
     },
     "removePinNamed": "Remover {name} do menu"
+  },
+  "offline": {
+    "title": "Uso offline",
+    "download": "Baixar para uso offline",
+    "downloadNamed": "Baixar {name} para uso offline",
+    "downloading": "Baixando…",
+    "downloadAgain": "Baixar de novo",
+    "downloadAgainNamed": "Baixar {name} de novo",
+    "remove": "Remover o download",
+    "removeNamed": "Remover o download de {name}",
+    "notDownloaded": "Ainda não baixado. Baixe este app para abri-lo e adicionar registros sem conexão.",
+    "ready": "Pronto para uso offline",
+    "readyDetail": "Versão {release}, baixada {when}. {records} de {total} registros estão neste dispositivo.",
+    "newerRelease": "Uma versão mais nova (número {live}) está no ar. Baixe de novo para usá-la offline.",
+    "truncated": "Só os {records} registros mais recentes de {total} foram baixados.",
+    "ownOnly": "Só os registros que você adicionou foram baixados.",
+    "cantInsert": "Você pode ver esta cópia offline, mas não adicionar registros.",
+    "storage": "Armazenamento neste dispositivo: cerca de {usage} usados de {quota}.",
+    "storageUnknown": "Este navegador não informa quanto armazenamento resta.",
+    "persisted": "Este navegador concordou em manter os dados baixados.",
+    "notPersisted": "Este navegador pode apagar os dados baixados quando o dispositivo estiver com pouco espaço.",
+    "disabled": "Um administrador desativou os downloads offline deste espaço.",
+    "onlineOnly": "Criar com IA, publicar e compartilhar exigem conexão. Offline, você abre apps baixados e adiciona registros.",
+    "unavailable": "O armazenamento offline não está disponível neste navegador, então os apps não podem ser baixados.",
+    "schemaNewer": "Este dispositivo guarda dados offline gravados por uma versão mais nova do TaskTo.AI. Atualize o app para usá-los. Nada foi alterado.",
+    "reload": "Recarregar para atualizar",
+    "needsConnection": "Isto exige conexão. Offline, você pode adicionar registros e navegar pela cópia baixada.",
+    "notSaved": {
+      "quota": "Este dispositivo não tem mais espaço, então o registro NÃO foi salvo. Libere espaço ou remova um download e tente de novo.",
+      "unavailable": "O armazenamento offline não está disponível, então o registro NÃO foi salvo.",
+      "failed": "O registro não pôde ser gravado neste dispositivo e NÃO foi salvo."
+    },
+    "saved": "Salvo neste dispositivo. Será enviado quando você voltar a ficar online.",
+    "localCopy": "Cópia offline: listas e números cobrem os registros baixados {when} (baixados: {records}) e os salvos neste dispositivo (salvos aqui: {queued}). Não são os totais do servidor.",
+    "localTruncated": "O download tem só os {records} registros mais recentes de {total}.",
+    "state": {
+      "draft": "Rascunho neste dispositivo",
+      "queued": "Salvo neste dispositivo, aguardando sincronização",
+      "syncing": "Sincronizando…",
+      "synced": "Sincronizado",
+      "attention": "Precisa de atenção"
+    },
+    "queue": {
+      "title": "Neste dispositivo",
+      "none": "Nada aguardando envio.",
+      "item": "{app}: {summary}",
+      "itemNew": "{app}: novo registro",
+      "photos": "Fotos: {uploaded} de {total} enviadas",
+      "syncedNote": "O servidor já tem.",
+      "next": "Próxima tentativa {when}.",
+      "attempts_one": "Tentado uma vez até agora.",
+      "attempts_many": "Tentado {count} de vezes até agora.",
+      "attempts_other": "Tentado {count} vezes até agora.",
+      "retry": "Tentar agora",
+      "retryNamed": "Tentar {name} agora",
+      "hold": "Manter como rascunho",
+      "holdNamed": "Manter {name} como rascunho",
+      "send": "Enviar",
+      "sendNamed": "Enviar {name}",
+      "discard": "Descartar",
+      "discardNamed": "Descartar {name}",
+      "discardQuestion": "Descartar este registro? Ele é apagado deste dispositivo e nunca será enviado.",
+      "discardConfirm": "Sim, descartar",
+      "clearSynced": "Limpar registros sincronizados",
+      "waiting_one": "{count} registro aguardando sincronização",
+      "waiting_many": "{count} de registros aguardando sincronização",
+      "waiting_other": "{count} registros aguardando sincronização"
+    },
+    "attention": {
+      "refused": "O servidor não aceitou: {error}",
+      "access": "Você não tem mais acesso a este app ou espaço. O que você digitou fica guardado aqui.",
+      "archived": "O app ou o espaço dele está arquivado ou offline, então não aceita registros agora.",
+      "outdated": "O app mudou depois que este registro foi feito. Baixe-o de novo e tente outra vez.",
+      "gave_up": "Não foi possível alcançar o servidor após várias tentativas.",
+      "photo": "Uma foto não pôde ser enviada, então o registro também não foi."
+    },
+    "sync": {
+      "paused": "A sincronização está pausada: entre de novo para enviar o que está aguardando.",
+      "account": "A sincronização está pausada: este navegador está conectado como outra pessoa. Entre na conta a que estes registros pertencem para enviá-los.",
+      "offline": "Você está offline. Os registros aguardando são enviados quando você reconectar.",
+      "running": "Sincronizando…",
+      "now": "Sincronizar agora"
+    },
+    "shell": {
+      "title": "Offline",
+      "intro": "O TaskTo.AI não consegue alcançar o servidor. Os apps que você baixou abrem aqui, e os registros que você adiciona ficam neste dispositivo até você voltar a ficar online.",
+      "none": "Nada foi baixado neste dispositivo. Baixe um app enquanto estiver online para usá-lo aqui.",
+      "reconnect": "Tentar reconectar",
+      "open": "Abrir",
+      "openNamed": "Abrir {name}",
+      "back": "Voltar aos apps baixados",
+      "needsUpdate": "Esta versão do TaskTo.AI não consegue mostrar {name}."
+    },
+    "accountChanged": {
+      "title": "A conta mudou",
+      "body": "Outra conta foi conectada neste navegador, ou esta saiu, em outra aba. Nada é mostrado aqui até você recarregar esta página.",
+      "reload": "Recarregar esta página"
+    },
+    "foreign": {
+      "title": "Registros de outra conta",
+      "body_one": "Este navegador guarda {count} registro não enviado de outra conta. Entre nessa conta para enviá-lo ou descarte-o.",
+      "body_many": "Este navegador guarda {count} de registros não enviados de outra conta. Entre nessa conta para enviá-los ou descarte-os.",
+      "body_other": "Este navegador guarda {count} registros não enviados de outra conta. Entre nessa conta para enviá-los ou descarte-os.",
+      "signOut": "Sair para entrar nessa conta",
+      "discard": "Descartá-los",
+      "discardQuestion_one": "Descartar {count} registro que nunca foi enviado? Não é possível recuperá-lo.",
+      "discardQuestion_many": "Descartar {count} de registros que nunca foram enviados? Não é possível recuperá-los.",
+      "discardQuestion_other": "Descartar {count} registros que nunca foram enviados? Não é possível recuperá-los."
+    },
+    "logout": {
+      "title": "Registros ainda não enviados",
+      "body_one": "{count} registro neste dispositivo não chegou ao servidor. Sair agora o perderia, a menos que você o sincronize ou descarte.",
+      "body_many": "{count} de registros neste dispositivo não chegaram ao servidor. Sair agora os perderia, a menos que você os sincronize ou descarte.",
+      "body_other": "{count} registros neste dispositivo não chegaram ao servidor. Sair agora os perderia, a menos que você os sincronize ou descarte.",
+      "sync": "Sincronizar agora",
+      "syncing": "Sincronizando…",
+      "discard": "Descartar e sair",
+      "cancel": "Cancelar",
+      "stillWaiting": "Alguns registros ainda aguardam: o servidor não pôde recebê-los ainda. Tente de novo ou descarte-os.",
+      "unreadableSchema": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e esta versão do TaskTo.AI não consegue verificar: foram salvos por uma versão mais nova. Você pode mantê-los e sair sem apagar nada, e depois entrar com a versão mais nova para enviá-los, ou descartá-los.",
+      "unreadableStorage": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e o armazenamento do dispositivo não pode ser lido agora para verificar. Você pode mantê-los e sair sem apagar nada, ou descartá-los.",
+      "keep": "Mantê-los e sair"
+    }
+  },
+  "notifications": {
+    "title": "Notificações",
+    "bell": "Notificações",
+    "bellUnread": "Notificações, {count} não lidas",
+    "intro": "O que aconteceu e que você pode querer ver. As notificações push são opcionais e servem só para avisar que há algo aqui.",
+    "pushSettings": "Configurações de notificações",
+    "none": "Nenhuma notificação ainda.",
+    "markAllRead": "Marcar todas como lidas",
+    "older": "Mostrar mais antigas",
+    "unread": "Não lida:",
+    "unavailable": "Esta notificação não está mais disponível.",
+    "openInbox": "Abrir suas notificações",
+    "kind": {
+      "card_assigned": "Um cartão foi atribuído a você: {title}",
+      "app_effect_failed": "Uma ação em {app} não terminou e precisa que você tente de novo",
+      "changed": "Algo mudou. Abra para ver o que você ainda pode ver."
+    },
+    "push": {
+      "card_assigned": "Um cartão foi atribuído a você",
+      "app_effect_failed": "Uma ação de um app precisa da sua atenção",
+      "changed": "Algo mudou"
+    },
+    "settings": {
+      "title": "Suas notificações",
+      "inbox": "As notificações sempre aparecem na sua caixa de entrada, mesmo que este navegador não consiga mostrar notificações push.",
+      "openInbox": "Abrir a caixa de entrada",
+      "pushTitle": "Notificações push neste dispositivo",
+      "pushIntro": "Opcional. Quando ativadas, este dispositivo é avisado de uma nova notificação mesmo com o TaskTo.AI fechado. Nada é enviado a ele até você ativar.",
+      "unsupported": "Este navegador não consegue receber notificações push aqui. Suas notificações continuam aparecendo na caixa de entrada.",
+      "iosInstall": "No iPhone e no iPad, as notificações push só funcionam no app instalado. Adicione o TaskTo.AI à Tela de Início (veja Sobre), abra-o por lá e volte a esta página. Suas notificações aparecem na caixa de entrada de qualquer forma.",
+      "denied": "As notificações estão bloqueadas para este site no seu navegador. Para ativar o push, permita notificações para este site nas configurações do navegador e volte aqui. Suas notificações continuam aparecendo na caixa de entrada.",
+      "dismissed": "Você não respondeu à pergunta do navegador, então o push continua desativado.",
+      "off": "O push está desativado neste dispositivo.",
+      "on": "O push está ativado neste dispositivo.",
+      "turnOn": "Ativar o push neste dispositivo",
+      "turnOff": "Desativar o push neste dispositivo",
+      "turnOffFailed": "O navegador deste dispositivo não encerrou a inscrição de push, então o push continua ativado. Tente de novo.",
+      "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo."
+    }
   }
 }

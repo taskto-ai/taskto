@@ -10,23 +10,40 @@
 
 import { type FormEvent, useState } from 'react'
 import { ApiError, type App, api, errorText, type SchemaChange, type Space, ws } from '../api'
-import { has, type Key, useT } from '../i18n'
+import type { EventSourceFactory } from '../conversations/useConversationStream'
+import { useT } from '../i18n'
 import { useLoad } from '../load'
+import { OfflinePanel } from '../offline/OfflinePanel'
 import { Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
+import { AppBuilder, lastBuilderConversation } from './AppBuilder'
+import { AppEffects } from './AppEffects'
+import { appError, MigrationNotice, publishDraft } from './AppPublish'
 import { AppRecords } from './AppRecords'
 import { AppReleases } from './AppReleases'
 import { AppRoles } from './AppRoles'
 import { AppStage } from './AppStage'
-import { appPath, parseItem } from './route'
+import { appPath, builderPath, parseBuilder, parseItem } from './route'
 
 const appsBase = (workspace: number, space: number) => `${ws(workspace)}/spaces/${space}/apps`
 
-export function AppsPage({ workspace, open }: { workspace: number; open?: string }) {
+export function AppsPage({
+  workspace,
+  open,
+  streams,
+}: {
+  workspace: number
+  open?: string
+  // The builder's conversation stream: a test's own.
+  streams?: EventSourceFactory
+}) {
   const spaces = useLoad(() => api<{ spaces: Space[] }>(`${ws(workspace)}/spaces`).then((r) => r.spaces), [workspace])
   // Bumped when an app moves, so every space's list shows where it is now.
   const [moves, setMoves] = useState(0)
   const t = useT()
+  const continuing = lastBuilderConversation(workspace)
+  const builder = parseBuilder(open)
+  if (builder) return <AppBuilder workspace={workspace} route={builder} streams={streams} />
   const launched = parseItem(open)
   if (launched) {
     const space = spaces.data?.find((s) => s.id === launched.space)
@@ -37,6 +54,7 @@ export function AppsPage({ workspace, open }: { workspace: number; open?: string
         app={launched.app}
         writable={space?.access === 'write'}
         screen={launched.screen}
+        spaceInfo={space}
       />
     )
   }
@@ -44,6 +62,14 @@ export function AppsPage({ workspace, open }: { workspace: number; open?: string
     <div className="tt-section">
       <div className="tt-pane-head">
         <h1>{t('shell.sections.apps')}</h1>
+        <Link className="tt-button tt-primary" href={builderPath(workspace)}>
+          {t('apps.builder.build')}
+        </Link>
+        {continuing && (
+          <Link className="tt-button" href={builderPath(workspace, { kind: 'conversation', conversation: continuing })}>
+            {t('apps.builder.continue')}
+          </Link>
+        )}
       </div>
       <p className="tt-muted">{t('apps.intro')}</p>
       {spaces.error && (
@@ -102,17 +128,18 @@ function SpaceApps({
   // shown, and the list reloaded, so the next try is made against the current version).
   const publish = async (app: App, acknowledge: SchemaChange[]): Promise<SchemaChange[] | null> => {
     try {
-      await api<App>(`${base}/${app.id}/publish`, { method: 'POST', body: { version: app.version, acknowledge } })
+      const result = await publishDraft(`${base}/${app.id}`, app.version, acknowledge)
+      if ('changes' in result) {
+        setError(null)
+        return result.changes
+      }
       setError(null)
     } catch (e) {
-      if (e instanceof ApiError && e.code === 'app_migration_required') {
-        const changes = (e.body as { params?: { changes?: SchemaChange[] } }).params?.changes
-        if (changes && changes.length > 0) {
-          setError(null)
-          return changes
-        }
-      }
-      setError(e instanceof ApiError && e.code === 'app_changed' ? t('apps.changed', { name: app.name }) : errorText(e))
+      setError(
+        e instanceof ApiError && e.code === 'app_changed'
+          ? t('apps.changed', { name: app.name })
+          : appError(e, app.name),
+      )
     }
     apps.reload()
     return null
@@ -194,9 +221,8 @@ function AppRow({
   const [busy, setBusy] = useState(false)
   const [rolesOpen, setRolesOpen] = useState(false)
   const [releasesOpen, setReleasesOpen] = useState(false)
-  // The schema changes a publish waits to have acknowledged, and whether the person has.
+  // The schema changes a publish waits to have acknowledged.
   const [migration, setMigration] = useState<SchemaChange[] | null>(null)
-  const [understood, setUnderstood] = useState(false)
   const offline = app.archived_at !== null
   // Those who may design or publish the app see what isn't live: its draft and its releases.
   const reviewer = writable && (app.access.design || app.access.publish)
@@ -206,7 +232,6 @@ function AppRow({
     const needed = await publish(app, acknowledge)
     setBusy(false)
     setMigration(needed)
-    setUnderstood(false)
   }
   const run = async (body: { name?: string; archived?: boolean }) => {
     setBusy(true)
@@ -307,6 +332,15 @@ function AppRow({
               {t('apps.releases.open')}
             </button>
           )}
+          {!offline && writable && app.access.design && (
+            <Link
+              className="tt-button"
+              href={builderPath(workspace, { kind: 'edit', space: space.id, app: app.id })}
+              aria-label={t('apps.builder.editNamed', { name: app.name })}
+            >
+              {t('apps.builder.edit')}
+            </Link>
+          )}
           {writable && app.access.design && (
             <button type="button" className="tt-button" disabled={busy} onClick={() => setRenaming(true)}>
               {t('apps.rename')}
@@ -365,39 +399,12 @@ function AppRow({
         </div>
       )}
       {migration && (
-        <fieldset className="tt-app-migration">
-          <legend>
-            <strong>{t('apps.migration.title')}</strong>
-          </legend>
-          <p className="tt-muted tt-small">{t('apps.migration.intro')}</p>
-          <ul>
-            {migration.map((c) => {
-              const key = `apps.migration.${c.change}`
-              return (
-                <li key={`${c.change}-${c.field}`}>
-                  {has(key) ? t(key as Key, { field: c.field }) : `${c.change}: ${c.field}`}
-                </li>
-              )
-            })}
-          </ul>
-          <label className="tt-inline-field">
-            <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
-            {t('apps.migration.confirm')}
-          </label>
-          <div className="tt-app-actions">
-            <button
-              type="button"
-              className="tt-button tt-primary"
-              disabled={busy || !understood}
-              onClick={() => runPublish(migration)}
-            >
-              {t('apps.migration.publish')}
-            </button>
-            <button type="button" className="tt-button" disabled={busy} onClick={() => setMigration(null)}>
-              {t('common.cancel')}
-            </button>
-          </div>
-        </fieldset>
+        <MigrationNotice
+          changes={migration}
+          busy={busy}
+          onPublish={() => runPublish(migration)}
+          onCancel={() => setMigration(null)}
+        />
       )}
       {releasesOpen && (
         <AppReleases
@@ -420,17 +427,21 @@ function LaunchedApp({
   app,
   writable,
   screen,
+  spaceInfo,
 }: {
   workspace: number
   space: number
   app: number
   writable: boolean
   screen?: string
+  spaceInfo?: Space
 }) {
   const base = `${appsBase(workspace, space)}/${app}`
   const info = useLoad(() => api<App>(base), [base])
   // Bumped when a record is restored, so the screen is loaded again with it.
   const [restored, setRestored] = useState(0)
+  // How many actions ran on the screen: each may have set effects going.
+  const [actions, setActions] = useState(0)
   const back = routePath({ workspace, section: 'apps' })
   const t = useT()
   const restore = async () => {
@@ -446,6 +457,15 @@ function LaunchedApp({
     <div className="tt-section">
       <div className="tt-pane-head">
         <h1>{info.data?.name ?? t('apps.app')}</h1>
+        {info.data && !info.data.archived_at && writable && info.data.access.design && (
+          <Link
+            className="tt-button"
+            href={builderPath(workspace, { kind: 'edit', space, app })}
+            aria-label={t('apps.builder.editNamed', { name: info.data.name })}
+          >
+            {t('apps.builder.edit')}
+          </Link>
+        )}
         <Link className="tt-button" href={back}>
           {t('apps.all')}
         </Link>
@@ -473,7 +493,15 @@ function LaunchedApp({
             <p className="tt-muted tt-small">{t('apps.noDataChanges')}</p>
           )}
           {info.data.access.read_records === 'own' && <p className="tt-muted tt-small">{t('apps.ownRecords')}</p>}
-          <AppStage key={screen ?? ''} base={base} app={info.data} reloadKey={restored} screen={screen} />
+          <AppStage
+            key={screen ?? ''}
+            base={base}
+            app={info.data}
+            reloadKey={restored}
+            screen={screen}
+            onAction={() => setActions((n) => n + 1)}
+          />
+          <AppEffects workspace={workspace} base={base} writable={writable} reloadKey={actions} />
           <AppRecords
             base={base}
             appId={app}
@@ -483,6 +511,7 @@ function LaunchedApp({
             release={info.data.live?.number}
             onRestored={() => setRestored((n) => n + 1)}
           />
+          <OfflinePanel workspace={workspace} space={space} app={info.data} spaceInfo={spaceInfo} />
         </>
       )}
     </div>

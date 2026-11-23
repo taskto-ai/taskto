@@ -187,6 +187,13 @@ const maxNameLen = 100
 type Service struct {
 	db     *sql.DB
 	access *access.Checker
+	// platform is what the app's effects act on (outbox.go).
+	platform Platform
+	// clock is the time the outbox's worker goes by: the real one, a test's own otherwise.
+	clock func() time.Time
+	// wake tells the worker, if it runs in this process, that an entry was queued.
+	wake  chan struct{}
+	hooks outboxHooks
 	// dataDir holds the spaces' directories, where attachments are kept (WithFiles); empty if
 	// the service keeps no files.
 	dataDir string
@@ -194,9 +201,18 @@ type Service struct {
 	thumbs  chan struct{}
 }
 
+// outboxHooks are for tests to stop the worker where a crash would.
+type outboxHooks struct {
+	// afterWork is called once an entry's work is done and before it is noted as done.
+	afterWork func(effectRow) error
+	// beforeDocument is called once a document entry has passed its checks, right before it asks
+	// for the space's write lock to commit.
+	beforeDocument func(effectRow)
+}
+
 // New returns the apps service over sqlDB, which must be migrated.
 func New(sqlDB *sql.DB, c *access.Checker) *Service {
-	return &Service{db: sqlDB, access: c, thumbs: make(chan struct{}, maxThumbnails)}
+	return &Service{db: sqlDB, access: c, clock: time.Now, wake: make(chan struct{}, 1), thumbs: make(chan struct{}, maxThumbnails)}
 }
 
 // timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the schema's format for times.
@@ -539,6 +555,9 @@ func (s *Service) createApp(ctx context.Context, sp access.Space, a Actor, na Ne
 	if err != nil {
 		return App{}, err
 	}
+	if err := s.checkEffectTargets(ctx, a, def); err != nil {
+		return App{}, err
+	}
 	raw, err := json.Marshal(def)
 	if err != nil {
 		return App{}, err
@@ -610,6 +629,9 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 	if ch.Definition != nil {
 		var err error
 		if checked, err = ch.Definition.Check(); err != nil {
+			return App{}, err
+		}
+		if err := s.checkEffectTargets(ctx, a, checked); err != nil {
 			return App{}, err
 		}
 		raw, err := json.Marshal(checked)
@@ -866,6 +888,7 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	var def, live Definition
 	var acc access.AppAccess
 	var change Change
+	queued := false
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		var err error
 		if acc, err = s.recheckApp(ctx, actor, sp.ID, appID); err != nil {
@@ -906,14 +929,58 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 			return err
 		}
 		change = ch
+		// What the action sets going besides the change is the live release's: an action of an
+		// older release was taken as the live one defines it (liveTakes).
+		effects := live.Actions[action.Name].Effects
+		key, err := operationKey(action, len(effects) > 0)
+		if err != nil {
+			return err
+		}
+		var opID int64
+		if key != "" {
+			// A key is for one request: the release it runs from is part of it.
+			release := a.Live.Number
+			if action.Release != nil {
+				release = *action.Release
+			}
+			var replay bool
+			if opID, replay, err = beginOperation(ctx, tx, actor, appID, key, release, action); err != nil {
+				return err
+			}
+			if replay {
+				// Made before: the change and its effects are in already, and the answer is the
+				// first one's, whatever the live release has become since: it is asked of the
+				// live release's compatibility only for a request not yet made.
+				return nil
+			}
+		}
 		if fromOlder && !liveTakes(live, def, action.Name, ch) {
 			return &outdatedError{release: *action.Release, live: a.Live.Number}
 		}
-		return apply(ctx, tx, actor, appID, live, ch,
+		ap, err := apply(ctx, tx, actor, appID, live, ch,
 			visibility{scope: acc.ModifyRecords, user: actor.UserID}, readable(acc, actor.UserID))
+		if err != nil {
+			return err
+		}
+		// The operation remembers the record it made: a download says which of the caller's
+		// operations its records are (offline.go), so a device doesn't count a record it sent
+		// twice, once as sent and once as the server's.
+		if opID != 0 && ap.changed {
+			if _, err := tx.ExecContext(ctx, `UPDATE app_operations SET record_id = ? WHERE id = ?`, ap.id, opID); err != nil {
+				return err
+			}
+		}
+		if err := enqueueEffects(ctx, tx, actor, appID, opID, live, live.Actions[action.Name], ap); err != nil {
+			return err
+		}
+		queued = len(effects) > 0 && ap.changed
+		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if queued {
+		s.poke()
 	}
 	// The screen's data is read after the change commits, outside the write lock, which every
 	// write on the server waits for: an app's rows can be up to MaxDataSize, and the next
@@ -925,14 +992,19 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	if err != nil {
 		return nil, err
 	}
-	shown := shownBy(live, def)
+	return answer(appID, shownBy(live, def), rows, change), nil
+}
+
+// answer is the messages that update a screen once change has been made to rows: the rows and
+// summaries as they are now and, for an app with screens, what the action does to the screen the
+// person is on. The record a detail screen shows is shown again after an update and emptied after
+// a delete, and the screen the action says it goes on to (Then) is opened. The live app and the
+// draft's preview (preview.go) answer alike.
+func answer(appID int64, shown Definition, rows []Row, change Change) []Message {
 	msgs := Refreshed(SurfaceID(appID), shown, rows, change.Kind == ActionInsert)
 	if !shown.hasScreens() {
-		return msgs, nil
+		return msgs
 	}
-	// An app with screens: what the action does to the screen the person is on. The record a
-	// detail screen shows is shown again after an update and emptied after a delete, and the
-	// screen the action says it goes on to (Then) is opened.
 	switch change.Kind {
 	case ActionUpdate:
 		record := map[string]any{}
@@ -948,7 +1020,7 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	if change.Then != "" {
 		msgs = append(msgs, dataMessage(SurfaceID(appID), "/"+ScreenKey, change.Then))
 	}
-	return msgs, nil
+	return msgs
 }
 
 // navigates reports whether the action is a navigate action of the release it comes from, which
@@ -1074,13 +1146,13 @@ func shownBy(live, from Definition) Definition {
 // modify is the rows the actor may change: a row outside it is answered as one the app doesn't
 // have, so which rows exist isn't told to someone who may not touch them. read is the rows
 // they may read, which decides whether a conflict shows the row as it is now.
-func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change, modify, read visibility) error {
+func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change, modify, read visibility) (applied, error) {
 	var count, size int
 	// Only live rows count against the limits. In bytes, as len() counts below: length() of
 	// TEXT counts characters, which would let non-ASCII rows hold more than MaxDataSize.
 	if err := tx.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(length(CAST(data AS BLOB))), 0) FROM app_rows WHERE app_id = ? AND deleted_at IS NULL`, appID).
 		Scan(&count, &size); err != nil {
-		return err
+		return applied{}, err
 	}
 	at := now()
 	switch ch.Kind {
@@ -1088,14 +1160,14 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		// The row is stored as the live release's collection allows, whichever release's screen
 		// the action came from: its required fields and limits are the live ones.
 		if err := def.Collection.Fits(ch.Data); err != nil {
-			return err
+			return applied{}, err
 		}
 		raw, err := json.Marshal(ch.Data)
 		if err != nil {
-			return err
+			return applied{}, err
 		}
 		if count >= MaxRows || size+len(raw) > MaxDataSize {
-			return appFull(fmt.Sprintf("an app holds at most %d rows and %d MiB", MaxRows, MaxDataSize>>20))
+			return applied{}, appFull(fmt.Sprintf("an app holds at most %d rows and %d MiB", MaxRows, MaxDataSize>>20))
 		}
 		var id int64
 		if err := tx.QueryRowContext(ctx, `
@@ -1105,16 +1177,19 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 			VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			appID, string(raw), at, actor.UserID, actor.Agent, via(actor), actionColumn(ch),
 			at, actor.UserID, actor.Agent, via(actor), actionColumn(ch)).Scan(&id); err != nil {
-			return err
+			return applied{}, err
 		}
 		if err := claimAttachments(ctx, tx, actor, appID, id, def, nil, ch.Data); err != nil {
-			return err
+			return applied{}, err
 		}
-		return remember(ctx, tx, appID, id, 1, opInsert, string(raw), at, actor, ch)
+		if err := remember(ctx, tx, appID, id, 1, opInsert, string(raw), at, actor, ch); err != nil {
+			return applied{}, err
+		}
+		return applied{id: id, revision: 1, data: ch.Data, changed: true}, nil
 	case ActionUpdate, ActionDelete:
 		cur, err := liveRow(ctx, tx, appID, ch, modify, read, def)
 		if err != nil {
-			return err
+			return applied{}, err
 		}
 		if ch.Kind == ActionDelete {
 			_, err := tx.ExecContext(ctx, `
@@ -1122,42 +1197,47 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 				WHERE id = ? AND app_id = ?`,
 				cur.revision+1, at, actor.UserID, actor.Agent, via(actor), actionColumn(ch), ch.ID, appID)
 			if err != nil {
-				return err
+				return applied{}, err
 			}
-			return remember(ctx, tx, appID, ch.ID, cur.revision+1, opDelete, cur.data, at, actor, ch)
+			return applied{id: ch.ID, revision: cur.revision + 1, data: cur.fields, changed: true},
+				remember(ctx, tx, appID, ch.ID, cur.revision+1, opDelete, cur.data, at, actor, ch)
 		}
 		next, err := def.Collection.Merge(cur.fields, ch.Data)
 		if err != nil {
-			return err
+			return applied{}, err
 		}
 		// A captured location and a signature stay as they were captured, whoever asks to change them
 		// and by whichever screen, release or the records explorer.
 		if err := def.Collection.lockedChange(cur.fields, next); err != nil {
-			return err
+			return applied{}, err
 		}
 		raw, err := json.Marshal(next)
 		if err != nil {
-			return err
+			return applied{}, err
 		}
 		if size-len(cur.data)+len(raw) > MaxDataSize {
-			return appFull(fmt.Sprintf("an app holds at most %d MiB", MaxDataSize>>20))
+			return applied{}, appFull(fmt.Sprintf("an app holds at most %d MiB", MaxDataSize>>20))
 		}
 		if string(raw) == cur.canonical {
-			return nil // nothing changed: no new revision, nothing to remember
+			// Nothing changed: no new revision, nothing to remember, no effects.
+			return applied{id: ch.ID, revision: cur.revision, data: next}, nil
 		}
 		if err := claimAttachments(ctx, tx, actor, appID, ch.ID, def, cur.fields, next); err != nil {
-			return err
+			return applied{}, err
 		}
 		_, err = tx.ExecContext(ctx, `
 			UPDATE app_rows SET data = ?, revision = ?, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?, updated_action = ?
 			WHERE id = ? AND app_id = ?`,
 			string(raw), cur.revision+1, at, actor.UserID, actor.Agent, via(actor), actionColumn(ch), ch.ID, appID)
 		if err != nil {
-			return err
+			return applied{}, err
 		}
-		return remember(ctx, tx, appID, ch.ID, cur.revision+1, opUpdate, string(raw), at, actor, ch)
+		if err := remember(ctx, tx, appID, ch.ID, cur.revision+1, opUpdate, string(raw), at, actor, ch); err != nil {
+			return applied{}, err
+		}
+		return applied{id: ch.ID, revision: cur.revision + 1, data: next, changed: true}, nil
 	}
-	return invalidf("unknown kind of action %q", ch.Kind)
+	return applied{}, invalidf("unknown kind of action %q", ch.Kind)
 }
 
 // The operations a record's history lists.

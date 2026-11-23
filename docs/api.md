@@ -90,6 +90,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_name_length` | 400 | An app's name must have 1 to `max` characters. |
 | `too_many_apps` | 409 | The space has `max` apps. |
 | `app_full` | 409 | The app holds `max_rows` rows or `max_mib` MiB of data. |
+| `app_preview_full` | 409 | A [preview](#post-appsapppreview) holds `max_rows` sample rows already. |
+| `app_preview_too_large` | 413 | A preview's request, with all its sample rows, is over `max_mib` MiB. |
 | `app_forbidden` | 403 | The space allows it, but the caller's roles in the app don't: `capability` is `design`, `publish`, `submit`, `modify_records` or `manage_roles`. |
 | `app_definition_version` | 400 | The definition's `definition_version` is `version`, which this server doesn't read (it reads up to `supported`). |
 | `app_not_published` | 409 | The app has no release yet: it is a draft, so it can't be launched or have its actions run. |
@@ -105,6 +107,11 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
 | `app_migration_invalid` | 400 | An acknowledgement that is malformed: an unknown `change`, a field that is no name, or one twice. |
+| `app_effect_target` | 400 | An effect of the definition targets space `space_id` (or a board of it) that the person saving, publishing or rolling back the app can't use (write, for an effect that makes or moves something; read, for a route). |
+| `app_operation_invalid` | 422 | An action's `operation` isn't 8 to 64 letters, digits, `-` or `_`. |
+| `app_operation_reused` | 409 | The `operation` was used before for a different request. |
+| `app_effects_backlog` | 409 | The app has `max` effects waiting: the action changed nothing. |
+| `app_effect_not_failed` | 409 | Only a failed effect is retried. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
@@ -138,6 +145,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_field_not_barcode` | 422 | The value of `field`, a barcode field, isn't the text of a code (no control characters, within `max_length`), or isn't valid for the `format` the field reads. |
 | `app_field_locked` | 422 | `field` holds a captured location or a signature, which no later change may alter or clear unless the field says `editable`. |
 | `app_signature_type` | 400 | The picture uploaded for a signature field isn't a PNG; the upload is removed. |
+| `offline_downloads_disabled` | 403 | An admin turned off downloading this space's apps for offline use. |
+| `session_account_changed` | 409 | The request names (`X-Taskto-Expected-User`) another account than the session's: a queue made by one account is being sent with another's session. Nothing was done. |
 | `request_too_large` | 413 | The request's body is over `max` bytes. |
 | `doc_not_found` | 404 | No such document, folder or version in the space. |
 | `doc_name_invalid` | 400 | `name` can't be a path in a space: empty parts, `..`, `.git`, `.taskto` (the server's own storage), a leading `/`, backslashes or control characters. |
@@ -239,6 +248,11 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `consent_forbidden` | 403 | Only the space's owner or one of its editors can change its consent. |
 | `consent_no_model` | 409 | The workspace has no embeddings model to consent to. |
 | `consent_endpoint_changed` | 409 | The workspace's embeddings endpoint changed: review it, then consent again. |
+| `notification_not_found` | 404 | The notification isn't the caller's, or is gone. |
+| `push_endpoint_invalid` | 400 | A push subscription's `endpoint` isn't an `https` address of at most 2048 characters without credentials or a fragment. |
+| `push_keys_invalid` | 400 | A push subscription's `keys` aren't a P-256 public key (`p256dh`) and a 16-byte `auth` secret, base64url. |
+| `push_too_many_subscriptions` | 409 | The caller already has push turned on for `max` devices (a device that changes hands counts for its new person). |
+| `push_no_workspace` | 403 | The caller is in no workspace: push is for people who are in one. |
 
 ### Sessions
 
@@ -585,6 +599,7 @@ A space as the caller sees it:
 {
   "id": 4, "workspace_id": 1, "kind": "shared", "name": "Team",
   "archived_at": null, "created_at": "…",
+  "offline_downloads": true,
   "role": "editor", "access": "write"
 }
 ```
@@ -597,6 +612,9 @@ A space as the caller sees it:
   admins see spaces with `none`).
 - `archived_at`: when an admin archived the space, or `null`. Archived spaces are
   read-only, for editors too.
+- `offline_downloads`: whether the space's apps may be [downloaded for offline
+  use](#get-appsappoffline). `true` for a new space and for every private space; an admin
+  turns it off for a shared space whose data shouldn't be kept on devices.
 
 ### `GET /api/workspaces/{workspace}/spaces`
 
@@ -618,8 +636,10 @@ The space, for those who can read it, and for admins if it is shared. `404` othe
 
 ### `PATCH /api/workspaces/{workspace}/spaces/{space}`
 
-Admin only, shared spaces only (`404` for private ones). Renames, archives or unarchives:
-`{"name": "New name"}`, `{"archived": true}`, `{"archived": false}`, or several at once.
+Admin only, shared spaces only (`404` for private ones). Renames, archives or unarchives, and
+allows or refuses offline downloads:
+`{"name": "New name"}`, `{"archived": true}`, `{"archived": false}`,
+`{"offline_downloads": false}`, or several at once.
 Archiving an archived space keeps its first `archived_at`. `200` with the space; `400` for
 an empty body or name.
 
@@ -1319,6 +1339,103 @@ The agent works boards through tools that call the same code, for the user it wo
 and with exactly that user's access. See [boards-agent-tools.md](boards-agent-tools.md)
 and [agent-tools.md](agent-tools.md).
 
+## Notifications
+
+The notification inbox and, for people who opt in, Web Push ([pwa.md](pwa.md#notifications),
+[install.md](install.md#web-push-notifications)). A notification is about one person in one
+workspace: its kind and the IDs of what it is about, never a copy of what the record says. What an
+item says is worked out each time it is read, or pushed, from what the recipient **may read at that
+moment**: once they can't read what it was about (the space's membership ended, the card or app is
+gone, the app's roles changed), the item is `{"kind": "changed"}` with no `params`, no IDs and the
+workspace's home as its target, and a push for it says the same. Notifications are made for:
+
+- `card_assigned`: a card was assigned to you by someone else (`params.title`; target: the card);
+- `app_effect_failed`: an effect of an app you acted in failed for good and waits for you to retry
+  it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one.
+
+Leaving a workspace deletes the person's notifications of it. Old ones are removed after 90 days
+(read) or 180 days, and past 500 per person and workspace. These routes take a session only (`403`
+with an access token) and the CSRF guard checks the ones that change something (send `{}` for a
+body that has no fields).
+
+An item:
+
+```json
+{"id": 12, "workspace_id": 1, "kind": "card_assigned", "params": {"title": "Fix the gate"},
+ "target": {"section": "boards", "item": "3:4:9"}, "read": false, "created_at": "…"}
+```
+
+`target` is an address of the web app under `/w/{workspace_id}/`: its section and item, as the
+app's router reads them. The page it opens checks access again.
+
+### `GET /api/workspaces/{workspace}/notifications`
+
+The caller's notifications in the workspace, newest first: `{"notifications": […], "more": true,
+"unread": 3}`. `limit` (1–50, default 30), `before` (a notification's ID: the page of older ones),
+`unread=true` (unread ones only). `unread` counts all the caller's unread ones, not the page's.
+`400` for a bad `limit` or `before`.
+
+### `GET /api/workspaces/{workspace}/notifications/count`
+
+`{"unread": 3}`: what the badge shows.
+
+### `POST /api/workspaces/{workspace}/notifications/{notification}/read`
+
+Marks one of the caller's notifications read. `204`; `404` for one that is someone else's, in
+another workspace, or gone.
+
+### `POST /api/workspaces/{workspace}/notifications/read`
+
+Marks all the caller's notifications of the workspace read. `204`.
+
+### `GET /api/me/notifications/{notification}`
+
+One notification of the caller's, whatever its workspace, as above: the address a push opens,
+`/notification/{id}`, which holds nothing but this ID. `404` (`notification_not_found`) for
+someone else's.
+
+### Web Push
+
+Push is optional, per device, and never needed: everything above works without it. A push is
+a prompt to look at the inbox, not a message and not a way to sync: the browser's push service
+carries it with a lifetime of an hour and may deliver it late, twice or not at all. What is sent is
+`{"id": 12, "kind": "card_assigned"}` (the kind is `changed` if the recipient may no longer read what
+it was about), encrypted to the browser (RFC 8291, `aes128gcm`), signed with the server's VAPID key
+(RFC 8292). These routes take a session only.
+
+### `GET /api/me/push/key`
+
+`{"public_key": "B…"}`: the server's VAPID public key, base64url, which a browser subscribes with
+(`applicationServerKey`). It is made once, when the server first starts, and its private half is
+sealed with the server key and never returned or logged.
+
+### `PUT /api/me/push/subscription`
+
+Registers the calling browser: `{"endpoint": "https://…", "keys": {"p256dh": "…", "auth": "…"}}`,
+what a browser's `PushSubscription` says (no other fields). `204`. The endpoint, the device's
+identity, is an `https` address of at most 2048 characters (`400 push_endpoint_invalid`), the keys
+a P-256 point and a 16-byte secret (`400 push_keys_invalid`), at most 20 devices per person
+(`409 push_too_many_subscriptions`; registering a device again is not another, but a browser that
+takes over another person's endpoint is one more of its new person's). The endpoint must be an
+address the server may connect to under its [egress policy](install.md#web-push-notifications): a
+loopback, private, link-local or metadata address is `400 egress_refused` here, as it is when a
+push is sent. A person who is in no workspace can't register one (`403 push_no_workspace`). It is
+bound to the session that made it: signing out, a session that expires or ends elsewhere, signing
+out everywhere and a password change remove it, and no push is sent to a subscription whose session
+has expired, even before it is removed (the server sweeps them hourly and checks at each push). A
+browser that is signed in as someone else takes the endpoint over, and what was queued for the
+first person is dropped. Only notifications made after this are pushed to the device.
+
+### `DELETE /api/me/push/subscription`
+
+`{"endpoint": "https://…"}`: removes the caller's subscription for that endpoint. `204`, also for one
+that isn't there or isn't theirs.
+
+Subscriptions also end when the push service answers a push with `404` or `410`, and when the person
+leaves the last workspace they were in. A push that fails with `429` or a server error is tried again
+(at most five tries in all, which holds across a restart, over less than an hour); one refused with another status (`400`, `401`, `403`,
+`413`), or to an address the [egress policy](install.md#web-push-notifications) refuses, is dropped.
+
 ## Personal apps
 
 A personal app is a screen built from a fixed catalog of [A2UI](https://a2ui.org/) v0.9
@@ -1624,6 +1741,7 @@ saying what is wrong) unless:
   gives (blank text clears a field); `delete` removes the row whose `id` it gives; `navigate`
   opens a screen (`"screen"`). An insert, update or delete may say `"then"`, a screen to open
   once it has run.
+- An insert or an update may have **effects**, at most 5 (see [Effects](#effects-of-actions)).
 - **summaries**, at most 20: `{"kind": "count"}` or `{"kind": "sum", "field": …}` of a
   number field, shown as text; `"where"`, a rule, narrows either to the rows it holds of.
 - **contributions** (optional, version 2): what the app offers the platform's [Home page and
@@ -1765,7 +1883,7 @@ app_not_published` before its first release. It draws the **live release**; `?re
 draws the draft, and `?release=<number>` that release (`404 app_release_not_found`), both
 only for those who may design or publish the app (`403 app_forbidden`, `design`) unless the
 number is the live one. The draft is drawn with the app's real rows, to look at: it is for
-previews, and its actions are not run. The data model has the rows the caller may read, and the
+previews, and its actions are not run (to try a draft use [`…/preview`](#post-appsapppreview), which runs on sample rows instead). The data model has the rows the caller may read, and the
 summaries over those rows alone. A client names the release it drew in its actions: it knows
 it from `live.number` of the app it read, which it passes as `?release=`.
 
@@ -1779,6 +1897,78 @@ every row the caller reads; a shortcut draws nothing. It is the app's surface, s
 as it is (`404` for a caller who may not view the app, `409` while it is offline or unpublished),
 and `404 home_widget_not_found` for a widget the release doesn't offer. `widget` can't be
 combined with `release` or `screen` (`400`).
+
+### `GET …/apps/{app}/offline`
+
+Readers of the app. The app's **live release and the records the caller may read**, for the web
+app to keep on the device for [offline use](offline.md). Nothing is stored by the server: it is a
+snapshot, and the writes made against it come back as ordinary
+[actions](#post-appsappactions) under their `operation` keys.
+
+```json
+{
+  "app_id": 9, "space_id": 4, "name": "Expenses", "release": 3,
+  "definition": {
+    "definition_version": 2, "requires": ["component.Column", …],
+    "collection": {"fields": [ … ]}, "entry": "…", "screens": [{"name": "…", "record": true}],
+    "actions": {"add_expense": {"kind": "insert", "then": "…"}},
+    "summaries": {"total": {"kind": "sum", "field": "amount"}}
+  },
+  "messages": [ … ],
+  "scope": "all", "records": 120, "total": 120, "truncated": false,
+  "can_insert": true, "captured_at": "…",
+  "operations": {"off-6b0c…": 118}
+}
+```
+
+- `messages` are the A2UI messages [`…/surface`](#get-appsappsurface) sends for the live release:
+  they draw the app with the downloaded records, and its summaries count **those records only**.
+- `definition` is what a client needs to use the app without the server: what it requires of a
+  client (a client that lacks a capability shows an update-required state instead of the app),
+  the collection, and each action's kind, screens and `then`. It holds none of an action's
+  `effects` (their targets and templates are the server's), and no component.
+- `scope`: `all` records, or only the caller's `own` (from their roles in the app). The records
+  are those of every screen's own filter: none deleted, and each as the screen shows it, with no
+  field the collection doesn't declare and none of another type.
+- At most 2000 records, the latest: `records` is how many were sent, `total` how many the caller
+  reads, `truncated` whether they differ.
+- `can_insert`: the caller may add records now (the submit capability, in a writable space).
+  Offline writes are inserts only.
+- `operations`: which of the downloaded records **the caller's own operations** made: the
+  operation key (see [Replaying an offline insert](#get-appsappoffline)) to the record's id. It
+  names only the caller's operations and only records the download holds. A device that sent a
+  record and downloads again knows by it that its entry for the record and the downloaded record
+  are one.
+
+`403 offline_downloads_disabled` while an admin has [turned downloads
+off](#patch-apiworkspacesworkspacespacesspace) for the space; `404` for a caller who may not view
+the app; `409 app_offline` while it is offline and `409 app_not_published` before its first
+release. A client that holds a download and is refused with `403 offline_downloads_disabled` or
+`404` removes its copy, and one whose copy holds more records than the caller's `read_records`
+now says (`GET …/apps/{app}`) downloads it again.
+
+**Replaying an offline insert.** The client sends the action it queued to
+[`…/actions`](#post-appsappactions) with `release` set to the release its screen was drawn from
+and a stable `operation`. The server records the operation's receipt in the same transaction as
+the record, so sending it again (the answer was lost, the page was reopened) changes nothing and
+is answered `200` with the rows the caller reads **as they are now**, not with the first answer's
+body (the receipt remembers the request and the record it made, not what was answered; a record
+deleted since is simply not among the rows); another request under the same key is `409
+app_operation_reused`.
+
+**For one account.** A request that is sent later than it was made, from a browser whose session
+may have changed hands, says whose it is: the header `X-Taskto-Expected-User` holds the id of the
+account. On any route (an app's replay, uploads and checks, the space's metadata), if the session is
+another account's the answer is `409 session_account_changed` before anything else is looked at (a
+space the session can't open is not a `404` then): nothing is read or written as the wrong
+account, and the client pauses the queue rather than count a failure. The check is made for
+**every `/api` route** that carries the header, not only an app's (the offline client names the
+account on its downloads, on the space and app checks that revalidate them, and on the queue): the
+answer is the same `409` before the route's own checks. A request without the header
+is as it always was; a value that is no account's id is `400`. An insert that names a photo (an attachment id) is accepted only when the
+photo's upload has been finalized (`422 app_attachment_bad` otherwise), which is why the client
+uploads a queued insert's photos, with the resumable [upload routes](#photo-attachments), before
+it sends the insert.
 
 ### `POST …/apps/{app}/actions`
 
@@ -1804,7 +1994,9 @@ its screen was drawn from (`…/surface?release=`); left out, it is the live one
 release the action runs as the live definition says. From another release (the app was
 published or rolled back since the screen was drawn) it runs as *that release* defines it,
 and is **applied only if the live release can take it as it is**: the live release declares
-the same action (same name and kind), every field the action sets is a field the live collection
+the same action (same name, kind and screens it opens; what it sets going besides the change, its
+`effects`, is the live release's whatever the older one said, so a release that only changed those
+refuses nothing), every field the action sets is a field the live collection
 declares with the same type, and an insert gives every field the live collection requires. Then
 the live collection checks **the row the action would store** as always, an insert's and an
 update's alike, whichever release's screen it came from: a required field missing, or a value
@@ -1823,6 +2015,196 @@ stays stored).
 
 An action may be sent with `?widget=<id>` (a widget's actions): it is the same action with the
 same checks, answered with at most 25 rows in `/items`.
+
+### Effects of actions
+
+An insert or an update may declare **effects**: what the change sets going on boards and documents.
+The kinds are a fixed registry, strictly checked when the definition is saved; a key that isn't one
+of a kind's (a URL, a tool name, a command), an unknown `kind` or a hole in a template that isn't a
+field refuses the definition (`400`). A definition with effects needs `definition_version` 2, and
+its release needs the capability `effect.<kind>` of each kind it uses (`requires`).
+
+```json
+"actions": {
+  "submit_inspection": {"kind": "insert", "effects": [
+    {"kind": "create_card", "name": "maintenance", "space_id": 7, "board_id": 12, "column": "todo",
+     "when": {"field": "result", "op": "eq", "value": "fail"},
+     "title": "Fix {{site}} (inspection {{id}})", "body": "Notes: {{notes}}"},
+    {"kind": "create_document", "space_id": 7, "path": "inspections/{{id}}.md", "content": "Site: {{site}}\n"},
+    {"kind": "open_route", "route": "card", "card": "maintenance"}]},
+  "resolve": {"kind": "update", "effects": [{"kind": "update_card", "card": "maintenance", "column": "done"}]}
+}
+```
+
+| `kind` | Takes | Does |
+|---|---|---|
+| `create_card` | `space_id`, `board_id`, `title`, `column`?, `body`?, `docs`?, `name`? | a card on the board; `name` lets other effects refer to the card made for the record |
+| `update_card` | `card`, `column` | moves the card the `create_card` effect called `card` made for the record |
+| `create_document` | `space_id`, `path`, `content`? | a Markdown document, never over another |
+| `open_route` | `route`: `board` (`space_id`, `board_id`), `card` (`card`) or `document` (`space_id`, `path`) | a place to open in the web app, as a kind and IDs; never an address |
+
+Every kind may have `when`, a rule ([Fields and rules](#fields-and-rules)) over the record as the change leaves it: the
+effect applies only then. `title`, `body`, `content`, `path` and `docs` are **templates**: text
+with `{{field}}` holes (a field of the collection, or `id`, the record's number) and nothing else:
+no expressions, no functions, and what fills a hole is never read as a template again. A title is
+put on one line (200 characters), and what fills a hole in a path is made a safe file name, so a
+value can't climb out of the folder.
+
+**What a definition may not do.** It gives no authority. Saving, publishing or rolling back to an app
+whose effects target a space or board the caller can't use is refused (`400 app_effect_target`; the
+same answer for a space they can't read). Each target is checked for each permission an effect needs
+of it (a route that only reads a board doesn't stand in for a card made on it, which writes), as of
+the moment of the write, with the write lock held. Every effect runs as the user who acted, with
+their access **when it runs**.
+
+**The outbox.** When the action changes a record, the change and one entry per effect that applies
+are committed **in the same transaction**. The request answers then; the server's worker does the
+entries afterwards, so they go on when nobody has the app open, and a crash loses none. An action
+may carry an `operation`, its **idempotency key** (8 to 64 letters, digits, `-`, `_`), which a
+client makes once for a press of a button and sends again with every retry of it (the web app keeps
+one key for each submission whose outcome it doesn't know, whatever time the renderer stamped on each
+press, across a refresh or a reopened screen, and makes a new one only after a definite answer: a
+success, or a refusal with a code of its own (`4xx`); a dropped connection, a timeout, a `5xx` or a
+gateway's reply leaves the key to be sent again): a request made again under the same operation (by the
+same user, for the same app) changes nothing, queues nothing and is answered as the first was; one
+made for a different request is `409 app_operation_reused`. A request already made is answered as it
+was even if the live release has changed since (a release that no longer takes the older screen's
+action doesn't turn the retry of a committed request into `409 app_release_outdated`: that is asked
+only of a request not yet made). What makes a request "the same" is the
+release it runs from (the `release` it names, or the live one), the action, its context and its
+`expectedRevision`: the same key and body run by another release is a different request. An action with effects and no `operation` is given one by the server
+(an update made against an `expectedRevision` can't be applied twice anyway). Entries are queued once and
+done at most once to effect: a card carries its entry's key, and an entry's number is never given
+again (even after the cleanup below), so doing the entry again after a crash between making the card
+and noting it finds the card, and no later entry can find an earlier one's; a document's commit names its entry in its message, so an entry found again after a crash between the
+commit and the note that it was done is done at once, **whatever became of the document since** (edited,
+moved, deleted: nothing is written again); a document that is at the path with the very content the
+entry writes is the entry's own too, a different one is never overwritten (`app_effect_doc_exists`); moving a card to the column it is in is nothing to do. An update that left
+the record as it was queues nothing. An action from an older release runs the **live** release's effects.
+
+**The record's card.** The card a `create_card` effect (by its `name`) made for a record is kept in a
+link of its own, made in the same transaction as the card, which the cleanup of entries never
+removes: `update_card` and a route to the card find it there, for as long as the record is. A card
+made later for the same name replaces the link; an entry done again late never takes it back.
+
+**Order.** The `update_card` entries of a card are ordered by their number (the order they were
+queued in). A move is made in one transaction with a note on the link of which entry made it, and
+only if no later entry's move was noted before: an entry that is done again late (its worker died
+before noting it done, and its lease ran out) never undoes what a newer one did; it ends as done and
+moves nothing.
+
+**What happens meanwhile.** Queued entries keep what they were queued with: publishing a new release
+or rolling back neither cancels nor changes them (what they make was filled in from the record when the
+action ran), but what people are shown of them follows the live release (see the listing). Deleting a
+record doesn't remove its entries: the ones that haven't run **fail** with `app_effect_record_gone`
+(nothing is made for a deleted record), and the ones that already ran stay as they are. Restoring a
+record queues nothing and retries nothing; whoever acted retries the failed entries on purpose, as for
+any failure. Entries are cleaned up by their own last activity (queued, tried or retried): finished
+ones 30 days after it, any 90 days after it, so a retry made today is not erased because its request
+is old; an operation goes when none of its entries is left and 30 days passed since the request.
+
+Before an entry runs the worker checks, as the user who acted and as of now, that the app is there and
+online and they may still open it, that they hold the right the action needed (submit for an insert;
+for an update, to change **and** to read the record the entry came from, in the scope their roles give
+them now: their own records or all), that the record is still there, and that they may write the
+target; if not, the entry fails at once with `app_effect_app_access`, `app_effect_app_offline`,
+`app_effect_record_gone` or `app_effect_target_access` and does nothing. The checks are repeated as
+close to the write as the data allows: inside the transaction that makes or moves a card (which holds
+the write lock), and for a document **while the space's write lock is held**, right before the commit,
+so a right withdrawn while the entry waited for the lock stops it. Other
+failures with a code of their own (`app_effect_target_gone`, `app_effect_board_offline`,
+`app_effect_invalid`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
+`app_effect_app_offline`) fail at once too; a failure that may pass (the database was busy, a card
+being changed) is tried again after 5 s, 10 s, 20 s…, at most 5 tries in all (a worker that died on
+the last try doesn't give an entry another: its lease running out fails it), and then is failed
+as `app_effect_gave_up`. A failed entry stays until its user retries it.
+
+An **effect** as the routes list it:
+
+```json
+{"id": 31, "operation": "k3j9x0vq2m", "position": 0, "kind": "create_card", "name": "maintenance",
+ "action": "submit_inspection", "record": 14, "record_revision": 1,
+ "status": "done", "attempts": 1, "next_attempt_at": null, "error": null,
+ "detail": {"title": "Fix East gate (inspection 14)", "column": "todo"},
+ "result": {"workspace_id": 1, "space_id": 7, "board_id": 12, "card_id": 88, "title": "Fix East gate (inspection 14)"},
+ "created_at": "…", "updated_at": "…", "done_at": "…", "can_retry": false}
+```
+
+`status` is `pending`, `running`, `done`, `failed` or, only in a preview, `simulated`. `error` is
+`{"code", "params"}` for a failed entry (and for a pending one that failed before and waits for
+its next try; `next_attempt_at` is then when). `result` is what a done entry made: a card's IDs, a
+document's `space_id` and `path`, a route as `{"kind", "workspace_id", "space_id", "board_id"?, "card_id"?, "path"?}`
+for the web app to turn into its own address, in the workspace the space is in (which may not be the
+app's); it is present only if the caller may read the space it points into.
+
+What an entry says of its target is for those who may read the target **now**, exactly as `result` is:
+for a caller who can't read the space an effect targets, `detail` keeps only the kind of route and
+`error.params` is left out (the status and `error.code` stay). And what the templates made of the
+record's fields (`detail.title`, `detail.path`, a result's `title` and `path`, and the `path` of an
+error's `params`) is shown only while the live release still declares every field the entry was filled
+from, with the type it had: after a release removes or retypes one, those are left out.
+
+#### `GET …/apps/{app}/effects`
+
+Readers of the app: the effects of the records the caller may read (all, or only their own: the
+same filter as the records), newest first, `?status=` (`pending`, `running`, `done`, `failed`, or
+`active` for the two that wait), `?limit=` (1–200, 100), `?before=` (an effect's ID: only older ones,
+to read on past a page): `{"effects": […], "more": false, "active": 2, "failed": 1}`, where `more`
+says older effects match too, and `active` and `failed` count everything the caller may see that waits
+or failed, whatever the page. A record the caller may not read has no effects for them.
+
+#### `GET …/apps/{app}/records/{record}/effects`
+
+The same for one record.
+
+#### `POST …/apps/{app}/effects/{effect}/retry`
+
+Writers; body `{}`. Puts a failed effect back to be done, with its tries counted afresh, and answers
+it. Each time the worker takes an entry it is given a new claim, which only the worker holding it can
+complete or fail, so one slow after its lease ran out can't end a retry made since. Only the **user who acted** may retry it, and only while they hold the right the action needed
+(`403 app_forbidden`, `capability` `retry_effect`, `submit` or `modify_records`; an update needs the
+right to change that record, in the scope their roles give now); `409 app_effect_not_failed` for one
+that didn't fail; `409 app_effects_backlog` when the app already has 500 effects waiting (a retry is
+waiting work like any other); `404` for an effect of a record the caller can't read. The worker checks access again when it runs, so a retry never widens what anyone may do.
+
+#### `POST …/apps/{app}/actions/preview`
+
+Those who may design or publish the app (`403 app_forbidden` otherwise). The same body as an action;
+it is worked out against the **draft** and **does nothing**: no record changes, no operation is
+kept, no entry is queued, no card or document is made. It answers `{"effects": […]}`, the effects
+that would apply, with `status: "simulated"`, what they would make in `detail` (a new record's `id`
+is `new`), and an `error` with the code an effect would fail with if the caller couldn't write its
+target.
+
+### `POST …/apps/{app}/preview`
+
+Tries the draft on **sample rows, not the app's data**. For those who may design or publish the app
+(`403 app_forbidden`, `design`, for anyone else; `404` for an app the caller can't read, or of another
+space or workspace), in a space the caller may read; `409` while the app is offline. The draft is
+drawn or used with rows that the caller keeps and sends back, and the server **reads and writes none
+of the app's rows**: no row is stored, changed or deleted, no revision or history is made, and
+nothing an action could do outside the rows happens, whatever the action is. It changes no state at
+all, which is why it is a `POST`: the sample rows travel in the body.
+
+`{}` starts a preview: the answer's `rows` are a few sample rows made from the draft's collection
+(plausible values of every field, the same each time). `{"rows": [{"id": 1, "revision": 1, "data": {…}}, …],
+"action": {…}}` goes on from those rows: `action` is the A2UI client action a button sent, in the
+form of [`…/actions`](#post-appsappactions), and runs as the **draft** defines it, on the rows
+sent. Without `action` the rows are only drawn. A preview holds at most 100 rows (`409
+app_preview_full`, which names the preview's limit, not a live app's), and its request at most 8 MiB, since it carries every row
+(`413 app_preview_too_large`, unlike the 64 KiB of a definition's body); rows must each have an `id` and a `revision` from 1, an `id` of their own, and fit the
+draft's collection (`422`; a client starts the preview again when the draft changed). A preview holds no photos: the values
+of an `attachment` field, in the rows sent or in an action, are dropped, so a preview never reads or
+returns an attachment of the app, and sample rows have none. An action the
+draft doesn't declare, a value that doesn't fit its field, or a row the sample rows don't have is
+`422`, as in a live app; a stale `expectedRevision` is `409 app_record_conflict`.
+
+`200` with `{"messages": […], "rows": […]}`: the A2UI messages that draw the screen (`createSurface`,
+`updateComponents`, `updateDataModel` for a start, as `…/surface` answers) or update it (as `…/actions`
+does), and the rows as the action left them, to send with the next step. The answer is the same
+for the draft of an app that was never published, which is how it is tried first. The web
+app's builder and its Apps page use this route for every draft they show, and label it a **Preview**
+with sample data, apart from the **Live** release.
 
 ### Photo attachments
 

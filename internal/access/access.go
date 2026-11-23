@@ -99,6 +99,9 @@ type Space struct {
 	Name        string  `json:"name"`
 	ArchivedAt  *string `json:"archived_at"`
 	CreatedAt   string  `json:"created_at"`
+	// OfflineDownloads is whether the space's apps may be downloaded for offline use. A shared
+	// space's admins turn it off; a private space always allows it.
+	OfflineDownloads bool `json:"offline_downloads"`
 	// Role is empty for a shared space the user isn't a member of.
 	Role   Role   `json:"role,omitempty"`
 	Access Access `json:"access"`
@@ -137,7 +140,7 @@ func New(sqlDB *sql.DB, a *auth.Service) *Checker {
 
 // spaceColumns are the columns scanSpace reads, from spaces s, memberships m (the user's
 // membership of the space's workspace) and space_members sm (theirs in the space, if any).
-const spaceColumns = `s.id, s.workspace_id, s.kind, s.name, s.archived_at, s.created_at,
+const spaceColumns = `s.id, s.workspace_id, s.kind, s.name, s.archived_at, s.created_at, s.offline_downloads,
 	CASE WHEN s.kind = 'private' AND s.owner_id = m.user_id THEN 'owner' ELSE coalesce(sm.role, '') END`
 
 // fromSpaceFor joins a space to userID's workspace membership and space membership: a
@@ -152,7 +155,7 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanSpace(row scanner) (Space, error) {
 	var s Space
-	if err := row.Scan(&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.Role); err != nil {
+	if err := row.Scan(&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.OfflineDownloads, &s.Role); err != nil {
 		return Space{}, err
 	}
 	s.Access = s.access()
@@ -269,6 +272,38 @@ func (c *Checker) RequireSpace(need Access, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), spaceKey{}, s)))
 	}))
+}
+
+// ExpectedUserHeader names the account a request is meant for: a client that holds one
+// account's queued work and sends it later (the offline outbox, docs/offline.md) says whose it is,
+// since the browser's session cookie may belong to someone else by then.
+const ExpectedUserHeader = "X-Taskto-Expected-User"
+
+// ExpectUser refuses a request that names, in ExpectedUserHeader, another account than the
+// session's: 409 session_account_changed, before the space or anything in it is looked at, so
+// nothing is read or written as the wrong person and the answer says nothing of what they may
+// see. A request without the header passes unchanged, and one with an unreadable value is a 400.
+// A request without a session is the usual 401.
+func (c *Checker) ExpectUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		want := r.Header.Get(ExpectedUserHeader)
+		if want == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		c.auth.RequireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id, err := strconv.ParseInt(want, 10, 64)
+			if err != nil || id <= 0 {
+				writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, ExpectedUserHeader+" is an account's id")
+				return
+			}
+			if u, _ := auth.UserFrom(r.Context()); u.ID != id {
+				writeError(w, http.StatusConflict, apierr.CodeAccountChanged, "this request is for another account than the one signed in")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})).ServeHTTP(w, r)
+	})
 }
 
 // RequireSpaceAdmin is RequireSpace(Write) for workspace admins only: it answers 403 to

@@ -128,14 +128,15 @@ func (c *Checker) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name     *string `json:"name"`
-		Archived *bool   `json:"archived"`
+		Name             *string `json:"name"`
+		Archived         *bool   `json:"archived"`
+		OfflineDownloads *bool   `json:"offline_downloads"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if req.Name == nil && req.Archived == nil {
-		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "name or archived is required")
+	if req.Name == nil && req.Archived == nil && req.OfflineDownloads == nil {
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "name, archived or offline_downloads is required")
 		return
 	}
 	if req.Name != nil {
@@ -145,7 +146,7 @@ func (c *Checker) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Name = &name
 	}
-	if err := c.updateShared(r.Context(), s.ID, req.Name, req.Archived); err != nil {
+	if err := c.updateShared(r.Context(), s.ID, req.Name, req.Archived, req.OfflineDownloads); err != nil {
 		c.fail(w, r, err)
 		return
 	}

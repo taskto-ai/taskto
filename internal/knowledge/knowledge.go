@@ -320,6 +320,51 @@ func (s *Store) Put(_ context.Context, sp access.Space, name string, content []b
 	})
 }
 
+// PutIf is Put for a Markdown document, with a guard that runs while the space's write lock is
+// held, right before the commit: a caller that must check, as of the moment of the write, that
+// it may still make the change (an authorization that can be withdrawn while the change waits
+// for the lock) does it there. A guard that returns an error stops the change, and the error is
+// returned as it is; nothing is committed. The guard must not call back into the Store.
+func (s *Store) PutIf(_ context.Context, sp access.Space, name string, content []byte, base string, by Author, message string, guard func() error) (Result, error) {
+	if err := s.checkWrite(sp, name, content, by, message); err != nil {
+		return Result{}, err
+	}
+	if err := checkVersion(base); err != nil {
+		return Result{}, err
+	}
+	if !IsMarkdown(name) {
+		return Result{}, fmt.Errorf("%w: a guarded change is for a Markdown document", ErrInvalid)
+	}
+	return s.putIf(sp, name, int64(len(content)), base, by, message, guard, func(r *repo, _ *object.TreeEntry) (plumbing.Hash, error) {
+		return r.storeBlob(content)
+	})
+}
+
+// FindCommit looks through the space's history, newest first, for the commit whose message is
+// exactly message and whose committer is the agent (empty for none): the commit an earlier try
+// of a change made, found again by the message it was given.
+func (s *Store) FindCommit(ctx context.Context, sp access.Space, message, agent string) (Commit, bool, error) {
+	before := ""
+	for {
+		page, err := s.History(ctx, sp, "", before, MaxHistoryLimit)
+		if err != nil {
+			return Commit{}, false, err
+		}
+		for _, c := range page.Commits {
+			if c.Message == message && c.Agent == agent {
+				return c, true, nil
+			}
+		}
+		if page.Next == "" {
+			return Commit{}, false, nil
+		}
+		before = page.Next
+		if err := ctx.Err(); err != nil {
+			return Commit{}, false, err
+		}
+	}
+}
+
 // PutFile is Put for content read from src, of any size up to the largest file: it streams
 // the bytes of a file other than Markdown to disk, without holding them in memory.
 func (s *Store) PutFile(ctx context.Context, sp access.Space, name string, src io.Reader, base string, by Author, message string) (Result, error) {
@@ -387,8 +432,19 @@ func (s *Store) putUnversioned(sp access.Space, name string, sg *staged, base st
 // put creates or replaces name with the blob store makes, as Put describes; adding is the
 // size of what store adds to git.
 func (s *Store) put(sp access.Space, name string, adding int64, base string, by Author, message string, store func(r *repo, cur *object.TreeEntry) (plumbing.Hash, error)) (Result, error) {
+	return s.putIf(sp, name, adding, base, by, message, nil, store)
+}
+
+// putIf is put with a guard, run once the write lock is held and before anything is read or
+// committed: if it returns an error, nothing is written and the error is the result.
+func (s *Store) putIf(sp access.Space, name string, adding int64, base string, by Author, message string, guard func() error, store func(r *repo, cur *object.TreeEntry) (plumbing.Hash, error)) (Result, error) {
 	var res Result
 	err := s.write(sp, adding, true, func(r *repo) error {
+		if guard != nil {
+			if err := guard(); err != nil {
+				return err
+			}
+		}
 		head, err := r.head()
 		if err != nil {
 			return err

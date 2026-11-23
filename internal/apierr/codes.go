@@ -81,21 +81,25 @@ const (
 
 	// Personal apps (internal/apps).
 
-	CodeAppOffline        Code = "app_offline"
-	CodeAppChanged        Code = "app_changed"     // 409, with the app as it is now in "current"
-	CodeAppNameLength     Code = "app_name_length" // params: max
-	CodeTooManyApps       Code = "too_many_apps"   // params: max
-	CodeAppFull           Code = "app_full"        // params: max_rows, max_mib
-	CodeAppRowNotFound    Code = "app_row_not_found"
-	CodeAppRecordConflict Code = "app_record_conflict"  // 409: the record changed since the client read it; params: id, revision
-	CodeAppFieldRequired  Code = "app_field_required"   // params: field
-	CodeAppFieldTooLong   Code = "app_field_too_long"   // params: field, max
-	CodeAppFieldNotNumber Code = "app_field_not_number" // params: field
-	CodeAppFieldTooSmall  Code = "app_field_too_small"  // params: field, min
-	CodeAppFieldTooLarge  Code = "app_field_too_large"  // params: field, max
-	CodeAppFieldNotDate   Code = "app_field_not_date"   // params: field
-	CodeAppFieldNotTime   Code = "app_field_not_time"   // params: field
-	CodeAppFieldNotOption Code = "app_field_not_option" // params: field
+	CodeAppOffline     Code = "app_offline"
+	CodeAppChanged     Code = "app_changed"     // 409, with the app as it is now in "current"
+	CodeAppNameLength  Code = "app_name_length" // params: max
+	CodeTooManyApps    Code = "too_many_apps"   // params: max
+	CodeAppFull        Code = "app_full"        // params: max_rows, max_mib
+	CodeAppRowNotFound Code = "app_row_not_found"
+	// CodeAppPreviewFull is a preview at its own row limit (params: max_rows); CodeAppPreviewTooLarge
+	// a preview's request over its size limit (413; params: max_mib).
+	CodeAppPreviewFull     Code = "app_preview_full"
+	CodeAppPreviewTooLarge Code = "app_preview_too_large"
+	CodeAppRecordConflict  Code = "app_record_conflict"  // 409: the record changed since the client read it; params: id, revision
+	CodeAppFieldRequired   Code = "app_field_required"   // params: field
+	CodeAppFieldTooLong    Code = "app_field_too_long"   // params: field, max
+	CodeAppFieldNotNumber  Code = "app_field_not_number" // params: field
+	CodeAppFieldTooSmall   Code = "app_field_too_small"  // params: field, min
+	CodeAppFieldTooLarge   Code = "app_field_too_large"  // params: field, max
+	CodeAppFieldNotDate    Code = "app_field_not_date"   // params: field
+	CodeAppFieldNotTime    Code = "app_field_not_time"   // params: field
+	CodeAppFieldNotOption  Code = "app_field_not_option" // params: field
 	// CodeAppFieldRequiredWhen is a field the app requires when another field has a value
 	// (params: field).
 	CodeAppFieldRequiredWhen Code = "app_field_required_when"
@@ -103,6 +107,26 @@ const (
 	CodeAppRolesInvalid      Code = "app_roles_invalid"    // 400
 	CodeAppRolesNotMember    Code = "app_roles_not_member" // 400: a role for someone who can't read the space
 	CodeAppRolesLockout      Code = "app_roles_lockout"    // 400: the change would take the caller's own right to manage roles
+
+	// Effects of apps on boards and documents (internal/apps/effects.go, outbox.go).
+
+	CodeAppEffectTarget     Code = "app_effect_target"     // 400: a target the person saving the app can't write; params: space_id
+	CodeAppOperationInvalid Code = "app_operation_invalid" // 422: the operation (idempotency key) isn't 8 to 64 letters, digits, - or _
+	CodeAppOperationReused  Code = "app_operation_reused"  // 409: the operation was used for another request
+	CodeAppEffectsBacklog   Code = "app_effects_backlog"   // 409: too many effects wait; params: max
+	CodeAppEffectNotFailed  Code = "app_effect_not_failed" // 409: only a failed effect is retried
+	// The reasons an effect failed, kept with it and shown by its listing, not answers to a request.
+	CodeAppEffectAppAccess    Code = "app_effect_app_access"    // the user no longer has the access to the app the action needed
+	CodeAppEffectTargetAccess Code = "app_effect_target_access" // the user no longer may write what the effect targets
+	CodeAppEffectTargetGone   Code = "app_effect_target_gone"   // the target board or card is no longer there
+	CodeAppEffectBoardOffline Code = "app_effect_board_offline" // the target board is archived
+	CodeAppEffectInvalid      Code = "app_effect_invalid"       // what the effect makes isn't accepted (a title, a path)
+	CodeAppEffectDocExists    Code = "app_effect_doc_exists"    // a different document is at the path; params: path
+	CodeAppEffectNoCard       Code = "app_effect_no_card"       // the card to change was never made for the record
+	CodeAppEffectCardArchived Code = "app_effect_card_archived" // the card to change is archived
+	CodeAppEffectAppOffline   Code = "app_effect_app_offline"   // the app is offline or its space archived
+	CodeAppEffectRecordGone   Code = "app_effect_record_gone"   // the record it came from was deleted: restore it and retry
+	CodeAppEffectGaveUp       Code = "app_effect_gave_up"       // it kept failing for a reason that may pass: retry it
 
 	// Querying an app's records (internal/apps/query.go).
 
@@ -144,6 +168,11 @@ const (
 	CodeAppFieldNotBarcode     Code = "app_field_not_barcode"     // 400: not a barcode's text, or not valid for the field's format; params: field, format
 	CodeAppFieldLocked         Code = "app_field_locked"          // 400: a captured location or a signature can't be changed once stored; params: field
 	CodeAppSignatureType       Code = "app_signature_type"        // 400: a signature is a PNG picture
+
+	// Offline use of apps (internal/apps/offline.go).
+
+	CodeOfflineDisabled Code = "offline_downloads_disabled" // 403: an admin turned off downloading this space's apps for offline use
+	CodeAccountChanged  Code = "session_account_changed"    // 409: the request was made for another account than the session's (the browser signed in as someone else)
 
 	// Home widgets and navigation pins (internal/apps/home.go).
 
@@ -281,4 +310,12 @@ const (
 	CodeConsentForbidden         Code = "consent_forbidden"
 	CodeConsentNoModel           Code = "consent_no_model"
 	CodeConsentEndpointChanged   Code = "consent_endpoint_changed"
+
+	// Notifications and Web Push (internal/notifications).
+
+	CodeNotificationNotFound     Code = "notification_not_found"      // 404: not the caller's, or gone
+	CodePushEndpointInvalid      Code = "push_endpoint_invalid"       // 400: a subscription's endpoint isn't an https address of at most 2048 characters
+	CodePushKeysInvalid          Code = "push_keys_invalid"           // 400: a subscription's keys aren't a P-256 key and a 16-byte secret
+	CodePushTooManySubscriptions Code = "push_too_many_subscriptions" // 409: the person has the most devices subscribed; params: max
+	CodePushNoWorkspace          Code = "push_no_workspace"           // 403: push is for people in a workspace, and the caller is in none
 )

@@ -1,0 +1,686 @@
+// Sending what was made offline (docs/offline.md, "Sending the queue").
+//
+// The queue is sent in the order it was made, one record at a time, as the signed-in user, with
+// the session the browser holds *now*: nothing about who may do what is remembered from when the
+// record was made, so the server decides again on every send. A record goes to the server in two
+// steps. First its photos, each uploaded through the resumable upload routes (an upload that was
+// interrupted, by the network or by closing the page, goes on from where the server is); the
+// record is sent only once every photo is finalized, so a record never names media that isn't
+// there. Then the action, with the item's own operation key: sending it again (the answer was
+// lost) changes nothing on the server, so a record is made exactly once however often it is sent.
+//
+// What the answer means:
+//   2xx                      synced: the server acknowledged the record (and its photos)
+//   401                      the session ended: sending pauses until someone signs in
+//   session_account_changed  the browser's session is another account's than the queue's:
+//                            sending pauses, and nothing is counted against the item
+//   no answer, 5xx, 408, 425, 429
+//                            transient: try again later, backing off, up to MAX_ATTEMPTS times,
+//                            then it needs attention and the person says when to try again
+//   403, 404                 access was lost (the space, the app, the right to add): the item
+//                            needs attention, and if the app can no longer be opened at all the
+//                            downloaded copy is removed
+//   409 (archived, outdated) and 400/422 (the server refused it)
+//                            needs attention: not retried until the person says so; the input is
+//                            kept
+
+import { ApiError, api, forAccount, SESSION_LOST } from '../api'
+import { UploadCancelled, uploadPhoto } from '../apps/photos'
+import type { Attachment, AttentionReason, ItemError, OfflineStore, OutboxItem } from './store'
+
+export const MAX_ATTEMPTS = 8
+const BASE_DELAY = 2_000
+const MAX_DELAY = 5 * 60_000
+// How long a claim on an item holds without being renewed, and how soon a tab that found another
+// one sending looks again.
+export const LEASE_MS = 30_000
+export const LOCK_RETRY_MS = 1_500
+// The server's answer to a request made for another account than the session's.
+export const ACCOUNT_CHANGED = 'session_account_changed'
+
+// The wait before attempt n+1 after n failures: doubling, capped, with a little jitter so many
+// devices coming back together don't arrive together.
+export function backoff(attempts: number, random: () => number = Math.random): number {
+  const wait = Math.min(MAX_DELAY, BASE_DELAY * 2 ** Math.max(0, attempts - 1))
+  return Math.round(wait * (0.85 + random() * 0.3))
+}
+
+type Outcome =
+  | { kind: 'synced' }
+  | { kind: 'paused' }
+  // The session is another account's: nothing is sent until it is this queue's again.
+  | { kind: 'account' }
+  // Not ours to send now (another tab holds it): left alone, looked at again when its claim ends.
+  | { kind: 'skipped'; until?: number }
+  // `exhausted`: it failed for the last time and now needs attention: the items behind it are not
+  // held back by it.
+  | { kind: 'transient'; error: ItemError; exhausted?: boolean }
+  | { kind: 'attention'; reason: AttentionReason; error: ItemError; revoked?: boolean }
+
+export function describe(e: unknown): ItemError {
+  if (e instanceof ApiError) return { status: e.status, code: e.code, params: e.params, message: e.message }
+  return { message: e instanceof Error ? e.message : String(e) }
+}
+
+// What a failed send means; the item's attachments say whether a photo was the cause.
+export function classify(e: unknown): Outcome {
+  const error = describe(e)
+  if (!(e instanceof ApiError)) return { kind: 'transient', error }
+  const { status, code } = e
+  if (code === ACCOUNT_CHANGED) return { kind: 'account' }
+  if (status === 401) return { kind: 'paused' }
+  if (status >= 500 || status === 408 || status === 425 || status === 429) return { kind: 'transient', error }
+  if (code === 'app_attachment_bad' || code === 'app_upload_state') return { kind: 'attention', reason: 'photo', error }
+  if (status === 403 || status === 404) {
+    if (code === 'space_archived' || code === 'app_offline') return { kind: 'attention', reason: 'archived', error }
+    return {
+      kind: 'attention',
+      reason: 'access',
+      error,
+      revoked: status === 404 || code === 'offline_downloads_disabled',
+    }
+  }
+  if (code === 'app_offline' || code === 'space_archived') return { kind: 'attention', reason: 'archived', error }
+  if (code === 'app_release_outdated' || code === 'app_not_published' || code === 'app_release_not_found') {
+    return { kind: 'attention', reason: 'outdated', error }
+  }
+  return { kind: 'attention', reason: 'refused', error }
+}
+
+export type SyncStatus = {
+  // Why nothing is being sent, if so: the session ended, the browser is signed in as someone
+  // else than the queue's owner, or the person said so.
+  paused: null | 'session' | 'account' | 'manual'
+  running: boolean
+  // The browser's own idea of the network: a hint, never proof.
+  online: boolean
+}
+
+export type SyncDeps = {
+  now?: () => number
+  // Where the timer is: a test's own.
+  setTimer?: (fn: () => void, ms: number) => unknown
+  clearTimer?: (handle: unknown) => void
+  upload?: typeof uploadPhoto
+  request?: typeof api
+  random?: () => number
+  // Called when the server says the app can't be opened any more: its downloaded copy goes.
+  onRevoked?: (item: OutboxItem, why: ItemError) => void | Promise<void>
+  // The account this browser says is signed in now (null: nobody knows). A queue is sent only as
+  // its owner: when this says someone else, sending pauses before a request is made.
+  signedIn?: () => number | null
+  // Asks the server whether what the device holds may still be held. Called when the network comes
+  // back, before the queue is sent.
+  revalidate?: () => Promise<unknown>
+  // Runs fn every ms until the returned function is called: what keeps an item's claim alive while
+  // its request is in flight. A test's own.
+  heartbeat?: (fn: () => void, ms: number) => () => void
+}
+
+const realHeartbeat = (fn: () => void, ms: number) => {
+  const handle = setInterval(fn, ms)
+  return () => clearInterval(handle)
+}
+
+// An item's claim is no longer ours: another tab has it, so nothing of this send is written.
+class LeaseLost extends Error {}
+
+const randomId = () => {
+  const bytes = new Uint8Array(8)
+  globalThis.crypto.getRandomValues(bytes)
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+export class SyncEngine {
+  private listeners = new Set<() => void>()
+  private timer: unknown
+  private running = false
+  // Something asked to send while a pass was running: another pass follows it.
+  private rerun = false
+  private paused: SyncStatus['paused'] = null
+  private stopped = false
+  // Who holds the claims this engine makes on items.
+  private readonly owner = randomId()
+  private readonly now: () => number
+  private readonly upload: typeof uploadPhoto
+  private readonly request: typeof api
+  private lastRenew = 0
+  // The requests of sends in flight: aborted when the claim is lost, or the engine stops.
+  private readonly inflight = new Set<AbortController>()
+  // Settles when the pass that is running is over.
+  private active: Promise<void> | undefined
+  // The earliest that a pass that found another tab sending looks again.
+  private lockedUntil: number | undefined
+
+  constructor(
+    private readonly store: OfflineStore,
+    private readonly deps: SyncDeps = {},
+  ) {
+    this.now = deps.now ?? Date.now
+    this.upload = deps.upload ?? uploadPhoto
+    this.request = deps.request ?? api
+  }
+
+  status(): SyncStatus {
+    return {
+      paused: this.paused,
+      running: this.running,
+      online: typeof navigator === 'undefined' || navigator.onLine !== false,
+    }
+  }
+
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn)
+    return () => this.listeners.delete(fn)
+  }
+
+  private emit() {
+    for (const fn of [...this.listeners]) fn()
+  }
+
+  // Whether the browser's signed-in account is this queue's owner (or isn't known to be anyone
+  // else): a queue is only ever sent as its owner.
+  private ownerSignedIn(): boolean {
+    const who = this.deps.signedIn?.()
+    return who === undefined || who === null || who === this.store.user
+  }
+
+  // Every request made for the queue says whose it is: the server refuses it for any other session.
+  private get headers() {
+    return forAccount(this.store.user)
+  }
+
+  // Starts sending whenever there is something to send: now, when the network comes back, when the
+  // page comes to the front, and when an item's wait is over.
+  start(): () => void {
+    this.stopped = false
+    const kick = () => void this.run()
+    // The network is back: what the device holds is asked about first (a copy may have been
+    // revoked, and an account may have changed meanwhile), then the queue is sent.
+    const online = () => void this.revalidated().then(() => this.run())
+    window.addEventListener('online', online)
+    const visible = () => document.visibilityState === 'visible' && kick()
+    document.addEventListener('visibilitychange', visible)
+    const lost = () => this.pause('session')
+    window.addEventListener(SESSION_LOST, lost)
+    // Another tab signed in as someone else: this queue stops being sent from here at once.
+    const storage = () => {
+      if (!this.ownerSignedIn() && !this.paused) this.pause('account')
+    }
+    window.addEventListener('storage', storage)
+    kick()
+    return () => {
+      this.stopped = true
+      for (const c of this.inflight) c.abort()
+      window.removeEventListener('online', online)
+      document.removeEventListener('visibilitychange', visible)
+      window.removeEventListener(SESSION_LOST, lost)
+      window.removeEventListener('storage', storage)
+      this.clear()
+    }
+  }
+
+  // Resolves once the pass that is running (if any) has written what it was doing: what a page
+  // letting go of this engine waits for before closing the database.
+  idle(): Promise<void> {
+    return this.active && this.running ? this.active : Promise.resolve()
+  }
+
+  // Asks the server whether what the device holds may still be held, once at a time: a pass that
+  // starts while it is in flight (the page coming to the front, a timer, the person's own "try
+  // again") waits for it, so nothing is sent on the strength of an answer not yet given.
+  private revalidating: Promise<void> | undefined
+  private revalidated(): Promise<void> {
+    if (this.stopped || this.paused || !this.deps.revalidate) return Promise.resolve()
+    this.revalidating ??= (async () => {
+      try {
+        await this.deps.revalidate?.()
+      } catch {
+        // The server can't be asked, or the database is closed: the queue's own sends find out.
+      }
+    })().finally(() => {
+      this.revalidating = undefined
+    })
+    return this.revalidating
+  }
+
+  pause(reason: 'session' | 'account' | 'manual') {
+    this.paused = reason
+    this.clear()
+    this.emit()
+  }
+
+  // Sending goes on: someone signed in again (the session paused for), or the person said so.
+  resume() {
+    this.paused = null
+    this.emit()
+    void this.run()
+  }
+
+  private clear() {
+    if (this.timer !== undefined) (this.deps.clearTimer ?? clearTimeout)(this.timer as never)
+    this.timer = undefined
+  }
+
+  private schedule(at: number) {
+    if (this.stopped || this.paused) return
+    this.clear()
+    const ms = Math.max(0, at - this.now())
+    this.timer = (this.deps.setTimer ?? setTimeout)(() => {
+      this.timer = undefined
+      void this.run()
+    }, ms)
+  }
+
+  // "Try again now": an item that waits for its next attempt, or needs attention, is sent at once.
+  async retry(id?: string): Promise<void> {
+    for (const item of await this.store.listItems()) {
+      if (id !== undefined && item.id !== id) continue
+      if (item.state === 'queued' || item.state === 'attention') {
+        // Decided on the item as it is stored: one a tab just synced is never put back.
+        await this.store.updateItem(item.id, (i) =>
+          i.state !== 'queued' && i.state !== 'attention'
+            ? undefined
+            : {
+                ...i,
+                state: 'queued',
+                attempts: 0,
+                nextAttemptAt: undefined,
+                attention: undefined,
+                error: undefined,
+                // A photo that was refused is uploaded again from the start.
+                attachments: i.attachments.map((a) =>
+                  a.state === 'uploaded' && !a.serverId ? { ...a, state: 'pending' } : a,
+                ),
+              },
+        )
+      }
+    }
+    if (this.paused === 'manual') this.paused = null
+    await this.run()
+  }
+
+  // Holds an item as a local draft: it stays on this device and isn't sent until it is sent on purpose.
+  async hold(id: string): Promise<void> {
+    await this.store.updateItem(id, (i) =>
+      i.state === 'synced' || i.state === 'syncing' ? undefined : { ...i, state: 'draft' },
+    )
+    this.emit()
+  }
+
+  async release(id: string): Promise<void> {
+    await this.store.updateItem(id, (i) =>
+      i.state === 'draft' ? { ...i, state: 'queued', attempts: 0, nextAttemptAt: undefined } : undefined,
+    )
+    await this.run()
+  }
+
+  // Sends what is waiting. One run at a time here and, where the browser has Web Locks, in all of
+  // this user's tabs (two tabs sending the same item would still make it once, by the operation
+  // key, but would upload its photos twice: the claims on items are what keeps that from
+  // happening where there are no locks). A run goes on until nothing is left to send: an item
+  // added while it ran is sent by it, and a call made during a run makes another follow.
+  async run(): Promise<void> {
+    if (this.stopped || this.paused) return
+    if (this.running) {
+      this.rerun = true
+      return
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+    this.running = true
+    this.emit()
+    let finished: () => void = () => {}
+    this.active = new Promise<void>((resolve) => {
+      finished = resolve
+    })
+    // When to look again, apart from the items' own waits: a claim that ends, a tab that is sending.
+    let wake: number | undefined
+    this.lockedUntil = undefined
+    try {
+      do {
+        this.rerun = false
+        wake = await this.pass()
+      } while (this.rerun && !this.stopped && !this.paused)
+    } catch {
+      // The database was closed (signing out, or deleted by another tab) while this ran.
+    } finally {
+      this.running = false
+      finished()
+      this.emit()
+    }
+    // Wake up when the first item that is waiting is due.
+    try {
+      const waiting = (await this.store.listItems())
+        .filter((i) => i.state === 'queued' && i.nextAttemptAt !== undefined)
+        .map((i) => i.nextAttemptAt as number)
+      let at = Math.min(...waiting, wake ?? Number.POSITIVE_INFINITY)
+      // Another tab holds the lock: no sooner than the retry delay, whatever an item's own wait
+      // says (one that is already over would make this look again at once, for ever).
+      if (this.lockedUntil !== undefined) at = Math.max(at, this.lockedUntil)
+      if (Number.isFinite(at)) this.schedule(at)
+    } catch {
+      // The database was closed (signing out) while this pass ran: nothing is waiting any more.
+    }
+  }
+
+  private due(item: OutboxItem): boolean {
+    const sendable = item.state === 'queued' || item.state === 'syncing'
+    return sendable && !(item.nextAttemptAt !== undefined && item.nextAttemptAt > this.now())
+  }
+
+  // One tab at a time sends, where Web Locks say so; the answer is when to look again, if
+  // something was left that this didn't send.
+  private async pass(): Promise<number | undefined> {
+    // What the device holds is asked about before anything is sent, whoever asked for the pass.
+    if (this.revalidating) await this.revalidating
+    if (this.stopped || this.paused) return undefined
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+    if (!locks) return this.sendAll(false)
+    let wake: number | undefined
+    await locks.request(`taskto-outbox-${this.store.user}`, { ifAvailable: true }, async (lock) => {
+      if (lock) {
+        wake = await this.sendAll(true)
+        return
+      }
+      // Another tab is sending: this one's items are its to send as well, if it gets to them. A tab
+      // that skipped doesn't just trust that: it looks again soon, and the lock's holder may have
+      // been past the point where it would have seen an item added a moment ago.
+      if ((await this.store.listItems()).some((i) => this.due(i))) {
+        wake = this.now() + LOCK_RETRY_MS
+        this.lockedUntil = wake
+      }
+    })
+    return wake
+  }
+
+  // Sends the items in the order they were made, until none is left that can be sent now. An item
+  // is looked for again after each send, so one made meanwhile is found. `exclusive`: a lock says
+  // nobody else is sending, so a claim another page left behind (it was closed) is taken at once.
+  private async sendAll(exclusive: boolean): Promise<number | undefined> {
+    const done = new Set<string>()
+    let wake: number | undefined
+    for (;;) {
+      if (this.stopped || this.paused) return wake
+      // The queue is the signed-in account's: when someone else is, it waits for its owner.
+      if (!this.ownerSignedIn()) {
+        this.pause('account')
+        return wake
+      }
+      const next = (await this.store.listItems()).find((i) => !done.has(i.id) && this.due(i))
+      if (!next) return wake
+      done.add(next.id)
+      const outcome = await this.send(next, exclusive)
+      if (outcome.kind === 'paused') {
+        this.pause('session')
+        return wake
+      }
+      if (outcome.kind === 'account') {
+        this.pause('account')
+        return wake
+      }
+      if (outcome.kind === 'skipped' && outcome.until !== undefined) {
+        wake = Math.min(wake ?? Number.POSITIVE_INFINITY, outcome.until)
+      }
+      // The network is down: the items behind this one would find the same. (An item that has run
+      // out of tries is the person's to deal with now: it holds nothing back.)
+      if (outcome.kind === 'transient' && !outcome.exhausted) return wake
+    }
+  }
+
+  // The claim on an item, made in its own transaction: taken if nobody holds it, if the holder's
+  // time has run out, or if it is ours already (or we hold the lock). Not taken otherwise.
+  private claim(i: OutboxItem, exclusive: boolean): OutboxItem | undefined {
+    const now = this.now()
+    if (i.state === 'queued') {
+      if (i.nextAttemptAt !== undefined && i.nextAttemptAt > now) return undefined
+    } else if (i.state === 'syncing') {
+      // A `syncing` item found here is being sent by a tab, or was by a page that was closed.
+      if (!exclusive && i.lease && i.lease.owner !== this.owner && i.lease.until > now) return undefined
+    } else {
+      return undefined
+    }
+    return { ...i, state: 'syncing', lease: { owner: this.owner, until: now + LEASE_MS } }
+  }
+
+  // Changes an item only while the claim is ours (and the server hasn't acknowledged it): what a
+  // send that lost its claim would write is never written.
+  private async owned(id: string, change: (i: OutboxItem) => OutboxItem): Promise<OutboxItem> {
+    // An engine that was stopped writes nothing more.
+    if (this.stopped) throw new LeaseLost()
+    let held = true
+    const saved = await this.store.updateItem(id, (i) => {
+      if (i.state === 'synced' || i.lease?.owner !== this.owner) {
+        held = false
+        return undefined
+      }
+      return change(i)
+    })
+    if (!held || !saved) throw new LeaseLost()
+    return saved
+  }
+
+  // Keeps the claim while a long upload goes on.
+  private async renew(id: string, force = false): Promise<void> {
+    const now = this.now()
+    if (!force && now - this.lastRenew < LEASE_MS / 3) return
+    this.lastRenew = now
+    await this.owned(id, (i) => ({ ...i, lease: { owner: this.owner, until: now + LEASE_MS } }))
+  }
+
+  private async send(start: OutboxItem, exclusive: boolean): Promise<Outcome> {
+    const id = start.id
+    const claimed = await this.store.updateItem(id, (i) => this.claim(i, exclusive))
+    if (claimed?.state !== 'syncing' || claimed.lease?.owner !== this.owner) {
+      return { kind: 'skipped', until: claimed?.state === 'syncing' ? claimed.lease?.until : undefined }
+    }
+    this.lastRenew = this.now()
+    // The claim is kept for as long as this send is in flight, on a clock of its own: a request
+    // that stalls (a chunk that never answers) makes no progress to renew on, and a lease that ran
+    // out would let another tab start the same upload. If the claim is lost anyway (another tab
+    // took it, the item was discarded) the request is aborted at once.
+    const abort = new AbortController()
+    let lost = false
+    this.inflight.add(abort)
+    const beat = (this.deps.heartbeat ?? realHeartbeat)(() => {
+      this.renew(id, true).catch((e) => {
+        if (e instanceof LeaseLost || this.stopped) {
+          lost = true
+          abort.abort()
+        }
+      })
+    }, LEASE_MS / 3)
+    try {
+      // Photos first: the record is sent once every one of them is finalized on the server.
+      for (const a of claimed.attachments) {
+        const current = (await this.store.getItem(id))?.attachments.find((x) => x.localId === a.localId)
+        if (!current || (current.state === 'uploaded' && current.serverId)) continue
+        await this.uploadOne(claimed, current, abort.signal)
+      }
+      const fresh = await this.store.getItem(id)
+      if (!fresh) return { kind: 'synced' }
+      if (fresh.attachments.some((a) => !(a.state === 'uploaded' && a.serverId))) {
+        throw new ApiError(0, 'a photo is not on the server', { code: 'app_attachment_bad' })
+      }
+      // Still ours? If another tab took over, it sends: this one stops before it asks the server.
+      await this.renew(id, true)
+      await this.request(`${fresh.base}/actions`, {
+        method: 'POST',
+        // The photos are the ones persisted on the item: a retry sends the same request.
+        body: { ...withServerPhotos(fresh), release: fresh.release, operation: fresh.operation },
+        headers: this.headers,
+        signal: abort.signal,
+      })
+      // Stopped, or the claim lost, while the answer came in: it is not written (the item is sent
+      // again by whoever has it next, and the server answers the same operation the same way).
+      if (abort.signal.aborted) throw new DOMException('the send was aborted', 'AbortError')
+      // The server's answer is what makes it synced, whoever holds the claim now.
+      await this.store.updateItem(id, (i) => ({
+        ...i,
+        state: 'synced',
+        syncedAt: new Date(this.now()).toISOString(),
+        attempts: i.attempts + 1,
+        nextAttemptAt: undefined,
+        attention: undefined,
+        error: undefined,
+        lease: undefined,
+      }))
+      await this.store.dropBlobs(id)
+      return { kind: 'synced' }
+    } catch (e) {
+      // A send whose engine stopped writes nothing and lets its claim go; one that lost its claim
+      // writes nothing either: another tab has it.
+      if (this.stopped && abort.signal.aborted) return await this.letGo(id)
+      if (lost || e instanceof LeaseLost) return { kind: 'skipped' }
+      if (e instanceof UploadCancelled) return { kind: 'transient', error: describe(e) }
+      // Awaited here, inside the try: the request is in flight (and abortable) until it is over.
+      return await this.failed(id, e, abort.signal, () => lost)
+    } finally {
+      beat()
+      this.inflight.delete(abort)
+    }
+  }
+
+  // The claim is let go, so the item is the next sender's at once, not when the lease runs out.
+  // (Nothing is counted against it.)
+  private async letGo(id: string): Promise<Outcome> {
+    await this.store
+      .updateItem(id, (i) =>
+        i.state === 'syncing' && i.lease?.owner === this.owner
+          ? { ...i, state: 'queued', lease: undefined }
+          : undefined,
+      )
+      .catch(() => {})
+    return { kind: 'skipped' }
+  }
+
+  private async uploadOne(item: OutboxItem, a: Attachment, signal: AbortSignal): Promise<void> {
+    const blob = await this.store.getBlob(a.blobId)
+    if (!blob) throw new ApiError(0, 'the photo is no longer on this device', { code: 'app_attachment_bad' })
+    await this.patchAttachment(item.id, a.localId, { state: 'uploading' })
+    const done = await this.upload(item.base, a.field, blob, {
+      resume: a.uploadId,
+      onStarted: (uploadId) => void this.patchAttachment(item.id, a.localId, { uploadId }).catch(() => {}),
+      onProgress: () => void this.renew(item.id).catch(() => {}),
+      headers: this.headers,
+      signal,
+      retries: 2,
+    })
+    // The first finalized id an item gets is the one it keeps: a send made again (after a failure, by
+    // another page) is the same request, and the server holds the first answer for its operation.
+    await this.owned(item.id, (i) => ({
+      ...i,
+      attachments: i.attachments.map((x) =>
+        x.localId === a.localId
+          ? x.serverId
+            ? x
+            : { ...x, state: 'uploaded', serverId: done.id, uploadId: done.id }
+          : x,
+      ),
+    }))
+  }
+
+  private patchAttachment(id: string, localId: string, change: Partial<Attachment>) {
+    return this.owned(id, (i) => ({
+      ...i,
+      // A photo the server has finalized stays so.
+      attachments: i.attachments.map((a) => (a.localId === localId && !a.serverId ? { ...a, ...change } : a)),
+    }))
+  }
+
+  // Whether what a send found out is still to be acted on: this engine runs, the send's own request
+  // wasn't aborted (it stopped, or the claim was lost), and the account signed in here is the
+  // queue's owner. Checked after every wait, before anything is written or deleted.
+  private live(signal: AbortSignal): boolean {
+    return !this.stopped && !signal.aborted && this.ownerSignedIn()
+  }
+
+  // Records what a failed send means for the item, and acts on a revocation.
+  private async failed(id: string, e: unknown, signal: AbortSignal, lost: () => boolean): Promise<Outcome> {
+    let outcome = classify(e)
+    // A 403 or 404 only means the app can't be reached *now*: it is confirmed by asking for the
+    // app itself, which is answered for anyone who may open it.
+    if (outcome.kind === 'attention' && outcome.reason === 'access') {
+      const item = await this.store.getItem(id)
+      if (item) {
+        const revoked = await this.revoked(item, signal)
+        // An answer that came after this send was let go of says nothing that may be acted on.
+        if (!this.live(signal)) return lost() ? { kind: 'skipped' } : this.letGo(id)
+        outcome = { ...outcome, revoked }
+        if (revoked) await this.deps.onRevoked?.(item, outcome.error)
+      }
+    }
+    if (!this.live(signal)) return lost() ? { kind: 'skipped' } : this.letGo(id)
+    // The wrong account is not the item's failure: it waits, as it was, for its owner.
+    const result = outcome
+    try {
+      await this.owned(id, (i) => {
+        const free = { ...i, lease: undefined }
+        switch (result.kind) {
+          case 'paused':
+          case 'account':
+            // Waits for the next session: not a failed attempt.
+            return { ...free, state: 'queued' }
+          case 'transient': {
+            const attempts = i.attempts + 1
+            if (attempts >= MAX_ATTEMPTS) {
+              result.exhausted = true
+              return {
+                ...free,
+                state: 'attention',
+                attention: 'gave_up',
+                attempts,
+                nextAttemptAt: undefined,
+                error: result.error,
+              }
+            }
+            return {
+              ...free,
+              state: 'queued',
+              attempts,
+              nextAttemptAt: this.now() + backoff(attempts, this.deps.random),
+              error: result.error,
+            }
+          }
+          case 'attention':
+            return {
+              ...free,
+              state: 'attention',
+              attention: result.reason,
+              nextAttemptAt: undefined,
+              error: result.error,
+              // A photo the server no longer has is uploaded again when the person retries.
+              attachments:
+                result.reason === 'photo'
+                  ? i.attachments.map((a) => ({ ...a, state: 'pending', uploadId: undefined, serverId: undefined }))
+                  : i.attachments,
+            }
+          default:
+            return i
+        }
+      })
+    } catch (err) {
+      if (!(err instanceof LeaseLost)) throw err
+    }
+    return outcome
+  }
+
+  private async revoked(item: OutboxItem, signal: AbortSignal): Promise<boolean> {
+    try {
+      await this.request(item.base, { headers: this.headers, signal })
+      return false
+    } catch (e) {
+      return e instanceof ApiError && (e.status === 403 || e.status === 404)
+    }
+  }
+}
+
+// The action to send: the context's local photo ids replaced by the server's.
+export function withServerPhotos(item: OutboxItem): OutboxItem['action'] {
+  const server = new Map(item.attachments.map((a) => [a.localId, a.serverId]))
+  const context = { ...item.action.context }
+  for (const a of item.attachments) {
+    const list = context[a.field]
+    if (Array.isArray(list)) context[a.field] = list.map((x) => (typeof x === 'string' ? (server.get(x) ?? x) : x))
+  }
+  return { ...item.action, context }
+}

@@ -249,6 +249,31 @@ textarea {
   flex-shrink: 0;
 }
 
+/* The inbox's bell in the top bar, with the count of unread notifications. */
+.tt-bell {
+  position: relative;
+  text-decoration: none;
+}
+
+.tt-bell[aria-current="page"] {
+  background: var(--tt-hover);
+}
+
+.tt-badge {
+  position: absolute;
+  inset-block-start: 0.15rem;
+  inset-inline-end: 0.1rem;
+  min-width: 1.1rem;
+  padding-inline: 0.25rem;
+  border-radius: 999px;
+  background: var(--tt-danger);
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 1.1rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Fingers: every control is at least 44px each way (--tt-touch). */
 @media (pointer: coarse) {
   input,
@@ -1980,6 +2005,205 @@ fieldset {
   overflow-wrap: anywhere;
 }
 
+/* The app builder: the conversation beside a live preview of the draft; on a phone, Build and
+   Preview are tabs, and both panes stay drawn (the hidden one is only out of sight and out of
+   reach) so neither loses its scroll or its form when you switch. */
+
+.tt-builder {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.tt-builder-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 1.25rem;
+  border-block-end: 1px solid var(--tt-line);
+}
+
+.tt-builder-bar h1 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.tt-builder-tabs {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.tt-builder-tabs [role="tab"] {
+  min-height: var(--tt-touch);
+  position: relative;
+}
+
+.tt-builder-tabs [role="tab"][aria-selected="true"] {
+  border-color: var(--tt-accent);
+  font-weight: 600;
+}
+
+.tt-builder-dot {
+  display: inline-block;
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  margin-inline-start: 0.4rem;
+  border-radius: 50%;
+  background: var(--tt-accent);
+}
+
+.tt-builder-panes {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(18rem, 1fr) minmax(0, 1fr);
+}
+
+.tt-builder-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.tt-builder-pane:focus {
+  outline: none;
+}
+
+.tt-builder-pane:focus-visible {
+  outline: 2px solid var(--tt-accent);
+  outline-offset: -2px;
+}
+
+.tt-builder-pane[data-pane="build"] {
+  border-inline-end: 1px solid var(--tt-line);
+}
+
+.tt-builder-pane[data-pane="build"] > .tt-chat {
+  height: 100%;
+}
+
+.tt-builder-preview {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+  padding: 0.75rem 1.25rem calc(1rem + env(safe-area-inset-bottom));
+}
+
+.tt-builder-preview .tt-app {
+  overflow: auto;
+}
+
+.tt-builder-app {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.tt-stage[data-stage="draft"] {
+  padding: 0.6rem;
+  border: 1px dashed var(--tt-warning);
+  border-radius: var(--tt-radius);
+}
+
+.tt-publish {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-publish h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.tt-publish-summary {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+}
+
+.tt-publish-summary dt {
+  font-weight: 600;
+}
+
+.tt-publish-summary dd {
+  margin: 0 0 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+.tt-publish-summary p,
+.tt-publish-summary ul {
+  margin: 0 0 0.25rem;
+}
+
+.tt-published {
+  margin: 0;
+  color: var(--tt-success);
+}
+
+.tt-builder-start {
+  max-inline-size: 42rem;
+}
+
+.tt-builder-form,
+.tt-builder-where {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tt-builder-where {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-builder-where p {
+  margin: 0;
+}
+
+.tt-field {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.tt-field textarea {
+  inline-size: 100%;
+  resize: vertical;
+}
+
+/* A phone: one pane at a time. The one that isn't shown is still laid out and keeps its scroll,
+   only out of sight and out of reach (it is also `inert`, so it can't be tabbed to or heard). */
+.tt-builder[data-narrow] .tt-builder-bar {
+  padding-inline: 0.75rem;
+}
+
+.tt-builder[data-narrow] .tt-builder-panes {
+  position: relative;
+  display: block;
+}
+
+.tt-builder[data-narrow] .tt-builder-pane {
+  position: absolute;
+  inset: 0;
+}
+
+.tt-builder[data-narrow] .tt-builder-pane[data-active="false"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.tt-builder[data-narrow] .tt-builder-pane[data-pane="build"] {
+  border-inline-end: 0;
+}
+
+.tt-builder[data-narrow] .tt-builder-preview {
+  padding-inline: 0.75rem;
+}
+
 /* Phones: the sidebar is a drawer, and one pane at a time. */
 
 @media (max-width: 48rem) {
@@ -2536,6 +2760,82 @@ html[data-keyboard="open"] .tt-composer {
   }
 }
 
+/* Effects of an app's actions: what they set going, and the ones that failed. */
+
+.tt-effects,
+.tt-effects-panel,
+.tt-effects-preview {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.tt-effects > .tt-button {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tt-effects-panel,
+.tt-effects-preview {
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-effects-badge {
+  font-size: 0.8em;
+  color: var(--tt-muted);
+}
+
+.tt-effects-badge[data-failed="true"] {
+  color: var(--tt-danger, inherit);
+  font-weight: 600;
+}
+
+.tt-effect-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-effect {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  min-inline-size: 0;
+}
+
+.tt-effect[data-status="failed"] {
+  border-color: var(--tt-danger, var(--tt-line));
+}
+
+.tt-effect-head,
+.tt-effect-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tt-effect-detail {
+  overflow-wrap: anywhere;
+}
+
+.tt-effect-status {
+  font-size: 0.8em;
+  padding-inline: 0.45rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 999px;
+}
+
 /* Pinned apps: a section of their own in the navigation, after the platform's pages. A pin's label
    is text, cut with an ellipsis rather than letting it stretch the menu. */
 .tt-pins {
@@ -2699,4 +2999,117 @@ html[data-keyboard="open"] .tt-composer {
   border: 1px solid var(--tt-line);
   border-radius: var(--tt-radius);
   background: var(--tt-surface);
+}
+
+/* Offline use (docs/offline.md): the download panel, the queue of records made on this device, and
+   the warning before signing out with some that were not sent. */
+
+.tt-offline {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-offline-ready {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.tt-offline-saved {
+  margin: 0;
+  color: var(--tt-success);
+  font-weight: 600;
+}
+
+.tt-outbox {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-outbox-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-outbox-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 0.5rem;
+}
+
+.tt-outbox-name {
+  flex: 1 1 12rem;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-stage-label[data-state="synced"] {
+  color: var(--tt-success);
+  border-color: currentColor;
+}
+
+.tt-stage-label[data-state="attention"] {
+  color: var(--tt-danger);
+  border-color: currentColor;
+}
+
+.tt-stage-label[data-state="queued"],
+.tt-stage-label[data-state="syncing"],
+.tt-stage-label[data-state="draft"] {
+  color: var(--tt-warning);
+  border-color: currentColor;
+}
+
+.tt-guard {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: var(--tt-scrim);
+}
+
+.tt-guard-box {
+  display: grid;
+  gap: 0.75rem;
+  inline-size: min(32rem, 100%);
+  max-block-size: 100%;
+  overflow: auto;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--tt-line-strong);
+  border-radius: 0.75rem;
+  background: var(--tt-surface);
+  color: var(--tt-fg);
+}
+
+/* An unread item of the inbox is set in bold with a mark before it, which a screen reader gets as
+   text (the link says "Unread"). */
+.tt-inbox [data-unread] .tt-inbox-link {
+  font-weight: 600;
+}
+
+.tt-inbox [data-unread] .tt-row-main::before {
+  content: "";
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  border-radius: 50%;
+  background: var(--tt-accent);
+  position: absolute;
+  inset-inline-start: -0.9rem;
+  inset-block-start: 1rem;
+}
+
+.tt-inbox {
+  padding-inline-start: 1rem;
+}
+
+.tt-inbox .tt-row {
+  position: relative;
 }

@@ -4,6 +4,7 @@
 
 import { useState } from 'react'
 import { api, type Conversation, errorText, ws } from '../api'
+import { builderPath } from '../apps/route'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Link, navigate, routePath } from '../router'
@@ -68,6 +69,10 @@ export function ConversationsPage({
             <Icon name="plus" />
             {t('conversations.new')}
           </button>
+          <Link className="tt-button" href={builderPath(workspace)}>
+            <Icon name="apps" />
+            {t('apps.builder.build')}
+          </Link>
         </div>
         {error && (
           <p role="alert" className="tt-error">
@@ -104,6 +109,7 @@ export function ConversationsPage({
           backHref={link()}
           onChanged={list.reload}
           streams={streams}
+          buildHref={builderPath(workspace, { kind: 'conversation', conversation: openId })}
         />
       ) : (
         <section className="tt-chat tt-chat-empty">

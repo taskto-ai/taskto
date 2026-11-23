@@ -336,3 +336,40 @@ func TestCLIWorkers(t *testing.T) {
 		}
 	}
 }
+
+func TestPushContact(t *testing.T) {
+	if got := load(t, nil, nil).PushContact; got != "" {
+		t.Fatalf("push contact by default = %q, want none (the server's default applies)", got)
+	}
+	file := writeConfig(t, `push_contact = "mailto:file@example.org"`)
+	// The file, then the environment over it, then the flag over both.
+	if got := load(t, []string{"-config", file}, nil).PushContact; got != "mailto:file@example.org" {
+		t.Fatalf("from the file: %q", got)
+	}
+	env := map[string]string{"TASKTO_PUSH_CONTACT": "https://ops.example.org/contact"}
+	if got := load(t, []string{"-config", file}, env).PushContact; got != "https://ops.example.org/contact" {
+		t.Fatalf("env over file: %q", got)
+	}
+	if got := load(t, []string{"-config", file, "-push-contact", "mailto:flag@example.org"}, env).PushContact; got != "mailto:flag@example.org" {
+		t.Fatalf("flag over env: %q", got)
+	}
+}
+
+func TestPushContactMustBeMailtoOrHTTPS(t *testing.T) {
+	for _, bad := range []string{
+		"http://example.org", "ftp://example.org", "example.org", "mailto:", "mailto:nobody", "mailto:@example.org",
+		"mailto:a@", "https://", "https://user:pw@example.org", "https://exa mple.org", "javascript:alert(1)",
+	} {
+		if err := ValidatePushContact(bad); err == nil {
+			t.Errorf("%q accepted as a push contact", bad)
+		}
+		if _, err := Load([]string{"-push-contact", bad}, func(string) string { return "" }, io.Discard); err == nil {
+			t.Errorf("-push-contact %q accepted", bad)
+		}
+	}
+	for _, good := range []string{"", "mailto:ops@example.org", "https://example.org", "https://example.org/contact?x=1"} {
+		if err := ValidatePushContact(good); err != nil {
+			t.Errorf("%q refused: %v", good, err)
+		}
+	}
+}
