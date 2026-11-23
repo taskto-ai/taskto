@@ -153,7 +153,33 @@ func sameOrigin(a, b *url.URL) bool {
 		}
 		return "80"
 	}
-	return a.Scheme == b.Scheme && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
+	return a.Scheme == b.Scheme && sameASCIIHost(a.Hostname(), b.Hostname()) && port(a) == port(b)
+}
+
+// sameASCIIHost compares two host names in ASCII case only, and refuses any that isn't ASCII:
+// Unicode case folding (strings.EqualFold) equates names that DNS, after IDNA, tells apart, so a
+// redirect could reach another origin. A provider's Unicode name redirecting to its own Punycode
+// spelling is refused too, which fails safe.
+func sameASCIIHost(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if x >= utf8.RuneSelf || y >= utf8.RuneSelf {
+			return false
+		}
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }
 
 // statusTransport remembers the HTTP status of the last failing answer, so that a failure
@@ -166,7 +192,8 @@ type statusTransport struct {
 
 func (t *statusTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(r)
-	if err == nil && resp.StatusCode >= 400 {
+	// 3xx too: a redirect that isn't followed (the token exchange) is the answer that failed.
+	if err == nil && resp.StatusCode >= 300 {
 		t.last.Store(int32(resp.StatusCode)) // #nosec G115 -- an HTTP status
 	}
 	return resp, err
@@ -570,19 +597,20 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		// The account was made from its invites, which are all used up: the invite screen would
 		// find nothing. Go to the workspace of the invite that was opened, or else the first one
 		// accepted.
-		next = "/w/" + strconv.FormatInt(s.ssoLanding(r.Context(), next, res.joined), 10) + "/conversations"
+		next = "/w/" + strconv.FormatInt(s.ssoLanding(r.Context(), next, res.joined, res.accepted), 10) + "/conversations"
 	}
 	redirectSeeOther(w, next)
 }
 
 // ssoLanding is the workspace to open for a new account that joined joined (in the invites'
-// order): the one whose invite the person opened, which next names by its token after the #, if
-// it is among them, and otherwise the first.
-func (s *Service) ssoLanding(ctx context.Context, next string, joined []int64) int64 {
+// order) by accepting the invites accepted: the workspace of the invite the person opened, which
+// next names by its token after the #, if this login accepted that very invite, and otherwise
+// the first. Another invite's token (someone else's, or an expired one) never picks it.
+func (s *Service) ssoLanding(ctx context.Context, next string, joined, accepted []int64) int64 {
 	if _, token, ok := strings.Cut(next, "#"); ok && token != "" {
-		var ws int64
-		err := s.db.QueryRowContext(ctx, `SELECT workspace_id FROM invites WHERE token_hash = ?`, hashToken(token)).Scan(&ws)
-		if err == nil && slices.Contains(joined, ws) {
+		var id, ws int64
+		err := s.db.QueryRowContext(ctx, `SELECT id, workspace_id FROM invites WHERE token_hash = ?`, hashToken(token)).Scan(&id, &ws)
+		if err == nil && slices.Contains(accepted, id) {
 			return ws
 		}
 	}
@@ -629,7 +657,8 @@ func googleEmailTrusted(email, hostedDomain string) bool {
 	if strings.TrimSpace(hostedDomain) != "" {
 		return true
 	}
-	_, domain, ok := strings.Cut(strings.TrimSpace(email), "@")
+	// Not trimmed: "gmail.com" followed by any space, Unicode or not, isn't gmail.com.
+	_, domain, ok := strings.Cut(email, "@")
 	return ok && isGmailDomain(domain)
 }
 
@@ -756,11 +785,19 @@ var (
 )
 
 // ssoLoggedIn is the result of a login: the user, their new session's token and the
-// workspaces an account made by the login joined, first invite first.
+// workspaces an account made by the login joined, first invite first, with the invites it
+// accepted.
 type ssoLoggedIn struct {
-	user   User
-	token  string
-	joined []int64
+	user     User
+	token    string
+	joined   []int64
+	accepted []int64
+}
+
+// ssoJoined is what a new account's invites did: the workspaces joined, first invite first, and
+// the IDs of the invites accepted.
+type ssoJoined struct {
+	workspaces, invites []int64
 }
 
 // ssoLogin finds or makes the user for an identity and logs them in, in one transaction:
@@ -782,7 +819,7 @@ func (s *Service) ssoLogin(ctx context.Context, c *ssoClient, id ssoIdentity) (s
 		err := tx.QueryRowContext(ctx, `
 			SELECT u.id, u.email, u.name FROM user_identities i JOIN users u ON u.id = i.user_id
 			WHERE i.issuer = ? AND i.subject = ?`, c.cfg.Issuer, id.subject).Scan(&u.ID, &u.Email, &u.Name)
-		var joined []int64
+		var joined ssoJoined
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			if u, joined, err = s.ssoNewIdentity(ctx, tx, c, id); err != nil {
@@ -792,41 +829,41 @@ func (s *Service) ssoLogin(ctx context.Context, c *ssoClient, id ssoIdentity) (s
 			return err
 		}
 		token, err := s.insertSession(ctx, tx, u.ID)
-		res = ssoLoggedIn{user: u, token: token, joined: joined}
+		res = ssoLoggedIn{user: u, token: token, joined: joined.workspaces, accepted: joined.invites}
 		return err
 	})
 	return res, err
 }
 
 // ssoNewIdentity links an identity not seen before to a user, making the user if an invite
-// allows it. It returns the workspaces joined by the new account, if one was made.
-func (s *Service) ssoNewIdentity(ctx context.Context, tx *sql.Tx, c *ssoClient, id ssoIdentity) (User, []int64, error) {
+// allows it. It returns what the new account's invites did, if one was made.
+func (s *Service) ssoNewIdentity(ctx context.Context, tx *sql.Tx, c *ssoClient, id ssoIdentity) (User, ssoJoined, error) {
 	email, ok := normalizeEmail(id.email)
 	if !ok || (!id.verified && !c.cfg.TrustEmail) {
-		return User{}, nil, errSSOUnverified
+		return User{}, ssoJoined{}, errSSOUnverified
 	}
 	if c.cfg.Issuer == googleIssuer && (!id.verified || !googleEmailTrusted(id.email, id.hostedDomain)) {
-		return User{}, nil, errSSOGoogleEmail
+		return User{}, ssoJoined{}, errSSOGoogleEmail
 	}
 	u := User{Email: email}
-	var joined []int64
+	var joined ssoJoined
 	err := tx.QueryRowContext(ctx, `SELECT id, name FROM users WHERE email = ?`, email).Scan(&u.ID, &u.Name)
 	switch {
 	case err == nil:
 		var linked bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM user_identities WHERE user_id = ? AND issuer = ?)`,
 			u.ID, c.cfg.Issuer).Scan(&linked); err != nil {
-			return User{}, nil, err
+			return User{}, ssoJoined{}, err
 		}
 		if linked {
-			return User{}, nil, errSSOLinkedElsewhere
+			return User{}, ssoJoined{}, errSSOLinkedElsewhere
 		}
 	case errors.Is(err, sql.ErrNoRows):
 		if u, joined, err = s.ssoInvitedUser(ctx, tx, email, id.name); err != nil {
-			return User{}, nil, err
+			return User{}, ssoJoined{}, err
 		}
 	default:
-		return User{}, nil, err
+		return User{}, ssoJoined{}, err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)`,
 		c.cfg.Issuer, id.subject, u.ID)
@@ -834,44 +871,46 @@ func (s *Service) ssoNewIdentity(ctx context.Context, tx *sql.Tx, c *ssoClient, 
 }
 
 // ssoInvitedUser makes the account of an email with pending invites, without a password,
-// and accepts every one of them. It returns the workspaces joined, in the invites' order.
-func (s *Service) ssoInvitedUser(ctx context.Context, tx *sql.Tx, email, name string) (User, []int64, error) {
+// and accepts every one of them. It returns the workspaces joined, in the invites' order, and the
+// invites accepted.
+func (s *Service) ssoInvitedUser(ctx context.Context, tx *sql.Tx, email, name string) (User, ssoJoined, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, workspace_id, email, role FROM invites
 		WHERE email = ? AND accepted_at IS NULL AND expires_at > ? ORDER BY id`, email, stamp(s.now()))
 	if err != nil {
-		return User{}, nil, err
+		return User{}, ssoJoined{}, err
 	}
 	var invites []pendingInvite
 	for rows.Next() {
 		var inv pendingInvite
 		if err := rows.Scan(&inv.id, &inv.workspaceID, &inv.email, &inv.role); err != nil {
 			_ = rows.Close()
-			return User{}, nil, err
+			return User{}, ssoJoined{}, err
 		}
 		invites = append(invites, inv)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return User{}, nil, err
+		return User{}, ssoJoined{}, err
 	}
 	if len(invites) == 0 {
-		return User{}, nil, errSSONoAccount
+		return User{}, ssoJoined{}, errSSONoAccount
 	}
 	u, err := insertUser(ctx, tx, email, ssoName(name, email), "")
 	if err != nil {
-		return User{}, nil, err
+		return User{}, ssoJoined{}, err
 	}
-	var joined []int64
+	var joined ssoJoined
 	for _, inv := range invites {
 		if err := s.useInvite(ctx, tx, inv); err != nil {
-			return User{}, nil, err
+			return User{}, ssoJoined{}, err
 		}
 		// Two invites to one workspace: the first one's role stands.
 		if err := join(ctx, tx, inv, u.ID); err != nil && !errors.Is(err, errAlreadyMember) {
-			return User{}, nil, err
+			return User{}, ssoJoined{}, err
 		}
-		if !slices.Contains(joined, inv.workspaceID) {
-			joined = append(joined, inv.workspaceID)
+		joined.invites = append(joined.invites, inv.id)
+		if !slices.Contains(joined.workspaces, inv.workspaceID) {
+			joined.workspaces = append(joined.workspaces, inv.workspaceID)
 		}
 	}
 	return u, joined, nil

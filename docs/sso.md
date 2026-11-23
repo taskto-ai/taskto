@@ -35,7 +35,8 @@ providers in a file; there is no admin screen for them.
    to `/?sso_error=<code>`, which the login screen shows in their language. If the sign-in
    made the account from its invites and the page was the invite screen, they are sent to the
    conversations of a workspace they joined instead, since the invite link is used up: the one
-   whose invite link they opened, or else the first invite accepted.
+   whose invite link they opened, if that link was one of the invites the sign-in accepted, or
+   else the first invite accepted.
 
 An identity is the issuer and the `sub` claim, never the email: a person who changes their
 email at the provider still logs in as the same user. An email whose user already has another

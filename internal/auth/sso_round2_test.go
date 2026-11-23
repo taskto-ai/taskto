@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 )
@@ -118,6 +119,12 @@ func TestSameOrigin(t *testing.T) {
 		{"https://a.example", "https://b.a.example", false},
 		{"https://a.example", "https://a.example:8443", false},
 		{"http://127.0.0.1:1", "http://127.0.0.1:2", false},
+		// Unicode case folding equates names that IDNA keeps apart: K (U+212A, Kelvin) folds to
+		// k, but xn--... of "\u212aey.example" isn't key.example. Non-ASCII hosts never match.
+		{"https://key.example", "https://\u212aey.example", false},
+		{"https://\u212aey.example", "https://\u212aey.example", false},
+		{"https://b\u00fccher.example", "https://xn--bcher-kva.example", false},
+		{"https://XN--BCHER-KVA.example", "https://xn--bcher-kva.example", true},
 	} {
 		a, _ := url.Parse(c.a)
 		b, _ := url.Parse(c.b)
@@ -132,9 +139,10 @@ func TestSameOrigin(t *testing.T) {
 func TestSSONewAccountLandsOnTheRightWorkspace(t *testing.T) {
 	// Two workspaces whose invites are in the opposite order to their ids: the second workspace
 	// (the higher id) invited first.
+	var owner *client
 	setup := func(t *testing.T) (s *ssoEnv, ws1, ws2 int64, tok1, tok2 string) {
 		s = newSSOEnv(t)
-		owner, ws1 := s.setup()
+		owner, ws1 = s.setup()
 		ownerID := s.count(`SELECT id FROM users`)
 		ws2 = s.addWorkspace(int64(ownerID), "Second")
 		if ws2 <= ws1 {
@@ -160,6 +168,26 @@ func TestSSONewAccountLandsOnTheRightWorkspace(t *testing.T) {
 		s, _, ws2, _, _ := setup(t)
 		b := s.browser()
 		s.wantLogin(b, s.signIn(b, "/invite#not-a-token", verified("new@example.com")),
+			fmt.Sprintf("/w/%d/conversations", ws2), "new@example.com")
+	})
+	// Tokens of invites to a workspace the account did join, but that this login didn't accept:
+	// they mustn't pick the landing, which is the first invite accepted (the second workspace).
+	t.Run("someone else's invite to a joined workspace is not followed", func(t *testing.T) {
+		s, ws1, ws2, _, _ := setup(t)
+		other := s.invite(owner, ws1, "other@example.com", RoleMember)
+		b := s.browser()
+		s.wantLogin(b, s.signIn(b, "/invite#"+other, verified("new@example.com")),
+			fmt.Sprintf("/w/%d/conversations", ws2), "new@example.com")
+	})
+	t.Run("an expired invite to a joined workspace is not followed", func(t *testing.T) {
+		s, ws1, ws2, _, _ := setup(t)
+		old := s.invite(owner, ws1, "new@example.com", RoleMember)
+		if _, err := s.db.Exec(`UPDATE invites SET expires_at = ? WHERE token_hash = ?`,
+			stamp(s.svc.now().Add(-time.Hour)), hashToken(old)); err != nil {
+			t.Fatal(err)
+		}
+		b := s.browser()
+		s.wantLogin(b, s.signIn(b, "/invite#"+old, verified("new@example.com")),
 			fmt.Sprintf("/w/%d/conversations", ws2), "new@example.com")
 	})
 }

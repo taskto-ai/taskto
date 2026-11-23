@@ -182,6 +182,9 @@ func TestGoogleEmailTrusted(t *testing.T) {
 		{"a@gmaıl.com", "", false}, // a dotless ı
 		{"a@gmail.com\u212a", "", false},
 		{"a@gmail.co\u0301m", "", false},
+		{"a@gmail.com\u00a0", "", false}, // a trailing no-break space, which TrimSpace would drop
+		{"a@gmail.com\u3000", "", false},
+		{" a@gmail.com ", "", false},
 		{"a@example.com", "", false},
 		{"a@example.com", "   ", false},
 		{"a@example.com", " \t", false},

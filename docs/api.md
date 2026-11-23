@@ -474,8 +474,10 @@ the login was started for finds none and leaves the login for the right one. The
 exchanged with the PKCE verifier, without following a redirect. Every call to the provider is
 `https`; `http` is accepted only for a provider whose issuer is itself `http` on a loopback
 host (development), and only to loopback hosts. Discovery, keys and user info follow a redirect
-only within the origin they started from, so nothing is downgraded to `http` or sent to another
-origin, user info's bearer token included. The ID token's signature, issuer, expiry and nonce
+only within the origin they started from: the same scheme, port and host name, compared in
+ASCII letters only (a host name that isn't ASCII never matches, so Unicode look-alikes can't
+pass as the same origin). So nothing is downgraded to `http` or sent to another origin, user
+info's bearer token included. The ID token's signature, issuer, expiry and nonce
 are checked, its `aud` must be this client alone (a token that names another audience too is
 refused), and its `azp`, when present at all, must be the string of this client's ID (an empty,
 `null` or non-string `azp` is refused).
@@ -493,8 +495,9 @@ cookie:
   ASCII letters, in either case, as the `email` claim has it, or an `hd` claim that isn't blank.
   A `next` that is the invite screen (`/invite…`) goes to `/w/<id>/conversations` instead when
   the sign-in made the account, since its invites are used up: the workspace is the one of the
-  invite whose token is in `next`'s fragment (`/invite#<token>`), else of the first invite
-  accepted (the oldest). For an existing account the invite stays pending and `next` is kept;
+  invite whose token is in `next`'s fragment (`/invite#<token>`) if this sign-in accepted that
+  very invite, else of the first invite accepted (the oldest); another invite's token (someone
+  else's, or an expired one) never picks it. For an existing account the invite stays pending and `next` is kept;
 - on failure, to `/?sso_error=<code>`, one of the `sso_*` [error codes](#error-codes) above.
   An error from the provider, such as `access_denied`, is `sso_failed`.
 
