@@ -14,7 +14,9 @@ import (
 // arguments of each: A2UI v0.9's basic catalog, without the components and functions that
 // load or open outside addresses (Image, Video, AudioPlayer, openUrl: an app is shared,
 // and a picture from elsewhere would tell that server who opens it, and could carry the
-// app's data in its address), plus TaskTo.AI's Stat. The web app's catalog
+// app's data in its address), plus TaskTo.AI's Stat, Show, PhotoInput and Photos. The last two
+// are how photos get in and out without an outside address: they upload to, and draw from, this
+// server's authenticated attachment routes (attachments.go). The web app's catalog
 // (web/src/apps/catalog.tsx) is the same set; testdata/catalog.json is the contract between
 // the two, which both test against.
 //
@@ -137,6 +139,13 @@ var components = map[string]map[string]prop{
 	// the record a screen shows (/record). It hides an input; it decides nothing the server
 	// accepts (rules.go).
 	"Show": {"when": req(kRule), "source": enum("draft", "record"), "child": req(kComponentID)},
+	// Ours: a photo input for an attachment field. It takes photos from the camera or the
+	// library, uploads each to the server (attachments.go) and holds their ids in value, a list
+	// at a path such as /draft/photos. field names the attachment field it is for.
+	"PhotoInput": {"field": req(kString), "label": opt(kDynString), "value": req(kDynStringList)},
+	// Ours: draws the thumbnails of the attachments whose ids are in value, fetched from the
+	// server with the viewer's own session, never from an outside address.
+	"Photos": {"label": opt(kDynString), "value": req(kDynStringList)},
 	// Ours, and the server's: the host of an app's screens, which the server adds as the root
 	// (screens.go). An app's own components may not use it.
 	screensComponent: {"current": req(kDynString), "screens": req(kScreenRefs)},
@@ -181,9 +190,14 @@ func Capabilities() []string {
 	for name := range functions {
 		all = append(all, FunctionCapability(name))
 	}
+	all = append(all, AttachmentCapability)
 	sort.Strings(all)
 	return all
 }
+
+// AttachmentCapability is what a client needs to hold an attachment field: to read its value as a
+// list of attachment ids and send them. A collection with one requires it (Definition.Check).
+const AttachmentCapability = "field.attachment"
 
 // ComponentCapability is the capability of drawing component name.
 func ComponentCapability(name string) string { return "component." + name }
@@ -300,6 +314,12 @@ func (c *screenCheck) component(id string, obj map[string]any) error {
 	for key, p := range spec {
 		if _, given := obj[key]; p.required && !given {
 			return fmt.Errorf("%s needs %q", name, key)
+		}
+	}
+	if name == "PhotoInput" {
+		field, _ := obj["field"].(string)
+		if f, ok := c.collection.field(field); !ok || f.Type != TypeAttachment {
+			return fmt.Errorf("PhotoInput's field %q is not an attachment field of the collection", field)
 		}
 	}
 	return nil

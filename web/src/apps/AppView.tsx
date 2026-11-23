@@ -14,12 +14,16 @@ import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
 import { appsCatalog, unsupportedBy } from './catalog'
 import { keepLabelsLinked } from './labels'
+import { type AppFiles, AppFilesContext } from './PhotoInput'
 
 export type ActionPayload = Parameters<NonNullable<ConstructorParameters<typeof MessageProcessor>[1]>>[0]
 
 export type AppTransport = {
   load(): Promise<unknown[]>
   act(action: ActionPayload): Promise<unknown[]>
+  // Where the app's attachments are, for the photo components; left out where there is no server
+  // to hold them.
+  files?: AppFiles
 }
 
 // The app's routes on the server: base is …/spaces/{space}/apps/{app}. release is the live
@@ -30,9 +34,11 @@ export function httpTransport(base: string, release?: number | 'draft'): AppTran
     return {
       load: () => api<unknown[]>(`${base}/surface?release=draft`),
       act: () => Promise.reject(new Error(translate('apps.stage.draftNoActions'))),
+      files: { base, uploads: false },
     }
   }
   return {
+    files: { base, uploads: true },
     load: () => api<unknown[]>(release === undefined ? `${base}/surface` : `${base}/surface?release=${release}`),
     act: (action) =>
       api<unknown[]>(`${base}/actions`, {
@@ -137,7 +143,9 @@ export function AppView({
           {error}
         </p>
       )}
-      {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
+      <AppFilesContext.Provider value={transport.files ?? null}>
+        {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
+      </AppFilesContext.Provider>
     </section>
   )
 }

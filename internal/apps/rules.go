@@ -141,6 +141,9 @@ func (r Rule) checkAt(c Collection, depth int, nodes *int) error {
 	if !slices.Contains(ruleOps, r.Op) {
 		return fmt.Errorf("op must be one of %s", strings.Join(ruleOps, ", "))
 	}
+	if f.Type == TypeAttachment {
+		return fmt.Errorf("an attachment field can't be compared: a rule can't read %q", f.Name)
+	}
 	ordered := f.Type == TypeNumber || f.Type == TypeDate || f.Type == TypeTime
 	if !ordered && r.Op != OpEq && r.Op != OpNe {
 		return fmt.Errorf("a %s field is compared with eq or ne only", f.Type)
@@ -281,7 +284,7 @@ func compareFloat(a, b float64) int {
 // stored returns v as a value of the field's type with its limits not applied: the form rows
 // hold it in.
 func (f Field) stored(v any) (any, bool, error) {
-	f.MaxLength, f.Min, f.Max, f.Options = math.MaxInt, nil, nil, nil
+	f.MaxLength, f.Min, f.Max, f.Options, f.MaxFiles = math.MaxInt, nil, nil, nil, math.MaxInt
 	return f.parse(v)
 }
 

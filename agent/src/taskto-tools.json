@@ -589,7 +589,7 @@
   },
   {
     "name": "list_app_rows",
-    "description": "Read an app's data: the rows the user may read (all of them, or only the ones they created, by their role in the app), oldest first, each with its id, its _revision and the fields its collection declares. Deleted rows are not listed. An offline app's rows are kept and read too. A list too long for one reply is cut short, with truncated: true and next_after: call again with after set to it for the rest.",
+    "description": "Read an app's data: the rows the user may read (all of them, or only the ones they created, by their role in the app), oldest first, each with its id, its _revision and the fields its collection declares (an attachment field holds a list of {id, content_type, size, width, height}: the agent can read what photos a row has, never their bytes, and can't upload or attach one). Deleted rows are not listed. An offline app's rows are kept and read too. A list too long for one reply is cut short, with truncated: true and next_after: call again with after set to it for the rest.",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -638,7 +638,7 @@
             "definition_version": {
               "type": "integer",
               "minimum": 1,
-              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time or choice fields, rules or navigation"
+              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time, choice or attachment fields, rules or navigation"
             },
             "requires": {
               "type": "array",
@@ -704,8 +704,8 @@
                       },
                       "type": {
                         "type": "string",
-                        "enum": ["string", "number", "boolean", "date", "time", "choice"],
-                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options"
+                        "enum": ["string", "number", "boolean", "date", "time", "choice", "attachment"],
+                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options, an attachment a list of photos (JPEG, PNG or GIF) that people upload with the PhotoInput component: you can't upload or read pictures, only see their ids and metadata in list_app_rows"
                       },
                       "required": {
                         "type": "boolean"
@@ -734,6 +734,18 @@
                         "minimum": 1,
                         "maximum": 10000,
                         "description": "string fields; 1000 if left out"
+                      },
+                      "max_files": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "attachment fields: how many photos; 1 if left out"
+                      },
+                      "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 16777216,
+                        "description": "attachment fields: the size of each photo in bytes; 8 MiB if left out"
                       },
                       "min": {
                         "type": "number",
@@ -841,7 +853,7 @@
             "definition_version": {
               "type": "integer",
               "minimum": 1,
-              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time or choice fields, rules or navigation"
+              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time, choice or attachment fields, rules or navigation"
             },
             "requires": {
               "type": "array",
@@ -907,8 +919,8 @@
                       },
                       "type": {
                         "type": "string",
-                        "enum": ["string", "number", "boolean", "date", "time", "choice"],
-                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options"
+                        "enum": ["string", "number", "boolean", "date", "time", "choice", "attachment"],
+                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options, an attachment a list of photos (JPEG, PNG or GIF) that people upload with the PhotoInput component: you can't upload or read pictures, only see their ids and metadata in list_app_rows"
                       },
                       "required": {
                         "type": "boolean"
@@ -937,6 +949,18 @@
                         "minimum": 1,
                         "maximum": 10000,
                         "description": "string fields; 1000 if left out"
+                      },
+                      "max_files": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "attachment fields: how many photos; 1 if left out"
+                      },
+                      "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 16777216,
+                        "description": "attachment fields: the size of each photo in bytes; 8 MiB if left out"
                       },
                       "min": {
                         "type": "number",

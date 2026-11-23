@@ -7,6 +7,8 @@ import { useState } from 'react'
 import { type AppAccess, type AppRecord, api, errorText, type RecordAuthor, type RecordVersion } from '../api'
 import { type Format, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
+import { PhotoStrip } from './PhotoInput'
+import { photoIds } from './photos'
 
 type Tab = 'live' | 'deleted'
 type RecordList = { records: AppRecord[]; truncated: boolean }
@@ -120,6 +122,7 @@ function RecordsPanel({ base, canRestore, onRestored }: { base: string; canResto
                 </span>
               </div>
               <div className="tt-record-data">{preview(rec.data, f, t)}</div>
+              <RecordPhotos base={base} data={rec.data} />
               <div className="tt-muted tt-small">
                 {rec.deleted_at
                   ? t('apps.records.deletedBy', { when: f.dateTime(rec.deleted_at), name: who(rec.deleted_by, t) })
@@ -194,6 +197,7 @@ function RecordHistory({ base, id }: { base: string; id: number }) {
               })}
             </div>
             <div className="tt-muted tt-small tt-record-data">{preview(v.data, f, t)}</div>
+            <RecordPhotos base={base} data={v.data} />
             {v.synthetic && <div className="tt-muted tt-small">{t('apps.records.synthetic')}</div>}
           </li>
         ))}
@@ -207,6 +211,20 @@ function RecordHistory({ base, id }: { base: string; id: number }) {
   )
 }
 
+// The thumbnails of the photos a record's attachment fields hold, field by field.
+function RecordPhotos({ base, data }: { base: string; data: Record<string, unknown> }) {
+  return (
+    <>
+      {Object.entries(data).map(([name, v]) => {
+        const ids = photoIds(v)
+        return ids.length > 0 && ids.length === (v as unknown[]).length ? (
+          <PhotoStrip key={name} base={base} ids={ids} label={name} />
+        ) : null
+      })}
+    </>
+  )
+}
+
 // The name of who did something, and that it was through the agent.
 function who(a: RecordAuthor | null, t: T): string {
   if (!a) return t('apps.records.unknownUser')
@@ -216,12 +234,15 @@ function who(a: RecordAuthor | null, t: T): string {
 // A record's fields in one line: "name: value" for each.
 function preview(data: Record<string, unknown>, f: Format, t: T): string {
   const parts = Object.entries(data).map(([name, v]) => {
+    const photos = photoIds(v)
     const shown =
       typeof v === 'number'
         ? f.number(v)
         : typeof v === 'boolean'
           ? t(v ? 'apps.records.yes' : 'apps.records.no')
-          : String(v)
+          : photos.length > 0 && photos.length === (v as unknown[]).length
+            ? t('apps.photos.count', { count: photos.length })
+            : String(v)
     return `${name}: ${shown}`
   })
   return parts.length > 0 ? parts.join(' · ') : t('apps.records.empty')

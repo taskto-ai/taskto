@@ -2121,6 +2121,111 @@ html[data-keyboard="open"] .tt-composer {
   padding-block-end: max(1rem, env(safe-area-inset-bottom));
 }
 
+/* Photos of an app: the input (camera and library), the uploads on their way, and the thumbnails. */
+
+.tt-photos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.tt-photos-label {
+  font-weight: 600;
+}
+
+.tt-photo-grid,
+.tt-photo-uploads {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-photo-grid {
+  grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr));
+}
+
+.tt-photo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+
+.tt-photo img {
+  display: block;
+  inline-size: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  background: var(--tt-hover);
+}
+
+.tt-photo a {
+  display: block;
+}
+
+.tt-photo a:focus-visible,
+.tt-photo-add label:focus-within {
+  outline: 2px solid var(--tt-accent);
+  outline-offset: 2px;
+}
+
+.tt-photo-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-photo-name {
+  flex: 1 1 8rem;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-photo-upload progress {
+  flex: 2 1 8rem;
+  min-inline-size: 0;
+}
+
+.tt-photo-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tt-photo-add .tt-button {
+  position: relative;
+  flex: 1 1 10rem;
+  min-height: var(--tt-touch, 2.75rem);
+}
+
+.tt-photo-add .tt-disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The file input is the control, kept for the keyboard and screen readers; its label is what is seen. */
+.tt-file-input {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.tt-file-input:disabled {
+  cursor: default;
+}
+
 /* After the rules they override (the top bar's own controls are smaller). */
 @media (pointer: coarse) {
   .tt-topbar select,

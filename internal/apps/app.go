@@ -75,9 +75,9 @@ const CatalogID = "https://taskto.ai/catalogs/apps/v1.json"
 //
 // Version 1 is one screen, string, number, boolean and date fields, and the actions insert,
 // update and delete. Version 2 adds screens with navigation between them, time and choice
-// fields, rules (conditionally required fields, the Show component, summaries over some rows)
-// and the navigate action. A definition that says version 1 is read, checked and drawn as it
-// always was, and can't use any of version 2.
+// fields, rules (conditionally required fields, the Show component, summaries over some rows),
+// the navigate action and attachment fields (photos, attachments.go). A definition that says
+// version 1 is read, checked and drawn as it always was, and can't use any of version 2.
 const DefinitionVersion = 2
 
 // firstVersion is the version of the format before screens and rules.
@@ -121,6 +121,9 @@ const (
 	TypeDate    = "date"   // YYYY-MM-DD
 	TypeTime    = "time"   // HH:MM, on a 24-hour clock (definition version 2)
 	TypeChoice  = "choice" // one of the field's Options (definition version 2)
+	// TypeAttachment is a list of photos: attachment ids, which the records hold in place of
+	// bytes (definition version 2, attachments.go).
+	TypeAttachment = "attachment"
 )
 
 // Field is one typed field of a row.
@@ -140,6 +143,11 @@ type Field struct {
 	Max *float64 `json:"max,omitempty"`
 	// Options are the values a choice field may hold: at most MaxOptions, each unique.
 	Options []string `json:"options,omitempty"`
+	// MaxFiles bounds how many attachments an attachment field holds: DefaultMaxFiles if unset,
+	// at most MaxMaxFiles. MaxBytes bounds each one's size: DefaultMaxFileBytes if unset, at most
+	// MaxMaxFileBytes.
+	MaxFiles int `json:"max_files,omitempty"`
+	MaxBytes int `json:"max_bytes,omitempty"`
 }
 
 // The kinds of action: add a row built from the event's context and clear the form at
@@ -178,6 +186,11 @@ const (
 	maxOptionLen     = 100
 	maxActions       = 50
 	maxSummaries     = 20
+	// The bounds of an attachment field, and the defaults when it names none.
+	DefaultMaxFiles     = 1
+	MaxMaxFiles         = 10
+	DefaultMaxFileBytes = 8 << 20
+	MaxMaxFileBytes     = 16 << 20
 	// MaxDefinitionSize bounds a definition's JSON, so the agent can always read one whole
 	// (agenttools.MaxResult).
 	MaxDefinitionSize = 48 << 10
@@ -202,6 +215,10 @@ const (
 	DraftKey  = "draft"
 	ScreenKey = "screen"
 	RecordKey = "record"
+	// FilesKey holds what a screen needs to know of the app's attachment fields: at /_files/<field>,
+	// their limits (attachments.go). It starts with an underscore, as RevisionKey does, so no field
+	// or summary can have its name.
+	FilesKey = "_files"
 )
 
 // ErrInvalid matches every validation error (errors.Is); their messages say what is wrong.
@@ -283,8 +300,25 @@ func (d Definition) Check() (Definition, error) {
 				}
 				seen[o] = true
 			}
+		case TypeAttachment:
+			uses2 = append(uses2, "an attachment field")
+			if f.MaxFiles == 0 {
+				f.MaxFiles = DefaultMaxFiles
+			}
+			if f.MaxBytes == 0 {
+				f.MaxBytes = DefaultMaxFileBytes
+			}
+			if f.MaxFiles < 1 || f.MaxFiles > MaxMaxFiles {
+				return Definition{}, invalidf("collection: field %q: max_files is 1 to %d", f.Name, MaxMaxFiles)
+			}
+			if f.MaxBytes < 1 || f.MaxBytes > MaxMaxFileBytes {
+				return Definition{}, invalidf("collection: field %q: max_bytes is 1 to %d", f.Name, MaxMaxFileBytes)
+			}
 		default:
-			return Definition{}, invalidf("collection: field %q: type must be string, number, boolean, date, time or choice", f.Name)
+			return Definition{}, invalidf("collection: field %q: type must be string, number, boolean, date, time, choice or attachment", f.Name)
+		}
+		if f.Type != TypeAttachment && (f.MaxFiles != 0 || f.MaxBytes != 0) {
+			return Definition{}, invalidf("collection: field %q: only an attachment field has max_files and max_bytes", f.Name)
 		}
 		if f.Type != TypeString && f.MaxLength != 0 {
 			return Definition{}, invalidf("collection: field %q: only a string field has max_length", f.Name)
@@ -395,6 +429,11 @@ func (d Definition) Check() (Definition, error) {
 			return Definition{}, err
 		}
 	}
+	// A collection with an attachment field needs a client that knows how to hold one, whatever
+	// its screens draw.
+	if slices.ContainsFunc(out.Collection.Fields, func(f Field) bool { return f.Type == TypeAttachment }) {
+		requires = sortedKeys(setOf(append(requires, AttachmentCapability)))
+	}
 	out.Requires = requires
 	if slices.Contains(requires, ComponentCapability("Show")) {
 		uses2 = append(uses2, "the Show component")
@@ -471,6 +510,9 @@ func Surface(surfaceID string, def Definition, rows []Row) []Message {
 // /record (none).
 func DataModel(surfaceID string, def Definition, rows []Row) Message {
 	value := map[string]any{"items": Items(def, rows), "draft": map[string]any{}}
+	if files := def.filesModel(); files != nil {
+		value[FilesKey] = files
+	}
 	for name, s := range def.Summaries {
 		value[name] = summarize(s, def.Collection, rows)
 	}
@@ -802,6 +844,8 @@ func (f Field) parse(v any) (value any, present bool, err error) {
 			return nil, false, invalidAs(apierr.CodeAppFieldNotOption, apierr.Params{"field": f.Name}, "%s must be one of %s", f.Name, strings.Join(f.Options, ", "))
 		}
 		return s, true, nil
+	case TypeAttachment:
+		return f.parseAttachments(v)
 	}
 	return nil, false, invalidf("%s has an unknown type", f.Name)
 }

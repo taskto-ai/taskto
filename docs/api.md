@@ -115,9 +115,19 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_field_not_time` | 422 | The value of `field` isn't a time, `HH:MM` on a 24-hour clock. |
 | `app_field_not_option` | 422 | The value of `field`, a choice, isn't one of its options (or is several of them). |
 | `app_field_required_when` | 422 | `field` is required when the row meets the condition its `required_when` rule sets, and the action leaves it out. |
+| `app_field_files` | 400 / 422 | The value of `field`, an attachment field, isn't a list of at most `max` different attachment ids. |
+| `app_attachment_bad` | 422 | An attachment named in a record can't be used there: it isn't the caller's own upload for that `field` of this app, isn't finished, or is in a record already. The reason is never told, so someone else's id isn't told from one that doesn't exist, and the whole change is refused. |
+| `app_attachment_type` | 400 | The file isn't a JPEG, PNG or GIF picture the server can read, or has more pixels than it takes (`max_megapixels`); the upload is removed. |
+| `app_upload_size` | 400 | The declared size of an upload is 0 or over the `max` bytes `field` takes. |
+| `app_upload_offset` | 409 | A chunk wasn't at the offset the server is at, or the upload isn't complete: `params.offset` is the bytes the server has, where to continue from. |
+| `app_upload_state` | 409 | The upload can't take that now: it is finalized already (a chunk), or a record holds it (abandoning it). |
+| `app_upload_chunk` | 413 | A chunk is over 2 MiB, or runs past the declared size; `params.max` is what it may be. |
+| `app_uploads_pending` | 409 | The caller has `max` photos in this app that are in no record yet. |
+| `app_files_full` | 409 | The app's attachments would take it over `max_mib` MiB in all. |
+| `app_files_unavailable` | 503 | This server keeps no files for apps. |
 | `request_too_large` | 413 | The request's body is over `max` bytes. |
 | `doc_not_found` | 404 | No such document, folder or version in the space. |
-| `doc_name_invalid` | 400 | `name` can't be a path in a space: empty parts, `..`, `.git`, a leading `/`, backslashes or control characters. |
+| `doc_name_invalid` | 400 | `name` can't be a path in a space: empty parts, `..`, `.git`, `.taskto` (the server's own storage), a leading `/`, backslashes or control characters. |
 | `doc_path_too_long` | 400 | A path has at most `max` bytes. |
 | `doc_path_too_deep` | 400 | A path has at most `max` levels of folders. |
 | `doc_name_too_long` | 400 | A file or folder name has at most `max` bytes. |
@@ -267,8 +277,9 @@ Every `/api` request with a method other than `GET`, `HEAD` or `OPTIONS` must:
   without that header, an `Origin` must match the `Host`. Otherwise `403`.
 - have `Content-Type: application/json` when they carry a body. Otherwise `415`. A
   request without a body (`DELETE`, `POST /api/logout`) needs no content type; the
-  cross-origin rule above still applies to it. The one route that takes a file's bytes,
-  [`PUT …/docs/{path}`](#put-apiworkspacesworkspacespacesspacedocspath), also takes
+  cross-origin rule above still applies to it. The two routes that take bytes,
+  [`PUT …/docs/{path}`](#put-apiworkspacesworkspacespacesspacedocspath) and
+  [`PUT …/apps/{app}/uploads/{upload}`](#photo-attachments), also take
   `application/octet-stream`; no other route does.
 
 A cross-site form can't meet the second rule (it can't send either type), and a script on another site can't meet
@@ -1510,7 +1521,8 @@ saying what is wrong) unless:
   each component it draws and `function.<name>` for each function it calls. The server works
   it out from the screen and replaces whatever was sent, so a definition can't claim less than
   it uses; the list is in each release, and a client whose catalog lacks one shows that it
-  must update. A new component or function is a new capability.
+  must update. A new component or function is a new capability, and a collection with an
+  [attachment field](#photo-attachments) always requires `field.attachment`, whatever its screens draw.
 
 - **components** is the screen of an app with one, 1–300 A2UI components, one with the ID `root`
   (an app with several has `screens` instead, never both), each
@@ -1518,8 +1530,10 @@ saying what is wrong) unless:
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value) and `Show` (draws its child while a rule holds,
-  [below](#fields-and-rules)). `Screens`, the host of an app's screens, is the server's own and
+  address), plus `Stat` (a labelled value), `Show` (draws its child while a rule holds,
+  [below](#fields-and-rules)), and `PhotoInput` and `Photos` (a photo input and the thumbnails of
+  attachments, which upload to and draw from this server's own authenticated routes, never an
+  outside address: [Photo attachments](#photo-attachments)). `Screens`, the host of an app's screens, is the server's own and
   is refused in a definition. Props must have the catalog's types and enum
   values; dynamic values are a literal, a data binding `{"path": …}`, or a call of a
   catalog function returning the right type. Every component referred to must exist, no
@@ -1528,9 +1542,12 @@ saying what is wrong) unless:
   same catalog.
 - **collection.fields**, at most 50: `name` (a lowercase letter, then up to 39 lowercase
   letters, digits or `_`; not `id`, `items` or `draft`), `type` (`string`, `number`,
-  `boolean`, `date`: `YYYY-MM-DD`, `time`: `HH:MM` on a 24-hour clock, or `choice`), `required`,
+  `boolean`, `date`: `YYYY-MM-DD`, `time`: `HH:MM` on a 24-hour clock, `choice`, or `attachment`: a
+  list of photos), `required`,
   `required_when` (a rule), `max_length` (strings: 1–10000, 1000 when left out), `min` and `max`
-  (numbers), `options` (a choice's, 1–50 different texts of at most 100 characters).
+  (numbers), `options` (a choice's, 1–50 different texts of at most 100 characters), `max_files`
+  (an attachment field's: 1–10, 1 when left out) and `max_bytes` (each file's size: at most 16 MiB,
+  8 MiB when left out). An attachment field is version 2, and no rule can read it.
 - **actions**, 1–50, map an event name to its `kind`: `insert` adds a row from the
   event's context; `update` changes the fields the context gives of the row whose `id` it
   gives (blank text clears a field); `delete` removes the row whose `id` it gives; `navigate`
@@ -1542,6 +1559,8 @@ saying what is wrong) unless:
 
 The data model an app's screen binds to: `/items` is the live rows, each with its `id`, its
 revision as `_revision` and the collection's fields; `/draft` is an empty form; each summary is at `/<name>`.
+An app with attachment fields also has `/_files/<field>`, `{"max_files", "max_bytes"}`: the limits its
+photo input shows.
 An app with screens also has `/screen`, the name of the screen shown, and `/record`, the record a
 detail screen shows.
 
@@ -1634,7 +1653,9 @@ Writers of both spaces, with the design capability in the app. Its role assignme
 behind: they were set for the old space's members, so the moved app is unrestricted until
 roles are set in the new space. `{"version": 1, "space_id": 7}`: moves the app, with its rows,
 to another space of the workspace the caller may write (`404` for one they can't read or
-of another workspace, `403` for one they may only read). `200` with the app.
+of another workspace, `403` for one they may only read). `200` with the app. The app's
+[attachments](#photo-attachments) go with it: their files are copied to the new space's directory
+after the move, and are read from wherever they are meanwhile.
 
 ### `GET …/apps/{app}/surface`
 
@@ -1689,6 +1710,108 @@ the fields the live release declares** (as it declares them), and its summaries 
 read such fields: nothing the live app leaves unseen, such as a field it removed, is returned. A
 value stored with another type than its field's current one is left out of the data model (and
 stays stored).
+
+### Photo attachments
+
+A record never holds a file: an `attachment` field holds a **list of attachment ids** (32 hexadecimal
+characters, from the system's random source), and the files are separate resources the server keeps
+in the managed storage of the space that holds the app, under its data directory
+(`.taskto/app-files/<app>/<id>`, with `<id>.thumb` beside it; the `.taskto` directory is the server's own, which no document name can lead into), never in the database, which keeps only their
+metadata. A photo is never an address: the catalog still has no `Image`, and nothing in a record can
+make a browser or the server fetch from outside. The `PhotoInput` component uploads and the `Photos`
+component draws thumbnails, both through the routes below with the viewer's own session. A browser
+that takes a photo with its camera sends it to the app; it may not also keep it in the device's
+camera roll, and nothing here promises that.
+
+An attachment field takes at most `max_files` pictures of at most `max_bytes` each. The accepted types
+are **JPEG, PNG and GIF**, found in the bytes themselves (never from the client's `Content-Type` or the
+file's name, and `svg`, `html` and the rest are refused), with a bound on the pixels (50 megapixels for a
+JPEG, 24 for the others), so a file can't take more memory to read than that. Photos are stored as sent,
+metadata inside them (a phone's location, for one) included.
+
+An attachment is made in steps, by a writer of the space whose roles in the app let them submit records
+or change some (otherwise `403 app_forbidden`; a viewer of the space is `403` as for any write). All the routes are under `…/apps/{app}`, need a session, and go through the
+[CSRF guard](#csrf). Every one of an upload's routes belongs to its **uploader**: anyone else, in the
+space or not, gets `404`, as for an upload that doesn't exist.
+
+#### `POST …/apps/{app}/uploads`
+
+`{"field": "photos", "size": 2345678}`: starts an upload for an attachment field of the live release
+(`409 app_not_published` before one), declaring the file's size in bytes (`400 app_upload_size` if it is 0
+or over the field's `max_bytes`). `201` with `{"id", "field", "status": "uploading", "size", "received": 0,
+"attached": false, "created_at", "chunk_size": 1048576, "max_chunk": 2097152}`. A person may have 20
+photos waiting to be saved in a record per app, and an app's attachments take at most 1 GiB in all
+(`409 app_uploads_pending`, `app_files_full`).
+
+#### `GET …/apps/{app}/uploads/{upload}`
+
+Where the server is: the same object, with `received`, the offset to continue from. For the uploader only.
+
+#### `PUT …/apps/{app}/uploads/{upload}?offset=N`
+
+One chunk: the body is the bytes, up to 2 MiB, as `application/octet-stream`. `offset` must be the
+server's `received`: the chunk is written at that offset and the answer is the object with the new
+`received`. At any other offset it is refused, `409 app_upload_offset` with `params.offset` the bytes the
+server has, and nothing is written. So a chunk that was applied but whose answer was lost, sent again, is
+never applied twice: the client asks where the server is (or reads it from the `409`) and continues from
+there. An upload interrupted by anything, the server's restart included, resumes the same way, and the
+finished file is exactly the bytes sent, once. The body is read whole before anything is written, so a
+connection that drops half way changes nothing; `413 app_upload_chunk` for a chunk that is too large or runs
+past the declared size; `409 app_upload_state` once the upload is finalized.
+
+#### `POST …/apps/{app}/uploads/{upload}/finalize`
+
+`{}`. Checks that all the bytes are there (`409 app_upload_offset` with where the server is, if not), that
+they are a picture of an accepted type within the pixel bound, and makes a thumbnail (a JPEG of at most
+320 pixels on a side, turned the way the picture's orientation says) with the standard library's image
+packages. A file that isn't an accepted picture is removed and answers `400 app_attachment_type`. `200`
+with the attachment: `"status": "ready"`, `content_type`, `width` and `height` as shown. Finalizing a
+ready attachment answers it again, so a retry is safe.
+
+#### `DELETE …/apps/{app}/uploads/{upload}`
+
+Removes an upload, or a ready photo, that no record holds yet. `204`; `409 app_upload_state` if a record holds it.
+
+#### Putting photos in records
+
+An insert or update names attachments in the field's value, a list of their ids (`{"photos": ["…", "…"]}` in
+the action's context, as a `PhotoInput` bound to `/draft/photos` sends). The server attaches them in the same
+transaction that writes the record, and **the whole change is refused, writing nothing, with `422
+app_attachment_bad`** unless each id that isn't already in that record's field is an attachment of this app
+and this field, uploaded by the caller, finalized, and in no record yet. More than `max_files`, a repeat, or
+anything that isn't an id is `app_field_files`. Every way that writes records goes through these checks,
+actions of an older release (whose screens may send anything) and the live release alike. An attachment is
+attached to one record, for good: replacing a photo in a record's list, deleting the record, and restoring it
+all keep the files, since the record's history refers to them.
+
+#### `GET …/apps/{app}/attachments/{attachment}` and `…/thumbnail`
+
+The picture, or its thumbnail, for whoever may **read the record it is in**: with the read scope of their
+role in the app, all records or only the ones they created ([App roles](#app-roles)), and **not for a
+deleted record** (nobody reads its attachments until it is restored). Before it is in a record only its
+uploader reads it, to see what they are about to submit. Whatever else, and for an attachment that doesn't
+exist, is the same `404`, with the same body. The answer has the type found in the bytes (`image/jpeg`,
+`image/png`, `image/gif`; the thumbnail is `image/jpeg`), `X-Content-Type-Options: nosniff`,
+`Content-Disposition: inline` with a file name made from the id (never a name from a person),
+`Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin`, and
+`Cache-Control: private, no-cache` with an `ETag`, so a shared cache keeps nothing and a browser asks the
+server (which checks access again) each time. `Range` and `If-None-Match` work.
+
+#### What lasts, and what is cleaned up
+
+- An attachment in no record **a day after its last change** (an abandoned upload, a photo taken and never
+  submitted) is removed with its files. This happens as an app's uploads start and on a timer
+  (`apps.Service.Maintain`, every ten minutes), which also removes a file no attachment of its space
+  knows (what a failed removal left) and the files of an app that no longer exists. A record's attachments
+  are never touched.
+- **Moving an app** to another space moves its files: each attachment names the space whose directory
+  holds its bytes, reads follow it, and after the move the server copies the files over and updates it,
+  which the timer retries if it was interrupted. The photos stay readable at every step, to the readers of
+  the app in its new space.
+- No route deletes an app or a space. When one does, the rows go with it (`ON DELETE CASCADE`) and the
+  sweep removes the files of an app whose row is gone, and a space's directory takes the rest with it.
+- The agent sees an attachment field's ids and metadata (`content_type`, `size`, `width`, `height`) in
+  `list_app_rows`, never the bytes; it has no tool to upload or attach a photo.
 
 ### Drafts and releases
 

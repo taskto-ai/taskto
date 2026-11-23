@@ -117,6 +117,19 @@ const (
 	CodeAppMigrationUnneeded   Code = "app_migration_unneeded"   // 409: an acknowledgement of a change that isn't happening; params: changes
 	CodeAppMigrationInvalid    Code = "app_migration_invalid"    // 400
 
+	// Photo attachments of apps and their uploads (internal/apps/attachments.go).
+
+	CodeAppFieldFiles       Code = "app_field_files"       // 400: an attachment field's value isn't a list of at most max attachment ids; params: field, max
+	CodeAppAttachmentBad    Code = "app_attachment_bad"    // 400: an attachment can't be used here (unknown, not yours, not finished, another app's or field's, or already attached); params: field
+	CodeAppAttachmentType   Code = "app_attachment_type"   // 400: the bytes aren't a JPEG, PNG or GIF picture the server can read, or it has too many pixels; params: max_megapixels
+	CodeAppUploadSize       Code = "app_upload_size"       // 400: the declared size is 0 or over the field's limit; params: field, max (bytes)
+	CodeAppUploadOffset     Code = "app_upload_offset"     // 409: a chunk wasn't at the upload's offset; params: offset (where the server is)
+	CodeAppUploadState      Code = "app_upload_state"      // 409: the upload isn't in the state that call needs (finished already, or not complete yet)
+	CodeAppUploadChunk      Code = "app_upload_chunk"      // 413: a chunk is over the limit, or runs past the declared size; params: max (bytes)
+	CodeAppUploadsPending   Code = "app_uploads_pending"   // 409: too many unfinished uploads of the caller's; params: max
+	CodeAppFilesFull        Code = "app_files_full"        // 409: the app's attachments are over their total; params: max_mib
+	CodeAppFilesUnavailable Code = "app_files_unavailable" // 503: this server keeps no files for apps
+
 	// The knowledge base (internal/knowledge).
 
 	CodeRequestTooLarge   Code = "request_too_large"    // 413; params: max (bytes)

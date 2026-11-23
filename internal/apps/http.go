@@ -40,6 +40,10 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("POST "+apps+"/{app}/records/{record}/restore", write(s.handleRestore))
 	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
 	mux.Handle("PUT "+apps+"/{app}/roles", write(s.handleSetRoles))
+	// Attachments (attachments.go): the uploads, and the photos kept for records.
+	if s.dataDir != "" {
+		s.attachmentRoutes(mux, read, write, apps)
+	}
 }
 
 // maxBody bounds a request: a definition is at most MaxDefinitionSize, with room for the
@@ -390,7 +394,10 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var incompatible *incompatibleError
 	var migration *migrationError
 	var conflict *conflictError
+	var status *statusError
 	switch {
+	case errors.As(err, &status):
+		writeError(w, status.status, status.code, status.msg, status.params)
 	case errors.As(err, &conflict):
 		// With the record as it is now, if the caller reads it, so they can reapply their change.
 		body := map[string]any{"error": err.Error(), "code": apierr.CodeAppRecordConflict, "params": apierr.Params{"id": conflict.id}}

@@ -58,6 +58,7 @@ func unsafe(name, why string) error {
 //   - any ".." element, even one that would stay inside;
 //   - backslashes, NUL and other control characters;
 //   - Windows' reserved names (NUL, COM1, ...), on Windows;
+//   - any ".taskto" element (ManagedDir), spelled in the same ways: the server's own storage;
 //   - any ".git" element, also spelled as the case-insensitive file systems of macOS and
 //     Windows would read it (".GIT", ".git.", ".g\u200cit", "git~1"): a space's knowledge
 //     base is a git repository, and writing its hooks or config would run code on the
@@ -87,6 +88,9 @@ func CheckName(name string) error {
 		if isGitDir(elem) {
 			return unsafe(name, "git metadata")
 		}
+		if isManagedDir(elem) {
+			return unsafe(name, "the server's managed storage")
+		}
 	}
 	if !filepath.IsLocal(filepath.FromSlash(name)) {
 		return unsafe(name, "not a local name on this system")
@@ -94,18 +98,33 @@ func CheckName(name string) error {
 	return nil
 }
 
+// ManagedDir is the directory of a space's directory that holds what the server stores there
+// besides the knowledge base, such as the files of apps' attachments (internal/apps). It is the
+// server's alone: no name from a person or a model may lead into it, or a document could overwrite
+// or shadow what the server keeps, so CheckName refuses it in every spelling it refuses ".git" in.
+const ManagedDir = ".taskto"
+
+// isManagedDir reports whether a path element names ManagedDir on some file system.
+func isManagedDir(elem string) bool { return normalizedElem(elem) == ManagedDir }
+
 // isGitDir reports whether a path element names a git directory on some file system:
 // case-insensitive, ignoring trailing dots and spaces (Windows), the code points HFS+
 // ignores (macOS), and the 8.3 short name (Windows).
 func isGitDir(elem string) bool {
+	elem = normalizedElem(elem)
+	return elem == ".git" || elem == "git~1"
+}
+
+// normalizedElem is a path element as a case-insensitive file system that ignores some code points
+// and trailing dots and spaces would compare it.
+func normalizedElem(elem string) string {
 	elem = strings.Map(func(r rune) rune {
 		if hfsIgnorable(r) {
 			return -1
 		}
 		return r
 	}, strings.ToLower(elem))
-	elem = strings.TrimRight(elem, ". ")
-	return elem == ".git" || elem == "git~1"
+	return strings.TrimRight(elem, ". ")
 }
 
 // hfsIgnorable reports the code points HFS+ drops when comparing names, the list git

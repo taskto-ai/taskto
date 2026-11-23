@@ -85,7 +85,8 @@ func (s *Service) UpdateApp(ctx context.Context, a Actor, spaceID, appID int64, 
 
 // ListRows returns an app's rows as the app shows them (Items), oldest first: those the
 // user may read, which for a user who reads only their own records are theirs. An offline
-// app's rows are kept, so they are read too.
+// app's rows are kept, so they are read too. An attachment field holds each attachment's
+// metadata, not its bytes.
 func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) ([]map[string]any, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
@@ -108,7 +109,13 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 	if ap.liveDef != nil {
 		def = *ap.liveDef
 	}
-	return Items(def, rows), nil
+	items := Items(def, rows)
+	// An attachment field shows what each attachment is (id, type, size, pixels), never its bytes:
+	// the agent has no tool to read or to upload a file.
+	if err := s.describeAttachments(ctx, ap.ID, def, items); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 //go:embed examples/*.json
@@ -194,13 +201,14 @@ var rules = []string{
 	`Dynamic values are a literal, a data binding {"path": "/abs/path"} (or a path relative to the item inside a List template), or a function call {"call", "args"}.`,
 	`A child list is ["id", …] or a template {"componentId", "path": "/items"} drawing the component once per row; inside it, paths like "amount" or "id" are the row's.`,
 	`The data model: /items is the rows, each with its "id" and the collection's fields; /draft is an empty form to bind inputs to; each summary is at /<name>, as text.`,
-	`collection.fields: [{"name", "type": "string"|"number"|"boolean"|"date"|"time"|"choice", "required"?, "required_when"? (a rule), "max_length"? (string, default 1000, at most 10000), "min"?/"max"? (number), "options"? (choice: 1 to 50 different texts)}], at most 50; a date is YYYY-MM-DD, a time HH:MM (24-hour); names are lowercase letters, digits and _, not id, items or draft. Bind a time to a DateTimeInput with enableTime true and enableDate false; a choice to a ChoicePicker with variant "mutuallyExclusive" and the same options (a value outside them is refused).`,
+	`collection.fields: [{"name", "type": "string"|"number"|"boolean"|"date"|"time"|"choice"|"attachment", "required"?, "required_when"? (a rule), "max_length"? (string, default 1000, at most 10000), "min"?/"max"? (number), "options"? (choice: 1 to 50 different texts)}], at most 50; a date is YYYY-MM-DD, a time HH:MM (24-hour); names are lowercase letters, digits and _, not id, items or draft. Bind a time to a DateTimeInput with enableTime true and enableDate false; a choice to a ChoicePicker with variant "mutuallyExclusive" and the same options (a value outside them is refused).`,
 	`Rules are tiny and declarative, never code: {"field", "op": "eq"|"ne"|"lt"|"lte"|"gt"|"gte", "value": a literal of the field's type} or {"all": [rules]} or {"any": [rules]}, nested at most 3 deep, at most 16 parts; ordering is for number, date and time fields, and a field with no value equals nothing. A field's "required_when" makes it required when its rule holds of the row: the server enforces it on every insert and update, from any screen or release or from you, whatever is shown. The Show component {"when": rule, "source"?: "draft" (default, the form at /draft) | "record" (the record a detail screen shows), "child": id} draws its child only while the rule holds: it hides an input for people and is never a limit on what the server accepts. A summary may add "where": a rule, to count or sum only some rows.`,
 	`actions: {"<event name>": {"kind": "insert"|"update"|"delete"|"navigate", "screen"? (navigate), "then"? (the others)}}. A Button's action {"event": {"name", "context"}} must name one. insert adds a row from the context's fields and clears /draft; update changes the fields the context gives of the row whose "id" it gives; delete removes the row whose "id" it gives.`,
 	`summaries: {"<name>": {"kind": "count"} | {"kind": "sum", "field": "<number field>"}}.`,
 	`Saving a definition (create_app, update_app) saves the app's DRAFT: it changes nothing people use. They keep using the live release until a person who may publish the app publishes the draft, in the Apps page; you have no tool to publish. A new app is a draft only, and is not launchable until published.`,
 	`Publishing checks the draft against the app's rows: removing a field that rows have values for, changing a field's type, making a field required (or conditionally required) that some row lacks, or tightening its limits or a choice's options below a stored value needs the publisher to acknowledge it by name. So prefer adding fields as optional, and keep names and types of fields that have data.`,
 	`Image, Video, AudioPlayer and openUrl are not available: an app never loads or opens outside addresses.`,
+	`Photos: a collection field {"name", "type": "attachment", "max_files"? (1 to 10, default 1), "max_bytes"? (per file, at most 16 MiB, default 8 MiB), "required"?} holds JPEG, PNG or GIF pictures, which people upload with the PhotoInput component {"field": "<that field>", "label"?, "value": {"path": "/draft/<field>"}} (camera or library; on a detail screen with "source": "record" use "/record/<field>" and an update action whose context gives the field) and see with Photos {"value": {"path": "<field>"} inside a List template, or "/record/<field>", "label"?}, which draws thumbnails from this server, never from an outside address. The action's context passes the field's binding ({"path": "/draft/<field>"}) like any other. An attachment field needs definition_version 2, can't be used in a rule, and is stored as a list of attachment ids; the pictures themselves are separate resources that only people who may read the record can fetch. You can read their ids and metadata (list_app_rows) but you cannot upload, read or attach a picture yourself.`,
 }
 
 func describeProps(spec map[string]prop) map[string]string {
