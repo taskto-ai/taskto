@@ -21,8 +21,11 @@ RUN npm install -g --no-fund --no-audit "pnpm@$(node -p "require('./package.json
  && pnpm install --frozen-lockfile
 COPY web/ web/
 COPY agent/ agent/
-# The web app's type check covers its tests, which share fixtures with the Go server.
+# The web app's type check covers its tests, which share fixtures with the Go server: the
+# catalog's test data and the bundled app templates (web/src/dockerfile.test.ts checks that
+# every directory of internal/ the web app imports is copied here).
 COPY internal/apps/testdata/ internal/apps/testdata/
+COPY internal/apps/templates/ internal/apps/templates/
 RUN pnpm run build \
  && pnpm --filter @taskto/agent deploy --prod --legacy /tmp/agent \
  && mkdir -p /out/data /out/agent && cp -R /tmp/agent/package.json /tmp/agent/node_modules agent/dist /out/agent/
