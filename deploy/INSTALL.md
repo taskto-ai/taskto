@@ -937,30 +937,41 @@ else
   files="repository password" cert=off ok=yes
   [ ! -e "$TASKTO_BACKUP_DIR/client.pem" ] || { files="$files client.pem"; cert=on; }
   # Whether restic is given a client certificate, in Compose's settings (step 6) and in the
-  # running schedule (step 9). One added or removed since needs steps 1, 6 and 9 first:
-  # nothing is copied or removed until both agree with this directory.
+  # schedule's container (step 9; stopped or not). One added or removed since needs steps 1,
+  # 6 and 9 first: nothing is copied or removed until both agree with this directory.
   inuse=$(vm <<'EOF'
 cd /srv/taskto
 cfg=$(docker compose config --format json | jq -r '.services["backup-schedule"].environment.RESTIC_TLS_CLIENT_CERT // empty')
-s=$(docker compose ps -q backup-schedule)
+s=$(docker compose ps -a -q backup-schedule)
 [ -n "$s" ] || exit 1
 run=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$s" | sed -n 's/^RESTIC_TLS_CLIENT_CERT=//p')
 echo "$([ -n "$cfg" ] && echo on || echo off)/$([ -n "$run" ] && echo on || echo off)"
 EOF
   ) || inuse=unknown
   if [ "$inuse" = unknown ]; then
-    echo "FAIL: can't read the backups' settings on the VM: is backup-schedule running (step 9)?"; ok=no
+    echo "FAIL: can't read the backups' settings on the VM: has step 9 created backup-schedule?"; ok=no
   elif [ "$inuse" != "$cert/$cert" ]; then
     echo "FAIL: client.pem was added or removed since steps 1, 6 and 9 ran: run them again, then this step"; ok=no
   fi
+  # Each file goes to the VM as <file>.new first. Only once all of them are there are they
+  # switched in together, so a failed copy leaves the set the backups use as it was.
   for f in $files; do
     [ "$ok" = yes ] || break
     ssh -o BatchMode=yes "$TASKTO_SSH" \
-      "sudo -n sh -c 'umask 077; cat > /srv/taskto/backup/$f.new && chown 65532:65532 /srv/taskto/backup/$f.new && mv /srv/taskto/backup/$f.new /srv/taskto/backup/$f'" \
+      "sudo -n sh -c 'umask 077; cat > /srv/taskto/backup/$f.new && chown 65532:65532 /srv/taskto/backup/$f.new'" \
       < "$TASKTO_BACKUP_DIR/$f" || { echo "FAIL: copying $f to the VM"; ok=no; }
   done
-  # No client certificate here, and none recorded: none is left on the VM either.
-  [ "$ok" = no ] || [ "$cert" = on ] || echo 'rm -f /srv/taskto/backup/client.pem' | vm || ok=no
+  if [ "$ok" = yes ]; then
+    # Switched in with one call. No client certificate here, and none recorded: none is left
+    # on the VM either.
+    { echo 'cd /srv/taskto/backup'
+      for f in $files; do echo "mv $f.new $f"; done
+      [ "$cert" = on ] || echo 'rm -f client.pem'
+    } | vm || { echo "FAIL: switching the new files in on the VM"; ok=no; }
+  else
+    echo 'rm -f /srv/taskto/backup/*.new' | vm || true
+  fi
+  # The files are in place.
   [ "$ok" = yes ] && vm <<'EOF'
 cd /srv/taskto
 # The repository is created the first time. One that is there already (a reinstall) is
@@ -1157,7 +1168,7 @@ Steps 15 and 16 set them up and prove a restore. After that:
 - To restore after losing the VM: install a new one with the same `TASKTO_BACKUP_DIR` (the
   repository's address and password, kept off the VM for this) up to step 9. Then, on the
   VM, `docker compose stop backup-schedule`, so it doesn't back up the new, empty server;
-  copy the files with step 15's Run from its `files=` line through the `for` loop's `done`
-  (not the rest of it, whose backup would be of the empty server); and follow [docs/install.md](../docs/install.md#restore),
+  copy the files with step 15's Run from its `files=` line through its `# The files are in place.`
+  line (not the rest of it, whose backup would be of the empty server); and follow [docs/install.md](../docs/install.md#restore),
   "From the restic repository", in `/srv/taskto`, naming the snapshot by its ID from
   `snapshots` rather than `latest`. Then run steps 9 to 17.
