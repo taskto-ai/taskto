@@ -1578,6 +1578,13 @@ new collection stay as they are: a value of another type than its field's is lef
 the app shows, and an update of such a row must give the fields that don't fit. A draft equal
 to the live release is `409 app_nothing_to_publish`.
 
+The rows are looked at only for a publisher who reads every record (read scope `all`). For
+anyone else the publish is judged by the two collections alone, as if every row were affected:
+every removed or retyped field, every field that became (or was added as) required, and every
+tighter `max_length`, `min` or `max` is to be acknowledged, whatever the rows hold. So the
+answer is the same for a bound that some row breaks and one that none does, and repeated
+publishes read nothing out of the data.
+
 #### `POST …/apps/{app}/rollback`
 
 `{"version": 4, "release": 2}`. Makes an earlier release the live one: the app serves it as
@@ -1586,7 +1593,9 @@ as it is (it then differs from the live release, and publishing it makes a new r
 return to the one before). It is refused (`409 app_release_incompatible`, `params.fields`
 the fields that don't fit, never rows) unless every row fits that release's collection: its
 required fields present, every value of its field's type and within its limits; fields it
-doesn't declare are ignored, and kept. `409 app_release_already_live` for the live release,
+doesn't declare are ignored, and kept. Whether the rows fit is told only to a publisher who
+reads every record: for anyone else a rollback to a release whose collection isn't the live
+one's is `403 app_forbidden` (`read_records`). `409 app_release_already_live` for the live release,
 `404 app_release_not_found` for one the app doesn't have. `200` with the app.
 
 #### `GET …/apps/{app}/releases`

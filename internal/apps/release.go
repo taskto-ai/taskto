@@ -30,7 +30,17 @@ import (
 // acknowledges each such change by name, nothing more and nothing less (Publish.Acknowledge);
 // the answer names the changes (field and kind), never the rows or their values. Rollback
 // points the app at an earlier release and is refused unless every row fits that release's
-// collection. A release records the capabilities its screen needs (Definition.Requires), so a
+// collection.
+//
+// What a refusal says about the rows is only for those who read them all. For a publisher whose
+// read scope isn't "all", publish judges the draft by the two schemas alone: every change that
+// could affect a stored row is to be acknowledged, whether or not one does, so neither the
+// refusal nor its list of changes tells whether a row lacks a field or holds a value past a
+// bound (tightening a bound again and again would read the values out). A rollback by such a
+// publisher, which can't be judged without the rows, is refused unless the release's collection
+// is the live one's.
+//
+// A release records the capabilities its screen needs (Definition.Requires), so a
 // client that lacks one shows that it must update, and the version of the definition format.
 //
 // The rows are the app's, not a release's: a release only says how they are drawn and which
@@ -190,6 +200,11 @@ func sameDefinition(a, b Definition) bool {
 		return false
 	}
 	return reflect.DeepEqual(vx, vy)
+}
+
+// sameCollection reports whether two collections are the same.
+func sameCollection(a, b Collection) bool {
+	return sameDefinition(Definition{Collection: a}, Definition{Collection: b})
 }
 
 const releaseFrom = `
@@ -354,11 +369,15 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 			}
 			base = &cur.liveDef.Collection
 		}
-		rows, err := loadRows(ctx, tx, appID, everything) // the check is the server's, over every row
-		if err != nil {
-			return err
+		// A publisher who doesn't read every row is judged by the schemas alone.
+		blind := acc.ReadRecords != access.ScopeAll
+		var rows []Row
+		if !blind {
+			if rows, err = loadRows(ctx, tx, appID, everything); err != nil {
+				return err
+			}
 		}
-		if err := acknowledged(breakingChanges(base, checked.Collection, rows), req.Acknowledge); err != nil {
+		if err := acknowledged(breakingChanges(base, checked.Collection, rows, blind), req.Acknowledge); err != nil {
 			return err
 		}
 		raw, err := json.Marshal(checked)
@@ -432,6 +451,13 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 		if cur.Live != nil && cur.Live.Number == target.Number {
 			return ErrReleaseLive
 		}
+		if acc.ReadRecords != access.ScopeAll {
+			// Whether the rows fit is theirs to learn only if they read them all; the same
+			// collection holds the same rows.
+			if cur.liveDef == nil || !sameCollection(cur.liveDef.Collection, target.Definition.Collection) {
+				return forbidden(capReadRecords)
+			}
+		}
 		rows, err := loadRows(ctx, tx, appID, everything)
 		if err != nil {
 			return err
@@ -480,13 +506,15 @@ func holds(r Row, name string) bool {
 // breakingChanges works out what publishing a collection next over the live one (nil before
 // the first release) does to the rows stored, as the kinds of SchemaChange, sorted by field.
 // Only a field that differs from the live release's is looked at, and only a row that is
-// affected counts: a change nothing stored is touched by is free.
-func breakingChanges(live *Collection, next Collection, rows []Row) []SchemaChange {
+// affected counts: a change nothing stored is touched by is free. Blind, for a publisher who
+// doesn't read every row, rows are not looked at: every change that could affect one counts,
+// so the answer is the same whatever the rows hold.
+func breakingChanges(live *Collection, next Collection, rows []Row, blind bool) []SchemaChange {
 	if live == nil {
 		return nil
 	}
 	var out []SchemaChange
-	anyRow := func(test func(Row) bool) bool { return slices.ContainsFunc(rows, test) }
+	anyRow := func(test func(Row) bool) bool { return blind || slices.ContainsFunc(rows, test) }
 	for _, was := range live.Fields {
 		nf, kept := next.field(was.Name)
 		switch {
@@ -504,7 +532,7 @@ func breakingChanges(live *Collection, next Collection, rows []Row) []SchemaChan
 		if nf.Required && !was.Required && anyRow(func(r Row) bool { return !holds(r, was.Name) }) {
 			out = append(out, SchemaChange{ChangeFieldRequired, was.Name})
 		}
-		if anyRow(func(r Row) bool {
+		if blind && narrower(was, nf) || !blind && anyRow(func(r Row) bool {
 			v, ok := r.Data[was.Name]
 			if !ok || v == nil {
 				return false
@@ -528,6 +556,24 @@ func breakingChanges(live *Collection, next Collection, rows []Row) []SchemaChan
 		return out[i].Change < out[j].Change
 	})
 	return out
+}
+
+// narrower reports whether field next, of the same type as was, refuses some value was takes:
+// a shorter max_length, or a min or max that is new or tighter.
+func narrower(was, next Field) bool {
+	length := func(f Field) int {
+		if f.MaxLength == 0 {
+			return DefaultMaxLength
+		}
+		return f.MaxLength
+	}
+	if length(next) < length(was) {
+		return true
+	}
+	if next.Min != nil && (was.Min == nil || *next.Min > *was.Min) {
+		return true
+	}
+	return next.Max != nil && (was.Max == nil || *next.Max < *was.Max)
 }
 
 // checkAcknowledge refuses an acknowledgement that is malformed: an unknown kind, a field
