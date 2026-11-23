@@ -13,6 +13,7 @@ import (
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/notifications"
 )
 
 // timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the schema's format for times.
@@ -835,9 +836,23 @@ func applyChanges(ctx context.Context, tx *sql.Tx, sp access.Space, a Actor, boa
 				userID = as.ID
 			}
 		}
+		var previous sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT assignee_id FROM cards WHERE id = ?`, cardID).Scan(&previous); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE cards SET assignee_id = ?, assignee_agent = ? WHERE id = ?`,
 			userID, agent, cardID); err != nil {
 			return err
+		}
+		// Someone newly assigned a card by someone else is told, in their inbox (and by push, if
+		// they chose that). Assigning yourself, or the same person again, tells nobody.
+		if as := ch.Assignee.Value; as != nil && !agent && as.ID != a.UserID && (!previous.Valid || previous.Int64 != as.ID) {
+			if err := notifications.Add(ctx, tx, notifications.Notice{
+				UserID: as.ID, WorkspaceID: sp.WorkspaceID, Kind: notifications.KindCardAssigned,
+				Ref: notifications.Ref{Space: sp.ID, Board: boardID, Card: cardID},
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	if ch.BlockedReason.Set {

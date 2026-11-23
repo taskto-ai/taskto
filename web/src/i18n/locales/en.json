@@ -725,7 +725,12 @@
     "home_defaults_shared": "Defaults are only for the apps of shared spaces.",
     "app_query_cursor": "That page can no longer be found. Start again from the first page.",
     "app_query_field": "The app has no field “{field}” that can be used here.",
-    "app_query_condition": "The filter on “{field}” doesn’t fit the field."
+    "app_query_condition": "The filter on “{field}” doesn’t fit the field.",
+    "notification_not_found": "That notification isn't available.",
+    "push_endpoint_invalid": "This browser's push address isn't valid.",
+    "push_keys_invalid": "This browser's push keys aren't valid.",
+    "push_too_many_subscriptions": "You already have push turned on for {max} devices. Turn it off on one of them first.",
+    "push_no_workspace": "Push notifications are for people who are in a workspace."
   },
   "language": {
     "label": "Language",
@@ -744,7 +749,8 @@
       "dictation": "Dictation",
       "password": "Password",
       "tokens": "Access tokens",
-      "about": "About"
+      "about": "About",
+      "notifications": "Notifications"
     },
     "general": {
       "language": "Default language",
@@ -1180,7 +1186,8 @@
       "boards": "Boards",
       "apps": "Apps",
       "settings": "Settings",
-      "home": "Home"
+      "home": "Home",
+      "notifications": "Notifications"
     },
     "noWorkspace": "You aren't a member of any workspace. Ask an admin for an invite.",
     "logOut": "Log out",
@@ -1517,5 +1524,45 @@
       "pin": "pin"
     },
     "removePinNamed": "Remove {name} from the menu"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "bell": "Notifications",
+    "bellUnread": "Notifications, {count} unread",
+    "intro": "What happened that you may want to see. Push notifications are optional and only a prompt to look here.",
+    "pushSettings": "Notification settings",
+    "none": "No notifications yet.",
+    "markAllRead": "Mark all as read",
+    "older": "Show older",
+    "unread": "Unread:",
+    "unavailable": "This notification isn't available any more.",
+    "openInbox": "Open your notifications",
+    "kind": {
+      "card_assigned": "A card was assigned to you: {title}",
+      "app_effect_failed": "An action in {app} didn't finish and needs you to retry it",
+      "changed": "Something changed. Open it to see what you can still see."
+    },
+    "push": {
+      "card_assigned": "A card was assigned to you",
+      "app_effect_failed": "An app action needs your attention",
+      "changed": "Something changed"
+    },
+    "settings": {
+      "title": "Your notifications",
+      "inbox": "Notifications always appear in your inbox, whether or not this browser can show push notifications.",
+      "openInbox": "Open the inbox",
+      "pushTitle": "Push notifications on this device",
+      "pushIntro": "Optional. When on, this device is told about a new notification even when TaskTo.AI isn't open. Nothing is sent to it until you turn this on.",
+      "unsupported": "This browser can't receive push notifications here. Your notifications still appear in the inbox.",
+      "iosInstall": "On iPhone and iPad, push notifications work only in the installed app. Add TaskTo.AI to your Home Screen (see About), open it from there and come back to this page. Your notifications appear in the inbox either way.",
+      "denied": "Notifications are blocked for this site in your browser. To turn push on, allow notifications for this site in the browser's settings, then come back. Your notifications still appear in the inbox.",
+      "dismissed": "You didn't answer the browser's question, so push is still off.",
+      "off": "Push is off on this device.",
+      "on": "Push is on for this device.",
+      "turnOn": "Turn on push on this device",
+      "turnOff": "Turn off push on this device",
+      "turnOffFailed": "This device's browser wouldn't end its push subscription, so push is still on. Try again.",
+      "caveat": "A push says only that something is new, never what it is, and opens the app, which checks what you may see. It can arrive late, or not at all: the inbox is the record. Signing out turns push off on that device."
+    }
   }
 }

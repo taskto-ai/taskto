@@ -16,9 +16,12 @@
 // - waits: a new version installs but doesn't take over until the page asks it to (the
 //   update prompt, src/pwa), so an update never reloads a page with unsaved work.
 //
+// - shows a push and opens the app when it is clicked (see "Push" below): optional, only for a
+//   person who turned it on, and never the way the app learns anything.
+//
 // It never stores or answers anything from /api or any other request the server answers with
 // a person's data: it answers only static files under the app's own names, and page
-// navigations; and it stores only at install.
+// navigations; and it stores only at install, and the few words a push says (see "Push").
 
 const VERSION = '__VERSION__'
 const PRECACHE = /* __PRECACHE__ */ []
@@ -84,8 +87,98 @@ async function cleanUp() {
 }
 
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting()
+  const data = event.data
+  if (!data) return
+  if (data.type === 'SKIP_WAITING') self.skipWaiting()
+  if (data.type === 'PUSH_STRINGS') event.waitUntil(keepStrings(data.strings))
 })
+
+// --- Push --------------------------------------------------------------------------------------
+//
+// A push is a prompt to look at the app's inbox, not a message: the server sends the notification's
+// ID and its kind, encrypted to this browser (RFC 8291), and nothing else, never a title or a name
+// (docs/pwa.md#notifications). The worker says it in a few words of the person's language, which the
+// page gave it when push was turned on (the worker can't load the app's translations), and a
+// click opens /notification/{id}: the app reads it as the signed-in person and checks access
+// again before it shows where it leads. A push may arrive late, twice or never; nothing relies on it.
+
+const BRAND = 'TaskTo.AI'
+const KINDS = ['card_assigned', 'app_effect_failed', 'changed']
+// Not under PREFIX: an update of the app keeps what the person's language said.
+const STRINGS_CACHE = 'taskto-push-strings'
+const STRINGS_KEY = '/__taskto-push-strings'
+const MAX_STRING = 200
+
+// Keeps the words for each kind of push: only the kinds the server sends, as short text.
+async function keepStrings(strings) {
+  if (!strings || typeof strings !== 'object') return
+  const clean = {}
+  for (const kind of KINDS) {
+    if (typeof strings[kind] === 'string' && strings[kind].length <= MAX_STRING) clean[kind] = strings[kind]
+  }
+  const cache = await caches.open(STRINGS_CACHE)
+  await cache.put(STRINGS_KEY, new Response(JSON.stringify(clean)))
+}
+
+async function readStrings() {
+  try {
+    const hit = await (await caches.open(STRINGS_CACHE)).match(STRINGS_KEY)
+    return hit ? await hit.json() : {}
+  } catch {
+    return {}
+  }
+}
+
+function notificationId(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : 0
+}
+
+self.addEventListener('push', (event) => {
+  event.waitUntil(showPush(event))
+})
+
+// A browser that is sent a push must show something: whatever arrives, even what can't be read,
+// shows the generic words.
+async function showPush(event) {
+  let data = {}
+  try {
+    data = event.data ? event.data.json() : {}
+  } catch {
+    data = {}
+  }
+  const id = notificationId(data?.id)
+  const kind = KINDS.includes(data?.kind) ? data.kind : 'changed'
+  const strings = await readStrings()
+  await self.registration.showNotification(BRAND, {
+    body: strings[kind] || '',
+    // One notification replaces its own earlier one, never another's.
+    tag: id ? `taskto-notification-${id}` : 'taskto-notification',
+    data: { id },
+    icon: '/icons/icon-192.png',
+  })
+  // An open page asks the inbox again (the badge).
+  for (const client of await self.clients.matchAll({ type: 'window', includeUncontrolled: true })) {
+    client.postMessage({ type: 'PUSH_RECEIVED' })
+  }
+}
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const id = notificationId(event.notification.data?.id)
+  event.waitUntil(openApp(id ? `/notification/${id}` : '/'))
+})
+
+// The app's own window if one is open (it follows the address without reloading), else a new one.
+async function openApp(path) {
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  const open = windows.find((c) => new URL(c.url).origin === self.location.origin)
+  if (open) {
+    await open.focus()
+    open.postMessage({ type: 'OPEN', path })
+    return
+  }
+  await self.clients.openWindow(path)
+}
 
 self.addEventListener('fetch', (event) => {
   const request = event.request

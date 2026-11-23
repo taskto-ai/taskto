@@ -21,6 +21,7 @@ const PATHS = {
   edit: 'M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4',
   archive: 'M3 4h18v4H3zM5 8v12h14V8M10 12h4',
   mic: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3',
+  bell: 'M6 17h12l-1.5-2v-5a4.5 4.5 0 0 0-9 0v5L6 17zM10 20h4',
   browser: 'M3 5h18v14H3zM3 9h18M6 7h.01M9 7h.01',
 } as const
 
