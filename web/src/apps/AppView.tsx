@@ -223,7 +223,7 @@ export function AppView({
             onActionRef.current?.()
           } catch (e) {
             setSimulated(null)
-            if (e instanceof ApiError && e.code === RECORD_CONFLICT) {
+            if (e instanceof ApiError && (e.code === RECORD_CONFLICT || e.code === 'offline_record_changed')) {
               // Show the record as it is now, so the next try is made against its latest revision.
               try {
                 apply(await transportRef.current.load())

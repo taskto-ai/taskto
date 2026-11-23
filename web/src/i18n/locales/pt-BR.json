@@ -893,12 +893,24 @@
     "app_signature_type": "Uma assinatura deve ser uma imagem PNG.",
     "offline_downloads_disabled": "Um administrador desativou os downloads offline deste espaço.",
     "session_account_changed": "Este navegador está conectado como uma conta diferente daquela a que estes registros pertencem.",
-    "offline_unsupported": "Isto exige conexão. Offline, você pode adicionar registros e navegar pela cópia baixada.",
+    "offline_unsupported": "Isto exige conexão. Offline, você pode adicionar registros, alterar ou excluir os baixados e navegar pela cópia baixada.",
     "notification_not_found": "Essa notificação não está disponível.",
     "push_endpoint_invalid": "O endereço de push deste navegador não é válido.",
     "push_keys_invalid": "As chaves de push deste navegador não são válidas.",
     "push_too_many_subscriptions": "Você já ativou o push em {max} dispositivos. Desative em um deles primeiro.",
-    "push_no_workspace": "O push é para quem participa de um espaço de trabalho."
+    "push_no_workspace": "O push é para quem participa de um espaço de trabalho.",
+    "offline_record_unsynced": "Este registro ainda não chegou ao servidor. Altere ou exclua depois que ele for sincronizado, ou descarte-o pela lista abaixo.",
+    "offline_record_busy": "Uma alteração anterior neste registro está sendo enviada. Tente de novo depois que ela for sincronizada.",
+    "offline_edit_unavailable": "Para alterar este registro offline, baixe o app de novo enquanto estiver online.",
+    "offline_photos_unsupported": "Adicionar fotos a um registro que já existe exige conexão.",
+    "offline_nothing_to_change": "Nada é diferente, então não há o que alterar.",
+    "offline_field_removed": "O app não tem mais o campo “{field}”.",
+    "offline_item_changed": "Isto mudou em outra aba ou janela. Revise de novo.",
+    "offline_not_writer": "As alterações estão sendo feitas em outra aba. Assuma o controle aqui para alterar registros nesta aba.",
+    "offline_copy_changed": "A cópia deste app neste dispositivo foi substituída durante a verificação. Ela aparece como está agora: revise de novo.",
+    "offline_review_again": "O registro mudou de novo nesse meio tempo. Ele aparece como está agora: revise e escolha outra vez.",
+    "offline_record_unreadable": "Você não pode mais ler este registro, então sua alteração não pode ser aplicada sobre ele. Você pode manter a versão do servidor ou descartar a alteração.",
+    "offline_record_changed": "Este registro mudou neste dispositivo (em outra aba ou janela) depois que esta tela foi desenhada. Ele aparece como está agora: confira e tente de novo."
   },
   "language": {
     "label": "Idioma",
@@ -1705,6 +1717,11 @@
     "removePinNamed": "Remover {name} do menu"
   },
   "offline": {
+    "writer": {
+      "elsewhere": "As alterações estão sendo feitas em outra aba. Os registros e a fila aparecem aqui e são alterados lá.",
+      "waiting": "Esperando a outra aba largar…",
+      "takeOver": "Fazer alterações aqui"
+    },
     "title": "Uso offline",
     "download": "Baixar para uso offline",
     "downloadNamed": "Baixar {name} para uso offline",
@@ -1769,7 +1786,15 @@
       "clearSynced": "Limpar registros sincronizados",
       "waiting_one": "{count} registro aguardando sincronização",
       "waiting_many": "{count} de registros aguardando sincronização",
-      "waiting_other": "{count} registros aguardando sincronização"
+      "waiting_other": "{count} registros aguardando sincronização",
+      "itemChange": "{app}: alteração em {summary}",
+      "itemChangeAny": "{app}: alteração em um registro",
+      "itemDelete": "{app}: excluir {summary}",
+      "itemDeleteAny": "{app}: excluir um registro",
+      "pendingNote": "Mostrado aqui como você deixou; o servidor ainda não o tem.",
+      "waitsEarlier": "Espera a resposta a uma alteração anterior no mesmo registro.",
+      "review": "Revisar",
+      "reviewNamed": "Revisar {name}"
     },
     "attention": {
       "refused": "O servidor não aceitou: {error}",
@@ -1777,7 +1802,10 @@
       "archived": "O app ou o espaço dele está arquivado ou offline, então não aceita registros agora.",
       "outdated": "O app mudou depois que este registro foi feito. Baixe-o de novo e tente outra vez.",
       "gave_up": "Não foi possível alcançar o servidor após várias tentativas.",
-      "photo": "Uma foto não pôde ser enviada, então o registro também não foi."
+      "photo": "Uma foto não pôde ser enviada, então o registro também não foi.",
+      "conflict": "O registro mudou no servidor depois da sua alteração. Nada foi sobrescrito: revise para escolher.",
+      "deleted": "O registro foi excluído no servidor. Sua alteração não foi aplicada e o registro não foi restaurado.",
+      "schema": "O que você digitou não cabe no app como ele está agora. Fica guardado aqui: corrija ou descarte."
     },
     "sync": {
       "paused": "A sincronização está pausada: entre de novo para enviar o que está aguardando.",
@@ -1822,10 +1850,71 @@
       "discard": "Descartar e sair",
       "cancel": "Cancelar",
       "stillWaiting": "Alguns registros ainda aguardam: o servidor não pôde recebê-los ainda. Tente de novo ou descarte-os.",
+      "notWriter": "As alterações estão sendo feitas em outra aba, que não deixou esta assumir. Sincronize naquela aba, ou feche-a e tente de novo.",
       "unreadableSchema": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e esta versão do TaskTo.AI não consegue verificar: foram salvos por uma versão mais nova. Você pode mantê-los e sair sem apagar nada, e depois entrar com a versão mais nova para enviá-los, ou descartá-los.",
       "unreadableStorage": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e o armazenamento do dispositivo não pode ser lido agora para verificar. Você pode mantê-los e sair sem apagar nada, ou descartá-los.",
       "keep": "Mantê-los e sair"
-    }
+    },
+    "pendingChanges_one": "{count} alteração em um registro baixado aguarda sincronização. A tela a mostra como você a deixou.",
+    "pendingChanges_other": "{count} alterações em registros baixados aguardam sincronização. A tela as mostra como você as deixou.",
+    "resolve": {
+      "title": "Revisar {name}",
+      "close": "Fechar",
+      "empty": "(vazio)",
+      "yes": "sim",
+      "no": "não",
+      "photos_one": "{count} foto",
+      "photos_other": "{count} fotos",
+      "mine": "Sua alteração",
+      "notInApp": "(o app não tem mais este campo)",
+      "deletedMark": "(excluído)",
+      "photosKept": "As fotos ficam como estão.",
+      "save": "Salvar e tentar de novo",
+      "cancel": "Cancelar",
+      "edit": "Editar e tentar de novo",
+      "reapply": "Aplicar minha alteração por cima",
+      "deleteAnyway": "Excluir mesmo assim",
+      "keepServer": "Manter a versão do servidor",
+      "column": {
+        "field": "Campo",
+        "original": "Quando você começou",
+        "mine": "Sua alteração",
+        "deleted": "Sua exclusão",
+        "server": "No servidor agora"
+      },
+      "conflict": {
+        "title": "Este registro mudou no servidor",
+        "titleDelete": "Você excluiu um registro que mudou desde então",
+        "intro": "Sua alteração não foi enviada, então nada foi sobrescrito. Compare-a com o registro como o servidor o tem agora e escolha.",
+        "unreadable": "O servidor tem uma versão mais nova deste registro, mas você não pode mais lê-lo, então sua alteração não pode ser aplicada. Você pode descartá-la.",
+        "checking": "Verificando o que o servidor tem agora…",
+        "nowDeleted": "Este registro foi excluído no servidor nesse meio tempo. Sua alteração não pode ser aplicada sobre ele."
+      },
+      "deleted": {
+        "title": "Este registro foi excluído no servidor",
+        "body": "Sua alteração não foi aplicada e o registro não foi restaurado. Você pode restaurá-lo e aplicar sua alteração, ou descartar sua alteração.",
+        "bodyDelete": "Você queria excluí-lo, e ele já está excluído. Não há mais nada a enviar.",
+        "checking": "Verificando os registros excluídos…",
+        "byAt": "Excluído por {by}, {when}.",
+        "at": "Excluído {when}.",
+        "unknown": "Ele não está entre os registros excluídos que você pode restaurar: pode ter sumido de vez, ou não ser mais seu para alterar.",
+        "restore": "Restaurar e aplicar minha alteração",
+        "discard": "Descartar minha alteração",
+        "clear": "Limpar isto"
+      },
+      "schema": {
+        "title": "O que você digitou não cabe mais no app",
+        "intro": "O app mudou depois que isto foi feito. O que você digitou fica guardado: corrija o que não cabe e tente de novo, ou descarte.",
+        "checking": "Verificando com o app como ele está agora…",
+        "fix": "Corrigir e tentar de novo"
+      },
+      "refusedDelete": {
+        "title": "O servidor não aceitou esta exclusão",
+        "body": "O motivo aparece no item. Você pode tentar de novo pela lista ou descartá-lo."
+      },
+      "photos_many": "{count} de fotos"
+    },
+    "pendingChanges_many": "{count} de alterações em registros baixados aguardam sincronização. A tela as mostra como você as deixou."
   },
   "notifications": {
     "title": "Notificações",

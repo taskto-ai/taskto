@@ -37,9 +37,10 @@ import {
   settle,
   unsentOf,
 } from './runtime'
-import { type Download, NotSaved, OfflineStore, type OutboxItem, scopeKey } from './store'
+import { approvalOf, type Download, NotSaved, OfflineStore, type OutboxItem, scopeKey } from './store'
 import { backoff, LEASE_MS, LOCK_RETRY_MS, MAX_ATTEMPTS, SyncEngine } from './sync'
 import { localPhotos, offlineTransport } from './transport'
+import { soleWriter } from './writer.testing'
 
 const scope = { workspace: 1, space: 2, app: 1 }
 const base = '/api/workspaces/1/spaces/2/apps/1'
@@ -153,7 +154,13 @@ function engineOf(store: OfflineStore, c = clock(), extra: ConstructorParameters
 
 // An engine that sends nothing: the screen's button asks it to run, and the tests decide when.
 function idle(store: OfflineStore) {
-  return { user: store.user, store, engine: { run: async () => {} } as unknown as SyncEngine, stop: () => {} }
+  return {
+    user: store.user,
+    store,
+    engine: { run: async () => {} } as unknown as SyncEngine,
+    stop: () => {},
+    writer: soleWriter,
+  }
 }
 
 // Queues an insert the way the offline screen's button does, through the transport.
@@ -429,9 +436,10 @@ test('a write the device refuses is never shown as saved, and the input is still
   await expect(store.enqueue({ ...(await fakeItem(store)) }, [])).rejects.toMatchObject({ reason: 'quota' })
 })
 
-async function fakeItem(store: OfflineStore): Promise<Omit<OutboxItem, 'seq'>> {
+async function fakeItem(store: OfflineStore): Promise<Omit<OutboxItem, 'seq' | 'version'>> {
   const now = new Date().toISOString()
   return {
+    kind: 'insert',
     id: 'x',
     user: store.user,
     scopeKey: scopeKey(scope),
@@ -493,12 +501,16 @@ test('the offline screen is the downloaded release, its numbers say what they co
   expect(await store.listItems()).toHaveLength(1)
 })
 
-test('what needs the server stays online: a button that changes or deletes a record is refused offline', async () => {
+test('what needs the server stays online: nothing that is not a change to a record, and no change from a copy that was never told which records may change', async () => {
   const store = await openStore()
   const d = download(7)
   const runtime = idle(store)
   const transport = offlineTransport(runtime, d)
-  await expect(transport.act(press('delete_expense', { id: 1 }))).rejects.toMatchObject({ code: 'offline_unsupported' })
+  // A copy made before the server said which records may be changed offers no change: the person
+  // is told to download again (docs/offline.md).
+  await expect(transport.act(press('delete_expense', { id: 1 }))).rejects.toMatchObject({
+    code: 'offline_edit_unavailable',
+  })
   await expect(transport.act(press('nope', {}))).rejects.toBeInstanceOf(ApiError)
   expect(await store.listItems()).toEqual([])
 })
@@ -681,8 +693,8 @@ test('signing out deletes the account’s database, the downloads and the queue 
   await runtime.store.putDownload(download(7))
   await queue(runtime.store, { description: 'x', amount: '1' }, download(7))
   expect((await indexedDB.databases()).map((x) => x.name)).toContain('taskto-offline-7')
-  const shown = (await runtime.store.unsynced()).map((i) => i.id)
-  await deactivate({ purge: true, approved: new Set(shown) })
+  const shown = await unsentOf(7)
+  await deactivate({ purge: true, approved: approvalOf(shown.items) })
   expect((await indexedDB.databases()).map((x) => x.name)).not.toContain('taskto-offline-7')
   expect(lastUser()).toBeNull()
   expect(runtimeState().runtime).toBeNull()
@@ -696,7 +708,7 @@ test('signing out with records not sent offers to sync or discard, and syncing s
   const store = await openStore()
   await queue(store, { description: 'A', amount: '1' })
   const engine = engineOf(store)
-  const runtime = { user: 7, store, engine, stop: () => {} }
+  const runtime = { user: 7, store, engine, stop: () => {}, writer: soleWriter }
   let up = false
   const calls = fakeFetch({
     [`POST ${base}/actions`]: () => (up ? { body: [] } : { status: 503, body: { error: 'busy' } }),
@@ -966,7 +978,7 @@ test('signing out deletes the account’s database even when it was never opened
   expect(await deactivate({ purge: true, user: 7 })).toHaveLength(1)
   expect((await indexedDB.databases()).map((x) => x.name)).toContain('taskto-offline-7')
   const shown = await unsentOf(7)
-  expect(await deactivate({ purge: true, user: 7, approved: new Set(shown.ids) })).toEqual([])
+  expect(await deactivate({ purge: true, user: 7, approved: approvalOf(shown.items) })).toEqual([])
   expect((await indexedDB.databases()).map((x) => x.name)).not.toContain('taskto-offline-7')
   expect(lastUser()).toBeNull()
 })
@@ -1540,7 +1552,7 @@ test('what is unsent that the person was not shown is never deleted by signing o
   const other = await OfflineStore.open(7)
   await queue(other, { description: 'Made just now', amount: '1' })
   other.close()
-  const left = await deactivate({ purge: true, user: 7, approved: new Set(asked.ids) })
+  const left = await deactivate({ purge: true, user: 7, approved: approvalOf(asked.items) })
   expect(left).toHaveLength(1)
   // Nothing was torn down, and nothing deleted.
   expect(runtimeState().runtime?.user).toBe(7)
@@ -1555,7 +1567,8 @@ test('a database found empty is marked as it is deleted: a stale tab can no long
   const stale = await OfflineStore.open(7)
   expect(await settle(7)).toEqual([])
   // The record is refused, so the person is told it was not saved, never that it was.
-  const item: Omit<OutboxItem, 'seq'> = {
+  const item: Omit<OutboxItem, 'seq' | 'version'> = {
+    kind: 'insert',
     id: 'late',
     user: 7,
     scopeKey: scopeKey(scope),

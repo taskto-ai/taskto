@@ -8,9 +8,11 @@
 // deleting it) or to discard it.
 
 import { useEffect, useRef, useState } from 'react'
+import { errorText } from '../api'
 import { useT } from '../i18n'
 import { ConfirmButton } from '../settings/parts'
 import type { Runtime } from './runtime'
+import { NotWriter } from './store'
 
 export function LogoutGuard({
   runtime,
@@ -36,6 +38,7 @@ export function LogoutGuard({
   const [busy, setBusy] = useState(false)
   const [left, setLeft] = useState(count)
   const [stuck, setStuck] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
   const first = useRef<HTMLButtonElement>(null)
   useEffect(() => first.current?.focus(), [])
   useEffect(() => {
@@ -47,13 +50,28 @@ export function LogoutGuard({
   const sync = async () => {
     setBusy(true)
     setStuck(false)
+    setFailure(null)
     try {
       if (!runtime) return
+      // Trying again changes items that need attention, which only the offline writer does (writer.ts).
+      // In a tab that is not, pressing "Sync now" is the person asking for the right, as the
+      // take-over button is: it is asked for first, and when this tab does not get it the person
+      // is told, and nothing is attempted.
+      if (!runtime.writer.holds()) {
+        await runtime.writer.takeOver()
+        if (!runtime.writer.holds()) {
+          setFailure(t('offline.logout.notWriter'))
+          return
+        }
+      }
       await runtime.engine.retry()
       const unsent = await runtime.store.unsynced()
       setLeft(unsent.length)
       if (unsent.length === 0) onSignOut()
       else setStuck(true)
+    } catch (e) {
+      // The right was lost while this ran (another tab took it), or the device refused.
+      setFailure(e instanceof NotWriter ? t('offline.logout.notWriter') : errorText(e))
     } finally {
       setBusy(false)
     }
@@ -71,6 +89,11 @@ export function LogoutGuard({
         {stuck && (
           <p role="alert" className="tt-error">
             {t('offline.logout.stillWaiting')}
+          </p>
+        )}
+        {failure && (
+          <p role="alert" className="tt-error">
+            {failure}
           </p>
         )}
         <div className="tt-row-actions">

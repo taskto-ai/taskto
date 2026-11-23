@@ -318,6 +318,8 @@ export type OfflineApp = {
   captured_at: string
   // The caller's operation keys that made downloaded records: key → record id.
   operations?: Record<string, number>
+  // Which of the downloaded records the caller may change or delete now.
+  modifiable?: number[]
 }
 
 // A widget an app offers for Home (docs/api.md, Home): a bounded view, never markup of its own.

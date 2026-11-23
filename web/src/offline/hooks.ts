@@ -10,6 +10,12 @@ export function useRuntime(): RuntimeState {
   return useSyncExternalStore(subscribeRuntime, runtimeState)
 }
 
+// Whether this tab is the one that changes existing records (writer.ts): the others read.
+export function useWriter(runtime: Runtime | null): boolean {
+  const subscribe = useCallback((fn: () => void) => runtime?.writer.subscribe(fn) ?? (() => {}), [runtime])
+  return useSyncExternalStore(subscribe, () => runtime?.writer.holds() ?? false)
+}
+
 export type OfflineData = {
   loaded: boolean
   downloads: Download[]

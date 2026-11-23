@@ -84,6 +84,12 @@ type OfflineApp struct {
 	// id. A device that sent a record and holds it in its outbox as well as in this download
 	// knows by it that the two are one.
 	Operations map[string]int64 `json:"operations"`
+	// Modifiable is which of the downloaded records the caller may change or delete now: the
+	// ones their role's modify scope reaches (all of them, or only those they created), and none
+	// when the space is read-only. A client offers an offline edit or deletion only for these. It
+	// saves a wait and decides nothing: every send is checked again (Service.act), and a record
+	// that stopped being changeable is answered as one the app doesn't have.
+	Modifiable []int64 `json:"modifiable"`
 }
 
 // offlineApp answers a download: the caller's view of the live release and their records.
@@ -135,7 +141,49 @@ func (s *Service) offlineApp(ctx context.Context, sp access.Space, actor Actor, 
 	if out.Operations, err = s.operationsOf(ctx, appID, actor.UserID, rows); err != nil {
 		return OfflineApp{}, err
 	}
+	if out.Modifiable, err = s.modifiableOf(ctx, sp, appID, actor.UserID, acc.ModifyRecords, rows); err != nil {
+		return OfflineApp{}, err
+	}
 	return out, nil
+}
+
+// modifiableOf is the ids of rows (the caller's download) that the caller may change or delete:
+// every one for the modify scope "all", the ones they created for "own", none otherwise or in a
+// space that can't be written.
+func (s *Service) modifiableOf(ctx context.Context, sp access.Space, appID, userID int64, scope access.Scope, rows []Row) ([]int64, error) {
+	out := []int64{}
+	if may(sp, access.Write) != nil {
+		return out, nil
+	}
+	switch scope {
+	case access.ScopeAll:
+		for _, r := range rows {
+			out = append(out, r.ID)
+		}
+		return out, nil
+	case access.ScopeOwn:
+	default:
+		return out, nil
+	}
+	in := make(map[int64]bool, len(rows))
+	for _, r := range rows {
+		in[r.ID] = true
+	}
+	found, err := s.db.QueryContext(ctx, `SELECT id FROM app_rows WHERE app_id = ? AND deleted_at IS NULL AND created_by = ? ORDER BY id`, appID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = found.Close() }()
+	for found.Next() {
+		var id int64
+		if err := found.Scan(&id); err != nil {
+			return nil, err
+		}
+		if in[id] {
+			out = append(out, id)
+		}
+	}
+	return out, found.Err()
 }
 
 // operationsOf is the caller's operations that made one of rows: key to the record's id.

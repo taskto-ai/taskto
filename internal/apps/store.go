@@ -894,6 +894,43 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 // sent back is drawn by the release the action came from, limited to the fields the live
 // release declares (shownBy): nothing the live app leaves unseen is returned.
 func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
+	msgs, err := s.actOnce(ctx, sp, actor, appID, action)
+	// A request this caller made before, under the same operation and release, and that committed,
+	// is answered with its receipt even when what they may do has changed since: a client that
+	// sent it and lost the answer (a device that was offline) must be able to learn that it is
+	// in, or a refusal of the access they have now would leave it not knowing whether it is. The
+	// receipt is no data: the rows are the caller's to read, and aren't sent.
+	//
+	// An app archived since is the same: the change is in, and the device learns it from the receipt
+	// rather than from a refusal that says nothing of it (ErrOffline).
+	//
+	// The receipt answers on the route it was made on only: the space and the app of the route are
+	// the ones it was made in (a caller who lost their access to that space does not get it through
+	// any other space they can reach).
+	if err != nil &&
+		(errors.Is(err, ErrNotFound) || errors.Is(err, ErrReadOnly) || errors.Is(err, ErrForbidden) || errors.Is(err, ErrOffline)) &&
+		s.committed(ctx, sp.ID, actor, appID, action) {
+		return []Message{}, nil
+	}
+	return msgs, err
+}
+
+// committed reports whether the operation the action names was made by actor, in this app and
+// this space, under the same request (the release it names, the action and its context): it is
+// recorded in the transaction of the change it made, so a record of it is a change that committed.
+func (s *Service) committed(ctx context.Context, spaceID int64, actor Actor, appID int64, action ClientAction) bool {
+	if action.Operation == "" || action.Release == nil || !operationPattern.MatchString(action.Operation) {
+		return false
+	}
+	var hash string
+	err := s.db.QueryRowContext(ctx, `SELECT o.request_hash FROM app_operations o
+		JOIN apps a ON a.id = o.app_id
+		WHERE a.id = ? AND a.space_id = ? AND o.user_id = ? AND o.operation = ?`,
+		appID, spaceID, actor.UserID, action.Operation).Scan(&hash)
+	return err == nil && hash == requestHash(*action.Release, action)
+}
+
+func (s *Service) actOnce(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
 	if err := may(sp, access.Read); err != nil {
 		return nil, err
 	}

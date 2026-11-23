@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { createRoot } from 'react-dom/client'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { CliAccount, CliAccounts, CliLogin } from '../api'
 import { format } from '../i18n'
@@ -374,6 +375,38 @@ test('several accounts of one CLI: each its own card, a name, and another one ad
   await waitFor(() => expect(count(calls, 'POST', '/api/me/cli-accounts/claude-2/login')).toBe(1))
   // Codex's first account isn't connected: no second one is offered before it.
   expect(screen.queryByRole('button', { name: 'Add another account Codex' })).toBeNull()
+})
+
+test('a name typed right after the cards appear is kept: the form does not reset its draft in an effect that runs after the first commit', async () => {
+  fakeCli({
+    'GET /api/me/cli-accounts': list(account('claude', 'Claude Code', { state: 'connected', label: 'Personal' })),
+  })
+  // Outside act, as a real page runs: the cards are committed by the scheduler, and a person (or a
+  // test) types as soon as the form is on screen, before the effects of that commit have run.
+  const flag = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+  flag.IS_REACT_ACT_ENVIRONMENT = false
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  try {
+    root.render(<CliAccountsTab />)
+    await new Promise<void>((resolve) => {
+      const seen = new MutationObserver(() => {
+        if (!host.querySelector('form[aria-label^="Name of"]')) return
+        seen.disconnect()
+        resolve()
+      })
+      seen.observe(host, { childList: true, subtree: true })
+    })
+    const input = host.querySelector('form[aria-label^="Name of"] input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Work' } })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(input.value).toBe('Work')
+  } finally {
+    root.unmount()
+    host.remove()
+    flag.IS_REACT_ACT_ENVIRONMENT = true
+  }
 })
 
 test("a workspace's shared accounts: terms for API keys, the member's mode, and admins add one and set modes", async () => {

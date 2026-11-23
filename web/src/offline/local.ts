@@ -9,7 +9,7 @@
 
 import { ApiError, type OfflineApp } from '../api'
 import { holds, type Rule } from '../apps/rules'
-import type { Download, OutboxItem } from './store'
+import { type ChangeKind, type Download, kindOf, type OutboxItem } from './store'
 
 type Definition = OfflineApp['definition']
 type Field = Definition['collection']['fields'][number] & {
@@ -40,17 +40,61 @@ export function parseInsert(def: Definition, context: Record<string, unknown>): 
     const v = parseField(f, context[f.name])
     if (v !== undefined) values[f.name] = v
   }
-  for (const f of fields) {
+  requireFields(def, values)
+  return values
+}
+
+// The first required field a record lacks: always required, or required when its rule holds.
+export function requireFields(def: Definition, values: Record<string, unknown>): void {
+  for (const f of def.collection.fields as Field[]) {
     const missing = values[f.name] === undefined
     if (missing && f.required) throw refused('app_field_required', { field: f.name })
     if (missing && f.required_when && holds(f.required_when, values)) {
       throw refused('app_field_required_when', { field: f.name })
     }
   }
-  return values
 }
 
-function parseField(f: Field, raw: unknown): unknown {
+// What an update sets, each value as the server stores it, and null for a field it clears. A
+// mirror of the server's Plan for an update: only the fields the context names (and not its id),
+// each of which must be one the collection declares.
+export function parseUpdate(def: Definition, context: Record<string, unknown>): Record<string, unknown> {
+  const byName = new Map((def.collection.fields as Field[]).map((f) => [f.name, f]))
+  const changes: Record<string, unknown> = {}
+  for (const [name, raw] of Object.entries(context)) {
+    if (name === 'id') continue
+    const f = byName.get(name)
+    if (!f) throw refused('bad_request', { field: name })
+    changes[name] = parseField(f, raw) ?? null
+  }
+  return changes
+}
+
+// The record's own fields: an item without its id and the keys the device adds (`_revision`,
+// `_pending`).
+export function fieldsOf(item: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(item)) if (k !== 'id' && !k.startsWith('_')) out[k] = v
+  return out
+}
+
+// Applies an update's changes to a record's fields and checks the result against the collection,
+// as the server does before it writes: a required field must not end up missing.
+export function applyUpdate(
+  def: Definition,
+  fields: Record<string, unknown>,
+  changes: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...fields }
+  for (const [k, v] of Object.entries(changes)) {
+    if (v === null) delete merged[k]
+    else merged[k] = v
+  }
+  requireFields(def, merged)
+  return merged
+}
+
+export function parseField(f: Field, raw: unknown): unknown {
   // A scanner's text is taken as it was read: a line break or a tab around a code is no padding to
   // trim but a character that isn't part of one (the server refuses it too).
   if (f.type === 'barcode' && typeof raw === 'string' && raw.trim() !== '' && CONTROL.test(raw)) {
@@ -221,17 +265,24 @@ function parseSignature(f: Field, v: unknown): string | undefined {
 // Items as the data model holds them: id, then the values.
 type Item = Record<string, unknown>
 
-// The records an app shows offline: the downloaded ones, then the ones queued on this device.
+// The records an app shows offline: the downloaded ones with the changes waiting on this device
+// applied, then the records queued here. A record the person changed is shown as they left it and
+// says so (`_pending`); one they deleted is not shown. `_revision` stays the revision the change
+// was based on, so a further change is based on it too; once the server acknowledged a change the
+// record is the server's, as it answered (unknown, and so with no revision, if its answer didn't
+// say).
 export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
   const base = dataModelOf(download.messages)
-  const downloaded = (Array.isArray(base?.items) ? (base.items as Item[]) : []).slice()
-  // A record this device sent is among the downloaded ones once a download was taken after the
-  // server had it (the download names the operation that made each of the person's records):
-  // it is the server's, shown once, and never again as the device's own.
-  const local = queue
-    .filter((q) => q.action.name in download.definition.actions)
-    .filter((q) => !(q.operation in (download.operations ?? {})))
-    .map((q) => {
+  let items = (Array.isArray(base?.items) ? (base.items as Item[]) : []).slice()
+  const created: Item[] = []
+  for (const q of [...queue].sort((a, b) => a.seq - b.seq)) {
+    if (!(q.action.name in download.definition.actions)) continue
+    // A record this device sent is among the downloaded ones once a download was taken after the
+    // server had it (the download names the operation that made each of the person's records):
+    // it is the server's, shown once, and never again as the device's own.
+    if (q.operation in (download.operations ?? {})) continue
+    const kind = kindOf(q)
+    if (kind === 'insert') {
       // What the server will store: the values the context gives, parsed. (The queue holds the
       // context as sent; a context that parsed when it was queued parses again.)
       let values: Record<string, unknown> = {}
@@ -240,9 +291,94 @@ export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
       } catch {
         values = {}
       }
-      return { id: q.record.id, ...values }
-    })
-  return [...downloaded, ...local]
+      created.push({ id: q.record.id, ...values })
+    } else {
+      items = overlay(download.definition, items, q, kind)
+    }
+  }
+  return [...items, ...created]
+}
+
+// One waiting change to a downloaded record, applied to what is shown. A change is applied only to
+// the revision it was based on: the downloaded record is at that revision (or says none), so the
+// values the change was made on, the values it sets and the revision shown are one record's. A
+// record the copy holds at another revision (a download was taken since) is not mixed with it:
+//   - a change the server has acknowledged is the server's word at its revision, and shows only
+//     if no newer copy of the record is held (a no-op that left no revision of its own, or an
+//     answer older than the copy, never masks the copy);
+//   - a change still waiting shows the record as downloaded, marked for review (`_pending:
+//     'review'`): sending it will say what became of it (a conflict, mostly), and no revision it
+//     wasn't made on is stamped on its values.
+function overlay(def: Definition, items: Item[], q: OutboxItem, kind: ChangeKind): Item[] {
+  const at = items.findIndex((i) => i.id === q.record.id)
+  if (at < 0) return items
+  const held = typeof items[at]._revision === 'number' ? (items[at]._revision as number) : undefined
+  const based = held === undefined || q.record.revision === null || held === q.record.revision
+  const replace = (next: Item) => items.map((it, i) => (i === at ? next : it))
+  if (q.state === 'synced') {
+    // What the server answered for an update it acknowledged is the record as it has it: its
+    // revision is only ever shown with its values, never with the ones this device made.
+    const ackRevision = typeof q.ack?._revision === 'number' ? q.ack._revision : undefined
+    if (kind === 'update' && q.ack && ackRevision !== undefined) {
+      return held === undefined || ackRevision >= held ? replace({ ...q.ack, id: q.record.id }) : items
+    }
+    // Without the server's word the copy is the only record there is: a newer one is never covered.
+    if (!based) return items
+  } else if (!based) {
+    return replace({ ...items[at], _pending: 'review' })
+  }
+  if (kind === 'delete') return items.filter((_, i) => i !== at)
+  let changes: Record<string, unknown>
+  try {
+    changes = parseUpdate(def, q.action.context)
+  } catch {
+    return items
+  }
+  const next: Item = { ...items[at] }
+  for (const [k, v] of Object.entries(changes)) {
+    if (v === null) delete next[k]
+    else next[k] = v
+  }
+  if (q.state === 'synced') {
+    // The server didn't say what it has: the person's values, and no revision to base a change on.
+    delete next._revision
+  } else {
+    next._pending = 'update'
+    if (q.record.revision !== null) next._revision = q.record.revision
+  }
+  return replace(next)
+}
+
+// The downloaded record, as the server had it (before any change waiting here).
+export function downloadedItem(download: Download, id: number): Item | undefined {
+  const base = dataModelOf(download.messages)
+  return (Array.isArray(base?.items) ? (base.items as Item[]) : []).find((i) => i.id === id)
+}
+
+// The download with one record replaced by the server's (an item), or, with null, removed: what a
+// conflict's resolution makes the copy hold. The counts follow.
+export function withRecord(download: Download, id: number, record: Item | null): Download {
+  let found = false
+  const messages = (download.messages as Message[]).map((m) => {
+    const update = m.updateDataModel as { path?: string; value?: unknown } | undefined
+    if (update?.path !== '/' || !update.value || typeof update.value !== 'object') return m
+    const value = update.value as Record<string, unknown>
+    const items = Array.isArray(value.items) ? (value.items as Item[]) : []
+    found = items.some((i) => i.id === id)
+    const next = record
+      ? found
+        ? items.map((i) => (i.id === id ? record : i))
+        : [...items, record]
+      : items.filter((i) => i.id !== id)
+    return { ...m, updateDataModel: { ...update, value: { ...value, items: next } } }
+  })
+  const delta = record ? (found ? 0 : 1) : found ? -1 : 0
+  return {
+    ...download,
+    messages,
+    records: Math.max(0, download.records + delta),
+    total: Math.max(0, download.total + delta),
+  }
 }
 
 // The first updateDataModel at the root: the whole data model the download was taken with.
@@ -304,10 +440,18 @@ export function viewOf(download: Download, queue: OutboxItem[]): unknown[] {
   })
 }
 
-// What the screen is sent after a record was queued: as the server answers an insert. An app with
-// one screen has its whole data model drawn again (the form emptied); an app with screens has the
-// records, the summaries and the form replaced, and goes on to the screen the action names.
-export function answerInsert(download: Download, queue: OutboxItem[], actionName: string): unknown[] {
+// What the screen is sent after a change was queued: as the server answers it. An app with one
+// screen has its whole data model drawn again (the form emptied); an app with screens has the
+// records, the summaries (and, for an insert, the form) replaced, the record a detail screen shows
+// shown again after an update and emptied after a delete, and goes on to the screen the action
+// names.
+export function answerChange(
+  download: Download,
+  queue: OutboxItem[],
+  actionName: string,
+  kind: ChangeKind = 'insert',
+  id?: number,
+): unknown[] {
   const surface = surfaceOf(download.messages)
   const items = itemsOf(download, queue)
   const def = download.definition
@@ -316,11 +460,16 @@ export function answerInsert(download: Download, queue: OutboxItem[], actionName
   for (const [name, s] of Object.entries(def.summaries ?? {}).sort(([a], [b]) => (a < b ? -1 : 1))) {
     out.push(dataMessage(surface, `/${name}`, summarize(s, items)))
   }
-  out.push(dataMessage(surface, '/draft', {}))
+  if (kind === 'insert') out.push(dataMessage(surface, '/draft', {}))
+  if (kind === 'update') out.push(dataMessage(surface, '/record', items.find((i) => i.id === id) ?? {}))
+  if (kind === 'delete') out.push(dataMessage(surface, '/record', {}))
   const then = def.actions[actionName]?.then
   if (then) out.push(dataMessage(surface, '/screen', then))
   return out
 }
+
+export const answerInsert = (download: Download, queue: OutboxItem[], actionName: string): unknown[] =>
+  answerChange(download, queue, actionName, 'insert')
 
 // A navigate action, which changes no record: the screen to show and, for one that shows a record,
 // the record.

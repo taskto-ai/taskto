@@ -16,6 +16,7 @@ import { deactivate, rememberUser, setSyncDeps } from './runtime'
 import { type Download, OfflineStore, scopeKey } from './store'
 import { SyncEngine } from './sync'
 import { offlineTransport } from './transport'
+import { soleWriter } from './writer.testing'
 
 const scope = { workspace: 1, space: 2, app: 1 }
 const base = '/api/workspaces/1/spaces/2/apps/1'
@@ -158,7 +159,13 @@ test('offline, a record with a required code, location and signature is queued, 
   const store = await OfflineStore.open(7)
   const d = download(7)
   await store.putDownload(d)
-  const runtime = { user: 7, store, engine: { run: async () => {} } as unknown as SyncEngine, stop: () => {} }
+  const runtime = {
+    user: 7,
+    store,
+    engine: { run: async () => {} } as unknown as SyncEngine,
+    stop: () => {},
+    writer: soleWriter,
+  }
   const transport = offlineTransport(runtime, d)
   const picture = blob('png bytes', 'image/png')
   const staged = transport.photos.stage(picture)

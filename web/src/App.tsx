@@ -15,6 +15,7 @@ import { ForeignGuard } from './offline/ForeignGuard'
 import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
 import { activate, deactivate, discardForeign, lastUser, settle, type Unsent, unsentOf } from './offline/runtime'
+import { approvalOf } from './offline/store'
 import { navigate } from './router'
 import { Shell } from './shell/Shell'
 import { claimDrafts, forgetDrafts } from './uiState'
@@ -125,15 +126,15 @@ export function App() {
   // and a person with records not yet sent is asked first: every sign-out goes through here.
   // `keep`: the account's database is not deleted (the person chose so, since this version
   // couldn't tell whether it holds unsent records).
-  const signOut = useCallback(async ({ user, next, ids }: Leaving & Partial<Pick<Unsent, 'ids'>>, keep = false) => {
-    const approved = new Set(ids)
+  const signOut = useCallback(async ({ user, next, items }: Leaving & Partial<Pick<Unsent, 'items'>>, keep = false) => {
+    const approved = approvalOf(items ?? [])
     // What the device holds is decided first and in one step: if a record that was not shown to the
     // person has appeared since (another tab of the account, a stale one), nothing is deleted and
     // nobody is signed out: they are asked again about what is there now.
     if (!keep) {
       const left = await settle(user, approved)
       if (left.length > 0) {
-        setLeaving({ user, next, count: left.length, ids: left, unreadable: null })
+        setLeaving({ user, next, count: left.length, items: left, unreadable: null })
         return
       }
     }
@@ -149,7 +150,7 @@ export function App() {
     forgetDrafts()
     const left = await deactivate(keep ? { purge: false, keep: true, user } : { purge: true, user, approved })
     if (left.length > 0) {
-      setLeaving({ user, next, count: left.length, ids: left, unreadable: null })
+      setLeaving({ user, next, count: left.length, items: left, unreadable: null })
       return
     }
     setLeaving(null)
@@ -190,7 +191,7 @@ export function App() {
   // holds, which the person decides about first (nothing of them is shown).
   const leavingGuard = leaving && (
     <LogoutGuard
-      key={leaving.ids.join()}
+      key={leaving.items.map((i) => `${i.id}@${i.version}`).join()}
       runtime={runtime}
       count={leaving.count}
       unreadable={leaving.unreadable}

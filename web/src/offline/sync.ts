@@ -19,16 +19,36 @@
 //                            then it needs attention and the person says when to try again
 //   403, 404                 access was lost (the space, the app, the right to add): the item
 //                            needs attention, and if the app can no longer be opened at all the
-//                            downloaded copy is removed
+//                            downloaded copy is removed; it says nothing of an earlier send of the
+//                            same change, which may be on the server (`unconfirmed` stays)
 //   409 (archived, outdated) and 400/422 (the server refused it)
 //                            needs attention: not retried until the person says so; the input is
 //                            kept
+//   409 app_record_conflict  (an update or a delete) the record changed since the change was based
+//                            on it: needs attention with the record as it is now, if the person
+//                            may read it; nothing is overwritten
+//   422 app_row_not_found    (an update or a delete) the record is gone (deleted, or no longer the
+//                            person's to change): needs attention; it is never brought back by the
+//                            change
+//   a field that doesn't fit the app as it is now (removed, retyped, now required, a choice that
+//   is no longer one): needs attention as a schema problem; the input is kept for repair
 
 import { ApiError, api, forAccount, SESSION_LOST } from '../api'
 import { UploadCancelled, uploadPhoto } from '../apps/photos'
-import type { Attachment, AttentionReason, ItemError, OfflineStore, OutboxItem } from './store'
+import {
+  type Attachment,
+  type AttentionReason,
+  type ChangeKind,
+  type Conflict,
+  type ItemError,
+  kindOf,
+  type OfflineStore,
+  type OutboxItem,
+  type Problem,
+} from './store'
 
 export const MAX_ATTEMPTS = 8
+const MAX_REORDERS = 50
 const BASE_DELAY = 2_000
 const MAX_DELAY = 5 * 60_000
 // How long a claim on an item holds without being renewed, and how soon a tab that found another
@@ -51,19 +71,41 @@ type Outcome =
   // The session is another account's: nothing is sent until it is this queue's again.
   | { kind: 'account' }
   // Not ours to send now (another tab holds it): left alone, looked at again when its claim ends.
-  | { kind: 'skipped'; until?: number }
+  // `ordered`: an earlier change to the same record had no answer for good when the claim was made.
+  | { kind: 'skipped'; until?: number; ordered?: boolean }
   // `exhausted`: it failed for the last time and now needs attention: the items behind it are not
   // held back by it.
   | { kind: 'transient'; error: ItemError; exhausted?: boolean }
-  | { kind: 'attention'; reason: AttentionReason; error: ItemError; revoked?: boolean }
+  | {
+      kind: 'attention'
+      reason: AttentionReason
+      error: ItemError
+      revoked?: boolean
+      conflict?: Conflict
+      problems?: Problem[]
+    }
 
 export function describe(e: unknown): ItemError {
   if (e instanceof ApiError) return { status: e.status, code: e.code, params: e.params, message: e.message }
   return { message: e instanceof Error ? e.message : String(e) }
 }
 
-// What a failed send means; the item's attachments say whether a photo was the cause.
-export function classify(e: unknown): Outcome {
+// The server's codes for a value that doesn't fit the field it is for, or a field the app doesn't
+// have: when an item that was fine when it was made gets one of these, the app changed under it.
+const SCHEMA_CODES = new Set([
+  'app_field_required',
+  'app_field_required_when',
+  'app_field_not_option',
+  'app_field_not_number',
+  'app_field_not_date',
+  'app_field_not_time',
+  'app_field_files',
+  'bad_request',
+])
+
+// What a failed send means; the item's attachments say whether a photo was the cause. `kind` is
+// what the item does; `restoring`, that the step that failed was the restore of a deleted record.
+export function classify(e: unknown, kind: ChangeKind = 'insert', restoring = false): Outcome {
   const error = describe(e)
   if (!(e instanceof ApiError)) return { kind: 'transient', error }
   const { status, code } = e
@@ -71,6 +113,27 @@ export function classify(e: unknown): Outcome {
   if (status === 401) return { kind: 'paused' }
   if (status >= 500 || status === 408 || status === 425 || status === 429) return { kind: 'transient', error }
   if (code === 'app_attachment_bad' || code === 'app_upload_state') return { kind: 'attention', reason: 'photo', error }
+  if (code === 'app_record_conflict' && status === 409) {
+    const current = (e.body as { current?: unknown } | undefined)?.current
+    const here = current && typeof current === 'object' ? (current as Record<string, unknown>) : null
+    // The restore found the record deleted again, at a revision newer than the one the person was
+    // shown (there is no live record to show): it is a deleted record still, and is offered a
+    // restore again, at the revision it has now.
+    if (restoring && !here) return { kind: 'attention', reason: 'deleted', error }
+    return { kind: 'attention', reason: 'conflict', error, conflict: { current: here } }
+  }
+  // Not allowed to restore: the person's role, said as the server's refusal of this change.
+  if (restoring && (status === 403 || status === 404)) return { kind: 'attention', reason: 'refused', error }
+  if (code === 'app_row_not_found' && kind !== 'insert') return { kind: 'attention', reason: 'deleted', error }
+  if ((status === 400 || status === 422) && code && SCHEMA_CODES.has(code) && kind !== 'delete') {
+    const field = (e.params as { field?: unknown } | undefined)?.field
+    return {
+      kind: 'attention',
+      reason: 'schema',
+      error,
+      problems: [{ field: typeof field === 'string' ? field : '', code, params: e.params }],
+    }
+  }
   if (status === 403 || status === 404) {
     if (code === 'space_archived' || code === 'app_offline') return { kind: 'attention', reason: 'archived', error }
     return {
@@ -86,6 +149,46 @@ export function classify(e: unknown): Outcome {
   }
   return { kind: 'attention', reason: 'refused', error }
 }
+
+// Whether a failure is the server's verdict on the operation itself: what it says after it has
+// looked the operation up (a change it applied is answered as it was, never refused), so that it
+// doesn't have the change. What the server refuses before that (the person's access, an archived
+// or unpublished app, a missing release) says nothing of an earlier send, and neither does a
+// photo that didn't go up.
+export function definite(o: Extract<Outcome, { kind: 'attention' }>): boolean {
+  switch (o.reason) {
+    case 'conflict':
+    case 'deleted':
+    case 'schema':
+      return true
+    case 'refused':
+      return o.error.status === 400 || o.error.status === 422 || o.error.code === 'app_operation_reused'
+    case 'outdated':
+      return o.error.code === 'app_release_outdated'
+    default:
+      return false
+  }
+}
+
+// An item that has an earlier change to the same record that the server hasn't answered for good
+// is not sent: a record's changes are answered in the order they were made, so that what a delete
+// finds on the server is whatever the edit before it made of it, never the other way round. An
+// answer is for good when the server has the change (synced) or refused it (it needs the person,
+// and was not left unconfirmed).
+export function waitsForEarlier(item: OutboxItem, queue: readonly OutboxItem[]): boolean {
+  if (kindOf(item) === 'insert') return false
+  return queue.some(
+    (e) =>
+      e.seq < item.seq &&
+      e.scopeKey === item.scopeKey &&
+      kindOf(e) !== 'insert' &&
+      e.record.id === item.record.id &&
+      !(e.state === 'synced' || (e.state === 'attention' && !e.unconfirmed)),
+  )
+}
+
+// Why an item needs the person to settle it, not another try.
+export const RESOLVE = new Set<AttentionReason>(['conflict', 'deleted', 'schema'])
 
 export type SyncStatus = {
   // Why nothing is being sent, if so: the session ended, the browser is signed in as someone
@@ -159,6 +262,9 @@ export class SyncEngine {
     this.now = deps.now ?? Date.now
     this.upload = deps.upload ?? uploadPhoto
     this.request = deps.request ?? api
+    // Whatever this engine's pages write is written only while the account signed in here is its
+    // owner, asked in the transaction that writes.
+    store.requireAccount(() => this.ownerSignedIn())
   }
 
   status(): SyncStatus {
@@ -188,6 +294,16 @@ export class SyncEngine {
   // Every request made for the queue says whose it is: the server refuses it for any other session.
   private get headers() {
     return forAccount(this.store.user)
+  }
+
+  // For what the person settles by hand (offline/choices.ts): the same, and whether this engine
+  // still acts for its owner (it runs, and the account signed in here is theirs).
+  ownerHeaders(): Record<string, string> {
+    return this.headers
+  }
+
+  canAct(): boolean {
+    return !this.stopped && this.ownerSignedIn()
   }
 
   // Starts sending whenever there is something to send: now, when the network comes back, when the
@@ -276,23 +392,29 @@ export class SyncEngine {
   async retry(id?: string): Promise<void> {
     for (const item of await this.store.listItems()) {
       if (id !== undefined && item.id !== id) continue
+      // "Sync now" for the whole queue leaves alone what only the person can settle: sending it
+      // again would be answered the same way.
+      if (id === undefined && item.state === 'attention' && item.attention && RESOLVE.has(item.attention)) continue
       if (item.state === 'queued' || item.state === 'attention') {
         // Decided on the item as it is stored: one a tab just synced is never put back.
-        await this.store.updateItem(item.id, (i) =>
-          i.state !== 'queued' && i.state !== 'attention'
-            ? undefined
-            : {
-                ...i,
-                state: 'queued',
-                attempts: 0,
-                nextAttemptAt: undefined,
-                attention: undefined,
-                error: undefined,
-                // A photo that was refused is uploaded again from the start.
-                attachments: i.attachments.map((a) =>
-                  a.state === 'uploaded' && !a.serverId ? { ...a, state: 'pending' } : a,
-                ),
-              },
+        await this.store.updateItem(
+          item.id,
+          (i) =>
+            i.state !== 'queued' && i.state !== 'attention'
+              ? undefined
+              : {
+                  ...i,
+                  state: 'queued',
+                  attempts: 0,
+                  nextAttemptAt: undefined,
+                  attention: undefined,
+                  error: undefined,
+                  // A photo that was refused is uploaded again from the start.
+                  attachments: i.attachments.map((a) =>
+                    a.state === 'uploaded' && !a.serverId ? { ...a, state: 'pending' } : a,
+                  ),
+                },
+          { guarded: true },
         )
       }
     }
@@ -302,15 +424,19 @@ export class SyncEngine {
 
   // Holds an item as a local draft: it stays on this device and isn't sent until it is sent on purpose.
   async hold(id: string): Promise<void> {
-    await this.store.updateItem(id, (i) =>
-      i.state === 'synced' || i.state === 'syncing' ? undefined : { ...i, state: 'draft' },
+    await this.store.updateItem(
+      id,
+      (i) => (i.state === 'synced' || i.state === 'syncing' ? undefined : { ...i, state: 'draft' }),
+      { guarded: true },
     )
     this.emit()
   }
 
   async release(id: string): Promise<void> {
-    await this.store.updateItem(id, (i) =>
-      i.state === 'draft' ? { ...i, state: 'queued', attempts: 0, nextAttemptAt: undefined } : undefined,
+    await this.store.updateItem(
+      id,
+      (i) => (i.state === 'draft' ? { ...i, state: 'queued', attempts: 0, nextAttemptAt: undefined } : undefined),
+      { guarded: true },
     )
     await this.run()
   }
@@ -350,8 +476,13 @@ export class SyncEngine {
     }
     // Wake up when the first item that is waiting is due.
     try {
-      const waiting = (await this.store.listItems())
-        .filter((i) => i.state === 'queued' && i.nextAttemptAt !== undefined)
+      // An item behind an earlier change to its record is not woken by its own wait: it can't be
+      // sent before that one is answered, and when it is (here, in this pass, or by the person's
+      // choice, which asks for a pass) the pass looks for it again. Its own overdue wait would
+      // otherwise set a zero-delay timer that finds nothing, for ever.
+      const queue = await this.store.listItems()
+      const waiting = queue
+        .filter((i) => i.state === 'queued' && i.nextAttemptAt !== undefined && !waitsForEarlier(i, queue))
         .map((i) => i.nextAttemptAt as number)
       let at = Math.min(...waiting, wake ?? Number.POSITIVE_INFINITY)
       // Another tab holds the lock: no sooner than the retry delay, whatever an item's own wait
@@ -385,7 +516,8 @@ export class SyncEngine {
       // Another tab is sending: this one's items are its to send as well, if it gets to them. A tab
       // that skipped doesn't just trust that: it looks again soon, and the lock's holder may have
       // been past the point where it would have seen an item added a moment ago.
-      if ((await this.store.listItems()).some((i) => this.due(i))) {
+      const queue = await this.store.listItems()
+      if (queue.some((i) => this.due(i) && !waitsForEarlier(i, queue))) {
         wake = this.now() + LOCK_RETRY_MS
         this.lockedUntil = wake
       }
@@ -399,6 +531,10 @@ export class SyncEngine {
   private async sendAll(exclusive: boolean): Promise<number | undefined> {
     const done = new Set<string>()
     let wake: number | undefined
+    // Items the claim refused to put ahead of an earlier change to their record: the earlier one is
+    // sent first (it is looked for again), and this one after it. Bounded, so a queue that keeps
+    // changing under the pass can't hold it for ever.
+    let reordered = 0
     for (;;) {
       if (this.stopped || this.paused) return wake
       // The queue is the signed-in account's: when someone else is, it waits for its owner.
@@ -406,7 +542,8 @@ export class SyncEngine {
         this.pause('account')
         return wake
       }
-      const next = (await this.store.listItems()).find((i) => !done.has(i.id) && this.due(i))
+      const queue = await this.store.listItems()
+      const next = queue.find((i) => !done.has(i.id) && this.due(i) && !waitsForEarlier(i, queue))
       if (!next) return wake
       done.add(next.id)
       const outcome = await this.send(next, exclusive)
@@ -421,6 +558,7 @@ export class SyncEngine {
       if (outcome.kind === 'skipped' && outcome.until !== undefined) {
         wake = Math.min(wake ?? Number.POSITIVE_INFINITY, outcome.until)
       }
+      if (outcome.kind === 'skipped' && outcome.ordered && reordered++ < MAX_REORDERS) done.delete(next.id)
       // The network is down: the items behind this one would find the same. (An item that has run
       // out of tries is the person's to deal with now: it holds nothing back.)
       if (outcome.kind === 'transient' && !outcome.exhausted) return wake
@@ -429,8 +567,23 @@ export class SyncEngine {
 
   // The claim on an item, made in its own transaction: taken if nobody holds it, if the holder's
   // time has run out, or if it is ours already (or we hold the lock). Not taken otherwise.
-  private claim(i: OutboxItem, exclusive: boolean): OutboxItem | undefined {
+  //
+  // `queue` is the item's app's queue as the claiming transaction reads it: a record's changes are
+  // answered in the order they were made, and that is decided here, atomically with the claim, not
+  // on the list the pass chose from (the person may have put an earlier item of the record back to
+  // waiting since). `ordered` is set when that is why nothing was claimed.
+  private claim(
+    i: OutboxItem,
+    exclusive: boolean,
+    attempt: string,
+    queue: readonly OutboxItem[],
+    ordered: { value: boolean },
+  ): OutboxItem | undefined {
     const now = this.now()
+    if (waitsForEarlier(i, queue)) {
+      ordered.value = true
+      return undefined
+    }
     if (i.state === 'queued') {
       if (i.nextAttemptAt !== undefined && i.nextAttemptAt > now) return undefined
     } else if (i.state === 'syncing') {
@@ -439,39 +592,78 @@ export class SyncEngine {
     } else {
       return undefined
     }
-    return { ...i, state: 'syncing', lease: { owner: this.owner, until: now + LEASE_MS } }
+    // A change to an existing record may be on the server from the moment it is sent, whatever
+    // the answer is: until a definite one, nothing else is written to that record's item.
+    const changes = kindOf(i) !== 'insert'
+    return {
+      ...i,
+      state: 'syncing',
+      sends: (i.sends ?? 0) + 1,
+      lease: { owner: this.owner, until: now + LEASE_MS, attempt },
+      ...(changes && {
+        unconfirmed: true,
+        // What an answer that settles nothing goes back to. An item found *syncing* was claimed by
+        // a send that never answered for good (its tab was closed, or froze): that send may have
+        // reached the server, so a claim made over it is made on an item that is unconfirmed, and
+        // an answer that says nothing of the operation (a refusal of the route) leaves it so.
+        unconfirmedBefore: i.state === 'syncing' ? true : i.unconfirmed === true,
+      }),
+    }
   }
 
-  // Changes an item only while the claim is ours (and the server hasn't acknowledged it): what a
-  // send that lost its claim would write is never written.
-  private async owned(id: string, change: (i: OutboxItem) => OutboxItem): Promise<OutboxItem> {
-    // An engine that was stopped writes nothing more.
-    if (this.stopped) throw new LeaseLost()
+  // Changes an item only while the claim is the one this send made (our own, and this attempt's:
+  // a claim made again, or by another tab, is another attempt's), and the server hasn't
+  // acknowledged it: what a send that lost its claim would write is never written.
+  private async owned(
+    id: string,
+    attempt: string,
+    change: (i: OutboxItem) => OutboxItem,
+    bump = false,
+  ): Promise<OutboxItem> {
+    // An engine that was stopped, or whose account is no longer the one signed in here, writes
+    // nothing more.
+    if (this.stopped || !this.ownerSignedIn()) throw new LeaseLost()
     let held = true
-    const saved = await this.store.updateItem(id, (i) => {
-      if (i.state === 'synced' || i.lease?.owner !== this.owner) {
-        held = false
-        return undefined
-      }
-      return change(i)
-    })
+    const saved = await this.store.updateItem(
+      id,
+      (i) => {
+        if (i.state === 'synced' || i.lease?.owner !== this.owner || i.lease.attempt !== attempt) {
+          held = false
+          return undefined
+        }
+        return change(i)
+      },
+      { bump },
+    )
     if (!held || !saved) throw new LeaseLost()
     return saved
   }
 
   // Keeps the claim while a long upload goes on.
-  private async renew(id: string, force = false): Promise<void> {
+  private async renew(id: string, attempt: string, force = false): Promise<void> {
     const now = this.now()
     if (!force && now - this.lastRenew < LEASE_MS / 3) return
     this.lastRenew = now
-    await this.owned(id, (i) => ({ ...i, lease: { owner: this.owner, until: now + LEASE_MS } }))
+    await this.owned(
+      id,
+      attempt,
+      (i) => ({ ...i, lease: { owner: this.owner, until: now + LEASE_MS, attempt } }),
+      false,
+    )
   }
 
   private async send(start: OutboxItem, exclusive: boolean): Promise<Outcome> {
     const id = start.id
-    const claimed = await this.store.updateItem(id, (i) => this.claim(i, exclusive))
-    if (claimed?.state !== 'syncing' || claimed.lease?.owner !== this.owner) {
-      return { kind: 'skipped', until: claimed?.state === 'syncing' ? claimed.lease?.until : undefined }
+    // The token of this send: what it writes is written only while the item's claim carries it.
+    const attempt = randomId()
+    const ordered = { value: false }
+    const claimed = await this.store.claimItem(id, (i, queue) => this.claim(i, exclusive, attempt, queue, ordered))
+    if (claimed?.state !== 'syncing' || claimed.lease?.owner !== this.owner || claimed.lease.attempt !== attempt) {
+      return {
+        kind: 'skipped',
+        until: claimed?.state === 'syncing' ? claimed.lease?.until : undefined,
+        ordered: ordered.value,
+      }
     }
     this.lastRenew = this.now()
     // The claim is kept for as long as this send is in flight, on a clock of its own: a request
@@ -481,8 +673,10 @@ export class SyncEngine {
     const abort = new AbortController()
     let lost = false
     this.inflight.add(abort)
+    // Whether the step that is in flight is the restore of a deleted record.
+    let restoring = false
     const beat = (this.deps.heartbeat ?? realHeartbeat)(() => {
-      this.renew(id, true).catch((e) => {
+      this.renew(id, attempt, true).catch((e) => {
         if (e instanceof LeaseLost || this.stopped) {
           lost = true
           abort.abort()
@@ -494,97 +688,186 @@ export class SyncEngine {
       for (const a of claimed.attachments) {
         const current = (await this.store.getItem(id))?.attachments.find((x) => x.localId === a.localId)
         if (!current || (current.state === 'uploaded' && current.serverId)) continue
-        await this.uploadOne(claimed, current, abort.signal)
+        await this.uploadOne(claimed, current, abort.signal, attempt)
       }
-      const fresh = await this.store.getItem(id)
+      let fresh = await this.store.getItem(id)
       if (!fresh) return { kind: 'synced' }
       if (fresh.attachments.some((a) => !(a.state === 'uploaded' && a.serverId))) {
         throw new ApiError(0, 'a photo is not on the server', { code: 'app_attachment_bad' })
       }
       // Still ours? If another tab took over, it sends: this one stops before it asks the server.
-      await this.renew(id, true)
-      await this.request(`${fresh.base}/actions`, {
+      await this.renew(id, attempt, true)
+      // A change the person chose to apply to a record deleted on the server: the record is
+      // restored first, explicitly, and the change is sent on top of the restored revision.
+      if (fresh.restore) {
+        restoring = true
+        fresh = await this.restoreFirst(fresh, abort.signal, attempt)
+        restoring = false
+      }
+      const kind = kindOf(fresh)
+      const answer = await this.request<unknown>(`${fresh.base}/actions`, {
         method: 'POST',
-        // The photos are the ones persisted on the item: a retry sends the same request.
-        body: { ...withServerPhotos(fresh), release: fresh.release, operation: fresh.operation },
+        // The photos are the ones persisted on the item: a retry sends the same request. A change
+        // to a record says the revision it is based on, which the server checks.
+        body:
+          kind === 'insert'
+            ? { ...withServerPhotos(fresh), release: fresh.release, operation: fresh.operation }
+            : {
+                ...fresh.action,
+                release: fresh.release,
+                operation: fresh.operation,
+                expectedRevision: fresh.record.revision,
+              },
         headers: this.headers,
         signal: abort.signal,
       })
-      // Stopped, or the claim lost, while the answer came in: it is not written (the item is sent
-      // again by whoever has it next, and the server answers the same operation the same way).
-      if (abort.signal.aborted) throw new DOMException('the send was aborted', 'AbortError')
-      // The server's answer is what makes it synced, whoever holds the claim now.
-      await this.store.updateItem(id, (i) => ({
-        ...i,
-        state: 'synced',
-        syncedAt: new Date(this.now()).toISOString(),
-        attempts: i.attempts + 1,
-        nextAttemptAt: undefined,
-        attention: undefined,
-        error: undefined,
-        lease: undefined,
-      }))
-      await this.store.dropBlobs(id)
+      // Stopped, the claim lost, or the account changed while the answer came in: it is not written
+      // (the item is sent again by whoever has it next, and the server answers the same operation
+      // the same way).
+      this.assertLive(abort.signal)
+      // The record as the server answered an update, with the revision it has: shown from then on
+      // (a replay answers with the record as it is now, which may hold another device's change,
+      // and a change that set what was set already makes no revision of its own). Its revision is
+      // never paired with the values this device made.
+      const ack = kind === 'update' ? recordIn(answer, fresh.record.id) : undefined
+      // The server's answer is what makes it synced: this exact operation, sent by this very attempt.
+      // An item that was requeued under another key meanwhile, or claimed by another send, is not
+      // what this answer is about: its own send gets its own answer (a replay of the same
+      // operation is answered the same way).
+      const sent = fresh.operation
+      let acknowledged = false
+      await this.store.updateItem(
+        id,
+        (i) => {
+          if (
+            i.state !== 'syncing' ||
+            i.operation !== sent ||
+            i.lease?.owner !== this.owner ||
+            i.lease.attempt !== attempt
+          ) {
+            return undefined
+          }
+          acknowledged = true
+          return {
+            ...i,
+            state: 'synced',
+            syncedAt: new Date(this.now()).toISOString(),
+            attempts: i.attempts + 1,
+            nextAttemptAt: undefined,
+            attention: undefined,
+            error: undefined,
+            conflict: undefined,
+            problems: undefined,
+            restore: undefined,
+            unconfirmed: undefined,
+            unconfirmedBefore: undefined,
+            ack,
+            lease: undefined,
+          }
+        },
+        { bump: false },
+      )
+      if (!acknowledged) return { kind: 'skipped' }
+      if (this.ownerSignedIn()) await this.store.dropBlobs(id)
       return { kind: 'synced' }
     } catch (e) {
       // A send whose engine stopped writes nothing and lets its claim go; one that lost its claim
       // writes nothing either: another tab has it.
-      if (this.stopped && abort.signal.aborted) return await this.letGo(id)
+      if (this.stopped && abort.signal.aborted) return await this.letGo(id, attempt)
       if (lost || e instanceof LeaseLost) return { kind: 'skipped' }
       if (e instanceof UploadCancelled) return { kind: 'transient', error: describe(e) }
       // Awaited here, inside the try: the request is in flight (and abortable) until it is over.
-      return await this.failed(id, e, abort.signal, () => lost)
+      return await this.failed(id, attempt, e, abort.signal, () => lost, kindOf(claimed), restoring)
     } finally {
       beat()
       this.inflight.delete(abort)
     }
   }
 
+  // Restores the record the item's change is for (it was deleted on the server, and the person
+  // chose to apply the change anyway) and writes the revision it now has. A restore that was made
+  // by an earlier send whose answer was lost finds the record live at the very next revision:
+  // that is the same restore, and the change goes on from it.
+  private async restoreFirst(item: OutboxItem, signal: AbortSignal, attempt: string): Promise<OutboxItem> {
+    const at = item.restore?.revision ?? 0
+    let revision: number
+    try {
+      const record = await this.request<{ revision: number }>(`${item.base}/records/${item.record.id}/restore`, {
+        method: 'POST',
+        body: { expected_revision: at },
+        headers: this.headers,
+        signal,
+      })
+      revision = record.revision
+    } catch (e) {
+      const current =
+        e instanceof ApiError ? (e.body as { current?: { _revision?: unknown } } | undefined)?.current : undefined
+      if (!(e instanceof ApiError && e.code === 'app_record_conflict' && current?._revision === at + 1)) throw e
+      revision = at + 1
+    }
+    this.assertLive(signal)
+    return this.owned(item.id, attempt, (i) => ({ ...i, restore: undefined, record: { ...i.record, revision } }))
+  }
+
   // The claim is let go, so the item is the next sender's at once, not when the lease runs out.
   // (Nothing is counted against it.)
-  private async letGo(id: string): Promise<Outcome> {
+  private async letGo(id: string, attempt: string): Promise<Outcome> {
     await this.store
-      .updateItem(id, (i) =>
-        i.state === 'syncing' && i.lease?.owner === this.owner
-          ? { ...i, state: 'queued', lease: undefined }
-          : undefined,
+      .updateItem(
+        id,
+        (i) =>
+          i.state === 'syncing' && i.lease?.owner === this.owner && i.lease.attempt === attempt
+            ? { ...i, state: 'queued', lease: undefined }
+            : undefined,
+        { bump: false },
       )
       .catch(() => {})
     return { kind: 'skipped' }
   }
 
-  private async uploadOne(item: OutboxItem, a: Attachment, signal: AbortSignal): Promise<void> {
+  private async uploadOne(item: OutboxItem, a: Attachment, signal: AbortSignal, attempt: string): Promise<void> {
     const blob = await this.store.getBlob(a.blobId)
     if (!blob) throw new ApiError(0, 'the photo is no longer on this device', { code: 'app_attachment_bad' })
-    await this.patchAttachment(item.id, a.localId, { state: 'uploading' })
+    await this.patchAttachment(item.id, attempt, a.localId, { state: 'uploading' })
     const done = await this.upload(item.base, a.field, blob, {
       resume: a.uploadId,
-      onStarted: (uploadId) => void this.patchAttachment(item.id, a.localId, { uploadId }).catch(() => {}),
-      onProgress: () => void this.renew(item.id).catch(() => {}),
+      onStarted: (uploadId) => void this.patchAttachment(item.id, attempt, a.localId, { uploadId }).catch(() => {}),
+      onProgress: () => void this.renew(item.id, attempt).catch(() => {}),
       headers: this.headers,
       signal,
       retries: 2,
     })
     // The first finalized id an item gets is the one it keeps: a send made again (after a failure, by
     // another page) is the same request, and the server holds the first answer for its operation.
-    await this.owned(item.id, (i) => ({
-      ...i,
-      attachments: i.attachments.map((x) =>
-        x.localId === a.localId
-          ? x.serverId
-            ? x
-            : { ...x, state: 'uploaded', serverId: done.id, uploadId: done.id }
-          : x,
-      ),
-    }))
+    this.assertLive(signal)
+    await this.owned(
+      item.id,
+      attempt,
+      (i) => ({
+        ...i,
+        attachments: i.attachments.map((x) =>
+          x.localId === a.localId
+            ? x.serverId
+              ? x
+              : { ...x, state: 'uploaded', serverId: done.id, uploadId: done.id }
+            : x,
+        ),
+      }),
+      false,
+    )
   }
 
-  private patchAttachment(id: string, localId: string, change: Partial<Attachment>) {
-    return this.owned(id, (i) => ({
-      ...i,
-      // A photo the server has finalized stays so.
-      attachments: i.attachments.map((a) => (a.localId === localId && !a.serverId ? { ...a, ...change } : a)),
-    }))
+  private patchAttachment(id: string, attempt: string, localId: string, change: Partial<Attachment>) {
+    return this.owned(
+      id,
+      attempt,
+      (i) => ({
+        ...i,
+        // A photo the server has finalized stays so.
+        attachments: i.attachments.map((a) => (a.localId === localId && !a.serverId ? { ...a, ...change } : a)),
+      }),
+      false,
+    )
   }
 
   // Whether what a send found out is still to be acted on: this engine runs, the send's own request
@@ -594,9 +877,23 @@ export class SyncEngine {
     return !this.stopped && !signal.aborted && this.ownerSignedIn()
   }
 
+  // The same, as a refusal to go on: what is found out after a wait is acted on only while the
+  // account that made the queue is the one signed in (the account's epoch).
+  private assertLive(signal: AbortSignal): void {
+    if (!this.live(signal)) throw new DOMException('the send was aborted', 'AbortError')
+  }
+
   // Records what a failed send means for the item, and acts on a revocation.
-  private async failed(id: string, e: unknown, signal: AbortSignal, lost: () => boolean): Promise<Outcome> {
-    let outcome = classify(e)
+  private async failed(
+    id: string,
+    attempt: string,
+    e: unknown,
+    signal: AbortSignal,
+    lost: () => boolean,
+    kind: ChangeKind,
+    restoring: boolean,
+  ): Promise<Outcome> {
+    let outcome = classify(e, kind, restoring)
     // A 403 or 404 only means the app can't be reached *now*: it is confirmed by asking for the
     // app itself, which is answered for anyone who may open it.
     if (outcome.kind === 'attention' && outcome.reason === 'access') {
@@ -604,22 +901,33 @@ export class SyncEngine {
       if (item) {
         const revoked = await this.revoked(item, signal)
         // An answer that came after this send was let go of says nothing that may be acted on.
-        if (!this.live(signal)) return lost() ? { kind: 'skipped' } : this.letGo(id)
+        if (!this.live(signal)) return lost() ? { kind: 'skipped' } : this.letGo(id, attempt)
+        // Nor does one that came after the claim was lost: whoever has the item now (another tab, a
+        // send after a retry, a download made meanwhile) asks again for itself. Decided on the item
+        // as stored now (its operation and this attempt's token), before any effect of the reply.
+        if (revoked && !(await this.stillMine(id, attempt, item.operation))) return { kind: 'skipped' }
         outcome = { ...outcome, revoked }
         if (revoked) await this.deps.onRevoked?.(item, outcome.error)
       }
     }
-    if (!this.live(signal)) return lost() ? { kind: 'skipped' } : this.letGo(id)
+    if (!this.live(signal)) return lost() ? { kind: 'skipped' } : this.letGo(id, attempt)
     // The wrong account is not the item's failure: it waits, as it was, for its owner.
     const result = outcome
     try {
-      await this.owned(id, (i) => {
+      await this.owned(id, attempt, (i) => {
         const free = { ...i, lease: undefined }
         switch (result.kind) {
           case 'paused':
           case 'account':
-            // Waits for the next session: not a failed attempt.
-            return { ...free, state: 'queued' }
+            // Waits for the next session: not a failed attempt. That the session ended says nothing
+            // of an earlier send that went unanswered, which may be on the server: only a definite
+            // answer clears that.
+            return {
+              ...free,
+              state: 'queued',
+              unconfirmed: i.unconfirmedBefore === true ? true : undefined,
+              unconfirmedBefore: undefined,
+            }
           case 'transient': {
             const attempts = i.attempts + 1
             if (attempts >= MAX_ATTEMPTS) {
@@ -648,6 +956,16 @@ export class SyncEngine {
               attention: result.reason,
               nextAttemptAt: undefined,
               error: result.error,
+              // Only a definite answer about this operation says whether the server has the change:
+              // a verdict it gave after it checked the operation's receipt. A refusal made before
+              // it looked (access lost, an archived space, a photo) says nothing of an earlier send,
+              // so the item is as unconfirmed as it was before this one.
+              unconfirmed: definite(result) ? undefined : i.unconfirmedBefore === true ? true : undefined,
+              unconfirmedBefore: undefined,
+              // A restore that found the record deleted again is asked for again, at its new revision.
+              restore: result.reason === 'deleted' ? undefined : i.restore,
+              conflict: result.conflict,
+              problems: result.problems,
               // A photo the server no longer has is uploaded again when the person retries.
               attachments:
                 result.reason === 'photo'
@@ -664,6 +982,29 @@ export class SyncEngine {
     return outcome
   }
 
+  // Whether the item is still claimed by this very send (its operation key and attempt token), read
+  // in a transaction of its own that writes nothing.
+  private async stillMine(id: string, attempt: string, operation: string): Promise<boolean> {
+    let mine = false
+    try {
+      await this.store.updateItem(
+        id,
+        (i) => {
+          mine =
+            i.state === 'syncing' &&
+            i.operation === operation &&
+            i.lease?.owner === this.owner &&
+            i.lease.attempt === attempt
+          return undefined
+        },
+        { bump: false },
+      )
+    } catch {
+      return false
+    }
+    return mine && !this.stopped && this.ownerSignedIn()
+  }
+
   private async revoked(item: OutboxItem, signal: AbortSignal): Promise<boolean> {
     try {
       await this.request(item.base, { headers: this.headers, signal })
@@ -673,6 +1014,37 @@ export class SyncEngine {
     }
   }
 }
+
+// Record `id` as the messages an action answers with say it (an item: its id, `_revision` and
+// fields), if they do: the records are at /items, or in the whole data model.
+export function recordIn(answer: unknown, id: number): Record<string, unknown> | undefined {
+  if (!Array.isArray(answer)) return undefined
+  for (const m of answer as { updateDataModel?: { path?: string; value?: unknown } }[]) {
+    const update = m?.updateDataModel
+    if (!update) continue
+    const list =
+      update.path === '/'
+        ? (update.value as { items?: unknown } | undefined)?.items
+        : update.path === '/items'
+          ? update.value
+          : undefined
+    if (!Array.isArray(list)) continue
+    const found = list.find((i) => (i as { id?: unknown } | null)?.id === id) as
+      | (Record<string, unknown> & { _revision?: unknown })
+      | undefined
+    if (found && typeof found._revision === 'number') {
+      // Only the record's own keys: what the device adds to what it shows is not the server's.
+      return Object.fromEntries(
+        Object.entries(found).filter(([k]) => k === 'id' || k === '_revision' || !k.startsWith('_')),
+      )
+    }
+  }
+  return undefined
+}
+
+// The revision of record `id` in the messages an action answers with, if they say it.
+export const revisionIn = (answer: unknown, id: number): number | undefined =>
+  recordIn(answer, id)?._revision as number | undefined
 
 // The action to send: the context's local photo ids replaced by the server's.
 export function withServerPhotos(item: OutboxItem): OutboxItem['action'] {

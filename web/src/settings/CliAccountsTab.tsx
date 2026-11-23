@@ -187,7 +187,14 @@ function LabelForm({ account: a, onChanged }: { account: CliAccount; onChanged: 
   const [label, setLabel] = useState(a.label)
   const action = useAction()
   const t = useT()
-  useEffect(() => setLabel(a.label), [a.label])
+  // The draft follows the account's name when the server's changes. This is not an effect: an
+  // effect runs after the first commit, and a name typed before it ran (the commit and the typing
+  // are both quick) was overwritten with the saved one.
+  const [saved, setSaved] = useState(a.label)
+  if (saved !== a.label) {
+    setSaved(a.label)
+    setLabel(a.label)
+  }
   const save = (e: FormEvent) => {
     e.preventDefault()
     action

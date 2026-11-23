@@ -44,6 +44,7 @@ export function ConfirmButton({
   question,
   confirm,
   disabled,
+  onOpen,
   onConfirm,
 }: {
   label: string
@@ -51,6 +52,9 @@ export function ConfirmButton({
   question: string
   confirm: string
   disabled?: boolean
+  // Called when the question is asked, with what the confirmation will be about decided here, not
+  // when it is answered: what changed in between is not what was asked about.
+  onOpen?: () => void
   onConfirm: () => void
 }) {
   const t = useT()
@@ -62,7 +66,10 @@ export function ConfirmButton({
         className="tt-button"
         aria-label={name ? t('common.labelFor', { label, name }) : undefined}
         disabled={disabled}
-        onClick={() => setAsking(true)}
+        onClick={() => {
+          onOpen?.()
+          setAsking(true)
+        }}
       >
         {label}
       </button>

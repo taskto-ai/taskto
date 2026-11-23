@@ -28,8 +28,9 @@ import {
 } from './account'
 import { SchemaTooNew } from './idb'
 import { revalidate } from './revalidate'
-import { type Download, OfflineStore } from './store'
+import { type Approval, type Download, OfflineStore, seenOf, type UnsentRef } from './store'
 import { type SyncDeps, SyncEngine } from './sync'
+import { OfflineWriter, type WriterDeps } from './writer'
 
 const USERS = 'taskto:offline-users'
 
@@ -58,6 +59,8 @@ export type Runtime = {
   user: number
   store: OfflineStore
   engine: SyncEngine
+  // Whether this tab is the one that changes existing records (writer.ts).
+  writer: OfflineWriter
   stop: () => void
 }
 
@@ -78,6 +81,7 @@ let state: RuntimeState = { runtime: null, problem: null, foreign: null }
 let opening: Promise<RuntimeState> | null = null
 const listeners = new Set<() => void>()
 let deps: SyncDeps = {}
+let writerDeps: WriterDeps = {}
 
 function set(next: RuntimeState) {
   state = next
@@ -91,8 +95,9 @@ export const subscribeRuntime = (fn: () => void) => {
 export const runtimeState = () => state
 
 // For tests: the engine's clock, transport and timers.
-export function setSyncDeps(next: SyncDeps) {
+export function setSyncDeps(next: SyncDeps, writer: WriterDeps = {}) {
   deps = next
+  writerDeps = writer
 }
 
 // Every other account's database on this browser goes, except one with unsent work: that one keeps
@@ -236,8 +241,19 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
           await deps.onRevoked?.(item, why)
         },
       })
-      const stop = engine.start()
-      set({ runtime: { user, store: opened, engine, stop }, problem: null, foreign })
+      const writer = new OfflineWriter(opened, writerDeps)
+      // Known before anything is shown: the first tab of the account is its writer.
+      await writer.start()
+      if (!current()) {
+        writer.stop()
+        return abandon(opened)
+      }
+      const stopEngine = engine.start()
+      const stop = () => {
+        stopEngine()
+        writer.stop()
+      }
+      set({ runtime: { user, store: opened, engine, writer, stop }, problem: null, foreign })
       // Whether what was downloaded may still be kept (access lost, downloads turned off, fewer
       // records readable): asked as soon as the server can be, and a refusal removes the copy.
       void revalidate(opened).catch(() => {})
@@ -266,13 +282,15 @@ export async function discardForeign(): Promise<void> {
 // in the open database if it is the one in use, else by opening the user's (and closing it). A
 // database that can't be opened or counted is not zero: `unreadable` says why, and the person is
 // told that unsent records may exist that this version can't check.
-export type Unsent = { count: number; ids: string[]; unreadable: 'schema' | 'unavailable' | null }
+// `items`: each unsent record as it is now (its id, version and operation): what the person is
+// shown, and what they approve to lose (`approvalOf`): an item that changed since is not that.
+export type Unsent = { count: number; items: UnsentRef[]; unreadable: 'schema' | 'unavailable' | null }
 
 export async function unsentOf(user: number): Promise<Unsent> {
   const runtime = state.runtime
-  const found = (items: { id: string }[]): Unsent => ({
+  const found = (items: { id: string; version?: number; operation: string }[]): Unsent => ({
     count: items.length,
-    ids: items.map((i) => i.id),
+    items: items.map((i) => ({ id: i.id, ...seenOf(i) })),
     unreadable: null,
   })
   // A browser with no IndexedDB at all can hold nothing: that is zero, not unknown.
@@ -286,7 +304,7 @@ export async function unsentOf(user: number): Promise<Unsent> {
       store.close()
     }
   } catch (e) {
-    return { count: 0, ids: [], unreadable: e instanceof SchemaTooNew ? 'schema' : 'unavailable' }
+    return { count: 0, items: [], unreadable: e instanceof SchemaTooNew ? 'schema' : 'unavailable' }
   }
 }
 
@@ -294,14 +312,16 @@ export async function unsentOf(user: number): Promise<Unsent> {
 // transaction per database (the user's, and the one this tab holds), it is checked that nothing
 // unsent is in it beyond `approved` (what the person was shown and agreed to lose), and if so the
 // database is emptied and marked as being deleted, so nothing can be committed to it from then on
-// (a stale tab, another tab of the same account). Answers the unsent records that are there and
-// were not approved: then nothing was changed, and the person is asked again. A database that
-// can't be opened is not looked at here: the person already chose what happens to it.
-export async function settle(user: number | undefined, approved: ReadonlySet<string> = new Set()): Promise<string[]> {
+// (a stale tab, another tab of the same account). An approval is of an item as it was shown (its
+// version and its operation), so a record that was changed since, or made after, is not agreed to.
+// Answers the unsent records that are there and were not approved, as they are now: then nothing
+// was changed, and the person is asked again. A database that can't be opened is not looked at
+// here: the person already chose what happens to it.
+export async function settle(user: number | undefined, approved: Approval = new Map()): Promise<UnsentRef[]> {
   if (opening) await opening.catch(() => {})
   const runtime = state.runtime
   const users = [...new Set([runtime?.user, user].filter((n): n is number => n !== undefined))]
-  const left: string[] = []
+  const left: UnsentRef[] = []
   for (const id of users) {
     let store = runtime?.user === id ? runtime.store : undefined
     const own = !store
@@ -359,8 +379,8 @@ export async function deactivate({
   purge: boolean
   user?: number
   keep?: boolean
-  approved?: ReadonlySet<string>
-}): Promise<string[]> {
+  approved?: Approval
+}): Promise<UnsentRef[]> {
   if (opening) await opening.catch(() => {})
   if (keep && !purge) {
     if (user !== undefined) writeUsers([...readUsers(), user])

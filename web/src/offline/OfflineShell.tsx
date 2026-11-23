@@ -12,8 +12,9 @@ import { useFormat, useT } from '../i18n'
 import { useOfflineData, useRuntime } from './hooks'
 import { OutboxList, SyncNotice } from './OutboxList'
 import type { Runtime } from './runtime'
-import { type Download, type OutboxItem, scopeKey } from './store'
+import { type Download, kindOf, type OutboxItem, scopeKey } from './store'
 import { type OfflineTransport, offlineTransport } from './transport'
+import { WriterNotice } from './WriterNotice'
 
 export function OfflineShell({ user, onReconnect }: { user: string; onReconnect: () => void }) {
   const t = useT()
@@ -48,6 +49,7 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
         </div>
       )}
       {problem === 'unavailable' && <p className="tt-muted">{t('offline.unavailable')}</p>}
+      {runtime && <WriterNotice runtime={runtime} />}
       {runtime && !download && (
         <>
           {data.loaded && data.downloads.length === 0 && <p className="tt-muted">{t('offline.shell.none')}</p>}
@@ -78,7 +80,9 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
           />
         </>
       )}
-      {runtime && <OutboxList runtime={runtime} items={data.items} status={data.status} apps={apps} />}
+      {runtime && (
+        <OutboxList runtime={runtime} items={data.items} status={data.status} apps={apps} downloads={data.downloads} />
+      )}
       {runtime && data.items.length === 0 && <SyncNotice status={data.status} waiting={0} />}
     </main>
   )
@@ -108,17 +112,26 @@ export function OfflineApp({
   const transport: AppTransport = made.current.transport
   useEffect(() => () => made.current?.transport.photos.release(), [])
   const queued = items.length
+  // Changes to downloaded records that the server doesn't have yet: shown on the screen as the
+  // person left them, and said to be waiting.
+  const changes = items.filter((i) => kindOf(i) !== 'insert' && i.state !== 'synced').length
 
-  // A record that left the queue behind this screen's back (discarded, cleared) is drawn out of
-  // it. A record added by this screen's own button is already in the answer, and the form being
-  // typed in is not drawn over.
-  const ids = items.map((i) => i.id)
-  const seen = useRef<string[]>(ids)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a changed set of ids is the reason
+  // A record that left the queue behind this screen's back (discarded, cleared), or a change to a
+  // record whose revision moved on (settled by the person, acknowledged by the server), is drawn
+  // again, so the next change is based on the revision now. A record added by this screen's own
+  // button is already in the answer, and the form being typed in is not drawn over.
+  const signature = items
+    .map(
+      (i) =>
+        `${i.id}:${kindOf(i) === 'insert' ? '' : i.state === 'synced' ? (i.ack?._revision ?? '') : i.record.revision}`,
+    )
+    .join(',')
+  const seen = useRef<string[]>(signature ? signature.split(',') : [])
   useEffect(() => {
-    if (seen.current.some((id) => !ids.includes(id))) setReload((n) => n + 1)
-    seen.current = ids
-  }, [ids.join(',')])
+    const now = new Map(signature ? signature.split(',').map((e) => [e.slice(0, e.lastIndexOf(':')), e] as const) : [])
+    if (seen.current.some((e) => now.get(e.slice(0, e.lastIndexOf(':'))) !== e)) setReload((n) => n + 1)
+    seen.current = signature ? signature.split(',') : []
+  }, [signature])
 
   return (
     <div className="tt-stage" data-stage="offline">
@@ -132,13 +145,17 @@ export function OfflineApp({
           ? ` ${t('offline.localTruncated', { records: f.number(download.records), total: f.number(download.total) })}`
           : ''}
       </p>
+      {changes > 0 && <p className="tt-muted tt-small">{t('offline.pendingChanges', { count: changes })}</p>}
       {saved && (
         <p role="status" className="tt-offline-saved">
           {t('offline.saved')}
         </p>
       )}
       <AppView
-        key={scopeKey(download)}
+        // A screen is drawn from one release of the app, and a button on it is resolved in that one: a
+        // download that brought another release is drawn again, a fresh screen with its own buttons,
+        // never the old one's pressed under the new definition.
+        key={`${scopeKey(download)}@${download.release}`}
         surfaceId={`app-${download.app}`}
         label={download.name}
         transport={transport}
