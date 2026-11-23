@@ -1,7 +1,7 @@
 # Offline use of apps
 
-A person can **download an app for offline use**, open it without a connection, and add records
-that wait on the device until the server has them. It is explicit, it is bounded, and it never
+A person can **download an app for offline use**, open it without a connection, and add, change
+and delete records that wait on the device until the server has them. It is explicit, it is bounded, and it never
 pretends: what is on the device says it is on the device, and a record is "synced" only once the
 server said so.
 
@@ -11,21 +11,25 @@ What works offline, and what doesn't:
 |---|---|
 | Open a downloaded app, look around its screens | yes |
 | Add a record (an `insert` action), with photos | yes, kept on the device and sent later |
-| Change or delete a record, restore, history, effects' progress | no: they need the server's records as they are |
+| Change or delete a record that was downloaded (an `update` or `delete` action), for the records the server said the person may change | yes, kept on the device and sent later, against the revision they were based on ([Changing and deleting](#changing-and-deleting-records)) |
+| Restore a deleted record, history, effects' progress, new photos on a record that exists | no: they need the server's records as they are |
 | Build or change an app with AI, publish, roll back, share, roles | no: online only, and the panel says so |
 | Search, a new server query, the records explorer | no |
 
 The server's side is [`GET …/apps/{app}/offline`](api.md#get-appsappoffline) and the ordinary
-action route; everything else is in the web app (`web/src/offline/`).
+action route, with its revision check and its soft deletion; everything else is in the web app
+(`web/src/offline/`). The server decides every change again when it is sent, as the person who
+made it: what the device does is only what saves a wait.
 
 ## Downloading
 
 **Download for offline use** (the app's page, *Offline use*) asks the server for the app's **live
 release** and the **records the person may read**, and keeps them in the browser's IndexedDB. The
 download is the person's own view: the same filter every screen uses (their records only, if the
-app's roles say so; none deleted; each record as the screen shows it, with no field the collection
-doesn't declare), at most the latest 2000 records. It holds no action's effects (their targets are
-the server's) and no one else's data. It also says which of the records the person's own
+app's roles say so; none deleted; each record as the screen shows it, with its `_revision` and no
+field the collection doesn't declare), at most the latest 2000 records. It says which of those the
+person may change or delete (`modifiable`: from their role's modify scope, none in a read-only
+space). It holds no action's effects (their targets are the server's) and no one else's data. It also says which of the records the person's own
 operations made (`operations`, the keys that [replay](#sending-replay) sends), so that a record
 this device sent and a download that already holds it are the same record: see
 [Refreshing a download](#refreshing-a-download).
@@ -84,8 +88,8 @@ recomputed from those records with the same rules the server uses
 
 ## The outbox
 
-An insert made offline is a **queue item**, written to IndexedDB **together with its photos' bytes
-in one transaction**. It is shown as *Saved on this device* only after that transaction has
+An insert, an edit or a deletion made offline is a **queue item**, written to IndexedDB **together
+with its photos' bytes in one transaction**. It is shown as *Saved on this device* only after that transaction has
 completed; if the write fails (the quota, a closed database) the person is told it was **not**
 saved and the form keeps what they typed. An item carries:
 
@@ -94,9 +98,14 @@ saved and the form keeps what they typed. An item carries:
   insert against the live release, and an older one it can't take is refused: `app_release_outdated`);
 - a **stable operation id**, made once with the item, sent with every attempt: the server's
   idempotency key;
-- the record's local id (negative) and its revision (none until the server has it);
+- its **kind**: `insert`, `update` or `delete`;
+- the record: an insert's local id (negative, and no revision until the server has it), or an
+  update's or a delete's **server id and the revision the change was based on**, which is
+  mandatory (`expectedRevision`; see [Changing and deleting](#changing-and-deleting-records)), and
+  the record's fields as they were downloaded, to show beside the server's if there is a conflict;
 - the action as the screen sent it, and its **attachment dependencies**: each photo's blob, its
-  upload id once the server made one, and the attachment id once it is finalized.
+  upload id once the server made one, and the attachment id once it is finalized (an insert's:
+  adding photos to a record that exists needs the connection).
 
 States, each shown on the item:
 
@@ -174,10 +183,81 @@ What the answer means:
 | 409 `session_account_changed` | the session is another account's: **sending pauses** as above, the item waits as it was |
 | no answer, 5xx, 408, 425, 429 | transient: try again with backoff (2 s doubling to 5 min, with jitter), and the items behind it wait; after 8 attempts, *Needs attention* with **Try again now**, and the items behind it are sent (a record that gave up doesn't hold the queue) |
 | 403, 404 | access lost: *Needs attention*. If asking for the app itself is also refused, the revocation is confirmed: **replay is blocked and the downloaded copy is removed**; the queued input stays, for the person to deal with |
+| 409 `app_record_conflict` (an update or a delete) | the record changed since the change was based on it: *Needs attention*, a **conflict**, with the record as the server has it now if the person may read it; never retried by itself ([Conflicts](#conflicts-and-what-doesnt-fit)) |
+| 422 `app_row_not_found` (an update or a delete) | the record is gone (deleted, or no longer the person's to change): *Needs attention*, **deleted**; the change never brings it back |
+| 422 or 400 for a field the app no longer takes (removed, retyped, now required, a choice that is no longer one) | *Needs attention*, **schema**: the input is kept, with what doesn't fit, to repair or discard |
 | 409 archived, offline, outdated; 400/422 | the server refused it for good: *Needs attention* with the server's reason; never retried by itself |
 
 The person's controls, on every item: *Try again now*, *Keep as draft* / *Send*, *Discard* (asks),
-and *Sync now* for the whole queue.
+and *Sync now* for the whole queue. A **permanent failure stops retrying**: every state that
+*Needs attention* waits for the person, and *Sync now* leaves alone what only they can settle
+(conflicts, deleted records, what no longer fits). An item that needs a decision has *Review*.
+
+## Changing and deleting records
+
+A button that **changes** (`update`) or **deletes** a record the person downloaded queues an item
+like an insert does. What is defined, and why:
+
+- **The revision it is based on is mandatory.** The screen's button says the `_revision` of the
+  record it was shown (as it does online), the item keeps it as `record.revision`, and the send
+  carries it as `expectedRevision`. A copy that doesn't say which records the person may change
+  (made by an earlier version), a record not in the server's `modifiable` list, a button that
+  doesn't give a revision, and a record that is only on this device (a negative id: change or
+  delete it once it is synced, or discard it from the list) are refused, in words, and nothing is
+  queued. The app's own rules (a field that must be a number, a required field) are checked as an
+  insert's are.
+- **Shown optimistically, and labelled.** The offline screen draws a changed record as the person
+  left it (`_pending`), with the `_revision` it is based on, and leaves a deleted record out; the
+  queue says it is a change the server doesn't have yet, and the screen says how many are waiting.
+  Counts and sums are over what is shown.
+- **Several changes to one record are one item while none was sent.** The later values win; the
+  item keeps its place in the queue and the revision it was first based on, and is sent under a new
+  operation key (nothing was ever sent under the old one). A deletion takes the place of the
+  changes before it. **Once a send was started and not answered for good** (no answer, a 5xx, the
+  page was closed: the change may be on the server) the item is marked and the record takes no
+  further change until it is known (*An earlier change to this record is being sent*): the key is
+  never reused for a different request, and a change never goes out based on a revision that
+  another one of ours may have moved. A definite refusal (a conflict, a 4xx) clears the mark.
+- **After the server acknowledged it**, the next change to the record is based on the revision the
+  server gave, which is read from the answer only when it is exactly the one the change was based
+  on or the next (any later one holds a change of somebody else's that this device hasn't seen: the
+  record then has no known revision and is changed again after the next download). The screen is
+  drawn again with it.
+- **Deleting is the server's soft deletion**: the record is a tombstone there, kept with its
+  history and restorable. A fresh download holds no deleted record, so it removes the copy of one
+  (a change waiting for it stays, to be settled below, and a synced change to a record the download
+  no longer holds goes with it); a download that was cut at 2000 records doesn't say a record that
+  isn't in it is gone.
+
+## Conflicts and what doesn't fit
+
+Nothing is ever overwritten, and nothing is brought back to life, silently: the server's answer
+decides, and where it can't apply a change the item **needs attention** and keeps the person's
+input. *Review* shows what to choose, with the record as the server has it **only when the person
+may read it**. A choice is made in the item's own transaction, together with the downloaded copy it
+changes, and only to an item that still needs attention and is still the request that was shown
+(its operation key): another tab that settled it first wins.
+
+| Situation | What the person sees | Choices |
+|---|---|---|
+| **Conflict**: two devices (or two people) changed the record from the same revision | a table of each field as it was when they started, their change, and the server's value now | *Apply my change on top* (the same change on the revision just shown, under a new key; for a deletion, *Delete it anyway*); *Keep the server's version* (their change is discarded and the copy holds the server's record); *Edit and try again* (a form of the record's fields, sending only what differs from the server's, so what they didn't touch is not overwritten); *Discard* |
+| **Conflict, record no longer readable** | that there is a newer version they can't read | *Keep the server's version* (discard) |
+| **Deleted** on the server while it was changed here | who deleted it and when, from the list of deleted records | *Restore it and apply my change* (the restore is sent first, then the change on the revision it gives; a restore whose answer was lost is recognised as the same restore), *Discard my change*. A deletion of a record already deleted has nothing left to send: *Clear this*. The restore is the person's own step and needs the right to modify; if it is refused the item says so |
+| **Schema**: a field removed, retyped, now required, a choice narrowed | what doesn't fit, field by field, checked against the app as it is live now (the copy is downloaded again to know it), and the input as entered | *Fix and try again* (a form of the live fields; the item is then made for the live release and its definition version, on a new key), *Discard* |
+| **Outdated, refused** | the server's reason | the same repair, or *Discard* |
+| **Access lost, archived**, an app taken offline | the reason; the copy is removed if the app can't be opened any more | *Discard*; retry from the list once access is back |
+
+Fixing never silently drops input: a value that doesn't fit the live app is refused in the form
+with the server's words and the item stays as it was. A field the app has removed is listed as
+such; it is left out of the new request only when the person saves the repaired one. Any other
+refusal is shown with the server's own reason.
+
+**The same guarantees as an insert's.** Every request of a change or of a choice (the send, the
+restore, the check of the deleted records, the download that repairs) names the account the
+database belongs to and is written only while the browser is still signed in as them; a different
+account signed in pauses sending without counting anything against the item; a stopped engine or a
+lost claim writes nothing; unsent changes count as unsent for signing out and for another account
+signing in (sealed, never deleted by a sign-in), and are purged only by the one conditional step.
 
 ## Accounts, signing out and revocation
 
@@ -261,7 +341,10 @@ the admin switch for spaces where that is not acceptable.
 
 The database is **versioned** (`SCHEMA_VERSION` in `web/src/offline/store.ts`) and migrated step by
 step, each version's migration run once in the upgrade's own transaction; a migration is added,
-never edited. A service worker update waits for the person ([pwa.md](pwa.md)), so a page and its
+never edited. Version 2 added the item's kind: what version 1 queued was only inserts, so its items
+are marked as such when the database is upgraded, and are sent exactly as before (same operation
+key, same request); a copy downloaded by version 1 keeps working and offers no change until it is
+downloaded again. A service worker update waits for the person ([pwa.md](pwa.md)), so a page and its
 database change version together. If a database is **newer than the page** (an installed version
 newer than this tab), it is left untouched and the page asks to be updated rather than risk the
 queue. The queue's items name the release and definition version they were made against, so an
@@ -276,7 +359,10 @@ view with the rest of the app ([pwa.md](pwa.md)).
 The tests run in jsdom with an in-memory IndexedDB (`fake-indexeddb`, used by the tests only). Only
 real devices show: that a browser's quota and eviction behave as `estimate()` and `persist()` say
 (Safari's seven-day rule for sites without a home-screen install; Chrome's eviction under
-pressure); that a phone's camera photo, held in IndexedDB as a blob, survives the app being killed
+pressure); that an edit made on one device and a conflicting one made on another are told apart
+the way the tests' stand-in server does (the Go tests cover the real server's side, the web tests
+a stand-in for it); that a person reads the conflict table and the repair form comfortably on a
+phone-sized screen; that a phone's camera photo, held in IndexedDB as a blob, survives the app being killed
 in the background; that Web Locks and `online` events fire the way the code expects after a
 phone's sleep; that the offline view opens after a device restart with no network; and the
 durability of a write on a phone that loses power right after "Saved on this device".
