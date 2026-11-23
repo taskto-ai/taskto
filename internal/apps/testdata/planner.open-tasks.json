@@ -1,0 +1,18 @@
+[
+  {
+    "updateDataModel": {
+      "path": "/screen",
+      "surfaceId": "app-1",
+      "value": "tasks"
+    },
+    "version": "v0.9"
+  },
+  {
+    "updateDataModel": {
+      "path": "/record",
+      "surfaceId": "app-1",
+      "value": {}
+    },
+    "version": "v0.9"
+  }
+]

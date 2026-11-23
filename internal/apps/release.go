@@ -123,12 +123,15 @@ const (
 	// ChangeFieldRequired: a field became required (or was added as required) and some row
 	// has no value for it.
 	ChangeFieldRequired = "field_required"
-	// ChangeFieldNarrowed: a field's limits (max_length, min, max) now refuse a value some row
-	// has.
+	// ChangeFieldNarrowed: a field's limits (max_length, min, max), or a choice's options, now
+	// refuse a value some row has.
 	ChangeFieldNarrowed = "field_narrowed"
+	// ChangeFieldRequiredWhen: a field gained a conditional requirement, or its rule changed
+	// (required_when), and some row has no value for it where the new rule requires one.
+	ChangeFieldRequiredWhen = "field_required_when"
 )
 
-var schemaChanges = []string{ChangeFieldRemoved, ChangeFieldTypeChanged, ChangeFieldRequired, ChangeFieldNarrowed}
+var schemaChanges = []string{ChangeFieldRemoved, ChangeFieldTypeChanged, ChangeFieldRequired, ChangeFieldNarrowed, ChangeFieldRequiredWhen}
 
 // SchemaChange names one change of a field: its kind and the field.
 type SchemaChange struct {
@@ -495,7 +498,7 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 func misfits(c Collection, rows []Row) []string {
 	var bad []string
 	for _, f := range c.Fields {
-		if slices.ContainsFunc(rows, func(r Row) bool { return f.fits(r.Data) != nil }) {
+		if slices.ContainsFunc(rows, func(r Row) bool { return c.fitsField(f, r.Data) != nil }) {
 			bad = append(bad, f.Name)
 		}
 	}
@@ -548,10 +551,24 @@ func breakingChanges(live *Collection, next Collection, rows []Row, blind bool) 
 		}) {
 			out = append(out, SchemaChange{ChangeFieldNarrowed, was.Name})
 		}
+		// A conditional requirement that is new or changed. Judged blind, it counts whenever the
+		// rule differs; otherwise only if some row would now be refused that the live release
+		// didn't refuse.
+		if !nf.Required && nf.RequiredWhen != nil && !sameRule(nf.RequiredWhen, was.RequiredWhen) && anyRow(func(r Row) bool {
+			return !holds(r, was.Name) && next.requires(nf, r.Data) && !live.requires(was, r.Data)
+		}) {
+			out = append(out, SchemaChange{ChangeFieldRequiredWhen, was.Name})
+		}
 	}
 	for _, f := range next.Fields {
-		if _, existed := live.field(f.Name); !existed && f.Required && anyRow(func(r Row) bool { return !holds(r, f.Name) }) {
+		if _, existed := live.field(f.Name); existed {
+			continue
+		}
+		if f.Required && anyRow(func(r Row) bool { return !holds(r, f.Name) }) {
 			out = append(out, SchemaChange{ChangeFieldRequired, f.Name})
+		}
+		if !f.Required && f.RequiredWhen != nil && anyRow(func(r Row) bool { return !holds(r, f.Name) && next.requires(f, r.Data) }) {
+			out = append(out, SchemaChange{ChangeFieldRequiredWhen, f.Name})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -574,6 +591,13 @@ func narrower(was, next Field) bool {
 	}
 	if length(next) < length(was) {
 		return true
+	}
+	if was.Type == TypeChoice {
+		for _, o := range was.Options {
+			if !slices.Contains(next.Options, o) {
+				return true
+			}
+		}
 	}
 	if next.Min != nil && (was.Min == nil || *next.Min > *was.Min) {
 		return true

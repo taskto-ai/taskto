@@ -5,9 +5,10 @@
 // checks every saved app against the same catalog (internal/apps/catalog.go); its
 // testdata/catalog.json is the contract the tests hold both to.
 
-import { createComponentImplementation } from '@a2ui/react/v0_9'
+import { createComponentImplementation, useSignalValue } from '@a2ui/react/v0_9'
 import { basicCatalog, Catalog, CommonSchemas } from '@a2ui/web_core/v0_9'
 import { z } from 'zod'
+import { holds, type Rule, type Values } from './rules'
 
 export const APPS_CATALOG_ID = 'https://taskto.ai/catalogs/apps/v1.json'
 
@@ -29,6 +30,44 @@ const Stat = createComponentImplementation(StatApi, ({ props }) => (
   </dl>
 ))
 
+// Draws its child only while its rule holds of the form (/draft, the default) or of the record a
+// screen shows (/record). It hides an input for people and decides nothing the server accepts.
+// Reading the whole object is what keeps it up to date: a change to any of its fields notifies it.
+const ShowApi = {
+  name: 'Show',
+  schema: z
+    .object({
+      when: z.any(),
+      source: z.enum(['draft', 'record']).optional(),
+      child: CommonSchemas.ComponentId,
+    })
+    .strict(),
+}
+
+const Show = createComponentImplementation(ShowApi, ({ props, buildChild, context }) => {
+  const source = props.source ?? 'draft'
+  const values = useSignalValue(context.dataContext.dataModel.getSignal<Values>(`/${source}`))
+  return holds(props.when as Rule, values ?? {}) ? buildChild(props.child) : null
+})
+
+// The host of an app's screens, which the server adds as the root: it draws the screen the data
+// model names (/screen). Moving between screens only changes that, so what is typed into the form
+// (/draft) is where it was left.
+const ScreensApi = {
+  name: 'Screens',
+  schema: z
+    .object({
+      current: CommonSchemas.DynamicString,
+      screens: z.array(z.object({ name: z.string(), child: CommonSchemas.ComponentId }).strict()),
+    })
+    .strict(),
+}
+
+const Screens = createComponentImplementation(ScreensApi, ({ props, buildChild }) => {
+  const shown = props.screens.find((s) => s.name === props.current)
+  return <div className="tt-screen">{shown ? buildChild(shown.child) : null}</div>
+})
+
 // Left out: what loads from elsewhere, and regular expressions. An app's pattern would run in
 // every viewer's browser against text other members can store, and a pattern such as (a+)+
 // or .*.*.*.* can freeze it; the server refuses both too (internal/apps/catalog.go).
@@ -48,13 +87,15 @@ export const appsCatalog = new Catalog(
     ...[...basicCatalog.components.values()].filter((c) => !LEFT_OUT.has(c.name) && c.name !== 'TextField'),
     ...(TextField ? [TextField] : []),
     Stat,
+    Show,
+    Screens,
   ],
   [...basicCatalog.functions.values()].filter((f) => !LEFT_OUT.has(f.name)),
 )
 
 // The version of the definition format this client reads (internal/apps DefinitionVersion), which
 // is TaskTo.AI's and has nothing to do with the A2UI protocol's.
-export const DEFINITION_VERSION = 1
+export const DEFINITION_VERSION = 2
 
 // What this client can draw, named as the server names the capabilities a release needs
 // (apps.Capabilities): component.<Name> and function.<name>.

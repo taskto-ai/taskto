@@ -94,10 +94,15 @@ const (
 	CodeAppFieldTooSmall  Code = "app_field_too_small"  // params: field, min
 	CodeAppFieldTooLarge  Code = "app_field_too_large"  // params: field, max
 	CodeAppFieldNotDate   Code = "app_field_not_date"   // params: field
-	CodeAppForbidden      Code = "app_forbidden"        // 403: the caller's app roles don't allow it; params: capability
-	CodeAppRolesInvalid   Code = "app_roles_invalid"    // 400
-	CodeAppRolesNotMember Code = "app_roles_not_member" // 400: a role for someone who can't read the space
-	CodeAppRolesLockout   Code = "app_roles_lockout"    // 400: the change would take the caller's own right to manage roles
+	CodeAppFieldNotTime   Code = "app_field_not_time"   // params: field
+	CodeAppFieldNotOption Code = "app_field_not_option" // params: field
+	// CodeAppFieldRequiredWhen is a field the app requires when another field has a value
+	// (params: field).
+	CodeAppFieldRequiredWhen Code = "app_field_required_when"
+	CodeAppForbidden         Code = "app_forbidden"        // 403: the caller's app roles don't allow it; params: capability
+	CodeAppRolesInvalid      Code = "app_roles_invalid"    // 400
+	CodeAppRolesNotMember    Code = "app_roles_not_member" // 400: a role for someone who can't read the space
+	CodeAppRolesLockout      Code = "app_roles_lockout"    // 400: the change would take the caller's own right to manage roles
 
 	// Drafts and releases of apps (internal/apps/release.go).
 

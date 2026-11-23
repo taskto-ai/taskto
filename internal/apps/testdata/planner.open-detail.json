@@ -1,0 +1,25 @@
+[
+  {
+    "updateDataModel": {
+      "path": "/screen",
+      "surfaceId": "app-1",
+      "value": "detail"
+    },
+    "version": "v0.9"
+  },
+  {
+    "updateDataModel": {
+      "path": "/record",
+      "surfaceId": "app-1",
+      "value": {
+        "_revision": 1,
+        "category": "other",
+        "category_note": "errand",
+        "done": true,
+        "id": 2,
+        "title": "Fix the shelf"
+      }
+    },
+    "version": "v0.9"
+  }
+]

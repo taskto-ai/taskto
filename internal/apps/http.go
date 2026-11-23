@@ -27,7 +27,9 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("PATCH "+apps+"/{app}", write(s.handleUpdate))
 	mux.Handle("POST "+apps+"/{app}/move", write(s.handleMove))
 	mux.Handle("GET "+apps+"/{app}/surface", read(s.handleSurface))
-	mux.Handle("POST "+apps+"/{app}/actions", write(s.handleAction))
+	// Actions are the readers' route too: navigating changes nothing, and act asks for the
+	// right to write the space itself for every other kind of action.
+	mux.Handle("POST "+apps+"/{app}/actions", read(s.handleAction))
 	mux.Handle("POST "+apps+"/{app}/publish", write(s.handlePublish))
 	mux.Handle("POST "+apps+"/{app}/rollback", write(s.handleRollback))
 	mux.Handle("GET "+apps+"/{app}/releases", read(s.handleReleases))

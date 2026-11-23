@@ -80,7 +80,7 @@ results, `error: <message>`.
 | `read_doc` | `space_id`, `path`, `offset`? | A Markdown document, 32 KiB at a time from `offset` (bytes); `next_offset` while there is more. `version` is what `write_doc` needs. |
 | `write_doc` | `space_id`, `path`, `content`, `base_version`?, `message`? | Creates (no `base_version`) or replaces (the version read) a Markdown document. |
 | `list_boards` … `set_blocked` | | The board tools of [boards-agent-tools.md](boards-agent-tools.md). |
-| `app_catalog` | | What an app may be made of: the components and their props, the functions, the field types, the actions, the rules, and the bundled example app. |
+| `app_catalog` | | What an app may be made of: the components and their props, the functions, the field types (time and choice included), screens and navigation, the rules, and the bundled example apps. |
 | `list_apps` | `space_id`, `archived`? | A space's apps, without definitions; `archived: true` includes the offline ones. |
 | `show_app` | `space_id`, `app_id` | An app with its draft definition, its `version`, and the live release (number and needs, not its definition) with `unpublished_changes`. |
 | `list_app_rows` | `space_id`, `app_id` | An app's data: the rows the user may read (all, or only their own: [App roles](api.md#app-roles)), oldest first, each with its `id`, its `_revision` and the fields its live release's collection declares (deleted rows are not listed); an offline app's too. |

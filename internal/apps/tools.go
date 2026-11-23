@@ -187,16 +187,19 @@ func Reference() (CatalogReference, error) {
 }
 
 var rules = []string{
-	`An app is {"name", "definition": {"components", "collection", "actions", "summaries"}}.`,
-	`components: the screen, at most 300; one has the id "root". Use only the components and props listed; anything else is refused.`,
+	`An app is {"name", "definition": {"components" or "screens"+"entry", "collection", "actions", "summaries"}}. definition_version is 2 (leave it out); a definition that says 1 can't use screens, time or choice fields, rules or navigation.`,
+	`components: the screen of an app with one, at most 300; one has the id "root". Use only the components and props listed; anything else is refused. Screens is the server's own and can't be used.`,
+	`screens: an app with several has "screens": [{"name", "root", "record"?, "components"}] and "entry" (the screen it opens on) instead of components, at most 12 screens and 300 components in all. Every component id is unique across the screens (not "root", which is the server's), a screen's "root" is the id of its root component, and a component refers only to its own screen's. The data model's /screen says which is shown.`,
+	`Moving between screens: an action {"kind": "navigate", "screen": "<name>"} that a Button's event names, with no context; for a screen with "record": true the event's context is {"id": <the row's id>} (a path such as {"path": "id"} in a List template, or "/record/id" on a detail screen) and the screen shows that row at /record (id, _revision and the fields). Navigating changes no row and keeps the form at /draft, so what was typed survives going back and forth. An insert, update or delete may add "then": "<screen>" to open one after it runs.`,
 	`Dynamic values are a literal, a data binding {"path": "/abs/path"} (or a path relative to the item inside a List template), or a function call {"call", "args"}.`,
 	`A child list is ["id", …] or a template {"componentId", "path": "/items"} drawing the component once per row; inside it, paths like "amount" or "id" are the row's.`,
 	`The data model: /items is the rows, each with its "id" and the collection's fields; /draft is an empty form to bind inputs to; each summary is at /<name>, as text.`,
-	`collection.fields: [{"name", "type": "string"|"number"|"boolean"|"date", "required"?, "max_length"? (string, default 1000, at most 10000), "min"?/"max"? (number)}], at most 50; a date is YYYY-MM-DD; names are lowercase letters, digits and _, not id, items or draft.`,
-	`actions: {"<event name>": {"kind": "insert"|"update"|"delete"}}. A Button's action {"event": {"name", "context"}} must name one. insert adds a row from the context's fields and clears /draft; update changes the fields the context gives of the row whose "id" it gives; delete removes the row whose "id" it gives.`,
+	`collection.fields: [{"name", "type": "string"|"number"|"boolean"|"date"|"time"|"choice", "required"?, "required_when"? (a rule), "max_length"? (string, default 1000, at most 10000), "min"?/"max"? (number), "options"? (choice: 1 to 50 different texts)}], at most 50; a date is YYYY-MM-DD, a time HH:MM (24-hour); names are lowercase letters, digits and _, not id, items or draft. Bind a time to a DateTimeInput with enableTime true and enableDate false; a choice to a ChoicePicker with variant "mutuallyExclusive" and the same options (a value outside them is refused).`,
+	`Rules are tiny and declarative, never code: {"field", "op": "eq"|"ne"|"lt"|"lte"|"gt"|"gte", "value": a literal of the field's type} or {"all": [rules]} or {"any": [rules]}, nested at most 3 deep, at most 16 parts; ordering is for number, date and time fields, and a field with no value equals nothing. A field's "required_when" makes it required when its rule holds of the row: the server enforces it on every insert and update, from any screen or release or from you, whatever is shown. The Show component {"when": rule, "source"?: "draft" (default, the form at /draft) | "record" (the record a detail screen shows), "child": id} draws its child only while the rule holds: it hides an input for people and is never a limit on what the server accepts. A summary may add "where": a rule, to count or sum only some rows.`,
+	`actions: {"<event name>": {"kind": "insert"|"update"|"delete"|"navigate", "screen"? (navigate), "then"? (the others)}}. A Button's action {"event": {"name", "context"}} must name one. insert adds a row from the context's fields and clears /draft; update changes the fields the context gives of the row whose "id" it gives; delete removes the row whose "id" it gives.`,
 	`summaries: {"<name>": {"kind": "count"} | {"kind": "sum", "field": "<number field>"}}.`,
 	`Saving a definition (create_app, update_app) saves the app's DRAFT: it changes nothing people use. They keep using the live release until a person who may publish the app publishes the draft, in the Apps page; you have no tool to publish. A new app is a draft only, and is not launchable until published.`,
-	`Publishing checks the draft against the app's rows: removing a field that rows have values for, changing a field's type, making a field required that some row lacks, or tightening its limits below a stored value needs the publisher to acknowledge it by name. So prefer adding fields as optional, and keep names and types of fields that have data.`,
+	`Publishing checks the draft against the app's rows: removing a field that rows have values for, changing a field's type, making a field required (or conditionally required) that some row lacks, or tightening its limits or a choice's options below a stored value needs the publisher to acknowledge it by name. So prefer adding fields as optional, and keep names and types of fields that have data.`,
 	`Image, Video, AudioPlayer and openUrl are not available: an app never loads or opens outside addresses.`,
 }
 
@@ -225,4 +228,6 @@ var kindNames = map[kind]string{
 	kTabs:          `[{"title": dynamic string, "child": component id}], at least one`,
 	kOptions:       `[{"label": dynamic string, "value": string}]`,
 	kIconName:      `an icon name (` + strings.Join(iconNames, ", ") + `), {"svgPath"} or a data binding`,
+	kRule:          `a rule: {"field", "op": eq|ne|lt|lte|gt|gte, "value": literal}, {"all": [rule, …]} or {"any": [rule, …]}`,
+	kScreenRefs:    `[{"name", "child": component id}]`,
 }

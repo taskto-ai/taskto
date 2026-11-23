@@ -284,7 +284,7 @@ func TestCheckRefusesBadDefinitions(t *testing.T) {
 		"max_length":       {func(d *Definition) { d.Collection.Fields[0].MaxLength = MaxMaxLength + 1 }, "max_length is 1 to"},
 		"min over max":     {func(d *Definition) { d.Collection.Fields[1].Min, d.Collection.Fields[1].Max = n(5), n(1) }, "min is more than max"},
 		"limit of a type":  {func(d *Definition) { d.Collection.Fields[0].Min = n(1) }, "only a number field"},
-		"action kind":      {func(d *Definition) { d.Actions["wipe"] = Action{Kind: "delete_all"} }, "kind must be insert, update or delete"},
+		"action kind":      {func(d *Definition) { d.Actions["wipe"] = Action{Kind: "delete_all"} }, "kind must be insert, update, delete or navigate"},
 		"no action":        {func(d *Definition) { d.Actions = nil }, "at least one"},
 		"reserved summary": {func(d *Definition) { d.Summaries["items"] = Summary{Kind: "count"} }, "not items"},
 		"sum of text":      {func(d *Definition) { d.Summaries["total"] = Summary{Kind: "sum", Field: "description"} }, "not a number field"},

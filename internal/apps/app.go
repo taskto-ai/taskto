@@ -51,6 +51,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -71,9 +72,18 @@ const CatalogID = "https://taskto.ai/catalogs/apps/v1.json"
 // definition gains something an older reader would misread (a new kind of action, say), while
 // the catalog's growth is told by Definition.Requires. A definition that says a higher version
 // than this is refused, and a client that finds a release in a higher one asks to be updated.
-const DefinitionVersion = 1
+//
+// Version 1 is one screen, string, number, boolean and date fields, and the actions insert,
+// update and delete. Version 2 adds screens with navigation between them, time and choice
+// fields, rules (conditionally required fields, the Show component, summaries over some rows)
+// and the navigate action. A definition that says version 1 is read, checked and drawn as it
+// always was, and can't use any of version 2.
+const DefinitionVersion = 2
 
-// Definition is what an app is made of: its screen, its collection and its actions.
+// firstVersion is the version of the format before screens and rules.
+const firstVersion = 1
+
+// Definition is what an app is made of: its screen or screens, its collection and its actions.
 type Definition struct {
 	// DefinitionVersion is the format version the definition is written in; DefinitionVersion
 	// if left out.
@@ -83,10 +93,14 @@ type Definition struct {
 	// out from the screen, replacing whatever was sent, so it can't claim less than it uses.
 	// A client whose catalog lacks one of them can't draw the app.
 	Requires []string `json:"requires"`
-	// Components is the screen: the A2UI component list, sent as is in updateComponents.
-	// The root component has the ID "root".
-	Components []json.RawMessage `json:"components"`
-	Collection Collection        `json:"collection"`
+	// Components is the screen of an app with one: the A2UI component list, sent as is in
+	// updateComponents. The root component has the ID "root". An app with Screens has none.
+	Components []json.RawMessage `json:"components,omitempty"`
+	// Screens are the screens of an app with several (screens.go), and Entry the one it opens
+	// on. An app has Components or Screens, never both.
+	Screens    []Screen   `json:"screens,omitempty"`
+	Entry      string     `json:"entry,omitempty"`
+	Collection Collection `json:"collection"`
 	// Actions maps an A2UI event name to what it does. A button can only send an event
 	// named here.
 	Actions map[string]Action `json:"actions"`
@@ -104,7 +118,9 @@ const (
 	TypeString  = "string"
 	TypeNumber  = "number"
 	TypeBoolean = "boolean"
-	TypeDate    = "date" // YYYY-MM-DD
+	TypeDate    = "date"   // YYYY-MM-DD
+	TypeTime    = "time"   // HH:MM, on a 24-hour clock (definition version 2)
+	TypeChoice  = "choice" // one of the field's Options (definition version 2)
 )
 
 // Field is one typed field of a row.
@@ -112,32 +128,45 @@ type Field struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"`
 	Required bool   `json:"required,omitempty"`
+	// RequiredWhen makes the field required when its rule holds of the row (rules.go): on every
+	// insert and update, whichever release's screen sends it. A field that is always required
+	// has none.
+	RequiredWhen *Rule `json:"required_when,omitempty"`
 	// MaxLength bounds a string field, in characters: DefaultMaxLength if unset, at most
 	// MaxMaxLength.
 	MaxLength int `json:"max_length,omitempty"`
 	// Min and Max bound a number field.
 	Min *float64 `json:"min,omitempty"`
 	Max *float64 `json:"max,omitempty"`
+	// Options are the values a choice field may hold: at most MaxOptions, each unique.
+	Options []string `json:"options,omitempty"`
 }
 
 // The kinds of action: add a row built from the event's context and clear the form at
 // /draft; change the fields the context gives of the row whose "id" it gives; delete the
-// row whose "id" it gives.
+// row whose "id" it gives; open another screen (screens.go).
 const (
-	ActionInsert = "insert"
-	ActionUpdate = "update"
-	ActionDelete = "delete"
+	ActionInsert   = "insert"
+	ActionUpdate   = "update"
+	ActionDelete   = "delete"
+	ActionNavigate = "navigate"
 )
 
 // Action is what an event does.
 type Action struct {
 	Kind string `json:"kind"`
+	// Screen is the screen a navigate action opens.
+	Screen string `json:"screen,omitempty"`
+	// Then is the screen an insert, update or delete opens once it has run, if any.
+	Then string `json:"then,omitempty"`
 }
 
-// Summary is a value computed over the rows: "count", or "sum" of a number field.
+// Summary is a value computed over the rows: "count", or "sum" of a number field. Where
+// narrows it to the rows its rule holds of.
 type Summary struct {
 	Kind  string `json:"kind"`
 	Field string `json:"field,omitempty"`
+	Where *Rule  `json:"where,omitempty"`
 }
 
 // Bounds of a definition and of an app's rows.
@@ -145,6 +174,8 @@ const (
 	MaxFields        = 50
 	DefaultMaxLength = 1000
 	MaxMaxLength     = 10000
+	MaxOptions       = 50
+	maxOptionLen     = 100
 	maxActions       = 50
 	maxSummaries     = 20
 	// MaxDefinitionSize bounds a definition's JSON, so the agent can always read one whole
@@ -162,7 +193,16 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
 
 // reserved are the data model keys the platform fills, and a row's own ID; a field or
 // summary can't use them.
-var reserved = map[string]bool{"items": true, "draft": true, "id": true}
+var reserved = map[string]bool{ItemsKey: true, DraftKey: true, "id": true}
+
+// The data model's keys the platform fills. An app with screens has two more, ScreenKey and
+// RecordKey, which its summaries can't use either.
+const (
+	ItemsKey  = "items"
+	DraftKey  = "draft"
+	ScreenKey = "screen"
+	RecordKey = "record"
+)
 
 // ErrInvalid matches every validation error (errors.Is); their messages say what is wrong.
 var ErrInvalid = errors.New("invalid request")
@@ -202,6 +242,8 @@ func (d Definition) Check() (Definition, error) {
 			"definition_version %d isn't supported: this server reads up to %d", d.DefinitionVersion, DefinitionVersion)
 	}
 	fields := map[string]Field{}
+	// What the definition uses that only version 2 has, for a definition that says version 1.
+	var uses2 []string
 	if len(d.Collection.Fields) > MaxFields {
 		return Definition{}, invalidf("collection: at most %d fields", MaxFields)
 	}
@@ -227,8 +269,22 @@ func (d Definition) Check() (Definition, error) {
 				return Definition{}, invalidf("collection: field %q: min is more than max", f.Name)
 			}
 		case TypeBoolean, TypeDate:
+		case TypeTime:
+			uses2 = append(uses2, "a time field")
+		case TypeChoice:
+			uses2 = append(uses2, "a choice field")
+			if len(f.Options) < 1 || len(f.Options) > MaxOptions {
+				return Definition{}, invalidf("collection: field %q: a choice has 1 to %d options", f.Name, MaxOptions)
+			}
+			seen := map[string]bool{}
+			for _, o := range f.Options {
+				if o == "" || o != strings.TrimSpace(o) || utf8.RuneCountInString(o) > maxOptionLen || seen[o] {
+					return Definition{}, invalidf("collection: field %q: options are different texts of 1 to %d characters, with no space at either end", f.Name, maxOptionLen)
+				}
+				seen[o] = true
+			}
 		default:
-			return Definition{}, invalidf("collection: field %q: type must be string, number, boolean or date", f.Name)
+			return Definition{}, invalidf("collection: field %q: type must be string, number, boolean, date, time or choice", f.Name)
 		}
 		if f.Type != TypeString && f.MaxLength != 0 {
 			return Definition{}, invalidf("collection: field %q: only a string field has max_length", f.Name)
@@ -236,8 +292,27 @@ func (d Definition) Check() (Definition, error) {
 		if f.Type != TypeNumber && (f.Min != nil || f.Max != nil) {
 			return Definition{}, invalidf("collection: field %q: only a number field has min and max", f.Name)
 		}
+		if f.Type != TypeChoice && f.Options != nil {
+			return Definition{}, invalidf("collection: field %q: only a choice field has options", f.Name)
+		}
 		fields[f.Name] = f
 		out.Collection.Fields[i] = f
+	}
+	// Rules read other fields, so they are checked once every field is declared.
+	for _, f := range out.Collection.Fields {
+		if f.RequiredWhen == nil {
+			continue
+		}
+		uses2 = append(uses2, "required_when")
+		if f.Required {
+			return Definition{}, invalidf("collection: field %q: it is always required, so required_when means nothing", f.Name)
+		}
+		if err := f.RequiredWhen.check(out.Collection); err != nil {
+			return Definition{}, invalidf("collection: field %q: required_when: %v", f.Name, err)
+		}
+		if slices.Contains(ruleFields(*f.RequiredWhen), f.Name) {
+			return Definition{}, invalidf("collection: field %q: required_when can't read the field itself", f.Name)
+		}
 	}
 	if len(d.Actions) == 0 {
 		return Definition{}, invalidf("actions: an app needs at least one")
@@ -245,14 +320,27 @@ func (d Definition) Check() (Definition, error) {
 	if len(d.Actions) > maxActions {
 		return Definition{}, invalidf("actions: at most %d", maxActions)
 	}
+	screens, err := d.screenIndex()
+	if err != nil {
+		return Definition{}, err
+	}
+	if len(d.Screens) > 0 {
+		uses2 = append(uses2, "screens")
+	}
 	for name, a := range d.Actions {
 		if !namePattern.MatchString(name) {
 			return Definition{}, invalidf("actions: %q: a name is a lowercase letter, then up to 39 lowercase letters, digits or _", name)
 		}
 		switch a.Kind {
-		case ActionInsert, ActionUpdate, ActionDelete:
+		case ActionInsert, ActionUpdate, ActionDelete, ActionNavigate:
 		default:
-			return Definition{}, invalidf("actions: %q: kind must be insert, update or delete", name)
+			return Definition{}, invalidf("actions: %q: kind must be insert, update, delete or navigate", name)
+		}
+		if err := checkActionScreens(name, a, screens); err != nil {
+			return Definition{}, err
+		}
+		if a.Kind == ActionNavigate || a.Then != "" {
+			uses2 = append(uses2, "navigation")
 		}
 	}
 	if len(d.Summaries) > maxSummaries {
@@ -264,6 +352,9 @@ func (d Definition) Check() (Definition, error) {
 		}
 		if _, clash := fields[name]; clash {
 			return Definition{}, invalidf("summaries: %q is also a field", name)
+		}
+		if len(d.Screens) > 0 && (name == ScreenKey || name == RecordKey) {
+			return Definition{}, invalidf("summaries: %q: screen and record are the screens' own", name)
 		}
 		switch s.Kind {
 		case "count":
@@ -277,13 +368,41 @@ func (d Definition) Check() (Definition, error) {
 		default:
 			return Definition{}, invalidf("summaries: %q: kind must be count or sum", name)
 		}
+		if s.Where != nil {
+			uses2 = append(uses2, "a summary's where")
+			if err := s.Where.check(out.Collection); err != nil {
+				return Definition{}, invalidf("summaries: %q: where: %v", name, err)
+			}
+		}
 	}
-	comps, requires, err := checkComponents(d.Components, d.Actions)
-	if err != nil {
-		return Definition{}, err
+	scope := &screenScope{actions: d.Actions, collection: out.Collection, screens: screens}
+	var requires []string
+	if len(d.Screens) > 0 {
+		if len(d.Components) > 0 {
+			return Definition{}, invalidf("an app has components or screens, not both")
+		}
+		out.Screens, requires, err = checkScreens(d.Screens, scope)
+		if err != nil {
+			return Definition{}, err
+		}
+		out.Components = nil
+	} else {
+		if d.Entry != "" {
+			return Definition{}, invalidf("entry names the screen an app opens on, and this app has no screens")
+		}
+		out.Components, requires, err = checkComponents(d.Components, "root", map[string]bool{}, scope)
+		if err != nil {
+			return Definition{}, err
+		}
 	}
-	out.Components = comps
 	out.Requires = requires
+	if slices.Contains(requires, ComponentCapability("Show")) {
+		uses2 = append(uses2, "the Show component")
+	}
+	if d.DefinitionVersion == firstVersion && len(uses2) > 0 {
+		return Definition{}, invalidf("definition_version %d can't use %s: they are for version 2 (leave definition_version out for the current one)",
+			d.DefinitionVersion, strings.Join(sortedKeys(setOf(uses2)), ", "))
+	}
 	raw, err := json.Marshal(out)
 	if err != nil {
 		return Definition{}, err
@@ -341,19 +460,47 @@ func SurfaceID(id int64) string { return "app-" + strconv.FormatInt(id, 10) }
 func Surface(surfaceID string, def Definition, rows []Row) []Message {
 	return []Message{
 		{"version": ProtocolVersion, "createSurface": map[string]any{"surfaceId": surfaceID, "catalogId": CatalogID}},
-		{"version": ProtocolVersion, "updateComponents": map[string]any{"surfaceId": surfaceID, "components": def.Components}},
+		{"version": ProtocolVersion, "updateComponents": map[string]any{"surfaceId": surfaceID, "components": def.surfaceComponents()}},
 		DataModel(surfaceID, def, rows),
 	}
 }
 
 // DataModel replaces the whole data model: the rows at /items (each with its "id" and
-// the collection's fields), an empty form at /draft, and the summaries.
+// the collection's fields), an empty form at /draft, and the summaries. An app with screens
+// has the screen it is on at /screen (its entry) and the record a detail screen shows at
+// /record (none).
 func DataModel(surfaceID string, def Definition, rows []Row) Message {
 	value := map[string]any{"items": Items(def, rows), "draft": map[string]any{}}
 	for name, s := range def.Summaries {
-		value[name] = summarize(s, rows)
+		value[name] = summarize(s, def.Collection, rows)
 	}
-	return Message{"version": ProtocolVersion, "updateDataModel": map[string]any{"surfaceId": surfaceID, "path": "/", "value": value}}
+	if def.hasScreens() {
+		value[ScreenKey], value[RecordKey] = def.Entry, map[string]any{}
+	}
+	return dataMessage(surfaceID, "/", value)
+}
+
+func dataMessage(surfaceID, path string, value any) Message {
+	return Message{"version": ProtocolVersion, "updateDataModel": map[string]any{"surfaceId": surfaceID, "path": path, "value": value}}
+}
+
+// Refreshed is what an action's answer sends once the rows may have changed. An app with one
+// screen has its whole data model replaced, as it always was (the form cleared, whichever
+// action ran). An app with screens has the rows and the summaries replaced and nothing else,
+// so the screen the person is on and the form they are filling stay where they are; only an
+// insert clears the form (clearDraft), and the record a detail screen shows is shown again.
+func Refreshed(surfaceID string, def Definition, rows []Row, clearDraft bool) []Message {
+	if !def.hasScreens() {
+		return []Message{DataModel(surfaceID, def, rows)}
+	}
+	msgs := []Message{dataMessage(surfaceID, "/"+ItemsKey, Items(def, rows))}
+	for _, name := range sortedKeys(def.Summaries) {
+		msgs = append(msgs, dataMessage(surfaceID, "/"+name, summarize(def.Summaries[name], def.Collection, rows)))
+	}
+	if clearDraft {
+		msgs = append(msgs, dataMessage(surfaceID, "/"+DraftKey, map[string]any{}))
+	}
+	return msgs
 }
 
 // RevisionKey is the key of a row's revision in its item. A field's name can't start with
@@ -374,8 +521,7 @@ func Items(def Definition, rows []Row) []map[string]any {
 
 // ofType reports whether v is a value of f's type, whatever the field's limits.
 func ofType(f Field, v any) bool {
-	f.MaxLength, f.Min, f.Max = math.MaxInt, nil, nil
-	_, present, err := f.parse(v)
+	_, present, err := f.stored(v)
 	return err == nil && present
 }
 
@@ -402,7 +548,16 @@ func declared(def Definition, data map[string]any) map[string]any {
 }
 
 // summarize formats as text: A2UI binds text components to strings.
-func summarize(s Summary, rows []Row) string {
+func summarize(s Summary, c Collection, rows []Row) string {
+	if s.Where != nil {
+		var kept []Row
+		for _, r := range rows {
+			if c.holds(*s.Where, r.Data) {
+				kept = append(kept, r)
+			}
+		}
+		rows = kept
+	}
 	switch s.Kind {
 	case "count":
 		return strconv.Itoa(len(rows))
@@ -422,12 +577,17 @@ func summarize(s Summary, rows []Row) string {
 // Change is what an action does to the rows: insert Data, or update or delete row ID. Name
 // is the action's event name, kept with the change; Expected is the revision the row had
 // when the person saw it, if they said.
+//
+// A navigate action changes no row: Screen is the screen it opens and ID, for one that shows a
+// record, the record. For the other kinds Then is the screen to open once the change is made.
 type Change struct {
 	Kind     string
 	Name     string
 	ID       int64
 	Data     map[string]any
 	Expected *int64
+	Screen   string
+	Then     string
 }
 
 // Plan works out what action does, from the context alone: which row, and the fields it
@@ -441,7 +601,10 @@ func Plan(surfaceID string, def Definition, action ClientAction) (Change, error)
 	if !ok {
 		return Change{}, invalidf("unknown action %q", action.Name)
 	}
-	ch := Change{Kind: a.Kind, Name: action.Name}
+	ch := Change{Kind: a.Kind, Name: action.Name, Then: a.Then}
+	if a.Kind == ActionNavigate {
+		return planNavigate(def, a, ch, action)
+	}
 	if action.ExpectedRevision != nil {
 		if a.Kind == ActionInsert || *action.ExpectedRevision < 1 {
 			return Change{}, invalidf("expectedRevision is the revision of the row an update or a delete was made against, from 1")
@@ -520,11 +683,29 @@ func (c Collection) Merge(row, changes map[string]any) (map[string]any, error) {
 // alone.
 func (c Collection) Fits(row map[string]any) error {
 	for _, f := range c.Fields {
-		if err := f.fits(row); err != nil {
+		if err := c.fitsField(f, row); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// fitsField checks a stored row against one of the collection's fields: what the field alone
+// asks (fits), and the value its rule makes required, whatever the screen that sent the row
+// showed.
+func (c Collection) fitsField(f Field, row map[string]any) error {
+	if err := f.fits(row); err != nil {
+		return err
+	}
+	if v, ok := row[f.Name]; f.RequiredWhen != nil && (!ok || v == nil) && c.requires(f, row) {
+		return invalidAs(apierr.CodeAppFieldRequiredWhen, apierr.Params{"field": f.Name}, "%s is required here", f.Name)
+	}
+	return nil
+}
+
+// requires reports whether the field is required of the row: always, or when its rule holds.
+func (c Collection) requires(f Field, row map[string]any) bool {
+	return f.Required || (f.RequiredWhen != nil && c.holds(*f.RequiredWhen, row))
 }
 
 // fits checks a stored row against the field alone: present if required, and of its type and
@@ -545,6 +726,17 @@ func (f Field) fits(row map[string]any) error {
 // arrive as strings, so number and boolean fields accept them as text too; blank text is
 // no value (present is false).
 func (f Field) parse(v any) (value any, present bool, err error) {
+	if list, isList := v.([]any); isList && f.Type == TypeChoice {
+		// A ChoicePicker's value is a list of what is chosen: one choice, or none.
+		switch len(list) {
+		case 0:
+			return nil, false, nil
+		case 1:
+			v = list[0]
+		default:
+			return nil, false, invalidAs(apierr.CodeAppFieldNotOption, apierr.Params{"field": f.Name}, "%s takes one of its options, not several", f.Name)
+		}
+	}
 	if s, isString := v.(string); isString {
 		s = strings.TrimSpace(s)
 		if s == "" {
@@ -594,6 +786,20 @@ func (f Field) parse(v any) (value any, present bool, err error) {
 		s, ok := v.(string)
 		if _, err := time.Parse(time.DateOnly, s); !ok || err != nil {
 			return nil, false, invalidAs(apierr.CodeAppFieldNotDate, apierr.Params{"field": f.Name}, "%s must be a date, YYYY-MM-DD", f.Name)
+		}
+		return s, true, nil
+	case TypeTime:
+		s, ok := v.(string)
+		if !ok || !timePattern.MatchString(s) {
+			return nil, false, invalidAs(apierr.CodeAppFieldNotTime, apierr.Params{"field": f.Name}, "%s must be a time, HH:MM", f.Name)
+		}
+		return s, true, nil
+	case TypeChoice:
+		s, ok := v.(string)
+		// A field whose options aren't known (Field.stored, which reads a value as a row holds
+		// it, whatever the options now are) takes any text.
+		if !ok || (f.Options != nil && !slices.Contains(f.Options, s)) {
+			return nil, false, invalidAs(apierr.CodeAppFieldNotOption, apierr.Params{"field": f.Name}, "%s must be one of %s", f.Name, strings.Join(f.Options, ", "))
 		}
 		return s, true, nil
 	}

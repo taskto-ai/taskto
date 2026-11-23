@@ -1,0 +1,172 @@
+{
+  "name": "Task planner",
+  "definition": {
+    "screens": [
+      {
+        "name": "tasks",
+        "root": "tasks-root",
+        "components": [
+          { "id": "tasks-root", "component": "Column", "children": ["tasks-title", "tasks-open", "tasks-list", "tasks-new"] },
+          { "id": "tasks-title", "component": "Text", "text": "Tasks", "variant": "h2" },
+          { "id": "tasks-open", "component": "Stat", "label": "Open tasks", "value": { "path": "/open" } },
+          { "id": "tasks-list", "component": "List", "children": { "componentId": "task-row", "path": "/items" } },
+          { "id": "task-row", "component": "Row", "justify": "spaceBetween", "align": "center", "children": ["task-title", "task-category", "task-open"] },
+          { "id": "task-title", "component": "Text", "text": { "path": "title" } },
+          { "id": "task-category", "component": "Text", "text": { "path": "category" }, "variant": "caption" },
+          { "id": "task-open-label", "component": "Text", "text": "Open" },
+          {
+            "id": "task-open",
+            "component": "Button",
+            "variant": "borderless",
+            "child": "task-open-label",
+            "action": { "event": { "name": "open_task", "context": { "id": { "path": "id" } } } }
+          },
+          { "id": "tasks-new-label", "component": "Text", "text": "New task" },
+          {
+            "id": "tasks-new",
+            "component": "Button",
+            "variant": "primary",
+            "child": "tasks-new-label",
+            "action": { "event": { "name": "new_task" } }
+          }
+        ]
+      },
+      {
+        "name": "new",
+        "root": "new-root",
+        "components": [
+          {
+            "id": "new-root",
+            "component": "Column",
+            "children": ["new-title", "new-name", "new-category", "new-note-when", "new-date", "new-time", "new-actions"]
+          },
+          { "id": "new-title", "component": "Text", "text": "New task", "variant": "h2" },
+          { "id": "new-name", "component": "TextField", "label": "Title", "value": { "path": "/draft/title" } },
+          {
+            "id": "new-category",
+            "component": "ChoicePicker",
+            "label": "Category",
+            "variant": "mutuallyExclusive",
+            "displayStyle": "chips",
+            "options": [
+              { "label": "Work", "value": "work" },
+              { "label": "Home", "value": "home" },
+              { "label": "Other", "value": "other" }
+            ],
+            "value": { "path": "/draft/category" }
+          },
+          {
+            "id": "new-note-when",
+            "component": "Show",
+            "when": { "field": "category", "op": "eq", "value": "other" },
+            "child": "new-note"
+          },
+          { "id": "new-note", "component": "TextField", "label": "What kind of task?", "value": { "path": "/draft/category_note" } },
+          { "id": "new-date", "component": "DateTimeInput", "label": "Due date", "enableDate": true, "value": { "path": "/draft/due_date" } },
+          { "id": "new-time", "component": "DateTimeInput", "label": "Due time", "enableTime": true, "value": { "path": "/draft/due_time" } },
+          { "id": "new-actions", "component": "Row", "children": ["new-back", "new-add"] },
+          { "id": "new-back-label", "component": "Text", "text": "Back" },
+          {
+            "id": "new-back",
+            "component": "Button",
+            "child": "new-back-label",
+            "action": { "event": { "name": "back_to_tasks" } }
+          },
+          { "id": "new-add-label", "component": "Text", "text": "Add task" },
+          {
+            "id": "new-add",
+            "component": "Button",
+            "variant": "primary",
+            "child": "new-add-label",
+            "action": {
+              "event": {
+                "name": "add_task",
+                "context": {
+                  "title": { "path": "/draft/title" },
+                  "category": { "path": "/draft/category" },
+                  "category_note": { "path": "/draft/category_note" },
+                  "due_date": { "path": "/draft/due_date" },
+                  "due_time": { "path": "/draft/due_time" }
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "detail",
+        "root": "detail-root",
+        "record": true,
+        "components": [
+          {
+            "id": "detail-root",
+            "component": "Column",
+            "children": ["detail-title", "detail-category", "detail-note-when", "detail-due", "detail-actions"]
+          },
+          { "id": "detail-title", "component": "Text", "text": { "path": "/record/title" }, "variant": "h2" },
+          { "id": "detail-category", "component": "Stat", "label": "Category", "value": { "path": "/record/category" } },
+          {
+            "id": "detail-note-when",
+            "component": "Show",
+            "source": "record",
+            "when": { "field": "category", "op": "eq", "value": "other" },
+            "child": "detail-note"
+          },
+          { "id": "detail-note", "component": "Stat", "label": "Kind", "value": { "path": "/record/category_note" } },
+          { "id": "detail-due", "component": "Stat", "label": "Due", "value": { "path": "/record/due_date" } },
+          { "id": "detail-actions", "component": "Row", "children": ["detail-back", "detail-done", "detail-delete"] },
+          { "id": "detail-back-label", "component": "Text", "text": "Back" },
+          {
+            "id": "detail-back",
+            "component": "Button",
+            "child": "detail-back-label",
+            "action": { "event": { "name": "back_to_tasks" } }
+          },
+          { "id": "detail-done-label", "component": "Text", "text": "Mark done" },
+          {
+            "id": "detail-done",
+            "component": "Button",
+            "variant": "primary",
+            "child": "detail-done-label",
+            "action": { "event": { "name": "complete_task", "context": { "id": { "path": "/record/id" }, "done": true } } }
+          },
+          { "id": "detail-delete-label", "component": "Text", "text": "Delete" },
+          {
+            "id": "detail-delete",
+            "component": "Button",
+            "variant": "borderless",
+            "child": "detail-delete-label",
+            "action": { "event": { "name": "delete_task", "context": { "id": { "path": "/record/id" } } } }
+          }
+        ]
+      }
+    ],
+    "entry": "tasks",
+    "collection": {
+      "fields": [
+        { "name": "title", "type": "string", "required": true, "max_length": 100 },
+        { "name": "category", "type": "choice", "required": true, "options": ["work", "home", "other"] },
+        {
+          "name": "category_note",
+          "type": "string",
+          "max_length": 100,
+          "required_when": { "field": "category", "op": "eq", "value": "other" }
+        },
+        { "name": "due_date", "type": "date" },
+        { "name": "due_time", "type": "time" },
+        { "name": "done", "type": "boolean" }
+      ]
+    },
+    "actions": {
+      "new_task": { "kind": "navigate", "screen": "new" },
+      "open_task": { "kind": "navigate", "screen": "detail" },
+      "back_to_tasks": { "kind": "navigate", "screen": "tasks" },
+      "add_task": { "kind": "insert", "then": "tasks" },
+      "complete_task": { "kind": "update", "then": "tasks" },
+      "delete_task": { "kind": "delete", "then": "tasks" }
+    },
+    "summaries": {
+      "open": { "kind": "count", "where": { "field": "done", "op": "ne", "value": true } }
+    }
+  }
+}

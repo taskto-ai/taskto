@@ -828,11 +828,18 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 // sent back is drawn by the release the action came from, limited to the fields the live
 // release declares (shownBy): nothing the live app leaves unseen is returned.
 func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
+	if err := may(sp, access.Read); err != nil {
+		return nil, err
+	}
+	if s.navigates(ctx, sp, actor, appID, action) {
+		return s.navigate(ctx, sp, actor, appID, action)
+	}
 	if err := may(sp, access.Write); err != nil {
 		return nil, err
 	}
 	var def, live Definition
 	var acc access.AppAccess
+	var change Change
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		var err error
 		if acc, err = s.recheckApp(ctx, actor, sp.ID, appID); err != nil {
@@ -872,6 +879,7 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 		if err != nil {
 			return err
 		}
+		change = ch
 		if fromOlder && !liveTakes(live, def, action.Name, ch) {
 			return &outdatedError{release: *action.Release, live: a.Live.Number}
 		}
@@ -891,7 +899,115 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	if err != nil {
 		return nil, err
 	}
-	return []Message{DataModel(SurfaceID(appID), shownBy(live, def), rows)}, nil
+	shown := shownBy(live, def)
+	msgs := Refreshed(SurfaceID(appID), shown, rows, change.Kind == ActionInsert)
+	if !shown.hasScreens() {
+		return msgs, nil
+	}
+	// An app with screens: what the action does to the screen the person is on. The record a
+	// detail screen shows is shown again after an update and emptied after a delete, and the
+	// screen the action says it goes on to (Then) is opened.
+	switch change.Kind {
+	case ActionUpdate:
+		record := map[string]any{}
+		for _, r := range rows {
+			if r.ID == change.ID {
+				record = item(shown, r)
+			}
+		}
+		msgs = append(msgs, dataMessage(SurfaceID(appID), "/"+RecordKey, record))
+	case ActionDelete:
+		msgs = append(msgs, dataMessage(SurfaceID(appID), "/"+RecordKey, map[string]any{}))
+	}
+	if change.Then != "" {
+		msgs = append(msgs, dataMessage(SurfaceID(appID), "/"+ScreenKey, change.Then))
+	}
+	return msgs, nil
+}
+
+// navigates reports whether the action is a navigate action of the release it comes from, which
+// the caller may take as the app's reader. Anything it can't tell is left to act, which gives
+// the errors it always did.
+func (s *Service) navigates(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) bool {
+	if _, err := s.appAccess(ctx, actor, sp.ID, appID); err != nil {
+		return false
+	}
+	a, err := launchable(ctx, s.db, sp.ID, appID)
+	if err != nil || a.liveDef == nil {
+		return false
+	}
+	def := *a.liveDef
+	if action.Release != nil && *action.Release != a.Live.Number {
+		rel, err := loadRelease(ctx, s.db, appID, *action.Release, true)
+		if err != nil {
+			return false
+		}
+		def = *rel.Definition
+	}
+	return def.Actions[action.Name].Kind == ActionNavigate
+}
+
+// navigate runs a navigate action: it changes no row, so it is the reader's, and answers with
+// the screen to show and, for one that shows a record, the record, as the caller may read it
+// (one they may not is answered as one the app doesn't have). The form at /draft, the rows
+// and everything else in the data model are left alone. From a release that is not the live one
+// it is read as that release defines it; a release that can't be found is answered as an
+// outdated screen, so which releases exist isn't told.
+func (s *Service) navigate(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
+	acc, err := s.appAccess(ctx, actor, sp.ID, appID)
+	if err != nil {
+		return nil, err
+	}
+	a, err := launchable(ctx, s.db, sp.ID, appID)
+	if err != nil {
+		return nil, err
+	}
+	if a.liveDef == nil {
+		return nil, ErrNotPublished
+	}
+	def := *a.liveDef
+	if action.Release != nil && *action.Release != a.Live.Number {
+		rel, err := loadRelease(ctx, s.db, appID, *action.Release, true)
+		if err != nil {
+			return nil, &outdatedError{release: *action.Release, live: a.Live.Number}
+		}
+		def = *rel.Definition
+	}
+	ch, err := Plan(SurfaceID(a.ID), def, action)
+	if err != nil {
+		return nil, err
+	}
+	record := map[string]any{}
+	if ch.ID != 0 {
+		row, found, err := loadRow(ctx, s.db, appID, ch.ID, readable(acc, actor.UserID))
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, invalidAs(apierr.CodeAppRowNotFound, nil, "the app has no row %d", ch.ID)
+		}
+		record = item(shownBy(*a.liveDef, def), row)
+	}
+	return Opened(SurfaceID(appID), ch.Screen, record), nil
+}
+
+// loadRow returns the live row id of an app, if v reads it.
+func loadRow(ctx context.Context, q queryer, appID, id int64, v visibility) (Row, bool, error) {
+	var r Row
+	var data string
+	var creator sql.NullInt64
+	err := q.QueryRowContext(ctx, `SELECT id, revision, data, created_by FROM app_rows WHERE app_id = ? AND id = ? AND deleted_at IS NULL`, appID, id).
+		Scan(&r.ID, &r.Revision, &data, &creator)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !v.sees(creator)) {
+		return Row{}, false, nil
+	}
+	if err != nil {
+		return Row{}, false, err
+	}
+	if err := json.Unmarshal([]byte(data), &r.Data); err != nil {
+		return Row{}, false, fmt.Errorf("app %d row %d: %w", appID, r.ID, err)
+	}
+	return r, true, nil
 }
 
 // shownBy is the definition an action's answer is drawn from: from, the release the action
@@ -909,14 +1025,19 @@ func shownBy(live, from Definition) Definition {
 		}
 	}
 	shown.Summaries = map[string]Summary{}
+	same := func(field string) bool {
+		lf, kept := shown.Collection.field(field)
+		ff, _ := from.Collection.field(field)
+		return kept && lf.Type == ff.Type
+	}
 	for name, sum := range from.Summaries {
-		if sum.Field == "" {
-			shown.Summaries[name] = sum
-			continue
+		keep := sum.Field == "" || same(sum.Field)
+		if sum.Where != nil {
+			for _, field := range ruleFields(*sum.Where) {
+				keep = keep && same(field)
+			}
 		}
-		lf, kept := shown.Collection.field(sum.Field)
-		ff, _ := from.Collection.field(sum.Field)
-		if kept && lf.Type == ff.Type {
+		if keep {
 			shown.Summaries[name] = sum
 		}
 	}
