@@ -1441,8 +1441,11 @@ reads no record is `403 app_forbidden` (`read_records`), an app the caller can't
 whichever the direction, and then by `id` in the same direction as the key. A page is read **by
 keyset**: it asks for the records after the position the cursor names in that order, so paging
 neither skips nor repeats a record that does not change meanwhile, whatever is inserted or deleted
-between the pages (a record whose own sort key changes meanwhile, one edited while paging by
-`_updated`, is seen at most where it was or where it is now). `total` and `aggregates` are asked
+between the pages. A record whose own sort key changes meanwhile (one edited while paging by
+`_updated`) is read where it is when each page is asked: again if it moved into the pages still to
+come, not at all if it moved into the ones already read; sort by `_id` or `_created` for a walk
+that edits can't disturb. A text field orders by its first 200 characters, then by `id`, so a
+cursor stays short. `total` and `aggregates` are asked
 again with every page, so they are the whole matching set as of that request.
 
 **Cursors** are opaque. A cursor is only a position and a fingerprint of the query it ends a

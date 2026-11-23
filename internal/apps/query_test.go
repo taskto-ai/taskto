@@ -526,8 +526,8 @@ func TestQueryTypedValuesAgreeWithTheGoRules(t *testing.T) {
 	values := map[string][]string{
 		TypeNumber:  {`0`, `-3`, `2.5`, `1e300`, `"12"`, `"abc"`, `true`, `null`, `[1]`, `{}`, `""`},
 		TypeBoolean: {`true`, `false`, `"true"`, `1`, `0`, `null`, `"x"`},
-		TypeString:  {`"x"`, `" x"`, `""`, `"  "`, `1`, `true`, `null`, `[]`, `"ação"`},
-		TypeChoice:  {`"bug"`, `"gone"`, `""`, `3`, `null`},
+		TypeString:  {`"x"`, `" x"`, `""`, `"  "`, `1`, `true`, `null`, `[]`, `"ação"`, `"\u00a0"`, `"\u3000\u2003"`, `"\u0085\u2028 "`, `"\u00a0x"`},
+		TypeChoice:  {`"bug"`, `"gone"`, `""`, `3`, `null`, `"\u00a0"`},
 		TypeDate:    {`"2026-01-05"`, `"2024-02-29"`, `"2023-02-29"`, `"2026-13-01"`, `"2026-1-5"`, `"2026-01-05T10:00"`, `"0000-01-01"`, `5`, `null`, `""`, `"tomorrow"`},
 		TypeTime:    {`"00:00"`, `"23:59"`, `"24:00"`, `"12:60"`, `"7:30"`, `"07:30"`, `"07:30:00"`, `5`, `null`, `""`},
 	}
@@ -717,5 +717,44 @@ func TestQueryRecordsChangedAtTheSameTimeKeepAStableOrder(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Fatalf("%v: paged %v, want %v", order, got, want)
 		}
+	}
+}
+
+// A text sort key of any length keeps paging going: the cursor holds only the key's first
+// characters, and every record is reached once.
+func TestQueryPagesPastLongTextKeys(t *testing.T) {
+	w := newWorld(t)
+	s := w.shared
+	a := w.tasks(w.alice, s)
+	var want []int64
+	for _, title := range []string{"a", "m", "z"} {
+		want = append(want, w.addTask(w.alice, s, a, map[string]any{"title": title}))
+	}
+	// Stored as an older release or a longer field could have left it: far past what a cursor
+	// held before, and full of characters JSON escapes.
+	long := strings.Repeat("m<", 3000)
+	if _, err := w.e.db.Exec(`UPDATE app_rows SET data = json_set(data, '$.title', ?) WHERE id = ?`, long, want[1]); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.walk(w.alice, s, a, 1, nil, "sort", "title", "dir", "asc"); !slices.Equal(got, want) {
+		t.Fatalf("pages by title = %v, want %v", got, want)
+	}
+}
+
+// An integer sort key is carried exactly, even past what a float64 holds, so paging moves on.
+func TestQueryCursorKeepsLargeIntegersExact(t *testing.T) {
+	w := newWorld(t)
+	s := w.shared
+	a := w.tasks(w.alice, s)
+	var want []int64
+	for _, qty := range []string{"9007199254740992", "9007199254740993", "9007199254740994"} {
+		id := w.addTask(w.alice, s, a, map[string]any{"title": "x"})
+		if _, err := w.e.db.Exec(`UPDATE app_rows SET data = json_set(data, '$.qty', json(?)) WHERE id = ?`, qty, id); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, id)
+	}
+	if got := w.walk(w.alice, s, a, 1, nil, "sort", "qty", "dir", "asc"); !slices.Equal(got, want) {
+		t.Fatalf("pages by qty = %v, want %v", got, want)
 	}
 }

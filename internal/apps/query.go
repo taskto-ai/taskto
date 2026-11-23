@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/access"
@@ -35,8 +36,11 @@ import (
 // and then by id, the id in the same direction as the key. Paging is by keyset: a page asks for
 // the records after the cursor's position in that order, so it never repeats or skips a record
 // that doesn't change while the pages are read, whatever is inserted or deleted meanwhile. A
-// record whose own sort key changes meanwhile (it is edited, for the default order) is seen at
-// most where it was or where it is now.
+// record whose own sort key changes meanwhile (it is edited, for the default order) is read where
+// it is when each page is asked: again, if it moved into the pages still to come, or not at all,
+// if it moved into the ones already read. A text sort key orders by its first sortPrefix
+// characters, so a cursor stays small whatever the field holds; records whose keys share those
+// characters are in id order.
 
 // Bounds of a query.
 const (
@@ -46,8 +50,11 @@ const (
 	maxSearchTerms  = 5
 	maxTermLen      = 100
 	maxAggregates   = 8
-	maxCursorLen    = 1024
-	maxValueLen     = 1000
+	// A cursor holds at most sortPrefix characters of a text key, each at most 6 bytes as JSON
+	// (\u escapes), in base64.
+	maxCursorLen = 4096
+	sortPrefix   = 200
+	maxValueLen  = 1000
 )
 
 // The states of the records a query reads.
@@ -184,9 +191,21 @@ func typed(f Field) string {
 	case TypeTime:
 		return "(CASE WHEN " + t + " = 'text' AND " + x + " GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(" + x + ", 1, 2) < '24' THEN " + x + " END)"
 	default: // string, choice
-		return "(CASE WHEN " + t + " = 'text' AND trim(" + x + ", char(32, 9, 10, 11, 12, 13)) <> '' THEN " + x + " END)"
+		return "(CASE WHEN " + t + " = 'text' AND trim(" + x + ", " + blanks + ") <> '' THEN " + x + " END)"
 	}
 }
+
+// blanks is, as an SQL expression, every character strings.TrimSpace trims (unicode.IsSpace),
+// so a text that is blank to Go (ofType) is blank to SQL too.
+var blanks = func() string {
+	var codes []string
+	for r := rune(0); r <= 0x3000; r++ { // the last space unicode.IsSpace knows is U+3000
+		if unicode.IsSpace(r) {
+			codes = append(codes, strconv.Itoa(int(r)))
+		}
+	}
+	return "char(" + strings.Join(codes, ", ") + ")"
+}()
 
 // fieldOf returns a declared field, as a name the SQL can carry.
 func fieldOf(def Definition, name string) (Field, error) {
@@ -245,6 +264,7 @@ func sortOf(def Definition, name, dir string, deleted bool) (sortKey, error) {
 			k.typ = keyNumber
 		} else {
 			k.typ = keyText
+			k.expr = "substr(" + k.expr + ", 1, " + strconv.Itoa(sortPrefix) + ")"
 		}
 	}
 	switch dir {
@@ -525,7 +545,7 @@ func writeCursor(print string, k sortKey, sk any, id int64) (string, error) {
 	case nil:
 		b.N = 1
 	case int64:
-		b.K = float64(x)
+		b.K = x
 	case float64:
 		b.K = x
 	case string:
@@ -535,7 +555,8 @@ func writeCursor(print string, k sortKey, sk any, id int64) (string, error) {
 	default:
 		return "", fmt.Errorf("sort key of type %T", sk)
 	}
-	if _, isNumber := b.K.(float64); b.K != nil && isNumber != (k.typ == keyNumber) {
+	_, isInt := b.K.(int64)
+	if _, isFloat := b.K.(float64); b.K != nil && (isInt || isFloat) != (k.typ == keyNumber) {
 		return "", fmt.Errorf("sort key %v isn't of the key's type", b.K)
 	}
 	raw, err := json.Marshal(b)
@@ -557,6 +578,7 @@ func readCursor(s, print string, k sortKey) (*cursorPos, error) {
 	var b cursorBody
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
+	dec.UseNumber() // an integer key stays exact, past what a float64 holds
 	if err := dec.Decode(&b); err != nil || dec.More() || b.V != 1 || b.F != print || b.I < 0 || (b.N != 0 && b.N != 1) {
 		return nil, badCursor()
 	}
@@ -568,24 +590,29 @@ func readCursor(s, print string, k sortKey) (*cursorPos, error) {
 		return pos, nil
 	}
 	switch x := b.K.(type) {
-	case float64:
-		if k.typ != keyNumber || math.IsNaN(x) || math.IsInf(x, 0) {
+	case json.Number:
+		if k.typ != keyNumber {
 			return nil, badCursor()
 		}
+		if i, err := x.Int64(); err == nil {
+			pos.key = i
+			return pos, nil
+		}
+		f, err := x.Float64()
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return nil, badCursor()
+		}
+		pos.key = f
 	case string:
-		if k.typ != keyText || len(x) > 4*maxMaxLengthBytes {
+		if k.typ != keyText || utf8.RuneCountInString(x) > sortPrefix {
 			return nil, badCursor()
 		}
+		pos.key = x
 	default:
 		return nil, badCursor()
 	}
-	pos.key = b.K
 	return pos, nil
 }
-
-// maxMaxLengthBytes bounds the text of a sort key in a cursor: a string field is at most
-// MaxMaxLength characters.
-const maxMaxLengthBytes = MaxMaxLength
 
 // after is the condition that a row comes after the cursor in the order.
 func (p queryPlan) after() (string, []any) {
