@@ -941,12 +941,18 @@ else
       "sudo -n sh -c 'umask 077; cat > /srv/taskto/backup/$f.new && chown 65532:65532 /srv/taskto/backup/$f.new && mv /srv/taskto/backup/$f.new /srv/taskto/backup/$f'" \
       < "$TASKTO_BACKUP_DIR/$f" || { echo "FAIL: copying $f to the VM"; copied=no; break; }
   done
+  # No client certificate here: none is left on the VM either (one that was removed).
+  [ "$copied" = no ] || [ -e "$TASKTO_BACKUP_DIR/client.pem" ] \
+    || echo 'rm -f /srv/taskto/backup/client.pem' | vm || copied=no
   [ "$copied" = yes ] && vm <<'EOF'
 . /etc/taskto/install.env
 cd /srv/taskto
-# A client certificate added after step 1 isn't in Compose's settings yet.
+# A client certificate added or removed since step 1 isn't in Compose's settings yet.
 if [ -e backup/client.pem ] && [ "${TASKTO_BACKUP_CLIENT_CERT:-}" != on ]; then
-  echo "FAIL: backup/client.pem is new: run steps 1, 6 and 9 again, then this step"; exit 1
+  echo "FAIL: backup/client.pem was added since step 1: run steps 1, 6 and 9 again, then this step"; exit 1
+fi
+if [ ! -e backup/client.pem ] && [ "${TASKTO_BACKUP_CLIENT_CERT:-}" = on ]; then
+  echo "FAIL: client.pem was removed since step 1: run steps 1, 6 and 9 again, then this step"; exit 1
 fi
 # The repository is created the first time. One that is there already (a reinstall) is
 # kept, and opens only with its own password: init then fails, and the step stops.
@@ -960,8 +966,9 @@ fi
 If the first backup fails, `docker compose logs backup-schedule` and the error it printed
 say why: most often the backup host's firewall, its TLS certificate, a missing or wrong
 client certificate (`client.pem`, for a backup host that asks for one), or a wrong user or
-password in `repository`. A `client.pem` added after step 1 reaches restic only once steps
-1, 6 and 9 have run again: running this step alone stops and says so.
+password in `repository`. A `client.pem` added or removed after step 1 reaches restic only once steps
+1, 6 and 9 have run again: running this step alone stops and says so. Removing it from
+`TASKTO_BACKUP_DIR` removes the VM's copy too, here.
 
 If the backup host's prune job opens the repository with a key of its own
 ([docs/install.md](../docs/install.md#3-removing-old-snapshots-on-the-backup-host-only)),
