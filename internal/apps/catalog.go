@@ -146,9 +146,28 @@ var components = map[string]map[string]prop{
 	// Ours: draws the thumbnails of the attachments whose ids are in value, fetched from the
 	// server with the viewer's own session, never from an outside address.
 	"Photos": {"label": opt(kDynString), "value": req(kDynStringList)},
+	// Ours: input for a location field (capture.go). It asks the browser for the position once, on
+	// the person's button or, for a field whose capture is "submit", when the form is submitted, and
+	// never follows it; where the position can't be had the person types it. value holds the
+	// location object at a path such as /draft/<field>; readOnly only shows what is stored.
+	"LocationInput": {"field": req(kString), "label": opt(kDynString), "value": req(kDynValue), "readOnly": opt(kBool)},
+	// Ours: a pad to sign on, for a signature field: the PNG is uploaded like a photo and its id held
+	// in value; readOnly only shows the stored signature. A typed name is the keyboard's way to sign.
+	"SignatureInput": {"field": req(kString), "label": opt(kDynString), "value": req(kDynValue), "readOnly": opt(kBool)},
+	// Ours: input for a barcode field: scans with the camera where the browser can, and always takes
+	// the code typed. value holds its text.
+	"BarcodeInput": {"field": req(kString), "label": opt(kDynString), "value": req(kDynString)},
 	// Ours, and the server's: the host of an app's screens, which the server adds as the root
 	// (screens.go). An app's own components may not use it.
 	screensComponent: {"current": req(kDynString), "screens": req(kScreenRefs)},
+}
+
+// inputFields is the kind of field each input component is for.
+var inputFields = map[string]string{
+	"PhotoInput":     TypeAttachment,
+	"LocationInput":  TypeLocation,
+	"SignatureInput": TypeSignature,
+	"BarcodeInput":   TypeBarcode,
 }
 
 // function is one function of the catalog: its arguments, what it returns, and whether it
@@ -190,7 +209,9 @@ func Capabilities() []string {
 	for name := range functions {
 		all = append(all, FunctionCapability(name))
 	}
-	all = append(all, AttachmentCapability)
+	for _, capability := range fieldCapabilities {
+		all = append(all, capability)
+	}
 	all = append(all, slotCapabilities...)
 	sort.Strings(all)
 	return all
@@ -317,10 +338,10 @@ func (c *screenCheck) component(id string, obj map[string]any) error {
 			return fmt.Errorf("%s needs %q", name, key)
 		}
 	}
-	if name == "PhotoInput" {
+	if want, isInput := inputFields[name]; isInput {
 		field, _ := obj["field"].(string)
-		if f, ok := c.collection.field(field); !ok || f.Type != TypeAttachment {
-			return fmt.Errorf("PhotoInput's field %q is not an attachment field of the collection", field)
+		if f, ok := c.collection.field(field); !ok || f.Type != want {
+			return fmt.Errorf("%s's field %q is not a %s field of the collection", name, field, want)
 		}
 	}
 	return nil
@@ -584,6 +605,9 @@ func (c *screenCheck) action(id string, v any, depth int) error {
 				if err := c.dynamic(id, kDynValue, cv, depth+1); err != nil {
 					return fmt.Errorf("event context %s: %w", k, err)
 				}
+				if err := c.submitCaptured(k, cv); err != nil {
+					return err
+				}
 			}
 		default:
 			return fmt.Errorf("event: unknown key %q", key)
@@ -604,6 +628,27 @@ func (c *screenCheck) action(id string, v any, depth int) error {
 			return fmt.Errorf("event %q opens %q, which doesn't show a record: it takes no id", ev["name"], named.Screen)
 		case len(ctx) > 1 || (len(ctx) == 1 && !hasID):
 			return fmt.Errorf("event %q: navigating takes only the record's id", ev["name"])
+		}
+	}
+	return nil
+}
+
+// submitCaptured checks an event context entry that passes a location field taken at submit
+// (capture "submit"): the browser takes the position as the button is pressed and puts it in the
+// context under the field's own name, so the entry must be named so.
+func (c *screenCheck) submitCaptured(key string, v any) error {
+	o, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	path, _ := o["path"].(string)
+	for _, root := range []string{"/" + DraftKey + "/", "/" + RecordKey + "/"} {
+		name, found := strings.CutPrefix(path, root)
+		if !found {
+			continue
+		}
+		if f, declared := c.collection.field(name); declared && f.Type == TypeLocation && f.Capture == CaptureSubmit && key != name {
+			return fmt.Errorf("event context %s: field %q is taken when the form is submitted, so its entry in the context is named %q", key, name, name)
 		}
 	}
 	return nil

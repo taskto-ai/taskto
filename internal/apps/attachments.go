@@ -109,6 +109,9 @@ var attachmentIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var errNotPicture = invalidAs(apierr.CodeAppAttachmentType, apierr.Params{"max_megapixels": maxPixels["jpeg"] / 1_000_000},
 	"the file isn't a JPEG, PNG or GIF picture this server can read")
 
+// errNotPNG is for a picture that isn't a PNG, offered for a signature.
+var errNotPNG = invalidAs(apierr.CodeAppSignatureType, nil, "a signature is a PNG picture")
+
 // statusError is an error with the status and code the API answers it with.
 type statusError struct {
 	status int
@@ -293,12 +296,15 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 			return ErrNotPublished
 		}
 		f, ok := ap.liveDef.Collection.field(in.Field)
-		if !ok || f.Type != TypeAttachment {
-			return invalidf("the app has no attachment field %q", in.Field)
+		if !ok || (f.Type != TypeAttachment && f.Type != TypeSignature) {
+			return invalidf("the app has no attachment or signature field %q", in.Field)
 		}
 		maxBytes := int64(f.MaxBytes)
 		if maxBytes == 0 {
 			maxBytes = DefaultMaxFileBytes
+			if f.Type == TypeSignature {
+				maxBytes = DefaultSignatureBytes
+			}
 		}
 		if in.Size < 1 || in.Size > maxBytes {
 			return invalidAs(apierr.CodeAppUploadSize, apierr.Params{"field": f.Name, "max": maxBytes},
@@ -428,15 +434,20 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	}
 	defer s.lock(id)()
 	var u upload
+	var signature bool
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		if err := s.uploader(ctx, a, sp.ID, appID); err != nil {
 			return err
 		}
-		if _, err := launchable(ctx, tx, sp.ID, appID); err != nil {
+		ap, err := launchable(ctx, tx, sp.ID, appID)
+		if err != nil {
 			return err
 		}
-		var err error
 		u, err = ownUpload(ctx, tx, a, appID, id)
+		if err == nil && ap.liveDef != nil {
+			f, _ := ap.liveDef.Collection.field(u.Field)
+			signature = f.Type == TypeSignature
+		}
 		return err
 	})
 	if err != nil {
@@ -467,6 +478,9 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		return Attachment{}, err
 	}
 	pic, err := inspect(data)
+	if err == nil && signature && pic.format != "png" {
+		err = errNotPNG
+	}
 	var thumb, stored []byte
 	if err == nil {
 		thumb, err = s.makeThumbnail(ctx, data, pic.format)
@@ -483,8 +497,9 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 			err = errNotPicture
 		}
 	}
-	if errors.Is(err, errNotPicture) {
-		// Not a picture, so not an attachment: it is removed, and the client starts over.
+	if errors.Is(err, errNotPicture) || errors.Is(err, errNotPNG) {
+		// Not a picture (or, for a signature, not a PNG), so not an attachment: it is removed, and the
+		// client starts over.
 		if derr := s.deleteAttachment(ctx, id, appID); derr != nil {
 			slog.Warn("apps: removing a file that isn't a picture", "app", appID, "err", derr)
 		}
@@ -720,8 +735,11 @@ func (s *Service) openAttachment(ctx context.Context, sp access.Space, a Actor, 
 	return &File{File: f, ContentType: contentType, Name: "photo-" + id[:8] + "." + ext, ETag: etag}, nil
 }
 
-// attachmentIDs reads the ids a stored attachment field holds.
+// attachmentIDs reads the ids a stored attachment field holds, or the one a signature field does.
 func attachmentIDs(v any) []string {
+	if id, ok := v.(string); ok {
+		return []string{id}
+	}
 	list, _ := v.([]any)
 	ids := make([]string, 0, len(list))
 	for _, item := range list {
@@ -740,8 +758,13 @@ func attachmentIDs(v any) []string {
 // doesn't exist.
 func claimAttachments(ctx context.Context, tx *sql.Tx, actor Actor, appID, rowID int64, def Definition, before, after map[string]any) error {
 	for _, f := range def.Collection.Fields {
-		if f.Type != TypeAttachment {
+		if f.Type != TypeAttachment && f.Type != TypeSignature {
 			continue
+		}
+		// A signature is a PNG, by what the bytes turned out to be.
+		onlyType := ""
+		if f.Type == TypeSignature {
+			onlyType = "image/png"
 		}
 		had := map[string]bool{}
 		for _, id := range attachmentIDs(before[f.Name]) {
@@ -753,8 +776,9 @@ func claimAttachments(ctx context.Context, tx *sql.Tx, actor Actor, appID, rowID
 			}
 			res, err := tx.ExecContext(ctx, `
 				UPDATE app_attachments SET row_id = ?, attached_at = ?
-				WHERE id = ? AND app_id = ? AND field = ? AND owner = ? AND status = 'ready' AND row_id IS NULL`,
-				rowID, now(), id, appID, f.Name, actor.UserID)
+				WHERE id = ? AND app_id = ? AND field = ? AND owner = ? AND status = 'ready' AND row_id IS NULL
+					AND (? = '' OR content_type = ?)`,
+				rowID, now(), id, appID, f.Name, actor.UserID, onlyType, onlyType)
 			if err != nil {
 				return err
 			}
@@ -767,20 +791,60 @@ func claimAttachments(ctx context.Context, tx *sql.Tx, actor Actor, appID, rowID
 	return nil
 }
 
-// filesModel is the limits of the collection's attachment fields, for the screen's data model at
-// /_files (nil if there are none).
+// filesModel is the limits of the collection's attachment and signature fields, for the screen's
+// data model at /_files (nil if there are none).
 func (d Definition) filesModel() map[string]any {
 	var out map[string]any
 	for _, f := range d.Collection.Fields {
-		if f.Type != TypeAttachment {
+		if f.Type != TypeAttachment && f.Type != TypeSignature {
 			continue
 		}
 		if out == nil {
 			out = map[string]any{}
 		}
+		if f.Type == TypeSignature {
+			out[f.Name] = map[string]any{"max_files": 1, "max_bytes": cmpOr(f.MaxBytes, DefaultSignatureBytes)}
+			continue
+		}
 		out[f.Name] = map[string]any{"max_files": cmpOr(f.MaxFiles, DefaultMaxFiles), "max_bytes": cmpOr(f.MaxBytes, DefaultMaxFileBytes)}
 	}
 	return out
+}
+
+// fieldsModel is what a screen needs to know of the collection's capture fields, for the data model
+// at /_fields/<field> (nil if there are none): when a location is taken and whether it can still be
+// changed once stored, the format a barcode reads, and whether the field must have a value.
+func (d Definition) fieldsModel() map[string]any {
+	var out map[string]any
+	for _, f := range d.Collection.Fields {
+		var info map[string]any
+		switch f.Type {
+		case TypeLocation:
+			info = map[string]any{"capture": cmpOrString(f.Capture, CaptureButton)}
+		case TypeBarcode:
+			info = map[string]any{"format": f.Format}
+		case TypeSignature:
+		default:
+			continue
+		}
+		if info == nil {
+			info = map[string]any{}
+		}
+		info["required"] = f.Required
+		info["editable"] = f.Editable
+		if out == nil {
+			out = map[string]any{}
+		}
+		out[f.Name] = info
+	}
+	return out
+}
+
+func cmpOrString(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
 }
 
 func cmpOr(v, fallback int) int {
@@ -838,9 +902,11 @@ type Described struct {
 // by what each is: id, type, size and pixels. It never reads a file.
 func (s *Service) describeAttachments(ctx context.Context, appID int64, def Definition, items []map[string]any) error {
 	var names []string
+	single := map[string]bool{}
 	for _, f := range def.Collection.Fields {
-		if f.Type == TypeAttachment {
+		if f.Type == TypeAttachment || f.Type == TypeSignature {
 			names = append(names, f.Name)
+			single[f.Name] = f.Type == TypeSignature
 		}
 	}
 	if len(names) == 0 {
@@ -873,6 +939,10 @@ func (s *Service) describeAttachments(ctx context.Context, appID int64, def Defi
 						d = Described{ID: id}
 					}
 					list = append(list, d)
+				}
+				if single[name] && len(list) == 1 {
+					it[name] = list[0] // a signature is one picture
+					continue
 				}
 				it[name] = list
 			}

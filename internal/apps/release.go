@@ -602,6 +602,10 @@ func narrower(was, next Field) bool {
 	if was.Type == TypeAttachment && next.MaxFiles < was.MaxFiles {
 		return true
 	}
+	// A barcode field that now reads one format only, or another, refuses codes it took.
+	if was.Type == TypeBarcode && next.Format != "" && next.Format != was.Format {
+		return true
+	}
 	if next.Min != nil && (was.Min == nil || *next.Min > *was.Min) {
 		return true
 	}

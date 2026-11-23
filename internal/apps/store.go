@@ -1130,6 +1130,11 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		if err != nil {
 			return err
 		}
+		// A captured location and a signature stay as they were captured, whoever asks to change them
+		// and by whichever screen, release or the records explorer.
+		if err := def.Collection.lockedChange(cur.fields, next); err != nil {
+			return err
+		}
 		raw, err := json.Marshal(next)
 		if err != nil {
 			return err

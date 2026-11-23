@@ -136,6 +136,15 @@ const (
 	CodeAppFilesFull        Code = "app_files_full"        // 409: the app's attachments are over their total; params: max_mib
 	CodeAppFilesUnavailable Code = "app_files_unavailable" // 503: this server keeps no files for apps
 
+	// Location, signature and barcode fields of apps (internal/apps/capture.go).
+
+	CodeAppFieldNotLocation    Code = "app_field_not_location"    // 400: not a {lat, lon, accuracy_m, captured_at, source} within bounds; params: field
+	CodeAppFieldLocationFuture Code = "app_field_location_future" // 400: a location captured later than the server's clock allows; params: field
+	CodeAppFieldNotSignature   Code = "app_field_not_signature"   // 400: a signature field holds one attachment id; params: field
+	CodeAppFieldNotBarcode     Code = "app_field_not_barcode"     // 400: not a barcode's text, or not valid for the field's format; params: field, format
+	CodeAppFieldLocked         Code = "app_field_locked"          // 400: a captured location or a signature can't be changed once stored; params: field
+	CodeAppSignatureType       Code = "app_signature_type"        // 400: a signature is a PNG picture
+
 	// Home widgets and navigation pins (internal/apps/home.go).
 
 	CodeHomeWidgetNotFound Code = "home_widget_not_found" // 404: the app's live release has no such widget
