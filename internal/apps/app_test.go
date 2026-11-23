@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -471,5 +472,50 @@ func TestCheckRefusesBadOptionLabels(t *testing.T) {
 		if _, err := base(f).Check(); err == nil || !strings.Contains(err.Error(), "option_labels") {
 			t.Errorf("%s: err = %v", name, err)
 		}
+	}
+}
+
+// A client that predates the labels would draw nothing where a screen binds to one, so a release that
+// does requires the capability, which an older client lacks and answers with "update required"; a
+// release that only has option labels, and shows the stored text, needs nothing new.
+func TestBindingToALabelRequiresTheCapability(t *testing.T) {
+	fields := []Field{{Name: "category", Type: TypeChoice, Options: []string{"food", "other"}, OptionLabels: map[string]string{"food": "Food"}}}
+	check := func(components ...string) []string {
+		t.Helper()
+		var raw []json.RawMessage
+		for _, c := range components {
+			raw = append(raw, json.RawMessage(c))
+		}
+		got, err := Definition{Components: raw, Collection: Collection{Fields: fields}, Actions: map[string]Action{"add": {Kind: ActionInsert}}}.Check()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Requires
+	}
+	root := `{"id":"root","component":"Column","children":{"componentId":"row","path":"/items"}}`
+	for name, path := range map[string]string{"relative": "_labels/category", "absolute": "/record/_labels/category"} {
+		if got := check(root, `{"id":"row","component":"Text","text":{"path":"`+path+`"}}`); !slices.Contains(got, LabelsCapability) {
+			t.Errorf("%s: requires = %v", name, got)
+		}
+	}
+	if got := check(root, `{"id":"row","component":"Text","text":{"path":"category"}}`); slices.Contains(got, LabelsCapability) {
+		t.Errorf("a stored text needs no new capability: %v", got)
+	}
+	// Screens are looked at too, and the server's catalog lists it as one a client may have.
+	tpl, err := Templates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, x := range tpl {
+		if x.ID == "inspection" {
+			found = true
+			if got, err := x.Definition.Check(); err != nil || !slices.Contains(got.Requires, LabelsCapability) {
+				t.Errorf("inspection: requires = %v, %v", got.Requires, err)
+			}
+		}
+	}
+	if !found || !slices.Contains(Capabilities(), LabelsCapability) {
+		t.Errorf("template found %v, capabilities %v", found, Capabilities())
 	}
 }

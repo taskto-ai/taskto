@@ -528,6 +528,11 @@ func (d Definition) Check() (Definition, error) {
 			requires = sortedKeys(setOf(append(requires, capability)))
 		}
 	}
+	// A client that predates the labels (LabelsKey) would draw nothing where a screen binds to one:
+	// a screen that does requires the capability, so an older client says it must be updated.
+	if usesLabels(out.Screens, out.Components) {
+		requires = sortedKeys(setOf(append(requires, LabelsCapability)))
+	}
 	// A client that doesn't know month_of would total every month in place of this one's: it
 	// must be told to update instead.
 	if monthly {
@@ -562,6 +567,41 @@ func (d Definition) Check() (Definition, error) {
 		return Definition{}, invalidf("the definition is over %d KiB", MaxDefinitionSize>>10)
 	}
 	return out, nil
+}
+
+// usesLabels says whether a screen or a component binds to a choice's label: a data binding whose
+// path has LabelsKey as one of its segments.
+func usesLabels(screens []Screen, components []json.RawMessage) bool {
+	var found func(v any) bool
+	found = func(v any) bool {
+		switch x := v.(type) {
+		case map[string]any:
+			if path, ok := x["path"].(string); ok && slices.Contains(strings.Split(path, "/"), LabelsKey) {
+				return true
+			}
+			for _, child := range x {
+				if found(child) {
+					return true
+				}
+			}
+		case []any:
+			for _, child := range x {
+				if found(child) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	raw, err := json.Marshal(struct {
+		Screens    []Screen          `json:"screens"`
+		Components []json.RawMessage `json:"components"`
+	}{screens, components})
+	if err != nil {
+		return false
+	}
+	var tree any
+	return json.Unmarshal(raw, &tree) == nil && found(tree)
 }
 
 // mergeSorted joins two lists of capabilities, sorted and without repeats.

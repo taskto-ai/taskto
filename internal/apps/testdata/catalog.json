@@ -23,6 +23,7 @@
     "component.Tabs",
     "component.Text",
     "component.TextField",
+    "data.labels",
     "effect.create_card",
     "effect.create_document",
     "effect.open_route",
