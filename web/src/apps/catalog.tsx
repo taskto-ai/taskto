@@ -1,6 +1,7 @@
 // The component catalog personal apps may use: A2UI's basic components and functions, without
 // the ones that load or open outside addresses (an app is shared, and a picture from elsewhere
-// would tell that server who opens it), plus TaskTo.AI's own (Stat, Show, PhotoInput, Photos). A surface naming anything outside
+// would tell that server who opens it), plus TaskTo.AI's own (Stat, Show, PhotoInput, Photos,
+// LocationInput, SignatureInput, BarcodeInput). A surface naming anything outside
 // it is rejected by the renderer, so an app can only ever be built from these. The Go server
 // checks every saved app against the same catalog (internal/apps/catalog.go); its
 // testdata/catalog.json is the contract the tests hold both to.
@@ -8,9 +9,13 @@
 import { createComponentImplementation, useSignalValue } from '@a2ui/react/v0_9'
 import { basicCatalog, Catalog, CommonSchemas } from '@a2ui/web_core/v0_9'
 import { z } from 'zod'
+import { BarcodeField } from './BarcodeInput'
+import { type CaptureInfo, isLocation } from './capture'
+import { LocationField } from './LocationInput'
 import { PhotoField, PhotoStrip, useAppFiles } from './PhotoInput'
-import { type PhotoLimits, photoIds } from './photos'
+import { type PhotoLimits, photoIds, signatureId } from './photos'
 import { holds, type Rule, type Values } from './rules'
+import { SignatureField } from './SignaturePad'
 
 export const APPS_CATALOG_ID = 'https://taskto.ai/catalogs/apps/v1.json'
 
@@ -82,6 +87,90 @@ const PhotoInput = createComponentImplementation(PhotoInputApi, ({ props, contex
   )
 })
 
+// An input for a location field (internal/apps/capture.go): the person's position, read once on a
+// button or as the form is submitted, or typed when the device can't give it. value holds the
+// location object; readOnly only shows what is stored.
+const LocationInputApi = {
+  name: 'LocationInput',
+  schema: z
+    .object({
+      field: z.string(),
+      label: CommonSchemas.DynamicString.optional(),
+      value: CommonSchemas.DynamicValue,
+      readOnly: z.boolean().optional(),
+    })
+    .strict(),
+}
+
+const LocationInput = createComponentImplementation(LocationInputApi, ({ props, context }) => {
+  const info = useSignalValue(context.dataContext.dataModel.getSignal<CaptureInfo>(`/_fields/${props.field}`))
+  const setValue = (props as { setValue?: (value: unknown) => void }).setValue
+  return (
+    <LocationField
+      label={props.label}
+      field={props.field}
+      value={isLocation(props.value) ? props.value : undefined}
+      onChange={(loc) => setValue?.(loc)}
+      info={info ?? undefined}
+      readOnly={props.readOnly}
+    />
+  )
+})
+
+// An input for a signature field: a pad to draw on, or a typed name, saved as a PNG attachment whose
+// id is held in value.
+const SignatureInputApi = {
+  name: 'SignatureInput',
+  schema: z
+    .object({
+      field: z.string(),
+      label: CommonSchemas.DynamicString.optional(),
+      value: CommonSchemas.DynamicValue,
+      readOnly: z.boolean().optional(),
+    })
+    .strict(),
+}
+
+const SignatureInput = createComponentImplementation(SignatureInputApi, ({ props }) => {
+  const files = useAppFiles()
+  const setValue = (props as { setValue?: (value: unknown) => void }).setValue
+  return (
+    <SignatureField
+      label={props.label}
+      files={files}
+      field={props.field}
+      value={signatureId(props.value)}
+      onChange={(id) => setValue?.(id)}
+      readOnly={props.readOnly}
+    />
+  )
+})
+
+// An input for a barcode field: the code typed, or scanned with the camera.
+const BarcodeInputApi = {
+  name: 'BarcodeInput',
+  schema: z
+    .object({
+      field: z.string(),
+      label: CommonSchemas.DynamicString.optional(),
+      value: CommonSchemas.DynamicString,
+    })
+    .strict(),
+}
+
+const BarcodeInput = createComponentImplementation(BarcodeInputApi, ({ props, context }) => {
+  const info = useSignalValue(context.dataContext.dataModel.getSignal<CaptureInfo>(`/_fields/${props.field}`))
+  const setValue = (props as { setValue?: (value: string) => void }).setValue
+  return (
+    <BarcodeField
+      label={props.label}
+      value={typeof props.value === 'string' ? props.value : ''}
+      onChange={(code) => setValue?.(code)}
+      info={info ?? undefined}
+    />
+  )
+})
+
 // The thumbnails of the attachments whose ids are in value, drawn from the server with the viewer's
 // own session: never from an outside address.
 const PhotosApi = {
@@ -141,6 +230,9 @@ export const appsCatalog = new Catalog(
     Show,
     PhotoInput,
     Photos,
+    LocationInput,
+    SignatureInput,
+    BarcodeInput,
     Screens,
   ],
   [...basicCatalog.functions.values()].filter((f) => !LEFT_OUT.has(f.name)),
@@ -162,6 +254,10 @@ export const catalogCapabilities: ReadonlySet<string> = new Set([
   ...EFFECT_KINDS.map((kind) => `effect.${kind}`),
   // Holding an attachment field: reading its value as a list of attachment ids and sending them.
   'field.attachment',
+  // Holding a location, a signature and a barcode field: their values as the server stores them.
+  'field.location',
+  'field.signature',
+  'field.barcode',
   // The extension slots this client draws (internal/apps/contributions.go): Home's widgets and the
   // navigation's pin.
   'slot.home_widgets.v1',

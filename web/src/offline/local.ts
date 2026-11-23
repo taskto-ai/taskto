@@ -16,6 +16,7 @@ type Field = Definition['collection']['fields'][number] & {
   required_when?: Rule
   max_files?: number
   max_bytes?: number
+  format?: string
 }
 
 export type Message = Record<string, unknown>
@@ -50,6 +51,11 @@ export function parseInsert(def: Definition, context: Record<string, unknown>): 
 }
 
 function parseField(f: Field, raw: unknown): unknown {
+  // A scanner's text is taken as it was read: a line break or a tab around a code is no padding to
+  // trim but a character that isn't part of one (the server refuses it too).
+  if (f.type === 'barcode' && typeof raw === 'string' && raw.trim() !== '' && CONTROL.test(raw)) {
+    throw refused('app_field_not_barcode', { field: f.name, format: f.format ?? '' })
+  }
   let v = raw
   if (Array.isArray(v) && f.type === 'choice') {
     if (v.length === 0) return undefined
@@ -94,6 +100,12 @@ function parseField(f: Field, raw: unknown): unknown {
         throw refused('app_field_not_option', { field: f.name })
       }
       return v
+    case 'barcode':
+      return parseBarcode(f, v)
+    case 'location':
+      return parseLocation(f, v)
+    case 'signature':
+      return parseSignature(f, v)
     case 'attachment': {
       const max = f.max_files ?? 1
       if (!Array.isArray(v) || v.length === 0) return undefined
@@ -106,9 +118,104 @@ function parseField(f: Field, raw: unknown): unknown {
   return undefined
 }
 
-// The fields of an app's collection that hold photos.
+// The fields of an app's collection that hold pictures made on this device: photos and signatures.
+// Both are sent as the queue's attachments: uploaded first, then named by their server ids.
 export function attachmentFields(def: Definition): string[] {
-  return def.collection.fields.filter((f) => f.type === 'attachment').map((f) => f.name)
+  return def.collection.fields.filter((f) => f.type === 'attachment' || f.type === 'signature').map((f) => f.name)
+}
+
+// The attachment ids a value of such a field holds: a list of photos, or the one a signature has.
+export function attachmentIdsOf(value: unknown): string[] {
+  if (typeof value === 'string') return [value]
+  return Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : []
+}
+
+// ---- the capture fields: mirrors of the server's checks (internal/apps/capture.go) ----------------------
+
+const CONTROL = /\p{Cc}/u
+const ATTACHMENT_ID = /^[0-9a-f]{32}$/
+
+// The formats whose text is a number the server checks: its length, and whether the last digit is a
+// check digit (GS1: the weights 3 and 1 alternate from the digit before it).
+const CHECKED: Record<string, { lengths: number[]; check: boolean }> = {
+  ean_13: { lengths: [13], check: true },
+  ean_8: { lengths: [8], check: true },
+  upc_a: { lengths: [12], check: true },
+  upc_e: { lengths: [6, 7, 8], check: false },
+}
+
+function checkDigitOk(digits: string): boolean {
+  let sum = 0
+  for (let i = digits.length - 2; i >= 0; i--) {
+    const d = Number(digits[i])
+    sum += (digits.length - 2 - i) % 2 === 0 ? d * 3 : d
+  }
+  return (10 - (sum % 10)) % 10 === Number(digits[digits.length - 1])
+}
+
+function parseBarcode(f: Field, v: unknown): string {
+  const bad = () => refused('app_field_not_barcode', { field: f.name, format: f.format ?? '' })
+  if (typeof v !== 'string') throw bad()
+  const max = f.max_length ?? 1000
+  if ([...v].length > max) throw refused('app_field_too_long', { field: f.name, max })
+  const rule = f.format ? CHECKED[f.format] : undefined
+  if (rule && (!rule.lengths.includes(v.length) || !/^\d+$/.test(v) || (rule.check && !checkDigitOk(v)))) throw bad()
+  return v
+}
+
+// A location, as the server stores it: a position within the globe, how sure the device was, when it
+// said so (RFC 3339, from 2000 on, and not later than the clock by more than five minutes) and where it
+// came from. An object with no keys is no value.
+const LOCATION_KEYS = ['lat', 'lon', 'accuracy_m', 'captured_at', 'source']
+const MAX_ACCURACY = 1_000_000
+const MAX_CLOCK_SKEW = 5 * 60 * 1000
+const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(\.\d+)?(Z|[+-]([01]\d|2[0-3]):[0-5]\d)$/
+
+function parseLocation(f: Field, v: unknown): Record<string, unknown> | undefined {
+  const bad = () => refused('app_field_not_location', { field: f.name })
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw bad()
+  const obj = v as Record<string, unknown>
+  const keys = Object.keys(obj)
+  if (keys.length === 0) return undefined
+  if (keys.some((k) => !LOCATION_KEYS.includes(k))) throw bad()
+  const { lat, lon, accuracy_m: accuracy, captured_at: at, source } = obj
+  const within = (n: unknown, limit: number): n is number =>
+    typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= limit
+  if (!within(lat, 90) || !within(lon, 180)) throw bad()
+  if (source !== 'device' && source !== 'manual') throw bad()
+  const out: Record<string, unknown> = { lat, lon, source }
+  if (accuracy !== undefined && accuracy !== null) {
+    if (!within(accuracy, MAX_ACCURACY) || accuracy < 0) throw bad()
+    out.accuracy_m = accuracy
+  } else if (source === 'device') {
+    throw bad()
+  }
+  const time = typeof at === 'string' ? RFC3339.exec(at) : null
+  if (!time) throw bad()
+  const [year, month, day, hour, minute, second] = time.slice(1, 7).map(Number)
+  const stamp = Date.UTC(year, month - 1, day, hour, minute, second)
+  // A date that isn't one (the 30th of February) is no time.
+  const check = new Date(stamp)
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) throw bad()
+  const instant = Date.parse(at as string)
+  if (!Number.isFinite(instant) || year < 2000) throw bad()
+  if (instant > Date.now() + MAX_CLOCK_SKEW) throw refused('app_field_location_future', { field: f.name })
+  out.captured_at = new Date(instant).toISOString()
+  return out
+}
+
+// A signature is one attachment id: the id of the picture staged on this device (which the queue
+// uploads and replaces with the server's), as text or as a list of one.
+function parseSignature(f: Field, v: unknown): string | undefined {
+  const bad = () => refused('app_field_not_signature', { field: f.name })
+  let id = v
+  if (Array.isArray(v)) {
+    if (v.length === 0) return undefined
+    if (v.length !== 1) throw bad()
+    id = v[0]
+  }
+  if (typeof id !== 'string' || !ATTACHMENT_ID.test(id)) throw bad()
+  return id
 }
 
 // Items as the data model holds them: id, then the values.

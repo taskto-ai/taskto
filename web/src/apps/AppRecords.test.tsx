@@ -356,3 +356,38 @@ test('dropping an edit after a conflict goes back to the current record', async 
   expect(screen.queryByRole('region', { name: 'Someone else changed this record meanwhile' })).toBeNull()
   expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1)
 })
+
+const captured: AppDefinition = {
+  collection: {
+    fields: [
+      { name: 'amount', type: 'number' },
+      { name: 'code', type: 'barcode' },
+      { name: 'place', type: 'location' },
+      { name: 'signed', type: 'signature' },
+      { name: 'photos', type: 'attachment' },
+    ],
+  },
+  actions: { add: { kind: 'insert' }, edit: { kind: 'update' } },
+}
+
+test('only the fields the server can put in order are offered to sort by', async () => {
+  fakeFetch({ [`GET ${base}/records/query`]: { body: page([record(4, 2, { amount: 12.5 })]) } })
+  renderRecords({ definition: captured })
+  openExplorer()
+  await screen.findByText('12.5')
+  // The table: a column to sort by for what can be, a plain heading for what can't.
+  for (const sortable of ['amount', 'code']) expect(screen.getByRole('button', { name: sortable })).toBeTruthy()
+  for (const evidence of ['place', 'signed', 'photos']) {
+    expect(screen.queryByRole('button', { name: evidence })).toBeNull()
+    expect(screen.getByRole('columnheader', { name: evidence })).toBeTruthy()
+  }
+})
+
+test('on a phone the sort menu leaves out what the server refuses to sort by', async () => {
+  phone()
+  fakeFetch({ [`GET ${base}/records/query`]: { body: page([record(4, 2, { amount: 12.5 })]) } })
+  renderRecords({ definition: captured })
+  openExplorer()
+  const menu = (await screen.findByLabelText('Sort by')) as HTMLSelectElement
+  expect([...menu.options].map((o) => o.value)).toEqual(['_updated', 'amount', 'code'])
+})

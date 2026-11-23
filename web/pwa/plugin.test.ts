@@ -19,6 +19,7 @@ const build = [
   'assets/pt-BR-ghi789.js',
   'assets/index-abc123.js.map',
   'vendor/novnc/core/rfb.js',
+  'assets/THIRD_PARTY_NOTICES.txt',
   'sw.js',
 ]
 
@@ -32,11 +33,12 @@ test('precaches the page, public files and every chunk, lazy ones included', () 
   expect(entries).toContain('/assets/index-abc123.css')
 })
 
-test('leaves out the worker itself, source maps and the vendored live view', () => {
+test('leaves out the worker itself, source maps, the vendored live view and the licence notices', () => {
   const entries = precacheEntries(build)
   expect(entries).not.toContain('/sw.js')
   expect(entries.some((e) => e.endsWith('.map'))).toBe(false)
   expect(entries.some((e) => e.startsWith('/vendor/'))).toBe(false)
+  expect(entries.some((e) => e.endsWith('THIRD_PARTY_NOTICES.txt'))).toBe(false)
 })
 
 test('a build without the page is an error', () => {

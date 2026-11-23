@@ -9,10 +9,13 @@ import { useId, useState } from 'react'
 import { ApiError, type AppField, type AppRecord, api, errorText, type RecordVersion } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
+import { isLocation } from './capture'
 import { toText } from './explorer'
+import { LocationField } from './LocationInput'
 import { PhotoStrip } from './PhotoInput'
-import { photoIds } from './photos'
+import { photoIds, signatureId } from './photos'
 import { HistoryList, shown, who } from './RecordParts'
+import { SignatureField } from './SignaturePad'
 
 const RECORD_CONFLICT = 'app_record_conflict'
 // Shown after the name of a field that must have a value.
@@ -263,6 +266,7 @@ export function RecordDetail({
             base={base}
             field={field}
             text={textOf(field.name)}
+            raw={base0[field.name]}
             editable={editable}
             onChange={(v) => setEdits((cur) => ({ ...cur, [field.name]: v }))}
           />
@@ -329,6 +333,7 @@ function FieldRow({
   base,
   field,
   text,
+  raw,
   editable,
   onChange,
 }: {
@@ -336,6 +341,8 @@ function FieldRow({
   base: string
   field: AppField
   text: string
+  // The value as the record holds it (an object for a location).
+  raw: unknown
   editable: boolean
   onChange: (v: string) => void
 }) {
@@ -348,9 +355,36 @@ function FieldRow({
       {field.required ? <span aria-hidden="true">{REQUIRED_MARK}</span> : null}
     </span>
   )
-  const known = ['string', 'number', 'boolean', 'date', 'time', 'choice'].includes(field.type)
+  const known = ['string', 'number', 'boolean', 'date', 'time', 'choice', 'barcode'].includes(field.type)
   // A field this version doesn't know how to edit (captured evidence such as media, a location or a
   // signature) is shown as it was recorded, never as an input.
+  if (field.type === 'location' || field.type === 'signature') {
+    // Captured evidence: shown as recorded, never an input. The server refuses a change to it (unless
+    // the field says it is editable), so no control is offered.
+    return (
+      <div className="tt-record-field">
+        {field.type === 'location' ? (
+          <LocationField
+            field={field.name}
+            label={field.name}
+            value={isLocation(raw) ? raw : undefined}
+            onChange={() => {}}
+            readOnly
+          />
+        ) : (
+          <SignatureField
+            field={field.name}
+            label={field.name}
+            files={{ base, uploads: false }}
+            value={signatureId(raw)}
+            onChange={() => {}}
+            readOnly
+          />
+        )}
+        {!field.editable && <span className="tt-muted tt-small">{t('apps.explorer.evidence')}</span>}
+      </div>
+    )
+  }
   if (!editable || !known) {
     // Photos are shown as thumbnails, through the viewer's own session.
     const photos = field.type === 'attachment' ? photoIds(text.split(',')) : []
@@ -404,10 +438,10 @@ function FieldRow({
           {label}
           <input
             id={id}
-            type={field.type === 'string' ? 'text' : field.type}
+            type={field.type === 'string' || field.type === 'barcode' ? 'text' : field.type}
             step={field.type === 'number' ? 'any' : undefined}
             inputMode={field.type === 'number' ? 'decimal' : undefined}
-            maxLength={field.type === 'string' ? field.max_length : undefined}
+            maxLength={field.type === 'string' || field.type === 'barcode' ? field.max_length : undefined}
             value={text}
             onChange={(e) => onChange(e.target.value)}
           />

@@ -680,7 +680,9 @@ export function withServerPhotos(item: OutboxItem): OutboxItem['action'] {
   const context = { ...item.action.context }
   for (const a of item.attachments) {
     const list = context[a.field]
-    if (Array.isArray(list)) context[a.field] = list.map((x) => (typeof x === 'string' ? (server.get(x) ?? x) : x))
+    // A photo field holds a list of ids; a signature field holds one, as text or as a list of one.
+    if (typeof list === 'string') context[a.field] = server.get(list) ?? list
+    else if (Array.isArray(list)) context[a.field] = list.map((x) => (typeof x === 'string' ? (server.get(x) ?? x) : x))
   }
   return { ...item.action, context }
 }

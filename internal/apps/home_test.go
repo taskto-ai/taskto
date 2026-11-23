@@ -180,7 +180,7 @@ func plannerDefinition(t *testing.T) Definition {
 		t.Fatal(err)
 	}
 	for _, ex := range all {
-		if ex.Name != "Expense tracker" {
+		if ex.Name == "Task planner" {
 			return ex.Definition
 		}
 	}
