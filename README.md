@@ -13,6 +13,8 @@ An open-source, self-hosted workspace for one person or a whole company:
   checked against a fixed component catalog.
 - **Dictation**, on a local speech model by default, and **MCP** access for your own
   agents.
+- **An app on your phone**: installable from the browser (Add to Home Screen), with an
+  offline shell, on a server with HTTPS ([docs/pwa.md](docs/pwa.md)).
 - **Languages**: English and Brazilian Portuguese so far, built to take more
   ([docs/i18n.md](docs/i18n.md)).
 
@@ -46,6 +48,7 @@ step-by-step install on a fresh Ubuntu VM.
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | how it fits together |
 | [docs/install.md](docs/install.md) | install, HTTPS, backups, upgrades |
+| [docs/pwa.md](docs/pwa.md) | the installable app: manifest, offline shell, service worker, updates, phones |
 | [docs/api.md](docs/api.md) | the HTTP API |
 | [docs/mcp.md](docs/mcp.md) | using it from your own agents (Claude Code, Codex, any MCP client) with an access token |
 | [docs/cli-workers.md](docs/cli-workers.md), [docs/account-switching.md](docs/account-switching.md), [docs/cli-tools.md](docs/cli-tools.md) | the official CLIs on users' own accounts, with TaskTo's tools |

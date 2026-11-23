@@ -331,3 +331,66 @@ test('the menu button opens the sidebar as a drawer, and a link closes it', asyn
   fireEvent.click(within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('link', { name: 'Apps' }))
   expect(shell.dataset.drawer).toBe('closed')
 })
+
+test('the drawer takes focus, makes the page inert, and Escape closes it back to its button', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  const { container } = render(<App />)
+  // The page has loaded, and with it the language: nothing is left to redraw the shell.
+  await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull())
+  await screen.findByText('Pick a conversation, or start a new one.')
+  const menu = screen.getByRole('button', { name: 'Open the menu' })
+  const main = container.querySelector('main') as HTMLElement
+  expect(main.hasAttribute('inert')).toBe(false)
+
+  fireEvent.click(menu)
+  const nav = screen.getByRole('navigation', { name: 'Sections' })
+  expect(document.activeElement).toBe(within(nav).getByRole('link', { name: 'Conversations' }))
+  expect(main.hasAttribute('inert')).toBe(true)
+
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect((container.querySelector('.tt-shell') as HTMLElement).dataset.drawer).toBe('closed')
+  expect(document.activeElement).toBe(menu)
+  expect(main.hasAttribute('inert')).toBe(false)
+})
+
+test('picking a page in the drawer moves focus to the page', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  const { container } = render(<App />)
+  await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull())
+  await screen.findByText('Pick a conversation, or start a new one.')
+  fireEvent.click(screen.getByRole('button', { name: 'Open the menu' }))
+  // jsdom doesn't make inert elements unfocusable, as browsers do: check the page isn't inert
+  // when it is focused.
+  const real = HTMLElement.prototype.focus
+  const inertWhenFocused: boolean[] = []
+  const focus = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options) {
+    if (this.tagName === 'MAIN') inertWhenFocused.push(this.hasAttribute('inert'))
+    real.call(this, options)
+  })
+  fireEvent.click(within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('link', { name: 'Boards' }))
+  await waitFor(() => expect(document.activeElement).toBe(container.querySelector('main')))
+  expect(inertWhenFocused).toEqual([false])
+  focus.mockRestore()
+})
+
+test('the skip link is the first stop and moves focus to the page', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  const { container } = render(<App />)
+  const skip = await screen.findByRole('button', { name: 'Skip to the content' })
+  expect(container.querySelector('.tt-shell')?.firstElementChild).toBe(skip)
+  fireEvent.click(skip)
+  expect(document.activeElement).toBe(container.querySelector('main'))
+  expect(window.location.pathname).toBe('/w/1/conversations')
+})
+
+test('the account menu leads to the install guidance', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  render(<App />)
+  fireEvent.click(await screen.findByRole('link', { name: 'Install the app' }))
+  await screen.findByRole('heading', { name: 'Install the app' })
+  expect(window.location.pathname).toBe('/w/1/settings/about')
+})

@@ -249,12 +249,39 @@ textarea {
   flex-shrink: 0;
 }
 
+/* Fingers: every control is at least 44px each way (--tt-touch). */
 @media (pointer: coarse) {
+  input,
+  select,
   .tt-button,
   .tt-icon-button,
-  input,
-  select {
+  .tt-account summary {
     min-height: var(--tt-touch);
+  }
+
+  .tt-icon-button {
+    min-width: var(--tt-touch);
+  }
+
+  .tt-account summary {
+    display: grid;
+    place-items: center;
+    min-width: var(--tt-touch);
+  }
+
+  /* Checkboxes and radios are the box itself: their label is what is pressed, so the label is
+     the target. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-height: 0;
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  label:has(> input[type="checkbox"]),
+  label:has(> input[type="radio"]) {
+    min-height: var(--tt-touch);
+    align-items: center;
   }
 }
 
@@ -324,17 +351,28 @@ textarea {
 .tt-shell {
   height: 100%;
   display: grid;
-  grid-template-rows: var(--tt-topbar-h) minmax(0, 1fr);
+  /* The top bar reaches under the status bar when the app is installed on a phone. */
+  grid-template-rows: calc(var(--tt-topbar-h) + env(safe-area-inset-top)) minmax(0, 1fr);
 }
 
 .tt-topbar {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0 0.5rem 0 0.75rem;
+  /* env()'s insets are the screen's left and right whatever the language's direction (a
+     notch in landscape), so these are physical, with the start and end padding swapped for
+     right-to-left below. */
+  padding-block-start: env(safe-area-inset-top);
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+  padding-right: max(0.5rem, env(safe-area-inset-right));
   background: var(--tt-bar);
   color: var(--tt-on-bar);
   min-width: 0;
+}
+
+[dir="rtl"] .tt-topbar {
+  padding-left: max(0.5rem, env(safe-area-inset-left));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
 }
 
 .tt-topbar select {
@@ -428,6 +466,8 @@ textarea {
   position: relative;
   display: flex;
   min-height: 0;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 .tt-sidebar {
@@ -475,7 +515,7 @@ textarea {
 }
 
 .tt-section {
-  padding: 1rem 1.25rem;
+  padding: 1rem 1.25rem calc(1rem + env(safe-area-inset-bottom));
   display: grid;
   gap: 0.75rem;
   align-content: start;
@@ -1597,9 +1637,12 @@ fieldset {
     transform: translateX(100%);
   }
 
+  /* Opening shows it at once (no visibility transition), so it can take focus as it opens;
+     closing keeps it visible until it has slid out. */
   .tt-shell[data-drawer="open"] .tt-sidebar {
     transform: none;
     visibility: visible;
+    transition: transform 0.18s ease-out;
   }
 
   .tt-scrim {
@@ -1789,5 +1832,115 @@ fieldset {
 
   .tt-live-screen {
     height: 40vh;
+  }
+}
+
+/* The installed app and the phone around it (docs/pwa.md). */
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* A pull from the top of a page doesn't reload the installed app and lose what is typed. */
+  overscroll-behavior-y: contain;
+  /* Pan and pinch, no double-tap-to-zoom delay on every control (inherited by intersection). */
+  touch-action: manipulation;
+}
+
+/* First stop for the keyboard: out of sight until focused. */
+.tt-skip {
+  position: absolute;
+  border: 1px solid var(--tt-line-strong);
+  font: inherit;
+  inset-inline-start: 0.5rem;
+  inset-block-start: 0.5rem;
+  z-index: 100;
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--tt-radius);
+  background: var(--tt-surface);
+  color: var(--tt-fg);
+  transform: translateY(-300%);
+}
+
+.tt-skip:focus {
+  transform: none;
+}
+
+.tt-page:focus {
+  outline: none; /* focused by the skip link and the drawer, not a control */
+}
+
+.tt-warning {
+  color: var(--tt-warning);
+}
+
+.tt-steps {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding-inline-start: 1.25rem;
+}
+
+/* The update prompt: at the bottom, over the page, clear of the home bar. */
+.tt-update {
+  position: fixed;
+  inset-inline: 0.75rem;
+  inset-block-end: calc(0.75rem + env(safe-area-inset-bottom));
+  z-index: 50;
+  margin-inline: auto;
+  max-width: 28rem;
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line-strong);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.45);
+}
+
+.tt-update p {
+  margin: 0;
+}
+
+.tt-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* The on-screen keyboard is up on a browser that doesn't resize the page for it (iOS Safari;
+   src/pwa/viewport.ts): the app is the visible part, and the home bar isn't there. */
+html[data-keyboard="open"] body {
+  overflow: hidden;
+}
+
+html[data-keyboard="open"] #root {
+  height: var(--tt-viewport-h);
+  transform: translateY(var(--tt-viewport-top));
+}
+
+html[data-keyboard="open"] .tt-composer {
+  padding-bottom: 0.75rem;
+}
+
+@media (max-width: 48rem) {
+  .tt-sidebar {
+    padding-block-end: calc(0.5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Screens without the shell (setup, login, errors) keep clear of the status and home bars. */
+.tt-auth,
+.tt-center {
+  padding-block-start: max(1rem, env(safe-area-inset-top));
+  padding-block-end: max(1rem, env(safe-area-inset-bottom));
+}
+
+/* After the rules they override (the top bar's own controls are smaller). */
+@media (pointer: coarse) {
+  .tt-topbar select,
+  .tt-tabs a {
+    min-height: var(--tt-touch);
   }
 }

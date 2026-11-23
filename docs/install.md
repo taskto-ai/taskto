@@ -223,6 +223,45 @@ A proxy on the host reaching a published port shows up with the address of Docke
 gateway, which can be shared with other local traffic; prefer running the proxy in the
 Compose project, as the bundled Caddy does.
 
+### The app on phones and computers
+
+TaskTo.AI is an installable web app (a PWA): from the browser, a person can add it to a phone's
+Home Screen or a computer's apps, where it opens in a window of its own
+([docs/pwa.md](pwa.md) has the design). It works in a plain browser tab too; nothing here is
+required for that.
+
+Installing, and the offline shell, need a **secure context**: browsers run service workers
+only on pages served over HTTPS (or from `localhost`). So a server people install from needs
+what step 3 already asks for:
+
+- **A certificate the devices trust.** A public one (Caddy's, or Let's Encrypt) just works. A
+  self-signed or private-CA certificate must be installed on each phone and computer first;
+  when the browser shows a certificate warning, it won't register the worker or offer to
+  install, and iOS won't keep the Home Screen app's login.
+- **The app at the root of its host** (`https://tasks.example.com/`, not under a path): the
+  manifest's start URL and scope are `/`.
+- **A proxy that leaves `/sw.js` and `/manifest.webmanifest` alone.** The server sends them
+  with `Cache-Control: no-cache`; a proxy or CDN must not cache them (or the app won't learn of
+  a new version), nor answer for the server's routes (`/api`, `/mcp`, `/healthz`).
+
+Each person installs from **Settings → About → Install the app**, which says what to do on
+their device:
+
+- **iPhone and iPad (Safari):** the Share button, then **Add to Home Screen**. iOS has no
+  install prompt a page can start.
+- **Android (Chrome and others):** the browser's menu, then **Install app** or **Add to Home
+  screen**; Chrome may also offer an **Install TaskTo.AI** button there.
+- **Computers (Chrome, Edge):** the install icon at the end of the address bar. Safari: **File →
+  Add to Dock**.
+
+Only the app's own files (the screens, scripts and icons) are kept for offline use. Nothing
+from `/api` is cached by the worker: a person's conversations, documents, boards and apps
+always come from the server, so offline the app opens and says it can't reach it.
+
+An upgrade of the server ([Upgrade and rollback](#upgrade-and-rollback)) reaches open apps
+as a prompt, **A new version of TaskTo.AI is ready**, with **Reload to update** and **Later**.
+The page is never reloaded for anyone: they update when they have saved their work.
+
 ### Where provider accounts may connect
 
 Workspace admins add provider accounts for the workspace, and every member can add

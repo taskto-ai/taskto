@@ -2,6 +2,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import { initLocale } from './i18n'
+import { listenForInstall } from './pwa/install'
+import { UpdateBanner } from './pwa/UpdateBanner'
+import { registerServiceWorker } from './pwa/update'
+import { trackKeyboard } from './pwa/viewport'
 import './styles.css'
 import { applyTheme, storedTheme } from './theme'
 
@@ -15,8 +19,16 @@ applyTheme(storedTheme())
 // starts in English and switches when the file arrives.
 await Promise.race([initLocale(), new Promise((resolve) => setTimeout(resolve, 1500))])
 
+// The install prompt may fire before anything draws; the keyboard is followed from the start.
+listenForInstall()
+trackKeyboard()
+
 createRoot(root).render(
   <StrictMode>
     <App />
+    <UpdateBanner />
   </StrictMode>,
 )
+
+// Once drawn: the offline shell, and its updates (src/pwa/update.ts).
+registerServiceWorker()

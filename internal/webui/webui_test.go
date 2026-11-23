@@ -13,6 +13,9 @@ import (
 var app = fstest.MapFS{
 	"index.html":                {Data: []byte("<!doctype html><title>app</title>")},
 	"favicon.svg":               {Data: []byte("<svg></svg>")},
+	"manifest.webmanifest":      {Data: []byte(`{"name":"app"}`)},
+	"sw.js":                     {Data: []byte("self.skipWaiting")},
+	"icons/icon-192.png":        {Data: []byte("\x89PNG\r\n\x1a\n")},
 	"assets/index-B1x2c3d4.js":  {Data: []byte("console.log(1)")},
 	"assets/index-Q9w8e7r6.css": {Data: []byte("body{}")},
 }
@@ -45,6 +48,11 @@ func TestFiles(t *testing.T) {
 		{"/", "text/html", "<title>app</title>", "no-cache"},
 		{"/index.html", "text/html", "<title>app</title>", "no-cache"},
 		{"/favicon.svg", "image/svg+xml", "<svg>", "no-cache"},
+		// A manifest is JSON of its own type; the service worker is JavaScript, and neither
+		// is cached: an installed app learns of a new version by fetching them.
+		{"/manifest.webmanifest", "application/manifest+json", `{"name"`, "no-cache"},
+		{"/sw.js", "text/javascript", "self.skipWaiting", "no-cache"},
+		{"/icons/icon-192.png", "image/png", "PNG", "no-cache"},
 		{"/assets/index-B1x2c3d4.js", "javascript", "console.log", "public, max-age=31536000, immutable"},
 		{"/assets/index-Q9w8e7r6.css", "text/css", "body{}", "public, max-age=31536000, immutable"},
 	}
