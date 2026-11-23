@@ -284,7 +284,7 @@ func compareFloat(a, b float64) int {
 // stored returns v as a value of the field's type with its limits not applied: the form rows
 // hold it in.
 func (f Field) stored(v any) (any, bool, error) {
-	f.MaxLength, f.Min, f.Max, f.Options, f.MaxFiles, f.noClock = math.MaxInt, nil, nil, nil, math.MaxInt, true
+	f.MaxLength, f.Min, f.Max, f.Options, f.MaxFiles, f.asStored = math.MaxInt, nil, nil, nil, math.MaxInt, true
 	f.Format = "" // a code stored under another format is still the text it was
 	return f.parse(v)
 }

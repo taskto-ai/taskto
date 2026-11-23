@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -610,4 +611,196 @@ func TestCapturedValuesObeyTheRolesOfTheApp(t *testing.T) {
 	id := w.latest(a)
 	rec = w.edit(w.alice, w.shared, a, id, map[string]any{"place": where(map[string]any{"lat": 1.0})})
 	expectCode(t, rec, http.StatusUnprocessableEntity, "app_field_locked")
+}
+
+// An app with one field, an attachment field or a signature field, drawn by a button that sends it.
+func retypeApp(kind string) map[string]any {
+	var def map[string]any
+	text := `{
+	  "components": [
+	    {"id": "root", "component": "Column", "children": ["add"]},
+	    {"id": "add_label", "component": "Text", "text": "Add"},
+	    {"id": "add", "component": "Button", "child": "add_label", "action": {"event": {"name": "add_note", "context": {
+	      "title": {"path": "/draft/title"}, "sig": {"path": "/draft/sig"}}}}}
+	  ],
+	  "collection": {"fields": [{"name": "title", "type": "string"}, {"name": "sig", "type": "` + kind + `"}]},
+	  "actions": {"add_note": {"kind": "insert"}, "edit_note": {"kind": "update"}}
+	}`
+	if err := jsonUnmarshal(text, &def); err != nil {
+		panic(err)
+	}
+	return def
+}
+
+func (w *world) retype(u *user, s access.Space, a App, kind string, ack ...SchemaChange) *httptest.ResponseRecorder {
+	w.e.t.Helper()
+	var def Definition
+	raw, _ := json.Marshal(retypeApp(kind))
+	if err := json.Unmarshal(raw, &def); err != nil {
+		w.e.t.Fatal(err)
+	}
+	cur := w.view(u, s, a)
+	cur = w.mustPatchDraft(u, s, cur, def)
+	return w.tryPublish(u, s, cur, ack...)
+}
+
+func TestAPhotoNeverBecomesALockedSignature(t *testing.T) {
+	w := newWorld(t)
+	s := w.alicePrivate
+	rec := w.alice.do(http.MethodPost, appsPath(s, ""), map[string]any{"name": "Retyped", "definition": retypeApp("attachment")})
+	expect(t, rec, http.StatusCreated)
+	a := w.publish(w.alice, s, decode[App](t, rec))
+
+	// A photo in a record, and a PNG photo uploaded and waiting to be saved.
+	photo := w.upload(w.alice, s, a, "sig", testJPEG(t, 90, 40), 4000)
+	pending := w.upload(w.alice, s, a, "sig", testPNG(t, 90, 40), 4000)
+	expect(t, w.insert(w.alice, s, a, map[string]any{"sig": []any{photo}}), http.StatusOK)
+	rid := w.latest(a)
+
+	// Making the field a signature is a change of type, which the publisher acknowledges.
+	expectCode(t, w.retype(w.alice, s, a, "signature"), http.StatusConflict, "app_migration_required")
+	a = decode[App](t, w.view2(w.alice, s, a))
+	expect(t, w.retype(w.alice, s, a, "signature", SchemaChange{ChangeFieldTypeChanged, "sig"}), http.StatusOK)
+
+	// The stored list of photos is no signature: it is not shown, and not locked.
+	list := w.alice.do(http.MethodGet, appPath(s, a.ID, "/records/query"), nil)
+	expect(t, list, http.StatusOK)
+	if strings.Contains(list.Body.String(), photo) {
+		t.Fatalf("a photo is shown as a signature: %s", list.Body)
+	}
+	if _, locked := (Field{Name: "sig", Type: TypeSignature}).locked(w.rowData(a, rid)); locked {
+		t.Fatal("a photo is a locked signature")
+	}
+	// A photo that was waiting for the field it was is not a signature either, though it is a PNG.
+	expectCode(t, w.edit(w.alice, s, a, rid, map[string]any{"sig": pending}), http.StatusUnprocessableEntity, "app_attachment_bad")
+	if w.attachedTo(pending) != nil {
+		t.Fatal("a photo was attached as a signature")
+	}
+	// A picture drawn for the signature is the capture, and then it is locked.
+	signature := w.upload(w.alice, s, a, "sig", testPNG(t, 120, 50), 4000)
+	expect(t, w.edit(w.alice, s, a, rid, map[string]any{"sig": signature}), http.StatusOK)
+	if got := w.rowData(a, rid)["sig"]; got != signature {
+		t.Fatalf("stored = %v", got)
+	}
+	other := w.upload(w.alice, s, a, "sig", testPNG(t, 130, 50), 4000)
+	expectCode(t, w.edit(w.alice, s, a, rid, map[string]any{"sig": other}), http.StatusUnprocessableEntity, "app_field_locked")
+}
+
+func (w *world) view2(u *user, s access.Space, a App) *httptest.ResponseRecorder {
+	return u.do(http.MethodGet, appPath(s, a.ID, ""), nil)
+}
+
+func TestARetypedStoredListIsNoSignature(t *testing.T) {
+	id := strings.Repeat("ab", 16)
+	f := Field{Name: "sig", Type: TypeSignature}
+	// A screen's picture input binds a list of one; a row never holds one.
+	if got, present, err := f.parse([]any{id}); err != nil || !present || got != id {
+		t.Fatalf("a list from a screen: %v %v %v", got, present, err)
+	}
+	if _, present, err := f.stored([]any{id}); err == nil && present {
+		t.Fatal("a list of photos is read as a stored signature")
+	}
+	if ofType(f, []any{id}) {
+		t.Fatal("a list of photos is of a signature's type")
+	}
+	if _, locked := f.locked(map[string]any{"sig": []any{id}}); locked {
+		t.Fatal("a list of photos is a locked signature")
+	}
+	if _, locked := f.locked(map[string]any{"sig": id}); !locked {
+		t.Fatal("a signature isn't locked")
+	}
+}
+
+func TestTypeChangesIntoCapturedFieldsAreAcknowledged(t *testing.T) {
+	// Whether or not a row holds a value: what the field takes from then on is locked.
+	for _, from := range []string{TypeAttachment, TypeString} {
+		for _, into := range []string{TypeSignature, TypeLocation} {
+			live := Collection{Fields: []Field{{Name: "x", Type: from}}}
+			next := Collection{Fields: []Field{{Name: "x", Type: into}}}
+			want := []SchemaChange{{ChangeFieldTypeChanged, "x"}}
+			for _, blind := range []bool{true, false} {
+				if got := breakingChanges(&live, next, nil, blind); !slices.Equal(got, want) {
+					t.Errorf("%s to %s, blind %v: %v", from, into, blind, got)
+				}
+			}
+		}
+	}
+	// Another change of type with no value stored is still free.
+	live := Collection{Fields: []Field{{Name: "x", Type: TypeString}}}
+	next := Collection{Fields: []Field{{Name: "x", Type: TypeNumber}}}
+	if got := breakingChanges(&live, next, nil, false); len(got) != 0 {
+		t.Errorf("string to number with no rows: %v", got)
+	}
+}
+
+func TestAPendingUploadIsHeldToTheFieldsLimitNow(t *testing.T) {
+	w := newWorld(t)
+	s := w.alicePrivate
+	a := w.createCapture(w.alice, s)
+	// A signature uploaded under the default limit, then the field's limit is tightened.
+	sig := w.upload(w.alice, s, a, "signed", testPNG(t, 300, 100), 5000)
+	cur := w.view(w.alice, s, a)
+	cur = w.mustPatchDraft(w.alice, s, cur, fieldsOf(*cur.Draft, "signed", func(f *Field) { f.MaxBytes = 50 }))
+	expect(t, w.tryPublish(w.alice, s, cur), http.StatusOK)
+	expectCode(t, w.insert(w.alice, s, a, map[string]any{"signed": sig}), http.StatusUnprocessableEntity, "app_attachment_bad")
+	if w.attachedTo(sig) != nil || w.rowCount(a) != 0 {
+		t.Fatal("a signature over the limit was attached")
+	}
+
+	// Photos the same.
+	p := w.createPhotos(w.alice, s, "Photos")
+	photo := w.upload(w.alice, s, p, "photos", testJPEG(t, 300, 200), 5000)
+	cur = w.view(w.alice, s, p)
+	cur = w.mustPatchDraft(w.alice, s, cur, fieldsOf(*cur.Draft, "photos", func(f *Field) { f.MaxBytes = 100 }))
+	expect(t, w.tryPublish(w.alice, s, cur), http.StatusOK)
+	expectCode(t, w.insert(w.alice, s, p, map[string]any{"photos": []any{photo}}), http.StatusUnprocessableEntity, "app_attachment_bad")
+	if w.attachedTo(photo) != nil {
+		t.Fatal("a photo over the limit was attached")
+	}
+}
+
+func TestClearingARequiredCapturedFieldIsALockedChange(t *testing.T) {
+	w := newWorld(t)
+	s := w.alicePrivate
+	a := w.createCapture(w.alice, s)
+	cur := w.view(w.alice, s, a)
+	cur = w.mustPatchDraft(w.alice, s, cur, fieldsOf(*cur.Draft, "place", func(f *Field) { f.Required = true }))
+	expect(t, w.tryPublish(w.alice, s, cur), http.StatusOK)
+	expect(t, w.insert(w.alice, s, a, map[string]any{"place": where(nil)}), http.StatusOK)
+	id := w.latest(a)
+	// Clearing it is refused as the change it is, not for the field's being required.
+	for _, clear := range []any{nil, "", map[string]any{}} {
+		expectCode(t, w.edit(w.alice, s, a, id, map[string]any{"place": clear}), http.StatusUnprocessableEntity, "app_field_locked")
+	}
+	// A required field that was never captured is still required.
+	expectCode(t, w.insert(w.alice, s, a, map[string]any{}), http.StatusUnprocessableEntity, "app_field_required")
+}
+
+func TestStrictCapturedValuesRefuseWhatParsersLetThrough(t *testing.T) {
+	code := Field{Name: "code", Type: TypeBarcode, MaxLength: 40}
+	for _, s := range []string{"4006381333931\n", "\t4006381333931", "\r\nabc", "abc\x00 "} {
+		if got, _, err := code.parse(s); err == nil {
+			t.Errorf("%q accepted as %v", s, got)
+		}
+	}
+	// A line break alone is no code, and spaces around one are still padding.
+	if _, present, err := code.parse("\n"); err != nil || present {
+		t.Errorf("a line break: %v %v", present, err)
+	}
+	if got, _, err := code.parse("  abc "); err != nil || got != "abc" {
+		t.Errorf("padded: %v %v", got, err)
+	}
+	place := Field{Name: "place", Type: TypeLocation}
+	for _, zone := range []string{"+24:60", "+24:00", "+23:60", "-24:00", "+99:00", "+05:75"} {
+		at := time.Now().Add(-48 * time.Hour).UTC().Format("2006-01-02T15:04:05") + zone
+		if _, _, err := place.parse(where(map[string]any{"captured_at": at})); err == nil {
+			t.Errorf("captured_at %s accepted", at)
+		}
+	}
+	for _, zone := range []string{"Z", "+23:59", "-12:00", "+00:00"} {
+		at := time.Now().Add(-48 * time.Hour).UTC().Format("2006-01-02T15:04:05") + zone
+		if _, _, err := place.parse(where(map[string]any{"captured_at": at})); err != nil {
+			t.Errorf("captured_at %s: %v", at, err)
+		}
+	}
 }

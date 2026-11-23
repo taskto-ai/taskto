@@ -1202,13 +1202,14 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 			return applied{id: ch.ID, revision: cur.revision + 1, data: cur.fields, changed: true},
 				remember(ctx, tx, appID, ch.ID, cur.revision+1, opDelete, cur.data, at, actor, ch)
 		}
-		next, err := def.Collection.Merge(cur.fields, ch.Data)
-		if err != nil {
+		// A captured location and a signature stay as they were captured, whoever asks to change them
+		// and by whichever screen, release or the records explorer. That is told first: clearing a
+		// required one is a change that is refused for what it is, not for the field's being required.
+		next := merged(cur.fields, ch.Data)
+		if err := def.Collection.lockedChange(cur.fields, next); err != nil {
 			return applied{}, err
 		}
-		// A captured location and a signature stay as they were captured, whoever asks to change them
-		// and by whichever screen, release or the records explorer.
-		if err := def.Collection.lockedChange(cur.fields, next); err != nil {
+		if err := def.Collection.Fits(next); err != nil {
 			return applied{}, err
 		}
 		raw, err := json.Marshal(next)

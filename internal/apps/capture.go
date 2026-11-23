@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -111,16 +112,19 @@ func checkDigitOK(digits string) bool {
 	return (10-sum%10)%10 == int(digits[len(digits)-1]-'0')
 }
 
+// badBarcode is the error of a value that isn't the text of the field's code.
+func (f Field) badBarcode() error {
+	of := ""
+	if f.Format != "" {
+		of = " of format " + f.Format
+	}
+	return invalidAs(apierr.CodeAppFieldNotBarcode, apierr.Params{"field": f.Name, "format": f.Format}, "%s must be the text of a code%s", f.Name, of)
+}
+
 // parseBarcode reads a barcode field's value: text with no control characters, of at most MaxLength
 // characters, valid for the field's format if it names one whose text can be checked.
 func (f Field) parseBarcode(s string) (any, bool, error) {
-	bad := func() error {
-		of := ""
-		if f.Format != "" {
-			of = " of format " + f.Format
-		}
-		return invalidAs(apierr.CodeAppFieldNotBarcode, apierr.Params{"field": f.Name, "format": f.Format}, "%s must be the text of a code%s", f.Name, of)
-	}
+	bad := f.badBarcode
 	if strings.IndexFunc(s, unicode.IsControl) >= 0 {
 		return nil, false, bad()
 	}
@@ -153,7 +157,7 @@ var locationKeys = []string{"lat", "lon", "accuracy_m", "captured_at", "source"}
 // degrees within the globe, accuracy_m (metres, 0 to MaxLocationAccuracy; the device's own
 // reading, so a manual position may leave it out), captured_at in UTC, and source. An object with
 // no keys is no value. Whether captured_at is not in the future is checked unless the field is
-// read as stored (Field.noClock): a row keeps what was true when it was captured.
+// read as stored (Field.asStored): a row keeps what was true when it was captured.
 func (f Field) parseLocation(v any) (any, bool, error) {
 	bad := func(format string, args ...any) error {
 		return invalidAs(apierr.CodeAppFieldNotLocation, apierr.Params{"field": f.Name}, format, args...)
@@ -191,10 +195,10 @@ func (f Field) parseLocation(v any) (any, bool, error) {
 	}
 	text, _ := obj["captured_at"].(string)
 	at, err := time.Parse(time.RFC3339, text)
-	if err != nil || at.Before(earliestCapture) {
+	if err != nil || !validZone(text) || at.Before(earliestCapture) {
 		return nil, false, bad("%s: captured_at is a time, RFC 3339, from 2000 on", f.Name)
 	}
-	if !f.noClock && at.After(time.Now().Add(MaxClockSkew)) {
+	if !f.asStored && at.After(time.Now().Add(MaxClockSkew)) {
 		return nil, false, invalidAs(apierr.CodeAppFieldLocationFuture, apierr.Params{"field": f.Name},
 			"%s: captured_at is later than this server's clock (more than %v of difference)", f.Name, MaxClockSkew)
 	}
@@ -202,11 +206,21 @@ func (f Field) parseLocation(v any) (any, bool, error) {
 	return out, true, nil
 }
 
+// zonePattern is the end of an RFC 3339 time: Z, or an offset of at most 23:59.
+var zonePattern = regexp.MustCompile(`(Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$`)
+
+// validZone reports whether the time's zone is one: Go's parser lets an offset of +24:60 through.
+func validZone(text string) bool { return zonePattern.MatchString(text) }
+
 // parseSignature reads a signature field's value: the id of one attachment (or a list of one).
 // Whether it may be used, and that it is a PNG, is for claimAttachments.
+//
+// A row holds the id alone. A list of one is taken from a screen (what a picture input binds), but never
+// as a stored value: that is what a field that was an attachment field held, a photo that is no
+// signature, and it is hidden as any value of another type is.
 func (f Field) parseSignature(v any) (any, bool, error) {
 	bad := invalidAs(apierr.CodeAppFieldNotSignature, apierr.Params{"field": f.Name}, "%s must be the id of one signature picture", f.Name)
-	if list, ok := v.([]any); ok {
+	if list, ok := v.([]any); ok && !f.asStored {
 		if len(list) == 0 {
 			return nil, false, nil
 		}

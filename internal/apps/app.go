@@ -55,6 +55,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/apierr"
@@ -161,8 +162,9 @@ type Field struct {
 	// Editable lets a stored location or signature be changed later, which no field does unless it
 	// says so (capture.go).
 	Editable bool `json:"editable,omitempty"`
-	// noClock reads a value as a row holds it: a location's captured_at is not held to the clock.
-	noClock bool
+	// asStored reads a value as a row holds it: a location's captured_at is not held to the clock, and
+	// a signature is the plain id of its picture (never the list an attachment field held it in).
+	asStored bool
 }
 
 // The kinds of action: add a row built from the event's context and clear the form at
@@ -808,6 +810,15 @@ func Plan(surfaceID string, def Definition, action ClientAction) (Change, error)
 // collection: required fields present. Fields of the row that the collection no longer
 // declares are kept as they are, so declaring them again brings them back.
 func (c Collection) Merge(row, changes map[string]any) (map[string]any, error) {
+	out := merged(row, changes)
+	if err := c.Fits(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// merged is row with the changes applied (nil clears a field), checked by nobody.
+func merged(row, changes map[string]any) map[string]any {
 	out := map[string]any{}
 	for k, v := range row {
 		out[k] = v
@@ -819,10 +830,7 @@ func (c Collection) Merge(row, changes map[string]any) (map[string]any, error) {
 			out[k] = v
 		}
 	}
-	if err := c.Fits(out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return out
 }
 
 // Fits checks a stored row against the collection: every required field present, every
@@ -865,7 +873,7 @@ func (f Field) fits(row map[string]any) error {
 		}
 		return nil
 	}
-	f.noClock = true // a row keeps what was true when it was stored
+	f.asStored = true // a row keeps what was true when it was stored
 	_, _, err := f.parse(v)
 	return err
 }
@@ -886,11 +894,16 @@ func (f Field) parse(v any) (value any, present bool, err error) {
 		}
 	}
 	if s, isString := v.(string); isString {
-		s = strings.TrimSpace(s)
-		if s == "" {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
 			return nil, false, nil
 		}
-		v = s
+		// A scanner's text is taken as it was read: a line break or a tab around it is no padding to
+		// trim, but a character that isn't part of a code.
+		if f.Type == TypeBarcode && strings.IndexFunc(s, unicode.IsControl) >= 0 {
+			return nil, false, f.badBarcode()
+		}
+		v = trimmed
 	}
 	if v == nil {
 		return nil, false, nil

@@ -299,13 +299,7 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 		if !ok || (f.Type != TypeAttachment && f.Type != TypeSignature) {
 			return invalidf("the app has no attachment or signature field %q", in.Field)
 		}
-		maxBytes := int64(f.MaxBytes)
-		if maxBytes == 0 {
-			maxBytes = DefaultMaxFileBytes
-			if f.Type == TypeSignature {
-				maxBytes = DefaultSignatureBytes
-			}
-		}
+		maxBytes := f.maxFileBytes()
 		if in.Size < 1 || in.Size > maxBytes {
 			return invalidAs(apierr.CodeAppUploadSize, apierr.Params{"field": f.Name, "max": maxBytes},
 				"%s takes files of 1 to %d bytes", f.Name, maxBytes)
@@ -327,8 +321,8 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 				code: apierr.CodeAppFilesFull, params: apierr.Params{"max_mib": MaxAppFileBytes >> 20}}
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO app_attachments (id, app_id, space_id, field, owner, status, size) VALUES (?, ?, ?, ?, ?, 'uploading', ?)`,
-			id, appID, sp.ID, f.Name, a.UserID, in.Size); err != nil {
+			INSERT INTO app_attachments (id, app_id, space_id, field, kind, owner, status, size) VALUES (?, ?, ?, ?, ?, ?, 'uploading', ?)`,
+			id, appID, sp.ID, f.Name, f.Type, a.UserID, in.Size); err != nil {
 			return err
 		}
 		u, err := loadAttachment(ctx, tx, appID, id)
@@ -761,11 +755,14 @@ func claimAttachments(ctx context.Context, tx *sql.Tx, actor Actor, appID, rowID
 		if f.Type != TypeAttachment && f.Type != TypeSignature {
 			continue
 		}
-		// A signature is a PNG, by what the bytes turned out to be.
+		// A signature is a PNG, by what the bytes turned out to be, and an attachment is only claimed by
+		// a field of the kind it was uploaded for: a field retyped since can't take what was pending
+		// for what it was. What the field's size limit is now holds too, whatever it was at upload.
 		onlyType := ""
 		if f.Type == TypeSignature {
 			onlyType = "image/png"
 		}
+		limit := f.maxFileBytes()
 		had := map[string]bool{}
 		for _, id := range attachmentIDs(before[f.Name]) {
 			had[id] = true
@@ -776,19 +773,30 @@ func claimAttachments(ctx context.Context, tx *sql.Tx, actor Actor, appID, rowID
 			}
 			res, err := tx.ExecContext(ctx, `
 				UPDATE app_attachments SET row_id = ?, attached_at = ?
-				WHERE id = ? AND app_id = ? AND field = ? AND owner = ? AND status = 'ready' AND row_id IS NULL
-					AND (? = '' OR content_type = ?)`,
-				rowID, now(), id, appID, f.Name, actor.UserID, onlyType, onlyType)
+				WHERE id = ? AND app_id = ? AND field = ? AND kind = ? AND owner = ? AND status = 'ready' AND row_id IS NULL
+					AND (? = '' OR content_type = ?) AND size <= ?`,
+				rowID, now(), id, appID, f.Name, f.Type, actor.UserID, onlyType, onlyType, limit)
 			if err != nil {
 				return err
 			}
 			if n, _ := res.RowsAffected(); n != 1 {
 				return invalidAs(apierr.CodeAppAttachmentBad, apierr.Params{"field": f.Name},
-					"%s: a photo can't be used here: it must be one you uploaded for this field, finished, and not in a record already", f.Name)
+					"%s: a photo can't be used here: it must be one you uploaded for this field, finished, within its size limit, and not in a record already", f.Name)
 			}
 		}
 	}
 	return nil
+}
+
+// maxFileBytes is the most a file of the field may have: its max_bytes, or the default of its kind.
+func (f Field) maxFileBytes() int64 {
+	if f.MaxBytes != 0 {
+		return int64(f.MaxBytes)
+	}
+	if f.Type == TypeSignature {
+		return DefaultSignatureBytes
+	}
+	return DefaultMaxFileBytes
 }
 
 // filesModel is the limits of the collection's attachment and signature fields, for the screen's

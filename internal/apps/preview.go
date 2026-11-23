@@ -3,6 +3,7 @@ package apps
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -61,6 +62,7 @@ type PreviewReply struct {
 // SampleRows makes the sample rows of a collection: a few rows of plausible values of every field,
 // the same on every call. A row the collection's rules refuse is left out.
 func SampleRows(c Collection) []Row {
+	c = c.forPreview()
 	var rows []Row
 	for n := 1; n <= sampleRowCount; n++ {
 		data := map[string]any{}
@@ -105,8 +107,61 @@ func sampleValue(f Field, n int) (any, bool) {
 			return nil, false
 		}
 		return f.Options[(n-1)%len(f.Options)], true
+	case TypeLocation:
+		// A place and a time that are plain sample data, not a person's: the same on every call.
+		return map[string]any{"lat": 38.7 + float64(n)/100, "lon": -9.1, "accuracy_m": 10.0,
+			"captured_at": fmt.Sprintf("2026-01-%02dT09:30:00.000Z", 9+n), "source": SourceDevice}, true
+	case TypeBarcode:
+		return sampleCode(f, n), true
 	}
+	// A signature (like a photo) has no sample: a preview never holds a picture.
 	return nil, false
+}
+
+// sampleCode is the n-th sample text of a barcode field: a number with the right check digit for a
+// format the server checks, text otherwise, within the field's length.
+func sampleCode(f Field, n int) string {
+	// digits is a number of the length, ending in its check digit if the format has one.
+	digits := func(length int, check bool) string {
+		if !check {
+			return fmt.Sprintf("%0*d", length, 400638+n)
+		}
+		body := fmt.Sprintf("%0*d", length-1, 400638133000+n)
+		body = body[len(body)-(length-1):]
+		for d := range 10 {
+			if checkDigitOK(body + fmt.Sprint(d)) {
+				return body + fmt.Sprint(d)
+			}
+		}
+		return body + "0"
+	}
+	s := fmt.Sprintf("CODE-%d", 1000+n)
+	switch f.Format {
+	case "ean_13":
+		s = digits(13, true)
+	case "ean_8":
+		s = digits(8, true)
+	case "upc_a":
+		s = digits(12, true)
+	case "upc_e":
+		s = digits(6, false)
+	}
+	if f.MaxLength > 0 && utf8.RuneCountInString(s) > f.MaxLength {
+		s = string([]rune(s)[:f.MaxLength])
+	}
+	return s
+}
+
+// forPreview is the collection as a preview holds it: the same, but a field that holds a picture is never
+// required, since a preview holds none (it would otherwise refuse every row and every action).
+func (c Collection) forPreview() Collection {
+	out := Collection{Fields: slices.Clone(c.Fields)}
+	for i, f := range out.Fields {
+		if f.Type == TypeAttachment || f.Type == TypeSignature {
+			out.Fields[i].Required, out.Fields[i].RequiredWhen = false, nil
+		}
+	}
+	return out
 }
 
 // preview draws the app's draft, or runs one of its actions, on sample rows. It is for those who
@@ -164,7 +219,7 @@ func simulate(def Definition, rows []Row, ch Change) ([]Row, error) {
 		if len(rows) >= previewMaxRows {
 			return nil, previewFull()
 		}
-		if err := def.Collection.Fits(ch.Data); err != nil {
+		if err := def.Collection.forPreview().Fits(ch.Data); err != nil {
 			return nil, err
 		}
 		var id int64
@@ -186,7 +241,7 @@ func simulate(def Definition, rows []Row, ch Change) ([]Row, error) {
 			case r.ID != ch.ID:
 				out = append(out, r)
 			case ch.Kind == ActionUpdate:
-				next, err := def.Collection.Merge(r.Data, ch.Data)
+				next, err := def.Collection.forPreview().Merge(r.Data, ch.Data)
 				if err != nil {
 					return nil, err
 				}
@@ -198,12 +253,12 @@ func simulate(def Definition, rows []Row, ch Change) ([]Row, error) {
 	return nil, invalidf("unknown kind of action %q", ch.Kind)
 }
 
-// withoutPhotos is data without its attachment fields' values: a preview never holds an attachment id,
+// withoutPhotos is data without its attachment and signature fields' values: a preview never holds an attachment id,
 // so it can't draw, return or tell whether a real attachment exists. The sample rows have none.
 func withoutPhotos(def Definition, data map[string]any) map[string]any {
 	out := make(map[string]any, len(data))
 	for k, v := range data {
-		if f, ok := def.Collection.field(k); ok && f.Type == TypeAttachment {
+		if f, ok := def.Collection.field(k); ok && (f.Type == TypeAttachment || f.Type == TypeSignature) {
 			continue
 		}
 		out[k] = v
@@ -235,7 +290,7 @@ func previewRows(def Definition, given []PreviewRow) ([]Row, error) {
 		}
 		seen[g.ID] = true
 		data := withoutPhotos(def, declared(def, g.Data))
-		if err := def.Collection.Fits(data); err != nil {
+		if err := def.Collection.forPreview().Fits(data); err != nil {
 			return nil, err
 		}
 		rows = append(rows, Row{ID: g.ID, Revision: g.Revision, Data: data})

@@ -212,8 +212,7 @@ func Capabilities() []string {
 	for _, kind := range EffectKinds {
 		all = append(all, EffectCapability(kind))
 	}
-	all = append(all, AttachmentCapability)
-	for _, capability := range fieldCapabilities {
+	for _, capability := range fieldCapabilities { // includes AttachmentCapability
 		all = append(all, capability)
 	}
 	all = append(all, slotCapabilities...)
