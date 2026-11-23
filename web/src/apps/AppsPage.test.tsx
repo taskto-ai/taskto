@@ -439,13 +439,15 @@ test('a publisher without the right to design can roll back, and a builder can r
   expect(within(crew).queryByRole('button', { name: /^Roll back/ })).toBeNull()
 })
 
-test('a launched app says it is live, and those who may review it can preview the draft, whose buttons run nothing', async () => {
+test('a launched app says it is live, and those who may review it can preview the draft, whose buttons change nothing', async () => {
   window.history.replaceState(null, '', '/w/1/apps/2-1')
   const calls = fakeFetch({
     'GET /api/workspaces/1/spaces': { body: spaces },
     'GET /api/workspaces/1/spaces/2/apps/1': { body: app({ unpublished_changes: true, live: release({ number: 4 }) }) },
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=4': { body: surface },
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=draft': { body: surface },
+    'POST /api/workspaces/1/spaces/2/apps/1/actions/preview': { body: { effects: [] } },
+    'GET /api/workspaces/1/spaces/2/apps/1/effects?limit=50': { body: { effects: [], active: 0, failed: 0 } },
   })
   render(<Routed />)
   await screen.findByText('Live · release 4')
@@ -457,8 +459,11 @@ test('a launched app says it is live, and those who may review it can preview th
   expect(screen.getByText(/preview of changes that aren’t published yet/)).toBeTruthy()
   await screen.findByText('Coffee')
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-  expect((await screen.findByRole('alert')).textContent).toBe('This is a draft preview: publish the app to use it.')
-  expect(calls.some((c) => c.method === 'POST')).toBe(false)
+  // The button asks what it would set going, and nothing is saved.
+  await screen.findByText('Preview: nothing was saved')
+  expect(calls.filter((c) => c.method === 'POST').map((c) => c.path)).toEqual([
+    '/api/workspaces/1/spaces/2/apps/1/actions/preview',
+  ])
 
   fireEvent.click(screen.getByRole('button', { name: 'Back to the live release' }))
   await screen.findByText('Live · release 4')

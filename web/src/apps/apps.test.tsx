@@ -14,7 +14,7 @@ import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { ApiError } from '../api'
 import { fakeFetch } from '../test/fakes'
-import { type ActionPayload, AppView, httpTransport } from './AppView'
+import { type ActionPayload, AppView, httpTransport, PreviewResult } from './AppView'
 import { appsCatalog, catalogCapabilities, DEFINITION_VERSION } from './catalog'
 
 afterEach(() => {
@@ -268,6 +268,7 @@ test('the app is drawn from the release it names, and its actions name that rele
   const calls = fakeFetch({
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=3': { body: surface },
     'POST /api/workspaces/1/spaces/2/apps/1/actions': { body: afterAdd },
+    'POST /api/workspaces/1/spaces/2/apps/1/actions/preview': { body: { effects: [] } },
   })
   const base = '/api/workspaces/1/spaces/2/apps/1'
   const transport = httpTransport(base, 3)
@@ -281,12 +282,42 @@ test('the app is drawn from the release it names, and its actions name that rele
   })
   expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${base}/surface?release=3`, `POST ${base}/actions`])
   expect(calls[1].body).toMatchObject({ name: 'add_expense', release: 3 })
-  // A draft is drawn, never acted on.
+  // A draft is drawn, never acted on: its buttons ask the server what they would set going, which
+  // changes nothing.
   const preview = httpTransport(base, 'draft')
   await expect(
     preview.act({ name: 'x', surfaceId: 'app-1', sourceComponentId: 'x', timestamp: 't', context: {} }),
-  ).rejects.toThrow('draft preview')
-  expect(calls).toHaveLength(2)
+  ).rejects.toBeInstanceOf(PreviewResult)
+  expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+    `GET ${base}/surface?release=3`,
+    `POST ${base}/actions`,
+    `POST ${base}/actions/preview`,
+  ])
+})
+
+test('an action keeps its operation key until the server has answered it', async () => {
+  const base = '/api/workspaces/1/spaces/2/apps/1'
+  let fail = true
+  const calls = fakeFetch({
+    [`POST ${base}/actions`]: () => {
+      if (fail) throw new TypeError('network down')
+      return { body: afterAdd }
+    },
+  })
+  const transport = httpTransport(base, 3)
+  const press = (context: Record<string, unknown>) =>
+    transport.act({ name: 'add_expense', surfaceId: 'app-1', sourceComponentId: 'add', timestamp: 't', context })
+  const operation = (i: number) => (calls[i].body as { operation: string }).operation
+
+  // No answer: the person presses the same button again, and the server is told it is the same press.
+  await expect(press({ amount: '1' })).rejects.toThrow()
+  fail = false
+  await press({ amount: '1' })
+  expect(operation(0)).toMatch(/^[A-Za-z0-9_-]{8,64}$/)
+  expect(operation(1)).toBe(operation(0))
+  // Answered: the next press is a new one, and so is a different request.
+  await press({ amount: '1' })
+  expect(operation(2)).not.toBe(operation(0))
 })
 
 for (const [name, component] of [

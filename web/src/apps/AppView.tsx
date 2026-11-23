@@ -9,9 +9,10 @@
 import { A2uiSurface, type ReactCatalogComponent } from '@a2ui/react/v0_9'
 import { MessageProcessor, STRICT_VALIDATION, type SurfaceModel } from '@a2ui/web_core/v0_9'
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, api, type DefinitionNeeds, errorText } from '../api'
+import { ApiError, type AppEffect, api, type DefinitionNeeds, errorText } from '../api'
 import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
+import { EffectPreview } from './AppEffects'
 import { appsCatalog, unsupportedBy } from './catalog'
 import { keepLabelsLinked } from './labels'
 
@@ -22,23 +23,57 @@ export type AppTransport = {
   act(action: ActionPayload): Promise<unknown[]>
 }
 
+// What a draft's button does in a preview: nothing is saved, and the answer is the effects it would
+// set going, simulated, which the view shows.
+export class PreviewResult extends Error {
+  constructor(readonly effects: AppEffect[]) {
+    super('preview')
+  }
+}
+
+// A new idempotency key for a press of a button (the server's `operation`): 8 to 64 letters, digits,
+// - and _.
+function newOperation(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+}
+
 // The app's routes on the server: base is …/spaces/{space}/apps/{app}. release is the live
 // release's number, which the screen is drawn from and its actions name; 'draft' draws the draft, a
-// preview whose actions don't run.
+// preview whose actions run on nothing: the server says what they would set going.
+//
+// Every action carries an operation, its idempotency key. If the request fails without an answer
+// (the connection dropped, so the person can't know whether it was made), the same press made again
+// sends the same key: the server then changes nothing a second time and queues no second card.
 export function httpTransport(base: string, release?: number | 'draft'): AppTransport {
   if (release === 'draft') {
     return {
       load: () => api<unknown[]>(`${base}/surface?release=draft`),
-      act: () => Promise.reject(new Error(translate('apps.stage.draftNoActions'))),
+      act: async (action) => {
+        const preview = await api<{ effects: AppEffect[] }>(`${base}/actions/preview`, { method: 'POST', body: action })
+        throw new PreviewResult(preview.effects)
+      },
     }
   }
+  let unanswered: { sent: string; operation: string } | null = null
   return {
     load: () => api<unknown[]>(release === undefined ? `${base}/surface` : `${base}/surface?release=${release}`),
-    act: (action) =>
-      api<unknown[]>(`${base}/actions`, {
-        method: 'POST',
-        body: release === undefined ? action : { ...action, release },
-      }),
+    act: async (action) => {
+      const sent = JSON.stringify(action)
+      const operation = unanswered?.sent === sent ? unanswered.operation : newOperation()
+      unanswered = { sent, operation }
+      try {
+        const answer = await api<unknown[]>(`${base}/actions`, {
+          method: 'POST',
+          body: release === undefined ? { ...action, operation } : { ...action, release, operation },
+        })
+        unanswered = null
+        return answer
+      } catch (e) {
+        // An answer, even a refusal, is the end of it; no answer is not.
+        if (e instanceof ApiError) unanswered = null
+        throw e
+      }
+    },
   }
 }
 
@@ -51,6 +86,7 @@ export function AppView({
   transport,
   release,
   reloadKey = 0,
+  onAction,
 }: {
   surfaceId: string
   label: string
@@ -60,8 +96,14 @@ export function AppView({
   // Changed by the caller when the app's data changed behind the screen's back (a record was
   // restored): the screen is loaded again.
   reloadKey?: number
+  // Called after an action ran, which may have set effects going.
+  onAction?: () => void
 }) {
   const [error, setError] = useState<string | null>(null)
+  // What the last button of a draft's preview would have set going.
+  const [simulated, setSimulated] = useState<AppEffect[] | null>(null)
+  const onActionRef = useRef(onAction)
+  onActionRef.current = onAction
   const [surface, setSurface] = useState<SurfaceModel<ReactCatalogComponent> | null>(null)
   // Read through a ref so a caller passing a new transport object on each render doesn't
   // reload the app: only a different surface does.
@@ -102,7 +144,15 @@ export function AppView({
         try {
           apply(await transportRef.current.act(withRevision(action)))
           setError(null)
+          setSimulated(null)
+          onActionRef.current?.()
         } catch (e) {
+          if (e instanceof PreviewResult) {
+            setSimulated(e.effects)
+            setError(null)
+            return
+          }
+          setSimulated(null)
           if (e instanceof ApiError && e.code === RECORD_CONFLICT) {
             // Show the record as it is now, so the next try is made against its latest revision.
             try {
@@ -138,6 +188,7 @@ export function AppView({
         </p>
       )}
       {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
+      {simulated && <EffectPreview effects={simulated} />}
     </section>
   )
 }

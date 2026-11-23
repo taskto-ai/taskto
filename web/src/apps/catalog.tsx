@@ -97,11 +97,16 @@ export const appsCatalog = new Catalog(
 // is TaskTo.AI's and has nothing to do with the A2UI protocol's.
 export const DEFINITION_VERSION = 2
 
+// The kinds of effect an action may set going (internal/apps EffectKinds), which this client shows
+// the progress of (AppEffects).
+export const EFFECT_KINDS = ['create_card', 'update_card', 'create_document', 'open_route'] as const
+
 // What this client can draw, named as the server names the capabilities a release needs
-// (apps.Capabilities): component.<Name> and function.<name>.
+// (apps.Capabilities): component.<Name>, function.<name> and effect.<kind>.
 export const catalogCapabilities: ReadonlySet<string> = new Set([
   ...[...appsCatalog.components.keys()].map((name) => `component.${name}`),
   ...[...appsCatalog.functions.keys()].map((name) => `function.${name}`),
+  ...EFFECT_KINDS.map((kind) => `effect.${kind}`),
 ])
 
 // What a release needs that this client doesn't have: a definition format newer than it reads, or

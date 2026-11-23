@@ -2128,3 +2128,79 @@ html[data-keyboard="open"] .tt-composer {
     min-height: var(--tt-touch);
   }
 }
+
+/* Effects of an app's actions: what they set going, and the ones that failed. */
+
+.tt-effects,
+.tt-effects-panel,
+.tt-effects-preview {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.tt-effects > .tt-button {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tt-effects-panel,
+.tt-effects-preview {
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-effects-badge {
+  font-size: 0.8em;
+  color: var(--tt-muted);
+}
+
+.tt-effects-badge[data-failed="true"] {
+  color: var(--tt-danger, inherit);
+  font-weight: 600;
+}
+
+.tt-effect-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-effect {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  min-inline-size: 0;
+}
+
+.tt-effect[data-status="failed"] {
+  border-color: var(--tt-danger, var(--tt-line));
+}
+
+.tt-effect-head,
+.tt-effect-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tt-effect-detail {
+  overflow-wrap: anywhere;
+}
+
+.tt-effect-status {
+  font-size: 0.8em;
+  padding-inline: 0.45rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 999px;
+}
