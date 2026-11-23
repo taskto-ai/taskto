@@ -51,22 +51,50 @@ export async function createDetector(formats: string[] = []): Promise<Scanner> {
   return { detector: new BarcodeDetector(options) as Detector, native: false }
 }
 
+// How many frames in a row may fail before any frame was read at all: a decoder that can't start
+// (its module or its .wasm didn't load, a browser that can't run it) fails every frame the same way
+// and would keep the camera on for nothing.
+export const START_FAILURES = 3
+
+// The decoder can't work, as opposed to a frame it couldn't read: scanning stops, the camera is let
+// go and the person types the code (BarcodeInput.tsx).
+export class DecoderError extends Error {
+  constructor(readonly cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause))
+  }
+}
+
+// A rejection that says the decoder, not the frame, is the trouble: the browser's way to say a format
+// or the detector itself isn't supported, or that the page may not use it.
+function isFatal(e: unknown): boolean {
+  return e instanceof DOMException && (e.name === 'NotSupportedError' || e.name === 'SecurityError')
+}
+
 // Reads the camera until a code is found, checking about five times a second so a phone isn't kept
-// busy. Resolves with the code, or with null when stop() was called first.
+// busy. Resolves with the code, or with null when stop() was called first; rejects with a
+// DecoderError when the decoder can't work: it said it isn't supported, or it failed every frame it
+// was given from the start. A frame that couldn't be read once the decoder had read one is only a
+// miss: the next frame may be fine.
 export type ScanSession = { result: Promise<Detected | null>; stop: () => void }
 
 export function scan(video: HTMLVideoElement, detector: Detector, every = 200): ScanSession {
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let finish: (d: Detected | null) => void = () => {}
-  const result = new Promise<Detected | null>((resolve) => {
+  let fail: (e: unknown) => void = () => {}
+  const result = new Promise<Detected | null>((resolve, reject) => {
     finish = resolve
+    fail = reject
   })
+  let worked = false
+  let failures = 0
   const tick = async () => {
     if (stopped) return
     try {
       if (video.readyState >= 2) {
         const found = await detector.detect(video)
+        worked = true
+        failures = 0
         const first = found.find((d) => d.rawValue)
         if (first && !stopped) {
           stopped = true
@@ -74,8 +102,13 @@ export function scan(video: HTMLVideoElement, detector: Detector, every = 200): 
           return
         }
       }
-    } catch {
-      // A frame that couldn't be read: the next one may be.
+    } catch (e) {
+      failures++
+      if (!stopped && (isFatal(e) || (!worked && failures >= START_FAILURES))) {
+        stopped = true
+        fail(new DecoderError(e))
+        return
+      }
     }
     if (!stopped) timer = setTimeout(tick, every)
   }

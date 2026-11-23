@@ -28,6 +28,10 @@ const ORDERED: FieldType[] = ['number', 'date', 'time', 'string']
 // compare, and the server answers a filter or a sort on one with an error.
 export const queryable = (fields: AppField[]) => fields.filter((f) => f.type !== 'location' && f.type !== 'signature')
 
+// The fields a query can sort by: the ones it can compare. A photo is no more an order than a location
+// or a signature is, and the server answers a sort by one with an error (internal/apps/query.go).
+export const sortable = (fields: AppField[]) => queryable(fields).filter((f) => f.type !== 'attachment')
+
 // The operators the server takes for a field of this type.
 export function opsFor(type: FieldType): string[] {
   if (type === 'boolean' || type === 'choice') return ['eq', 'ne']

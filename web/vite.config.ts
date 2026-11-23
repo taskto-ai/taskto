@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { dirname, join, normalize, sep } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type Plugin } from 'vite'
+import { notices } from './pwa/notices.ts'
 import { pwa } from './pwa/plugin.ts'
 
 // noVNC (MPL-2.0) draws the agent browser's live view (docs/agent-browser.md). Its files are
@@ -61,7 +62,7 @@ function novnc(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), novnc(), pwa(join(import.meta.dirname, 'pwa/sw.template.js'))],
+  plugins: [react(), novnc(), notices(import.meta.dirname), pwa(join(import.meta.dirname, 'pwa/sw.template.js'))],
   // A test may wait several times, each up to src/test/setup.ts's 4 s: 10 s for the whole test
   // lets a wait that never ends fail with Testing Library's own message, not vitest's timeout.
   test: { setupFiles: ['src/test/setup.ts'], testTimeout: 10_000 },

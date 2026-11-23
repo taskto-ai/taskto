@@ -162,6 +162,20 @@ export function AppView({
   // then, submit.ts).
   const captures = useRef(new SubmitCaptures())
   const dictation = transport.files?.uploads ? workspaceOf(transport.files.base) : null
+  // A submission is being made (a location taken as the form is submitted, the request on its way):
+  // its buttons are off until it has an answer, and a press that gets through (a key) is that submission.
+  const [busy, setBusy] = useState(false)
+  useEffect(() => captures.current.subscribe(() => setBusy(captures.current.busy)), [])
+  useEffect(() => {
+    if (!busy || !section) return
+    const off = [...section.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')].filter(
+      (b) => !b.closest('.tt-capture'),
+    )
+    for (const b of off) b.disabled = true
+    return () => {
+      for (const b of off) b.disabled = false
+    }
+  }, [busy, section])
 
   // The renderer's inputs aren't linked to their labels: name them for assistive technology.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the section exists once the screen is drawn
@@ -189,32 +203,34 @@ export function AppView({
     }
     const processor = new MessageProcessor<ReactCatalogComponent>(
       [appsCatalog],
-      async (action) => {
-        try {
-          const prepared = await captures.current.apply(action.context)
-          if (prepared.block) {
-            setError(prepared.block)
-            return
-          }
-          const pressed = withRevision({ ...action, context: prepared.context ?? action.context })
-          apply(await transportRef.current.act(pressed))
-          setError(null)
-          // A preview says what the button would have set going; a live app's effects are listed by the page.
-          setSimulated(transportRef.current.simulate ? await transportRef.current.simulate(pressed) : null)
-          onActionRef.current?.()
-        } catch (e) {
-          setSimulated(null)
-          if (e instanceof ApiError && e.code === RECORD_CONFLICT) {
-            // Show the record as it is now, so the next try is made against its latest revision.
-            try {
-              apply(await transportRef.current.load())
-            } catch {
-              // The conflict is what the person is told; the screen stays as it was.
+      (action) =>
+        // One submission at a time: a second press while the first is capturing or sending is that one.
+        captures.current.once(action, async () => {
+          try {
+            const prepared = await captures.current.apply(action)
+            if (prepared.block) {
+              setError(prepared.block)
+              return
             }
+            const pressed = withRevision({ ...action, context: prepared.context ?? action.context })
+            apply(await transportRef.current.act(pressed))
+            setError(null)
+            // A preview says what the button would have set going; a live app's effects are listed by the page.
+            setSimulated(transportRef.current.simulate ? await transportRef.current.simulate(pressed) : null)
+            onActionRef.current?.()
+          } catch (e) {
+            setSimulated(null)
+            if (e instanceof ApiError && e.code === RECORD_CONFLICT) {
+              // Show the record as it is now, so the next try is made against its latest revision.
+              try {
+                apply(await transportRef.current.load())
+              } catch {
+                // The conflict is what the person is told; the screen stays as it was.
+              }
+            }
+            setError(errorText(e))
           }
-          setError(errorText(e))
-        }
-      },
+        }),
       // Without this the processor accepts components outside the catalog and silently draws
       // nothing; strict refuses them, and dangling references, with an error. The server
       // checked the app when it was saved too.
@@ -232,7 +248,7 @@ export function AppView({
   if (blocked) return <UpdateRequired label={label} unsupported={unsupported} />
 
   return (
-    <section className="tt-app" aria-label={label} ref={attach}>
+    <section className="tt-app" aria-label={label} aria-busy={busy || undefined} ref={attach}>
       {error && (
         <p role="alert" className="tt-error">
           {error}

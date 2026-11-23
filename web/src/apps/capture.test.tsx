@@ -7,9 +7,10 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
+import { ApiError } from '../api'
 import { forgetSharedDictationStatus } from '../conversations/Dictation'
 import { fakeFetch } from '../test/fakes'
 import { AppView } from './AppView'
@@ -20,6 +21,7 @@ import { FieldDictation } from './FieldDictation'
 import { LocationField } from './LocationInput'
 import type { AppFiles } from './PhotoInput'
 import { SignatureField } from './SignaturePad'
+import { DecoderError, START_FAILURES, scan } from './scanner'
 import { SubmitCaptures, SubmitCapturesContext } from './submit'
 import { insertText, workspaceOf } from './TextDictation'
 
@@ -190,14 +192,14 @@ test('a location taken at submit is read when the form is submitted, once', asyn
   expect(screen.getByText(/when you submit this form/)).toBeTruthy()
   expect(geo.getCurrentPosition).not.toHaveBeenCalled()
   // An action whose context doesn't pass the field doesn't read it.
-  expect((await captures.apply({ other: 1 })).context).toEqual({ other: 1 })
+  expect((await captures.apply({ name: 'add', context: { other: 1 } })).context).toEqual({ other: 1 })
   expect(geo.getCurrentPosition).not.toHaveBeenCalled()
-  const sent = await captures.apply({ place: undefined, title: 'x' })
+  const sent = await captures.apply({ name: 'add', context: { place: undefined, title: 'x' } })
   expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1)
   expect(sent.context).toMatchObject({ title: 'x', place: { lat: 41.15, lon: -8.61, source: 'device' } })
   // A second submit keeps the one the form has.
   await waitFor(() => expect(changed).toHaveBeenCalled())
-  await captures.apply({ place: {} })
+  await captures.apply({ name: 'add', context: { place: {} } })
   expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1)
   expect(geo.watchPosition).not.toHaveBeenCalled()
 })
@@ -210,7 +212,7 @@ test('a location refused at submit blocks a form that needs it and not one that 
       <Where info={{ capture: 'submit', required: true }} />
     </SubmitCapturesContext.Provider>,
   )
-  const blocked = await captures.apply({ place: undefined })
+  const blocked = await captures.apply({ name: 'add', context: { place: undefined } })
   expect(blocked.block).toMatch(/This form needs a location/)
   expect(blocked.context).toBeUndefined()
   // The reason is on the field too, and the typed way is open.
@@ -221,7 +223,7 @@ test('a location refused at submit blocks a form that needs it and not one that 
       <Where info={{ capture: 'submit', required: false }} />
     </SubmitCapturesContext.Provider>,
   )
-  const open = await captures.apply({ place: undefined })
+  const open = await captures.apply({ name: 'add', context: { place: undefined } })
   expect(open.block).toBeUndefined()
   expect(open.context).toEqual({ place: undefined })
 })
@@ -441,6 +443,36 @@ test('a signature can’t be saved in a preview, and a stored one is only shown'
   )
 })
 
+test('offline, a signature is staged on the device like a photo and nothing is uploaded', async () => {
+  const { blobs } = stubCanvas()
+  const calls = fakeFetch({})
+  const staged: Blob[] = []
+  const local = {
+    stage: vi.fn((file: Blob) => {
+      staged.push(file)
+      return 'c'.repeat(32)
+    }),
+    url: vi.fn(() => 'blob:signature'),
+    forget: vi.fn(),
+  }
+  const changed = vi.fn()
+  render(<Sign field={{ base, uploads: true, local }} onValue={changed} />)
+  expect(screen.getByText(/kept on this device with the record/)).toBeTruthy()
+  drawStroke(pad())
+  fireEvent.click(screen.getByRole('button', { name: 'Save signature' }))
+  await waitFor(() => expect(changed).toHaveBeenCalledWith('c'.repeat(32)))
+  expect(calls.length).toBe(0) // no connection is needed
+  expect(blobs.length).toBeGreaterThan(0)
+  expect(staged[0].type).toBe('image/png')
+  // It is shown from the device, with no link to a server that doesn't have it yet.
+  expect(screen.getByRole('img', { name: 'The saved signature' }).getAttribute('src')).toBe('blob:signature')
+  expect(screen.queryByRole('link')).toBeNull()
+  // Signing again lets the staged picture go.
+  fireEvent.click(screen.getByRole('button', { name: 'Sign again' }))
+  expect(local.forget).toHaveBeenCalledWith('c'.repeat(32))
+  expect(changed).toHaveBeenLastCalledWith(undefined)
+})
+
 // ---- barcode --------------------------------------------------------------------------------------
 
 function Code({ info, onValue }: { info?: { format?: string }; onValue?: (v: string) => void }) {
@@ -515,6 +547,55 @@ test('the browser’s own BarcodeDetector reads a code when it has one', async (
   // The camera is let go as soon as a code is read.
   expect(track.stop).toHaveBeenCalled()
   expect(screen.getByText(/Reads EAN-13 codes/)).toBeTruthy()
+})
+
+test('a decoder that can’t start turns the camera off and leaves the typed field', async () => {
+  const track = { stop: vi.fn() }
+  stubNavigator('mediaDevices', { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) })
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+  Object.defineProperty(HTMLMediaElement.prototype, 'readyState', { configurable: true, get: () => 4 })
+  // The detector is there but can't run: every frame says so.
+  const detect = vi.fn().mockRejectedValue(new DOMException('no decoder', 'NotSupportedError'))
+  vi.stubGlobal(
+    'BarcodeDetector',
+    class {
+      static getSupportedFormats = async () => ['qr_code']
+      detect = detect
+    },
+  )
+  const changed = vi.fn()
+  render(<Code onValue={changed} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Scan with the camera' }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/code reader isn’t working in this browser/)
+  // Not scanning any more: the camera was let go, the frames stopped coming, the button is back.
+  expect(track.stop).toHaveBeenCalled()
+  const frames = detect.mock.calls.length
+  await new Promise((r) => setTimeout(r, 450))
+  expect(detect.mock.calls.length).toBe(frames)
+  expect(screen.getByRole('button', { name: 'Scan with the camera' }).getAttribute('aria-pressed')).toBe('false')
+  fireEvent.change(screen.getByLabelText(/Code \(type it/), { target: { value: 'ABC-1' } })
+  expect(changed).toHaveBeenLastCalledWith('ABC-1')
+})
+
+test('a decoder that fails every frame from the start is no decoder, but one frame’s miss is a miss', async () => {
+  const video = { readyState: 4 } as HTMLVideoElement
+  // Failing from the start, with whatever error: after a few frames it is given up.
+  const broken = { detect: vi.fn().mockRejectedValue(new TypeError('Failed to fetch')) }
+  const session = scan(video, broken, 1)
+  await expect(session.result).rejects.toBeInstanceOf(DecoderError)
+  expect(broken.detect.mock.calls.length).toBe(START_FAILURES)
+  // One that worked and then missed a frame goes on, and finds the code.
+  const flaky = {
+    detect: vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('frame'))
+      .mockRejectedValueOnce(new Error('frame'))
+      .mockRejectedValueOnce(new Error('frame'))
+      .mockRejectedValueOnce(new Error('frame'))
+      .mockResolvedValue([{ rawValue: 'X-1' }]),
+  }
+  await expect(scan(video, flaky, 1).result).resolves.toMatchObject({ rawValue: 'X-1' })
 })
 
 vi.mock('./zxing', () => ({
@@ -686,6 +767,76 @@ test('on a screen the inputs draw, a typed code reaches the action and a submit-
   expect(sent.name).toBe('add')
   expect(sent.context.code).toBe('TAG-42')
   expect(sent.context.place).toMatchObject({ lat: 38.7223, lon: -9.1393, accuracy_m: 9, source: 'device' })
+})
+
+test('pressing Save twice while the location is being taken sends one record', async () => {
+  stubCanvas()
+  stubNavigator('onLine', true)
+  // A position that comes in when the test says: the second press is made while it is awaited.
+  let give: PositionCallback = () => {}
+  const geo = {
+    getCurrentPosition: vi.fn((ok: PositionCallback) => {
+      give = ok
+    }),
+    watchPosition: vi.fn(),
+    clearWatch: vi.fn(),
+  }
+  stubNavigator('geolocation', geo)
+  fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
+  const acted = vi.fn(async () => [])
+  render(
+    <AppView
+      surfaceId="app-9"
+      label="Inspection"
+      release={{ definition_version: DEFINITION_VERSION, requires: NEEDS }}
+      transport={{ load: async () => structuredClone(screenMessages), act: acted, files }}
+    />,
+  )
+  const save = await screen.findByRole('button', { name: 'Save' })
+  fireEvent.click(save)
+  await waitFor(() => expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1))
+  // While it is pending the button is off, and a press that still gets through is the same submission.
+  await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(true))
+  expect(screen.getByRole('region', { name: 'Inspection' }).getAttribute('aria-busy')).toBe('true')
+  fireEvent.click(save)
+  act(() =>
+    give({
+      coords: { latitude: 38.7, longitude: -9.1, accuracy: 9 },
+      timestamp: Date.now() - 500,
+    } as GeolocationPosition),
+  )
+  await waitFor(() => expect(acted).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
+  expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1)
+  expect(acted).toHaveBeenCalledTimes(1)
+})
+
+test('pressing Save again after an answer that didn’t arrive sends the same location, so the same operation', async () => {
+  stubCanvas()
+  stubNavigator('onLine', true)
+  const geo = stubGeolocation({ latitude: 38.7, longitude: -9.1, accuracy: 9 })
+  fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
+  // The first request's answer is lost (a gateway's, no code of the server's); the second is made.
+  const acted = vi
+    .fn()
+    .mockRejectedValueOnce(new ApiError(502, 'bad gateway', {}))
+    .mockResolvedValue([])
+  render(
+    <AppView
+      surfaceId="app-9"
+      label="Inspection"
+      release={{ definition_version: DEFINITION_VERSION, requires: NEEDS }}
+      transport={{ load: async () => structuredClone(screenMessages), act: acted, files }}
+    />,
+  )
+  fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(acted).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(acted).toHaveBeenCalledTimes(2))
+  const places = acted.mock.calls.map((c) => (c[0] as { context: { place: unknown } }).context.place)
+  expect(places[1]).toEqual(places[0]) // not a second reading, which would be another submission
+  expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1)
 })
 
 test('a form that needs its location and can’t get it isn’t sent', async () => {

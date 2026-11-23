@@ -9,9 +9,10 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import type { Plugin } from 'vite'
 
-// Files the worker leaves out: itself, source maps, and the vendored noVNC (the agent
-// browser's live view, which needs the network anyway, and is large).
-const SKIP = [/^sw\.js$/, /\.map$/, /^vendor\//]
+// Files the worker leaves out: itself, source maps, the vendored noVNC (the agent
+// browser's live view, which needs the network anyway, and is large) and the licence notices, which
+// are there to be read, not to run offline.
+const SKIP = [/^sw\.js$/, /\.map$/, /^vendor\//, /(^|\/)THIRD_PARTY_NOTICES\.txt$/]
 
 // The URLs to precache, from the build's files (relative, with "/"): the page under the one
 // name the worker serves it from, then everything else. Sorted, so the list is stable.

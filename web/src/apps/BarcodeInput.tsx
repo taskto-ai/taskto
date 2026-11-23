@@ -9,7 +9,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
 import type { CaptureInfo } from './capture'
-import { canUseCamera, createDetector, scan } from './scanner'
+import { canUseCamera, createDetector, DecoderError, scan } from './scanner'
 
 export function BarcodeField({
   label,
@@ -78,7 +78,13 @@ export function BarcodeField({
           setScanning(false)
         }
       } catch (e) {
-        fail(t('apps.barcode.decoderFailed', { error: errorText(e) }))
+        // A decoder that can't work (it isn't supported, or failed every frame from the start) turns the
+        // camera off (the cleanup of this effect) and leaves the typed field, which the message says.
+        fail(
+          e instanceof DecoderError
+            ? t('apps.barcode.decoderStopped')
+            : t('apps.barcode.decoderFailed', { error: errorText(e) }),
+        )
       }
     })()
     return () => {

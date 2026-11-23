@@ -2349,14 +2349,20 @@ a position (denied, no support, an insecure page, a timeout) the person is told 
 which are stored as `"manual"`. A form whose field is `required` and can't get a position isn't sent.
 
 **Signature** (`"type": "signature"`, `max_bytes` 1 MiB when left out). The value is **one attachment id**
-(a list of one is read as that id). The input draws on a canvas pad with pointer events (`touch-action: none` on the
+(a list of one is read as that id when a screen sends it; a record holds the id alone). The input draws on a canvas pad with pointer events (`touch-action: none` on the
 pad only, so the page scrolls around it; undo and clear; the strokes are kept as fractions of the pad's size, so
 turning the device redraws them) or takes a typed name confirmed with a checkbox, for the keyboard, a switch
 device or a screen reader. The picture, always a PNG, is uploaded through the
 [photo upload](#photo-attachments) (the same three steps and limits, `POST …/uploads` with the signature
 field's name) and attached to the record the same way. A signature upload is checked to be a PNG by its bytes
-(`400 app_signature_type`, the upload removed), and a record can only claim a PNG as a signature. It is read
-like any attachment, by whoever reads the record; `Photos` draws it.
+(`400 app_signature_type`, the upload removed), and a record can only claim a PNG that was uploaded **for a
+signature field** (each attachment says which kind of field it was uploaded for, so a photo is never a signature,
+even a PNG one that was still waiting when a photo field was made a signature field), **within the field's
+`max_bytes` as it is when the record is saved**, not as it was when the upload started (`422 app_attachment_bad`;
+the same for a photo field's `max_bytes`). A list of photos that a field held before it became a signature field
+is no signature: it is hidden like any value of another type, and never locked. It is read like any attachment, by
+whoever reads the record; `Photos` draws it. Offline, the web app keeps the signature's picture on the device with
+the record, like a photo, and sends it when it is back online ([offline.md](offline.md)).
 
 **Barcode** (`"type": "barcode"`). The value is text, within `max_length` (1000 when left out), with no control
 characters; blank is no value. `format` (one of `aztec`, `codabar`, `code_39`, `code_93`, `code_128`,
@@ -2364,18 +2370,25 @@ characters; blank is no value. `format` (one of `aztec`, `codabar`, `code_39`, `
 camera reads, and for `ean_8`, `ean_13` and `upc_a` the server checks digits, length and the check digit
 (`upc_e`, digits only), however the code came in. A rule can compare a barcode with `eq` and `ne`; a filter takes
 `eq`, `ne` and `contains`. The web app scans with the browser's own `BarcodeDetector` when it has one, and where it
-hasn't (it isn't in every browser), with a bundled decoder (zxing-wasm through the `barcode-detector` package, MIT),
+hasn't (it isn't in every browser), with a bundled decoder (zxing-wasm through the `barcode-detector` package, both MIT, which wraps ZXing-C++, Apache-2.0; their notices are served with the app, [docs/pwa.md](pwa.md#device-capabilities-in-apps)),
 a separate file that loads the first time it is needed and is served with the app, never from an outside
 address. **The code can always be typed**; a blocked, missing or insecure camera, or a decoder that couldn't
-load, leaves the typed field as it was.
+load or that can't run (the browser says it isn't supported, or it fails every frame from the start), turns the
+camera off, says so, and leaves the typed field as it was.
 
 **Captured values are evidence.** Once a record holds a location or a signature, **no later change can alter or
 clear it**: an insert or update (a screen's, an older release's, the records explorer's, which sends the app's
 own update action) that would is refused whole with `422 app_field_locked`, and changes nothing, not even a new
-revision. Giving it again unchanged is fine, a record that has none takes one once (that is the capture), and
+revision. That is told before anything else about the change: clearing a captured location the field requires is
+`app_field_locked`, not `app_field_required`. Giving it again unchanged is fine, a record that has none takes one once (that is the capture), and
 a field that says `"editable": true` is not locked. The records explorer shows such values read-only. A location
 or a signature can't be filtered or sorted by (`400 app_query_field` / `app_query_condition`); a barcode is a
-text for both.
+text for both. The records explorer offers to sort by neither of those, nor by a photo field (the
+server refuses a sort by a photo field, too).
+
+A barcode's text is taken as it was read: a line break, a tab or any other control character in it, even around
+it, is `422 app_field_not_barcode` (only spaces are trimmed). A `captured_at` must have a real zone: `Z` or an
+offset of at most `23:59` (`+24:60` is no time).
 
 The agent sees these values in `list_app_rows` (a signature as the picture's metadata, never its bytes) and has no
 tool to capture one.
@@ -2414,7 +2427,7 @@ are affected by are **schema changes that must be acknowledged**, by naming each
 | `change` | When |
 |---|---|
 | `field_removed` | a field is gone, and some row has a value for it (the value stays in the row, unseen) |
-| `field_type_changed` | a field's type changed, and some row has a value for it |
+| `field_type_changed` | a field's type changed, and some row has a value for it; **a field that becomes a location or a signature field** is always one, whatever the rows hold, since what it takes from then on is locked once stored |
 | `field_required` | a field became required (or was added as required), and some row has no value for it |
 | `field_narrowed` | a field's `max_length`, `min` or `max`, or a choice's `options`, now refuses a value some row has |
 | `field_required_when` | a field gained a `required_when` rule, or its rule changed, and some row lacks the field where the new rule requires it |

@@ -290,7 +290,10 @@
       "date": "date",
       "time": "time",
       "choice": "choice",
-      "attachment": "photos"
+      "attachment": "photos",
+      "location": "location",
+      "signature": "signature",
+      "barcode": "code"
     },
     "needs": {
       "design": "You can’t change this app: that needs the builder role in it.",
@@ -410,6 +413,7 @@
       "none": "No signature.",
       "signed": "Signed",
       "note": "The pad only takes touches that start on it: the rest of the page scrolls as usual. A saved signature can’t be changed afterwards.",
+      "noteOffline": "Without a connection the signature is kept on this device with the record, and sent when you’re back online. A saved signature can’t be changed afterwards.",
       "previewOnly": "A signature can’t be saved in a preview.",
       "notHere": "A signature can’t be saved here."
     },
@@ -427,6 +431,7 @@
       "noDevice": "No camera was found. Type the code instead.",
       "cameraFailed": "The camera didn’t start: {error} Type the code instead.",
       "decoderFailed": "The code reader couldn’t be loaded: {error} Type the code instead.",
+      "decoderStopped": "The code reader isn’t working in this browser, so the camera was turned off. Type the code instead.",
       "format": "Reads {format} codes.",
       "formats": {
         "aztec": "Aztec",

@@ -19,6 +19,7 @@ import {
   queryable,
   queryString,
   type Sort,
+  sortable,
   type Tab,
   UPDATED,
 } from './explorer'
@@ -183,7 +184,7 @@ export function AppExplorer({
               <option value={tab === 'deleted' ? '_deleted' : UPDATED}>
                 {t(tab === 'deleted' ? 'apps.explorer.deletedAt' : 'apps.explorer.changedAt')}
               </option>
-              {queryable(fields).map((field) => (
+              {sortable(fields).map((field) => (
                 <option key={field.name} value={field.name}>
                   {field.name}
                 </option>
@@ -478,9 +479,16 @@ function RecordTable({
         <thead>
           <tr>
             <th scope="col">{t('apps.explorer.id')}</th>
-            {fields.map((field) => (
-              <Head key={field.name} by={field.name} text={field.name} sort={sort} onSort={onSort} />
-            ))}
+            {fields.map((field) =>
+              sortable([field]).length > 0 ? (
+                <Head key={field.name} by={field.name} text={field.name} sort={sort} onSort={onSort} />
+              ) : (
+                // What can't be put in order is a heading only: the server refuses to sort by it.
+                <th key={field.name} scope="col">
+                  {field.name}
+                </th>
+              ),
+            )}
             <Head
               by={timeKey}
               text={t(deleted ? 'apps.explorer.deletedAt' : 'apps.explorer.changedAt')}

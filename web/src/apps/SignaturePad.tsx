@@ -27,7 +27,7 @@ type Stroke = Point[]
 // The picture's size in pixels: three times as wide as high, as the pad is.
 export const SIGNATURE_WIDTH = 600
 export const SIGNATURE_HEIGHT = 200
-const INK = '#111'
+const INK = 'rgb(17 17 17)'
 const PAPER = '#fff'
 
 // Draws strokes into a context of a canvas of w by h pixels, ink on paper.
@@ -216,15 +216,21 @@ export function SignatureField({
     redraw()
   }
 
-  // Uploads the picture like a photo; its id goes to the form.
+  // Uploads the picture like a photo; its id goes to the form. Offline there is no server to upload to:
+  // the picture is staged on the device, as a photo is, and the queue uploads it with the record.
   const save = async (picture: HTMLCanvasElement) => {
     if (!files) return
     setSaving(true)
     setProblem(null)
     try {
-      const done = await uploadPhoto(files.base, field, await canvasToPng(picture))
-      mine.current.add(done.id)
-      onChange(done.id)
+      const png = await canvasToPng(picture)
+      if (files.local) {
+        onChange(files.local.stage(png))
+      } else {
+        const done = await uploadPhoto(files.base, field, png)
+        mine.current.add(done.id)
+        onChange(done.id)
+      }
       strokes.current = []
       setCount(0)
       setName('')
@@ -238,7 +244,8 @@ export function SignatureField({
   }
 
   const signAgain = () => {
-    if (value && files && mine.current.delete(value)) void discardPhoto(files.base, value)
+    if (value && files?.local) files.local.forget(value)
+    else if (value && files && mine.current.delete(value)) void discardPhoto(files.base, value)
     onChange(undefined)
   }
 
@@ -246,9 +253,14 @@ export function SignatureField({
     return (
       <fieldset className="tt-capture tt-signature">
         <legend className="tt-capture-label">{heading}</legend>
-        <a href={photoUrl(files.base, value)} target="_blank" rel="noopener noreferrer">
-          <img className="tt-signature-image" src={thumbnailUrl(files.base, value)} alt={t('apps.signature.alt')} />
-        </a>
+        {files.local ? (
+          // Still on this device: nothing of it is on the server to link to.
+          <img className="tt-signature-image" src={files.local.url(value)} alt={t('apps.signature.alt')} />
+        ) : (
+          <a href={photoUrl(files.base, value)} target="_blank" rel="noopener noreferrer">
+            <img className="tt-signature-image" src={thumbnailUrl(files.base, value)} alt={t('apps.signature.alt')} />
+          </a>
+        )}
         {!readOnly && (
           <div className="tt-capture-actions">
             <button type="button" className="tt-button" onClick={signAgain}>
@@ -347,7 +359,9 @@ export function SignatureField({
         </p>
       )}
       <p id={`${ids}-note`} className="tt-muted tt-small">
-        {!uploads ? t(files ? 'apps.signature.previewOnly' : 'apps.signature.notHere') : t('apps.signature.note')}
+        {!uploads
+          ? t(files ? 'apps.signature.previewOnly' : 'apps.signature.notHere')
+          : t(files?.local ? 'apps.signature.noteOffline' : 'apps.signature.note')}
       </p>
     </fieldset>
   )

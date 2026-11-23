@@ -294,7 +294,10 @@
       "date": "data",
       "time": "hora",
       "choice": "escolha",
-      "attachment": "fotos"
+      "attachment": "fotos",
+      "location": "localização",
+      "signature": "assinatura",
+      "barcode": "código"
     },
     "needs": {
       "design": "Você não pode alterar este app: isso exige o papel de criador nele.",
@@ -414,6 +417,7 @@
       "none": "Sem assinatura.",
       "signed": "Assinado",
       "note": "O quadro só recebe toques que começam nele: o resto da página rola normalmente. Uma assinatura salva não pode ser alterada depois.",
+      "noteOffline": "Sem conexão, a assinatura fica neste dispositivo junto com o registro e é enviada quando você voltar a ficar online. Uma assinatura salva não pode ser alterada depois.",
       "previewOnly": "Não é possível salvar uma assinatura em uma prévia.",
       "notHere": "Não é possível salvar uma assinatura aqui."
     },
@@ -431,6 +435,7 @@
       "noDevice": "Nenhuma câmera foi encontrada. Digite o código.",
       "cameraFailed": "A câmera não iniciou: {error} Digite o código.",
       "decoderFailed": "Não foi possível carregar o leitor de códigos: {error} Digite o código.",
+      "decoderStopped": "O leitor de códigos não está funcionando neste navegador, então a câmera foi desligada. Digite o código.",
       "format": "Lê códigos {format}.",
       "formats": {
         "aztec": "Aztec",
