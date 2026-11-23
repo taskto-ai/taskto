@@ -936,13 +936,22 @@ else
   (umask 077; [ -s "$TASKTO_BACKUP_DIR/password" ] || openssl rand -base64 32 > "$TASKTO_BACKUP_DIR/password")
   files="repository password" cert=off ok=yes
   [ ! -e "$TASKTO_BACKUP_DIR/client.pem" ] || { files="$files client.pem"; cert=on; }
-  # Compose passes restic a client certificate as step 1 recorded it: one added or removed
-  # since then needs steps 1, 6 and 9 first. Nothing is copied or removed until they agree.
-  recorded=$(echo '. /etc/taskto/install.env; echo "${TASKTO_BACKUP_CLIENT_CERT:-off}"' | vm) || recorded=unknown
-  if [ "$recorded" = unknown ]; then
-    echo "FAIL: can't read /etc/taskto/install.env on the VM"; ok=no
-  elif [ "$recorded" != "$cert" ]; then
-    echo "FAIL: client.pem was added or removed since step 1: run steps 1, 6 and 9 again, then this step"; ok=no
+  # Whether restic is given a client certificate, in Compose's settings (step 6) and in the
+  # running schedule (step 9). One added or removed since needs steps 1, 6 and 9 first:
+  # nothing is copied or removed until both agree with this directory.
+  inuse=$(vm <<'EOF'
+cd /srv/taskto
+cfg=$(docker compose config --format json | jq -r '.services["backup-schedule"].environment.RESTIC_TLS_CLIENT_CERT // empty')
+s=$(docker compose ps -q backup-schedule)
+[ -n "$s" ] || exit 1
+run=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$s" | sed -n 's/^RESTIC_TLS_CLIENT_CERT=//p')
+echo "$([ -n "$cfg" ] && echo on || echo off)/$([ -n "$run" ] && echo on || echo off)"
+EOF
+  ) || inuse=unknown
+  if [ "$inuse" = unknown ]; then
+    echo "FAIL: can't read the backups' settings on the VM: is backup-schedule running (step 9)?"; ok=no
+  elif [ "$inuse" != "$cert/$cert" ]; then
+    echo "FAIL: client.pem was added or removed since steps 1, 6 and 9 ran: run them again, then this step"; ok=no
   fi
   for f in $files; do
     [ "$ok" = yes ] || break
@@ -967,8 +976,8 @@ If the first backup fails, `docker compose logs backup-schedule` and the error i
 say why: most often the backup host's firewall, its TLS certificate, a missing or wrong
 client certificate (`client.pem`, for a backup host that asks for one), or a wrong user or
 password in `repository`. A `client.pem` added or removed after step 1 reaches restic only once steps
-1, 6 and 9 have run again: this step first compares it with what step 1 recorded, and
-stops, changing nothing, until they agree. Once they do, a removed one is removed from the
+1, 6 and 9 have run again: this step first compares it with Compose's settings and the
+running schedule, and stops, changing nothing, until they agree. Once they do, a removed one is removed from the
 VM too.
 
 If the backup host's prune job opens the repository with a key of its own
