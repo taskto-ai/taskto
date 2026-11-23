@@ -351,7 +351,8 @@ test('leaving and reopening keeps the message, the app being built and the pane'
   // Sending it forgets it.
   fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' })
   await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(''))
-  expect(window.localStorage.getItem(MESSAGE)).toBeNull()
+  // The draft is forgotten by an effect after the field is emptied: under load it can be a beat later.
+  await waitFor(() => expect(window.localStorage.getItem(MESSAGE)).toBeNull())
 })
 
 test('a private app is published in one step, and the panel says who can use it and what it can do', async () => {

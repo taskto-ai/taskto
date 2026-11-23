@@ -141,6 +141,16 @@ function SpaceSettings({
           />
         )}
       </div>
+      <label>
+        <input
+          type="checkbox"
+          checked={space.offline_downloads !== false}
+          disabled={action.busy}
+          onChange={(e) => patch({ offline_downloads: e.target.checked })}
+        />
+        {t('settings.spaces.offlineDownloads')}
+      </label>
+      <p className="tt-muted tt-small">{t('settings.spaces.offlineHelp')}</p>
       <Alert error={action.error} />
       <SpaceMembers workspace={workspace} url={`${url}/members`} onChange={onChange} />
     </section>

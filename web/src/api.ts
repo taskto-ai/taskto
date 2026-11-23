@@ -96,6 +96,9 @@ export type Space = {
   archived_at: string | null
   role?: 'owner' | 'editor' | 'viewer'
   access: 'write' | 'read' | 'none'
+  // Whether the space's apps may be downloaded for offline use (docs/offline.md); an admin turns
+  // it off for a shared space. Older servers don't send it.
+  offline_downloads?: boolean
 }
 
 // `versioned` is false for large files and audio and video: only their current bytes are kept,
@@ -221,6 +224,31 @@ export type App = {
   unpublished_changes: boolean
   // The definition being edited, in a single app's reply, for those who may design or publish.
   draft?: AppDraft
+}
+
+// What GET …/apps/{app}/offline answers (docs/api.md): the live release as a client needs it to
+// use the app without the server, and the records the caller may read.
+export type OfflineApp = {
+  app_id: number
+  space_id: number
+  name: string
+  release: number
+  definition: {
+    definition_version: number
+    requires: string[]
+    collection: { fields: AppField[] }
+    entry?: string
+    screens?: { name: string; record?: boolean }[]
+    actions: Record<string, { kind: AppActionKind; screen?: string; then?: string }>
+    summaries?: Record<string, { kind: 'count' | 'sum'; field?: string; where?: unknown }>
+  }
+  messages: unknown[]
+  scope: 'all' | 'own'
+  records: number
+  total: number
+  truncated: boolean
+  can_insert: boolean
+  captured_at: string
 }
 
 // A widget an app offers for Home (docs/api.md, Home): a bounded view, never markup of its own.

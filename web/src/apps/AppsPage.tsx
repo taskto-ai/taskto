@@ -13,6 +13,7 @@ import { ApiError, type App, api, errorText, type SchemaChange, type Space, ws }
 import type { EventSourceFactory } from '../conversations/useConversationStream'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
+import { OfflinePanel } from '../offline/OfflinePanel'
 import { Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
 import { AppBuilder, lastBuilderConversation } from './AppBuilder'
@@ -53,6 +54,7 @@ export function AppsPage({
         app={launched.app}
         writable={space?.access === 'write'}
         screen={launched.screen}
+        spaceInfo={space}
       />
     )
   }
@@ -425,12 +427,14 @@ function LaunchedApp({
   app,
   writable,
   screen,
+  spaceInfo,
 }: {
   workspace: number
   space: number
   app: number
   writable: boolean
   screen?: string
+  spaceInfo?: Space
 }) {
   const base = `${appsBase(workspace, space)}/${app}`
   const info = useLoad(() => api<App>(base), [base])
@@ -507,6 +511,7 @@ function LaunchedApp({
             release={info.data.live?.number}
             onRestored={() => setRestored((n) => n + 1)}
           />
+          <OfflinePanel workspace={workspace} space={space} app={info.data} spaceInfo={spaceInfo} />
         </>
       )}
     </div>

@@ -4,13 +4,18 @@
 // without, and then the workspace it joined. A password reset link (/reset-password#<token>)
 // sets the password, and signs in.
 
-import { useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { ApiError, api, errorText, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
 import { setPreferences, useT } from './i18n'
+import { LogoutGuard } from './offline/LogoutGuard'
+import { activate, deactivate, lastUser, runtimeState } from './offline/runtime'
 import { navigate } from './router'
 import { Shell } from './shell/Shell'
 import { claimDrafts, forgetDrafts } from './uiState'
+
+// The renderer comes with it: loaded only where it is used, and precached, so it opens offline too.
+const OfflineShell = lazy(() => import('./offline/OfflineShell').then((m) => ({ default: m.OfflineShell })))
 
 type Session =
   | { state: 'loading' }
@@ -19,6 +24,8 @@ type Session =
   | { state: 'in'; me: Me }
   | { state: 'invite'; me: Me | null }
   | { state: 'reset' }
+  // The server can't be reached and someone signed in here before: the apps they downloaded.
+  | { state: 'offline'; name: string }
   | { state: 'error'; error: string }
 
 const INVITE_PATH = '/invite'
@@ -31,8 +38,13 @@ export function App() {
   // anything is drawn, so another account never finds the last one's.
   const signIn = useCallback((me: Me) => {
     claimDrafts(me.user.id)
+    // What is kept for offline use is the same: this account's, and no other's. Sending what it
+    // queued starts (or goes on, after the session ended and this person signed in again).
+    void activate(me.user.id, me.user.name)
     setSession({ state: 'in', me })
   }, [])
+  // Records made on this device that haven't reached the server: asked about before signing out.
+  const [leaving, setLeaving] = useState<{ count: number } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -50,8 +62,16 @@ export function App() {
       await setPreferences({ user: me.user.locale ?? null })
       signIn(me)
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) setSession({ state: 'login' })
-      else setSession({ state: 'error', error: errorText(e) })
+      if (e instanceof ApiError && e.status === 401) return setSession({ state: 'login' })
+      // No answer at all (not a server's error): offline. If someone signed in here, the apps they
+      // downloaded can still be used.
+      const before = !(e instanceof ApiError) ? lastUser() : null
+      if (before) {
+        void activate(before.id)
+        setSession({ state: 'offline', name: before.name })
+      } else {
+        setSession({ state: 'error', error: errorText(e) })
+      }
     }
   }, [signIn])
 
@@ -74,11 +94,21 @@ export function App() {
     },
     [signIn],
   )
-  const logOut = useCallback(async () => {
+  // Signing out takes with it what this device kept of the account (drafts, downloads, the queue),
+  // and a person with records not yet sent is asked first.
+  const signOut = useCallback(async () => {
     await api('/api/logout', { method: 'POST' }).catch(() => {})
     forgetDrafts()
+    await deactivate({ purge: true })
+    setLeaving(null)
     setSession({ state: 'login' })
   }, [])
+  const logOut = useCallback(async () => {
+    const runtime = runtimeState().runtime
+    const unsent = runtime ? await runtime.store.unsynced().catch(() => []) : []
+    if (unsent.length > 0) setLeaving({ count: unsent.length })
+    else await signOut()
+  }, [signOut])
   // Joined: on to the workspace the invite was for, the one that is new, and the token
   // leaves the address bar and the history entry.
   const joined = useCallback(
@@ -103,6 +133,7 @@ export function App() {
   const leaveInvite = useCallback(async () => {
     await api('/api/logout', { method: 'POST' }).catch(() => {})
     forgetDrafts()
+    await deactivate({ purge: true })
     setSession({ state: 'invite', me: null })
   }, [])
 
@@ -130,7 +161,25 @@ export function App() {
           </button>
         </div>
       )
+    case 'offline':
+      return (
+        <Suspense fallback={<p className="tt-center tt-muted">{t('app.loading')}</p>}>
+          <OfflineShell user={session.name} onReconnect={load} />
+        </Suspense>
+      )
     case 'in':
-      return <Shell me={session.me} onLogout={logOut} />
+      return (
+        <>
+          <Shell me={session.me} onLogout={logOut} />
+          {leaving && runtimeState().runtime && (
+            <LogoutGuard
+              runtime={runtimeState().runtime as NonNullable<ReturnType<typeof runtimeState>['runtime']>}
+              count={leaving.count}
+              onSignOut={() => void signOut()}
+              onCancel={() => setLeaving(null)}
+            />
+          )}
+        </>
+      )
   }
 }

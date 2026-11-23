@@ -96,7 +96,9 @@ const PhotosApi = {
 
 const Photos = createComponentImplementation(PhotosApi, ({ props }) => {
   const files = useAppFiles()
-  return files ? <PhotoStrip base={files.base} ids={photoIds(props.value)} label={props.label} /> : null
+  return files ? (
+    <PhotoStrip base={files.base} ids={photoIds(props.value)} label={props.label} local={files.local} />
+  ) : null
 })
 
 // The host of an app's screens, which the server adds as the root: it draws the screen the data
