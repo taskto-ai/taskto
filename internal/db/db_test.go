@@ -660,11 +660,29 @@ func TestRecordRevisionsMigrationKeepsExistingRows(t *testing.T) {
 	for _, bad := range []string{
 		`UPDATE app_rows SET revision = 0 WHERE id = 7`,
 		`UPDATE app_row_history SET data = '{}' WHERE row_id = 7`,
+		`UPDATE app_row_history SET actor = 2 WHERE row_id = 7`,
+		`UPDATE app_row_history SET actor = NULL, data = '{}' WHERE row_id = 7`,
 		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data) VALUES (5, 7, 1, 'update', '{}')`,
 		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data) VALUES (5, 7, 2, 'purge', '{}')`,
 	} {
 		if _, err := sqlDB.ExecContext(ctx, bad); err == nil {
 			t.Fatalf("%s was accepted", bad)
 		}
+	}
+	// An account that goes leaves its history, unattributed (actor ON DELETE SET NULL).
+	for _, q := range []string{
+		`INSERT INTO users (id, email, name, password_hash) VALUES (3, 'c@example.com', 'C', 'x')`,
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor) VALUES (5, 7, 2, 'update', '{}', 3)`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM users WHERE id = 3`); err != nil {
+		t.Fatalf("deleting a user named in history: %v", err)
+	}
+	var actor sql.NullInt64
+	if err := sqlDB.QueryRowContext(ctx, `SELECT actor FROM app_row_history WHERE row_id = 7 AND revision = 2`).Scan(&actor); err != nil || actor.Valid {
+		t.Fatalf("history's actor after the user went = %v, %v", actor, err)
 	}
 }

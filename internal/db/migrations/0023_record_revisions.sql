@@ -67,8 +67,17 @@ BEGIN
     SELECT RAISE(ABORT, 'a row''s revision cannot go back');
 END;
 
+-- The one change allowed is the actor's account going (actor ON DELETE SET NULL).
 CREATE TRIGGER app_row_history_immutable
-BEFORE UPDATE ON app_row_history
+BEFORE UPDATE OF id, app_id, row_id, revision, operation, data, at, actor_agent, actor_via, action, synthetic
+ON app_row_history
+BEGIN
+    SELECT RAISE(ABORT, 'a row''s history is never rewritten');
+END;
+
+CREATE TRIGGER app_row_history_actor_only_cleared
+BEFORE UPDATE OF actor ON app_row_history
+WHEN NEW.actor IS NOT NULL
 BEGIN
     SELECT RAISE(ABORT, 'a row''s history is never rewritten');
 END;
