@@ -20,6 +20,7 @@ import (
 	"io"
 	"math/big"
 	"net/url"
+	"strings"
 	"time"
 
 	"taskto.ai/taskto/internal/serverkey"
@@ -185,7 +186,7 @@ const tokenLifetime = 12 * time.Hour
 func (k *vapidKey) authorization(endpoint *url.URL, subject string, now time.Time) (string, error) {
 	header, _ := json.Marshal(map[string]string{"typ": "JWT", "alg": "ES256"})
 	claims, err := json.Marshal(map[string]any{
-		"aud": endpoint.Scheme + "://" + endpoint.Host,
+		"aud": origin(endpoint),
 		"exp": now.Add(tokenLifetime).Unix(),
 		"sub": subject,
 	})
@@ -207,4 +208,19 @@ func (k *vapidKey) authorization(endpoint *url.URL, subject string, now time.Tim
 	sig.R.FillBytes(raw[:32])
 	sig.S.FillBytes(raw[32:])
 	return "vapid t=" + signing + "." + b64.EncodeToString(raw) + ", k=" + k.publicKey(), nil
+}
+
+// origin is an address's origin as RFC 8292 wants the token's audience: the serialized origin
+// (RFC 6454), with the scheme and host in lower case and the port left out when it is the scheme's
+// default. A push service compares it with its own, and refuses a token whose audience differs.
+func origin(u *url.URL) string {
+	scheme, host := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	port := u.Port()
+	if port == "" || (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		return scheme + "://" + host
+	}
+	return scheme + "://" + host + ":" + port
 }

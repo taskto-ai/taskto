@@ -28,11 +28,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"net/http"
 
 	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/config"
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/serverkey"
 )
@@ -124,6 +126,10 @@ type Options struct {
 	// HTTPClient sends the pushes. nil is the egress client for public addresses only, which is
 	// what it must be in a server: an endpoint is an address a person gave.
 	HTTPClient *http.Client
+	// Egress is where endpoints may be: the policy of registration and of every push. nil is the
+	// policy for public addresses only, which is what it must be in a server (an endpoint is an
+	// address a person gave); a test that gives its own HTTPClient gives its own policy too.
+	Egress *egress.Policy
 	// Contact says to the push services who runs the server (the VAPID subject): a mailto: or
 	// https: URL. Empty is the project's address.
 	Contact string
@@ -142,7 +148,10 @@ type Service struct {
 	vapid   *vapidKey
 	client  *http.Client
 	contact string
+	egress  egress.Policy
 	clock   func() time.Time
+	// tidyEvery is how often the worker tidies; a field for tests.
+	tidyEvery time.Duration
 }
 
 // New returns the service over a migrated database, making the server's VAPID key pair if it has
@@ -151,13 +160,19 @@ func New(ctx context.Context, sqlDB *sql.DB, spaces *access.Checker, opts Option
 	if opts.Key == nil {
 		return nil, errors.New("notifications: a server key is required")
 	}
+	if err := config.ValidatePushContact(opts.Contact); err != nil {
+		return nil, fmt.Errorf("notifications: the push contact: %w", err)
+	}
 	vapid, err := loadVAPID(ctx, sqlDB, opts.Key)
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{db: sqlDB, access: spaces, key: opts.Key, vapid: vapid, client: opts.HTTPClient, contact: opts.Contact, clock: opts.Now}
+	s := &Service{db: sqlDB, access: spaces, key: opts.Key, vapid: vapid, client: opts.HTTPClient, contact: opts.Contact, clock: opts.Now, tidyEvery: tidyEvery, egress: egress.MustParse("public")}
+	if opts.Egress != nil {
+		s.egress = *opts.Egress
+	}
 	if s.client == nil {
-		s.client = egress.MustParse("public").Client(sendTimeout)
+		s.client = s.egress.Client(sendTimeout)
 	}
 	if s.contact == "" {
 		s.contact = DefaultContact

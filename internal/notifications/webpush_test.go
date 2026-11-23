@@ -256,3 +256,39 @@ func TestVAPIDAuthorizationIsAValidES256Token(t *testing.T) {
 
 // Purge is the retention the worker runs every hour, for the external tests.
 func (s *Service) Purge(ctx context.Context) error { return s.purge(ctx) }
+
+// Tidy is what the worker does on its own schedule, once, for the external tests.
+func (s *Service) Tidy(ctx context.Context) { s.tidy(ctx) }
+
+// TidyEvery sets how often the worker tidies, for the external tests.
+func (s *Service) TidyEvery(d time.Duration) { s.tidyEvery = d }
+
+func TestVAPIDAudienceIsTheSerializedOrigin(t *testing.T) {
+	_, k := openTestDB(t)
+	for raw, want := range map[string]string{
+		"https://push.example.net/send/abc":        "https://push.example.net",
+		"HTTPS://Push.Example.NET/send/abc":        "https://push.example.net",
+		"https://push.example.net:443/send/abc":    "https://push.example.net",
+		"https://PUSH.example.net:8443/send/abc":   "https://push.example.net:8443",
+		"https://push.example.net./x":              "https://push.example.net.",
+		"https://[2001:DB8::1]:443/x":              "https://[2001:db8::1]",
+		"https://[2001:db8::1]:8443/x?a=b#ignored": "https://[2001:db8::1]:8443",
+	} {
+		endpoint, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		header, err := k.authorization(endpoint, "https://example.org", time.Unix(1_700_000_000, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, _, _ := strings.Cut(strings.TrimPrefix(header, "vapid t="), ", k=")
+		var claims struct{ Aud string }
+		if err := json.Unmarshal(mustB64(t, strings.Split(token, ".")[1]), &claims); err != nil {
+			t.Fatal(err)
+		}
+		if claims.Aud != want {
+			t.Errorf("aud for %s = %q, want %q", raw, claims.Aud, want)
+		}
+	}
+}

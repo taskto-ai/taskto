@@ -23,6 +23,7 @@ import (
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/serverkey"
 )
@@ -38,6 +39,8 @@ type pushServer struct {
 	requests []pushRequest
 	// status is the answer for the next request to a path; 201 when none is set.
 	status map[string][]int
+	// delay is how long each request takes to answer.
+	delay time.Duration
 }
 
 type pushRequest struct {
@@ -52,12 +55,14 @@ func newPushServer(t *testing.T) *pushServer {
 	p.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		p.mu.Lock()
+		delay := p.delay
 		p.requests = append(p.requests, pushRequest{path: r.URL.Path, header: r.Header.Clone(), body: body})
 		code := http.StatusCreated
 		if queue := p.status[r.URL.Path]; len(queue) > 0 {
 			code, p.status[r.URL.Path] = queue[0], queue[1:]
 		}
 		p.mu.Unlock()
+		time.Sleep(delay)
 		w.WriteHeader(code)
 	}))
 	p.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -112,7 +117,9 @@ func newEnv(t *testing.T, tls bool) *env {
 	e := &env{t: t, db: sqlDB, key: key, push: newPushServer(t), cards: boards.New(sqlDB, spaces)}
 	opts := notifications.Options{Key: key, Now: func() time.Time { return time.Now().Add(e.skew) }}
 	if tls {
-		opts.HTTPClient = e.push.Client()
+		// The test push service is on loopback: a client of its own, and the policy that goes with it.
+		anywhere := egress.MustParse("any")
+		opts.HTTPClient, opts.Egress = e.push.Client(), &anywhere
 	}
 	if e.svc, err = notifications.New(ctx, sqlDB, spaces, opts); err != nil {
 		t.Fatal(err)
@@ -810,14 +817,34 @@ func TestSubscriptionsAreValidatedBoundedAndOwnedByTheirPerson(t *testing.T) {
 	w.subscribe(w.bob, w.newDevice("d0"))
 }
 
-func TestAnEndpointOnThePrivateNetworkIsNeverConnectedTo(t *testing.T) {
-	// The default client is the egress client for public addresses only: an endpoint is an address
-	// a person gave, and the test push service is on loopback.
-	w := newWorld(t, false)
-	d := w.newDevice("loopback")
+func TestAnEndpointOnThePrivateNetworkIsRefusedAtRegistrationAndNeverConnectedTo(t *testing.T) {
+	// The default policy is the one for public addresses only: an endpoint is an address a person
+	// gave, and the test push service is on loopback.
+	public := newWorld(t, false)
+	d := public.newDevice("loopback")
+	for _, endpoint := range []string{d.endpoint, "https://169.254.169.254/latest", "https://[::1]:8443/x", "https://10.1.2.3/x", "https://localhost/x"} {
+		body := d.body()
+		body["endpoint"] = endpoint
+		rec := public.bob.do(http.MethodPut, "/api/me/push/subscription", body)
+		if rec.Code != http.StatusBadRequest || decode[struct{ Code string }](t, rec).Code != "egress_refused" {
+			t.Errorf("%s: %d %s", endpoint, rec.Code, rec.Body)
+		}
+	}
+	if public.count("push_subscriptions", "1=1") != 0 {
+		t.Fatal("a private endpoint was stored")
+	}
+
+	// A subscription that is there anyway (made before a policy changed, or by an address that
+	// resolved elsewhere then) is refused on every connection, and its push fails at once.
+	w := newWorld(t, true)
+	d = w.newDevice("loopback")
 	w.subscribe(w.bob, d)
 	w.assign("Ping", w.bob)
-	w.svc.DrainOnce(context.Background())
+	strict, err := notifications.New(context.Background(), w.db, access.New(w.db, nil), notifications.Options{Key: w.key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	strict.DrainOnce(context.Background())
 	if len(w.push.got()) != 0 {
 		t.Fatal("the server connected to a loopback address")
 	}
@@ -915,8 +942,10 @@ func TestOldNotificationsAndFinishedPushesArePurgedAndAPersonsListIsBounded(t *t
 			}
 		}
 	}
+	// One instant for the whole fixture: today's notifications are all made at it, and compared with it.
+	now := time.Now()
 	day := func(ago int) string {
-		return time.Now().Add(-time.Duration(ago) * 24 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+		return now.Add(-time.Duration(ago) * 24 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 	add(day(200), "", 2)      // older than anything is kept
 	add(day(100), day(95), 3) // read long ago
@@ -938,5 +967,177 @@ func TestOldNotificationsAndFinishedPushesArePurgedAndAPersonsListIsBounded(t *t
 	// The newest are the ones kept.
 	if n := w.count("notifications", "created_at >= ?", day(0)); n != 5 {
 		t.Fatalf("%d of today's notifications kept, want all 5", n)
+	}
+}
+
+func TestAPushIsNotSentToASubscriptionWhoseSessionExpired(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t, true)
+	d, kept := w.newDevice("expired"), w.newDevice("kept")
+	w.subscribe(w.bob, d)
+	other := &user{e: w.env}
+	expect(t, other.do(http.MethodPost, "/api/login", map[string]string{"email": "bob@example.com", "password": fakePassword}), http.StatusOK)
+	w.subscribe(other, kept)
+	// Only the first session ends, and nobody logs in afterwards, which is when auth sweeps sessions.
+	if _, err := w.db.Exec(`UPDATE sessions SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = (SELECT session_id FROM push_subscriptions WHERE endpoint = ?)`, d.endpoint); err != nil {
+		t.Fatal(err)
+	}
+	w.assign("After the session ended", w.bob)
+	w.svc.DrainOnce(ctx)
+	if got, _ := w.pushed(d); len(got) != 0 {
+		t.Fatal("a push went to a device whose session had expired")
+	}
+	if got, _ := w.pushed(kept); len(got) != 1 {
+		t.Fatalf("the device with a live session got %d pushes", len(got))
+	}
+	if w.count("push_subscriptions", "endpoint = ?", d.endpoint) != 0 {
+		t.Fatal("the subscription of an expired session is still there")
+	}
+}
+
+func TestExpiredSessionsSubscriptionsAreSweptOnTheWorkersSchedule(t *testing.T) {
+	w := newWorld(t, true)
+	gone, live := w.newDevice("gone"), w.newDevice("live")
+	w.subscribe(w.bob, gone)
+	other := &user{e: w.env}
+	expect(t, other.do(http.MethodPost, "/api/login", map[string]string{"email": "bob@example.com", "password": fakePassword}), http.StatusOK)
+	w.subscribe(other, live)
+	w.assign("Queued", w.bob)
+	if _, err := w.db.Exec(`UPDATE sessions SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = (SELECT session_id FROM push_subscriptions WHERE endpoint = ?)`, gone.endpoint); err != nil {
+		t.Fatal(err)
+	}
+	w.svc.Tidy(context.Background())
+	if w.count("push_subscriptions", "endpoint = ?", gone.endpoint) != 0 || w.count("push_subscriptions", "endpoint = ?", live.endpoint) != 1 {
+		t.Fatal("the sweep must end the expired session's subscription and only that one")
+	}
+	if w.count("push_deliveries", "1=1") != 1 {
+		t.Fatal("the expired subscription's queued push should go with it")
+	}
+}
+
+func TestAPushThatUsedAllItsTriesIsGivenUpAfterARestart(t *testing.T) {
+	w := newWorld(t, true)
+	d := w.newDevice("phone")
+	w.subscribe(w.bob, d)
+	w.assign("Ping", w.bob)
+	// A worker that died on its fifth try left it pending with five tries counted.
+	if _, err := w.db.Exec(`UPDATE push_deliveries SET attempts = 5`); err != nil {
+		t.Fatal(err)
+	}
+	w.svc.DrainOnce(context.Background())
+	if len(w.push.got()) != 0 {
+		t.Fatal("a push was tried a sixth time")
+	}
+	if w.count("push_deliveries", "state = 'failed' AND attempts = 5") != 1 {
+		t.Fatal("a push out of tries should be marked failed, not left pending")
+	}
+}
+
+func TestNoSubscriptionIsMadeForSomeoneInNoWorkspace(t *testing.T) {
+	w := newWorld(t, true)
+	d := w.newDevice("phone")
+	w.subscribe(w.mallory, d)
+	if _, err := w.db.Exec(`DELETE FROM memberships WHERE user_id = ?`, w.mallory.id); err != nil {
+		t.Fatal(err)
+	}
+	if w.count("push_subscriptions", "user_id = ?", w.mallory.id) != 0 {
+		t.Fatal("leaving the last workspace should have ended the subscription")
+	}
+	// The app opening afterwards registers the device again; it must not take.
+	rec := w.mallory.do(http.MethodPut, "/api/me/push/subscription", d.body())
+	if rec.Code != http.StatusForbidden || decode[struct{ Code string }](t, rec).Code != "push_no_workspace" {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if w.count("push_subscriptions", "1=1") != 0 {
+		t.Fatal("a person in no workspace has a push subscription again")
+	}
+}
+
+func TestADeviceChangingHandsCountsAgainstTheNewOwnersLimit(t *testing.T) {
+	w := newWorld(t, true)
+	for i := range notifications.MaxSubscriptions {
+		w.subscribe(w.bob, w.newDevice(fmt.Sprintf("bob%d", i)))
+	}
+	shared := w.newDevice("shared")
+	w.subscribe(w.mallory, shared)
+	rec := w.bob.do(http.MethodPut, "/api/me/push/subscription", shared.body())
+	if rec.Code != http.StatusConflict || decode[struct{ Code string }](t, rec).Code != "push_too_many_subscriptions" {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if w.count("push_subscriptions", "user_id = ?", w.bob.id) != notifications.MaxSubscriptions ||
+		w.count("push_subscriptions", "user_id = ?", w.mallory.id) != 1 {
+		t.Fatal("a device moved to an account that was at the limit")
+	}
+}
+
+func TestRetentionRunsOnItsOwnScheduleWhileAPushBacklogIsSent(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t, true)
+	for i := range notifications.MaxSubscriptions {
+		w.subscribe(w.bob, w.newDevice(fmt.Sprintf("d%d", i)))
+	}
+	for i := range 5 {
+		w.assign(fmt.Sprintf("Card %d", i), w.bob)
+	}
+	// 100 pushes, each taking a while: the sender has no pause for far longer than the tidy interval.
+	w.push.mu.Lock()
+	w.push.delay = 15 * time.Millisecond
+	w.push.mu.Unlock()
+	w.svc.TidyEvery(20 * time.Millisecond)
+	stop := w.svc.Start(ctx)
+	defer stop()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for len(w.push.got()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the worker sent nothing")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	old := time.Now().Add(-200 * 24 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+	if _, err := w.db.Exec(`INSERT INTO notifications (user_id, workspace_id, kind, ref, created_at) VALUES (?, ?, 'card_assigned', '{}', ?)`, w.bob.id, w.ws, old); err != nil {
+		t.Fatal(err)
+	}
+	for w.count("notifications", "created_at = ?", old) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the old notification was never purged")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if w.count("push_deliveries", "state = 'pending'") == 0 {
+		t.Fatal("the backlog was sent before the purge ran: the test shows nothing")
+	}
+}
+
+func TestThePushContactIsTheVAPIDSubjectAndMustBeValid(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t, true)
+	d := w.newDevice("phone")
+	w.subscribe(w.bob, d)
+	w.assign("Ping", w.bob)
+	anywhere := egress.MustParse("any")
+	svc, err := notifications.New(ctx, w.db, access.New(w.db, nil), notifications.Options{
+		Key: w.key, HTTPClient: w.push.Client(), Egress: &anywhere, Contact: "mailto:ops@example.org"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.DrainOnce(ctx)
+	_, requests := w.pushed(d)
+	if len(requests) != 1 {
+		t.Fatalf("%d pushes", len(requests))
+	}
+	token, _, _ := strings.Cut(strings.TrimPrefix(requests[0].header.Get("Authorization"), "vapid t="), ", k=")
+	raw, err := base64.RawURLEncoding.DecodeString(strings.Split(token, ".")[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims struct{ Sub string }
+	if err := json.Unmarshal(raw, &claims); err != nil || claims.Sub != "mailto:ops@example.org" {
+		t.Fatalf("subject = %q, %v", claims.Sub, err)
+	}
+	for _, bad := range []string{"http://example.org", "ops@example.org", "mailto:"} {
+		if _, err := notifications.New(ctx, w.db, access.New(w.db, nil), notifications.Options{Key: w.key, Contact: bad}); err == nil {
+			t.Errorf("contact %q accepted", bad)
+		}
 	}
 }

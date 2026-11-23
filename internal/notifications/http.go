@@ -12,9 +12,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/auth"
+	"taskto.ai/taskto/internal/egress"
 )
 
 // Routes mounts the inbox's and push's endpoints on mux. The inbox of a workspace is behind a's
@@ -272,8 +274,18 @@ func (s *Service) handleSubscribe(w http.ResponseWriter, r *http.Request, a *aut
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if _, ok := checkEndpoint(req.Endpoint); !ok {
+	target, ok := checkEndpoint(req.Endpoint)
+	if !ok {
 		apierr.Write(w, http.StatusBadRequest, apierr.CodePushEndpointInvalid, "the endpoint must be an https address of at most "+strconv.Itoa(maxEndpoint)+" characters")
+		return
+	}
+	// The addresses the sender may connect to, and no others: refused here, where the person
+	// sees why, and again on every push.
+	lookup, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	err := s.egress.Check(lookup, target.Hostname(), nil)
+	cancel()
+	if refused := egress.Refusal(err); refused != nil {
+		apierr.WriteError(w, refused.APIError("endpoint"))
 		return
 	}
 	pub, secret, ok := parseKeys(req.Keys.P256dh, req.Keys.Auth)
@@ -296,12 +308,22 @@ func (s *Service) handleSubscribe(w http.ResponseWriter, r *http.Request, a *aut
 		return
 	}
 	err = s.write(r.Context(), func(tx *sql.Tx) error {
+		// Push is for people in a workspace: leaving the last one ended their subscriptions, and
+		// the app opening afterwards must not make one again.
+		var member bool
+		if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = ?)`, u.ID).Scan(&member); err != nil {
+			return err
+		}
+		if !member {
+			return errNoWorkspace
+		}
 		var owner sql.NullInt64
 		err := tx.QueryRowContext(r.Context(), `SELECT user_id FROM push_subscriptions WHERE endpoint = ?`, req.Endpoint).Scan(&owner)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if !owner.Valid {
+		if !owner.Valid || owner.Int64 != u.ID {
+			// A new device, or one that changes hands: either way it is one more of this person's.
 			var have int
 			if err := tx.QueryRowContext(r.Context(), `SELECT count(*) FROM push_subscriptions WHERE user_id = ?`, u.ID).Scan(&have); err != nil {
 				return err
@@ -325,6 +347,8 @@ func (s *Service) handleSubscribe(w http.ResponseWriter, r *http.Request, a *aut
 		return err
 	})
 	switch {
+	case errors.Is(err, errNoWorkspace):
+		apierr.Write(w, http.StatusForbidden, apierr.CodePushNoWorkspace, "push is for people who are in a workspace")
 	case errors.Is(err, errTooMany):
 		apierr.Write(w, http.StatusConflict, apierr.CodePushTooManySubscriptions, "too many devices are subscribed", apierr.Params{"max": MaxSubscriptions})
 	case err != nil:
@@ -334,7 +358,10 @@ func (s *Service) handleSubscribe(w http.ResponseWriter, r *http.Request, a *aut
 	}
 }
 
-var errTooMany = errors.New("too many subscriptions")
+var (
+	errTooMany     = errors.New("too many subscriptions")
+	errNoWorkspace = errors.New("no workspace")
+)
 
 func (s *Service) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	u, _ := auth.UserFrom(r.Context())

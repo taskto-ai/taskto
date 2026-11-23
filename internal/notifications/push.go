@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"taskto.ai/taskto/internal/egress"
@@ -42,36 +43,66 @@ const (
 	pushTTL = time.Hour
 	// keepDeliveries is how long finished pushes are kept.
 	keepDeliveries = 7 * 24 * time.Hour
+	// tidyEvery is how often the worker tidies.
+	tidyEvery = time.Hour
 )
 
 // Start starts the worker and returns the function that stops it and waits for it. The data
-// directory has one server (package lockfile), so one worker.
+// directory has one server (package lockfile), so one worker. Sending and tidying each have a
+// goroutine and a schedule of their own: a backlog of pushes that never empties must not keep the
+// retention (or the sweep of subscriptions whose session ended) from running.
 func (s *Service) Start(ctx context.Context) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
+	var running sync.WaitGroup
+	running.Add(2)
 	go func() {
-		defer close(done)
+		defer running.Done()
 		poll := time.NewTicker(pushPoll)
 		defer poll.Stop()
-		tidy := time.NewTicker(time.Hour)
-		defer tidy.Stop()
 		for {
 			s.drain(ctx)
 			select {
 			case <-ctx.Done():
 				return
 			case <-poll.C:
+			}
+		}
+	}()
+	go func() {
+		defer running.Done()
+		tidy := time.NewTicker(s.tidyEvery)
+		defer tidy.Stop()
+		for {
+			s.tidy(ctx)
+			select {
+			case <-ctx.Done():
+				return
 			case <-tidy.C:
-				if err := s.purge(ctx); err != nil && ctx.Err() == nil {
-					slog.Warn("notifications: purging failed", "err", err)
-				}
 			}
 		}
 	}()
 	return func() {
 		cancel()
-		<-done
+		running.Wait()
 	}
+}
+
+// tidy is what the worker does on its own schedule: end the subscriptions of sessions that have
+// expired, and purge.
+func (s *Service) tidy(ctx context.Context) {
+	if err := errors.Join(s.sweepSessions(ctx), s.purge(ctx)); err != nil && ctx.Err() == nil {
+		slog.Warn("notifications: tidying failed", "err", err)
+	}
+}
+
+// sweepSessions removes the subscriptions of sessions that have expired, with their queued pushes.
+// Auth removes an expired session only when someone logs in, which may not happen for a long time,
+// and a subscription is a login's: it must not outlive it. (Signing out and revoking delete the
+// session row, which takes the subscription with it.)
+func (s *Service) sweepSessions(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM push_subscriptions WHERE session_id IN (SELECT id FROM sessions WHERE expires_at <= ?)`, s.now())
+	return err
 }
 
 // drain sends the pushes that are due, one after another.
@@ -99,15 +130,21 @@ type delivery struct {
 }
 
 // claim takes the next push that is due, counting the try and moving the next one out, so a worker
-// that dies on it doesn't take it again at once.
+// that dies on it doesn't take it again at once. A push that has used all its tries (a worker that
+// died on the last one, then restarted) is given up here, never tried again.
 func (s *Service) claim(ctx context.Context) (delivery, bool, error) {
 	t := s.clock()
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE push_deliveries SET state = 'failed', updated_at = ?
+		WHERE state = 'pending' AND attempts >= ? AND next_attempt_at <= ?`, s.stamp(t), maxAttempts, s.stamp(t)); err != nil {
+		return delivery{}, false, err
+	}
 	var d delivery
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE push_deliveries SET attempts = attempts + 1, next_attempt_at = ?, updated_at = ?
-		WHERE id = (SELECT id FROM push_deliveries WHERE state = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT 1)
+		WHERE id = (SELECT id FROM push_deliveries WHERE state = 'pending' AND attempts < ? AND next_attempt_at <= ? ORDER BY id LIMIT 1)
 		RETURNING id, notification_id, subscription_id, attempts`,
-		s.stamp(t.Add(2*sendTimeout)), s.stamp(t), s.stamp(t)).Scan(&d.id, &d.notificationID, &d.subscriptionID, &d.attempts)
+		s.stamp(t.Add(2*sendTimeout)), s.stamp(t), maxAttempts, s.stamp(t)).Scan(&d.id, &d.notificationID, &d.subscriptionID, &d.attempts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return delivery{}, false, nil
 	}
@@ -169,28 +206,33 @@ type payload struct {
 
 // send makes one try. Anything it can't push is dropped here (failed): a notification that was read
 // meanwhile, that is too old, or whose person is no longer in the workspace or no longer owns the
-// device.
+// device. A device whose session has ended is gone (its subscription is removed).
 func (s *Service) send(ctx context.Context, d delivery) (out outcome, status int, wait time.Duration) {
 	var n stored
 	var ref string
 	var subUser int64
 	var endpoint string
 	var p256dh, sealed []byte
-	var member bool
+	var member, live bool
 	err := s.db.QueryRowContext(ctx, `
 		SELECT n.id, n.user_id, n.workspace_id, n.kind, n.ref, n.created_at, n.read_at IS NOT NULL,
 			sub.user_id, sub.endpoint, sub.p256dh, sub.auth_sealed,
-			EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = n.workspace_id AND m.user_id = n.user_id)
+			EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = n.workspace_id AND m.user_id = n.user_id),
+			EXISTS (SELECT 1 FROM sessions s WHERE s.id = sub.session_id AND s.user_id = sub.user_id AND s.expires_at > ?)
 		FROM push_deliveries d
 		JOIN notifications n ON n.id = d.notification_id
 		JOIN push_subscriptions sub ON sub.id = d.subscription_id
-		WHERE d.id = ?`, d.id).Scan(&n.id, &n.userID, &n.workspaceID, &n.kind, &ref, &n.createdAt, &n.read,
-		&subUser, &endpoint, &p256dh, &sealed, &member)
+		WHERE d.id = ?`, s.now(), d.id).Scan(&n.id, &n.userID, &n.workspaceID, &n.kind, &ref, &n.createdAt, &n.read,
+		&subUser, &endpoint, &p256dh, &sealed, &member, &live)
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.Warn("notifications: a push's notification or device is gone", "delivery", d.id, "err", err)
 		}
 		return failed, 0, 0
+	}
+	if !live {
+		// The login that made the subscription is over: so is the subscription.
+		return gone, 0, 0
 	}
 	if err := json.Unmarshal([]byte(ref), &n.ref); err != nil {
 		return failed, 0, 0
