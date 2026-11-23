@@ -140,6 +140,8 @@
     "unpublishedChanges": "Unpublished changes",
     "publish": "Publish",
     "publishNamed": "Publish {name}",
+    "closeReview": "Close review",
+    "closeReviewNamed": "Close the review of {name}",
     "previewDraft": "Preview draft",
     "previewDraftNamed": "Preview the draft of {name}",
     "stage": {
@@ -268,7 +270,39 @@
         "update": "Change records.",
         "delete": "Delete records (a deleted record can be restored).",
         "readOnly": "It only shows records: it can’t add, change or delete any.",
-        "nothingElse": "It can’t reach anything else: no other app, document or account."
+        "nothingElse": "It can’t reach anything else: no other app, document or account.",
+        "effectsIntro": "Beyond its own records, it also does this when someone presses its buttons:",
+        "effectsAudit": "It does these as the person who pressed the button, and only what that person may do.",
+        "effect": {
+          "always": "{effect}.",
+          "when": "{effect}, only when {rule}.",
+          "createCard": "Creates a card on {board}",
+          "updateCard": "Moves the card this record made to {column}",
+          "createDocument": "Creates a document at {path} in {space}",
+          "openBoard": "Offers a link to {board}",
+          "openCard": "Offers a link to the card this record made",
+          "openDocument": "Offers a link to the document {path} in {space}"
+        },
+        "target": {
+          "board": "{board} ({space})",
+          "boardHidden": "a board you can’t see",
+          "boardUnset": "a board that isn’t chosen yet",
+          "spaceHidden": "a space you can’t see",
+          "spaceUnset": "a space that isn’t chosen yet"
+        }
+      },
+      "rule": {
+        "eq": "{field} is {value}",
+        "ne": "{field} is not {value}",
+        "lt": "{field} is below {value}",
+        "lte": "{field} is at most {value}",
+        "gt": "{field} is above {value}",
+        "gte": "{field} is at least {value}",
+        "text": "“{value}”",
+        "yes": "yes",
+        "no": "no",
+        "group": "({rule})",
+        "unknown": "its rule holds"
       },
       "field": "{name} ({type})",
       "publish": {

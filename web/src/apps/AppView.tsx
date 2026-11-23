@@ -22,7 +22,7 @@ import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
 import { EffectPreview } from './AppEffects'
 import { appsCatalog, unsupportedBy } from './catalog'
-import { keepLabelsLinked } from './labels'
+import { fieldLabels, keepLabelsLinked } from './labels'
 import { withOperation } from './operations'
 import { type AppFiles, AppFilesContext } from './PhotoInput'
 import { SubmitCaptures, SubmitCapturesContext } from './submit'
@@ -231,7 +231,13 @@ export function AppView({
                 // The conflict is what the person is told; the screen stays as it was.
               }
             }
-            setError(errorText(e))
+            const open = processor.model.surfacesMap.get(surfaceId)
+            setError(
+              errorText(
+                e,
+                open ? fieldLabels(open.componentsModel.entries, (path) => open.dataModel.get(path)) : undefined,
+              ),
+            )
           }
         }),
       // Without this the processor accepts components outside the catalog and silently draws

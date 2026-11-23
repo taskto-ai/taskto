@@ -9,7 +9,7 @@
 // what the caller may do.
 
 import { type FormEvent, useState } from 'react'
-import { ApiError, type App, api, errorText, type SchemaChange, type Space, ws } from '../api'
+import { ApiError, type App, api, errorText, type Space, ws } from '../api'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
@@ -18,7 +18,7 @@ import { Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
 import { AppBuilder, lastBuilderConversation } from './AppBuilder'
 import { AppEffects } from './AppEffects'
-import { appError, MigrationNotice, publishDraft } from './AppPublish'
+import { appError, PublishPanel } from './AppPublish'
 import { AppRecords } from './AppRecords'
 import { AppReleases } from './AppReleases'
 import { AppRoles } from './AppRoles'
@@ -130,27 +130,6 @@ function SpaceApps({
     }
     apps.reload()
   }
-  // publish makes the app's draft its live release. It answers the schema changes the server wants
-  // acknowledged first (nothing is published then), or null: published, or failed (the error is
-  // shown, and the list reloaded, so the next try is made against the current version).
-  const publish = async (app: App, acknowledge: SchemaChange[]): Promise<SchemaChange[] | null> => {
-    try {
-      const result = await publishDraft(`${base}/${app.id}`, app.version, acknowledge)
-      if ('changes' in result) {
-        setError(null)
-        return result.changes
-      }
-      setError(null)
-    } catch (e) {
-      setError(
-        e instanceof ApiError && e.code === 'app_changed'
-          ? t('apps.changed', { name: app.name })
-          : appError(e, app.name),
-      )
-    }
-    apps.reload()
-    return null
-  }
   // move moves an app, with its rows, to another space the user may write.
   const move = async (app: App, to: number) => {
     try {
@@ -190,7 +169,6 @@ function SpaceApps({
               spaceBase={`${ws(workspace)}/spaces/${space.id}`}
               change={change}
               move={move}
-              publish={publish}
               reload={apps.reload}
             />
           ))}
@@ -210,7 +188,6 @@ function AppRow({
   spaceBase,
   change,
   move,
-  publish,
   reload,
 }: {
   workspace: number
@@ -223,7 +200,6 @@ function AppRow({
   spaceBase: string
   change: (app: App, body: { name?: string; archived?: boolean }) => Promise<void>
   move: (app: App, to: number) => Promise<void>
-  publish: (app: App, acknowledge: SchemaChange[]) => Promise<SchemaChange[] | null>
   reload: () => void
 }) {
   const [renaming, setRenaming] = useState(false)
@@ -233,17 +209,34 @@ function AppRow({
   const [rolesOpen, setRolesOpen] = useState(false)
   const [releasesOpen, setReleasesOpen] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
-  // The schema changes a publish waits to have acknowledged.
-  const [migration, setMigration] = useState<SchemaChange[] | null>(null)
+  // The app as its publisher reviews it before publishing: with its draft and where its effects go,
+  // which the list doesn't carry. Publishing is only from there, so what the draft does is seen first.
+  const [reviewing, setReviewing] = useState<App | null>(null)
+  const [reviewError, setReviewError] = useState<string | null>(null)
   const offline = app.archived_at !== null
   // Those who may design or publish the app see what isn't live: its draft and its releases.
   const reviewer = writable && (app.access.design || app.access.publish)
   const t = useT()
-  const runPublish = async (acknowledge: SchemaChange[]) => {
+  const appBase = `${spaceBase}/apps/${app.id}`
+  const review = async () => {
     setBusy(true)
-    const needed = await publish(app, acknowledge)
+    setReviewError(null)
+    try {
+      setReviewing(await api<App>(appBase))
+    } catch (e) {
+      setReviewError(appError(e, app.name))
+    }
     setBusy(false)
-    setMigration(needed)
+  }
+  // The panel published the app, or found that it changed: the list and the panel read it again.
+  const reviewed = async () => {
+    reload()
+    try {
+      setReviewing(await api<App>(appBase))
+    } catch (e) {
+      setReviewing(null)
+      setReviewError(appError(e, app.name))
+    }
   }
   const run = async (body: { name?: string; archived?: boolean }) => {
     setBusy(true)
@@ -326,8 +319,8 @@ function AppRow({
             <button
               type="button"
               className="tt-button tt-primary"
-              disabled={busy || migration !== null}
-              onClick={() => runPublish([])}
+              disabled={busy || reviewing !== null}
+              onClick={review}
               aria-label={t('apps.publishNamed', { name: app.name })}
             >
               {t('apps.publish')}
@@ -421,13 +414,23 @@ function AppRow({
           )}
         </div>
       )}
-      {migration && (
-        <MigrationNotice
-          changes={migration}
-          busy={busy}
-          onPublish={() => runPublish(migration)}
-          onCancel={() => setMigration(null)}
-        />
+      {reviewError && (
+        <p role="alert" className="tt-error">
+          {reviewError}
+        </p>
+      )}
+      {reviewing && (
+        <>
+          <PublishPanel base={appBase} spaceBase={spaceBase} app={reviewing} space={space} onChanged={reviewed} />
+          <button
+            type="button"
+            className="tt-button"
+            aria-label={t('apps.closeReviewNamed', { name: app.name })}
+            onClick={() => setReviewing(null)}
+          >
+            {t('apps.closeReview')}
+          </button>
+        </>
       )}
       {releasesOpen && (
         <AppReleases
