@@ -726,6 +726,9 @@
     "app_query_cursor": "That page can no longer be found. Start again from the first page.",
     "app_query_field": "The app has no field “{field}” that can be used here.",
     "app_query_condition": "The filter on “{field}” doesn’t fit the field.",
+    "offline_downloads_disabled": "An admin turned off offline downloads for this space.",
+    "session_account_changed": "This browser is signed in as a different account than the one these records belong to.",
+    "offline_unsupported": "This needs a connection. Offline, you can add records and look around the downloaded copy.",
     "notification_not_found": "That notification isn't available.",
     "push_endpoint_invalid": "This browser's push address isn't valid.",
     "push_keys_invalid": "This browser's push keys aren't valid.",
@@ -834,7 +837,9 @@
       "person": "{name} ({email})",
       "as": "As",
       "add": "Add",
-      "rolesHelp": "Editors read and write; viewers read. A change takes effect at the member's next request."
+      "rolesHelp": "Editors read and write; viewers read. A change takes effect at the member's next request.",
+      "offlineDownloads": "Allow offline downloads",
+      "offlineHelp": "Members can keep this space’s apps and records on their devices to use without a connection. Turn it off for sensitive data: new downloads are refused, and a device removes its copy the next time it connects."
     },
     "tokens": {
       "title": "Access tokens",
@@ -1524,6 +1529,124 @@
       "pin": "pin"
     },
     "removePinNamed": "Remove {name} from the menu"
+  },
+  "offline": {
+    "title": "Offline use",
+    "download": "Download for offline use",
+    "downloadNamed": "Download {name} for offline use",
+    "downloading": "Downloading…",
+    "downloadAgain": "Download again",
+    "downloadAgainNamed": "Download {name} again",
+    "remove": "Remove download",
+    "removeNamed": "Remove the download of {name}",
+    "notDownloaded": "Not downloaded yet. Download this app to open it and add records without a connection.",
+    "ready": "Ready for offline use",
+    "readyDetail": "Release {release}, downloaded {when}. {records} of {total} records are on this device.",
+    "newerRelease": "A newer release (number {live}) is live. Download again to use it offline.",
+    "truncated": "Only the latest {records} of your {total} records are downloaded.",
+    "ownOnly": "Only the records you added are downloaded.",
+    "cantInsert": "You can look at this copy offline, but not add records.",
+    "storage": "Storage on this device: about {usage} used of {quota}.",
+    "storageUnknown": "This browser doesn’t say how much storage is left.",
+    "persisted": "This browser has agreed to keep downloaded data.",
+    "notPersisted": "This browser may clear downloaded data when the device runs low on space.",
+    "disabled": "An admin turned off offline downloads for this space.",
+    "onlineOnly": "Building with AI, publishing and sharing need a connection. Offline, you can open downloaded apps and add records.",
+    "unavailable": "Offline storage isn’t available in this browser, so apps can’t be downloaded.",
+    "schemaNewer": "This device holds offline data written by a newer version of TaskTo.AI. Update the app to use it. Nothing was changed.",
+    "reload": "Reload to update",
+    "needsConnection": "This needs a connection. Offline, you can add records and look around the downloaded copy.",
+    "notSaved": {
+      "quota": "This device has no room left, so the record was NOT saved. Free some space or remove a download, then try again.",
+      "unavailable": "Offline storage isn’t available, so the record was NOT saved.",
+      "failed": "The record could not be written to this device and was NOT saved."
+    },
+    "saved": "Saved on this device. It is sent when you are back online.",
+    "localCopy": "Offline copy: lists and numbers cover the records downloaded {when} (downloaded: {records}) and those saved on this device (saved here: {queued}). They are not the server’s totals.",
+    "localTruncated": "The download holds only the latest {records} of {total} records.",
+    "state": {
+      "draft": "Draft on this device",
+      "queued": "Saved on this device, waiting to sync",
+      "syncing": "Syncing…",
+      "synced": "Synced",
+      "attention": "Needs attention"
+    },
+    "queue": {
+      "title": "On this device",
+      "none": "Nothing is waiting to be sent.",
+      "item": "{app}: {summary}",
+      "itemNew": "{app}: new record",
+      "photos": "Photos: {uploaded} of {total} sent",
+      "syncedNote": "The server has it.",
+      "next": "Next try {when}.",
+      "attempts_one": "Tried once so far.",
+      "attempts_other": "Tried {count} times so far.",
+      "retry": "Try again now",
+      "retryNamed": "Try {name} again now",
+      "hold": "Keep as draft",
+      "holdNamed": "Keep {name} as a draft",
+      "send": "Send",
+      "sendNamed": "Send {name}",
+      "discard": "Discard",
+      "discardNamed": "Discard {name}",
+      "discardQuestion": "Discard this record? It is deleted from this device and never sent.",
+      "discardConfirm": "Yes, discard",
+      "clearSynced": "Clear synced records",
+      "waiting_one": "{count} record waiting to sync",
+      "waiting_other": "{count} records waiting to sync"
+    },
+    "attention": {
+      "refused": "The server did not accept it: {error}",
+      "access": "You no longer have access to this app or space. What you entered is kept here.",
+      "archived": "The app or its space is archived or offline, so it can’t take records now.",
+      "outdated": "The app changed after this record was made. Download it again, then try again.",
+      "gave_up": "The server couldn’t be reached after several tries.",
+      "photo": "A photo couldn’t be sent, so the record wasn’t."
+    },
+    "sync": {
+      "paused": "Sync is paused: sign in again to send what is waiting.",
+      "account": "Sync is paused: this browser is signed in as someone else. Sign in as the account these records belong to, to send them.",
+      "offline": "You’re offline. Waiting records are sent when you reconnect.",
+      "running": "Syncing…",
+      "now": "Sync now"
+    },
+    "shell": {
+      "title": "Offline",
+      "intro": "TaskTo.AI can’t reach the server. The apps you downloaded open here, and records you add are kept on this device until you are back online.",
+      "none": "Nothing is downloaded on this device. Download an app while you are online to use it here.",
+      "reconnect": "Try to reconnect",
+      "open": "Open",
+      "openNamed": "Open {name}",
+      "back": "Back to the downloaded apps",
+      "needsUpdate": "This version of TaskTo.AI can’t draw {name}."
+    },
+    "accountChanged": {
+      "title": "The account changed",
+      "body": "Another account was signed in on this browser, or this one signed out, in another tab. Nothing is shown here until you reload this page.",
+      "reload": "Reload this page"
+    },
+    "foreign": {
+      "title": "Records of another account",
+      "body_one": "This browser holds {count} unsent record of another account. Sign in as that account to send it, or discard it.",
+      "body_other": "This browser holds {count} unsent records of another account. Sign in as that account to send them, or discard them.",
+      "signOut": "Sign out to sign in as that account",
+      "discard": "Discard them",
+      "discardQuestion_one": "Discard {count} record that was never sent? It can’t be recovered.",
+      "discardQuestion_other": "Discard {count} records that were never sent? They can’t be recovered."
+    },
+    "logout": {
+      "title": "Records not sent yet",
+      "body_one": "{count} record on this device hasn’t reached the server. Signing out now would lose it unless you sync or discard it.",
+      "body_other": "{count} records on this device haven’t reached the server. Signing out now would lose them unless you sync or discard them.",
+      "sync": "Sync now",
+      "syncing": "Syncing…",
+      "discard": "Discard and sign out",
+      "cancel": "Cancel",
+      "stillWaiting": "Some records are still waiting: the server couldn’t take them yet. Try again, or discard them.",
+      "unreadableSchema": "Records you made on this device may not have reached the server, and this version of TaskTo.AI can’t check: they were saved by a newer version. You can keep them and sign out without deleting anything, then sign in with the newer version to send them, or discard them.",
+      "unreadableStorage": "Records you made on this device may not have reached the server, and the device’s storage can’t be read right now to check. You can keep them and sign out without deleting anything, or discard them.",
+      "keep": "Keep them and sign out"
+    }
   },
   "notifications": {
     "title": "Notifications",

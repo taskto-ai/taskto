@@ -23,7 +23,22 @@ import {
 
 // Where the app's attachments are (…/spaces/{space}/apps/{app}), given by the screen that draws
 // them; uploads is false where the screen is a preview, whose buttons change nothing.
-export type AppFiles = { base: string; uploads: boolean }
+export type AppFiles = {
+  base: string
+  uploads: boolean
+  // Offline (docs/offline.md): there is no server to upload to. A photo is staged on the device and
+  // given a local id, which the record holds until the outbox has uploaded the photo and the
+  // server's id has replaced it.
+  local?: LocalPhotos
+}
+
+export type LocalPhotos = {
+  // Keeps the photo in memory under a new id; it is written to the device with the record that holds it.
+  stage(file: Blob): string
+  // Something an <img> can show for the id, if the photo is here.
+  url(id: string): string | undefined
+  forget(id: string): void
+}
 
 export const AppFilesContext = createContext<AppFiles | null>(null)
 
@@ -143,6 +158,12 @@ export function PhotoField({
         setProblem(t('apps.photos.notPicture', { name: file.name }))
         continue
       }
+      if (files?.local) {
+        // Nothing to send now: the photo goes with the record, when the outbox sends it.
+        current.current = [...current.current, files.local.stage(file)]
+        onChange(current.current)
+        continue
+      }
       const item: Pending = { key: ++keys, name: file.name || t('apps.photos.unnamed'), file, sent: 0 }
       setPending((all) => [...all, item])
       void run(item)
@@ -152,7 +173,8 @@ export function PhotoField({
   const remove = (id: string) => {
     current.current = current.current.filter((x) => x !== id)
     onChange(current.current)
-    if (files && mine.current.delete(id)) void discardPhoto(files.base, id)
+    if (files?.local) files.local.forget(id)
+    else if (files && mine.current.delete(id)) void discardPhoto(files.base, id)
   }
 
   const cancel = (item: Pending) => {
@@ -170,7 +192,7 @@ export function PhotoField({
           {value.map((id, i) => (
             <li key={id} className="tt-photo">
               <img
-                src={thumbnailUrl(files.base, id)}
+                src={files.local ? files.local.url(id) : thumbnailUrl(files.base, id)}
                 alt={t('apps.photos.photoN', { n: i + 1, total: value.length })}
                 loading="lazy"
               />
@@ -275,8 +297,20 @@ export function PhotoField({
 }
 
 // The thumbnails of attachments, each opening its picture in a tab of its own.
-export function PhotoStrip({ base, ids, label }: { base: string; ids: string[]; label?: string }) {
+export function PhotoStrip({
+  base,
+  ids,
+  label,
+  local,
+}: {
+  base: string
+  ids: string[]
+  label?: string
+  local?: LocalPhotos
+}) {
   const t = useT()
+  // Offline, only the photos this device holds can be shown: the others are on the server.
+  if (local) ids = ids.filter((id) => local.url(id) !== undefined)
   if (ids.length === 0) return null
   return (
     <figure className="tt-photos tt-photos-strip" aria-label={label ?? t('apps.photos.label')}>
@@ -284,13 +318,13 @@ export function PhotoStrip({ base, ids, label }: { base: string; ids: string[]; 
         {ids.map((id, i) => (
           <li key={id} className="tt-photo">
             <a
-              href={photoUrl(base, id)}
+              href={local ? local.url(id) : photoUrl(base, id)}
               target="_blank"
               rel="noopener noreferrer"
               aria-label={t('apps.photos.openN', { n: i + 1, total: ids.length })}
             >
               <img
-                src={thumbnailUrl(base, id)}
+                src={local ? local.url(id) : thumbnailUrl(base, id)}
                 alt={t('apps.photos.photoN', { n: i + 1, total: ids.length })}
                 loading="lazy"
               />

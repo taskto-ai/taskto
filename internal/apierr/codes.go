@@ -160,6 +160,11 @@ const (
 	CodeAppFilesFull        Code = "app_files_full"        // 409: the app's attachments are over their total; params: max_mib
 	CodeAppFilesUnavailable Code = "app_files_unavailable" // 503: this server keeps no files for apps
 
+	// Offline use of apps (internal/apps/offline.go).
+
+	CodeOfflineDisabled Code = "offline_downloads_disabled" // 403: an admin turned off downloading this space's apps for offline use
+	CodeAccountChanged  Code = "session_account_changed"    // 409: the request was made for another account than the session's (the browser signed in as someone else)
+
 	// Home widgets and navigation pins (internal/apps/home.go).
 
 	CodeHomeWidgetNotFound Code = "home_widget_not_found" // 404: the app's live release has no such widget

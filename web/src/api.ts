@@ -29,20 +29,53 @@ export class ApiError extends Error {
 
 export const SESSION_LOST = 'taskto:session-lost'
 
-export async function api<T>(path: string, init: { method?: string; body?: unknown; bytes?: Blob } = {}): Promise<T> {
+// The account a request is meant for (docs/api.md): what is sent on behalf of an account that may
+// not be the one the browser's session belongs to any more (the offline queue) says whose it is,
+// and the server refuses it for anyone else, with `session_account_changed`.
+export const EXPECTED_USER_HEADER = 'X-Taskto-Expected-User'
+
+export const forAccount = (user: number): Record<string, string> => ({ [EXPECTED_USER_HEADER]: String(user) })
+
+// A request made for an account was refused because the session is another one's: said to the page
+// (detail.expected is the account the request was for), whose offline view of that account stops.
+export const ACCOUNT_CHANGED_EVENT = 'taskto:account-changed'
+const ACCOUNT_CHANGED = 'session_account_changed'
+
+export type RequestInit = {
+  method?: string
+  body?: unknown
+  bytes?: Blob
+  headers?: Record<string, string>
+  signal?: AbortSignal
+}
+
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const extra = init.headers ?? {}
   const res = await fetch(path, {
     method: init.method ?? 'GET',
+    ...(init.signal ? { signal: init.signal } : {}),
     ...(init.bytes !== undefined
-      ? { headers: { 'Content-Type': 'application/octet-stream' }, body: init.bytes }
+      ? { headers: { ...extra, 'Content-Type': 'application/octet-stream' }, body: init.bytes }
       : init.body !== undefined
-        ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(init.body) }
-        : {}),
+        ? { headers: { ...extra, 'Content-Type': 'application/json' }, body: JSON.stringify(init.body) }
+        : Object.keys(extra).length > 0
+          ? { headers: extra }
+          : {}),
   })
   if (res.status === 204) return undefined as T
-  const data = await res.json().catch(() => null)
+  // An answer that isn't JSON is no data; a body that was cut short because the request was
+  // aborted is not an answer at all, and says so (a caller that aborts never takes it for one).
+  const data = await res.json().catch((e) => {
+    if (init.signal?.aborted || (e as { name?: string } | null)?.name === 'AbortError') throw e
+    return null
+  })
   if (!res.ok) {
     // A session that ended (logged out elsewhere, expired) sends the app back to the login.
     if (res.status === 401) window.dispatchEvent(new Event(SESSION_LOST))
+    if (res.status === 409 && data?.code === ACCOUNT_CHANGED) {
+      const expected = Number(extra[EXPECTED_USER_HEADER])
+      window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { expected } }))
+    }
     const message = data && typeof data.error === 'string' ? data.error : `${res.status} ${res.statusText}`
     throw new ApiError(res.status, message, data)
   }
@@ -96,6 +129,9 @@ export type Space = {
   archived_at: string | null
   role?: 'owner' | 'editor' | 'viewer'
   access: 'write' | 'read' | 'none'
+  // Whether the space's apps may be downloaded for offline use (docs/offline.md); an admin turns
+  // it off for a shared space. Older servers don't send it.
+  offline_downloads?: boolean
 }
 
 // `versioned` is false for large files and audio and video: only their current bytes are kept,
@@ -221,6 +257,33 @@ export type App = {
   unpublished_changes: boolean
   // The definition being edited, in a single app's reply, for those who may design or publish.
   draft?: AppDraft
+}
+
+// What GET …/apps/{app}/offline answers (docs/api.md): the live release as a client needs it to
+// use the app without the server, and the records the caller may read.
+export type OfflineApp = {
+  app_id: number
+  space_id: number
+  name: string
+  release: number
+  definition: {
+    definition_version: number
+    requires: string[]
+    collection: { fields: AppField[] }
+    entry?: string
+    screens?: { name: string; record?: boolean }[]
+    actions: Record<string, { kind: AppActionKind; screen?: string; then?: string }>
+    summaries?: Record<string, { kind: 'count' | 'sum'; field?: string; where?: unknown }>
+  }
+  messages: unknown[]
+  scope: 'all' | 'own'
+  records: number
+  total: number
+  truncated: boolean
+  can_insert: boolean
+  captured_at: string
+  // The caller's operation keys that made downloaded records: key → record id.
+  operations?: Record<string, number>
 }
 
 // A widget an app offers for Home (docs/api.md, Home): a bounded view, never markup of its own.

@@ -57,6 +57,10 @@ export type UploadOptions = {
   retries?: number
   // The wait before a retry, in milliseconds.
   backoff?: number
+  // Headers every request of the upload carries (the account the upload is for).
+  headers?: Record<string, string>
+  // Aborting stops the upload, and the request in flight, at once: it throws UploadCancelled.
+  signal?: AbortSignal
 }
 
 export class UploadCancelled extends Error {}
@@ -78,16 +82,24 @@ export async function uploadPhoto(
 ): Promise<Attachment> {
   const retries = opts.retries ?? 3
   const upload = (id: string, rest = '') => `${base}/uploads/${id}${rest}`
+  const headers = opts.headers
+  const signal = opts.signal
   let state: Attachment | undefined
   if (opts.resume) {
     try {
-      state = await api<Attachment>(upload(opts.resume))
+      state = await api<Attachment>(upload(opts.resume), { headers, signal })
     } catch (e) {
       // Gone (it expired): start again.
       if (!(e instanceof ApiError && e.status === 404)) throw e
     }
   }
-  if (!state) state = await api<Attachment>(`${base}/uploads`, { method: 'POST', body: { field, size: file.size } })
+  if (!state)
+    state = await api<Attachment>(`${base}/uploads`, {
+      method: 'POST',
+      body: { field, size: file.size },
+      headers,
+      signal,
+    })
   const id = state.id
   opts.onStarted?.(id)
   if (state.status === 'ready') return state
@@ -96,17 +108,21 @@ export async function uploadPhoto(
   let failures = 0
   // A bound on the trips, so a server that never agrees can't keep the upload going for ever.
   for (let trips = 0, max = Math.ceil(file.size / chunk) * 3 + 20; trips < max; trips++) {
-    if (opts.cancelled?.()) throw new UploadCancelled()
+    if (opts.cancelled?.() || signal?.aborted) throw new UploadCancelled()
     opts.onProgress?.(offset, file.size)
     try {
-      if (offset >= file.size) return await api<Attachment>(upload(id, '/finalize'), { method: 'POST', body: {} })
+      if (offset >= file.size)
+        return await api<Attachment>(upload(id, '/finalize'), { method: 'POST', body: {}, headers, signal })
       const next = await api<Attachment>(`${upload(id)}?offset=${offset}`, {
         method: 'PUT',
         bytes: file.slice(offset, offset + chunk),
+        headers,
+        signal,
       })
       offset = next.received
       failures = 0
     } catch (e) {
+      if (signal?.aborted) throw new UploadCancelled()
       if (e instanceof ApiError && e.code === OFFSET && typeof e.params?.offset === 'number') {
         // The server is somewhere else than we thought (a chunk we never heard was applied): go on
         // from where it is.
@@ -116,7 +132,7 @@ export async function uploadPhoto(
       if (!transient(e) || ++failures > retries) throw e
       await sleep((opts.backoff ?? 500) * failures)
       try {
-        offset = (await api<Attachment>(upload(id))).received
+        offset = (await api<Attachment>(upload(id), { headers, signal })).received
       } catch {
         // Still not reachable: the next try finds out.
       }

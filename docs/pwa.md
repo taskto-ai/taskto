@@ -38,6 +38,10 @@ agent browser's live view, source maps and the worker itself are left out.
   when the network fails does the worker answer with the cached page, which the app's router
   then draws for that route. The server's own routes (`/api`, `/mcp`, `/cli-mcp`, `/healthz`)
   are never answered by the worker, offline included.
+- **Offline use of apps** ([offline.md](offline.md)) rests on this: the offline view and the apps
+  renderer are lazy chunks, which the install fetches with the rest, so a downloaded app can be
+  drawn with no network. The downloaded records are not in the worker's cache but in IndexedDB,
+  one database per signed-in user, which the page writes and the worker never touches.
 - **Never:** the worker stores only at install, from its list, and answers only those static
   files and page navigations. Nothing under `/api` is ever fetched, stored or answered by it:
   people's conversations, documents, boards and apps are not cached by the worker, so nothing of
@@ -64,6 +68,13 @@ a tab that updated.
 
 Registration happens after the page has loaded, in production builds, in a secure context
 only. `vite dev` serves no worker.
+
+## Updates and the offline database
+
+The page's IndexedDB schema is versioned, and an update that waits for the person means a page and
+its database move together. A database that is newer than the page (another tab already updated)
+is not opened for writing: the page says the app must be updated, and the queue of records made
+offline is never rewritten by code that doesn't know its shape ([offline.md](offline.md#updates-and-the-schema)).
 
 ## Phones: layout and keyboard
 
@@ -158,7 +169,8 @@ The tests run in jsdom and in a desktop Chromium that emulates a phone's viewpor
 Only a real device shows: that iOS offers Add to Home Screen and opens the installed app
 under a translucent status bar with the right insets; that Android's install prompt and
 maskable icon look right; that the keyboard handling (`viewport.ts`) keeps the composer and
-top bar in place on iOS; that the safe areas clear a notch in landscape; that an update
+top bar in place on iOS; that the safe areas clear a notch in landscape; what a browser keeps of
+IndexedDB after a restart or under storage pressure (the rest is in [offline.md](offline.md#what-the-tests-dont-cover)); that an update
 installed while the app is in the background prompts when it returns; and that the app opens
 offline after a phone's own restart.
 Push is tested without a push service of a browser's maker: the Go tests run a test push service

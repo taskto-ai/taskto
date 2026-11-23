@@ -182,6 +182,8 @@ test("never answers, or caches, the server's routes", async () => {
   for (const path of [
     '/api/me',
     '/api/workspaces/1/conversations',
+    '/api/workspaces/1/spaces/2/apps/3/offline',
+    '/api/workspaces/1/spaces/2/apps/3/uploads/abc',
     '/mcp',
     '/cli-mcp',
     '/healthz',

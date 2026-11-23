@@ -543,7 +543,7 @@ test('reading the thread backs off after failures, and stops for good when acces
   const answered = globalThis.fetch
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     if (failing && String(input) === `${C}/1` && init?.method === 'GET') {
-      calls.push({ method: 'GET', path: `${C}/1`, body: undefined })
+      calls.push({ method: 'GET', path: `${C}/1`, body: undefined, headers: {} })
       return new Response(JSON.stringify({ error: failing === 404 ? 'not found' : 'boom' }), { status: failing })
     }
     return answered(input, init)

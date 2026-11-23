@@ -2898,6 +2898,94 @@ html[data-keyboard="open"] .tt-composer {
   background: var(--tt-surface);
 }
 
+/* Offline use (docs/offline.md): the download panel, the queue of records made on this device, and
+   the warning before signing out with some that were not sent. */
+
+.tt-offline {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-offline-ready {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.tt-offline-saved {
+  margin: 0;
+  color: var(--tt-success);
+  font-weight: 600;
+}
+
+.tt-outbox {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-outbox-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-outbox-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 0.5rem;
+}
+
+.tt-outbox-name {
+  flex: 1 1 12rem;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-stage-label[data-state="synced"] {
+  color: var(--tt-success);
+  border-color: currentColor;
+}
+
+.tt-stage-label[data-state="attention"] {
+  color: var(--tt-danger);
+  border-color: currentColor;
+}
+
+.tt-stage-label[data-state="queued"],
+.tt-stage-label[data-state="syncing"],
+.tt-stage-label[data-state="draft"] {
+  color: var(--tt-warning);
+  border-color: currentColor;
+}
+
+.tt-guard {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: var(--tt-scrim);
+}
+
+.tt-guard-box {
+  display: grid;
+  gap: 0.75rem;
+  inline-size: min(32rem, 100%);
+  max-block-size: 100%;
+  overflow: auto;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--tt-line-strong);
+  border-radius: 0.75rem;
+  background: var(--tt-surface);
+  color: var(--tt-fg);
+}
+
 /* An unread item of the inbox is set in bold with a mark before it, which a screen reader gets as
    text (the link says "Unread"). */
 .tt-inbox [data-unread] .tt-inbox-link {

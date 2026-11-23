@@ -962,6 +962,14 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 		if err != nil {
 			return err
 		}
+		// The operation remembers the record it made: a download says which of the caller's
+		// operations its records are (offline.go), so a device doesn't count a record it sent
+		// twice, once as sent and once as the server's.
+		if opID != 0 && ap.changed {
+			if _, err := tx.ExecContext(ctx, `UPDATE app_operations SET record_id = ? WHERE id = ?`, ap.id, opID); err != nil {
+				return err
+			}
+		}
 		if err := enqueueEffects(ctx, tx, actor, appID, opID, live, live.Actions[action.Name], ap); err != nil {
 			return err
 		}
