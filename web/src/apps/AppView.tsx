@@ -30,22 +30,30 @@ export type AppTransport = {
 // transport keeps (the server holds nothing of a preview and writes none of the app's rows:
 // docs/api.md, …/preview). A new transport starts a new preview, so a caller keeps one while the
 // preview is in use.
+//
+// The steps go one at a time, each on the rows the one before left: two taps in quick succession
+// would otherwise both start from the same rows, and whichever answer came last would drop the
+// other's change.
 export function previewTransport(base: string): AppTransport {
   let rows: PreviewRow[] | undefined
-  const step = async (action?: ActionPayload) => {
-    const reply = await api<PreviewReply>(`${base}/preview`, {
-      method: 'POST',
-      body: action && rows ? { rows, action } : {},
+  let queue: Promise<unknown> = Promise.resolve()
+  const step = (action?: ActionPayload, fresh = false): Promise<unknown[]> => {
+    const run = queue.then(async () => {
+      // Loading starts over from the sample rows.
+      if (fresh) rows = undefined
+      const reply = await api<PreviewReply>(`${base}/preview`, {
+        method: 'POST',
+        body: action && rows ? { rows, action } : {},
+      })
+      rows = reply.rows
+      return reply.messages
     })
-    rows = reply.rows
-    return reply.messages
+    // A step that failed leaves the rows as they were, and the next goes on from them.
+    queue = run.catch(() => undefined)
+    return run
   }
   return {
-    // Loading starts over from the sample rows.
-    load: () => {
-      rows = undefined
-      return step()
-    },
+    load: () => step(undefined, true),
     act: (action) => step(action),
   }
 }

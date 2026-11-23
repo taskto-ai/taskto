@@ -313,6 +313,61 @@ test("a draft is tried on sample rows the server makes, and its actions never re
   expect(calls[3].body).toEqual({})
 })
 
+test('two taps on a preview in quick succession each go on from the rows the other left', async () => {
+  const base = '/api/workspaces/1/spaces/2/apps/1'
+  const sent: { rows?: unknown[]; action?: { name: string } }[] = []
+  const answers: ((rows: unknown[] | 'fail') => void)[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      sent.push(body)
+      const rows = await new Promise<unknown[] | 'fail'>((resolve) => answers.push(resolve))
+      return new Response(JSON.stringify(rows === 'fail' ? { error: 'x', code: 'internal' } : { messages: [], rows }), {
+        status: rows === 'fail' ? 500 : 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }),
+  )
+  const preview = httpTransport(base, 'draft')
+  const tap = (name: string) => ({ name, surfaceId: 'app-1', sourceComponentId: 'b', timestamp: 't', context: {} })
+  const load = preview.load()
+  await vi.waitFor(() => expect(sent).toHaveLength(1))
+  answers[0]([{ id: 1, revision: 1, data: {} }])
+  await load
+
+  const first = preview.act(tap('one'))
+  const second = preview.act(tap('two'))
+  // The second waits for the first: it must start from the rows the first leaves.
+  await vi.waitFor(() => expect(sent).toHaveLength(2))
+  await new Promise((r) => setTimeout(r, 20))
+  expect(sent).toHaveLength(2)
+  const afterOne = [
+    { id: 1, revision: 1, data: {} },
+    { id: 2, revision: 1, data: { by: 'one' } },
+  ]
+  answers[1](afterOne)
+  await first
+  await vi.waitFor(() => expect(sent).toHaveLength(3))
+  expect(sent[2]).toMatchObject({ rows: afterOne, action: { name: 'two' } })
+  answers[2]([...afterOne, { id: 3, revision: 1, data: { by: 'two' } }])
+  await second
+
+  // A step that fails leaves the next one to go on from the rows as they were.
+  const failing = preview.act(tap('three'))
+  await vi.waitFor(() => expect(sent).toHaveLength(4))
+  const fine = preview.act(tap('four'))
+  answers[3]('fail')
+  await expect(failing).rejects.toBeTruthy()
+  await vi.waitFor(() => expect(sent).toHaveLength(5))
+  expect(sent[4]).toMatchObject({
+    rows: [...afterOne, { id: 3, revision: 1, data: { by: 'two' } }],
+    action: { name: 'four' },
+  })
+  answers[4]([])
+  await fine
+})
+
 for (const [name, component] of [
   ['outside the catalog', { id: 'root', component: 'Script', src: 'x' }],
   ['left out of the basic catalog', { id: 'root', component: 'Image', url: 'https://elsewhere.example/p.png' }],

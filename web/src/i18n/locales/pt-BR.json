@@ -237,7 +237,8 @@
         "doneShared": "Publicado como versão {number}. Ele está no ar para quem pode usá-lo em {space}.",
         "needsPublisher": "Você pode criar o rascunho, mas publicá-lo exige o papel de publicador neste app. Peça a alguém que o tenha para publicar.",
         "readOnly": "Você só pode ler este espaço, então não pode publicar aqui.",
-        "nothing": "Nada de novo para publicar: o rascunho é a versão no ar."
+        "nothing": "Nada de novo para publicar: o rascunho é a versão no ar.",
+        "moved": "O rascunho mudou enquanto você o revisava, então nada foi publicado. O que ele pode ler e alterar, acima, está atualizado: revise de novo antes de publicar."
       }
     },
     "fieldType": {

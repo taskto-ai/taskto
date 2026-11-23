@@ -234,7 +234,8 @@
         "doneShared": "Published as release {number}. It is live for the people who may use it in {space}.",
         "needsPublisher": "You can build the draft, but publishing it needs the publisher role in this app. Ask someone who has it to publish.",
         "readOnly": "You can only read this space, so you can’t publish here.",
-        "nothing": "Nothing new to publish: the draft is the live release."
+        "nothing": "Nothing new to publish: the draft is the live release.",
+        "moved": "The draft changed while you were reviewing it, so nothing was published. What it can read and change above is up to date: review it again before you publish."
       }
     },
     "fieldType": {

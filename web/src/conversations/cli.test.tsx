@@ -170,7 +170,7 @@ test('a finished CLI turn says the CLI worked', () => {
     ],
     docs: { 'pi.live': {} },
   })
-  expect(t.messages[1].tools).toEqual([{ id: 'call-1', name: 'cli_turn', cli: 'claude' }])
+  expect(t.messages[1].tools).toEqual([{ id: 'call-1', key: '2.0.0', name: 'cli_turn', cli: 'claude' }])
 })
 
 test('a finished CLI turn keeps showing what the CLI did, from its result', () => {
@@ -195,7 +195,7 @@ test('a finished CLI turn keeps showing what the CLI did, from its result', () =
     ],
     docs: { 'pi.live': {} },
   })
-  expect(t.messages[1].tools).toEqual([{ id: 'call-1', name: 'cli_turn', cli: 'claude', output: kept }])
+  expect(t.messages[1].tools).toEqual([{ id: 'call-1', key: '2.0.0', name: 'cli_turn', cli: 'claude', output: kept }])
 })
 
 test('a turn waiting for a new login shows the banner; Reconnect signs in right there and it goes', async () => {
@@ -466,7 +466,7 @@ test("a CLI's request to take over the browser is shown as the built-in agent's"
     })
   const t = result({ transcript: '▸ mcp__taskto__browser_help', help })
   expect(t.messages[1].tools).toEqual([
-    { id: 'call-1', name: 'cli_turn', cli: 'claude', output: '▸ mcp__taskto__browser_help', help },
+    { id: 'call-1', key: '2.0.0', name: 'cli_turn', cli: 'claude', output: '▸ mcp__taskto__browser_help', help },
   ])
   expect(pendingHelp(t.messages)).toEqual(help)
 

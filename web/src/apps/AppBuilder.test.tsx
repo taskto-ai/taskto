@@ -6,6 +6,7 @@ import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { parseRoute, usePath } from '../router'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
+import { claimDrafts } from '../uiState'
 import { AppsPage } from './AppsPage'
 
 const privateSpace = { id: 2, workspace_id: 1, kind: 'private', name: 'Private', archived_at: null, access: 'write' }
@@ -97,6 +98,10 @@ function savedEntries(id: number, saved: unknown) {
 }
 
 const apps = '/api/workspaces/1/spaces/2/apps/1'
+// What this browser keeps for user 7, who is signed in: every key names its user.
+const USER = 7
+const SESSION = `taskto:builder:${USER}:1:9`
+const MESSAGE = `taskto:message:${USER}:/api/workspaces/1/conversations/9`
 // What was sent to the agent, as the conversation's messages route took it.
 const sentToAgent = (calls: Call[]) =>
   String(
@@ -137,7 +142,7 @@ function builderRoutes(extra: Record<string, Parameters<typeof fakeFetch>[0][str
 }
 
 async function openBuilder(saved = true) {
-  window.localStorage.setItem('taskto:builder:1:9', JSON.stringify({ space: 2, ...(saved ? { app: 1 } : {}) }))
+  window.localStorage.setItem(SESSION, JSON.stringify({ space: 2, ...(saved ? { app: 1 } : {}) }))
   window.history.replaceState(null, '', '/w/1/apps/build-9')
   render(<Routed />)
   await waitFor(() => expect(streams.sources).toHaveLength(1))
@@ -149,6 +154,7 @@ const panel = (name: 'build' | 'preview') => document.getElementById(`tt-builder
 beforeEach(() => {
   window.history.replaceState(null, '', '/w/1/apps')
   streams = fakeStreams()
+  claimDrafts(USER)
 })
 afterEach(() => {
   cleanup()
@@ -208,7 +214,7 @@ test('a new app starts in the private space unless a shared one is chosen, and t
   expect(content).toContain('my private space (space id 2)')
   expect(content).toMatch(/Don’t publish it/)
   // Where it was started is kept, and the builder opens on the conversation.
-  expect(JSON.parse(window.localStorage.getItem('taskto:builder:1:9') ?? '{}')).toEqual({ space: 2 })
+  expect(JSON.parse(window.localStorage.getItem(SESSION) ?? '{}')).toEqual({ space: 2, since: 0 })
   await screen.findByRole('tablist', { name: 'Builder view' })
 })
 
@@ -228,7 +234,7 @@ test('a shared space is chosen explicitly', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Start building' }))
   await waitFor(() => expect(window.location.pathname).toBe('/w/1/apps/build-9'))
   expect(sentToAgent(calls)).toContain('the shared space “Team” (space id 3)')
-  expect(JSON.parse(window.localStorage.getItem('taskto:builder:1:9') ?? '{}')).toEqual({ space: 3 })
+  expect(JSON.parse(window.localStorage.getItem(SESSION) ?? '{}')).toEqual({ space: 3, since: 0 })
 })
 
 test('on a phone, Build and Preview switch without losing the message or the preview, and focus follows', async () => {
@@ -345,7 +351,7 @@ test('leaving and reopening keeps the message, the app being built and the pane'
   // Sending it forgets it.
   fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' })
   await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(''))
-  expect(window.localStorage.getItem('taskto:message:/api/workspaces/1/conversations/9')).toBeNull()
+  expect(window.localStorage.getItem(MESSAGE)).toBeNull()
 })
 
 test('a private app is published in one step, and the panel says who can use it and what it can do', async () => {
@@ -385,7 +391,7 @@ test('a private app is published in one step, and the panel says who can use it 
 
 test('a shared app needs the publisher role, and publishing it names who it goes to first', async () => {
   narrowScreen(true)
-  window.localStorage.setItem('taskto:builder:1:9', JSON.stringify({ space: 3, app: 4 }))
+  window.localStorage.setItem(SESSION, JSON.stringify({ space: 3, app: 4 }))
   window.history.replaceState(null, '', '/w/1/apps/build-9')
   const base = '/api/workspaces/1/spaces/3/apps/4'
   const shared = (over: Record<string, unknown> = {}) => app({ id: 4, space_id: 3, ...over })
@@ -485,7 +491,7 @@ test('permission errors are said in the user’s language, not as the server wro
 
 test('someone who can’t change the app is told so instead of being shown its draft', async () => {
   narrowScreen(false)
-  window.localStorage.setItem('taskto:builder:1:9', JSON.stringify({ space: 2, app: 1 }))
+  window.localStorage.setItem(SESSION, JSON.stringify({ space: 2, app: 1 }))
   window.history.replaceState(null, '', '/w/1/apps/build-9')
   const calls = fakeFetch({
     'GET /api/workspaces/1/spaces': { body: spaces },
@@ -527,7 +533,7 @@ test('Edit with AI asks the agent to change the draft of that app, and the live 
   expect(content).toContain('Add a notes field')
   expect(content).toContain('app id 1, in space id 2')
   expect(content).toMatch(/Change its draft only/)
-  expect(JSON.parse(window.localStorage.getItem('taskto:builder:1:9') ?? '{}')).toEqual({ space: 2, app: 1 })
+  expect(JSON.parse(window.localStorage.getItem(SESSION) ?? '{}')).toEqual({ space: 2, since: 0, app: 1 })
   // Nothing was published or changed by asking.
   expect(calls.some((c) => c.path.endsWith('/publish') || (c.method === 'PATCH' && c.path === apps))).toBe(false)
   // The builder opens on the app: its draft is previewed, and the live release is one tap away.
@@ -546,4 +552,191 @@ test('Edit with AI is refused to someone who may not design the app', async () =
   )
   fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'x' } })
   expect((screen.getByRole('button', { name: 'Start editing' }) as HTMLButtonElement).disabled).toBe(true)
+})
+
+// The agent called create_app in entry id, under call id callId, and the server answered with saved.
+function saveAt(id: number, callId: string, saved: unknown) {
+  return savedEntries(id, saved).map((e) => JSON.parse(JSON.stringify(e).replaceAll(`c${id}`, callId)))
+}
+
+const getsOf = (calls: Call[], path: string) => calls.filter((c) => c.method === 'GET' && c.path === path)
+const NOTHING = 'Nothing to preview yet. Describe the app in Build: the agent’s draft shows here, with sample data.'
+
+test('building in a conversation that has saved other apps opens the builder, and only takes an app saved after', async () => {
+  narrowScreen(false)
+  window.history.replaceState(null, '', '/w/1/apps/build-9')
+  const older = '/api/workspaces/1/spaces/2/apps/5'
+  const olderEntries = savedEntries(1, app({ id: 5, name: 'Older' }))
+  const route = {
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/conversations/9': { body: conversation(9) },
+    'GET /api/workspaces/1/conversations/9/entries': { body: { entries: olderEntries } },
+    'POST /api/workspaces/1/conversations/9/messages': { status: 202, body: { submission_id: 1 } },
+    [`GET ${older}`]: { body: app({ id: 5, name: 'Older' }) },
+    [`GET ${apps}`]: { body: app() },
+    [`POST ${older}/preview`]: { body: { messages: surface, rows: [] } },
+    [`POST ${apps}/preview`]: { body: { messages: surface, rows: [] } },
+  }
+  const calls = fakeFetch(route)
+  render(<Routed />)
+  fireEvent.change(await screen.findByLabelText('What should the app do?'), { target: { value: 'A better tracker' } })
+  fireEvent.click(await screen.findByRole('button', { name: 'Start building' }))
+
+  // The address is the one the page is on: the builder opens on the conversation all the same.
+  await waitFor(() => expect(streams.sources).toHaveLength(1))
+  expect(window.location.pathname).toBe('/w/1/apps/build-9')
+  expect(screen.getByLabelText('Message')).toBeTruthy()
+  expect(sentToAgent(calls)).toContain('A better tracker')
+  act(() => streams.sources[0].open())
+
+  // The conversation's earlier save is not this build's: nothing is shown, nothing is published from it.
+  act(() => streams.sources[0].send({ type: 'value', value: { entries: olderEntries } }))
+  await within(panel('preview')).findByText(NOTHING)
+  expect(getsOf(calls, older)).toHaveLength(0)
+  expect(within(panel('preview')).queryByRole('region', { name: 'Publish' })).toBeNull()
+
+  // The one saved after it is.
+  act(() =>
+    streams.sources[0].send({ type: 'value', value: { entries: [...olderEntries, ...savedEntries(5, app())] } }),
+  )
+  await within(panel('preview')).findByText('Preview · sample data')
+  expect(getsOf(calls, older)).toHaveLength(0)
+
+  // After a reload the same holds: the older app is still not picked from the transcript.
+  cleanup()
+  streams = fakeStreams()
+  window.localStorage.setItem(SESSION, JSON.stringify({ space: 2, since: 2 }))
+  const again = fakeFetch(route)
+  render(<Routed />)
+  await waitFor(() => expect(streams.sources).toHaveLength(1))
+  act(() => streams.sources[0].open())
+  act(() => streams.sources[0].send({ type: 'value', value: { entries: olderEntries } }))
+  await within(panel('preview')).findByText(NOTHING)
+  expect(getsOf(again, older)).toHaveLength(0)
+})
+
+test('a browser that keeps nothing still opens the new build', async () => {
+  narrowScreen(true)
+  window.history.replaceState(null, '', '/w/1/apps/build')
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'POST /api/workspaces/1/conversations': { status: 201, body: conversation(9) },
+    'POST /api/workspaces/1/conversations/9/messages': { status: 202, body: { submission_id: 1 } },
+    'PATCH /api/workspaces/1/conversations/9': { body: conversation(9) },
+    'GET /api/workspaces/1/conversations/9': { body: conversation(9) },
+  })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new DOMException('full', 'QuotaExceededError')
+  })
+  try {
+    render(<Routed />)
+    fireEvent.change(await screen.findByLabelText('What should the app do?'), { target: { value: 'A tracker' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Start building' }))
+    await waitFor(() => expect(window.location.pathname).toBe('/w/1/apps/build-9'))
+    await screen.findByRole('tablist', { name: 'Builder view' })
+    expect(screen.queryByLabelText('What should the app do?')).toBeNull()
+  } finally {
+    vi.restoreAllMocks()
+  }
+})
+
+test('a tab left open by another account never writes the unsent message where the next one reads', async () => {
+  narrowScreen(false)
+  builderRoutes()
+  await openBuilder()
+  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
+  fireEvent.change(box, { target: { value: 'Alice’s secret plan' } })
+  expect(window.localStorage.getItem(MESSAGE)).toBe('Alice’s secret plan')
+
+  // Bob signs in through another tab: it forgets what was kept, and the browser is his.
+  window.localStorage.clear()
+  window.localStorage.setItem('taskto:drafts-of', '8')
+
+  // Alice's tab goes on: what she types is kept nowhere Bob reads.
+  fireEvent.change(box, { target: { value: 'Alice’s secret plan, continued' } })
+  expect(Object.values({ ...window.localStorage }).join('|')).not.toContain('Alice')
+})
+
+test('a second save under the same tool call id reads the app again', async () => {
+  narrowScreen(false)
+  const calls = builderRoutes()
+  await openBuilder(false)
+  act(() => streams.sources[0].send({ type: 'value', value: { entries: saveAt(1, 'call_0', app()) } }))
+  await within(panel('preview')).findByText('Preview · sample data')
+  const first = getsOf(calls, apps).length
+  // Some providers number a turn's calls from 0: the next save has the same id.
+  act(() =>
+    streams.sources[0].send({
+      type: 'value',
+      value: { entries: [...saveAt(1, 'call_0', app()), ...saveAt(3, 'call_0', app({ version: 2 }))] },
+    }),
+  )
+  await waitFor(() => expect(getsOf(calls, apps).length).toBeGreaterThan(first))
+})
+
+test('an app a CLI turn saved fills the preview of a new build', async () => {
+  narrowScreen(false)
+  const calls = builderRoutes()
+  await openBuilder(false)
+  expect(getsOf(calls, apps)).toHaveLength(0)
+  const cli = [
+    {
+      id: 1,
+      kind: 'pi.assistant',
+      model: [
+        { role: 'assistant', content: [{ type: 'toolCall', id: 'k', name: 'cli_turn', arguments: { cli: 'claude' } }] },
+      ],
+    },
+    {
+      id: 2,
+      kind: 'pi.tool',
+      model: [
+        {
+          role: 'toolResult',
+          toolCallId: 'k',
+          toolName: 'cli_turn',
+          content: [{ type: 'text', text: 'Saved the app.' }],
+          details: { transcript: '▸ mcp__taskto__create_app', apps: [{ space: 2, app: 1 }] },
+        },
+      ],
+    },
+  ]
+  act(() => streams.sources[0].send({ type: 'value', value: { entries: cli } }))
+  await within(panel('preview')).findByText('Preview · sample data')
+  expect(getsOf(calls, apps).length).toBeGreaterThan(0)
+})
+
+test('a shared publish confirmation closes when the draft changes, and publishes only what was reviewed again', async () => {
+  narrowScreen(false)
+  window.localStorage.setItem(SESSION, JSON.stringify({ space: 3, app: 4, since: 0 }))
+  window.history.replaceState(null, '', '/w/1/apps/build-9')
+  const base = '/api/workspaces/1/spaces/3/apps/4'
+  const shared = (over: Record<string, unknown> = {}) => app({ id: 4, space_id: 3, ...over })
+  let version = 1
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/conversations/9': { body: conversation(9) },
+    [`GET ${base}`]: () => ({ body: shared({ version }) }),
+    [`POST ${base}/preview`]: { body: { messages: surface, rows: [] } },
+    [`POST ${base}/publish`]: { body: shared({ version: version + 1, live: release(), unpublished_changes: false }) },
+  })
+  render(<Routed />)
+  await waitFor(() => expect(streams.sources).toHaveLength(1))
+  act(() => streams.sources[0].open())
+  const section = await within(panel('preview')).findByRole('region', { name: 'Publish' })
+  fireEvent.click(await within(section).findByRole('button', { name: 'Review and publish…' }))
+  expect(within(section).getByRole('button', { name: 'Publish for Team' })).toBeTruthy()
+
+  // The agent saves again while the confirmation is open: the draft is not the one that was reviewed.
+  version = 2
+  act(() => streams.sources[0].send({ type: 'value', value: { entries: savedEntries(1, shared({ version: 2 })) } }))
+  await within(section).findByText(/changed while you were reviewing it/)
+  expect(within(section).queryByRole('button', { name: 'Publish for Team' })).toBeNull()
+  expect(calls.some((c) => c.path === `${base}/publish`)).toBe(false)
+
+  // Confirming again publishes the version now shown.
+  fireEvent.click(within(section).getByRole('button', { name: 'Review and publish…' }))
+  fireEvent.click(within(section).getByRole('button', { name: 'Publish for Team' }))
+  await waitFor(() => expect(calls.some((c) => c.path === `${base}/publish`)).toBe(true))
+  expect(calls.find((c) => c.path === `${base}/publish`)?.body).toEqual({ version: 2, acknowledge: [] })
 })

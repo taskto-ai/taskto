@@ -14,6 +14,7 @@
 import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, type App, api, type Conversation, type Space, ws } from '../api'
 import { ConversationView } from '../conversations/ConversationView'
+import type { History } from '../conversations/history'
 import type { AppRef } from '../conversations/transcript'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
 import { browserLocale, useT } from '../i18n'
@@ -21,22 +22,28 @@ import { useLoad } from '../load'
 import { NARROW, useMediaQuery } from '../media'
 import { Link, navigate, routePath } from '../router'
 import { spaceLabel } from '../spaces'
-import { readJson, readState, writeState } from '../uiState'
+import { draftKey, readDraft, readDraftJson, writeDraft } from '../uiState'
 import { appError, PublishPanel } from './AppPublish'
 import { AppStage } from './AppStage'
 import { appPath, type BuilderRoute, builderPath } from './route'
 
-// What a builder session remembers in this browser: where the app lives and which app it is, once
-// the agent has saved one.
-type Session = { space: number; app?: number }
-const sessionKey = (workspace: number, conversation: number) => `taskto:builder:${workspace}:${conversation}`
-const lastKey = (workspace: number) => `taskto:builder:${workspace}:last`
-const paneKey = (workspace: number, conversation: number) => `taskto:builder-pane:${workspace}:${conversation}`
+// What a builder session knows: where the app lives and which app it is, once the agent has saved
+// one, and `since`, the newest entry the conversation had when the building began: only an app
+// the agent saved after it is this build's (a conversation may have saved others before, and the
+// builder never takes one of those for the app being built). An app that was chosen, to edit it,
+// is in the session from the start. It is kept in this browser as a convenience, and the page holds
+// it in its own state, so a browser that keeps nothing builds all the same.
+type Session = { space: number; app?: number; since?: number }
+
+// These keys belong to the signed-in user (uiState.draftKey).
+const sessionKey = (workspace: number, conversation: number) => draftKey('builder', workspace, conversation)
+const lastKey = (workspace: number) => draftKey('builder', workspace, 'last')
+const paneKey = (workspace: number, conversation: number) => draftKey('builder-pane', workspace, conversation)
 
 // The conversation a person was last building in, to continue it from the Apps page.
 export function lastBuilderConversation(workspace: number): number | null {
-  const n = Number(readState(lastKey(workspace)))
-  return Number.isSafeInteger(n) && n > 0 && readJson<Session>(sessionKey(workspace, n)) ? n : null
+  const n = Number(readDraft(lastKey(workspace)))
+  return Number.isSafeInteger(n) && n > 0 && readDraftJson<Session>(sessionKey(workspace, n)) ? n : null
 }
 
 export function AppBuilder({
@@ -49,28 +56,62 @@ export function AppBuilder({
   streams?: EventSourceFactory
 }) {
   const conversation = route.kind === 'conversation' ? route.conversation : null
-  const session = conversation ? readJson<Session>(sessionKey(workspace, conversation)) : null
+  // The sessions started on this page, whatever the browser kept.
+  const [started, setStarted] = useState<Record<number, Session>>({})
+  const session = conversation
+    ? (started[conversation] ?? readDraftJson<Session>(sessionKey(workspace, conversation)))
+    : null
   if (conversation && session) {
-    return <BuilderSession key={conversation} workspace={workspace} conversation={conversation} streams={streams} />
+    return (
+      <BuilderSession
+        key={conversation}
+        workspace={workspace}
+        conversation={conversation}
+        initial={session}
+        streams={streams}
+      />
+    )
   }
-  return <BuilderStart key={JSON.stringify(route)} workspace={workspace} route={route} />
+  return (
+    <BuilderStart
+      key={JSON.stringify(route)}
+      workspace={workspace}
+      route={route}
+      onStarted={(id, next) => {
+        setStarted((all) => ({ ...all, [id]: next }))
+        // Building in the conversation the page is already on has no address to go to: the session
+        // is what changes.
+        if (!(route.kind === 'conversation' && route.conversation === id)) {
+          navigate(builderPath(workspace, { kind: 'conversation', conversation: id }))
+        }
+      }}
+    />
+  )
 }
 
 // The start: what the app should do, and where it lives.
-function BuilderStart({ workspace, route }: { workspace: number; route: BuilderRoute }) {
+function BuilderStart({
+  workspace,
+  route,
+  onStarted,
+}: {
+  workspace: number
+  route: BuilderRoute
+  onStarted: (conversation: number, session: Session) => void
+}) {
   const t = useT()
   const editing = route.kind === 'edit' ? route : null
   const conversation = route.kind === 'conversation' ? route.conversation : null
   const scope = editing ? `edit-${editing.space}-${editing.app}` : conversation ? `build-${conversation}` : 'new'
-  const textKey = `taskto:builder-start:${workspace}:${scope}`
+  const textKey = draftKey('builder-start', workspace, scope)
   const spaces = useLoad(() => api<{ spaces: Space[] }>(`${ws(workspace)}/spaces`).then((r) => r.spaces), [workspace])
   const target = useLoad(
     () => (editing ? api<App>(`${ws(workspace)}/spaces/${editing.space}/apps/${editing.app}`) : Promise.resolve(null)),
     [workspace, editing?.space, editing?.app],
   )
-  const [description, setDescription] = useState(() => readState(textKey) ?? '')
+  const [description, setDescription] = useState(() => readDraft(textKey) ?? '')
   // biome-ignore lint/correctness/useExhaustiveDependencies: written when the text changes
-  useEffect(() => writeState(textKey, description.trim() ? description : null), [description])
+  useEffect(() => writeDraft(textKey, description.trim() ? description : null), [description])
   const [where, setWhere] = useState<'private' | 'shared'>('private')
   const [shared, setShared] = useState('')
   const [busy, setBusy] = useState(false)
@@ -95,6 +136,11 @@ function BuilderStart({ workspace, route }: { workspace: number; route: BuilderR
     try {
       const id =
         conversation ?? (await api<Conversation>(`${ws(workspace)}/conversations`, { method: 'POST', body: {} })).id
+      // Where this build begins: what the conversation already holds (it may have saved other apps
+      // before) isn't part of it. A conversation made here is empty.
+      const since = conversation
+        ? ((await api<History>(`${ws(workspace)}/conversations/${id}/entries`)).entries.at(-1)?.id ?? 0)
+        : 0
       const app = target.data ?? undefined
       const place = t(chosen.kind === 'private' ? 'apps.builder.prompt.private' : 'apps.builder.prompt.shared', {
         space: chosen.name,
@@ -121,13 +167,11 @@ function BuilderStart({ workspace, route }: { workspace: number; route: BuilderR
         const title = (app?.name ?? content).replace(/\s+/g, ' ').slice(0, 60)
         await api(`${ws(workspace)}/conversations/${id}`, { method: 'PATCH', body: { title } }).catch(() => undefined)
       }
-      writeState(textKey, null)
-      writeState(
-        sessionKey(workspace, id),
-        JSON.stringify({ space: chosen.id, ...(app ? { app: app.id } : {}) } satisfies Session),
-      )
-      writeState(lastKey(workspace), String(id))
-      navigate(builderPath(workspace, { kind: 'conversation', conversation: id }))
+      writeDraft(textKey, null)
+      const session: Session = { space: chosen.id, since, ...(app ? { app: app.id } : {}) }
+      writeDraft(sessionKey(workspace, id), JSON.stringify(session))
+      writeDraft(lastKey(workspace), String(id))
+      onStarted(id, session)
     } catch (err) {
       setError(appError(err))
     } finally {
@@ -242,17 +286,19 @@ type Pane = 'build' | 'preview'
 function BuilderSession({
   workspace,
   conversation,
+  initial,
   streams,
 }: {
   workspace: number
   conversation: number
+  initial: Session
   streams?: EventSourceFactory
 }) {
   const t = useT()
   const narrow = useMediaQuery(NARROW)
-  const [session, setSession] = useState<Session | null>(() => readJson<Session>(sessionKey(workspace, conversation)))
+  const [session, setSession] = useState<Session>(initial)
   const [pane, setPane] = useState<Pane>(() =>
-    readState(paneKey(workspace, conversation)) === 'preview' ? 'preview' : 'build',
+    readDraft(paneKey(workspace, conversation)) === 'preview' ? 'preview' : 'build',
   )
   const [save, setSave] = useState<string | null>(null)
   // The agent saved the app while the person was on the other pane.
@@ -260,14 +306,14 @@ function BuilderSession({
   const spaces = useLoad(() => api<{ spaces: Space[] }>(`${ws(workspace)}/spaces`).then((r) => r.spaces), [workspace])
 
   // This is the conversation the Apps page offers to continue.
-  useEffect(() => writeState(lastKey(workspace), String(conversation)), [workspace, conversation])
+  useEffect(() => writeDraft(lastKey(workspace), String(conversation)), [workspace, conversation])
   // Where focus goes when the pane changes: into the pane for a tap or click, and stays on the tab
   // for the arrow keys, which only move along the tabs.
   const focusPanel = useRef(true)
   const choose = (next: Pane, toPanel = true) => {
     focusPanel.current = toPanel
     setPane(next)
-    writeState(paneKey(workspace, conversation), next)
+    writeDraft(paneKey(workspace, conversation), next)
     if (next === 'preview') setFresh(false)
   }
   const buildPanel = useRef<HTMLElement>(null)
@@ -289,9 +335,9 @@ function BuilderSession({
   const saved = useCallback(
     (app: AppRef, id: string) => {
       setSession((s) => {
-        const next: Session = { space: app.space, app: app.app }
-        if (s && s.space === next.space && s.app === next.app) return s
-        writeState(sessionKey(workspace, conversation), JSON.stringify(next))
+        const next: Session = { ...s, space: app.space, app: app.app }
+        if (s.space === next.space && s.app === next.app) return s
+        writeDraft(sessionKey(workspace, conversation), JSON.stringify(next))
         return next
       })
       setSave(id)
@@ -373,6 +419,7 @@ function BuilderSession({
             streams={streams}
             embedApps={false}
             onSavedApp={saved}
+            savedAfter={session.since}
           />
         </section>
         <section
@@ -402,7 +449,7 @@ function BuilderPreview({
   save,
 }: {
   workspace: number
-  session: Session | null
+  session: Session
   spaces: Space[] | undefined
   // Changes with each save the agent makes: the app is read again.
   save: string | null

@@ -125,7 +125,7 @@ function SpaceApps({
   // shown, and the list reloaded, so the next try is made against the current version).
   const publish = async (app: App, acknowledge: SchemaChange[]): Promise<SchemaChange[] | null> => {
     try {
-      const result = await publishDraft(`${base}/${app.id}`, app, acknowledge)
+      const result = await publishDraft(`${base}/${app.id}`, app.version, acknowledge)
       if ('changes' in result) {
         setError(null)
         return result.changes

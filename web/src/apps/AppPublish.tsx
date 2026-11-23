@@ -4,7 +4,7 @@
 // can read and change. The server decides every one of these (the app's roles, the space's, what
 // must be acknowledged); nothing here widens what it allows.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   type App,
@@ -36,15 +36,16 @@ export function appError(e: unknown, name?: string): string {
   return errorText(e)
 }
 
-// The result of asking the server to publish: the app, or the schema changes it wants
-// acknowledged first (nothing is published then). Any other refusal is thrown.
+// The result of asking the server to publish the draft at version, the one the person saw: the
+// app, or the schema changes it wants acknowledged first (nothing is published then). A draft
+// that has moved on is the server's `app_changed`, thrown like any other refusal.
 export async function publishDraft(
   base: string,
-  app: App,
+  version: number,
   acknowledge: SchemaChange[],
 ): Promise<{ published: App } | { changes: SchemaChange[] }> {
   try {
-    const published = await api<App>(`${base}/publish`, { method: 'POST', body: { version: app.version, acknowledge } })
+    const published = await api<App>(`${base}/publish`, { method: 'POST', body: { version, acknowledge } })
     return { published }
   } catch (e) {
     if (e instanceof ApiError && e.code === 'app_migration_required') {
@@ -207,29 +208,47 @@ export function PublishPanel({
   const t = useT()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [confirming, setConfirming] = useState(false)
-  const [migration, setMigration] = useState<SchemaChange[] | null>(null)
+  // The draft's version the person is confirming, which a publish names: the draft they were
+  // shown, never a newer one that arrived while the confirmation was open.
+  const [reviewed, setReviewed] = useState<number | null>(null)
+  const confirming = reviewed !== null
+  const [migration, setMigration] = useState<{ changes: SchemaChange[]; version: number } | null>(null)
   const [published, setPublished] = useState<number | null>(null)
+  // The draft changed under a confirmation: it was closed, and the person confirms again.
+  const [moved, setMoved] = useState(false)
+  const seen = useRef(app.version)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: when the draft's version changes
+  useEffect(() => {
+    if (seen.current === app.version) return
+    seen.current = app.version
+    if (reviewed !== null || migration !== null) {
+      setReviewed(null)
+      setMigration(null)
+      setMoved(true)
+    }
+  }, [app.version])
   const personal = space.kind === 'private'
   const mayPublish = space.access === 'write' && app.access.publish
   const nothing = app.live !== null && !app.unpublished_changes
 
-  const run = async (acknowledge: SchemaChange[]) => {
+  // version is the draft the person reviewed (a personal app has no review: the one on screen).
+  const run = async (version: number, acknowledge: SchemaChange[]) => {
     setBusy(true)
     setError(null)
+    setMoved(false)
     try {
-      const result = await publishDraft(base, app, acknowledge)
+      const result = await publishDraft(base, version, acknowledge)
       if ('changes' in result) {
-        setMigration(result.changes)
+        setMigration({ changes: result.changes, version })
       } else {
         setMigration(null)
-        setConfirming(false)
+        setReviewed(null)
         setPublished(result.published.live?.number ?? null)
         onChanged()
       }
     } catch (e) {
       setError(appError(e, app.name))
-      setConfirming(false)
+      setReviewed(null)
       onChanged()
     } finally {
       setBusy(false)
@@ -262,15 +281,20 @@ export function PublishPanel({
           {error}
         </p>
       )}
+      {moved && (
+        <p role="alert" className="tt-error">
+          {t('apps.builder.publish.moved')}
+        </p>
+      )}
       {!mayPublish ? (
         <p className="tt-muted tt-small">
           {t(space.access === 'write' ? 'apps.builder.publish.needsPublisher' : 'apps.builder.publish.readOnly')}
         </p>
       ) : migration ? (
         <MigrationNotice
-          changes={migration}
+          changes={migration.changes}
           busy={busy}
-          onPublish={() => run(migration)}
+          onPublish={() => run(migration.version, migration.changes)}
           onCancel={() => setMigration(null)}
         />
       ) : nothing ? (
@@ -280,17 +304,29 @@ export function PublishPanel({
           {!personal && (
             <p className="tt-small">{t('apps.builder.publish.confirmShared', { space: spaceLabel(space) })}</p>
           )}
-          <button type="button" className="tt-button tt-primary" disabled={busy} onClick={() => run([])}>
+          <button
+            type="button"
+            className="tt-button tt-primary"
+            disabled={busy}
+            onClick={() => run(reviewed ?? app.version, [])}
+          >
             {personal ? t('apps.builder.publish.now') : t('apps.builder.publish.confirm', { space: spaceLabel(space) })}
           </button>
           {!personal && (
-            <button type="button" className="tt-button" disabled={busy} onClick={() => setConfirming(false)}>
+            <button type="button" className="tt-button" disabled={busy} onClick={() => setReviewed(null)}>
               {t('common.cancel')}
             </button>
           )}
         </div>
       ) : (
-        <button type="button" className="tt-button tt-primary" onClick={() => setConfirming(true)}>
+        <button
+          type="button"
+          className="tt-button tt-primary"
+          onClick={() => {
+            setMoved(false)
+            setReviewed(app.version)
+          }}
+        >
           {t('apps.builder.publish.review')}
         </button>
       )}

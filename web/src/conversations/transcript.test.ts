@@ -67,7 +67,7 @@ test('shows tool calls, failures, and that earlier entries are left out', () => 
   })
   expect(t.truncated).toBe(true)
   expect(t.messages).toEqual([
-    { key: '4.0', role: 'assistant', text: '', tools: [{ id: 'c1', name: 'search_docs' }] },
+    { key: '4.0', role: 'assistant', text: '', tools: [{ id: 'c1', key: '4.0.0', name: 'search_docs' }] },
     { key: '5.0', role: 'assistant', text: '', tools: [], error: 'rate limited' },
   ])
 })
@@ -117,10 +117,10 @@ test('a tool use names the app only from a saved result, never from its argument
     ],
   })
   expect(t.messages[0].tools).toEqual([
-    { id: 'ok', name: 'create_app', app: { space: 2, app: 1 } },
-    { id: 'refused', name: 'create_app' },
-    { id: 'odd', name: 'update_app' },
-    { id: 'other', name: 'show_app' },
+    { id: 'ok', key: '1.0.0', name: 'create_app', app: { space: 2, app: 1 } },
+    { id: 'refused', key: '1.0.1', name: 'create_app' },
+    { id: 'odd', key: '1.0.2', name: 'update_app' },
+    { id: 'other', key: '1.0.3', name: 'show_app' },
   ])
 })
 
@@ -142,7 +142,64 @@ test('a result answers the latest call with its id: ids can repeat across turns'
     ],
   })
   expect(t.messages.map((m) => m.tools)).toEqual([
-    [{ id: 'call_0', name: 'create_app', app: { space: 2, app: 1 } }],
-    [{ id: 'call_0', name: 'update_app', app: { space: 2, app: 5 } }],
+    [{ id: 'call_0', key: '1.0.0', name: 'create_app', app: { space: 2, app: 1 } }],
+    [{ id: 'call_0', key: '3.0.0', name: 'update_app', app: { space: 2, app: 5 } }],
   ])
+})
+
+test('a call is named by where it is, so a repeated id is still another call', () => {
+  const call = { role: 'assistant', content: [{ type: 'toolCall', id: 'call_0', name: 'create_app', arguments: {} }] }
+  const t = transcript({
+    entries: [
+      { id: 1, kind: 'pi.assistant', model: [call] },
+      { id: 3, kind: 'pi.assistant', model: [call] },
+    ],
+  })
+  const keys = t.messages.flatMap((m) => m.tools.map((u) => u.key))
+  expect(keys).toEqual(['1.0.0', '3.0.0'])
+})
+
+test('an app a CLI turn saved is the app of its cli_turn call, from the result it kept', () => {
+  const t = transcript({
+    entries: [
+      {
+        id: 1,
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            content: [{ type: 'toolCall', id: 'c', name: 'cli_turn', arguments: { cli: 'claude' } }],
+          },
+          {
+            role: 'toolResult',
+            toolCallId: 'c',
+            toolName: 'cli_turn',
+            content: [{ type: 'text', text: 'Saved.' }],
+            details: {
+              transcript: '▸ mcp__taskto__create_app',
+              // The last is the one shown; what isn't an id is passed over.
+              apps: [{ space: 2, app: 1 }, { space: 'x', app: 3 }, { space: 2, app: 4 }, null],
+            },
+          },
+        ],
+      },
+    ],
+  })
+  expect(t.messages[0].tools[0].app).toEqual({ space: 2, app: 4 })
+  const none = transcript({
+    entries: [
+      {
+        id: 1,
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            content: [{ type: 'toolCall', id: 'c', name: 'cli_turn', arguments: { cli: 'claude' } }],
+          },
+          { role: 'toolResult', toolCallId: 'c', toolName: 'cli_turn', content: [], details: { apps: 'nope' } },
+        ],
+      },
+    ],
+  })
+  expect(none.messages[0].tools[0].app).toBeUndefined()
 })

@@ -45,7 +45,7 @@ import { Markdown } from '../markdown'
 import { Link, routePath } from '../router'
 import { CliLoginFlow } from '../settings/CliAccountsTab'
 import { Icon } from '../shell/Icon'
-import { readState, writeState } from '../uiState'
+import { draftKey, readDraft, writeDraft } from '../uiState'
 import { useDictation } from './Dictation'
 import { type History, useHistory } from './history'
 import { type AppRef, type ChatMessage, CLI_TOOL, HELP_TOOL, pendingHelp, type ToolUse, transcript } from './transcript'
@@ -84,11 +84,13 @@ function liveApps(messages: ChatMessage[]): Set<ToolUse> {
   return live
 }
 
-// The app the agent saved last in the conversation, and the tool call that saved it.
-function lastSavedApp(messages: ChatMessage[]): { app: AppRef; save: string } | null {
+// The app the agent saved last in the conversation, and the call that saved it, by where the call
+// is in the conversation (its id alone may repeat: a second save with the same id is another
+// save). With after, only a save in an entry after that one counts.
+function lastSavedApp(messages: ChatMessage[], after = 0): { app: AppRef; save: string } | null {
   for (const m of [...messages].reverse()) {
     for (const t of [...m.tools].reverse()) {
-      if (t.app) return { app: t.app, save: t.id }
+      if (t.app && Number.parseInt(t.key, 10) > after) return { app: t.app, save: t.key }
     }
   }
   return null
@@ -110,6 +112,7 @@ export function ConversationView({
   buildHref,
   embedApps = true,
   onSavedApp,
+  savedAfter,
 }: {
   workspace: number
   id: number
@@ -125,6 +128,8 @@ export function ConversationView({
   // Called with the app the agent saved last, and the tool call that saved it (which changes with
   // each save, so the caller knows to read the app again).
   onSavedApp?: (app: AppRef, save: string) => void
+  // Only an app saved in an entry after this one is told to onSavedApp.
+  savedAfter?: number
 }) {
   const t = useT()
   const base = `${ws(workspace)}/conversations/${id}`
@@ -137,7 +142,7 @@ export function ConversationView({
   )
   const archived = Boolean(meta.data?.archived_at)
   const apps = embedApps ? liveApps(messages) : new Set<ToolUse>()
-  const saved = lastSavedApp(messages)
+  const saved = lastSavedApp(messages, savedAfter)
   // biome-ignore lint/correctness/useExhaustiveDependencies: told again for each new save only
   useEffect(() => {
     if (saved) onSavedApp?.(saved.app, saved.save)
@@ -795,10 +800,11 @@ function Composer({
 }) {
   const t = useT()
   // An unsent message is kept in this browser, so leaving and coming back finds it where it was.
-  const draftKey = `taskto:message:${base}`
-  const [text, setText] = useState(() => readState(draftKey) ?? '')
+  // The key names the signed-in user, so no other account's tab reads or writes it.
+  const messageKey = draftKey('message', base)
+  const [text, setText] = useState(() => readDraft(messageKey) ?? '')
   // biome-ignore lint/correctness/useExhaustiveDependencies: written when the text changes
-  useEffect(() => writeState(draftKey, text.trim() ? text : null), [text])
+  useEffect(() => writeDraft(messageKey, text.trim() ? text : null), [text])
   const [busy, setBusy] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
