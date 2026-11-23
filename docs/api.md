@@ -1789,8 +1789,15 @@ camera roll, and nothing here promises that.
 An attachment field takes at most `max_files` pictures of at most `max_bytes` each. The accepted types
 are **JPEG, PNG and GIF**, found in the bytes themselves (never from the client's `Content-Type` or the
 file's name, and `svg`, `html` and the rest are refused), with a bound on the pixels (50 megapixels for a
-JPEG, 24 for the others), so a file can't take more memory to read than that. Photos are stored as sent,
-metadata inside them (a phone's location, for one) included.
+JPEG, 24 for the others), so a file can't take more memory to read than that. A photo is served to every
+reader of the record that holds it, so **the metadata inside it is removed when it is finalized**: a phone's
+location, the camera, the time and the rest (Exif and XMP, text and time chunks, comments), losslessly, without
+decoding or re-encoding, so the pixels are exactly the ones sent. A JPEG keeps its JFIF header, its colour
+profile and Adobe's colour transform, and, if the photo isn't upright, a minimal Exif segment holding its
+orientation alone, so a browser still shows it right. A PNG keeps every chunk but `eXIf`, `tEXt`, `zTXt`,
+`iTXt` and `tIME`; a GIF every block but comments and application extensions other than its loop control.
+A file whose structure can't be walked with certainty is refused (`400 app_attachment_type`), not guessed at.
+What is kept is therefore a little smaller than what was sent, and its `size` is the stored one.
 
 An attachment is made in steps, by a writer of the space whose roles in the app let them submit records
 or change some (otherwise `403 app_forbidden`; a viewer of the space is `403` as for any write). All the routes are under `…/apps/{app}`, need a session, and go through the
@@ -1827,9 +1834,13 @@ past the declared size; `409 app_upload_state` once the upload is finalized.
 `{}`. Checks that all the bytes are there (`409 app_upload_offset` with where the server is, if not), that
 they are a picture of an accepted type within the pixel bound, and makes a thumbnail (a JPEG of at most
 320 pixels on a side, turned the way the picture's orientation says) with the standard library's image
-packages. A file that isn't an accepted picture is removed and answers `400 app_attachment_type`. `200`
-with the attachment: `"status": "ready"`, `content_type`, `width` and `height` as shown. Finalizing a
-ready attachment answers it again, so a retry is safe.
+packages, and keeps the picture without its metadata (see above). A file that isn't an accepted picture is
+removed and answers `400 app_attachment_type`. `200` with the attachment: `"status": "ready"`,
+`content_type`, `width` and `height` as shown, and `size` and `received` now the **stored** size, the length the
+picture is served with (while it is uploading they are the declared size and what the server has). The
+received bytes are removed only after the attachment is saved as ready, so a finalize that was interrupted
+starts again from them, and the timer removes any that were left. Finalizing a ready attachment answers it
+again, so a retry is safe.
 
 #### `DELETE …/apps/{app}/uploads/{upload}`
 

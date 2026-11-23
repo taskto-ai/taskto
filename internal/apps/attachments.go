@@ -44,8 +44,11 @@ import (
 //     the same bytes are never written twice. Only the uploader may add chunks, read the state,
 //     finalize or abandon an upload;
 //  3. finalize: the bytes must be all there, and be a JPEG, PNG or GIF by their own content (not
-//     by anything the client said), within the pixel bound; the server makes the thumbnail. The
-//     upload becomes an attachment, "ready", and finalizing it again says the same.
+//     by anything the client said), within the pixel bound; the server makes the thumbnail, and
+//     keeps the picture without its metadata (stripMetadata: where a photo was taken, the camera,
+//     and the rest, left out without touching the pixels; only the orientation stays). The upload
+//     becomes an attachment, "ready", whose size is that of the picture kept, and finalizing it
+//     again says the same.
 //
 // A ready attachment is attached to a record by the insert or update that lists its id, in the
 // same transaction as the record is written (claimAttachments): the attachment must be the
@@ -125,8 +128,9 @@ type Attachment struct {
 	Field string `json:"field"`
 	// Status is "uploading" or "ready".
 	Status string `json:"status"`
-	// Size is what the upload declared, and Received what the server has of it so far: the offset
-	// the next chunk starts at.
+	// While it is uploading, Size is what the upload declared and Received what the server has of
+	// it so far: the offset the next chunk starts at. Once it is ready, both are the size of the
+	// stored picture, which is the length it is served with: the received file without its metadata.
 	Size     int64 `json:"size"`
 	Received int64 `json:"received"`
 	// ContentType, Width and Height are what the bytes turned out to be, once it is ready.
@@ -463,9 +467,21 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		return Attachment{}, err
 	}
 	pic, err := inspect(data)
-	var thumb []byte
+	var thumb, stored []byte
 	if err == nil {
 		thumb, err = s.makeThumbnail(ctx, data, pic.format)
+	}
+	if err == nil {
+		// What is kept is the picture without the metadata a camera wrote into it (where it was
+		// taken, and more): the readers of a record see the picture, not that.
+		stored, err = stripMetadata(data, pic.format)
+	}
+	if err == nil {
+		// A picture the stripped bytes don't show as the received ones did is not kept.
+		var again sniffed
+		if again, err = inspect(stored); err == nil && again != pic {
+			err = errNotPicture
+		}
 	}
 	if errors.Is(err, errNotPicture) {
 		// Not a picture, so not an attachment: it is removed, and the client starts over.
@@ -477,20 +493,15 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	if err != nil {
 		return Attachment{}, err
 	}
-	// Bytes past the declared size (a chunk written and never recorded, the server having stopped
-	// in between) are not the picture's.
-	if f, err := root.OpenFile(fileName(appID, id, ".part"), os.O_WRONLY, 0); err == nil {
-		err = errors.Join(f.Truncate(u.Size), f.Close())
-		if err != nil {
-			return Attachment{}, err
-		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return Attachment{}, err
-	}
+	// The order makes it safe to stop at any point. The received file (.part) is removed only once
+	// the store says the attachment is ready, so until then a retry finds it and does all this again;
+	// the thumbnail and the stored picture are each written whole or not at all. Bytes past the
+	// declared size (a chunk written and never recorded, the server having stopped in between) were
+	// not read, and are not the picture's.
 	if err := writeFile(root, fileName(appID, id, ".thumb"), thumb); err != nil {
 		return Attachment{}, err
 	}
-	if err := root.Rename(fileName(appID, id, ".part"), fileName(appID, id, "")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := writeFile(root, fileName(appID, id, ""), stored); err != nil {
 		return Attachment{}, err
 	}
 	var ready Attachment
@@ -498,10 +509,12 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		if err := s.uploader(ctx, a, sp.ID, appID); err != nil {
 			return err
 		}
+		// From here the size is the stored one (the length it is served with), no longer the declared one.
 		res, err := tx.ExecContext(ctx, `
-			UPDATE app_attachments SET status = 'ready', content_type = ?, width = ?, height = ?, thumb_size = ?, updated_at = ?
+			UPDATE app_attachments SET status = 'ready', size = ?, received = ?, content_type = ?, width = ?, height = ?,
+				thumb_size = ?, updated_at = ?
 			WHERE id = ? AND app_id = ? AND owner = ? AND status = 'uploading'`,
-			pic.contentType, pic.width, pic.height, len(thumb), now(), id, appID, a.UserID)
+			len(stored), len(stored), pic.contentType, pic.width, pic.height, len(thumb), now(), id, appID, a.UserID)
 		if err != nil {
 			return err
 		}
@@ -512,18 +525,22 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		ready = u.Attachment
 		return err
 	})
-	return ready, err
+	if err != nil {
+		return ready, err
+	}
+	if err := root.Remove(fileName(appID, id, ".part")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		slog.Warn("apps: removing a received upload", "app", appID, "err", err) // Sweep removes it
+	}
+	return ready, nil
 }
 
 var errShort = errors.New("the file has fewer bytes than were received")
 
-// readUpload reads the size bytes of an upload: from the file being received, or, if it was already
-// renamed (finalizing stopped before the store heard of it), from the finished one.
+// readUpload reads the size bytes of an upload from the file being received. Only that file has
+// them: the finished one, which finalizing may have written before it stopped, holds the picture
+// without its metadata, so it is no stand-in, and finalizing starts again from this one.
 func readUpload(root *os.Root, appID int64, id string, size int64) ([]byte, error) {
 	f, err := root.Open(fileName(appID, id, ".part"))
-	if errors.Is(err, fs.ErrNotExist) {
-		f, err = root.Open(fileName(appID, id, ""))
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -914,8 +931,17 @@ func (s *Service) relocateOne(ctx context.Context, appID int64, id string, from,
 		return err
 	}
 	defer dst.Close()
+	// The stored picture and its thumbnail go. The received file goes only while the upload isn't
+	// finished: after, it is a leftover that is not the picture (it still has its metadata).
+	var status string
+	if err := s.db.QueryRowContext(ctx, `SELECT status FROM app_attachments WHERE id = ?`, id).Scan(&status); err != nil {
+		return err
+	}
 	suffixes := []string{"", ".part", ".thumb"}
 	for _, suffix := range suffixes {
+		if suffix == ".part" && status == statusReady {
+			continue
+		}
 		data, err := readWhole(src, fileName(appID, id, suffix))
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -1095,7 +1121,24 @@ func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.T
 			continue
 		}
 		for _, f := range files {
-			id, _, _ := strings.Cut(f.Name(), ".")
+			id, suffix, _ := strings.Cut(f.Name(), ".")
+			// The received file of an attachment that is ready is a leftover of finalizing (it was
+			// stopped, or couldn't remove it): it holds the original, metadata included, and nothing
+			// reads it, so it goes at once.
+			if suffix == "part" && attachmentIDPattern.MatchString(id) {
+				var ready int
+				if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM app_attachments WHERE id = ? AND space_id = ? AND status = 'ready'`,
+					id, sp.ID).Scan(&ready); err != nil {
+					errs = append(errs, err)
+					continue
+				}
+				if ready > 0 {
+					if err := root.Remove(path.Join(name, f.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+						errs = append(errs, err)
+					}
+					continue
+				}
+			}
 			fi, err := f.Info()
 			if err != nil || !attachmentIDPattern.MatchString(id) || !fi.ModTime().Before(cutoff) {
 				continue
