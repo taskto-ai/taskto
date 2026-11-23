@@ -51,7 +51,7 @@ here is a secret. The published images are public, so no token is needed to pull
 | `TASKTO_CLI_WORKER_MEMORY` | `6g` | The CLI worker's memory cap. The CLIs take 250–400 MB each, and the agent browser 300–500 MB each. |
 | `TASKTO_CLI_WORKER_CPUS` | `3` | The CLI worker's CPUs. |
 | `TASKTO_BROWSER` | `true` | The agent browser ([agent-browser.md](../docs/agent-browser.md)). |
-| `TASKTO_BACKUP_DIR` | `$HOME/.config/taskto-backup` | A directory **on your machine**, mode 700, for the backups (step 15): `repository`, the backup repository's address with its append-only user, `rest:https://<user>:<password>@<backup-host>:8000/<user>/`, from whoever runs the backup host ([docs/install.md](../docs/install.md#backups-the-server-cant-delete)); and `password`, the repository's password, which step 15 makes if it isn't there. Both mode 600. `none` only for an install that nobody outside a private network can reach. |
+| `TASKTO_BACKUP_DIR` | `$HOME/.config/taskto-backup` | A directory **on your machine**, mode 700, for the backups (step 15): `repository`, the backup repository's address with its append-only user, `rest:https://<user>:<password>@<backup-host>:8000/<user>/`, from whoever runs the backup host ([docs/install.md](../docs/install.md#backups-the-server-cant-delete)); `password`, the repository's password, which step 15 makes if it isn't there; and, only if the backup host asks for a TLS client certificate, `client.pem`, that certificate and its key in one PEM file, from whoever runs the backup host. All mode 600. `none` only for an install that nobody outside a private network can reach. |
 | `TASKTO_BACKUP_AT` | `03:15` | When the nightly backup starts, `HH:MM` in UTC. |
 
 The sizes are for a VM of 4 cores and 12 GB, which leaves the server what it needs: its own
@@ -141,10 +141,15 @@ case "${TASKTO_BACKUP_DIR:-}" in
   *)
     [ -d "$TASKTO_BACKUP_DIR" ] && [ "$(mode "$TASKTO_BACKUP_DIR")" = 700 ] || fail "$TASKTO_BACKUP_DIR isn't a directory of mode 700"
     [ -s "$TASKTO_BACKUP_DIR/repository" ] || fail "no repository address in $TASKTO_BACKUP_DIR/repository"
-    for f in repository password; do
+    for f in repository password client.pem; do
       [ ! -e "$TASKTO_BACKUP_DIR/$f" ] || [ "$(mode "$TASKTO_BACKUP_DIR/$f")" = 600 ] || fail "$TASKTO_BACKUP_DIR/$f isn't mode 600"
     done
     grep -Eq '^rest:https?://[^/@]+@[^/]+/[^/]+/$' "$TASKTO_BACKUP_DIR/repository" || fail "$TASKTO_BACKUP_DIR/repository isn't rest:https://<user>:<password>@<host>:<port>/<user>/"
+    if [ -e "$TASKTO_BACKUP_DIR/client.pem" ]; then
+      grep -q -- '-----BEGIN CERTIFICATE-----' "$TASKTO_BACKUP_DIR/client.pem" && grep -Eq -- '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' "$TASKTO_BACKUP_DIR/client.pem" \
+        || fail "$TASKTO_BACKUP_DIR/client.pem doesn't hold a certificate and its key"
+      grep -q '^rest:https://' "$TASKTO_BACKUP_DIR/repository" || fail "a client certificate needs an https:// repository"
+    fi
     printf '%s' "${TASKTO_BACKUP_AT:-}" | grep -Eq '^([01][0-9]|2[0-3]):[0-5][0-9]$' || fail "TASKTO_BACKUP_AT isn't HH:MM"
     git show "${TASKTO_VERSION}:compose.yaml" | grep -q '^  backup-schedule:' || fail "$TASKTO_VERSION predates the nightly backups"
     ;;
@@ -163,14 +168,16 @@ steps and the firewall unit read them there. This is also the first time you rea
 ```sh
 . ~/.config/taskto-install.env
 q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-TASKTO_BACKUPS=on
+TASKTO_BACKUPS=on TASKTO_BACKUP_CLIENT_CERT=off
 [ "$TASKTO_BACKUP_DIR" != none ] || TASKTO_BACKUPS=off
+[ "$TASKTO_BACKUPS" = off ] || [ ! -e "$TASKTO_BACKUP_DIR/client.pem" ] || TASKTO_BACKUP_CLIENT_CERT=on
 {
   echo 'install -d -m 755 /etc/taskto'
   echo "cat > /etc/taskto/install.env.new <<'VARS'"
   for v in TASKTO_MODE TASKTO_DOMAIN TASKTO_VERSION TASKTO_REGISTRY TASKTO_REGISTRY_USER \
     TASKTO_ADMIN_EMAIL TASKTO_ADMIN_NAME TASKTO_WORKSPACE TASKTO_LAN_IP TASKTO_PROXY_IP \
-    TASKTO_CLI_WORKER_MEMORY TASKTO_CLI_WORKER_CPUS TASKTO_BROWSER TASKTO_BACKUPS TASKTO_BACKUP_AT; do
+    TASKTO_CLI_WORKER_MEMORY TASKTO_CLI_WORKER_CPUS TASKTO_BROWSER TASKTO_BACKUPS TASKTO_BACKUP_AT \
+    TASKTO_BACKUP_CLIENT_CERT; do
     echo "$v=$(q "$(eval "printf %s \"\${$v:-}\"")")"
   done
   echo 'VARS'
@@ -356,9 +363,11 @@ from your checkout, and two files written from the inputs:
   worker's size, the backups' time;
 - `compose.override.yaml`: the egress policies (both `public`, so nobody's provider
   account can reach the VM's private network or a metadata service:
-  [docs/install.md](../docs/install.md#where-provider-accounts-may-connect)), and in
+  [docs/install.md](../docs/install.md#where-provider-accounts-may-connect)), in
   `traefik` mode the LAN port and the trusted proxy
-  ([docs/install.md](../docs/install.md#the-clients-address-behind-a-proxy)).
+  ([docs/install.md](../docs/install.md#the-clients-address-behind-a-proxy)), and, when
+  the backup host asks for a client certificate, restic's `RESTIC_TLS_CLIENT_CERT` for the
+  two backup services (the file itself comes in step 15).
 
 **Run**:
 
@@ -404,6 +413,13 @@ ENV
     echo '    ports:'
     echo "      - \"$TASKTO_LAN_IP:80:8080\""
   fi
+  if [ "${TASKTO_BACKUPS:-}" = on ] && [ "${TASKTO_BACKUP_CLIENT_CERT:-}" = on ]; then
+    for s in backup backup-schedule; do
+      echo "  $s:"
+      echo '    environment:'
+      echo '      RESTIC_TLS_CLIENT_CERT: /run/taskto-backup/client.pem'
+    done
+  fi
 } > compose.override.yaml.new
 chmod 644 .env.new compose.override.yaml.new
 mv .env.new .env
@@ -443,6 +459,12 @@ if [ "${TASKTO_BACKUPS:-}" = on ]; then
   [ "$(jq -r '.services["backup-schedule"].image' <<<"$cfg")" = "$TASKTO_REGISTRY/taskto-backup:$TASKTO_VERSION" ] || fail "no backup-schedule service with the backup image"
   [ "$(jq -r '.services["backup-schedule"].environment.TASKTO_BACKUP_AT' <<<"$cfg")" = "${TASKTO_BACKUP_AT:-03:15}" ] || fail "the backups' time"
   [ "$(stat -c '%u:%g %a' backup)" = "65532:65532 700" ] || fail "/srv/taskto/backup isn't 65532's, mode 700"
+  want=null
+  [ "${TASKTO_BACKUP_CLIENT_CERT:-}" = on ] && want=/run/taskto-backup/client.pem
+  for s in backup backup-schedule; do
+    [ "$(docker compose --profile backup --profile backup-schedule config --format json | jq -r --arg s "$s" '.services[$s].environment.RESTIC_TLS_CLIENT_CERT')" = "$want" ] \
+      || fail "$s's RESTIC_TLS_CLIENT_CERT isn't $want"
+  done
 fi
 grep -rqiE 'insecure|unsafe|local-unsafe' .env compose.override.yaml && fail "a development switch is set"
 [ -s /etc/taskto/registry-token ] && grep -rqF -f /etc/taskto/registry-token /srv/taskto && fail "the pull token is in /srv/taskto"
@@ -912,12 +934,45 @@ if [ "$TASKTO_BACKUP_DIR" = none ]; then
   echo "backups are off: say so in the report"
 else
   (umask 077; [ -s "$TASKTO_BACKUP_DIR/password" ] || openssl rand -base64 32 > "$TASKTO_BACKUP_DIR/password")
-  for f in repository password; do
+  files="repository password" cert=off ok=yes
+  [ ! -e "$TASKTO_BACKUP_DIR/client.pem" ] || { files="$files client.pem"; cert=on; }
+  # Whether restic is given a client certificate, in Compose's settings (step 6) and in the
+  # schedule's container (step 9; stopped or not). One added or removed since needs steps 1,
+  # 6 and 9 first: nothing is copied or removed until both agree with this directory.
+  inuse=$(vm <<'EOF'
+cd /srv/taskto
+cfg=$(docker compose config --format json | jq -r '.services["backup-schedule"].environment.RESTIC_TLS_CLIENT_CERT // empty')
+s=$(docker compose ps -a -q backup-schedule)
+[ -n "$s" ] || exit 1
+run=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$s" | sed -n 's/^RESTIC_TLS_CLIENT_CERT=//p')
+echo "$([ -n "$cfg" ] && echo on || echo off)/$([ -n "$run" ] && echo on || echo off)"
+EOF
+  ) || inuse=unknown
+  if [ "$inuse" = unknown ]; then
+    echo "FAIL: can't read the backups' settings on the VM: has step 9 created backup-schedule?"; ok=no
+  elif [ "$inuse" != "$cert/$cert" ]; then
+    echo "FAIL: client.pem was added or removed since steps 1, 6 and 9 ran: run them again, then this step"; ok=no
+  fi
+  # Each file goes to the VM as <file>.new first. Only once all of them are there are they
+  # switched in together, so a failed copy leaves the set the backups use as it was.
+  for f in $files; do
+    [ "$ok" = yes ] || break
     ssh -o BatchMode=yes "$TASKTO_SSH" \
-      "sudo -n sh -c 'umask 077; cat > /srv/taskto/backup/$f.new && chown 65532:65532 /srv/taskto/backup/$f.new && mv /srv/taskto/backup/$f.new /srv/taskto/backup/$f'" \
-      < "$TASKTO_BACKUP_DIR/$f"
+      "sudo -n sh -c 'umask 077; cat > /srv/taskto/backup/$f.new && chown 65532:65532 /srv/taskto/backup/$f.new'" \
+      < "$TASKTO_BACKUP_DIR/$f" || { echo "FAIL: copying $f to the VM"; ok=no; }
   done
-  vm <<'EOF'
+  if [ "$ok" = yes ]; then
+    # Switched in with one call. No client certificate here, and none recorded: none is left
+    # on the VM either.
+    { echo 'cd /srv/taskto/backup'
+      for f in $files; do echo "mv $f.new $f"; done
+      [ "$cert" = on ] || echo 'rm -f client.pem'
+    } | vm || { echo "FAIL: switching the new files in on the VM"; ok=no; }
+  else
+    echo 'rm -f /srv/taskto/backup/*.new' | vm || true
+  fi
+  # The files are in place.
+  [ "$ok" = yes ] && vm <<'EOF'
 cd /srv/taskto
 # The repository is created the first time. One that is there already (a reinstall) is
 # kept, and opens only with its own password: init then fails, and the step stops.
@@ -929,8 +984,19 @@ fi
 ```
 
 If the first backup fails, `docker compose logs backup-schedule` and the error it printed
-say why: most often the backup host's firewall, its TLS certificate, or a wrong user or
-password in `repository`.
+say why: most often the backup host's firewall, its TLS certificate, a missing or wrong
+client certificate (`client.pem`, for a backup host that asks for one), or a wrong user or
+password in `repository`. A `client.pem` added or removed after step 1 reaches restic only once steps
+1, 6 and 9 have run again: this step first compares it with Compose's settings and the
+running schedule, and stops, changing nothing, until they agree. Once they do, a removed one is removed from the
+VM too.
+
+If the backup host's prune job opens the repository with a key of its own
+([docs/install.md](../docs/install.md#3-removing-old-snapshots-on-the-backup-host-only)),
+and its admins would rather add it from this side than hold the repository's password,
+they send the new key on standard input, never as an argument, to
+`docker compose run --rm -T backup key add --new-password-file /dev/stdin` in `/srv/taskto`
+on the VM. The append-only server accepts a new key; it can't remove one.
 
 **Check**: the files are the backups' only, the schedule runs unprivileged, the last backup
 succeeded, and the backup host refuses a delete from this VM. The delete is of a made-up
@@ -945,7 +1011,13 @@ fail() { echo "FAIL: $*"; exit 1; }
 if [ "${TASKTO_BACKUPS:-}" != on ]; then echo "backups are off"; echo OK; exit 0; fi
 cd /srv/taskto
 [ "$(stat -c '%u:%g %a' backup)" = "65532:65532 700" ] || fail "backup/ isn't 65532's, mode 700"
-for f in repository password; do
+files="repository password"
+cert=""
+if [ "${TASKTO_BACKUP_CLIENT_CERT:-}" = on ]; then
+  files="$files client.pem"
+  cert="--cert backup/client.pem"
+fi
+for f in $files; do
   [ -s "backup/$f" ] && [ "$(stat -c '%u:%g %a' "backup/$f")" = "65532:65532 600" ] || fail "backup/$f isn't 65532's, mode 600"
 done
 grep -qrF -f backup/password .env compose.yaml compose.override.yaml /etc/taskto/install.env && fail "the repository's password is in a Compose file"
@@ -958,7 +1030,8 @@ echo "$h"
 [ "$(jq -r .status <<<"$h")" = ok ] || fail "the last backup didn't succeed: docker compose logs backup-schedule"
 url=$(sed -n 's|^rest:||p' backup/repository | head -1)
 zeros=$(printf '0%.0s' $(seq 64))
-code=$(printf 'url = "%s/snapshots/%s"\n' "${url%/}" "$zeros" | curl -sS -o /dev/null -w '%{http_code}' -X DELETE -K -)
+# shellcheck disable=SC2086 # $cert is empty, or two words.
+code=$(printf 'url = "%s/snapshots/%s"\n' "${url%/}" "$zeros" | curl -sS -o /dev/null -w '%{http_code}' $cert -X DELETE -K -)
 [ "$code" = 403 ] || fail "the backup host answered $code to a delete from this VM, not 403: it isn't append-only"
 echo OK
 EOF
@@ -1095,7 +1168,8 @@ Steps 15 and 16 set them up and prove a restore. After that:
 - To restore after losing the VM: install a new one with the same `TASKTO_BACKUP_DIR` (the
   repository's address and password, kept off the VM for this) up to step 9. Then, on the
   VM, `docker compose stop backup-schedule`, so it doesn't back up the new, empty server;
-  copy the two files with the `for` loop of step 15's Run (not the rest of it, whose backup
-  would be of the empty server); and follow [docs/install.md](../docs/install.md#restore),
+  copy the files with step 15's Run: its first line, `. ~/.config/taskto-install.env` (which
+  also defines `vm`), then from its `files=` line through its `# The files are in place.`
+  line (not the rest of it, whose backup would be of the empty server); and follow [docs/install.md](../docs/install.md#restore),
   "From the restic repository", in `/srv/taskto`, naming the snapshot by its ID from
   `snapshots` rather than `latest`. Then run steps 9 to 17.

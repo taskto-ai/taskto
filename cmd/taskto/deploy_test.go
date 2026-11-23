@@ -267,7 +267,8 @@ func TestInstallRunbookStaysSafe(t *testing.T) {
 	// and a restore drill into a scratch volume and a server cut off from the network. The
 	// server's side never removes a snapshot, and the repository's secrets are never shown.
 	for _, want := range []string{"## Step 15: backups", "## Step 16: the restore drill", "profiles=$profiles,backup-schedule",
-		"backup-schedule -now", "-X DELETE", "dump latest /taskto.tar", "--network none", "restore -"} {
+		"backup-schedule -now", "-X DELETE", "dump latest /taskto.tar", "--network none", "restore -",
+		"RESTIC_TLS_CLIENT_CERT: /run/taskto-backup/client.pem", "$cert -X DELETE"} {
 		if !strings.Contains(runbook, want) {
 			t.Errorf("deploy/INSTALL.md's backups don't have %q", want)
 		}
