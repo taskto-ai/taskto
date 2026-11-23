@@ -100,6 +100,11 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   counts, the agent's tools). An app without roles behaves as before. The agent builds and changes apps with
   its app tools, and the conversation shows each app it saved there, launched from the
   server like on the Apps page (never from the tool call's arguments), with a link to it.
+  An insert or update may declare **effects** from a fixed registry (a card, a document, a route),
+  which a transactional outbox carries out: the record's change and its entries commit
+  together, a worker in the server does them as the user who acted with that user's access at that
+  time, once however often a request is repeated, with a failed one shown and retried on purpose
+  ([api.md](api.md#effects-of-actions)).
   See [api.md](api.md#personal-apps). Sandboxed code apps may come later,
   enabled by an admin.
 - **Integrations:** people's own agents (Claude Code, Codex, any MCP client) use the

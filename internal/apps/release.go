@@ -345,6 +345,16 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 	if err := checkAcknowledge(req.Acknowledge); err != nil {
 		return App{}, err
 	}
+	// What the draft's effects target is the publisher's to use: checked before the write lock is
+	// taken (an app that isn't there is answered below, as always).
+	// Only for a caller who may publish: the draft is not theirs to read otherwise.
+	if acc, err := s.appAccess(ctx, a, sp.ID, appID); err == nil && acc.Publish {
+		if draft, err := app(ctx, s.db, sp.ID, appID); err == nil {
+			if err := s.checkEffectTargets(ctx, a, draft.draftDef); err != nil {
+				return App{}, err
+			}
+		}
+	}
 	var published App
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		acc, err := s.recheckApp(ctx, a, sp.ID, appID)
@@ -647,7 +657,7 @@ func acknowledged(found, ack []SchemaChange) error {
 // the action sets is one it declares with the same type, and an insert gives every field it
 // requires.
 func liveTakes(live, from Definition, name string, ch Change) bool {
-	if la, ok := live.Actions[name]; !ok || la != from.Actions[name] {
+	if la, ok := live.Actions[name]; !ok || !reflect.DeepEqual(la, from.Actions[name]) {
 		return false
 	}
 	for field := range ch.Data {

@@ -491,6 +491,10 @@ type NewCard struct {
 	BlockedBy     []int64   `json:"blocked_by"`
 	Docs          []string  `json:"docs"`
 	Conversations []string  `json:"conversations"`
+	// Origin makes creating the card idempotent: if the board already has a card made with
+	// this origin, that card is returned and nothing is created. It is the server's own
+	// (package apps' outbox uses it), never read from a request.
+	Origin string `json:"-"`
 }
 
 func (s *Service) createCard(ctx context.Context, sp access.Space, a Actor, boardID int64, nc NewCard) (Card, error) {
@@ -520,15 +524,29 @@ func (s *Service) createCard(ctx context.Context, sp access.Space, a Actor, boar
 		if _, err := writableBoard(ctx, tx, sp.ID, boardID); err != nil {
 			return err
 		}
+		if nc.Origin != "" {
+			// Made before: that card, whatever has happened to it since.
+			err := tx.QueryRowContext(ctx, `SELECT id FROM cards WHERE board_id = ? AND origin = ?`, boardID, nc.Origin).Scan(&id)
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
 		rank, err := rankAt(ctx, tx, boardID, nc.Column, 0, nc.Position)
 		if err != nil {
 			return err
 		}
+		var origin any
+		if nc.Origin != "" {
+			origin = nc.Origin
+		}
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO cards (board_id, title, body, col, rank,
+			INSERT INTO cards (board_id, title, body, col, rank, origin,
 				created_by, created_by_agent, created_via, updated_by, updated_by_agent, updated_via)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			boardID, *ch.Title, *ch.Body, nc.Column, rank, a.UserID, a.Agent, via(a), a.UserID, a.Agent, via(a))
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			boardID, *ch.Title, *ch.Body, nc.Column, rank, origin, a.UserID, a.Agent, via(a), a.UserID, a.Agent, via(a))
 		if err != nil {
 			return err
 		}

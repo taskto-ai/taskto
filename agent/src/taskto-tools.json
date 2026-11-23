@@ -769,6 +769,75 @@
                   "then": {
                     "type": "string",
                     "description": "insert, update or delete: the screen to open once it has run (not a record screen)"
+                  },
+                  "effects": {
+                    "type": "array",
+                    "maxItems": 5,
+                    "description": "insert or update only: what the change sets going on boards and documents once the record is saved, done by the server as the user who acted and only if they still may (a card or document is never made twice). Each is one of the registry's kinds with the fields it takes, and nothing else is accepted: no URLs, no tool names. Text fields are templates: {{field}} is a field of the collection, {{id}} the record's number, and there is nothing more to them",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["create_card", "update_card", "create_document", "open_route"],
+                          "description": "create_card: a card on a board; update_card: moves the card a create_card effect made for this record; create_document: a Markdown document in a space; open_route: a place in TaskTo.AI to open (route board, card or document)"
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "create_card only: names the effect so update_card and an open_route card can refer to the card it made. Unique in the app"
+                        },
+                        "when": {
+                          "type": "object",
+                          "description": "the effect applies only if this rule (the same as required_when) holds of the record as the change leaves it"
+                        },
+                        "space_id": {
+                          "type": "integer",
+                          "description": "create_card, create_document, open_route board or document: the space, by ID. The person who saves and publishes the app must be able to write it, and whoever acts must be able to when the effect runs"
+                        },
+                        "board_id": {
+                          "type": "integer",
+                          "description": "create_card, open_route board: the board of that space, by ID"
+                        },
+                        "column": {
+                          "type": "string",
+                          "enum": ["backlog", "todo", "doing", "review", "done"],
+                          "description": "create_card: where the card goes (default backlog); update_card: where it moves"
+                        },
+                        "title": {
+                          "type": "string",
+                          "description": "create_card: the card's title, a template of at most 400 characters"
+                        },
+                        "body": {
+                          "type": "string",
+                          "description": "create_card: the card's Markdown body, a template"
+                        },
+                        "docs": {
+                          "type": "array",
+                          "maxItems": 5,
+                          "items": { "type": "string" },
+                          "description": "create_card: documents of the board's space the card refers to, templates of paths"
+                        },
+                        "card": {
+                          "type": "string",
+                          "description": "update_card, open_route card: the name of the create_card effect whose card for the record it is about"
+                        },
+                        "path": {
+                          "type": "string",
+                          "description": "create_document, open_route document: a template of a path inside the space, like inspections/{{id}}.md. A create_document path ends in .md, never starts with / and has no ... Whatever fills a hole is made a safe file name"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "create_document: the document's text, a template"
+                        },
+                        "route": {
+                          "type": "string",
+                          "enum": ["board", "card", "document"],
+                          "description": "open_route: which place to open"
+                        }
+                      },
+                      "required": ["kind"],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": ["kind"],
@@ -972,6 +1041,75 @@
                   "then": {
                     "type": "string",
                     "description": "insert, update or delete: the screen to open once it has run (not a record screen)"
+                  },
+                  "effects": {
+                    "type": "array",
+                    "maxItems": 5,
+                    "description": "insert or update only: what the change sets going on boards and documents once the record is saved, done by the server as the user who acted and only if they still may (a card or document is never made twice). Each is one of the registry's kinds with the fields it takes, and nothing else is accepted: no URLs, no tool names. Text fields are templates: {{field}} is a field of the collection, {{id}} the record's number, and there is nothing more to them",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["create_card", "update_card", "create_document", "open_route"],
+                          "description": "create_card: a card on a board; update_card: moves the card a create_card effect made for this record; create_document: a Markdown document in a space; open_route: a place in TaskTo.AI to open (route board, card or document)"
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "create_card only: names the effect so update_card and an open_route card can refer to the card it made. Unique in the app"
+                        },
+                        "when": {
+                          "type": "object",
+                          "description": "the effect applies only if this rule (the same as required_when) holds of the record as the change leaves it"
+                        },
+                        "space_id": {
+                          "type": "integer",
+                          "description": "create_card, create_document, open_route board or document: the space, by ID. The person who saves and publishes the app must be able to write it, and whoever acts must be able to when the effect runs"
+                        },
+                        "board_id": {
+                          "type": "integer",
+                          "description": "create_card, open_route board: the board of that space, by ID"
+                        },
+                        "column": {
+                          "type": "string",
+                          "enum": ["backlog", "todo", "doing", "review", "done"],
+                          "description": "create_card: where the card goes (default backlog); update_card: where it moves"
+                        },
+                        "title": {
+                          "type": "string",
+                          "description": "create_card: the card's title, a template of at most 400 characters"
+                        },
+                        "body": {
+                          "type": "string",
+                          "description": "create_card: the card's Markdown body, a template"
+                        },
+                        "docs": {
+                          "type": "array",
+                          "maxItems": 5,
+                          "items": { "type": "string" },
+                          "description": "create_card: documents of the board's space the card refers to, templates of paths"
+                        },
+                        "card": {
+                          "type": "string",
+                          "description": "update_card, open_route card: the name of the create_card effect whose card for the record it is about"
+                        },
+                        "path": {
+                          "type": "string",
+                          "description": "create_document, open_route document: a template of a path inside the space, like inspections/{{id}}.md. A create_document path ends in .md, never starts with / and has no ... Whatever fills a hole is made a safe file name"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "create_document: the document's text, a template"
+                        },
+                        "route": {
+                          "type": "string",
+                          "enum": ["board", "card", "document"],
+                          "description": "open_route: which place to open"
+                        }
+                      },
+                      "required": ["kind"],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": ["kind"],

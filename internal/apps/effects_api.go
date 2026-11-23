@@ -1,0 +1,524 @@
+package apps
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"slices"
+	"strconv"
+
+	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/boards"
+)
+
+// Seeing the effects of an app, retrying the ones that failed, and trying an action out without
+// doing anything (a preview).
+//
+// Effects are the app's records' as far as who may see them: the entries of a record are listed
+// to whoever reads the record (visibility), never to someone who doesn't, and what an entry
+// made (the card's IDs, the document's path) is told only to one who may read where it is. Only
+// the user who acted may retry an entry, and only with the rights the action needs now: the worker
+// checks again, as them, when it runs.
+
+// EffectView is an effect as the API lists it.
+type EffectView struct {
+	ID int64 `json:"id"`
+	// Operation is the stable operation ID of the request that queued it, Position the effect's
+	// place among that action's.
+	Operation string `json:"operation"`
+	Position  int    `json:"position"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name,omitempty"`
+	Action    string `json:"action"`
+	// Record and RecordRevision are what the action changed.
+	Record         int64 `json:"record"`
+	RecordRevision int64 `json:"record_revision"`
+	// Status is pending, running, done, failed or, in a preview, simulated.
+	Status   string `json:"status"`
+	Attempts int    `json:"attempts"`
+	// NextAttemptAt is when a pending effect that failed before is tried again.
+	NextAttemptAt *string `json:"next_attempt_at"`
+	// Error is why a failed effect failed, or why a simulated one would.
+	Error *EffectError `json:"error"`
+	// Detail is what the effect makes, as the record filled it in.
+	Detail EffectDetail `json:"detail"`
+	// Result is what a done effect made, if the caller may read where: a card's IDs, a
+	// document's path, a route as kind and IDs.
+	Result    map[string]any `json:"result,omitempty"`
+	CreatedAt string         `json:"created_at,omitempty"`
+	UpdatedAt string         `json:"updated_at,omitempty"`
+	DoneAt    *string        `json:"done_at"`
+	// CanRetry is whether the caller may retry it: it failed and they are who acted.
+	CanRetry bool `json:"can_retry"`
+}
+
+// EffectError is the code (and params) of a failure, for the web app to say.
+type EffectError struct {
+	Code   apierr.Code   `json:"code"`
+	Params apierr.Params `json:"params,omitempty"`
+}
+
+// EffectDetail is what an effect makes, shortly: the card's title and column, the document's
+// path, the kind of route.
+type EffectDetail struct {
+	Title  string `json:"title,omitempty"`
+	Column string `json:"column,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Route  string `json:"route,omitempty"`
+}
+
+func detailOf(p payload) EffectDetail {
+	return EffectDetail{Title: p.Title, Column: p.Column, Path: p.Path, Route: p.Route}
+}
+
+// EffectList is a page of effects, newest first, with how many of the app's wait and failed.
+type EffectList struct {
+	Effects []EffectView `json:"effects"`
+	// Active and Failed count the entries the caller may see that wait or run, and that failed.
+	Active int `json:"active"`
+	Failed int `json:"failed"`
+}
+
+// EffectFilter selects effects: a record's, those in a state (a status, or "active" for those
+// waiting or running), at most Limit.
+type EffectFilter struct {
+	Record int64
+	Status string
+	Limit  int
+}
+
+var effectStatuses = []string{StatePending, StateRunning, StateDone, StateFailed, "active"}
+
+// view presents an entry to a caller. canRead says whether they may read a space.
+func (s *Service) view(ctx context.Context, e effectRow, caller Actor, canRead func(int64) bool) (EffectView, error) {
+	v := EffectView{
+		ID: e.id, Operation: e.operation, Position: e.position, Kind: e.kind, Name: e.name, Action: e.action,
+		Record: e.recordID, RecordRevision: e.recordRevision, Status: e.state, Attempts: e.attempts,
+		Detail: detailOf(e.payload), CreatedAt: e.createdAt, UpdatedAt: e.updatedAt,
+		CanRetry: e.state == StateFailed && e.userID == caller.UserID,
+	}
+	if e.doneAt.Valid {
+		v.DoneAt = &e.doneAt.String
+	}
+	if e.state == StatePending && e.attempts > 0 {
+		v.NextAttemptAt = &e.nextAttemptAt
+	}
+	if e.errCode.Valid && (e.state == StateFailed || e.state == StatePending) {
+		v.Error = &EffectError{Code: apierr.Code(e.errCode.String)}
+		if e.errParams.Valid {
+			_ = json.Unmarshal([]byte(e.errParams.String), &v.Error.Params)
+		}
+	}
+	if e.state == StateDone && e.result.Valid {
+		var res map[string]any
+		if err := json.Unmarshal([]byte(e.result.String), &res); err != nil {
+			return EffectView{}, err
+		}
+		if canRead(resultSpace(res)) {
+			v.Result = res
+		}
+	}
+	return v, nil
+}
+
+// resultSpace is the space a result points into.
+func resultSpace(res map[string]any) int64 {
+	if route, ok := res["route"].(map[string]any); ok {
+		res = route
+	}
+	id, _ := res["space_id"].(float64)
+	return int64(id)
+}
+
+// readability caches, for one request, whether the caller reads each space.
+func (s *Service) readability(ctx context.Context, userID int64) func(int64) bool {
+	known := map[int64]bool{}
+	return func(spaceID int64) bool {
+		ok, seen := known[spaceID]
+		if !seen {
+			ok, _ = s.access.CanRead(ctx, userID, spaceID)
+			known[spaceID] = ok
+		}
+		return ok
+	}
+}
+
+// effectsReader checks that the caller may read the app's records, which entries are listed with,
+// and says whose.
+func (s *Service) effectsReader(ctx context.Context, sp access.Space, a Actor, appID int64) (visibility, error) {
+	if err := may(sp, access.Read); err != nil {
+		return visibility{}, err
+	}
+	acc, err := s.appAccess(ctx, a, sp.ID, appID)
+	if err != nil {
+		return visibility{}, err
+	}
+	if err := need(acc, access.CapView); err != nil {
+		return visibility{}, err
+	}
+	return readable(acc, a.UserID), nil
+}
+
+// listEffects lists an app's effects that the caller may see: those of records they may read.
+func (s *Service) listEffects(ctx context.Context, sp access.Space, a Actor, appID int64, f EffectFilter) (EffectList, error) {
+	v, err := s.effectsReader(ctx, sp, a, appID)
+	if err != nil {
+		return EffectList{}, err
+	}
+	out := EffectList{Effects: []EffectView{}}
+	if v.scope == access.ScopeNone {
+		return out, nil
+	}
+	if f.Status != "" && !slices.Contains(effectStatuses, f.Status) {
+		return EffectList{}, invalidf("status is one of %v", effectStatuses)
+	}
+	if f.Limit < 0 || f.Limit > maxListed {
+		return EffectList{}, invalidf("limit is 1 to %d", maxListed)
+	}
+	if f.Limit == 0 {
+		f.Limit = defaultListed
+	}
+	where, args := `e.app_id = ?`, []any{appID}
+	if v.scope == access.ScopeOwn {
+		where, args = where+` AND r.created_by = ?`, append(args, v.user)
+	}
+	// An app's counts are over everything the caller sees, whatever the page.
+	// #nosec G202 -- the conditions joined are constants above; values go in args.
+	counts, err := s.db.QueryContext(ctx, `SELECT e.state, count(*) `+effectFrom+` WHERE `+where+` AND e.state <> 'done' GROUP BY e.state`, args...)
+	if err != nil {
+		return EffectList{}, err
+	}
+	defer counts.Close()
+	for counts.Next() {
+		var state string
+		var n int
+		if err := counts.Scan(&state, &n); err != nil {
+			return EffectList{}, err
+		}
+		if state == StateFailed {
+			out.Failed += n
+		} else {
+			out.Active += n
+		}
+	}
+	if err := counts.Err(); err != nil {
+		return EffectList{}, err
+	}
+	if f.Record != 0 {
+		where, args = where+` AND e.record_id = ?`, append(args, f.Record)
+	}
+	switch f.Status {
+	case "":
+	case "active":
+		where += ` AND e.state IN ('pending', 'running')`
+	default:
+		where, args = where+` AND e.state = ?`, append(args, f.Status)
+	}
+	// #nosec G202 -- the conditions joined are constants above; values go in args.
+	rows, err := s.db.QueryContext(ctx, `SELECT `+effectColumns+effectFrom+` WHERE `+where+` ORDER BY e.id DESC LIMIT ?`, append(args, f.Limit)...)
+	if err != nil {
+		return EffectList{}, err
+	}
+	defer rows.Close()
+	canRead := s.readability(ctx, a.UserID)
+	for rows.Next() {
+		e, err := scanEffect(rows)
+		if err != nil {
+			return EffectList{}, err
+		}
+		view, err := s.view(ctx, e, a, canRead)
+		if err != nil {
+			return EffectList{}, err
+		}
+		out.Effects = append(out.Effects, view)
+	}
+	return out, rows.Err()
+}
+
+// retryEffect puts a failed effect back to be done, with its attempts counted afresh. It is for
+// the user who acted, who must still hold the right the action needed: the worker asks again,
+// as them, and a retry doesn't widen what they may do.
+func (s *Service) retryEffect(ctx context.Context, sp access.Space, a Actor, appID, id int64) (EffectView, error) {
+	if err := may(sp, access.Write); err != nil {
+		return EffectView{}, err
+	}
+	v, err := s.effectsReader(ctx, sp, a, appID)
+	if err != nil {
+		return EffectView{}, err
+	}
+	if v.scope == access.ScopeNone {
+		return EffectView{}, ErrNotFound // no record is theirs to read, so no effect is
+	}
+	var e effectRow
+	err = s.write(ctx, func(tx *sql.Tx) error {
+		acc, err := s.recheckApp(ctx, a, sp.ID, appID)
+		if err != nil {
+			return err
+		}
+		where, args := `e.id = ? AND e.app_id = ?`, []any{id, appID}
+		if v.scope != access.ScopeAll {
+			where, args = where+` AND r.created_by = ?`, append(args, a.UserID)
+		}
+		e, err = scanEffect(tx.QueryRowContext(ctx, `SELECT `+effectColumns+effectFrom+` WHERE `+where, args...))
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if e.userID != a.UserID {
+			return forbidden("retry_effect")
+		}
+		// The right the action needed.
+		if e.actionKind == ActionInsert {
+			if err := need(acc, access.CapSubmit); err != nil {
+				return err
+			}
+		} else if acc.ModifyRecords == access.ScopeNone {
+			return forbidden(capModifyRecords)
+		}
+		res, err := tx.ExecContext(ctx, `
+			UPDATE app_effects SET state = 'pending', attempts = 0, next_attempt_at = ?, lease_until = NULL,
+				error_code = NULL, error_params = NULL, updated_at = ?
+			WHERE id = ? AND state = 'failed'`, now(), now(), id)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			if err != nil {
+				return err
+			}
+			return errEffectNotFailed
+		}
+		e, err = scanEffect(tx.QueryRowContext(ctx, `SELECT `+effectColumns+effectFrom+` WHERE e.id = ?`, id))
+		return err
+	})
+	if err != nil {
+		return EffectView{}, err
+	}
+	s.poke()
+	return s.view(ctx, e, a, s.readability(ctx, a.UserID))
+}
+
+// Preview is what an action would set going, simulated.
+type Preview struct {
+	Effects []EffectView `json:"effects"`
+}
+
+// previewAction works out what an action of the app's DRAFT would do about effects, and does
+// nothing: no record changes, no operation is kept, no entry is queued, no card or document is
+// made. It is for those who may design or publish the app, who look at the draft. An effect whose
+// target the caller couldn't write is reported with the code it would fail with.
+func (s *Service) previewAction(ctx context.Context, sp access.Space, a Actor, appID int64, action ClientAction) (Preview, error) {
+	if err := may(sp, access.Read); err != nil {
+		return Preview{}, err
+	}
+	acc, err := s.appAccess(ctx, a, sp.ID, appID)
+	if err != nil {
+		return Preview{}, err
+	}
+	if !reviews(acc) {
+		return Preview{}, forbidden(string(access.CapDesign))
+	}
+	ap, err := launchable(ctx, s.db, sp.ID, appID)
+	if err != nil {
+		return Preview{}, err
+	}
+	def := ap.draftDef
+	ch, err := Plan(SurfaceID(ap.ID), def, action)
+	if err != nil {
+		return Preview{}, err
+	}
+	out := Preview{Effects: []EffectView{}}
+	if ch.Kind != ActionInsert && ch.Kind != ActionUpdate {
+		return out, nil
+	}
+	if ch.Kind == ActionInsert && !acc.Submit {
+		return Preview{}, forbidden(string(access.CapSubmit))
+	}
+	if ch.Kind == ActionUpdate && acc.ModifyRecords == access.ScopeNone {
+		return Preview{}, forbidden(capModifyRecords)
+	}
+	data, id := ch.Data, int64(0)
+	if ch.Kind == ActionUpdate {
+		row, found, err := loadRow(ctx, s.db, appID, ch.ID, visibility{scope: acc.ModifyRecords, user: a.UserID})
+		if err != nil {
+			return Preview{}, err
+		}
+		if !found {
+			return Preview{}, invalidAs(apierr.CodeAppRowNotFound, nil, "the app has no row %d", ch.ID)
+		}
+		if data, err = def.Collection.Merge(row.Data, ch.Data); err != nil {
+			return Preview{}, err
+		}
+		id = row.ID
+	}
+	for i, e := range def.Actions[action.Name].Effects {
+		if !e.applies(def.Collection, data) {
+			continue
+		}
+		p := e.payload(def.Collection, data, id)
+		v := EffectView{
+			Position: i, Kind: e.Kind, Name: e.Name, Action: action.Name, Record: id, Status: StateSimulated,
+			Detail: detailOf(p), NextAttemptAt: nil, DoneAt: nil,
+		}
+		if code := s.previewTarget(ctx, a.UserID, e, p); code != "" {
+			v.Error = &EffectError{Code: code}
+		}
+		out.Effects = append(out.Effects, v)
+	}
+	return out, nil
+}
+
+// previewTarget is the code an effect would fail with for lack of access to its target, or "".
+func (s *Service) previewTarget(ctx context.Context, userID int64, e Effect, p payload) apierr.Code {
+	targetsSpace := e.Kind == EffectCreateCard || e.Kind == EffectCreateDocument || (e.Kind == EffectOpenRoute && p.SpaceID != 0)
+	if !targetsSpace {
+		return ""
+	}
+	if _, err := s.target(ctx, userID, p.SpaceID, e.Kind != EffectOpenRoute); err != nil {
+		var ee *effectError
+		if errors.As(err, &ee) {
+			return ee.code
+		}
+	}
+	return ""
+}
+
+// checkEffectTargets checks, when an app is saved or published, that the one saving it may write
+// every space and board its effects name: a definition can't point at what its author couldn't use
+// themselves. It tells nothing about a space the author can't read that they couldn't tell from
+// the refusal for any other. (Whoever acts is checked again when an effect runs.)
+func (s *Service) checkEffectTargets(ctx context.Context, a Actor, def Definition) error {
+	type target struct{ space, board int64 }
+	var seen []target
+	for _, name := range sortedKeys(def.Actions) {
+		for _, e := range def.Actions[name].Effects {
+			if e.SpaceID == 0 {
+				continue
+			}
+			t := target{e.SpaceID, e.BoardID}
+			if slices.Contains(seen, t) {
+				continue
+			}
+			seen = append(seen, t)
+			write := e.Kind == EffectCreateCard || e.Kind == EffectCreateDocument
+			if err := s.targetOfDefinition(ctx, a, t.space, t.board, write); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Service) targetOfDefinition(ctx context.Context, a Actor, spaceID, boardID int64, write bool) error {
+	refused := invalidAs(apierr.CodeAppEffectTarget, apierr.Params{"space_id": spaceID},
+		"an effect targets space %d, which you can't %s: choose a space and board you can", spaceID, map[bool]string{true: "write", false: "read"}[write])
+	sp, err := s.access.Check(ctx, a.UserID, spaceID)
+	if errors.Is(err, access.ErrNotFound) {
+		return refused
+	}
+	if err != nil {
+		return err
+	}
+	if !sp.Access.Allows(access.Read) || (write && !sp.Access.Allows(access.Write)) {
+		return refused
+	}
+	if boardID == 0 || s.platform.Boards == nil {
+		return nil
+	}
+	all, err := s.platform.Boards.ListBoards(ctx, boards.Actor(a), spaceID)
+	if err != nil {
+		return err
+	}
+	for _, b := range all {
+		if b.ID == boardID {
+			return nil
+		}
+	}
+	return refused
+}
+
+func (s *Service) handleEffects(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	s.listed(w, r, req, 0)
+}
+
+func (s *Service) handleRecordEffects(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	id, ok := recordID(w, r)
+	if !ok {
+		return
+	}
+	s.listed(w, r, req, id)
+}
+
+func (s *Service) listed(w http.ResponseWriter, r *http.Request, req request, record int64) {
+	f := EffectFilter{Record: record, Status: r.URL.Query().Get("status")}
+	if l := r.URL.Query().Get("limit"); l != "" {
+		n, err := strconv.Atoi(l)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "limit is a number")
+			return
+		}
+		f.Limit = n
+	}
+	out, err := s.listEffects(r.Context(), req.space, req.actor, req.app, f)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Service) handleRetryEffect(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("effect"), 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, http.StatusNotFound, apierr.CodeNotFound, ErrNotFound.Error())
+		return
+	}
+	var body struct{}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	v, err := s.retryEffect(r.Context(), req.space, req.actor, req.app, id)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Service) handlePreviewAction(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	var action ClientAction
+	if !readJSON(w, r, &action) {
+		return
+	}
+	out, err := s.previewAction(r.Context(), req.space, req.actor, req.app, action)
+	if errors.Is(err, ErrInvalid) {
+		invalid(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
