@@ -25,7 +25,8 @@ import { spaceLabel } from '../spaces'
 import { draftKey, readDraft, readDraftJson, writeDraft } from '../uiState'
 import { appError, PublishPanel } from './AppPublish'
 import { AppStage } from './AppStage'
-import { appPath, type BuilderRoute, builderPath } from './route'
+import { BoardChooser } from './AppTemplates'
+import { appPath, type BuilderRoute, builderPath, templatesPath } from './route'
 
 // What a builder session knows: where the app lives and which app it is, once the agent has saved
 // one, and `since`, the newest entry the conversation had when the building began: only an app
@@ -183,6 +184,11 @@ function BuilderStart({
     <div className="tt-section tt-builder-start">
       <div className="tt-pane-head">
         <h1>{t(editing ? 'apps.builder.editTitle' : 'apps.builder.title')}</h1>
+        {!editing && (
+          <Link className="tt-button" href={templatesPath(workspace)}>
+            {t('apps.templates.start')}
+          </Link>
+        )}
         <Link className="tt-button" href={routePath({ workspace, section: 'apps' })}>
           {t('apps.all')}
         </Link>
@@ -502,6 +508,9 @@ function BuilderPreview({
             <p className="tt-muted">
               {appError(new ApiError(403, '', { code: 'app_forbidden', params: { capability: 'design' } }))}
             </p>
+          )}
+          {info.data.needs_board && info.data.access.design && (
+            <BoardChooser workspace={workspace} base={base} app={info.data} spaces={spaces} onChanged={reload} />
           )}
           <PublishPanel
             base={base}

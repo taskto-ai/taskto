@@ -23,7 +23,8 @@ import { AppRecords } from './AppRecords'
 import { AppReleases } from './AppReleases'
 import { AppRoles } from './AppRoles'
 import { AppStage } from './AppStage'
-import { appPath, builderPath, parseBuilder, parseItem } from './route'
+import { DuplicateForm, InstalledApp, TemplatesPage } from './AppTemplates'
+import { appPath, builderPath, isTemplates, parseBuilder, parseInstalled, parseItem, templatesPath } from './route'
 
 const appsBase = (workspace: number, space: number) => `${ws(workspace)}/spaces/${space}/apps`
 
@@ -44,6 +45,9 @@ export function AppsPage({
   const continuing = lastBuilderConversation(workspace)
   const builder = parseBuilder(open)
   if (builder) return <AppBuilder workspace={workspace} route={builder} streams={streams} />
+  if (isTemplates(open)) return <TemplatesPage workspace={workspace} />
+  const installed = parseInstalled(open)
+  if (installed) return <InstalledApp workspace={workspace} space={installed.space} app={installed.app} />
   const launched = parseItem(open)
   if (launched) {
     const space = spaces.data?.find((s) => s.id === launched.space)
@@ -64,6 +68,9 @@ export function AppsPage({
         <h1>{t('shell.sections.apps')}</h1>
         <Link className="tt-button tt-primary" href={builderPath(workspace)}>
           {t('apps.builder.build')}
+        </Link>
+        <Link className="tt-button" href={templatesPath(workspace)}>
+          {t('apps.templates.start')}
         </Link>
         {continuing && (
           <Link className="tt-button" href={builderPath(workspace, { kind: 'conversation', conversation: continuing })}>
@@ -179,6 +186,7 @@ function SpaceApps({
               app={a}
               writable={writable}
               targets={targets}
+              copyTo={writable ? [space, ...targets] : targets}
               spaceBase={`${ws(workspace)}/spaces/${space.id}`}
               change={change}
               move={move}
@@ -198,6 +206,7 @@ function AppRow({
   app,
   writable,
   targets,
+  copyTo,
   spaceBase,
   change,
   move,
@@ -209,6 +218,8 @@ function AppRow({
   app: App
   writable: boolean
   targets: Space[]
+  // Where a copy of the app may go: every space the user may write.
+  copyTo: Space[]
   spaceBase: string
   change: (app: App, body: { name?: string; archived?: boolean }) => Promise<void>
   move: (app: App, to: number) => Promise<void>
@@ -221,6 +232,7 @@ function AppRow({
   const [busy, setBusy] = useState(false)
   const [rolesOpen, setRolesOpen] = useState(false)
   const [releasesOpen, setReleasesOpen] = useState(false)
+  const [duplicating, setDuplicating] = useState(false)
   // The schema changes a publish waits to have acknowledged.
   const [migration, setMigration] = useState<SchemaChange[] | null>(null)
   const offline = app.archived_at !== null
@@ -368,6 +380,17 @@ function AppRow({
               {t('apps.roles.open')}
             </button>
           )}
+          {copyTo.length > 0 && (
+            <button
+              type="button"
+              className="tt-button"
+              aria-expanded={duplicating}
+              onClick={() => setDuplicating((d) => !d)}
+              aria-label={t('apps.duplicate.openNamed', { name: app.name })}
+            >
+              {t('apps.duplicate.open')}
+            </button>
+          )}
           {writable && app.access.design && targets.length > 0 && (
             <form
               className="tt-app-move"
@@ -412,6 +435,15 @@ function AppRow({
           app={app}
           canRollBack={writable && app.access.publish}
           changed={reload}
+        />
+      )}
+      {duplicating && (
+        <DuplicateForm
+          workspace={workspace}
+          space={space}
+          app={app}
+          spaces={copyTo}
+          onCancel={() => setDuplicating(false)}
         />
       )}
       {rolesOpen && (

@@ -257,8 +257,15 @@ function dataModelOf(messages: unknown[]): Record<string, unknown> | undefined {
 }
 
 // A summary over rows, as the server formats one: the count as a number, a sum with two decimals.
-function summarize(s: { kind: string; field?: string; where?: unknown }, rows: Item[]): string {
-  const kept = s.where ? rows.filter((r) => holds(s.where as Rule, r)) : rows
+function summarize(s: { kind: string; field?: string; where?: unknown; month_of?: string }, rows: Item[]): string {
+  const month = new Date().toISOString().slice(0, 7)
+  const dated = s.month_of
+    ? rows.filter(
+        (r) =>
+          typeof r[s.month_of as string] === 'string' && (r[s.month_of as string] as string).startsWith(`${month}-`),
+      )
+    : rows
+  const kept = s.where ? dated.filter((r) => holds(s.where as Rule, r)) : dated
   if (s.kind === 'count') return String(kept.length)
   if (s.kind === 'sum') {
     let total = 0

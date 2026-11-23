@@ -272,6 +272,24 @@ export type App = {
   unpublished_changes: boolean
   // The definition being edited, in a single app's reply, for those who may design or publish.
   draft?: AppDraft
+  // The draft has effects with no board chosen yet (a template's, or a copy's whose boards its copier
+  // can't write): it can't be published until one is. Told to those who may design or publish.
+  needs_board?: boolean
+}
+
+// A starter app the server comes with (docs/templates.md).
+export type AppTemplate = {
+  id: string
+  version: number
+  name: string
+  description: string
+  recommended_space: 'private' | 'shared'
+  needs_board: boolean
+  // The kinds of field that use the phone's own hardware.
+  captures: ('attachment' | 'location' | 'signature' | 'barcode')[]
+  // The role assignments an install makes in a shared space: the installer's, and the other members'.
+  roles?: { installer: AppRole[]; members?: AppRole[] }
+  widgets: string[]
 }
 
 // What GET …/apps/{app}/offline answers (docs/api.md): the live release as a client needs it to

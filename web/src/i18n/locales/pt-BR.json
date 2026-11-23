@@ -458,6 +458,64 @@
       "title": "Ditar: fale e depois edite o texto. Sua fala é enviada a este servidor para virar texto, então é preciso estar conectado.",
       "offline": "Ditar exige conexão com este servidor. Você está offline: digite ou use a tecla de ditado do próprio teclado.",
       "unavailable": "{reason} A tecla de ditado do próprio teclado continua funcionando neste campo."
+    },
+    "templates": {
+      "start": "Começar de um modelo",
+      "title": "Começar de um modelo",
+      "intro": "Um modelo é um app pronto. Instalar um cria um app novo, só seu, no espaço que você escolher, como rascunho: nada fica no ar até você testar e publicar, e ele não traz dados de ninguém.",
+      "use": "Usar este modelo",
+      "useNamed": "Usar o modelo {name}",
+      "install": "Instalar como rascunho",
+      "forPrivate": "Feito para o seu espaço privado.",
+      "forShared": "Feito para um espaço compartilhado, para uma equipe.",
+      "betterPrivate": "Este modelo é feito para o seu espaço privado; também funciona em um compartilhado.",
+      "betterShared": "Este modelo é feito para uma equipe em um espaço compartilhado; no seu espaço privado só você vai usá-lo.",
+      "captures": "Usa o seu celular para: {kinds}.",
+      "capture": {
+        "attachment": "a câmera",
+        "location": "a sua posição",
+        "signature": "um campo de assinatura",
+        "barcode": "ler um código"
+      },
+      "needsBoard": "Precisa de um quadro seu para os cartões que cria.",
+      "widgets": "Oferece um widget para a sua página Início.",
+      "board": "Quadro para os cartões que ele cria",
+      "chooseBoard": "Escolha um quadro…",
+      "boardIn": "{board} · {space}",
+      "boardNote": "Só aparecem os quadros em que você pode escrever.",
+      "noBoards": "Você não tem nenhum quadro em que possa escrever: crie um em Quadros primeiro.",
+      "boardNeeded": "Este app cria cartões em um quadro, e nenhum foi escolhido ainda. Escolha um em que você possa escrever antes de publicar.",
+      "useBoard": "Usar este quadro",
+      "publishNeedsBoard": "Escolha antes um quadro para os cartões deste app: ele não pode ser publicado até lá.",
+      "rolesShared": "Em um espaço compartilhado, você recebe estes papéis: {installer}. Todos os outros do espaço recebem: {members}.",
+      "rolesInstaller": "Em um espaço compartilhado, você recebe estes papéis: {installer}.",
+      "draftNote": "Ele é instalado como rascunho, sem registros. Você testa com dados de exemplo e depois publica.",
+      "installedNote": "Este é um rascunho: nada está no ar ainda. Teste abaixo, veja quem poderá usá-lo e depois publique.",
+      "liveNote": "Este app está no ar. As mudanças no rascunho só entram no ar quando você as publicar.",
+      "noReview": "Você não pode revisar o rascunho deste app: isso exige o papel de construtor ou de publicador nele.",
+      "items": {
+        "expense_tracker": {
+          "name": "Controle de despesas",
+          "description": "Registre o que você gasta com a foto do recibo e veja o total do mês na sua página Início."
+        },
+        "equipment_checkout": {
+          "name": "Retirada de equipamentos",
+          "description": "Leia a etiqueta de um item, diga quem está com ele e desde quando, e marque a devolução. Cada pessoa vê as próprias retiradas; gestores de dados veem todas."
+        },
+        "inspection": {
+          "name": "Inspeção",
+          "description": "Percorra um local, registre aprovado ou reprovado com o lugar e uma assinatura, e transforme cada reprovação em um cartão em um quadro que você escolher."
+        }
+      }
+    },
+    "duplicate": {
+      "open": "Duplicar como modelo",
+      "openNamed": "Duplicar {name} como modelo",
+      "title": "Duplicar {name}",
+      "note": "Isto copia só a definição do app, em um app novo, só seu: nenhum registro, foto, histórico ou papel vem junto, e os quadros em que você não pode escrever são limpos e escolhidos de novo antes de publicar.",
+      "defaultName": "Cópia de {name}",
+      "space": "Colocar a cópia em",
+      "make": "Fazer a cópia"
     }
   },
   "auth": {
@@ -782,6 +840,9 @@
     "app_roles_not_member": "Papéis só podem ser dados a membros do espaço.",
     "app_roles_lockout": "Você não pode remover o seu próprio direito de gerenciar os papéis deste app.",
     "app_effect_target": "Um efeito deste app aponta para um espaço ou quadro em que você não pode escrever: escolha um em que possa.",
+    "app_effect_target_unset": "Os cartões deste app ainda não têm um quadro escolhido: escolha um em que você possa escrever antes de publicar.",
+    "app_template_not_found": "Esse modelo não existe.",
+    "app_template_board": "Escolha um quadro em que você possa escrever para os cartões deste modelo (um modelo sem cartões não usa nenhum).",
     "app_operation_invalid": "A chave da operação deve ter de 8 a 64 letras, dígitos, - ou _.",
     "app_operation_reused": "Essa operação já foi usada para outra requisição.",
     "app_effects_backlog": "Este app tem {max} efeitos aguardando: tente de novo quando terminarem.",
