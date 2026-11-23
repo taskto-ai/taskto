@@ -591,6 +591,11 @@ func TestWidgetScreensAndPinsOpenWhereTheyShould(t *testing.T) {
 			}
 		}
 	}
+	// A refused widget id does nothing: the action doesn't run.
+	before := storedRows(t, w.e.db, app.ID)
 	expect(t, w.alice.do(http.MethodPost, appPath(w.alicePrivate, app.ID, "/actions?widget=NOT%20AN%20ID"),
 		ClientAction{Name: "add_task", SurfaceID: SurfaceID(app.ID), Context: map[string]any{"title": "x", "category": "work"}}), http.StatusBadRequest)
+	if after := storedRows(t, w.e.db, app.ID); len(after) != len(before) {
+		t.Fatalf("a refused widget action stored a row: %d rows, were %d", len(after), len(before))
+	}
 }

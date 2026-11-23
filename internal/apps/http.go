@@ -183,20 +183,20 @@ func (s *Service) handleAction(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// An action of a widget (?widget=) is answered with the rows a widget holds, not all. The
+	// request is checked before the action runs: a refusal must mean nothing was done.
+	widget := r.URL.Query().Get("widget")
+	if widget != "" && !namePattern.MatchString(widget) {
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "widget is a widget's id")
+		return
+	}
 	var action ClientAction
 	if !readJSON(w, r, &action) {
 		return
 	}
 	msgs, err := s.act(r.Context(), req.space, req.actor, req.app, action)
-	if err == nil {
-		// An action of a widget (?widget=) is answered with the rows a widget holds, not all.
-		if widget := r.URL.Query().Get("widget"); widget != "" {
-			if !namePattern.MatchString(widget) {
-				writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "widget is a widget's id")
-				return
-			}
-			msgs = BoundItems(msgs, MaxWidgetItems)
-		}
+	if err == nil && widget != "" {
+		msgs = BoundItems(msgs, MaxWidgetItems)
 	}
 	if errors.Is(err, ErrInvalid) {
 		// The screen sent something the app doesn't allow: the request was well formed.
