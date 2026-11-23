@@ -51,3 +51,24 @@ export const appsCatalog = new Catalog(
   ],
   [...basicCatalog.functions.values()].filter((f) => !LEFT_OUT.has(f.name)),
 )
+
+// The version of the definition format this client reads (internal/apps DefinitionVersion), which
+// is TaskTo.AI's and has nothing to do with the A2UI protocol's.
+export const DEFINITION_VERSION = 1
+
+// What this client can draw, named as the server names the capabilities a release needs
+// (apps.Capabilities): component.<Name> and function.<name>.
+export const catalogCapabilities: ReadonlySet<string> = new Set([
+  ...[...appsCatalog.components.keys()].map((name) => `component.${name}`),
+  ...[...appsCatalog.functions.keys()].map((name) => `function.${name}`),
+])
+
+// What a release needs that this client doesn't have: a definition format newer than it reads, or
+// capabilities its catalog lacks. Empty when the release can be drawn. A release that needs
+// more is not drawn: the app says the client must be updated, instead of showing a broken screen.
+export function unsupportedBy(needs: { definition_version: number; requires: readonly string[] }): string[] {
+  const missing = needs.requires.filter((c) => !catalogCapabilities.has(c))
+  return needs.definition_version > DEFINITION_VERSION
+    ? [`definition_version.${needs.definition_version}`, ...missing]
+    : missing
+}

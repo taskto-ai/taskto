@@ -1,18 +1,22 @@
 // Personal apps: the apps of every space the user can read, by space, and one launched app
 // with its data. Apps are built by asking the agent; here they are launched, renamed, taken
-// offline and restored, and shared by moving them to a shared space. A space's editors
-// change its apps and its viewers launch them; roles in an app narrow that further (a user who
-// may only submit records can't rename or move it), and the server's answer for the app,
-// `access`, says what the caller may do.
+// offline and restored, published, rolled back and shared by moving them to a shared space. An app
+// has a draft, which the agent and builders change, and releases: people use the live release, and
+// someone who may publish the app makes the draft the next one, acknowledging the changes that
+// stored rows are affected by, or rolls back to an earlier release. A space's editors change its
+// apps and its viewers launch them; roles in an app narrow that further (a user who may only submit
+// records can't rename, publish or move it), and the server's answer for the app, `access`, says
+// what the caller may do.
 
 import { type FormEvent, useState } from 'react'
-import { ApiError, type App, api, errorText, type Space, ws } from '../api'
-import { useT } from '../i18n'
+import { ApiError, type App, api, errorText, type SchemaChange, type Space, ws } from '../api'
+import { has, type Key, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
+import { AppReleases } from './AppReleases'
 import { AppRoles } from './AppRoles'
-import { AppView, httpTransport } from './AppView'
+import { AppStage } from './AppStage'
 import { appPath, parseItem } from './route'
 
 const appsBase = (workspace: number, space: number) => `${ws(workspace)}/spaces/${space}/apps`
@@ -91,6 +95,26 @@ function SpaceApps({
     }
     apps.reload()
   }
+  // publish makes the app's draft its live release. It answers the schema changes the server wants
+  // acknowledged first (nothing is published then), or null: published, or failed (the error is
+  // shown, and the list reloaded, so the next try is made against the current version).
+  const publish = async (app: App, acknowledge: SchemaChange[]): Promise<SchemaChange[] | null> => {
+    try {
+      await api<App>(`${base}/${app.id}/publish`, { method: 'POST', body: { version: app.version, acknowledge } })
+      setError(null)
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'app_migration_required') {
+        const changes = (e.body as { params?: { changes?: SchemaChange[] } }).params?.changes
+        if (changes && changes.length > 0) {
+          setError(null)
+          return changes
+        }
+      }
+      setError(e instanceof ApiError && e.code === 'app_changed' ? t('apps.changed', { name: app.name }) : errorText(e))
+    }
+    apps.reload()
+    return null
+  }
   // move moves an app, with its rows, to another space the user may write.
   const move = async (app: App, to: number) => {
     try {
@@ -129,6 +153,8 @@ function SpaceApps({
               spaceBase={`${ws(workspace)}/spaces/${space.id}`}
               change={change}
               move={move}
+              publish={publish}
+              reload={apps.reload}
             />
           ))}
         </ul>
@@ -146,6 +172,8 @@ function AppRow({
   spaceBase,
   change,
   move,
+  publish,
+  reload,
 }: {
   workspace: number
   space: Space
@@ -155,14 +183,29 @@ function AppRow({
   spaceBase: string
   change: (app: App, body: { name?: string; archived?: boolean }) => Promise<void>
   move: (app: App, to: number) => Promise<void>
+  publish: (app: App, acknowledge: SchemaChange[]) => Promise<SchemaChange[] | null>
+  reload: () => void
 }) {
   const [renaming, setRenaming] = useState(false)
   const [to, setTo] = useState('')
   const [name, setName] = useState(app.name)
   const [busy, setBusy] = useState(false)
   const [rolesOpen, setRolesOpen] = useState(false)
+  const [releasesOpen, setReleasesOpen] = useState(false)
+  // The schema changes a publish waits to have acknowledged, and whether the person has.
+  const [migration, setMigration] = useState<SchemaChange[] | null>(null)
+  const [understood, setUnderstood] = useState(false)
   const offline = app.archived_at !== null
+  // Those who may design or publish the app see what isn't live: its draft and its releases.
+  const reviewer = writable && (app.access.design || app.access.publish)
   const t = useT()
+  const runPublish = async (acknowledge: SchemaChange[]) => {
+    setBusy(true)
+    const needed = await publish(app, acknowledge)
+    setBusy(false)
+    setMigration(needed)
+    setUnderstood(false)
+  }
   const run = async (body: { name?: string; archived?: boolean }) => {
     setBusy(true)
     await change(app, body)
@@ -202,11 +245,27 @@ function AppRow({
           <span className="tt-muted tt-small">
             {[t('apps.rows', { count: app.rows }), ...(offline ? [t('apps.offline')] : [])].join(' · ')}
           </span>
+          <span className="tt-app-status">
+            {app.live ? (
+              <span className="tt-stage-label" data-stage="live">
+                {t('apps.stage.live', { number: app.live.number })}
+              </span>
+            ) : (
+              <span className="tt-stage-label" data-stage="draft">
+                {t('apps.notPublished')}
+              </span>
+            )}
+            {app.live && app.unpublished_changes && (
+              <span className="tt-stage-label" data-stage="draft">
+                {t('apps.unpublishedChanges')}
+              </span>
+            )}
+          </span>
         </div>
       )}
       {!renaming && (
         <div className="tt-app-actions">
-          {!offline && (
+          {!offline && app.live && (
             <Link
               className="tt-button tt-primary"
               href={appPath(workspace, space.id, app.id)}
@@ -214,6 +273,37 @@ function AppRow({
             >
               {t('apps.launch')}
             </Link>
+          )}
+          {!offline && !app.live && reviewer && (
+            <Link
+              className="tt-button"
+              href={appPath(workspace, space.id, app.id)}
+              aria-label={t('apps.previewDraftNamed', { name: app.name })}
+            >
+              {t('apps.previewDraft')}
+            </Link>
+          )}
+          {writable && app.access.publish && app.unpublished_changes && (
+            <button
+              type="button"
+              className="tt-button tt-primary"
+              disabled={busy || migration !== null}
+              onClick={() => runPublish([])}
+              aria-label={t('apps.publishNamed', { name: app.name })}
+            >
+              {t('apps.publish')}
+            </button>
+          )}
+          {reviewer && app.live && (
+            <button
+              type="button"
+              className="tt-button"
+              aria-expanded={releasesOpen}
+              onClick={() => setReleasesOpen((o) => !o)}
+              aria-label={t('apps.releases.openNamed', { name: app.name })}
+            >
+              {t('apps.releases.open')}
+            </button>
           )}
           {writable && app.access.design && (
             <button type="button" className="tt-button" disabled={busy} onClick={() => setRenaming(true)}>
@@ -271,6 +361,49 @@ function AppRow({
             </form>
           )}
         </div>
+      )}
+      {migration && (
+        <fieldset className="tt-app-migration">
+          <legend>
+            <strong>{t('apps.migration.title')}</strong>
+          </legend>
+          <p className="tt-muted tt-small">{t('apps.migration.intro')}</p>
+          <ul>
+            {migration.map((c) => {
+              const key = `apps.migration.${c.change}`
+              return (
+                <li key={`${c.change}-${c.field}`}>
+                  {has(key) ? t(key as Key, { field: c.field }) : `${c.change}: ${c.field}`}
+                </li>
+              )
+            })}
+          </ul>
+          <label className="tt-inline-field">
+            <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
+            {t('apps.migration.confirm')}
+          </label>
+          <div className="tt-app-actions">
+            <button
+              type="button"
+              className="tt-button tt-primary"
+              disabled={busy || !understood}
+              onClick={() => runPublish(migration)}
+            >
+              {t('apps.migration.publish')}
+            </button>
+            <button type="button" className="tt-button" disabled={busy} onClick={() => setMigration(null)}>
+              {t('common.cancel')}
+            </button>
+          </div>
+        </fieldset>
+      )}
+      {releasesOpen && (
+        <AppReleases
+          base={`${spaceBase}/apps/${app.id}`}
+          app={app}
+          canRollBack={writable && app.access.publish}
+          changed={reload}
+        />
       )}
       {rolesOpen && (
         <AppRoles base={`${spaceBase}/apps/${app.id}`} spaceBase={spaceBase} onClose={() => setRolesOpen(false)} />
@@ -334,7 +467,7 @@ function LaunchedApp({
             <p className="tt-muted tt-small">{t('apps.noDataChanges')}</p>
           )}
           {info.data.access.read_records === 'own' && <p className="tt-muted tt-small">{t('apps.ownRecords')}</p>}
-          <AppView surfaceId={`app-${app}`} label={info.data.name} transport={httpTransport(base)} />
+          <AppStage base={base} app={info.data} />
         </>
       )}
     </div>

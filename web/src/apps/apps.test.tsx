@@ -6,16 +6,20 @@
 
 import { MessageProcessor, STRICT_VALIDATION } from '@a2ui/web_core/v0_9'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import type { z } from 'zod'
 import goCatalog from '../../../internal/apps/testdata/catalog.json'
 import expectedAction from '../../../internal/apps/testdata/expenses.action.json'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
-import { type ActionPayload, AppView } from './AppView'
-import { appsCatalog } from './catalog'
+import { fakeFetch } from '../test/fakes'
+import { type ActionPayload, AppView, httpTransport } from './AppView'
+import { appsCatalog, catalogCapabilities, DEFINITION_VERSION } from './catalog'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 // The value shown next to a Stat's label.
 function stat(label: string): string {
@@ -130,6 +134,88 @@ test('the catalog is the one the server checks apps against', () => {
   }
   expect(components).toEqual(goCatalog.components)
   expect([...appsCatalog.functions.keys()].sort()).toEqual(goCatalog.functions)
+})
+
+// What a release needs is named by the server's capabilities: the client must know the same set, and
+// read the same definition format version, or it would draw apps it can't, or refuse ones it can.
+test('the capabilities and definition version are the ones the server speaks', () => {
+  expect([...catalogCapabilities].sort()).toEqual(goCatalog.capabilities)
+  expect(DEFINITION_VERSION).toBe(goCatalog.definition_version)
+})
+
+const never = { load: vi.fn(async () => surface), act: vi.fn(async () => afterAdd) }
+
+test('a release that needs a capability this client lacks shows "update required", not a broken app', async () => {
+  never.load.mockClear()
+  render(
+    <AppView
+      surfaceId="app-1"
+      label="Expenses"
+      transport={never}
+      release={{ definition_version: 1, requires: ['component.Text', 'component.Gauge', 'function.sparkline'] }}
+    />,
+  )
+  await screen.findByText('Update required')
+  expect(screen.getByText(/published with features this version of TaskTo.AI doesn’t have yet/)).toBeTruthy()
+  // It says what is missing, not what the client has.
+  expect(screen.getByText('Needs: component.Gauge, function.sparkline')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Update TaskTo.AI' })).toBeTruthy()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(never.load).not.toHaveBeenCalled()
+  expect(screen.queryByText('Coffee')).toBeNull()
+})
+
+test('a definition format newer than the client reads shows "update required" too', async () => {
+  never.load.mockClear()
+  render(
+    <AppView
+      surfaceId="app-1"
+      label="Expenses"
+      transport={never}
+      release={{ definition_version: DEFINITION_VERSION + 1, requires: ['component.Text'] }}
+    />,
+  )
+  await screen.findByText('Update required')
+  expect(screen.getByText(`Needs: definition_version.${DEFINITION_VERSION + 1}`)).toBeTruthy()
+  expect(never.load).not.toHaveBeenCalled()
+})
+
+test('a release the client can draw is drawn', async () => {
+  render(
+    <AppView
+      surfaceId="app-1"
+      label="Expenses"
+      transport={never}
+      release={{ definition_version: DEFINITION_VERSION, requires: [...catalogCapabilities] }}
+    />,
+  )
+  await screen.findByText('Coffee')
+  expect(screen.queryByText('Update required')).toBeNull()
+})
+
+test('the app is drawn from the release it names, and its actions name that release', async () => {
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=3': { body: surface },
+    'POST /api/workspaces/1/spaces/2/apps/1/actions': { body: afterAdd },
+  })
+  const base = '/api/workspaces/1/spaces/2/apps/1'
+  const transport = httpTransport(base, 3)
+  await transport.load()
+  await transport.act({
+    name: 'add_expense',
+    surfaceId: 'app-1',
+    sourceComponentId: 'add',
+    timestamp: 't',
+    context: {},
+  })
+  expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${base}/surface?release=3`, `POST ${base}/actions`])
+  expect(calls[1].body).toMatchObject({ name: 'add_expense', release: 3 })
+  // A draft is drawn, never acted on.
+  const preview = httpTransport(base, 'draft')
+  await expect(
+    preview.act({ name: 'x', surfaceId: 'app-1', sourceComponentId: 'x', timestamp: 't', context: {} }),
+  ).rejects.toThrow('draft preview')
+  expect(calls).toHaveLength(2)
 })
 
 for (const [name, component] of [

@@ -160,15 +160,38 @@ export type AppAccess = {
 // Roles of one user (or, with a null user_id, of every member without roles of their own).
 export type AppGrant = { user_id: number | null; roles: AppRole[] }
 
+// What a client needs to draw a definition: the version of the definition's format and the catalog
+// capabilities its screen uses ("component.Stat", "function.formatDate").
+export type DefinitionNeeds = { definition_version: number; requires: string[] }
+
+// One published, immutable definition of an app. The app serves its live release.
+export type AppRelease = DefinitionNeeds & {
+  number: number
+  published_at: string
+  published_by: Author
+  live: boolean
+  live_since?: string
+}
+
+// A change of a collection a publish must acknowledge, by kind and field.
+export type SchemaChange = { change: string; field: string }
+
 export type App = {
   id: number
   space_id: number
   name: string
   archived_at: string | null
+  // The app's version for optimistic changes: bumped by every change, a publish included.
   version: number
   // Rows the caller may read.
   rows: number
   access: AppAccess
+  // The release people use; null until the app's first publish.
+  live: AppRelease | null
+  // The draft differs from the live release (told only to those who may design or publish).
+  unpublished_changes: boolean
+  // The definition being edited, in a single app's reply, for those who may design or publish.
+  draft?: DefinitionNeeds
 }
 
 export type Comment = { id: number; card_id: number; author: Author; body: string; created_at: string }
