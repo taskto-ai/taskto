@@ -68,10 +68,11 @@
 
   --tt-scrim: light-dark(rgba(17, 17, 16, 0.42), rgba(0, 0, 0, 0.6));
   /* Only what you are meant to press, and what floats, has a shadow: the buttons' short hard lift
-     (the website's), and the soft one under a menu or a dialog. */
-  --tt-shadow-lift: light-dark(0 2px 0 #111110, 0 2px 0 #1fc98a);
-  --tt-shadow-lift-hover: light-dark(0 3px 0 #111110, 0 3px 0 #1fc98a);
-  --tt-shadow-pop: light-dark(0 12px 32px -12px rgba(17, 17, 16, 0.35), 0 12px 32px -12px rgba(0, 0, 0, 0.8));
+     (the website's), and the soft one under a menu or a dialog. light-dark() takes colours only,
+     so the lengths stay outside it. */
+  --tt-shadow-lift: 0 2px 0 var(--tt-accent-edge);
+  --tt-shadow-lift-hover: 0 3px 0 var(--tt-accent-edge);
+  --tt-shadow-pop: 0 12px 32px -12px light-dark(rgba(17, 17, 16, 0.35), rgba(0, 0, 0, 0.8));
 
   /* Fonts (SIL OFL 1.1), served from the app itself (main.tsx): nothing is fetched from another
      site. The website's three: Inter for the interface and what people read, Bricolage Grotesque
