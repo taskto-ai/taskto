@@ -163,7 +163,19 @@ func (s *Service) handleSurface(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	msgs, err := s.surface(r.Context(), req.space, req.actor, req.app, r.URL.Query().Get("release"))
+	q := r.URL.Query()
+	var msgs []Message
+	var err error
+	if widget := q.Get("widget"); widget != "" {
+		// A widget is drawn from the live release alone.
+		if q.Get("release") != "" || q.Get("screen") != "" {
+			writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "widget can't be combined with release or screen")
+			return
+		}
+		msgs, err = s.widgetSurface(r.Context(), req.space, req.actor, req.app, widget)
+	} else {
+		msgs, err = s.surface(r.Context(), req.space, req.actor, req.app, q.Get("release"), q.Get("screen"))
+	}
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -176,11 +188,21 @@ func (s *Service) handleAction(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// An action of a widget (?widget=) is answered with the rows a widget holds, not all. The
+	// request is checked before the action runs: a refusal must mean nothing was done.
+	widget := r.URL.Query().Get("widget")
+	if widget != "" && !namePattern.MatchString(widget) {
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "widget is a widget's id")
+		return
+	}
 	var action ClientAction
 	if !readJSON(w, r, &action) {
 		return
 	}
 	msgs, err := s.act(r.Context(), req.space, req.actor, req.app, action)
+	if err == nil && widget != "" {
+		msgs = BoundItems(msgs, MaxWidgetItems)
+	}
 	if errors.Is(err, ErrInvalid) {
 		// The screen sent something the app doesn't allow: the request was well formed.
 		invalid(w, http.StatusUnprocessableEntity, err)
@@ -416,9 +438,12 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var migration *migrationError
 	var conflict *conflictError
 	var status *statusError
+	var apiErr *apierr.Error
 	switch {
 	case errors.As(err, &status):
 		writeError(w, status.status, status.code, status.msg, status.params)
+	case errors.As(err, &apiErr):
+		apierr.WriteError(w, apiErr)
 	case errors.As(err, &conflict):
 		// With the record as it is now, if the caller reads it, so they can reapply their change.
 		body := map[string]any{"error": err.Error(), "code": apierr.CodeAppRecordConflict, "params": apierr.Params{"id": conflict.id}}

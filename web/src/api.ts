@@ -211,6 +211,60 @@ export type App = {
   draft?: DefinitionNeeds
 }
 
+// A widget an app offers for Home (docs/api.md, Home): a bounded view, never markup of its own.
+export type Widget = {
+  id: string
+  title: string
+  kind: 'summaries' | 'screen' | 'shortcut'
+  size?: 'small' | 'medium' | 'large'
+  summaries?: { summary: string; label: string }[]
+  screen?: string
+}
+
+// What an app's navigation pin shows: its label, and the screen it opens the app on.
+export type Pin = { label: string; screen?: string }
+
+// A widget on someone's Home or a pin in their navigation, as the server works it out now. `id` is the
+// person's own placement, `default_id` the space default it is. An `unavailable` item has no widget
+// or label, only the app's name and why (`offline`, `unpublished`, `removed`).
+export type HomeItem = {
+  id?: number
+  default_id?: number
+  source: 'personal' | 'default'
+  kind: 'widget' | 'pin'
+  space_id: number
+  app_id: number
+  app_name: string
+  widget_id?: string
+  widget?: Widget
+  label?: string
+  screen?: string
+  state: 'ready' | 'unavailable'
+  reason?: 'offline' | 'unpublished' | 'removed'
+  release?: { number: number; definition_version: number; requires: string[] }
+  can_manage?: boolean
+}
+
+export type HomeView = {
+  widgets: HomeItem[]
+  pins: HomeItem[]
+  hidden: HomeItem[]
+  limits: { widgets: number; pins: number }
+}
+
+// An app the person may place on Home or pin, with what it offers.
+export type AvailableApp = {
+  space_id: number
+  space_name: string
+  space_kind: 'private' | 'shared'
+  app_id: number
+  name: string
+  widgets: Widget[]
+  pin: Pin | null
+  can_set_defaults: boolean
+  defaults: { id: number; kind: 'widget' | 'pin'; widget?: string }[]
+}
+
 // Who made a change to an app's record, through the agent or an access token if so.
 export type RecordAuthor = { id: number; name: string; agent: boolean; via?: string }
 

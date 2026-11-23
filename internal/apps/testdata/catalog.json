@@ -32,7 +32,9 @@
     "function.numeric",
     "function.or",
     "function.pluralize",
-    "function.required"
+    "function.required",
+    "slot.home_widgets.v1",
+    "slot.nav_pin.v1"
   ],
   "components": {
     "Button": [

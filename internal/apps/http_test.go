@@ -53,6 +53,7 @@ func newEnv(t *testing.T) *env {
 	accounts.Routes(mux)
 	spaces.Routes(mux)
 	s.Routes(mux)
+	s.HomeRoutes(mux, accounts)
 	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux, RawBodyRoutes...), dataDir: dataDir}
 }
 

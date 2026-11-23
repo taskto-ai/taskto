@@ -897,6 +897,85 @@
                 "required": ["kind"],
                 "additionalProperties": false
               }
+            },
+            "contributions": {
+              "type": "object",
+              "description": "what the app offers the Home page and the navigation (version 2 of the format): widgets people may put on their Home, and the pin's label. A widget is a bounded view, never markup: it shows summaries, one of the app's screens, or is only a shortcut that opens the app. Nothing here grants access: every widget reads and acts through the app, with the person's own role",
+              "properties": {
+                "version": {
+                  "type": "integer",
+                  "enum": [1],
+                  "description": "1; leave it out"
+                },
+                "widgets": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "a lowercase letter, then lowercase letters, digits or _ (at most 40), unique in the app"
+                      },
+                      "title": {
+                        "type": "string",
+                        "description": "plain text of 1 to 60 characters on one line"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": ["summaries", "screen", "shortcut"]
+                      },
+                      "size": {
+                        "type": "string",
+                        "enum": ["small", "medium", "large"],
+                        "description": "small if left out"
+                      },
+                      "summaries": {
+                        "type": "array",
+                        "maxItems": 4,
+                        "description": "summaries widget only: 1 to 4 of the app's summaries, each with its label",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "summary": {
+                              "type": "string",
+                              "description": "the name of one of the app's summaries"
+                            },
+                            "label": {
+                              "type": "string",
+                              "description": "plain text of 1 to 40 characters"
+                            }
+                          },
+                          "required": ["summary", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "screen": {
+                        "type": "string",
+                        "description": "screen widget only: one of the app's screens that doesn't show a record"
+                      }
+                    },
+                    "required": ["id", "title", "kind"],
+                    "additionalProperties": false
+                  }
+                },
+                "pin": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "description": "plain text of 1 to 30 characters"
+                    },
+                    "screen": {
+                      "type": "string",
+                      "description": "the screen the pin opens the app on (not a record screen); the entry if left out"
+                    }
+                  },
+                  "required": ["label"],
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
             }
           },
           "required": ["collection", "actions"],
@@ -1112,6 +1191,85 @@
                 "required": ["kind"],
                 "additionalProperties": false
               }
+            },
+            "contributions": {
+              "type": "object",
+              "description": "what the app offers the Home page and the navigation (version 2 of the format): widgets people may put on their Home, and the pin's label. A widget is a bounded view, never markup: it shows summaries, one of the app's screens, or is only a shortcut that opens the app. Nothing here grants access: every widget reads and acts through the app, with the person's own role",
+              "properties": {
+                "version": {
+                  "type": "integer",
+                  "enum": [1],
+                  "description": "1; leave it out"
+                },
+                "widgets": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "a lowercase letter, then lowercase letters, digits or _ (at most 40), unique in the app"
+                      },
+                      "title": {
+                        "type": "string",
+                        "description": "plain text of 1 to 60 characters on one line"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": ["summaries", "screen", "shortcut"]
+                      },
+                      "size": {
+                        "type": "string",
+                        "enum": ["small", "medium", "large"],
+                        "description": "small if left out"
+                      },
+                      "summaries": {
+                        "type": "array",
+                        "maxItems": 4,
+                        "description": "summaries widget only: 1 to 4 of the app's summaries, each with its label",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "summary": {
+                              "type": "string",
+                              "description": "the name of one of the app's summaries"
+                            },
+                            "label": {
+                              "type": "string",
+                              "description": "plain text of 1 to 40 characters"
+                            }
+                          },
+                          "required": ["summary", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "screen": {
+                        "type": "string",
+                        "description": "screen widget only: one of the app's screens that doesn't show a record"
+                      }
+                    },
+                    "required": ["id", "title", "kind"],
+                    "additionalProperties": false
+                  }
+                },
+                "pin": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "description": "plain text of 1 to 30 characters"
+                    },
+                    "screen": {
+                      "type": "string",
+                      "description": "the screen the pin opens the app on (not a record screen); the entry if left out"
+                    }
+                  },
+                  "required": ["label"],
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
             }
           },
           "required": ["collection", "actions"],

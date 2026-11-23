@@ -76,8 +76,10 @@ const CatalogID = "https://taskto.ai/catalogs/apps/v1.json"
 // Version 1 is one screen, string, number, boolean and date fields, and the actions insert,
 // update and delete. Version 2 adds screens with navigation between them, time and choice
 // fields, rules (conditionally required fields, the Show component, summaries over some rows),
-// the navigate action and attachment fields (photos, attachments.go). A definition that says
-// version 1 is read, checked and drawn as it always was, and can't use any of version 2.
+// the navigate action, attachment fields (photos, attachments.go) and contributions
+// (contributions.go: home widgets and a navigation pin, each slot a capability the release needs). A
+// definition that says version 1 is read, checked and drawn as it always was, and can't use any of
+// version 2.
 const DefinitionVersion = 2
 
 // firstVersion is the version of the format before screens and rules.
@@ -106,6 +108,9 @@ type Definition struct {
 	Actions map[string]Action `json:"actions"`
 	// Summaries are values computed from the rows and shown in the data model.
 	Summaries map[string]Summary `json:"summaries,omitempty"`
+	// Contributions are what the app offers the platform's Home page and navigation
+	// (contributions.go): version 2 of the format.
+	Contributions *Contributions `json:"contributions,omitempty"`
 }
 
 // Collection is the schema of the app's rows, shown in the data model at /items.
@@ -434,6 +439,15 @@ func (d Definition) Check() (Definition, error) {
 	if slices.ContainsFunc(out.Collection.Fields, func(f Field) bool { return f.Type == TypeAttachment }) {
 		requires = sortedKeys(setOf(append(requires, AttachmentCapability)))
 	}
+	contributions, slots, err := d.checkContributions(screens)
+	if err != nil {
+		return Definition{}, err
+	}
+	out.Contributions = contributions
+	if contributions != nil {
+		uses2 = append(uses2, "contributions")
+		requires = withNeeds(requires, slots)
+	}
 	out.Requires = requires
 	if slices.Contains(requires, ComponentCapability("Show")) {
 		uses2 = append(uses2, "the Show component")
@@ -509,7 +523,17 @@ func Surface(surfaceID string, def Definition, rows []Row) []Message {
 // has the screen it is on at /screen (its entry) and the record a detail screen shows at
 // /record (none).
 func DataModel(surfaceID string, def Definition, rows []Row) Message {
-	value := map[string]any{"items": Items(def, rows), "draft": map[string]any{}}
+	return dataModel(surfaceID, def, rows, def.Entry, 0)
+}
+
+// dataModel is DataModel with the screen an app with screens opens on, and, if limit is set, only
+// the latest limit rows at /items: the summaries still count every row given.
+func dataModel(surfaceID string, def Definition, rows []Row, screen string, limit int) Message {
+	shown := rows
+	if limit > 0 && len(shown) > limit {
+		shown = shown[len(shown)-limit:]
+	}
+	value := map[string]any{"items": Items(def, shown), "draft": map[string]any{}}
 	if files := def.filesModel(); files != nil {
 		value[FilesKey] = files
 	}
@@ -517,7 +541,7 @@ func DataModel(surfaceID string, def Definition, rows []Row) Message {
 		value[name] = summarize(s, def.Collection, rows)
 	}
 	if def.hasScreens() {
-		value[ScreenKey], value[RecordKey] = def.Entry, map[string]any{}
+		value[ScreenKey], value[RecordKey] = screen, map[string]any{}
 	}
 	return dataMessage(surfaceID, "/", value)
 }

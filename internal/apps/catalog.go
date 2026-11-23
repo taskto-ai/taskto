@@ -191,6 +191,7 @@ func Capabilities() []string {
 		all = append(all, FunctionCapability(name))
 	}
 	all = append(all, AttachmentCapability)
+	all = append(all, slotCapabilities...)
 	sort.Strings(all)
 	return all
 }

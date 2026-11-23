@@ -155,6 +155,10 @@ export const catalogCapabilities: ReadonlySet<string> = new Set([
   ...[...appsCatalog.functions.keys()].map((name) => `function.${name}`),
   // Holding an attachment field: reading its value as a list of attachment ids and sending them.
   'field.attachment',
+  // The extension slots this client draws (internal/apps/contributions.go): Home's widgets and the
+  // navigation's pin.
+  'slot.home_widgets.v1',
+  'slot.nav_pin.v1',
 ])
 
 // What a release needs that this client doesn't have: a definition format newer than it reads, or
