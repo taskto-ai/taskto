@@ -1148,7 +1148,7 @@ Steps 15 and 16 set them up and prove a restore. After that:
 - To restore after losing the VM: install a new one with the same `TASKTO_BACKUP_DIR` (the
   repository's address and password, kept off the VM for this) up to step 9. Then, on the
   VM, `docker compose stop backup-schedule`, so it doesn't back up the new, empty server;
-  copy the files with the `files=` lines and the `for` loop of step 15's Run (not the rest of it, whose backup
-  would be of the empty server); and follow [docs/install.md](../docs/install.md#restore),
+  copy the files with step 15's Run from its `files=` line through the `for` loop's `done`
+  (not the rest of it, whose backup would be of the empty server); and follow [docs/install.md](../docs/install.md#restore),
   "From the restic repository", in `/srv/taskto`, naming the snapshot by its ID from
   `snapshots` rather than `latest`. Then run steps 9 to 17.
