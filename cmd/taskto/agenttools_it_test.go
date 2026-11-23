@@ -39,12 +39,17 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 	dataDir := filepath.Join(dir, "data")
+	// The scripted model answers a tool's result by repeating it, at the pace of a model people
+	// watch (agent/src/model.ts): minutes for the app catalog. This test reads the answers, not
+	// the stream, so the sidecar, which inherits the server's environment, writes them at once.
+	t.Setenv("TASKTO_AGENT_SCRIPT_TOKENS_PER_SECOND", "0")
 	server, addr := startServer(t, bin, "-addr", "127.0.0.1:0", "-data-dir", dataDir, "-agent", "-agent-entry", entry, "-insecure-cookies")
 	_, socketDir, _ := agentPaths(dataDir)
 	sidecar := agentrt.New(filepath.Join(socketDir, "agent.sock"))
-	// Every tool call below is a whole model turn in one conversation that keeps growing: on CI's
-	// runners the test takes about three minutes, so it has twice that before it gives up.
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	// Every tool call is a model turn in a conversation of its own, so each replays a history of
+	// one message, and the model writes without pacing: the whole test takes a few seconds, even
+	// on a busy runner. This budget is for a turn that is stuck, not a slow one.
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	// The tools socket is owner-only, next to the sidecar's.
@@ -60,7 +65,13 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		}
 		return &api{t: t, base: "http://" + addr, http: &http.Client{Jar: jar}}
 	}
-	decodeInto := func(raw []byte, v any) {
+	// as is the same session with failures reported by the subtest that makes the call.
+	as := func(t *testing.T, a *api) *api {
+		bound := *a
+		bound.t = t
+		return &bound
+	}
+	decodeInto := func(t *testing.T, raw []byte, v any) {
 		t.Helper()
 		if err := json.Unmarshal(raw, v); err != nil {
 			t.Fatalf("decode %s: %v", raw, err)
@@ -79,7 +90,7 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 	if token == nil {
 		t.Fatal("the server logged no setup token")
 	}
-	decodeInto(owner.expect(http.StatusCreated, http.MethodPost, "/api/setup", map[string]string{
+	decodeInto(t, owner.expect(http.StatusCreated, http.MethodPost, "/api/setup", map[string]string{
 		"email": "owner@example.com", "name": "Owner", "password": "fake-password-for-tests", "workspace_name": "Home",
 		"setup_token": token[1],
 	}), &me)
@@ -87,10 +98,10 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 	var invite struct {
 		Token string `json:"token"`
 	}
-	decodeInto(owner.expect(http.StatusCreated, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", ws),
+	decodeInto(t, owner.expect(http.StatusCreated, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", ws),
 		map[string]string{"email": "member@example.com"}), &invite)
 	member := newAPI()
-	decodeInto(member.expect(http.StatusCreated, http.MethodPost, "/api/invites/accept", map[string]string{
+	decodeInto(t, member.expect(http.StatusCreated, http.MethodPost, "/api/invites/accept", map[string]string{
 		"token": invite.Token, "name": "Member", "password": "fake-password-for-tests",
 	}), &me)
 	memberID := me.User.ID
@@ -101,7 +112,7 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 	}
 	privateOf := func(a *api) int64 {
 		var list struct{ Spaces []space }
-		decodeInto(a.expect(http.StatusOK, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces", ws), nil), &list)
+		decodeInto(t, a.expect(http.StatusOK, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/spaces", ws), nil), &list)
 		for _, s := range list.Spaces {
 			if s.Kind == "private" {
 				return s.ID
@@ -112,25 +123,31 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 	}
 	ownerPrivate, memberPrivate := privateOf(owner), privateOf(member)
 	var team space
-	decodeInto(owner.expect(http.StatusCreated, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/spaces", ws), map[string]string{"name": "Team"}), &team)
+	decodeInto(t, owner.expect(http.StatusCreated, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/spaces", ws), map[string]string{"name": "Team"}), &team)
 	owner.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members", ws, team.ID),
 		map[string]any{"user_id": memberID, "role": "editor"})
 	spacePath := func(s int64, rest string) string { return fmt.Sprintf("/api/workspaces/%d/spaces/%d%s", ws, s, rest) }
 	var board struct {
 		ID int64 `json:"id"`
 	}
-	decodeInto(owner.expect(http.StatusCreated, http.MethodPost, spacePath(team.ID, "/boards"), map[string]string{"name": "Launch"}), &board)
+	decodeInto(t, owner.expect(http.StatusCreated, http.MethodPost, spacePath(team.ID, "/boards"), map[string]string{"name": "Launch"}), &board)
 	member.expect(http.StatusCreated, http.MethodPut, spacePath(memberPrivate, "/docs/secret.md"), map[string]string{"content": "# Member's secret\n\nzanzibar"})
 
 	base := fmt.Sprintf("/api/workspaces/%d/conversations", ws)
-	var conv struct {
-		ID int64 `json:"id"`
+	type conversation struct {
+		ID   int64 `json:"id"`
+		path string
 	}
-	decodeInto(owner.expect(http.StatusCreated, http.MethodPost, base, map[string]any{}), &conv)
-	one := fmt.Sprintf("%s/%d", base, conv.ID)
-
-	// use has the scripted model call a tool in the owner's conversation and returns what it got.
-	use := func(tool string, args map[string]any) string {
+	// open starts a conversation of a person's own, with no history.
+	open := func(t *testing.T, a *api) conversation {
+		t.Helper()
+		var c conversation
+		decodeInto(t, a.expect(http.StatusCreated, http.MethodPost, base, map[string]any{}), &c)
+		c.path = fmt.Sprintf("%s/%d", base, c.ID)
+		return c
+	}
+	// turn has the scripted model call a tool in a person's conversation and returns what it got.
+	turn := func(t *testing.T, a *api, c conversation, tool string, args map[string]any) string {
 		t.Helper()
 		raw, err := json.Marshal(args)
 		if err != nil {
@@ -139,12 +156,12 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		var sent struct {
 			SubmissionID int64 `json:"submission_id"`
 		}
-		decodeInto(owner.expect(http.StatusAccepted, http.MethodPost, one+"/messages", map[string]any{"content": "tool:" + tool + " " + string(raw)}), &sent)
+		decodeInto(t, a.expect(http.StatusAccepted, http.MethodPost, c.path+"/messages", map[string]any{"content": "tool:" + tool + " " + string(raw)}), &sent)
 		if settled, err := sidecar.Wait(ctx, sent.SubmissionID); err != nil || settled.Status != "done" {
 			t.Fatalf("%s: %+v, %v", tool, settled, err)
 		}
 		var msgs struct{ Messages []agentrt.Message }
-		decodeInto(owner.expect(http.StatusOK, http.MethodGet, one+"/messages", nil), &msgs)
+		decodeInto(t, a.expect(http.StatusOK, http.MethodGet, c.path+"/messages", nil), &msgs)
 		last := msgs.Messages[len(msgs.Messages)-1].Text
 		got, ok := strings.CutPrefix(last, "finished "+tool+": ")
 		if !ok {
@@ -152,132 +169,148 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 		}
 		return got
 	}
-
-	// The owner's spaces, and none of the member's.
-	spaces := use("list_spaces", map[string]any{})
-	if !strings.Contains(spaces, fmt.Sprintf(`"id":%d,`, ownerPrivate)) || !strings.Contains(spaces, fmt.Sprintf(`"id":%d,`, team.ID)) ||
-		strings.Contains(spaces, fmt.Sprintf(`"id":%d,`, memberPrivate)) {
-		t.Fatalf("list_spaces = %s", spaces)
-	}
-	if got := use("read_doc", map[string]any{"space_id": memberPrivate, "path": "secret.md"}); got != "error: not found" {
-		t.Fatalf("reading the member's document: %s", got)
-	}
-	if got := use("search_docs", map[string]any{"query": "zanzibar"}); !strings.Contains(got, `"results":[]`) {
-		t.Fatalf("searching for the member's document: %s", got)
+	// use is one tool call by the owner's agent, in a conversation of its own: a turn replays the
+	// conversation's history, so one call per conversation keeps every turn as short as the first.
+	use := func(t *testing.T, tool string, args map[string]any) string {
+		t.Helper()
+		o := as(t, owner)
+		return turn(t, o, open(t, o), tool, args)
 	}
 
-	// A document the agent writes is the owner's, committed by the agent.
-	if got := use("write_doc", map[string]any{"space_id": team.ID, "path": "notes/plan.md", "content": "# Plan\n\nlaunch"}); !strings.Contains(got, `"commit"`) {
-		t.Fatalf("write_doc = %s", got)
-	}
-	var history struct {
-		Commits []struct {
-			Author struct{ Name string } `json:"author"`
-			Agent  string                `json:"agent"`
-		} `json:"commits"`
-	}
-	decodeInto(member.expect(http.StatusOK, http.MethodGet, spacePath(team.ID, "/history/notes/plan.md"), nil), &history)
-	if len(history.Commits) != 1 || history.Commits[0].Author.Name != "Owner" || history.Commits[0].Agent == "" {
-		t.Fatalf("history = %+v", history)
-	}
-	if got := use("read_doc", map[string]any{"space_id": team.ID, "path": "notes/plan.md"}); !strings.Contains(got, `launch`) {
-		t.Fatalf("read_doc = %s", got)
-	}
+	t.Run("an agent sees the owner's spaces and none of the member's", func(t *testing.T) {
+		spaces := use(t, "list_spaces", map[string]any{})
+		if !strings.Contains(spaces, fmt.Sprintf(`"id":%d,`, ownerPrivate)) || !strings.Contains(spaces, fmt.Sprintf(`"id":%d,`, team.ID)) ||
+			strings.Contains(spaces, fmt.Sprintf(`"id":%d,`, memberPrivate)) {
+			t.Fatalf("list_spaces = %s", spaces)
+		}
+		if got := use(t, "read_doc", map[string]any{"space_id": memberPrivate, "path": "secret.md"}); got != "error: not found" {
+			t.Fatalf("reading the member's document: %s", got)
+		}
+		if got := use(t, "search_docs", map[string]any{"query": "zanzibar"}); !strings.Contains(got, `"results":[]`) {
+			t.Fatalf("searching for the member's document: %s", got)
+		}
+	})
 
-	// A card the agent creates on the team board links this conversation by its API ID.
-	convID := strconv.FormatInt(conv.ID, 10)
-	created := use("create_card", map[string]any{"space_id": team.ID, "board_id": board.ID, "title": "Launch", "conversations": []string{convID}})
-	var card struct {
-		ID            int64    `json:"id"`
-		Conversations []string `json:"conversations"`
-		CreatedBy     struct {
-			ID    int64 `json:"id"`
-			Agent bool  `json:"agent"`
-		} `json:"created_by"`
-	}
-	decodeInto([]byte(created), &card)
-	if len(card.Conversations) != 1 || card.Conversations[0] != convID || !card.CreatedBy.Agent {
-		t.Fatalf("create_card = %s", created)
-	}
-	// The member sees the link on the card, and can't follow it; the owner can.
-	member.expect(http.StatusOK, http.MethodGet, spacePath(team.ID, fmt.Sprintf("/boards/%d/cards/%d", board.ID, card.ID)), nil)
-	member.expect(http.StatusNotFound, http.MethodGet, fmt.Sprintf("%s/%s", base, card.Conversations[0]), nil)
-	owner.expect(http.StatusOK, http.MethodGet, fmt.Sprintf("%s/%s", base, card.Conversations[0]), nil)
-	// And the agent can't link a conversation of the member's.
-	var theirs struct {
-		ID int64 `json:"id"`
-	}
-	decodeInto(member.expect(http.StatusCreated, http.MethodPost, base, map[string]any{}), &theirs)
-	if got := use("create_card", map[string]any{"space_id": team.ID, "board_id": board.ID, "title": "x", "conversations": []string{strconv.FormatInt(theirs.ID, 10)}}); !strings.HasPrefix(got, "error: conversations:") {
-		t.Fatalf("linking the member's conversation: %s", got)
-	}
+	t.Run("a document the agent writes is the owner's, committed by the agent", func(t *testing.T) {
+		if got := use(t, "write_doc", map[string]any{"space_id": team.ID, "path": "notes/plan.md", "content": "# Plan\n\nlaunch"}); !strings.Contains(got, `"commit"`) {
+			t.Fatalf("write_doc = %s", got)
+		}
+		var history struct {
+			Commits []struct {
+				Author struct{ Name string } `json:"author"`
+				Agent  string                `json:"agent"`
+			} `json:"commits"`
+		}
+		decodeInto(t, as(t, member).expect(http.StatusOK, http.MethodGet, spacePath(team.ID, "/history/notes/plan.md"), nil), &history)
+		if len(history.Commits) != 1 || history.Commits[0].Author.Name != "Owner" || history.Commits[0].Agent == "" {
+			t.Fatalf("history = %+v", history)
+		}
+		if got := use(t, "read_doc", map[string]any{"space_id": team.ID, "path": "notes/plan.md"}); !strings.Contains(got, `launch`) {
+			t.Fatalf("read_doc = %s", got)
+		}
+	})
 
-	// An app the agent builds in the team space: the member launches it; and the agent
-	// reaches no app of the member's private space.
-	example, err := apps.Examples()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := use("app_catalog", map[string]any{}); !strings.Contains(got, `"Stat"`) {
-		t.Fatalf("app_catalog = %s", got)
-	}
-	built := use("create_app", map[string]any{"space_id": team.ID, "name": "Team expenses", "definition": example[0].Definition})
-	var app struct {
-		ID        int64 `json:"id"`
-		Version   int64 `json:"version"`
-		CreatedBy struct {
-			Agent bool `json:"agent"`
-		} `json:"created_by"`
-	}
-	decodeInto([]byte(built), &app)
-	if app.ID == 0 || !app.CreatedBy.Agent {
-		t.Fatalf("create_app = %s", built)
-	}
-	// What the agent builds is a draft: launched once a person publishes it.
-	surface := spacePath(team.ID, fmt.Sprintf("/apps/%d/surface", app.ID))
-	member.expect(http.StatusConflict, http.MethodGet, surface, nil)
-	owner.expect(http.StatusOK, http.MethodPost, spacePath(team.ID, fmt.Sprintf("/apps/%d/publish", app.ID)),
-		map[string]any{"version": app.Version, "acknowledge": []any{}})
-	member.expect(http.StatusOK, http.MethodGet, surface, nil)
-	if got := use("create_app", map[string]any{"space_id": team.ID, "name": "Bad", "definition": map[string]any{
-		"components": []any{map[string]any{"id": "root", "component": "Script"}}, "collection": map[string]any{"fields": []any{}},
-		"actions": map[string]any{"x": map[string]any{"kind": "insert"}},
-	}}); !strings.Contains(got, `"Script" is not a component`) {
-		t.Fatalf("an app outside the catalog: %s", got)
-	}
-	var theirApp struct {
-		ID int64 `json:"id"`
-	}
-	decodeInto(member.expect(http.StatusCreated, http.MethodPost, spacePath(memberPrivate, "/apps"),
-		map[string]any{"name": "Mine", "definition": example[0].Definition}), &theirApp)
-	if got := use("show_app", map[string]any{"space_id": memberPrivate, "app_id": theirApp.ID}); got != "error: not found" {
-		t.Fatalf("the member's app: %s", got)
-	}
+	// The conversation the capability check below looks at: one that has had a tool turn.
+	var cardConv conversation
+	t.Run("a card the agent creates links the conversation by its API ID", func(t *testing.T) {
+		o, m := as(t, owner), as(t, member)
+		cardConv = open(t, o)
+		convID := strconv.FormatInt(cardConv.ID, 10)
+		created := turn(t, o, cardConv, "create_card", map[string]any{"space_id": team.ID, "board_id": board.ID, "title": "Launch", "conversations": []string{convID}})
+		var card struct {
+			ID            int64    `json:"id"`
+			Conversations []string `json:"conversations"`
+			CreatedBy     struct {
+				ID    int64 `json:"id"`
+				Agent bool  `json:"agent"`
+			} `json:"created_by"`
+		}
+		decodeInto(t, []byte(created), &card)
+		if len(card.Conversations) != 1 || card.Conversations[0] != convID || !card.CreatedBy.Agent {
+			t.Fatalf("create_card = %s", created)
+		}
+		// The member sees the link on the card, and can't follow it; the owner can.
+		m.expect(http.StatusOK, http.MethodGet, spacePath(team.ID, fmt.Sprintf("/boards/%d/cards/%d", board.ID, card.ID)), nil)
+		m.expect(http.StatusNotFound, http.MethodGet, fmt.Sprintf("%s/%s", base, card.Conversations[0]), nil)
+		o.expect(http.StatusOK, http.MethodGet, fmt.Sprintf("%s/%s", base, card.Conversations[0]), nil)
+		// And the agent can't link a conversation of the member's.
+		theirs := open(t, m)
+		if got := use(t, "create_card", map[string]any{"space_id": team.ID, "board_id": board.ID, "title": "x", "conversations": []string{strconv.FormatInt(theirs.ID, 10)}}); !strings.HasPrefix(got, "error: conversations:") {
+			t.Fatalf("linking the member's conversation: %s", got)
+		}
+	})
 
-	// The capability never shows in what the browser gets.
-	stream := owner.openEvents(one + "/events")
-	if ev := stream.next(t); ev.Type != "value" || strings.Contains(string(ev.Value), "ttc1.") {
-		t.Fatalf("the conversation's view: %s", ev.Value)
-	}
-	stream.cancel()
-	if _, msgs := owner.do(http.MethodGet, one+"/messages", nil); strings.Contains(string(msgs), "ttc1.") {
-		t.Fatal("the messages show the capability")
-	}
+	t.Run("an app the agent builds in the team space is launched by the member once published", func(t *testing.T) {
+		o, m := as(t, owner), as(t, member)
+		example, err := apps.Examples()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := use(t, "app_catalog", map[string]any{}); !strings.Contains(got, `"Stat"`) {
+			t.Fatalf("app_catalog = %s", got)
+		}
+		built := use(t, "create_app", map[string]any{"space_id": team.ID, "name": "Team expenses", "definition": example[0].Definition})
+		var app struct {
+			ID        int64 `json:"id"`
+			Version   int64 `json:"version"`
+			CreatedBy struct {
+				Agent bool `json:"agent"`
+			} `json:"created_by"`
+		}
+		decodeInto(t, []byte(built), &app)
+		if app.ID == 0 || !app.CreatedBy.Agent {
+			t.Fatalf("create_app = %s", built)
+		}
+		// What the agent builds is a draft: launched once a person publishes it.
+		surface := spacePath(team.ID, fmt.Sprintf("/apps/%d/surface", app.ID))
+		m.expect(http.StatusConflict, http.MethodGet, surface, nil)
+		o.expect(http.StatusOK, http.MethodPost, spacePath(team.ID, fmt.Sprintf("/apps/%d/publish", app.ID)),
+			map[string]any{"version": app.Version, "acknowledge": []any{}})
+		m.expect(http.StatusOK, http.MethodGet, surface, nil)
+		if got := use(t, "create_app", map[string]any{"space_id": team.ID, "name": "Bad", "definition": map[string]any{
+			"components": []any{map[string]any{"id": "root", "component": "Script"}}, "collection": map[string]any{"fields": []any{}},
+			"actions": map[string]any{"x": map[string]any{"kind": "insert"}},
+		}}); !strings.Contains(got, `"Script" is not a component`) {
+			t.Fatalf("an app outside the catalog: %s", got)
+		}
+	})
 
-	// The member taken off the team space: their access is gone from the next call on.
-	owner.expect(http.StatusNoContent, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", ws, team.ID, memberID), nil)
-	theirsPath := fmt.Sprintf("%s/%d", base, theirs.ID)
-	var sent struct {
-		SubmissionID int64 `json:"submission_id"`
-	}
-	args, _ := json.Marshal(map[string]any{"space_id": team.ID, "path": "notes/plan.md"})
-	decodeInto(member.expect(http.StatusAccepted, http.MethodPost, theirsPath+"/messages", map[string]any{"content": "tool:read_doc " + string(args)}), &sent)
-	if _, err := sidecar.Wait(ctx, sent.SubmissionID); err != nil {
-		t.Fatal(err)
-	}
-	var msgs struct{ Messages []agentrt.Message }
-	decodeInto(member.expect(http.StatusOK, http.MethodGet, theirsPath+"/messages", nil), &msgs)
-	if last := msgs.Messages[len(msgs.Messages)-1].Text; last != "finished read_doc: error: not found" {
-		t.Fatalf("the member's agent after leaving the space: %q", last)
-	}
+	t.Run("the agent reaches no app of the member's private space", func(t *testing.T) {
+		example, err := apps.Examples()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var theirApp struct {
+			ID int64 `json:"id"`
+		}
+		decodeInto(t, as(t, member).expect(http.StatusCreated, http.MethodPost, spacePath(memberPrivate, "/apps"),
+			map[string]any{"name": "Mine", "definition": example[0].Definition}), &theirApp)
+		if got := use(t, "show_app", map[string]any{"space_id": memberPrivate, "app_id": theirApp.ID}); got != "error: not found" {
+			t.Fatalf("the member's app: %s", got)
+		}
+	})
+
+	t.Run("the capability never shows in what the browser gets", func(t *testing.T) {
+		if cardConv.ID == 0 {
+			t.Skip("no conversation had a tool turn")
+		}
+		o := as(t, owner)
+		stream := o.openEvents(cardConv.path + "/events")
+		if ev := stream.next(t); ev.Type != "value" || strings.Contains(string(ev.Value), "ttc1.") {
+			t.Fatalf("the conversation's view: %s", ev.Value)
+		}
+		stream.cancel()
+		if _, msgs := o.do(http.MethodGet, cardConv.path+"/messages", nil); strings.Contains(string(msgs), "ttc1.") {
+			t.Fatal("the messages show the capability")
+		}
+	})
+
+	t.Run("a member taken off the team space loses its access from the next call on", func(t *testing.T) {
+		m := as(t, member)
+		as(t, owner).expect(http.StatusNoContent, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", ws, team.ID, memberID), nil)
+		got := turn(t, m, open(t, m), "read_doc", map[string]any{"space_id": team.ID, "path": "notes/plan.md"})
+		if got != "error: not found" {
+			t.Fatalf("the member's agent after leaving the space: %q", got)
+		}
+	})
 }

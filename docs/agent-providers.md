@@ -61,7 +61,9 @@ Ollama, vLLM, SGLang, llama.cpp, LM Studio, LiteLLM and other gateways. It uses 
 | `egress` | optional | Where its requests may connect: a non-empty list of `"public"`, host names, IP addresses and CIDR prefixes, as in the server's egress policies ([install.md](install.md#where-provider-accounts-may-connect)). Left out, anywhere. The server writes each account's from its policy. |
 
 **`script`**: the scripted offline model (`agent/src/model.ts`) with one model, `script-1`. No
-keys, no network, the same answer for the same input. For tests and development.
+keys, no network, the same answer for the same input. For tests and development. It writes at
+40 tokens per second, so a partial answer can be seen streaming; a test that only checks what
+the tools returned starts the sidecar with `TASKTO_AGENT_SCRIPT_TOKENS_PER_SECOND=0`, no pacing.
 
 **`cli`**: a CLI worker ([cli-workers.md](cli-workers.md)), the official Claude Code, Codex or
 Grok Build CLI on the conversation owner's own login. Only the server writes these, as
