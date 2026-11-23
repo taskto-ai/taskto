@@ -84,6 +84,9 @@ export type Download = Scope & {
   // What was read from the server for the copy held at some point is written into it only while
   // this is still the copy it was read for (`resolve`: CopyChanged).
   generation?: number
+  // The order downloads began in (`beginDownload`): a download is never written over a copy that
+  // came from one that began after it (`putDownload`). Copies put without one have none.
+  ticket?: number
 }
 
 // What an item does: make a record, change a downloaded one, or delete one.
@@ -288,6 +291,15 @@ export class CopyChanged extends Refused {
   }
 }
 
+// A download that was overtaken: a download that began after it has been written (or the copy was
+// removed after it began), so what it holds is older than what the device has and is not written.
+export class StaleDownload extends Refused {
+  constructor() {
+    super('a newer download is held')
+    this.name = 'StaleDownload'
+  }
+}
+
 // The account signed in on this browser is not the one this database is for: nothing is written.
 export class AccountLapsed extends Refused {
   constructor() {
@@ -310,7 +322,10 @@ export const queueSignature = (items: readonly OutboxItem[]): string =>
 
 // The meta row that says which tab holds the right to change existing records, and until when.
 export const WRITER = 'writer'
-export type WriterRow = { key: typeof WRITER; owner: string; until: number }
+// `via`: how the holder got it, by a Web Lock it holds (any other tab with Web Locks is waiting for
+// that lock, so a row left by a holder whose lock is gone is free to a tab that holds the lock) or
+// by the lease alone (free only once `until` has passed). Whoever holds it renews `until`.
+export type WriterRow = { key: typeof WRITER; owner: string; until: number; via?: 'lock' | 'lease' }
 
 // A refusal of the device's own to keep something: shown as the failure it is.
 export class NotSaved extends Error {
@@ -398,15 +413,22 @@ export class OfflineStore {
     if (row?.owner !== this.writer) throw new NotWriter()
   }
 
-  // The writer row, in one transaction: taken when `free` says the row (if any) is free to take.
-  // Answers whether `owner` holds it now.
-  async claimWriter(owner: string, until: number, free: (row: WriterRow | undefined) => boolean): Promise<boolean> {
+  // The writer row, in one transaction (a compare-and-set: the database's word is the one source of
+  // truth for who the writer is, whatever the tabs use to take turns): taken when `free` says the
+  // row (if any) is free to take, or when it is already `owner`'s, which renews it. Answers whether
+  // `owner` holds it now.
+  async claimWriter(
+    owner: string,
+    until: number,
+    free: (row: WriterRow | undefined) => boolean,
+    via: WriterRow['via'] = 'lease',
+  ): Promise<boolean> {
     return this.tx([META], 'readwrite', async (tx) => {
       const meta = tx.store<WriterRow | { key: string; value: number }>(META)
       if ((await meta.get(RETIRED)) !== undefined) return false
       const row = (await meta.get(WRITER)) as WriterRow | undefined
       if (row?.owner !== owner && !free(row)) return false
-      await meta.put({ key: WRITER, owner, until })
+      await meta.put({ key: WRITER, owner, until, via })
       return true
     })
   }
@@ -449,11 +471,29 @@ export class OfflineStore {
   // --- downloads
 
   // Keeps a copy as a new one: its generation is a new number, whatever the copy given says.
-  putDownload(d: Download): Promise<void> {
+  //
+  // With a `ticket` (from `beginDownload`, taken before the request was made) the copy is written
+  // only if no download that began later is held, and none was removed since this one began: a
+  // download that was overtaken (a newer one was written, and the records it no longer holds were
+  // let go with it) never replaces the newer, so a deleted record can't come back from an older
+  // answer. Decided in the writing transaction (StaleDownload).
+  putDownload(d: Download, ticket?: number): Promise<void> {
     return this.keep([DOWNLOADS, META], async (tx) => {
+      if (ticket !== undefined) {
+        const held = await tx.store<Download>(DOWNLOADS).get(d.key)
+        const floor = (await tx.store<{ key: string; value: number }>(META).get(floorKey(d.key)))?.value ?? 0
+        if (ticket <= floor || (held?.ticket ?? 0) > ticket) throw new StaleDownload()
+        d.ticket = ticket
+      }
       d.generation = await nextGeneration(tx)
       await tx.store<Download>(DOWNLOADS).put(d)
     })
+  }
+
+  // The order downloads began in, one counter for the database (so it orders those of every tab):
+  // taken before a download's request is made.
+  beginDownload(): Promise<number> {
+    return this.keep([META], async (tx) => nextCounter(tx, 'downloadTicket'))
   }
 
   // The generation of the copy held for a scope, or null when none is.
@@ -473,6 +513,9 @@ export class OfflineStore {
   removeDownload(scope: Scope): Promise<void> {
     return this.keep([DOWNLOADS, META], async (tx) => {
       await nextGeneration(tx)
+      // A download that began before this removal doesn't bring the copy back (`putDownload`).
+      const began = ((await tx.store<{ key: string; value: number }>(META).get('downloadTicket'))?.value ?? 0) as number
+      await tx.store(META).put({ key: floorKey(scopeKey(scope)), value: began })
       await tx.store(DOWNLOADS).delete(scopeKey(scope))
     })
   }
@@ -637,6 +680,29 @@ export class OfflineStore {
     })
   }
 
+  // The engine's claim on an item, in its own transaction, with the queue of the item's app as that
+  // transaction reads it: `claim` decides on the item and the queue together, so a condition about
+  // the other items (an earlier change to the same record that has no answer for good) is checked
+  // atomically with the claim, never on a list read before. The version is left as it is (a claim
+  // is not a change anyone was shown).
+  async claimItem(
+    id: string,
+    claim: (item: OutboxItem, queue: readonly OutboxItem[]) => OutboxItem | undefined,
+  ): Promise<OutboxItem | undefined> {
+    return this.keep([OUTBOX], async (tx) => {
+      const store = tx.store<OutboxItem>(OUTBOX)
+      const current = await store.get(id)
+      if (!current) return undefined
+      const queue = await store.getAllByIndex('byApp', current.scopeKey)
+      const next = claim(current, queue)
+      if (!next) return current
+      this.assertAccount()
+      const saved = { ...next, version: versionOf(current), updatedAt: new Date().toISOString() }
+      await store.put(saved)
+      return saved
+    })
+  }
+
   getBlob(id: string): Promise<Blob | undefined> {
     return this.tx([BLOBS], 'readonly', (tx) => tx.store<BlobRow>(BLOBS).get(id)).then((r) => r?.blob)
   }
@@ -756,8 +822,15 @@ function asNotSaved(e: unknown): NotSaved {
 // The next number for a copy of a download: one counter for the database, so a copy put after one
 // was removed is never mistaken for it.
 async function nextGeneration(tx: Tx): Promise<number> {
+  return nextCounter(tx, 'downloadGen')
+}
+
+async function nextCounter(tx: Tx, key: string): Promise<number> {
   const meta = tx.store<{ key: string; value: number }>(META)
-  const next = ((await meta.get('downloadGen'))?.value ?? 0) + 1
-  await meta.put({ key: 'downloadGen', value: next })
+  const next = ((await meta.get(key))?.value ?? 0) + 1
+  await meta.put({ key, value: next })
   return next
 }
+
+// Where the last ticket issued is noted when an app's copy is removed.
+const floorKey = (key: string) => `downloadFloor:${key}`

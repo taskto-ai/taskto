@@ -11,12 +11,15 @@ import 'fake-indexeddb/auto'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import surface from '../../../internal/apps/testdata/expenses.surface.json'
+import type { OfflineApp } from '../api'
 import { setPreferences } from '../i18n'
 import { useOfflineData } from './hooks'
 import { OutboxList } from './OutboxList'
-import { deactivate, rememberUser } from './runtime'
+import { deactivate, type Runtime, rememberUser } from './runtime'
 import { NotWriter, OfflineStore, type OutboxItem, scopeKey } from './store'
 import { SyncEngine } from './sync'
+import { offlineTransport } from './transport'
 import { WriterNotice } from './WriterNotice'
 import { OfflineWriter, WRITER_LEASE_MS, type WriterDeps } from './writer'
 
@@ -279,4 +282,163 @@ test('a tab that is not the writer shows the queue read-only, says so, and its b
   expect(screen.queryByText(/Changes are being made in another tab/)).toBeNull()
   expect(await screen.findByRole('button', { name: /Discard/ })).toBeTruthy()
   expect(wa.holds()).toBe(false)
+})
+
+// Two tabs with different ways to take turns: one with Web Locks, one with the lease in the database.
+async function mixed(tell = true) {
+  const c = clock()
+  // `tell: false`: the tabs never hear one another (a tab that froze), so only the row says who holds.
+  const channel = tell ? channels() : () => null
+  const common = { now: c.now, heartbeat: () => () => {}, channel, setTimer: (fn: () => void) => setTimeout(fn, 0) }
+  const a = await OfflineStore.open(7)
+  const b = await OfflineStore.open(7)
+  const lease = new OfflineWriter(a, { ...common, locks: null })
+  const locked = new OfflineWriter(b, { ...common, locks: new FakeLocks() as never })
+  return { a, b, c, lease, locked }
+}
+
+test('a tab with Web Locks does not take the right from a tab that holds it by the lease: the row in the database decides', async () => {
+  const { a, lease, locked } = await mixed()
+  await lease.start()
+  await locked.start()
+  expect([lease.holds(), locked.holds()]).toEqual([true, false])
+  expect(await a.writerIs(lease.owner)).toBe(true)
+  expect(await a.writerIs(locked.owner)).toBe(false)
+  // Asked to, it waits for the lease holder to let go, and then it holds the right alone.
+  await locked.takeOver()
+  expect(locked.holds()).toBe(true)
+  await waitFor(() => expect(lease.holds()).toBe(false))
+  expect(await a.writerIs(locked.owner)).toBe(true)
+})
+
+test('a tab with the lease does not take the right from a tab that holds a Web Lock, until its lease has run out', async () => {
+  const { a, b, c, lease, locked } = await mixed(false)
+  await locked.start()
+  await lease.start()
+  expect([locked.holds(), lease.holds()]).toEqual([true, false])
+  expect(await a.writerIs(locked.owner)).toBe(true)
+  // The lock's holder froze: its lease runs out, and the other tab may take the row. The database
+  // then refuses the first one's writes, whatever it believes.
+  c.advance(WRITER_LEASE_MS + 1)
+  await lease.takeOver()
+  expect(lease.holds()).toBe(true)
+  expect(await a.writerIs(lease.owner)).toBe(true)
+  const saved = await a.enqueue(itemOf(), [])
+  await expect(discardOf(b, saved)).rejects.toBeInstanceOf(NotWriter)
+  await discardOf(a, saved)
+  expect(await a.listItems()).toEqual([])
+})
+
+test('stopping while the lock is being taken lets the lock go: no Web Lock is left held by a tab that stopped', async () => {
+  const locks = new FakeLocks()
+  const store = await OfflineStore.open(7)
+  let open: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  // The database is slow to answer the writer's claim: the tab stops meanwhile.
+  const claim = store.claimWriter.bind(store)
+  const slow = vi.spyOn(store, 'claimWriter').mockImplementation(async (...args) => {
+    await gate
+    return claim(...args)
+  })
+  const writer = new OfflineWriter(store, { locks: locks as never, now: clock().now, heartbeat: () => () => {} })
+  const starting = writer.start()
+  await waitFor(() => expect(slow).toHaveBeenCalled())
+  writer.stop()
+  open()
+  await starting
+  expect(writer.holds()).toBe(false)
+  expect(await store.writerIs(writer.owner)).toBe(false)
+  // The lock is free: another tab can have it.
+  let free = false
+  await locks.request(`taskto-offline-writer-7`, { ifAvailable: true }, async (lock) => {
+    free = lock !== null
+  })
+  expect(free).toBe(true)
+})
+
+// --- the screen a press is bound to
+
+const definition: OfflineApp['definition'] = {
+  definition_version: 1,
+  requires: [],
+  collection: {
+    fields: [
+      { name: 'description', type: 'string', required: true, max_length: 200 },
+      { name: 'amount', type: 'number', required: true },
+    ],
+  },
+  actions: {
+    add_expense: { kind: 'insert' },
+    edit_expense: { kind: 'update' },
+  },
+  summaries: { total: { kind: 'sum', field: 'amount' } },
+}
+
+const press = (context: Record<string, unknown>) => ({
+  name: 'edit_expense',
+  surfaceId: 'app-1',
+  sourceComponentId: 'edit',
+  timestamp: '2026-11-02T10:00:00.000Z',
+  context,
+  expectedRevision: 1,
+})
+
+test('a screen drawn before a hand-over cannot queue a change over the previous writer’s pending edit: it reads again first', async () => {
+  const c = clock()
+  const deps: WriterDeps = {
+    locks: new FakeLocks() as never,
+    now: c.now,
+    channel: channels(),
+    heartbeat: () => () => {},
+  }
+  const a = await OfflineStore.open(7)
+  const b = await OfflineStore.open(7)
+  const wa = new OfflineWriter(a, deps)
+  const wb = new OfflineWriter(b, deps)
+  await wa.start()
+  await wb.start()
+  const copy = {
+    ...scope,
+    key: scopeKey(scope),
+    user: 7,
+    name: 'Expenses',
+    release: 3,
+    definition,
+    messages: surface,
+    scopeOf: 'all' as const,
+    records: 1,
+    total: 1,
+    truncated: false,
+    canInsert: true,
+    capturedAt: '2026-11-02T10:00:00.000Z',
+    operations: {},
+    modifiable: [1],
+    bytes: 100,
+  }
+  await a.putDownload(copy)
+  const runtime = (store: OfflineStore, writer: OfflineWriter) =>
+    ({ user: 7, store, writer, engine: { run: async () => {} }, stop: () => {} }) as unknown as Runtime
+  const first = offlineTransport(runtime(a, wa), copy)
+  const second = offlineTransport(runtime(b, wb), copy)
+  // The second tab draws its screen (as a reader), and then the first one, the writer, edits.
+  await second.load()
+  await first.load()
+  await first.act(press({ id: 1, amount: '9' }))
+  const [mine] = await a.listItems()
+  // The right is handed over. The second tab's screen was drawn before, and doesn't show that edit.
+  await wb.takeOver()
+  expect(wb.holds()).toBe(true)
+  await expect(second.act(press({ id: 1, description: 'Stale' }))).rejects.toMatchObject({
+    code: 'offline_record_changed',
+  })
+  // Nothing was merged into the edit the screen never showed.
+  expect(await b.listItems()).toEqual([mine])
+  // Drawn again, the screen shows it, and a change then is made knowing it.
+  await second.load()
+  await second.act(press({ id: 1, description: 'Later' }))
+  const [merged] = await b.listItems()
+  expect(merged).toMatchObject({ id: mine.id, version: mine.version + 1 })
+  expect(merged.action.context).toEqual({ id: 1, amount: '9', description: 'Later' })
 })

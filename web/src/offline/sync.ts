@@ -48,6 +48,7 @@ import {
 } from './store'
 
 export const MAX_ATTEMPTS = 8
+const MAX_REORDERS = 50
 const BASE_DELAY = 2_000
 const MAX_DELAY = 5 * 60_000
 // How long a claim on an item holds without being renewed, and how soon a tab that found another
@@ -70,7 +71,8 @@ type Outcome =
   // The session is another account's: nothing is sent until it is this queue's again.
   | { kind: 'account' }
   // Not ours to send now (another tab holds it): left alone, looked at again when its claim ends.
-  | { kind: 'skipped'; until?: number }
+  // `ordered`: an earlier change to the same record had no answer for good when the claim was made.
+  | { kind: 'skipped'; until?: number; ordered?: boolean }
   // `exhausted`: it failed for the last time and now needs attention: the items behind it are not
   // held back by it.
   | { kind: 'transient'; error: ItemError; exhausted?: boolean }
@@ -524,6 +526,10 @@ export class SyncEngine {
   private async sendAll(exclusive: boolean): Promise<number | undefined> {
     const done = new Set<string>()
     let wake: number | undefined
+    // Items the claim refused to put ahead of an earlier change to their record: the earlier one is
+    // sent first (it is looked for again), and this one after it. Bounded, so a queue that keeps
+    // changing under the pass can't hold it for ever.
+    let reordered = 0
     for (;;) {
       if (this.stopped || this.paused) return wake
       // The queue is the signed-in account's: when someone else is, it waits for its owner.
@@ -547,6 +553,7 @@ export class SyncEngine {
       if (outcome.kind === 'skipped' && outcome.until !== undefined) {
         wake = Math.min(wake ?? Number.POSITIVE_INFINITY, outcome.until)
       }
+      if (outcome.kind === 'skipped' && outcome.ordered && reordered++ < MAX_REORDERS) done.delete(next.id)
       // The network is down: the items behind this one would find the same. (An item that has run
       // out of tries is the person's to deal with now: it holds nothing back.)
       if (outcome.kind === 'transient' && !outcome.exhausted) return wake
@@ -555,8 +562,23 @@ export class SyncEngine {
 
   // The claim on an item, made in its own transaction: taken if nobody holds it, if the holder's
   // time has run out, or if it is ours already (or we hold the lock). Not taken otherwise.
-  private claim(i: OutboxItem, exclusive: boolean, attempt: string): OutboxItem | undefined {
+  //
+  // `queue` is the item's app's queue as the claiming transaction reads it: a record's changes are
+  // answered in the order they were made, and that is decided here, atomically with the claim, not
+  // on the list the pass chose from (the person may have put an earlier item of the record back to
+  // waiting since). `ordered` is set when that is why nothing was claimed.
+  private claim(
+    i: OutboxItem,
+    exclusive: boolean,
+    attempt: string,
+    queue: readonly OutboxItem[],
+    ordered: { value: boolean },
+  ): OutboxItem | undefined {
     const now = this.now()
+    if (waitsForEarlier(i, queue)) {
+      ordered.value = true
+      return undefined
+    }
     if (i.state === 'queued') {
       if (i.nextAttemptAt !== undefined && i.nextAttemptAt > now) return undefined
     } else if (i.state === 'syncing') {
@@ -574,8 +596,11 @@ export class SyncEngine {
       lease: { owner: this.owner, until: now + LEASE_MS, attempt },
       ...(changes && {
         unconfirmed: true,
-        // What an answer that settles nothing goes back to (kept across a claim made again).
-        unconfirmedBefore: i.state === 'syncing' ? i.unconfirmedBefore : i.unconfirmed === true,
+        // What an answer that settles nothing goes back to. An item found *syncing* was claimed by
+        // a send that never answered for good (its tab was closed, or froze): that send may have
+        // reached the server, so a claim made over it is made on an item that is unconfirmed, and
+        // an answer that says nothing of the operation (a refusal of the route) leaves it so.
+        unconfirmedBefore: i.state === 'syncing' ? true : i.unconfirmed === true,
       }),
     }
   }
@@ -625,9 +650,14 @@ export class SyncEngine {
     const id = start.id
     // The token of this send: what it writes is written only while the item's claim carries it.
     const attempt = randomId()
-    const claimed = await this.store.updateItem(id, (i) => this.claim(i, exclusive, attempt), { bump: false })
+    const ordered = { value: false }
+    const claimed = await this.store.claimItem(id, (i, queue) => this.claim(i, exclusive, attempt, queue, ordered))
     if (claimed?.state !== 'syncing' || claimed.lease?.owner !== this.owner || claimed.lease.attempt !== attempt) {
-      return { kind: 'skipped', until: claimed?.state === 'syncing' ? claimed.lease?.until : undefined }
+      return {
+        kind: 'skipped',
+        until: claimed?.state === 'syncing' ? claimed.lease?.until : undefined,
+        ordered: ordered.value,
+      }
     }
     this.lastRenew = this.now()
     // The claim is kept for as long as this send is in flight, on a clock of its own: a request

@@ -37,6 +37,7 @@ import {
   queueSignature,
   RecordBusy,
   RecordChanged,
+  versionOf,
 } from './store'
 
 const hex = (n: number) => {
@@ -125,6 +126,27 @@ export function offlineTransport(
   const photos = localPhotos()
   const queue = () => runtime.store.listItems(download)
 
+  // What the screen on display was drawn from: the writer session it was drawn in, and the queue it
+  // showed. A press that changes a record is bound to it: the writer's queue may have been changed
+  // since (the right was handed to another tab and back, or this tab became the writer after the
+  // screen was drawn, or an item of the record was changed here), and a screen that doesn't show
+  // that must not queue a change on top of it, merging into an edit it never showed. It is drawn
+  // again (the renderer loads on `offline_record_changed`) before it can. The session is read before
+  // the queue, so a hand-over in between makes a screen stale, never fresh. A transport that has
+  // drawn nothing yet (`load` was not called) has nothing to be stale against: it adopts what it reads.
+  let screen: { session: number; queue: OutboxItem[] } | undefined
+  const readQueue = async () => {
+    const session = runtime.writer.session()
+    const items = await queue()
+    return { session, items }
+  }
+  const versionsOf = (items: readonly OutboxItem[], id: number) =>
+    items
+      .filter((i) => kindOf(i) !== 'insert' && i.record.id === id)
+      .map((i) => `${i.id}:${versionOf(i)}`)
+      .sort()
+      .join(',')
+
   // A change to a downloaded record: queued with the revision it is based on, and shown as the
   // person left it. Changes to one record are one item while none was sent only when they are the
   // same action, made on the same base (the same revision, the same release): the later values
@@ -140,6 +162,7 @@ export function offlineTransport(
   ) => {
     // Only the tab that holds the offline writer changes existing records (writer.ts).
     if (!runtime.writer.holds()) throw notWriter()
+    const read = await readQueue()
     const id = Number(context.id)
     if (!Number.isInteger(id)) throw new ApiError(422, 'bad request', { code: 'bad_request' })
     if (id < 0) throw new ApiError(409, 'not on the server yet', { code: 'offline_record_unsynced' })
@@ -149,7 +172,13 @@ export function offlineTransport(
     if (!download.modifiable.includes(id)) {
       throw new ApiError(403, 'not allowed', { code: 'app_forbidden', params: { capability: 'modify_records' } })
     }
-    const items = await queue()
+    const items = read.items
+    // Bound to what the screen showed: the writer session it was drawn in, and the versions of the
+    // record's items.
+    screen ??= { session: read.session, queue: items }
+    if (screen.session !== read.session || versionsOf(screen.queue, id) !== versionsOf(items, id)) {
+      throw recordChanged()
+    }
     const shown = itemsOf(download, items).find((i) => i.id === id)
     if (!shown) throw new ApiError(422, 'row not found', { error: 'row not found', code: 'app_row_not_found' })
     // The revision the person saw: mandatory, since the server decides by it.
@@ -242,7 +271,9 @@ export function offlineTransport(
     }
     opts.onSaved?.(saved)
     void runtime.engine.run()
-    return answerChange(download, await queue(), action.name, kind, id)
+    const after = await readQueue()
+    screen = { session: after.session, queue: after.items }
+    return answerChange(download, after.items, action.name, kind, id)
   }
   const recordChanged = () => new ApiError(409, 'this record changed', { code: 'offline_record_changed' })
   const notWriter = () => new ApiError(409, 'changes are being made in another tab', { code: NOT_WRITER })
@@ -254,13 +285,15 @@ export function offlineTransport(
       await refresh()
       drawn = download
       // The photos of records still queued are on this device: shown from there.
-      const items = await queue()
+      const read = await readQueue()
+      const items = read.items
       for (const item of items) {
         for (const a of item.attachments) {
           const blob = await runtime.store.getBlob(a.blobId)
           if (blob) photos.adopt(a.localId, blob)
         }
       }
+      screen = { session: read.session, queue: items }
       return viewOf(download, items)
     },
     act: async (action: ActionPayload) => {
@@ -269,7 +302,12 @@ export function offlineTransport(
       const download = screenOf()
       const def = download.definition.actions[action.name]
       const context = (action.context ?? {}) as Record<string, unknown>
-      if (def?.kind === 'navigate') return answerNavigate(download, await queue(), action.name, context)
+      if (def?.kind === 'navigate') {
+        // A screen drawn from the queue as it is now.
+        const read = await readQueue()
+        screen = { session: read.session, queue: read.items }
+        return answerNavigate(download, read.items, action.name, context)
+      }
       if (def?.kind === 'update' || def?.kind === 'delete') return change(download, action, def.kind, context)
       // Only a change to a record can be made without the server: everything else needs it.
       if (def?.kind !== 'insert') {
@@ -329,7 +367,9 @@ export function offlineTransport(
       opts.onSaved?.(saved)
       // If the network is there the record goes now; if not, the engine sends it when it is.
       void runtime.engine.run()
-      return answerChange(download, await queue(), action.name, 'insert')
+      const after = await readQueue()
+      screen = { session: after.session, queue: after.items }
+      return answerChange(download, after.items, action.name, 'insert')
     },
   }
 }

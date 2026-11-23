@@ -9,7 +9,7 @@ import { useFormat, useT } from '../i18n'
 import { downloadApp, type StorageStatus, storageStatus, UnsupportedRelease } from './download'
 import { useOfflineData, useRuntime } from './hooks'
 import { OutboxList } from './OutboxList'
-import { NotSaved, scopeKey } from './store'
+import { NotSaved, StaleDownload, scopeKey } from './store'
 import { notSavedText } from './transport'
 import { WriterNotice } from './WriterNotice'
 
@@ -49,6 +49,8 @@ export function OfflinePanel({
     try {
       await downloadApp(runtime.store, scope)
     } catch (e) {
+      // Overtaken by a removal that began later (the copy was revoked): the panel shows what is held.
+      if (e instanceof StaleDownload) return
       setError(
         e instanceof NotSaved
           ? notSavedText(e)

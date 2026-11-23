@@ -6,7 +6,7 @@
 import { api, forAccount, type OfflineApp } from '../api'
 import { unsupportedBy } from '../apps/catalog'
 import { assertSignedIn } from './account'
-import { type Download, type OfflineStore, type Scope, scopeKey } from './store'
+import { type Download, type OfflineStore, type Scope, StaleDownload, scopeKey } from './store'
 
 export type StorageStatus = {
   // Bytes in use and the most this site may use, as the browser estimates (it may not say).
@@ -50,7 +50,14 @@ const appBase = (s: Scope) => `/api/workspaces/${s.workspace}/spaces/${s.space}/
 // `session_account_changed`) or a NotSaved from the device (the storage is full). The request
 // names the account whose database the answer is for, and the answer is written only while the
 // browser is still signed in as them (`AccountChanged` otherwise).
+//
+// Downloads are ordered by when they began (a ticket the database hands out before the request):
+// one that is overtaken by a download that began after it, and was written first, is not written
+// over it (`putDownload`, in its transaction), so a record that the newer one no longer holds (it
+// was deleted, and the device's note of that went with the newer copy) can't come back from an older
+// answer. The answer is then the copy the device holds, which is the newer one.
 export async function downloadApp(store: OfflineStore, scope: Scope): Promise<Download> {
+  const ticket = await store.beginDownload()
   const r = await api<OfflineApp>(`${appBase(scope)}/offline`, { headers: forAccount(store.user) })
   // A release this client can't draw is not kept as if it could be used.
   const missing = unsupportedBy(r.definition)
@@ -77,7 +84,16 @@ export async function downloadApp(store: OfflineStore, scope: Scope): Promise<Do
   // has (it is among this download's) is the server's from now on, and the device's own entry for
   // it, which would show it twice, goes.
   assertSignedIn(store.user)
-  await store.putDownload(download)
+  try {
+    await store.putDownload(download, ticket)
+  } catch (e) {
+    if (!(e instanceof StaleDownload)) throw e
+    // Overtaken: what the device holds came from a download that began later. Nothing of this
+    // answer is kept, and nothing is let go on the strength of it.
+    const held = await store.getDownload(scope)
+    if (held) return held
+    throw e
+  }
   await store.dropIncluded(scope, download.operations, presentIn(download))
   // After the copy is kept: improves its chance to stay.
   void requestPersistence()

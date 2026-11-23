@@ -1781,3 +1781,133 @@ test('in a tab that is not the writer a button that changes a record says so, an
   expect((await screen.findByRole('alert')).textContent).toMatch(/Changes are being made in another tab/)
   expect(await store.listItems()).toEqual([])
 })
+
+test('a send whose tab was lost after it began stays unconfirmed when the next tab is refused at the route: only a verdict on the operation clears it', async () => {
+  const { store, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  // The first tab began the send and was never heard of again: its request is never answered.
+  const lost = held()
+  const first = engineOf(store, clock(), { request: lost.request }).run()
+  await waitFor(() => expect(lost.calls).toHaveBeenCalled())
+  expect((await store.listItems())[0]).toMatchObject({ state: 'syncing', unconfirmed: true })
+  // Another tab takes the item once the claim ran out, and the route refuses it: the space or the
+  // app says no, before it looked at the operation, which says nothing of what the first send did.
+  const later = clock()
+  later.advance(10 * 60_000)
+  fakeFetch({
+    [`POST ${base}/actions`]: { status: 404, body: { error: 'no', code: 'space_not_found' } },
+    [`GET ${base}`]: { body: {} },
+  })
+  await engineOf(store, later).run()
+  const [refused] = await store.listItems()
+  expect(refused).toMatchObject({ state: 'attention', attention: 'access', unconfirmed: true })
+  // It still takes no further change: the first send may have committed.
+  await expect(transport.act(press('edit_expense', { id: 1, amount: '11' }, 1))).rejects.toMatchObject({
+    code: 'offline_record_busy',
+  })
+  lost.waiting[0]([])
+  await first
+  // Its late answer wrote nothing.
+  expect((await store.listItems())[0]).toMatchObject({ state: 'attention', unconfirmed: true })
+})
+
+test('a claim is refused in its own transaction while an earlier change to the same record has no answer for good, so a delete never overtakes it', async () => {
+  const { store, runtime } = await setup()
+  const t = offlineTransport(runtime, download(7))
+  await t.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  await t.act(press('delete_expense', { id: 1 }, 1))
+  const [edit] = await store.listItems()
+  // The edit needs attention, and was not left unconfirmed: the delete may go.
+  await store.updateItem(edit.id, (i) => ({ ...i, state: 'attention', attention: 'conflict' }))
+  // The pass reads the queue and picks the delete; before it claims, the person (in the writer) puts
+  // the edit back to waiting.
+  const list = store.listItems.bind(store)
+  vi.spyOn(store, 'listItems').mockImplementationOnce(async (s) => {
+    const items = await list(s)
+    await store.updateItem(edit.id, (i) => ({ ...i, state: 'queued', attention: undefined }))
+    return items
+  })
+  const calls = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  await engineOf(store).run()
+  // The delete was not claimed ahead of the edit: the edit is sent first, then the delete.
+  expect(actionCalls(calls).map((x) => (x.body as { name: string }).name)).toEqual(['edit_expense', 'delete_expense'])
+  expect((await store.listItems()).map((i) => i.state)).toEqual(['synced', 'synced'])
+})
+
+// The download's messages with no record in them: what a server that deleted it answers.
+const withoutRecords = () =>
+  surface.map((m) =>
+    m.updateDataModel
+      ? { ...m, updateDataModel: { ...m.updateDataModel, value: { draft: {}, items: [], total: '0.00' } } }
+      : m,
+  )
+
+test('a download that began earlier never replaces a newer one that was written first: a deleted record does not come back', async () => {
+  const { store, runtime, transport } = await setup()
+  // The record was deleted here and the server has it: a synced deletion, held until a download says so.
+  await transport.act(press('delete_expense', { id: 1 }, 1))
+  const [gone] = await store.listItems()
+  await store.updateItem(gone.id, (i) => ({ ...i, state: 'synced' }))
+  let release: () => void = () => {}
+  const opened = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let asked = 0
+  const calls = fakeFetch({
+    [`GET ${base}/offline`]: async () => {
+      // The first request is answered late, from before the deletion: it still holds the record.
+      if (asked++ === 0) {
+        await opened
+        return { body: offlineApp({ captured_at: '2026-11-04T10:00:00.000Z' }) }
+      }
+      return {
+        body: {
+          ...offlineApp({ captured_at: '2026-11-04T10:00:05.000Z' }),
+          messages: withoutRecords(),
+          records: 0,
+          total: 0,
+          modifiable: [],
+        },
+      }
+    },
+  })
+  const older = downloadApp(store, scope)
+  await waitFor(() => expect(calls.length).toBe(1))
+  // A newer download begins, is answered first and written: the record is gone, and its deletion's
+  // note goes with it.
+  const newer = await downloadApp(store, scope)
+  expect(itemsOf(newer, [])).toEqual([])
+  expect(await store.listItems()).toEqual([])
+  // The older answer arrives now. It is not written over the newer copy.
+  release()
+  const answer = await older
+  expect(answer.capturedAt).toBe('2026-11-04T10:00:05.000Z')
+  const copy = (await store.getDownload(scope)) as Download
+  expect(copy.capturedAt).toBe('2026-11-04T10:00:05.000Z')
+  expect(itemsOf(copy, await store.listItems())).toEqual([])
+  expect(runtime.user).toBe(7)
+})
+
+test('a download that began before the copy was removed does not bring it back', async () => {
+  const { store } = await setup()
+  let release: () => void = () => {}
+  const opened = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const calls = fakeFetch({
+    [`GET ${base}/offline`]: async () => {
+      await opened
+      return { body: offlineApp() }
+    },
+  })
+  const pending = downloadApp(store, scope)
+  await waitFor(() => expect(calls.length).toBe(1))
+  // Access was revoked meanwhile: the copy is removed.
+  await store.removeDownload(scope)
+  release()
+  await expect(pending).rejects.toMatchObject({ name: 'StaleDownload' })
+  expect(await store.getDownload(scope)).toBeUndefined()
+  // A download that begins after the removal is kept.
+  fakeFetch({ [`GET ${base}/offline`]: { body: offlineApp() } })
+  expect((await downloadApp(store, scope)).release).toBe(3)
+})

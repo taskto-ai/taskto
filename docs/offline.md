@@ -150,11 +150,26 @@ Several tabs of one account share one queue, and what they would have to do to w
   `resolve`, `discardItem`, the retry, hold, release and clear of an item) reads that row in its
   own transaction and is **refused** (`NotWriter`) unless it names this tab. A tab that lost the
   right while a write was on its way, a frozen tab that woke up, is refused by the database.
-- **How it is held.** Where the browser has Web Locks, the writer holds a lock named for the account
-  for as long as it keeps the right (it is let go when the tab closes) and writes the row when it
-  gets it. Where it hasn't, the row carries a **lease** that its holder renews with a heartbeat, and
-  anyone may take it once it has run out. A tab that closed lets go at once; one that froze loses
-  the right when the lease ends, if another tab asks.
+- **How it is held: the row is the one source of truth.** The row carries a **lease** that its
+  holder renews with a heartbeat, and it is taken only by a compare-and-set in one transaction
+  (`claimWriter`): when no one holds it, or the lease has run out. That is the same with and without
+  Web Locks, so a tab that has them and a tab that hasn't, or that holds the right by the lease
+  alone, respect one another: neither takes the right from the other's unexpired lease, and both
+  report holding only when the row says so. **Web Locks only serialize acquisition**: a tab takes the
+  lock named for the account, then tries the row, so tabs with Web Locks never race for it, and a
+  row left by a holder whose lock is gone (its tab was closed or crashed) is free to the tab that
+  holds the lock now, without waiting for the lease. A lock is held only while the tab holds the
+  row: when the row is lost the lock is let go, and a lock that is granted to a tab that stopped
+  meanwhile (it was closed while it waited, or while the database answered its claim) is let go at
+  once, with the row if it got it. A tab that closed lets go at once; one that froze loses the right
+  when the lease ends, if another tab asks.
+- **A screen is bound to the session it was drawn in.** Each time a tab becomes the writer it starts
+  a new **session**. A button that changes a record is accepted only on a screen drawn in the
+  writer's current session, and only if the versions of the record's items are the ones the screen
+  was drawn from (see [Versions](#versions-what-makes-two-tabs-agree)): a screen drawn before a
+  hand-over, which doesn't show what the previous writer queued, can't merge a change into it. It
+  is refused (*This record changed on this device…*) and drawn again, and the next press is made on
+  what it shows.
 
 ### Versions: what makes two tabs agree
 
@@ -192,6 +207,13 @@ The rules:
   as it is now*, and the screen is drawn again): values and revisions of different bases are never
   put together. A screen drawn from another revision than the device holds now is refused the same
   way, so an item never pairs the revision a person saw with the values of another.
+- **A press is bound to the screen it was made on.** The transport keeps, with each screen it
+  draws (the first load, a navigation, and after each change it saved), the writer's session and the
+  items of the app's queue the screen showed. A press that changes a record is refused
+  (`offline_record_changed`) when the session is another one, or when the versions of the record's
+  items are not those of the screen: the transaction's own check of the queue then guards what
+  happens between the press's read and its write. A transport that has drawn nothing has nothing to
+  be stale against.
 - **A button is resolved in the release its screen was drawn from.** The transport keeps the
   release `load` drew and resolves the pressed action in its definition, queues the item for that
   release, and never in a newer one downloaded meanwhile, where the same name may be another
@@ -260,7 +282,10 @@ sent while an earlier item for the same record has no answer for good (it is que
 waiting for its retry, held as a draft, or *needs attention* and was left unconfirmed): a deletion
 therefore never overtakes the edit before it, an edit is never reported *deleted* because its later
 deletion got there first, and the ordinary outcome of two changes made on one revision is a visible
-conflict on the second. An answer for good is the server's acknowledgement or its verdict (a
+conflict on the second. The order is enforced **in the claim's own transaction**
+(`OfflineStore.claimItem`): an item is claimed only if, in that transaction, no earlier item for the
+record lacks an answer for good, so an earlier item that the person put back to waiting between the
+pass's reading of the queue and its claim is sent first, and the later one after it. An answer for good is the server's acknowledgement or its verdict (a
 conflict, a missing record, a field that doesn't fit). The revisions are not chained: the second
 item is still based on the revision the person saw.
 
@@ -301,7 +326,7 @@ What the answer means:
 | 401, the session ended | **sending pauses** (the item waits, no attempt is counted) until someone signs in again; then it resumes |
 | 409 `session_account_changed` | the session is another account's: **sending pauses** as above, the item waits as it was |
 | no answer, 5xx, 408, 425, 429 | transient: try again with backoff (2 s doubling to 5 min, with jitter), and the items behind it wait; after 8 attempts, *Needs attention* with **Try again now**, and the items behind it are sent (a record that gave up doesn't hold the queue) |
-| 403, 404 | access lost: *Needs attention*. If asking for the app itself is also refused, the revocation is confirmed: **replay is blocked and the downloaded copy is removed**; the queued input stays, for the person to deal with. Such a refusal says nothing of an earlier send of the same change: a change that **may already be on the server** stays *unconfirmed* (it takes no further edit, and is never reused for another request) |
+| 403, 404 | access lost: *Needs attention*. If asking for the app itself is also refused, the revocation is confirmed: **replay is blocked and the downloaded copy is removed**; the queued input stays, for the person to deal with. Such a refusal says nothing of an earlier send of the same change: a change that **may already be on the server** stays *unconfirmed* (it takes no further edit, and is never reused for another request). That includes a send by a tab that was lost: an item found *syncing* by the tab that claims it next was sent by one that never answered for good, so it is unconfirmed, and a refusal of the route by the next claimant leaves it so |
 | 409 `app_record_conflict` (an update or a delete) | the record changed since the change was based on it: *Needs attention*, a **conflict**, with the record as the server has it now if the person may read it; never retried by itself ([Conflicts](#conflicts-and-what-doesnt-fit)) |
 | 422 `app_row_not_found` (an update or a delete) | the record is gone (deleted, or no longer the person's to change): *Needs attention*, **deleted**; the change never brings it back |
 | 422 or 400 for a field the app no longer takes (removed, retyped, now required, a choice that is no longer one) | *Needs attention*, **schema**: the input is kept, with what doesn't fit, to repair or discard |
@@ -472,6 +497,15 @@ signing in is dealt with when it signs in:
   person may no longer read ([Downloading](#downloading)).
 
 ## Refreshing a download
+
+**Downloads are ordered by when they began.** Before its request is made, a download takes a
+**ticket** from a counter in the database (one for every tab of the account), and the copy is written
+only if no download that began after it is held, and the app's copy was not removed after it began,
+decided in the writing transaction (`putDownload`, `StaleDownload`). An older answer that arrives
+late (the revalidation's, a second tab's) is never written over a newer copy: the record that the
+newer one no longer holds (deleted, with the device's note of the deletion let go together with it)
+can't come back from it, and a copy removed for a revocation is not brought back by a download
+that was already on its way. The caller is answered with the copy the device holds.
 
 A download is a snapshot, and a record this device sent may be in the next one. The download says
 which of its records the person's own operations made, and a record whose operation key is among
