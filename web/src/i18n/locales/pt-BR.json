@@ -137,6 +137,67 @@
       "message": "Este app foi publicado com recursos que esta versão do TaskTo.AI ainda não tem, então não pode ser mostrado aqui.",
       "needs": "Precisa de: {needs}",
       "update": "Atualizar o TaskTo.AI"
+    },
+    "explorer": {
+      "back": "Voltar aos registros",
+      "saved": "Salvo.",
+      "save": "Salvar alterações",
+      "delete": "Excluir",
+      "deleteConfirm": "Sim, excluir este registro",
+      "cancel": "Cancelar",
+      "empty": "—",
+      "unset": "Sem valor",
+      "fields": "Campos do registro {id}",
+      "conflict": {
+        "title": "Outra pessoa alterou este registro enquanto isso",
+        "keep": "O que você digitou continua no formulário. Abaixo estão os campos em que difere do registro como está agora. Salve o seu por cima da versão atual, ou descarte o seu e use a atual.",
+        "field": "Campo",
+        "yours": "O que você digitou",
+        "current": "Valor atual",
+        "reapply": "Salvar minhas alterações por cima da versão atual",
+        "discard": "Descartar minhas alterações e usar o registro atual"
+      },
+      "search": "Buscar nos registros",
+      "searchGo": "Buscar",
+      "sortBy": "Ordenar por",
+      "changedAt": "Alterado",
+      "deletedAt": "Excluído",
+      "ascending": "Crescente",
+      "descending": "Decrescente",
+      "noMatch": "Nenhum registro corresponde.",
+      "showing": "Mostrando {from}–{to} de {total} registros encontrados",
+      "total": "{total} registros encontrados",
+      "previous": "Página anterior",
+      "next": "Próxima página",
+      "first": "Primeira página",
+      "totalsLabel": "Totais",
+      "totalsOf": "Totais de",
+      "totalsNone": "Sem totais",
+      "totalsScope": "Sobre todos os {total} registros encontrados, não só esta página.",
+      "agg": {
+        "sum": "Soma",
+        "avg": "Média",
+        "min": "Menor",
+        "max": "Maior"
+      },
+      "filters": "Filtrar os registros",
+      "filterField": "Campo",
+      "filterOp": "Condição",
+      "filterValue": "Valor",
+      "addFilter": "Adicionar filtro",
+      "activeFilters": "Filtros em uso",
+      "removeFilter": "Remover o filtro {filter}",
+      "id": "Registro",
+      "openRecord": "Abrir o registro {id}",
+      "op": {
+        "eq": "é",
+        "ne": "não é",
+        "lt": "é menor que",
+        "lte": "é no máximo",
+        "gt": "é maior que",
+        "gte": "é no mínimo",
+        "contains": "contém"
+      }
     }
   },
   "auth": {
@@ -469,7 +530,10 @@
     "home_widget_not_found": "Este app não oferece esse widget.",
     "home_limit": "Você pode ter no máximo {max} destes.",
     "home_order_invalid": "Essa ordem não é feita de itens seus.",
-    "home_defaults_shared": "Padrões existem só para os apps de espaços compartilhados."
+    "home_defaults_shared": "Padrões existem só para os apps de espaços compartilhados.",
+    "app_query_cursor": "Essa página não pode mais ser encontrada. Comece de novo pela primeira página.",
+    "app_query_field": "O app não tem o campo “{field}” que possa ser usado aqui.",
+    "app_query_condition": "O filtro em “{field}” não combina com o campo."
   },
   "language": {
     "label": "Idioma",

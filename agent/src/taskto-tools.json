@@ -615,6 +615,94 @@
     }
   },
   {
+    "name": "query_app_rows",
+    "description": "Query an app's data with filters, search, sort and pages, and get totals over ALL the rows that match, not only the page: the rows the user may read (all of them, or only the ones they created, by their role in the app), each with its id, its _revision and the fields its live release's collection declares. Use it instead of list_app_rows when you need some rows, an order, a count or a sum. Filters all have to hold: a field, an op (eq, ne, lt, lte, gt, gte, or contains for a string) and a value of the field's type; a row with no value of the field equals nothing (ne matches it, the others don't). search is words that each have to be in some string or choice field. Rows are ordered by sort (a field, _updated, _created or id; _updated newest first by default) and then by id, rows without a value last; a page ends with next_cursor, which you pass as cursor, with the same query, for the next one: rows added or removed meanwhile don't shift the pages. total and aggregates are over every matching row. A number held as text is shown but is in no comparison, sort or sum. A page too long for one reply is made shorter: next_cursor continues after the last row sent.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["live", "deleted"],
+          "description": "live rows (the default) or deleted ones, which can be restored by a person"
+        },
+        "filters": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": { "type": "string", "description": "a field the app's live release declares" },
+              "op": {
+                "type": "string",
+                "enum": ["eq", "ne", "lt", "lte", "gt", "gte", "contains"],
+                "description": "lt, lte, gt and gte are for number, date, time and string fields; contains is a case-insensitive substring of a string field"
+              },
+              "value": {
+                "description": "a value of the field's type: text, a number, true or false, a date YYYY-MM-DD or a time HH:MM"
+              }
+            },
+            "required": ["field", "op", "value"],
+            "additionalProperties": false
+          },
+          "description": "conditions that all have to hold"
+        },
+        "search": {
+          "type": "string",
+          "description": "words (at most 5) that each have to be in some string or choice field, in any case"
+        },
+        "sort": {
+          "type": "string",
+          "description": "a field, or _updated, _created, _deleted (deleted rows only) or id"
+        },
+        "dir": {
+          "type": "string",
+          "enum": ["asc", "desc"],
+          "description": "the times are newest first by default, the rest ascending"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "rows in a page (default 50)"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "the previous page's next_cursor, with the same state, filters, search and sort"
+        },
+        "aggregates": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["count", "sum", "min", "max", "avg"] },
+              "field": {
+                "type": "string",
+                "description": "count: optional (the rows that have a value of it); sum and avg: a number field; min and max: a number, date or time field"
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          "description": "values over all the matching rows, each with the count of rows it was computed from"
+        }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "create_app",
     "description": "Save a new personal app in a space the user may write: a private space's apps are the user's, a shared space's are its members'. The server checks the definition against the catalog and says what is wrong if it doesn't fit. It is saved as a draft: it can't be launched until a person who may publish the app publishes it in the Apps page; you can't publish.",
     "read_only": false,

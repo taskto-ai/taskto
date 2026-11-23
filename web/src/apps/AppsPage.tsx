@@ -476,8 +476,11 @@ function LaunchedApp({
           <AppStage key={screen ?? ''} base={base} app={info.data} reloadKey={restored} screen={screen} />
           <AppRecords
             base={base}
+            appId={app}
             access={info.data.access}
             writable={writable}
+            definition={info.data.live?.definition}
+            release={info.data.live?.number}
             onRestored={() => setRestored((n) => n + 1)}
           />
         </>

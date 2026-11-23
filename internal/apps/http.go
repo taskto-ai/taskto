@@ -36,6 +36,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("GET "+apps+"/{app}/releases/{release}", read(s.handleRelease))
 	mux.Handle("GET "+apps+"/{app}/records", read(s.handleRecords))
 	mux.Handle("GET "+apps+"/{app}/records/deleted", read(s.handleDeleted))
+	mux.Handle("GET "+apps+"/{app}/records/query", read(s.handleQuery))
 	mux.Handle("GET "+apps+"/{app}/records/{record}/history", read(s.handleHistory))
 	mux.Handle("POST "+apps+"/{app}/records/{record}/restore", write(s.handleRestore))
 	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
@@ -285,6 +286,26 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request, deleted bool) {
 		return
 	}
 	out, err := s.listRecords(r.Context(), req.space, req.actor, req.app, deleted)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleQuery answers a page of the app's records, filtered, searched and sorted, with the totals
+// of all that match (query.go).
+func (s *Service) handleQuery(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	q, err := QueryFromValues(r.URL.Query())
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	out, err := s.queryRecords(r.Context(), req.space, req.actor, req.app, q)
 	if err != nil {
 		fail(w, r, err)
 		return
