@@ -31,6 +31,13 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	// Actions are the readers' route too: navigating changes nothing, and act asks for the
 	// right to write the space itself for every other kind of action.
 	mux.Handle("POST "+apps+"/{app}/actions", read(s.handleAction))
+	// A preview of what an action of the draft would set going: it changes nothing.
+	mux.Handle("POST "+apps+"/{app}/actions/preview", read(s.handlePreviewAction))
+	// The effects of actions (effects_api.go): listed to whoever reads the records, retried by
+	// the user who acted.
+	mux.Handle("GET "+apps+"/{app}/effects", read(s.handleEffects))
+	mux.Handle("GET "+apps+"/{app}/records/{record}/effects", read(s.handleRecordEffects))
+	mux.Handle("POST "+apps+"/{app}/effects/{effect}/retry", write(s.handleRetryEffect))
 	// The draft's preview runs on sample rows the caller holds and writes nothing, so it is the
 	// readers' route as far as the space goes; the app's roles say who may see a draft.
 	mux.Handle("POST "+apps+"/{app}/preview", read(s.handlePreview))
@@ -490,6 +497,10 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 			params["capability"] = f.capability
 		}
 		writeError(w, http.StatusForbidden, apierr.CodeAppForbidden, err.Error(), params)
+	case errors.Is(err, errOperationReused):
+		writeError(w, http.StatusConflict, apierr.CodeAppOperationReused, err.Error())
+	case errors.Is(err, errEffectNotFailed):
+		writeError(w, http.StatusConflict, apierr.CodeAppEffectNotFailed, err.Error())
 	case errors.Is(err, ErrOffline):
 		writeError(w, http.StatusConflict, apierr.CodeAppOffline, err.Error())
 	case errors.Is(err, ErrNotPublished):

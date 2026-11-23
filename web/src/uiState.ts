@@ -3,6 +3,8 @@
 // in a private window, and throws then), so every read and write is allowed to fail, and what
 // matters is on the server.
 
+import { setOperationUser } from './apps/operations'
+
 export function readState(key: string): string | null {
   try {
     return window.localStorage.getItem(key)
@@ -77,6 +79,7 @@ export function writeDraft(key: string | null, value: string | null): void {
 // page's claim on them.
 export function forgetDrafts(): void {
   owner = null
+  setOperationUser(null)
   try {
     const keys: string[] = []
     for (let i = 0; i < window.localStorage.length; i++) {
@@ -95,5 +98,6 @@ export function forgetDrafts(): void {
 export function claimDrafts(user: number): void {
   if (claimed() !== String(user)) forgetDrafts()
   owner = user
+  setOperationUser(user)
   writeState(DRAFTS_OF, String(user))
 }

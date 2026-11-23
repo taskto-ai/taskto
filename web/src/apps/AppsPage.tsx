@@ -16,6 +16,7 @@ import { useLoad } from '../load'
 import { Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
 import { AppBuilder, lastBuilderConversation } from './AppBuilder'
+import { AppEffects } from './AppEffects'
 import { appError, MigrationNotice, publishDraft } from './AppPublish'
 import { AppRecords } from './AppRecords'
 import { AppReleases } from './AppReleases'
@@ -435,6 +436,8 @@ function LaunchedApp({
   const info = useLoad(() => api<App>(base), [base])
   // Bumped when a record is restored, so the screen is loaded again with it.
   const [restored, setRestored] = useState(0)
+  // How many actions ran on the screen: each may have set effects going.
+  const [actions, setActions] = useState(0)
   const back = routePath({ workspace, section: 'apps' })
   const t = useT()
   const restore = async () => {
@@ -486,7 +489,15 @@ function LaunchedApp({
             <p className="tt-muted tt-small">{t('apps.noDataChanges')}</p>
           )}
           {info.data.access.read_records === 'own' && <p className="tt-muted tt-small">{t('apps.ownRecords')}</p>}
-          <AppStage key={screen ?? ''} base={base} app={info.data} reloadKey={restored} screen={screen} />
+          <AppStage
+            key={screen ?? ''}
+            base={base}
+            app={info.data}
+            reloadKey={restored}
+            screen={screen}
+            onAction={() => setActions((n) => n + 1)}
+          />
+          <AppEffects workspace={workspace} base={base} writable={writable} reloadKey={actions} />
           <AppRecords
             base={base}
             appId={app}

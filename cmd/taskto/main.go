@@ -193,8 +193,14 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	// they act for each conversation's owner, or each access token's user, with that user's
 	// access.
 	spaces := access.New(sqlDB, nil)
+	boardSvc := boards.New(sqlDB, spaces)
+	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb})
+	// The apps' effects (cards, documents) are done in the background, as the users who acted,
+	// so they go on when nobody has the app open. Stopped before the database closes.
+	stopEffects := appSvc.StartOutbox(ctx)
+	defer stopEffects()
 	tools := agenttools.New(agenttools.Options{
-		DB: sqlDB, Key: key, Access: spaces, Boards: boards.New(sqlDB, spaces), Apps: apps.New(sqlDB, spaces),
+		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: appSvc,
 		Knowledge: kb, Search: index, Browser: browsers,
 	})
 	// The same tools for the CLIs of conversations' turns, on the per-turn proxy's listener.

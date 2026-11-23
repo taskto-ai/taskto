@@ -222,9 +222,16 @@ function Page({ route, me, workspace }: { route: Route; me: Me; workspace: Works
     case 'conversations':
       return <ConversationsPage workspace={route.workspace} open={route.item} />
     case 'knowledge':
-      return <KnowledgePage workspace={route.workspace} admin={workspace.role === 'admin'} />
+      return (
+        <KnowledgePage
+          key={route.item ?? ''}
+          workspace={route.workspace}
+          admin={workspace.role === 'admin'}
+          open={route.item}
+        />
+      )
     case 'boards':
-      return <BoardsPage workspace={route.workspace} />
+      return <BoardsPage key={route.item ?? ''} workspace={route.workspace} open={route.item} />
     case 'apps':
       return (
         <Suspense fallback={<Loading />}>

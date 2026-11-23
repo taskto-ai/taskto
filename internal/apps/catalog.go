@@ -180,7 +180,7 @@ var functions = map[string]function{
 }
 
 // Capabilities are what a client's catalog can draw, named so a release can say which it needs: a
-// component is component.<Name>, a function function.<name>. A new component or function is a new
+// component is component.<Name>, a function function.<name>, an effect effect.<kind>. A new component or function is a new
 // capability, so an app that uses it is not drawn by a client that lacks it. The list is sorted.
 func Capabilities() []string {
 	var all []string
@@ -189,6 +189,9 @@ func Capabilities() []string {
 	}
 	for name := range functions {
 		all = append(all, FunctionCapability(name))
+	}
+	for _, kind := range EffectKinds {
+		all = append(all, EffectCapability(kind))
 	}
 	all = append(all, AttachmentCapability)
 	all = append(all, slotCapabilities...)

@@ -76,10 +76,10 @@ const CatalogID = "https://taskto.ai/catalogs/apps/v1.json"
 // Version 1 is one screen, string, number, boolean and date fields, and the actions insert,
 // update and delete. Version 2 adds screens with navigation between them, time and choice
 // fields, rules (conditionally required fields, the Show component, summaries over some rows),
-// the navigate action, attachment fields (photos, attachments.go) and contributions
-// (contributions.go: home widgets and a navigation pin, each slot a capability the release needs). A
-// definition that says version 1 is read, checked and drawn as it always was, and can't use any of
-// version 2.
+// the navigate action, effects on boards and documents, attachment fields (photos,
+// attachments.go) and contributions (contributions.go: home widgets and a navigation pin, each
+// slot a capability the release needs). A definition that says version 1 is read, checked and
+// drawn as it always was, and can't use any of version 2.
 const DefinitionVersion = 2
 
 // firstVersion is the version of the format before screens and rules.
@@ -172,6 +172,9 @@ type Action struct {
 	Screen string `json:"screen,omitempty"`
 	// Then is the screen an insert, update or delete opens once it has run, if any.
 	Then string `json:"then,omitempty"`
+	// Effects are what an insert or an update sets going on the rest of TaskTo.AI once the
+	// record is changed (effects.go): done by the server's worker, as the user who acted.
+	Effects []Effect `json:"effects,omitempty"`
 }
 
 // Summary is a value computed over the rows: "count", or "sum" of a number field. Where
@@ -381,6 +384,9 @@ func (d Definition) Check() (Definition, error) {
 		if a.Kind == ActionNavigate || a.Then != "" {
 			uses2 = append(uses2, "navigation")
 		}
+		if len(a.Effects) > 0 {
+			uses2 = append(uses2, "effects")
+		}
 	}
 	if len(d.Summaries) > maxSummaries {
 		return Definition{}, invalidf("summaries: at most %d", maxSummaries)
@@ -448,7 +454,11 @@ func (d Definition) Check() (Definition, error) {
 		uses2 = append(uses2, "contributions")
 		requires = withNeeds(requires, slots)
 	}
-	out.Requires = requires
+	effects, err := d.checkEffects(out.Collection)
+	if err != nil {
+		return Definition{}, err
+	}
+	out.Requires = mergeSorted(requires, effects)
 	if slices.Contains(requires, ComponentCapability("Show")) {
 		uses2 = append(uses2, "the Show component")
 	}
@@ -464,6 +474,13 @@ func (d Definition) Check() (Definition, error) {
 		return Definition{}, invalidf("the definition is over %d KiB", MaxDefinitionSize>>10)
 	}
 	return out, nil
+}
+
+// mergeSorted joins two lists of capabilities, sorted and without repeats.
+func mergeSorted(a, b []string) []string {
+	all := append(slices.Clone(a), b...)
+	slices.Sort(all)
+	return slices.Compact(all)
 }
 
 // field returns the collection's field name.
@@ -501,6 +518,12 @@ type ClientAction struct {
 	// row as it is now: the web app always sends it; the agent's and scripts' callers may
 	// leave it out.
 	ExpectedRevision *int64 `json:"expectedRevision,omitempty"`
+	// Operation is the idempotency key of the request: 8 to 64 letters, digits, - or _, made by the
+	// client for one press of a button and sent again with every retry of it. A request made
+	// again under the same operation changes nothing and queues no effects, and is answered
+	// as the first one was; a different request under it is refused. An action that has
+	// effects and no operation is given one by the server (outbox.go).
+	Operation string `json:"operation,omitempty"`
 }
 
 // Message is one A2UI server-to-client message.

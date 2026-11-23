@@ -107,6 +107,11 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
 | `app_migration_invalid` | 400 | An acknowledgement that is malformed: an unknown `change`, a field that is no name, or one twice. |
+| `app_effect_target` | 400 | An effect of the definition targets space `space_id` (or a board of it) that the person saving, publishing or rolling back the app can't use (write, for an effect that makes or moves something; read, for a route). |
+| `app_operation_invalid` | 422 | An action's `operation` isn't 8 to 64 letters, digits, `-` or `_`. |
+| `app_operation_reused` | 409 | The `operation` was used before for a different request. |
+| `app_effects_backlog` | 409 | The app has `max` effects waiting: the action changed nothing. |
+| `app_effect_not_failed` | 409 | Only a failed effect is retried. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
@@ -1615,6 +1620,7 @@ saying what is wrong) unless:
   gives (blank text clears a field); `delete` removes the row whose `id` it gives; `navigate`
   opens a screen (`"screen"`). An insert, update or delete may say `"then"`, a screen to open
   once it has run.
+- An insert or an update may have **effects**, at most 5 (see [Effects](#effects-of-actions)).
 - **summaries**, at most 20: `{"kind": "count"}` or `{"kind": "sum", "field": …}` of a
   number field, shown as text; `"where"`, a rule, narrows either to the rows it holds of.
 - **contributions** (optional, version 2): what the app offers the platform's [Home page and
@@ -1792,7 +1798,9 @@ its screen was drawn from (`…/surface?release=`); left out, it is the live one
 release the action runs as the live definition says. From another release (the app was
 published or rolled back since the screen was drawn) it runs as *that release* defines it,
 and is **applied only if the live release can take it as it is**: the live release declares
-the same action (same name and kind), every field the action sets is a field the live collection
+the same action (same name, kind and screens it opens; what it sets going besides the change, its
+`effects`, is the live release's whatever the older one said, so a release that only changed those
+refuses nothing), every field the action sets is a field the live collection
 declares with the same type, and an insert gives every field the live collection requires. Then
 the live collection checks **the row the action would store** as always, an insert's and an
 update's alike, whichever release's screen it came from: a required field missing, or a value
@@ -1811,6 +1819,166 @@ stays stored).
 
 An action may be sent with `?widget=<id>` (a widget's actions): it is the same action with the
 same checks, answered with at most 25 rows in `/items`.
+
+### Effects of actions
+
+An insert or an update may declare **effects**: what the change sets going on boards and documents.
+The kinds are a fixed registry, strictly checked when the definition is saved; a key that isn't one
+of a kind's (a URL, a tool name, a command), an unknown `kind` or a hole in a template that isn't a
+field refuses the definition (`400`). A definition with effects needs `definition_version` 2, and
+its release needs the capability `effect.<kind>` of each kind it uses (`requires`).
+
+```json
+"actions": {
+  "submit_inspection": {"kind": "insert", "effects": [
+    {"kind": "create_card", "name": "maintenance", "space_id": 7, "board_id": 12, "column": "todo",
+     "when": {"field": "result", "op": "eq", "value": "fail"},
+     "title": "Fix {{site}} (inspection {{id}})", "body": "Notes: {{notes}}"},
+    {"kind": "create_document", "space_id": 7, "path": "inspections/{{id}}.md", "content": "Site: {{site}}\n"},
+    {"kind": "open_route", "route": "card", "card": "maintenance"}]},
+  "resolve": {"kind": "update", "effects": [{"kind": "update_card", "card": "maintenance", "column": "done"}]}
+}
+```
+
+| `kind` | Takes | Does |
+|---|---|---|
+| `create_card` | `space_id`, `board_id`, `title`, `column`?, `body`?, `docs`?, `name`? | a card on the board; `name` lets other effects refer to the card made for the record |
+| `update_card` | `card`, `column` | moves the card the `create_card` effect called `card` made for the record |
+| `create_document` | `space_id`, `path`, `content`? | a Markdown document, never over another |
+| `open_route` | `route`: `board` (`space_id`, `board_id`), `card` (`card`) or `document` (`space_id`, `path`) | a place to open in the web app, as a kind and IDs; never an address |
+
+Every kind may have `when`, a rule ([Fields and rules](#fields-and-rules)) over the record as the change leaves it: the
+effect applies only then. `title`, `body`, `content`, `path` and `docs` are **templates**: text
+with `{{field}}` holes (a field of the collection, or `id`, the record's number) and nothing else:
+no expressions, no functions, and what fills a hole is never read as a template again. A title is
+put on one line (200 characters), and what fills a hole in a path is made a safe file name, so a
+value can't climb out of the folder.
+
+**What a definition may not do.** It gives no authority. Saving, publishing or rolling back to an app
+whose effects target a space or board the caller can't use is refused (`400 app_effect_target`; the
+same answer for a space they can't read). Each target is checked for each permission an effect needs
+of it (a route that only reads a board doesn't stand in for a card made on it, which writes), as of
+the moment of the write, with the write lock held. Every effect runs as the user who acted, with
+their access **when it runs**.
+
+**The outbox.** When the action changes a record, the change and one entry per effect that applies
+are committed **in the same transaction**. The request answers then; the server's worker does the
+entries afterwards, so they go on when nobody has the app open, and a crash loses none. An action
+may carry an `operation`, its **idempotency key** (8 to 64 letters, digits, `-`, `_`), which a
+client makes once for a press of a button and sends again with every retry of it (the web app keeps
+one key for each submission whose outcome it doesn't know, whatever time the renderer stamped on each
+press, across a refresh or a reopened screen, and makes a new one only after a definite answer: a
+success, or a refusal with a code of its own (`4xx`); a dropped connection, a timeout, a `5xx` or a
+gateway's reply leaves the key to be sent again): a request made again under the same operation (by the
+same user, for the same app) changes nothing, queues nothing and is answered as the first was; one
+made for a different request is `409 app_operation_reused`. A request already made is answered as it
+was even if the live release has changed since (a release that no longer takes the older screen's
+action doesn't turn the retry of a committed request into `409 app_release_outdated`: that is asked
+only of a request not yet made). What makes a request "the same" is the
+release it runs from (the `release` it names, or the live one), the action, its context and its
+`expectedRevision`: the same key and body run by another release is a different request. An action with effects and no `operation` is given one by the server
+(an update made against an `expectedRevision` can't be applied twice anyway). Entries are queued once and
+done at most once to effect: a card carries its entry's key, and an entry's number is never given
+again (even after the cleanup below), so doing the entry again after a crash between making the card
+and noting it finds the card, and no later entry can find an earlier one's; a document's commit names its entry in its message, so an entry found again after a crash between the
+commit and the note that it was done is done at once, **whatever became of the document since** (edited,
+moved, deleted: nothing is written again); a document that is at the path with the very content the
+entry writes is the entry's own too, a different one is never overwritten (`app_effect_doc_exists`); moving a card to the column it is in is nothing to do. An update that left
+the record as it was queues nothing. An action from an older release runs the **live** release's effects.
+
+**The record's card.** The card a `create_card` effect (by its `name`) made for a record is kept in a
+link of its own, made in the same transaction as the card, which the cleanup of entries never
+removes: `update_card` and a route to the card find it there, for as long as the record is. A card
+made later for the same name replaces the link; an entry done again late never takes it back.
+
+**Order.** The `update_card` entries of a card are ordered by their number (the order they were
+queued in). A move is made in one transaction with a note on the link of which entry made it, and
+only if no later entry's move was noted before: an entry that is done again late (its worker died
+before noting it done, and its lease ran out) never undoes what a newer one did; it ends as done and
+moves nothing.
+
+**What happens meanwhile.** Queued entries keep what they were queued with: publishing a new release
+or rolling back neither cancels nor changes them (what they make was filled in from the record when the
+action ran), but what people are shown of them follows the live release (see the listing). Deleting a
+record doesn't remove its entries: the ones that haven't run **fail** with `app_effect_record_gone`
+(nothing is made for a deleted record), and the ones that already ran stay as they are. Restoring a
+record queues nothing and retries nothing; whoever acted retries the failed entries on purpose, as for
+any failure. Entries are cleaned up by their own last activity (queued, tried or retried): finished
+ones 30 days after it, any 90 days after it, so a retry made today is not erased because its request
+is old; an operation goes when none of its entries is left and 30 days passed since the request.
+
+Before an entry runs the worker checks, as the user who acted and as of now, that the app is there and
+online and they may still open it, that they hold the right the action needed (submit for an insert;
+for an update, to change **and** to read the record the entry came from, in the scope their roles give
+them now: their own records or all), that the record is still there, and that they may write the
+target; if not, the entry fails at once with `app_effect_app_access`, `app_effect_app_offline`,
+`app_effect_record_gone` or `app_effect_target_access` and does nothing. The checks are repeated as
+close to the write as the data allows: inside the transaction that makes or moves a card (which holds
+the write lock), and for a document **while the space's write lock is held**, right before the commit,
+so a right withdrawn while the entry waited for the lock stops it. Other
+failures with a code of their own (`app_effect_target_gone`, `app_effect_board_offline`,
+`app_effect_invalid`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
+`app_effect_app_offline`) fail at once too; a failure that may pass (the database was busy, a card
+being changed) is tried again after 5 s, 10 s, 20 s…, at most 5 tries in all (a worker that died on
+the last try doesn't give an entry another: its lease running out fails it), and then is failed
+as `app_effect_gave_up`. A failed entry stays until its user retries it.
+
+An **effect** as the routes list it:
+
+```json
+{"id": 31, "operation": "k3j9x0vq2m", "position": 0, "kind": "create_card", "name": "maintenance",
+ "action": "submit_inspection", "record": 14, "record_revision": 1,
+ "status": "done", "attempts": 1, "next_attempt_at": null, "error": null,
+ "detail": {"title": "Fix East gate (inspection 14)", "column": "todo"},
+ "result": {"workspace_id": 1, "space_id": 7, "board_id": 12, "card_id": 88, "title": "Fix East gate (inspection 14)"},
+ "created_at": "…", "updated_at": "…", "done_at": "…", "can_retry": false}
+```
+
+`status` is `pending`, `running`, `done`, `failed` or, only in a preview, `simulated`. `error` is
+`{"code", "params"}` for a failed entry (and for a pending one that failed before and waits for
+its next try; `next_attempt_at` is then when). `result` is what a done entry made: a card's IDs, a
+document's `space_id` and `path`, a route as `{"kind", "workspace_id", "space_id", "board_id"?, "card_id"?, "path"?}`
+for the web app to turn into its own address, in the workspace the space is in (which may not be the
+app's); it is present only if the caller may read the space it points into.
+
+What an entry says of its target is for those who may read the target **now**, exactly as `result` is:
+for a caller who can't read the space an effect targets, `detail` keeps only the kind of route and
+`error.params` is left out (the status and `error.code` stay). And what the templates made of the
+record's fields (`detail.title`, `detail.path`, a result's `title` and `path`, and the `path` of an
+error's `params`) is shown only while the live release still declares every field the entry was filled
+from, with the type it had: after a release removes or retypes one, those are left out.
+
+#### `GET …/apps/{app}/effects`
+
+Readers of the app: the effects of the records the caller may read (all, or only their own: the
+same filter as the records), newest first, `?status=` (`pending`, `running`, `done`, `failed`, or
+`active` for the two that wait), `?limit=` (1–200, 100), `?before=` (an effect's ID: only older ones,
+to read on past a page): `{"effects": […], "more": false, "active": 2, "failed": 1}`, where `more`
+says older effects match too, and `active` and `failed` count everything the caller may see that waits
+or failed, whatever the page. A record the caller may not read has no effects for them.
+
+#### `GET …/apps/{app}/records/{record}/effects`
+
+The same for one record.
+
+#### `POST …/apps/{app}/effects/{effect}/retry`
+
+Writers; body `{}`. Puts a failed effect back to be done, with its tries counted afresh, and answers
+it. Each time the worker takes an entry it is given a new claim, which only the worker holding it can
+complete or fail, so one slow after its lease ran out can't end a retry made since. Only the **user who acted** may retry it, and only while they hold the right the action needed
+(`403 app_forbidden`, `capability` `retry_effect`, `submit` or `modify_records`; an update needs the
+right to change that record, in the scope their roles give now); `409 app_effect_not_failed` for one
+that didn't fail; `409 app_effects_backlog` when the app already has 500 effects waiting (a retry is
+waiting work like any other); `404` for an effect of a record the caller can't read. The worker checks access again when it runs, so a retry never widens what anyone may do.
+
+#### `POST …/apps/{app}/actions/preview`
+
+Those who may design or publish the app (`403 app_forbidden` otherwise). The same body as an action;
+it is worked out against the **draft** and **does nothing**: no record changes, no operation is
+kept, no entry is queued, no card or document is made. It answers `{"effects": […]}`, the effects
+that would apply, with `status: "simulated"`, what they would make in `detail` (a new record's `id`
+is `new`), and an `error` with the code an effect would fail with if the caller couldn't write its
+target.
 
 ### `POST …/apps/{app}/preview`
 

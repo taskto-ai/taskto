@@ -16,9 +16,11 @@ import { ApiError } from '../api'
 import { fakeFetch } from '../test/fakes'
 import { type ActionPayload, AppView, httpTransport } from './AppView'
 import { appsCatalog, catalogCapabilities, DEFINITION_VERSION } from './catalog'
+import { forgetOperations } from './operations'
 
 afterEach(() => {
   cleanup()
+  forgetOperations()
   vi.unstubAllGlobals()
 })
 

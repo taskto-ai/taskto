@@ -47,6 +47,27 @@ export function parseRoute(path: string): Route | null {
   return { workspace: Number(m[1]), section, ...(item ? { item } : {}) }
 }
 
+// Where a link to a place in the boards or the knowledge base goes: the item says which, as the page
+// that opens it reads it back (boardItem, documentItem).
+export function boardItem(space: number, board?: number, card?: number): string {
+  return [space, board, card].filter((n) => n !== undefined).join(':')
+}
+
+export function parseBoardItem(item: string | undefined): { space: number; board?: number; card?: number } | null {
+  const m = /^(\d+)(?::(\d+))?(?::(\d+))?$/.exec(item ?? '')
+  if (!m) return null
+  return { space: Number(m[1]), ...(m[2] ? { board: Number(m[2]) } : {}), ...(m[3] ? { card: Number(m[3]) } : {}) }
+}
+
+export function documentItem(space: number, path: string): string {
+  return `${space}:${path}`
+}
+
+export function parseDocumentItem(item: string | undefined): { space: number; path?: string } | null {
+  const m = /^(\d+)(?::(.+))?$/.exec(item ?? '')
+  return m ? { space: Number(m[1]), ...(m[2] ? { path: m[2] } : {}) } : null
+}
+
 export function routePath(r: Route): string {
   return `/w/${r.workspace}/${r.section}${r.item ? `/${encodeURIComponent(r.item)}` : ''}`
 }

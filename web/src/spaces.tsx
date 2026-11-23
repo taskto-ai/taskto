@@ -5,9 +5,10 @@ import { api, type Space, ws } from './api'
 import { t, useT } from './i18n'
 import { useLoad } from './load'
 
-export function useSpaces(workspace: number) {
+// initial is the space to open on (a link's), if the user can read it.
+export function useSpaces(workspace: number, initial?: number) {
   const spaces = useLoad(() => api<{ spaces: Space[] }>(`${ws(workspace)}/spaces`).then((r) => r.spaces), [workspace])
-  const [chosen, setChosen] = useState<number | null>(null)
+  const [chosen, setChosen] = useState<number | null>(initial ?? null)
   const space = spaces.data?.find((s) => s.id === chosen) ?? spaces.data?.[0]
   return { spaces, space, choose: setChosen }
 }

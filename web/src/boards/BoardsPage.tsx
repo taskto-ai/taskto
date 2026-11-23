@@ -26,7 +26,7 @@ import { conversationTitle } from '../conversations/ConversationView'
 import { type Key, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Markdown } from '../markdown'
-import { Link, routePath } from '../router'
+import { Link, parseBoardItem, routePath } from '../router'
 import { Icon } from '../shell/Icon'
 import { SpacePicker, useSpaces } from '../spaces'
 import { usePoll } from './poll'
@@ -58,8 +58,10 @@ function blockedText(t: T, reason: string | null, cards: string): string {
 
 type CardWithThread = Card & { comments: Comment[] }
 
-export function BoardsPage({ workspace }: { workspace: number }) {
-  const { spaces, space, choose } = useSpaces(workspace)
+// open is a link's item (boardItem): the space, board and card to open on.
+export function BoardsPage({ workspace, open }: { workspace: number; open?: string }) {
+  const target = parseBoardItem(open)
+  const { spaces, space, choose } = useSpaces(workspace, target?.space)
   const base = space ? `${ws(workspace)}/spaces/${space.id}/boards` : null
   // Archived boards are listed only when asked for, after the others.
   const [archived, setArchived] = useState(false)
@@ -70,11 +72,18 @@ export function BoardsPage({ workspace }: { workspace: number }) {
         : Promise.resolve(undefined),
     [base, archived],
   )
-  const [chosen, setChosen] = useState<number | null>(null)
+  const [chosen, setChosen] = useState<number | null>(target?.board ?? null)
   const [adding, setAdding] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [boardError, setBoardError] = useState<string | null>(null)
-  const board = boards.data?.find((b) => b.id === chosen) ?? boards.data?.[0]
+  // A link names its board: if that one isn't among those listed (it was archived since, or
+  // is gone) another board is not shown in its place, which would read as the card's board.
+  const linkedMissing =
+    boards.data !== undefined &&
+    target?.board !== undefined &&
+    chosen === target.board &&
+    !boards.data.some((b) => b.id === chosen)
+  const board = linkedMissing ? undefined : (boards.data?.find((b) => b.id === chosen) ?? boards.data?.[0])
   const canWrite = space?.access === 'write'
   const t = useT()
 
@@ -111,13 +120,18 @@ export function BoardsPage({ workspace }: { workspace: number }) {
           <label className="tt-inline-field">
             {t('boards.board')}
             <select
-              value={board?.id}
+              value={board?.id ?? ''}
               onChange={(e) => {
                 setRenaming(false)
                 setBoardError(null)
                 setChosen(Number(e.target.value))
               }}
             >
+              {!board && (
+                <option value="" disabled>
+                  {t('boards.board')}
+                </option>
+              )}
               {boards.data.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.archived_at ? t('boards.archivedBoard', { name: b.name }) : b.name}
@@ -144,6 +158,16 @@ export function BoardsPage({ workspace }: { workspace: number }) {
         <p role="alert" className="tt-error">
           {spaces.error ?? boards.error}
         </p>
+      )}
+      {linkedMissing && (
+        <div role="status" className="tt-panel">
+          <p>{t(archived ? 'boards.linkedUnavailable' : 'boards.linkedArchivedOrGone')}</p>
+          {!archived && space?.kind === 'shared' && (
+            <button type="button" className="tt-button" onClick={() => setArchived(true)}>
+              {t('boards.showArchived')}
+            </button>
+          )}
+        </div>
       )}
       {board && (
         <div className="tt-actions">
@@ -194,7 +218,7 @@ export function BoardsPage({ workspace }: { workspace: number }) {
       {(spaces.data === undefined || base) && boards.data === undefined && !boards.error && !spaces.error && (
         <p className="tt-muted">{t('app.loading')}</p>
       )}
-      {boards.data?.length === 0 && <p className="tt-muted">{t('boards.noBoards')}</p>}
+      {boards.data?.length === 0 && !linkedMissing && <p className="tt-muted">{t('boards.noBoards')}</p>}
       {base && space && board && (
         <BoardView
           key={board.id}
@@ -202,6 +226,7 @@ export function BoardsPage({ workspace }: { workspace: number }) {
           workspace={workspace}
           space={space}
           canWrite={canWrite && !board.archived_at}
+          openCard={board.id === target?.board ? target.card : undefined}
         />
       )}
     </div>
@@ -300,14 +325,17 @@ function BoardView({
   workspace,
   space,
   canWrite,
+  openCard,
 }: {
   url: string
   workspace: number
   space: Space
   canWrite: boolean
+  // The card to open on, a link's.
+  openCard?: number
 }) {
   const cards = useLoad(() => api<{ cards: Card[] }>(url).then((r) => r.cards), [url])
-  const [open, setOpen] = useState<number | null>(null)
+  const [open, setOpen] = useState<number | null>(openCard ?? null)
   // Dragging a card: which one, and the column it is over. The Column field of the open card
   // does the same from the keyboard, so dragging is only a quicker way for a pointer.
   const [dragged, setDragged] = useState<Card | null>(null)

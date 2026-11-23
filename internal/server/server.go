@@ -76,8 +76,11 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireAdmin(backupStatus(opts.BackupDataDir)))
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
-	boards.New(sqlDB, spaces).Routes(mux)
-	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir)
+	boardSvc := boards.New(sqlDB, spaces)
+	boardSvc.Routes(mux)
+	// The apps' routes list and retry their effects and check the targets they name; the
+	// server's own worker, which does them, is the one the command starts (apps.StartOutbox).
+	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(apps.Platform{Boards: boardSvc})
 	appsService.Routes(mux)
 	appsService.HomeRoutes(mux, accounts)
 	if opts.AppsReady != nil {

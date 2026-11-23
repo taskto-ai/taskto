@@ -9,11 +9,21 @@
 import { A2uiSurface, type ReactCatalogComponent } from '@a2ui/react/v0_9'
 import { MessageProcessor, STRICT_VALIDATION, type SurfaceModel } from '@a2ui/web_core/v0_9'
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, api, type DefinitionNeeds, errorText, type PreviewReply, type PreviewRow } from '../api'
+import {
+  ApiError,
+  type AppEffect,
+  api,
+  type DefinitionNeeds,
+  errorText,
+  type PreviewReply,
+  type PreviewRow,
+} from '../api'
 import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
+import { EffectPreview } from './AppEffects'
 import { appsCatalog, unsupportedBy } from './catalog'
 import { keepLabelsLinked } from './labels'
+import { withOperation } from './operations'
 import { type AppFiles, AppFilesContext } from './PhotoInput'
 
 export type ActionPayload = Parameters<NonNullable<ConstructorParameters<typeof MessageProcessor>[1]>>[0]
@@ -24,6 +34,9 @@ export type AppTransport = {
   // Where the app's attachments are, for the photo components; left out where there is no server
   // to hold them.
   files?: AppFiles
+  // In a draft's preview: what the action just run would set going on boards and documents, which
+  // changes nothing (docs/api.md, …/actions/preview). Absent where actions are real.
+  simulate?(action: ActionPayload): Promise<AppEffect[]>
 }
 
 // The draft's preview: its screen and its buttons work, on sample rows the server makes and this
@@ -55,14 +68,18 @@ export function previewTransport(base: string): AppTransport {
   return {
     load: () => step(undefined, true),
     act: (action) => step(action),
+    simulate: async (action) =>
+      (await api<{ effects: AppEffect[] }>(`${base}/actions/preview`, { method: 'POST', body: action })).effects,
   }
 }
 
 // The app's routes on the server: base is …/spaces/{space}/apps/{app}. release is the live
 // release's number, which the screen is drawn from and its actions name; 'draft' is the draft's
-// preview, whose actions run on sample rows (previewTransport) and never on the app's own. screen opens an app with screens on one of them (a pin's); widget
-// draws one of the live release's Home widgets instead (a bounded view whose actions are the app's
-// own, answered with the rows it holds).
+// preview, whose actions run on sample rows (previewTransport) and never on the app's own. screen opens an app
+// with screens on one of them (a pin's); widget draws one of the live release's Home widgets instead (a
+// bounded view whose actions are the app's own, answered with the rows it holds).
+//
+// Every action carries an operation, its idempotency key (see operations.ts).
 export function httpTransport(
   base: string,
   release?: number | 'draft',
@@ -76,24 +93,24 @@ export function httpTransport(
   }
   // The draft is its preview, on sample rows (previewTransport), and opens on its entry screen.
   if (release === 'draft') return previewTransport(base)
+  const scope = `${base}|${release ?? 'live'}|${opts.widget ?? ''}`
+  const post = (path: string, action: ActionPayload) =>
+    withOperation(scope, action, (operation) =>
+      api<unknown[]>(path, {
+        method: 'POST',
+        body: release === undefined ? { ...action, operation } : { ...action, release, operation },
+      }),
+    )
   if (opts.widget !== undefined) {
     return {
       load: () => api<unknown[]>(`${base}/surface${query({ widget: opts.widget })}`),
-      act: (action) =>
-        api<unknown[]>(`${base}/actions${query({ widget: opts.widget })}`, {
-          method: 'POST',
-          body: release === undefined ? action : { ...action, release },
-        }),
+      act: (action) => post(`${base}/actions${query({ widget: opts.widget })}`, action),
     }
   }
   return {
     files: { base, uploads: true },
     load: () => api<unknown[]>(`${base}/surface${query({ release, screen: opts.screen })}`),
-    act: (action) =>
-      api<unknown[]>(`${base}/actions`, {
-        method: 'POST',
-        body: release === undefined ? action : { ...action, release },
-      }),
+    act: (action) => post(`${base}/actions`, action),
   }
 }
 
@@ -106,6 +123,7 @@ export function AppView({
   transport,
   release,
   reloadKey = 0,
+  onAction,
 }: {
   surfaceId: string
   label: string
@@ -115,8 +133,14 @@ export function AppView({
   // Changed by the caller when the app's data changed behind the screen's back (a record was
   // restored): the screen is loaded again.
   reloadKey?: number
+  // Called after an action ran, which may have set effects going.
+  onAction?: () => void
 }) {
   const [error, setError] = useState<string | null>(null)
+  // What the last button of a draft's preview would have set going.
+  const [simulated, setSimulated] = useState<AppEffect[] | null>(null)
+  const onActionRef = useRef(onAction)
+  onActionRef.current = onAction
   const [surface, setSurface] = useState<SurfaceModel<ReactCatalogComponent> | null>(null)
   // Read through a ref so a caller passing a new transport object on each render doesn't
   // reload the app: only a different surface does.
@@ -155,9 +179,14 @@ export function AppView({
       [appsCatalog],
       async (action) => {
         try {
-          apply(await transportRef.current.act(withRevision(action)))
+          const pressed = withRevision(action)
+          apply(await transportRef.current.act(pressed))
           setError(null)
+          // A preview says what the button would have set going; a live app's effects are listed by the page.
+          setSimulated(transportRef.current.simulate ? await transportRef.current.simulate(pressed) : null)
+          onActionRef.current?.()
         } catch (e) {
+          setSimulated(null)
           if (e instanceof ApiError && e.code === RECORD_CONFLICT) {
             // Show the record as it is now, so the next try is made against its latest revision.
             try {
@@ -195,6 +224,7 @@ export function AppView({
       <AppFilesContext.Provider value={transport.files ?? null}>
         {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
       </AppFilesContext.Provider>
+      {simulated && <EffectPreview effects={simulated} />}
     </section>
   )
 }

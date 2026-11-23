@@ -294,6 +294,36 @@ export type AppRecord = {
   deleted_by: RecordAuthor | null
 }
 
+// An effect an action of an app set going, as the server's outbox lists it: what it makes, how it is
+// getting on, why it failed, and what it made if the caller may read where. `simulated` is of a
+// preview only.
+export type EffectKind = 'create_card' | 'update_card' | 'create_document' | 'open_route'
+export type EffectStatus = 'pending' | 'running' | 'done' | 'failed' | 'simulated'
+export type AppEffect = {
+  // 0 for a simulated one.
+  id: number
+  operation: string
+  position: number
+  kind: EffectKind
+  name?: string
+  action: string
+  record: number
+  record_revision: number
+  status: EffectStatus
+  attempts: number
+  next_attempt_at: string | null
+  error: { code: string; params?: Params } | null
+  detail: { title?: string; column?: string; path?: string; route?: string }
+  result?: Record<string, unknown>
+  created_at?: string
+  updated_at?: string
+  done_at: string | null
+  // Whether the caller may retry it: it failed and they are who acted.
+  can_retry: boolean
+}
+// more: older effects than the page's last match too (ask again with before=<its id>).
+export type AppEffectList = { effects: AppEffect[]; more?: boolean; active: number; failed: number }
+
 // One value over every record a query matches: its count is how many records it was computed from.
 export type RecordAggregate = {
   kind: 'count' | 'sum' | 'min' | 'max' | 'avg'

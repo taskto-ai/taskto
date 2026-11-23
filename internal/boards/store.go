@@ -491,6 +491,16 @@ type NewCard struct {
 	BlockedBy     []int64   `json:"blocked_by"`
 	Docs          []string  `json:"docs"`
 	Conversations []string  `json:"conversations"`
+	// Origin makes creating the card idempotent: if the board already has a card made with
+	// this origin, that card is returned and nothing is created. It is the server's own
+	// (package apps' outbox uses it), never read from a request.
+	Origin string `json:"-"`
+	// Check, if set, runs in the card's transaction once the board is known to be writable and
+	// before anything is made; an error from it makes nothing. Created, if set, runs in the same
+	// transaction once the card exists (or, with an Origin, once it was found). Both are the
+	// server's own (package apps' outbox), never read from a request.
+	Check   func(tx *sql.Tx) error               `json:"-"`
+	Created func(tx *sql.Tx, cardID int64) error `json:"-"`
 }
 
 func (s *Service) createCard(ctx context.Context, sp access.Space, a Actor, boardID int64, nc NewCard) (Card, error) {
@@ -520,22 +530,50 @@ func (s *Service) createCard(ctx context.Context, sp access.Space, a Actor, boar
 		if _, err := writableBoard(ctx, tx, sp.ID, boardID); err != nil {
 			return err
 		}
+		if nc.Check != nil {
+			if err := nc.Check(tx); err != nil {
+				return err
+			}
+		}
+		if nc.Origin != "" {
+			// Made before: that card, whatever has happened to it since.
+			err := tx.QueryRowContext(ctx, `SELECT id FROM cards WHERE board_id = ? AND origin = ?`, boardID, nc.Origin).Scan(&id)
+			if err == nil {
+				if nc.Created != nil {
+					return nc.Created(tx, id)
+				}
+				return nil
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
 		rank, err := rankAt(ctx, tx, boardID, nc.Column, 0, nc.Position)
 		if err != nil {
 			return err
 		}
+		var origin any
+		if nc.Origin != "" {
+			origin = nc.Origin
+		}
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO cards (board_id, title, body, col, rank,
+			INSERT INTO cards (board_id, title, body, col, rank, origin,
 				created_by, created_by_agent, created_via, updated_by, updated_by_agent, updated_via)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			boardID, *ch.Title, *ch.Body, nc.Column, rank, a.UserID, a.Agent, via(a), a.UserID, a.Agent, via(a))
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			boardID, *ch.Title, *ch.Body, nc.Column, rank, origin, a.UserID, a.Agent, via(a), a.UserID, a.Agent, via(a))
 		if err != nil {
 			return err
 		}
 		if id, err = res.LastInsertId(); err != nil {
 			return err
 		}
-		return applyChanges(ctx, tx, sp, a, boardID, id, ch)
+		if err := applyChanges(ctx, tx, sp, a, boardID, id, ch); err != nil {
+			return err
+		}
+		if nc.Created != nil {
+			return nc.Created(tx, id)
+		}
+		return nil
 	})
 	if err != nil {
 		return Card{}, err
@@ -603,6 +641,52 @@ func (s *Service) moveCard(ctx context.Context, sp access.Space, a Actor, boardI
 	return s.changeCard(ctx, sp, a, boardID, cardID, m.Version, func(tx *sql.Tx, _ Card) error {
 		return place(ctx, tx, boardID, cardID, m.Column, m.Position, nil)
 	})
+}
+
+// moveCardIf puts a card in column, as it is when the write lock is held, whatever its version.
+// guard runs first, in the same transaction, with the card as it is: it says whether to go on, and
+// what it writes is committed either way, so a caller can note, atomically with the move, that
+// the move was made. A card already in column isn't touched. moved says whether the card changed.
+func (s *Service) moveCardIf(ctx context.Context, sp access.Space, a Actor, boardID, cardID int64, column Column,
+	guard func(tx *sql.Tx, c Card) (bool, error),
+) (c Card, moved bool, err error) {
+	if err := may(sp, access.Write); err != nil {
+		return Card{}, false, err
+	}
+	if !column.onBoard() {
+		return Card{}, false, invalid("column must be one of backlog, todo, doing, review, done")
+	}
+	err = s.write(ctx, func(tx *sql.Tx) error {
+		if _, err := writableBoard(ctx, tx, sp.ID, boardID); err != nil {
+			return err
+		}
+		cur, err := card(ctx, tx, sp.ID, boardID, cardID)
+		if err != nil {
+			return err
+		}
+		if guard != nil {
+			ok, err := guard(tx, cur)
+			if err != nil || !ok {
+				return err
+			}
+		}
+		if cur.Column == column || cur.Column == Archived {
+			return nil
+		}
+		if err := place(ctx, tx, boardID, cardID, column, nil, nil); err != nil {
+			return err
+		}
+		moved = true
+		_, err = tx.ExecContext(ctx, `
+			UPDATE cards SET version = version + 1, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?
+			WHERE id = ?`, now(), a.UserID, a.Agent, via(a), cardID)
+		return err
+	})
+	if err != nil {
+		return Card{}, false, err
+	}
+	c, err = card(ctx, s.db, sp.ID, boardID, cardID)
+	return c, moved, err
 }
 
 // archiveCard moves a card to Archived, remembering its column.

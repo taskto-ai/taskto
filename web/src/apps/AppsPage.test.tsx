@@ -7,6 +7,7 @@ import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { parseRoute, usePath } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { AppsPage } from './AppsPage'
+import { forgetOperations } from './operations'
 
 const spaces = {
   spaces: [
@@ -61,6 +62,7 @@ function Routed() {
 beforeEach(() => window.history.replaceState(null, '', '/w/1/apps'))
 afterEach(() => {
   cleanup()
+  forgetOperations()
   vi.unstubAllGlobals()
 })
 
@@ -450,6 +452,8 @@ test('a launched app says it is live, and those who may review it can try the dr
       (call.body as { action?: unknown }).action
         ? { body: { messages: afterAdd, rows: [] } }
         : { body: { messages: surface, rows: [{ id: 1, revision: 1, data: {} }] } },
+    'POST /api/workspaces/1/spaces/2/apps/1/actions/preview': { body: { effects: [] } },
+    'GET /api/workspaces/1/spaces/2/apps/1/effects?limit=50': { body: { effects: [], active: 0, failed: 0 } },
   })
   render(<Routed />)
   await screen.findByText('Live · release 4')
@@ -462,9 +466,13 @@ test('a launched app says it is live, and those who may review it can try the dr
   await screen.findByText('Coffee')
   // Its buttons work, on the sample rows the preview sent: they never reach the app's own actions.
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-  await waitFor(() => expect(calls.filter((c) => c.method === 'POST')).toHaveLength(2))
+  // …and say what the button would have set going on boards and documents, which changes nothing.
+  await screen.findByText('Preview: nothing was saved')
   const sent = calls.filter((c) => c.method === 'POST')
-  expect(sent.map((c) => c.path)).toEqual(Array(2).fill('/api/workspaces/1/spaces/2/apps/1/preview'))
+  expect(sent.map((c) => c.path)).toEqual([
+    ...Array(2).fill('/api/workspaces/1/spaces/2/apps/1/preview'),
+    '/api/workspaces/1/spaces/2/apps/1/actions/preview',
+  ])
   expect(sent[0].body).toEqual({}) // the start
   expect(sent[1].body).toMatchObject({ rows: [{ id: 1, revision: 1, data: {} }], action: { name: 'delete_expense' } })
   expect(calls.some((c) => c.path.endsWith('/actions'))).toBe(false)
