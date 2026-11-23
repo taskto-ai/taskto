@@ -551,6 +551,11 @@
     }
   },
   "auth": {
+    "methods": {
+      "title": "Sign in",
+      "error": "Couldn't find out how you can sign in. Check your connection and try again.",
+      "retry": "Retry"
+    },
     "sso": {
       "continue": "Continue with {name}",
       "or": "or"
@@ -746,6 +751,7 @@
     "sso_failed": "Signing in with your provider didn't work. Try again, and tell whoever runs this server if it keeps failing.",
     "sso_expired": "That sign-in took too long or was already used. Start again.",
     "sso_email_unverified": "Your provider didn't confirm your email address, so you can't sign in with it.",
+    "sso_google_email_untrusted": "Google doesn't vouch for this email address: sign in with a Gmail or Google Workspace account, or use the address your invite names with another sign-in.",
     "sso_no_account": "There's no account for this email. Ask a workspace admin for an invite.",
     "sso_account_linked_elsewhere": "The account for this email is already linked to another sign-in from this provider. Ask a workspace admin for help.",
     "board_archived": "This board is archived: it is read-only.",

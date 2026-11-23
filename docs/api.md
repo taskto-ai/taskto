@@ -66,11 +66,12 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `reset_invalid` | 404 | The reset link is unknown, used or expired. |
 | `reset_own` | 400 | An admin changes their own password in Settings, not with a reset link. |
 | `reset_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
-| `password_login_disabled` | 403 | Passwords are turned off on this server ([sso.md](sso.md#turning-passwords-off)): logging in, a new account with a password, and reset links answer this. |
+| `password_login_disabled` | 403 | Passwords are turned off on this server ([sso.md](sso.md#turning-passwords-off)): logging in, a new account with a password, making a reset link and using one answer this. |
 | `sso_unknown_provider` | 404 | No such single sign-on provider. |
 | `sso_failed` | 502 | The provider didn't answer. As `?sso_error=`: the provider or the exchange failed, or the person declined (details are in the server's log). |
 | `sso_expired` | | Only as `?sso_error=`: the sign-in's state is missing, doesn't match the browser's cookie, expired or was used already. Start again. |
 | `sso_email_unverified` | | Only as `?sso_error=`: the provider gave no email, or didn't verify it. |
+| `sso_google_email_untrusted` | | Only as `?sso_error=`: with Google, the email can't link an account or make one from an invite unless it ends in `@gmail.com` or the ID token has an `hd` claim (a Google Workspace account). |
 | `sso_no_account` | | Only as `?sso_error=`: no account has the email, and no invite is pending for it. |
 | `sso_account_linked_elsewhere` | | Only as `?sso_error=`: the email's account is linked to another identity of this provider. |
 | `space_not_found` | 404 | No such space, or the caller can't read it. |
@@ -469,7 +470,8 @@ The provider redirects the browser here with `code` and `state`. It is the one `
 changes state, since a redirect can't be a `POST`. It acts only when `state` equals the
 `__Host-taskto_sso` cookie and a pending login of this provider that it uses up: a link
 forged for another browser, and a replay, find none. The code is exchanged with the PKCE
-verifier; the ID token's signature, issuer, audience, expiry and nonce are checked.
+verifier, over `https` only and without following a redirect; the ID token's signature, issuer,
+audience (this client's alone), expiry and nonce are checked.
 
 It always answers `303`, and clears the cookie:
 
@@ -477,7 +479,11 @@ It always answers `303`, and clears the cookie:
   revoked). An identity already linked logs in its user; otherwise a verified email (or a
   `trust_email` provider's) that belongs to a user links the identity to them; otherwise a
   pending invite for the email creates an account with no password and accepts every pending
-  invite for that email; otherwise it is refused. All of it in one transaction;
+  invite for that email; otherwise it is refused. All of it in one transaction. With Google,
+  linking and creating need an address Google vouches for (`@gmail.com`, or an `hd` claim). A
+  `next` that is the invite screen (`/invite…`) goes to `/w/<first workspace joined>` instead
+  when the sign-in made the account, since its invites are used up; for an existing account
+  the invite stays pending and `next` is kept;
 - on failure, to `/?sso_error=<code>`, one of the `sso_*` [error codes](#error-codes) above.
   An error from the provider, such as `access_denied`, is `sso_failed`.
 
@@ -554,7 +560,8 @@ fragment, like an invite's).
 `201`. `404` if the user isn't a member of the workspace. `400` for the admin's own
 account: they change it with their current password. `403` if the member also belongs to a
 workspace the admin doesn't administer: whoever has the link can take over the account, so
-only someone who administers every one of its workspaces can make one.
+only someone who administers every one of its workspaces can make one. `403 password_login_disabled`
+when the operator turned passwords off: a link nobody could use isn't made.
 
 ### `POST /api/password-reset`
 

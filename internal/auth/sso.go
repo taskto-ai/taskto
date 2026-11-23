@@ -7,10 +7,11 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,8 +54,16 @@ const (
 type sso struct {
 	providers []*ssoClient
 	byID      map[string]*ssoClient
-	// hc makes every call to a provider: discovery, keys, the token and user info requests.
-	hc         *http.Client
+	// hc makes the calls that carry no secret of ours: discovery, keys and user info. Only
+	// https is followed (see guardTransport).
+	hc *http.Client
+	// tokenHC makes the token exchange, which carries the code, the PKCE verifier and the
+	// client secret: it follows no redirect at all, so they go to the token endpoint and
+	// nowhere else.
+	tokenHC *http.Client
+	// guard is the transport under both clients.
+	guard      *guardTransport
+	timeout    time.Duration
 	startLimit *limiter
 
 	mu      sync.Mutex
@@ -67,6 +76,14 @@ type ssoClient struct {
 
 	mu       sync.Mutex
 	provider *oidc.Provider
+	flight   *discovery // the discovery in progress, shared by everyone who asks meanwhile
+}
+
+// discovery is one asking of a provider for its metadata.
+type discovery struct {
+	done     chan struct{} // closed once provider and err are set
+	provider *oidc.Provider
+	err      error
 }
 
 // ssoPending is what a login in progress needs back at the callback.
@@ -76,12 +93,30 @@ type ssoPending struct {
 }
 
 func newSSO(providers []SSOProvider, now func() time.Time) *sso {
+	// http, to a loopback host, only when an operator pointed a provider at one (development).
+	guard := &guardTransport{base: http.DefaultTransport}
+	for _, p := range providers {
+		guard.loopbackHTTP = guard.loopbackHTTP || strings.HasPrefix(p.Issuer, "http://")
+	}
 	x := &sso{
 		byID:       map[string]*ssoClient{},
-		hc:         &http.Client{Timeout: ssoTimeout},
+		guard:      guard,
+		timeout:    ssoTimeout,
 		startLimit: newLimiter(ipAttempts, attemptWindow, now),
 		pending:    map[string]ssoPending{},
 	}
+	x.hc = &http.Client{Timeout: ssoTimeout, Transport: guard, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("too many redirects")
+		}
+		if !secureURL(req.URL, guard.loopbackHTTP) {
+			return errInsecureEndpoint
+		}
+		return nil
+	}}
+	x.tokenHC = &http.Client{Timeout: ssoTimeout, Transport: guard, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse // the 3xx answer is the result: nothing is followed
+	}}
 	for _, p := range providers {
 		c := &ssoClient{cfg: p}
 		x.providers = append(x.providers, c)
@@ -90,22 +125,157 @@ func newSSO(providers []SSOProvider, now func() time.Time) *sso {
 	return x
 }
 
-// discover returns the provider's metadata, asking it on first use only: a provider that is
-// down doesn't stop the server from starting, and is tried again on the next login.
-func (c *ssoClient) discover(ctx context.Context, hc *http.Client) (*oidc.Provider, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.provider != nil {
-		return c.provider, nil
+var errInsecureEndpoint = errors.New("refusing a URL that isn't https")
+
+// secureURL says whether the server may call u: https, or http to a loopback host (a provider
+// running next to the server in development).
+func secureURL(u *url.URL, allowLoopbackHTTP bool) bool {
+	if u == nil || u.Host == "" || u.User != nil {
+		return false
 	}
-	ctx, cancel := context.WithTimeout(oidc.ClientContext(ctx, hc), ssoTimeout)
+	return u.Scheme == "https" || (allowLoopbackHTTP && u.Scheme == "http" && isLoopbackHost(u.Hostname()))
+}
+
+// guardTransport refuses every request that isn't to an https URL (or, in development, an http one to loopback), so
+// that neither a discovered endpoint nor a redirect can take credentials over plain http.
+type guardTransport struct {
+	base         http.RoundTripper
+	loopbackHTTP bool
+}
+
+func (g *guardTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if !secureURL(r.URL, g.loopbackHTTP) {
+		return nil, errInsecureEndpoint
+	}
+	return g.base.RoundTrip(r)
+}
+
+// ssoErr is a failure the logs may show: a fixed category and, when the provider answered
+// one, its HTTP status. It never holds what the provider or the browser sent, which could be
+// anything, a secret included.
+type ssoErr struct {
+	category string
+	status   int
+}
+
+func (e *ssoErr) Error() string {
+	if e.status != 0 {
+		return e.category + " (HTTP " + strconv.Itoa(e.status) + ")"
+	}
+	return e.category
+}
+
+func failure(category string) error { return &ssoErr{category: category} }
+
+// knownOAuthErrors are the error codes of RFC 6749, OpenID Connect Core and RFC 6750: the
+// only provider-chosen words the logs repeat.
+var knownOAuthErrors = map[string]bool{
+	"invalid_request": true, "invalid_client": true, "invalid_grant": true, "unauthorized_client": true,
+	"unsupported_grant_type": true, "unsupported_response_type": true, "invalid_scope": true,
+	"access_denied": true, "server_error": true, "temporarily_unavailable": true,
+	"interaction_required": true, "login_required": true, "account_selection_required": true,
+	"consent_required": true, "invalid_request_uri": true, "invalid_request_object": true,
+	"request_not_supported": true, "request_uri_not_supported": true, "registration_not_supported": true,
+}
+
+// oauthCode is the provider's error code if it is a standard one, and "other" if not.
+func oauthCode(code string) string {
+	if knownOAuthErrors[code] {
+		return code
+	}
+	return "other"
+}
+
+// discover returns the provider's metadata, asking it on first use only: a provider that is
+// down doesn't stop the server from starting, and is tried again on the next login. Everyone
+// who asks while it is being asked shares the one request, and each waits no longer than its
+// own context allows, or the timeout. A success is kept; a failure is forgotten, so the next
+// caller asks again.
+func (x *sso) discover(ctx context.Context, c *ssoClient) (*oidc.Provider, error) {
+	c.mu.Lock()
+	if c.provider != nil {
+		p := c.provider
+		c.mu.Unlock()
+		return p, nil
+	}
+	f := c.flight
+	if f == nil {
+		f = &discovery{done: make(chan struct{})}
+		c.flight = f
+		// Detached on purpose: it is shared by every caller, and no one caller's cancelation may stop it.
+		go x.runDiscovery(c, f) //nolint:gosec // G118: see above
+	}
+	c.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(ctx, x.timeout)
+	defer cancel()
+	select {
+	case <-f.done:
+		return f.provider, f.err
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, failure("discovery timed out")
+		}
+		return nil, failure("discovery canceled")
+	}
+}
+
+// runDiscovery asks the provider once, on a context of its own so that no caller's cancelation
+// stops the others, and publishes the answer.
+func (x *sso) runDiscovery(c *ssoClient, f *discovery) {
+	ctx, cancel := context.WithTimeout(oidc.ClientContext(context.Background(), x.hc), x.timeout)
 	defer cancel()
 	p, err := oidc.NewProvider(ctx, c.cfg.Issuer)
 	if err != nil {
-		return nil, err
+		// The error carries the provider's response body: only its category is kept.
+		p = nil
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			err = failure("discovery timed out")
+		} else {
+			err = failure("discovery failed")
+		}
+	} else if err = checkEndpoints(c.cfg.Issuer, p); err != nil {
+		p = nil
 	}
-	c.provider = p
-	return p, nil
+	c.mu.Lock()
+	if err == nil {
+		c.provider = p
+	}
+	c.flight = nil
+	c.mu.Unlock()
+	f.provider, f.err = p, err
+	close(f.done)
+}
+
+// checkEndpoints refuses a provider whose authorization, token, key or user info endpoint
+// isn't https, before any request carries a credential to it. An http provider (accepted only
+// on a loopback host, for development) may have http endpoints on loopback hosts.
+func checkEndpoints(issuer string, p *oidc.Provider) error {
+	var doc struct {
+		JWKSURI string `json:"jwks_uri"`
+	}
+	if err := p.Claims(&doc); err != nil {
+		return failure("discovery document unreadable")
+	}
+	dev := strings.HasPrefix(issuer, "http://")
+	for _, e := range []struct {
+		name, value string
+		optional    bool
+	}{
+		{"authorization_endpoint", p.Endpoint().AuthURL, false},
+		{"token_endpoint", p.Endpoint().TokenURL, false},
+		{"jwks_uri", doc.JWKSURI, false},
+		{"userinfo_endpoint", p.UserInfoEndpoint(), true},
+	} {
+		if e.value == "" && e.optional {
+			continue
+		}
+		u, err := url.Parse(e.value)
+		if err != nil || !secureURL(u, dev) {
+			return failure("discovery: " + e.name + " is missing or isn't an https URL")
+		}
+	}
+	return nil
 }
 
 func (s *Service) ssoRoutes(mux *http.ServeMux) {
@@ -198,9 +368,9 @@ func (s *Service) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 		tooMany(w, wait)
 		return
 	}
-	prov, err := c.discover(r.Context(), s.sso.hc)
+	prov, err := s.sso.discover(r.Context(), c)
 	if err != nil {
-		slog.WarnContext(r.Context(), "sso: provider discovery failed", "provider", c.cfg.ID, "err", err)
+		slog.WarnContext(r.Context(), "sso: provider discovery failed", "provider", c.cfg.ID, "failure", err.Error())
 		writeError(w, http.StatusBadGateway, apierr.CodeSSOFailed, "the sign-in provider didn't answer")
 		return
 	}
@@ -268,8 +438,6 @@ func redirectSeeOther(w http.ResponseWriter, location string) {
 }
 
 func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
-	// The cookie did its job whatever happens next.
-	http.SetCookie(w, s.ssoCookie("", -1))
 	c := s.sso.byID[r.PathValue("provider")]
 	if c == nil {
 		ssoFailure(w, apierr.CodeSSOUnknownProvider)
@@ -279,6 +447,8 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	state := q.Get("state")
 	cookie, err := r.Cookie(s.ssoCookieName())
 	if state == "" || err != nil || subtle.ConstantTimeCompare([]byte(state), []byte(cookie.Value)) != 1 {
+		// Not this browser's sign-in, or an old one: whatever cookie it holds belongs to a
+		// sign-in that may still be going on (a newer attempt in another tab), so it stays.
 		ssoFailure(w, apierr.CodeSSOExpired)
 		return
 	}
@@ -287,24 +457,30 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		ssoFailure(w, apierr.CodeSSOExpired)
 		return
 	}
+	// The state matched the cookie and its provider: the cookie has done its job, whatever
+	// happens next.
+	http.SetCookie(w, s.ssoCookie("", -1))
 	if e := q.Get("error"); e != "" {
-		// The provider refused or the person declined; its error is a short code, not a secret.
-		slog.InfoContext(r.Context(), "sso: the provider returned an error", "provider", c.cfg.ID, "error", truncate(e, 64))
+		// The provider refused or the person declined. Its error and error_description are the
+		// provider's words, not ours: only a standard code is logged.
+		slog.InfoContext(r.Context(), "sso: the provider returned an error", "provider", c.cfg.ID, "error", oauthCode(e))
 		ssoFailure(w, apierr.CodeSSOFailed)
 		return
 	}
 	id, err := s.ssoExchange(r.Context(), c, pend, q.Get("code"))
 	if err != nil {
-		slog.WarnContext(r.Context(), "sso: the sign-in failed", "provider", c.cfg.ID, "err", err)
+		slog.WarnContext(r.Context(), "sso: the sign-in failed", "provider", c.cfg.ID, "failure", err.Error())
 		ssoFailure(w, apierr.CodeSSOFailed)
 		return
 	}
-	u, token, err := s.ssoLogin(r.Context(), c, id)
+	res, err := s.ssoLogin(r.Context(), c, id)
 	if err != nil {
 		code := apierr.CodeSSOFailed
 		switch {
 		case errors.Is(err, errSSOUnverified):
 			code = apierr.CodeSSOEmailUnverified
+		case errors.Is(err, errSSOGoogleEmail):
+			code = apierr.CodeSSOGoogleEmailUntrusted
 		case errors.Is(err, errSSONoAccount):
 			code = apierr.CodeSSONoAccount
 		case errors.Is(err, errSSOLinkedElsewhere):
@@ -324,22 +500,30 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 			slog.WarnContext(r.Context(), "auth: deleting the replaced session", "err", err)
 		}
 	}
-	slog.InfoContext(r.Context(), "sso login", "provider", c.cfg.ID, "user_id", u.ID)
-	s.setSessionCookie(w, token)
-	redirectSeeOther(w, pend.next)
+	slog.InfoContext(r.Context(), "sso login", "provider", c.cfg.ID, "user_id", res.user.ID)
+	s.setSessionCookie(w, res.token)
+	next := pend.next
+	if len(res.joined) > 0 && isInvitePath(next) {
+		// The account was made from its invites, which are all used up: the invite screen would
+		// find nothing. Go to the first workspace joined instead.
+		next = "/w/" + strconv.FormatInt(res.joined[0], 10)
+	}
+	redirectSeeOther(w, next)
 }
 
-func truncate(s string, n int) string {
-	if len(s) > n {
-		return strings.ToValidUTF8(s[:n], "")
-	}
-	return s
+// isInvitePath says whether next is the invite screen, /invite or /invite#token.
+func isInvitePath(next string) bool {
+	path, _, _ := strings.Cut(next, "#")
+	path, _, _ = strings.Cut(path, "?")
+	return path == "/invite" || strings.HasPrefix(path, "/invite/")
 }
 
 // ssoIdentity is what the provider says about the person.
 type ssoIdentity struct {
 	subject, email, name string
 	verified             bool
+	// hostedDomain is the ID token's hd claim: Google sets it for Google Workspace accounts.
+	hostedDomain string
 }
 
 // flexBool reads a JSON boolean, or the string "true" some providers send instead.
@@ -350,48 +534,84 @@ func (b *flexBool) UnmarshalJSON(d []byte) error {
 	return nil
 }
 
+// googleIssuer is Google's issuer, whose email_verified isn't enough for an address that isn't
+// Google's own (see googleEmailTrusted).
+var googleIssuer = "https://accounts.google.com" // a variable for the tests
+
+// googleEmailTrusted says whether a Google sign-in's email may be used to link an identity to
+// an account or to make one from an invite. Google's guidance: an address is only the account
+// holder's if it ends in @gmail.com (Google is its mailbox provider) or the ID token has an hd
+// claim (a Google Workspace account, whose domain Google verified). Any other address can keep
+// email_verified true after its mailbox changes hands.
+func googleEmailTrusted(email, hostedDomain string) bool {
+	return hostedDomain != "" || strings.HasSuffix(email, "@gmail.com")
+}
+
 // ssoExchange trades the authorization code for tokens, with the PKCE verifier, and verifies
-// the ID token: signature, issuer, audience, expiry and the nonce of this login.
+// the ID token: signature, issuer, audience, expiry and the nonce of this login. Its errors
+// are fixed categories: what the provider answered is never in them (see ssoErr).
 func (s *Service) ssoExchange(ctx context.Context, c *ssoClient, pend ssoPending, code string) (ssoIdentity, error) {
 	if code == "" {
-		return ssoIdentity{}, errors.New("no authorization code")
+		return ssoIdentity{}, failure("no authorization code")
 	}
-	prov, err := c.discover(ctx, s.sso.hc)
+	prov, err := s.sso.discover(ctx, c)
 	if err != nil {
-		return ssoIdentity{}, fmt.Errorf("discovery: %w", err)
+		return ssoIdentity{}, err
 	}
-	ctx, cancel := context.WithTimeout(oidc.ClientContext(ctx, s.sso.hc), ssoTimeout)
+	ctx, cancel := context.WithTimeout(oidc.ClientContext(ctx, s.sso.tokenHC), s.sso.timeout)
 	defer cancel()
 	tok, err := s.oauthConfig(c, prov).Exchange(ctx, code, oauth2.VerifierOption(pend.verifier))
 	if err != nil {
-		// A RetrieveError carries the provider's whole response body: keep its code only.
+		// A RetrieveError carries the provider's whole response body: only its status and a
+		// standard error code are kept.
 		var re *oauth2.RetrieveError
 		if errors.As(err, &re) {
-			return ssoIdentity{}, fmt.Errorf("token exchange: status %d, error %q", re.Response.StatusCode, truncate(re.ErrorCode, 64))
+			e := &ssoErr{category: "token exchange refused: " + oauthCode(re.ErrorCode)}
+			if re.Response != nil {
+				e.status = re.Response.StatusCode
+			}
+			return ssoIdentity{}, e
 		}
-		return ssoIdentity{}, fmt.Errorf("token exchange: %w", err)
+		return ssoIdentity{}, failure("token exchange failed")
 	}
 	raw, _ := tok.Extra("id_token").(string)
 	if raw == "" {
-		return ssoIdentity{}, errors.New("the token response has no ID token")
+		return ssoIdentity{}, failure("the token response has no ID token")
 	}
+	// Keys and user info are asked with the client that follows https redirects only.
+	ctx = oidc.ClientContext(ctx, s.sso.hc)
 	idt, err := prov.Verifier(&oidc.Config{ClientID: c.cfg.ClientID}).Verify(ctx, raw)
 	if err != nil {
-		return ssoIdentity{}, fmt.Errorf("ID token: %w", err)
+		return ssoIdentity{}, failure("ID token not verified")
 	}
 	if subtle.ConstantTimeCompare([]byte(idt.Nonce), []byte(pend.nonce)) != 1 {
-		return ssoIdentity{}, errors.New("ID token: the nonce doesn't match")
+		return ssoIdentity{}, failure("ID token: the nonce doesn't match")
 	}
 	if idt.Subject == "" || len(idt.Subject) > maxSubject {
-		return ssoIdentity{}, errors.New("ID token: the subject is missing or too long")
+		return ssoIdentity{}, failure("ID token: the subject is missing or too long")
 	}
 	var cl struct {
-		Email         string   `json:"email"`
-		EmailVerified flexBool `json:"email_verified"`
-		Name          string   `json:"name"`
+		Email           string   `json:"email"`
+		EmailVerified   flexBool `json:"email_verified"`
+		Name            string   `json:"name"`
+		HostedDomain    string   `json:"hd"`
+		AuthorizedParty string   `json:"azp"`
 	}
 	if err := idt.Claims(&cl); err != nil {
-		return ssoIdentity{}, errors.New("ID token: unreadable claims")
+		return ssoIdentity{}, failure("ID token: unreadable claims")
+	}
+	// OIDC Core 3.1.3.7: go-oidc checks that this client is among the audiences, and we want
+	// more: the token is for this client alone. Another audience means someone else may rely on
+	// it too, which no provider we support does for a login; it is refused, so azp, which must
+	// name this client whenever there are several audiences, never has to be trusted to
+	// settle it.
+	for _, aud := range idt.Audience {
+		if aud != c.cfg.ClientID {
+			return ssoIdentity{}, failure("ID token: the audience isn't this client's alone")
+		}
+	}
+	if cl.AuthorizedParty != "" && cl.AuthorizedParty != c.cfg.ClientID {
+		return ssoIdentity{}, failure("ID token: the authorized party isn't this client")
 	}
 	if cl.Email == "" {
 		// Some providers keep the address out of the ID token: ask UserInfo, for the same subject.
@@ -400,7 +620,7 @@ func (s *Service) ssoExchange(ctx context.Context, c *ssoClient, pend ssoPending
 		case err != nil:
 			slog.InfoContext(ctx, "sso: no email in the ID token, and UserInfo failed", "provider", c.cfg.ID)
 		case ui.Subject != idt.Subject:
-			return ssoIdentity{}, errors.New("UserInfo: the subject doesn't match the ID token's")
+			return ssoIdentity{}, failure("UserInfo: the subject doesn't match the ID token's")
 		default:
 			var uc struct {
 				Name string `json:"name"`
@@ -412,14 +632,24 @@ func (s *Service) ssoExchange(ctx context.Context, c *ssoClient, pend ssoPending
 			}
 		}
 	}
-	return ssoIdentity{subject: idt.Subject, email: cl.Email, name: cl.Name, verified: bool(cl.EmailVerified)}, nil
+	return ssoIdentity{subject: idt.Subject, email: cl.Email, name: cl.Name, verified: bool(cl.EmailVerified),
+		hostedDomain: cl.HostedDomain}, nil
 }
 
 var (
 	errSSOUnverified      = errors.New("the provider gave no verified email")
+	errSSOGoogleEmail     = errors.New("a verified Google email outside Gmail and Google Workspace is not enough")
 	errSSONoAccount       = errors.New("no account, and no invite, for this email")
 	errSSOLinkedElsewhere = errors.New("the account is linked to another identity of this provider")
 )
+
+// ssoLoggedIn is the result of a login: the user, their new session's token and the
+// workspaces an account made by the login joined, first invite first.
+type ssoLoggedIn struct {
+	user   User
+	token  string
+	joined []int64
+}
 
 // ssoLogin finds or makes the user for an identity and logs them in, in one transaction:
 //
@@ -430,96 +660,109 @@ var (
 //   - else an email with pending invites makes an SSO-only account (no password) that accepts
 //     all of them;
 //   - else the login is refused.
-func (s *Service) ssoLogin(ctx context.Context, c *ssoClient, id ssoIdentity) (User, string, error) {
-	var u User
-	var token string
+//
+// With Google, linking and making an account need an address Google vouches for (see
+// googleEmailTrusted), whatever trust_email says.
+func (s *Service) ssoLogin(ctx context.Context, c *ssoClient, id ssoIdentity) (ssoLoggedIn, error) {
+	var res ssoLoggedIn
 	err := s.write(ctx, func(tx *sql.Tx) error {
+		var u User
 		err := tx.QueryRowContext(ctx, `
 			SELECT u.id, u.email, u.name FROM user_identities i JOIN users u ON u.id = i.user_id
 			WHERE i.issuer = ? AND i.subject = ?`, c.cfg.Issuer, id.subject).Scan(&u.ID, &u.Email, &u.Name)
+		var joined []int64
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			if u, err = s.ssoNewIdentity(ctx, tx, c, id); err != nil {
+			if u, joined, err = s.ssoNewIdentity(ctx, tx, c, id); err != nil {
 				return err
 			}
 		case err != nil:
 			return err
 		}
-		token, err = s.insertSession(ctx, tx, u.ID)
+		token, err := s.insertSession(ctx, tx, u.ID)
+		res = ssoLoggedIn{user: u, token: token, joined: joined}
 		return err
 	})
-	return u, token, err
+	return res, err
 }
 
 // ssoNewIdentity links an identity not seen before to a user, making the user if an invite
-// allows it.
-func (s *Service) ssoNewIdentity(ctx context.Context, tx *sql.Tx, c *ssoClient, id ssoIdentity) (User, error) {
+// allows it. It returns the workspaces joined by the new account, if one was made.
+func (s *Service) ssoNewIdentity(ctx context.Context, tx *sql.Tx, c *ssoClient, id ssoIdentity) (User, []int64, error) {
 	email, ok := normalizeEmail(id.email)
 	if !ok || (!id.verified && !c.cfg.TrustEmail) {
-		return User{}, errSSOUnverified
+		return User{}, nil, errSSOUnverified
+	}
+	if c.cfg.Issuer == googleIssuer && (!id.verified || !googleEmailTrusted(email, id.hostedDomain)) {
+		return User{}, nil, errSSOGoogleEmail
 	}
 	u := User{Email: email}
+	var joined []int64
 	err := tx.QueryRowContext(ctx, `SELECT id, name FROM users WHERE email = ?`, email).Scan(&u.ID, &u.Name)
 	switch {
 	case err == nil:
 		var linked bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM user_identities WHERE user_id = ? AND issuer = ?)`,
 			u.ID, c.cfg.Issuer).Scan(&linked); err != nil {
-			return User{}, err
+			return User{}, nil, err
 		}
 		if linked {
-			return User{}, errSSOLinkedElsewhere
+			return User{}, nil, errSSOLinkedElsewhere
 		}
 	case errors.Is(err, sql.ErrNoRows):
-		if u, err = s.ssoInvitedUser(ctx, tx, email, id.name); err != nil {
-			return User{}, err
+		if u, joined, err = s.ssoInvitedUser(ctx, tx, email, id.name); err != nil {
+			return User{}, nil, err
 		}
 	default:
-		return User{}, err
+		return User{}, nil, err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)`,
 		c.cfg.Issuer, id.subject, u.ID)
-	return u, err
+	return u, joined, err
 }
 
 // ssoInvitedUser makes the account of an email with pending invites, without a password,
-// and accepts every one of them.
-func (s *Service) ssoInvitedUser(ctx context.Context, tx *sql.Tx, email, name string) (User, error) {
+// and accepts every one of them. It returns the workspaces joined, in the invites' order.
+func (s *Service) ssoInvitedUser(ctx context.Context, tx *sql.Tx, email, name string) (User, []int64, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, workspace_id, email, role FROM invites
 		WHERE email = ? AND accepted_at IS NULL AND expires_at > ? ORDER BY id`, email, stamp(s.now()))
 	if err != nil {
-		return User{}, err
+		return User{}, nil, err
 	}
 	var invites []pendingInvite
 	for rows.Next() {
 		var inv pendingInvite
 		if err := rows.Scan(&inv.id, &inv.workspaceID, &inv.email, &inv.role); err != nil {
 			_ = rows.Close()
-			return User{}, err
+			return User{}, nil, err
 		}
 		invites = append(invites, inv)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return User{}, err
+		return User{}, nil, err
 	}
 	if len(invites) == 0 {
-		return User{}, errSSONoAccount
+		return User{}, nil, errSSONoAccount
 	}
 	u, err := insertUser(ctx, tx, email, ssoName(name, email), "")
 	if err != nil {
-		return User{}, err
+		return User{}, nil, err
 	}
+	var joined []int64
 	for _, inv := range invites {
 		if err := s.useInvite(ctx, tx, inv); err != nil {
-			return User{}, err
+			return User{}, nil, err
 		}
 		// Two invites to one workspace: the first one's role stands.
 		if err := join(ctx, tx, inv, u.ID); err != nil && !errors.Is(err, errAlreadyMember) {
-			return User{}, err
+			return User{}, nil, err
+		}
+		if !slices.Contains(joined, inv.workspaceID) {
+			joined = append(joined, inv.workspaceID)
 		}
 	}
-	return u, nil
+	return u, joined, nil
 }
 
 // ssoName is the new account's name: the provider's, or the email's local part, at most

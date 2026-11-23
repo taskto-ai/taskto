@@ -150,3 +150,46 @@ test('an invite with passwords off has no account form', async () => {
   expect(screen.queryByLabelText('Your name')).toBeNull()
   screen.getByText(/Sign in with your provider/)
 })
+
+test('a login-methods failure that is not a 404 says so and a retry fetches again', async () => {
+  let answers = 0
+  fakeFetch({
+    'GET /api/login/methods': () => (answers++ === 0 ? { status: 503, body: { error: 'down' } } : { body: ssoOnly }),
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(/Couldn't find out how you can sign in/)
+  // No password form is guessed at.
+  expect(screen.queryByLabelText('Password')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  await screen.findByRole('button', { name: 'Continue with Authentik' })
+  expect(screen.queryByText(/Couldn't find out/)).toBeNull()
+  expect(screen.queryByLabelText('Password')).toBeNull()
+  expect(answers).toBe(2)
+})
+
+test('an answer that is not the login methods is an error, not passwords only', async () => {
+  for (const body of [
+    { password: 'yes', sso: [] },
+    { password: true },
+    { password: true, sso: [{ id: 1 }] },
+    null,
+    'nope',
+  ]) {
+    fakeFetch({ 'GET /api/login/methods': { body } })
+    render(<LoginScreen onDone={() => {}} />)
+    await screen.findByText(/Couldn't find out how you can sign in/)
+    expect(screen.queryByLabelText('Password')).toBeNull()
+    screen.getByRole('button', { name: 'Retry' })
+    cleanup()
+  }
+})
+
+test('the invite screen too waits for the methods and retries', async () => {
+  let answers = 0
+  fakeFetch({
+    'GET /api/login/methods': () => (answers++ === 0 ? { status: 500, body: {} } : { body: both }),
+  })
+  render(<InviteScreen token="tok" me={null} onDone={() => {}} onLogout={() => {}} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
+  await screen.findByRole('button', { name: 'Continue with Google' })
+})

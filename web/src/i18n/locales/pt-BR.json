@@ -555,6 +555,11 @@
     }
   },
   "auth": {
+    "methods": {
+      "title": "Entrar",
+      "error": "Não foi possível saber como você pode entrar. Verifique sua conexão e tente de novo.",
+      "retry": "Tentar de novo"
+    },
     "sso": {
       "continue": "Continuar com {name}",
       "or": "ou"
@@ -750,6 +755,7 @@
     "sso_failed": "Não foi possível entrar com o seu provedor. Tente de novo e avise quem administra este servidor se continuar falhando.",
     "sso_expired": "Esse login demorou demais ou já foi usado. Comece de novo.",
     "sso_email_unverified": "O seu provedor não confirmou o seu e-mail, então não é possível entrar com ele.",
+    "sso_google_email_untrusted": "O Google não garante este endereço de e-mail: entre com uma conta do Gmail ou do Google Workspace, ou use o endereço do convite com outro tipo de login.",
     "sso_no_account": "Não há conta para este e-mail. Peça um convite a um administrador do espaço de trabalho.",
     "sso_account_linked_elsewhere": "A conta deste e-mail já está vinculada a outro login deste provedor. Peça ajuda a um administrador do espaço de trabalho.",
     "board_archived": "Este quadro está arquivado: só pode ser lido.",

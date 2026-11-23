@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -35,6 +37,9 @@ type SupervisorConfig struct {
 	DB string
 	// Env is added to this process's environment for the sidecar.
 	Env []string
+	// DropEnv names variables of this process's environment the sidecar must not inherit, such
+	// as a secret the server read from one. They are removed before Env is added.
+	DropEnv []string
 	// Logger receives the supervisor's events and the sidecar's output. Default: slog.Default().
 	Logger *slog.Logger
 	// Tools, if set, is served to the sidecar on a second owner-only socket in SocketDir
@@ -391,6 +396,18 @@ func (s *Supervisor) run(ctx context.Context, lock *os.File, closeTools func()) 
 	}
 }
 
+// childEnviron is this process's environment without the variables in DropEnv.
+func (s *Supervisor) childEnviron() []string {
+	env := os.Environ()
+	if len(s.cfg.DropEnv) == 0 {
+		return env
+	}
+	return slices.DeleteFunc(env, func(kv string) bool {
+		name, _, _ := strings.Cut(kv, "=")
+		return slices.Contains(s.cfg.DropEnv, name)
+	})
+}
+
 // runOnce runs one sidecar process until it exits or ctx ends, and returns only after the
 // process has exited: how long it was ready (zero if it never was), and why it ended.
 func (s *Supervisor) runOnce(ctx context.Context) (uptime time.Duration, err error) {
@@ -399,7 +416,7 @@ func (s *Supervisor) runOnce(ctx context.Context) (uptime time.Duration, err err
 	// Not CommandContext: a cancelled context would SIGKILL it, and terminate stops it with
 	// SIGTERM first. G204: the command and entry come from the server's config.
 	cmd := exec.Command(s.cfg.Node, s.cfg.Entry) //nolint:noctx,gosec // see above
-	cmd.Env = append(os.Environ(), s.cfg.Env...)
+	cmd.Env = append(s.childEnviron(), s.cfg.Env...)
 	cmd.Env = append(cmd.Env, "TASKTO_AGENT_SOCKET="+s.socket, "TASKTO_AGENT_DB="+s.cfg.DB, ExitOnEOFEnv+"=1")
 	// Always set, empty without tools, so the sidecar never finds a socket from elsewhere.
 	tools := ""

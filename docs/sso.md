@@ -29,8 +29,12 @@ providers in a file; there is no admin screen for them.
       SSO-only account), named from the `name` claim (or the start of the email), it accepts
       **every** pending invite for that email, and the identity is linked;
    4. otherwise the login is refused: `sso_no_account`.
+
+   With Google, steps 2 and 3 have one more condition ([below](#google-and-email-addresses-it-doesnt-own)).
 4. The person gets a session and is sent back to the page they came from. A failure sends them
-   to `/?sso_error=<code>`, which the login screen shows in their language.
+   to `/?sso_error=<code>`, which the login screen shows in their language. If the sign-in
+   made the account from its invites and the page was the invite screen, they are sent to the
+   first workspace they joined instead, since the invite link is used up.
 
 An identity is the issuer and the `sub` claim, never the email: a person who changes their
 email at the provider still logs in as the same user. An email whose user already has another
@@ -87,9 +91,23 @@ starts, so a mistake stops it there; restart to change it.
 | `scopes` | optional | Default `["openid", "email", "profile"]`. Must include `openid`. |
 | `trust_email` | optional | Default `false`: the ID token's `email_verified` must be `true`. See below. |
 
-The providers aren't contacted at startup: each is discovered the first time someone uses it
-(with a timeout), so a provider that is down doesn't stop the server, and works again once it
-is back. The client secret is never logged.
+The providers aren't contacted at startup: each is discovered the first time someone uses it,
+so a provider that is down doesn't stop the server, and works again once it is back. Everyone
+who logs in while a provider is being asked shares the one request and waits at most its
+15-second timeout; a failure is forgotten, so the next login asks again.
+
+**Prefer `{"file": …}` for the client secret.** A secret named with `{"env": …}` has to be in
+the server's environment, which child processes inherit and operators' tooling (`docker
+inspect`, `/proc`, crash reports) can show. The server removes each variable it read from its
+own environment at startup, before it starts the agent runtime or anything else, and the agent
+runtime's environment is built without it; a file, though, is never in an environment at all,
+and can be mode 600 and owned by the server's user alone.
+
+Every endpoint the provider's discovery document names (authorization, token, keys, user info)
+must be `https`: one that isn't makes the provider fail before any request carrying a
+credential is made (`http` is accepted only when the issuer itself is a `localhost` one, for
+development). Redirects to anything but `https` are refused too, and the token exchange, which
+carries the code, the PKCE verifier and the client secret, follows no redirect at all.
 
 ### `trust_email`
 
@@ -115,7 +133,20 @@ address without confirming it.
    (mode 600) and name it in `client_secret`.
 5. Add the provider with the issuer `https://accounts.google.com`, as in the example above.
 
-Google sends `email_verified: true` for its accounts, so `trust_email` stays off.
+Google sends `email_verified: true` for its accounts, so `trust_email` stays off (and it
+wouldn't help: see the next section).
+
+### Google and email addresses it doesn't own
+
+Google can keep `email_verified: true` for an address that isn't Gmail after the mailbox changes
+hands (a domain that lapsed and was bought, say). Following Google's guidance, when the issuer
+is `https://accounts.google.com` the server links an identity to an existing account by its
+email, and makes an account from an invite, **only if** the address ends in `@gmail.com` or
+the ID token has an `hd` claim (a Google Workspace account). Otherwise the login is refused
+with `sso_google_email_untrusted`, and `trust_email` doesn't change that. An identity already
+linked (by issuer and `sub`) keeps working without the check, so it matters only the first time.
+Someone with a personal Google account on another domain can't use the first sign-in with
+Google; they can sign in with another provider or with a password.
 
 ## Setting up Authentik
 
@@ -147,10 +178,12 @@ Google sends `email_verified: true` for its accounts, so `trust_email` stays off
 TaskTo.AI makes accounts only for invited addresses, so who can get in is who an admin invites.
 Within that:
 
-- **Invites:** an admin invites `person@example.com` as always. When that
-  person signs in with the provider and the provider vouches for that address, the account is
-  made and the invite is accepted; nobody needs to pass on the invite link. A person who is
-  invited to several workspaces joins them all at their first sign-in.
+- **Invites:** an admin invites `person@example.com` as always. When someone **without an
+  account** signs in with the provider and the provider vouches for that address, the account is
+  made and **every** pending invite for it is accepted at once, so nobody needs to pass on the
+  invite link and a person invited to several workspaces joins them all at their first sign-in.
+  Someone who **already has an account** is only signed in: they still open the invite link and
+  press Join after signing in, to join the workspace.
 - **Authentik:** bind a group or user policy to the application (**Policy / Group / User
   Bindings**) to decide which of your users can use it at all.
 - **Google Workspace:** an **Internal** consent screen limits sign-in to your organization.
@@ -166,14 +199,16 @@ provider's `sub` is what counts.
 - `POST /api/login` answers `403 password_login_disabled`.
 - A new person can't create an account with a password from an invite (`403`); they sign in
   with a provider. Someone who is logged in can still join with their invite.
-- Reset links can't be used.
+- Reset links can't be made or used (`403 password_login_disabled`), since nobody could use one.
 - The login and invite screens show the provider buttons only.
 
 First-run setup still creates the owner **with a password**, since there is no provider yet at
 that point to vouch for them. With passwords off, the owner then signs in with the provider
 using the same email, which links the identity to the account. Keep the provider's
 configuration right before you turn passwords off: if no provider works, nobody can log in, and
-the way back is to remove the setting and restart.
+the way back is to remove the setting and recreate the server. With Compose, change the
+`.env` and run `docker compose up -d taskto`, which recreates the container with the new
+environment; `docker compose restart` keeps the old one and changes nothing.
 
 Accounts made by signing in have no password. They can't use the password login, and "change
 password" refuses them. If passwords are on, an admin's reset link still lets such a person
@@ -194,9 +229,16 @@ set one.
   character, or is longer than 2048 bytes. Anything else goes to `/`.
 - **ID tokens are verified by [go-oidc](https://github.com/coreos/go-oidc)**: signature against
   the provider's published keys, issuer, audience (your client ID), expiry. The server then
-  checks the nonce and that a subject is present.
+  checks the nonce and that a subject is present, that the audience is your client ID and
+  nothing else (an ID token also meant for another client is refused), and that `azp`, when
+  present, is your client ID (OpenID Connect Core 3.1.3.7).
 - **Identities are the issuer and the subject**, not the email.
 - **Secrets:** the client secret is read from a file or variable and is never logged, or put in
-  an error. Tokens are never logged.
+  an error. Tokens are never logged. Nor is what a provider sends back: a failure is logged as
+  a fixed category and, when the provider answered, its HTTP status (and a standard OAuth error
+  code such as `invalid_grant`), never its response body, `error_description` or other text,
+  which could carry anything. The login's redirect never carries it either.
+- **A stale callback** (an older sign-in started in another tab) leaves the cookie of the newer
+  one alone: the cookie is cleared only by a callback whose state matched it.
 - Calls to the provider (discovery, keys, tokens, UserInfo) use a 15-second timeout. They are
   not covered by the [egress policies](agent-providers.md), which are for model providers.

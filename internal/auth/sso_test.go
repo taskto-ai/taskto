@@ -40,6 +40,12 @@ type fakeIdP struct {
 	codes        map[string]issuedCode
 	userinfo     map[string]any
 	badSignature bool // sign with a key the JWKS doesn't list
+
+	// Set before the first request: serve over TLS, change what discovery says, or take over
+	// an endpoint.
+	useTLS    bool
+	discovery map[string]any
+	handlers  map[string]http.HandlerFunc
 }
 
 type issuedCode struct {
@@ -47,35 +53,57 @@ type issuedCode struct {
 	claims    map[string]any
 }
 
-func newFakeIdP(t *testing.T) *fakeIdP {
+func newFakeIdP(t *testing.T) *fakeIdP { return newFakeIdPWith(t, nil) }
+
+// newFakeIdPWith is newFakeIdP with setup run before the server starts.
+func newFakeIdPWith(t *testing.T, setup func(*fakeIdP)) *fakeIdP {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeIdP{t: t, key: key, codes: map[string]issuedCode{}, userinfo: map[string]any{"sub": "sub-1"}}
+	f := &fakeIdP{t: t, key: key, codes: map[string]issuedCode{}, userinfo: map[string]any{"sub": "sub-1"},
+		handlers: map[string]http.HandlerFunc{}}
+	if setup != nil {
+		setup(f)
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
-		writeTestJSON(w, map[string]any{
+	// route registers a handler, which a test may have replaced.
+	route := func(path string, h http.HandlerFunc) {
+		if o := f.handlers[path]; o != nil {
+			h = o
+		}
+		mux.HandleFunc(path, h)
+	}
+	route("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		doc := map[string]any{
 			"issuer": f.srv.URL, "authorization_endpoint": f.srv.URL + "/authorize",
 			"token_endpoint": f.srv.URL + "/token", "jwks_uri": f.srv.URL + "/keys",
 			"userinfo_endpoint":                     f.srv.URL + "/userinfo",
 			"id_token_signing_alg_values_supported": []string{"RS256"},
-		})
+		}
+		for k, v := range f.discovery {
+			doc[k] = v
+		}
+		writeTestJSON(w, doc)
 	})
-	mux.HandleFunc("/keys", func(w http.ResponseWriter, _ *http.Request) {
+	route("/keys", func(w http.ResponseWriter, _ *http.Request) {
 		writeTestJSON(w, map[string]any{"keys": []map[string]string{{
 			"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k1",
 			"n": b64(key.N.Bytes()), "e": b64(big.NewInt(int64(key.E)).Bytes()),
 		}}})
 	})
-	mux.HandleFunc("/token", f.token)
-	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, _ *http.Request) {
+	route("/token", f.token)
+	route("/userinfo", func(w http.ResponseWriter, _ *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		writeTestJSON(w, f.userinfo)
 	})
-	f.srv = httptest.NewServer(mux)
+	if f.useTLS {
+		f.srv = httptest.NewTLSServer(mux)
+	} else {
+		f.srv = httptest.NewServer(mux)
+	}
 	t.Cleanup(f.srv.Close)
 	return f
 }
@@ -209,7 +237,11 @@ type ssoEnv struct {
 
 func newSSOEnv(t *testing.T, tweak ...func(*SSOProvider, *Options)) *ssoEnv {
 	t.Helper()
-	idp := newFakeIdP(t)
+	return newSSOEnvWith(t, newFakeIdP(t), tweak...)
+}
+
+func newSSOEnvWith(t *testing.T, idp *fakeIdP, tweak ...func(*SSOProvider, *Options)) *ssoEnv {
+	t.Helper()
 	p := SSOProvider{ID: "fake", Name: "Fake", Issuer: idp.srv.URL, ClientID: testClientID,
 		ClientSecret: testClientSecret, Scopes: []string{"openid", "email", "profile"}}
 	opts := Options{PublicURL: testPublicURL}
@@ -217,7 +249,12 @@ func newSSOEnv(t *testing.T, tweak ...func(*SSOProvider, *Options)) *ssoEnv {
 		f(&p, &opts)
 	}
 	opts.SSO = []SSOProvider{p}
-	return &ssoEnv{env: newEnv(t, opts), idp: idp}
+	e := &ssoEnv{env: newEnv(t, opts), idp: idp}
+	if idp.useTLS {
+		// The test server's certificate is the only one trusted.
+		e.svc.sso.guard.base = idp.srv.Client().Transport
+	}
+	return e
 }
 
 // start asks for the sign-in and returns the authorization URL's parameters.
@@ -309,7 +346,9 @@ func TestSSOCreatesAnInvitedAccountAndAcceptsEveryInvite(t *testing.T) {
 
 	b := s.browser()
 	rec := s.signIn(b, "/invite#tok", map[string]any{"email": "New@Example.com", "email_verified": true, "name": "  Nia  "})
-	s.wantLogin(b, rec, "/invite#tok", "new@example.com")
+	// Its invites are used up, so the invite screen would find nothing: it goes to the first
+	// workspace joined.
+	s.wantLogin(b, rec, fmt.Sprintf("/w/%d", ws1), "new@example.com")
 
 	var name, hash string
 	if err := s.db.QueryRow(`SELECT name, password_hash FROM users WHERE email = 'new@example.com'`).Scan(&name, &hash); err != nil {
@@ -415,10 +454,10 @@ func TestSSOStateIsBoundToTheBrowserAndWorksOnce(t *testing.T) {
 		b := s.browser()
 		q := s.start(b, "")
 		s.wantFailure(callback(b, q, "another-state"), apierr.CodeSSOExpired)
-		// The cookie is gone and the real state was not used up by the mismatch, but the
-		// browser has nothing to present it with.
-		if _, ok := b.cookies[s.svc.ssoCookieName()]; ok {
-			t.Fatal("the sign-in cookie was kept")
+		// A callback that doesn't match leaves the cookie alone: it belongs to a sign-in that
+		// may still be going on.
+		if _, ok := b.cookies[s.svc.ssoCookieName()]; !ok {
+			t.Fatal("the sign-in cookie was cleared by a callback that didn't match")
 		}
 	})
 	t.Run("another browser's state", func(t *testing.T) {
@@ -704,6 +743,11 @@ func TestPasswordLoginDisabled(t *testing.T) {
 	want(s.client().do(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword}))
 	want(s.client().do(http.MethodPost, "/api/invites/accept", map[string]string{"token": inviteToken, "name": "New", "password": otherPassword}))
 	want(s.client().do(http.MethodPost, "/api/password-reset", map[string]string{"token": resetToken, "password": otherPassword}))
+	// Making a reset link is refused too: nobody could use it.
+	want(owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/password-reset", ws, memberID), nil))
+	if n := s.count(`SELECT count(*) FROM password_resets`); n != 1 {
+		t.Fatalf("reset links = %d, want only the first", n)
+	}
 
 	// Nothing was used up by the refusals.
 	if n := s.count(`SELECT count(*) FROM invites WHERE accepted_at IS NULL`); n != 1 {

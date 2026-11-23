@@ -62,6 +62,7 @@ const (
 	CodeSSOFailed                 Code = "sso_failed"
 	CodeSSOExpired                Code = "sso_expired"
 	CodeSSOEmailUnverified        Code = "sso_email_unverified"
+	CodeSSOGoogleEmailUntrusted   Code = "sso_google_email_untrusted"
 	CodeSSONoAccount              Code = "sso_no_account"
 	CodeSSOAccountLinkedElsewhere Code = "sso_account_linked_elsewhere"
 

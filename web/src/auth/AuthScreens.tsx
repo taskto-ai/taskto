@@ -49,22 +49,73 @@ function useSubmit(send: () => Promise<Me>, onDone: (me: Me) => void) {
 }
 
 // How people can sign in on this server (GET /api/login/methods). A server that doesn't know the
-// route is an older one: passwords only.
+// route (404) is an older one: passwords only. Any other failure, or an answer that isn't the
+// shape the route promises, is an error to retry: guessing "passwords only" would show a form
+// that a passwords-off server refuses, or hide the providers.
 type LoginMethods = { password: boolean; sso: { id: string; name: string }[] }
 
-function useLoginMethods(): LoginMethods | null {
-  const [methods, setMethods] = useState<LoginMethods | null>(null)
+type MethodsState = { kind: 'loading' } | { kind: 'ready'; methods: LoginMethods } | { kind: 'error' }
+
+function validMethods(v: unknown): v is LoginMethods {
+  if (typeof v !== 'object' || v === null) return false
+  const m = v as { password?: unknown; sso?: unknown }
+  return (
+    typeof m.password === 'boolean' &&
+    Array.isArray(m.sso) &&
+    m.sso.every(
+      (p) =>
+        typeof p === 'object' &&
+        p !== null &&
+        typeof (p as { id?: unknown }).id === 'string' &&
+        typeof (p as { name?: unknown }).name === 'string',
+    )
+  )
+}
+
+function useLoginMethods(): { state: MethodsState; retry: () => void } {
+  const [state, setState] = useState<MethodsState>({ kind: 'loading' })
+  const [attempt, setAttempt] = useState(0)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt makes a Retry fetch again
   useEffect(() => {
     let live = true
-    api<Partial<LoginMethods>>('/api/login/methods').then(
-      (m) => live && setMethods({ password: m.password !== false, sso: Array.isArray(m.sso) ? m.sso : [] }),
-      () => live && setMethods({ password: true, sso: [] }),
+    api<unknown>('/api/login/methods').then(
+      (m) => {
+        if (live) setState(validMethods(m) ? { kind: 'ready', methods: m } : { kind: 'error' })
+      },
+      (err) => {
+        if (!live) return
+        setState(
+          err instanceof ApiError && err.status === 404
+            ? { kind: 'ready', methods: { password: true, sso: [] } }
+            : { kind: 'error' },
+        )
+      },
     )
     return () => {
       live = false
     }
-  }, [])
-  return methods
+  }, [attempt])
+  const retry = () => {
+    setState({ kind: 'loading' })
+    setAttempt((n) => n + 1)
+  }
+  return { state, retry }
+}
+
+// What a screen shows until the login methods are known, or when they couldn't be had.
+function MethodsPending({ state, retry }: { state: MethodsState; retry: () => void }) {
+  const t = useT()
+  if (state.kind !== 'error') return <AuthLoading />
+  return (
+    <AuthFrame title={t('auth.methods.title')}>
+      <p role="alert" className="tt-error">
+        {t('auth.methods.error')}
+      </p>
+      <button type="button" className="tt-button tt-primary" onClick={retry}>
+        {t('auth.methods.retry')}
+      </button>
+    </AuthFrame>
+  )
 }
 
 // One button per single sign-on provider. `next` is where the provider's sign-in brings the
@@ -197,7 +248,7 @@ export function SetupScreen({ onDone }: { onDone: (me: Me) => void }) {
 
 export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   const t = useT()
-  const methods = useLoginMethods()
+  const loaded = useLoginMethods()
   const ssoError = useSsoError()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -205,7 +256,8 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     () => api<Me>('/api/login', { method: 'POST', body: { email, password } }),
     onDone,
   )
-  if (!methods) return <AuthLoading />
+  if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
+  const methods = loaded.state.methods
   return (
     <AuthFrame title={t('auth.login.title')}>
       {ssoError && (
@@ -331,7 +383,7 @@ export function InviteScreen({
   onLogout: () => void
 }) {
   const t = useT()
-  const methods = useLoginMethods()
+  const loaded = useLoginMethods()
   const [mode, setMode] = useState<'new' | 'login'>('new')
   // Who the person was before joining, to tell the workspace they joined.
   const before = useRef(me)
@@ -396,7 +448,8 @@ export function InviteScreen({
       </AuthFrame>
     )
   }
-  if (!methods) return <AuthLoading />
+  if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
+  const methods = loaded.state.methods
   // Signing in with a provider comes back to this invite, signed in.
   const sso = <SsoButtons providers={methods.sso} next={`/invite#${token}`} />
   const or = methods.password && methods.sso.length > 0 && (

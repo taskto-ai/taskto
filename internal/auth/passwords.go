@@ -119,6 +119,11 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleCreateReset(w http.ResponseWriter, r *http.Request) {
+	// A link nobody could use: with passwords off, using one is refused too.
+	if s.opts.DisablePasswordLogin {
+		passwordLoginDisabled(w)
+		return
+	}
 	m, _ := MembershipFrom(r.Context())
 	admin, _ := UserFrom(r.Context())
 	userID, ok := pathID(w, r, "user", apierr.CodeMemberNotFound, "member not found")

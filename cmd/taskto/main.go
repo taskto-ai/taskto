@@ -133,6 +133,14 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 			return err
 		}
 	}
+	// The single sign-on providers' client secrets are read, and their environment variables
+	// removed, before anything starts a child process: the agent sidecar, the CLI workers and
+	// the browsers must not inherit them. A mistake in the file stops the server here; the
+	// providers themselves are asked on first use, so one that is down doesn't.
+	ssoProviders, ssoSecretEnv, err := loadSSOProviders(cfg.SSOProviders, os.Getenv, os.Unsetenv)
+	if err != nil {
+		return err
+	}
 	// One server per data directory, enforced before anything in it is opened. Deferred
 	// first, so the lock goes last, after the sidecar has stopped and the database closed.
 	lock, err := lockfile.DataDir(cfg.DataDir)
@@ -219,7 +227,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	var agent agentRuntime
 	var convAgent conversations.Agent // nil: the conversation API answers 503
 	if cfg.Agent {
-		agent, err = startAgent(ctx, cfg, store, toolsSocket(tools, cliAccounts), cliAccounts.Providers())
+		agent, err = startAgent(ctx, cfg, store, toolsSocket(tools, cliAccounts), cliAccounts.Providers(), ssoSecretEnv)
 		if err != nil {
 			return err
 		}
@@ -249,13 +257,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	}
 	authOpts := auth.Options{InsecureCookies: cfg.InsecureCookies, TrustedProxies: cfg.TrustedProxyPrefixes(),
 		PublicURL: cfg.PublicURL, DisablePasswordLogin: cfg.DisablePasswordLogin}
-	if cfg.SSOProviders != "" {
-		// Read now, so a mistake in the file stops the server here; the providers themselves are
-		// asked on first use, so one that is down doesn't.
-		if authOpts.SSO, err = auth.LoadSSOProviders(cfg.SSOProviders, os.Getenv); err != nil {
-			return err
-		}
-		slog.Info("single sign-on is on", "providers", len(authOpts.SSO), "public_url", cfg.PublicURL,
+	authOpts.SSO = ssoProviders
+	if len(ssoProviders) > 0 {
+		slog.Info("single sign-on is on", "providers", len(ssoProviders), "public_url", cfg.PublicURL,
 			"password_login", !cfg.DisablePasswordLogin)
 	}
 	for _, p := range authOpts.TrustedProxies {

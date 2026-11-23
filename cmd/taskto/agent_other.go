@@ -13,7 +13,7 @@ import (
 )
 
 // startAgent fails: the agent runtime's supervisor needs Unix sockets and process groups.
-func startAgent(context.Context, config.Config, *providers.Store, http.Handler, []providers.CLIProvider) (agentRuntime, error) {
+func startAgent(context.Context, config.Config, *providers.Store, http.Handler, []providers.CLIProvider, []string) (agentRuntime, error) {
 	return agentRuntime{}, errors.New("agent runtime: needs Linux, macOS or another Unix system")
 }
 

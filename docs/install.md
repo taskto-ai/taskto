@@ -387,7 +387,16 @@ nobody signs up by signing in. [sso.md](sso.md) has the provider-by-provider set
 restrict who may sign in, and the security notes.
 
 With Compose, put the providers file and the secrets it names in a directory next to the
-project, mount it read-only, and set the three variables in `.env`. The public address must be
+project, mount it read-only, and set the three variables in `.env`. The container runs as
+`65532`, so the files must be readable by that user: owned by
+it with mode `600`, in a directory it can traverse:
+
+```sh
+sudo chown -R 65532:65532 sso && sudo chmod 700 sso && sudo chmod 600 sso/*
+```
+
+The host directory above it (the project directory) must let `65532` reach `sso`: at least
+execute permission for others. Keep the mount `:ro`. The public address must be
 the `https` one people use, since it makes the redirect URIs you register at the provider:
 
 ```yaml
@@ -408,8 +417,8 @@ TASKTO_PUBLIC_URL=https://tasks.example.com
 The redirect URI for a provider with the id `google` is
 `https://tasks.example.com/api/sso/google/callback`. A client secret named by
 `{"env": "VAR"}` has to be set in the server's environment too (`environment:` in the
-override); one named by `{"file": …}` is read from the mounted directory. Restart the server
-after changing the file. Turning passwords off leaves the owner signing in through the provider
+override), which is why `{"file": …}`, read from the mounted directory, is preferred. Restart the server
+after changing the file (`docker compose up -d taskto` after a change to `.env` or the override, which recreates the container; `restart` keeps the old environment). Turning passwords off leaves the owner signing in through the provider
 with the email they set up with ([sso.md](sso.md#turning-passwords-off)).
 
 ## Models
