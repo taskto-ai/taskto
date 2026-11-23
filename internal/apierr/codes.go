@@ -123,6 +123,13 @@ const (
 	CodeAppMigrationUnneeded   Code = "app_migration_unneeded"   // 409: an acknowledgement of a change that isn't happening; params: changes
 	CodeAppMigrationInvalid    Code = "app_migration_invalid"    // 400
 
+	// Home widgets and navigation pins (internal/apps/home.go).
+
+	CodeHomeWidgetNotFound Code = "home_widget_not_found" // 404: the app's live release has no such widget
+	CodeHomeLimit          Code = "home_limit"            // 409: params: max
+	CodeHomeOrderInvalid   Code = "home_order_invalid"    // 400: the ids aren't the caller's of that kind
+	CodeHomeDefaultsShared Code = "home_defaults_shared"  // 409: defaults are for the apps of shared spaces
+
 	// The knowledge base (internal/knowledge).
 
 	CodeRequestTooLarge   Code = "request_too_large"    // 413; params: max (bytes)

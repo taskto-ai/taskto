@@ -181,6 +181,7 @@ func Capabilities() []string {
 	for name := range functions {
 		all = append(all, FunctionCapability(name))
 	}
+	all = append(all, slotCapabilities...)
 	sort.Strings(all)
 	return all
 }

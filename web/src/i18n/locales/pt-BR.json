@@ -527,6 +527,10 @@
     "app_migration_required": "Esta publicação muda o esquema dos dados e precisa da sua confirmação antes.",
     "app_migration_unneeded": "Essas mudanças não fazem mais parte desta publicação: recarregue o app e tente de novo.",
     "app_migration_invalid": "A confirmação das mudanças de esquema não é válida.",
+    "home_widget_not_found": "Este app não oferece esse widget.",
+    "home_limit": "Você pode ter no máximo {max} destes.",
+    "home_order_invalid": "Essa ordem não é feita de itens seus.",
+    "home_defaults_shared": "Padrões existem só para os apps de espaços compartilhados.",
     "app_query_cursor": "Essa página não pode mais ser encontrada. Comece de novo pela primeira página.",
     "app_query_field": "O app não tem o campo “{field}” que possa ser usado aqui.",
     "app_query_condition": "O filtro em “{field}” não combina com o campo."
@@ -990,7 +994,8 @@
       "knowledge": "Base de conhecimento",
       "boards": "Quadros",
       "apps": "Apps",
-      "settings": "Configurações"
+      "settings": "Configurações",
+      "home": "Início"
     },
     "noWorkspace": "Você não é membro de nenhum espaço de trabalho. Peça um convite a um administrador.",
     "logOut": "Sair",
@@ -1006,7 +1011,10 @@
     },
     "account": "Conta: {name}",
     "skipToContent": "Pular para o conteúdo",
-    "installApp": "Instalar o app"
+    "installApp": "Instalar o app",
+    "pinned": "Apps fixados",
+    "pageFailed": "Não foi possível mostrar esta página. O menu e as suas configurações continuam funcionando.",
+    "reload": "Recarregar"
   },
   "common": {
     "cancel": "Cancelar",
@@ -1279,5 +1287,52 @@
       "yours": "O navegador, sob seu controle",
       "watching": "O navegador, enquanto o agente trabalha"
     }
+  },
+  "home": {
+    "intro": "Widgets dos seus apps e os apps que você fixou no menu. Cada um mostra só o que você pode ver no app.",
+    "empty": "Nada no seu Início ainda. Escolha Personalizar para colocar aqui um widget de um dos seus apps ou para fixar um app no menu.",
+    "widgets": "Widgets",
+    "customize": "Personalizar",
+    "done": "Concluir",
+    "failed": "Não foi possível mostrar este widget.",
+    "fromApp": "De {name}",
+    "fromAppDefault": "De {name} · definido para o espaço",
+    "openApp": "Abrir {name}",
+    "unavailable": {
+      "offline": "{name} está fora do ar, então este widget não está disponível.",
+      "unpublished": "{name} ainda não foi publicado, então este widget não está disponível.",
+      "removed": "{name} não oferece mais este widget."
+    },
+    "unavailableShort": {
+      "offline": "· app fora do ar",
+      "unpublished": "· app não publicado",
+      "removed": "· não é mais oferecido"
+    },
+    "default": "· definido para o espaço",
+    "moveEarlier": "Mover {name} para antes",
+    "moveLater": "Mover {name} para depois",
+    "removeNamed": "Remover {name}",
+    "remove": "Remover",
+    "hideNamed": "Ocultar {name}",
+    "showNamed": "Mostrar {name} de novo",
+    "pins": "Fixados no menu",
+    "pinsIntro": "Os apps fixados aparecem no menu, depois das páginas do TaskTo.AI.",
+    "noPins": "Nenhum app fixado.",
+    "pinNamed": "Fixar {name}",
+    "unpinNamed": "Desafixar {name}",
+    "hidden": "Padrões ocultos",
+    "add": "Adicionar dos seus apps",
+    "noApps": "Nenhum dos seus apps foi publicado ainda.",
+    "addNamed": "Adicionar {name} ao Início",
+    "setDefaultNamed": "Definir {name} como padrão do espaço",
+    "unsetDefaultNamed": "Deixar de ter {name} como padrão do espaço",
+    "defaultsNote": "Um padrão aparece para todos os membros do espaço, que podem ocultá-lo. Só quem pode publicar o app define um.",
+    "kind": {
+      "summaries": "números",
+      "screen": "tela",
+      "shortcut": "atalho",
+      "pin": "fixação"
+    },
+    "removePinNamed": "Remover {name} do menu"
   }
 }

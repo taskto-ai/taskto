@@ -24,16 +24,38 @@ export type AppTransport = {
 
 // The app's routes on the server: base is …/spaces/{space}/apps/{app}. release is the live
 // release's number, which the screen is drawn from and its actions name; 'draft' draws the draft, a
-// preview whose actions don't run.
-export function httpTransport(base: string, release?: number | 'draft'): AppTransport {
+// preview whose actions don't run. screen opens an app with screens on one of them (a pin's); widget
+// draws one of the live release's Home widgets instead (a bounded view whose actions are the app's
+// own, answered with the rows it holds).
+export function httpTransport(
+  base: string,
+  release?: number | 'draft',
+  opts: { screen?: string; widget?: string } = {},
+): AppTransport {
+  const query = (params: Record<string, string | number | undefined>) => {
+    const q = new URLSearchParams()
+    for (const [key, value] of Object.entries(params)) if (value !== undefined) q.set(key, String(value))
+    const text = q.toString()
+    return text ? `?${text}` : ''
+  }
   if (release === 'draft') {
     return {
-      load: () => api<unknown[]>(`${base}/surface?release=draft`),
+      load: () => api<unknown[]>(`${base}/surface${query({ release: 'draft', screen: opts.screen })}`),
       act: () => Promise.reject(new Error(translate('apps.stage.draftNoActions'))),
     }
   }
+  if (opts.widget !== undefined) {
+    return {
+      load: () => api<unknown[]>(`${base}/surface${query({ widget: opts.widget })}`),
+      act: (action) =>
+        api<unknown[]>(`${base}/actions${query({ widget: opts.widget })}`, {
+          method: 'POST',
+          body: release === undefined ? action : { ...action, release },
+        }),
+    }
+  }
   return {
-    load: () => api<unknown[]>(release === undefined ? `${base}/surface` : `${base}/surface?release=${release}`),
+    load: () => api<unknown[]>(`${base}/surface${query({ release, screen: opts.screen })}`),
     act: (action) =>
       api<unknown[]>(`${base}/actions`, {
         method: 'POST',
