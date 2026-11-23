@@ -262,6 +262,47 @@ An upgrade of the server ([Upgrade and rollback](#upgrade-and-rollback)) reaches
 as a prompt, **A new version of TaskTo.AI is ready**, with **Reload to update** and **Later**.
 The page is never reloaded for anyone: they update when they have saved their work.
 
+### Web Push notifications
+
+Notifications always appear in each person's **inbox** (the bell in the top bar). **Web Push**
+is an optional extra on top: a person turns it on, per device, in **Settings → Notifications**,
+and only then does that device get a prompt when something new arrives while TaskTo.AI is closed.
+Nothing about it is required: with push off, unavailable or blocked, every workflow works, and a
+push is never the way anything is synced. The server makes its VAPID key pair by itself the first
+time it starts (the private key is sealed in the database with `server.key`, so a backup needs both,
+as for the other sealed secrets); there is nothing to configure.
+
+What the server needs to send a push:
+
+- **Outbound HTTPS to the browsers' push services**, directly: Google's for Chrome and Android,
+  Mozilla's for Firefox, Apple's for Safari and the iPhone's Home Screen app. Which one a device
+  uses is its browser's choice; the address is in the subscription the browser gives. Port 443
+  out, to public addresses. The server connects under the **egress policy for public addresses
+  only**, and that isn't configurable: an endpoint is an address a person's browser reported, so
+  loopback, private, link-local, CGNAT and metadata addresses are refused on every connection
+  (checked after DNS resolution, as for [provider accounts](#where-provider-accounts-may-connect)),
+  and redirects aren't followed. It doesn't use the `HTTP_PROXY` and `HTTPS_PROXY` variables: a
+  network that only lets servers out through a proxy needs a transparent one, or an allowance
+  for the push services' addresses.
+- **DNS** for those names, as for any outbound call.
+- **A secure connection for the web app itself** (step 3): browsers offer push only to a page
+  on HTTPS, and to a service worker.
+
+When the server can't reach a push service, people see no difference except the missing prompt:
+notifications are still made, still shown in the inbox, and the badge still counts them. A push
+that fails with a busy or unreachable service is tried again up to five times over about forty
+minutes, then dropped, and the log says `a push service didn't answer` with the service's host
+(never the subscription's address, which is a capability). A push the service refuses (`400`,
+`401`, `403`, `413`), or to an address the egress policy refuses, is dropped at once, and the log
+says so. A service that answers `404` or `410` for a subscription has ended it: the server removes
+it. A subscription is also removed when its person signs out of that browser, when its session
+ends, and when they leave their last workspace.
+
+On an iPhone or iPad, push works only for TaskTo.AI **installed on the Home Screen** (iOS 16.4 or
+later), as in the install steps above: the settings page says so, and in a Safari tab the inbox
+is all there is. The page tells the person when their browser has blocked notifications, and how to
+allow them.
+
 ### Where provider accounts may connect
 
 Workspace admins add provider accounts for the workspace, and every member can add

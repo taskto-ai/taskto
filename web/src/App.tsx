@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, api, errorText, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
 import { setPreferences, useT } from './i18n'
+import { leavePush } from './notifications/push'
 import { navigate } from './router'
 import { Shell } from './shell/Shell'
 import { claimDrafts, forgetDrafts } from './uiState'
@@ -62,7 +63,11 @@ export function App() {
   const signedIn = session.state === 'in'
   useEffect(() => {
     if (!signedIn) return
-    const lost = () => setSession({ state: 'login' })
+    // The session ended elsewhere (or expired): this device stops receiving the person's pushes.
+    const lost = () => {
+      void leavePush()
+      setSession({ state: 'login' })
+    }
     window.addEventListener(SESSION_LOST, lost)
     return () => window.removeEventListener(SESSION_LOST, lost)
   }, [signedIn])
@@ -75,6 +80,8 @@ export function App() {
     [signIn],
   )
   const logOut = useCallback(async () => {
+    // This device's push subscription goes first, while the session can still say whose it is.
+    await leavePush()
     await api('/api/logout', { method: 'POST' }).catch(() => {})
     forgetDrafts()
     setSession({ state: 'login' })
@@ -101,6 +108,7 @@ export function App() {
     [signIn],
   )
   const leaveInvite = useCallback(async () => {
+    await leavePush()
     await api('/api/logout', { method: 'POST' }).catch(() => {})
     forgetDrafts()
     setSession({ state: 'invite', me: null })

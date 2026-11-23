@@ -8,8 +8,22 @@ import { api, errorText, type Me, type Workspace } from '../api'
 import { BoardsPage } from '../boards/BoardsPage'
 import { ConversationsPage } from '../conversations/ConversationsPage'
 import { PinnedNav } from '../home/PinnedNav'
-import { automaticLocale, type Key, LOCALES, localeName, setPreferences, type T, useLocale, useT } from '../i18n'
+import {
+  automaticLocale,
+  type Key,
+  LOCALES,
+  localeName,
+  setPreferences,
+  type T,
+  useFormat,
+  useLocale,
+  useT,
+} from '../i18n'
 import { KnowledgePage } from '../knowledge/KnowledgePage'
+import { parseNotificationPath } from '../notifications/api'
+import { NotificationsPage, OpenNotification } from '../notifications/NotificationsPage'
+import { useOpenFromWorker, usePushSync } from '../notifications/usePushSync'
+import { useUnread } from '../notifications/useUnread'
 import { useInstall } from '../pwa/install'
 import { Link, navigate, parseRoute, type Route, routePath, type Section, usePath } from '../router'
 import { SettingsPage } from '../settings/SettingsPage'
@@ -24,7 +38,7 @@ const HomePage = lazy(() => import('../home/HomePage').then((m) => ({ default: m
 
 const LAST_WORKSPACE = 'taskto.workspace'
 
-const NAV: { section: Section; label: Key }[] = [
+const NAV: { section: Exclude<Section, 'notifications'>; label: Key }[] = [
   { section: 'home', label: 'shell.sections.home' },
   { section: 'conversations', label: 'shell.sections.conversations' },
   { section: 'knowledge', label: 'shell.sections.knowledge' },
@@ -52,8 +66,20 @@ function rememberWorkspace(id: number) {
   }
 }
 
+// A push opens /notification/{id}: read as the signed-in person and followed to where it leads,
+// outside the shell, which would take that address for an unknown route.
 export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
+  const opening = parseNotificationPath(usePath())
+  if (opening !== null) {
+    return <OpenNotification id={opening} fallbackWorkspace={me.workspaces[0]?.id ?? null} />
+  }
+  return <Frame me={me} onLogout={onLogout} />
+}
+
+function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
   const path = usePath()
+  usePushSync(me.user.id)
+  useOpenFromWorker()
   const parsed = parseRoute(path)
   const member = (id: number) => me.workspaces.some((w) => w.id === id)
   const fallback = me.workspaces.find((w) => w.id === lastWorkspace()) ?? me.workspaces[0]
@@ -160,8 +186,11 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             ))}
           </select>
         </label>
-        <span className="tt-topbar-section">{section && t(section.label)}</span>
+        <span className="tt-topbar-section">
+          {section ? t(section.label) : route.section === 'notifications' ? t('notifications.title') : ''}
+        </span>
         <div className="tt-topbar-end">
+          <Bell workspace={workspace.id} current={route.section === 'notifications'} t={t} />
           <ThemeSelect theme={theme} onChange={setTheme} t={t} />
           <AccountMenu me={me} workspace={workspace.id} onLogout={onLogout} t={t} />
         </div>
@@ -240,6 +269,8 @@ function Page({ route, me, workspace }: { route: Route; me: Me; workspace: Works
       )
     case 'settings':
       return <SettingsPage me={me} workspace={workspace} tab={route.item} />
+    case 'notifications':
+      return <NotificationsPage workspace={route.workspace} />
   }
 }
 
@@ -260,6 +291,28 @@ function PageFailed() {
 function Loading() {
   const t = useT()
   return <p className="tt-section tt-muted">{t('app.loading')}</p>
+}
+
+// The inbox's link in the top bar, with how many notifications are unread. The count is a
+// convenience: a failed ask leaves it as it was.
+function Bell({ workspace, current, t }: { workspace: number; current: boolean; t: T }) {
+  const unread = useUnread(workspace)
+  const f = useFormat()
+  return (
+    <Link
+      href={routePath({ workspace, section: 'notifications' })}
+      className="tt-icon-button tt-bell"
+      aria-current={current ? 'page' : undefined}
+      aria-label={unread > 0 ? t('notifications.bellUnread', { count: unread }) : t('notifications.bell')}
+    >
+      <Icon name="bell" />
+      {unread > 0 && (
+        <span className="tt-badge" aria-hidden>
+          {unread > 99 ? `${f.number(99)}+` : f.number(unread)}
+        </span>
+      )}
+    </Link>
+  )
 }
 
 function ThemeSelect({ theme, onChange, t }: { theme: Theme; onChange: (theme: Theme) => void; t: T }) {

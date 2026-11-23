@@ -249,6 +249,31 @@ textarea {
   flex-shrink: 0;
 }
 
+/* The inbox's bell in the top bar, with the count of unread notifications. */
+.tt-bell {
+  position: relative;
+  text-decoration: none;
+}
+
+.tt-bell[aria-current="page"] {
+  background: var(--tt-hover);
+}
+
+.tt-badge {
+  position: absolute;
+  inset-block-start: 0.15rem;
+  inset-inline-end: 0.1rem;
+  min-width: 1.1rem;
+  padding-inline: 0.25rem;
+  border-radius: 999px;
+  background: var(--tt-danger);
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 1.1rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Fingers: every control is at least 44px each way (--tt-touch). */
 @media (pointer: coarse) {
   input,
@@ -2871,4 +2896,29 @@ html[data-keyboard="open"] .tt-composer {
   border: 1px solid var(--tt-line);
   border-radius: var(--tt-radius);
   background: var(--tt-surface);
+}
+
+/* An unread item of the inbox is set in bold with a mark before it, which a screen reader gets as
+   text (the link says "Unread"). */
+.tt-inbox [data-unread] .tt-inbox-link {
+  font-weight: 600;
+}
+
+.tt-inbox [data-unread] .tt-row-main::before {
+  content: "";
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  border-radius: 50%;
+  background: var(--tt-accent);
+  position: absolute;
+  inset-inline-start: -0.9rem;
+  inset-block-start: 1rem;
+}
+
+.tt-inbox {
+  padding-inline-start: 1rem;
+}
+
+.tt-inbox .tt-row {
+  position: relative;
 }
