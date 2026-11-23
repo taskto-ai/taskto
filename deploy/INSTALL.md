@@ -955,7 +955,7 @@ EOF
   fi
   # Each file goes to the VM as <file>.new first. Only once all of them are there are they
   # switched in together, so a failed copy leaves the set the backups use as it was.
-  for f in $files; do
+  for f in $(printf '%s\n' "$files"); do
     [ "$ok" = yes ] || break
     ssh -o BatchMode=yes "$TASKTO_SSH" \
       "sudo -n sh -c 'umask 077; cat > /srv/taskto/backup/$f.new && chown 65532:65532 /srv/taskto/backup/$f.new'" \
@@ -965,7 +965,7 @@ EOF
     # Switched in with one call. No client certificate here, and none recorded: none is left
     # on the VM either.
     { echo 'cd /srv/taskto/backup'
-      for f in $files; do echo "mv $f.new $f"; done
+      for f in $(printf '%s\n' "$files"); do echo "mv $f.new $f"; done
       [ "$cert" = on ] || echo 'rm -f client.pem'
     } | vm || { echo "FAIL: switching the new files in on the VM"; ok=no; }
   else
