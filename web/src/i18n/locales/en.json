@@ -34,7 +34,30 @@
     "offlineNamed": "{name} is offline: it can’t be launched.",
     "openInApps": "Open in Apps",
     "openNamedInApps": "Open {name} in Apps",
-    "invalidScreen": "The app sent a screen that can’t be shown: {error}"
+    "invalidScreen": "The app sent a screen that can’t be shown: {error}",
+    "noDataChanges": "Your role in this app lets you view it, not change its data.",
+    "ownRecords": "You see only the records you added.",
+    "roles": {
+      "open": "Roles",
+      "openNamed": "Roles of {name}",
+      "close": "Close",
+      "saved": "Saved.",
+      "intro": "Roles narrow what a member’s role in the space allows, never widen it. Once any roles are set, a member with no roles here (and no “Everyone else” row) can’t use or see the app. Clear every role to give the app back to the whole space.",
+      "member": "Member",
+      "everyoneElse": "Everyone else",
+      "checkbox": "{role}: {name}",
+      "builder": "Builder",
+      "builderHelp": "changes the app and its roles",
+      "publisher": "Publisher",
+      "publisherHelp": "takes the app offline and back",
+      "user": "User",
+      "userHelp": "adds records, and sees and changes only their own",
+      "data_manager": "Data manager",
+      "data_managerHelp": "adds, sees and changes everyone’s records",
+      "reader": "Reader",
+      "readerHelp": "sees everyone’s records",
+      "line": "{role}: {help}"
+    }
   },
   "auth": {
     "login": {
@@ -344,7 +367,11 @@
     "embeddings_failed": "The account's endpoint didn't return embeddings for this model.",
     "consent_forbidden": "Only the space's owner or one of its editors can change this.",
     "consent_no_model": "This workspace has no embeddings model to consent to.",
-    "consent_endpoint_changed": "The workspace's embeddings endpoint has changed: review it, then consent again."
+    "consent_endpoint_changed": "The workspace's embeddings endpoint has changed: review it, then consent again.",
+    "app_forbidden": "Your role in this app doesn’t allow that.",
+    "app_roles_invalid": "Those roles can’t be saved: pick known roles, once per member.",
+    "app_roles_not_member": "Roles can only go to members of the space.",
+    "app_roles_lockout": "You can’t remove your own right to manage this app’s roles."
   },
   "language": {
     "label": "Language",

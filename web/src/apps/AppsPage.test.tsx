@@ -13,6 +13,18 @@ const spaces = {
     { id: 3, workspace_id: 1, kind: 'shared', name: 'Team', archived_at: null, role: 'viewer', access: 'read' },
   ],
 }
+// What a space's editor may do in an app that has no roles set: everything, over all records.
+const everything = {
+  roles: ['builder', 'publisher', 'user', 'data_manager', 'reader'],
+  restricted: false,
+  view: true,
+  design: true,
+  publish: true,
+  submit: true,
+  manage_roles: true,
+  read_records: 'all',
+  modify_records: 'all',
+}
 const app = (over: Record<string, unknown>) => ({
   id: 1,
   space_id: 2,
@@ -20,6 +32,7 @@ const app = (over: Record<string, unknown>) => ({
   archived_at: null,
   version: 1,
   rows: 1,
+  access: everything,
   ...over,
 })
 
@@ -162,4 +175,68 @@ test('an offline app is not launched, and its editors can restore it', async () 
   fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
   await screen.findByText('Coffee')
   await waitFor(() => expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ version: 2, archived: false }))
+})
+
+test("an app user can launch it but isn't offered what only builders and publishers do", async () => {
+  const submitter = {
+    ...everything,
+    roles: ['user'],
+    restricted: true,
+    design: false,
+    publish: false,
+    manage_roles: false,
+    read_records: 'own',
+    modify_records: 'own',
+  }
+  const withTeam = {
+    spaces: [
+      { id: 4, workspace_id: 1, kind: 'shared', name: 'Crew', archived_at: null, role: 'editor', access: 'write' },
+    ],
+  }
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: withTeam },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': {
+      body: { apps: [app({ space_id: 4, access: submitter })] },
+    },
+  })
+  render(<Routed />)
+  const crew = await screen.findByRole('region', { name: 'Crew' })
+  await within(crew).findByRole('link', { name: 'Launch Expenses' })
+  expect(within(crew).queryByRole('button', { name: 'Rename' })).toBeNull()
+  expect(within(crew).queryByRole('button', { name: /Take offline/ })).toBeNull()
+  expect(within(crew).queryByRole('button', { name: /Roles of/ })).toBeNull()
+  expect(within(crew).queryByRole('combobox')).toBeNull()
+})
+
+test('a builder sets the roles of members of a shared space', async () => {
+  const withTeam = {
+    spaces: [
+      { id: 4, workspace_id: 1, kind: 'shared', name: 'Crew', archived_at: null, role: 'editor', access: 'write' },
+    ],
+  }
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: withTeam },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': { body: { apps: [app({ space_id: 4 })] } },
+    'GET /api/workspaces/1/spaces/4/apps/1/roles': {
+      body: { grants: [{ user_id: null, roles: ['reader'] }], roles: everything.roles },
+    },
+    'GET /api/workspaces/1/spaces/4/members': {
+      body: { members: [{ id: 5, email: 'a@example.com', name: 'Ann', role: 'editor', added_at: '' }] },
+    },
+    'PUT /api/workspaces/1/spaces/4/apps/1/roles': { body: { grants: [], roles: everything.roles } },
+  })
+  render(<Routed />)
+  const crew = await screen.findByRole('region', { name: 'Crew' })
+  fireEvent.click(await within(crew).findByRole('button', { name: 'Roles of Expenses' }))
+  const reader = await within(crew).findByRole('checkbox', { name: 'Reader: Everyone else' })
+  expect((reader as HTMLInputElement).checked).toBe(true)
+  fireEvent.click(within(crew).getByRole('checkbox', { name: 'User: Ann' }))
+  fireEvent.click(within(crew).getByRole('button', { name: 'Save' }))
+  await within(crew).findByText('Saved.')
+  expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({
+    grants: [
+      { user_id: null, roles: ['reader'] },
+      { user_id: 5, roles: ['user'] },
+    ],
+  })
 })

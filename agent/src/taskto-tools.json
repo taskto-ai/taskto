@@ -589,7 +589,7 @@
   },
   {
     "name": "list_app_rows",
-    "description": "Read an app's data: its rows, oldest first, each with its id and the fields its collection declares. An offline app's rows are kept and read too. A list too long for one reply is cut short, with truncated: true and next_after: call again with after set to it for the rest.",
+    "description": "Read an app's data: the rows the user may read (all of them, or only the ones they created, by their role in the app), oldest first, each with its id and the fields its collection declares. An offline app's rows are kept and read too. A list too long for one reply is cut short, with truncated: true and next_after: call again with after set to it for the rest.",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -732,7 +732,7 @@
   },
   {
     "name": "update_app",
-    "description": "Change an app: rename it, replace its definition (its rows must fit the new collection: add new fields as optional), or take it offline (archived: true; its rows are kept) and back. Only what is given changes.",
+    "description": "Change an app: rename it, replace its definition (its rows must fit the new collection: add new fields as optional), or take it offline (archived: true; its rows are kept) and back. Only what is given changes. The user's role in the app decides: renaming and redefining need the right to design it, taking it offline the right to publish it; without it the call is refused (403), and only the user's own roles count, not anything in the definition.",
     "read_only": false,
     "input_schema": {
       "type": "object",

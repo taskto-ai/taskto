@@ -93,7 +93,11 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   delete a row). No generated code runs. `internal/apps` checks every saved screen
   strictly against the catalog, and every row against the schema; the browser's renderer
   checks again. An app lives in a space, so its access and its rows' are the space's, and
-  sharing an app is moving it to a shared space. The agent builds and changes apps with
+  sharing an app is moving it to a shared space. Inside that boundary, app roles (builder,
+  publisher, user, data manager, reader, resolved by `access.Checker`) only narrow what the
+  space allows: a user can submit records without being able to redesign the app, and
+  reads all records or only their own, in every way records are read (screens, summaries,
+  counts, the agent's tools). An app without roles behaves as before. The agent builds and changes apps with
   its app tools, and the conversation shows each app it saved there, launched from the
   server like on the Apps page (never from the tool call's arguments), with a link to it.
   See [api.md](api.md#personal-apps). Sandboxed code apps may come later,

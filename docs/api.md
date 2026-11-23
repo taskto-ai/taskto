@@ -90,7 +90,11 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_name_length` | 400 | An app's name must have 1 to `max` characters. |
 | `too_many_apps` | 409 | The space has `max` apps. |
 | `app_full` | 409 | The app holds `max_rows` rows or `max_mib` MiB of data. |
-| `app_row_not_found` | 422 | The action names a row the app doesn't have (any more). |
+| `app_forbidden` | 403 | The space allows it, but the caller's roles in the app don't: `capability` is `design`, `publish`, `submit`, `modify_records` or `manage_roles`. |
+| `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
+| `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
+| `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
+| `app_row_not_found` | 422 | The action names a row the app doesn't have (any more), or one the caller may not change. |
 | `app_field_required` | 422 | The action leaves out `field`, which the app requires. |
 | `app_field_too_long` | 422 | The value of `field` has more than `max` characters. |
 | `app_field_not_number` | 422 | The value of `field` isn't a number. |
@@ -1296,7 +1300,66 @@ is a member of. Every route below is under
 `/api/workspaces/{workspace}/spaces/{space}/apps`, needs a session (`401`), goes through
 the [CSRF guard](#csrf) unless it is a `GET`, and answers `404` for a space or app the
 caller can't read, or that isn't where the path says (an app of another space), and `403`
-for a write the caller may only read: a viewer, or an archived space.
+for a write the caller may only read: a viewer, or an archived space. Besides, `403` with
+the code `app_forbidden` is for something the space allows but the caller's **roles in the
+app** don't.
+
+### App roles
+
+The space is the outer boundary; roles in an app only **narrow** what the caller's role in
+the space allows, never widen it (a viewer of the space holds no right to write, whatever
+roles an app gives them; nobody writes in an archived space). Roles are a set of
+capabilities, and a user may hold several:
+
+| Role | Design | Publish | Submit | Read records | Modify records |
+|---|---|---|---|---|---|
+| `builder` | yes | | | | |
+| `publisher` | | yes | | | |
+| `user` | | | yes | own | own |
+| `data_manager` | | | yes | all | all |
+| `reader` | | | | all | |
+
+Every role may view the app (launch it and read its definition); a `builder` also manages
+the app's roles. **Design** is changing the app's definition, renaming it and moving it;
+**publish** is taking it offline and restoring it (release steps will extend it);
+**submit** is adding a record (an `insert` action). **Own** records are those the caller
+created, which includes the ones the agent created for them; records whose creator's
+account was deleted are in nobody's own, and only readers of all see them. Every way of
+reading records answers to the read scope: the screen's rows, its summaries (`count`,
+`sum`), `rows` in an app's list and the agent's `list_app_rows`. A change to a record the
+caller may not change is answered as `app_row_not_found`.
+
+An app **without role assignments is unrestricted**, as every app was before roles: for a
+user who may write the space it is every role, for one who may only read it, `reader`. So
+nothing changes for an app until someone sets roles. An assignment is for one user, or with
+`"user_id": null` the default, for every member of the space who has no assignment of their
+own. Once an app has **any** assignment it is restricted for everyone: a member holds their
+own roles, else the default's, else **none**, and then the app answers them `404` and is left
+out of their list, like an app of a space they can't open. So restricting an app never leaves
+someone it doesn't name (a member who joins the space later included) with every role. The agent acts as the user who started it, with
+exactly their roles; it has no tool to set roles, and a definition grants none. Roles
+belong to the space they were set in: someone who leaves the space (or the workspace) loses
+their roles in its apps, so rejoining gives back nothing.
+
+An app as one caller sees it has `access`, what they may do:
+
+```json
+"access": {"roles": ["user"], "restricted": true, "view": true, "design": false,
+  "publish": false, "submit": true, "manage_roles": false,
+  "read_records": "own", "modify_records": "own"}
+```
+
+### `GET …/apps/{app}/roles`
+
+Those who manage the app's roles (`403 app_forbidden`, `manage_roles`, otherwise):
+`{"grants": [{"user_id": 3, "roles": ["user"]}, {"user_id": null, "roles": ["reader"]}], "roles": [every role]}`.
+
+### `PUT …/apps/{app}/roles`
+
+Those who manage the app's roles, in a space they may write. `{"grants": […]}` replaces all
+the assignments; an empty list makes the app unrestricted again. Every `user_id` must be able
+to read the space (`400 app_roles_not_member`), and the caller must keep the right to manage
+the roles (`400 app_roles_lockout`). `200` with the same reply as `GET`.
 
 **Offline.** Taking an app offline archives it: it can't be launched (`409` from
 `…/surface`) and its actions don't run (`409`), and its rows are kept, until it is
@@ -1315,11 +1378,13 @@ An app:
   "archived_at": null, "version": 1, "rows": 12,
   "created_at": "…", "created_by": {"id": 2, "name": "Member", "agent": true},
   "updated_at": "…", "updated_by": {"id": 2, "name": "Member", "agent": true},
+  "access": { … },
   "definition": { … }
 }
 ```
 
-`rows` counts the collection's rows. `definition` is only in a single app's reply.
+`rows` counts the collection's rows the caller may read (see [App roles](#app-roles)).
+`access` is what the caller may do in the app. `definition` is only in a single app's reply.
 `agent` is `true` when the agent made the change for that user.
 
 ### The definition
@@ -1383,16 +1448,21 @@ The app, with its definition.
 
 ### `PATCH …/apps/{app}`
 
-Writers. With the `version`: `name` renames it, `archived` takes it offline (`true`) or
-restores it (`false`), `definition` replaces its screen, collection, actions and
-summaries. A new definition must fit the app's rows: every row must still satisfy the
+Writers. With the `version`: `name` renames it and `definition` replaces its screen,
+collection, actions and summaries (these take the design capability; changing the
+collection also takes reading all records, `403 app_forbidden` with `read_records`
+otherwise, since its check against every row would tell of rows the caller can't read),
+`archived` takes it
+offline (`true`) or restores it (`false`; the publish capability). A new definition must fit the app's rows: every row must still satisfy the
 collection (`400` otherwise, naming the rows), so new fields are added as optional.
 Fields no longer declared stay in the rows, unseen, and come back if declared again.
 `200` with the app.
 
 ### `POST …/apps/{app}/move`
 
-Writers of both spaces. `{"version": 1, "space_id": 7}`: moves the app, with its rows,
+Writers of both spaces, with the design capability in the app. Its role assignments stay
+behind: they were set for the old space's members, so the moved app is unrestricted until
+roles are set in the new space. `{"version": 1, "space_id": 7}`: moves the app, with its rows,
 to another space of the workspace the caller may write (`404` for one they can't read or
 of another workspace, `403` for one they may only read). `200` with the app.
 
@@ -1400,16 +1470,20 @@ of another workspace, `403` for one they may only read). `200` with the app.
 
 Launches the app: the A2UI messages that draw it with its rows, `createSurface`,
 `updateComponents` and `updateDataModel`, for the surface `app-<id>` and the catalog
-`https://taskto.ai/catalogs/apps/v1.json`. `409` while it is offline.
+`https://taskto.ai/catalogs/apps/v1.json`. `409` while it is offline. The data model has
+the rows the caller may read, and the summaries over those rows alone.
 
 ### `POST …/apps/{app}/actions`
 
-Writers. The A2UI client action a button sent:
+Writers, and by the action's kind, the submit capability (`insert`) or the right to modify
+the row (`update` and `delete`, of all records or only the caller's own; else
+`403 app_forbidden`). The A2UI client action a button sent:
 `{"name": "add_expense", "surfaceId": "app-9", "sourceComponentId": "add", "timestamp": "…", "context": {…}}`.
 The server checks it against the app (`422` for an event the app doesn't declare,
 another surface, a context field the collection doesn't have, a value that doesn't fit
 its field, or a row the app doesn't have), applies it, and answers with the
-`updateDataModel` message to apply: all the rows, an empty `/draft`, and the summaries.
+`updateDataModel` message to apply: the rows the caller may read, an empty `/draft`, and the
+summaries over them.
 Form inputs arrive as text, so number and boolean fields accept their text too. `409`
 while the app is offline.
 

@@ -60,7 +60,10 @@ tools again after a crash (`replay: 'safe'`), and never a write. Change a tool i
   (`apps.Actor`). Over MCP, the committer is the access token instead
   (`<name> (access token)`), and board and app changes carry its name too (`via`). The
   agent builds and changes apps; it doesn't run their actions, which are for the people
-  using them.
+  using them. It has exactly its user's roles in an app ([App roles](api.md#app-roles)): a
+  user who may only submit records can't have it change the app (`403`), and one who reads
+  only their own records gets only those from `list_app_rows`. It has no tool to set roles,
+  and nothing in a definition grants any.
 
 Refusals are `4xx {"error": "…"}` with a message for the model: `400` invalid arguments,
 `403` read-only (a viewer, an archived space or board), `404` not found, `409` a stale
@@ -80,9 +83,9 @@ results, `error: <message>`.
 | `app_catalog` | | What an app may be made of: the components and their props, the functions, the field types, the actions, the rules, and the bundled example app. |
 | `list_apps` | `space_id`, `archived`? | A space's apps, without definitions; `archived: true` includes the offline ones. |
 | `show_app` | `space_id`, `app_id` | An app with its definition and `version`. |
-| `list_app_rows` | `space_id`, `app_id` | An app's data: its rows, oldest first, each with its `id` and the fields its collection declares; an offline app's too. |
+| `list_app_rows` | `space_id`, `app_id` | An app's data: the rows the user may read (all, or only their own: [App roles](api.md#app-roles)), oldest first, each with its `id` and the fields its collection declares; an offline app's too. |
 | `create_app` | `space_id`, `name`, `definition` | Saves a new app in a space the user may write, checked strictly against the catalog ([api.md](api.md#personal-apps)). |
-| `update_app` | `space_id`, `app_id`, `version`, `name`?, `definition`?, `archived`? | Renames an app, replaces its definition (its rows must fit the new collection), or takes it offline and back. |
+| `update_app` | `space_id`, `app_id`, `version`, `name`?, `definition`?, `archived`? | Renames an app, replaces its definition (its rows must fit the new collection; the user must hold the design right), or takes it offline and back (the publish right). |
 
 Only Markdown documents (`.md`) are read or written; other files are uploads, which only
 `list_docs` shows, with `versioned: false` for the unversioned ones (large files, audio

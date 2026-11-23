@@ -216,3 +216,59 @@ func TestAppCatalogFits(t *testing.T) {
 		t.Fatalf("app_catalog is %d bytes: keep it well under the result bound", len(raw))
 	}
 }
+
+// The agent has its user's roles in an app: it can't change an app its user may only use,
+// reads only the records its user reads, and nothing it writes grants roles.
+func TestAppToolsKeepToTheirUsersRoles(t *testing.T) {
+	w := newWorld(t)
+	created := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Team expenses", "definition": expenses(t)})
+	app := id(created["id"])
+	// A record of Alice's own and one of Bob's, a viewer of the space who had added it before.
+	w.exec(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, '{"description": "alice-row", "amount": 1}', ?)`, app, w.alice)
+	w.exec(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, '{"description": "bob-row", "amount": 2}', ?)`, app, w.bob)
+	ref := map[string]any{"space_id": w.shared, "app_id": app}
+
+	// Unrestricted: an editor's agent reads both and shows what its user may do.
+	if rows := w.ok(w.aliceConv, "list_app_rows", ref)["rows"].([]any); len(rows) != 2 {
+		t.Fatalf("list_app_rows = %v", rows)
+	}
+	shown := w.ok(w.aliceConv, "show_app", ref)
+	if acc := shown["access"].(map[string]any); acc["design"] != true || acc["read_records"] != "all" {
+		t.Fatalf("show_app access = %v", acc)
+	}
+
+	// Alice becomes a plain user of the app (roles are set by people, in the web app).
+	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'user')`, app, w.alice)
+	rows := w.ok(w.aliceConv, "list_app_rows", ref)["rows"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["description"] != "alice-row" {
+		t.Fatalf("a user's agent reads %v", rows)
+	}
+	list := w.ok(w.aliceConv, "list_apps", map[string]any{"space_id": w.shared})["apps"].([]any)
+	if n := list[0].(map[string]any)["rows"]; n != float64(1) {
+		t.Fatalf("list_apps counts %v rows", n)
+	}
+	// And its changes to the app are refused, however it asks.
+	out := w.status(http.StatusForbidden, w.aliceConv, "update_app", map[string]any{"space_id": w.shared, "app_id": app, "version": 1, "name": "Mine"})
+	if !strings.Contains(out["error"].(string), "role") {
+		t.Fatalf("refusal = %v", out)
+	}
+	w.status(http.StatusForbidden, w.aliceConv, "update_app", map[string]any{"space_id": w.shared, "app_id": app, "version": 1, "archived": true})
+	w.status(http.StatusForbidden, w.aliceConv, "update_app", map[string]any{"space_id": w.shared, "app_id": app, "version": 1, "definition": expenses(t)})
+
+	// A definition has no roles in it to grant: the tool refuses a field it doesn't know.
+	def := expenses(t)
+	def["roles"] = []string{"builder"}
+	w.status(http.StatusBadRequest, w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Sneaky", "definition": def})
+	// Bob, named nowhere, sees nothing of the restricted app until a default names everyone else.
+	w.status(http.StatusNotFound, w.bobConv, "list_app_rows", ref)
+	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, NULL, 'reader')`, app)
+	// Bob's agent, a viewer, reads the space's records and changes nothing.
+	if rows := w.ok(w.bobConv, "list_app_rows", ref)["rows"].([]any); len(rows) != 2 {
+		t.Fatalf("a viewer's agent reads %v", rows)
+	}
+	w.status(http.StatusForbidden, w.bobConv, "update_app", map[string]any{"space_id": w.shared, "app_id": app, "version": 1, "name": "Bob's"})
+	var name string
+	if err := w.db.QueryRow(`SELECT name FROM apps WHERE id = ?`, app).Scan(&name); err != nil || name != "Team expenses" {
+		t.Fatalf("name = %q, %v", name, err)
+	}
+}

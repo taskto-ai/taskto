@@ -353,7 +353,8 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 		return &Refusal{http.StatusNotFound, errNotFound.Error()}
 	case errors.Is(err, knowledge.ErrNotFound):
 		return &Refusal{http.StatusNotFound, err.Error()}
-	case errors.Is(err, boards.ErrReadOnly), errors.Is(err, boards.ErrBoardArchived), errors.Is(err, knowledge.ErrReadOnly), errors.Is(err, apps.ErrReadOnly):
+	case errors.Is(err, boards.ErrReadOnly), errors.Is(err, boards.ErrBoardArchived), errors.Is(err, knowledge.ErrReadOnly), errors.Is(err, apps.ErrReadOnly),
+		errors.Is(err, apps.ErrForbidden):
 		return &Refusal{http.StatusForbidden, err.Error()}
 	case errors.Is(err, boards.ErrStale), errors.Is(err, knowledge.ErrConflict), errors.Is(err, apps.ErrStale), errors.Is(err, apps.ErrFull):
 		return &Refusal{http.StatusConflict, err.Error()}

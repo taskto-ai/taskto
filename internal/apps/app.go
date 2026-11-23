@@ -11,7 +11,13 @@
 //   - a shared space's apps are its members': editors create, change and use them (their
 //     actions change rows), viewers launch them and see the rows, read-only;
 //   - an app the caller can't read answers ErrNotFound, like a space; the apps of an
-//     archived space are read-only.
+//     archived space are read-only;
+//   - inside the space, roles in the app (access.AppAccess, set with the roles routes) only
+//     narrow that: whoever may write the space may still be allowed to submit records and
+//     not to change the app (ErrForbidden), and may read all of its records or only their
+//     own. Every way of reading records (screens, summaries, counts, the agent's reads)
+//     goes through one filter, visibility. An app with no roles set is as the space alone
+//     allows, which is what every app was before roles.
 //
 // Sharing an app is moving it to a shared space: its rows go with it.
 //

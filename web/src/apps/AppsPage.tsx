@@ -1,7 +1,9 @@
 // Personal apps: the apps of every space the user can read, by space, and one launched app
 // with its data. Apps are built by asking the agent; here they are launched, renamed, taken
 // offline and restored, and shared by moving them to a shared space. A space's editors
-// change its apps; its viewers launch them.
+// change its apps and its viewers launch them; roles in an app narrow that further (a user who
+// may only submit records can't rename or move it), and the server's answer for the app,
+// `access`, says what the caller may do.
 
 import { type FormEvent, useState } from 'react'
 import { ApiError, type App, api, errorText, type Space, ws } from '../api'
@@ -9,6 +11,7 @@ import { useT } from '../i18n'
 import { useLoad } from '../load'
 import { Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
+import { AppRoles } from './AppRoles'
 import { AppView, httpTransport } from './AppView'
 import { appPath, parseItem } from './route'
 
@@ -123,6 +126,7 @@ function SpaceApps({
               app={a}
               writable={writable}
               targets={targets}
+              spaceBase={`${ws(workspace)}/spaces/${space.id}`}
               change={change}
               move={move}
             />
@@ -139,6 +143,7 @@ function AppRow({
   app,
   writable,
   targets,
+  spaceBase,
   change,
   move,
 }: {
@@ -147,6 +152,7 @@ function AppRow({
   app: App
   writable: boolean
   targets: Space[]
+  spaceBase: string
   change: (app: App, body: { name?: string; archived?: boolean }) => Promise<void>
   move: (app: App, to: number) => Promise<void>
 }) {
@@ -154,6 +160,7 @@ function AppRow({
   const [to, setTo] = useState('')
   const [name, setName] = useState(app.name)
   const [busy, setBusy] = useState(false)
+  const [rolesOpen, setRolesOpen] = useState(false)
   const offline = app.archived_at !== null
   const t = useT()
   const run = async (body: { name?: string; archived?: boolean }) => {
@@ -208,51 +215,65 @@ function AppRow({
               {t('apps.launch')}
             </Link>
           )}
-          {writable && (
-            <>
-              <button type="button" className="tt-button" disabled={busy} onClick={() => setRenaming(true)}>
-                {t('apps.rename')}
-              </button>
-              <button
-                type="button"
-                className="tt-button"
-                disabled={busy}
-                onClick={() => run({ archived: !offline })}
-                aria-label={t(offline ? 'apps.restoreNamed' : 'apps.takeOfflineNamed', { name: app.name })}
+          {writable && app.access.design && (
+            <button type="button" className="tt-button" disabled={busy} onClick={() => setRenaming(true)}>
+              {t('apps.rename')}
+            </button>
+          )}
+          {writable && app.access.publish && (
+            <button
+              type="button"
+              className="tt-button"
+              disabled={busy}
+              onClick={() => run({ archived: !offline })}
+              aria-label={t(offline ? 'apps.restoreNamed' : 'apps.takeOfflineNamed', { name: app.name })}
+            >
+              {offline ? t('apps.restore') : t('apps.takeOffline')}
+            </button>
+          )}
+          {writable && app.access.manage_roles && space.kind === 'shared' && (
+            <button
+              type="button"
+              className="tt-button"
+              aria-expanded={rolesOpen}
+              onClick={() => setRolesOpen((o) => !o)}
+              aria-label={t('apps.roles.openNamed', { name: app.name })}
+            >
+              {t('apps.roles.open')}
+            </button>
+          )}
+          {writable && app.access.design && targets.length > 0 && (
+            <form
+              className="tt-app-move"
+              onSubmit={async (e) => {
+                e.preventDefault()
+                setBusy(true)
+                await move(app, Number(to))
+                setBusy(false)
+              }}
+            >
+              <select
+                aria-label={t('apps.moveNamed', { name: app.name })}
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                required
               >
-                {offline ? t('apps.restore') : t('apps.takeOffline')}
+                <option value="">{t('apps.moveTo')}</option>
+                {targets.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {spaceLabel(t)}
+                  </option>
+                ))}
+              </select>
+              <button type="submit" className="tt-button" disabled={busy || !to}>
+                {t('apps.move')}
               </button>
-              {targets.length > 0 && (
-                <form
-                  className="tt-app-move"
-                  onSubmit={async (e) => {
-                    e.preventDefault()
-                    setBusy(true)
-                    await move(app, Number(to))
-                    setBusy(false)
-                  }}
-                >
-                  <select
-                    aria-label={t('apps.moveNamed', { name: app.name })}
-                    value={to}
-                    onChange={(e) => setTo(e.target.value)}
-                    required
-                  >
-                    <option value="">{t('apps.moveTo')}</option>
-                    {targets.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {spaceLabel(t)}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="submit" className="tt-button" disabled={busy || !to}>
-                    {t('apps.move')}
-                  </button>
-                </form>
-              )}
-            </>
+            </form>
           )}
         </div>
+      )}
+      {rolesOpen && (
+        <AppRoles base={`${spaceBase}/apps/${app.id}`} spaceBase={spaceBase} onClose={() => setRolesOpen(false)} />
       )}
     </li>
   )
@@ -299,7 +320,7 @@ function LaunchedApp({
       {info.data?.archived_at && (
         <div className="tt-app-offline">
           <p>{t('apps.offlineNotice')}</p>
-          {writable && (
+          {writable && info.data.access.publish && (
             <button type="button" className="tt-button tt-primary" onClick={restore}>
               {t('apps.restore')}
             </button>
@@ -309,6 +330,10 @@ function LaunchedApp({
       {info.data && !info.data.archived_at && (
         <>
           {!writable && <p className="tt-muted tt-small">{t('apps.viewOnly')}</p>}
+          {writable && !info.data.access.submit && info.data.access.modify_records === 'none' && (
+            <p className="tt-muted tt-small">{t('apps.noDataChanges')}</p>
+          )}
+          {info.data.access.read_records === 'own' && <p className="tt-muted tt-small">{t('apps.ownRecords')}</p>}
           <AppView surfaceId={`app-${app}`} label={info.data.name} transport={httpTransport(base)} />
         </>
       )}

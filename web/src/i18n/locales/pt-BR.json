@@ -35,7 +35,30 @@
     "offlineNamed": "{name} está fora do ar: não pode ser aberto.",
     "openInApps": "Abrir em Apps",
     "openNamedInApps": "Abrir {name} em Apps",
-    "invalidScreen": "O app enviou uma tela que não pode ser mostrada: {error}"
+    "invalidScreen": "O app enviou uma tela que não pode ser mostrada: {error}",
+    "noDataChanges": "Seu papel neste app permite ver, mas não alterar os dados.",
+    "ownRecords": "Você vê apenas os registros que adicionou.",
+    "roles": {
+      "open": "Papéis",
+      "openNamed": "Papéis de {name}",
+      "close": "Fechar",
+      "saved": "Salvo.",
+      "intro": "Os papéis restringem o que o papel do membro no espaço permite, nunca ampliam. Depois que algum papel é definido, quem não tem papéis aqui (e não há linha “Todos os demais”) não vê nem usa o app. Remova todos os papéis para devolver o app a todo o espaço.",
+      "member": "Membro",
+      "everyoneElse": "Todos os demais",
+      "checkbox": "{role}: {name}",
+      "builder": "Construtor",
+      "builderHelp": "altera o app e seus papéis",
+      "publisher": "Publicador",
+      "publisherHelp": "tira o app do ar e o recoloca",
+      "user": "Usuário",
+      "userHelp": "adiciona registros e vê e altera só os seus",
+      "data_manager": "Gestor de dados",
+      "data_managerHelp": "adiciona, vê e altera os registros de todos",
+      "reader": "Leitor",
+      "readerHelp": "vê os registros de todos",
+      "line": "{role}: {help}"
+    }
   },
   "auth": {
     "login": {
@@ -345,7 +368,11 @@
     "embeddings_failed": "O endpoint da conta não retornou embeddings para este modelo.",
     "consent_forbidden": "Só o proprietário do espaço ou um dos editores pode mudar isso.",
     "consent_no_model": "Este espaço de trabalho não tem um modelo de embeddings para consentir.",
-    "consent_endpoint_changed": "O endpoint de embeddings do espaço de trabalho mudou: revise-o e consinta de novo."
+    "consent_endpoint_changed": "O endpoint de embeddings do espaço de trabalho mudou: revise-o e consinta de novo.",
+    "app_forbidden": "Seu papel neste app não permite isso.",
+    "app_roles_invalid": "Não dá para salvar esses papéis: escolha papéis conhecidos, uma vez por membro.",
+    "app_roles_not_member": "Papéis só podem ser dados a membros do espaço.",
+    "app_roles_lockout": "Você não pode remover o seu próprio direito de gerenciar os papéis deste app."
   },
   "language": {
     "label": "Idioma",

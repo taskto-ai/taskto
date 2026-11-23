@@ -15,9 +15,11 @@ import (
 // The agent's app tools (docs/agent-tools.md) call the methods below. The agent works for
 // one user at a time, in that user's conversation, and has exactly that user's access:
 // each method checks a.UserID's access to the space through package access, as
-// RequireSpace does for a request. A space or app the user can't read is ErrNotFound; a
-// change they can't make is ErrReadOnly. Changes are recorded as a.UserID's, marked as the
-// agent's when a.Agent is set.
+// RequireSpace does for a request, and their roles in the app through Checker.App. A space
+// or app the user can't read is ErrNotFound; a change the space doesn't let them make is
+// ErrReadOnly, and one their roles in the app don't is ErrForbidden. Changes are recorded as
+// a.UserID's, marked as the agent's when a.Agent is set. The agent has no tool to set roles,
+// and an app's definition holds none: it gains no authority by what it writes.
 
 // space returns spaceID as a's user sees it, or ErrNotFound.
 func (s *Service) space(ctx context.Context, a Actor, spaceID int64) (access.Space, error) {
@@ -34,7 +36,7 @@ func (s *Service) ListApps(ctx context.Context, a Actor, spaceID int64, withArch
 	if err != nil {
 		return nil, err
 	}
-	return s.listApps(ctx, sp, withArchived)
+	return s.listApps(ctx, sp, a, withArchived)
 }
 
 // ShowApp returns an app with its definition.
@@ -43,7 +45,7 @@ func (s *Service) ShowApp(ctx context.Context, a Actor, spaceID, appID int64) (A
 	if err != nil {
 		return App{}, err
 	}
-	return s.getApp(ctx, sp, appID)
+	return s.getApp(ctx, sp, a, appID)
 }
 
 // CreateApp saves a new app in a space.
@@ -64,10 +66,15 @@ func (s *Service) UpdateApp(ctx context.Context, a Actor, spaceID, appID int64, 
 	return s.updateApp(ctx, sp, a, appID, ch)
 }
 
-// ListRows returns an app's rows as the app shows them (Items), oldest first. An offline
+// ListRows returns an app's rows as the app shows them (Items), oldest first: those the
+// user may read, which for a user who reads only their own records are theirs. An offline
 // app's rows are kept, so they are read too.
 func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) ([]map[string]any, error) {
 	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	acc, err := s.appAccess(ctx, a, sp.ID, appID)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +82,7 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 	if err != nil {
 		return nil, err
 	}
-	rows, err := loadRows(ctx, s.db, ap.ID)
+	rows, err := loadRows(ctx, s.db, ap.ID, readable(acc, a.UserID))
 	if err != nil {
 		return nil, err
 	}

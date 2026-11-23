@@ -47,10 +47,13 @@ func (s *Service) listApps(ctx context.Context, c *call, args json.RawMessage) (
 		return nil, err
 	}
 	list = list[min(a.Offset, len(list)):]
-	n, res, err := fitting(len(list), func(n int) any { return map[string]any{"apps": list[:n]} })
-	if err == nil && n < len(list) {
-		res = map[string]any{"apps": list[:n], "truncated": true, "next_offset": a.Offset + n}
-	}
+	// The size measured is that of the reply sent, the keys that say it is cut short included.
+	_, res, err := fitting(len(list), func(n int) any {
+		if n < len(list) {
+			return map[string]any{"apps": list[:n], "truncated": true, "next_offset": a.Offset + n}
+		}
+		return map[string]any{"apps": list[:n]}
+	})
 	return res, err
 }
 
@@ -98,15 +101,18 @@ func (s *Service) listAppRows(ctx context.Context, c *call, args json.RawMessage
 	}
 	from := sort.Search(len(rows), func(i int) bool { return rowID(rows[i]) > a.After })
 	rows = rows[from:]
-	n, res, err := fitting(len(rows), func(n int) any { return map[string]any{"rows": rows[:n]} })
-	switch {
-	case err != nil || n == len(rows):
-	case n == 0:
-		// The next row alone is over a reply: say which, and go on past it.
-		res = map[string]any{"rows": rows[:0], "truncated": true, "too_large": []int64{rowID(rows[0])}, "next_after": rowID(rows[0])}
-	default:
-		res = map[string]any{"rows": rows[:n], "truncated": true, "next_after": rowID(rows[n-1])}
-	}
+	// The size measured is that of the reply sent, the keys that say it is cut short included.
+	_, res, err := fitting(len(rows), func(n int) any {
+		switch {
+		case n == len(rows):
+			return map[string]any{"rows": rows[:n]}
+		case n == 0:
+			// The next row alone is over a reply: say which, and go on past it.
+			return map[string]any{"rows": rows[:0], "truncated": true, "too_large": []int64{rowID(rows[0])}, "next_after": rowID(rows[0])}
+		default:
+			return map[string]any{"rows": rows[:n], "truncated": true, "next_after": rowID(rows[n-1])}
+		}
+	})
 	return res, err
 }
 

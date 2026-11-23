@@ -20,6 +20,11 @@
 //     spaces' names and member lists, to manage them, and can add themselves, which every
 //     member then sees in the list.
 //
+// Apps add a finer layer inside a space (apps.go): roles in one app (builder, publisher,
+// user, data manager, reader) that only narrow what the caller's access to the space
+// allows, never widen it, and say whether they read all of the app's records or only their
+// own. App returns what a caller may do in an app, for requests and for the agent alike.
+//
 // A space that the caller can't open answers 404, never 403, whether it exists or not,
 // so IDs don't reveal what other people have; 403 is only for a write to a space the
 // caller may read. Routes on a space's content go under
