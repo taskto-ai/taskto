@@ -35,3 +35,34 @@ export function keepLabelsLinked(root: HTMLElement): () => void {
   observer.observe(root, { childList: true, subtree: true })
   return () => observer.disconnect()
 }
+
+// What a screen's form calls each field of the app, by the field's name: the label of the input that
+// holds it. An input says its field either itself (a location or a signature input names its
+// `field`) or through the data it is bound to, which a button's action context hands to the field of
+// the same name ({"notes": {"path": "/draft/notes"}}). A field with no input on the screen has no
+// label here, and an error about it names the field.
+export function fieldLabels(
+  components: Iterable<[string, { properties: Record<string, unknown> }]>,
+): Record<string, string> {
+  const byPath = new Map<string, string>()
+  const labels: Record<string, string> = {}
+  const all = [...components]
+  for (const [, { properties: p }] of all) {
+    if (typeof p.label !== 'string' || p.label === '') continue
+    const path = (p.value as { path?: unknown } | undefined)?.path
+    if (typeof path === 'string') byPath.set(path, p.label)
+    if (typeof p.field === 'string') labels[p.field] = p.label
+  }
+  for (const [, { properties: p }] of all) {
+    const context = ((p.action as { event?: { context?: unknown } } | undefined)?.event?.context ?? {}) as Record<
+      string,
+      unknown
+    >
+    for (const [name, bound] of Object.entries(context)) {
+      const path = (bound as { path?: unknown } | null)?.path
+      const label = typeof path === 'string' ? byPath.get(path) : undefined
+      if (label && !(name in labels)) labels[name] = label
+    }
+  }
+  return labels
+}

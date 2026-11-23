@@ -20,6 +20,7 @@ import {
 import { has, type Key, t as translate, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { spaceLabel } from '../spaces'
+import { effectLines } from './effectLines'
 
 // What went wrong with a change to an app, for people. A role that doesn't allow it names what is
 // missing (the capability the server says: design, publish, …), and a stale version says the app
@@ -155,14 +156,17 @@ const CHANGES: Partial<Record<AppActionKind, Key>> = {
   delete: 'apps.builder.can.delete',
 }
 
-// What the app can read and change, from its draft: the fields of its records and what its buttons
-// do to them. An app runs nothing else: it reaches no other app, document or account.
+// What the app can read and change, from its draft: the fields of its records, what its buttons do
+// to them and what their effects do outside them (a card on a board, a document, a place to open),
+// each said with where it goes. Only when it has no effects does it say that it reaches nothing else:
+// an app runs nothing but those, so it never reaches another app or an account.
 function Capabilities({ app }: { app: App }) {
   const t = useT()
   const f = useFormat()
   const fields = app.draft?.collection?.fields ?? []
   const kinds = new Set(Object.values(app.draft?.actions ?? {}).map((a) => a.kind))
   const changes = (Object.keys(CHANGES) as AppActionKind[]).filter((k) => kinds.has(k))
+  const effects = effectLines(app, app.draft, f.list)
   return (
     <>
       {fields.length > 0 && (
@@ -183,7 +187,20 @@ function Capabilities({ app }: { app: App }) {
       ) : (
         <p>{t('apps.builder.can.readOnly')}</p>
       )}
-      <p className="tt-muted tt-small">{t('apps.builder.can.nothingElse')}</p>
+      {effects.length > 0 ? (
+        <>
+          <p>{t('apps.builder.can.effectsIntro')}</p>
+          <ul>
+            {effects.map((line, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: the lines are the draft's effects in their order
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+          <p className="tt-muted tt-small">{t('apps.builder.can.effectsAudit')}</p>
+        </>
+      ) : (
+        <p className="tt-muted tt-small">{t('apps.builder.can.nothingElse')}</p>
+      )}
     </>
   )
 }

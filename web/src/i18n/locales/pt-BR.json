@@ -270,7 +270,39 @@
         "update": "Alterar registros.",
         "delete": "Excluir registros (um registro excluído pode ser restaurado).",
         "readOnly": "Só mostra registros: não pode adicionar, alterar nem excluir nenhum.",
-        "nothingElse": "Não alcança mais nada: nenhum outro app, documento ou conta."
+        "nothingElse": "Não alcança mais nada: nenhum outro app, documento ou conta.",
+        "effectsIntro": "Além dos próprios registros, ele também faz isto quando alguém aperta seus botões:",
+        "effectsAudit": "Ele faz isso como a pessoa que apertou o botão, e só o que essa pessoa pode fazer.",
+        "effect": {
+          "always": "{effect}.",
+          "when": "{effect}, só quando {rule}.",
+          "createCard": "Cria um cartão em {board}",
+          "updateCard": "Move para {column} o cartão que ele criou em {board}",
+          "updateCardUnknown": "Move para {column} o cartão que ele criou",
+          "createDocument": "Cria um documento em {path} no espaço {space}",
+          "openBoard": "Abre {board}",
+          "openCard": "Abre o cartão que ele criou em {board}",
+          "openCardUnknown": "Abre o cartão que ele criou",
+          "openDocument": "Abre o documento {path} no espaço {space}"
+        },
+        "target": {
+          "board": "{board} ({space})",
+          "boardHidden": "um quadro que você não vê",
+          "boardUnset": "um quadro que ainda não foi escolhido",
+          "spaceHidden": "um espaço que você não vê",
+          "spaceUnset": "um espaço que ainda não foi escolhido"
+        }
+      },
+      "rule": {
+        "eq": "{field} é {value}",
+        "ne": "{field} não é {value}",
+        "lt": "{field} é menor que {value}",
+        "lte": "{field} é no máximo {value}",
+        "gt": "{field} é maior que {value}",
+        "gte": "{field} é no mínimo {value}",
+        "text": "“{value}”",
+        "group": "({rule})",
+        "unknown": "a regra dele vale"
       },
       "field": "{name} ({type})",
       "publish": {

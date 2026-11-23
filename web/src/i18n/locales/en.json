@@ -266,7 +266,39 @@
         "update": "Change records.",
         "delete": "Delete records (a deleted record can be restored).",
         "readOnly": "It only shows records: it can’t add, change or delete any.",
-        "nothingElse": "It can’t reach anything else: no other app, document or account."
+        "nothingElse": "It can’t reach anything else: no other app, document or account.",
+        "effectsIntro": "Beyond its own records, it also does this when someone presses its buttons:",
+        "effectsAudit": "It does these as the person who pressed the button, and only what that person may do.",
+        "effect": {
+          "always": "{effect}.",
+          "when": "{effect}, only when {rule}.",
+          "createCard": "Creates a card on {board}",
+          "updateCard": "Moves the card it made on {board} to {column}",
+          "updateCardUnknown": "Moves the card it made to {column}",
+          "createDocument": "Creates a document at {path} in {space}",
+          "openBoard": "Opens {board}",
+          "openCard": "Opens the card it made on {board}",
+          "openCardUnknown": "Opens the card it made",
+          "openDocument": "Opens the document {path} in {space}"
+        },
+        "target": {
+          "board": "{board} ({space})",
+          "boardHidden": "a board you can’t see",
+          "boardUnset": "a board that isn’t chosen yet",
+          "spaceHidden": "a space you can’t see",
+          "spaceUnset": "a space that isn’t chosen yet"
+        }
+      },
+      "rule": {
+        "eq": "{field} is {value}",
+        "ne": "{field} is not {value}",
+        "lt": "{field} is below {value}",
+        "lte": "{field} is at most {value}",
+        "gt": "{field} is above {value}",
+        "gte": "{field} is at least {value}",
+        "text": "“{value}”",
+        "group": "({rule})",
+        "unknown": "its rule holds"
       },
       "field": "{name} ({type})",
       "publish": {
