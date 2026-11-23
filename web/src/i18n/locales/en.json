@@ -118,15 +118,15 @@
       "publishedBy": "Published by {name}, {date}",
       "rollBack": "Roll back",
       "rollBackNamed": "Roll back to release {number}",
-      "rollBackNote": "Rolling back makes an earlier release the live one. It never changes the data, and it is refused if the data doesn’t fit that release."
+      "rollBackNote": "Rolling back makes an earlier release the live one. It never changes the data. If that release declares different fields, it is refused unless the data fits it."
     },
     "migration": {
-      "title": "This publish changes data your app already holds",
-      "intro": "Nothing is deleted or rewritten, but the live app will treat these rows differently. Publish only if that is what you want.",
-      "field_removed": "“{field}” is removed, and some rows have a value for it. The value stays stored, unseen.",
-      "field_type_changed": "“{field}” changes type, and some rows have a value for it. Those values stay stored, but aren’t shown.",
-      "field_required": "“{field}” becomes required, and some rows have none.",
-      "field_narrowed": "The limits of “{field}” refuse a value some rows have.",
+      "title": "This publish may change how your app treats its data",
+      "intro": "Nothing is deleted or rewritten, but the live app may treat stored rows differently. You may not be able to see which rows, so every change that could affect one is listed. Publish only if that is what you want.",
+      "field_removed": "“{field}” is removed. Rows that have a value for it, if any, keep it stored, unseen.",
+      "field_type_changed": "“{field}” changes type. Rows that have a value for it, if any, keep it stored, but it isn’t shown.",
+      "field_required": "“{field}” becomes required. Rows that lack it, if any, will be refused when they are changed.",
+      "field_narrowed": "The limits of “{field}” change, and may refuse values that stored rows have.",
       "confirm": "I understand these changes",
       "publish": "Publish with these changes"
     },

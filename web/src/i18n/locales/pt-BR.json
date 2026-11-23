@@ -119,15 +119,15 @@
       "publishedBy": "Publicada por {name}, {date}",
       "rollBack": "Reverter",
       "rollBackNamed": "Reverter para a versão {number}",
-      "rollBackNote": "Reverter coloca uma versão anterior no ar. Isso nunca altera os dados, e é recusado se os dados não couberem nessa versão."
+      "rollBackNote": "Reverter coloca uma versão anterior no ar. Isso nunca altera os dados. Se essa versão declara campos diferentes, é recusado a menos que os dados caibam nela."
     },
     "migration": {
-      "title": "Esta publicação muda dados que o app já tem",
-      "intro": "Nada é apagado nem reescrito, mas o app no ar tratará estas linhas de outro jeito. Publique só se for isso que você quer.",
-      "field_removed": "“{field}” foi removido, e algumas linhas têm um valor nele. O valor continua guardado, sem aparecer.",
-      "field_type_changed": "“{field}” muda de tipo, e algumas linhas têm um valor nele. Esses valores continuam guardados, mas não aparecem.",
-      "field_required": "“{field}” passa a ser obrigatório, e algumas linhas não têm valor.",
-      "field_narrowed": "Os limites de “{field}” recusam um valor que algumas linhas têm.",
+      "title": "Esta publicação pode mudar como o app trata os dados",
+      "intro": "Nada é apagado nem reescrito, mas o app no ar pode tratar linhas guardadas de outro jeito. Talvez você não possa ver quais linhas, então toda mudança que poderia afetar uma é listada. Publique só se for isso que você quer.",
+      "field_removed": "“{field}” foi removido. As linhas que têm um valor nele, se houver, continuam com ele guardado, sem aparecer.",
+      "field_type_changed": "“{field}” muda de tipo. As linhas que têm um valor nele, se houver, continuam com ele guardado, mas ele não aparece.",
+      "field_required": "“{field}” passa a ser obrigatório. As linhas que não têm valor, se houver, serão recusadas quando forem alteradas.",
+      "field_narrowed": "Os limites de “{field}” mudam e podem recusar valores que as linhas guardadas têm.",
       "confirm": "Entendo essas mudanças",
       "publish": "Publicar com essas mudanças"
     },

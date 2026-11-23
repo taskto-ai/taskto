@@ -368,7 +368,7 @@ test('publishing asks to acknowledge the schema changes the server names, then p
   fireEvent.click(await within(crew).findByRole('button', { name: 'Publish Expenses' }))
 
   // Nothing is published yet: the changes are listed, and the person has to say they understand.
-  const panel = await within(crew).findByRole('group', { name: 'This publish changes data your app already holds' })
+  const panel = await within(crew).findByRole('group', { name: 'This publish may change how your app treats its data' })
   expect(within(panel).getByText(/“notes” is removed/)).toBeTruthy()
   const go = within(panel).getByRole('button', { name: 'Publish with these changes' }) as HTMLButtonElement
   expect(go.disabled).toBe(true)
