@@ -72,7 +72,9 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
 	boards.New(sqlDB, spaces).Routes(mux)
-	apps.New(sqlDB, spaces).Routes(mux)
+	appService := apps.New(sqlDB, spaces)
+	appService.Routes(mux)
+	appService.HomeRoutes(mux, accounts)
 	if opts.Search != nil {
 		opts.Search.Knowledge().Routes(mux, spaces)
 		opts.Search.Routes(mux, accounts, spaces)
