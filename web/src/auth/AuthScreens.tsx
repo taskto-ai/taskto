@@ -309,6 +309,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
 // account out everywhere, and in here.
 export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: (me: Me) => void }) {
   const t = useT()
+  const loaded = useLoginMethods()
   const [password, setPassword] = useState('')
   const [again, setAgain] = useState('')
   const mismatch = again !== '' && password !== again
@@ -321,6 +322,17 @@ export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: 
       <AuthFrame title={t('auth.reset.title')}>
         <p role="alert" className="tt-error">
           {t('auth.reset.incomplete')}
+        </p>
+      </AuthFrame>
+    )
+  }
+  if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
+  if (!loaded.state.methods.password) {
+    // The server refuses the reset when passwords are off: don't offer a form that can't work.
+    return (
+      <AuthFrame title={t('auth.reset.title')}>
+        <p role="alert" className="tt-error">
+          {t('auth.reset.off')}
         </p>
       </AuthFrame>
     )

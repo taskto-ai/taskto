@@ -194,6 +194,7 @@ func (f *fakeIdP) sign(claims map[string]any) string {
 // browser keeps cookies by name, as a real one does: the session's and the sign-in's.
 type browser struct {
 	e       *env
+	mu      sync.Mutex // a test may have two requests of one browser in flight
 	cookies map[string]*http.Cookie
 }
 
@@ -215,11 +216,15 @@ func (b *browser) do(method, path string, body any) *httptest.ResponseRecorder {
 		r.Header.Set("Sec-Fetch-Site", "cross-site")
 	}
 	r.RemoteAddr = "192.0.2.1:1234"
+	b.mu.Lock()
 	for _, c := range b.cookies {
 		r.AddCookie(c)
 	}
+	b.mu.Unlock()
 	rec := httptest.NewRecorder()
 	b.e.h.ServeHTTP(rec, r)
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	for _, c := range rec.Result().Cookies() {
 		if c.MaxAge < 0 {
 			delete(b.cookies, c.Name)
@@ -248,11 +253,11 @@ func newSSOEnvWith(t *testing.T, idp *fakeIdP, tweak ...func(*SSOProvider, *Opti
 	for _, f := range tweak {
 		f(&p, &opts)
 	}
-	opts.SSO = []SSOProvider{p}
+	opts.SSO = append([]SSOProvider{p}, opts.SSO...) // a tweak may add providers
 	e := &ssoEnv{env: newEnv(t, opts), idp: idp}
 	if idp.useTLS {
 		// The test server's certificate is the only one trusted.
-		e.svc.sso.guard.base = idp.srv.Client().Transport
+		e.svc.sso.byID[p.ID].guard.base = idp.srv.Client().Transport
 	}
 	return e
 }
@@ -348,7 +353,7 @@ func TestSSOCreatesAnInvitedAccountAndAcceptsEveryInvite(t *testing.T) {
 	rec := s.signIn(b, "/invite#tok", map[string]any{"email": "New@Example.com", "email_verified": true, "name": "  Nia  "})
 	// Its invites are used up, so the invite screen would find nothing: it goes to the first
 	// workspace joined.
-	s.wantLogin(b, rec, fmt.Sprintf("/w/%d", ws1), "new@example.com")
+	s.wantLogin(b, rec, fmt.Sprintf("/w/%d/conversations", ws1), "new@example.com")
 
 	var name, hash string
 	if err := s.db.QueryRow(`SELECT name, password_hash FROM users WHERE email = 'new@example.com'`).Scan(&name, &hash); err != nil {
@@ -500,6 +505,8 @@ func TestSSOStateIsBoundToTheBrowserAndWorksOnce(t *testing.T) {
 		defer delete(s.svc.sso.byID, "other")
 		rec := b.do(http.MethodGet, "/api/sso/other/callback?state="+url.QueryEscape(q.Get("state"))+"&code=x", nil)
 		s.wantFailure(rec, apierr.CodeSSOExpired)
+		// The wrong provider's callback consumed nothing: the right one still works.
+		s.wantLogin(b, callback(b, q, q.Get("state")), "/", "owner@example.com")
 	})
 }
 

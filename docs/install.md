@@ -392,8 +392,11 @@ project, mount it read-only, and set the three variables in `.env`. The containe
 it with mode `600`, in a directory it can traverse:
 
 ```sh
-sudo chown -R 65532:65532 sso && sudo chmod 700 sso && sudo chmod 600 sso/*
+sudo chmod 600 sso/* && sudo chown -R 65532:65532 sso && sudo chmod 700 sso
 ```
+
+The files' modes are set first: once `sso` is `65532`'s alone with mode `700`, your own shell
+can no longer expand `sso/*`.
 
 The host directory above it (the project directory) must let `65532` reach `sso`: at least
 execute permission for others. Keep the mount `:ro`. The public address must be

@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
-import { InviteScreen, LoginScreen } from './AuthScreens'
+import { InviteScreen, LoginScreen, ResetPasswordScreen } from './AuthScreens'
 
 afterEach(async () => {
   cleanup()
@@ -192,4 +192,17 @@ test('the invite screen too waits for the methods and retries', async () => {
   render(<InviteScreen token="tok" me={null} onDone={() => {}} onLogout={() => {}} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
   await screen.findByRole('button', { name: 'Continue with Google' })
+})
+
+test('a reset link is not offered a form when password login is off', async () => {
+  fakeFetch({ 'GET /api/login/methods': { body: ssoOnly } })
+  render(<ResetPasswordScreen token="fake-reset-token" onDone={() => {}} />)
+  expect((await screen.findByRole('alert')).textContent).toContain('Password login is turned off')
+  expect(screen.queryByLabelText('New password')).toBeNull()
+})
+
+test('a reset link with password login on still shows the form', async () => {
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  render(<ResetPasswordScreen token="fake-reset-token" onDone={() => {}} />)
+  expect(await screen.findByLabelText('New password')).toBeTruthy()
 })

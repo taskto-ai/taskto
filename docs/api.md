@@ -469,21 +469,32 @@ when too many logins wait (`Retry-After`). It is a `POST`, so the CSRF guard app
 The provider redirects the browser here with `code` and `state`. It is the one `GET` that
 changes state, since a redirect can't be a `POST`. It acts only when `state` equals the
 `__Host-taskto_sso` cookie and a pending login of this provider that it uses up: a link
-forged for another browser, and a replay, find none. The code is exchanged with the PKCE
-verifier, over `https` only and without following a redirect; the ID token's signature, issuer,
-audience (this client's alone), expiry and nonce are checked.
+forged for another browser, and a replay, find none, and a callback to another provider than
+the login was started for finds none and leaves the login for the right one. The code is
+exchanged with the PKCE verifier, without following a redirect. Every call to the provider is
+`https`; `http` is accepted only for a provider whose issuer is itself `http` on a loopback
+host (development), and only to loopback hosts. Discovery, keys and user info follow a redirect
+only within the origin they started from, so nothing is downgraded to `http` or sent to another
+origin, user info's bearer token included. The ID token's signature, issuer, expiry and nonce
+are checked, its `aud` must be this client alone (a token that names another audience too is
+refused), and its `azp`, when present at all, must be the string of this client's ID (an empty,
+`null` or non-string `azp` is refused).
 
-It always answers `303`, and clears the cookie:
+It always answers `303`. It never clears the `__Host-taskto_sso` cookie, which expires with the
+state after 10 minutes and works once, so a slow callback can't take away a newer sign-in's
+cookie:
 
 - on success, to `next`, with a new session cookie (a session the browser already had is
   revoked). An identity already linked logs in its user; otherwise a verified email (or a
   `trust_email` provider's) that belongs to a user links the identity to them; otherwise a
   pending invite for the email creates an account with no password and accepts every pending
   invite for that email; otherwise it is refused. All of it in one transaction. With Google,
-  linking and creating need an address Google vouches for (`@gmail.com`, or an `hd` claim). A
-  `next` that is the invite screen (`/invite…`) goes to `/w/<first workspace joined>` instead
-  when the sign-in made the account, since its invites are used up; for an existing account
-  the invite stays pending and `next` is kept;
+  linking and creating need an address Google vouches for: a domain that is `gmail.com` in
+  ASCII letters, in either case, as the `email` claim has it, or an `hd` claim that isn't blank.
+  A `next` that is the invite screen (`/invite…`) goes to `/w/<id>/conversations` instead when
+  the sign-in made the account, since its invites are used up: the workspace is the one of the
+  invite whose token is in `next`'s fragment (`/invite#<token>`), else of the first invite
+  accepted (the oldest). For an existing account the invite stays pending and `next` is kept;
 - on failure, to `/?sso_error=<code>`, one of the `sso_*` [error codes](#error-codes) above.
   An error from the provider, such as `access_denied`, is `sso_failed`.
 

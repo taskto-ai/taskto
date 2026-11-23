@@ -573,6 +573,7 @@
     "reset": {
       "title": "Defina uma nova senha",
       "incomplete": "Este link de redefinição está incompleto: abra o link inteiro que você recebeu.",
+      "off": "O login com senha está desativado neste servidor, então um link de redefinição não pode ser usado. Entre com um provedor.",
       "intro": "Escolha uma nova senha para sua conta. Suas sessões em qualquer outro lugar serão encerradas.",
       "password": "Nova senha",
       "hint": "Pelo menos 12 caracteres.",

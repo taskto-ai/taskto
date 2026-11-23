@@ -569,6 +569,7 @@
     "reset": {
       "title": "Set a new password",
       "incomplete": "This reset link is incomplete: open the whole link you were sent.",
+      "off": "Password login is turned off on this server, so a reset link can't be used. Sign in with a provider instead.",
       "intro": "Choose a new password for your account. Anywhere else you are signed in is signed out.",
       "password": "New password",
       "hint": "At least 12 characters.",

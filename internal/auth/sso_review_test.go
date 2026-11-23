@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -176,6 +177,16 @@ func TestGoogleEmailTrusted(t *testing.T) {
 		{"a@gmail.com.evil.test", "", false},
 		{"a@notgmail.com", "", false},
 		{"gmail.com@example.com", "", false},
+		{"User@GMAIL.COM", "", true},
+		{"a@gmaİl.com", "", false}, // U+0130 lower-cases to an ASCII i
+		{"a@gmaıl.com", "", false}, // a dotless ı
+		{"a@gmail.com\u212a", "", false},
+		{"a@gmail.co\u0301m", "", false},
+		{"a@example.com", "", false},
+		{"a@example.com", "   ", false},
+		{"a@example.com", " \t", false},
+		{"a@example.com", " example.com ", true},
+		{"nobody", "", false},
 	} {
 		if got := googleEmailTrusted(c.email, c.hd); got != c.want {
 			t.Errorf("googleEmailTrusted(%q, %q) = %v", c.email, c.hd, got)
@@ -355,7 +366,7 @@ func TestSSOInviteScreenAfterSignIn(t *testing.T) {
 		owner, ws := s.setup()
 		s.invite(owner, ws, "new@example.com", RoleMember)
 		b := s.browser()
-		s.wantLogin(b, s.signIn(b, "/invite#tok", verified("new@example.com")), fmt.Sprintf("/w/%d", ws), "new@example.com")
+		s.wantLogin(b, s.signIn(b, "/invite#tok", verified("new@example.com")), fmt.Sprintf("/w/%d/conversations", ws), "new@example.com")
 	})
 	t.Run("an account that already exists is only signed in, and keeps the pending invite", func(t *testing.T) {
 		s := newSSOEnv(t)
@@ -413,7 +424,8 @@ func TestSSODiscoveryIsSharedAndEachCallerKeepsItsOwnDeadline(t *testing.T) {
 		inner.ServeHTTP(w, r)
 	})
 	s := newSSOEnvWith(t, idp)
-	const timeout = 400 * time.Millisecond
+	// Long enough that a caller whose goroutine starts late still joins the first one's discovery.
+	const timeout = time.Second
 	s.svc.sso.timeout = timeout
 
 	const callers = 12
@@ -480,6 +492,10 @@ func TestSSOAudience(t *testing.T) {
 		"another audience, azp is the client": with(map[string]any{"aud": []string{testClientID, "other"}, "azp": testClientID}),
 		"another audience first":              with(map[string]any{"aud": []string{"other", testClientID}, "azp": "other"}),
 		"azp is someone else":                 with(map[string]any{"azp": "other"}),
+		"azp is empty":                        with(map[string]any{"azp": ""}),
+		"azp is null":                         with(map[string]any{"azp": json.RawMessage("null")}),
+		"azp is a number":                     with(map[string]any{"azp": 5}),
+		"azp is a list":                       with(map[string]any{"azp": []string{testClientID}}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := s.browser()
@@ -524,7 +540,8 @@ func TestSSOStaleCallbackLeavesANewerAttemptsCookie(t *testing.T) {
 	codeB := s.idp.issue(qb.Get("nonce"), qb.Get("code_challenge"), verified("owner@example.com"))
 	rec := b.do(http.MethodGet, "/api/sso/fake/callback?state="+url.QueryEscape(qb.Get("state"))+"&code="+codeB, nil)
 	s.wantLogin(b, rec, "/b", "owner@example.com")
-	if _, ok := b.cookies[s.svc.ssoCookieName()]; ok {
-		t.Fatal("the cookie outlived the sign-in it was for")
+	// The callback never clears the cookie: it expires with the state, which works once.
+	if c := b.cookies[s.svc.ssoCookieName()]; c == nil || c.MaxAge != int(ssoTTL/time.Second) {
+		t.Fatalf("cookie %+v, want one that lives as long as the state", c)
 	}
 }

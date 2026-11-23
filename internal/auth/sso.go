@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -52,17 +54,8 @@ const (
 
 // sso is the single sign-on state of a Service.
 type sso struct {
-	providers []*ssoClient
-	byID      map[string]*ssoClient
-	// hc makes the calls that carry no secret of ours: discovery, keys and user info. Only
-	// https is followed (see guardTransport).
-	hc *http.Client
-	// tokenHC makes the token exchange, which carries the code, the PKCE verifier and the
-	// client secret: it follows no redirect at all, so they go to the token endpoint and
-	// nowhere else.
-	tokenHC *http.Client
-	// guard is the transport under both clients.
-	guard      *guardTransport
+	providers  []*ssoClient
+	byID       map[string]*ssoClient
 	timeout    time.Duration
 	startLimit *limiter
 
@@ -74,8 +67,25 @@ type sso struct {
 type ssoClient struct {
 	cfg SSOProvider
 
+	// Each provider has its own clients, so that one provider's development exception (http to
+	// loopback) is never another's.
+	//
+	// hc makes the calls that carry no secret of ours: discovery, keys and user info. It follows a
+	// redirect only within the origin of the request it started from, so the user info's bearer
+	// token stays where it was sent.
+	hc *http.Client
+	// tokenHC makes the token exchange, which carries the code, the PKCE verifier and the client
+	// secret: it follows no redirect at all, so they go to the token endpoint and nowhere else.
+	tokenHC *http.Client
+	// guard is the transport under both clients.
+	guard *guardTransport
+	// failed is the status of the provider's last failing HTTP answer, for the logs (see
+	// statusTransport).
+	failed atomic.Int32
+
 	mu       sync.Mutex
 	provider *oidc.Provider
+	oauth    *oauth2.Config
 	flight   *discovery // the discovery in progress, shared by everyone who asks meanwhile
 }
 
@@ -93,39 +103,80 @@ type ssoPending struct {
 }
 
 func newSSO(providers []SSOProvider, now func() time.Time) *sso {
-	// http, to a loopback host, only when an operator pointed a provider at one (development).
-	guard := &guardTransport{base: http.DefaultTransport}
-	for _, p := range providers {
-		guard.loopbackHTTP = guard.loopbackHTTP || strings.HasPrefix(p.Issuer, "http://")
-	}
 	x := &sso{
 		byID:       map[string]*ssoClient{},
-		guard:      guard,
 		timeout:    ssoTimeout,
 		startLimit: newLimiter(ipAttempts, attemptWindow, now),
 		pending:    map[string]ssoPending{},
 	}
-	x.hc = &http.Client{Timeout: ssoTimeout, Transport: guard, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
-			return errors.New("too many redirects")
-		}
-		if !secureURL(req.URL, guard.loopbackHTTP) {
-			return errInsecureEndpoint
-		}
-		return nil
-	}}
-	x.tokenHC = &http.Client{Timeout: ssoTimeout, Transport: guard, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse // the 3xx answer is the result: nothing is followed
-	}}
 	for _, p := range providers {
 		c := &ssoClient{cfg: p}
+		// http, to a loopback host, only when this provider's issuer is one (development).
+		c.guard = &guardTransport{base: http.DefaultTransport, loopbackHTTP: strings.HasPrefix(p.Issuer, "http://")}
+		rt := &statusTransport{base: c.guard, last: &c.failed}
+		c.hc = &http.Client{Timeout: ssoTimeout, Transport: rt, CheckRedirect: sameOriginRedirect}
+		c.tokenHC = &http.Client{Timeout: ssoTimeout, Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse // the 3xx answer is the result: nothing is followed
+		}}
 		x.providers = append(x.providers, c)
 		x.byID[p.ID] = c
 	}
 	return x
 }
 
-var errInsecureEndpoint = errors.New("refusing a URL that isn't https")
+var (
+	errInsecureEndpoint = errors.New("refusing a URL that isn't https")
+	errCrossOrigin      = errors.New("refusing a redirect to another origin")
+)
+
+// sameOriginRedirect lets a request follow a redirect only to the origin it started from. A
+// redirect from https is therefore to https, and a chain can't leave an origin and come back by
+// another scheme; the Authorization header Go carries along (to the same host or a subdomain of
+// it) never reaches another origin.
+func sameOriginRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return errors.New("too many redirects")
+	}
+	if !sameOrigin(req.URL, via[0].URL) {
+		return errCrossOrigin
+	}
+	return nil
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	port := func(u *url.URL) string {
+		if p := u.Port(); p != "" {
+			return p
+		}
+		if u.Scheme == "https" {
+			return "443"
+		}
+		return "80"
+	}
+	return a.Scheme == b.Scheme && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
+}
+
+// statusTransport remembers the HTTP status of the last failing answer, so that a failure
+// go-oidc reports only as text (with the provider's body in it) can still be logged with its
+// status. Concurrent logins at one provider may see each other's: it is a hint for the logs.
+type statusTransport struct {
+	base http.RoundTripper
+	last *atomic.Int32
+}
+
+func (t *statusTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(r)
+	if err == nil && resp.StatusCode >= 400 {
+		t.last.Store(int32(resp.StatusCode)) // #nosec G115 -- an HTTP status
+	}
+	return resp, err
+}
+
+// fail is failure(category) with the status of the provider's last failing answer, if any since
+// the caller reset it (see c.failed.Store(0)).
+func (c *ssoClient) fail(category string) error {
+	return &ssoErr{category: category, status: int(c.failed.Load())}
+}
 
 // secureURL says whether the server may call u: https, or http to a loopback host (a provider
 // running next to the server in development).
@@ -223,16 +274,17 @@ func (x *sso) discover(ctx context.Context, c *ssoClient) (*oidc.Provider, error
 // runDiscovery asks the provider once, on a context of its own so that no caller's cancelation
 // stops the others, and publishes the answer.
 func (x *sso) runDiscovery(c *ssoClient, f *discovery) {
-	ctx, cancel := context.WithTimeout(oidc.ClientContext(context.Background(), x.hc), x.timeout)
+	ctx, cancel := context.WithTimeout(oidc.ClientContext(context.Background(), c.hc), x.timeout)
 	defer cancel()
+	c.failed.Store(0)
 	p, err := oidc.NewProvider(ctx, c.cfg.Issuer)
 	if err != nil {
-		// The error carries the provider's response body: only its category is kept.
+		// The error carries the provider's response body: only its category and status are kept.
 		p = nil
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			err = failure("discovery timed out")
 		} else {
-			err = failure("discovery failed")
+			err = c.fail("discovery failed")
 		}
 	} else if err = checkEndpoints(c.cfg.Issuer, p); err != nil {
 		p = nil
@@ -318,14 +370,22 @@ func (s *Service) ssoCookie(value string, maxAge int) *http.Cookie {
 	}
 }
 
+// oauthConfig is the provider's OAuth client, made once: it remembers how the token endpoint
+// wants the client's credentials (Basic or in the form), so only the first exchange can be
+// refused for guessing wrong.
 func (s *Service) oauthConfig(c *ssoClient, p *oidc.Provider) *oauth2.Config {
-	return &oauth2.Config{
-		ClientID:     c.cfg.ClientID,
-		ClientSecret: c.cfg.ClientSecret,
-		Endpoint:     p.Endpoint(),
-		RedirectURL:  s.opts.PublicURL + "/api/sso/" + c.cfg.ID + "/callback",
-		Scopes:       c.cfg.Scopes,
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.oauth == nil {
+		c.oauth = &oauth2.Config{
+			ClientID:     c.cfg.ClientID,
+			ClientSecret: c.cfg.ClientSecret,
+			Endpoint:     p.Endpoint(),
+			RedirectURL:  s.opts.PublicURL + "/api/sso/" + c.cfg.ID + "/callback",
+			Scopes:       c.cfg.Scopes,
+		}
 	}
+	return c.oauth
 }
 
 func randomToken() (string, error) {
@@ -415,13 +475,17 @@ func (x *sso) put(now time.Time, state string, p ssoPending) bool {
 	return true
 }
 
-// take removes and returns the login in progress for state: it works once.
-func (x *sso) take(now time.Time, state string) (ssoPending, bool) {
+// take removes and returns the login in progress for state, if it is one of provider's: it
+// works once, and a callback to another provider leaves it for the right one.
+func (x *sso) take(now time.Time, state, provider string) (ssoPending, bool) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	p, ok := x.pending[state]
+	if !ok || p.provider != provider {
+		return ssoPending{}, false
+	}
 	delete(x.pending, state)
-	return p, ok && now.Before(p.expires)
+	return p, now.Before(p.expires)
 }
 
 // ssoFailure redirects the browser to the login screen with the reason.
@@ -447,19 +511,18 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	state := q.Get("state")
 	cookie, err := r.Cookie(s.ssoCookieName())
 	if state == "" || err != nil || subtle.ConstantTimeCompare([]byte(state), []byte(cookie.Value)) != 1 {
-		// Not this browser's sign-in, or an old one: whatever cookie it holds belongs to a
-		// sign-in that may still be going on (a newer attempt in another tab), so it stays.
+		// Not this browser's sign-in, or an old one.
 		ssoFailure(w, apierr.CodeSSOExpired)
 		return
 	}
-	pend, ok := s.sso.take(s.now(), state)
-	if !ok || pend.provider != c.cfg.ID {
+	// The cookie is never cleared here: it lives as long as the state does (ssoTTL), and the
+	// state works once, so a cookie left behind is harmless, while clearing it could take away
+	// a newer attempt's.
+	pend, ok := s.sso.take(s.now(), state, c.cfg.ID)
+	if !ok {
 		ssoFailure(w, apierr.CodeSSOExpired)
 		return
 	}
-	// The state matched the cookie and its provider: the cookie has done its job, whatever
-	// happens next.
-	http.SetCookie(w, s.ssoCookie("", -1))
 	if e := q.Get("error"); e != "" {
 		// The provider refused or the person declined. Its error and error_description are the
 		// provider's words, not ours: only a standard code is logged.
@@ -505,10 +568,25 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	next := pend.next
 	if len(res.joined) > 0 && isInvitePath(next) {
 		// The account was made from its invites, which are all used up: the invite screen would
-		// find nothing. Go to the first workspace joined instead.
-		next = "/w/" + strconv.FormatInt(res.joined[0], 10)
+		// find nothing. Go to the workspace of the invite that was opened, or else the first one
+		// accepted.
+		next = "/w/" + strconv.FormatInt(s.ssoLanding(r.Context(), next, res.joined), 10) + "/conversations"
 	}
 	redirectSeeOther(w, next)
+}
+
+// ssoLanding is the workspace to open for a new account that joined joined (in the invites'
+// order): the one whose invite the person opened, which next names by its token after the #, if
+// it is among them, and otherwise the first.
+func (s *Service) ssoLanding(ctx context.Context, next string, joined []int64) int64 {
+	if _, token, ok := strings.Cut(next, "#"); ok && token != "" {
+		var ws int64
+		err := s.db.QueryRowContext(ctx, `SELECT workspace_id FROM invites WHERE token_hash = ?`, hashToken(token)).Scan(&ws)
+		if err == nil && slices.Contains(joined, ws) {
+			return ws
+		}
+	}
+	return joined[0]
 }
 
 // isInvitePath says whether next is the invite screen, /invite or /invite#token.
@@ -543,8 +621,34 @@ var googleIssuer = "https://accounts.google.com" // a variable for the tests
 // holder's if it ends in @gmail.com (Google is its mailbox provider) or the ID token has an hd
 // claim (a Google Workspace account, whose domain Google verified). Any other address can keep
 // email_verified true after its mailbox changes hands.
+//
+// It takes the email claim as Google sent it, not the lower-cased address the account is found
+// by: Unicode lower-casing turns look-alikes (İ, U+0130) into ASCII letters, so a domain that
+// only looks like gmail.com would pass.
 func googleEmailTrusted(email, hostedDomain string) bool {
-	return hostedDomain != "" || strings.HasSuffix(email, "@gmail.com")
+	if strings.TrimSpace(hostedDomain) != "" {
+		return true
+	}
+	_, domain, ok := strings.Cut(strings.TrimSpace(email), "@")
+	return ok && isGmailDomain(domain)
+}
+
+// isGmailDomain is domain == "gmail.com" with ASCII letters in either case, and nothing else.
+func isGmailDomain(domain string) bool {
+	const want = "gmail.com"
+	if len(domain) != len(want) {
+		return false
+	}
+	for i := 0; i < len(domain); i++ {
+		c := domain[i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // ssoExchange trades the authorization code for tokens, with the PKCE verifier, and verifies
@@ -558,7 +662,7 @@ func (s *Service) ssoExchange(ctx context.Context, c *ssoClient, pend ssoPending
 	if err != nil {
 		return ssoIdentity{}, err
 	}
-	ctx, cancel := context.WithTimeout(oidc.ClientContext(ctx, s.sso.tokenHC), s.sso.timeout)
+	ctx, cancel := context.WithTimeout(oidc.ClientContext(ctx, c.tokenHC), s.sso.timeout)
 	defer cancel()
 	tok, err := s.oauthConfig(c, prov).Exchange(ctx, code, oauth2.VerifierOption(pend.verifier))
 	if err != nil {
@@ -578,11 +682,12 @@ func (s *Service) ssoExchange(ctx context.Context, c *ssoClient, pend ssoPending
 	if raw == "" {
 		return ssoIdentity{}, failure("the token response has no ID token")
 	}
-	// Keys and user info are asked with the client that follows https redirects only.
-	ctx = oidc.ClientContext(ctx, s.sso.hc)
+	// Keys and user info are asked with the client that follows redirects within an origin only.
+	ctx = oidc.ClientContext(ctx, c.hc)
+	c.failed.Store(0)
 	idt, err := prov.Verifier(&oidc.Config{ClientID: c.cfg.ClientID}).Verify(ctx, raw)
 	if err != nil {
-		return ssoIdentity{}, failure("ID token not verified")
+		return ssoIdentity{}, c.fail("ID token not verified")
 	}
 	if subtle.ConstantTimeCompare([]byte(idt.Nonce), []byte(pend.nonce)) != 1 {
 		return ssoIdentity{}, failure("ID token: the nonce doesn't match")
@@ -591,11 +696,12 @@ func (s *Service) ssoExchange(ctx context.Context, c *ssoClient, pend ssoPending
 		return ssoIdentity{}, failure("ID token: the subject is missing or too long")
 	}
 	var cl struct {
-		Email           string   `json:"email"`
-		EmailVerified   flexBool `json:"email_verified"`
-		Name            string   `json:"name"`
-		HostedDomain    string   `json:"hd"`
-		AuthorizedParty string   `json:"azp"`
+		Email         string   `json:"email"`
+		EmailVerified flexBool `json:"email_verified"`
+		Name          string   `json:"name"`
+		HostedDomain  string   `json:"hd"`
+		// Kept raw: an empty or null azp is not an absent one.
+		AuthorizedParty json.RawMessage `json:"azp"`
 	}
 	if err := idt.Claims(&cl); err != nil {
 		return ssoIdentity{}, failure("ID token: unreadable claims")
@@ -610,15 +716,21 @@ func (s *Service) ssoExchange(ctx context.Context, c *ssoClient, pend ssoPending
 			return ssoIdentity{}, failure("ID token: the audience isn't this client's alone")
 		}
 	}
-	if cl.AuthorizedParty != "" && cl.AuthorizedParty != c.cfg.ClientID {
-		return ssoIdentity{}, failure("ID token: the authorized party isn't this client")
+	if cl.AuthorizedParty != nil {
+		var azp string
+		if json.Unmarshal(cl.AuthorizedParty, &azp) != nil || azp != c.cfg.ClientID {
+			return ssoIdentity{}, failure("ID token: the authorized party isn't this client")
+		}
 	}
 	if cl.Email == "" {
 		// Some providers keep the address out of the ID token: ask UserInfo, for the same subject.
+		c.failed.Store(0)
 		ui, err := prov.UserInfo(ctx, oauth2.StaticTokenSource(tok))
 		switch {
 		case err != nil:
-			slog.InfoContext(ctx, "sso: no email in the ID token, and UserInfo failed", "provider", c.cfg.ID)
+			// The error carries the provider's body: only a category and the status are logged.
+			slog.InfoContext(ctx, "sso: no email in the ID token, and UserInfo failed", "provider", c.cfg.ID,
+				"failure", c.fail("UserInfo failed").Error())
 		case ui.Subject != idt.Subject:
 			return ssoIdentity{}, failure("UserInfo: the subject doesn't match the ID token's")
 		default:
@@ -693,7 +805,7 @@ func (s *Service) ssoNewIdentity(ctx context.Context, tx *sql.Tx, c *ssoClient, 
 	if !ok || (!id.verified && !c.cfg.TrustEmail) {
 		return User{}, nil, errSSOUnverified
 	}
-	if c.cfg.Issuer == googleIssuer && (!id.verified || !googleEmailTrusted(email, id.hostedDomain)) {
+	if c.cfg.Issuer == googleIssuer && (!id.verified || !googleEmailTrusted(id.email, id.hostedDomain)) {
 		return User{}, nil, errSSOGoogleEmail
 	}
 	u := User{Email: email}
