@@ -296,4 +296,11 @@ const (
 	CodeConsentForbidden         Code = "consent_forbidden"
 	CodeConsentNoModel           Code = "consent_no_model"
 	CodeConsentEndpointChanged   Code = "consent_endpoint_changed"
+
+	// Notifications and Web Push (internal/notifications).
+
+	CodeNotificationNotFound     Code = "notification_not_found"      // 404: not the caller's, or gone
+	CodePushEndpointInvalid      Code = "push_endpoint_invalid"       // 400: a subscription's endpoint isn't an https address of at most 2048 characters
+	CodePushKeysInvalid          Code = "push_keys_invalid"           // 400: a subscription's keys aren't a P-256 key and a 16-byte secret
+	CodePushTooManySubscriptions Code = "push_too_many_subscriptions" // 409: the person has the most devices subscribed; params: max
 )

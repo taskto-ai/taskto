@@ -18,6 +18,7 @@ import (
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/notifications"
 )
 
 // The transactional outbox of an app's effects.
@@ -406,6 +407,9 @@ func (s *Service) claim(ctx context.Context) (effectRow, bool, error) {
 					WHERE id = ?`, string(apierr.CodeAppEffectGaveUp), at, id); err != nil {
 					return err
 				}
+				if err := notifyEffectFailed(ctx, tx, id); err != nil {
+					return err
+				}
 				continue
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE app_effects SET state = 'running', attempts = attempts + 1, lease = lease + 1, lease_until = ?, updated_at = ? WHERE id = ?`,
@@ -478,10 +482,42 @@ func (s *Service) fail(ctx context.Context, e effectRow, cause error) error {
 			WHERE id = ? AND state = 'running' AND lease = ?`, s.stamp(t.Add(wait)), string(ee.code), params, s.stamp(t), e.id, e.lease)
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE app_effects SET state = 'failed', lease_until = NULL, error_code = ?, error_params = ?, updated_at = ?
-		WHERE id = ? AND state = 'running' AND lease = ?`, string(ee.code), params, s.stamp(t), e.id, e.lease)
-	return err
+	return s.write(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE app_effects SET state = 'failed', lease_until = NULL, error_code = ?, error_params = ?, updated_at = ?
+			WHERE id = ? AND state = 'running' AND lease = ?`, string(ee.code), params, s.stamp(t), e.id, e.lease)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil || n != 1 {
+			return err // a worker that no longer owns the entry tells nobody
+		}
+		return notifyEffectFailed(ctx, tx, e.id)
+	})
+}
+
+// notifyEffectFailed tells the user the entry was done for, in their notification inbox (and by
+// push, if they chose that), that it failed for good and waits for them to retry it. The
+// notification names the app and the entry, never what the entry was to make: what it says is
+// worked out when it is read, from what they may read then. A failure after a retry is a new
+// notification, one per claim.
+func notifyEffectFailed(ctx context.Context, tx *sql.Tx, effectID int64) error {
+	var userID, appID, lease, spaceID, workspaceID int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT e.user_id, e.app_id, e.lease, a.space_id, sp.workspace_id
+		FROM app_effects e JOIN apps a ON a.id = e.app_id JOIN spaces sp ON sp.id = a.space_id
+		WHERE e.id = ?`, effectID).Scan(&userID, &appID, &lease, &spaceID, &workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return notifications.Add(ctx, tx, notifications.Notice{
+		UserID: userID, WorkspaceID: workspaceID, Kind: notifications.KindAppEffectFailed,
+		Ref:       notifications.Ref{Space: spaceID, App: appID, Effect: effectID},
+		DedupeKey: fmt.Sprintf("effect:%d:%d", effectID, lease),
+	})
 }
 
 // perform does one entry: it checks, as the user who acted and as of now, that they may still do

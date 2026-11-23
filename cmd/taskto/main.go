@@ -29,6 +29,7 @@ import (
 	"taskto.ai/taskto/internal/dictation"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/lockfile"
+	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/privcheck"
 	"taskto.ai/taskto/internal/providers"
 	"taskto.ai/taskto/internal/search"
@@ -199,6 +200,14 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	// so they go on when nobody has the app open. Stopped before the database closes.
 	stopEffects := appSvc.StartOutbox(ctx)
 	defer stopEffects()
+	// The notification inbox, and Web Push for the people who turn it on: the VAPID key pair is made
+	// on first start, and the worker that sends pushes runs until the server stops.
+	notifier, err := notifications.New(ctx, sqlDB, spaces, notifications.Options{Key: key})
+	if err != nil {
+		return err
+	}
+	stopPush := notifier.Start(ctx)
+	defer stopPush()
 	tools := agenttools.New(agenttools.Options{
 		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: appSvc,
 		Knowledge: kb, Search: index, Browser: browsers,
@@ -263,6 +272,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 			"setup_token", authOpts.SetupToken)
 	}
 	handler, err := server.New(version, sqlDB, server.Options{
+		Notifications: notifier,
 		Auth:          authOpts,
 		DataDir:       cfg.DataDir,
 		AgentState:    agent.state,

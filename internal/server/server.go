@@ -22,6 +22,7 @@ import (
 	"taskto.ai/taskto/internal/dictation"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/mcpserver"
+	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/providers"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/webui"
@@ -56,6 +57,8 @@ type Options struct {
 	Dictation *dictation.Service
 	// Browser serves the agent browser (/api/me/browser and its live view); nil leaves it out.
 	Browser *agentbrowser.Service
+	// Notifications serves the notification inbox and Web Push subscriptions; nil leaves them out.
+	Notifications *notifications.Service
 	// AppsReady, if set, is called with the apps service the server made, which keeps attachments
 	// in DataDir (none if that is empty), so its caller can run its maintenance
 	// (apps.Service.Maintain) for as long as it serves.
@@ -85,6 +88,9 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	appsService.HomeRoutes(mux, accounts)
 	if opts.AppsReady != nil {
 		opts.AppsReady(appsService)
+	}
+	if opts.Notifications != nil {
+		opts.Notifications.Routes(mux, accounts)
 	}
 	if opts.Search != nil {
 		opts.Search.Knowledge().Routes(mux, spaces)
