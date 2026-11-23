@@ -30,6 +30,8 @@ type env struct {
 	db *sql.DB
 	s  *Service
 	h  http.Handler
+	// dataDir is where the spaces' files are.
+	dataDir string
 }
 
 func newEnv(t *testing.T) *env {
@@ -45,13 +47,14 @@ func newEnv(t *testing.T) *env {
 	}
 	accounts := auth.New(sqlDB, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
 	spaces := access.New(sqlDB, accounts)
-	s := New(sqlDB, spaces)
+	dataDir := t.TempDir()
+	s := New(sqlDB, spaces).WithFiles(dataDir)
 	mux := http.NewServeMux()
 	accounts.Routes(mux)
 	spaces.Routes(mux)
 	s.Routes(mux)
 	s.HomeRoutes(mux, accounts)
-	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux)}
+	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux, RawBodyRoutes...), dataDir: dataDir}
 }
 
 // user is a logged-in browser.

@@ -14,12 +14,16 @@ import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
 import { appsCatalog, unsupportedBy } from './catalog'
 import { keepLabelsLinked } from './labels'
+import { type AppFiles, AppFilesContext } from './PhotoInput'
 
 export type ActionPayload = Parameters<NonNullable<ConstructorParameters<typeof MessageProcessor>[1]>>[0]
 
 export type AppTransport = {
   load(): Promise<unknown[]>
   act(action: ActionPayload): Promise<unknown[]>
+  // Where the app's attachments are, for the photo components; left out where there is no server
+  // to hold them.
+  files?: AppFiles
 }
 
 // The draft's preview: its screen and its buttons work, on sample rows the server makes and this
@@ -75,6 +79,7 @@ export function httpTransport(
     }
   }
   return {
+    files: { base, uploads: true },
     load: () => api<unknown[]>(`${base}/surface${query({ release, screen: opts.screen })}`),
     act: (action) =>
       api<unknown[]>(`${base}/actions`, {
@@ -179,7 +184,9 @@ export function AppView({
           {error}
         </p>
       )}
-      {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
+      <AppFilesContext.Provider value={transport.files ?? null}>
+        {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
+      </AppFilesContext.Provider>
     </section>
   )
 }

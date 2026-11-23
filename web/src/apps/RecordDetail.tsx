@@ -10,6 +10,8 @@ import { ApiError, type AppField, type AppRecord, api, errorText, type RecordVer
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { toText } from './explorer'
+import { PhotoStrip } from './PhotoInput'
+import { photoIds } from './photos'
 import { HistoryList, shown, who } from './RecordParts'
 
 const RECORD_CONFLICT = 'app_record_conflict'
@@ -258,6 +260,7 @@ export function RecordDetail({
           <FieldRow
             key={field.name}
             idPrefix={formId}
+            base={base}
             field={field}
             text={textOf(field.name)}
             editable={editable}
@@ -323,12 +326,14 @@ function shownText(
 
 function FieldRow({
   idPrefix,
+  base,
   field,
   text,
   editable,
   onChange,
 }: {
   idPrefix: string
+  base: string
   field: AppField
   text: string
   editable: boolean
@@ -347,6 +352,16 @@ function FieldRow({
   // A field this version doesn't know how to edit (captured evidence such as media, a location or a
   // signature) is shown as it was recorded, never as an input.
   if (!editable || !known) {
+    // Photos are shown as thumbnails, through the viewer's own session.
+    const photos = field.type === 'attachment' ? photoIds(text.split(',')) : []
+    if (photos.length > 0) {
+      return (
+        <div className="tt-record-field">
+          <span className="tt-record-field-name">{field.name}</span>
+          <PhotoStrip base={base} ids={photos} label={field.name} />
+        </div>
+      )
+    }
     return (
       <div className="tt-record-field">
         <span className="tt-record-field-name">{field.name}</span>

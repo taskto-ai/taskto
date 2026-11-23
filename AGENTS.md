@@ -18,7 +18,7 @@ apps built by asking the agent. See [docs/architecture.md](docs/architecture.md)
 | `internal/knowledge/` | the knowledge base: each space's documents and uploads in a git repository (go-git, through the space's `os.Root`); large files, audio and video, and heavy binaries (archives, disk images, design files) unversioned, a Git LFS pointer in git and their bytes in the space's `.git/lfs/objects/` (`large.go`); a versioned file that becomes unversioned leaves history, by a crash-safe rewrite of the space's commits (`rewrite.go`) | Go |
 | `internal/search/` | the knowledge base's search index: full text (SQLite FTS5) and optional semantic search, kept in step with git | Go |
 | `internal/boards/` | personal and team boards, cards and their threads, and the methods the agent's board tools call | Go |
-| `internal/apps/` | personal apps: the component catalog and the strict check of saved screens, collections and their rows, the actions Go runs, the methods the agent's app tools call, and the extension slots (`contributions.go`: widgets and a pin an app offers) with each person's Home placements and a shared space's defaults (`home.go`) | Go |
+| `internal/apps/` | personal apps: the component catalog and the strict check of saved screens, collections and their rows, the actions Go runs, the methods the agent's app tools call, photo attachments (`attachments.go`: chunked, resumable uploads into the space's managed storage, thumbnails, metadata stripped at finalize, authenticated reads by record access, orphan cleanup, files following an app that moves), and the extension slots (`contributions.go`: widgets and a pin an app offers) with each person's Home placements and a shared space's defaults (`home.go`) | Go |
 | `internal/conversations/` | conversations with the agent: who owns each, the API to them, their live updates as Server-Sent Events, and finding where they drift from the agent runtime's | Go |
 | `internal/agenttools/` | the knowledge-base, board and app tools of agents, defined once in `tools.json`: the sidecar's tools call back into it for the conversation's owner, and MCP calls it for an access token's user | Go |
 | `internal/mcpserver/` | the MCP endpoint, `/mcp`: the same tools for people's own agents, with an access token ([docs/mcp.md](docs/mcp.md)); and `ForTurns`, the endpoint for CLI turns, `/cli-mcp` on the per-turn proxy's listener, with the browser tools too ([docs/cli-tools.md](docs/cli-tools.md)) | Go |
@@ -79,7 +79,7 @@ apps built by asking the agent. See [docs/architecture.md](docs/architecture.md)
 - **State changes are never GETs.** The CSRF guard (`auth.CSRF`) checks every other
   method under `/api` and requires `Content-Type: application/json`, or
   `application/octet-stream` on the routes that take a file's bytes, named in
-  `knowledge.RawBodyRoutes`; `GET` routes are left alone. The API is described in [docs/api.md](docs/api.md); keep it current.
+  `knowledge.RawBodyRoutes` and `apps.RawBodyRoutes`; `GET` routes are left alone. The API is described in [docs/api.md](docs/api.md); keep it current.
 - **One binary works for one person or a company.** Don't add code paths that only work in
   one of the two modes.
 - **Agents never run as root or with sudo.** The server refuses to start the agent sidecar

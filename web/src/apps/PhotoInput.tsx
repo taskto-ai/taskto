@@ -1,0 +1,307 @@
+// Photos in an app: an input that takes them from the camera or the library and uploads each to
+// the server, and the thumbnails that show them. A photo is never an outside address: it is an
+// attachment the server keeps, fetched with the viewer's own session (docs/api.md).
+//
+// The camera is one way in and never the only one. A file input with `capture` opens the camera on
+// a phone, and if the person has blocked it (or the device has none) the library's input, which
+// has no `capture`, still works. A photo taken this way is sent to the app: the browser may not
+// keep a copy in the device's camera roll, so nothing here promises one.
+
+import { createContext, useContext, useEffect, useId, useRef, useState } from 'react'
+import { errorText } from '../api'
+import { useFormat, useT } from '../i18n'
+import {
+  DEFAULT_LIMITS,
+  discardPhoto,
+  PHOTO_TYPES,
+  type PhotoLimits,
+  photoUrl,
+  thumbnailUrl,
+  UploadCancelled,
+  uploadPhoto,
+} from './photos'
+
+// Where the app's attachments are (…/spaces/{space}/apps/{app}), given by the screen that draws
+// them; uploads is false where the screen is a preview, whose buttons change nothing.
+export type AppFiles = { base: string; uploads: boolean }
+
+export const AppFilesContext = createContext<AppFiles | null>(null)
+
+// Whether the person has blocked the camera for this site, as far as the browser says: false if
+// it doesn't say, since the camera input is harmless then.
+export function useCameraBlocked(): boolean {
+  const [blocked, setBlocked] = useState(false)
+  useEffect(() => {
+    let live = true
+    let status: PermissionStatus | undefined
+    try {
+      navigator.permissions
+        ?.query({ name: 'camera' as PermissionName })
+        .then((s) => {
+          if (!live) return
+          status = s
+          setBlocked(s.state === 'denied')
+          s.onchange = () => setBlocked(s.state === 'denied')
+        })
+        .catch(() => {})
+    } catch {
+      // No such permission here (some browsers refuse the name): not knowing is not blocking.
+    }
+    return () => {
+      live = false
+      if (status) status.onchange = null
+    }
+  }, [])
+  return blocked
+}
+
+// One upload that hasn't finished: on its way, or failed and waiting to be resumed.
+type Pending = {
+  key: number
+  name: string
+  file: File
+  // Once the server has made the upload: what a retry resumes.
+  id?: string
+  sent: number
+  failed?: string
+}
+
+let keys = 0
+
+export function PhotoField({
+  label,
+  files,
+  field,
+  value,
+  limits = DEFAULT_LIMITS,
+  onChange,
+}: {
+  label?: string
+  files: AppFiles | null
+  field: string
+  value: string[]
+  limits?: PhotoLimits
+  // Called with the whole new list of attachment ids.
+  onChange: (ids: string[]) => void
+}) {
+  const t = useT()
+  const f = useFormat()
+  const [pending, setPending] = useState<Pending[]>([])
+  const [problem, setProblem] = useState<string | null>(null)
+  const cameraBlocked = useCameraBlocked()
+  const hintId = useId()
+  // Uploads finish at different times: they add to the list as it is, not as it was drawn.
+  const current = useRef(value)
+  current.current = value
+  // The uploads of this screen that the person then removed, or cancelled: they stop.
+  const stopped = useRef(new Set<number>())
+  // The photos uploaded here and not yet in a record: removing one discards it on the server too.
+  const mine = useRef(new Set<string>())
+
+  const uploads = !!files?.uploads
+  const full = value.length + pending.filter((p) => !p.failed).length >= limits.max_files
+  const canAdd = uploads && !full
+
+  const patch = (key: number, change: Partial<Pending>) =>
+    setPending((all) => all.map((p) => (p.key === key ? { ...p, ...change } : p)))
+
+  const run = async (item: Pending) => {
+    if (!files) return
+    patch(item.key, { failed: undefined })
+    try {
+      const done = await uploadPhoto(files.base, field, item.file, {
+        resume: item.id,
+        onStarted: (id) => patch(item.key, { id }),
+        onProgress: (sent) => patch(item.key, { sent }),
+        cancelled: () => stopped.current.has(item.key),
+      })
+      mine.current.add(done.id)
+      current.current = [...current.current, done.id]
+      onChange(current.current)
+      setPending((all) => all.filter((p) => p.key !== item.key))
+    } catch (e) {
+      if (e instanceof UploadCancelled) return
+      patch(item.key, { failed: errorText(e) })
+    }
+  }
+
+  const add = (picked: FileList | null) => {
+    setProblem(null)
+    const room = limits.max_files - value.length - pending.filter((p) => !p.failed).length
+    const chosen = [...(picked ?? [])]
+    if (chosen.length > room) setProblem(t('apps.photos.limit', { count: limits.max_files }))
+    for (const file of chosen.slice(0, Math.max(0, room))) {
+      if (file.type && !PHOTO_TYPES.includes(file.type)) {
+        setProblem(t('apps.photos.notPicture', { name: file.name }))
+        continue
+      }
+      if (file.size > limits.max_bytes) {
+        setProblem(t('apps.photos.tooLarge', { name: file.name, max: f.bytes(limits.max_bytes) }))
+        continue
+      }
+      if (file.size === 0) {
+        setProblem(t('apps.photos.notPicture', { name: file.name }))
+        continue
+      }
+      const item: Pending = { key: ++keys, name: file.name || t('apps.photos.unnamed'), file, sent: 0 }
+      setPending((all) => [...all, item])
+      void run(item)
+    }
+  }
+
+  const remove = (id: string) => {
+    current.current = current.current.filter((x) => x !== id)
+    onChange(current.current)
+    if (files && mine.current.delete(id)) void discardPhoto(files.base, id)
+  }
+
+  const cancel = (item: Pending) => {
+    stopped.current.add(item.key)
+    setPending((all) => all.filter((p) => p.key !== item.key))
+    if (files && item.id) void discardPhoto(files.base, item.id)
+  }
+
+  const heading = label ?? t('apps.photos.label')
+  return (
+    <fieldset className="tt-photos" aria-describedby={hintId}>
+      <legend className="tt-photos-label">{heading}</legend>
+      {files && value.length > 0 && (
+        <ul className="tt-photo-grid">
+          {value.map((id, i) => (
+            <li key={id} className="tt-photo">
+              <img
+                src={thumbnailUrl(files.base, id)}
+                alt={t('apps.photos.photoN', { n: i + 1, total: value.length })}
+                loading="lazy"
+              />
+              <button
+                type="button"
+                className="tt-button tt-photo-remove"
+                aria-label={t('apps.photos.removeNamed', { n: i + 1 })}
+                onClick={() => remove(id)}
+              >
+                {t('apps.photos.remove')}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {pending.length > 0 && (
+        <ul className="tt-photo-uploads">
+          {pending.map((p) => (
+            <li key={p.key} className="tt-photo-upload">
+              <span className="tt-photo-name">{p.name}</span>
+              {p.failed ? (
+                <>
+                  <span role="alert" className="tt-error tt-small">
+                    {t('apps.photos.failed', { name: p.name, error: p.failed })}
+                  </span>
+                  <button
+                    type="button"
+                    className="tt-button"
+                    aria-label={t('apps.photos.retryNamed', { name: p.name })}
+                    onClick={() => void run(p)}
+                  >
+                    {t('apps.photos.retry')}
+                  </button>
+                </>
+              ) : (
+                <progress
+                  max={p.file.size}
+                  value={p.sent}
+                  aria-label={t('apps.photos.progressNamed', { name: p.name })}
+                />
+              )}
+              <button
+                type="button"
+                className="tt-button"
+                aria-label={t('apps.photos.cancelNamed', { name: p.name })}
+                onClick={() => cancel(p)}
+              >
+                {t('apps.photos.cancel')}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="tt-photo-add">
+        {/* The camera: where the browser has one, this opens it; where it hasn't, or the person has
+            blocked it, the library's input below does the same job. */}
+        <label className={`tt-button${!canAdd || cameraBlocked ? ' tt-disabled' : ''}`}>
+          {t('apps.photos.take')}
+          <input
+            type="file"
+            className="tt-file-input"
+            accept={PHOTO_TYPES.join(',')}
+            capture="environment"
+            disabled={!canAdd || cameraBlocked}
+            onChange={(e) => {
+              add(e.target.files)
+              e.target.value = ''
+            }}
+          />
+        </label>
+        <label className={`tt-button${!canAdd ? ' tt-disabled' : ''}`}>
+          {t('apps.photos.choose')}
+          <input
+            type="file"
+            className="tt-file-input"
+            accept={PHOTO_TYPES.join(',')}
+            multiple={limits.max_files > 1}
+            disabled={!canAdd}
+            onChange={(e) => {
+              add(e.target.files)
+              e.target.value = ''
+            }}
+          />
+        </label>
+      </div>
+      <p id={hintId} className="tt-muted tt-small">
+        {!uploads
+          ? t(files ? 'apps.photos.previewOnly' : 'apps.photos.notHere')
+          : cameraBlocked
+            ? t('apps.photos.cameraBlocked')
+            : t('apps.photos.cameraNote')}{' '}
+        {t('apps.photos.limit', { count: limits.max_files })}{' '}
+        {t('apps.photos.maxSize', { max: f.bytes(limits.max_bytes) })}
+      </p>
+      {problem && (
+        <p role="alert" className="tt-error tt-small">
+          {problem}
+        </p>
+      )}
+    </fieldset>
+  )
+}
+
+// The thumbnails of attachments, each opening its picture in a tab of its own.
+export function PhotoStrip({ base, ids, label }: { base: string; ids: string[]; label?: string }) {
+  const t = useT()
+  if (ids.length === 0) return null
+  return (
+    <figure className="tt-photos tt-photos-strip" aria-label={label ?? t('apps.photos.label')}>
+      <ul className="tt-photo-grid">
+        {ids.map((id, i) => (
+          <li key={id} className="tt-photo">
+            <a
+              href={photoUrl(base, id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={t('apps.photos.openN', { n: i + 1, total: ids.length })}
+            >
+              <img
+                src={thumbnailUrl(base, id)}
+                alt={t('apps.photos.photoN', { n: i + 1, total: ids.length })}
+                loading="lazy"
+              />
+            </a>
+          </li>
+        ))}
+      </ul>
+    </figure>
+  )
+}
+
+export function useAppFiles(): AppFiles | null {
+  return useContext(AppFilesContext)
+}

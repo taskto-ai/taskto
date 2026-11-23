@@ -809,3 +809,50 @@ func TestRecordRevisionsMigrationKeepsExistingRows(t *testing.T) {
 		t.Fatalf("history's actor after the user went = %v, %v", actor, err)
 	}
 }
+
+// TestAppAttachmentsKeepTheirAppFieldAndUploader checks the attachments table's triggers: an
+// attachment never moves to another app, field or uploader, but an account that goes leaves it
+// unattributed (owner ON DELETE SET NULL), so deleting a user who uploaded a photo works.
+func TestAppAttachmentsKeepTheirAppFieldAndUploader(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
+	if _, err := Migrate(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	const id = "0123456789abcdef0123456789abcdef"
+	for _, q := range []string{
+		`INSERT INTO users (id, email, name, password_hash) VALUES (1, 'a@example.com', 'A', 'x'), (2, 'b@example.com', 'B', 'x')`,
+		`INSERT INTO workspaces (id, name) VALUES (1, 'One')`,
+		`INSERT INTO spaces (id, workspace_id, kind, name) VALUES (10, 1, 'shared', 'Team')`,
+		`INSERT INTO apps (id, space_id, name, definition) VALUES (5, 10, 'Tracker', '{}'), (6, 10, 'Other', '{}')`,
+		`INSERT INTO app_attachments (id, app_id, space_id, field, owner, status, size) VALUES ('` + id + `', 5, 10, 'photos', 1, 'uploading', 10)`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, bad := range []string{
+		`UPDATE app_attachments SET app_id = 6`,
+		`UPDATE app_attachments SET field = 'receipt'`,
+		`UPDATE app_attachments SET owner = 2`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, bad); err == nil {
+			t.Fatalf("%s was accepted", bad)
+		}
+	}
+	// Ordinary changes of state still go through.
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE app_attachments SET received = 4`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM users WHERE id = 1`); err != nil {
+		t.Fatalf("deleting a user who uploaded an attachment: %v", err)
+	}
+	var owner sql.NullInt64
+	if err := sqlDB.QueryRowContext(ctx, `SELECT owner FROM app_attachments WHERE id = ?`, id).Scan(&owner); err != nil || owner.Valid {
+		t.Fatalf("owner after the user went = %v, %v", owner, err)
+	}
+	// Nobody can be made the uploader of one that has none.
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE app_attachments SET owner = 2`); err == nil {
+		t.Fatal("an unattributed attachment was given an uploader")
+	}
+}

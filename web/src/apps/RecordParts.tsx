@@ -3,6 +3,7 @@
 
 import type { AppField, RecordAuthor, RecordVersion } from '../api'
 import { type Format, type T, useFormat, useT } from '../i18n'
+import { photoIds } from './photos'
 
 // The name of who did something, and that it was through the agent.
 export function who(a: RecordAuthor | null, t: T): string {
@@ -21,6 +22,9 @@ export function shown(v: unknown, type: AppField['type'] | undefined, f: Format,
   if (v === undefined || v === null || v === '') return ''
   if (typeof v === 'number') return f.number(v)
   if (typeof v === 'boolean') return t(v ? 'apps.records.yes' : 'apps.records.no')
+  // A photo field holds attachment ids: what a person reads is how many, never the ids.
+  if (Array.isArray(v) && photoIds(v).length === v.length && v.length > 0)
+    return t('apps.photos.count', { count: v.length })
   if (type === 'date' && typeof v === 'string') {
     const day = calendarDay(v)
     return day ? f.date(day) : v
