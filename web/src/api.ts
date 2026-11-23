@@ -88,12 +88,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 //
 // fieldLabels says what a form calls its fields (by their names in the app): an error about a
 // field names it as the person sees it ("Notes (needed when it fails)"), not as the app's data does.
-export function errorText(e: unknown, fieldLabels?: Record<string, string>): string {
+export function errorText(e: unknown, fieldLabels?: ReadonlyMap<string, string>): string {
   if (e instanceof ApiError) {
     const key = e.code && `errors.${e.code}`
     if (key && has(key)) {
       const field = e.params?.field
-      const label = typeof field === 'string' ? fieldLabels?.[field] : undefined
+      const label = typeof field === 'string' ? fieldLabels?.get(field) : undefined
       return t(key as Key, label ? { ...e.params, field: label } : e.params)
     }
     const said = (e.body as { error?: unknown } | undefined)?.error

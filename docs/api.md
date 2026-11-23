@@ -1686,8 +1686,9 @@ sees the live release alone. See [Drafts and releases](#drafts-and-releases).
 `effect_targets` comes with `draft`, for the same callers, when the draft's [effects](#effects-of-actions)
 name a space: one entry for each space (and board) they act on or open, so a page can say where
 they go. `space`, `space_kind` and `board` are told only when the caller may read the space (in the
-app's own workspace) and the board is one of its; otherwise the entry has the IDs alone, which the
-draft holds anyway, and nothing is told of what they are.
+app's own workspace) and the board is one of its (not archived or gone); otherwise the entry has
+the IDs alone, which the draft holds anyway, and nothing is told of what they are, the space's name
+and kind included.
 
 ### The definition
 

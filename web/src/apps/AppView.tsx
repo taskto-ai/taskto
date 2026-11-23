@@ -231,8 +231,13 @@ export function AppView({
                 // The conflict is what the person is told; the screen stays as it was.
               }
             }
-            const components = processor.model.surfacesMap.get(surfaceId)?.componentsModel.entries
-            setError(errorText(e, components ? fieldLabels(components) : undefined))
+            const open = processor.model.surfacesMap.get(surfaceId)
+            setError(
+              errorText(
+                e,
+                open ? fieldLabels(open.componentsModel.entries, (path) => open.dataModel.get(path)) : undefined,
+              ),
+            )
           }
         }),
       // Without this the processor accepts components outside the catalog and silently draws

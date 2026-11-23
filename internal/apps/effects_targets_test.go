@@ -44,3 +44,20 @@ func TestTheDraftNamesItsEffectTargetsOnlyToWhoMayReadThem(t *testing.T) {
 		t.Fatalf("names of what the caller can't read: %s", rec.Body.String())
 	}
 }
+
+// A target whose board is archived is told by its IDs alone: nothing of its space, as the API
+// says for a board that isn't one of the space's.
+func TestAnArchivedBoardIsAnEffectTargetByItsIDsAlone(t *testing.T) {
+	f := newFX(t)
+	if _, err := f.e.db.Exec(`UPDATE boards SET archived_at = CURRENT_TIMESTAMP WHERE id = ?`, f.board); err != nil {
+		t.Fatal(err)
+	}
+	got := f.view(f.alice, f.shared, f.app).EffectTargets
+	want := []EffectTarget{
+		{SpaceID: f.maint.ID, BoardID: f.board},
+		{SpaceID: f.maint.ID, Space: "Maintenance", SpaceKind: access.Shared},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("targets with an archived board: %+v", got)
+	}
+}

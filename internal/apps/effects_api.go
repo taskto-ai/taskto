@@ -551,6 +551,11 @@ func (s *Service) effectTargets(ctx context.Context, a Actor, appSpace int64, de
 				out[i].Board = b.Name
 			}
 		}
+		// A board that isn't one of the space's (archived, or gone) is the IDs alone, like a target
+		// the caller can't read: nothing of the space is told for it.
+		if out[i].Board == "" {
+			out[i].Space, out[i].SpaceKind = "", ""
+		}
 	}
 	return out, nil
 }

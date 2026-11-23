@@ -5,10 +5,8 @@
 // only tells people what the draft says.
 
 import type { App, AppDraft, DraftEffect, EffectTarget } from '../api'
-import { type Key, t } from '../i18n'
+import { type Format, type Key, t } from '../i18n'
 import type { Rule } from './rules'
-
-type Said = (items: readonly string[], type?: 'conjunction' | 'disjunction') => string
 
 // A board as the person may see it: "Maintenance (Field team)", or that it is one they can't see,
 // or that none is chosen yet.
@@ -41,63 +39,68 @@ const COMPARE: Record<string, Key> = {
 
 // A rule in words: "result is “fail” and status is not “closed”". A rule it can't read is "its rule
 // holds", which is true of any rule.
-export function ruleText(rule: Rule, said: Said, nested = false): string {
+export function ruleText(rule: Rule, f: Pick<Format, 'list' | 'number'>, nested = false): string {
   const group = (rules: Rule[], type: 'conjunction' | 'disjunction') => {
-    const parts = rules.map((r) => ruleText(r, said, true))
-    const text = said(parts, type)
+    const parts = rules.map((r) => ruleText(r, f, true))
+    const text = f.list(parts, type)
     return nested && parts.length > 1 ? t('apps.builder.rule.group', { rule: text }) : text
   }
   if (rule.all && rule.all.length > 0) return group(rule.all, 'conjunction')
   if (rule.any && rule.any.length > 0) return group(rule.any, 'disjunction')
   const key = rule.op && COMPARE[rule.op]
   if (typeof rule.field !== 'string' || !key) return t('apps.builder.rule.unknown')
-  const value = typeof rule.value === 'string' ? t('apps.builder.rule.text', { value: rule.value }) : String(rule.value)
-  return t(key, { field: rule.field, value })
+  return t(key, { field: rule.field, value: valueText(rule.value, f) })
+}
+
+// A literal as people read it: text quoted, a number in the locale's format, a boolean in words.
+function valueText(value: unknown, f: Pick<Format, 'number'>): string {
+  if (typeof value === 'string') return t('apps.builder.rule.text', { value })
+  if (typeof value === 'number') return f.number(value)
+  if (typeof value === 'boolean') return t(value ? 'apps.builder.rule.yes' : 'apps.builder.rule.no')
+  return String(value)
 }
 
 function column(name: string | undefined): string {
   const key = `boards.columns.${name}`
-  return name && name in COLUMNS ? t(key as Key) : (name ?? '')
+  return name && COLUMNS.has(name) ? t(key as Key) : (name ?? '')
 }
 
-const COLUMNS: Record<string, true> = { backlog: true, todo: true, doing: true, review: true, done: true }
+const COLUMNS = new Set(['backlog', 'todo', 'doing', 'review', 'done'])
 
 // The lines of the effects the draft declares, by action (in the order of the actions' names) and
 // then by effect: empty when it declares none.
-export function effectLines(app: Pick<App, 'effect_targets'>, draft: AppDraft | undefined, said: Said): string[] {
+export function effectLines(
+  app: Pick<App, 'effect_targets'>,
+  draft: AppDraft | undefined,
+  f: Pick<Format, 'list' | 'number'>,
+): string[] {
   const targets = app.effect_targets ?? []
   const actions = draft?.actions ?? {}
   const all = Object.keys(actions)
     .sort()
     .flatMap((name) => actions[name].effects ?? [])
-  const maker = (card: string | undefined) => all.find((e) => e.kind === 'create_card' && e.name === card)
   return all.map((e) => {
     let line: string
     switch (e.kind) {
       case 'create_card':
         line = t('apps.builder.can.effect.createCard', { board: boardOf(e, targets) })
         break
-      case 'update_card': {
-        const made = maker(e.card)
-        line = made
-          ? t('apps.builder.can.effect.updateCard', { board: boardOf(made, targets), column: column(e.column) })
-          : t('apps.builder.can.effect.updateCardUnknown', { column: column(e.column) })
+      // Moving, and linking to, a card act on the card the record already has: the one made where the
+      // create_card effect pointed when the record's was made (perhaps by an older release, on another
+      // board), so the board now chosen isn't said.
+      case 'update_card':
+        line = t('apps.builder.can.effect.updateCard', { column: column(e.column) })
         break
-      }
       case 'create_document':
         line = t('apps.builder.can.effect.createDocument', { path: e.path ?? '', space: spaceOf(e, targets) })
         break
       default:
         if (e.route === 'board') line = t('apps.builder.can.effect.openBoard', { board: boardOf(e, targets) })
-        else if (e.route === 'card') {
-          const made = maker(e.card)
-          line = made
-            ? t('apps.builder.can.effect.openCard', { board: boardOf(made, targets) })
-            : t('apps.builder.can.effect.openCardUnknown')
-        } else line = t('apps.builder.can.effect.openDocument', { path: e.path ?? '', space: spaceOf(e, targets) })
+        else if (e.route === 'card') line = t('apps.builder.can.effect.openCard')
+        else line = t('apps.builder.can.effect.openDocument', { path: e.path ?? '', space: spaceOf(e, targets) })
     }
     return e.when
-      ? t('apps.builder.can.effect.when', { effect: line, rule: ruleText(e.when, said) })
+      ? t('apps.builder.can.effect.when', { effect: line, rule: ruleText(e.when, f) })
       : t('apps.builder.can.effect.always', { effect: line })
   })
 }

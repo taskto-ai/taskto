@@ -141,6 +141,8 @@
     "notPublished": "Não publicado",
     "unpublishedChanges": "Alterações não publicadas",
     "publish": "Publicar",
+    "closeReview": "Fechar revisão",
+    "closeReviewNamed": "Fechar a revisão de {name}",
     "publishNamed": "Publicar {name}",
     "previewDraft": "Ver o rascunho",
     "previewDraftNamed": "Ver o rascunho de {name}",
@@ -277,13 +279,11 @@
           "always": "{effect}.",
           "when": "{effect}, só quando {rule}.",
           "createCard": "Cria um cartão em {board}",
-          "updateCard": "Move para {column} o cartão que ele criou em {board}",
-          "updateCardUnknown": "Move para {column} o cartão que ele criou",
+          "updateCard": "Move para {column} o cartão que este registro criou",
           "createDocument": "Cria um documento em {path} no espaço {space}",
-          "openBoard": "Abre {board}",
-          "openCard": "Abre o cartão que ele criou em {board}",
-          "openCardUnknown": "Abre o cartão que ele criou",
-          "openDocument": "Abre o documento {path} no espaço {space}"
+          "openBoard": "Oferece um link para {board}",
+          "openCard": "Oferece um link para o cartão que este registro criou",
+          "openDocument": "Oferece um link para o documento {path} no espaço {space}"
         },
         "target": {
           "board": "{board} ({space})",
@@ -301,6 +301,8 @@
         "gt": "{field} é maior que {value}",
         "gte": "{field} é no mínimo {value}",
         "text": "“{value}”",
+        "yes": "sim",
+        "no": "não",
         "group": "({rule})",
         "unknown": "a regra dele vale"
       },

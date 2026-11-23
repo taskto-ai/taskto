@@ -7,9 +7,13 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
 import inspection from '../../../internal/apps/templates/inspection.json'
 import type { App, AppDraft, EffectTarget, Space } from '../api'
+import { setPreferences } from '../i18n'
 import { PublishPanel } from './AppPublish'
 
-afterEach(cleanup)
+afterEach(async () => {
+  cleanup()
+  await setPreferences({ user: null })
+})
 
 const team: Space = {
   id: 3,
@@ -120,12 +124,81 @@ test('every kind of effect is told, with its rule or its place', () => {
   const lines = screen.getAllByRole('listitem').map((li) => li.textContent)
   expect(lines).toEqual(
     expect.arrayContaining([
-      'Creates a card on Maintenance (Field team), only when result is “fail” and (level is at least 3 or urgent is true).',
+      'Creates a card on Maintenance (Field team), only when result is “fail” and (level is at least 3 or urgent is yes).',
       'Creates a document at inspections/{{id}}.md in Field team.',
-      'Opens the card it made on Maintenance (Field team).',
-      'Opens a board you can’t see.',
-      'Opens the document inspections/index.md in Field team.',
-      'Moves the card it made on Maintenance (Field team) to Done.',
+      'Offers a link to the card this record made.',
+      'Offers a link to a board you can’t see.',
+      'Offers a link to the document inspections/index.md in Field team.',
+      'Moves the card this record made to Done.',
     ]),
   )
+})
+
+test('moving or linking to a card says it is the record’s own card, not the board the app now makes cards on', () => {
+  const draft = inspections()
+  draft.actions = {
+    a: { kind: 'insert', effects: [{ kind: 'create_card', name: 'fix', space_id: 7, board_id: 12 }] },
+    b: {
+      kind: 'update',
+      effects: [
+        { kind: 'update_card', card: 'fix', column: 'done' },
+        { kind: 'open_route', route: 'card', card: 'fix' },
+      ],
+    },
+  }
+  panel(draft, [{ space_id: 7, space: 'Field team', space_kind: 'shared', board_id: 12, board: 'Maintenance' }])
+  const lines = screen.getAllByRole('listitem').map((li) => li.textContent ?? '')
+  expect(lines.filter((l) => l.includes('Maintenance'))).toEqual(['Creates a card on Maintenance (Field team).'])
+  expect(lines).toContain('Moves the card this record made to Done.')
+  expect(lines).toContain('Offers a link to the card this record made.')
+})
+
+test('a draft the caller isn’t given is not an app that reaches nothing else', () => {
+  const app = {
+    id: 9,
+    space_id: 3,
+    name: 'Inspection',
+    archived_at: null,
+    version: 1,
+    rows: 0,
+    access: { ...all, design: false },
+    live: null,
+    unpublished_changes: false,
+  } as unknown as App
+  render(<PublishPanel base="/api/x" spaceBase="/api/y" app={app} space={team} onChanged={() => undefined} />)
+  expect(screen.queryByText(NOTHING_ELSE)).toBeNull()
+  expect(screen.queryByText(/only shows records/)).toBeNull()
+  expect(screen.getByText(/You can’t review this app’s draft/)).toBeTruthy()
+})
+
+test('a rule’s numbers, booleans and a column are said in the user’s language', async () => {
+  await setPreferences({ user: 'pt-BR' })
+  const draft = inspections()
+  draft.actions = {
+    a: {
+      kind: 'insert',
+      effects: [
+        {
+          kind: 'create_card',
+          name: 'fix',
+          space_id: 7,
+          board_id: 12,
+          when: {
+            all: [
+              { field: 'level', op: 'gte', value: 1234.5 },
+              { field: 'urgent', op: 'eq', value: true },
+              { field: 'checked', op: 'eq', value: false },
+            ],
+          },
+        },
+        { kind: 'update_card', card: 'constructor', column: 'constructor' },
+      ],
+    },
+  }
+  panel(draft, [{ space_id: 7, space: 'Field team', space_kind: 'shared', board_id: 12, board: 'Maintenance' }])
+  const lines = screen.getAllByRole('listitem').map((li) => li.textContent ?? '')
+  expect(lines.find((l) => l.startsWith('Cria um cartão'))).toContain(
+    'level é no mínimo 1.234,5, urgent é sim e checked é não',
+  )
+  expect(lines).toContain('Move para constructor o cartão que este registro criou.')
 })

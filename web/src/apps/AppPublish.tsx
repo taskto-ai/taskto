@@ -163,10 +163,13 @@ const CHANGES: Partial<Record<AppActionKind, Key>> = {
 function Capabilities({ app }: { app: App }) {
   const t = useT()
   const f = useFormat()
+  // Without the draft (the caller may not design or publish the app) there is nothing to say: an empty
+  // list of effects would read as an app that reaches nothing else.
+  if (!app.draft) return <p className="tt-muted tt-small">{t('apps.templates.noReview')}</p>
   const fields = app.draft?.collection?.fields ?? []
   const kinds = new Set(Object.values(app.draft?.actions ?? {}).map((a) => a.kind))
   const changes = (Object.keys(CHANGES) as AppActionKind[]).filter((k) => kinds.has(k))
-  const effects = effectLines(app, app.draft, f.list)
+  const effects = effectLines(app, app.draft, f)
   return (
     <>
       {fields.length > 0 && (
