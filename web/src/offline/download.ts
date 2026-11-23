@@ -70,6 +70,7 @@ export async function downloadApp(store: OfflineStore, scope: Scope): Promise<Do
     canInsert: r.can_insert,
     capturedAt: r.captured_at,
     operations: r.operations ?? {},
+    modifiable: r.modifiable,
     bytes: JSON.stringify(r.messages).length + JSON.stringify(r.definition).length,
   }
   // The copy and the records of this device it already holds, in one step: a record the server
@@ -77,10 +78,22 @@ export async function downloadApp(store: OfflineStore, scope: Scope): Promise<Do
   // it, which would show it twice, goes.
   assertSignedIn(store.user)
   await store.putDownload(download)
-  await store.dropIncluded(scope, download.operations)
+  await store.dropIncluded(scope, download.operations, presentIn(download))
   // After the copy is kept: improves its chance to stay.
   void requestPersistence()
   return download
+}
+
+// The ids of the records a download holds, when it holds them all (a truncated one doesn't say
+// that a record it lacks is gone).
+function presentIn(d: Download): ReadonlySet<number> | null {
+  if (d.truncated) return null
+  const ids = new Set<number>()
+  for (const m of d.messages as { updateDataModel?: { path?: string; value?: { items?: unknown } } }[]) {
+    const items = m.updateDataModel?.path === '/' ? m.updateDataModel.value?.items : undefined
+    for (const i of Array.isArray(items) ? items : []) if (typeof i?.id === 'number') ids.add(i.id)
+  }
+  return ids
 }
 
 export class UnsupportedRelease extends Error {

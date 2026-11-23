@@ -156,7 +156,7 @@ export function OfflinePanel({
       )}
       <p className="tt-muted tt-small">{t('offline.onlineOnly')}</p>
       {runtime && data.items.length > 0 && (
-        <OutboxList runtime={runtime} items={data.items} status={data.status} apps={apps} />
+        <OutboxList runtime={runtime} items={data.items} status={data.status} apps={apps} downloads={data.downloads} />
       )}
     </section>
   )

@@ -17,7 +17,7 @@
 import type { OfflineApp } from '../api'
 import { deleteDatabase, type Migration, openDatabase, runTx, type Tx } from './idb'
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 export const DOWNLOADS = 'downloads'
 export const OUTBOX = 'outbox'
@@ -36,6 +36,18 @@ export const MIGRATIONS: Record<number, Migration> = {
     outbox.createIndex('byState', 'state')
     db.createObjectStore(BLOBS, { keyPath: 'id' })
     db.createObjectStore(META, { keyPath: 'key' })
+  },
+  // Edits and deletions of downloaded records: every item says what kind of change it is. What
+  // version 1 queued was only ever inserts, so they are marked so, in this upgrade's transaction.
+  2: (_db, tx) => {
+    const request = tx.objectStore(OUTBOX).openCursor()
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) return
+      const item = cursor.value as Partial<OutboxItem>
+      if (item.kind === undefined) cursor.update({ ...item, kind: 'insert' })
+      cursor.continue()
+    }
   },
 }
 
@@ -60,9 +72,16 @@ export type Download = Scope & {
   // Which of the downloaded records this person's own operations made: operation key → record id.
   // The record an item of the outbox made is among the downloaded ones when its key is here.
   operations: Record<string, number>
+  // Which of the downloaded records the person may change or delete (the server's word when the
+  // copy was taken). A copy without it (made by an earlier version) offers no offline edits until
+  // it is downloaded again.
+  modifiable?: number[]
   // About how big the copy is, for the storage the person is shown.
   bytes: number
 }
+
+// What an item does: make a record, change a downloaded one, or delete one.
+export type ChangeKind = 'insert' | 'update' | 'delete'
 
 export type OutboxState = 'draft' | 'queued' | 'syncing' | 'synced' | 'attention'
 
@@ -84,8 +103,27 @@ export type Attachment = {
 export type ItemError = { status?: number; code?: string; params?: Record<string, unknown>; message: string }
 
 // Why an item needs attention: the server refused it for good, the person must act, or it kept
-// failing.
-export type AttentionReason = 'refused' | 'access' | 'archived' | 'outdated' | 'gave_up' | 'photo'
+// failing. `conflict`: the record changed on the server since the change was based on it;
+// `deleted`: the record is no longer there to change; `schema`: what was entered doesn't fit the
+// app as it is now.
+export type AttentionReason =
+  | 'refused'
+  | 'access'
+  | 'archived'
+  | 'outdated'
+  | 'gave_up'
+  | 'photo'
+  | 'conflict'
+  | 'deleted'
+  | 'schema'
+
+// What doesn't fit, as the person is shown it: a field, and the server's code (or the one the
+// check on the device found) with its params, which the web app translates (errors.<code>).
+export type Problem = { field: string; code: string; params?: Record<string, unknown> }
+
+// What the server answered to a change made against a record that has moved on: the record as it
+// is now (an item: its id, `_revision` and fields), or null when the person may not read it.
+export type Conflict = { current: Record<string, unknown> | null }
 
 export type OutboxItem = {
   id: string
@@ -112,9 +150,29 @@ export type OutboxItem = {
   }
   // The idempotency key, made once with the item: every send of it is the same request.
   operation: string
-  // The record it makes: a negative local id until the server has it; its revision is unknown
-  // until then (an insert has none).
+  // What it does. Items written by version 1 of the database were all inserts (migrated).
+  kind: ChangeKind
+  // The record it is about. An insert's: a negative local id until the server has it, and no
+  // revision. An update's or a delete's: the downloaded record's id and the revision the change
+  // was based on, which the server checks (`expectedRevision`: mandatory for an offline change).
   record: { id: number; revision: number | null }
+  // An update's or a delete's record as it was downloaded (its fields, without id and revision):
+  // what the person saw when they changed it, to show beside the current one in a conflict.
+  original?: Record<string, unknown>
+  // For an update or a delete the server acknowledged: the revision it gave the record, so a
+  // later change to it is based on that one.
+  ackRevision?: number
+  // Set once a send was started and the server's answer wasn't a definite one (no answer, 5xx,
+  // the page was closed): the change may be on the server. Such an item takes no further edit to
+  // its record, and its key is never reused for another request.
+  unconfirmed?: boolean
+  // The record as the server has it now, when it refused the change as a conflict.
+  conflict?: Conflict
+  // What doesn't fit the app as it is now, when it needs attention for that.
+  problems?: Problem[]
+  // A change to a record deleted on the server that the person chose to apply anyway: the
+  // record is restored first (at this revision of its deletion), then the change is sent on top.
+  restore?: { revision: number }
   attachments: Attachment[]
   state: OutboxState
   attempts: number
@@ -132,6 +190,21 @@ export type OutboxItem = {
 }
 
 export type BlobRow = { id: string; item: string; blob: Blob }
+
+// What an item does: an item that says nothing was made by version 1 of the database, an insert.
+export const kindOf = (item: Pick<OutboxItem, 'kind'>): ChangeKind => item.kind ?? 'insert'
+
+// A record's change is in the queue and may already be on the server: no other change is
+// written to the record until it is known (RecordBusy).
+export const mayBeOnServer = (item: OutboxItem): boolean => item.state === 'syncing' || item.unconfirmed === true
+
+// A change to a record whose earlier change may already be on the server.
+export class RecordBusy extends Error {
+  constructor() {
+    super('an earlier change to this record may already be on the server')
+    this.name = 'RecordBusy'
+  }
+}
 
 // A refusal of the device's own to keep something: shown as the failure it is.
 export class NotSaved extends Error {
@@ -203,6 +276,17 @@ export class OfflineStore {
     }
   }
 
+  // A write that is refused because the record is busy (the transaction is aborted, nothing is
+  // written) says so, rather than that the device could not keep it.
+  private async keepOrBusy<R>(stores: string[], fn: (tx: Tx) => Promise<R>): Promise<R> {
+    try {
+      return await this.keep(stores, fn)
+    } catch (e) {
+      if (e instanceof NotSaved && e.cause instanceof RecordBusy) throw e.cause
+      throw e
+    }
+  }
+
   // --- downloads
 
   putDownload(d: Download): Promise<void> {
@@ -242,6 +326,65 @@ export class OfflineStore {
     })
   }
 
+  // Records a change to a downloaded record (an update or a delete) in one transaction, with the
+  // items already waiting for that record in view: `build` gets the record's item that the server
+  // hasn't acknowledged, if there is one, and answers the item to keep: a new one, or that one
+  // merged (it keeps its place in the queue). It may throw (RecordBusy). Resolves once durable.
+  async changeRecord(
+    scope: Scope,
+    recordId: number,
+    build: (prev: OutboxItem | undefined) => Omit<OutboxItem, 'seq'> | OutboxItem,
+  ): Promise<OutboxItem> {
+    return this.keepOrBusy([OUTBOX, META], async (tx) => {
+      const meta = tx.store<{ key: string; value: number }>(META)
+      if ((await meta.get(RETIRED)) !== undefined) throw new NotSaved('unavailable')
+      const outbox = tx.store<OutboxItem>(OUTBOX)
+      const waiting = (await outbox.getAllByIndex('byApp', scopeKey(scope)))
+        .filter((i) => kindOf(i) !== 'insert' && i.record.id === recordId && i.state !== 'synced')
+        .sort((a, b) => a.seq - b.seq)
+      const next = build(waiting.at(-1))
+      if ('seq' in next) {
+        await outbox.put(next)
+        return next
+      }
+      const seq = ((await meta.get('seq'))?.value ?? 0) + 1
+      await meta.put({ key: 'seq', value: seq })
+      const saved = { ...next, seq }
+      await outbox.put(saved)
+      return saved
+    })
+  }
+
+  // The person's choice about an item that needs attention, applied in the item's own
+  // transaction together with the downloaded copy it changes: `decide` sees the item and the copy
+  // as they are stored now and answers what to keep (item: null removes it, with its photos), or
+  // nothing to change none. Only an item that still needs attention, and is still the request
+  // the person was shown (its operation key), is changed: a tab that moved it on meanwhile wins.
+  // Answers whether it was applied.
+  async resolve(
+    id: string,
+    operation: string,
+    decide: (item: OutboxItem, copy: Download | undefined) => { item: OutboxItem | null; copy?: Download } | undefined,
+  ): Promise<boolean> {
+    return this.keep([OUTBOX, DOWNLOADS, BLOBS], async (tx) => {
+      const outbox = tx.store<OutboxItem>(OUTBOX)
+      const current = await outbox.get(id)
+      if (current?.state !== 'attention' || current.operation !== operation) return false
+      const downloads = tx.store<Download>(DOWNLOADS)
+      const decided = decide(current, await downloads.get(current.scopeKey))
+      if (!decided) return false
+      if (decided.item === null) {
+        await outbox.delete(id)
+        const blobs = tx.store<BlobRow>(BLOBS)
+        for (const b of await blobs.getAll()) if (b.item === id) await blobs.delete(b.id)
+      } else {
+        await outbox.put({ ...decided.item, updatedAt: new Date().toISOString() })
+      }
+      if (decided.copy) await downloads.put(decided.copy)
+      return true
+    })
+  }
+
   getItem(id: string): Promise<OutboxItem | undefined> {
     return this.tx([OUTBOX], 'readonly', (tx) => tx.store<OutboxItem>(OUTBOX).get(id))
   }
@@ -259,10 +402,20 @@ export class OfflineStore {
   // Lets go of the app's records that a fresh download holds, those it names by their operation:
   // the server has them, so the device's own copy (kept to show it until a download did) goes, and
   // with it, if it had not been told so, the wait to send it.
-  async dropIncluded(scope: Scope, operations: Record<string, number>): Promise<void> {
-    if (Object.keys(operations).length === 0) return
+  //
+  // A change the server acknowledged goes the same way: when the download holds the record with
+  // its operation, or, for a change to a record the download no longer has (deleted, `present` is
+  // the ids it holds, or null when it holds only the latest of more), when it is gone from it.
+  async dropIncluded(
+    scope: Scope,
+    operations: Record<string, number>,
+    present: ReadonlySet<number> | null = null,
+  ): Promise<void> {
     for (const item of await this.listItems(scope)) {
-      if (item.state === 'synced' && item.operation in operations) await this.removeItem(item.id)
+      if (item.state !== 'synced') continue
+      const included = item.operation in operations
+      const gone = kindOf(item) !== 'insert' && present !== null && !present.has(item.record.id)
+      if (included || gone) await this.removeItem(item.id)
     }
   }
 

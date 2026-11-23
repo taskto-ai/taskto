@@ -728,12 +728,18 @@
     "app_query_condition": "The filter on “{field}” doesn’t fit the field.",
     "offline_downloads_disabled": "An admin turned off offline downloads for this space.",
     "session_account_changed": "This browser is signed in as a different account than the one these records belong to.",
-    "offline_unsupported": "This needs a connection. Offline, you can add records and look around the downloaded copy.",
+    "offline_unsupported": "This needs a connection. Offline, you can add records, change or delete downloaded ones, and look around the downloaded copy.",
     "notification_not_found": "That notification isn't available.",
     "push_endpoint_invalid": "This browser's push address isn't valid.",
     "push_keys_invalid": "This browser's push keys aren't valid.",
     "push_too_many_subscriptions": "You already have push turned on for {max} devices. Turn it off on one of them first.",
-    "push_no_workspace": "Push notifications are for people who are in a workspace."
+    "push_no_workspace": "Push notifications are for people who are in a workspace.",
+    "offline_record_unsynced": "This record hasn’t reached the server yet. Change or delete it once it has been synced, or discard it from the list below.",
+    "offline_record_busy": "An earlier change to this record is being sent. Try again once it has been synced.",
+    "offline_edit_unavailable": "To change this record offline, download the app again while you are online.",
+    "offline_photos_unsupported": "Adding photos to a record that already exists needs a connection.",
+    "offline_nothing_to_change": "Nothing is different, so there is nothing to change.",
+    "offline_field_removed": "The app no longer has the field “{field}”."
   },
   "language": {
     "label": "Language",
@@ -1593,7 +1599,14 @@
       "discardConfirm": "Yes, discard",
       "clearSynced": "Clear synced records",
       "waiting_one": "{count} record waiting to sync",
-      "waiting_other": "{count} records waiting to sync"
+      "waiting_other": "{count} records waiting to sync",
+      "itemChange": "{app}: change to {summary}",
+      "itemChangeAny": "{app}: change to a record",
+      "itemDelete": "{app}: delete {summary}",
+      "itemDeleteAny": "{app}: delete a record",
+      "pendingNote": "Shown here as you left it; the server doesn’t have it yet.",
+      "review": "Review",
+      "reviewNamed": "Review {name}"
     },
     "attention": {
       "refused": "The server did not accept it: {error}",
@@ -1601,7 +1614,10 @@
       "archived": "The app or its space is archived or offline, so it can’t take records now.",
       "outdated": "The app changed after this record was made. Download it again, then try again.",
       "gave_up": "The server couldn’t be reached after several tries.",
-      "photo": "A photo couldn’t be sent, so the record wasn’t."
+      "photo": "A photo couldn’t be sent, so the record wasn’t.",
+      "conflict": "The record changed on the server after you changed it. Nothing was overwritten: review it to choose.",
+      "deleted": "The record was deleted on the server. Your change was not applied, and the record was not brought back.",
+      "schema": "What you entered doesn’t fit the app as it is now. It is kept here: fix it or discard it."
     },
     "sync": {
       "paused": "Sync is paused: sign in again to send what is waiting.",
@@ -1646,6 +1662,62 @@
       "unreadableSchema": "Records you made on this device may not have reached the server, and this version of TaskTo.AI can’t check: they were saved by a newer version. You can keep them and sign out without deleting anything, then sign in with the newer version to send them, or discard them.",
       "unreadableStorage": "Records you made on this device may not have reached the server, and the device’s storage can’t be read right now to check. You can keep them and sign out without deleting anything, or discard them.",
       "keep": "Keep them and sign out"
+    },
+    "pendingChanges_one": "{count} change to a record you downloaded is waiting to sync. The screen shows it as you left it.",
+    "pendingChanges_other": "{count} changes to records you downloaded are waiting to sync. The screen shows them as you left them.",
+    "resolve": {
+      "title": "Review {name}",
+      "close": "Close",
+      "empty": "(empty)",
+      "yes": "yes",
+      "no": "no",
+      "photos_one": "{count} photo",
+      "photos_other": "{count} photos",
+      "mine": "Your change",
+      "notInApp": "(the app no longer has this field)",
+      "deletedMark": "(deleted)",
+      "photosKept": "Photos stay as they are.",
+      "save": "Save and try again",
+      "cancel": "Cancel",
+      "edit": "Edit and try again",
+      "reapply": "Apply my change on top",
+      "deleteAnyway": "Delete it anyway",
+      "keepServer": "Keep the server’s version",
+      "column": {
+        "field": "Field",
+        "original": "When you started",
+        "mine": "Your change",
+        "deleted": "Your deletion",
+        "server": "On the server now"
+      },
+      "conflict": {
+        "title": "This record changed on the server",
+        "titleDelete": "You deleted a record that has changed since",
+        "intro": "Your change was not sent, so nothing was overwritten. Compare it with the record as the server has it now, then choose.",
+        "unreadable": "The server has a newer version of this record, but you can no longer read it, so your change can’t be applied. You can discard it."
+      },
+      "deleted": {
+        "title": "This record was deleted on the server",
+        "body": "Your change was not applied, and the record was not brought back. You can restore it and apply your change, or discard your change.",
+        "bodyDelete": "You wanted to delete it, and it is already deleted. There is nothing left to send.",
+        "checking": "Checking the deleted records…",
+        "byAt": "Deleted by {by}, {when}.",
+        "at": "Deleted {when}.",
+        "unknown": "It isn’t among the deleted records you can restore: it may be gone for good, or no longer yours to change.",
+        "restore": "Restore it and apply my change",
+        "discard": "Discard my change",
+        "clear": "Clear this"
+      },
+      "schema": {
+        "title": "What you entered no longer fits the app",
+        "intro": "The app changed after this was made. What you entered is kept: fix what doesn’t fit and try again, or discard it.",
+        "checking": "Checking against the app as it is now…",
+        "fix": "Fix and try again"
+      },
+      "refusedDelete": {
+        "title": "The server did not accept this deletion",
+        "body": "The reason is shown on the item. You can try again from the list, or discard it."
+      }
     }
   },
   "notifications": {

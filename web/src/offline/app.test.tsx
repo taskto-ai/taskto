@@ -70,6 +70,7 @@ afterEach(async () => {
 })
 
 const queued = (): Omit<OutboxItem, 'seq'> => ({
+  kind: 'insert',
   id: 'item-1',
   user: 7,
   scopeKey: '1/2/1',

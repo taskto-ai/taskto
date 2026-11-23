@@ -432,6 +432,7 @@ test('a write the device refuses is never shown as saved, and the input is still
 async function fakeItem(store: OfflineStore): Promise<Omit<OutboxItem, 'seq'>> {
   const now = new Date().toISOString()
   return {
+    kind: 'insert',
     id: 'x',
     user: store.user,
     scopeKey: scopeKey(scope),
@@ -493,12 +494,16 @@ test('the offline screen is the downloaded release, its numbers say what they co
   expect(await store.listItems()).toHaveLength(1)
 })
 
-test('what needs the server stays online: a button that changes or deletes a record is refused offline', async () => {
+test('what needs the server stays online: nothing that is not a change to a record, and no change from a copy that was never told which records may change', async () => {
   const store = await openStore()
   const d = download(7)
   const runtime = idle(store)
   const transport = offlineTransport(runtime, d)
-  await expect(transport.act(press('delete_expense', { id: 1 }))).rejects.toMatchObject({ code: 'offline_unsupported' })
+  // A copy made before the server said which records may be changed offers no change: the person
+  // is told to download again (docs/offline.md).
+  await expect(transport.act(press('delete_expense', { id: 1 }))).rejects.toMatchObject({
+    code: 'offline_edit_unavailable',
+  })
   await expect(transport.act(press('nope', {}))).rejects.toBeInstanceOf(ApiError)
   expect(await store.listItems()).toEqual([])
 })
@@ -1556,6 +1561,7 @@ test('a database found empty is marked as it is deleted: a stale tab can no long
   expect(await settle(7)).toEqual([])
   // The record is refused, so the person is told it was not saved, never that it was.
   const item: Omit<OutboxItem, 'seq'> = {
+    kind: 'insert',
     id: 'late',
     user: 7,
     scopeKey: scopeKey(scope),
