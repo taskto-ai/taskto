@@ -16,6 +16,7 @@ import {
   opsFor,
   PAGE_SIZE,
   type Query,
+  queryable,
   queryString,
   type Sort,
   type Tab,
@@ -169,7 +170,7 @@ export function AppExplorer({
         </form>
       </search>
 
-      <FilterBar fields={fields} filters={filters} onChange={(next) => ask(() => setFilters(next))} />
+      <FilterBar fields={queryable(fields)} filters={filters} onChange={(next) => ask(() => setFilters(next))} />
 
       {narrow && (
         <div className="tt-explorer-sort">
@@ -182,7 +183,7 @@ export function AppExplorer({
               <option value={tab === 'deleted' ? '_deleted' : UPDATED}>
                 {t(tab === 'deleted' ? 'apps.explorer.deletedAt' : 'apps.explorer.changedAt')}
               </option>
-              {fields.map((field) => (
+              {queryable(fields).map((field) => (
                 <option key={field.name} value={field.name}>
                   {field.name}
                 </option>

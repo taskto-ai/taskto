@@ -24,12 +24,16 @@ export const firstDir = (by: string): Dir => (by === UPDATED || by === DELETED ?
 
 const ORDERED: FieldType[] = ['number', 'date', 'time', 'string']
 
+// The fields a query can filter or sort by: a location or a signature is evidence, not something to
+// compare, and the server answers a filter or a sort on one with an error.
+export const queryable = (fields: AppField[]) => fields.filter((f) => f.type !== 'location' && f.type !== 'signature')
+
 // The operators the server takes for a field of this type.
 export function opsFor(type: FieldType): string[] {
   if (type === 'boolean' || type === 'choice') return ['eq', 'ne']
   const ops = ['eq', 'ne']
   if (ORDERED.includes(type)) ops.push('lt', 'lte', 'gt', 'gte')
-  if (type === 'string') ops.push('contains')
+  if (type === 'string' || type === 'barcode') ops.push('contains')
   return ops
 }
 

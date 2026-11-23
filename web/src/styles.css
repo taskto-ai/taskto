@@ -2425,6 +2425,109 @@ html[data-keyboard="open"] .tt-composer {
   cursor: default;
 }
 
+/* Capture fields of an app (location, signature, barcode) and the dictation beside text fields. At
+   360px everything stacks and every control keeps the touch size. */
+
+.tt-capture {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.tt-capture-label {
+  font-weight: 600;
+}
+
+.tt-capture-actions,
+.tt-dictate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-capture-actions .tt-button {
+  flex: 1 1 8rem;
+  min-block-size: var(--tt-touch, 2.75rem);
+}
+
+.tt-capture-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tt-capture-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.tt-capture-check {
+  flex-direction: row;
+  align-items: center;
+}
+
+.tt-capture-input {
+  min-block-size: var(--tt-touch, 2.75rem);
+  inline-size: 100%;
+  box-sizing: border-box;
+}
+
+.tt-capture-value {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The pad: touch-action is none here, on the canvas alone, so a touch that starts on it draws and
+   everything else on the page scrolls as usual (it is also set inline, where the element is made).
+   Three times as wide as high, as the picture is; the pad never takes the whole screen. */
+.tt-signature-canvas {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  inline-size: 100%;
+  max-inline-size: 30rem;
+  aspect-ratio: 3 / 1;
+  box-sizing: border-box;
+  border: 1px solid var(--tt-border, currentColor);
+  border-radius: 0.5rem;
+  background: white;
+  cursor: crosshair;
+}
+
+.tt-signature-image {
+  display: block;
+  max-inline-size: 100%;
+  inline-size: 20rem;
+  border: 1px solid var(--tt-border, currentColor);
+  border-radius: 0.5rem;
+  background: white;
+}
+
+.tt-barcode-camera video {
+  display: block;
+  inline-size: 100%;
+  max-inline-size: 30rem;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 0.5rem;
+  background: black;
+}
+
+.tt-dictate-slot {
+  margin-block-start: 0.25rem;
+}
+
+.tt-dictate-slot:empty {
+  display: none;
+}
+
 /* After the rules they override (the top bar's own controls are smaller). */
 @media (pointer: coarse) {
   .tt-topbar select,

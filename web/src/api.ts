@@ -176,7 +176,17 @@ export type AppRelease = DefinitionNeeds & {
 }
 
 // A field of an app's collection, as its definition declares it.
-export type FieldType = 'string' | 'number' | 'boolean' | 'date' | 'time' | 'choice' | 'attachment'
+export type FieldType =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'date'
+  | 'time'
+  | 'choice'
+  | 'attachment'
+  | 'location'
+  | 'signature'
+  | 'barcode'
 export type AppField = {
   name: string
   type: FieldType
@@ -185,6 +195,11 @@ export type AppField = {
   min?: number
   max?: number
   options?: string[]
+  // A location field: when it is taken ('button' or 'submit'); a barcode's format; and whether a stored
+  // location or signature can be changed (otherwise it is evidence).
+  capture?: 'button' | 'submit'
+  format?: string
+  editable?: boolean
 }
 
 // What the records explorer needs of an app's definition: its fields, and which actions change records.

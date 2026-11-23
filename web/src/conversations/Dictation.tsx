@@ -10,21 +10,51 @@ import { clock, encodeWav, type Recording, type StartRecording, startRecording, 
 
 type Phase = 'idle' | 'starting' | 'recording' | 'transcribing'
 
+// The status of a workspace's dictation, shared by the many fields of an app's screen so they ask
+// once: kept for a few seconds, and forgotten when the server says it isn't ready.
+const SHARED_FOR = 5000
+const shared = new Map<number, { at: number; status: Promise<DictationStatus> }>()
+
+function sharedStatus(workspace: number): Promise<DictationStatus> {
+  const known = shared.get(workspace)
+  if (known && Date.now() - known.at < SHARED_FOR) return known.status
+  const status = api<DictationStatus>(dictationPath(workspace))
+  shared.set(workspace, { at: Date.now(), status })
+  // A failure isn't kept: the next field asks again.
+  status.catch(() => shared.delete(workspace))
+  return status
+}
+
+export function forgetSharedDictationStatus() {
+  shared.clear()
+}
+
 // useDictation gives the composer its dictation controls, for the row beside the box, and a
 // message line (progress, errors) for above it. Both are null on a server without dictation.
+//
+// Fields of an app use it too (apps/FieldDictation.tsx): shareStatus has them ask for the status once
+// together, name says which field the button is for (its label and title), and unavailable is why
+// dictation can't be used on this server, when it can't.
 export function useDictation({
   workspace,
   disabled,
   onText,
   record = startRecording,
+  shareStatus,
+  name,
 }: {
   workspace: number
   disabled?: boolean
   onText: (text: string) => void
   record?: StartRecording
-}): { controls: ReactNode; message: ReactNode } {
+  shareStatus?: boolean
+  name?: { label: string; title: string }
+}): { controls: ReactNode; message: ReactNode; unavailable?: string } {
   const t = useT()
-  const status = useLoad(() => api<DictationStatus>(dictationPath(workspace)), [workspace])
+  const status = useLoad(
+    () => (shareStatus ? sharedStatus(workspace) : api<DictationStatus>(dictationPath(workspace))),
+    [workspace, shareStatus],
+  )
   const [phase, setPhase] = useState<Phase>('idle')
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -61,7 +91,10 @@ export function useDictation({
       // 503: not set up, or the local model is still downloading; the reason says which.
       const notReady = e instanceof ApiError && e.status === 503
       setError(notReady ? errorText(e) : t('conversations.dictation.failed', { error: errorText(e) }))
-      if (notReady) status.reload()
+      if (notReady) {
+        shared.delete(workspace)
+        status.reload()
+      }
     } finally {
       setPhase('idle')
     }
@@ -158,8 +191,8 @@ export function useDictation({
         className="tt-button"
         onClick={start}
         disabled={disabled || phase !== 'idle' || unavailable !== undefined}
-        aria-label={t('conversations.dictation.dictate')}
-        title={unavailable ?? t('conversations.dictation.dictateTitle')}
+        aria-label={name?.label ?? t('conversations.dictation.dictate')}
+        title={unavailable ?? name?.title ?? t('conversations.dictation.dictateTitle')}
       >
         <Icon name="mic" />
       </button>
@@ -179,5 +212,5 @@ export function useDictation({
         )}
       </p>
     )
-  return { controls, message }
+  return { controls, message, unavailable }
 }

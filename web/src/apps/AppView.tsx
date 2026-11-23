@@ -8,13 +8,15 @@
 
 import { A2uiSurface, type ReactCatalogComponent } from '@a2ui/react/v0_9'
 import { MessageProcessor, STRICT_VALIDATION, type SurfaceModel } from '@a2ui/web_core/v0_9'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api, type DefinitionNeeds, errorText } from '../api'
 import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
 import { appsCatalog, unsupportedBy } from './catalog'
 import { keepLabelsLinked } from './labels'
 import { type AppFiles, AppFilesContext } from './PhotoInput'
+import { SubmitCaptures, SubmitCapturesContext } from './submit'
+import { TextDictation, workspaceOf } from './TextDictation'
 
 export type ActionPayload = Parameters<NonNullable<ConstructorParameters<typeof MessageProcessor>[1]>>[0]
 
@@ -98,7 +100,17 @@ export function AppView({
   const t = useT()
   const unsupported = release ? unsupportedBy(release) : []
   const blocked = unsupported.length > 0
-  const root = useRef<HTMLElement>(null)
+  const root = useRef<HTMLElement | null>(null)
+  // The section, once drawn, for what looks at the screen's own elements (the labels, the dictation).
+  const [section, setSection] = useState<HTMLElement | null>(null)
+  const attach = useCallback((el: HTMLElement | null) => {
+    root.current = el
+    setSection(el)
+  }, [])
+  // What the screen's inputs do as a form is submitted, before its action is sent (a location taken
+  // then, submit.ts).
+  const captures = useRef(new SubmitCaptures())
+  const dictation = transport.files?.uploads ? workspaceOf(transport.files.base) : null
 
   // The renderer's inputs aren't linked to their labels: name them for assistive technology.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the section exists once the screen is drawn
@@ -128,7 +140,14 @@ export function AppView({
       [appsCatalog],
       async (action) => {
         try {
-          apply(await transportRef.current.act(withRevision(action)))
+          const prepared = await captures.current.apply(action.context)
+          if (prepared.block) {
+            setError(prepared.block)
+            return
+          }
+          apply(
+            await transportRef.current.act(withRevision({ ...action, context: prepared.context ?? action.context })),
+          )
           setError(null)
         } catch (e) {
           if (e instanceof ApiError && e.code === RECORD_CONFLICT) {
@@ -159,15 +178,18 @@ export function AppView({
   if (blocked) return <UpdateRequired label={label} unsupported={unsupported} />
 
   return (
-    <section className="tt-app" aria-label={label} ref={root}>
+    <section className="tt-app" aria-label={label} ref={attach}>
       {error && (
         <p role="alert" className="tt-error">
           {error}
         </p>
       )}
       <AppFilesContext.Provider value={transport.files ?? null}>
-        {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
+        <SubmitCapturesContext.Provider value={captures.current}>
+          {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
+        </SubmitCapturesContext.Provider>
       </AppFilesContext.Provider>
+      {dictation !== null && surface && <TextDictation root={section} workspace={dictation} />}
     </section>
   )
 }
