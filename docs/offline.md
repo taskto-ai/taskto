@@ -120,6 +120,58 @@ States, each shown on the item:
 A record's photos have a state of their own (*Photos: 1 of 2 sent*), since they can still be on
 their way when the record is not.
 
+### Versions: what makes two tabs agree
+
+Several tabs of one account, and a page that was closed, work on one queue, so no part of it is
+ever changed from a copy read earlier. Every item has a **version**, up from 1, that goes up with
+each change made to it by a person or a screen (coalescing a change into it, a choice, a hold, a
+release, a retry). The engine's own writes leave it: the claim on the item and its renewal, a
+photo's progress, and what a send's answer made of it (synced, needing attention, waiting for
+another try). Whatever of those a person is shown next, they are shown after an action of theirs
+that raised it (a retry, a choice), so a choice made on what was on screen before another tab's
+action is still refused, while an item that is merely being retried never makes an approval fail.
+The rules:
+
+- **Every change is a compare-and-set in one IndexedDB transaction**, against what its maker read.
+  An engine's write is a function of the stored item (`updateItem`), a new change to a record is
+  decided on the record's items as the transaction reads them (`changeRecord`), and a person's
+  choice, discard or approval carries the **version and operation key of the item they were shown**
+  (`Seen`). One that no longer matches is **refused**, with *This changed in another tab or window.
+  Review it again.*, and nothing is applied: the other tab's work is never overwritten by a
+  confirmation made on what was on screen before it.
+- **Signing out loses only what was shown.** The records the person is told they would lose are
+  listed with their versions, and *Discard and sign out* approves exactly those: an item that was
+  changed since (a newer edit coalesced into it) or made since is not agreed to, nothing is
+  deleted, and they are asked again about what is there now.
+- **One base per item.** A new local change to a record joins an item that is waiting only when it
+  was made on the **same base** (the same revision, the same release and definition version) and
+  is the **same action** (the same name: what an action sets going on boards and documents is the
+  server's to know, so a different action keeps its own item and its own identity, and a deletion
+  replaces nothing). A different action is queued on its own, based on the same revision, so it is
+  a visible conflict if the earlier one is sent first; a change on another base, or to a record
+  another tab deleted meanwhile, is **refused** (*This record changed on this device… It is shown
+  as it is now*, and the screen is drawn again): values and revisions of different bases are never
+  put together. A screen drawn from another revision than the device holds now is refused the same
+  way, so an item never pairs the revision a person saw with the values of another.
+- **A button is resolved in the release its screen was drawn from.** The transport keeps the
+  release `load` drew and resolves the pressed action in its definition, queues the item for that
+  release, and never in a newer one downloaded meanwhile, where the same name may be another
+  action. The records it acts on are always the copy's as it is now.
+- **The server's word is authoritative for values.** When an answer says the record's current
+  revision (the answer to an update, including a replay of one the server already had, or one that
+  set what was set already and so made no revision), the item keeps the record **as the server
+  answered it** (`ack`), and the screen shows that record from then on: the server's revision is
+  never paired with the values this device made. An answer that doesn't say leaves the record as
+  the person left it, with no revision to base a change on.
+- **Reading the server again at each choice.** The choices that show or reuse the server's data
+  (*Keep the server's version*, *Apply my change on top*, *Edit and try again*, and the review
+  itself) read the record **at that moment**, as the person who is signed in now may read it
+  (`records/{id}/history`), instead of trusting what the conflict was answered with: that may be a
+  record they can no longer read (it is dropped, and never written back into the download), or
+  have been shown before the app changed. A choice that builds on the server's record is applied
+  only if it is at the revision the person was shown; if it moved on, nothing is applied and the
+  review is drawn again with the record as it is (*The record changed again meanwhile*).
+
 ### Sending (replay)
 
 The queue is sent in the order it was made, **as the signed-in user, with the session the browser
@@ -210,19 +262,21 @@ like an insert does. What is defined, and why:
   left it (`_pending`), with the `_revision` it is based on, and leaves a deleted record out; the
   queue says it is a change the server doesn't have yet, and the screen says how many are waiting.
   Counts and sums are over what is shown.
-- **Several changes to one record are one item while none was sent.** The later values win; the
-  item keeps its place in the queue and the revision it was first based on, and is sent under a new
-  operation key (nothing was ever sent under the old one). A deletion takes the place of the
-  changes before it. **Once a send was started and not answered for good** (no answer, a 5xx, the
-  page was closed: the change may be on the server) the item is marked and the record takes no
-  further change until it is known (*An earlier change to this record is being sent*): the key is
-  never reused for a different request, and a change never goes out based on a revision that
-  another one of ours may have moved. A definite refusal (a conflict, a 4xx) clears the mark.
-- **After the server acknowledged it**, the next change to the record is based on the revision the
-  server gave, which is read from the answer only when it is exactly the one the change was based
-  on or the next (any later one holds a change of somebody else's that this device hasn't seen: the
-  record then has no known revision and is changed again after the next download). The screen is
-  drawn again with it.
+- **Several changes of one action to one record are one item while none was sent**, on the same
+  base ([versions](#versions-what-makes-two-tabs-agree)). The later values win; the item keeps its
+  place in the queue and the revision it was first based on, and is sent under a new operation key
+  (nothing was ever sent under the old one). A deletion, or another action, is an item of its
+  own. **Once a send was started and not answered for good** (no answer, a 5xx, the page was
+  closed: the change may be on the server) the item is marked and the record takes no further
+  change until it is known (*An earlier change to this record is being sent*): the key is never
+  reused for a different request, and a change never goes out based on a revision that another
+  one of ours may have moved. **Only a definite answer clears the mark**: a refusal (a conflict, a
+  4xx) or the server's acknowledgement. An answer that says the session ended (401) or the account
+  is another's says nothing of an earlier send that went unanswered, and leaves the mark as it was
+  before that send.
+- **After the server acknowledged it**, the record is shown as the server answered it, with its
+  revision, and the next change to the record is based on that revision. The screen is drawn again
+  with it.
 - **Deleting is the server's soft deletion**: the record is a tombstone there, kept with its
   history and restorable. A fresh download holds no deleted record, so it removes the copy of one
   (a change waiting for it stays, to be settled below, and a synced change to a record the download
@@ -234,15 +288,16 @@ like an insert does. What is defined, and why:
 Nothing is ever overwritten, and nothing is brought back to life, silently: the server's answer
 decides, and where it can't apply a change the item **needs attention** and keeps the person's
 input. *Review* shows what to choose, with the record as the server has it **only when the person
-may read it**. A choice is made in the item's own transaction, together with the downloaded copy it
-changes, and only to an item that still needs attention and is still the request that was shown
-(its operation key): another tab that settled it first wins.
+may read it**, read when it opens. A choice is made in the item's own transaction, together with
+the downloaded copy it changes, and only to an item that still needs attention and is still the
+item that was shown (its version and operation key): another tab that settled or changed it first
+wins, and the choice is refused ([versions](#versions-what-makes-two-tabs-agree)).
 
 | Situation | What the person sees | Choices |
 |---|---|---|
 | **Conflict**: two devices (or two people) changed the record from the same revision | a table of each field as it was when they started, their change, and the server's value now | *Apply my change on top* (the same change on the revision just shown, under a new key; for a deletion, *Delete it anyway*); *Keep the server's version* (their change is discarded and the copy holds the server's record); *Edit and try again* (a form of the record's fields, sending only what differs from the server's, so what they didn't touch is not overwritten); *Discard* |
 | **Conflict, record no longer readable** | that there is a newer version they can't read | *Keep the server's version* (discard) |
-| **Deleted** on the server while it was changed here | who deleted it and when, from the list of deleted records | *Restore it and apply my change* (the restore is sent first, then the change on the revision it gives; a restore whose answer was lost is recognised as the same restore), *Discard my change*. A deletion of a record already deleted has nothing left to send: *Clear this*. The restore is the person's own step and needs the right to modify; if it is refused the item says so |
+| **Deleted** on the server while it was changed here | who deleted it and when, from the list of deleted records | *Restore it and apply my change* (the restore is sent first, then the change on the revision it gives; a restore whose answer was lost is recognised as the same restore; a restore that finds the record deleted again at a newer revision is a deleted record still, and is offered again at the revision it has now), *Discard my change*. A deletion of a record already deleted has nothing left to send: *Clear this*. The restore is the person's own step and needs the right to modify; if it is refused the item says so |
 | **Schema**: a field removed, retyped, now required, a choice narrowed | what doesn't fit, field by field, checked against the app as it is live now (the copy is downloaded again to know it), and the input as entered | *Fix and try again* (a form of the live fields; the item is then made for the live release and its definition version, on a new key), *Discard* |
 | **Outdated, refused** | the server's reason | the same repair, or *Discard* |
 | **Access lost, archived**, an app taken offline | the reason; the copy is removed if the app can't be opened any more | *Discard*; retry from the list once access is back |
@@ -258,6 +313,13 @@ database belongs to and is written only while the browser is still signed in as 
 account signed in pauses sending without counting anything against the item; a stopped engine or a
 lost claim writes nothing; unsent changes count as unsent for signing out and for another account
 signing in (sealed, never deleted by a sign-in), and are purged only by the one conditional step.
+What a send finds out after any wait (the answer, a restore, a finished upload) is written only
+while the account that made the queue is still the one signed in here (the account epoch): a
+success that comes in after another account signed in changes nothing in the old account's queue,
+and the item stays as it was, unconfirmed, to be sent again, which the server answers with the
+same result. *Clear synced records* takes the entries out of the list, and an entry stays in the
+queue (cleared) until a download that holds its change lets it go, so a deleted record is never
+shown again from a copy that doesn't know of the deletion yet.
 
 ## Accounts, signing out and revocation
 
