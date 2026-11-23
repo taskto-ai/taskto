@@ -206,9 +206,21 @@ func sameDefinition(a, b Definition) bool {
 	return reflect.DeepEqual(vx, vy)
 }
 
-// sameCollection reports whether two collections are the same.
+// sameCollection reports whether two collections are the same in how their rows are read and
+// written: the fields' names, types, options, limits and rules. What only changes how a value reads
+// to people (a choice's option_labels) is left out: it changes no row and no refusal, so a release
+// that differs by it alone is not a different collection.
 func sameCollection(a, b Collection) bool {
-	return sameDefinition(Definition{Collection: a}, Definition{Collection: b})
+	return sameDefinition(Definition{Collection: withoutPresentation(a)}, Definition{Collection: withoutPresentation(b)})
+}
+
+// withoutPresentation is c without the properties of its fields that are only for display.
+func withoutPresentation(c Collection) Collection {
+	c.Fields = slices.Clone(c.Fields)
+	for i := range c.Fields {
+		c.Fields[i].OptionLabels = nil
+	}
+	return c
 }
 
 const releaseFrom = `

@@ -278,3 +278,43 @@ func TestARetypedFieldIsStillJudgedForWhatItRequires(t *testing.T) {
 		t.Fatalf("retyped and required: %v, want %v", got, want)
 	}
 }
+
+// A release that only changes how a choice's options read (their labels) is not a different
+// collection: rolling back across it is judged by no row, so a publisher who may not read the rows
+// can do it, and an owner can even with a row holding an option the older release no longer lists.
+func TestRollbackAcrossARelabelingReleaseIsNotJudgedByTheRows(t *testing.T) {
+	w := newWorld(t)
+	s := w.shared
+	a := w.create(w.alice, s, "Labelled")
+	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppBuilder, access.AppPublisher), grant(w.alice.id, access.AppRoles...))
+	category := func(options []string, labels map[string]string) Field {
+		return Field{Name: "category", Type: TypeChoice, Options: options, OptionLabels: labels}
+	}
+	cur := w.view(w.alice, s, a)
+	cur = w.mustPatchDraft(w.alice, s, cur, with(*cur.Draft, category([]string{"food", "other"}, map[string]string{"food": "Food"})))
+	cur = decode[App](t, w.tryPublish(w.alice, s, cur)) // release 2: both options
+	expect(t, w.actAs(w.alice, s, cur, nil, "add_expense",
+		map[string]any{"description": "bits", "amount": "1", "category": "other"}), http.StatusOK)
+	// Release 3 retires "other" (the row keeps it) and keeps the labels; release 4 only relabels.
+	cur = w.mustPatchDraft(w.alice, s, cur, fieldsOf(*cur.Draft, "category", func(f *Field) { f.Options = []string{"food"} }))
+	cur = decode[App](t, w.tryPublish(w.alice, s, cur, SchemaChange{ChangeFieldNarrowed, "category"}))
+	cur = w.mustPatchDraft(w.alice, s, cur, fieldsOf(*cur.Draft, "category", func(f *Field) { f.OptionLabels = map[string]string{"food": "Meals"} }))
+	cur = decode[App](t, w.tryPublish(w.alice, s, cur)) // no acknowledgement: nothing about the rows changed
+	if cur.Live == nil || cur.Live.Number != 4 {
+		t.Fatalf("live = %+v", cur.Live)
+	}
+
+	// The owner reads no record, and rolls back across the relabeling all the same.
+	owner := w.view(w.owner, s, a)
+	if owner.Access.ReadRecords != access.ScopeNone {
+		t.Fatalf("the owner reads records: %+v", owner.Access)
+	}
+	rec := w.tryRollback(w.owner, s, owner, 3)
+	expect(t, rec, http.StatusOK)
+	// Someone who reads every row, with the retired option still stored, can too: back to release 4.
+	back := decode[App](t, rec)
+	expect(t, w.tryRollback(w.alice, s, w.view(w.alice, s, back), 4), http.StatusOK)
+	// But a real change of the options is still judged by the rows: release 2 lists "other" again, and
+	// whoever can't read the rows is refused.
+	expectForbidden(t, w.tryRollback(w.owner, s, w.view(w.owner, s, a), 2), "read_records")
+}
