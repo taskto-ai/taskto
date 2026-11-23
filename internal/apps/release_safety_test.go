@@ -226,3 +226,34 @@ func TestRecordsFollowTheLiveReleaseNotTheDraft(t *testing.T) {
 		t.Fatalf("restore without the live release's required field = %s", rec.Body)
 	}
 }
+
+// A field the live release retyped keeps its old values stored, unseen: neither a summary in
+// the answer to an older release's action, nor the records, their history or the deleted ones
+// show them.
+func TestValuesOfARetypedFieldStayUnseen(t *testing.T) {
+	w := newWorld(t)
+	s := w.shared
+	a := w.editable(w.alice, s)
+	w.add(w.alice, s, a, "salary", "424242")
+	w.add(w.alice, s, a, "bonus", "111111")
+	id, _ := w.idOf(w.alice, s, a, "salary")
+	bonus, _ := w.idOf(w.alice, s, a, "bonus")
+	cur := w.view(w.alice, s, a)
+	// Release 2 makes the amount text and drops the sum over it.
+	next := fieldsOf(*cur.Draft, "amount", func(f *Field) { f.Type, f.Min, f.Max = TypeString, nil, nil })
+	next.Summaries = map[string]Summary{"n": {Kind: "count"}}
+	cur = w.mustPatchDraft(w.alice, s, cur, next)
+	expect(t, w.tryPublish(w.alice, s, cur, SchemaChange{ChangeFieldTypeChanged, "amount"}), http.StatusOK)
+
+	rec := w.actAs(w.alice, s, a, release(1), "delete_expense", map[string]any{"id": bonus})
+	expect(t, rec, http.StatusOK)
+	reads := []*httptest.ResponseRecorder{rec, w.records(w.alice, s, a), w.deleted(w.alice, s, a), w.history(w.alice, s, a, id)}
+	for _, rec := range reads {
+		expect(t, rec, http.StatusOK)
+		for _, leaked := range []string{"424242", "111111"} {
+			if strings.Contains(rec.Body.String(), leaked) {
+				t.Fatalf("a retyped field's stored value shows: %s", rec.Body)
+			}
+		}
+	}
+}

@@ -389,11 +389,12 @@ func item(def Definition, r Row) map[string]any {
 	return it
 }
 
-// declared is the fields of data that the collection declares.
+// declared is the fields of data that the collection declares, as Items shows them: a value
+// of another type than its field's (stored before the field was retyped) is left out.
 func declared(def Definition, data map[string]any) map[string]any {
 	out := map[string]any{}
 	for _, f := range def.Collection.Fields {
-		if v, ok := data[f.Name]; ok {
+		if v, ok := data[f.Name]; ok && ofType(f, v) {
 			out[f.Name] = v
 		}
 	}

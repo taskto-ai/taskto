@@ -897,8 +897,9 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 // shownBy is the definition an action's answer is drawn from: from, the release the action
 // came from, narrowed to what the live release shows. Its collection holds only the fields the
 // live release declares, as the live release declares them, and a summary is kept only if it
-// reads one of them, so the answer to an action of an older release shows no value the live
-// app doesn't (a field the live release removed, in whoever's row it is).
+// reads one of them that has kept its type, so the answer to an action of an older release
+// shows no value the live app doesn't (a field the live release removed, or the values stored
+// before it retyped one, in whoever's row they are).
 func shownBy(live, from Definition) Definition {
 	shown := from
 	shown.Collection = Collection{}
@@ -909,7 +910,13 @@ func shownBy(live, from Definition) Definition {
 	}
 	shown.Summaries = map[string]Summary{}
 	for name, sum := range from.Summaries {
-		if _, ok := shown.Collection.field(sum.Field); sum.Field == "" || ok {
+		if sum.Field == "" {
+			shown.Summaries[name] = sum
+			continue
+		}
+		lf, kept := shown.Collection.field(sum.Field)
+		ff, _ := from.Collection.field(sum.Field)
+		if kept && lf.Type == ff.Type {
 			shown.Summaries[name] = sum
 		}
 	}
