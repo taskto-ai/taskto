@@ -1478,12 +1478,13 @@ capabilities, and a user may hold several:
 | `reader` | | | | all | |
 
 Every role may view the app (launch it and read its live definition); a `builder` also manages
-the app's roles. So that an app is never left without someone who can set it right (roles are
-removed with the member who held them when they leave the space), **a workspace admin who may
-write a shared space (the space's creator is one, as its editor) can always view the app and
-manage its roles there**, whatever roles it assigns: they can always give someone the data manager
-role. It adds nothing else: they read or change records, design or publish only through roles they
-give themselves. **Design** is changing the app's draft, renaming it and moving it;
+the app's roles. Roles are removed with the member who held them when they leave the space, so
+the last builder leaving would strand an app whose roles are assigned. **Only while no assignment
+gives anyone the `builder` role, a workspace admin who may write the shared space (the space's
+creator is one, as its editor) can view the app and manage its roles**, to give someone the
+builder or data manager role again; once someone is a builder, the admin has only the roles
+assigned to them, like anyone. It is a way back, not standing access: it adds nothing else, and
+while the app has a builder an admin can't use it to give themselves its data. **Design** is changing the app's draft, renaming it and moving it;
 **publish** is publishing the draft, rolling back to an earlier release (see
 [Drafts and releases](#drafts-and-releases)), and taking it offline and restoring it;
 **submit** is adding a record (an `insert` action). **Own** records are those the caller

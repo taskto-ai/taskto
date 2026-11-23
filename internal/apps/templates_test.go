@@ -672,24 +672,37 @@ func TestASharedInstallIsNeverLeftWithoutSomeoneToManageItsRoles(t *testing.T) {
 	w := newWorld(t)
 	s := w.crew()
 	a := w.publish(w.alice, s, w.mustInstall(w.alice, s, "equipment-checkout", nil))
+	// While the app has its builder, the workspace admin has only the roles assigned to them.
+	if got := w.view(w.owner, s, a); got.Access.ManageRoles || got.Access.ReadRecords == access.ScopeAll {
+		t.Fatalf("the admin's access while alice builds the app = %+v", got.Access)
+	}
+	expect(t, w.owner.do(http.MethodPut, appPath(s, a.ID, "/roles"), map[string]any{"grants": []map[string]any{
+		{"user_id": w.owner.id, "roles": []string{"data_manager"}},
+		{"user_id": nil, "roles": []string{"user"}},
+	}}), http.StatusForbidden)
+
+	// The builder leaves: nobody may manage the roles, and the app is stranded.
 	if _, err := w.e.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, s.ID, w.alice.id); err != nil {
 		t.Fatal(err)
 	}
 	if got := w.view(w.bob, s, a); got.Access.ManageRoles || got.Access.ReadRecords != access.ScopeOwn {
 		t.Fatalf("bob's access = %+v", got.Access)
 	}
-	// The workspace admin (the space's creator) reads the roles and hands bob the data manager's.
+	// The workspace admin (the space's creator) reads the roles and hands bob the builder's.
 	expect(t, w.owner.do(http.MethodGet, appPath(s, a.ID, "/roles"), nil), http.StatusOK)
+	if got := w.view(w.owner, s, a); !got.Access.ManageRoles || got.Access.Design || got.Access.Publish || got.Access.ReadRecords == access.ScopeAll {
+		t.Fatalf("the admin's access to a stranded app = %+v", got.Access)
+	}
 	expect(t, w.owner.do(http.MethodPut, appPath(s, a.ID, "/roles"), map[string]any{"grants": []map[string]any{
-		{"user_id": w.bob.id, "roles": []string{"data_manager"}},
+		{"user_id": w.bob.id, "roles": []string{"builder", "data_manager"}},
 		{"user_id": nil, "roles": []string{"user"}},
 	}}), http.StatusOK)
-	if got := w.view(w.bob, s, a); got.Access.ReadRecords != access.ScopeAll {
+	if got := w.view(w.bob, s, a); !got.Access.ManageRoles || got.Access.ReadRecords != access.ScopeAll {
 		t.Fatalf("bob's access after the grant = %+v", got.Access)
 	}
-	// The admin's right is to the roles alone: not to design the app or publish it.
-	if got := w.view(w.owner, s, a); !got.Access.ManageRoles || got.Access.Design || got.Access.Publish {
-		t.Fatalf("the admin's access = %+v", got.Access)
+	// The app has a builder again: the admin's way back is closed.
+	if got := w.view(w.owner, s, a); got.Access.ManageRoles {
+		t.Fatalf("the admin keeps managing roles after handing the app over: %+v", got.Access)
 	}
 }
 

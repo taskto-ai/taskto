@@ -42,8 +42,10 @@ it came back (required once it is returned). A Home widget counts the items chec
 Who sees what: the install gives you the builder, publisher and data manager roles, and every
 other member the user role. A **user** reads and changes their own records only, and the counts
 they see are over those; a **data manager** reads and changes them all. Change who holds which
-role afterwards in the app's **Roles** panel. If the installer later leaves the space, their roles go with them;
-the space's admin can still open the **Roles** panel and give someone the data manager role.
+role afterwards in the app's **Roles** panel. If the installer later leaves the space and nobody
+else holds the builder role, the app has nobody to manage its roles: a workspace admin can then
+open the **Roles** panel and give someone the builder role (and, if needed, the data manager
+role). Once the app has a builder again, the admin has only the roles assigned to them.
 
 ### Inspection (for a shared space, with a board)
 

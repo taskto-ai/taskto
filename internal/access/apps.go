@@ -37,12 +37,12 @@ import (
 //
 // The space allows write: every capability; read: view and read all records.
 //
-// One more rule keeps an app from being left with nobody to set it right: in a shared space, a
-// workspace admin who may write the space (a member of it, as an editor) can always view the
-// app and manage its roles, whatever roles it assigns, and so can always give someone the
-// data manager role. Roles are removed with the member who held them (someone leaving the
-// space), so without this the last manager's departure would strand the app. It adds no
-// other capability: the admin reads or changes records only through roles they give themselves.
+// One more rule keeps an app from being left with nobody to set it right: roles are removed with
+// the member who held them (someone leaving the space), so the last builder's departure would
+// strand an app whose roles are assigned. Only then, while no assignment gives anyone the builder
+// role, a workspace admin who may write the shared space can view the app and manage its roles,
+// to give someone the builder (or data manager) role again. While the app has a builder, an admin
+// has only the roles assigned to them, like anyone: the rule is a way back, not standing access.
 
 // AppRole is a role in one app.
 type AppRole string
@@ -198,15 +198,15 @@ func defaultRoles(sp Access) []AppRole {
 // appAccess works out a user's access to an app: the capabilities of roles (nil if the app
 // is unrestricted), limited to what sp allows.
 //
-// admin is whether the user administers the space (see the note on the rules above): it only
-// adds to what roles give, view and manage_roles, and never beyond the space's limit.
-func appAccess(sp Access, roles []AppRole, restricted, admin bool) AppAccess {
+// rescue is whether the user may set a stranded app right (see the note on the rules above): it
+// only adds to what roles give, view and manage_roles, and never beyond the space's limit.
+func appAccess(sp Access, roles []AppRole, restricted, rescue bool) AppAccess {
 	limit := spaceLimit(sp)
 	if !restricted {
 		roles = defaultRoles(sp)
 	}
 	got := roleCaps(roles)
-	if admin && limit.ManageRoles {
+	if rescue && limit.ManageRoles {
 		got.View, got.ManageRoles = true, true
 	}
 	return AppAccess{
@@ -301,11 +301,44 @@ func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAcc
 		return AppAccess{}, err
 	}
 	roles, restricted := resolve(rows, userID, anyGrants)
-	admin, err := c.administers(ctx, userID, sp)
+	rescue, err := c.rescues(ctx, userID, sp, appID)
 	if err != nil {
 		return AppAccess{}, err
 	}
-	return appAccess(sp.Access, roles, restricted, admin), nil
+	return appAccess(sp.Access, roles, restricted, rescue), nil
+}
+
+// stranded is whether a set of assignments (every one of an app's) leaves it with nobody who may
+// manage its roles: there are some, and none of them, anyone's or the default's, is the builder's.
+func stranded(all []grantRow) bool {
+	if len(all) == 0 {
+		return false // unassigned: everyone who may write the space builds it
+	}
+	for _, r := range all {
+		if r.role == AppBuilder {
+			return false
+		}
+	}
+	return true
+}
+
+// strandedApps are the stranded apps of a space, by ID, as their stored assignments stand.
+const strandedApps = `
+	SELECT a.id FROM apps a
+	WHERE a.space_id = ?
+	  AND EXISTS (SELECT 1 FROM app_roles r WHERE r.app_id = a.id)
+	  AND NOT EXISTS (SELECT 1 FROM app_roles r WHERE r.app_id = a.id AND r.role = 'builder')`
+
+// rescues is whether userID may set appID of sp right: they administer the space, and the app is
+// stranded.
+func (c *Checker) rescues(ctx context.Context, userID int64, sp Space, appID int64) (bool, error) {
+	admin, err := c.administers(ctx, userID, sp)
+	if err != nil || !admin {
+		return false, err
+	}
+	var isStranded bool
+	err = c.db.QueryRowContext(ctx, `SELECT EXISTS (`+strandedApps+` AND a.id = ?)`, sp.ID, appID).Scan(&isStranded)
+	return isStranded, err
 }
 
 // administers is whether userID is an administrator of sp: a workspace admin, in a shared space
@@ -358,10 +391,28 @@ func (c *Checker) AppsIn(ctx context.Context, userID int64, sp Space) (map[int64
 	if err != nil {
 		return nil, err
 	}
+	rescue := map[int64]bool{}
+	if admin {
+		ids, err := c.db.QueryContext(ctx, strandedApps, sp.ID)
+		if err != nil {
+			return nil, err
+		}
+		for ids.Next() {
+			var id int64
+			if err := ids.Scan(&id); err != nil {
+				_ = ids.Close()
+				return nil, err
+			}
+			rescue[id] = true
+		}
+		if err := errors.Join(ids.Err(), ids.Close()); err != nil {
+			return nil, err
+		}
+	}
 	out := make(map[int64]AppAccess, len(byApp))
 	for id, gs := range byApp {
 		roles, restricted := resolve(gs, userID, anyGrants[id])
-		out[id] = appAccess(sp.Access, roles, restricted, admin)
+		out[id] = appAccess(sp.Access, roles, restricted, rescue[id])
 	}
 	return out, nil
 }
@@ -516,11 +567,16 @@ func (c *Checker) SetAppGrants(ctx context.Context, actorID, spaceID, appID int6
 			}
 		}
 		roles, restricted := resolve(rows, actorID, len(rows) > 0)
+		// After the change: an admin keeps the way back while the new assignments leave the app
+		// stranded, and an admin who gives someone the builder role has handed the app over,
+		// which is no lockout.
 		admin, err := c.administers(ctx, actorID, sp)
 		if err != nil {
 			return err
 		}
-		if !appAccess(sp.Access, roles, restricted, admin).ManageRoles {
+		rescue := admin && stranded(rows)
+		handedOver := admin && !stranded(rows)
+		if !appAccess(sp.Access, roles, restricted, rescue).ManageRoles && !handedOver {
 			return ErrGrantLockout
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM app_roles WHERE app_id = ?`, appID); err != nil {
