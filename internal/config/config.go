@@ -38,6 +38,15 @@ type Config struct {
 	// prefixes, whose X-Forwarded-For gives the client's address (see TrustedProxyPrefixes).
 	// Empty means none: the client is whoever connects.
 	TrustedProxies string
+	// SSOProviders is the path of the operator's single sign-on providers file
+	// (docs/sso.md); empty means password logins only.
+	SSOProviders string
+	// PublicURL is the server's external origin, https://taskto.example.com: the base of the
+	// providers' redirect URIs. Required with SSOProviders (see ValidatePublicURL).
+	PublicURL string
+	// DisablePasswordLogin turns passwords off, for instances where everyone signs in with a
+	// provider. Needs SSOProviders.
+	DisablePasswordLogin bool
 	// ProviderEgressWorkspace and ProviderEgressPersonal are the egress policies of the
 	// provider accounts workspaces' admins add and those any member adds for themselves: which
 	// addresses the server, and the agent runtime, may connect to when they call the
@@ -172,6 +181,24 @@ var settings = []setting{
 			c.TrustedProxies = v
 			return nil
 		},
+	},
+	{
+		flag: "sso-providers", env: "TASKTO_SSO_PROVIDERS", key: "sso_providers",
+		usage: "the single sign-on providers file, JSON (docs/sso.md); needs -public-url",
+		get:   func(c Config) string { return c.SSOProviders },
+		set:   func(c *Config, v string) error { c.SSOProviders = v; return nil },
+	},
+	{
+		flag: "public-url", env: "TASKTO_PUBLIC_URL", key: "public_url",
+		usage: "the server's external https origin, such as https://taskto.example.com, for single sign-on's redirect URIs",
+		get:   func(c Config) string { return c.PublicURL },
+		set:   func(c *Config, v string) error { c.PublicURL = v; return nil },
+	},
+	{
+		flag: "disable-password-login", env: "TASKTO_DISABLE_PASSWORD_LOGIN", key: "disable_password_login", isBool: true,
+		usage: "turn password logins off, so everyone signs in with a single sign-on provider (needs -sso-providers)",
+		get:   func(c Config) string { return strconv.FormatBool(c.DisablePasswordLogin) },
+		set:   setBool(func(c *Config) *bool { return &c.DisablePasswordLogin }),
 	},
 	{
 		flag: "provider-egress-workspace", env: "TASKTO_PROVIDER_EGRESS_WORKSPACE", key: "provider_egress_workspace",
@@ -564,6 +591,21 @@ func Load(args []string, getenv func(string) string, output io.Writer) (Config, 
 	if cfg.Browser && cfg.CLIWorkers == "" {
 		return Config{}, errors.New("config: -browser needs -cli-workers: the browser runs in the CLI worker")
 	}
+	if cfg.SSOProviders != "" {
+		if cfg.PublicURL == "" {
+			return Config{}, errors.New("config: -sso-providers needs -public-url, the server's external address")
+		}
+	}
+	if cfg.PublicURL != "" {
+		origin, err := ValidatePublicURL(cfg.PublicURL, cfg.InsecureCookies)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: -public-url %w", err)
+		}
+		cfg.PublicURL = origin
+	}
+	if cfg.DisablePasswordLogin && cfg.SSOProviders == "" {
+		return Config{}, errors.New("config: -disable-password-login needs -sso-providers: nobody could log in")
+	}
 	if cfg.Agent && cfg.AgentNode == "" {
 		return Config{}, errors.New("config: the agent runtime's Node.js executable is empty")
 	}
@@ -674,4 +716,28 @@ func ValidatePushContact(v string) error {
 		return errors.New("an https: contact needs a host and no credentials")
 	}
 	return errors.New("must be a mailto: address or an https: URL")
+}
+
+// ValidatePublicURL checks the server's external origin and returns it without a trailing
+// slash. It must be https, with a host, and no path, query, fragment or credentials; http is
+// accepted for localhost, 127.x and [::1] when insecureCookies is set, for development.
+func ValidatePublicURL(v string, insecureCookies bool) (string, error) {
+	u, err := url.Parse(v)
+	bad := err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != ""
+	if bad {
+		return "", errors.New("must be an origin such as https://taskto.example.com, without a path, query or credentials")
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		host := u.Hostname()
+		ip, _ := netip.ParseAddr(host)
+		if !insecureCookies || (host != "localhost" && !ip.IsLoopback()) {
+			return "", errors.New("must be https; http is accepted only for localhost with -insecure-cookies")
+		}
+	default:
+		return "", errors.New("must be https; http is accepted only for localhost with -insecure-cookies")
+	}
+	return u.Scheme + "://" + u.Host, nil
 }

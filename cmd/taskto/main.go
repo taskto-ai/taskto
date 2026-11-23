@@ -247,7 +247,17 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	if cfg.InsecureCookies {
 		slog.Warn("the session cookie is sent over plain http (insecure_cookies): use this only on localhost")
 	}
-	authOpts := auth.Options{InsecureCookies: cfg.InsecureCookies, TrustedProxies: cfg.TrustedProxyPrefixes()}
+	authOpts := auth.Options{InsecureCookies: cfg.InsecureCookies, TrustedProxies: cfg.TrustedProxyPrefixes(),
+		PublicURL: cfg.PublicURL, DisablePasswordLogin: cfg.DisablePasswordLogin}
+	if cfg.SSOProviders != "" {
+		// Read now, so a mistake in the file stops the server here; the providers themselves are
+		// asked on first use, so one that is down doesn't.
+		if authOpts.SSO, err = auth.LoadSSOProviders(cfg.SSOProviders, os.Getenv); err != nil {
+			return err
+		}
+		slog.Info("single sign-on is on", "providers", len(authOpts.SSO), "public_url", cfg.PublicURL,
+			"password_login", !cfg.DisablePasswordLogin)
+	}
 	for _, p := range authOpts.TrustedProxies {
 		// Anyone inside a trusted range can claim any address in X-Forwarded-For, and so
 		// dodge the per-address login limits: trust the proxy, not a whole network.

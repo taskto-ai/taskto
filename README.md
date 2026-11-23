@@ -15,6 +15,8 @@ An open-source, self-hosted workspace for one person or a whole company:
   agents.
 - **An app on your phone**: installable from the browser (Add to Home Screen), with an
   offline shell, on a server with HTTPS ([docs/pwa.md](docs/pwa.md)).
+- **Single sign-on**: Google, Authentik or any OpenID Connect provider, for the people an
+  admin invited, set up by the operator ([docs/sso.md](docs/sso.md)).
 - **Languages**: English and Brazilian Portuguese so far, built to take more
   ([docs/i18n.md](docs/i18n.md)).
 
@@ -51,6 +53,7 @@ step-by-step install on a fresh Ubuntu VM.
 | [docs/pwa.md](docs/pwa.md) | the installable app: manifest, offline shell, service worker, updates, phones |
 | [docs/templates.md](docs/templates.md) | the bundled app templates (expense tracker, equipment checkout, inspection), installing them and duplicating apps |
 | [docs/offline.md](docs/offline.md) | apps offline: downloads, the durable outbox for records made offline, sync, sign-out and revocation |
+| [docs/sso.md](docs/sso.md) | single sign-on with Google, Authentik or any OpenID Connect provider |
 | [docs/api.md](docs/api.md) | the HTTP API |
 | [docs/mcp.md](docs/mcp.md) | using it from your own agents (Claude Code, Codex, any MCP client) with an access token |
 | [docs/cli-workers.md](docs/cli-workers.md), [docs/account-switching.md](docs/account-switching.md), [docs/cli-tools.md](docs/cli-tools.md) | the official CLIs on users' own accounts, with TaskTo's tools |
@@ -91,6 +94,9 @@ the default.
 | `-data-dir` | `TASKTO_DATA_DIR` | `data_dir` | `data` | where the database and other data live |
 | `-insecure-cookies` | `TASKTO_INSECURE_COOKIES` | `insecure_cookies` | `false` | send the session cookie over plain http (local development only) |
 | `-trusted-proxies` | `TASKTO_TRUSTED_PROXIES` | `trusted_proxies` | | reverse proxies whose `X-Forwarded-For` gives the client's address: comma-separated IP addresses or CIDR prefixes ([docs/install.md](docs/install.md#the-clients-address-behind-a-proxy)) |
+| `-sso-providers` | `TASKTO_SSO_PROVIDERS` | `sso_providers` | | the single sign-on providers file, JSON ([docs/sso.md](docs/sso.md)); needs `-public-url` |
+| `-public-url` | `TASKTO_PUBLIC_URL` | `public_url` | | the server's external `https` origin, such as `https://taskto.example.com`, which single sign-on's redirect URIs are built on |
+| `-disable-password-login` | `TASKTO_DISABLE_PASSWORD_LOGIN` | `disable_password_login` | `false` | turn password logins off, so everyone signs in with a provider; needs `-sso-providers` |
 | `-provider-egress-workspace` | `TASKTO_PROVIDER_EGRESS_WORKSPACE` | `provider_egress_workspace` | `any` | where workspaces' provider accounts may connect: `any`, `public`, or a comma-separated list of `public`, hosts, IP addresses and CIDR prefixes ([docs/install.md](docs/install.md#where-provider-accounts-may-connect)) |
 | `-provider-egress-personal` | `TASKTO_PROVIDER_EGRESS_PERSONAL` | `provider_egress_personal` | `any` | the same for members' personal provider accounts |
 | `-agent` | `TASKTO_AGENT` | `agent` | `false` | run the agent runtime (see below) |

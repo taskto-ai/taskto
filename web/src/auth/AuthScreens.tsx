@@ -1,10 +1,10 @@
 // The screens before the app: first-run setup, logging in, invites and password reset links.
 // Each answers with the GET /api/me body, which the caller takes as the session.
 
-import { type FormEvent, type ReactNode, useRef, useState } from 'react'
-import { ApiError, api, errorText, type Me } from '../api'
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import { ApiError, api, codeText, errorText, type Me } from '../api'
 import { BrandLogo } from '../BrandLogo'
-import { useT } from '../i18n'
+import { t, useT } from '../i18n'
 
 // The product's name, the same in every language.
 const BRAND = 'TaskTo.AI'
@@ -24,6 +24,13 @@ function AuthFrame({ title, intro, children }: { title: string; intro?: ReactNod
   )
 }
 
+// Until the server says how people sign in, nothing is shown that it might take back: no heading
+// or form yet, so a screen is never drawn twice.
+function AuthLoading() {
+  const t = useT()
+  return <p className="tt-center tt-muted">{t('app.loading')}</p>
+}
+
 function useSubmit(send: () => Promise<Me>, onDone: (me: Me) => void) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -40,6 +47,82 @@ function useSubmit(send: () => Promise<Me>, onDone: (me: Me) => void) {
   }
   return { busy, error, submit }
 }
+
+// How people can sign in on this server (GET /api/login/methods). A server that doesn't know the
+// route is an older one: passwords only.
+type LoginMethods = { password: boolean; sso: { id: string; name: string }[] }
+
+function useLoginMethods(): LoginMethods | null {
+  const [methods, setMethods] = useState<LoginMethods | null>(null)
+  useEffect(() => {
+    let live = true
+    api<Partial<LoginMethods>>('/api/login/methods').then(
+      (m) => live && setMethods({ password: m.password !== false, sso: Array.isArray(m.sso) ? m.sso : [] }),
+      () => live && setMethods({ password: true, sso: [] }),
+    )
+    return () => {
+      live = false
+    }
+  }, [])
+  return methods
+}
+
+// One button per single sign-on provider. `next` is where the provider's sign-in brings the
+// person back to, a path on this server.
+function SsoButtons({ providers, next }: { providers: LoginMethods['sso']; next: string }) {
+  const t = useT()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (providers.length === 0) return null
+  const go = async (id: string) => {
+    setBusy(true)
+    setError(null)
+    try {
+      const { url } = await api<{ url: string }>(`/api/sso/${encodeURIComponent(id)}/start`, {
+        method: 'POST',
+        body: { next },
+      })
+      window.location.assign(url)
+    } catch (err) {
+      setError(errorText(err))
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="tt-sso">
+      {providers.map((p) => (
+        <button key={p.id} type="button" className="tt-button" disabled={busy} onClick={() => void go(p.id)}>
+          {t('auth.sso.continue', { name: p.name })}
+        </button>
+      ))}
+      {error && (
+        <p role="alert" className="tt-error">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// Why a sign-in with a provider failed: the server's redirect to /?sso_error=<code>. It is read
+// once and taken out of the address, so a reload doesn't show it again.
+function useSsoError(): string | null {
+  const [error] = useState(() => {
+    const code = new URLSearchParams(window.location.search).get('sso_error')
+    return code === null ? null : codeText(code, undefined, t('errors.sso_failed'))
+  })
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    if (url.searchParams.has('sso_error')) {
+      url.searchParams.delete('sso_error')
+      window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
+    }
+  }, [])
+  return error
+}
+
+// The page's path and fragment: where a provider's sign-in comes back to.
+const here = () => window.location.pathname + window.location.hash
 
 export function SetupScreen({ onDone }: { onDone: (me: Me) => void }) {
   const t = useT()
@@ -114,45 +197,57 @@ export function SetupScreen({ onDone }: { onDone: (me: Me) => void }) {
 
 export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   const t = useT()
+  const methods = useLoginMethods()
+  const ssoError = useSsoError()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const { busy, error, submit } = useSubmit(
     () => api<Me>('/api/login', { method: 'POST', body: { email, password } }),
     onDone,
   )
+  if (!methods) return <AuthLoading />
   return (
     <AuthFrame title={t('auth.login.title')}>
-      <form className="tt-form" onSubmit={submit}>
-        <label>
-          {t('auth.email')}
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="username"
-          />
-        </label>
-        <label>
-          {t('auth.password')}
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="current-password"
-          />
-        </label>
-        {error && (
-          <p role="alert" className="tt-error">
-            {error}
-          </p>
-        )}
-        <button type="submit" className="tt-button tt-primary" disabled={busy}>
-          {busy ? t('auth.login.busy') : t('auth.login.submit')}
-        </button>
-        <p className="tt-muted tt-small">{t('auth.login.forgot')}</p>
-      </form>
+      {ssoError && (
+        <p role="alert" className="tt-error">
+          {ssoError}
+        </p>
+      )}
+      <SsoButtons providers={methods.sso} next={here()} />
+      {methods.password && methods.sso.length > 0 && <p className="tt-muted tt-small tt-sso-or">{t('auth.sso.or')}</p>}
+      {methods.password && (
+        <form className="tt-form" onSubmit={submit}>
+          <label>
+            {t('auth.email')}
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoComplete="username"
+            />
+          </label>
+          <label>
+            {t('auth.password')}
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoComplete="current-password"
+            />
+          </label>
+          {error && (
+            <p role="alert" className="tt-error">
+              {error}
+            </p>
+          )}
+          <button type="submit" className="tt-button tt-primary" disabled={busy}>
+            {busy ? t('auth.login.busy') : t('auth.login.submit')}
+          </button>
+          <p className="tt-muted tt-small">{t('auth.login.forgot')}</p>
+        </form>
+      )}
     </AuthFrame>
   )
 }
@@ -236,6 +331,7 @@ export function InviteScreen({
   onLogout: () => void
 }) {
   const t = useT()
+  const methods = useLoginMethods()
   const [mode, setMode] = useState<'new' | 'login'>('new')
   // Who the person was before joining, to tell the workspace they joined.
   const before = useRef(me)
@@ -300,9 +396,24 @@ export function InviteScreen({
       </AuthFrame>
     )
   }
+  if (!methods) return <AuthLoading />
+  // Signing in with a provider comes back to this invite, signed in.
+  const sso = <SsoButtons providers={methods.sso} next={`/invite#${token}`} />
+  const or = methods.password && methods.sso.length > 0 && (
+    <p className="tt-muted tt-small tt-sso-or">{t('auth.sso.or')}</p>
+  )
+  if (!methods.password) {
+    return (
+      <AuthFrame title={t('auth.invite.title')} intro={<p className="tt-muted">{t('auth.invite.ssoIntro')}</p>}>
+        {sso}
+      </AuthFrame>
+    )
+  }
   if (mode === 'login') {
     return (
       <AuthFrame title={t('auth.invite.loginTitle')} intro={<p className="tt-muted">{t('auth.invite.loginIntro')}</p>}>
+        {sso}
+        {or}
         <form className="tt-form" onSubmit={submit}>
           <label>
             {t('auth.email')}
@@ -332,6 +443,8 @@ export function InviteScreen({
   }
   return (
     <AuthFrame title={t('auth.invite.title')} intro={<p className="tt-muted">{t('auth.invite.newIntro')}</p>}>
+      {sso}
+      {or}
       <form className="tt-form" onSubmit={submit}>
         <label>
           {t('auth.yourName')}

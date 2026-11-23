@@ -43,6 +43,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/workspaces/{workspace}/tokens/{token}", s.RequireMember(http.HandlerFunc(s.handleDeleteToken)))
 
 	s.passwordRoutes(mux)
+	s.ssoRoutes(mux)
 }
 
 const (
@@ -146,6 +147,10 @@ func (s *Service) handleSetup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if s.opts.DisablePasswordLogin {
+		passwordLoginDisabled(w)
+		return
+	}
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -186,7 +191,8 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !known {
+	// An account made by signing in with a provider has no password: it fails like a wrong one.
+	if !known || hash == "" {
 		s.hasher.burn(r.Context(), req.Password)
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
 		return
@@ -385,6 +391,10 @@ func (s *Service) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.opts.DisablePasswordLogin {
+		passwordLoginDisabled(w)
+		return
+	}
 	name := strings.TrimSpace(req.Name)
 	if !validName(name) {
 		nameError(w)
@@ -441,6 +451,10 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	writeError(w, status, code, msg)
+}
+
+func passwordLoginDisabled(w http.ResponseWriter) {
+	writeError(w, http.StatusForbidden, apierr.CodePasswordLoginDisabled, "passwords are turned off: sign in with a provider")
 }
 
 func tooMany(w http.ResponseWriter, wait time.Duration) {

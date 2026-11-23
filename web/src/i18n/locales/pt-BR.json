@@ -555,6 +555,10 @@
     }
   },
   "auth": {
+    "sso": {
+      "continue": "Continuar com {name}",
+      "or": "ou"
+    },
     "login": {
       "forgot": "Esqueceu sua senha? Peça um link de redefinição a um administrador do espaço de trabalho.",
       "title": "Entrar",
@@ -592,6 +596,7 @@
       "joining": "Entrando…",
       "join": "Entrar no espaço de trabalho",
       "logOut": "Sair, para usar outra conta",
+      "ssoIntro": "Você foi convidado. Entre com o seu provedor, usando o endereço para o qual o convite foi enviado.",
       "loginTitle": "Entre para participar",
       "loginIntro": "Entre na conta do endereço ao qual o convite foi enviado.",
       "loginSubmit": "Entrar e participar",
@@ -740,6 +745,13 @@
     "reset_invalid": "Este link de redefinição não existe, já foi usado ou expirou. Peça um novo a um administrador do espaço de trabalho.",
     "reset_own": "Para trocar a sua própria senha, use Configurações → Senha, com a senha atual.",
     "reset_elsewhere": "Este membro também participa de um espaço de trabalho que você não administra. Só quem administra todos os espaços de trabalho dele pode gerar um link de redefinição.",
+    "password_login_disabled": "As senhas estão desativadas neste servidor: continue com o seu provedor de login.",
+    "sso_unknown_provider": "Esse provedor de login não está configurado neste servidor.",
+    "sso_failed": "Não foi possível entrar com o seu provedor. Tente de novo e avise quem administra este servidor se continuar falhando.",
+    "sso_expired": "Esse login demorou demais ou já foi usado. Comece de novo.",
+    "sso_email_unverified": "O seu provedor não confirmou o seu e-mail, então não é possível entrar com ele.",
+    "sso_no_account": "Não há conta para este e-mail. Peça um convite a um administrador do espaço de trabalho.",
+    "sso_account_linked_elsewhere": "A conta deste e-mail já está vinculada a outro login deste provedor. Peça ajuda a um administrador do espaço de trabalho.",
     "board_archived": "Este quadro está arquivado: só pode ser lido.",
     "board_changed": "Alguém alterou este quadro enquanto isso: recarregue e tente de novo.",
     "card_changed": "Alguém alterou este cartão enquanto isso: recarregue e tente de novo.",
