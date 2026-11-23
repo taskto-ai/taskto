@@ -104,6 +104,12 @@ const (
 	CodeAppRolesNotMember    Code = "app_roles_not_member" // 400: a role for someone who can't read the space
 	CodeAppRolesLockout      Code = "app_roles_lockout"    // 400: the change would take the caller's own right to manage roles
 
+	// Querying an app's records (internal/apps/query.go).
+
+	CodeAppQueryCursor    Code = "app_query_cursor"    // 400: the cursor isn't one this query gave; start again from the first page
+	CodeAppQueryField     Code = "app_query_field"     // 400: a field the live release doesn't declare, or can't be used so; params: field
+	CodeAppQueryCondition Code = "app_query_condition" // 400: an operator or value that doesn't fit the field; params: field, op
+
 	// Drafts and releases of apps (internal/apps/release.go).
 
 	CodeAppDefinitionVersion   Code = "app_definition_version"   // 400: params: version, supported
@@ -116,6 +122,13 @@ const (
 	CodeAppMigrationRequired   Code = "app_migration_required"   // 409: schema changes to acknowledge; params: changes
 	CodeAppMigrationUnneeded   Code = "app_migration_unneeded"   // 409: an acknowledgement of a change that isn't happening; params: changes
 	CodeAppMigrationInvalid    Code = "app_migration_invalid"    // 400
+
+	// Home widgets and navigation pins (internal/apps/home.go).
+
+	CodeHomeWidgetNotFound Code = "home_widget_not_found" // 404: the app's live release has no such widget
+	CodeHomeLimit          Code = "home_limit"            // 409: params: max
+	CodeHomeOrderInvalid   Code = "home_order_invalid"    // 400: the ids aren't the caller's of that kind
+	CodeHomeDefaultsShared Code = "home_defaults_shared"  // 409: defaults are for the apps of shared spaces
 
 	// The knowledge base (internal/knowledge).
 

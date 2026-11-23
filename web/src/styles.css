@@ -1346,6 +1346,205 @@ a.tt-button.tt-primary {
   border-inline-start: 2px solid var(--tt-line);
 }
 
+/* The records explorer: a table on a wide screen, cards on a phone, and one record's editor. */
+
+.tt-explorer,
+.tt-record-detail,
+.tt-explorer-foot,
+.tt-explorer-filters,
+.tt-explorer-totals {
+  display: grid;
+  gap: 0.6rem;
+  min-inline-size: 0;
+}
+
+.tt-explorer-search,
+.tt-explorer-filter-form,
+.tt-explorer-sort {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tt-explorer-search input[type="search"] {
+  flex: 1 1 12rem;
+  min-inline-size: 0;
+}
+
+.tt-explorer-filter-form > * {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.tt-explorer-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tt-explorer-chips li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline-start: 0.6rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 999px;
+  overflow-wrap: anywhere;
+}
+
+.tt-table-scroll {
+  overflow-x: auto;
+  max-inline-size: 100%;
+}
+
+.tt-explorer-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+}
+
+.tt-explorer-table th,
+.tt-explorer-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: start;
+  border-block-end: 1px solid var(--tt-line);
+  vertical-align: baseline;
+}
+
+.tt-explorer-table td.tt-num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.tt-sort {
+  all: unset;
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tt-sort:focus-visible {
+  outline: 2px solid var(--tt-accent, currentColor);
+  outline-offset: 2px;
+}
+
+.tt-explorer-aggregates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0;
+}
+
+.tt-explorer-aggregates dt {
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.tt-explorer-aggregates dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.tt-record-open {
+  all: unset;
+  cursor: pointer;
+  display: block;
+  padding-block: 0.2rem;
+  min-block-size: 2.75rem;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
+.tt-record-open:focus-visible {
+  outline: 2px solid var(--tt-accent, currentColor);
+  outline-offset: 2px;
+}
+
+.tt-record-fields {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+}
+
+.tt-record-fields > div,
+.tt-record-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: baseline;
+}
+
+.tt-record-fields dt {
+  opacity: 0.75;
+}
+
+.tt-record-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-record-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tt-record-field {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.tt-record-field input,
+.tt-record-field select {
+  inline-size: 100%;
+  box-sizing: border-box;
+  min-block-size: 2.5rem;
+}
+
+.tt-record-field-label {
+  display: flex;
+  gap: 0.25rem;
+  align-items: baseline;
+}
+
+.tt-record-field-name {
+  font-weight: 600;
+}
+
+.tt-conflict {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  border: 2px solid var(--tt-accent, currentColor);
+  border-radius: var(--tt-radius);
+}
+
+.tt-conflict-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+}
+
+.tt-conflict-table th,
+.tt-conflict-table td {
+  text-align: start;
+  padding: 0.25rem 0.4rem;
+  border-block-end: 1px solid var(--tt-line);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 48rem) {
+  .tt-records-panel {
+    padding: 0.5rem;
+  }
+
+  .tt-explorer-filter-form select,
+  .tt-explorer-filter-form input {
+    flex: 1 1 8rem;
+  }
+}
+
 .tt-app-offline {
   display: flex;
   align-items: center;
@@ -2326,4 +2525,169 @@ html[data-keyboard="open"] .tt-composer {
   .tt-tabs a {
     min-height: var(--tt-touch);
   }
+}
+
+/* Pinned apps: a section of their own in the navigation, after the platform's pages. A pin's label
+   is text, cut with an ellipsis rather than letting it stretch the menu. */
+.tt-pins {
+  margin-block-start: 0.6rem;
+  padding-block-start: 0.4rem;
+  border-block-start: 1px solid var(--tt-line);
+}
+
+.tt-pins-title {
+  margin: 0;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tt-muted);
+}
+
+.tt-pins ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-pin-label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Home: widgets in a grid that is one column on a phone, and wider widgets take more of a row on
+   larger screens. Each widget is a card; its body is bounded and scrolls, so one can't take the page. */
+.tt-widgets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-widget-cell {
+  min-inline-size: 0;
+}
+
+@media (min-width: 48rem) {
+  .tt-widget-cell[data-size="medium"] {
+    grid-column: span 2;
+  }
+
+  .tt-widget-cell[data-size="large"] {
+    grid-column: 1 / -1;
+  }
+}
+
+.tt-widget {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  block-size: 100%;
+  min-inline-size: 0;
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-widget[data-state="unavailable"],
+.tt-widget[data-state="failed"] {
+  border-style: dashed;
+}
+
+.tt-widget-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.tt-widget-title {
+  display: grid;
+  min-inline-size: 0;
+}
+
+.tt-widget-title h2 {
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.tt-widget-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.tt-widget-body {
+  max-block-size: 22rem;
+  overflow: auto;
+  min-inline-size: 0;
+}
+
+.tt-widget-body .tt-app {
+  padding: 0.5rem;
+  border: 0;
+}
+
+.tt-widget-open {
+  align-self: end;
+  font-size: 0.9rem;
+}
+
+.tt-home-customize {
+  display: grid;
+  gap: 1.25rem;
+  margin-block-start: 1.25rem;
+  padding-block-start: 1rem;
+  border-block-start: 1px solid var(--tt-line);
+}
+
+.tt-home-customize h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1.05rem;
+}
+
+.tt-home-customize h3 {
+  margin: 0 0 0.3rem;
+  font-size: 0.95rem;
+}
+
+.tt-home-apps,
+.tt-home-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-home-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tt-home-name {
+  flex: 1 1 10rem;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-home-apps > li {
+  padding: 0.6rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  background: var(--tt-surface);
 }

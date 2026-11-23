@@ -125,7 +125,7 @@ test('each person picks their language in the account menu; it is saved and foll
     within(nav)
       .getAllByRole('link')
       .map((a) => a.textContent),
-  ).toEqual(['Conversas', 'Base de conhecimento', 'Quadros', 'Apps', 'Configurações'])
+  ).toEqual(['Início', 'Conversas', 'Base de conhecimento', 'Quadros', 'Apps', 'Configurações'])
   expect(document.documentElement.lang).toBe('pt-BR')
   await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH' && c.path === '/api/me')).toHaveLength(1))
   expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ locale: 'pt-BR' })

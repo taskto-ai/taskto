@@ -39,6 +39,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("GET "+apps+"/{app}/releases/{release}", read(s.handleRelease))
 	mux.Handle("GET "+apps+"/{app}/records", read(s.handleRecords))
 	mux.Handle("GET "+apps+"/{app}/records/deleted", read(s.handleDeleted))
+	mux.Handle("GET "+apps+"/{app}/records/query", read(s.handleQuery))
 	mux.Handle("GET "+apps+"/{app}/records/{record}/history", read(s.handleHistory))
 	mux.Handle("POST "+apps+"/{app}/records/{record}/restore", write(s.handleRestore))
 	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
@@ -161,7 +162,19 @@ func (s *Service) handleSurface(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	msgs, err := s.surface(r.Context(), req.space, req.actor, req.app, r.URL.Query().Get("release"))
+	q := r.URL.Query()
+	var msgs []Message
+	var err error
+	if widget := q.Get("widget"); widget != "" {
+		// A widget is drawn from the live release alone.
+		if q.Get("release") != "" || q.Get("screen") != "" {
+			writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "widget can't be combined with release or screen")
+			return
+		}
+		msgs, err = s.widgetSurface(r.Context(), req.space, req.actor, req.app, widget)
+	} else {
+		msgs, err = s.surface(r.Context(), req.space, req.actor, req.app, q.Get("release"), q.Get("screen"))
+	}
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -174,11 +187,21 @@ func (s *Service) handleAction(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// An action of a widget (?widget=) is answered with the rows a widget holds, not all. The
+	// request is checked before the action runs: a refusal must mean nothing was done.
+	widget := r.URL.Query().Get("widget")
+	if widget != "" && !namePattern.MatchString(widget) {
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "widget is a widget's id")
+		return
+	}
 	var action ClientAction
 	if !readJSON(w, r, &action) {
 		return
 	}
 	msgs, err := s.act(r.Context(), req.space, req.actor, req.app, action)
+	if err == nil && widget != "" {
+		msgs = BoundItems(msgs, MaxWidgetItems)
+	}
 	if errors.Is(err, ErrInvalid) {
 		// The screen sent something the app doesn't allow: the request was well formed.
 		invalid(w, http.StatusUnprocessableEntity, err)
@@ -288,6 +311,26 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request, deleted bool) {
 		return
 	}
 	out, err := s.listRecords(r.Context(), req.space, req.actor, req.app, deleted)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleQuery answers a page of the app's records, filtered, searched and sorted, with the totals
+// of all that match (query.go).
+func (s *Service) handleQuery(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	q, err := QueryFromValues(r.URL.Query())
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	out, err := s.queryRecords(r.Context(), req.space, req.actor, req.app, q)
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -415,7 +458,10 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var incompatible *incompatibleError
 	var migration *migrationError
 	var conflict *conflictError
+	var apiErr *apierr.Error
 	switch {
+	case errors.As(err, &apiErr):
+		apierr.WriteError(w, apiErr)
 	case errors.As(err, &conflict):
 		// With the record as it is now, if the caller reads it, so they can reapply their change.
 		body := map[string]any{"error": err.Error(), "code": apierr.CodeAppRecordConflict, "params": apierr.Params{"id": conflict.id}}

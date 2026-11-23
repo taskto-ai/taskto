@@ -50,6 +50,7 @@ func newEnv(t *testing.T) *env {
 	accounts.Routes(mux)
 	spaces.Routes(mux)
 	s.Routes(mux)
+	s.HomeRoutes(mux, accounts)
 	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux)}
 }
 
@@ -374,6 +375,7 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 			{http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": a.Version, "name": "Mine now"}},
 			{http.MethodPost, appPath(s, a.ID, "/move"), map[string]any{"version": a.Version, "space_id": s.ID}},
 			{http.MethodGet, appPath(s, a.ID, "/surface"), nil},
+			{http.MethodGet, appPath(s, a.ID, "/records/query"), nil},
 			{http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{"description": "x", "amount": "1"})},
 			{http.MethodGet, appPath(s, a.ID, "/roles"), nil},
 			{http.MethodPut, appPath(s, a.ID, "/roles"), map[string]any{"grants": []any{}}},

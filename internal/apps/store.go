@@ -709,6 +709,11 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 		if cur.Version != version {
 			return ErrStale
 		}
+		// What the space's publishers set as defaults for its members stays in the space: the
+		// app's new members never chose it.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM home_defaults WHERE app_id = ?`, appID); err != nil {
+			return err
+		}
 		// Once the app is known to be there (an unknown one is a 404 first): a move to where it
 		// is would change nothing but its version.
 		if to.ID == sp.ID {
@@ -784,7 +789,11 @@ func launchable(ctx context.Context, q queryer, spaceID, appID int64) (App, erro
 // the live release (ErrNotPublished before the first publish), "draft" for the draft, or a
 // release number; the draft and releases that are not live are for those who may design or
 // publish. Every screen is drawn with the same rows, those the caller reads.
-func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, appID int64, which string) ([]Message, error) {
+//
+// screen, for an app with screens, is the screen it opens on instead of its entry (what a pin
+// that names one asks for); a name that isn't one of the screens that don't show a record is
+// refused.
+func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, appID int64, which, screen string) ([]Message, error) {
 	if err := may(sp, access.Read); err != nil {
 		return nil, err
 	}
@@ -808,7 +817,13 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 	if err != nil {
 		return nil, err
 	}
-	return Surface(SurfaceID(a.ID), def, rows), nil
+	if screen != "" {
+		target, ok := def.screen(screen)
+		if !ok || target.Record {
+			return nil, invalidf("screen must name one of the app's screens that doesn't show a record")
+		}
+	}
+	return openedAt(Surface(SurfaceID(a.ID), def, rows), SurfaceID(a.ID), def, rows, screen), nil
 }
 
 // act runs a client action and returns the message that updates the screen. Errors in

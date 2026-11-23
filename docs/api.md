@@ -98,6 +98,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_release_incompatible` | 409 | A rollback to a release the app's data doesn't fit; `fields` names the fields that don't. |
 | `app_release_already_live` | 409 | The release to roll back to is the live one. |
 | `app_nothing_to_publish` | 409 | The draft is the live release's definition. |
+| `home_widget_not_found` | 404 | The app's live release offers no widget with that id. |
+| `home_limit` | 409 | A person has at most `max` widgets (or pins) in a workspace, and a space at most `max` default widgets (or pins). |
+| `home_order_invalid` | 400 | The ids to put in order aren't all the caller's own placements of that kind, or one is listed twice. |
+| `home_defaults_shared` | 409 | Defaults are only for the apps of shared spaces. |
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
 | `app_migration_invalid` | 400 | An acknowledgement that is malformed: an unknown `change`, a field that is no name, or one twice. |
@@ -106,6 +110,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
 | `app_row_not_found` | 422 | The action names a row the app doesn't have (any more), or one the caller may not change. |
 | `app_record_conflict` | 409 | The record changed since the client read it (or isn't deleted, for a restore); `params.id` is its ID, and `current` is the record as an item as it is now, only when the caller may read it. |
+| `app_query_cursor` | 400 | The `cursor` of a records query isn't one this query gave (it is another query's, another person's or damaged): start again from the first page. |
+| `app_query_field` | 400 | A records query names a `field` the live release doesn't declare, or can't use that way (a sum of text, a deletion time of live records). |
+| `app_query_condition` | 400 | A filter's operator or value doesn't fit its `field` (`op` says which operator). |
 | `app_field_required` | 422 | The action leaves out `field`, which the app requires. |
 | `app_field_too_long` | 422 | The value of `field` has more than `max` characters. |
 | `app_field_not_number` | 422 | The value of `field` isn't a number. |
@@ -1341,7 +1348,8 @@ the app's roles. **Design** is changing the app's draft, renaming it and moving 
 created, which includes the ones the agent created for them; records whose creator's
 account was deleted are in nobody's own, and only readers of all see them. Every way of
 reading records answers to the read scope: the screen's rows, its summaries (`count`,
-`sum`), `rows` in an app's list and the agent's `list_app_rows`. A change to a record the
+`sum`), `rows` in an app's list, the records query (pages, totals and aggregates) and the
+agent's `list_app_rows` and `query_app_rows`. A change to a record the
 caller may not change is answered as `app_row_not_found`.
 
 ### Records: revisions, history and deleting
@@ -1405,6 +1413,58 @@ The live records the caller may read, most recently changed first, at most 1,000
 holding the fields the **live release's** collection declares (the draft's don't count until
 published); `created_by` and the others are
 `{"id", "name", "agent", "via"}` or `null`. Read scope and `403`/`404` as for the history.
+
+### `GET …/apps/{app}/records/query`
+
+The data explorer's route: **a page** of the records the caller may read, filtered, searched and
+sorted by the server, with **totals over every record that matches**, never over the page.
+`{"records": [ … ], "next_cursor": "…" | null, "total": 412, "aggregates": [ … ]}`; each record is
+as in `GET …/records`. Parameters, all optional:
+
+| Parameter | Meaning |
+|---|---|
+| `state` | `live` (default) or `deleted`. |
+| `filter` | `field:op:value`, repeated, at most 8, **all** of which must hold (the value is what follows the second colon, so a time `12:30` is fine). `op` is `eq` or `ne` for every field, `lt`, `lte`, `gt`, `gte` for number, date, time and string fields, and `contains` for a string field (a case-insensitive substring, by Unicode case folding). The value is of the field's type; a number or a boolean may be text. A record with no value of the field equals nothing: `ne` matches it, the other operators don't (as in [rules](#personal-apps)). |
+| `q` | Words (at most 5, each at most 100 characters) that each have to be part of some string or choice field of the record, in any case. |
+| `sort` | A declared field, `_updated` (default), `_created`, `_deleted` (deleted records only) or `id`. |
+| `dir` | `asc` or `desc`: `desc` by default for the three times, `asc` for the rest. |
+| `limit` | Records in the page: 50 by default, at most 200. |
+| `cursor` | The `next_cursor` of the previous page **of the same query**. |
+| `aggregate` | `kind` or `kind:field`, repeated, at most 8: `count` (of the matching records, or with a field those that have a value of it), `sum` and `avg` of a number field, `min` and `max` of a number, date or time field. |
+
+**What a query reads.** The fields it names are the **live release's**, and a value counts only
+if it is of its field's type, as JSON holds it: a field the live release removed is in no filter,
+sort, search or total (it is a `400 app_query_field`), nor is a value stored before the field was
+retyped (a number kept as text, `"12"`, is shown as it is stored but is in no comparison, sort or
+sum, as in no summary). Deleted records are in none of the live ones, and the read scope of the
+caller's role (all records, or only the ones they created) applies to the page, to `total` and to
+every aggregate: they are computed by SQL over exactly the records the caller reads. A role that
+reads no record is `403 app_forbidden` (`read_records`), an app the caller can't see `404`.
+
+**The order is total.** Records are ordered by the sort key, those with no value of it last
+whichever the direction, and then by `id` in the same direction as the key. A page is read **by
+keyset**: it asks for the records after the position the cursor names in that order, so paging
+neither skips nor repeats a record that does not change meanwhile, whatever is inserted or deleted
+between the pages. A record whose own sort key changes meanwhile (one edited while paging by
+`_updated`) is read where it is when each page is asked: again if it moved into the pages still to
+come, not at all if it moved into the ones already read; sort by `_id` or `_created` for a walk
+that edits can't disturb. A text field orders by its first 200 characters, then by `id`, so a
+cursor stays short. `total` and `aggregates` are asked
+again with every page, so they are the whole matching set as of that request.
+
+**Cursors** are opaque. A cursor is only a position and a fingerprint of the query it ends a
+page of (the app, the caller, their read scope, the state, the filters, the search and the order,
+not the page size or the aggregates); a cursor of another query, or of another person, or damaged
+or too long, is `400 app_query_cursor`. The scope, the filters and everything else are decided
+again at every request, so a cursor, even one forged with a valid fingerprint, can put a caller
+anywhere in the order of the records they read and nowhere else.
+
+**Aggregates** come back in the order asked: `{"kind", "field", "value", "count"}`, `count` being
+the records the value was computed from (those with a value of the field). A `sum` or `count` over
+none is 0; `avg`, `min` and `max` over none are `null`, as is a result too large to be a number.
+Dates and times are given as the text they are. Numbers are summed as floating point in SQL, in
+no particular order, so a sum of many fractions may differ from one added in another order in its
+last digits.
 
 ### `GET …/apps/{app}/records/{record}/history`
 
@@ -1538,6 +1598,24 @@ saying what is wrong) unless:
   once it has run.
 - **summaries**, at most 20: `{"kind": "count"}` or `{"kind": "sum", "field": …}` of a
   number field, shown as text; `"where"`, a rule, narrows either to the rows it holds of.
+- **contributions** (optional, version 2): what the app offers the platform's [Home page and
+  navigation](#home-widgets-and-pins), in versioned slots:
+  `{"version": 1, "widgets": […], "pin": {…}}`. `version` is `1` (left out, it is). A widget is
+  `{"id", "title", "kind", "size"?, "summaries"?, "screen"?}`: an `id` (like a field's name,
+  unique among the app's widgets), a `title` of plain text (1–60 characters, one line, no space
+  at either end), a `kind` of `summaries` (1–4 `{"summary": a summary's name, "label": plain
+  text of 1–40 characters}`, each summary once), `screen` (`"screen"` names one of the app's
+  screens that doesn't show a record, so the app needs `screens`) or `shortcut` (only a title
+  that opens the app), and a `size` of `small` (the default), `medium` or `large`. At most 6
+  widgets. The `pin` is `{"label": plain text of 1–30 characters, "screen"?: a screen that shows
+  no record}`; the app is pinned under its name if it has none. Anything else is refused: an
+  unknown slot or key (`400 invalid_json`), a version this server doesn't read, text with control
+  characters or a line break, a reference to a summary or screen the app doesn't have, nothing at
+  all (`contributions` that offers neither widgets nor a pin). `requires` gains the capability of
+  each slot the definition fills, `slot.home_widgets.v1` and `slot.nav_pin.v1` (and, for a
+  summaries widget, `component.Column` and `component.Stat`, which draw it), so a client that
+  doesn't know a slot asks to be updated instead of drawing it wrongly. A contribution is only
+  an offer, plain data: it names no page, address or component of its own, and grants no access.
 - The whole definition is at most 48 KiB of JSON.
 
 The data model an app's screen binds to: `/items` is the live rows, each with its `id`, its
@@ -1605,6 +1683,13 @@ the record a screen shows; it hides an input and is never what limits a row.
 An app holds at most 5,000 live rows and 4 MiB of their data (`409` beyond; deleted
 records don't count, and restoring one needs room for it); a space at most 500 apps.
 
+What is capped, as it stays: a launched app's **screen** is drawn from all of its live rows at
+once (its items and summaries are computed in memory, so the 5,000 rows and 4 MiB are the
+limit of what one screen holds), `GET …/records` and `…/records/deleted` answer the 1,000 most
+recent, and `list_app_rows` reads every row a page at a time. The data explorer
+(`GET …/records/query`) and `query_app_rows` are not bound by those: pages and totals are
+computed in the database.
+
 ### `GET …/apps`
 
 The space's apps, by name, without definitions: `{"apps": [ … ]}`. Offline apps are left
@@ -1649,6 +1734,17 @@ previews, and its actions are not run (to try a draft use [`…/preview`](#post-
 summaries over those rows alone. A client names the release it drew in its actions: it knows
 it from `live.number` of the app it read, which it passes as `?release=`.
 
+`?screen=<name>` opens an app with screens on that screen instead of its entry (`400` unless it
+is one of its screens that doesn't show a record): what a pin that names a screen does.
+`?widget=<id>` draws one of the **live release's** [Home widgets](#home-widgets-and-pins)
+instead: a summaries widget is a column of `Stat` components over its summaries (the data model
+has only those, counted over the rows the caller reads); a screen widget is the app's own screens
+opened on the widget's, with at most 25 rows (the latest) in `/items`, its summaries counting
+every row the caller reads; a shortcut draws nothing. It is the app's surface, so it is refused
+as it is (`404` for a caller who may not view the app, `409` while it is offline or unpublished),
+and `404 home_widget_not_found` for a widget the release doesn't offer. `widget` can't be
+combined with `release` or `screen` (`400`).
+
 ### `POST …/apps/{app}/actions`
 
 Writers, and by the action's kind, the submit capability (`insert`) or the right to modify
@@ -1689,6 +1785,9 @@ the fields the live release declares** (as it declares them), and its summaries 
 read such fields: nothing the live app leaves unseen, such as a field it removed, is returned. A
 value stored with another type than its field's current one is left out of the data model (and
 stays stored).
+
+An action may be sent with `?widget=<id>` (a widget's actions): it is the same action with the
+same checks, answered with at most 25 rows in `/items`.
 
 ### `POST …/apps/{app}/preview`
 
@@ -1805,6 +1904,94 @@ definition version (`web/src/apps/catalog.tsx`, held to the server's by
 drawn: the app shows that it must be updated, and the page reloaded, instead of a broken
 screen. Every existing app became release 1, live, with its current definition also as its
 draft, when this arrived; nothing about who can use it changed.
+
+## Home widgets and pins
+
+Each person has a **Home** page in a workspace: widgets from their apps, and **pins**, apps listed
+in the navigation in a section of their own, after the platform's pages. An app *offers* them
+in its definition ([`contributions`](#the-definition)); the person chooses which to use. A widget
+is a bounded view, never markup of its own, and a contribution can't replace the platform's login,
+settings, permission prompts or publishing controls: pins are one more link to launch an app, their
+labels are plain text, and what a widget shows or does is the app's own surface and actions
+(`GET …/apps/{app}/surface?widget=` and `POST …/apps/{app}/actions`), with the caller's access to
+the app, so a read scope of `own` shows only their own records' summaries and an action needs
+the capability it always does.
+
+What is on a person's Home is a list of **placements**, each naming an app and, for a widget, one
+of its widgets; they are stored per user and read back through the one place that answers app
+access, so nothing about a placement is trusted. Reading Home gives each item as the caller
+sees it **now**:
+
+- an app the caller can no longer view (a lost role, a space they left, an app moved where they
+  can't read it) or that was deleted is **left out** as if it were never placed, and comes back
+  if they get access again;
+- an app that is offline, was never published, or whose live release no longer has the widget is
+  **unavailable**: `state` is `unavailable` with a `reason` (`offline`, `unpublished`, `removed`),
+  and it has the app's name (the caller may view the app) and no widget, label or release;
+- otherwise `state` is `ready`, with the `widget` (or, for a pin, its `label` and `screen`, else the
+  app's name) and the live `release` (`number`, `definition_version`, `requires`) a client checks
+  before drawing it.
+
+Every route needs a session (`401`) and checks the workspace (`404` for another). Workspace routes
+are under `/api/workspaces/{workspace}/home`; a person's placements are theirs alone (another's
+id is `404`, never `403`).
+
+### `GET /api/workspaces/{workspace}/home`
+
+The caller's Home: `{"widgets": […], "pins": […], "hidden": […], "limits": {"widgets": 24,
+"pins": 20}}`. An item is `{"id"?, "default_id"?, "source": "personal"|"default", "kind":
+"widget"|"pin", "space_id", "app_id", "app_name", "widget_id"?, "widget"?, "label"?, "screen"?,
+"state", "reason"?, "release"?, "can_manage"?}`. The defaults of the caller's shared spaces
+come first, then their own in the order they chose; an item the caller placed themselves
+replaces the same default. `hidden` are the defaults they hid.
+
+### `GET /api/workspaces/{workspace}/home/available`
+
+The apps the caller may put on Home or pin: those they may view, online and published, in the
+spaces they read, `{"apps": [{"space_id", "space_name", "space_kind", "app_id", "name",
+"widgets", "pin", "can_set_defaults", "defaults"}]}`. `can_set_defaults` and the `defaults` set
+are only for those who may [set defaults](#shared-defaults) for the app.
+
+### `POST /api/workspaces/{workspace}/home/items`
+
+Places a widget or pins an app: `{"kind": "widget"|"pin", "space_id", "app_id", "widget"}`, with
+`widget` for a widget only. `201` with the item, going last; placing what is already placed
+returns it. `404` for a space of another workspace or an app the caller may not view,
+`409 app_offline` or `app_not_published`, `404 home_widget_not_found`, `409 home_limit` (24
+widgets, 20 pins per workspace), `400` for a request that isn't one of those shapes.
+
+### `DELETE /api/workspaces/{workspace}/home/items/{item}`
+
+Takes one of the caller's placements away. `204`; `404` for one that isn't theirs.
+
+### `PUT /api/workspaces/{workspace}/home/order`
+
+`{"kind": "widget"|"pin", "ids": […]}`: puts the caller's placements of that kind in the order
+of `ids`, the ones not listed after them. All or nothing: an id that isn't theirs, of that kind,
+or is listed twice is `400 home_order_invalid`. `200` with Home.
+
+### `PUT` and `DELETE /api/workspaces/{workspace}/home/hidden/{default}`
+
+Hides a default of a shared space the caller reads, from them alone, or shows it again. `204`,
+idempotent; `404` for a default of an app the caller may not view.
+
+### Shared defaults
+
+The people who may **publish** an app of a shared space (the app's `publish` capability, which
+every writer of the space has in an app without roles, and is the publisher role's in one with
+them) may set its widgets and pin as defaults for the space's members, who see them unless they
+hide them: a default changes what every member sees when they open TaskTo.AI, as publishing
+changes what every member uses. Defaults are for the apps of **shared** spaces only, are bounded
+(12 widgets and 8 pins per space), and go when the app moves to another space. Everyone who
+reads the space may list them; they are seen only for the apps they may view.
+
+- `GET …/spaces/{space}/home/defaults`: `{"defaults": […]}`, each item with `can_manage`, whether
+  the caller may remove it.
+- `POST …/spaces/{space}/home/defaults`: `{"kind", "app_id", "widget"}` as above. `201` with the
+  item (`default_id`). A reader of the space `403`, someone who may write the space but not publish
+  the app `403 app_forbidden` (`publish`), a private space `409 home_defaults_shared`.
+- `DELETE …/spaces/{space}/home/defaults/{default}`: `204`, with the same rights; `404` for a
+  default of another space.
 
 ## Model providers
 

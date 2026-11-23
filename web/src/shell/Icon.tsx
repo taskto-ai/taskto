@@ -2,6 +2,10 @@
 
 const PATHS = {
   menu: 'M4 6h16M4 12h16M4 18h16',
+  home: 'M4 11l8-7 8 7M6 10v10h12V10M10 20v-6h4v6',
+  pin: 'M9 4h6l-1 6 3 3H7l3-3-1-6zM12 13v7',
+  up: 'M6 15l6-6 6 6',
+  down: 'M6 9l6 6 6-6',
   conversations: 'M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z',
   knowledge: 'M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2V5zM4 21a2 2 0 0 1 2-2h13v2',
   boards: 'M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z',

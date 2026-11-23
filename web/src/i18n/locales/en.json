@@ -225,6 +225,67 @@
       "modify_records": "You can’t change or delete records in this app with your role.",
       "read_records": "Your role in this app doesn’t let you read its records.",
       "manage_roles": "You can’t manage this app’s roles: that needs the builder role."
+    },
+    "explorer": {
+      "back": "Back to the records",
+      "saved": "Saved.",
+      "save": "Save changes",
+      "delete": "Delete",
+      "deleteConfirm": "Yes, delete this record",
+      "cancel": "Cancel",
+      "empty": "—",
+      "unset": "Not set",
+      "fields": "Fields of record {id}",
+      "conflict": {
+        "title": "Someone else changed this record meanwhile",
+        "keep": "What you typed is still in the form. Below are the fields where it differs from the record as it is now. Save yours over the current version, or drop yours and use the current one.",
+        "field": "Field",
+        "yours": "What you typed",
+        "current": "Current value",
+        "reapply": "Save my changes over the current version",
+        "discard": "Drop my changes and use the current record"
+      },
+      "search": "Search the records",
+      "searchGo": "Search",
+      "sortBy": "Sort by",
+      "changedAt": "Changed",
+      "deletedAt": "Deleted",
+      "ascending": "Ascending",
+      "descending": "Descending",
+      "noMatch": "No record matches.",
+      "showing": "Showing {from}–{to} of {total} matching records",
+      "total": "{total} matching records",
+      "previous": "Previous page",
+      "next": "Next page",
+      "first": "First page",
+      "totalsLabel": "Totals",
+      "totalsOf": "Totals of",
+      "totalsNone": "No totals",
+      "totalsScope": "Over all {total} matching records, not just this page.",
+      "agg": {
+        "sum": "Sum",
+        "avg": "Average",
+        "min": "Smallest",
+        "max": "Largest"
+      },
+      "filters": "Filter the records",
+      "filterField": "Field",
+      "filterOp": "Condition",
+      "filterValue": "Value",
+      "addFilter": "Add filter",
+      "activeFilters": "Filters in use",
+      "removeFilter": "Remove filter {filter}",
+      "id": "Record",
+      "openRecord": "Open record {id}",
+      "op": {
+        "eq": "is",
+        "ne": "is not",
+        "lt": "is less than",
+        "lte": "is at most",
+        "gt": "is more than",
+        "gte": "is at least",
+        "contains": "contains"
+      }
     }
   },
   "auth": {
@@ -553,7 +614,14 @@
     "app_nothing_to_publish": "There is nothing to publish: the draft is the live release.",
     "app_migration_required": "This publish changes the data’s schema and needs your confirmation first.",
     "app_migration_unneeded": "Those changes aren’t part of this publish any more: reload the app and try again.",
-    "app_migration_invalid": "The confirmation of the schema changes isn’t valid."
+    "app_migration_invalid": "The confirmation of the schema changes isn’t valid.",
+    "home_widget_not_found": "This app doesn’t offer that widget.",
+    "home_limit": "You can have at most {max} of these.",
+    "home_order_invalid": "That order isn’t made of your own items.",
+    "home_defaults_shared": "Defaults are only for the apps of shared spaces.",
+    "app_query_cursor": "That page can no longer be found. Start again from the first page.",
+    "app_query_field": "The app has no field “{field}” that can be used here.",
+    "app_query_condition": "The filter on “{field}” doesn’t fit the field."
   },
   "language": {
     "label": "Language",
@@ -1007,7 +1075,8 @@
       "knowledge": "Knowledge base",
       "boards": "Boards",
       "apps": "Apps",
-      "settings": "Settings"
+      "settings": "Settings",
+      "home": "Home"
     },
     "noWorkspace": "You aren't a member of any workspace. Ask an admin for an invite.",
     "logOut": "Log out",
@@ -1023,7 +1092,10 @@
     },
     "account": "Account: {name}",
     "skipToContent": "Skip to the content",
-    "installApp": "Install the app"
+    "installApp": "Install the app",
+    "pinned": "Pinned apps",
+    "pageFailed": "This page couldn’t be shown. The menu and your settings still work.",
+    "reload": "Reload"
   },
   "common": {
     "cancel": "Cancel",
@@ -1294,5 +1366,52 @@
       "yours": "The browser, under your control",
       "watching": "The browser, as the agent works"
     }
+  },
+  "home": {
+    "intro": "Widgets from your apps, and the apps you pinned to the menu. Each shows only what you may see in its app.",
+    "empty": "Nothing on your Home yet. Choose Customize to put a widget from one of your apps here, or to pin an app to the menu.",
+    "widgets": "Widgets",
+    "customize": "Customize",
+    "done": "Done",
+    "failed": "This widget couldn’t be shown.",
+    "fromApp": "From {name}",
+    "fromAppDefault": "From {name} · set for the space",
+    "openApp": "Open {name}",
+    "unavailable": {
+      "offline": "{name} is offline, so this widget is unavailable.",
+      "unpublished": "{name} isn’t published yet, so this widget is unavailable.",
+      "removed": "{name} no longer offers this widget."
+    },
+    "unavailableShort": {
+      "offline": "· app offline",
+      "unpublished": "· app not published",
+      "removed": "· no longer offered"
+    },
+    "default": "· set for the space",
+    "moveEarlier": "Move {name} earlier",
+    "moveLater": "Move {name} later",
+    "removeNamed": "Remove {name}",
+    "remove": "Remove",
+    "hideNamed": "Hide {name}",
+    "showNamed": "Show {name} again",
+    "pins": "Pinned in the menu",
+    "pinsIntro": "Pinned apps are listed in the menu, after the pages of TaskTo.AI.",
+    "noPins": "No apps pinned.",
+    "pinNamed": "Pin {name}",
+    "unpinNamed": "Unpin {name}",
+    "hidden": "Hidden defaults",
+    "add": "Add from your apps",
+    "noApps": "None of your apps is published yet.",
+    "addNamed": "Add {name} to Home",
+    "setDefaultNamed": "Set {name} as the space’s default",
+    "unsetDefaultNamed": "Stop {name} being the space’s default",
+    "defaultsNote": "A default shows for every member of the space, who can hide it. Only people who may publish the app set one.",
+    "kind": {
+      "summaries": "numbers",
+      "screen": "screen",
+      "shortcut": "shortcut",
+      "pin": "pin"
+    },
+    "removePinNamed": "Remove {name} from the menu"
   }
 }

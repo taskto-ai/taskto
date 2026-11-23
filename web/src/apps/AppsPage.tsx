@@ -51,6 +51,7 @@ export function AppsPage({
         space={launched.space}
         app={launched.app}
         writable={space?.access === 'write'}
+        screen={launched.screen}
       />
     )
   }
@@ -422,11 +423,13 @@ function LaunchedApp({
   space,
   app,
   writable,
+  screen,
 }: {
   workspace: number
   space: number
   app: number
   writable: boolean
+  screen?: string
 }) {
   const base = `${appsBase(workspace, space)}/${app}`
   const info = useLoad(() => api<App>(base), [base])
@@ -483,11 +486,14 @@ function LaunchedApp({
             <p className="tt-muted tt-small">{t('apps.noDataChanges')}</p>
           )}
           {info.data.access.read_records === 'own' && <p className="tt-muted tt-small">{t('apps.ownRecords')}</p>}
-          <AppStage base={base} app={info.data} reloadKey={restored} />
+          <AppStage key={screen ?? ''} base={base} app={info.data} reloadKey={restored} screen={screen} />
           <AppRecords
             base={base}
+            appId={app}
             access={info.data.access}
             writable={writable}
+            definition={info.data.live?.definition}
+            release={info.data.live?.number}
             onRestored={() => setRestored((n) => n + 1)}
           />
         </>

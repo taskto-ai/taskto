@@ -11,16 +11,19 @@ import type { App } from '../api'
 import { useT } from '../i18n'
 import { AppView, httpTransport } from './AppView'
 
-// reloadKey is changed by the page when the app's data changed behind the screen (a record was restored).
+// reloadKey is changed by the page when the app's data changed behind the screen (a record was restored);
+// screen is the one an app with screens opens on instead of its entry (a pin's).
 export function AppStage({
   base,
   app,
   reloadKey,
+  screen,
   builder,
 }: {
   base: string
   app: App
   reloadKey?: number
+  screen?: string
   // In the builder: the draft is shown first, and the way to the live release is always there.
   builder?: boolean
 }) {
@@ -34,7 +37,10 @@ export function AppStage({
   // in use; a new draft (the app's version moved) is a new preview.
   const version = draft ? app.version : 0
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new version of the draft is a new preview
-  const transport = useMemo(() => httpTransport(base, draft ? 'draft' : liveNumber), [base, draft, liveNumber, version])
+  const transport = useMemo(
+    () => httpTransport(base, draft ? 'draft' : liveNumber, { screen }),
+    [base, draft, liveNumber, version, screen],
+  )
 
   if (!live && !draft) {
     return <p className="tt-muted tt-small">{t('apps.stage.notPublished')}</p>
