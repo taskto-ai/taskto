@@ -792,13 +792,13 @@ func TestStrictCapturedValuesRefuseWhatParsersLetThrough(t *testing.T) {
 	}
 	place := Field{Name: "place", Type: TypeLocation}
 	for _, zone := range []string{"+24:60", "+24:00", "+23:60", "-24:00", "+99:00", "+05:75"} {
-		at := time.Now().Add(-48 * time.Hour).UTC().Format("2006-01-02T15:04:05") + zone
+		at := time.Now().Add(-48*time.Hour).UTC().Format("2006-01-02T15:04:05") + zone
 		if _, _, err := place.parse(where(map[string]any{"captured_at": at})); err == nil {
 			t.Errorf("captured_at %s accepted", at)
 		}
 	}
 	for _, zone := range []string{"Z", "+23:59", "-12:00", "+00:00"} {
-		at := time.Now().Add(-48 * time.Hour).UTC().Format("2006-01-02T15:04:05") + zone
+		at := time.Now().Add(-48*time.Hour).UTC().Format("2006-01-02T15:04:05") + zone
 		if _, _, err := place.parse(where(map[string]any{"captured_at": at})); err != nil {
 			t.Errorf("captured_at %s: %v", at, err)
 		}
