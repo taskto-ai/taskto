@@ -49,6 +49,7 @@ step-by-step install on a fresh Ubuntu VM.
 | [docs/architecture.md](docs/architecture.md) | how it fits together |
 | [docs/install.md](docs/install.md) | install, HTTPS, backups, upgrades |
 | [docs/pwa.md](docs/pwa.md) | the installable app: manifest, offline shell, service worker, updates, phones |
+| [docs/templates.md](docs/templates.md) | the bundled app templates (expense tracker, equipment checkout, inspection), installing them and duplicating apps |
 | [docs/offline.md](docs/offline.md) | apps offline: downloads, the durable outbox for records made offline, sync, sign-out and revocation |
 | [docs/api.md](docs/api.md) | the HTTP API |
 | [docs/mcp.md](docs/mcp.md) | using it from your own agents (Claude Code, Codex, any MCP client) with an access token |

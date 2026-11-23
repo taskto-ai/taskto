@@ -110,11 +110,14 @@ const (
 
 	// Effects of apps on boards and documents (internal/apps/effects.go, outbox.go).
 
-	CodeAppEffectTarget     Code = "app_effect_target"     // 400: a target the person saving the app can't write; params: space_id
-	CodeAppOperationInvalid Code = "app_operation_invalid" // 422: the operation (idempotency key) isn't 8 to 64 letters, digits, - or _
-	CodeAppOperationReused  Code = "app_operation_reused"  // 409: the operation was used for another request
-	CodeAppEffectsBacklog   Code = "app_effects_backlog"   // 409: too many effects wait; params: max
-	CodeAppEffectNotFailed  Code = "app_effect_not_failed" // 409: only a failed effect is retried
+	CodeAppEffectTarget      Code = "app_effect_target"       // 400: a target the person saving the app can't write; params: space_id
+	CodeAppEffectTargetUnset Code = "app_effect_target_unset" // 400: an effect has no board chosen yet, which publishing needs; params: action
+	CodeAppTemplateNotFound  Code = "app_template_not_found"  // 404: no such app template
+	CodeAppTemplateBoard     Code = "app_template_board"      // 400: the template needs a board and none was given, or takes none and one was
+	CodeAppOperationInvalid  Code = "app_operation_invalid"   // 422: the operation (idempotency key) isn't 8 to 64 letters, digits, - or _
+	CodeAppOperationReused   Code = "app_operation_reused"    // 409: the operation was used for another request
+	CodeAppEffectsBacklog    Code = "app_effects_backlog"     // 409: too many effects wait; params: max
+	CodeAppEffectNotFailed   Code = "app_effect_not_failed"   // 409: only a failed effect is retried
 	// The reasons an effect failed, kept with it and shown by its listing, not answers to a request.
 	CodeAppEffectAppAccess    Code = "app_effect_app_access"    // the user no longer has the access to the app the action needed
 	CodeAppEffectTargetAccess Code = "app_effect_target_access" // the user no longer may write what the effect targets

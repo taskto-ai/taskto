@@ -1,0 +1,182 @@
+{
+  "template_version": 1,
+  "id": "equipment-checkout",
+  "version": 1,
+  "name": "Equipment checkout",
+  "description": "Scan an item's tag, say who has it and since when, and mark it returned. Everyone sees their own checkouts; data managers see them all.",
+  "recommended_space": "shared",
+  "roles": { "installer": ["builder", "publisher", "data_manager"], "members": ["user"] },
+  "definition": {
+    "screens": [
+      {
+        "name": "list",
+        "root": "list-root",
+        "components": [
+          { "id": "list-root", "component": "Column", "children": ["list-title", "list-out", "list-new", "list-items"] },
+          { "id": "list-title", "component": "Text", "text": "Equipment", "variant": "h2" },
+          { "id": "list-out", "component": "Stat", "label": "Items checked out", "value": { "path": "/out" } },
+          { "id": "list-new-label", "component": "Text", "text": "Check out an item" },
+          {
+            "id": "list-new",
+            "component": "Button",
+            "variant": "primary",
+            "child": "list-new-label",
+            "action": { "event": { "name": "new_checkout" } }
+          },
+          { "id": "list-items", "component": "List", "children": { "componentId": "row", "path": "/items" } },
+          { "id": "row", "component": "Column", "children": ["row-head", "row-foot"] },
+          { "id": "row-head", "component": "Row", "justify": "spaceBetween", "align": "center", "children": ["row-tag", "row-status"] },
+          { "id": "row-tag", "component": "Text", "text": { "path": "equipment" } },
+          { "id": "row-status", "component": "Text", "text": { "path": "status" }, "variant": "caption" },
+          { "id": "row-foot", "component": "Row", "justify": "spaceBetween", "align": "center", "children": ["row-who", "row-open"] },
+          { "id": "row-who", "component": "Text", "text": { "path": "borrower" }, "variant": "caption" },
+          { "id": "row-open-label", "component": "Text", "text": "Open" },
+          {
+            "id": "row-open",
+            "component": "Button",
+            "variant": "borderless",
+            "child": "row-open-label",
+            "action": { "event": { "name": "open_checkout", "context": { "id": { "path": "id" } } } }
+          }
+        ]
+      },
+      {
+        "name": "new",
+        "root": "new-root",
+        "components": [
+          {
+            "id": "new-root",
+            "component": "Column",
+            "children": ["new-title", "new-tag", "new-who", "new-date", "new-condition", "new-notes", "new-actions"]
+          },
+          { "id": "new-title", "component": "Text", "text": "Check out an item", "variant": "h2" },
+          { "id": "new-tag", "component": "BarcodeInput", "field": "equipment", "label": "Equipment tag", "value": { "path": "/draft/equipment" } },
+          { "id": "new-who", "component": "TextField", "label": "Who is taking it?", "value": { "path": "/draft/borrower" } },
+          { "id": "new-date", "component": "DateTimeInput", "label": "Taken on", "enableDate": true, "value": { "path": "/draft/checked_out_on" } },
+          {
+            "id": "new-condition",
+            "component": "ChoicePicker",
+            "label": "Condition",
+            "variant": "mutuallyExclusive",
+            "displayStyle": "chips",
+            "options": [
+              { "label": "Good", "value": "good" },
+              { "label": "Worn", "value": "worn" },
+              { "label": "Damaged", "value": "damaged" }
+            ],
+            "value": { "path": "/draft/condition" }
+          },
+          { "id": "new-notes", "component": "TextField", "label": "Notes", "variant": "longText", "value": { "path": "/draft/notes" } },
+          { "id": "new-actions", "component": "Row", "children": ["new-back", "new-save"] },
+          { "id": "new-back-label", "component": "Text", "text": "Back" },
+          {
+            "id": "new-back",
+            "component": "Button",
+            "child": "new-back-label",
+            "action": { "event": { "name": "back_to_list" } }
+          },
+          { "id": "new-save-label", "component": "Text", "text": "Check out" },
+          {
+            "id": "new-save",
+            "component": "Button",
+            "variant": "primary",
+            "child": "new-save-label",
+            "action": {
+              "event": {
+                "name": "check_out",
+                "context": {
+                  "equipment": { "path": "/draft/equipment" },
+                  "borrower": { "path": "/draft/borrower" },
+                  "checked_out_on": { "path": "/draft/checked_out_on" },
+                  "condition": { "path": "/draft/condition" },
+                  "notes": { "path": "/draft/notes" },
+                  "status": "out"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "detail",
+        "root": "detail-root",
+        "record": true,
+        "components": [
+          {
+            "id": "detail-root",
+            "component": "Column",
+            "children": ["detail-title", "detail-who", "detail-date", "detail-status", "detail-return-when", "detail-actions"]
+          },
+          { "id": "detail-title", "component": "Text", "text": { "path": "/record/equipment" }, "variant": "h2" },
+          { "id": "detail-who", "component": "Stat", "label": "Taken by", "value": { "path": "/record/borrower" } },
+          { "id": "detail-date", "component": "Stat", "label": "Taken on", "value": { "path": "/record/checked_out_on" } },
+          { "id": "detail-status", "component": "Stat", "label": "Status", "value": { "path": "/record/status" } },
+          {
+            "id": "detail-return-when",
+            "component": "Show",
+            "source": "record",
+            "when": { "field": "status", "op": "eq", "value": "out" },
+            "child": "detail-return"
+          },
+          { "id": "detail-return", "component": "Column", "children": ["detail-return-date", "detail-return-button"] },
+          { "id": "detail-return-date", "component": "DateTimeInput", "label": "Returned on", "enableDate": true, "value": { "path": "/draft/returned_on" } },
+          { "id": "detail-return-label", "component": "Text", "text": "Mark as returned" },
+          {
+            "id": "detail-return-button",
+            "component": "Button",
+            "variant": "primary",
+            "child": "detail-return-label",
+            "action": {
+              "event": {
+                "name": "return_item",
+                "context": { "id": { "path": "/record/id" }, "status": "returned", "returned_on": { "path": "/draft/returned_on" } }
+              }
+            }
+          },
+          { "id": "detail-actions", "component": "Row", "children": ["detail-back"] },
+          { "id": "detail-back-label", "component": "Text", "text": "Back" },
+          {
+            "id": "detail-back",
+            "component": "Button",
+            "child": "detail-back-label",
+            "action": { "event": { "name": "back_to_list" } }
+          }
+        ]
+      }
+    ],
+    "entry": "list",
+    "collection": {
+      "fields": [
+        { "name": "equipment", "type": "barcode", "required": true, "max_length": 100 },
+        { "name": "borrower", "type": "string", "required": true, "max_length": 100 },
+        { "name": "checked_out_on", "type": "date", "required": true },
+        { "name": "condition", "type": "choice", "options": ["good", "worn", "damaged"] },
+        { "name": "notes", "type": "string", "max_length": 1000 },
+        { "name": "status", "type": "choice", "required": true, "options": ["out", "returned"] },
+        { "name": "returned_on", "type": "date", "required_when": { "field": "status", "op": "eq", "value": "returned" } }
+      ]
+    },
+    "actions": {
+      "new_checkout": { "kind": "navigate", "screen": "new" },
+      "open_checkout": { "kind": "navigate", "screen": "detail" },
+      "back_to_list": { "kind": "navigate", "screen": "list" },
+      "check_out": { "kind": "insert", "then": "list" },
+      "return_item": { "kind": "update", "then": "list" }
+    },
+    "summaries": {
+      "out": { "kind": "count", "where": { "field": "status", "op": "eq", "value": "out" } }
+    },
+    "contributions": {
+      "widgets": [
+        {
+          "id": "checked_out",
+          "title": "Equipment",
+          "kind": "summaries",
+          "size": "small",
+          "summaries": [{ "summary": "out", "label": "Checked out" }]
+        }
+      ],
+      "pin": { "label": "Equipment" }
+    }
+  }
+}

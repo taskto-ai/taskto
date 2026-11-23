@@ -51,6 +51,9 @@ export type AppTransport = {
 // other's change.
 export function previewTransport(base: string): AppTransport {
   let rows: PreviewRow[] | undefined
+  // The effects the last step would have set going: the server works them out on the preview's own
+  // rows, in the step itself, so a button with none costs no request and no real record is read.
+  let effects: AppEffect[] = []
   let queue: Promise<unknown> = Promise.resolve()
   const step = (action?: ActionPayload, fresh = false): Promise<unknown[]> => {
     const run = queue.then(async () => {
@@ -61,6 +64,7 @@ export function previewTransport(base: string): AppTransport {
         body: action && rows ? { rows, action } : {},
       })
       rows = reply.rows
+      effects = reply.effects ?? []
       return reply.messages
     })
     // A step that failed leaves the rows as they were, and the next goes on from them.
@@ -70,8 +74,7 @@ export function previewTransport(base: string): AppTransport {
   return {
     load: () => step(undefined, true),
     act: (action) => step(action),
-    simulate: async (action) =>
-      (await api<{ effects: AppEffect[] }>(`${base}/actions/preview`, { method: 'POST', body: action })).effects,
+    simulate: async () => effects,
   }
 }
 

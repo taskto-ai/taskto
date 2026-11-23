@@ -454,6 +454,64 @@
       "title": "Dictate: speak, then edit the text. Your speech is sent to this server to be turned into text, so this needs a connection.",
       "offline": "Dictation needs a connection to this server. You’re offline: type, or use your keyboard’s own dictation key.",
       "unavailable": "{reason} Your keyboard’s own dictation key still works in this field."
+    },
+    "templates": {
+      "start": "Start from a template",
+      "title": "Start from a template",
+      "intro": "A template is a ready-made app. Installing one makes a new app of your own in the space you choose, as a draft: nothing is live until you try it and publish it, and it comes with no data from anyone.",
+      "use": "Use this template",
+      "useNamed": "Use the template {name}",
+      "install": "Install as a draft",
+      "forPrivate": "Made for your private space.",
+      "forShared": "Made for a shared space, for a team.",
+      "betterPrivate": "This template is made for your private space; it works in a shared one too.",
+      "betterShared": "This template is made for a team in a shared space; in your private space only you will use it.",
+      "captures": "Uses your phone for: {kinds}.",
+      "capture": {
+        "attachment": "the camera",
+        "location": "your position",
+        "signature": "a signature pad",
+        "barcode": "scanning a code"
+      },
+      "needsBoard": "Needs a board of yours for the cards it makes.",
+      "widgets": "Offers a widget for your Home page.",
+      "board": "Board for the cards it makes",
+      "chooseBoard": "Choose a board…",
+      "boardIn": "{board} · {space}",
+      "boardNote": "Only boards you can write to are listed.",
+      "noBoards": "You have no board you can write to: make one in Boards first.",
+      "boardNeeded": "This app makes cards on a board, and none is chosen yet. Choose one you can write to before publishing.",
+      "useBoard": "Use this board",
+      "publishNeedsBoard": "Choose a board for this app’s cards first: it can’t be published until then.",
+      "rolesShared": "In a shared space, you get these roles: {installer}. Everyone else in the space gets: {members}.",
+      "rolesInstaller": "In a shared space, you get these roles: {installer}.",
+      "draftNote": "It is installed as a draft with no records. You try it on sample data, then publish it.",
+      "installedNote": "This is a draft: nothing is live yet. Try it below, check who will be able to use it, then publish it.",
+      "liveNote": "This app is live. Changes you make to its draft aren’t live until you publish them.",
+      "noReview": "You can’t review this app’s draft: that needs the builder or publisher role in it.",
+      "items": {
+        "expense_tracker": {
+          "name": "Expense tracker",
+          "description": "Record what you spend with a photo of the receipt, and see this month’s total on your Home page."
+        },
+        "equipment_checkout": {
+          "name": "Equipment checkout",
+          "description": "Scan an item’s tag, say who has it and since when, and mark it returned. Everyone sees their own checkouts; data managers see them all."
+        },
+        "inspection": {
+          "name": "Inspection",
+          "description": "Walk a site, record pass or fail with the place and a signature, and have every failure become a card on a board you choose."
+        }
+      }
+    },
+    "duplicate": {
+      "open": "Duplicate as template",
+      "openNamed": "Duplicate {name} as a template",
+      "title": "Duplicate {name}",
+      "note": "This copies the app’s definition only, into a new app of your own: no records, photos, history or roles come with it, and boards you can’t write to are cleared and chosen again before publishing.",
+      "defaultName": "Copy of {name}",
+      "space": "Put the copy in",
+      "make": "Make the copy"
     }
   },
   "auth": {
@@ -778,6 +836,9 @@
     "app_roles_not_member": "Roles can only go to members of the space.",
     "app_roles_lockout": "You can’t remove your own right to manage this app’s roles.",
     "app_effect_target": "An effect of this app targets a space or board you can’t write to: choose one you can.",
+    "app_effect_target_unset": "This app’s cards have no board chosen yet: choose one you can write to before publishing.",
+    "app_template_not_found": "That template doesn’t exist.",
+    "app_template_board": "Choose a board you can write to for this template’s cards (a template with no cards takes none).",
     "app_operation_invalid": "The operation key must be 8 to 64 letters, digits, - or _.",
     "app_operation_reused": "That operation was already used for a different request.",
     "app_effects_backlog": "This app has {max} effects waiting: try again once they are done.",

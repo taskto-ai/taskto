@@ -294,10 +294,10 @@ func TestACheckedTargetIsCheckedForEveryPermissionNeeded(t *testing.T) {
 	submit := d.Actions["submit_inspection"]
 	submit.Effects = submit.Effects[:1] // the card, on the same board
 	d.Actions = map[string]Action{"a_look": look, "submit_inspection": submit}
-	if err := f.e.s.checkEffectTargets(f.ctx(), Actor{UserID: f.alice.id}, d); err != nil {
+	if err := f.e.s.checkEffectTargets(f.ctx(), f.shared.WorkspaceID, Actor{UserID: f.alice.id}, d); err != nil {
 		t.Fatalf("an editor of the target: %v", err)
 	}
-	if err := f.e.s.checkEffectTargets(f.ctx(), Actor{UserID: f.bob.id}, d); err == nil {
+	if err := f.e.s.checkEffectTargets(f.ctx(), f.shared.WorkspaceID, Actor{UserID: f.bob.id}, d); err == nil {
 		t.Fatal("a viewer was let to point an effect that writes at the target, because a route reads it")
 	}
 }

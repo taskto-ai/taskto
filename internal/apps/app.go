@@ -195,6 +195,9 @@ type Summary struct {
 	Kind  string `json:"kind"`
 	Field string `json:"field,omitempty"`
 	Where *Rule  `json:"where,omitempty"`
+	// MonthOf names a date field: only the rows dated in the current calendar month (UTC, the
+	// server's clock; the device's own clock offline) are counted or summed.
+	MonthOf string `json:"month_of,omitempty"`
 }
 
 // Bounds of a definition and of an app's rows.
@@ -446,6 +449,7 @@ func (d Definition) Check() (Definition, error) {
 	if len(d.Summaries) > maxSummaries {
 		return Definition{}, invalidf("summaries: at most %d", maxSummaries)
 	}
+	monthly := false
 	for name, s := range d.Summaries {
 		if !namePattern.MatchString(name) || reserved[name] {
 			return Definition{}, invalidf("summaries: %q: a name is a lowercase letter, then up to 39 lowercase letters, digits or _, and not items, draft or id", name)
@@ -467,6 +471,13 @@ func (d Definition) Check() (Definition, error) {
 			}
 		default:
 			return Definition{}, invalidf("summaries: %q: kind must be count or sum", name)
+		}
+		if s.MonthOf != "" {
+			uses2 = append(uses2, "a summary's month_of")
+			monthly = true
+			if fields[s.MonthOf].Type != TypeDate {
+				return Definition{}, invalidf("summaries: %q: month_of names %q, which is not a date field", name, s.MonthOf)
+			}
 		}
 		if s.Where != nil {
 			uses2 = append(uses2, "a summary's where")
@@ -501,6 +512,11 @@ func (d Definition) Check() (Definition, error) {
 		if capability, ok := fieldCapabilities[f.Type]; ok {
 			requires = sortedKeys(setOf(append(requires, capability)))
 		}
+	}
+	// A client that doesn't know month_of would total every month in place of this one's: it
+	// must be told to update instead.
+	if monthly {
+		requires = sortedKeys(setOf(append(requires, SummaryMonthCapability)))
 	}
 	contributions, slots, err := d.checkContributions(screens)
 	if err != nil {
@@ -696,14 +712,35 @@ func declared(def Definition, data map[string]any) map[string]any {
 	return out
 }
 
+// currentMonth is the calendar month a "month_of" summary is over, as YYYY-MM; tests replace it.
+var currentMonth = func() string { return time.Now().UTC().Format("2006-01") }
+
+// inMonth is whether row's value of the date field name is a date of month (YYYY-MM). A value that
+// isn't a date (stored before the field was retyped, or any other text) is in no month, as the
+// rows' items leave it out too (declared).
+func inMonth(c Collection, name string, row map[string]any, month string) bool {
+	f, ok := c.field(name)
+	if !ok {
+		return false
+	}
+	v, present := row[name]
+	d, _ := v.(string)
+	return present && ofType(f, v) && strings.HasPrefix(d, month+"-")
+}
+
 // summarize formats as text: A2UI binds text components to strings.
 func summarize(s Summary, c Collection, rows []Row) string {
-	if s.Where != nil {
+	if s.Where != nil || s.MonthOf != "" {
+		month := currentMonth()
 		var kept []Row
 		for _, r := range rows {
-			if c.holds(*s.Where, r.Data) {
-				kept = append(kept, r)
+			if s.Where != nil && !c.holds(*s.Where, r.Data) {
+				continue
 			}
+			if s.MonthOf != "" && !inMonth(c, s.MonthOf, r.Data, month) {
+				continue
+			}
+			kept = append(kept, r)
 		}
 		rows = kept
 	}

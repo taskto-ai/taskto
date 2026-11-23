@@ -44,7 +44,8 @@
     "function.pluralize",
     "function.required",
     "slot.home_widgets.v1",
-    "slot.nav_pin.v1"
+    "slot.nav_pin.v1",
+    "summary.month_of"
   ],
   "components": {
     "BarcodeInput": [

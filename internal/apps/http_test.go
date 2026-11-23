@@ -54,6 +54,7 @@ func newEnv(t *testing.T) *env {
 	spaces.Routes(mux)
 	s.Routes(mux)
 	s.HomeRoutes(mux, accounts)
+	s.TemplateRoutes(mux, accounts)
 	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux, RawBodyRoutes...), dataDir: dataDir}
 }
 
@@ -392,6 +393,9 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 			{http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{"description": "x", "amount": "1"})},
 			{http.MethodGet, appPath(s, a.ID, "/roles"), nil},
 			{http.MethodPut, appPath(s, a.ID, "/roles"), map[string]any{"grants": []any{}}},
+			{http.MethodPost, appPath(s, a.ID, "/duplicate"), map[string]any{}},
+			{http.MethodPost, appPath(s, a.ID, "/effect-board"), map[string]any{"version": a.Version, "space_id": s.ID, "board_id": 1}},
+			{http.MethodPost, installPath(s, "expense-tracker"), map[string]any{}},
 		}
 	}
 	cases := []struct {
@@ -417,7 +421,7 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			for _, r := range routes(c.s, c.a) {
-				if c.own && r.path == appsPath(c.s, "") {
+				if c.own && (r.path == appsPath(c.s, "") || r.path == installPath(c.s, "expense-tracker")) {
 					continue
 				}
 				if rec := c.u.do(r.method, r.path, r.body); rec.Code != c.status {
