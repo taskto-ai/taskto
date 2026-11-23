@@ -239,6 +239,8 @@ export type AppField = {
   min?: number
   max?: number
   options?: string[]
+  // A choice's labels, by option: how a stored option reads to people (the option itself where it has none).
+  option_labels?: Record<string, string>
   // A location field: when it is taken ('button' or 'submit'); a barcode's format; and whether a stored
   // location or signature can be changed (otherwise it is evidence).
   capture?: 'button' | 'submit'

@@ -898,3 +898,66 @@ func TestAnAppNeverAimsAtAnotherWorkspace(t *testing.T) {
 		}
 	}
 }
+
+// A stored choice is its option's text ("food"): a screen that bound a Text or a Stat to the field
+// would show that, where the form's picker says "Food". Every bundled template shows a choice by its
+// label, at _labels/<field>, and labels each of its options.
+func TestTemplatesShowAChoiceByItsLabel(t *testing.T) {
+	all, err := Templates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tpl := range all {
+		choices := map[string]Field{}
+		for _, f := range tpl.Definition.Collection.Fields {
+			if f.Type == TypeChoice {
+				choices[f.Name] = f
+				for _, o := range f.Options {
+					if _, ok := f.OptionLabels[o]; !ok {
+						t.Errorf("%s: option %q of %s has no label", tpl.ID, o, f.Name)
+					}
+				}
+			}
+		}
+		for _, screen := range tpl.Definition.Screens {
+			for _, raw := range screen.Components {
+				var c map[string]any
+				if err := json.Unmarshal(raw, &c); err != nil {
+					t.Fatal(err)
+				}
+				if c["component"] != "Text" && c["component"] != "Stat" {
+					continue
+				}
+				for _, prop := range []string{"text", "value"} {
+					b, _ := c[prop].(map[string]any)
+					path, _ := b["path"].(string)
+					name := strings.TrimPrefix(strings.TrimPrefix(path, "/"+RecordKey+"/"), "/")
+					if _, isChoice := choices[name]; isChoice {
+						t.Errorf("%s: %s shows the stored text of the choice %s: bind to _labels/%s", tpl.ID, c["id"], name, name)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestTheExpenseDetailShowsTheCategoryByItsLabel(t *testing.T) {
+	w := newWorld(t)
+	s := w.alicePrivate
+	a := w.publish(w.alice, s, w.mustInstall(w.alice, s, "expense-tracker", nil))
+	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{
+		"description": "Lunch", "amount": 12, "spent_on": "2026-11-02", "category": "food"})), http.StatusOK)
+	items := w.items(w.alice, s, a)
+	if len(items) != 1 || items[0]["category"] != "food" {
+		t.Fatalf("items = %v", items)
+	}
+	if labels, _ := items[0][LabelsKey].(map[string]any); labels["category"] != "Food" {
+		t.Fatalf("item labels = %v", items[0][LabelsKey])
+	}
+	// The detail screen's record, as opening it answers.
+	rec := w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "open_expense", map[string]any{"id": items[0]["id"]}))
+	expect(t, rec, http.StatusOK)
+	if body := rec.Body.String(); !strings.Contains(body, `"_labels":{"category":"Food"}`) {
+		t.Fatalf("the record opened has no label: %s", body)
+	}
+}

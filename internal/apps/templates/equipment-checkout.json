@@ -27,7 +27,7 @@
           { "id": "row", "component": "Column", "children": ["row-head", "row-foot"] },
           { "id": "row-head", "component": "Row", "justify": "spaceBetween", "align": "center", "children": ["row-tag", "row-status"] },
           { "id": "row-tag", "component": "Text", "text": { "path": "equipment" } },
-          { "id": "row-status", "component": "Text", "text": { "path": "status" }, "variant": "caption" },
+          { "id": "row-status", "component": "Text", "text": { "path": "_labels/status" }, "variant": "caption" },
           { "id": "row-foot", "component": "Row", "justify": "spaceBetween", "align": "center", "children": ["row-who", "row-open"] },
           { "id": "row-who", "component": "Text", "text": { "path": "borrower" }, "variant": "caption" },
           { "id": "row-open-label", "component": "Text", "text": "Open" },
@@ -110,7 +110,7 @@
           { "id": "detail-title", "component": "Text", "text": { "path": "/record/equipment" }, "variant": "h2" },
           { "id": "detail-who", "component": "Stat", "label": "Taken by", "value": { "path": "/record/borrower" } },
           { "id": "detail-date", "component": "Stat", "label": "Taken on", "value": { "path": "/record/checked_out_on" } },
-          { "id": "detail-status", "component": "Stat", "label": "Status", "value": { "path": "/record/status" } },
+          { "id": "detail-status", "component": "Stat", "label": "Status", "value": { "path": "/record/_labels/status" } },
           {
             "id": "detail-return-when",
             "component": "Show",
@@ -150,9 +150,9 @@
         { "name": "equipment", "type": "barcode", "required": true, "max_length": 100 },
         { "name": "borrower", "type": "string", "required": true, "max_length": 100 },
         { "name": "checked_out_on", "type": "date", "required": true },
-        { "name": "condition", "type": "choice", "options": ["good", "worn", "damaged"] },
+        { "name": "condition", "type": "choice", "options": ["good", "worn", "damaged"], "option_labels": { "good": "Good", "worn": "Worn", "damaged": "Damaged" } },
         { "name": "notes", "type": "string", "max_length": 1000 },
-        { "name": "status", "type": "choice", "required": true, "options": ["out", "returned"] },
+        { "name": "status", "type": "choice", "required": true, "options": ["out", "returned"], "option_labels": { "out": "Checked out", "returned": "Returned" } },
         { "name": "returned_on", "type": "date", "required_when": { "field": "status", "op": "eq", "value": "returned" } }
       ]
     },

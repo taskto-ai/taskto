@@ -216,7 +216,7 @@ func Capabilities() []string {
 		all = append(all, capability)
 	}
 	all = append(all, slotCapabilities...)
-	all = append(all, SummaryMonthCapability)
+	all = append(all, SummaryMonthCapability, LabelsCapability)
 	sort.Strings(all)
 	return all
 }
@@ -225,6 +225,11 @@ func Capabilities() []string {
 // month_of. A definition with one requires it, so a client that predates it (and would total every
 // month) says it must be updated.
 const SummaryMonthCapability = "summary.month_of"
+
+// LabelsCapability is what a client needs to draw a screen that binds to a choice's label
+// (/_labels/<field>): to hold it with each item and record, which a client that predates it
+// doesn't, and would draw nothing there. A definition whose screens bind one requires it.
+const LabelsCapability = "data.labels"
 
 // AttachmentCapability is what a client needs to hold an attachment field: to read its value as a
 // list of attachment ids and send them. A collection with one requires it (Definition.Check).

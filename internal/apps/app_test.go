@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -408,5 +409,113 @@ func TestDataModelShowsDeclaredFieldsOnly(t *testing.T) {
 	raw, _ := json.Marshal(msg)
 	if !strings.Contains(string(raw), `"items":[{"_revision":2,"id":3,"title":"Milk"}]`) || strings.Contains(string(raw), "hidden") {
 		t.Fatalf("data model = %s", raw)
+	}
+}
+
+// A choice's stored text is not how it reads to people: each item carries its label at
+// _labels/<field>, so a screen shows "Food" where the row holds "food".
+func TestItemsCarryTheLabelOfEachChoice(t *testing.T) {
+	def := Definition{Collection: Collection{Fields: []Field{
+		{Name: "category", Type: TypeChoice, Options: []string{"food", "other"}, OptionLabels: map[string]string{"food": "Food"}},
+		{Name: "kind", Type: TypeChoice, Options: []string{"a", "b"}},
+		{Name: "note", Type: TypeString},
+	}}}
+	items := Items(def, []Row{
+		{ID: 1, Revision: 1, Data: map[string]any{"category": "food", "kind": "b", "note": "x"}},
+		// An option with no label reads as it is stored; a field with no value has no label.
+		{ID: 2, Revision: 1, Data: map[string]any{"category": "other"}},
+		{ID: 3, Revision: 1, Data: map[string]any{"note": "y"}},
+		// A value its field no longer lists is still shown, as it is.
+		{ID: 4, Revision: 1, Data: map[string]any{"category": "gone"}},
+	})
+	raw, _ := json.Marshal(items)
+	want := `[{"_labels":{"category":"Food","kind":"b"},"_revision":1,"category":"food","id":1,"kind":"b","note":"x"},` +
+		`{"_labels":{"category":"other"},"_revision":1,"category":"other","id":2},` +
+		`{"_revision":1,"id":3,"note":"y"},` +
+		`{"_labels":{"category":"gone"},"_revision":1,"category":"gone","id":4}]`
+	if string(raw) != want {
+		t.Fatalf("items = %s\nwant    %s", raw, want)
+	}
+	// The record a detail screen shows is made the same way.
+	if got := item(def, Row{ID: 1, Revision: 1, Data: map[string]any{"category": "food"}})[LabelsKey]; fmt.Sprint(got) != "map[category:Food]" {
+		t.Fatalf("record labels = %v", got)
+	}
+}
+
+func TestCheckRefusesBadOptionLabels(t *testing.T) {
+	base := func(f Field) Definition {
+		d := todo(t)
+		d.Collection.Fields = append(d.Collection.Fields, f)
+		return d
+	}
+	choice := func(labels map[string]string) Field {
+		return Field{Name: "k", Type: TypeChoice, Options: []string{"a", "b"}, OptionLabels: labels}
+	}
+	if _, err := base(choice(map[string]string{"a": "Alpha", "b": "Beta"})).Check(); err != nil {
+		t.Fatalf("labels for the options were refused: %v", err)
+	}
+	for name, f := range map[string]Field{
+		"not an option":    choice(map[string]string{"c": "Gamma"}),
+		"empty label":      choice(map[string]string{"a": ""}),
+		"padded label":     choice(map[string]string{"a": " Alpha"}),
+		"long label":       choice(map[string]string{"a": strings.Repeat("x", maxOptionLen+1)}),
+		"not a choice":     {Name: "k", Type: TypeString, OptionLabels: map[string]string{"a": "Alpha"}},
+		"labels not given": {Name: "k", Type: TypeChoice, Options: []string{"a"}, OptionLabels: map[string]string{}},
+	} {
+		if name == "labels not given" {
+			// An empty map is no labels: nothing to refuse.
+			if _, err := base(f).Check(); err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+			continue
+		}
+		if _, err := base(f).Check(); err == nil || !strings.Contains(err.Error(), "option_labels") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
+
+// A client that predates the labels would draw nothing where a screen binds to one, so a release that
+// does requires the capability, which an older client lacks and answers with "update required"; a
+// release that only has option labels, and shows the stored text, needs nothing new.
+func TestBindingToALabelRequiresTheCapability(t *testing.T) {
+	fields := []Field{{Name: "category", Type: TypeChoice, Options: []string{"food", "other"}, OptionLabels: map[string]string{"food": "Food"}}}
+	check := func(components ...string) []string {
+		t.Helper()
+		var raw []json.RawMessage
+		for _, c := range components {
+			raw = append(raw, json.RawMessage(c))
+		}
+		got, err := Definition{Components: raw, Collection: Collection{Fields: fields}, Actions: map[string]Action{"add": {Kind: ActionInsert}}}.Check()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Requires
+	}
+	root := `{"id":"root","component":"Column","children":{"componentId":"row","path":"/items"}}`
+	for name, path := range map[string]string{"relative": "_labels/category", "absolute": "/record/_labels/category"} {
+		if got := check(root, `{"id":"row","component":"Text","text":{"path":"`+path+`"}}`); !slices.Contains(got, LabelsCapability) {
+			t.Errorf("%s: requires = %v", name, got)
+		}
+	}
+	if got := check(root, `{"id":"row","component":"Text","text":{"path":"category"}}`); slices.Contains(got, LabelsCapability) {
+		t.Errorf("a stored text needs no new capability: %v", got)
+	}
+	// Screens are looked at too, and the server's catalog lists it as one a client may have.
+	tpl, err := Templates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, x := range tpl {
+		if x.ID == "inspection" {
+			found = true
+			if got, err := x.Definition.Check(); err != nil || !slices.Contains(got.Requires, LabelsCapability) {
+				t.Errorf("inspection: requires = %v, %v", got.Requires, err)
+			}
+		}
+	}
+	if !found || !slices.Contains(Capabilities(), LabelsCapability) {
+		t.Errorf("template found %v, capabilities %v", found, Capabilities())
 	}
 }

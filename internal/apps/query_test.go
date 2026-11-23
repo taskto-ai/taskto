@@ -758,3 +758,50 @@ func TestQueryCursorKeepsLargeIntegersExact(t *testing.T) {
 		t.Fatalf("pages by qty = %v, want %v", got, want)
 	}
 }
+
+// A query asks nothing of a field that holds files or evidence: a photo, a signature or a location
+// is refused with the query's own code, by the route, never reaching the database to fail there.
+func TestQueryRefusesFieldsThatHoldFilesAndEvidence(t *testing.T) {
+	w := newWorld(t)
+	s := w.shared
+	def, err := Definition{
+		Components: []json.RawMessage{json.RawMessage(`{"id":"root","component":"Text","text":"Visits"}`)},
+		Collection: Collection{Fields: []Field{
+			{Name: "title", Type: TypeString},
+			{Name: "photos", Type: TypeAttachment},
+			{Name: "sign", Type: TypeSignature},
+			{Name: "where", Type: TypeLocation},
+		}},
+		Actions: map[string]Action{"add": {Kind: ActionInsert}},
+	}.Check()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := w.alice.do(http.MethodPost, appsPath(s, ""), map[string]any{"name": "Visits", "definition": def})
+	expect(t, rec, http.StatusCreated)
+	a := w.publish(w.alice, s, decode[App](t, rec))
+	for _, c := range []struct {
+		name   string
+		params []string
+		code   string
+	}{
+		{"filtering by photos", []string{"filter", "photos:eq:1"}, "app_query_condition"},
+		{"filtering by a photo's id", []string{"filter", "photos:eq:" + strings.Repeat("a", 32)}, "app_query_condition"},
+		{"filtering out a photo's id", []string{"filter", "photos:ne:" + strings.Repeat("a", 32)}, "app_query_condition"},
+		{"filtering by photos with no value", []string{"filter", "photos:ne:"}, "app_query_condition"},
+		{"filtering by a signature", []string{"filter", "sign:eq:1"}, "app_query_condition"},
+		{"filtering by a location", []string{"filter", "where:eq:1"}, "app_query_condition"},
+		{"sorting by photos", []string{"sort", "photos"}, "app_query_field"},
+		{"sorting by a signature", []string{"sort", "sign"}, "app_query_field"},
+		{"sorting by a location", []string{"sort", "where"}, "app_query_field"},
+		{"counting photos", []string{"aggregate", "count:photos"}, "app_query_field"},
+		{"summing photos", []string{"aggregate", "sum:photos"}, "app_query_field"},
+	} {
+		rec := w.alice.do(http.MethodGet, queryURL(s, a, c.params...), nil)
+		if rec.Code != http.StatusBadRequest || errorCode(t, rec) != c.code {
+			t.Errorf("%s: %d %s, want 400 %s", c.name, rec.Code, rec.Body, c.code)
+		}
+	}
+	// What can be asked still can.
+	expect(t, w.alice.do(http.MethodGet, queryURL(s, a, "filter", "title:eq:x"), nil), http.StatusOK)
+}

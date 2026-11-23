@@ -111,7 +111,7 @@
           { "id": "detail-title", "component": "Text", "text": { "path": "/record/description" }, "variant": "h2" },
           { "id": "detail-amount", "component": "Stat", "label": "Amount", "value": { "path": "/record/amount" } },
           { "id": "detail-date", "component": "Stat", "label": "Date", "value": { "path": "/record/spent_on" } },
-          { "id": "detail-category", "component": "Stat", "label": "Category", "value": { "path": "/record/category" } },
+          { "id": "detail-category", "component": "Stat", "label": "Category", "value": { "path": "/record/_labels/category" } },
           { "id": "detail-receipt", "component": "Photos", "label": "Receipt", "value": { "path": "/record/receipt" } },
           { "id": "detail-actions", "component": "Row", "children": ["detail-back", "detail-delete"] },
           { "id": "detail-back-label", "component": "Text", "text": "Back" },
@@ -138,7 +138,13 @@
         { "name": "description", "type": "string", "required": true, "max_length": 200 },
         { "name": "amount", "type": "number", "required": true, "min": 0 },
         { "name": "spent_on", "type": "date", "required": true },
-        { "name": "category", "type": "choice", "required": true, "options": ["food", "transport", "lodging", "supplies", "other"] },
+        {
+          "name": "category",
+          "type": "choice",
+          "required": true,
+          "options": ["food", "transport", "lodging", "supplies", "other"],
+          "option_labels": { "food": "Food", "transport": "Transport", "lodging": "Lodging", "supplies": "Supplies", "other": "Other" }
+        },
         { "name": "receipt", "type": "attachment", "max_files": 3 }
       ]
     },

@@ -260,6 +260,8 @@ export const catalogCapabilities: ReadonlySet<string> = new Set([
   'field.barcode',
   // Totalling one calendar month: a summary's month_of (offline/local.ts).
   'summary.month_of',
+  // Drawing a choice by its label: /_labels/<field> of an item or a record (offline/local.ts).
+  'data.labels',
   // The extension slots this client draws (internal/apps/contributions.go): Home's widgets and the
   // navigation's pin.
   'slot.home_widgets.v1',

@@ -150,6 +150,11 @@ type Field struct {
 	Max *float64 `json:"max,omitempty"`
 	// Options are the values a choice field may hold: at most MaxOptions, each unique.
 	Options []string `json:"options,omitempty"`
+	// OptionLabels says how a choice's options read to people, where that isn't the stored text:
+	// {"food": "Food"}. Each key is one of the options; an option with no label is shown as it is
+	// stored. Stored values are never changed by it. A screen reads a stored choice's label at
+	// /_labels/<field> of its item or record (LabelsKey).
+	OptionLabels map[string]string `json:"option_labels,omitempty"`
 	// MaxFiles bounds how many attachments an attachment field holds: DefaultMaxFiles if unset,
 	// at most MaxMaxFiles. MaxBytes bounds each one's size: DefaultMaxFileBytes if unset, at most
 	// MaxMaxFileBytes.
@@ -246,6 +251,11 @@ const (
 	// /_fields/<field>, when a location is taken, a barcode's format, whether the field must have a
 	// value and whether it can be changed once stored. Underscore first, like FilesKey.
 	FieldsKey = "_fields"
+	// LabelsKey is, in each item and in /record, how the choice fields' stored values read to
+	// people: /_labels/<field> is the label of the value the row holds (its option_labels entry, or
+	// the stored text when it has none). A field with no value has none. Underscore first, like
+	// RevisionKey, so no field can have its name.
+	LabelsKey = "_labels"
 )
 
 // ErrInvalid matches every validation error (errors.Is); their messages say what is wrong.
@@ -327,6 +337,11 @@ func (d Definition) Check() (Definition, error) {
 				}
 				seen[o] = true
 			}
+			for o, label := range f.OptionLabels {
+				if !seen[o] || label == "" || label != strings.TrimSpace(label) || utf8.RuneCountInString(label) > maxOptionLen {
+					return Definition{}, invalidf("collection: field %q: option_labels name an option each, with a label of 1 to %d characters, with no space at either end", f.Name, maxOptionLen)
+				}
+			}
 		case TypeLocation:
 			uses2 = append(uses2, "a location field")
 			if f.Capture == "" {
@@ -392,8 +407,8 @@ func (d Definition) Check() (Definition, error) {
 		if f.Type != TypeNumber && (f.Min != nil || f.Max != nil) {
 			return Definition{}, invalidf("collection: field %q: only a number field has min and max", f.Name)
 		}
-		if f.Type != TypeChoice && f.Options != nil {
-			return Definition{}, invalidf("collection: field %q: only a choice field has options", f.Name)
+		if f.Type != TypeChoice && (f.Options != nil || f.OptionLabels != nil) {
+			return Definition{}, invalidf("collection: field %q: only a choice field has options and option_labels", f.Name)
 		}
 		fields[f.Name] = f
 		out.Collection.Fields[i] = f
@@ -513,6 +528,11 @@ func (d Definition) Check() (Definition, error) {
 			requires = sortedKeys(setOf(append(requires, capability)))
 		}
 	}
+	// A client that predates the labels (LabelsKey) would draw nothing where a screen binds to one:
+	// a screen that does requires the capability, so an older client says it must be updated.
+	if usesLabels(out.Screens, out.Components) {
+		requires = sortedKeys(setOf(append(requires, LabelsCapability)))
+	}
 	// A client that doesn't know month_of would total every month in place of this one's: it
 	// must be told to update instead.
 	if monthly {
@@ -547,6 +567,41 @@ func (d Definition) Check() (Definition, error) {
 		return Definition{}, invalidf("the definition is over %d KiB", MaxDefinitionSize>>10)
 	}
 	return out, nil
+}
+
+// usesLabels says whether a screen or a component binds to a choice's label: a data binding whose
+// path has LabelsKey as one of its segments.
+func usesLabels(screens []Screen, components []json.RawMessage) bool {
+	var found func(v any) bool
+	found = func(v any) bool {
+		switch x := v.(type) {
+		case map[string]any:
+			if path, ok := x["path"].(string); ok && slices.Contains(strings.Split(path, "/"), LabelsKey) {
+				return true
+			}
+			for _, child := range x {
+				if found(child) {
+					return true
+				}
+			}
+		case []any:
+			for _, child := range x {
+				if found(child) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	raw, err := json.Marshal(struct {
+		Screens    []Screen          `json:"screens"`
+		Components []json.RawMessage `json:"components"`
+	}{screens, components})
+	if err != nil {
+		return false
+	}
+	var tree any
+	return json.Unmarshal(raw, &tree) == nil && found(tree)
 }
 
 // mergeSorted joins two lists of capabilities, sorted and without repeats.
@@ -692,12 +747,27 @@ func ofType(f Field, v any) bool {
 
 func item(def Definition, r Row) map[string]any {
 	it := map[string]any{"id": r.ID, RevisionKey: r.Revision}
+	labels := map[string]any{}
 	for _, f := range def.Collection.Fields {
 		if v, ok := r.Data[f.Name]; ok && ofType(f, v) {
 			it[f.Name] = v
+			if s, isText := v.(string); isText && f.Type == TypeChoice {
+				labels[f.Name] = f.label(s)
+			}
 		}
 	}
+	if len(labels) > 0 {
+		it[LabelsKey] = labels
+	}
 	return it
+}
+
+// label is how a stored value of a choice field reads to people: its option label, or the value.
+func (f Field) label(value string) string {
+	if l, ok := f.OptionLabels[value]; ok {
+		return l
+	}
+	return value
 }
 
 // declared is the fields of data that the collection declares, as Items shows them: a value

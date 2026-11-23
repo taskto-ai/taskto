@@ -292,8 +292,8 @@ func (c Condition) sql(def Definition) (string, []any, Condition, error) {
 	if err != nil {
 		return "", nil, c, err
 	}
-	if f.Type == TypeLocation || f.Type == TypeSignature {
-		return "", nil, c, invalidAs(apierr.CodeAppQueryCondition, apierr.Params{"field": c.Field, "op": c.Op}, "a %s field is evidence, not something to filter by", f.Type)
+	if f.Type == TypeLocation || f.Type == TypeSignature || f.Type == TypeAttachment {
+		return "", nil, c, invalidAs(apierr.CodeAppQueryCondition, apierr.Params{"field": c.Field, "op": c.Op}, "a %s field is not something to filter by: it holds files and evidence, not a value", f.Type)
 	}
 	bad := func(format string, args ...any) error {
 		return invalidAs(apierr.CodeAppQueryCondition, apierr.Params{"field": c.Field, "op": c.Op}, format, args...)
@@ -384,6 +384,10 @@ func (a Aggregate) plan(def Definition) (aggregatePlan, error) {
 	f, err := fieldOf(def, a.Field)
 	if err != nil {
 		return p, err
+	}
+	// An attachment field holds a list of files: there is no value to count, total or compare.
+	if f.Type == TypeAttachment {
+		return p, invalidAs(apierr.CodeAppQueryField, apierr.Params{"field": a.Field}, "a %s field can't be aggregated", f.Type)
 	}
 	e := typed(f)
 	p.field = f
