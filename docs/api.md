@@ -1740,7 +1740,9 @@ saying what is wrong) unless:
   `boolean`, `date`: `YYYY-MM-DD`, `time`: `HH:MM` on a 24-hour clock, `choice`, `attachment`: a
   list of photos, or `location`, `signature` and `barcode`, [below](#location-signature-and-barcode-fields)), `required`,
   `required_when` (a rule), `max_length` (strings: 1–10000, 1000 when left out), `min` and `max`
-  (numbers), `options` (a choice's, 1–50 different texts of at most 100 characters), `max_files`
+  (numbers), `options` (a choice's, 1–50 different texts of at most 100 characters), `option_labels` (a choice's:
+  `{"<option>": "<label>"}`, each key one of the options and each label 1–100 characters, how a stored
+  value reads to people; the data model below says how a screen shows it), `max_files`
   (an attachment field's: 1–10, 1 when left out) and `max_bytes` (each file's size: at most 16 MiB,
   8 MiB when left out; a signature field's: 1 MiB when left out), and `capture`, `format` and `editable`
   (a location's, a barcode's, and a location's or signature's). An attachment field is version 2, and no
@@ -1780,6 +1782,11 @@ saying what is wrong) unless:
 
 The data model an app's screen binds to: `/items` is the live rows, each with its `id`, its
 revision as `_revision` and the collection's fields; `/draft` is an empty form; each summary is at `/<name>`.
+Each item (and `/record`) also has `_labels`, `{"<field>": "<label>"}` for each choice field the row has a value
+for: the field's `option_labels` entry for the stored option, or the stored text where it has none. A screen
+that shows a choice binds to `_labels/<field>` (`/record/_labels/<field>` on a detail screen), because the field
+itself holds the stored option (`"food"`, not `"Food"`); the label changes nothing that is stored, filtered,
+sorted or compared by a rule. The records explorer and a record's history show labels the same way.
 An app with attachment fields also has `/_files/<field>`, `{"max_files", "max_bytes"}`: the limits its
 photo input and the signature pad show (a signature field has `max_files` 1).
 An app with location, signature or barcode fields also has `/_fields/<field>`: `{"capture"}` (a location's: `"button"`
@@ -2502,8 +2509,9 @@ revision. That is told before anything else about the change: clearing a capture
 `app_field_locked`, not `app_field_required`. Giving it again unchanged is fine, a record that has none takes one once (that is the capture), and
 a field that says `"editable": true` is not locked. The records explorer shows such values read-only. A location
 or a signature can't be filtered or sorted by (`400 app_query_field` / `app_query_condition`); a barcode is a
-text for both. The records explorer offers to sort by neither of those, nor by a photo field (the
-server refuses a sort by a photo field, too).
+text for both. A photo field can't be filtered or sorted by either (the server refuses both). The records
+explorer offers to filter or sort by none of those three, and offers a filter only the operators its field's
+type takes.
 
 A barcode's text is taken as it was read: a line break, a tab or any other control character in it, even around
 it, is `422 app_field_not_barcode` (only spaces are trimmed). A `captured_at` must have a real zone: `Z` or an

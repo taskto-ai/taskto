@@ -391,3 +391,91 @@ test('on a phone the sort menu leaves out what the server refuses to sort by', a
   const menu = (await screen.findByLabelText('Sort by')) as HTMLSelectElement
   expect([...menu.options].map((o) => o.value)).toEqual(['_updated', 'amount', 'code'])
 })
+
+test('the filter offers only the fields the server can filter by, each with its own conditions', async () => {
+  fakeFetch({ [`GET ${base}/records/query`]: { body: page([record(4, 2, { amount: 12.5 })]) } })
+  renderRecords({ definition: captured })
+  openExplorer()
+  await screen.findByText('12.5')
+  const form = screen.getByRole('form', { name: 'Filter the records' })
+  const field = within(form).getByLabelText('Field') as HTMLSelectElement
+  // Neither a photo nor evidence (a location, a signature) can be filtered by: the server refuses it.
+  expect([...field.options].map((o) => o.value)).toEqual(['amount', 'code'])
+  const conditions = () =>
+    [...(within(form).getByLabelText('Condition') as HTMLSelectElement).options].map((o) => o.value)
+  expect(conditions()).toEqual(['eq', 'ne', 'lt', 'lte', 'gt', 'gte'])
+  fireEvent.change(field, { target: { value: 'code' } })
+  expect(conditions()).toEqual(['eq', 'ne', 'contains'])
+})
+
+const labelled: AppDefinition = {
+  collection: {
+    fields: [
+      { name: 'description', type: 'string' },
+      { name: 'kind', type: 'choice', options: ['food', 'travel'], option_labels: { food: 'Food', travel: 'Travel' } },
+    ],
+  },
+  actions: { add: { kind: 'insert' }, edit: { kind: 'update' } },
+}
+
+test('a choice reads by its label in the table, the filter and the record, and is stored and asked for as it is', async () => {
+  const calls = fakeFetch({
+    [`GET ${base}/records/query`]: { body: page([record(4, 2, { description: 'Lunch', kind: 'food' })]) },
+    [`GET ${base}/records/4/history`]: {
+      body: {
+        record: record(4, 2, { description: 'Lunch', kind: 'food' }),
+        history: [
+          {
+            revision: 1,
+            operation: 'insert',
+            data: { description: 'Lunch', kind: 'travel' },
+            at: '2026-11-01T10:00:00.000Z',
+            by: ana,
+          },
+        ],
+        truncated: false,
+      },
+    },
+  })
+  renderRecords({ definition: labelled })
+  openExplorer()
+  const row = (await screen.findByText('Lunch')).closest('tr') as HTMLElement
+  expect(within(row).getByText('Food')).toBeTruthy()
+  expect(within(row).queryByText('food')).toBeNull()
+
+  // The filter's value picker offers the labels and sends the stored option.
+  const form = screen.getByRole('form', { name: 'Filter the records' })
+  fireEvent.change(within(form).getByLabelText('Field'), { target: { value: 'kind' } })
+  const value = within(form).getByLabelText('Value') as HTMLSelectElement
+  expect([...value.options].map((o) => o.textContent)).toEqual(['Value', 'Food', 'Travel'])
+  fireEvent.change(value, { target: { value: 'food' } })
+  fireEvent.click(within(form).getByRole('button', { name: 'Add filter' }))
+  await waitFor(() => expect(params(calls.at(-1)?.path ?? '').getAll('filter')).toEqual(['kind:eq:food']))
+  expect(screen.getByRole('list', { name: 'Filters in use' }).textContent).toContain('kind is Food')
+
+  // The record: its picker, and its history.
+  fireEvent.click(await screen.findByRole('button', { name: 'Open record 4' }))
+  const picker = (await screen.findByLabelText('kind')) as HTMLSelectElement
+  expect([...picker.options].map((o) => o.textContent)).toEqual(['Not set', 'Food', 'Travel'])
+  expect(picker.value).toBe('food')
+  const versions = within(await screen.findByRole('list', { name: 'History of record 4' })).getAllByRole('listitem')
+  expect(versions[0].textContent).toContain('kind: Travel')
+})
+
+test('a stored option with no label, or that the app no longer lists, reads as it is stored', async () => {
+  fakeFetch({ [`GET ${base}/records/query`]: { body: page([record(4, 2, { description: 'Walk', kind: 'gone' })]) } })
+  renderRecords({
+    definition: {
+      ...labelled,
+      collection: {
+        fields: [
+          labelled.collection.fields[0],
+          { name: 'kind', type: 'choice', options: ['food', 'travel'], option_labels: { food: 'Food' } },
+        ],
+      },
+    },
+  })
+  openExplorer()
+  const row = (await screen.findByText('Walk')).closest('tr') as HTMLElement
+  expect(within(row).getByText('gone')).toBeTruthy()
+})

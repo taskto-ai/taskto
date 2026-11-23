@@ -11,12 +11,12 @@ import {
   actionOf,
   defaultSort,
   type Filter,
+  filterable,
   firstDir,
   numberFields,
   opsFor,
   PAGE_SIZE,
   type Query,
-  queryable,
   queryString,
   type Sort,
   sortable,
@@ -24,7 +24,7 @@ import {
   UPDATED,
 } from './explorer'
 import { RecordDetail } from './RecordDetail'
-import { shown, who } from './RecordParts'
+import { optionLabel, shown, who } from './RecordParts'
 
 const NARROW = '(max-width: 48rem)'
 // On the button that removes a filter, which is named for assistive technology by its label.
@@ -171,7 +171,7 @@ export function AppExplorer({
         </form>
       </search>
 
-      <FilterBar fields={queryable(fields)} filters={filters} onChange={(next) => ask(() => setFilters(next))} />
+      <FilterBar fields={filterable(fields)} filters={filters} onChange={(next) => ask(() => setFilters(next))} />
 
       {narrow && (
         <div className="tt-explorer-sort">
@@ -403,10 +403,11 @@ function FilterBar({
 }
 
 function chipValue(fl: Filter, fields: AppField[], f: Format, t: T): string {
-  const type = fields.find((x) => x.name === fl.field)?.type
+  const field = fields.find((x) => x.name === fl.field)
+  const type = field?.type
   if (type === 'boolean') return t(fl.value === 'true' ? 'apps.records.yes' : 'apps.records.no')
   if (type === 'number' && !Number.isNaN(Number(fl.value))) return f.number(Number(fl.value))
-  return shown(fl.value, type, f, t)
+  return shown(fl.value, type, f, t, field)
 }
 
 function FilterValue({
@@ -429,7 +430,7 @@ function FilterValue({
             ['true', t('apps.records.yes')],
             ['false', t('apps.records.no')],
           ]
-        : (field.options ?? []).map((o) => [o, o])
+        : (field.options ?? []).map((o) => [o, optionLabel(field, o)])
     return (
       <select id={id} aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{label}</option>
@@ -512,7 +513,7 @@ function RecordTable({
               </th>
               {fields.map((field) => (
                 <td key={field.name} className={field.type === 'number' ? 'tt-num' : undefined}>
-                  {shown(rec.data[field.name], field.type, f, t)}
+                  {shown(rec.data[field.name], field.type, f, t, field)}
                 </td>
               ))}
               <td className="tt-small">{f.dateTime(deleted ? (rec.deleted_at ?? rec.updated_at) : rec.updated_at)}</td>
@@ -553,7 +554,7 @@ function RecordCards({
     <ul className="tt-record-list tt-explorer-cards">
       {records.map((rec) => {
         const [lead, ...rest] = fields
-        const title = lead ? shown(rec.data[lead.name], lead.type, f, t) : ''
+        const title = lead ? shown(rec.data[lead.name], lead.type, f, t, lead) : ''
         return (
           <li key={rec.id} className="tt-record">
             <button
@@ -566,7 +567,7 @@ function RecordCards({
             </button>
             <dl className="tt-record-fields">
               {rest.map((field) => {
-                const v = shown(rec.data[field.name], field.type, f, t)
+                const v = shown(rec.data[field.name], field.type, f, t, field)
                 return v === '' ? null : (
                   <div key={field.name}>
                     <dt>{field.name}</dt>
