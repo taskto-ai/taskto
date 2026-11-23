@@ -342,10 +342,12 @@ func (s *Service) retryEffect(ctx context.Context, sp access.Space, a Actor, app
 		if waiting >= maxOutstanding {
 			return backlogError()
 		}
+		// By the worker's clock, which the queue's times are in.
+		at := s.stamp(s.clock())
 		res, err := tx.ExecContext(ctx, `
 			UPDATE app_effects SET state = 'pending', attempts = 0, next_attempt_at = ?, lease_until = NULL,
 				error_code = NULL, error_params = NULL, updated_at = ?
-			WHERE id = ? AND state = 'failed'`, now(), now(), id)
+			WHERE id = ? AND state = 'failed'`, at, at, id)
 		if err != nil {
 			return err
 		}

@@ -65,7 +65,7 @@ func newFX(t *testing.T) *fx {
 }
 
 // inspections is the app: a failed inspection makes a maintenance card, a document and a route to
-// the card; resolving one moves the card to done.
+// the card; resolving one moves the card to done and reopening it back to todo.
 func (f *fx) inspections() Definition {
 	failed := &Rule{Field: "result", Op: OpEq, Value: "fail"}
 	comp := func(s string) json.RawMessage { return json.RawMessage(s) }
@@ -92,6 +92,8 @@ func (f *fx) inspections() Definition {
 				{Kind: EffectOpenRoute, When: failed, Route: RouteCard, Card: "maintenance"},
 			}},
 			"resolve": {Kind: ActionUpdate, Effects: []Effect{{Kind: EffectUpdateCard, Card: "maintenance", Column: "done"}}},
+			"reopen":  {Kind: ActionUpdate, Effects: []Effect{{Kind: EffectUpdateCard, Card: "maintenance", Column: "todo"}}},
+			"remove":  {Kind: ActionDelete},
 		},
 	}
 }
@@ -829,7 +831,6 @@ func TestDefinitionsNameOnlyWhatTheRegistryHas(t *testing.T) {
 		t.Error("too many effects")
 	}
 }
-
 
 func TestAnEffectIsStrictAboutItsKeys(t *testing.T) {
 	f := newFX(t)
