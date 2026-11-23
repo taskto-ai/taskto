@@ -3,6 +3,7 @@ package apps
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -225,7 +226,7 @@ func (s *Service) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body PreviewRequest
-	if !readJSON(w, r, &body) {
+	if !readJSONLimit(w, r, &body, previewMaxBody) {
 		return
 	}
 	reply, err := s.preview(r.Context(), req.space, req.actor, req.app, body)
@@ -538,9 +539,21 @@ func invalid(w http.ResponseWriter, status int, err error) {
 // readJSON decodes the request body into v, strictly: unknown fields and trailing data
 // are errors. It answers 400 and returns false on failure.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
+	return readJSONLimit(w, r, v, maxBody)
+}
+
+// readJSONLimit is readJSON for a body of up to limit bytes. A preview's body carries all its
+// sample rows, so it is bigger than a definition's: its own limit, and its own answer to a body over it.
+func readJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) && limit == previewMaxBody {
+			writeError(w, http.StatusRequestEntityTooLarge, apierr.CodeAppPreviewTooLarge,
+				fmt.Sprintf("a preview's request is at most %d MiB", previewMaxBody>>20), apierr.Params{"max_mib": previewMaxBody >> 20})
+			return false
+		}
 		writeError(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: "+err.Error())
 		return false
 	}

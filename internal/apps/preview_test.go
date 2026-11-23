@@ -289,8 +289,12 @@ func TestPreviewChecksTheRowsItIsGiven(t *testing.T) {
 	}
 	rec := w.preview(w.alice, s, a, PreviewRequest{Rows: many})
 	expect(t, rec, http.StatusConflict)
-	if errorCode(t, rec) != "app_full" {
+	// The preview's own limit is named, not the live app's 5,000 rows.
+	if errorCode(t, rec) != "app_preview_full" {
 		t.Fatalf("too many rows = %s", rec.Body)
+	}
+	if got := decode[struct{ Params map[string]any }](t, rec).Params["max_rows"]; got != float64(previewMaxRows) {
+		t.Fatalf("too many rows names the limit %v, want %d", got, previewMaxRows)
 	}
 	for name, rows := range map[string][]PreviewRow{
 		"the same id twice":  {{ID: 1, Revision: 1, Data: ok}, {ID: 1, Revision: 1, Data: ok}},
@@ -347,5 +351,67 @@ func TestSampleRowsFitTheirCollections(t *testing.T) {
 	}})
 	if len(rows) != sampleRowCount || rows[0].Data["title"] != "Titl" || rows[2].Data["qty"] != 25.0 || rows[2].Data["kind"] != "a" {
 		t.Fatalf("limited sample rows = %+v", rows)
+	}
+}
+
+// A preview sends all its sample rows back, so its request is bigger than a definition's body
+// limit allows: rows that fit the draft go through up to the preview's own limits.
+func TestPreviewTakesAsManyValidRowsAsItHolds(t *testing.T) {
+	w := newWorld(t)
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Notes")
+	big := strings.Repeat("x", DefaultMaxLength)
+	var rows []PreviewRow
+	for i := 1; i <= previewMaxRows; i++ {
+		rows = append(rows, PreviewRow{ID: int64(i), Revision: 1, Data: map[string]any{"title": big}})
+	}
+	if raw, _ := json.Marshal(PreviewRequest{Rows: rows}); len(raw) <= maxBody {
+		t.Fatalf("the test's request is %d bytes: it must be over the definition body limit %d", len(raw), maxBody)
+	}
+	reply := w.mustPreview(w.alice, s, a, PreviewRequest{Rows: rows})
+	if len(reply.Rows) != previewMaxRows {
+		t.Fatalf("%d rows came back, want %d", len(reply.Rows), previewMaxRows)
+	}
+}
+
+// A request over the preview's own limit is refused with a code the web app translates.
+func TestPreviewRefusesAnOversizeRequest(t *testing.T) {
+	w := newWorld(t)
+	s, a := w.alicePrivate, w.aliceApp
+	body := `{"rows": [], "pad": "` + strings.Repeat("x", previewMaxBody) + `"}`
+	r := httptest.NewRequest(http.MethodPost, appPath(s, a.ID, "/preview"), strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	r.AddCookie(w.alice.cookie)
+	rec := httptest.NewRecorder()
+	w.e.h.ServeHTTP(rec, r)
+	expectCode(t, rec, http.StatusRequestEntityTooLarge, "app_preview_too_large")
+}
+
+// A preview never holds, returns or draws an attachment of a real app: the ids a client sends
+// are dropped, and sample rows have none.
+func TestPreviewNeverReferencesAttachments(t *testing.T) {
+	w := newWorld(t)
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Photos")
+	const id = "0123456789abcdef0123456789abcdef"
+	start := w.mustPreview(w.alice, s, a, PreviewRequest{})
+	for _, r := range start.Rows {
+		if _, has := r.Data["photos"]; has {
+			t.Fatalf("a sample row has photos: %+v", r)
+		}
+		if _, has := r.Data["receipt"]; has {
+			t.Fatalf("a sample row has a receipt: %+v", r)
+		}
+	}
+	given := []PreviewRow{{ID: 1, Revision: 1, Data: map[string]any{"title": "x", "photos": []any{id}}}}
+	reply := w.mustPreview(w.alice, s, a, PreviewRequest{Rows: given})
+	action := &ClientAction{Name: "add_note", SurfaceID: SurfaceID(a.ID), Context: map[string]any{"title": "y", "photos": []any{id}, "receipt": []any{id}}}
+	reply = w.mustPreview(w.alice, s, a, PreviewRequest{Rows: reply.Rows, Action: action})
+	if len(reply.Rows) != 2 {
+		t.Fatalf("rows = %+v", reply.Rows)
+	}
+	if out, _ := jsonString(reply); strings.Contains(out, id) {
+		t.Fatalf("the preview returned an attachment id: %s", out)
 	}
 }

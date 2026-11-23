@@ -246,7 +246,8 @@
       "boolean": "sim ou não",
       "date": "data",
       "time": "hora",
-      "choice": "escolha"
+      "choice": "escolha",
+      "attachment": "fotos"
     },
     "needs": {
       "design": "Você não pode alterar este app: isso exige o papel de criador nele.",
@@ -519,6 +520,8 @@
     "app_name_length": "O nome do app precisa ter de 1 a {max} caracteres.",
     "too_many_apps": "Um espaço pode ter no máximo {max} apps.",
     "app_full": "Este app está cheio: ele comporta no máximo {max_rows} linhas e {max_mib} MiB de dados.",
+    "app_preview_full": "A prévia está cheia: ela comporta no máximo {max_rows} linhas de exemplo. Comece de novo.",
+    "app_preview_too_large": "Os dados de exemplo da prévia são grandes demais (no máximo {max_mib} MiB). Comece de novo.",
     "app_row_not_found": "Essa linha não está mais no app: alguém pode tê-la excluído.",
     "app_record_conflict": "Outra pessoa alterou este registro enquanto isso. Ele aparece como está agora: confira e tente de novo.",
     "app_field_required": "{field} é obrigatório.",

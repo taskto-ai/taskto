@@ -90,6 +90,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_name_length` | 400 | An app's name must have 1 to `max` characters. |
 | `too_many_apps` | 409 | The space has `max` apps. |
 | `app_full` | 409 | The app holds `max_rows` rows or `max_mib` MiB of data. |
+| `app_preview_full` | 409 | A [preview](#post-appsapppreview) holds `max_rows` sample rows already. |
+| `app_preview_too_large` | 413 | A preview's request, with all its sample rows, is over `max_mib` MiB. |
 | `app_forbidden` | 403 | The space allows it, but the caller's roles in the app don't: `capability` is `design`, `publish`, `submit`, `modify_records` or `manage_roles`. |
 | `app_definition_version` | 400 | The definition's `definition_version` is `version`, which this server doesn't read (it reads up to `supported`). |
 | `app_not_published` | 409 | The app has no release yet: it is a draft, so it can't be launched or have its actions run. |
@@ -1825,8 +1827,11 @@ all, which is why it is a `POST`: the sample rows travel in the body.
 "action": {…}}` goes on from those rows: `action` is the A2UI client action a button sent, in the
 form of [`…/actions`](#post-appsappactions), and runs as the **draft** defines it, on the rows
 sent. Without `action` the rows are only drawn. A preview holds at most 100 rows (`409
-app_full`); rows must each have an `id` and a `revision` from 1, an `id` of their own, and fit the
-draft's collection (`422`; a client starts the preview again when the draft changed). An action the
+app_preview_full`, which names the preview's limit, not a live app's), and its request at most 8 MiB, since it carries every row
+(`413 app_preview_too_large`, unlike the 64 KiB of a definition's body); rows must each have an `id` and a `revision` from 1, an `id` of their own, and fit the
+draft's collection (`422`; a client starts the preview again when the draft changed). A preview holds no photos: the values
+of an `attachment` field, in the rows sent or in an action, are dropped, so a preview never reads or
+returns an attachment of the app, and sample rows have none. An action the
 draft doesn't declare, a value that doesn't fit its field, or a row the sample rows don't have is
 `422`, as in a live app; a stale `expectedRevision` is `409 app_record_conflict`.
 

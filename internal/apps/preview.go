@@ -21,6 +21,18 @@ import (
 // previewMaxRows bounds the sample rows a preview holds, so a request is a reasonable size.
 const previewMaxRows = 100
 
+// previewMaxBody bounds a preview's request, which carries every sample row: as many as an app may
+// hold in all, with room for the JSON around them and for the escaping of their text.
+const previewMaxBody = 2*MaxDataSize + 64<<10
+
+// previewFull is a preview at previewMaxRows. It says the preview's limit, not the live app's.
+func previewFull() error {
+	return &fullError{
+		msg:  fmt.Sprintf("a preview holds at most %d rows", previewMaxRows),
+		code: apierr.CodeAppPreviewFull, params: apierr.Params{"max_rows": previewMaxRows},
+	}
+}
+
 // sampleRowCount is how many sample rows a preview starts with.
 const sampleRowCount = 3
 
@@ -144,10 +156,13 @@ func (s *Service) preview(ctx context.Context, sp access.Space, actor Actor, app
 // simulate applies change to rows as the live app would to its own, in memory: the rows it
 // returns are new, the ones it was given are left as they were.
 func simulate(def Definition, rows []Row, ch Change) ([]Row, error) {
+	// A preview has no photos: an id in an action names an attachment of a live app, which a
+	// preview never reads or holds.
+	ch.Data = withoutPhotos(def, ch.Data)
 	switch ch.Kind {
 	case ActionInsert:
 		if len(rows) >= previewMaxRows {
-			return nil, appFull(fmt.Sprintf("a preview holds at most %d rows", previewMaxRows))
+			return nil, previewFull()
 		}
 		if err := def.Collection.Fits(ch.Data); err != nil {
 			return nil, err
@@ -183,6 +198,19 @@ func simulate(def Definition, rows []Row, ch Change) ([]Row, error) {
 	return nil, invalidf("unknown kind of action %q", ch.Kind)
 }
 
+// withoutPhotos is data without its attachment fields' values: a preview never holds an attachment id,
+// so it can't draw, return or tell whether a real attachment exists. The sample rows have none.
+func withoutPhotos(def Definition, data map[string]any) map[string]any {
+	out := make(map[string]any, len(data))
+	for k, v := range data {
+		if f, ok := def.Collection.field(k); ok && f.Type == TypeAttachment {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 func findRow(rows []Row, id int64) (Row, bool) {
 	for _, r := range rows {
 		if r.ID == id {
@@ -197,7 +225,7 @@ func findRow(rows []Row, id int64) (Row, bool) {
 // it requires and the row lacks) is refused, and the caller starts the preview again.
 func previewRows(def Definition, given []PreviewRow) ([]Row, error) {
 	if len(given) > previewMaxRows {
-		return nil, appFull(fmt.Sprintf("a preview holds at most %d rows", previewMaxRows))
+		return nil, previewFull()
 	}
 	seen := map[int64]bool{}
 	rows := make([]Row, 0, len(given))
@@ -206,7 +234,7 @@ func previewRows(def Definition, given []PreviewRow) ([]Row, error) {
 			return nil, invalidf("a preview's rows each have an id and a revision, from 1, and an id of their own")
 		}
 		seen[g.ID] = true
-		data := declared(def, g.Data)
+		data := withoutPhotos(def, declared(def, g.Data))
 		if err := def.Collection.Fits(data); err != nil {
 			return nil, err
 		}
