@@ -462,7 +462,7 @@ if [ "${TASKTO_BACKUPS:-}" = on ]; then
   want=null
   [ "${TASKTO_BACKUP_CLIENT_CERT:-}" = on ] && want=/run/taskto-backup/client.pem
   for s in backup backup-schedule; do
-    [ "$(docker compose --profile backup config --format json | jq -r --arg s "$s" '.services[$s].environment.RESTIC_TLS_CLIENT_CERT')" = "$want" ] \
+    [ "$(docker compose --profile backup --profile backup-schedule config --format json | jq -r --arg s "$s" '.services[$s].environment.RESTIC_TLS_CLIENT_CERT')" = "$want" ] \
       || fail "$s's RESTIC_TLS_CLIENT_CERT isn't $want"
   done
 fi
