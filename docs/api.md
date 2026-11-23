@@ -1399,7 +1399,8 @@ The live records the caller may read, most recently changed first, at most 1,000
 (`truncated`): `{"records": [ … ], "truncated": false}`. Each is
 `{"id", "revision", "data", "created_at", "created_by", "created_action", "updated_at",
 "updated_by", "updated_action", "deleted_at", "deleted_by", "deleted_action"}`, data
-holding the fields the collection declares; `created_by` and the others are
+holding the fields the **live release's** collection declares (the draft's don't count until
+published); `created_by` and the others are
 `{"id", "name", "agent", "via"}` or `null`. Read scope and `403`/`404` as for the history.
 
 ### `GET …/apps/{app}/records/{record}/history`
@@ -1409,7 +1410,7 @@ out): `{"record": {…}, "history": [{"revision": 3, "operation": "update", "dat
 "at": "…", "by": {"id", "name", "agent", "via"}, "action": "edit_expense"}, …],
 "truncated": false}`. `record` is the record as it is now, with its `revision`, `data`,
 who created, changed and deleted it, and `deleted_at` if it is deleted (its history can
-still be read). Data holds the fields the collection declares. Needs reading the record:
+still be read). Data holds the fields the live release's collection declares. Needs reading the record:
 `404` for one the caller may not read or that doesn't exist, `403` with `read_records`
 for a role that reads no record.
 
@@ -1424,9 +1425,10 @@ Writers who may change the record (`modify_records`). `{"expected_revision": 3}`
 revision of the deleted record the caller saw; it may be left out (`null`). Brings the
 record back, with its history, as a new revision, and answers with it. `409` with
 `app_record_conflict` if it isn't deleted, or has another revision; `409` with `app_full` if
-the app has no room for it; `400` if it no longer fits the collection, which changed since
-(the field's code, such as `app_field_required`); `409` with `app_offline` while the app is
-offline. The history and deleted routes work for an offline app, whose data is kept.
+the app has no room for it; `400` if it no longer fits the live release's collection, which
+changed since (the field's code, such as `app_field_required`; a draft that isn't published
+doesn't count); `409` with `app_offline` while the app is offline, `409 app_not_published`
+before the first release. The history and deleted routes work for an offline app, whose data is kept.
 
 ### `GET …/apps/{app}/roles`
 
@@ -1600,12 +1602,19 @@ published or rolled back since the screen was drawn) it runs as *that release* d
 and is **applied only if the live release can take it as it is**: the live release declares
 the same action (same name and kind), every field the action sets is a field the live collection
 declares with the same type, and an insert gives every field the live collection requires. Then
-the live collection checks the values as always (a value outside the live limits is the usual
-`422` of that field). Otherwise nothing changes and the answer is `409 app_release_outdated`
-(`release`, `live`), which tells the client to reload the app. A release the app doesn't have is
-`404 app_release_not_found`. The data model that answers is drawn by the release the action
-came from, so that screen shows what it can; a value stored with another type than its
-field's current one is left out of the data model (and stays stored).
+the live collection checks **the row the action would store** as always, an insert's and an
+update's alike, whichever release's screen it came from: a required field missing, or a value
+outside the live limits, is the usual error of that field (`app_field_required`,
+`app_field_too_long`, `app_field_too_small`, `app_field_too_large`…) and nothing is stored.
+Otherwise nothing changes and the answer is `409 app_release_outdated` (`release`, `live`), which
+tells the client to reload the app. A release the app doesn't have is `404 app_release_not_found`,
+but only for a caller who may run actions at all (the right to add or to change records); the
+others get `403 app_forbidden` whether the release exists or not, so naming one tells them
+nothing. The data model that answers is drawn by the release the action came from, **limited to
+the fields the live release declares** (as it declares them), and its summaries to the ones that
+read such fields: nothing the live app leaves unseen, such as a field it removed, is returned. A
+value stored with another type than its field's current one is left out of the data model (and
+stays stored).
 
 ### Drafts and releases
 
@@ -1653,7 +1662,8 @@ to the live release is `409 app_nothing_to_publish`.
 The rows are looked at only for a publisher who reads every record (read scope `all`). For
 anyone else the publish is judged by the two collections alone, as if every row were affected:
 every removed or retyped field, every field that became (or was added as) required, and every
-tighter `max_length`, `min` or `max` is to be acknowledged, whatever the rows hold. So the
+tighter `max_length`, `min` or `max` is to be acknowledged, whether or not a row is affected
+(the table above says when a change is one for a publisher who reads the rows). So the
 answer is the same for a bound that some row breaks and one that none does, and repeated
 publishes read nothing out of the data.
 
@@ -1662,12 +1672,16 @@ publishes read nothing out of the data.
 `{"version": 4, "release": 2}`. Makes an earlier release the live one: the app serves it as
 published, with the rows as they are now, and **no data is rolled back**. The draft is left
 as it is (it then differs from the live release, and publishing it makes a new release, not a
-return to the one before). It is refused (`409 app_release_incompatible`, `params.fields`
-the fields that don't fit, never rows) unless every row fits that release's collection: its
-required fields present, every value of its field's type and within its limits; fields it
-doesn't declare are ignored, and kept. Whether the rows fit is told only to a publisher who
-reads every record: for anyone else a rollback to a release whose collection isn't the live
-one's is `403 app_forbidden` (`read_records`). `409 app_release_already_live` for the live release,
+return to the one before). A release whose collection **is the live one's** (a release that
+changed only the screen, actions or summaries) is never judged by the rows, for anyone: nothing
+about how the rows are read or written changes, and the answer is the same whatever they hold
+(rows may not fit the live collection after a publish that acknowledged it, and a refusal would
+tell which). A release with another collection is refused (`409 app_release_incompatible`,
+`params.fields` the fields that don't fit, never rows) unless every row fits it: its required
+fields present, every value of its field's type and within its limits; fields it doesn't
+declare are ignored, and kept. Whether the rows fit is told only to a publisher who reads every
+record: for anyone else a rollback to a release whose collection isn't the live one's is `403
+app_forbidden` (`read_records`). `409 app_release_already_live` for the live release,
 `404 app_release_not_found` for one the app doesn't have. `200` with the app.
 
 #### `GET …/apps/{app}/releases`

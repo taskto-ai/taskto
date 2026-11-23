@@ -29,8 +29,9 @@ import (
 // whose collection would break data the live release shows is refused unless the request
 // acknowledges each such change by name, nothing more and nothing less (Publish.Acknowledge);
 // the answer names the changes (field and kind), never the rows or their values. Rollback
-// points the app at an earlier release and is refused unless every row fits that release's
-// collection.
+// points the app at an earlier release and, when its collection is not the live one's, is
+// refused unless every row fits it; with the live collection nothing about the rows changes,
+// so there is no check, and the answer is the same whatever the rows hold.
 //
 // What a refusal says about the rows is only for those who read them all. For a publisher whose
 // read scope isn't "all", publish judges the draft by the two schemas alone: every change that
@@ -38,7 +39,7 @@ import (
 // refusal nor its list of changes tells whether a row lacks a field or holds a value past a
 // bound (tightening a bound again and again would read the values out). A rollback by such a
 // publisher, which can't be judged without the rows, is refused unless the release's collection
-// is the live one's.
+// is the live one's, and then it is never judged by them.
 //
 // A release records the capabilities its screen needs (Definition.Requires), so a
 // client that lacks one shows that it must update, and the version of the definition format.
@@ -451,19 +452,23 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 		if cur.Live != nil && cur.Live.Number == target.Number {
 			return ErrReleaseLive
 		}
-		if acc.ReadRecords != access.ScopeAll {
-			// Whether the rows fit is theirs to learn only if they read them all; the same
-			// collection holds the same rows.
-			if cur.liveDef == nil || !sameCollection(cur.liveDef.Collection, target.Definition.Collection) {
+		// A release with the live release's collection changes nothing about how the rows are
+		// read or written, so there is nothing to check and nothing to tell: the answer is the
+		// same whatever the rows hold (rows may misfit the live collection, after a publish that
+		// acknowledged it, and a refusal here would tell which, one rollback at a time).
+		if cur.liveDef == nil || !sameCollection(cur.liveDef.Collection, target.Definition.Collection) {
+			if acc.ReadRecords != access.ScopeAll {
+				// Whether the rows fit a different collection is theirs to learn only if they
+				// read them all.
 				return forbidden(capReadRecords)
 			}
-		}
-		rows, err := loadRows(ctx, tx, appID, everything)
-		if err != nil {
-			return err
-		}
-		if fields := misfits(target.Definition.Collection, rows); len(fields) > 0 {
-			return &incompatibleError{fields: fields}
+			rows, err := loadRows(ctx, tx, appID, everything)
+			if err != nil {
+				return err
+			}
+			if fields := misfits(target.Definition.Collection, rows); len(fields) > 0 {
+				return &incompatibleError{fields: fields}
+			}
 		}
 		stamp := now()
 		if _, err := tx.ExecContext(ctx, `

@@ -824,13 +824,14 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 // field the live release requires and that release's screen doesn't send is the usual
 // reason: the client gets the field's own error). Otherwise nothing changes and the answer
 // is ErrReleaseOutdated, which tells the client to reload the app. A release the app doesn't
-// have is ErrReleaseNotFound. The data model sent back is drawn by the release the action
-// came from, so that screen shows what it can.
+// have is ErrReleaseNotFound, but only to a caller who may run actions at all. The data model
+// sent back is drawn by the release the action came from, limited to the fields the live
+// release declares (shownBy): nothing the live app leaves unseen is returned.
 func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
 	if err := may(sp, access.Write); err != nil {
 		return nil, err
 	}
-	var def Definition
+	var def, live Definition
 	var acc access.AppAccess
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		var err error
@@ -844,10 +845,16 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 		if a.liveDef == nil {
 			return ErrNotPublished
 		}
-		live := *a.liveDef
+		live = *a.liveDef
 		def = live
 		fromOlder := action.Release != nil && *action.Release != a.Live.Number
 		if fromOlder {
+			// Whether a release exists is for those who may run actions at all: the 404 for one
+			// that doesn't must not reach a caller the app refuses (what the action does is
+			// checked below against the right it needs).
+			if !acc.Submit && acc.ModifyRecords == access.ScopeNone {
+				return forbidden(string(access.CapSubmit))
+			}
 			rel, err := loadRelease(ctx, tx, appID, *action.Release, true)
 			if err != nil {
 				return err
@@ -884,7 +891,29 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	if err != nil {
 		return nil, err
 	}
-	return []Message{DataModel(SurfaceID(appID), def, rows)}, nil
+	return []Message{DataModel(SurfaceID(appID), shownBy(live, def), rows)}, nil
+}
+
+// shownBy is the definition an action's answer is drawn from: from, the release the action
+// came from, narrowed to what the live release shows. Its collection holds only the fields the
+// live release declares, as the live release declares them, and a summary is kept only if it
+// reads one of them, so the answer to an action of an older release shows no value the live
+// app doesn't (a field the live release removed, in whoever's row it is).
+func shownBy(live, from Definition) Definition {
+	shown := from
+	shown.Collection = Collection{}
+	for _, f := range from.Collection.Fields {
+		if lf, ok := live.Collection.field(f.Name); ok {
+			shown.Collection.Fields = append(shown.Collection.Fields, lf)
+		}
+	}
+	shown.Summaries = map[string]Summary{}
+	for name, sum := range from.Summaries {
+		if _, ok := shown.Collection.field(sum.Field); sum.Field == "" || ok {
+			shown.Summaries[name] = sum
+		}
+	}
+	return shown
 }
 
 // apply makes a change to an app's rows, within its bounds, and records it in their history.
@@ -902,6 +931,11 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 	at := now()
 	switch ch.Kind {
 	case ActionInsert:
+		// The row is stored as the live release's collection allows, whichever release's screen
+		// the action came from: its required fields and limits are the live ones.
+		if err := def.Collection.Fits(ch.Data); err != nil {
+			return err
+		}
 		raw, err := json.Marshal(ch.Data)
 		if err != nil {
 			return err
