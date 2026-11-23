@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -252,3 +253,6 @@ func TestVAPIDAuthorizationIsAValidES256Token(t *testing.T) {
 		t.Fatal("the signature doesn't verify under the public key")
 	}
 }
+
+// Purge is the retention the worker runs every hour, for the external tests.
+func (s *Service) Purge(ctx context.Context) error { return s.purge(ctx) }

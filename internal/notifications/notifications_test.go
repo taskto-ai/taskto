@@ -899,3 +899,44 @@ func TestOneVAPIDKeyPairPerServer(t *testing.T) {
 		t.Fatal("a second start made another key pair")
 	}
 }
+
+func TestOldNotificationsAndFinishedPushesArePurgedAndAPersonsListIsBounded(t *testing.T) {
+	w := newWorld(t, true)
+	add := func(created, read string, n int) {
+		t.Helper()
+		for range n {
+			var readAt any
+			if read != "" {
+				readAt = read
+			}
+			if _, err := w.db.Exec(`INSERT INTO notifications (user_id, workspace_id, kind, ref, created_at, read_at) VALUES (?, ?, 'card_assigned', '{}', ?, ?)`,
+				w.bob.id, w.ws, created, readAt); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	day := func(ago int) string {
+		return time.Now().Add(-time.Duration(ago) * 24 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+	}
+	add(day(200), "", 2)      // older than anything is kept
+	add(day(100), day(95), 3) // read long ago
+	add(day(100), "", 4)      // old but unread: kept
+	add(day(1), "", 500)      // a person's most
+	add(day(0), "", 5)        // and 5 newer ones push the 5 oldest of these out
+	if err := w.svc.Purge(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count("notifications", "created_at < ?", day(150)); n != 0 {
+		t.Fatalf("%d notifications past the longest keep", n)
+	}
+	if n := w.count("notifications", "read_at IS NOT NULL"); n != 0 {
+		t.Fatalf("%d notifications read long ago are kept", n)
+	}
+	if n := w.count("notifications", "user_id = ?", w.bob.id); n != 500 {
+		t.Fatalf("%d notifications kept, want the person's most, 500", n)
+	}
+	// The newest are the ones kept.
+	if n := w.count("notifications", "created_at >= ?", day(0)); n != 5 {
+		t.Fatalf("%d of today's notifications kept, want all 5", n)
+	}
+}
