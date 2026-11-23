@@ -2,10 +2,12 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { parseRoute, usePath } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { AppsPage } from './AppsPage'
+import { forgetOperations } from './operations'
 
 const spaces = {
   spaces: [
@@ -60,6 +62,7 @@ function Routed() {
 beforeEach(() => window.history.replaceState(null, '', '/w/1/apps'))
 afterEach(() => {
   cleanup()
+  forgetOperations()
   vi.unstubAllGlobals()
 })
 
@@ -439,13 +442,16 @@ test('a publisher without the right to design can roll back, and a builder can r
   expect(within(crew).queryByRole('button', { name: /^Roll back/ })).toBeNull()
 })
 
-test('a launched app says it is live, and those who may review it can preview the draft, whose buttons change nothing', async () => {
+test('a launched app says it is live, and those who may review it can try the draft on sample data', async () => {
   window.history.replaceState(null, '', '/w/1/apps/2-1')
   const calls = fakeFetch({
     'GET /api/workspaces/1/spaces': { body: spaces },
     'GET /api/workspaces/1/spaces/2/apps/1': { body: app({ unpublished_changes: true, live: release({ number: 4 }) }) },
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=4': { body: surface },
-    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=draft': { body: surface },
+    'POST /api/workspaces/1/spaces/2/apps/1/preview': (call) =>
+      (call.body as { action?: unknown }).action
+        ? { body: { messages: afterAdd, rows: [] } }
+        : { body: { messages: surface, rows: [{ id: 1, revision: 1, data: {} }] } },
     'POST /api/workspaces/1/spaces/2/apps/1/actions/preview': { body: { effects: [] } },
     'GET /api/workspaces/1/spaces/2/apps/1/effects?limit=50': { body: { effects: [], active: 0, failed: 0 } },
   })
@@ -455,15 +461,21 @@ test('a launched app says it is live, and those who may review it can preview th
   expect(screen.getByText(/It has changes that aren’t published yet/)).toBeTruthy()
 
   fireEvent.click(screen.getByRole('button', { name: 'Preview the draft' }))
-  await screen.findByText('Draft · not published')
-  expect(screen.getByText(/preview of changes that aren’t published yet/)).toBeTruthy()
+  await screen.findByText('Preview · sample data')
+  expect(screen.getByText(/preview of changes that aren’t published yet, on sample data/)).toBeTruthy()
   await screen.findByText('Coffee')
+  // Its buttons work, on the sample rows the preview sent: they never reach the app's own actions.
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-  // The button asks what it would set going, and nothing is saved.
+  // …and say what the button would have set going on boards and documents, which changes nothing.
   await screen.findByText('Preview: nothing was saved')
-  expect(calls.filter((c) => c.method === 'POST').map((c) => c.path)).toEqual([
+  const sent = calls.filter((c) => c.method === 'POST')
+  expect(sent.map((c) => c.path)).toEqual([
+    ...Array(2).fill('/api/workspaces/1/spaces/2/apps/1/preview'),
     '/api/workspaces/1/spaces/2/apps/1/actions/preview',
   ])
+  expect(sent[0].body).toEqual({}) // the start
+  expect(sent[1].body).toMatchObject({ rows: [{ id: 1, revision: 1, data: {} }], action: { name: 'delete_expense' } })
+  expect(calls.some((c) => c.path.endsWith('/actions'))).toBe(false)
 
   fireEvent.click(screen.getByRole('button', { name: 'Back to the live release' }))
   await screen.findByText('Live · release 4')
@@ -488,10 +500,10 @@ test('an app nobody has published yet shows its draft to its builders, and a not
   fakeFetch({
     'GET /api/workspaces/1/spaces': { body: spaces },
     'GET /api/workspaces/1/spaces/2/apps/1': { body: app({ live: null, unpublished_changes: true }) },
-    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=draft': { body: surface },
+    'POST /api/workspaces/1/spaces/2/apps/1/preview': { body: { messages: surface, rows: [] } },
   })
   render(<Routed />)
-  await screen.findByText('Draft · not published')
+  await screen.findByText('Preview · sample data')
   await screen.findByText('Coffee')
   cleanup()
 

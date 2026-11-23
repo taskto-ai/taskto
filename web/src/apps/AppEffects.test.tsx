@@ -296,3 +296,52 @@ test('failed effects older than the newest page are reachable and can be retried
   await screen.findByText('It will be tried again shortly.')
   expect(calls.find((c) => c.method === 'POST')?.path).toBe(`${base}/effects/40/retry`)
 })
+
+test('retrying an effect on an older page shows it retried there, not still failed', async () => {
+  const newest = Array.from({ length: 50 }, (_, i) =>
+    effect(200 - i, { status: 'done', done_at: '2026-11-02T10:00:00.000Z' }),
+  )
+  let retried = false
+  const calls = fakeFetch({
+    [`GET ${base}/effects?limit=50`]: () => ({
+      body: { effects: newest, more: true, active: retried ? 1 : 0, failed: retried ? 0 : 1 },
+    }),
+    [`GET ${base}/effects?limit=50&before=151`]: {
+      body: {
+        effects: [effect(40, { status: 'failed', error: { code: 'app_effect_gave_up' }, can_retry: true })],
+        more: false,
+        active: 0,
+        failed: 1,
+      },
+    },
+    [`GET ${base}/effects?limit=50&before=41`]: () => ({
+      body: {
+        effects: [
+          retried
+            ? effect(40, { status: 'pending', attempts: 0, can_retry: false })
+            : effect(40, { status: 'failed', error: { code: 'app_effect_gave_up' }, can_retry: true }),
+        ],
+        more: false,
+        active: 1,
+        failed: 0,
+      },
+    }),
+    [`POST ${base}/effects/40/retry`]: () => {
+      retried = true
+      return { body: effect(40, { status: 'pending' }) }
+    },
+  })
+  render(<AppEffects workspace={1} base={base} writable />)
+  fireEvent.click(await screen.findByRole('button', { name: /Effects/ }))
+  await screen.findByRole('list')
+  fireEvent.click(screen.getByRole('button', { name: 'Show older effects' }))
+  fireEvent.click(await screen.findByRole('button', { name: /Retry/ }))
+  await screen.findByText('It will be tried again shortly.')
+  // The older page is read again: the row is no longer failed, and offers no retry.
+  await waitFor(() => expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull())
+  expect(calls.some((c) => c.path.endsWith('before=41'))).toBe(true)
+  const old = screen
+    .getAllByRole('listitem')
+    .find((li) => li.textContent?.includes('Fix East gate') && li.getAttribute('data-status') !== 'done')
+  expect(old?.getAttribute('data-status')).toBe('pending')
+})

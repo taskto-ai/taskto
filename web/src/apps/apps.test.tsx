@@ -14,11 +14,13 @@ import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { ApiError } from '../api'
 import { fakeFetch } from '../test/fakes'
-import { type ActionPayload, AppView, httpTransport, PreviewResult } from './AppView'
+import { type ActionPayload, AppView, httpTransport } from './AppView'
 import { appsCatalog, catalogCapabilities, DEFINITION_VERSION } from './catalog'
+import { forgetOperations } from './operations'
 
 afterEach(() => {
   cleanup()
+  forgetOperations()
   vi.unstubAllGlobals()
 })
 
@@ -268,7 +270,6 @@ test('the app is drawn from the release it names, and its actions name that rele
   const calls = fakeFetch({
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=3': { body: surface },
     'POST /api/workspaces/1/spaces/2/apps/1/actions': { body: afterAdd },
-    'POST /api/workspaces/1/spaces/2/apps/1/actions/preview': { body: { effects: [] } },
   })
   const base = '/api/workspaces/1/spaces/2/apps/1'
   const transport = httpTransport(base, 3)
@@ -282,78 +283,91 @@ test('the app is drawn from the release it names, and its actions name that rele
   })
   expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${base}/surface?release=3`, `POST ${base}/actions`])
   expect(calls[1].body).toMatchObject({ name: 'add_expense', release: 3 })
-  // A draft is drawn, never acted on: its buttons ask the server what they would set going, which
-  // changes nothing.
+  expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${base}/surface?release=3`, `POST ${base}/actions`])
+})
+
+test("a draft is tried on sample rows the server makes, and its actions never reach the app's own", async () => {
+  const sample = [{ id: 1, revision: 1, data: { description: 'Coffee' } }]
+  const grown = [...sample, { id: 2, revision: 1, data: { description: 'Tea' } }]
+  const calls = fakeFetch({
+    'POST /api/workspaces/1/spaces/2/apps/1/preview': (call) =>
+      (call.body as { action?: unknown }).action
+        ? { body: { messages: afterAdd, rows: grown } }
+        : { body: { messages: surface, rows: sample } },
+  })
+  const base = '/api/workspaces/1/spaces/2/apps/1'
   const preview = httpTransport(base, 'draft')
-  await expect(
-    preview.act({ name: 'x', surfaceId: 'app-1', sourceComponentId: 'x', timestamp: 't', context: {} }),
-  ).rejects.toBeInstanceOf(PreviewResult)
+  expect(await preview.load()).toEqual(surface)
+  const action = { name: 'add_expense', surfaceId: 'app-1', sourceComponentId: 'add', timestamp: 't', context: {} }
+  expect(await preview.act(action)).toEqual(afterAdd)
+  await preview.act(action)
+  // The first step sends nothing; the next ones send back the rows the last one left, with the action.
   expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
-    `GET ${base}/surface?release=3`,
-    `POST ${base}/actions`,
-    `POST ${base}/actions/preview`,
+    `POST ${base}/preview`,
+    `POST ${base}/preview`,
+    `POST ${base}/preview`,
   ])
+  expect(calls[0].body).toEqual({})
+  expect(calls[1].body).toEqual({ rows: sample, action })
+  expect(calls[2].body).toEqual({ rows: grown, action })
+  // Loading again starts over from fresh sample rows.
+  await preview.load()
+  expect(calls[3].body).toEqual({})
 })
 
-test('an action keeps its operation key until the server has answered it', async () => {
+test('two taps on a preview in quick succession each go on from the rows the other left', async () => {
   const base = '/api/workspaces/1/spaces/2/apps/1'
-  let fail = true
-  const calls = fakeFetch({
-    [`POST ${base}/actions`]: () => {
-      if (fail) throw new TypeError('network down')
-      return { body: afterAdd }
-    },
+  const sent: { rows?: unknown[]; action?: { name: string } }[] = []
+  const answers: ((rows: unknown[] | 'fail') => void)[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      sent.push(body)
+      const rows = await new Promise<unknown[] | 'fail'>((resolve) => answers.push(resolve))
+      return new Response(JSON.stringify(rows === 'fail' ? { error: 'x', code: 'internal' } : { messages: [], rows }), {
+        status: rows === 'fail' ? 500 : 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }),
+  )
+  const preview = httpTransport(base, 'draft')
+  const tap = (name: string) => ({ name, surfaceId: 'app-1', sourceComponentId: 'b', timestamp: 't', context: {} })
+  const load = preview.load()
+  await vi.waitFor(() => expect(sent).toHaveLength(1))
+  answers[0]([{ id: 1, revision: 1, data: {} }])
+  await load
+
+  const first = preview.act(tap('one'))
+  const second = preview.act(tap('two'))
+  // The second waits for the first: it must start from the rows the first leaves.
+  await vi.waitFor(() => expect(sent).toHaveLength(2))
+  await new Promise((r) => setTimeout(r, 20))
+  expect(sent).toHaveLength(2)
+  const afterOne = [
+    { id: 1, revision: 1, data: {} },
+    { id: 2, revision: 1, data: { by: 'one' } },
+  ]
+  answers[1](afterOne)
+  await first
+  await vi.waitFor(() => expect(sent).toHaveLength(3))
+  expect(sent[2]).toMatchObject({ rows: afterOne, action: { name: 'two' } })
+  answers[2]([...afterOne, { id: 3, revision: 1, data: { by: 'two' } }])
+  await second
+
+  // A step that fails leaves the next one to go on from the rows as they were.
+  const failing = preview.act(tap('three'))
+  await vi.waitFor(() => expect(sent).toHaveLength(4))
+  const fine = preview.act(tap('four'))
+  answers[3]('fail')
+  await expect(failing).rejects.toBeTruthy()
+  await vi.waitFor(() => expect(sent).toHaveLength(5))
+  expect(sent[4]).toMatchObject({
+    rows: [...afterOne, { id: 3, revision: 1, data: { by: 'two' } }],
+    action: { name: 'four' },
   })
-  const transport = httpTransport(base, 3)
-  const press = (context: Record<string, unknown>) =>
-    transport.act({ name: 'add_expense', surfaceId: 'app-1', sourceComponentId: 'add', timestamp: 't', context })
-  const operation = (i: number) => (calls[i].body as { operation: string }).operation
-
-  // No answer: the person presses the same button again, and the server is told it is the same press.
-  await expect(press({ amount: '1' })).rejects.toThrow()
-  fail = false
-  await press({ amount: '1' })
-  expect(operation(0)).toMatch(/^[A-Za-z0-9_-]{8,64}$/)
-  expect(operation(1)).toBe(operation(0))
-  // Answered: the next press is a new one, and so is a different request.
-  await press({ amount: '1' })
-  expect(operation(2)).not.toBe(operation(0))
-})
-
-test('a retry after a lost answer is the same submission whatever the renderer stamped on the press', async () => {
-  const base = '/api/workspaces/1/spaces/2/apps/1'
-  let fail = true
-  const calls = fakeFetch({
-    [`POST ${base}/actions`]: () => {
-      if (fail) throw new TypeError('network down')
-      return { body: afterAdd }
-    },
-  })
-  const transport = httpTransport(base, 3)
-  // Every press carries the time it was made, as the renderer stamps it.
-  let at = 0
-  const press = (context: Record<string, unknown>) =>
-    transport.act({
-      name: 'add_expense',
-      surfaceId: 'app-1',
-      sourceComponentId: 'add',
-      timestamp: new Date(Date.UTC(2026, 10, 2, 10, 0, at++)).toISOString(),
-      context,
-    })
-  const operation = (i: number) => (calls[i].body as { operation: string }).operation
-
-  await expect(press({ amount: '1' })).rejects.toThrow()
-  // Another submission is pressed meanwhile, and lost too.
-  await expect(press({ amount: '2' })).rejects.toThrow()
-  fail = false
-  await press({ amount: '1' })
-  await press({ amount: '2' })
-  expect(operation(2)).toBe(operation(0))
-  expect(operation(3)).toBe(operation(1))
-  expect(operation(1)).not.toBe(operation(0))
-  // Answered: pressing it again is a new submission.
-  await press({ amount: '1' })
-  expect(operation(4)).not.toBe(operation(0))
+  answers[4]([])
+  await fine
 })
 
 for (const [name, component] of [

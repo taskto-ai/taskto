@@ -76,7 +76,14 @@ export function BoardsPage({ workspace, open }: { workspace: number; open?: stri
   const [adding, setAdding] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [boardError, setBoardError] = useState<string | null>(null)
-  const board = boards.data?.find((b) => b.id === chosen) ?? boards.data?.[0]
+  // A link names its board: if that one isn't among those listed (it was archived since, or
+  // is gone) another board is not shown in its place, which would read as the card's board.
+  const linkedMissing =
+    boards.data !== undefined &&
+    target?.board !== undefined &&
+    chosen === target.board &&
+    !boards.data.some((b) => b.id === chosen)
+  const board = linkedMissing ? undefined : (boards.data?.find((b) => b.id === chosen) ?? boards.data?.[0])
   const canWrite = space?.access === 'write'
   const t = useT()
 
@@ -113,13 +120,18 @@ export function BoardsPage({ workspace, open }: { workspace: number; open?: stri
           <label className="tt-inline-field">
             {t('boards.board')}
             <select
-              value={board?.id}
+              value={board?.id ?? ''}
               onChange={(e) => {
                 setRenaming(false)
                 setBoardError(null)
                 setChosen(Number(e.target.value))
               }}
             >
+              {!board && (
+                <option value="" disabled>
+                  {t('boards.board')}
+                </option>
+              )}
               {boards.data.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.archived_at ? t('boards.archivedBoard', { name: b.name }) : b.name}
@@ -146,6 +158,16 @@ export function BoardsPage({ workspace, open }: { workspace: number; open?: stri
         <p role="alert" className="tt-error">
           {spaces.error ?? boards.error}
         </p>
+      )}
+      {linkedMissing && (
+        <div role="status" className="tt-panel">
+          <p>{t(archived ? 'boards.linkedUnavailable' : 'boards.linkedArchivedOrGone')}</p>
+          {!archived && space?.kind === 'shared' && (
+            <button type="button" className="tt-button" onClick={() => setArchived(true)}>
+              {t('boards.showArchived')}
+            </button>
+          )}
+        </div>
       )}
       {board && (
         <div className="tt-actions">
@@ -196,7 +218,7 @@ export function BoardsPage({ workspace, open }: { workspace: number; open?: stri
       {(spaces.data === undefined || base) && boards.data === undefined && !boards.error && !spaces.error && (
         <p className="tt-muted">{t('app.loading')}</p>
       )}
-      {boards.data?.length === 0 && <p className="tt-muted">{t('boards.noBoards')}</p>}
+      {boards.data?.length === 0 && !linkedMissing && <p className="tt-muted">{t('boards.noBoards')}</p>}
       {base && space && board && (
         <BoardView
           key={board.id}

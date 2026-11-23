@@ -146,12 +146,13 @@
     "previewDraftNamed": "Ver o rascunho de {name}",
     "stage": {
       "live": "No ar · versão {number}",
-      "draft": "Rascunho · não publicado",
+      "draft": "Prévia · dados de exemplo",
       "showDraft": "Ver o rascunho",
       "showLive": "Voltar à versão no ar",
-      "draftNote": "Esta é uma prévia de alterações ainda não publicadas. Mais ninguém a vê, e os botões dela não alteram nenhum dado.",
+      "draftNote": "Esta é uma prévia de alterações ainda não publicadas, com dados de exemplo. Experimente: os botões funcionam, mas não alteram nada real, e mais ninguém a vê.",
       "unpublishedNote": "Você está vendo a versão no ar, a que todos usam. Ela tem alterações que ainda não foram publicadas.",
-      "notPublished": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer."
+      "notPublished": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer.",
+      "liveNote": "Esta é a versão no ar. Os botões dela alteram dados reais."
     },
     "photos": {
       "label": "Fotos",
@@ -211,6 +212,97 @@
       "message": "Este app foi publicado com recursos que esta versão do TaskTo.AI ainda não tem, então não pode ser mostrado aqui.",
       "needs": "Precisa de: {needs}",
       "update": "Atualizar o TaskTo.AI"
+    },
+    "builder": {
+      "build": "Criar um app",
+      "continue": "Continuar criando",
+      "title": "Criar um app",
+      "intro": "Descreva o app que você quer. O agente faz um rascunho com dados de exemplo em uma conversa, e você o experimenta aqui antes de qualquer outra pessoa poder usá-lo. Nada que você testar na prévia altera dados reais.",
+      "editTitle": "Editar com IA",
+      "editIntro": "Descreva o que deve mudar. O agente altera um novo rascunho do app; o app publicado continua funcionando como está até você publicar o rascunho.",
+      "editing": "Editando {name}, em {space}.",
+      "edit": "Editar com IA",
+      "editNamed": "Editar {name} com IA",
+      "what": "O que o app deve fazer?",
+      "whatChange": "O que deve mudar?",
+      "placeholder": "Por exemplo: um controle dos meus treinos, com a data, o exercício e como foi",
+      "changePlaceholder": "Por exemplo: incluir um campo de observações e um botão para marcar um item como feito",
+      "where": "Onde ele deve ficar?",
+      "wherePrivate": "No meu espaço privado",
+      "whereShared": "Em um espaço compartilhado",
+      "sharedSpace": "Espaço compartilhado",
+      "privateNote": "Só você pode ver e usar. Você pode compartilhá-lo depois, movendo-o para um espaço compartilhado.",
+      "sharedNote": "Quem pode abrir esse espaço poderá usar o app depois de publicado, e só quem tem o papel de publicador no app pode publicá-lo.",
+      "noSharedSpaces": "Você não pode alterar nenhum espaço compartilhado, então o app só pode ficar no seu espaço privado.",
+      "inThisConversation": "O agente vai criar o app nesta conversa.",
+      "backToConversation": "Voltar à conversa",
+      "start": "Começar a criar",
+      "startEdit": "Começar a editar",
+      "buildHere": "Criar um app nesta conversa",
+      "panes": "Visão do criador",
+      "tab": {
+        "build": "Criar",
+        "preview": "Prévia",
+        "updated": "(atualizada)"
+      },
+      "showingBuild": "Mostrando Criar: a conversa com o agente.",
+      "showingPreview": "Mostrando Prévia: o rascunho do app.",
+      "preview": {
+        "empty": "Ainda não há nada para ver. Descreva o app em Criar: o rascunho do agente aparece aqui, com dados de exemplo."
+      },
+      "prompt": {
+        "private": "meu espaço privado (id do espaço {id})",
+        "shared": "o espaço compartilhado “{space}” (id do espaço {id})",
+        "build": "Crie um app para mim: {description}\n\nSalve em {where}, como rascunho com algumas linhas de dados de exemplo para eu testar. Não publique: eu vou testar o rascunho e publicar eu mesmo. Quando estiver salvo, diga em palavras simples o que o app pode ler e alterar, e qualquer coisa que ele precise e que eu deva saber.",
+        "edit": "Altere o meu app “{name}” (id do app {app}, no espaço de id {space}): {description}\n\nAltere somente o rascunho dele. A versão publicada deve continuar funcionando como está até eu publicar o rascunho. Diga o que você mudou e o que há de novo que ele precise."
+      },
+      "audience": {
+        "title": "Quem pode usar",
+        "private": "Só você: ele está no seu espaço privado.",
+        "space": "Todos que podem abrir {space}: os editores adicionam e alteram registros, e os leitores só olham.",
+        "restricted": "Só quem tem um papel neste app. Os criadores do app definem os papéis.",
+        "person": "{name}: {roles}"
+      },
+      "can": {
+        "title": "O que ele pode ler e alterar",
+        "read": "Lê e guarda registros com estes campos: {fields}.",
+        "insert": "Adicionar registros.",
+        "update": "Alterar registros.",
+        "delete": "Excluir registros (um registro excluído pode ser restaurado).",
+        "readOnly": "Só mostra registros: não pode adicionar, alterar nem excluir nenhum.",
+        "nothingElse": "Não alcança mais nada: nenhum outro app, documento ou conta."
+      },
+      "field": "{name} ({type})",
+      "publish": {
+        "title": "Publicar",
+        "review": "Revisar e publicar…",
+        "now": "Publicar",
+        "confirmShared": "Isso coloca o app no ar para todos em {space} que podem usá-lo.",
+        "confirm": "Publicar para {space}",
+        "donePersonal": "Publicado como versão {number}. Ele está no ar no seu espaço privado.",
+        "doneShared": "Publicado como versão {number}. Ele está no ar para quem pode usá-lo em {space}.",
+        "needsPublisher": "Você pode criar o rascunho, mas publicá-lo exige o papel de publicador neste app. Peça a alguém que o tenha para publicar.",
+        "readOnly": "Você só pode ler este espaço, então não pode publicar aqui.",
+        "nothing": "Nada de novo para publicar: o rascunho é a versão no ar.",
+        "moved": "O rascunho mudou enquanto você o revisava, então nada foi publicado. O que ele pode ler e alterar, acima, está atualizado: revise de novo antes de publicar."
+      }
+    },
+    "fieldType": {
+      "string": "texto",
+      "number": "número",
+      "boolean": "sim ou não",
+      "date": "data",
+      "time": "hora",
+      "choice": "escolha",
+      "attachment": "fotos"
+    },
+    "needs": {
+      "design": "Você não pode alterar este app: isso exige o papel de criador nele.",
+      "publish": "Você não pode publicar este app: isso exige o papel de publicador nele.",
+      "submit": "Você não pode adicionar registros a este app: isso exige um papel que adicione registros.",
+      "modify_records": "Seu papel neste app não permite alterar nem excluir registros.",
+      "read_records": "Seu papel neste app não permite ler os registros dele.",
+      "manage_roles": "Você não pode gerenciar os papéis deste app: isso exige o papel de criador."
     },
     "explorer": {
       "back": "Voltar aos registros",
@@ -326,6 +418,8 @@
     "newBoard": "Novo quadro",
     "showArchived": "Mostrar quadros arquivados",
     "archivedNotice": "Este quadro está arquivado: só pode ser lido.",
+    "linkedArchivedOrGone": "O quadro para o qual este link aponta está arquivado ou não está mais disponível.",
+    "linkedUnavailable": "O quadro para o qual este link aponta não está mais disponível.",
     "rename": "Renomear",
     "renameBoard": "Renomear o quadro",
     "archiveBoard": "Arquivar o quadro",
@@ -475,6 +569,8 @@
     "app_name_length": "O nome do app precisa ter de 1 a {max} caracteres.",
     "too_many_apps": "Um espaço pode ter no máximo {max} apps.",
     "app_full": "Este app está cheio: ele comporta no máximo {max_rows} linhas e {max_mib} MiB de dados.",
+    "app_preview_full": "A prévia está cheia: ela comporta no máximo {max_rows} linhas de exemplo. Comece de novo.",
+    "app_preview_too_large": "Os dados de exemplo da prévia são grandes demais (no máximo {max_mib} MiB). Comece de novo.",
     "app_row_not_found": "Essa linha não está mais no app: alguém pode tê-la excluído.",
     "app_record_conflict": "Outra pessoa alterou este registro enquanto isso. Ele aparece como está agora: confira e tente de novo.",
     "app_field_required": "{field} é obrigatório.",
@@ -601,7 +697,7 @@
     "app_effect_target_gone": "O quadro ou cartão que este efeito tem como alvo não existe mais.",
     "app_effect_board_offline": "O quadro ou espaço que este efeito tem como alvo está arquivado.",
     "app_effect_invalid": "O que este efeito criaria não é aceito (um título ou um caminho, por exemplo).",
-    "app_effect_doc_exists": "Já existe um documento diferente em {path}; ele não foi sobrescrito.",
+    "app_effect_doc_exists": "Já existe um documento diferente onde este efeito escreve; ele não foi sobrescrito.",
     "app_effect_no_card": "Nenhum cartão foi criado para este registro alterar.",
     "app_effect_card_archived": "O cartão a alterar está arquivado.",
     "app_effect_app_offline": "O app está offline ou o seu espaço está arquivado.",

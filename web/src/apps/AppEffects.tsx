@@ -5,7 +5,7 @@
 //
 // The same list (EffectItems) shows what a preview of a draft's action would set going.
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { type AppEffect, type AppEffectList, api, codeText, errorText } from '../api'
 import { type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -15,6 +15,8 @@ import { boardItem, documentItem, Link, routePath } from '../router'
 const POLL_MS = 3000
 // How many effects a page holds.
 const PAGE = 50
+// The most the server lists at once.
+const MAX_PAGE = 200
 
 export function AppEffects({
   workspace,
@@ -43,13 +45,34 @@ export function AppEffects({
   // Another filter is another list.
   // biome-ignore lint/correctness/useExhaustiveDependencies: a changed filter or app drops the older pages
   useEffect(() => setOlder(null), [base, query])
+  const olderRef = useRef(older)
+  olderRef.current = older
+  // The older pages loaded are read again as one request (they are the newest first, so what they
+  // cover is everything older than their first effect): an effect on one of them that is retried,
+  // or that was waiting, is shown as it is now, not as it was when the page was loaded.
+  const refreshOlder = useCallback(async () => {
+    const kept = olderRef.current
+    const first = kept?.effects[0]
+    if (!kept || !first) return
+    const limit = Math.min(Math.max(kept.effects.length, PAGE), MAX_PAGE)
+    try {
+      const page = await api<AppEffectList>(`${base}/effects?${query}limit=${limit}&before=${first.id + 1}`)
+      setOlder({ effects: page.effects, more: page.more ?? false })
+    } catch (err) {
+      setOlderError(errorText(err))
+    }
+  }, [base, query])
   const waiting = (list.data?.active ?? 0) > 0
   const { reload } = list
+  const changed = useCallback(() => {
+    reload()
+    refreshOlder()
+  }, [reload, refreshOlder])
   useEffect(() => {
     if (!waiting) return
-    const timer = setInterval(reload, POLL_MS)
+    const timer = setInterval(changed, POLL_MS)
     return () => clearInterval(timer)
-  }, [waiting, reload])
+  }, [waiting, changed])
 
   const data = list.data
   // An app that never set anything going shows nothing of this.
@@ -109,7 +132,7 @@ export function AppEffects({
             effects={shown}
             label={t('apps.effects.list')}
             onRetry={writable ? (e) => retry(base, e) : undefined}
-            changed={reload}
+            changed={changed}
           />
           {olderError && (
             <p role="alert" className="tt-error">

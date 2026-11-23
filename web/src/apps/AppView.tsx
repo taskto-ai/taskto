@@ -1,7 +1,7 @@
 // Draws one personal app: the server sends A2UI messages, button actions go back to it,
 // and the messages it answers with update the screen.
 //
-// An app is drawn from one of its releases (or, to preview it, its draft), and its buttons name the
+// An app is drawn from one of its releases (or, to try it, its draft on sample data), and its buttons name the
 // release they were drawn from, so the server can tell an action of an older screen from the live
 // one's. A release that needs more than this client's catalog has (a component, a function, a
 // newer definition format) isn't drawn: the app says the client must be updated.
@@ -9,12 +9,21 @@
 import { A2uiSurface, type ReactCatalogComponent } from '@a2ui/react/v0_9'
 import { MessageProcessor, STRICT_VALIDATION, type SurfaceModel } from '@a2ui/web_core/v0_9'
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, type AppEffect, api, type DefinitionNeeds, errorText } from '../api'
+import {
+  ApiError,
+  type AppEffect,
+  api,
+  type DefinitionNeeds,
+  errorText,
+  type PreviewReply,
+  type PreviewRow,
+} from '../api'
 import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
 import { EffectPreview } from './AppEffects'
 import { appsCatalog, unsupportedBy } from './catalog'
 import { keepLabelsLinked } from './labels'
+import { withOperation } from './operations'
 import { type AppFiles, AppFilesContext } from './PhotoInput'
 
 export type ActionPayload = Parameters<NonNullable<ConstructorParameters<typeof MessageProcessor>[1]>>[0]
@@ -25,67 +34,52 @@ export type AppTransport = {
   // Where the app's attachments are, for the photo components; left out where there is no server
   // to hold them.
   files?: AppFiles
+  // In a draft's preview: what the action just run would set going on boards and documents, which
+  // changes nothing (docs/api.md, …/actions/preview). Absent where actions are real.
+  simulate?(action: ActionPayload): Promise<AppEffect[]>
 }
 
-// What a draft's button does in a preview: nothing is saved, and the answer is the effects it would
-// set going, simulated, which the view shows.
-export class PreviewResult extends Error {
-  constructor(readonly effects: AppEffect[]) {
-    super('preview')
+// The draft's preview: its screen and its buttons work, on sample rows the server makes and this
+// transport keeps (the server holds nothing of a preview and writes none of the app's rows:
+// docs/api.md, …/preview). A new transport starts a new preview, so a caller keeps one while the
+// preview is in use.
+//
+// The steps go one at a time, each on the rows the one before left: two taps in quick succession
+// would otherwise both start from the same rows, and whichever answer came last would drop the
+// other's change.
+export function previewTransport(base: string): AppTransport {
+  let rows: PreviewRow[] | undefined
+  let queue: Promise<unknown> = Promise.resolve()
+  const step = (action?: ActionPayload, fresh = false): Promise<unknown[]> => {
+    const run = queue.then(async () => {
+      // Loading starts over from the sample rows.
+      if (fresh) rows = undefined
+      const reply = await api<PreviewReply>(`${base}/preview`, {
+        method: 'POST',
+        body: action && rows ? { rows, action } : {},
+      })
+      rows = reply.rows
+      return reply.messages
+    })
+    // A step that failed leaves the rows as they were, and the next goes on from them.
+    queue = run.catch(() => undefined)
+    return run
   }
-}
-
-// A new idempotency key for a press of a button (the server's `operation`): 8 to 64 letters, digits,
-// - and _.
-function newOperation(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
-}
-
-// What identifies one submission of a button: the action as the person sent it, without the
-// renderer's per-click timestamp, which differs on every press of the same pending submission.
-export function submissionKey(action: ActionPayload): string {
-  const { timestamp: _timestamp, ...rest } = action as ActionPayload & { timestamp?: unknown }
-  return JSON.stringify(rest)
-}
-
-// Makes the idempotency key (the server's `operation`) of each action sent. A submission gets one
-// key, made once; every press of the same submission while no answer has come (the connection
-// dropped, so the person can't know whether it was made) sends that key again, so the server
-// changes nothing a second time and queues no second card. Any answer, even a refusal, ends the
-// submission: the next press is a new one. The renderer's own timestamp doesn't make a press a
-// different submission, and a submission that is waiting keeps its key while others are pressed.
-const MAX_UNANSWERED = 20
-
-export function operationTracker(make: () => string = newOperation) {
-  const unanswered = new Map<string, string>()
-  return async function withOperation<T>(action: ActionPayload, send: (operation: string) => Promise<T>): Promise<T> {
-    const sent = submissionKey(action)
-    let operation = unanswered.get(sent)
-    if (operation === undefined) {
-      operation = make()
-      unanswered.set(sent, operation)
-      // Only the newest are remembered, so a long session can't grow this without end.
-      if (unanswered.size > MAX_UNANSWERED) unanswered.delete(unanswered.keys().next().value as string)
-    }
-    try {
-      const answer = await send(operation)
-      unanswered.delete(sent)
-      return answer
-    } catch (e) {
-      // An answer, even a refusal, is the end of it; no answer is not.
-      if (e instanceof ApiError) unanswered.delete(sent)
-      throw e
-    }
+  return {
+    load: () => step(undefined, true),
+    act: (action) => step(action),
+    simulate: async (action) =>
+      (await api<{ effects: AppEffect[] }>(`${base}/actions/preview`, { method: 'POST', body: action })).effects,
   }
 }
 
 // The app's routes on the server: base is …/spaces/{space}/apps/{app}. release is the live
-// release's number, which the screen is drawn from and its actions name; 'draft' draws the draft, a
-// preview whose actions run on nothing: the server says what they would set going. screen opens an
-// app with screens on one of them (a pin's); widget draws one of the live release's Home widgets
-// instead (a bounded view whose actions are the app's own, answered with the rows it holds).
+// release's number, which the screen is drawn from and its actions name; 'draft' is the draft's
+// preview, whose actions run on sample rows (previewTransport) and never on the app's own. screen opens an app
+// with screens on one of them (a pin's); widget draws one of the live release's Home widgets instead (a
+// bounded view whose actions are the app's own, answered with the rows it holds).
 //
-// Every action carries an operation, its idempotency key (see operationTracker).
+// Every action carries an operation, its idempotency key (see operations.ts).
 export function httpTransport(
   base: string,
   release?: number | 'draft',
@@ -97,19 +91,11 @@ export function httpTransport(
     const text = q.toString()
     return text ? `?${text}` : ''
   }
-  if (release === 'draft') {
-    return {
-      load: () => api<unknown[]>(`${base}/surface${query({ release: 'draft', screen: opts.screen })}`),
-      act: async (action) => {
-        const preview = await api<{ effects: AppEffect[] }>(`${base}/actions/preview`, { method: 'POST', body: action })
-        throw new PreviewResult(preview.effects)
-      },
-      files: { base, uploads: false },
-    }
-  }
-  const withOperation = operationTracker()
+  // The draft is its preview, on sample rows (previewTransport), and opens on its entry screen.
+  if (release === 'draft') return previewTransport(base)
+  const scope = `${base}|${release ?? 'live'}|${opts.widget ?? ''}`
   const post = (path: string, action: ActionPayload) =>
-    withOperation(action, (operation) =>
+    withOperation(scope, action, (operation) =>
       api<unknown[]>(path, {
         method: 'POST',
         body: release === undefined ? { ...action, operation } : { ...action, release, operation },
@@ -193,16 +179,13 @@ export function AppView({
       [appsCatalog],
       async (action) => {
         try {
-          apply(await transportRef.current.act(withRevision(action)))
+          const pressed = withRevision(action)
+          apply(await transportRef.current.act(pressed))
           setError(null)
-          setSimulated(null)
+          // A preview says what the button would have set going; a live app's effects are listed by the page.
+          setSimulated(transportRef.current.simulate ? await transportRef.current.simulate(pressed) : null)
           onActionRef.current?.()
         } catch (e) {
-          if (e instanceof PreviewResult) {
-            setSimulated(e.effects)
-            setError(null)
-            return
-          }
           setSimulated(null)
           if (e instanceof ApiError && e.code === RECORD_CONFLICT) {
             // Show the record as it is now, so the next try is made against its latest revision.

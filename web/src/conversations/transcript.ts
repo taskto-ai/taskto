@@ -31,6 +31,9 @@ export type AppRef = { space: number; app: number }
 // browser_help call's: why the agent asks the user to take over the browser, and what to do.
 export type ToolUse = {
   id: string
+  // Where the call is (its message and its place in it): unlike id, which some providers number
+  // from 0 in every turn, it names one call in the whole conversation.
+  key: string
   name: string
   app?: AppRef
   cli?: CliName
@@ -85,11 +88,11 @@ function callsOf(content: unknown, key: string): { part: Part; at: string }[] {
 
 // What a finished cli_turn kept in its result's details: its transcript, and the CLI's request to
 // take over the browser.
-type CliKept = { transcript?: string; help?: ToolUse['help'] }
+type CliKept = { transcript?: string; help?: ToolUse['help']; apps?: AppRef[] }
 
 function toolsOf(content: unknown, key: string, saved: Map<string, AppRef>, done: Map<string, CliKept>): ToolUse[] {
   return callsOf(content, key).map(({ part, at }) => {
-    const use: ToolUse = { id: String(part.id ?? part.name), name: part.name as string }
+    const use: ToolUse = { id: String(part.id ?? part.name), key: at, name: part.name as string }
     const app = APP_TOOLS.has(use.name) ? saved.get(at) : undefined
     if (app) use.app = app
     const cli = use.name === CLI_TOOL ? (part.arguments as { cli?: unknown } | undefined)?.cli : undefined
@@ -106,14 +109,22 @@ function toolsOf(content: unknown, key: string, saved: Map<string, AppRef>, done
     const kept = use.name === CLI_TOOL ? done.get(at) : undefined
     if (kept?.transcript) use.output = kept.transcript
     if (kept?.help) use.help = kept.help
+    // The app a CLI turn saved last (its MCP calls of create_app and update_app).
+    const apps = kept?.apps
+    if (apps?.length) use.app = apps[apps.length - 1]
     return use
   })
 }
 
-// What a finished cli_turn kept in its result's details (agent/src/cli.ts): the transcript, and
-// a browser_help request of the CLI's, shown as plain text like the built-in agent's.
+// What a finished cli_turn kept in its result's details (agent/src/cli.ts): the transcript, a
+// browser_help request of the CLI's, shown as plain text like the built-in agent's, and the apps
+// it saved through TaskTo's create_app and update_app, which it names like those calls' results do.
 function cliKept(message: unknown): CliKept | undefined {
-  const m = message as { role?: unknown; toolName?: unknown; details?: { transcript?: unknown; help?: unknown } }
+  const m = message as {
+    role?: unknown
+    toolName?: unknown
+    details?: { transcript?: unknown; help?: unknown; apps?: unknown }
+  }
   if (m?.role !== 'toolResult' || m.toolName !== CLI_TOOL) return undefined
   const kept: CliKept = {}
   if (typeof m.details?.transcript === 'string' && m.details.transcript) kept.transcript = m.details.transcript
@@ -121,7 +132,12 @@ function cliKept(message: unknown): CliKept | undefined {
   if (typeof help?.message === 'string' && help.message.trim()) {
     kept.help = { reason: typeof help.reason === 'string' ? help.reason : 'other', message: help.message.trim() }
   }
-  return kept.transcript || kept.help ? kept : undefined
+  // The apps the CLI saved in the turn, as the server read them from the answers of its calls.
+  const apps = (Array.isArray(m.details?.apps) ? m.details.apps : []).flatMap(
+    (a: { space?: unknown; app?: unknown }) => (isId(a?.space) && isId(a.app) ? [{ space: a.space, app: a.app }] : []),
+  )
+  if (apps.length > 0) kept.apps = apps
+  return kept.transcript || kept.help || kept.apps ? kept : undefined
 }
 
 const isId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
