@@ -64,6 +64,10 @@ type App struct {
 	// UnpublishedChanges is whether the draft is not the live release's definition (it is
 	// always so before the first publish). Only callers who may design or publish are told.
 	UnpublishedChanges bool `json:"unpublished_changes"`
+	// NeedsBoard is whether the draft has effects with no board chosen yet, which can't be
+	// published until one is (a template's, or a copy's whose boards its copier can't write).
+	// Only callers who may design or publish are told.
+	NeedsBoard bool `json:"needs_board"`
 	// Draft is the definition being edited, in a single app's reply, for callers who may design
 	// or publish: others see the live release's definition alone.
 	Draft *Definition `json:"draft,omitempty"`
@@ -314,6 +318,7 @@ func reviews(acc access.AppAccess) bool { return acc.Design || acc.Publish }
 // the live release for everyone who may view the app.
 func (a *App) finish(acc access.AppAccess) {
 	a.UnpublishedChanges = reviews(acc) && a.draftDiffers
+	a.NeedsBoard = reviews(acc) && len(a.draftDef.unsetTargets()) > 0
 	if !a.detailed {
 		return
 	}
@@ -544,6 +549,12 @@ type NewApp struct {
 }
 
 func (s *Service) createApp(ctx context.Context, sp access.Space, a Actor, na NewApp) (App, error) {
+	return s.createAppWith(ctx, sp, a, na, nil)
+}
+
+// createAppWith is createApp that also makes the app's first role assignments, in the same
+// transaction as the app, so there is no moment the app exists without them.
+func (s *Service) createAppWith(ctx context.Context, sp access.Space, a Actor, na NewApp, grants []access.AppGrant) (App, error) {
 	if err := may(sp, access.Write); err != nil {
 		return App{}, err
 	}
@@ -555,7 +566,7 @@ func (s *Service) createApp(ctx context.Context, sp access.Space, a Actor, na Ne
 	if err != nil {
 		return App{}, err
 	}
-	if err := s.checkEffectTargets(ctx, a, def); err != nil {
+	if err := s.checkEffectTargets(ctx, sp.WorkspaceID, a, def); err != nil {
 		return App{}, err
 	}
 	raw, err := json.Marshal(def)
@@ -581,6 +592,13 @@ func (s *Service) createApp(ctx context.Context, sp access.Space, a Actor, na Ne
 			VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			sp.ID, name, string(raw), a.UserID, a.Agent, via(a), a.UserID, a.Agent, via(a)).Scan(&id); err != nil {
 			return err
+		}
+		for _, g := range grants {
+			for _, r := range g.Roles {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, ?)`, id, g.UserID, r); err != nil {
+					return err
+				}
+			}
 		}
 		created, err = app(ctx, tx, sp.ID, id) // as this change left it, not as a later one did
 		return err
@@ -631,7 +649,7 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		if checked, err = ch.Definition.Check(); err != nil {
 			return App{}, err
 		}
-		if err := s.checkEffectTargets(ctx, a, checked); err != nil {
+		if err := s.checkEffectTargets(ctx, sp.WorkspaceID, a, checked); err != nil {
 			return App{}, err
 		}
 		raw, err := json.Marshal(checked)
@@ -1130,6 +1148,9 @@ func shownBy(live, from Definition) Definition {
 	}
 	for name, sum := range from.Summaries {
 		keep := sum.Field == "" || same(sum.Field)
+		if sum.MonthOf != "" {
+			keep = keep && same(sum.MonthOf)
+		}
 		if sum.Where != nil {
 			for _, field := range ruleFields(*sum.Where) {
 				keep = keep && same(field)

@@ -40,3 +40,22 @@ export function builderPath(workspace: number, to: BuilderRoute = { kind: 'new' 
     to.kind === 'new' ? 'build' : to.kind === 'conversation' ? `build-${to.conversation}` : `edit-${to.space}-${to.app}`
   return routePath({ workspace, section: 'apps', item })
 }
+
+// The templates' addresses, under the Apps page: "templates" is the list to start from, and
+// "installed-{space}-{app}" the draft a template or a copy made, to try and publish.
+export function templatesPath(workspace: number): string {
+  return routePath({ workspace, section: 'apps', item: 'templates' })
+}
+
+export function isTemplates(item: string | undefined): boolean {
+  return item === 'templates'
+}
+
+export function installedPath(workspace: number, space: number, app: number): string {
+  return routePath({ workspace, section: 'apps', item: `installed-${space}-${app}` })
+}
+
+export function parseInstalled(item: string | undefined): { space: number; app: number } | null {
+  const m = item ? /^installed-(\d+)-(\d+)$/.exec(item) : null
+  return m ? { space: Number(m[1]), app: Number(m[2]) } : null
+}

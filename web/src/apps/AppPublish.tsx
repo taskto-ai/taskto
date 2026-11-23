@@ -286,7 +286,9 @@ export function PublishPanel({
           {t('apps.builder.publish.moved')}
         </p>
       )}
-      {!mayPublish ? (
+      {app.needs_board ? (
+        <p className="tt-muted tt-small">{t('apps.templates.publishNeedsBoard')}</p>
+      ) : !mayPublish ? (
         <p className="tt-muted tt-small">
           {t(space.access === 'write' ? 'apps.builder.publish.needsPublisher' : 'apps.builder.publish.readOnly')}
         </p>

@@ -1,0 +1,203 @@
+{
+  "template_version": 1,
+  "id": "inspection",
+  "version": 1,
+  "name": "Inspection",
+  "description": "Walk a site, record pass or fail with the place and a signature, and have every failure become a card on a board you choose.",
+  "recommended_space": "shared",
+  "definition": {
+    "screens": [
+      {
+        "name": "list",
+        "root": "list-root",
+        "components": [
+          { "id": "list-root", "component": "Column", "children": ["list-title", "list-failures", "list-new", "list-items"] },
+          { "id": "list-title", "component": "Text", "text": "Inspections", "variant": "h2" },
+          { "id": "list-failures", "component": "Stat", "label": "Open failures", "value": { "path": "/open_failures" } },
+          { "id": "list-new-label", "component": "Text", "text": "New inspection" },
+          {
+            "id": "list-new",
+            "component": "Button",
+            "variant": "primary",
+            "child": "list-new-label",
+            "action": { "event": { "name": "new_inspection" } }
+          },
+          { "id": "list-items", "component": "List", "children": { "componentId": "row", "path": "/items" } },
+          { "id": "row", "component": "Row", "justify": "spaceBetween", "align": "center", "children": ["row-site", "row-result", "row-open"] },
+          { "id": "row-site", "component": "Text", "text": { "path": "site" } },
+          { "id": "row-result", "component": "Text", "text": { "path": "result" }, "variant": "caption" },
+          { "id": "row-open-label", "component": "Text", "text": "Open" },
+          {
+            "id": "row-open",
+            "component": "Button",
+            "variant": "borderless",
+            "child": "row-open-label",
+            "action": { "event": { "name": "open_inspection", "context": { "id": { "path": "id" } } } }
+          }
+        ]
+      },
+      {
+        "name": "new",
+        "root": "new-root",
+        "components": [
+          {
+            "id": "new-root",
+            "component": "Column",
+            "children": ["new-title", "new-site", "new-result", "new-notes", "new-place", "new-signed", "new-actions"]
+          },
+          { "id": "new-title", "component": "Text", "text": "New inspection", "variant": "h2" },
+          { "id": "new-site", "component": "TextField", "label": "Site or item", "value": { "path": "/draft/site" } },
+          {
+            "id": "new-result",
+            "component": "ChoicePicker",
+            "label": "Result",
+            "variant": "mutuallyExclusive",
+            "displayStyle": "chips",
+            "options": [
+              { "label": "Pass", "value": "pass" },
+              { "label": "Fail", "value": "fail" }
+            ],
+            "value": { "path": "/draft/result" }
+          },
+          { "id": "new-notes", "component": "TextField", "label": "Notes (needed when it fails)", "variant": "longText", "value": { "path": "/draft/notes" } },
+          { "id": "new-place", "component": "LocationInput", "field": "place", "label": "Where you are", "value": { "path": "/draft/place" } },
+          { "id": "new-signed", "component": "SignatureInput", "field": "signed", "label": "Inspector's signature", "value": { "path": "/draft/signed" } },
+          { "id": "new-actions", "component": "Row", "children": ["new-back", "new-save"] },
+          { "id": "new-back-label", "component": "Text", "text": "Back" },
+          {
+            "id": "new-back",
+            "component": "Button",
+            "child": "new-back-label",
+            "action": { "event": { "name": "back_to_list" } }
+          },
+          { "id": "new-save-label", "component": "Text", "text": "Submit inspection" },
+          {
+            "id": "new-save",
+            "component": "Button",
+            "variant": "primary",
+            "child": "new-save-label",
+            "action": {
+              "event": {
+                "name": "submit_inspection",
+                "context": {
+                  "site": { "path": "/draft/site" },
+                  "result": { "path": "/draft/result" },
+                  "notes": { "path": "/draft/notes" },
+                  "place": { "path": "/draft/place" },
+                  "signed": { "path": "/draft/signed" }
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "detail",
+        "root": "detail-root",
+        "record": true,
+        "components": [
+          {
+            "id": "detail-root",
+            "component": "Column",
+            "children": ["detail-title", "detail-result", "detail-notes", "detail-place", "detail-signed", "detail-resolve-when", "detail-back"]
+          },
+          { "id": "detail-title", "component": "Text", "text": { "path": "/record/site" }, "variant": "h2" },
+          { "id": "detail-result", "component": "Stat", "label": "Result", "value": { "path": "/record/result" } },
+          { "id": "detail-notes", "component": "Stat", "label": "Notes", "value": { "path": "/record/notes" } },
+          { "id": "detail-place", "component": "LocationInput", "field": "place", "label": "Where", "readOnly": true, "value": { "path": "/record/place" } },
+          { "id": "detail-signed", "component": "Photos", "label": "Signature", "value": { "path": "/record/signed" } },
+          {
+            "id": "detail-resolve-when",
+            "component": "Show",
+            "source": "record",
+            "when": {
+              "all": [
+                { "field": "result", "op": "eq", "value": "fail" },
+                { "field": "status", "op": "ne", "value": "closed" }
+              ]
+            },
+            "child": "detail-resolve"
+          },
+          { "id": "detail-resolve-label", "component": "Text", "text": "Mark as fixed" },
+          {
+            "id": "detail-resolve",
+            "component": "Button",
+            "variant": "primary",
+            "child": "detail-resolve-label",
+            "action": { "event": { "name": "close_inspection", "context": { "id": { "path": "/record/id" }, "status": "closed" } } }
+          },
+          { "id": "detail-back-label", "component": "Text", "text": "Back" },
+          {
+            "id": "detail-back",
+            "component": "Button",
+            "child": "detail-back-label",
+            "action": { "event": { "name": "back_to_list" } }
+          }
+        ]
+      }
+    ],
+    "entry": "list",
+    "collection": {
+      "fields": [
+        { "name": "site", "type": "string", "required": true, "max_length": 100 },
+        { "name": "result", "type": "choice", "required": true, "options": ["pass", "fail"] },
+        {
+          "name": "notes",
+          "type": "string",
+          "max_length": 1000,
+          "required_when": { "field": "result", "op": "eq", "value": "fail" }
+        },
+        { "name": "place", "type": "location", "capture": "submit", "required": true },
+        { "name": "signed", "type": "signature", "required": true },
+        { "name": "status", "type": "choice", "options": ["open", "closed"] }
+      ]
+    },
+    "actions": {
+      "new_inspection": { "kind": "navigate", "screen": "new" },
+      "open_inspection": { "kind": "navigate", "screen": "detail" },
+      "back_to_list": { "kind": "navigate", "screen": "list" },
+      "submit_inspection": {
+        "kind": "insert",
+        "then": "list",
+        "effects": [
+          {
+            "kind": "create_card",
+            "name": "failure",
+            "when": { "field": "result", "op": "eq", "value": "fail" },
+            "column": "todo",
+            "title": "Failed inspection: {{site}} (#{{id}})",
+            "body": "Site: {{site}}\nNotes: {{notes}}\nInspection record: {{id}}"
+          }
+        ]
+      },
+      "close_inspection": { "kind": "update", "then": "list" }
+    },
+    "summaries": {
+      "open_failures": {
+        "kind": "count",
+        "where": {
+          "all": [
+            { "field": "result", "op": "eq", "value": "fail" },
+            { "field": "status", "op": "ne", "value": "closed" }
+          ]
+        }
+      },
+      "total": { "kind": "count" }
+    },
+    "contributions": {
+      "widgets": [
+        {
+          "id": "failures",
+          "title": "Inspections",
+          "kind": "summaries",
+          "size": "small",
+          "summaries": [
+            { "summary": "open_failures", "label": "Open failures" },
+            { "summary": "total", "label": "Inspections done" }
+          ]
+        }
+      ],
+      "pin": { "label": "Inspections" }
+    }
+  }
+}

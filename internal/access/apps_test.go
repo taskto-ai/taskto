@@ -20,7 +20,7 @@ func TestRolesGrantTheirCapabilities(t *testing.T) {
 		AppDataManager: {true, false, false, true, false, ScopeAll, ScopeAll},
 		AppReader:      {true, false, false, false, false, ScopeAll, ScopeNone},
 	} {
-		got := appAccess(Write, []AppRole{role}, true)
+		got := appAccess(Write, []AppRole{role}, true, false)
 		have := caps{got.View, got.Design, got.Publish, got.Submit, got.ManageRoles, got.ReadRecords, got.ModifyRecords}
 		if have != want {
 			t.Errorf("%s: %+v, want %+v", role, have, want)
@@ -30,21 +30,21 @@ func TestRolesGrantTheirCapabilities(t *testing.T) {
 
 // Roles combine by union, and the space's access is a ceiling over the result.
 func TestRolesCombineAndTheSpaceCaps(t *testing.T) {
-	got := appAccess(Write, []AppRole{AppUser, AppReader}, true)
+	got := appAccess(Write, []AppRole{AppUser, AppReader}, true, false)
 	if got.ReadRecords != ScopeAll || got.ModifyRecords != ScopeOwn || !got.Submit {
 		t.Fatalf("user and reader = %+v", got)
 	}
 	// Every role of a viewer of the space is no more than reading.
-	got = appAccess(Read, AppRoles, true)
+	got = appAccess(Read, AppRoles, true, false)
 	if got.Design || got.Publish || got.Submit || got.ManageRoles || got.ModifyRecords != ScopeNone || got.ReadRecords != ScopeAll {
 		t.Fatalf("every role under a read-only space = %+v", got)
 	}
 	// And a user's own-only reading stays own-only.
-	if got := appAccess(Read, []AppRole{AppUser}, true); got.ReadRecords != ScopeOwn {
+	if got := appAccess(Read, []AppRole{AppUser}, true, false); got.ReadRecords != ScopeOwn {
 		t.Fatalf("user under a read-only space = %+v", got)
 	}
 	// Nothing at all without access to the space.
-	got = appAccess(None, AppRoles, true)
+	got = appAccess(None, AppRoles, true, false)
 	if got.View || got.Design || got.Submit || got.ReadRecords != ScopeNone || got.ModifyRecords != ScopeNone {
 		t.Fatalf("no access to the space = %+v", got)
 	}
@@ -53,15 +53,15 @@ func TestRolesCombineAndTheSpaceCaps(t *testing.T) {
 // An app with no assignments gives what the space gave before roles: write is every role,
 // read is reading everything.
 func TestUnrestrictedAppIsTheSpaceAlone(t *testing.T) {
-	w := appAccess(Write, nil, false)
+	w := appAccess(Write, nil, false, false)
 	if w.Restricted || !w.View || !w.Design || !w.Publish || !w.Submit || !w.ManageRoles || w.ReadRecords != ScopeAll || w.ModifyRecords != ScopeAll {
 		t.Fatalf("write = %+v", w)
 	}
-	r := appAccess(Read, nil, false)
+	r := appAccess(Read, nil, false, false)
 	if r.Restricted || !r.View || r.Design || r.Publish || r.Submit || r.ManageRoles || r.ReadRecords != ScopeAll || r.ModifyRecords != ScopeNone {
 		t.Fatalf("read = %+v", r)
 	}
-	if n := appAccess(None, nil, false); n.View || n.ReadRecords != ScopeNone {
+	if n := appAccess(None, nil, false, false); n.View || n.ReadRecords != ScopeNone {
 		t.Fatalf("none = %+v", n)
 	}
 }
@@ -84,7 +84,7 @@ func TestResolvePicksOwnThenDefault(t *testing.T) {
 	if roles, restricted := resolve(rows[1:], 9, true); !restricted || len(roles) != 0 {
 		t.Fatalf("unnamed member = %v, %v; want no roles", roles, restricted)
 	}
-	if a := appAccess(Write, []AppRole{}, true); a.View || a.Submit || a.ReadRecords != ScopeNone {
+	if a := appAccess(Write, []AppRole{}, true, false); a.View || a.Submit || a.ReadRecords != ScopeNone {
 		t.Fatalf("unnamed space editor = %+v; want nothing", a)
 	}
 	if _, restricted := resolve(nil, 9, false); restricted {

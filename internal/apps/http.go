@@ -33,6 +33,12 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("GET "+apps+"/{app}", read(s.handleGet))
 	mux.Handle("PATCH "+apps+"/{app}", write(s.handleUpdate))
 	mux.Handle("POST "+apps+"/{app}/move", write(s.handleMove))
+	// A copy of the app's definition and nothing else, and a board for its effects (templates.go).
+	// Duplicating reads the source, so it is the readers' route; the new app is made in a space the
+	// caller writes, which duplicateApp checks.
+	mux.Handle("POST "+apps+"/{app}/duplicate", read(s.handleDuplicate))
+	mux.Handle("POST "+apps+"/{app}/effect-board", write(s.handleChooseBoard))
+	mux.Handle("POST "+"/api/workspaces/{workspace}/spaces/{space}/app-templates/{template}/install", write(s.handleInstall))
 	mux.Handle("GET "+apps+"/{app}/surface", read(s.handleSurface))
 	// Actions are the readers' route too: navigating changes nothing, and act asks for the
 	// right to write the space itself for every other kind of action.

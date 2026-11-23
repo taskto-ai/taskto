@@ -216,9 +216,15 @@ func Capabilities() []string {
 		all = append(all, capability)
 	}
 	all = append(all, slotCapabilities...)
+	all = append(all, SummaryMonthCapability)
 	sort.Strings(all)
 	return all
 }
+
+// SummaryMonthCapability is what a client needs to total one calendar month: to read a summary's
+// month_of. A definition with one requires it, so a client that predates it (and would total every
+// month) says it must be updated.
+const SummaryMonthCapability = "summary.month_of"
 
 // AttachmentCapability is what a client needs to hold an attachment field: to read its value as a
 // list of attachment ids and send them. A collection with one requires it (Definition.Check).

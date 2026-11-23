@@ -87,6 +87,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(apps.Platform{Boards: boardSvc})
 	appsService.Routes(mux)
 	appsService.HomeRoutes(mux, accounts)
+	appsService.TemplateRoutes(mux, accounts)
 	if opts.AppsReady != nil {
 		opts.AppsReady(appsService)
 	}

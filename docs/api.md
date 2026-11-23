@@ -107,7 +107,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
 | `app_migration_invalid` | 400 | An acknowledgement that is malformed: an unknown `change`, a field that is no name, or one twice. |
-| `app_effect_target` | 400 | An effect of the definition targets space `space_id` (or a board of it) that the person saving, publishing or rolling back the app can't use (write, for an effect that makes or moves something; read, for a route). |
+| `app_effect_target` | 400 | An effect of the definition targets space `space_id` (or a board of it) that the person saving, publishing or rolling back the app can't use (write, for an effect that makes or moves something; read, for a route), or that is in another workspace than the app's, whatever they may do there. |
+| `app_effect_target_unset` | 400 | The draft has an effect with no board chosen yet (a template's, or a copy's whose boards its copier can't write): choose one (`POST …/effect-board`) before publishing; `action` names the first. |
+| `app_template_not_found` | 404 | No app template has that id. |
+| `app_template_board` | 400 | The template needs a board and none was given, or takes none and one was. |
 | `app_operation_invalid` | 422 | An action's `operation` isn't 8 to 64 letters, digits, `-` or `_`. |
 | `app_operation_reused` | 409 | The `operation` was used before for a different request. |
 | `app_effects_backlog` | 409 | The app has `max` effects waiting: the action changed nothing. |
@@ -1475,7 +1478,13 @@ capabilities, and a user may hold several:
 | `reader` | | | | all | |
 
 Every role may view the app (launch it and read its live definition); a `builder` also manages
-the app's roles. **Design** is changing the app's draft, renaming it and moving it;
+the app's roles. Roles are removed with the member who held them when they leave the space, so
+the last builder leaving would strand an app whose roles are assigned. **Only while no assignment
+gives anyone the `builder` role, a workspace admin who may write the shared space (the space's
+creator is one, as its editor) can view the app and manage its roles**, to give someone the
+builder or data manager role again; once someone is a builder, the admin has only the roles
+assigned to them, like anyone. It is a way back, not standing access: it adds nothing else, and
+while the app has a builder an admin can't use it to give themselves its data. **Design** is changing the app's draft, renaming it and moving it;
 **publish** is publishing the draft, rolling back to an earlier release (see
 [Drafts and releases](#drafts-and-releases)), and taking it offline and restoring it;
 **submit** is adding a record (an `insert` action). **Own** records are those the caller
@@ -1743,7 +1752,12 @@ saying what is wrong) unless:
   once it has run.
 - An insert or an update may have **effects**, at most 5 (see [Effects](#effects-of-actions)).
 - **summaries**, at most 20: `{"kind": "count"}` or `{"kind": "sum", "field": …}` of a
-  number field, shown as text; `"where"`, a rule, narrows either to the rows it holds of.
+  number field, shown as text; `"where"`, a rule, narrows either to the rows it holds of, and
+  `"month_of"`, the name of a date field, to the rows dated in the current calendar month (UTC,
+  by the server's clock; the device's own clock offline). Only a value that is a real date of the
+  field counts (`2026-11-31`, or text stored before the field was retyped, is in no month). A
+  definition that uses `month_of` requires the capability `summary.month_of`, so a client that
+  predates it says it must be updated, instead of showing every month's total as this month's.
 - **contributions** (optional, version 2): what the app offers the platform's [Home page and
   navigation](#home-widgets-and-pins), in versioned slots:
   `{"version": 1, "widgets": […], "pin": {…}}`. `version` is `1` (left out, it is). A widget is
@@ -1873,6 +1887,68 @@ to another space of the workspace the caller may write (`404` for one they can't
 of another workspace, `403` for one they may only read). `200` with the app. The app's
 [attachments](#photo-attachments) go with it: their files are copied to the new space's directory
 after the move, and are read from wherever they are meanwhile.
+
+### Templates and copies
+
+Starting an app from a template, and copying an app, make a **new, independent app** in a space
+the caller may write, whose **draft** is a copy of a definition. Nothing else is copied: not a
+record, an attachment, a record's history, an effect's queued or finished work, a release, a Home
+placement or default, a role assignment of the source, a membership or a secret (a definition
+holds none). The new app is a draft until someone with the publish capability publishes it, the
+ordinary way (so the audience panel is shown first), and installing the same template twice makes
+two apps that share nothing. [docs/templates.md](templates.md) describes the three that come
+with the server.
+
+An effect whose board is not chosen yet (`space_id` and `board_id` both absent on a `create_card`,
+a `create_document` or a board or document `open_route`) is allowed in a draft, shown by the
+app's `needs_board: true` (told to callers who may design or publish), and refused when
+publishing (`400 app_effect_target_unset`). Half a target (a space with no board) is refused as
+always.
+
+#### `GET /api/workspaces/{workspace}/app-templates`
+
+Members. `{"templates": [{"id", "version", "name", "description", "recommended_space":
+"private"|"shared", "needs_board", "captures": ["attachment"|"location"|"signature"|"barcode"],
+"roles"?: {"installer": […], "members"?: […]}, "widgets": ["…"]}]}`. The templates are the
+server's own and the same for everyone; `captures` are the kinds of field that use the phone's
+camera, position, a signature pad or a scanner.
+
+#### `POST /api/workspaces/{workspace}/spaces/{space}/app-templates/{template}/install`
+
+Writers of the space. `{"name"?, "board"?: {"space_id", "board_id"}}`: installs the template as a
+new app in the space (`201` with the app, a draft). `board` is required when the template
+`needs_board` and refused (`400 app_template_board`) when it doesn't: it must be a board the
+caller may write, in a space of the same workspace (`400 app_effect_target` otherwise, and
+nothing is made). `404` for an unknown template, for a space the caller can't read or of another
+workspace; `403` for one they may only read.
+
+If the template has `roles` and the space is shared, the app is made with its first role
+assignments in the same transaction: the installer holds `roles.installer`, and every other member
+without roles of their own `roles.members`, so the app is restricted from its first moment (for
+the equipment checkout: members read and change their own records, the installer reads all). In a
+private space there is nothing to restrict and no roles are made.
+
+#### `POST …/apps/{app}/duplicate`
+
+Anyone who may view the app (a space reader included), copying into a space they write.
+`{"name"?, "space_id"?, "source"?: "live"|"draft"}`: `space_id` is the copy's space (the app's own
+if left out; `404` for one they can't read or of another workspace, `403` for one they may only
+read); `source` is the definition copied: the live release (`409 app_not_published` if there is
+none) or the draft, which only callers who may design or publish can read (`403 app_forbidden` for
+the others). Left out, it is the draft for those and the live release for everyone else. `201` with
+the new app, with no records and unrestricted: the copy can't carry the source's data or its grants
+(the space's own rules decide), and its creator gets the roles the creator of any new app gets. An
+effect aimed at a space of another workspace is always cleared, whatever the copier may write. An effect whose target the copier can't
+write (or read, for a route) has its target cleared and must be chosen again before publishing
+(`needs_board`); the ones they can use are kept. An app the caller holds no role in is `404`, as
+everywhere.
+
+#### `POST …/apps/{app}/effect-board`
+
+Callers who may design the app. `{"version", "space_id", "board_id"}`: gives every effect of the
+draft that has no board chosen the board, which the caller must be able to write (`400
+app_effect_target`; `400` if no effect waits for one). `200` with the app, as a change of the
+draft is (`409 app_changed` with the current app if it moved).
 
 ### `GET …/apps/{app}/surface`
 
@@ -2176,6 +2252,10 @@ that would apply, with `status: "simulated"`, what they would make in `detail` (
 is `new`), and an `error` with the code an effect would fail with if the caller couldn't write its
 target.
 
+Like the preview below, it never reads the app's records: the action is tried on the `rows` of the
+body (the preview's own, as below) or, without them, on sample rows made from the draft's
+collection. A field that holds a photo or a signature is never required there.
+
 ### `POST …/apps/{app}/preview`
 
 Tries the draft on **sample rows, not the app's data**. For those who may design or publish the app
@@ -2199,9 +2279,13 @@ returns an attachment of the app, and sample rows have none. An action the
 draft doesn't declare, a value that doesn't fit its field, or a row the sample rows don't have is
 `422`, as in a live app; a stale `expectedRevision` is `409 app_record_conflict`.
 
-`200` with `{"messages": […], "rows": […]}`: the A2UI messages that draw the screen (`createSurface`,
+`200` with `{"messages": […], "rows": […], "effects"?: […]}`: the A2UI messages that draw the screen (`createSurface`,
 `updateComponents`, `updateDataModel` for a start, as `…/surface` answers) or update it (as `…/actions`
-does), and the rows as the action left them, to send with the next step. The answer is the same
+does), and the rows as the action left them, to send with the next step. For an insert or an update
+with effects, `effects` are the ones that would apply to the record, simulated on those rows (as
+[`…/actions/preview`](#post-appsappactionspreview) answers; nothing is made). In a preview a
+**signature** or a **photo** is never required, since none is held, so an action whose record would
+carry one is not refused for the lack of it. The answer is the same
 for the draft of an app that was never published, which is how it is tried first. The web
 app's builder and its Apps page use this route for every draft they show, and label it a **Preview**
 with sample data, apart from the **Live** release.
