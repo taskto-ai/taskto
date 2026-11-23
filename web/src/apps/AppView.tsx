@@ -53,20 +53,27 @@ export function submissionKey(action: ActionPayload): string {
 // dropped, so the person can't know whether it was made) sends that key again, so the server
 // changes nothing a second time and queues no second card. Any answer, even a refusal, ends the
 // submission: the next press is a new one. The renderer's own timestamp doesn't make a press a
-// different submission.
+// different submission, and a submission that is waiting keeps its key while others are pressed.
+const MAX_UNANSWERED = 20
+
 export function operationTracker(make: () => string = newOperation) {
-  let unanswered: { sent: string; operation: string } | null = null
+  const unanswered = new Map<string, string>()
   return async function withOperation<T>(action: ActionPayload, send: (operation: string) => Promise<T>): Promise<T> {
     const sent = submissionKey(action)
-    const operation = unanswered?.sent === sent ? unanswered.operation : make()
-    unanswered = { sent, operation }
+    let operation = unanswered.get(sent)
+    if (operation === undefined) {
+      operation = make()
+      unanswered.set(sent, operation)
+      // Only the newest are remembered, so a long session can't grow this without end.
+      if (unanswered.size > MAX_UNANSWERED) unanswered.delete(unanswered.keys().next().value as string)
+    }
     try {
       const answer = await send(operation)
-      unanswered = null
+      unanswered.delete(sent)
       return answer
     } catch (e) {
       // An answer, even a refusal, is the end of it; no answer is not.
-      if (e instanceof ApiError) unanswered = null
+      if (e instanceof ApiError) unanswered.delete(sent)
       throw e
     }
   }

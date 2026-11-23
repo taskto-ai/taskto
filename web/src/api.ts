@@ -309,7 +309,8 @@ export type AppEffect = {
   // Whether the caller may retry it: it failed and they are who acted.
   can_retry: boolean
 }
-export type AppEffectList = { effects: AppEffect[]; active: number; failed: number }
+// more: older effects than the page's last match too (ask again with before=<its id>).
+export type AppEffectList = { effects: AppEffect[]; more?: boolean; active: number; failed: number }
 
 // One value over every record a query matches: its count is how many records it was computed from.
 export type RecordAggregate = {

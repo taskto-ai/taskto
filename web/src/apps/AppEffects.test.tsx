@@ -53,7 +53,7 @@ test('shows what waits and what failed, and why', async () => {
           }),
           effect(1, {
             status: 'done',
-            result: { space_id: 7, board_id: 12, card_id: 88 },
+            result: { workspace_id: 1, space_id: 7, board_id: 12, card_id: 88 },
             done_at: '2026-11-02T10:00:00.000Z',
           }),
         ],
@@ -78,7 +78,7 @@ test('shows what waits and what failed, and why', async () => {
   expect(items[1].textContent).toContain('5 tries')
   expect(items[2].textContent).toContain('Done')
   const link = within(items[2]).getByRole('link', { name: 'Card 88: open the boards' })
-  expect(link.getAttribute('href')).toBe('/w/1/boards')
+  expect(link.getAttribute('href')).toBe('/w/1/boards/7%3A12%3A88')
 })
 
 test('retries a failed effect on purpose, and tells the list to reload', async () => {
@@ -211,4 +211,88 @@ test('a preview says that nothing was saved, and what would be set going', () =>
   unmount()
   render(<EffectPreview effects={[]} />)
   expect(screen.getByText('This action would set nothing going.')).toBeTruthy()
+})
+
+test('a result links to its target, in the target’s own workspace', async () => {
+  fakeFetch({
+    [`GET ${base}/effects?limit=50`]: {
+      body: {
+        effects: [
+          effect(4, {
+            kind: 'open_route',
+            status: 'done',
+            result: { route: { kind: 'card', workspace_id: 5, space_id: 9, board_id: 3, card_id: 21 } },
+          }),
+          effect(3, {
+            kind: 'create_document',
+            status: 'done',
+            result: { workspace_id: 5, space_id: 9, path: 'inspections/14.md' },
+          }),
+          effect(2, {
+            kind: 'update_card',
+            status: 'done',
+            result: { workspace_id: 5, space_id: 9, board_id: 3, card_id: 21, column: 'done' },
+          }),
+        ],
+        active: 0,
+        failed: 0,
+      },
+    },
+  })
+  render(<AppEffects workspace={1} base={base} writable />)
+  fireEvent.click(await screen.findByRole('button', { name: /Effects/ }))
+  const items = within(await screen.findByRole('list', { name: 'The app’s effects' })).getAllByRole('listitem')
+  expect(within(items[0]).getByRole('link').getAttribute('href')).toBe('/w/5/boards/9%3A3%3A21')
+  expect(within(items[1]).getByRole('link').getAttribute('href')).toBe('/w/5/knowledge/9%3Ainspections%2F14.md')
+  expect(within(items[2]).getByRole('link').getAttribute('href')).toBe('/w/5/boards/9%3A3%3A21')
+})
+
+test('failed effects older than the newest page are reachable and can be retried', async () => {
+  const newest = Array.from({ length: 50 }, (_, i) =>
+    effect(200 - i, { status: 'done', done_at: '2026-11-02T10:00:00.000Z' }),
+  )
+  const calls = fakeFetch({
+    [`GET ${base}/effects?limit=50`]: { body: { effects: newest, more: true, active: 0, failed: 2 } },
+    [`GET ${base}/effects?status=failed&limit=50`]: {
+      body: {
+        effects: [
+          effect(40, {
+            status: 'failed',
+            error: { code: 'app_effect_gave_up' },
+            can_retry: true,
+            detail: { title: 'Old one' },
+          }),
+        ],
+        more: false,
+        active: 0,
+        failed: 2,
+      },
+    },
+    [`GET ${base}/effects?limit=50&before=151`]: {
+      body: {
+        effects: [effect(40, { status: 'failed', error: { code: 'app_effect_gave_up' }, can_retry: true })],
+        more: false,
+        active: 0,
+        failed: 2,
+      },
+    },
+    [`POST ${base}/effects/40/retry`]: { body: effect(40, { status: 'pending' }) },
+  })
+  render(<AppEffects workspace={1} base={base} writable />)
+  fireEvent.click(await screen.findByRole('button', { name: /Effects/ }))
+  await screen.findByRole('list')
+  // Not among the newest page, so a retry isn't offered there; the older page and the filter reach it.
+  expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Show older effects' }))
+  await screen.findByRole('button', { name: /Retry/ })
+  expect(screen.queryByRole('button', { name: 'Show older effects' })).toBeNull()
+  expect(calls.some((c) => c.path.endsWith('before=151'))).toBe(true)
+
+  // The filter asks for the failed ones alone.
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Only the failed (2)' }))
+  await screen.findByText('Old one')
+  expect(screen.getAllByRole('listitem')).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: /Retry/ }))
+  await screen.findByText('It will be tried again shortly.')
+  expect(calls.find((c) => c.method === 'POST')?.path).toBe(`${base}/effects/40/retry`)
 })

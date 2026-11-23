@@ -9,10 +9,12 @@ import { useEffect, useState } from 'react'
 import { type AppEffect, type AppEffectList, api, codeText, errorText } from '../api'
 import { type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Link, routePath } from '../router'
+import { boardItem, documentItem, Link, routePath } from '../router'
 
 // How often the list is asked for again while some effect waits or runs.
 const POLL_MS = 3000
+// How many effects a page holds.
+const PAGE = 50
 
 export function AppEffects({
   workspace,
@@ -29,8 +31,18 @@ export function AppEffects({
   reloadKey?: number
 }) {
   const [open, setOpen] = useState(false)
+  // Only the ones that failed: they stay until retried, however many newer there are.
+  const [failedOnly, setFailedOnly] = useState(false)
+  // Older pages the person asked for, after the newest page that is kept fresh.
+  const [older, setOlder] = useState<{ effects: AppEffect[]; more: boolean } | null>(null)
+  const [olderError, setOlderError] = useState<string | null>(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const t = useT()
-  const list = useLoad(() => api<AppEffectList>(`${base}/effects?limit=50`), [base, reloadKey])
+  const query = failedOnly ? 'status=failed&' : ''
+  const list = useLoad(() => api<AppEffectList>(`${base}/effects?${query}limit=${PAGE}`), [base, query, reloadKey])
+  // Another filter is another list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a changed filter or app drops the older pages
+  useEffect(() => setOlder(null), [base, query])
   const waiting = (list.data?.active ?? 0) > 0
   const { reload } = list
   useEffect(() => {
@@ -41,7 +53,22 @@ export function AppEffects({
 
   const data = list.data
   // An app that never set anything going shows nothing of this.
-  if (!data || (data.effects.length === 0 && data.active === 0 && data.failed === 0)) return null
+  if (!data || (data.effects.length === 0 && data.active === 0 && data.failed === 0 && !failedOnly)) return null
+  const shown = [...data.effects, ...(older?.effects ?? [])]
+  const more = older ? older.more : (data.more ?? false)
+  const showOlder = async () => {
+    const last = shown[shown.length - 1]
+    if (!last) return
+    setLoadingOlder(true)
+    setOlderError(null)
+    try {
+      const page = await api<AppEffectList>(`${base}/effects?${query}limit=${PAGE}&before=${last.id}`)
+      setOlder({ effects: [...(older?.effects ?? []), ...page.effects], more: page.more ?? false })
+    } catch (err) {
+      setOlderError(errorText(err))
+    }
+    setLoadingOlder(false)
+  }
   return (
     <div className="tt-effects">
       <button
@@ -71,13 +98,29 @@ export function AppEffects({
               {list.error}
             </p>
           )}
+          {(data.failed > 0 || failedOnly) && (
+            <label className="tt-inline-field">
+              <input type="checkbox" checked={failedOnly} onChange={(e) => setFailedOnly(e.target.checked)} />
+              {t('apps.effects.failedOnly', { count: data.failed })}
+            </label>
+          )}
           <EffectItems
             workspace={workspace}
-            effects={data.effects}
+            effects={shown}
             label={t('apps.effects.list')}
             onRetry={writable ? (e) => retry(base, e) : undefined}
             changed={reload}
           />
+          {olderError && (
+            <p role="alert" className="tt-error">
+              {olderError}
+            </p>
+          )}
+          {more && (
+            <button type="button" className="tt-button" disabled={loadingOlder} onClick={showOlder}>
+              {t('apps.effects.older')}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -208,42 +251,66 @@ function detail(e: AppEffect, t: ReturnType<typeof useT>): string {
 }
 
 // Where a done effect's result is: the web app turns the kind and IDs the server gives into its own
-// address (never one the server or a definition sent). The boards and the knowledge base don't
-// open on one card or document yet, so a link goes to the page.
+// address (never one the server or a definition sent), in the workspace of the space it is in,
+// which may not be the app's own. A card or a document is opened on, in its space.
 function ResultLink({ workspace, effect }: { workspace: number; effect: AppEffect }) {
   const t = useT()
   const result = effect.result ?? {}
+  const route = (result.route ?? {}) as Record<string, unknown>
+  const where = (kind: Record<string, unknown>) => {
+    const id = (key: string) =>
+      Number.isInteger(Number(kind[key])) && Number(kind[key]) > 0 ? Number(kind[key]) : undefined
+    return {
+      workspace: id('workspace_id') ?? workspace,
+      space: id('space_id'),
+      board: id('board_id'),
+      card: id('card_id'),
+    }
+  }
+  const boards = (w: ReturnType<typeof where>) =>
+    w.space === undefined
+      ? null
+      : routePath({ workspace: w.workspace, section: 'boards', item: boardItem(w.space, w.board, w.card) })
+  const document = (w: ReturnType<typeof where>, path: unknown) =>
+    w.space === undefined || typeof path !== 'string' || path === ''
+      ? null
+      : routePath({ workspace: w.workspace, section: 'knowledge', item: documentItem(w.space, path) })
+
   if (effect.kind === 'create_card' || effect.kind === 'update_card') {
-    const id = Number(result.card_id)
-    if (!Number.isInteger(id)) return null
+    const w = where(result)
+    const href = boards(w)
+    if (!href || w.card === undefined) return null
     return (
-      <Link className="tt-small" href={routePath({ workspace, section: 'boards' })}>
-        {t('apps.effects.result.card', { id })}
+      <Link className="tt-small" href={href}>
+        {t('apps.effects.result.card', { id: w.card })}
       </Link>
     )
   }
   if (effect.kind === 'create_document') {
     const path = typeof result.path === 'string' ? result.path : ''
-    return (
-      <Link className="tt-small" href={routePath({ workspace, section: 'knowledge' })}>
+    const href = document(where(result), path)
+    return href ? (
+      <Link className="tt-small" href={href}>
         {t('apps.effects.result.document', { path })}
       </Link>
-    )
+    ) : null
   }
-  const route = (result.route ?? {}) as { kind?: string }
+  const w = where(route)
   if (route.kind === 'document') {
-    return (
-      <Link className="tt-small" href={routePath({ workspace, section: 'knowledge' })}>
+    const href = document(w, route.path)
+    return href ? (
+      <Link className="tt-small" href={href}>
         {t('apps.effects.result.documentRoute')}
       </Link>
-    )
+    ) : null
   }
   if (route.kind === 'board' || route.kind === 'card') {
-    return (
-      <Link className="tt-small" href={routePath({ workspace, section: 'boards' })}>
+    const href = boards(w)
+    return href ? (
+      <Link className="tt-small" href={href}>
         {t('apps.effects.result.board')}
       </Link>
-    )
+    ) : null
   }
   return null
 }

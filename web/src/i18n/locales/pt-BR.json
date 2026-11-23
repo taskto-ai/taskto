@@ -101,6 +101,8 @@
       "retry": "Tentar de novo",
       "retryNamed": "Tentar de novo: {what}",
       "retried": "Será tentado de novo em instantes.",
+      "failedOnly": "Só os que falharam ({count})",
+      "older": "Mostrar efeitos mais antigos",
       "list": "Os efeitos do app",
       "result": {
         "card": "Cartão {id}: abrir os quadros",
@@ -603,6 +605,7 @@
     "app_effect_no_card": "Nenhum cartão foi criado para este registro alterar.",
     "app_effect_card_archived": "O cartão a alterar está arquivado.",
     "app_effect_app_offline": "O app está offline ou o seu espaço está arquivado.",
+    "app_effect_record_gone": "O registro de onde isto veio foi excluído. Restaure-o e tente de novo.",
     "app_effect_gave_up": "Continuou falhando por um motivo que pode passar: tente de novo.",
     "app_definition_version": "Este app usa um formato de definição (versão {version}) que o servidor não lê; ele lê até a {supported}.",
     "app_not_published": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer.",

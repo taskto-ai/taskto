@@ -320,6 +320,42 @@ test('an action keeps its operation key until the server has answered it', async
   expect(operation(2)).not.toBe(operation(0))
 })
 
+test('a retry after a lost answer is the same submission whatever the renderer stamped on the press', async () => {
+  const base = '/api/workspaces/1/spaces/2/apps/1'
+  let fail = true
+  const calls = fakeFetch({
+    [`POST ${base}/actions`]: () => {
+      if (fail) throw new TypeError('network down')
+      return { body: afterAdd }
+    },
+  })
+  const transport = httpTransport(base, 3)
+  // Every press carries the time it was made, as the renderer stamps it.
+  let at = 0
+  const press = (context: Record<string, unknown>) =>
+    transport.act({
+      name: 'add_expense',
+      surfaceId: 'app-1',
+      sourceComponentId: 'add',
+      timestamp: new Date(Date.UTC(2026, 10, 2, 10, 0, at++)).toISOString(),
+      context,
+    })
+  const operation = (i: number) => (calls[i].body as { operation: string }).operation
+
+  await expect(press({ amount: '1' })).rejects.toThrow()
+  // Another submission is pressed meanwhile, and lost too.
+  await expect(press({ amount: '2' })).rejects.toThrow()
+  fail = false
+  await press({ amount: '1' })
+  await press({ amount: '2' })
+  expect(operation(2)).toBe(operation(0))
+  expect(operation(3)).toBe(operation(1))
+  expect(operation(1)).not.toBe(operation(0))
+  // Answered: pressing it again is a new submission.
+  await press({ amount: '1' })
+  expect(operation(4)).not.toBe(operation(0))
+})
+
 for (const [name, component] of [
   ['outside the catalog', { id: 'root', component: 'Script', src: 'x' }],
   ['left out of the basic catalog', { id: 'root', component: 'Image', url: 'https://elsewhere.example/p.png' }],

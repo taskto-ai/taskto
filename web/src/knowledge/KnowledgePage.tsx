@@ -9,6 +9,7 @@ import { ApiError, api, type Doc, errorText, ws } from '../api'
 import { has, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { type LinkHandler, Markdown } from '../markdown'
+import { parseDocumentItem } from '../router'
 import { SearchBox, type SearchQuery, SearchResults } from '../search/Search'
 import { Icon } from '../shell/Icon'
 import { SpacePicker, useSpaces } from '../spaces'
@@ -75,11 +76,23 @@ export function resolveDocLink(from: string, href: string): string | null {
 
 // admin: the user is an admin of the workspace, who may remove a file's old versions from
 // its history.
-export function KnowledgePage({ workspace, admin = false }: { workspace: number; admin?: boolean }) {
-  const { spaces, space, choose } = useSpaces(workspace)
+// open is a link's item (documentItem): the space and document to open on.
+export function KnowledgePage({
+  workspace,
+  admin = false,
+  open: link,
+}: {
+  workspace: number
+  admin?: boolean
+  open?: string
+}) {
+  const target = parseDocumentItem(link)
+  const { spaces, space, choose } = useSpaces(workspace, target?.space)
   const base = space ? `${ws(workspace)}/spaces/${space.id}` : null
   const docs = useLoad(() => (base ? listDocs(base) : Promise.resolve(undefined)), [base])
-  const [open, setOpen] = useState<{ path: string; editing?: boolean } | null>(null)
+  const [open, setOpen] = useState<{ path: string; editing?: boolean } | null>(
+    target?.path ? { path: target.path } : null,
+  )
   // Each search counts, so asking the same again searches again rather than showing the last.
   const [query, setQuery] = useState<(SearchQuery & { n: number }) | null>(null)
   const [adding, setAdding] = useState<'new' | 'upload' | null>(null)

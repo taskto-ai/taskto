@@ -99,6 +99,8 @@
       "retry": "Retry",
       "retryNamed": "Retry: {what}",
       "retried": "It will be tried again shortly.",
+      "failedOnly": "Only the failed ({count})",
+      "older": "Show older effects",
       "list": "The app’s effects",
       "result": {
         "card": "Card {id}: open the boards",
@@ -599,6 +601,7 @@
     "app_effect_no_card": "No card was made for this record to change.",
     "app_effect_card_archived": "The card to change is archived.",
     "app_effect_app_offline": "The app is offline or its space is archived.",
+    "app_effect_record_gone": "The record this came from was deleted. Restore it and retry.",
     "app_effect_gave_up": "It kept failing for a reason that may pass: retry it.",
     "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
     "app_not_published": "This app isn’t published yet: it can be launched once someone who may publish it does.",

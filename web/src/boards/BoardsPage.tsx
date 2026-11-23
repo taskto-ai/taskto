@@ -26,7 +26,7 @@ import { conversationTitle } from '../conversations/ConversationView'
 import { type Key, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Markdown } from '../markdown'
-import { Link, routePath } from '../router'
+import { Link, parseBoardItem, routePath } from '../router'
 import { Icon } from '../shell/Icon'
 import { SpacePicker, useSpaces } from '../spaces'
 import { usePoll } from './poll'
@@ -58,8 +58,10 @@ function blockedText(t: T, reason: string | null, cards: string): string {
 
 type CardWithThread = Card & { comments: Comment[] }
 
-export function BoardsPage({ workspace }: { workspace: number }) {
-  const { spaces, space, choose } = useSpaces(workspace)
+// open is a link's item (boardItem): the space, board and card to open on.
+export function BoardsPage({ workspace, open }: { workspace: number; open?: string }) {
+  const target = parseBoardItem(open)
+  const { spaces, space, choose } = useSpaces(workspace, target?.space)
   const base = space ? `${ws(workspace)}/spaces/${space.id}/boards` : null
   // Archived boards are listed only when asked for, after the others.
   const [archived, setArchived] = useState(false)
@@ -70,7 +72,7 @@ export function BoardsPage({ workspace }: { workspace: number }) {
         : Promise.resolve(undefined),
     [base, archived],
   )
-  const [chosen, setChosen] = useState<number | null>(null)
+  const [chosen, setChosen] = useState<number | null>(target?.board ?? null)
   const [adding, setAdding] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [boardError, setBoardError] = useState<string | null>(null)
@@ -202,6 +204,7 @@ export function BoardsPage({ workspace }: { workspace: number }) {
           workspace={workspace}
           space={space}
           canWrite={canWrite && !board.archived_at}
+          openCard={board.id === target?.board ? target.card : undefined}
         />
       )}
     </div>
@@ -300,14 +303,17 @@ function BoardView({
   workspace,
   space,
   canWrite,
+  openCard,
 }: {
   url: string
   workspace: number
   space: Space
   canWrite: boolean
+  // The card to open on, a link's.
+  openCard?: number
 }) {
   const cards = useLoad(() => api<{ cards: Card[] }>(url).then((r) => r.cards), [url])
-  const [open, setOpen] = useState<number | null>(null)
+  const [open, setOpen] = useState<number | null>(openCard ?? null)
   // Dragging a card: which one, and the column it is over. The Column field of the open card
   // does the same from the keyboard, so dragging is only a quicker way for a pointer.
   const [dragged, setDragged] = useState<Card | null>(null)
