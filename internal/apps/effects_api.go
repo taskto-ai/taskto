@@ -488,6 +488,73 @@ func (s *Service) previewTarget(ctx context.Context, userID int64, e Effect, p p
 	return ""
 }
 
+// EffectTarget names a space, and a board of it, that an effect of the app's draft acts on or
+// opens. The names are told only to a caller who may read the target: the same workspace as the
+// app, and a space and board they can read. Otherwise the target is listed by its IDs alone, and
+// nothing is told of what it is, or whether it exists.
+type EffectTarget struct {
+	SpaceID int64 `json:"space_id"`
+	// Space and SpaceKind are the space's name and kind, when the caller may read it.
+	Space     string      `json:"space,omitempty"`
+	SpaceKind access.Kind `json:"space_kind,omitempty"`
+	BoardID   int64       `json:"board_id,omitempty"`
+	// Board is the board's name, when the caller may read the space and the board is one of its.
+	Board string `json:"board,omitempty"`
+}
+
+// effectTargets lists the targets of def's effects, each once, in the order of the actions'
+// names, with the names the caller may be told (EffectTarget).
+func (s *Service) effectTargets(ctx context.Context, a Actor, appSpace int64, def *Definition) ([]EffectTarget, error) {
+	var out []EffectTarget
+	boardsOf := map[int64][]boards.Board{}
+	for _, name := range sortedKeys(def.Actions) {
+		for _, e := range def.Actions[name].Effects {
+			if e.SpaceID == 0 {
+				continue
+			}
+			t := EffectTarget{SpaceID: e.SpaceID, BoardID: e.BoardID}
+			if slices.ContainsFunc(out, func(o EffectTarget) bool { return o.SpaceID == t.SpaceID && o.BoardID == t.BoardID }) {
+				continue
+			}
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	// The workspace of the app's own space: a target is always in it.
+	home, err := s.access.Check(ctx, a.UserID, appSpace)
+	if err != nil {
+		return nil, err
+	}
+	for i, t := range out {
+		sp, err := s.access.Check(ctx, a.UserID, t.SpaceID)
+		if errors.Is(err, access.ErrNotFound) || (err == nil && (sp.WorkspaceID != home.WorkspaceID || !sp.Access.Allows(access.Read))) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out[i].Space, out[i].SpaceKind = sp.Name, sp.Kind
+		if t.BoardID == 0 || s.platform.Boards == nil {
+			continue
+		}
+		all, ok := boardsOf[t.SpaceID]
+		if !ok {
+			if all, err = s.platform.Boards.ListBoards(ctx, boards.Actor(a), t.SpaceID); err != nil {
+				return nil, err
+			}
+			boardsOf[t.SpaceID] = all
+		}
+		for _, b := range all {
+			if b.ID == t.BoardID {
+				out[i].Board = b.Name
+			}
+		}
+	}
+	return out, nil
+}
+
 // checkEffectTargets checks, when an app is saved or published, that the one saving it may write
 // every space and board its effects name: a definition can't point at what its author couldn't use
 // themselves. It tells nothing about a space the author can't read that they couldn't tell from
