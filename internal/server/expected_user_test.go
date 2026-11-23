@@ -57,3 +57,30 @@ func TestARequestNamingAnotherAccountIsRefusedOnEveryAPIRoute(t *testing.T) {
 		t.Errorf("no header = %d, want 200", code)
 	}
 }
+
+// A sign-out that names the account it is for is refused for any other session, so a page that went
+// stale (another account signed in on the browser since) never signs the new one out.
+func TestALogoutNamingAnotherAccountLeavesTheSessionAlone(t *testing.T) {
+	s := newStack(t)
+	as := func(cookie string, who int64) func(*http.Request) {
+		return func(r *http.Request) {
+			sameOrigin(cookie)(r)
+			r.Header.Set(access.ExpectedUserHeader, fmt.Sprint(who))
+		}
+	}
+	rec := s.request(http.MethodPost, "/api/logout", nil, as(s.bob.cookie, s.alice.id))
+	if rec.Code != http.StatusConflict || decode(rec)["code"] != "session_account_changed" {
+		t.Fatalf("logout as bob for alice = %d %s, want 409 session_account_changed", rec.Code, rec.Body)
+	}
+	if code, _ := s.browser(s.bob.cookie, http.MethodGet, "/api/me", nil); code != http.StatusOK {
+		t.Fatalf("bob's session after the refused logout: GET /api/me = %d, want 200", code)
+	}
+	// Named for the session's own account, it signs out.
+	rec = s.request(http.MethodPost, "/api/logout", nil, as(s.bob.cookie, s.bob.id))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout as bob for bob = %d %s, want 204", rec.Code, rec.Body)
+	}
+	if code, _ := s.browser(s.bob.cookie, http.MethodGet, "/api/me", nil); code != http.StatusUnauthorized {
+		t.Fatalf("bob's session after his logout: GET /api/me = %d, want 401", code)
+	}
+}

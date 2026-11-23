@@ -385,3 +385,50 @@ test('…and discards it only when the person says so, after being asked', async
   await screen.findByRole('heading', { name: /sign in|log in/i })
   expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7')
 })
+
+// --- Fourth round of review.
+
+test('signing out names the account it is for, and a stale tab’s sign-out leaves the session that is there now alone', async () => {
+  const calls = fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  await signedInAs()
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+  const out = calls.find((c) => c.path === '/api/logout')
+  expect(out?.headers['x-taskto-expected-user']).toBe('7')
+})
+
+test('…and when the server says the session is another account’s, nobody is signed out here', async () => {
+  const calls = fakeFetch({
+    ...signedIn,
+    'POST /api/logout': { status: 409, body: { error: 'another account', code: 'session_account_changed' } },
+  })
+  await signedInAs()
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  // This tab learns it is stale: nothing of the account is shown, and the sign-out went no further.
+  await screen.findByRole('alertdialog')
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(true)
+  expect(screen.queryByRole('heading', { name: /sign in|log in/i })).toBeNull()
+})
+
+test('a record that appears after the person was asked is never deleted by the sign-out: they are asked again', async () => {
+  const calls = fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  // Nothing unsent when the person is asked; another tab of the account commits a record right after.
+  const stale = await OfflineStore.open(7)
+  const unsynced = runtime.store.unsynced.bind(runtime.store)
+  runtime.store.unsynced = async () => {
+    const seen = await unsynced()
+    await stale.enqueue(queued(), [])
+    return seen
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog.textContent).toMatch(/1 record on this device hasn’t reached the server/)
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+  stale.close()
+  expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
+  expect(await runtime.store.listItems()).toHaveLength(1)
+})

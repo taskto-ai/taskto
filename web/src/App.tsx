@@ -5,7 +5,7 @@
 // sets the password, and signs in.
 
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
-import { ApiError, api, errorText, type Me, SESSION_LOST } from './api'
+import { ApiError, api, errorText, forAccount, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
 import { setPreferences, useT } from './i18n'
 import { leavePush } from './notifications/push'
@@ -14,7 +14,7 @@ import { AccountChanged } from './offline/AccountChanged'
 import { ForeignGuard } from './offline/ForeignGuard'
 import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
-import { activate, deactivate, discardForeign, lastUser, type Unsent, unsentOf } from './offline/runtime'
+import { activate, deactivate, discardForeign, lastUser, settle, type Unsent, unsentOf } from './offline/runtime'
 import { navigate } from './router'
 import { Shell } from './shell/Shell'
 import { claimDrafts, forgetDrafts } from './uiState'
@@ -125,12 +125,33 @@ export function App() {
   // and a person with records not yet sent is asked first: every sign-out goes through here.
   // `keep`: the account's database is not deleted (the person chose so, since this version
   // couldn't tell whether it holds unsent records).
-  const signOut = useCallback(async ({ user, next }: Leaving, keep = false) => {
+  const signOut = useCallback(async ({ user, next, ids }: Leaving & Partial<Pick<Unsent, 'ids'>>, keep = false) => {
+    const approved = new Set(ids)
+    // What the device holds is decided first and in one step: if a record that was not shown to the
+    // person has appeared since (another tab of the account, a stale one), nothing is deleted and
+    // nobody is signed out: they are asked again about what is there now.
+    if (!keep) {
+      const left = await settle(user, approved)
+      if (left.length > 0) {
+        setLeaving({ user, next, count: left.length, ids: left, unreadable: null })
+        return
+      }
+    }
     // This device's push subscription goes first, while the session can still say whose it is.
     await leavePush()
-    await api('/api/logout', { method: 'POST' }).catch(() => {})
+    // The request says whose session it is for: a tab that is stale (another account signed in
+    // since) never signs that account out; the server refuses it.
+    const refused = await api('/api/logout', { method: 'POST', headers: forAccount(user) }).then(
+      () => false,
+      (e) => e instanceof ApiError && e.code === 'session_account_changed',
+    )
+    if (refused) return
     forgetDrafts()
-    await deactivate(keep ? { purge: false, keep: true, user } : { purge: true, user })
+    const left = await deactivate(keep ? { purge: false, keep: true, user } : { purge: true, user, approved })
+    if (left.length > 0) {
+      setLeaving({ user, next, count: left.length, ids: left, unreadable: null })
+      return
+    }
     setLeaving(null)
     setSession(next)
   }, [])
@@ -169,6 +190,7 @@ export function App() {
   // holds, which the person decides about first (nothing of them is shown).
   const leavingGuard = leaving && (
     <LogoutGuard
+      key={leaving.ids.join()}
       runtime={runtime}
       count={leaving.count}
       unreadable={leaving.unreadable}

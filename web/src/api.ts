@@ -63,7 +63,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
           : {}),
   })
   if (res.status === 204) return undefined as T
-  const data = await res.json().catch(() => null)
+  // An answer that isn't JSON is no data; a body that was cut short because the request was
+  // aborted is not an answer at all, and says so (a caller that aborts never takes it for one).
+  const data = await res.json().catch((e) => {
+    if (init.signal?.aborted || (e as { name?: string } | null)?.name === 'AbortError') throw e
+    return null
+  })
   if (!res.ok) {
     // A session that ended (logged out elsewhere, expired) sends the app back to the login.
     if (res.status === 401) window.dispatchEvent(new Event(SESSION_LOST))

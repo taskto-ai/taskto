@@ -138,7 +138,20 @@ shortly. Where there are no Web Locks the claim is kept alive for as long as the
 in flight, on a timer of its own (a third of the lease), whether or not the request makes
 progress: a photo upload whose chunk stalls still holds its claim, so no other tab starts it
 again. If the claim is lost anyway (another page took it, the item was discarded) the request is
-aborted at once and nothing of it is written. The photos' ids the server finalized are kept on the item, first one wins, so a send made
+aborted at once and nothing of it is written.
+
+**Nothing is written or deleted on the strength of an answer that came too late.** Every request
+of a pass (the photos, the record, and the check of the app after a 403 or 404) carries the pass's
+`AbortSignal`, which stopping the engine or losing the claim aborts. A body cut short by an abort
+is an `AbortError` (`web/src/api.ts`), never an empty answer. After each wait and before it writes
+or deletes anything (an acknowledgment, the item's new state, the removal of a downloaded copy) the
+send checks that the engine still runs, the signal is not aborted and the account signed in here is
+the queue's owner; if not, it lets its claim go (the item is the next sender's at once, no attempt
+counted) and writes nothing. A pass also waits for a revalidation that is in flight, whoever asked
+for the pass (the network coming back, the page returning to the foreground, a timer, *Sync now*),
+so nothing is sent before the server has said what may be kept. A tab that found another one
+sending looks again after no less than `LOCK_RETRY_MS`, whatever an item's own wait says.
+ The photos' ids the server finalized are kept on the item, first one wins, so a send made
 again is the same request, and an item the server acknowledged is never put back to waiting.
 
 1. **Photos first.** Each photo is uploaded through the resumable upload routes (create → chunks →
@@ -175,8 +188,17 @@ signing in is dealt with when it signs in:
 - **Signing in** makes the browser that account's (the *last user* marker moves first, so a
   database that can't be opened is never replaced by the previous account's). If the marker can't
   be written (the storage is full or blocked) it is removed, so an offline start never opens the
-  previous account's database; if it can't be removed either, this page refuses to open any
-  database offline. What the last
+  previous account's database; if it can't be removed either, offline starts are **refused**, and
+  the refusal is kept where the next page finds it (a flag in `localStorage`, one in
+  `sessionStorage`, and one in a small IndexedDB database of its own: whichever can be written),
+  so no page opens the last account's database from a marker that survived while another account
+  was the last to sign in. A later sign-in that can move the marker ends the refusal. (Only a
+  browser whose storage can't be written at all can't keep it; the tests can't tell what a real
+  one does.) **The account epoch:** who the marker names is checked again after every wait while
+  a database is being opened (before the sweep, between the other accounts' databases, before
+  and after opening this one): if another tab signed in as someone else meanwhile, the sweep stops
+  and this tab shows *The account changed* instead of publishing the database it was opening.
+  What the last
   account kept is deleted at once: its downloads, its records that reached the server and their
   photos, and the whole database if nothing was left unsent. If **records of another account have
   not reached the server**, those alone stay, **sealed**: nothing of them is shown or sent, and
@@ -194,7 +216,17 @@ signing in is dealt with when it signs in:
 - **Signing out**, from anywhere (the menu, the invite page), asks first if records on the device
   haven't reached the server: *Sync now*, *Discard and sign out*, or *Cancel*. Then the account's
   database is **deleted**: downloads, queue and photos, whether or not it had been opened in this
-  page. If the queue **can't be opened or counted** (a newer version wrote it, the storage isn't
+  page. Counting and deleting are **one step**: in a single IndexedDB transaction the database is
+  checked for unsent records other than those the person was shown (and agreed to lose) and, only
+  if there are none, emptied and **marked as being deleted**; from then on a record committed to
+  it (a stale tab, another tab of the same account) is refused and reported as not saved, never
+  lost without a word. If an unsent record turned up after the person was asked, nothing is
+  deleted and nobody is signed out: they are asked again about what is there now. The same step
+  decides the other accounts' databases when someone signs in, so a stale tab's record committed
+  during that sweep is counted, never deleted. The sign-out request names the account it is for
+  (`X-Taskto-Expected-User`), so a stale tab never signs out the account that is signed in now:
+  the server refuses it with `409 session_account_changed` and the tab shows *The account
+  changed*. If the queue **can't be opened or counted** (a newer version wrote it, the storage isn't
   available) the count is not taken to be zero: the person is told that unsent records may exist
   that this version can't check, and chooses *Keep them and sign out* (nothing is deleted; the
   database stays for the version or the moment that can read it) or *Discard and sign out*

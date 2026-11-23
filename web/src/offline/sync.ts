@@ -149,6 +149,8 @@ export class SyncEngine {
   private readonly inflight = new Set<AbortController>()
   // Settles when the pass that is running is over.
   private active: Promise<void> | undefined
+  // The earliest that a pass that found another tab sending looks again.
+  private lockedUntil: number | undefined
 
   constructor(
     private readonly store: OfflineStore,
@@ -195,7 +197,7 @@ export class SyncEngine {
     const kick = () => void this.run()
     // The network is back: what the device holds is asked about first (a copy may have been
     // revoked, and an account may have changed meanwhile), then the queue is sent.
-    const online = () => void this.revalidateThenRun()
+    const online = () => void this.revalidated().then(() => this.run())
     window.addEventListener('online', online)
     const visible = () => document.visibilityState === 'visible' && kick()
     document.addEventListener('visibilitychange', visible)
@@ -224,14 +226,22 @@ export class SyncEngine {
     return this.active && this.running ? this.active : Promise.resolve()
   }
 
-  private async revalidateThenRun(): Promise<void> {
-    if (this.stopped || this.paused) return
-    try {
-      await this.deps.revalidate?.()
-    } catch {
-      // The server can't be asked, or the database is closed: the queue's own sends find out.
-    }
-    await this.run()
+  // Asks the server whether what the device holds may still be held, once at a time: a pass that
+  // starts while it is in flight (the page coming to the front, a timer, the person's own "try
+  // again") waits for it, so nothing is sent on the strength of an answer not yet given.
+  private revalidating: Promise<void> | undefined
+  private revalidated(): Promise<void> {
+    if (this.stopped || this.paused || !this.deps.revalidate) return Promise.resolve()
+    this.revalidating ??= (async () => {
+      try {
+        await this.deps.revalidate?.()
+      } catch {
+        // The server can't be asked, or the database is closed: the queue's own sends find out.
+      }
+    })().finally(() => {
+      this.revalidating = undefined
+    })
+    return this.revalidating
   }
 
   pause(reason: 'session' | 'account' | 'manual') {
@@ -325,6 +335,7 @@ export class SyncEngine {
     })
     // When to look again, apart from the items' own waits: a claim that ends, a tab that is sending.
     let wake: number | undefined
+    this.lockedUntil = undefined
     try {
       do {
         this.rerun = false
@@ -342,7 +353,10 @@ export class SyncEngine {
       const waiting = (await this.store.listItems())
         .filter((i) => i.state === 'queued' && i.nextAttemptAt !== undefined)
         .map((i) => i.nextAttemptAt as number)
-      const at = Math.min(...waiting, wake ?? Number.POSITIVE_INFINITY)
+      let at = Math.min(...waiting, wake ?? Number.POSITIVE_INFINITY)
+      // Another tab holds the lock: no sooner than the retry delay, whatever an item's own wait
+      // says (one that is already over would make this look again at once, for ever).
+      if (this.lockedUntil !== undefined) at = Math.max(at, this.lockedUntil)
       if (Number.isFinite(at)) this.schedule(at)
     } catch {
       // The database was closed (signing out) while this pass ran: nothing is waiting any more.
@@ -357,6 +371,9 @@ export class SyncEngine {
   // One tab at a time sends, where Web Locks say so; the answer is when to look again, if
   // something was left that this didn't send.
   private async pass(): Promise<number | undefined> {
+    // What the device holds is asked about before anything is sent, whoever asked for the pass.
+    if (this.revalidating) await this.revalidating
+    if (this.stopped || this.paused) return undefined
     const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
     if (!locks) return this.sendAll(false)
     let wake: number | undefined
@@ -368,7 +385,10 @@ export class SyncEngine {
       // Another tab is sending: this one's items are its to send as well, if it gets to them. A tab
       // that skipped doesn't just trust that: it looks again soon, and the lock's holder may have
       // been past the point where it would have seen an item added a moment ago.
-      if ((await this.store.listItems()).some((i) => this.due(i))) wake = this.now() + LOCK_RETRY_MS
+      if ((await this.store.listItems()).some((i) => this.due(i))) {
+        wake = this.now() + LOCK_RETRY_MS
+        this.lockedUntil = wake
+      }
     })
     return wake
   }
@@ -425,6 +445,8 @@ export class SyncEngine {
   // Changes an item only while the claim is ours (and the server hasn't acknowledged it): what a
   // send that lost its claim would write is never written.
   private async owned(id: string, change: (i: OutboxItem) => OutboxItem): Promise<OutboxItem> {
+    // An engine that was stopped writes nothing more.
+    if (this.stopped) throw new LeaseLost()
     let held = true
     const saved = await this.store.updateItem(id, (i) => {
       if (i.state === 'synced' || i.lease?.owner !== this.owner) {
@@ -488,6 +510,9 @@ export class SyncEngine {
         headers: this.headers,
         signal: abort.signal,
       })
+      // Stopped, or the claim lost, while the answer came in: it is not written (the item is sent
+      // again by whoever has it next, and the server answers the same operation the same way).
+      if (abort.signal.aborted) throw new DOMException('the send was aborted', 'AbortError')
       // The server's answer is what makes it synced, whoever holds the claim now.
       await this.store.updateItem(id, (i) => ({
         ...i,
@@ -502,26 +527,30 @@ export class SyncEngine {
       await this.store.dropBlobs(id)
       return { kind: 'synced' }
     } catch (e) {
-      // A send that lost its claim (or whose engine stopped) writes nothing: another tab has it.
+      // A send whose engine stopped writes nothing and lets its claim go; one that lost its claim
+      // writes nothing either: another tab has it.
+      if (this.stopped && abort.signal.aborted) return await this.letGo(id)
       if (lost || e instanceof LeaseLost) return { kind: 'skipped' }
-      if (this.stopped && abort.signal.aborted) {
-        // Stopped mid-send: the claim is let go, so the item is the next sender's at once, not
-        // when the lease runs out. (Nothing is counted against it.)
-        await this.store
-          .updateItem(id, (i) =>
-            i.state === 'syncing' && i.lease?.owner === this.owner
-              ? { ...i, state: 'queued', lease: undefined }
-              : undefined,
-          )
-          .catch(() => {})
-        return { kind: 'skipped' }
-      }
       if (e instanceof UploadCancelled) return { kind: 'transient', error: describe(e) }
-      return this.failed(id, e)
+      // Awaited here, inside the try: the request is in flight (and abortable) until it is over.
+      return await this.failed(id, e, abort.signal, () => lost)
     } finally {
       beat()
       this.inflight.delete(abort)
     }
+  }
+
+  // The claim is let go, so the item is the next sender's at once, not when the lease runs out.
+  // (Nothing is counted against it.)
+  private async letGo(id: string): Promise<Outcome> {
+    await this.store
+      .updateItem(id, (i) =>
+        i.state === 'syncing' && i.lease?.owner === this.owner
+          ? { ...i, state: 'queued', lease: undefined }
+          : undefined,
+      )
+      .catch(() => {})
+    return { kind: 'skipped' }
   }
 
   private async uploadOne(item: OutboxItem, a: Attachment, signal: AbortSignal): Promise<void> {
@@ -558,19 +587,29 @@ export class SyncEngine {
     }))
   }
 
+  // Whether what a send found out is still to be acted on: this engine runs, the send's own request
+  // wasn't aborted (it stopped, or the claim was lost), and the account signed in here is the
+  // queue's owner. Checked after every wait, before anything is written or deleted.
+  private live(signal: AbortSignal): boolean {
+    return !this.stopped && !signal.aborted && this.ownerSignedIn()
+  }
+
   // Records what a failed send means for the item, and acts on a revocation.
-  private async failed(id: string, e: unknown): Promise<Outcome> {
+  private async failed(id: string, e: unknown, signal: AbortSignal, lost: () => boolean): Promise<Outcome> {
     let outcome = classify(e)
     // A 403 or 404 only means the app can't be reached *now*: it is confirmed by asking for the
     // app itself, which is answered for anyone who may open it.
     if (outcome.kind === 'attention' && outcome.reason === 'access') {
       const item = await this.store.getItem(id)
       if (item) {
-        const revoked = await this.revoked(item)
+        const revoked = await this.revoked(item, signal)
+        // An answer that came after this send was let go of says nothing that may be acted on.
+        if (!this.live(signal)) return lost() ? { kind: 'skipped' } : this.letGo(id)
         outcome = { ...outcome, revoked }
         if (revoked) await this.deps.onRevoked?.(item, outcome.error)
       }
     }
+    if (!this.live(signal)) return lost() ? { kind: 'skipped' } : this.letGo(id)
     // The wrong account is not the item's failure: it waits, as it was, for its owner.
     const result = outcome
     try {
@@ -625,9 +664,9 @@ export class SyncEngine {
     return outcome
   }
 
-  private async revoked(item: OutboxItem): Promise<boolean> {
+  private async revoked(item: OutboxItem, signal: AbortSignal): Promise<boolean> {
     try {
-      await this.request(item.base, { headers: this.headers })
+      await this.request(item.base, { headers: this.headers, signal })
       return false
     } catch (e) {
       return e instanceof ApiError && (e.status === 403 || e.status === 404)

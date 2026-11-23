@@ -21,7 +21,7 @@ import {
   forgetLast,
   type LastUser,
   lastUser,
-  markerStuck,
+  offlineRefused,
   onAccountSignal,
   rememberUser,
   watchAccount,
@@ -101,11 +101,14 @@ export function setSyncDeps(next: SyncDeps) {
 // be told apart (it can't be opened, or read, or cut down: a newer version's, or a storage error
 // that may pass) is never deleted: it stays as it is, sealed, and is looked at again at the next
 // sign-in. Losing someone's unsent records is worse than keeping a database too long.
-async function sweep(user: number): Promise<Foreign | null> {
+async function sweep(user: number, current: () => boolean): Promise<Foreign | null> {
   const others = readUsers().filter((id) => id !== user)
   const keep: number[] = []
   const foreign: Foreign = { users: [], count: 0 }
   for (const id of others) {
+    // Whoever signs in here now is the one these databases are dealt with for: if that changed
+    // while this ran, nothing more is touched.
+    if (!current()) throw new Lapsed()
     let store: OfflineStore
     try {
       store = await OfflineStore.open(id)
@@ -114,15 +117,16 @@ async function sweep(user: number): Promise<Foreign | null> {
       continue
     }
     try {
-      const unsent = await store.unsynced()
-      if (unsent.length > 0) {
+      // One transaction decides: nothing unsent and the database is marked and deleted, or only
+      // the unsent records stay. A record a stale tab commits meanwhile is counted, never deleted.
+      const unsent = await store.retireOrKeepUnsent()
+      if (unsent.length === 0) {
+        await store.destroy()
+      } else {
         keep.push(id)
         foreign.users.push(id)
         foreign.count += unsent.length
-        await store.keepOnlyUnsent()
         store.close()
-      } else {
-        await store.destroy()
       }
     } catch {
       // Not read, cut down or deleted: whatever it holds stays, and is never opened for this person.
@@ -130,9 +134,13 @@ async function sweep(user: number): Promise<Foreign | null> {
       if (!keep.includes(id)) keep.push(id)
     }
   }
+  if (!current()) throw new Lapsed()
   writeUsers([...keep, user])
   return foreign.count > 0 ? foreign : null
 }
+
+// The account signed in on this browser changed while an activation was under way.
+class Lapsed extends Error {}
 
 // This tab learns that the account signed in on this browser is no longer the one it holds (another
 // tab signed in as someone else, or out; the server refused a request as another account's): it
@@ -182,35 +190,59 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
   const attempt = (async () => {
     await teardown(false)
     // A browser whose marker can't be trusted opens no database offline.
-    if (!name && markerStuck()) {
+    if (!name && (await offlineRefused())) {
       set({ runtime: null, problem: 'unavailable', foreign: null })
       return state
     }
     // The browser is this account's from here on, whatever becomes of opening its database: an
     // error never leaves the last account's name for the next start to open. When the marker can't
     // be moved it is cleared, and when it can't be, offline starts are refused (account.ts).
-    if (name) rememberUser({ id: user, name })
-    const foreign = await sweep(user)
+    const marker = name ? rememberUser({ id: user, name }) : 'ok'
+    // The account epoch: who the browser's marker names. Every step of this that waits re-checks
+    // it before it deletes, opens or shows anything, so an account that signed in meanwhile (in
+    // another tab: this tab has no runtime yet to hear it with) is never acted against or shown
+    // this account's database.
+    const current = () => {
+      const who = lastUser()
+      return marker === 'ok' ? who?.id === user : who === null || who.id === user
+    }
+    const abandon = (store?: OfflineStore) => {
+      store?.close()
+      set({ runtime: null, problem: 'account', foreign: null })
+      return state
+    }
+    if (!current()) return abandon()
+    let foreign: Foreign | null
     try {
-      const store = await OfflineStore.open(user)
-      const engine = new SyncEngine(store, {
+      foreign = await sweep(user, current)
+    } catch (e) {
+      if (e instanceof Lapsed) return abandon()
+      throw e
+    }
+    let store: OfflineStore | undefined
+    try {
+      store = await OfflineStore.open(user)
+      if (!current()) return abandon(store)
+      const opened = store
+      const engine = new SyncEngine(opened, {
         // Who this browser says is signed in: a queue is sent only as its owner.
         signedIn: () => lastUser()?.id ?? null,
         // Back online: what was downloaded is asked about before the queue is sent.
-        revalidate: () => revalidate(store),
+        revalidate: () => revalidate(opened),
         ...deps,
         // The app can't be opened any more: the copy of its records goes, the queue stays.
         onRevoked: async (item, why) => {
-          await store.removeDownload(item)
+          await opened.removeDownload(item)
           await deps.onRevoked?.(item, why)
         },
       })
       const stop = engine.start()
-      set({ runtime: { user, store, engine, stop }, problem: null, foreign })
+      set({ runtime: { user, store: opened, engine, stop }, problem: null, foreign })
       // Whether what was downloaded may still be kept (access lost, downloads turned off, fewer
       // records readable): asked as soon as the server can be, and a refusal removes the copy.
-      void revalidate(store).catch(() => {})
+      void revalidate(opened).catch(() => {})
     } catch (e) {
+      store?.close()
       set({ runtime: null, problem: e instanceof SchemaTooNew ? 'schema' : 'unavailable', foreign })
     }
     return state
@@ -234,23 +266,59 @@ export async function discardForeign(): Promise<void> {
 // in the open database if it is the one in use, else by opening the user's (and closing it). A
 // database that can't be opened or counted is not zero: `unreadable` says why, and the person is
 // told that unsent records may exist that this version can't check.
-export type Unsent = { count: number; unreadable: 'schema' | 'unavailable' | null }
+export type Unsent = { count: number; ids: string[]; unreadable: 'schema' | 'unavailable' | null }
 
 export async function unsentOf(user: number): Promise<Unsent> {
   const runtime = state.runtime
+  const found = (items: { id: string }[]): Unsent => ({
+    count: items.length,
+    ids: items.map((i) => i.id),
+    unreadable: null,
+  })
   // A browser with no IndexedDB at all can hold nothing: that is zero, not unknown.
-  if (typeof indexedDB === 'undefined') return { count: 0, unreadable: null }
+  if (typeof indexedDB === 'undefined') return found([])
   try {
-    if (runtime?.user === user) return { count: (await runtime.store.unsynced()).length, unreadable: null }
+    if (runtime?.user === user) return found(await runtime.store.unsynced())
     const store = await OfflineStore.open(user)
     try {
-      return { count: (await store.unsynced()).length, unreadable: null }
+      return found(await store.unsynced())
     } finally {
       store.close()
     }
   } catch (e) {
-    return { count: 0, unreadable: e instanceof SchemaTooNew ? 'schema' : 'unavailable' }
+    return { count: 0, ids: [], unreadable: e instanceof SchemaTooNew ? 'schema' : 'unavailable' }
   }
+}
+
+// The first half of signing out, and the only thing that decides whether a database may go: in one
+// transaction per database (the user's, and the one this tab holds), it is checked that nothing
+// unsent is in it beyond `approved` (what the person was shown and agreed to lose), and if so the
+// database is emptied and marked as being deleted, so nothing can be committed to it from then on
+// (a stale tab, another tab of the same account). Answers the unsent records that are there and
+// were not approved: then nothing was changed, and the person is asked again. A database that
+// can't be opened is not looked at here: the person already chose what happens to it.
+export async function settle(user: number | undefined, approved: ReadonlySet<string> = new Set()): Promise<string[]> {
+  if (opening) await opening.catch(() => {})
+  const runtime = state.runtime
+  const users = [...new Set([runtime?.user, user].filter((n): n is number => n !== undefined))]
+  const left: string[] = []
+  for (const id of users) {
+    let store = runtime?.user === id ? runtime.store : undefined
+    const own = !store
+    try {
+      store ??= await OfflineStore.open(id)
+    } catch {
+      continue
+    }
+    try {
+      left.push(...(await store.retireOrKeepUnsent(approved, false)))
+    } catch {
+      // Not read: the person's choice (they were told) decides, as it did.
+    } finally {
+      if (own) store.close()
+    }
+  }
+  return left
 }
 
 async function teardown(purge: boolean, user?: number): Promise<void> {
@@ -286,19 +354,28 @@ export async function deactivate({
   purge,
   user,
   keep,
+  approved,
 }: {
   purge: boolean
   user?: number
   keep?: boolean
-}): Promise<void> {
+  approved?: ReadonlySet<string>
+}): Promise<string[]> {
   if (opening) await opening.catch(() => {})
   if (keep && !purge) {
     if (user !== undefined) writeUsers([...readUsers(), user])
     await teardown(false)
     forgetLast(user)
-    return
+    return []
+  }
+  // Deleting is conditional on there being nothing unsent that the person didn't approve: if some
+  // appeared since they were asked, everything stays (and is the answer, for the caller to say).
+  if (purge) {
+    const left = await settle(user, approved)
+    if (left.length > 0) return left
   }
   await teardown(purge, user)
+  return []
 }
 
 // Removes every downloaded app of the user's, and what was queued for it stays. (Used when the

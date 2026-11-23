@@ -23,6 +23,8 @@ export const DOWNLOADS = 'downloads'
 export const OUTBOX = 'outbox'
 export const BLOBS = 'blobs'
 export const META = 'meta'
+// The meta row that says the database is being deleted: nothing is written to it from then on.
+const RETIRED = 'retired'
 
 // What each version added. A new version appends here (never edits one that shipped) and raises
 // SCHEMA_VERSION; an upgrade runs every step the database hasn't had.
@@ -158,7 +160,20 @@ export class OfflineStore {
   }
 
   static async open(user: number): Promise<OfflineStore> {
-    return new OfflineStore(user, await openDatabase(OfflineStore.databaseName(user), SCHEMA_VERSION, MIGRATIONS))
+    const name = OfflineStore.databaseName(user)
+    const db = await openDatabase(name, SCHEMA_VERSION, MIGRATIONS)
+    // A database whose purge began (it was found empty, and marked) but did not finish: it is empty
+    // by construction, and goes before it is used again.
+    let retired = false
+    try {
+      retired = (await runTx(db, [META], 'readonly', (tx) => tx.store(META).get(RETIRED))) !== undefined
+    } catch {
+      // Not read: used as it is.
+    }
+    if (!retired) return new OfflineStore(user, db)
+    db.close()
+    await deleteDatabase(name)
+    return new OfflineStore(user, await openDatabase(name, SCHEMA_VERSION, MIGRATIONS))
   }
 
   // Called after every change made through this store (another tab's are seen the next time
@@ -215,6 +230,9 @@ export class OfflineStore {
   async enqueue(item: Omit<OutboxItem, 'seq'>, blobs: BlobRow[]): Promise<OutboxItem> {
     return this.keep([OUTBOX, BLOBS, META], async (tx) => {
       const meta = tx.store<{ key: string; value: number }>(META)
+      // A database that was found empty and marked for deletion takes nothing more: the record is
+      // reported as not saved, and the person keeps their input.
+      if ((await meta.get(RETIRED)) !== undefined) throw new NotSaved('unavailable')
       const seq = ((await meta.get('seq'))?.value ?? 0) + 1
       await meta.put({ key: 'seq', value: seq })
       const saved = { ...item, seq }
@@ -289,23 +307,40 @@ export class OfflineStore {
     return (await this.listItems()).filter((i) => i.state !== 'synced')
   }
 
-  // What remains when the account is no longer the one signed in here: only the records the server
-  // hasn't acknowledged, with their photos. Everything downloaded goes, and so do the records
-  // that were sent (and what they hold of the server's data). The unsent are the person's own
-  // work, which they send by signing in as the account again, or discard.
-  async keepOnlyUnsent(): Promise<void> {
-    await this.keep([DOWNLOADS, OUTBOX, BLOBS], async (tx) => {
+  // The one step that decides what becomes of a database that is let go of, in a single
+  // transaction, so a record committed meanwhile is never lost between a count and a deletion:
+  //   - nothing unsent (or only what `approved` names: records the person was shown and agreed to
+  //     lose): everything is cleared and the database is marked as being deleted, so that nothing
+  //     can be written to it after this; the answer is none, and the caller deletes it (`destroy`);
+  //   - otherwise: only the records the server hasn't acknowledged are kept, with their photos
+  //     (everything downloaded goes, and so do the records that were sent and what they hold of the
+  //     server's data), and the answer is which; the unsent are the person's own work, which
+  //     they send by signing in as the account again, or discard. (`seal: false`, for an account
+  //     still signed in, leaves the database exactly as it is instead.)
+  async retireOrKeepUnsent(approved: ReadonlySet<string> = new Set(), seal = true): Promise<string[]> {
+    return this.keep([DOWNLOADS, OUTBOX, BLOBS, META], async (tx) => {
+      const outbox = tx.store<OutboxItem>(OUTBOX)
+      const items = await outbox.getAll()
+      const unsent = items.filter((i) => i.state !== 'synced')
+      const everyApproved = unsent.every((i) => approved.has(i.id))
+      if (!everyApproved && !seal) return unsent.map((i) => i.id)
       const downloads = tx.store<Download>(DOWNLOADS)
       for (const d of await downloads.getAll()) await downloads.delete(d.key)
-      const outbox = tx.store<OutboxItem>(OUTBOX)
       const blobs = tx.store<BlobRow>(BLOBS)
+      if (everyApproved) {
+        for (const i of items) await outbox.delete(i.id)
+        for (const b of await blobs.getAll()) await blobs.delete(b.id)
+        await tx.store<{ key: string; value: number }>(META).put({ key: RETIRED, value: 1 })
+        return []
+      }
       const gone = new Set<string>()
-      for (const i of await outbox.getAll()) {
+      for (const i of items) {
         if (i.state !== 'synced') continue
         gone.add(i.id)
         await outbox.delete(i.id)
       }
       for (const b of await blobs.getAll()) if (gone.has(b.item)) await blobs.delete(b.id)
+      return unsent.map((i) => i.id)
     })
   }
 
