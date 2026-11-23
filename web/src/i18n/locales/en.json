@@ -90,6 +90,51 @@
       "reader": "Reader",
       "readerHelp": "sees everyone’s records",
       "line": "{role}: {help}"
+    },
+    "notPublished": "Not published",
+    "unpublishedChanges": "Unpublished changes",
+    "publish": "Publish",
+    "publishNamed": "Publish {name}",
+    "previewDraft": "Preview draft",
+    "previewDraftNamed": "Preview the draft of {name}",
+    "stage": {
+      "live": "Live · release {number}",
+      "draft": "Draft · not published",
+      "showDraft": "Preview the draft",
+      "showLive": "Back to the live release",
+      "draftNote": "This is a preview of changes that aren’t published yet. Nobody else sees it, and its buttons don’t change any data.",
+      "unpublishedNote": "You are looking at the live release, which everyone uses. It has changes that aren’t published yet.",
+      "notPublished": "This app isn’t published yet: it can be launched once someone who may publish it does.",
+      "draftNoActions": "This is a draft preview: publish the app to use it."
+    },
+    "releases": {
+      "open": "History",
+      "openNamed": "Release history of {name}",
+      "title": "Releases",
+      "none": "No releases yet.",
+      "number": "Release {number}",
+      "live": "Live",
+      "published": "Published {date}",
+      "publishedBy": "Published by {name}, {date}",
+      "rollBack": "Roll back",
+      "rollBackNamed": "Roll back to release {number}",
+      "rollBackNote": "Rolling back makes an earlier release the live one. It never changes the data. If that release declares different fields, it is refused unless the data fits it."
+    },
+    "migration": {
+      "title": "This publish may change how your app treats its data",
+      "intro": "Nothing is deleted or rewritten, but the live app may treat stored rows differently. You may not be able to see which rows, so every change that could affect one is listed. Publish only if that is what you want.",
+      "field_removed": "“{field}” is removed. Rows that have a value for it, if any, keep it stored, unseen.",
+      "field_type_changed": "“{field}” changes type. Rows that have a value for it, if any, keep it stored, but it isn’t shown.",
+      "field_required": "“{field}” becomes required. Rows that lack it, if any, will be refused when they are changed.",
+      "field_narrowed": "The limits of “{field}” change, and may refuse values that stored rows have.",
+      "confirm": "I understand these changes",
+      "publish": "Publish with these changes"
+    },
+    "updateRequired": {
+      "title": "Update required",
+      "message": "This app was published with features this version of TaskTo.AI doesn’t have yet, so it can’t be shown here.",
+      "needs": "Needs: {needs}",
+      "update": "Update TaskTo.AI"
     }
   },
   "auth": {
@@ -405,7 +450,17 @@
     "app_forbidden": "Your role in this app doesn’t allow that.",
     "app_roles_invalid": "Those roles can’t be saved: pick known roles, once per member.",
     "app_roles_not_member": "Roles can only go to members of the space.",
-    "app_roles_lockout": "You can’t remove your own right to manage this app’s roles."
+    "app_roles_lockout": "You can’t remove your own right to manage this app’s roles.",
+    "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
+    "app_not_published": "This app isn’t published yet: it can be launched once someone who may publish it does.",
+    "app_release_not_found": "That release of the app doesn’t exist.",
+    "app_release_outdated": "This screen is from an older release of the app (release {release}; the live one is {live}). Reload the app to continue.",
+    "app_release_incompatible": "The app’s data doesn’t fit that release, so it can’t go back to it. Fields that don’t fit: {fields}.",
+    "app_release_already_live": "That release is already the live one.",
+    "app_nothing_to_publish": "There is nothing to publish: the draft is the live release.",
+    "app_migration_required": "This publish changes the data’s schema and needs your confirmation first.",
+    "app_migration_unneeded": "Those changes aren’t part of this publish any more: reload the app and try again.",
+    "app_migration_invalid": "The confirmation of the schema changes isn’t valid."
   },
   "language": {
     "label": "Language",

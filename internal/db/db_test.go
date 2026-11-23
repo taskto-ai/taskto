@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -602,13 +603,135 @@ func TestAppRolesMigrationAddsNoAssignments(t *testing.T) {
 	}
 }
 
+// TestAppReleasesMigrationMakesEveryAppRelease1 upgrades a database with apps from before drafts
+// and releases: each becomes release 1, live, with its definition as its draft too (and saying
+// its format version and what it needs), and no role, row, version or access changes.
+func TestAppReleasesMigrationMakesEveryAppRelease1(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
+	if _, err := migrate(ctx, sqlDB, upTo(t, 23)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "apps", "examples", "expenses.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var example struct{ Definition json.RawMessage }
+	if err := json.Unmarshal(raw, &example); err != nil {
+		t.Fatal(err)
+	}
+	// A screen that calls a function of the catalog, and one that calls a name it doesn't have.
+	called := `{"components":[{"id":"root","component":"Column","children":["when","odd"]},
+		{"id":"when","component":"Text","text":{"call":"formatDate","args":{"value":"2024-01-02","format":"yyyy"}}},
+		{"id":"odd","component":"Text","text":{"call":"notAFunction","args":{}}}],"actions":{}}`
+	for _, q := range []struct {
+		q    string
+		args []any
+	}{
+		{`INSERT INTO users (id, email, name, password_hash) VALUES (1, 'a@example.com', 'A', 'x'), (2, 'b@example.com', 'B', 'x')`, nil},
+		{`INSERT INTO workspaces (id, name) VALUES (1, 'One')`, nil},
+		{`INSERT INTO memberships (workspace_id, user_id, role) VALUES (1, 1, 'admin'), (1, 2, 'member')`, nil},
+		{`INSERT INTO spaces (id, workspace_id, kind, name) VALUES (10, 1, 'shared', 'Team')`, nil},
+		{`INSERT INTO space_members (space_id, user_id, role) VALUES (10, 1, 'editor'), (10, 2, 'viewer')`, nil},
+		{`INSERT INTO apps (id, space_id, name, definition, version, updated_by, archived_at) VALUES (5, 10, 'Tracker', ?, 7, 2, NULL)`, []any{string(example.Definition)}},
+		{`INSERT INTO apps (id, space_id, name, definition, archived_at) VALUES (6, 10, 'Calls', ?, '2024-01-01T00:00:00.000Z')`, []any{called}},
+		{`INSERT INTO apps (id, space_id, name, definition) VALUES (7, 10, 'Empty', '{}')`, nil},
+		{`INSERT INTO app_rows (app_id, data, created_by) VALUES (5, '{"description":"x","amount":1}', 1), (5, '{}', 2)`, nil},
+		{`INSERT INTO app_roles (app_id, user_id, role) VALUES (5, 2, 'reader')`, nil},
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q.q, q.args...); err != nil {
+			t.Fatalf("%s: %v", q.q, err)
+		}
+	}
+	if _, err := Migrate(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+
+	type got struct {
+		live, differs, version int
+		draft, release, reqs   string
+		by                     sql.NullInt64
+		archived               bool
+	}
+	read := func(id int) got {
+		t.Helper()
+		var g got
+		if err := sqlDB.QueryRowContext(ctx, `
+			SELECT a.live_release, a.draft_differs, a.version, a.definition, r.definition, r.requires, r.published_by, a.archived_at IS NOT NULL
+			FROM apps a JOIN app_releases r ON r.app_id = a.id AND r.number = a.live_release WHERE a.id = ?`, id).
+			Scan(&g.live, &g.differs, &g.version, &g.draft, &g.release, &g.reqs, &g.by, &g.archived); err != nil {
+			t.Fatalf("app %d: %v", id, err)
+		}
+		return g
+	}
+	tracker := read(5)
+	wantReqs := `["component.Button","component.Column","component.List","component.Row","component.Stat","component.Text","component.TextField"]`
+	if tracker.live != 1 || tracker.differs != 0 || tracker.version != 7 || tracker.reqs != wantReqs || tracker.draft != tracker.release ||
+		tracker.by.Int64 != 2 || tracker.archived {
+		t.Fatalf("tracker = %+v", tracker)
+	}
+	var v int
+	var inDef string
+	if err := sqlDB.QueryRowContext(ctx, `SELECT json_extract(definition, '$.definition_version'), json_extract(definition, '$.requires') FROM apps WHERE id = 5`).Scan(&v, &inDef); err != nil || v != 1 || inDef != wantReqs {
+		t.Fatalf("the definition says version %d, requires %s (%v)", v, inDef, err)
+	}
+	// Only the catalog's own functions count; an app taken offline stays so; an empty definition is fine.
+	if g := read(6); g.reqs != `["component.Column","component.Text","function.formatDate"]` || !g.archived {
+		t.Fatalf("calls = %+v", g)
+	}
+	if g := read(7); g.reqs != `[]` || g.live != 1 {
+		t.Fatalf("empty = %+v", g)
+	}
+	// No role, row or creator changed.
+	var roles, rows, creators int
+	if err := sqlDB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM app_roles), count(*), count(created_by) FROM app_rows`).Scan(&roles, &rows, &creators); err != nil {
+		t.Fatal(err)
+	}
+	if roles != 1 || rows != 2 || creators != 2 {
+		t.Fatalf("roles %d, rows %d, creators %d", roles, rows, creators)
+	}
+	// A release is immutable and numbered per app.
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE app_releases SET definition = '{}' WHERE app_id = 5`); err == nil {
+		t.Fatal("a release was edited")
+	}
+	if _, err := sqlDB.ExecContext(ctx, `INSERT INTO app_releases (app_id, number, definition, definition_version, requires) VALUES (5, 2, '{}', 1, '[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE apps SET live_release = 2 WHERE id = 5`); err != nil {
+		t.Fatalf("serving release 2: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE apps SET live_release = 3 WHERE id = 5`); err == nil {
+		t.Fatal("an app served a release it doesn't have")
+	}
+	// Its publisher can't be changed, but an account that goes leaves it unattributed
+	// (published_by ON DELETE SET NULL).
+	for _, q := range []string{
+		`INSERT INTO users (id, email, name, password_hash) VALUES (30, 'p@example.com', 'P', 'x')`,
+		`INSERT INTO app_releases (app_id, number, definition, definition_version, requires, published_by) VALUES (5, 3, '{}', 1, '[]', 30)`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE app_releases SET published_by = 30 WHERE number = 3`); err == nil {
+		t.Fatal("a release's publisher was changed")
+	}
+	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM users WHERE id = 30`); err != nil {
+		t.Fatalf("deleting a user who published a release: %v", err)
+	}
+	var by sql.NullInt64
+	if err := sqlDB.QueryRowContext(ctx, `SELECT published_by FROM app_releases WHERE app_id = 5 AND number = 3`).Scan(&by); err != nil || by.Valid {
+		t.Fatalf("release's publisher after the user went = %v, %v", by, err)
+	}
+}
+
 // TestRecordRevisionsMigrationKeepsExistingRows upgrades a database whose apps have rows from
 // before revisions: each row is revision 1, live, with one synthetic history entry holding its
 // data, credited to its creator and dated at its creation; and history is append-only.
 func TestRecordRevisionsMigrationKeepsExistingRows(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
-	if _, err := migrate(ctx, sqlDB, upTo(t, 22)); err != nil {
+	if _, err := migrate(ctx, sqlDB, upTo(t, 21)); err != nil {
 		t.Fatal(err)
 	}
 	for _, q := range []string{

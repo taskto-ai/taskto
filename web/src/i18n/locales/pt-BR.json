@@ -91,6 +91,51 @@
       "reader": "Leitor",
       "readerHelp": "vê os registros de todos",
       "line": "{role}: {help}"
+    },
+    "notPublished": "Não publicado",
+    "unpublishedChanges": "Alterações não publicadas",
+    "publish": "Publicar",
+    "publishNamed": "Publicar {name}",
+    "previewDraft": "Ver o rascunho",
+    "previewDraftNamed": "Ver o rascunho de {name}",
+    "stage": {
+      "live": "No ar · versão {number}",
+      "draft": "Rascunho · não publicado",
+      "showDraft": "Ver o rascunho",
+      "showLive": "Voltar à versão no ar",
+      "draftNote": "Esta é uma prévia de alterações ainda não publicadas. Mais ninguém a vê, e os botões dela não alteram nenhum dado.",
+      "unpublishedNote": "Você está vendo a versão no ar, a que todos usam. Ela tem alterações que ainda não foram publicadas.",
+      "notPublished": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer.",
+      "draftNoActions": "Esta é uma prévia do rascunho: publique o app para usá-lo."
+    },
+    "releases": {
+      "open": "Histórico",
+      "openNamed": "Histórico de versões de {name}",
+      "title": "Versões",
+      "none": "Ainda não há versões.",
+      "number": "Versão {number}",
+      "live": "No ar",
+      "published": "Publicada em {date}",
+      "publishedBy": "Publicada por {name}, {date}",
+      "rollBack": "Reverter",
+      "rollBackNamed": "Reverter para a versão {number}",
+      "rollBackNote": "Reverter coloca uma versão anterior no ar. Isso nunca altera os dados. Se essa versão declara campos diferentes, é recusado a menos que os dados caibam nela."
+    },
+    "migration": {
+      "title": "Esta publicação pode mudar como o app trata os dados",
+      "intro": "Nada é apagado nem reescrito, mas o app no ar pode tratar linhas guardadas de outro jeito. Talvez você não possa ver quais linhas, então toda mudança que poderia afetar uma é listada. Publique só se for isso que você quer.",
+      "field_removed": "“{field}” foi removido. As linhas que têm um valor nele, se houver, continuam com ele guardado, sem aparecer.",
+      "field_type_changed": "“{field}” muda de tipo. As linhas que têm um valor nele, se houver, continuam com ele guardado, mas ele não aparece.",
+      "field_required": "“{field}” passa a ser obrigatório. As linhas que não têm valor, se houver, serão recusadas quando forem alteradas.",
+      "field_narrowed": "Os limites de “{field}” mudam e podem recusar valores que as linhas guardadas têm.",
+      "confirm": "Entendo essas mudanças",
+      "publish": "Publicar com essas mudanças"
+    },
+    "updateRequired": {
+      "title": "Atualização necessária",
+      "message": "Este app foi publicado com recursos que esta versão do TaskTo.AI ainda não tem, então não pode ser mostrado aqui.",
+      "needs": "Precisa de: {needs}",
+      "update": "Atualizar o TaskTo.AI"
     }
   },
   "auth": {
@@ -406,7 +451,17 @@
     "app_forbidden": "Seu papel neste app não permite isso.",
     "app_roles_invalid": "Não dá para salvar esses papéis: escolha papéis conhecidos, uma vez por membro.",
     "app_roles_not_member": "Papéis só podem ser dados a membros do espaço.",
-    "app_roles_lockout": "Você não pode remover o seu próprio direito de gerenciar os papéis deste app."
+    "app_roles_lockout": "Você não pode remover o seu próprio direito de gerenciar os papéis deste app.",
+    "app_definition_version": "Este app usa um formato de definição (versão {version}) que o servidor não lê; ele lê até a {supported}.",
+    "app_not_published": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer.",
+    "app_release_not_found": "Essa versão do app não existe.",
+    "app_release_outdated": "Esta tela é de uma versão antiga do app (versão {release}; a no ar é a {live}). Recarregue o app para continuar.",
+    "app_release_incompatible": "Os dados do app não cabem nessa versão, então ele não pode voltar a ela. Campos que não cabem: {fields}.",
+    "app_release_already_live": "Essa versão já é a que está no ar.",
+    "app_nothing_to_publish": "Não há nada para publicar: o rascunho é a versão no ar.",
+    "app_migration_required": "Esta publicação muda o esquema dos dados e precisa da sua confirmação antes.",
+    "app_migration_unneeded": "Essas mudanças não fazem mais parte desta publicação: recarregue o app e tente de novo.",
+    "app_migration_invalid": "A confirmação das mudanças de esquema não é válida."
   },
   "language": {
     "label": "Idioma",

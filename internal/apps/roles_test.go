@@ -190,7 +190,7 @@ func TestOwnRecordsAreTheOnesTheUserCreated(t *testing.T) {
 	def.Actions["edit_expense"] = Action{Kind: ActionUpdate}
 	rec := w.alice.do(http.MethodPost, appsPath(s, ""), map[string]any{"name": "Editable", "definition": def})
 	expect(t, rec, http.StatusCreated)
-	a := decode[App](t, rec)
+	a := w.publish(w.alice, s, decode[App](t, rec))
 	w.add(w.alice, s, a, "alice-row", "1")
 	w.add(w.owner, s, a, "owner-row", "2")
 	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppUser), grant(w.alice.id, access.AppRoles...))
@@ -511,40 +511,69 @@ func TestUnnamedMembersOfARestrictedAppSeeNothing(t *testing.T) {
 	}
 }
 
-// A builder who can't read the records can't change the collection: its check against every
-// row would name the rows that don't fit, and a bound tightened again and again would read
-// their values out. The rest of the definition stays theirs to change.
-func TestBuilderWithoutDataCantProbeRowsThroughTheCollection(t *testing.T) {
-	w := newWorld(t)
-	s, a := w.shared, w.sharedApp
-	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder))
-	cur := w.view(w.alice, s, a)
-	if cur.Access.ReadRecords != access.ScopeNone {
-		t.Fatalf("builder reads %s", cur.Access.ReadRecords)
-	}
-	patch := func(def *Definition) *httptest.ResponseRecorder {
-		return w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": cur.Version, "definition": def})
-	}
-	// "team-lunch" has amount 3: a max of 1 would not fit it.
-	tight := *cur.Definition
-	tight.Collection.Fields = append([]Field(nil), cur.Definition.Collection.Fields...)
-	one := 1.0
-	for i := range tight.Collection.Fields {
-		if tight.Collection.Fields[i].Name == "amount" {
-			tight.Collection.Fields[i].Max = &one
+// withMax is def with the amount field bounded by max.
+func withMax(def Definition, max float64) *Definition {
+	def.Collection.Fields = append([]Field(nil), def.Collection.Fields...)
+	for i := range def.Collection.Fields {
+		if def.Collection.Fields[i].Name == "amount" {
+			def.Collection.Fields[i].Max = &max
 		}
 	}
-	rec := patch(&tight)
-	expectForbidden(t, rec, "read_records")
-	if strings.Contains(rec.Body.String(), "row") {
-		t.Fatalf("the refusal tells of rows: %s", rec.Body)
+	return &def
+}
+
+// A builder and publisher who can't read the records can still change the collection of the
+// draft and publish it, and what they are told of the rows is nothing: a bound that some row
+// breaks and one that none does get the same answer, so a bound tightened again and again reads
+// no value out. Someone who reads every row is told only of the changes a row is affected by.
+func TestPublisherWithoutDataIsToldOfNoRows(t *testing.T) {
+	w := newWorld(t)
+	s, a := w.shared, w.sharedApp
+	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder, access.AppPublisher))
+	if got := w.view(w.alice, s, a).Access.ReadRecords; got != access.ScopeNone {
+		t.Fatalf("builder reads %s", got)
 	}
-	// The same collection: allowed, and nothing to tell.
-	expect(t, patch(cur.Definition), http.StatusOK)
-	// With the data, the collection is theirs to change, and its check is theirs to see.
+	// "team-lunch" has amount 3: a max of 1 doesn't fit it, a max of 1000 fits every row.
+	refusal := func(u *user, max float64) *httptest.ResponseRecorder {
+		cur := w.view(u, s, a)
+		rec := u.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": cur.Version, "definition": withMax(*cur.Draft, max)})
+		expect(t, rec, http.StatusOK)
+		cur = decode[App](t, rec)
+		return u.do(http.MethodPost, appPath(s, a.ID, "/publish"), map[string]any{"version": cur.Version, "acknowledge": []SchemaChange{}})
+	}
+	tight, loose := refusal(w.alice, 1), refusal(w.alice, 1000)
+	for _, rec := range []*httptest.ResponseRecorder{tight, loose} {
+		expect(t, rec, http.StatusConflict)
+		reply := decode[struct {
+			Code   string
+			Params struct{ Changes []SchemaChange }
+		}](t, rec)
+		if reply.Code != "app_migration_required" || len(reply.Params.Changes) != 1 || reply.Params.Changes[0] != (SchemaChange{ChangeFieldNarrowed, "amount"}) {
+			t.Fatalf("refusal = %s", rec.Body)
+		}
+		for _, leak := range []string{"team-lunch", "rows"} {
+			if strings.Contains(rec.Body.String(), leak) {
+				t.Fatalf("the refusal tells of the rows (%q): %s", leak, rec.Body)
+			}
+		}
+	}
+	if tight.Body.String() != loose.Body.String() {
+		t.Fatalf("the rows decide the answer:\n%s\n%s", tight.Body, loose.Body)
+	}
+
+	// Acknowledged, it publishes; rolling back to the first release, whose collection isn't
+	// the live one's, would tell whether the rows fit it, so it needs every row read.
+	cur := w.view(w.alice, s, a)
+	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/publish"),
+		map[string]any{"version": cur.Version, "acknowledge": []SchemaChange{{ChangeFieldNarrowed, "amount"}}}), http.StatusOK)
 	cur = w.view(w.alice, s, a)
-	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder, access.AppDataManager))
-	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": cur.Version, "definition": &tight}), http.StatusBadRequest)
+	rec := w.alice.do(http.MethodPost, appPath(s, a.ID, "/rollback"), map[string]any{"version": cur.Version, "release": 1})
+	expectForbidden(t, rec, "read_records")
+
+	// Reading every row, the same loose bound is a change no row is affected by.
+	w.mustSetRoles(w.alice, s, a, grant(w.alice.id, access.AppBuilder, access.AppPublisher, access.AppDataManager))
+	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/rollback"), map[string]any{"version": w.view(w.alice, s, a).Version, "release": 1}), http.StatusOK)
+	expect(t, refusal(w.alice, 1000), http.StatusOK)
 }
 
 // Roles are for members of the app's space: leaving it drops them, so rejoining, or the app

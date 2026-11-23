@@ -111,7 +111,9 @@ The 19 tools of [agent-tools.md](agent-tools.md#the-tools): `list_spaces`, `sear
 `list_docs`, `read_doc`, `write_doc`, the board tools of
 [boards-agent-tools.md](boards-agent-tools.md), and the app tools: `app_catalog`,
 `list_apps`, `show_app`, `list_app_rows` (an app's data), `create_app` and `update_app`.
-An app's actions are for the people using it, in the web app: no tool runs one. Read-only tools say so
+An app's actions are for the people using it, in the web app: no tool runs one. `create_app` and
+`update_app` save the app's draft; publishing it, and rolling back, are for a person who may publish
+the app, in the web app ([drafts and releases](api.md#drafts-and-releases)): no tool does either. Read-only tools say so
 (`readOnlyHint`), so a client can call them without asking you each time. Results and
 refusals are the conversation agent's: a refusal is a tool error (`isError`) saying why
 (`not found`, read-only, a stale version), for the model to act on. Their bounds are the

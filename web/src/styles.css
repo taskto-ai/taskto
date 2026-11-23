@@ -1317,6 +1317,99 @@ a.tt-button.tt-primary {
   gap: 0.75rem;
 }
 
+/* Drafts and releases: what an app shows says whether it is the live release or a draft. */
+
+.tt-app-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-block-start: 0.2rem;
+}
+
+.tt-stage {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-stage-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tt-stage-label {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid var(--tt-line-strong);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tt-stage-label[data-stage="live"] {
+  color: var(--tt-success);
+  border-color: currentColor;
+}
+
+.tt-stage-label[data-stage="draft"] {
+  color: var(--tt-warning);
+  border-color: currentColor;
+}
+
+.tt-app-update {
+  display: grid;
+  justify-items: start;
+  gap: 0.4rem;
+}
+
+.tt-app-migration,
+.tt-app-releases {
+  flex-basis: 100%;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-app-migration {
+  margin: 0;
+  min-inline-size: 0;
+}
+
+.tt-app-migration ul {
+  margin: 0;
+  padding-inline-start: 1.2rem;
+}
+
+.tt-app-releases h3 {
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.tt-release-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-release {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+}
+
+.tt-release-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 /* Settings: tabs, panels of rows, forms in a row, and the consent to an endpoint. */
 
 .tt-tabs {

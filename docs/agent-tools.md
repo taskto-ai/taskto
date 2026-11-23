@@ -82,10 +82,10 @@ results, `error: <message>`.
 | `list_boards` … `set_blocked` | | The board tools of [boards-agent-tools.md](boards-agent-tools.md). |
 | `app_catalog` | | What an app may be made of: the components and their props, the functions, the field types, the actions, the rules, and the bundled example app. |
 | `list_apps` | `space_id`, `archived`? | A space's apps, without definitions; `archived: true` includes the offline ones. |
-| `show_app` | `space_id`, `app_id` | An app with its definition and `version`. |
-| `list_app_rows` | `space_id`, `app_id` | An app's data: the rows the user may read (all, or only their own: [App roles](api.md#app-roles)), oldest first, each with its `id`, its `_revision` and the fields its collection declares (deleted rows are not listed); an offline app's too. |
-| `create_app` | `space_id`, `name`, `definition` | Saves a new app in a space the user may write, checked strictly against the catalog ([api.md](api.md#personal-apps)). |
-| `update_app` | `space_id`, `app_id`, `version`, `name`?, `definition`?, `archived`? | Renames an app, replaces its definition (its rows must fit the new collection; the user must hold the design right), or takes it offline and back (the publish right). |
+| `show_app` | `space_id`, `app_id` | An app with its draft definition, its `version`, and the live release (number and needs, not its definition) with `unpublished_changes`. |
+| `list_app_rows` | `space_id`, `app_id` | An app's data: the rows the user may read (all, or only their own: [App roles](api.md#app-roles)), oldest first, each with its `id`, its `_revision` and the fields its live release's collection declares (deleted rows are not listed); an offline app's too. |
+| `create_app` | `space_id`, `name`, `definition` | Saves a new app, as a draft, in a space the user may write, checked strictly against the catalog ([api.md](api.md#personal-apps)); it is launched once a person publishes it. |
+| `update_app` | `space_id`, `app_id`, `version`, `name`?, `definition`?, `archived`? | Renames an app, replaces its **draft** definition (the user must hold the design right; the live release, which people use, is untouched until a person publishes the draft, [api.md](api.md#drafts-and-releases)), or takes it offline and back (the publish right). The agent has no tool to publish or roll back. |
 
 Only Markdown documents (`.md`) are read or written; other files are uploads, which only
 `list_docs` shows, with `versioned: false` for the unversioned ones (large files, audio

@@ -161,6 +161,27 @@ var functions = map[string]function{
 	"not": {args: map[string]prop{"value": req(kDynBool)}, returns: "boolean"},
 }
 
+// Capabilities are what a client's catalog can draw, named so a release can say which it needs: a
+// component is component.<Name>, a function function.<name>. A new component or function is a new
+// capability, so an app that uses it is not drawn by a client that lacks it. The list is sorted.
+func Capabilities() []string {
+	var all []string
+	for name := range components {
+		all = append(all, ComponentCapability(name))
+	}
+	for name := range functions {
+		all = append(all, FunctionCapability(name))
+	}
+	sort.Strings(all)
+	return all
+}
+
+// ComponentCapability is the capability of drawing component name.
+func ComponentCapability(name string) string { return "component." + name }
+
+// FunctionCapability is the capability of calling function name.
+func FunctionCapability(name string) string { return "function." + name }
+
 // Bounds of a screen.
 const (
 	MaxComponents = 300
@@ -174,55 +195,56 @@ const (
 // screenCheck validates one screen.
 type screenCheck struct {
 	actions map[string]Action // the events buttons may send
+	used    map[string]bool   // the capabilities the screen needs
 	ids     map[string]bool
 	refs    map[string][]string // component ID → the IDs it refers to
 }
 
 // checkComponents validates a screen's components and returns them re-encoded, so what is
 // stored is exactly what was checked (no duplicate keys, nothing the decoder skipped).
-func checkComponents(raw []json.RawMessage, actions map[string]Action) ([]json.RawMessage, error) {
+func checkComponents(raw []json.RawMessage, actions map[string]Action) ([]json.RawMessage, []string, error) {
 	if len(raw) == 0 {
-		return nil, invalidf("components: a screen needs at least its root component")
+		return nil, nil, invalidf("components: a screen needs at least its root component")
 	}
 	if len(raw) > MaxComponents {
-		return nil, invalidf("components: at most %d", MaxComponents)
+		return nil, nil, invalidf("components: at most %d", MaxComponents)
 	}
-	c := &screenCheck{actions: actions, ids: map[string]bool{}, refs: map[string][]string{}}
+	c := &screenCheck{actions: actions, used: map[string]bool{}, ids: map[string]bool{}, refs: map[string][]string{}}
 	decoded := make([]map[string]any, len(raw))
 	for i, r := range raw {
 		obj, err := decodeObject(r)
 		if err != nil {
-			return nil, invalidf("components[%d]: %v", i, err)
+			return nil, nil, invalidf("components[%d]: %v", i, err)
 		}
 		id, _ := obj["id"].(string)
 		if id == "" || len(id) > maxIDLen {
-			return nil, invalidf("components[%d]: id must be text of 1 to %d characters", i, maxIDLen)
+			return nil, nil, invalidf("components[%d]: id must be text of 1 to %d characters", i, maxIDLen)
 		}
 		if c.ids[id] {
-			return nil, invalidf("components[%d]: id %q is used twice", i, id)
+			return nil, nil, invalidf("components[%d]: id %q is used twice", i, id)
 		}
 		c.ids[id] = true
 		decoded[i] = obj
 	}
 	if !c.ids["root"] {
-		return nil, invalidf(`components: no component has the id "root"`)
+		return nil, nil, invalidf(`components: no component has the id "root"`)
 	}
 	out := make([]json.RawMessage, len(decoded))
 	for i, obj := range decoded {
 		id := obj["id"].(string)
 		if err := c.component(id, obj); err != nil {
-			return nil, invalidf("component %q: %v", id, err)
+			return nil, nil, invalidf("component %q: %v", id, err)
 		}
 		b, err := json.Marshal(obj)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out[i] = b
 	}
 	if err := c.references(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out, nil
+	return out, sortedKeys(c.used), nil
 }
 
 // decodeObject decodes one JSON object, keeping numbers as written.
@@ -242,6 +264,7 @@ func decodeObject(raw json.RawMessage) (map[string]any, error) {
 func (c *screenCheck) component(id string, obj map[string]any) error {
 	name, _ := obj["component"].(string)
 	spec, ok := components[name]
+	c.used[ComponentCapability(name)] = true
 	if !ok {
 		return fmt.Errorf("%q is not a component of the catalog (it has %s)", obj["component"], strings.Join(componentNames(), ", "))
 	}
@@ -419,6 +442,7 @@ func (c *screenCheck) dynamic(id string, k kind, v any, depth int) error {
 func (c *screenCheck) call(id string, o map[string]any, k kind, depth int) error {
 	name, _ := o["call"].(string)
 	fn, ok := functions[name]
+	c.used[FunctionCapability(name)] = true
 	if !ok {
 		return fmt.Errorf("%q is not a function of the catalog (it has %s)", o["call"], strings.Join(sortedKeys(functions), ", "))
 	}

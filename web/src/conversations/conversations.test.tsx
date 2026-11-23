@@ -531,6 +531,17 @@ test('a page that fails to load says so, and can be tried again', async () => {
 
 // Apps the agent saved, shown in the conversation.
 
+const everything = {
+  roles: ['builder', 'publisher', 'user', 'data_manager', 'reader'],
+  restricted: false,
+  view: true,
+  design: true,
+  publish: true,
+  submit: true,
+  manage_roles: true,
+  read_records: 'all',
+  modify_records: 'all',
+}
 const savedApp = (over: Record<string, unknown> = {}) => ({
   id: 1,
   space_id: 2,
@@ -538,6 +549,17 @@ const savedApp = (over: Record<string, unknown> = {}) => ({
   archived_at: null,
   version: 1,
   rows: 1,
+  access: everything,
+  live: {
+    number: 1,
+    definition_version: 1,
+    requires: ['component.Text'],
+    published_at: '2026-11-18T10:00:00.000Z',
+    published_by: null,
+    live: true,
+  },
+  unpublished_changes: false,
+  draft: { definition_version: 1, requires: ['component.Text'] },
   ...over,
 })
 
@@ -594,7 +616,7 @@ test("a saved app's screen shows in the conversation, as the server has it", asy
   }
   const calls = await showEntries(toolEntries(1, 'create_app', { text: JSON.stringify(savedApp()) }, args), {
     'GET /api/workspaces/1/spaces/2/apps/1': { body: savedApp() },
-    'GET /api/workspaces/1/spaces/2/apps/1/surface': { body: surface },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
   })
 
   const app = await screen.findByRole('region', { name: 'Expenses' })
@@ -604,19 +626,53 @@ test("a saved app's screen shows in the conversation, as the server has it", asy
   expect(screen.queryByText('From the arguments')).toBeNull()
   expect(appCalls(calls).map((c) => c.path)).toEqual([
     '/api/workspaces/1/spaces/2/apps/1',
-    '/api/workspaces/1/spaces/2/apps/1/surface',
+    '/api/workspaces/1/spaces/2/apps/1/surface?release=1',
   ])
+  // What it shows is labelled: the live release, which everyone uses.
+  expect(screen.getByText('Live · release 1')).toBeTruthy()
 })
 
 test('the open link opens the app on the Apps page', async () => {
   await showEntries(toolEntries(1, 'update_app', { text: JSON.stringify(savedApp({ version: 2 })) }), {
     'GET /api/workspaces/1/spaces/2/apps/1': { body: savedApp({ version: 2 }) },
-    'GET /api/workspaces/1/spaces/2/apps/1/surface': { body: surface },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
   })
   const open = await screen.findByRole('link', { name: 'Open Expenses in Apps' })
   expect(open.getAttribute('href')).toBe('/w/1/apps/2-1')
   fireEvent.click(open)
   await waitFor(() => expect(window.location.pathname).toBe('/w/1/apps/2-1'))
+})
+
+test('the agent changed the app: the conversation shows the live release, and the draft only on request', async () => {
+  const calls = await showEntries(toolEntries(1, 'update_app', { text: JSON.stringify(savedApp({ version: 2 })) }), {
+    'GET /api/workspaces/1/spaces/2/apps/1': { body: savedApp({ version: 2, unpublished_changes: true }) },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=draft': { body: surface },
+  })
+  // The live release is what people use, and it is said so; the agent's changes aren't in it.
+  await screen.findByText('Live · release 1')
+  expect(screen.getByText(/It has changes that aren’t published yet/)).toBeTruthy()
+  expect(appCalls(calls).some((c) => c.path.endsWith('release=draft'))).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Preview the draft' }))
+  await screen.findByText('Draft · not published')
+  await waitFor(() => expect(appCalls(calls).some((c) => c.path.endsWith('release=draft'))).toBe(true))
+})
+
+test('a new app the agent made is a draft preview for its builders and a note for the rest', async () => {
+  const fresh = { live: null, unpublished_changes: true }
+  await showEntries(toolEntries(1, 'create_app', { text: JSON.stringify(savedApp(fresh)) }), {
+    'GET /api/workspaces/1/spaces/2/apps/1': { body: savedApp(fresh) },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=draft': { body: surface },
+  })
+  await screen.findByText('Draft · not published')
+  await screen.findByText('Coffee')
+  cleanup()
+
+  const user = { ...everything, design: false, publish: false, manage_roles: false }
+  await showEntries(toolEntries(1, 'create_app', { text: JSON.stringify(savedApp(fresh)) }), {
+    'GET /api/workspaces/1/spaces/2/apps/1': { body: savedApp({ ...fresh, access: user, draft: undefined }) },
+  })
+  await screen.findByText(/This app isn’t published yet/)
 })
 
 test('a refused or failed app tool call shows no app', async () => {
@@ -656,7 +712,7 @@ test('an app the user cannot read, or that was taken offline, is a note', async 
   expect(await screen.findByText(/This app isn’t available/)).toBeTruthy()
   expect(await screen.findByText('Old is offline: it can’t be launched.')).toBeTruthy()
   // Nothing is launched; the offline app can still be opened, to be restored there.
-  expect(appCalls(calls).filter((c) => c.path.endsWith('/surface'))).toEqual([])
+  expect(appCalls(calls).filter((c) => c.path.includes('/surface'))).toEqual([])
   expect(screen.queryByRole('link', { name: 'Open the app in Apps' })).toBeNull()
   expect(screen.getByRole('link', { name: 'Open Old in Apps' })).toBeTruthy()
 })
@@ -672,7 +728,7 @@ test('each app shows once, at its latest save, and older apps only link', async 
   const routes: Record<string, { body: unknown }> = {}
   for (const id of [1, 2, 3, 4]) {
     routes[`GET /api/workspaces/1/spaces/2/apps/${id}`] = { body: savedApp({ id, name: `App ${id}` }) }
-    routes[`GET /api/workspaces/1/spaces/2/apps/${id}/surface`] = { body: [] }
+    routes[`GET /api/workspaces/1/spaces/2/apps/${id}/surface?release=1`] = { body: [] }
   }
   const calls = await showEntries(entries, routes)
 
@@ -686,7 +742,7 @@ test('each app shows once, at its latest save, and older apps only link', async 
   ])
   expect(
     appCalls(calls)
-      .filter((c) => !c.path.endsWith('/surface'))
+      .filter((c) => !c.path.includes('/surface'))
       .map((c) => c.path)
       .sort(),
   ).toEqual([

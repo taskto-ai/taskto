@@ -26,10 +26,11 @@ import (
 //	data_manager  -       -        yes     all           all
 //	reader        -       -        -       all           -
 //
-// Every role may view the app (launch it and read its definition), and a builder may also
-// manage the app's roles. design is changing the definition (screen, collection, actions,
-// summaries), renaming the app and moving it; publish is making it available or taking it
-// offline (releases will extend it); submit is adding records. Reading and modifying
+// Every role may view the app (launch it and read its live definition), and a builder may also
+// manage the app's roles. design is changing the app's draft (its screen, collection, actions
+// and summaries), renaming the app and moving it; publish is making the draft the
+// live release (publishing it, or rolling back to an earlier release: internal/apps, release.go)
+// and taking the app offline and back; submit is adding records. Reading and modifying
 // records have a scope: "own" is the records the user created (the agent's included, as it
 // acts for them), "all" every record, "none" no record. Every way to read records answers to
 // the read scope, summaries (count, sum) and the counts in lists included.

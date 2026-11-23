@@ -99,6 +99,19 @@ const (
 	CodeAppRolesNotMember Code = "app_roles_not_member" // 400: a role for someone who can't read the space
 	CodeAppRolesLockout   Code = "app_roles_lockout"    // 400: the change would take the caller's own right to manage roles
 
+	// Drafts and releases of apps (internal/apps/release.go).
+
+	CodeAppDefinitionVersion   Code = "app_definition_version"   // 400: params: version, supported
+	CodeAppNotPublished        Code = "app_not_published"        // 409: no release yet, so nothing to launch
+	CodeAppReleaseNotFound     Code = "app_release_not_found"    // 404: the app has no such release
+	CodeAppReleaseOutdated     Code = "app_release_outdated"     // 409: an action of an older release the live one can't take; params: release, live
+	CodeAppReleaseIncompatible Code = "app_release_incompatible" // 409: the rows don't fit the release; params: fields
+	CodeAppReleaseLive         Code = "app_release_already_live" // 409
+	CodeAppNothingToPublish    Code = "app_nothing_to_publish"   // 409: the draft is the live release
+	CodeAppMigrationRequired   Code = "app_migration_required"   // 409: schema changes to acknowledge; params: changes
+	CodeAppMigrationUnneeded   Code = "app_migration_unneeded"   // 409: an acknowledgement of a change that isn't happening; params: changes
+	CodeAppMigrationInvalid    Code = "app_migration_invalid"    // 400
+
 	// The knowledge base (internal/knowledge).
 
 	CodeRequestTooLarge   Code = "request_too_large"    // 413; params: max (bytes)

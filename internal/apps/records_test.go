@@ -19,7 +19,13 @@ func (w *world) editable(u *user, s access.Space) App {
 	def.Summaries["n"] = Summary{Kind: "count"}
 	rec := u.do(http.MethodPost, appsPath(s, ""), map[string]any{"name": "Editable", "definition": def})
 	expect(w.e.t, rec, http.StatusCreated)
-	return decode[App](w.e.t, rec)
+	a := w.publish(u, s, decode[App](w.e.t, rec))
+	// As create does: the tests count versions from the app as it was made, live.
+	if _, err := w.e.db.Exec(`UPDATE apps SET version = 1 WHERE id = ?`, a.ID); err != nil {
+		w.e.t.Fatal(err)
+	}
+	a.Version = 1
+	return a
 }
 
 // act sends action name with ctx as u, expecting revision if it isn't nil.
@@ -316,10 +322,10 @@ func TestRestoreNeedsTheRecordToFitTheCollection(t *testing.T) {
 	w.add(w.alice, s, a, "lunch", "10")
 	id, _ := w.idOf(w.alice, s, a, "lunch")
 	expect(t, w.act(w.alice, s, a, "delete_expense", map[string]any{"id": id}, nil), http.StatusOK)
-	// A new required field: no live row lacks it, and the deleted one does.
-	def := *w.view(w.alice, s, a).Definition
-	def.Collection.Fields = append(def.Collection.Fields, Field{Name: "note", Type: TypeString, Required: true})
-	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "definition": def}), http.StatusOK)
+	// A new required field, published: no live row lacks it, and the deleted one does.
+	def := *w.view(w.alice, s, a).Draft
+	patched := w.mustPatchDraft(w.alice, s, a, with(def, Field{Name: "note", Type: TypeString, Required: true}))
+	w.publish(w.alice, s, patched)
 	rec := w.restore(w.alice, s, a, id, nil)
 	expect(t, rec, http.StatusBadRequest)
 	if decode[conflictReply](t, rec).Code != "app_field_required" {

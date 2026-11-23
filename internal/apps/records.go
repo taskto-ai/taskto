@@ -25,8 +25,8 @@ const (
 	MaxListed = 1000
 )
 
-// Record is one record with its provenance. Data holds the fields the collection declares
-// (as items do); the others stay in the row, unseen.
+// Record is one record with its provenance. Data holds the fields the live release's collection
+// declares (as items do); the others stay in the row, unseen.
 type Record struct {
 	ID       int64          `json:"id"`
 	Revision int64          `json:"revision"`
@@ -127,7 +127,13 @@ func (s *Service) readableRecords(ctx context.Context, sp access.Space, a Actor,
 	if err != nil {
 		return visibility{}, Definition{}, err
 	}
-	return readable(acc, a.UserID), *ap.Definition, nil
+	// The fields shown are the live release's: what the app declares to people. An app with
+	// no release has no records to show.
+	var def Definition
+	if ap.liveDef != nil {
+		def = *ap.liveDef
+	}
+	return readable(acc, a.UserID), def, nil
 }
 
 // recordHistory returns record id of appID, deleted or not, and its versions.
@@ -240,7 +246,10 @@ func (s *Service) restoreRecord(ctx context.Context, sp access.Space, a Actor, a
 		if err != nil {
 			return err
 		}
-		def := *ap.Definition
+		if ap.liveDef == nil {
+			return ErrNotPublished
+		}
+		def := *ap.liveDef // the record must fit what the app declares now
 		var data string
 		var revision int64
 		var creator sql.NullInt64

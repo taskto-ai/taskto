@@ -25,6 +25,18 @@ const everything = {
   read_records: 'all',
   modify_records: 'all',
 }
+// Release 1, published by Ann, which needs nothing this client lacks.
+const release = (over: Record<string, unknown> = {}) => ({
+  number: 1,
+  definition_version: 1,
+  requires: ['component.Column', 'component.Text'],
+  published_at: '2026-11-18T10:00:00.000Z',
+  published_by: { id: 1, name: 'Ann', agent: false },
+  live: true,
+  live_since: '2026-11-18T10:00:00.000Z',
+  ...over,
+})
+const draft = { definition_version: 1, requires: ['component.Column', 'component.Text'] }
 const app = (over: Record<string, unknown>) => ({
   id: 1,
   space_id: 2,
@@ -33,6 +45,9 @@ const app = (over: Record<string, unknown>) => ({
   version: 1,
   rows: 1,
   access: everything,
+  live: release(),
+  unpublished_changes: false,
+  draft,
   ...over,
 })
 
@@ -147,7 +162,7 @@ test('launching an app draws it with its data', async () => {
     'GET /api/workspaces/1/spaces/2/apps?archived=true': { body: { apps: [app({})] } },
     'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [] } },
     'GET /api/workspaces/1/spaces/2/apps/1': { body: app({}) },
-    'GET /api/workspaces/1/spaces/2/apps/1/surface': { body: surface },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
   })
   render(<Routed />)
   fireEvent.click(await screen.findByRole('link', { name: 'Launch Expenses' }))
@@ -155,6 +170,8 @@ test('launching an app draws it with its data', async () => {
   await screen.findByRole('heading', { name: 'Expenses' })
   await screen.findByText('Coffee')
   expect(screen.getByRole('region', { name: 'Expenses' })).toBeTruthy()
+  // What is shown is labelled: the live release everyone uses.
+  expect(screen.getByText('Live · release 1')).toBeTruthy()
 })
 
 test('an offline app is not launched, and its editors can restore it', async () => {
@@ -167,11 +184,11 @@ test('an offline app is not launched, and its editors can restore it', async () 
       archived = null
       return { body: app({ version: 3 }) }
     },
-    'GET /api/workspaces/1/spaces/2/apps/1/surface': { body: surface },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
   })
   render(<Routed />)
   await screen.findByText(/This app is offline/)
-  expect(calls.some((c) => c.path.endsWith('/surface'))).toBe(false)
+  expect(calls.some((c) => c.path.includes('/surface'))).toBe(false)
   fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
   await screen.findByText('Coffee')
   await waitFor(() => expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ version: 2, archived: false }))
@@ -239,4 +256,244 @@ test('a builder sets the roles of members of a shared space', async () => {
       { user_id: 5, roles: ['user'] },
     ],
   })
+})
+
+// The roles of a builder who may not publish, and of a publisher.
+const builder = {
+  ...everything,
+  roles: ['builder'],
+  restricted: true,
+  publish: false,
+  submit: false,
+  read_records: 'none',
+  modify_records: 'none',
+}
+const publisher = {
+  ...everything,
+  roles: ['publisher'],
+  restricted: true,
+  design: false,
+  submit: false,
+  manage_roles: false,
+}
+const plainUser = {
+  ...everything,
+  roles: ['user'],
+  restricted: true,
+  design: false,
+  publish: false,
+  manage_roles: false,
+  read_records: 'own',
+  modify_records: 'own',
+}
+
+const crewSpace = (id: number, name: string) => ({
+  id,
+  workspace_id: 1,
+  kind: 'shared',
+  name,
+  archived_at: null,
+  role: 'editor',
+  access: 'write',
+})
+
+test('shows what is live and what is only a draft, and offers Publish only to those who may publish', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces: [crewSpace(4, 'Crew')] } },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': {
+      body: {
+        apps: [
+          app({ id: 1, space_id: 4, name: 'Publishable', live: release({ number: 2 }), unpublished_changes: true }),
+          app({ id: 2, space_id: 4, name: 'Builders', access: builder, unpublished_changes: true }),
+          app({ id: 3, space_id: 4, name: 'Users', access: plainUser, unpublished_changes: false }),
+          app({ id: 4, space_id: 4, name: 'Fresh', live: null, unpublished_changes: true, access: publisher }),
+          app({
+            id: 5,
+            space_id: 4,
+            name: 'Only builders see it',
+            live: null,
+            unpublished_changes: true,
+            access: builder,
+          }),
+          app({ id: 6, space_id: 4, name: 'Hidden draft', live: null, access: plainUser }),
+          app({ id: 7, space_id: 4, name: 'Tidy', unpublished_changes: false, access: publisher }),
+        ],
+      },
+    },
+  })
+  render(<Routed />)
+  const crew = await screen.findByRole('region', { name: 'Crew' })
+  await within(crew).findByText('Publishable')
+  const row = (name: string) => within(crew).getByText(name).closest('li') as HTMLElement
+
+  // Live release 2, with changes that aren't published: the publisher can publish them.
+  expect(within(row('Publishable')).getByText('Live · release 2')).toBeTruthy()
+  expect(within(row('Publishable')).getByText('Unpublished changes')).toBeTruthy()
+  expect(within(row('Publishable')).getByRole('button', { name: 'Publish Publishable' })).toBeTruthy()
+  // A builder sees the draft differs, and has no Publish.
+  expect(within(row('Builders')).getByText('Unpublished changes')).toBeTruthy()
+  expect(within(row('Builders')).queryByRole('button', { name: /^Publish/ })).toBeNull()
+  // A user is told nothing of drafts, and has nothing to publish or review.
+  expect(within(row('Users')).getByText('Live · release 1')).toBeTruthy()
+  expect(within(row('Users')).queryByText('Unpublished changes')).toBeNull()
+  expect(within(row('Users')).queryByRole('button', { name: /^Publish|Release history/ })).toBeNull()
+  // An app never published: no Launch, a preview of the draft for those who may review it.
+  expect(within(row('Fresh')).getByText('Not published')).toBeTruthy()
+  expect(within(row('Fresh')).queryByRole('link', { name: /^Launch/ })).toBeNull()
+  expect(within(row('Fresh')).getByRole('link', { name: 'Preview the draft of Fresh' })).toBeTruthy()
+  expect(within(row('Fresh')).getByRole('button', { name: 'Publish Fresh' })).toBeTruthy()
+  expect(within(row('Only builders see it')).queryByRole('button', { name: /^Publish/ })).toBeNull()
+  expect(within(row('Hidden draft')).queryByRole('link')).toBeNull()
+  // Nothing to publish: no Publish.
+  expect(within(row('Tidy')).queryByRole('button', { name: /^Publish/ })).toBeNull()
+})
+
+test('publishing asks to acknowledge the schema changes the server names, then publishes with them', async () => {
+  const changes = [{ change: 'field_removed', field: 'notes' }]
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces: [crewSpace(4, 'Crew')] } },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': {
+      body: { apps: [app({ space_id: 4, unpublished_changes: true, version: 5 })] },
+    },
+    'POST /api/workspaces/1/spaces/4/apps/1/publish': (call) => {
+      const ack = (call.body as { acknowledge: unknown[] }).acknowledge
+      if (ack.length === 0) {
+        return { status: 409, body: { code: 'app_migration_required', error: 'x', params: { changes } } }
+      }
+      return { body: app({ space_id: 4, version: 6, live: release({ number: 2 }) }) }
+    },
+  })
+  render(<Routed />)
+  const crew = await screen.findByRole('region', { name: 'Crew' })
+  fireEvent.click(await within(crew).findByRole('button', { name: 'Publish Expenses' }))
+
+  // Nothing is published yet: the changes are listed, and the person has to say they understand.
+  const panel = await within(crew).findByRole('group', { name: 'This publish may change how your app treats its data' })
+  expect(within(panel).getByText(/“notes” is removed/)).toBeTruthy()
+  const go = within(panel).getByRole('button', { name: 'Publish with these changes' }) as HTMLButtonElement
+  expect(go.disabled).toBe(true)
+  fireEvent.click(within(panel).getByRole('checkbox', { name: 'I understand these changes' }))
+  expect(go.disabled).toBe(false)
+  fireEvent.click(go)
+
+  await waitFor(() => expect(within(crew).queryByRole('group')).toBeNull())
+  expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([
+    { version: 5, acknowledge: [] },
+    { version: 5, acknowledge: changes },
+  ])
+})
+
+test('the release history rolls back, and says why a release is refused', async () => {
+  const releases = [
+    release({ number: 3, live: true }),
+    release({ number: 2, live: false, published_by: null }),
+    release({ number: 1, live: false }),
+  ]
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces: [crewSpace(4, 'Crew')] } },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': {
+      body: { apps: [app({ space_id: 4, version: 7, live: release({ number: 3 }) })] },
+    },
+    'GET /api/workspaces/1/spaces/4/apps/1/releases': { body: { releases } },
+    'POST /api/workspaces/1/spaces/4/apps/1/rollback': (call) =>
+      (call.body as { release: number }).release === 2
+        ? { status: 409, body: { code: 'app_release_incompatible', error: 'x', params: { fields: ['amount'] } } }
+        : { body: app({ space_id: 4 }) },
+  })
+  render(<Routed />)
+  const crew = await screen.findByRole('region', { name: 'Crew' })
+  fireEvent.click(await within(crew).findByRole('button', { name: 'Release history of Expenses' }))
+  await within(crew).findByText('Release 3')
+  expect(within(crew).getByText('Live')).toBeTruthy()
+  expect(within(crew).getAllByText(/Published by Ann/)).toHaveLength(2)
+  expect(within(crew).getByText(/^Published Nov/)).toBeTruthy() // release 2 has no publisher: its account is gone
+  // The live release has nothing to roll back to.
+  expect(within(crew).getAllByRole('button', { name: /^Roll back to release/ })).toHaveLength(2)
+
+  fireEvent.click(within(crew).getByRole('button', { name: 'Roll back to release 2' }))
+  expect((await within(crew).findByRole('alert')).textContent).toBe(
+    'The app’s data doesn’t fit that release, so it can’t go back to it. Fields that don’t fit: amount.',
+  )
+  fireEvent.click(within(crew).getByRole('button', { name: 'Roll back to release 1' }))
+  await waitFor(() => expect(calls.filter((c) => c.method === 'POST')).toHaveLength(2))
+  expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([
+    { version: 7, release: 2 },
+    { version: 7, release: 1 },
+  ])
+})
+
+test('a publisher without the right to design can roll back, and a builder can read the history only', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces: [crewSpace(4, 'Crew')] } },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': {
+      body: { apps: [app({ space_id: 4, access: builder })] },
+    },
+    'GET /api/workspaces/1/spaces/4/apps/1/releases': {
+      body: { releases: [release({ number: 2 }), release({ number: 1, live: false })] },
+    },
+  })
+  render(<Routed />)
+  const crew = await screen.findByRole('region', { name: 'Crew' })
+  fireEvent.click(await within(crew).findByRole('button', { name: 'Release history of Expenses' }))
+  await within(crew).findByText('Release 2')
+  expect(within(crew).queryByRole('button', { name: /^Roll back/ })).toBeNull()
+})
+
+test('a launched app says it is live, and those who may review it can preview the draft, whose buttons run nothing', async () => {
+  window.history.replaceState(null, '', '/w/1/apps/2-1')
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps/1': { body: app({ unpublished_changes: true, live: release({ number: 4 }) }) },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=4': { body: surface },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=draft': { body: surface },
+  })
+  render(<Routed />)
+  await screen.findByText('Live · release 4')
+  await screen.findByText('Coffee')
+  expect(screen.getByText(/It has changes that aren’t published yet/)).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Preview the draft' }))
+  await screen.findByText('Draft · not published')
+  expect(screen.getByText(/preview of changes that aren’t published yet/)).toBeTruthy()
+  await screen.findByText('Coffee')
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  expect((await screen.findByRole('alert')).textContent).toBe('This is a draft preview: publish the app to use it.')
+  expect(calls.some((c) => c.method === 'POST')).toBe(false)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Back to the live release' }))
+  await screen.findByText('Live · release 4')
+})
+
+test('someone who may only use an app launches the live release and is offered no draft', async () => {
+  window.history.replaceState(null, '', '/w/1/apps/2-1')
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    // The server tells a user nothing of drafts.
+    'GET /api/workspaces/1/spaces/2/apps/1': { body: app({ access: plainUser, draft: undefined }) },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
+  })
+  render(<Routed />)
+  await screen.findByText('Live · release 1')
+  await screen.findByText('Coffee')
+  expect(screen.queryByRole('button', { name: /draft/i })).toBeNull()
+})
+
+test('an app nobody has published yet shows its draft to its builders, and a note to the rest', async () => {
+  window.history.replaceState(null, '', '/w/1/apps/2-1')
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps/1': { body: app({ live: null, unpublished_changes: true }) },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=draft': { body: surface },
+  })
+  render(<Routed />)
+  await screen.findByText('Draft · not published')
+  await screen.findByText('Coffee')
+  cleanup()
+
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps/1': { body: app({ live: null, access: plainUser, draft: undefined }) },
+  })
+  render(<Routed />)
+  await screen.findByText(/This app isn’t published yet/)
 })

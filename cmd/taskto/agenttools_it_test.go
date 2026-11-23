@@ -222,6 +222,7 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 	built := use("create_app", map[string]any{"space_id": team.ID, "name": "Team expenses", "definition": example[0].Definition})
 	var app struct {
 		ID        int64 `json:"id"`
+		Version   int64 `json:"version"`
 		CreatedBy struct {
 			Agent bool `json:"agent"`
 		} `json:"created_by"`
@@ -230,7 +231,12 @@ func TestAgentToolsThroughTheServer(t *testing.T) {
 	if app.ID == 0 || !app.CreatedBy.Agent {
 		t.Fatalf("create_app = %s", built)
 	}
-	member.expect(http.StatusOK, http.MethodGet, spacePath(team.ID, fmt.Sprintf("/apps/%d/surface", app.ID)), nil)
+	// What the agent builds is a draft: launched once a person publishes it.
+	surface := spacePath(team.ID, fmt.Sprintf("/apps/%d/surface", app.ID))
+	member.expect(http.StatusConflict, http.MethodGet, surface, nil)
+	owner.expect(http.StatusOK, http.MethodPost, spacePath(team.ID, fmt.Sprintf("/apps/%d/publish", app.ID)),
+		map[string]any{"version": app.Version, "acknowledge": []any{}})
+	member.expect(http.StatusOK, http.MethodGet, surface, nil)
 	if got := use("create_app", map[string]any{"space_id": team.ID, "name": "Bad", "definition": map[string]any{
 		"components": []any{map[string]any{"id": "root", "component": "Script"}}, "collection": map[string]any{"fields": []any{}},
 		"actions": map[string]any{"x": map[string]any{"kind": "insert"}},

@@ -32,9 +32,14 @@
 // in the list of deleted records, and can be restored (a new revision) by whoever may
 // change it. Reading a record's history, or the deleted ones, takes reading the record.
 //
-// Changes to an app are optimistic: it carries a version, bumped by every change, and an
-// update names the version it was made against; if that isn't the current one it fails
-// with ErrStale.
+// An app has a draft and releases (release.go). Editing it, by a person or by the agent,
+// changes the draft; the app serves its live release until someone who may publish it
+// publishes the draft, after the server checks it against the catalog and the rows, or rolls
+// back to an earlier release. A release is immutable and numbered.
+//
+// Changes to an app are optimistic: it carries a version, bumped by every change (the draft's,
+// a publish and a rollback included), and an update names the version it was made against; if
+// that isn't the current one it fails with ErrStale.
 //
 // HTTP handlers (http.go) and the agent's tools (tools.go) share the code in store.go;
 // the tools take an Actor and check its user's access to the space themselves.
@@ -61,8 +66,23 @@ const ProtocolVersion = "v0.9"
 // the same ID; a message naming any other catalog is rejected there.
 const CatalogID = "https://taskto.ai/catalogs/apps/v1.json"
 
+// DefinitionVersion is the version of the definition's own format, the one this server writes
+// and reads. It is TaskTo.AI's, independent of ProtocolVersion (A2UI's): it grows when the
+// definition gains something an older reader would misread (a new kind of action, say), while
+// the catalog's growth is told by Definition.Requires. A definition that says a higher version
+// than this is refused, and a client that finds a release in a higher one asks to be updated.
+const DefinitionVersion = 1
+
 // Definition is what an app is made of: its screen, its collection and its actions.
 type Definition struct {
+	// DefinitionVersion is the format version the definition is written in; DefinitionVersion
+	// if left out.
+	DefinitionVersion int `json:"definition_version"`
+	// Requires lists the catalog capabilities the screen needs (Capabilities): a component
+	// it draws is component.<Name>, a function it calls function.<name>. Check works the list
+	// out from the screen, replacing whatever was sent, so it can't claim less than it uses.
+	// A client whose catalog lacks one of them can't draw the app.
+	Requires []string `json:"requires"`
 	// Components is the screen: the A2UI component list, sent as is in updateComponents.
 	// The root component has the ID "root".
 	Components []json.RawMessage `json:"components"`
@@ -174,6 +194,13 @@ func invalidAs(code apierr.Code, params apierr.Params, format string, args ...an
 // Check validates the definition strictly, the screen against the catalog among it, and
 // returns it as it will be stored: the components re-encoded, string limits filled in.
 func (d Definition) Check() (Definition, error) {
+	if d.DefinitionVersion == 0 {
+		d.DefinitionVersion = DefinitionVersion
+	}
+	if d.DefinitionVersion < 1 || d.DefinitionVersion > DefinitionVersion {
+		return Definition{}, invalidAs(apierr.CodeAppDefinitionVersion, apierr.Params{"version": d.DefinitionVersion, "supported": DefinitionVersion},
+			"definition_version %d isn't supported: this server reads up to %d", d.DefinitionVersion, DefinitionVersion)
+	}
 	fields := map[string]Field{}
 	if len(d.Collection.Fields) > MaxFields {
 		return Definition{}, invalidf("collection: at most %d fields", MaxFields)
@@ -251,11 +278,12 @@ func (d Definition) Check() (Definition, error) {
 			return Definition{}, invalidf("summaries: %q: kind must be count or sum", name)
 		}
 	}
-	comps, err := checkComponents(d.Components, d.Actions)
+	comps, requires, err := checkComponents(d.Components, d.Actions)
 	if err != nil {
 		return Definition{}, err
 	}
 	out.Components = comps
+	out.Requires = requires
 	raw, err := json.Marshal(out)
 	if err != nil {
 		return Definition{}, err
@@ -291,6 +319,10 @@ type ClientAction struct {
 	SourceComponentID string         `json:"sourceComponentId"`
 	Timestamp         string         `json:"timestamp"`
 	Context           map[string]any `json:"context"`
+	// Release is the number of the release the screen was drawn from (the one its surface was
+	// asked for). Left out, the action is taken to come from the live release. See Service.act
+	// for what an action from a release that is not the live one may do.
+	Release *int64 `json:"release,omitempty"`
 	// ExpectedRevision is, for an update or a delete, the revision of the row the person
 	// saw when they acted (the "_revision" of its item). If the row has moved on, the action
 	// is refused as a conflict and changes nothing. Without it the action applies to the
@@ -329,7 +361,9 @@ func DataModel(surfaceID string, def Definition, rows []Row) Message {
 const RevisionKey = "_revision"
 
 // Items is the rows as the app shows them: each with its "id", its revision (RevisionKey)
-// and the fields the collection declares, and none it no longer does.
+// and the fields the collection declares, and none it no longer does. A value of another type than
+// the field's (a row from before the field's type changed, which a publish acknowledged) is left
+// out too, as if the row had none, but stays stored; one outside the field's limits is shown.
 func Items(def Definition, rows []Row) []map[string]any {
 	items := make([]map[string]any, len(rows))
 	for i, r := range rows {
@@ -338,19 +372,29 @@ func Items(def Definition, rows []Row) []map[string]any {
 	return items
 }
 
+// ofType reports whether v is a value of f's type, whatever the field's limits.
+func ofType(f Field, v any) bool {
+	f.MaxLength, f.Min, f.Max = math.MaxInt, nil, nil
+	_, present, err := f.parse(v)
+	return err == nil && present
+}
+
 func item(def Definition, r Row) map[string]any {
 	it := map[string]any{"id": r.ID, RevisionKey: r.Revision}
-	for k, v := range declared(def, r.Data) {
-		it[k] = v
+	for _, f := range def.Collection.Fields {
+		if v, ok := r.Data[f.Name]; ok && ofType(f, v) {
+			it[f.Name] = v
+		}
 	}
 	return it
 }
 
-// declared is the fields of data that the collection declares.
+// declared is the fields of data that the collection declares, as Items shows them: a value
+// of another type than its field's (stored before the field was retyped) is left out.
 func declared(def Definition, data map[string]any) map[string]any {
 	out := map[string]any{}
 	for _, f := range def.Collection.Fields {
-		if v, ok := data[f.Name]; ok {
+		if v, ok := data[f.Name]; ok && ofType(f, v) {
 			out[f.Name] = v
 		}
 	}
@@ -476,18 +520,25 @@ func (c Collection) Merge(row, changes map[string]any) (map[string]any, error) {
 // alone.
 func (c Collection) Fits(row map[string]any) error {
 	for _, f := range c.Fields {
-		v, ok := row[f.Name]
-		if !ok {
-			if f.Required {
-				return invalidAs(apierr.CodeAppFieldRequired, apierr.Params{"field": f.Name}, "%s is required", f.Name)
-			}
-			continue
-		}
-		if _, _, err := f.parse(v); err != nil {
+		if err := f.fits(row); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// fits checks a stored row against the field alone: present if required, and of its type and
+// within its limits.
+func (f Field) fits(row map[string]any) error {
+	v, ok := row[f.Name]
+	if !ok {
+		if f.Required {
+			return invalidAs(apierr.CodeAppFieldRequired, apierr.Params{"field": f.Name}, "%s is required", f.Name)
+		}
+		return nil
+	}
+	_, _, err := f.parse(v)
+	return err
 }
 
 // parse checks v as a value of f, from an action's context or a stored row. Form inputs

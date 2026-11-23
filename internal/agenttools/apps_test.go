@@ -37,7 +37,7 @@ func TestAppToolsBuildAppsForTheirUser(t *testing.T) {
 
 	created := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.alicePrivate, "name": "Expenses", "definition": expenses(t)})
 	by := created["created_by"].(map[string]any)
-	if id(by["id"]) != w.alice || by["agent"] != true || created["definition"] == nil {
+	if id(by["id"]) != w.alice || by["agent"] != true || created["draft"] == nil || created["live"] != nil || created["unpublished_changes"] != true {
 		t.Fatalf("create_app = %v", created)
 	}
 	app := id(created["id"])
@@ -270,5 +270,51 @@ func TestAppToolsKeepToTheirUsersRoles(t *testing.T) {
 	var name string
 	if err := w.db.QueryRow(`SELECT name FROM apps WHERE id = ?`, app).Scan(&name); err != nil || name != "Team expenses" {
 		t.Fatalf("name = %q, %v", name, err)
+	}
+}
+
+// The agent edits an app's draft and nothing more: what people use stays the release that was
+// published, and it has no tool to publish or roll back, which is for a person who may publish.
+func TestAgentEditsOnlyTheDraft(t *testing.T) {
+	w := newWorld(t)
+	for _, d := range Definitions() {
+		if strings.Contains(d.Name, "publish") || strings.Contains(d.Name, "rollback") || strings.Contains(d.Name, "release") {
+			t.Fatalf("the agent has a tool to %s", d.Name)
+		}
+	}
+	created := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.alicePrivate, "name": "Expenses", "definition": expenses(t)})
+	app := id(created["id"])
+	ref := map[string]any{"space_id": w.alicePrivate, "app_id": app}
+	// A person publishes it (the release is made as the server does).
+	w.exec(`INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
+		SELECT id, 1, definition, 1, json_extract(definition, '$.requires') FROM apps WHERE id = ?`, app)
+	w.exec(`UPDATE apps SET live_release = 1, live_at = updated_at, draft_differs = 0 WHERE id = ?`, app)
+	var published string
+	if err := w.db.QueryRow(`SELECT definition FROM app_releases WHERE app_id = ?`, app).Scan(&published); err != nil {
+		t.Fatal(err)
+	}
+
+	def := expenses(t)
+	def["collection"].(map[string]any)["fields"] = append(def["collection"].(map[string]any)["fields"].([]any),
+		map[string]any{"name": "category", "type": "string"})
+	updated := w.ok(w.aliceConv, "update_app", map[string]any{"space_id": w.alicePrivate, "app_id": app, "version": 1, "definition": def})
+	if updated["unpublished_changes"] != true || updated["draft"] == nil {
+		t.Fatalf("update_app = %v", updated)
+	}
+	live := updated["live"].(map[string]any)
+	if live["number"] != float64(1) || live["definition"] != nil {
+		t.Fatalf("live in update_app = %v", live)
+	}
+	var after string
+	if err := w.db.QueryRow(`SELECT definition FROM app_releases WHERE app_id = ?`, app).Scan(&after); err != nil || after != published {
+		t.Fatalf("the release changed: %v", err)
+	}
+	shown := w.ok(w.aliceConv, "show_app", ref)
+	if shown["unpublished_changes"] != true || shown["live"].(map[string]any)["number"] != float64(1) {
+		t.Fatalf("show_app = %v", shown)
+	}
+	raw, _ := json.Marshal(shown)
+	if len(raw) > MaxResult/2 {
+		t.Fatalf("show_app is %d bytes: it must leave room in a reply", len(raw))
 	}
 }
