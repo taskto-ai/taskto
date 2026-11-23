@@ -101,6 +101,8 @@ async function stillShown(runtime: Runtime, item: OutboxItem, seen: Seen): Promi
 export async function discard(runtime: Runtime, item: OutboxItem, seen: SeenAs): Promise<void> {
   if (!runtime.writer.holds()) throw notWriter()
   await chosen(() => runtime.store.discardItem(item.id, seen))
+  // A later change to the same record that waited for this one is sendable now.
+  await runtime.engine.run()
 }
 
 // A record as the server has it now, for the person who is signed in: read at the moment it is

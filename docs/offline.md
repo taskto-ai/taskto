@@ -149,7 +149,10 @@ Several tabs of one account share one queue, and what they would have to do to w
   store names the writer's identity, and every write only the writer makes (`changeRecord`,
   `resolve`, `discardItem`, the retry, hold, release and clear of an item) reads that row in its
   own transaction and is **refused** (`NotWriter`) unless it names this tab. A tab that lost the
-  right while a write was on its way, a frozen tab that woke up, is refused by the database.
+  right while a write was on its way, a frozen tab that woke up, is refused by the database. The
+  row's **lease is compared with the clock in the same transaction**: a guarded write is also
+  refused (`NotWriter`) once the lease has run out, until the holder's heartbeat renews it (or another
+  tab replaces the row), so a frozen tab never writes in the interval before another tab takes over.
 - **How it is held: the row is the one source of truth.** The row carries a **lease** that its
   holder renews with a heartbeat, and it is taken only by a compare-and-set in one transaction
   (`claimWriter`): when no one holds it, or the lease has run out. That is the same with and without
@@ -190,9 +193,14 @@ The rules:
   (`Seen`). One that no longer matches is **refused**, with *This changed in another tab or window.
   Review it again.*, and nothing is applied: the other tab's work is never overwritten by a
   confirmation made on what was on screen before it. A **discard** is bound to the item as it was
-  when the question was **asked**, its version, its operation and its state, not as it is drawn
-  when the answer is given (`discardItem`); it never removes an entry the server acknowledged
-  (those leave with a download that holds their change, or are only cleared from the list).
+  when the question was **asked**, its version, its operation, its state and **how many times it was
+  sent** (`sends`, raised each time a send claims the item), not as it is drawn when the answer is
+  given (`discardItem`): an item that went out and came back to the queue (queued, syncing, queued:
+  the same version and key) may be on the server now, so a confirmation made before that is refused
+  and the person is asked again about what is there. It never removes an entry the server
+  acknowledged (those leave with a download that holds their change, or are only cleared from the
+  list). Discarding wakes the queue: a later change to the same record that waited for it is sent
+  at once.
 - **Signing out loses only what was shown.** The records the person is told they would lose are
   listed with their versions, and *Discard and sign out* approves exactly those: an item that was
   changed since (a newer edit coalesced into it) or made since is not agreed to, nothing is
@@ -299,7 +307,14 @@ the queue's owner; if not, it lets its claim go (the item is the next sender's a
 counted) and writes nothing. A pass also waits for a revalidation that is in flight, whoever asked
 for the pass (the network coming back, the page returning to the foreground, a timer, *Sync now*),
 so nothing is sent before the server has said what may be kept. A tab that found another one
-sending looks again after no less than `LOCK_RETRY_MS`, whatever an item's own wait says.
+sending looks again after no less than `LOCK_RETRY_MS`, whatever an item's own wait says. A change
+queued behind an earlier change to its record is **not woken by its own wait** (it can't be sent
+before the earlier one is answered, and a zero-delay timer for it would find nothing, for ever): it
+is looked for again when the earlier one is answered in the pass, or when the person's choice
+(a discard) asks for one. What a send found out is acted on only while the item is still claimed by
+that very send, its operation key and attempt token read in a transaction first: a reply to a send
+that lost its claim, a revocation (a 403 or 404 that the app itself confirms) included, removes no
+download and changes nothing.
  The photos' ids the server finalized are kept on the item, first one wins, so a send made
 again is the same request, and an item the server acknowledged is never put back to waiting.
 
@@ -313,8 +328,9 @@ again is the same request, and an item the server acknowledged is never put back
    reopened, two tabs) changes nothing and is answered with a 2xx (**also when what the person may do
    changed meanwhile**: a request the caller made that committed is answered with its receipt, an
    empty answer, where the access checks would now refuse it, so a device that lost the answer
-   learns that the change is in; only the space's own route check, before the server reads the
-   request, can still refuse a replay) (the rows as they are *now*, not the first
+   learns that the change is in, **also after the app was archived**; only the space's own route
+   check, before the server reads the request, can still refuse a replay, and a receipt answers only
+   on the route of the space and app it was made in) (the rows as they are *now*, not the first
    answer's body: the server keeps the request's receipt, not its answer, and a record deleted since
    is simply not among them), which is what the device needs: **a record is made exactly once**. The same id for a different request is refused (`app_operation_reused`).
 
@@ -465,7 +481,10 @@ signing in is dealt with when it signs in:
   said so, in words: the page never falls back to another account's database, and the offline
   view opens the signed-in account's own or none.
 - **Signing out**, from anywhere (the menu, the invite page), asks first if records on the device
-  haven't reached the server: *Sync now*, *Discard and sign out*, or *Cancel*. Then the account's
+  haven't reached the server: *Sync now*, *Discard and sign out*, or *Cancel*. *Sync now* retries
+  what needs a retry, which only the writer does: in a tab that isn't, it asks for the right first
+  (as the take-over button does), and if the tab doesn't get it says so in words and tries nothing.
+  Then the account's
   database is **deleted**: downloads, queue and photos, whether or not it had been opened in this
   page. Counting and deleting are **one step**: in a single IndexedDB transaction the database is
   checked for unsent records other than those the person was shown (and agreed to lose) and, only

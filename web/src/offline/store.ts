@@ -190,6 +190,9 @@ export type OutboxItem = {
   // Whether `unconfirmed` was set before the send that is in flight (which sets it): what an
   // answer that isn't a definite one goes back to.
   unconfirmedBefore?: boolean
+  // How many times a send claimed the item. A confirmation to discard it is about the item as it
+  // was, and is refused once another send has been made (it may be on the server now).
+  sends?: number
   // The person cleared it from the list once the server had it: it stays, to keep showing the
   // record as the server has it, until a download that holds the change makes it go.
   cleared?: boolean
@@ -309,8 +312,11 @@ export class AccountLapsed extends Refused {
 }
 
 // What the item was when a person was shown it, for what only that state may be undone (a discard).
-export type SeenAs = Seen & { state: OutboxState }
-export const seenAs = (item: OutboxItem): SeenAs => ({ ...seenOf(item), state: item.state })
+// `sends` counts the times a send claimed the item: one that went out and came back to the queue
+// (same version, same key) is not the item the person was asked about, since it may be on the
+// server now.
+export type SeenAs = Seen & { state: OutboxState; sends?: number }
+export const seenAs = (item: OutboxItem): SeenAs => ({ ...seenOf(item), state: item.state, sends: item.sends ?? 0 })
 
 // A record's queue as a screen was drawn from it: what an enqueue checks again in its transaction.
 export const queueSignature = (items: readonly OutboxItem[]): string =>
@@ -347,6 +353,8 @@ export class OfflineStore {
   // changes only the writer makes are written only while the database says it is this one. Without
   // one nothing is checked (a tool or a test that has no competing tabs).
   private writer: string | undefined
+  // The clock the writer's lease is compared with.
+  private clock: () => number = Date.now
   // Whether the account signed in here is this database's: asked in the transaction, right before
   // each write.
   private account: () => boolean = () => true
@@ -390,8 +398,9 @@ export class OfflineStore {
 
   // From now on the changes only the offline writer makes (a change to a record, a choice, a
   // discard) are written only while `owner` is the one the database names (`claimWriter`).
-  attachWriter(owner: string | undefined) {
+  attachWriter(owner: string | undefined, now: () => number = Date.now) {
     this.writer = owner
+    this.clock = now
   }
 
   // Asks, for every write, whether the account signed in here is this database's. Asked inside the
@@ -405,12 +414,14 @@ export class OfflineStore {
     if (!this.account()) throw new AccountLapsed()
   }
 
-  // Inside a transaction that also reads META: the write is refused unless this tab is the writer.
+  // Inside a transaction that also reads META: the write is refused unless this tab is the writer,
+  // and its lease has not run out: until another tab replaces the row, an expired one is a right
+  // nobody renewed (the tab froze), and another tab may be about to take it.
   private async assertWriter(tx: Tx) {
     this.assertAccount()
     if (this.writer === undefined) return
     const row = await tx.store<WriterRow>(META).get(WRITER)
-    if (row?.owner !== this.writer) throw new NotWriter()
+    if (row?.owner !== this.writer || row.until <= this.clock()) throw new NotWriter()
   }
 
   // The writer row, in one transaction (a compare-and-set: the database's word is the one source of
@@ -456,7 +467,11 @@ export class OfflineStore {
     try {
       const out = await this.tx(stores, 'readwrite', async (tx) => {
         this.assertAccount()
-        return fn(tx)
+        const result = await fn(tx)
+        // Asked again after everything the transaction waited for: a sign-in that came meanwhile
+        // aborts it, and nothing is written under the account that has left.
+        this.assertAccount()
+        return result
       })
       this.changed()
       return out
@@ -718,6 +733,7 @@ export class OfflineStore {
       const outbox = tx.store<OutboxItem>(OUTBOX)
       const current = await outbox.get(id)
       if (!current || !isSeen(current, seen) || current.state !== seen.state) throw new ItemChanged()
+      if ((current.sends ?? 0) !== (seen.sends ?? 0)) throw new ItemChanged()
       if (current.state === 'synced' || current.state === 'syncing') throw new ItemChanged()
       await outbox.delete(id)
       const blobs = tx.store<BlobRow>(BLOBS)

@@ -476,8 +476,13 @@ export class SyncEngine {
     }
     // Wake up when the first item that is waiting is due.
     try {
-      const waiting = (await this.store.listItems())
-        .filter((i) => i.state === 'queued' && i.nextAttemptAt !== undefined)
+      // An item behind an earlier change to its record is not woken by its own wait: it can't be
+      // sent before that one is answered, and when it is (here, in this pass, or by the person's
+      // choice, which asks for a pass) the pass looks for it again. Its own overdue wait would
+      // otherwise set a zero-delay timer that finds nothing, for ever.
+      const queue = await this.store.listItems()
+      const waiting = queue
+        .filter((i) => i.state === 'queued' && i.nextAttemptAt !== undefined && !waitsForEarlier(i, queue))
         .map((i) => i.nextAttemptAt as number)
       let at = Math.min(...waiting, wake ?? Number.POSITIVE_INFINITY)
       // Another tab holds the lock: no sooner than the retry delay, whatever an item's own wait
@@ -593,6 +598,7 @@ export class SyncEngine {
     return {
       ...i,
       state: 'syncing',
+      sends: (i.sends ?? 0) + 1,
       lease: { owner: this.owner, until: now + LEASE_MS, attempt },
       ...(changes && {
         unconfirmed: true,
@@ -896,6 +902,10 @@ export class SyncEngine {
         const revoked = await this.revoked(item, signal)
         // An answer that came after this send was let go of says nothing that may be acted on.
         if (!this.live(signal)) return lost() ? { kind: 'skipped' } : this.letGo(id, attempt)
+        // Nor does one that came after the claim was lost: whoever has the item now (another tab, a
+        // send after a retry, a download made meanwhile) asks again for itself. Decided on the item
+        // as stored now (its operation and this attempt's token), before any effect of the reply.
+        if (revoked && !(await this.stillMine(id, attempt, item.operation))) return { kind: 'skipped' }
         outcome = { ...outcome, revoked }
         if (revoked) await this.deps.onRevoked?.(item, outcome.error)
       }
@@ -970,6 +980,29 @@ export class SyncEngine {
       if (!(err instanceof LeaseLost)) throw err
     }
     return outcome
+  }
+
+  // Whether the item is still claimed by this very send (its operation key and attempt token), read
+  // in a transaction of its own that writes nothing.
+  private async stillMine(id: string, attempt: string, operation: string): Promise<boolean> {
+    let mine = false
+    try {
+      await this.store.updateItem(
+        id,
+        (i) => {
+          mine =
+            i.state === 'syncing' &&
+            i.operation === operation &&
+            i.lease?.owner === this.owner &&
+            i.lease.attempt === attempt
+          return undefined
+        },
+        { bump: false },
+      )
+    } catch {
+      return false
+    }
+    return mine && !this.stopped && this.ownerSignedIn()
   }
 
   private async revoked(item: OutboxItem, signal: AbortSignal): Promise<boolean> {

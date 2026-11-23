@@ -20,7 +20,16 @@ import type { OfflineApp } from '../api'
 import { forgetOperations } from '../apps/operations'
 import { setPreferences } from '../i18n'
 import { type Call, fakeFetch } from '../test/fakes'
-import { type Deleted, findDeleted, keepServer, problemsOf, reapply, restoreAndApply, saveEdit } from './choices'
+import {
+  type Deleted,
+  discard,
+  findDeleted,
+  keepServer,
+  problemsOf,
+  reapply,
+  restoreAndApply,
+  saveEdit,
+} from './choices'
 import { downloadApp } from './download'
 import { useOfflineData } from './hooks'
 import { itemsOf } from './local'
@@ -28,6 +37,7 @@ import { OfflineApp as OfflineAppView } from './OfflineShell'
 import { OutboxList } from './OutboxList'
 import { deactivate, rememberUser, runtimeState, setSyncDeps, settle, unsentOf } from './runtime'
 import {
+  AccountLapsed,
   approvalOf,
   type Download,
   ItemChanged,
@@ -1910,4 +1920,111 @@ test('a download that began before the copy was removed does not bring it back',
   // A download that begins after the removal is kept.
   fakeFetch({ [`GET ${base}/offline`]: { body: offlineApp() } })
   expect((await downloadApp(store, scope)).release).toBe(3)
+})
+
+// --- the fourth review
+
+// An item written straight into the queue: a change to record 1 that waits, as the tests set it.
+const waiting = (over: Partial<OutboxItem> = {}) => ({
+  kind: 'update' as const,
+  id: `item-${Math.random()}`,
+  user: 7,
+  scopeKey: scopeKey(scope),
+  ...scope,
+  base,
+  release: 3,
+  schema: 1,
+  action: { name: 'edit_expense', surfaceId: 'app-1', sourceComponentId: '', timestamp: '', context: { id: 1 } },
+  operation: `op-${Math.random().toString(36).slice(2, 12)}`,
+  record: { id: 1, revision: 1 },
+  attachments: [],
+  state: 'queued' as const,
+  attempts: 0,
+  createdAt: '',
+  updatedAt: '',
+  ...over,
+})
+
+test('a reply to a send that lost its claim is not acted on: a stale 404 removes no fresh download', async () => {
+  const { store, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const [item] = await store.listItems()
+  fakeFetch({
+    [`POST ${base}/actions`]: { status: 404, body: { error: 'nf', code: 'not_found' } },
+    // While the probe is on its way another send has the item (its claim and token are not ours).
+    [`GET ${base}`]: async () => {
+      await store.updateItem(
+        item.id,
+        (i) => ({ ...i, lease: { owner: 'another-tab', until: Number.MAX_SAFE_INTEGER, attempt: 'theirs' } }),
+        { bump: false },
+      )
+      return { status: 404, body: { error: 'nf', code: 'not_found' } }
+    },
+  })
+  const revoked = vi.fn(async () => store.removeDownload(scope))
+  await engineOf(store, clock(), { onRevoked: revoked }).run()
+  expect(revoked).not.toHaveBeenCalled()
+  expect(await store.listDownloads()).toHaveLength(1)
+  // Nothing of the reply was written either: the item is the other send's.
+  expect(await store.getItem(item.id)).toMatchObject({ state: 'syncing', lease: { owner: 'another-tab' } })
+})
+
+test('a download is written only while the account is the database’s, asked in the writing transaction after what it read', async () => {
+  const store = await OfflineStore.open(7)
+  // The account is right when the write begins and has changed by the time its reads are done.
+  const ticket = await store.beginDownload()
+  let asked = 0
+  store.requireAccount(() => ++asked === 1)
+  await expect(store.putDownload(download(7), ticket)).rejects.toBeInstanceOf(AccountLapsed)
+  store.requireAccount(() => true)
+  expect(await store.getDownload(scope)).toBeUndefined()
+})
+
+test('a discard confirmed after the item went out and came back to the queue is refused: it may be on the server', async () => {
+  const { store, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const [queued] = await store.listItems()
+  // The question is opened on the queued item.
+  const asked = seenAs(queued)
+  // A send is made and not answered for good: queued → syncing → queued, the same version and key.
+  const c = clock()
+  fakeFetch({ [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } } })
+  await engineOf(store, c).run()
+  const [again] = await store.listItems()
+  expect(again).toMatchObject({ state: 'queued', version: queued.version, operation: queued.operation })
+  await expect(store.discardItem(again.id, asked)).rejects.toBeInstanceOf(ItemChanged)
+  expect(await store.listItems()).toHaveLength(1)
+  // Asked again about the item as it is now, it is the person's to discard.
+  await store.discardItem(again.id, seenAs(again))
+  expect(await store.listItems()).toEqual([])
+})
+
+test('a successor whose own wait is over is not woken by it while an earlier change to its record waits: no zero-delay timer', async () => {
+  const { store } = await setup()
+  const c = clock()
+  await store.enqueue(waiting({ nextAttemptAt: c.now() + 60_000 }), [])
+  await store.enqueue(waiting({ nextAttemptAt: c.now() - 5_000 }), [])
+  const calls = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  const timers: { fn: () => void; ms: number }[] = []
+  const engine = new SyncEngine(store, {
+    now: c.now,
+    setTimer: (fn, ms) => timers.push({ fn, ms }),
+    clearTimer: () => {},
+    random: () => 0.5,
+  })
+  await engine.run()
+  expect(actionCalls(calls)).toHaveLength(0)
+  // Woken when the earlier one is due, and not before.
+  expect(timers.map((t) => t.ms)).toEqual([60_000])
+})
+
+test('discarding the earlier change wakes the queue: the change that waited for it is sent at once', async () => {
+  const { store, runtime } = await setup()
+  const first = await store.enqueue(waiting({ nextAttemptAt: clock().now() + 600_000 }), [])
+  await store.enqueue(waiting(), [])
+  const calls = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  runtime.engine.gate = true
+  await discard(runtime, first, seenAs(first))
+  expect(actionCalls(calls)).toHaveLength(1)
+  expect((await store.listItems()).map((i) => i.state)).toEqual(['synced'])
 })

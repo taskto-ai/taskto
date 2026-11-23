@@ -1771,6 +1771,7 @@
       "discard": "Discard and sign out",
       "cancel": "Cancel",
       "stillWaiting": "Some records are still waiting: the server couldn’t take them yet. Try again, or discard them.",
+      "notWriter": "Changes are being made in another tab, which didn’t let this one take over. Sync from that tab, or close it and try again.",
       "unreadableSchema": "Records you made on this device may not have reached the server, and this version of TaskTo.AI can’t check: they were saved by a newer version. You can keep them and sign out without deleting anything, then sign in with the newer version to send them, or discard them.",
       "unreadableStorage": "Records you made on this device may not have reached the server, and the device’s storage can’t be read right now to check. You can keep them and sign out without deleting anything, or discard them.",
       "keep": "Keep them and sign out"

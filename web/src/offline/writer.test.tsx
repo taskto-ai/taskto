@@ -14,7 +14,9 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import type { OfflineApp } from '../api'
 import { setPreferences } from '../i18n'
+import { fakeFetch } from '../test/fakes'
 import { useOfflineData } from './hooks'
+import { LogoutGuard } from './LogoutGuard'
 import { OutboxList } from './OutboxList'
 import { deactivate, type Runtime, rememberUser } from './runtime'
 import { NotWriter, OfflineStore, type OutboxItem, scopeKey } from './store'
@@ -441,4 +443,59 @@ test('a screen drawn before a hand-over cannot queue a change over the previous 
   const [merged] = await b.listItems()
   expect(merged).toMatchObject({ id: mine.id, version: mine.version + 1 })
   expect(merged.action.context).toEqual({ id: 1, amount: '9', description: 'Later' })
+})
+
+test('a writer whose lease has run out is refused by the database, even before another tab replaces the row', async () => {
+  const c = clock()
+  const a = await OfflineStore.open(7)
+  const wa = new OfflineWriter(a, { locks: null, now: c.now, heartbeat: () => () => {}, channel: () => null })
+  await wa.start()
+  expect(wa.holds()).toBe(true)
+  const saved = await a.enqueue(itemOf(), [])
+  c.advance(WRITER_LEASE_MS + 1)
+  // Nobody took the row, but the right was not renewed: a guarded write is refused.
+  await expect(discardOf(a, saved)).rejects.toBeInstanceOf(NotWriter)
+  expect(await a.listItems()).toHaveLength(1)
+  // Renewed (the heartbeat), it writes again.
+  expect(await a.claimWriter(wa.owner, c.now() + WRITER_LEASE_MS, () => false)).toBe(true)
+  await discardOf(a, saved)
+  expect(await a.listItems()).toEqual([])
+})
+
+// A tab that is not the writer, with an item waiting for the person, and the sign-out guard open on it.
+async function signingOut(takeOver: 'real' | 'refused') {
+  const c = clock()
+  const { a, b, wb } = await tabs((cl) => ({
+    locks: null,
+    setTimer: (fn) => setTimeout(fn, 0),
+    now: cl.now,
+  }))
+  await a.enqueue(itemOf(), [])
+  const engine = new SyncEngine(b, { now: c.now, setTimer: () => 0, clearTimer: () => {}, random: () => 0.5 })
+  const writer =
+    takeOver === 'real' ? wb : ({ holds: () => wb.holds(), takeOver: async () => {} } as unknown as OfflineWriter)
+  const runtime = { user: 7, store: b, engine, writer, stop: () => {} } as unknown as Runtime
+  const out = vi.fn()
+  render(<LogoutGuard runtime={runtime} count={1} onSignOut={out} onCancel={() => {}} />)
+  return { a, b, out }
+}
+
+test('"Sync now" in a tab that is not the writer takes the right first, then syncs, and signs out', async () => {
+  const { b, out } = await signingOut('real')
+  fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  fireEvent.click(screen.getByRole('button', { name: 'Sync now' }))
+  await waitFor(() => expect(out).toHaveBeenCalledOnce())
+  expect((await b.listItems())[0].state).toBe('synced')
+})
+
+test('"Sync now" in a tab that could not take the right says so in words, and attempts nothing', async () => {
+  const { b, out } = await signingOut('refused')
+  const calls = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  fireEvent.click(screen.getByRole('button', { name: 'Sync now' }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/another tab/)
+  expect(out).not.toHaveBeenCalled()
+  expect(calls).toHaveLength(0)
+  expect((await b.listItems())[0].state).toBe('attention')
+  // The button works again, and the dialog is still there.
+  expect(screen.getByRole('button', { name: 'Sync now' })).toHaveProperty('disabled', false)
 })

@@ -73,7 +73,7 @@ export class OfflineWriter {
     private readonly deps: WriterDeps = {},
   ) {
     this.now = deps.now ?? Date.now
-    store.attachWriter(this.owner)
+    store.attachWriter(this.owner, this.now)
   }
 
   private get locks(): LockManager | null {
