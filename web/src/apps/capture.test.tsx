@@ -567,8 +567,9 @@ test('a decoder that can’t start turns the camera off and leaves the typed fie
   render(<Code onValue={changed} />)
   fireEvent.click(screen.getByRole('button', { name: 'Scan with the camera' }))
   expect((await screen.findByRole('alert')).textContent).toMatch(/code reader isn’t working in this browser/)
-  // Not scanning any more: the camera was let go, the frames stopped coming, the button is back.
-  expect(track.stop).toHaveBeenCalled()
+  // Not scanning any more: the camera was let go (by the effect's cleanup, which can run just
+  // after the message is drawn), the frames stopped coming, the button is back.
+  await waitFor(() => expect(track.stop).toHaveBeenCalled())
   const frames = detect.mock.calls.length
   await new Promise((r) => setTimeout(r, 450))
   expect(detect.mock.calls.length).toBe(frames)

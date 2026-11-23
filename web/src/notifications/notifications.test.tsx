@@ -487,6 +487,10 @@ test('a screen that holds a one-time token in its address is not replaced by a c
   fakeFetch({ 'GET /api/setup': { body: { needed: false } } })
   render(<App />)
   await screen.findByRole('heading', { name: /password/i })
+  // The app listened while it was loading and stopped when this screen came up, in an effect
+  // that can run just after the screen is drawn: settle the effects, or the listener that is
+  // about to be removed is still counted as listening.
+  await act(async () => {})
   const container = navigator.serviceWorker as unknown as {
     addEventListener: ReturnType<typeof vi.fn>
     removeEventListener: ReturnType<typeof vi.fn>

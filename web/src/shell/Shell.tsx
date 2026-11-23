@@ -378,8 +378,11 @@ function LanguageSelect({ initial, t }: { initial: string; t: T }) {
   const saving = useRef(false)
   // A new value from the server (the account's /api/me again) is the one to show and to go
   // back to, unless a pick is still being saved: that value is from before the pick, which
-  // stays the one wanted and shown.
+  // stays the one wanted and shown. A value the account already has (this effect's first run,
+  // which can come after a pick made at once, or /api/me confirming the pick just saved) is
+  // nothing new: acting on it would undo that pick.
   useEffect(() => {
+    if (initial === saved.current) return
     saved.current = initial
     if (saving.current) return
     wanted.current = initial

@@ -1400,7 +1400,8 @@ test('clearing synced records keeps a deleted record out of the screen until a d
   render(<Harness runtime={runtime} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Clear synced records' }))
   await waitFor(async () => expect((await store.listItems())[0].cleared).toBe(true))
-  expect(screen.queryByRole('button', { name: 'Clear synced records' })).toBeNull()
+  // The screen follows the store once it has read it again.
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Clear synced records' })).toBeNull())
   // The copy still holds the record: the deletion is what keeps it from being shown.
   const copy = (await store.getDownload(scope)) as Download
   expect(itemsOf(copy, await store.listItems())).toEqual([])

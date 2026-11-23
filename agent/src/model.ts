@@ -11,6 +11,20 @@ import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from '@ear
 
 export const SCRIPT_MODEL_ID = 'script-1'
 
+// How fast the model writes, in tokens per second: slow enough to see partial answers stream.
+// Every answer to a tool's result repeats the result, so a test that only checks what the tools
+// returned (a large one, such as the app catalog, takes minutes at this pace) sets this to 0, which
+// is no pacing at all, in the environment it starts the sidecar with.
+export const TOKENS_PER_SECOND_ENV = 'TASKTO_AGENT_SCRIPT_TOKENS_PER_SECOND'
+const DEFAULT_TOKENS_PER_SECOND = 40
+
+export function tokensPerSecond(env: NodeJS.ProcessEnv = process.env): number {
+  const set = env[TOKENS_PER_SECOND_ENV]?.trim()
+  if (!set) return DEFAULT_TOKENS_PER_SECOND
+  const value = Number(set)
+  return Number.isFinite(value) && value >= 0 ? value : DEFAULT_TOKENS_PER_SECOND
+}
+
 type Message = { role: string; content?: unknown; toolName?: string; sections?: Record<string, string> }
 
 function textOf(content: unknown): string {
@@ -26,7 +40,7 @@ export function installScriptModel(models: ReturnType<typeof createModels>, prov
   const faux = fauxProvider({
     provider,
     models: [{ id: SCRIPT_MODEL_ID }],
-    tokensPerSecond: 40, // slow enough to see partial answers stream
+    tokensPerSecond: tokensPerSecond(),
   })
   const answer = (context: { messages: Message[] }) => {
     // Pi Durable puts the system prompt's sections in positional system messages, a changed
