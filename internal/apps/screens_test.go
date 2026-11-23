@@ -315,8 +315,10 @@ func TestPlanNavigate(t *testing.T) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
-	if _, err := Plan(surfaceID, def, ClientAction{Name: "new_task", SurfaceID: surfaceID, ExpectedRevision: rev(1)}); !errors.Is(err, ErrInvalid) {
-		t.Errorf("a revision on a navigate: %v", err)
+	// The web app sends the revision of the record a button is on with every action: a navigate,
+	// which only reads, opens the record all the same.
+	if ch, err := Plan(surfaceID, def, ClientAction{Name: "open_task", SurfaceID: surfaceID, Context: map[string]any{"id": 2.0}, ExpectedRevision: rev(1)}); err != nil || ch.Screen != "detail" || ch.ID != 2 || ch.Expected != nil {
+		t.Errorf("a revision on a navigate: %+v, %v", ch, err)
 	}
 }
 
