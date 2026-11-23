@@ -39,13 +39,26 @@ func (s *Service) ListApps(ctx context.Context, a Actor, spaceID int64, withArch
 	return s.listApps(ctx, sp, a, withArchived)
 }
 
-// ShowApp returns an app with its definition.
+// ShowApp returns an app with its draft, for the agent that edits it, and the live
+// release's number and needs but not its definition: both would be too much for one reply.
 func (s *Service) ShowApp(ctx context.Context, a Actor, spaceID, appID int64) (App, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
 		return App{}, err
 	}
-	return s.getApp(ctx, sp, a, appID)
+	ap, err := s.getApp(ctx, sp, a, appID)
+	return forAgent(ap), err
+}
+
+// forAgent leaves out the live release's definition: the agent works on the draft, and a reply
+// holds one definition (MaxDefinitionSize), not two.
+func forAgent(ap App) App {
+	if ap.Live != nil {
+		live := *ap.Live
+		live.Definition = nil
+		ap.Live = &live
+	}
+	return ap
 }
 
 // CreateApp saves a new app in a space.
@@ -54,16 +67,20 @@ func (s *Service) CreateApp(ctx context.Context, a Actor, spaceID int64, na NewA
 	if err != nil {
 		return App{}, err
 	}
-	return s.createApp(ctx, sp, a, na)
+	ap, err := s.createApp(ctx, sp, a, na)
+	return forAgent(ap), err
 }
 
-// UpdateApp changes an app: ch.Version must be its current version, or ErrStale.
+// UpdateApp changes an app: ch.Version must be its current version, or ErrStale. A new
+// definition replaces the draft; the live release is not touched, and the agent has no way
+// to publish: that is for a person who may publish the app.
 func (s *Service) UpdateApp(ctx context.Context, a Actor, spaceID, appID int64, ch Changes) (App, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
 		return App{}, err
 	}
-	return s.updateApp(ctx, sp, a, appID, ch)
+	ap, err := s.updateApp(ctx, sp, a, appID, ch)
+	return forAgent(ap), err
 }
 
 // ListRows returns an app's rows as the app shows them (Items), oldest first: those the
@@ -86,7 +103,12 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 	if err != nil {
 		return nil, err
 	}
-	return Items(*ap.Definition, rows), nil
+	// As the app shows them: by the live release (an unpublished app has no rows).
+	def := ap.draftDef
+	if ap.liveDef != nil {
+		def = *ap.liveDef
+	}
+	return Items(def, rows), nil
 }
 
 //go:embed examples/*.json
@@ -127,11 +149,15 @@ func Examples() ([]Example, error) {
 // CatalogReference describes what an app may be made of, for the agent: the components
 // and their props, the functions, the field types and the actions.
 type CatalogReference struct {
-	Protocol   string                       `json:"protocol"`
-	Components map[string]map[string]string `json:"components"`
-	Functions  map[string]map[string]string `json:"functions"`
-	Rules      []string                     `json:"rules"`
-	Examples   []Example                    `json:"examples"`
+	Protocol string `json:"protocol"`
+	// Capabilities are what a definition may need (Definition.Requires), DefinitionVersion
+	// the version of its format.
+	DefinitionVersion int                          `json:"definition_version"`
+	Capabilities      []string                     `json:"capabilities"`
+	Components        map[string]map[string]string `json:"components"`
+	Functions         map[string]map[string]string `json:"functions"`
+	Rules             []string                     `json:"rules"`
+	Examples          []Example                    `json:"examples"`
 }
 
 // Reference returns the catalog's reference, with the bundled examples.
@@ -141,11 +167,13 @@ func Reference() (CatalogReference, error) {
 		return CatalogReference{}, err
 	}
 	ref := CatalogReference{
-		Protocol:   "A2UI " + ProtocolVersion + ": each component is {\"id\", \"component\", …props}; children are referred to by id",
-		Components: map[string]map[string]string{},
-		Functions:  map[string]map[string]string{},
-		Rules:      rules,
-		Examples:   ex,
+		Protocol:          "A2UI " + ProtocolVersion + ": each component is {\"id\", \"component\", …props}; children are referred to by id",
+		DefinitionVersion: DefinitionVersion,
+		Capabilities:      Capabilities(),
+		Components:        map[string]map[string]string{},
+		Functions:         map[string]map[string]string{},
+		Rules:             rules,
+		Examples:          ex,
 	}
 	for name, spec := range components {
 		ref.Components[name] = describeProps(spec)
@@ -167,7 +195,8 @@ var rules = []string{
 	`collection.fields: [{"name", "type": "string"|"number"|"boolean"|"date", "required"?, "max_length"? (string, default 1000, at most 10000), "min"?/"max"? (number)}], at most 50; a date is YYYY-MM-DD; names are lowercase letters, digits and _, not id, items or draft.`,
 	`actions: {"<event name>": {"kind": "insert"|"update"|"delete"}}. A Button's action {"event": {"name", "context"}} must name one. insert adds a row from the context's fields and clears /draft; update changes the fields the context gives of the row whose "id" it gives; delete removes the row whose "id" it gives.`,
 	`summaries: {"<name>": {"kind": "count"} | {"kind": "sum", "field": "<number field>"}}.`,
-	`Changing a definition: the app's rows must still fit the new collection, so add new fields as optional.`,
+	`Saving a definition (create_app, update_app) saves the app's DRAFT: it changes nothing people use. They keep using the live release until a person who may publish the app publishes the draft, in the Apps page; you have no tool to publish. A new app is a draft only, and is not launchable until published.`,
+	`Publishing checks the draft against the app's rows: removing a field that rows have values for, changing a field's type, making a field required that some row lacks, or tightening its limits below a stored value needs the publisher to acknowledge it by name. So prefer adding fields as optional, and keep names and types of fields that have data.`,
 	`Image, Video, AudioPlayer and openUrl are not available: an app never loads or opens outside addresses.`,
 }
 

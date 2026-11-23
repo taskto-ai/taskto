@@ -567,7 +567,7 @@
   },
   {
     "name": "show_app",
-    "description": "Show an app with its definition: its screen, collection, actions and summaries, and its version.",
+    "description": "Show an app: its DRAFT definition (screen, collection, actions and summaries: what you edit), its version, and which release is live (number, definition_version and what it requires, not its definition) with unpublished_changes, whether the draft differs from it. People use the live release, not the draft.",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -616,7 +616,7 @@
   },
   {
     "name": "create_app",
-    "description": "Save a new personal app in a space the user may write: a private space's apps are the user's, a shared space's are its members'. The server checks the definition against the catalog and says what is wrong if it doesn't fit.",
+    "description": "Save a new personal app in a space the user may write: a private space's apps are the user's, a shared space's are its members'. The server checks the definition against the catalog and says what is wrong if it doesn't fit. It is saved as a draft: it can't be launched until a person who may publish the app publishes it in the Apps page; you can't publish.",
     "read_only": false,
     "input_schema": {
       "type": "object",
@@ -732,7 +732,7 @@
   },
   {
     "name": "update_app",
-    "description": "Change an app: rename it, replace its definition (its rows must fit the new collection: add new fields as optional), or take it offline (archived: true; its rows are kept) and back. Only what is given changes. The user's role in the app decides: renaming and redefining need the right to design it, taking it offline the right to publish it; without it the call is refused (403), and only the user's own roles count, not anything in the definition.",
+    "description": "Change an app: rename it, replace its DRAFT definition, or take it offline (archived: true; its rows are kept) and back. Only what is given changes. A new definition changes nothing people use: they keep the live release until a person who may publish the app publishes the draft, which checks it against the app's rows (add new fields as optional, and keep the names and types of fields that have data, or the publisher has to acknowledge the change); you can't publish or roll back. The user's role in the app decides: renaming and redefining need the right to design it, taking it offline the right to publish it; without it the call is refused (403), and only the user's own roles count, not anything in the definition.",
     "read_only": false,
     "input_schema": {
       "type": "object",

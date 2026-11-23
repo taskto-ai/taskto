@@ -1,7 +1,6 @@
 package apps
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -35,14 +34,20 @@ type Author struct {
 	Via   string `json:"via,omitempty"`
 }
 
-// App is an app as a list shows it; Definition is set when one app is read.
+// App is an app as a list shows it; Live and Draft carry definitions when one app is read.
+//
+// An app has a draft, the definition people with the design capability edit, and releases,
+// immutable copies of drafts that were published (release.go). It serves its live release:
+// editing never changes what people use, publishing does.
 type App struct {
 	ID      int64  `json:"id"`
 	SpaceID int64  `json:"space_id"`
 	Name    string `json:"name"`
 	// ArchivedAt is when the app was taken offline, or nil.
 	ArchivedAt *string `json:"archived_at"`
-	Version    int64   `json:"version"`
+	// Version is the app's version for optimistic changes: bumped by every change to the
+	// app, the draft's, a publish and a rollback included.
+	Version int64 `json:"version"`
 	// Rows is how many rows its collection has that the caller may read: all of them, only
 	// their own, or none (see Access.ReadRecords).
 	Rows      int     `json:"rows"`
@@ -51,8 +56,23 @@ type App struct {
 	UpdatedAt string  `json:"updated_at"`
 	UpdatedBy *Author `json:"updated_by"`
 	// Access is what the caller may do in the app: their roles and capabilities.
-	Access     access.AppAccess `json:"access"`
-	Definition *Definition      `json:"definition,omitempty"`
+	Access access.AppAccess `json:"access"`
+	// Live is the release the app serves, or nil before its first publish (it can't be
+	// launched). Its Definition is in a single app's reply.
+	Live *Release `json:"live"`
+	// UnpublishedChanges is whether the draft is not the live release's definition (it is
+	// always so before the first publish). Only callers who may design or publish are told.
+	UnpublishedChanges bool `json:"unpublished_changes"`
+	// Draft is the definition being edited, in a single app's reply, for callers who may design
+	// or publish: others see the live release's definition alone.
+	Draft *Definition `json:"draft,omitempty"`
+
+	// What the store read, for the service's own use: the draft, the live release's definition
+	// and whether they differ. They reach a reply only through present, by the caller's access.
+	draftDef     Definition
+	liveDef      *Definition
+	draftDiffers bool
+	detailed     bool
 }
 
 var (
@@ -246,8 +266,30 @@ func (s *Service) present(ctx context.Context, a Actor, ap *App) error {
 		return err
 	}
 	ap.Access = acc
+	ap.finish(acc)
 	ap.Rows, err = countRows(ctx, s.db, ap.ID, readable(acc, a.UserID))
 	return err
+}
+
+// reviews is whether acc may see what is not live yet: the draft and the releases before it.
+func reviews(acc access.AppAccess) bool { return acc.Design || acc.Publish }
+
+// finish puts in a reply what the caller's access lets them know of the app's drafts: the
+// draft and whether it differs only for those who may design or publish, the definition of
+// the live release for everyone who may view the app.
+func (a *App) finish(acc access.AppAccess) {
+	a.UnpublishedChanges = reviews(acc) && a.draftDiffers
+	if !a.detailed {
+		return
+	}
+	if reviews(acc) {
+		d := a.draftDef
+		a.Draft = &d
+	}
+	if a.Live != nil && a.liveDef != nil {
+		d := *a.liveDef
+		a.Live.Definition = &d
+	}
 }
 
 // countRows counts the rows of appID that v reads.
@@ -299,41 +341,61 @@ func via(a Actor) any {
 	return a.Via
 }
 
-// appColumns selects what scanApp reads, from apps a; appListColumns the same with an empty
-// definition in its place, so a listing of up to maxApps apps doesn't read each one's (up to
-// 48 KiB) only to throw it away.
+// appColumns selects what scanApp reads, from apps a; appListColumns the same with empty
+// definitions in their place, so a listing of up to maxApps apps doesn't read each one's (up to
+// 48 KiB, twice) only to throw them away.
 const (
 	appFields = `a.id, a.space_id, a.name, a.archived_at, a.version,
-	a.created_at, a.created_by, coalesce(cu.name, ''), a.created_by_agent, a.created_via,
-	a.updated_at, a.updated_by, coalesce(uu.name, ''), a.updated_by_agent, a.updated_via, `
+		a.created_at, a.created_by, coalesce(cu.name, ''), a.created_by_agent, a.created_via,
+		a.updated_at, a.updated_by, coalesce(uu.name, ''), a.updated_by_agent, a.updated_via,
+		a.draft_differs, r.number, r.definition_version, r.requires, r.published_at, r.published_by, coalesce(pu.name, ''), a.live_at, `
 	appFrom = `
-	FROM apps a
-	LEFT JOIN users cu ON cu.id = a.created_by
-	LEFT JOIN users uu ON uu.id = a.updated_by`
-	appColumns     = appFields + `a.definition` + appFrom
-	appListColumns = appFields + `''` + appFrom
+		FROM apps a
+		LEFT JOIN users cu ON cu.id = a.created_by
+		LEFT JOIN users uu ON uu.id = a.updated_by
+		LEFT JOIN app_releases r ON r.app_id = a.id AND r.number = a.live_release
+		LEFT JOIN users pu ON pu.id = r.published_by`
+	appColumns     = appFields + `a.definition, coalesce(r.definition, '')` + appFrom
+	appListColumns = appFields + `'', ''` + appFrom
 )
 
-// scanApp reads an app; withDefinition decodes its definition too.
+// scanApp reads an app; withDefinition decodes its draft and live definitions too.
 func scanApp(row scanner, withDefinition bool) (App, error) {
 	var a App
-	var createdBy, updatedBy sql.NullInt64
-	var createdName, updatedName, def string
+	var createdBy, updatedBy, relNumber, relVersion, relBy sql.NullInt64
+	var createdName, updatedName, relByName, draft, live string
+	var relRequires, relAt, liveAt sql.NullString
 	var createdAgent, updatedAgent bool
 	var createdVia, updatedVia sql.NullString
 	if err := row.Scan(&a.ID, &a.SpaceID, &a.Name, &a.ArchivedAt, &a.Version,
 		&a.CreatedAt, &createdBy, &createdName, &createdAgent, &createdVia,
-		&a.UpdatedAt, &updatedBy, &updatedName, &updatedAgent, &updatedVia, &def); err != nil {
+		&a.UpdatedAt, &updatedBy, &updatedName, &updatedAgent, &updatedVia,
+		&a.draftDiffers, &relNumber, &relVersion, &relRequires, &relAt, &relBy, &relByName, &liveAt, &draft, &live); err != nil {
 		return App{}, err
 	}
 	a.CreatedBy = author(createdBy, createdName, createdAgent, createdVia)
 	a.UpdatedBy = author(updatedBy, updatedName, updatedAgent, updatedVia)
-	if withDefinition {
-		var d Definition
-		if err := json.Unmarshal([]byte(def), &d); err != nil {
-			return App{}, fmt.Errorf("app %d: stored definition: %w", a.ID, err)
+	if relNumber.Valid {
+		rel, err := newRelease(relNumber.Int64, int(relVersion.Int64), relRequires.String, relAt.String, relBy, relByName)
+		if err != nil {
+			return App{}, fmt.Errorf("app %d: %w", a.ID, err)
 		}
-		a.Definition = &d
+		rel.Live, rel.LiveSince = true, liveAt.String
+		a.Live = &rel
+	}
+	if withDefinition {
+		d, err := decodeDefinition(draft, 0, nil)
+		if err != nil {
+			return App{}, fmt.Errorf("app %d: stored draft: %w", a.ID, err)
+		}
+		a.draftDef, a.detailed = d, true
+		if a.Live != nil {
+			l, err := decodeDefinition(live, a.Live.DefinitionVersion, a.Live.Requires)
+			if err != nil {
+				return App{}, fmt.Errorf("app %d: stored release %d: %w", a.ID, a.Live.Number, err)
+			}
+			a.liveDef = &l
+		}
 	}
 	return a, nil
 }
@@ -390,6 +452,7 @@ func (s *Service) listApps(ctx context.Context, sp access.Space, a Actor, withAr
 	for i := range all {
 		acc := accs[all[i].ID]
 		all[i].Access = acc
+		all[i].finish(acc)
 		switch acc.ReadRecords {
 		case access.ScopeAll:
 			all[i].Rows = counts[all[i].ID].all
@@ -438,7 +501,8 @@ func (s *Service) getApp(ctx context.Context, sp access.Space, a Actor, appID in
 	return ap, nil
 }
 
-// NewApp is a new app: its name and definition.
+// NewApp is a new app: its name and its first draft. It has no release, so it can't be
+// launched, until someone who may publish it does.
 type NewApp struct {
 	Name       string     `json:"name"`
 	Definition Definition `json:"definition"`
@@ -474,9 +538,9 @@ func (s *Service) createApp(ctx context.Context, sp access.Space, a Actor, na Ne
 			return errTooManyApps
 		}
 		if err := tx.QueryRowContext(ctx, `
-			INSERT INTO apps (space_id, name, definition,
+			INSERT INTO apps (space_id, name, definition, draft_differs,
 				created_by, created_by_agent, created_via, updated_by, updated_by_agent, updated_via)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			sp.ID, name, string(raw), a.UserID, a.Agent, via(a), a.UserID, a.Agent, via(a)).Scan(&id); err != nil {
 			return err
 		}
@@ -499,8 +563,9 @@ type Changes struct {
 	Name    *string `json:"name"`
 	// Archived takes the app offline (true) or brings it back (false).
 	Archived *bool `json:"archived"`
-	// Definition replaces the app's screen, collection, actions and summaries. Its rows
-	// must fit the new collection.
+	// Definition replaces the app's DRAFT: the screen, collection, actions and summaries
+	// builders edit. It is checked against the catalog, not against the rows, and changes
+	// nothing people use until it is published (Publish, which checks the rows).
 	Definition *Definition `json:"definition"`
 }
 
@@ -565,28 +630,22 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		if cur.Version != ch.Version {
 			return ErrStale
 		}
+		// Only the draft changes: the live release, and so what people use, stays as it is.
+		// Whether the draft still differs from it is kept for the lists.
+		var differs any // nil: unchanged
 		if ch.Definition != nil {
-			// A new collection is checked against every row, and its refusal names the rows
-			// and why they don't fit: tightening a field's bounds, again and again, would read
-			// its values out. So only who reads all the records may change the collection;
-			// the screen, actions and summaries are design alone (an unchanged collection
-			// always fits).
-			if !sameCollection(cur.Definition.Collection, checked.Collection) && acc.ReadRecords != access.ScopeAll {
-				return forbidden(capReadRecords)
-			}
-			if err := rowsFit(ctx, tx, appID, checked.Collection); err != nil {
-				return err
-			}
+			differs = cur.liveDef == nil || !sameDefinition(*cur.liveDef, checked)
 		}
 		_, err = tx.ExecContext(ctx, `
 			UPDATE apps SET
 				name = coalesce(?, name),
 				definition = coalesce(?, definition),
+				draft_differs = coalesce(?, draft_differs),
 				archived_at = CASE WHEN ? IS NULL THEN archived_at
 				                   WHEN ? = '' THEN NULL
 				                   ELSE coalesce(archived_at, ?) END,
 				version = version + 1, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?
-			WHERE id = ?`, name, def, archivedAt, archivedAt, archivedAt, now(), a.UserID, a.Agent, via(a), appID)
+			WHERE id = ?`, name, def, differs, archivedAt, archivedAt, archivedAt, now(), a.UserID, a.Agent, via(a), appID)
 		if err != nil {
 			return err
 		}
@@ -600,36 +659,6 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		return App{}, err
 	}
 	return updated, nil
-}
-
-// sameCollection reports whether two collections are the same, field for field.
-func sameCollection(a, b Collection) bool {
-	x, errA := json.Marshal(a)
-	y, errB := json.Marshal(b)
-	return errA == nil && errB == nil && bytes.Equal(x, y)
-}
-
-// rowsFit checks every row of appID against a new collection, so changing an app's
-// definition never leaves rows its screen and actions can't handle.
-func rowsFit(ctx context.Context, q queryer, appID int64, c Collection) error {
-	rows, err := loadRows(ctx, q, appID, everything) // the check is the server's, over every row
-	if err != nil {
-		return err
-	}
-	var bad []string
-	for _, r := range rows {
-		if err := c.Fits(r.Data); err != nil {
-			bad = append(bad, fmt.Sprintf("row %d: %v", r.ID, err))
-		}
-	}
-	if len(bad) == 0 {
-		return nil
-	}
-	if len(bad) > 5 {
-		bad = append(bad[:5], fmt.Sprintf("and %d more", len(bad)-5))
-	}
-	return invalidf("%d of the app's rows don't fit the new collection (make the field optional, or keep its type): %s",
-		len(bad), strings.Join(bad, "; "))
 }
 
 // moveApp moves an app to another space of the same workspace, with its rows: the caller
@@ -737,8 +766,11 @@ func launchable(ctx context.Context, q queryer, spaceID, appID int64) (App, erro
 	return a, err
 }
 
-// surface returns the messages that draw an app with its rows.
-func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, appID int64) ([]Message, error) {
+// surface returns the messages that draw an app with its rows. which is the screen: "" for
+// the live release (ErrNotPublished before the first publish), "draft" for the draft, or a
+// release number; the draft and releases that are not live are for those who may design or
+// publish. Every screen is drawn with the same rows, those the caller reads.
+func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, appID int64, which string) ([]Message, error) {
 	if err := may(sp, access.Read); err != nil {
 		return nil, err
 	}
@@ -753,17 +785,33 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 	if err != nil {
 		return nil, err
 	}
+	def, err := screenOf(ctx, s.db, a, acc, which)
+	if err != nil {
+		return nil, err
+	}
 	// The screen's rows, and with them its summaries, are those the caller reads.
 	rows, err := loadRows(ctx, s.db, appID, readable(acc, actor.UserID))
 	if err != nil {
 		return nil, err
 	}
-	return Surface(SurfaceID(a.ID), *a.Definition, rows), nil
+	return Surface(SurfaceID(a.ID), def, rows), nil
 }
 
 // act runs a client action and returns the message that updates the screen. Errors in
 // the action itself (an unknown action or row, a value that doesn't fit) match
 // ErrInvalid.
+//
+// An action names the release its screen was drawn from (ClientAction.Release; left out, the
+// live one). From the live release it is run as the live definition says. From another one,
+// older because someone published or rolled back since the screen was drawn, it is run as that
+// release defines it, and applied only if the live release can take it as it is: the live
+// release declares the same action, and every field the action sets is one the live collection
+// declares, of the same type. The row it would write must still fit the live collection (a
+// field the live release requires and that release's screen doesn't send is the usual
+// reason: the client gets the field's own error). Otherwise nothing changes and the answer
+// is ErrReleaseOutdated, which tells the client to reload the app. A release the app doesn't
+// have is ErrReleaseNotFound. The data model sent back is drawn by the release the action
+// came from, so that screen shows what it can.
 func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
 	if err := may(sp, access.Write); err != nil {
 		return nil, err
@@ -779,7 +827,19 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 		if err != nil {
 			return err
 		}
-		def = *a.Definition
+		if a.liveDef == nil {
+			return ErrNotPublished
+		}
+		live := *a.liveDef
+		def = live
+		fromOlder := action.Release != nil && *action.Release != a.Live.Number
+		if fromOlder {
+			rel, err := loadRelease(ctx, tx, appID, *action.Release, true)
+			if err != nil {
+				return err
+			}
+			def = *rel.Definition
+		}
 		// What the action does decides which right it needs: adding a row is the user's,
 		// changing or removing one is the user's own or the data manager's all.
 		if kind := def.Actions[action.Name].Kind; kind == ActionInsert && !acc.Submit {
@@ -791,7 +851,10 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 		if err != nil {
 			return err
 		}
-		return apply(ctx, tx, actor, appID, def, ch, visibility{scope: acc.ModifyRecords, user: actor.UserID})
+		if fromOlder && !liveTakes(live, def, action.Name, ch) {
+			return &outdatedError{release: *action.Release, live: a.Live.Number}
+		}
+		return apply(ctx, tx, actor, appID, live, ch, visibility{scope: acc.ModifyRecords, user: actor.UserID})
 	})
 	if err != nil {
 		return nil, err

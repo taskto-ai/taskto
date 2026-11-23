@@ -311,7 +311,7 @@ func (s *stack) apps(ws, space int64) string {
 }
 
 // app makes the bundled example app in a space of one with a browser's session, with one
-// row, and returns its ID.
+// row, published, and returns its ID.
 func (s *stack) app(cookie string, space int64, row string) int64 {
 	s.t.Helper()
 	ex, err := apps.Examples()
@@ -323,6 +323,12 @@ func (s *stack) app(cookie string, space int64, row string) int64 {
 		s.t.Fatalf("create app = %d %v", code, a)
 	}
 	appID := id(a["id"])
+	// A new app is a draft: its owner publishes it (which makes it version 2) before it can be used.
+	if code, body := s.browser(cookie, http.MethodPost, fmt.Sprintf("%s/%d/publish", s.apps(s.one, space), appID), map[string]any{
+		"version": id(a["version"]), "acknowledge": []any{},
+	}); code != http.StatusOK {
+		s.t.Fatalf("publish app = %d %v", code, body)
+	}
 	if code, body := s.browser(cookie, http.MethodPost, fmt.Sprintf("%s/%d/actions", s.apps(s.one, space), appID), map[string]any{
 		"name": "add_expense", "surfaceId": apps.SurfaceID(appID), "sourceComponentId": "add",
 		"context": map[string]any{"description": row, "amount": "3"},
@@ -679,7 +685,7 @@ func TestTokenChangesAreTheUsersMarkedWithTheToken(t *testing.T) {
 	}
 	// Apps too, and their rows are read over MCP as the browser shows them.
 	appID := s.app(s.alice.cookie, s.alice.private, "coffee")
-	mcpApp := s.toolOK(token, "update_app", map[string]any{"space_id": s.alice.private, "app_id": appID, "version": 1, "name": "Spending"})
+	mcpApp := s.toolOK(token, "update_app", map[string]any{"space_id": s.alice.private, "app_id": appID, "version": 2, "name": "Spending"})
 	if by := mcpApp["updated_by"]; fmt.Sprint(by) != fmt.Sprint(want) {
 		t.Errorf("app's update by %v, want %v", by, want)
 	}

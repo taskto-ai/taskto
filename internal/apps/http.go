@@ -28,6 +28,10 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("POST "+apps+"/{app}/move", write(s.handleMove))
 	mux.Handle("GET "+apps+"/{app}/surface", read(s.handleSurface))
 	mux.Handle("POST "+apps+"/{app}/actions", write(s.handleAction))
+	mux.Handle("POST "+apps+"/{app}/publish", write(s.handlePublish))
+	mux.Handle("POST "+apps+"/{app}/rollback", write(s.handleRollback))
+	mux.Handle("GET "+apps+"/{app}/releases", read(s.handleReleases))
+	mux.Handle("GET "+apps+"/{app}/releases/{release}", read(s.handleRelease))
 	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
 	mux.Handle("PUT "+apps+"/{app}/roles", write(s.handleSetRoles))
 }
@@ -148,7 +152,7 @@ func (s *Service) handleSurface(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	msgs, err := s.surface(r.Context(), req.space, req.actor, req.app)
+	msgs, err := s.surface(r.Context(), req.space, req.actor, req.app, r.URL.Query().Get("release"))
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -176,6 +180,65 @@ func (s *Service) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, msgs)
+}
+
+// handlePublish makes the app's draft its live release.
+func (s *Service) handlePublish(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	var body Publish
+	if !readJSON(w, r, &body) {
+		return
+	}
+	a, err := s.publishApp(r.Context(), req.space, req.actor, req.app, body)
+	s.result(w, r, req, a, err)
+}
+
+// handleRollback makes an earlier release the live one.
+func (s *Service) handleRollback(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	var body Rollback
+	if !readJSON(w, r, &body) {
+		return
+	}
+	a, err := s.rollbackApp(r.Context(), req.space, req.actor, req.app, body)
+	s.result(w, r, req, a, err)
+}
+
+func (s *Service) handleReleases(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	all, err := s.listReleases(r.Context(), req.space, req.actor, req.app)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]Release{"releases": all})
+}
+
+func (s *Service) handleRelease(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	n, err := strconv.ParseInt(r.PathValue("release"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusNotFound, apierr.CodeAppReleaseNotFound, ErrReleaseNotFound.Error())
+		return
+	}
+	rel, err := s.getRelease(r.Context(), req.space, req.actor, req.app, n)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rel)
 }
 
 // handleRoles answers the app's role assignments, to whoever manages them.
@@ -241,6 +304,9 @@ func (s *Service) result(w http.ResponseWriter, r *http.Request, req request, a 
 // fail answers with the status for one of the package's errors, or 500.
 func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var full *fullError
+	var outdated *outdatedError
+	var incompatible *incompatibleError
+	var migration *migrationError
 	switch {
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, apierr.CodeNotFound, ErrNotFound.Error())
@@ -257,6 +323,24 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusForbidden, apierr.CodeAppForbidden, err.Error(), params)
 	case errors.Is(err, ErrOffline):
 		writeError(w, http.StatusConflict, apierr.CodeAppOffline, err.Error())
+	case errors.Is(err, ErrNotPublished):
+		writeError(w, http.StatusConflict, apierr.CodeAppNotPublished, err.Error())
+	case errors.Is(err, ErrReleaseNotFound):
+		writeError(w, http.StatusNotFound, apierr.CodeAppReleaseNotFound, err.Error())
+	case errors.As(err, &outdated):
+		writeError(w, http.StatusConflict, apierr.CodeAppReleaseOutdated, err.Error(), apierr.Params{"release": outdated.release, "live": outdated.live})
+	case errors.As(err, &incompatible):
+		writeError(w, http.StatusConflict, apierr.CodeAppReleaseIncompatible, err.Error(), apierr.Params{"fields": incompatible.fields})
+	case errors.Is(err, ErrReleaseLive):
+		writeError(w, http.StatusConflict, apierr.CodeAppReleaseLive, err.Error())
+	case errors.Is(err, ErrNothingToPublish):
+		writeError(w, http.StatusConflict, apierr.CodeAppNothingToPublish, err.Error())
+	case errors.As(err, &migration):
+		code := apierr.CodeAppMigrationUnneeded
+		if migration.unacknowledged {
+			code = apierr.CodeAppMigrationRequired
+		}
+		writeError(w, http.StatusConflict, code, err.Error(), apierr.Params{"changes": migration.changes})
 	case errors.Is(err, ErrStale):
 		// Not reached: changes go through result, which sends the current app too.
 		writeError(w, http.StatusConflict, apierr.CodeAppChanged, err.Error())

@@ -233,6 +233,29 @@ func (w *world) create(u *user, s access.Space, name string) App {
 	w.e.t.Helper()
 	rec := u.do(http.MethodPost, appsPath(s, ""), exampleBody(w.e.t, name))
 	expect(w.e.t, rec, http.StatusCreated)
+	a := w.publish(u, s, decode[App](w.e.t, rec))
+	// The tests that count versions count from the app as it was made, live: publishing it was
+	// only their setup.
+	if _, err := w.e.db.Exec(`UPDATE apps SET version = 1 WHERE id = ?`, a.ID); err != nil {
+		w.e.t.Fatal(err)
+	}
+	a.Version = 1
+	return a
+}
+
+// draft creates an app and leaves it as a draft: it has no release, so it can't be launched.
+func (w *world) draft(u *user, s access.Space, name string) App {
+	w.e.t.Helper()
+	rec := u.do(http.MethodPost, appsPath(s, ""), exampleBody(w.e.t, name))
+	expect(w.e.t, rec, http.StatusCreated)
+	return decode[App](w.e.t, rec)
+}
+
+// publish publishes a's draft as u, who must be allowed to, and returns the app as it is then.
+func (w *world) publish(u *user, s access.Space, a App) App {
+	w.e.t.Helper()
+	rec := u.do(http.MethodPost, appPath(s, a.ID, "/publish"), map[string]any{"version": a.Version, "acknowledge": []SchemaChange{}})
+	expect(w.e.t, rec, http.StatusOK)
 	return decode[App](w.e.t, rec)
 }
 
@@ -326,7 +349,7 @@ func TestAppLifecycle(t *testing.T) {
 		t.Fatalf("an offline app is listed: %+v", list)
 	}
 	list = decode[struct{ Apps []App }](t, w.alice.do(http.MethodGet, appsPath(s, "?archived=true"), nil)).Apps
-	if len(list) != 1 || list[0].Rows != 2 || list[0].Definition != nil {
+	if len(list) != 1 || list[0].Rows != 2 || list[0].Draft != nil || list[0].Live == nil || list[0].Live.Definition != nil {
 		t.Fatalf("with archived = %+v", list)
 	}
 
@@ -531,16 +554,16 @@ func TestSavedAppsAreCheckedOnTheServer(t *testing.T) {
 		t.Fatalf("bob's rows = %v", items)
 	}
 
-	// A new collection the rows don't fit is refused; one they fit is taken.
+	// A new collection the rows don't fit is a draft like any other: saving it is checked against
+	// the catalog, and the rows are checked when it is published (release_test.go).
 	def := example(t)
 	def.Collection.Fields = append(def.Collection.Fields, Field{Name: "category", Type: TypeString, Required: true})
 	rec = w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "definition": def})
-	expect(t, rec, http.StatusBadRequest)
-	if !strings.Contains(rec.Body.String(), "category is required") {
-		t.Fatalf("refusal = %s", rec.Body.String())
-	}
-	def.Collection.Fields[2].Required = false
-	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "definition": def}), http.StatusOK)
+	expect(t, rec, http.StatusOK)
+	// The catalog is checked at once.
+	bad := example(t)
+	bad.Components = append(bad.Components, json.RawMessage(`{"id":"pic","component":"Image","url":"https://example.com/x.png"}`))
+	expect(t, w.alice.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 2, "definition": bad}), http.StatusBadRequest)
 }
 
 func TestRoutesNeedASessionAndSameOrigin(t *testing.T) {

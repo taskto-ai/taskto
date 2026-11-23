@@ -66,13 +66,17 @@ func TestSurface(t *testing.T) {
 }
 
 // The catalog as the web app must register it: every component with its props, and the
-// functions.
+// functions, and the capabilities (what a release needs) and definition format version it
+// speaks.
 func TestCatalogContract(t *testing.T) {
 	comps := map[string][]string{}
 	for name, spec := range components {
 		comps[name] = sortedKeys(spec)
 	}
-	golden(t, "catalog.json", map[string]any{"id": CatalogID, "components": comps, "functions": sortedKeys(functions)})
+	golden(t, "catalog.json", map[string]any{
+		"id": CatalogID, "components": comps, "functions": sortedKeys(functions),
+		"capabilities": Capabilities(), "definition_version": DefinitionVersion,
+	})
 }
 
 func TestStoredDefinitionDrawsTheSameSurface(t *testing.T) {

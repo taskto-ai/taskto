@@ -91,6 +91,16 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `too_many_apps` | 409 | The space has `max` apps. |
 | `app_full` | 409 | The app holds `max_rows` rows or `max_mib` MiB of data. |
 | `app_forbidden` | 403 | The space allows it, but the caller's roles in the app don't: `capability` is `design`, `publish`, `submit`, `modify_records` or `manage_roles`. |
+| `app_definition_version` | 400 | The definition's `definition_version` is `version`, which this server doesn't read (it reads up to `supported`). |
+| `app_not_published` | 409 | The app has no release yet: it is a draft, so it can't be launched or have its actions run. |
+| `app_release_not_found` | 404 | The app has no such release. |
+| `app_release_outdated` | 409 | An action from release `release` that the live release `live` can't take; reload the app. |
+| `app_release_incompatible` | 409 | A rollback to a release the app's data doesn't fit; `fields` names the fields that don't. |
+| `app_release_already_live` | 409 | The release to roll back to is the live one. |
+| `app_nothing_to_publish` | 409 | The draft is the live release's definition. |
+| `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
+| `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
+| `app_migration_invalid` | 400 | An acknowledgement that is malformed: an unknown `change`, a field that is no name, or one twice. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
@@ -1319,9 +1329,10 @@ capabilities, and a user may hold several:
 | `data_manager` | | | yes | all | all |
 | `reader` | | | | all | |
 
-Every role may view the app (launch it and read its definition); a `builder` also manages
-the app's roles. **Design** is changing the app's definition, renaming it and moving it;
-**publish** is taking it offline and restoring it (release steps will extend it);
+Every role may view the app (launch it and read its live definition); a `builder` also manages
+the app's roles. **Design** is changing the app's draft, renaming it and moving it;
+**publish** is publishing the draft, rolling back to an earlier release (see
+[Drafts and releases](#drafts-and-releases)), and taking it offline and restoring it;
 **submit** is adding a record (an `insert` action). **Own** records are those the caller
 created, which includes the ones the agent created for them; records whose creator's
 account was deleted are in nobody's own, and only readers of all see them. Every way of
@@ -1379,18 +1390,28 @@ An app:
   "created_at": "…", "created_by": {"id": 2, "name": "Member", "agent": true},
   "updated_at": "…", "updated_by": {"id": 2, "name": "Member", "agent": true},
   "access": { … },
-  "definition": { … }
+  "live": {"number": 2, "definition_version": 1, "requires": ["component.Stat", …],
+    "published_at": "…", "published_by": {"id": 2, "name": "Member", "agent": false},
+    "live": true, "live_since": "…", "definition": { … }},
+  "unpublished_changes": true,
+  "draft": { … }
 }
 ```
 
 `rows` counts the collection's rows the caller may read (see [App roles](#app-roles)).
-`access` is what the caller may do in the app. `definition` is only in a single app's reply.
-`agent` is `true` when the agent made the change for that user.
+`access` is what the caller may do in the app. `agent` is `true` when the agent made the change
+for that user. `live` is the release the app serves (`null` until its first publish) and
+`unpublished_changes` says the draft differs from it (always so before the first publish); the
+**definitions** (`live.definition`, and `draft`) are only in a single app's reply. `draft` and
+`unpublished_changes` are only for callers who may design or publish the app: anyone else
+sees the live release alone. See [Drafts and releases](#drafts-and-releases).
 
 ### The definition
 
 ```json
 {
+  "definition_version": 1,
+  "requires": ["component.Button", "component.Column", …],
   "components": [{"id": "root", "component": "Column", "children": ["title", "items", "form"]}, …],
   "collection": {"fields": [
     {"name": "description", "type": "string", "required": true, "max_length": 200},
@@ -1403,6 +1424,16 @@ An app:
 
 The server checks every definition when it is saved, strictly, and refuses it (`400`,
 saying what is wrong) unless:
+
+- **definition_version** is the version of the definition's own format, TaskTo.AI's,
+  independent of the A2UI protocol's version: `1` today (left out, it is the server's
+  current). A higher one is refused (`app_definition_version`), and a client that finds a
+  release in a version it doesn't read asks to be updated instead of drawing it.
+- **requires** lists the catalog **capabilities** the screen needs: `component.<Name>` for
+  each component it draws and `function.<name>` for each function it calls. The server works
+  it out from the screen and replaces whatever was sent, so a definition can't claim less than
+  it uses; the list is in each release, and a client whose catalog lacks one shows that it
+  must update. A new component or function is a new capability.
 
 - **components** is the screen, 1–300 A2UI components, one with the ID `root`, each
   `{"id", "component", …props}` with only the catalog's components and props
@@ -1448,15 +1479,12 @@ The app, with its definition.
 
 ### `PATCH …/apps/{app}`
 
-Writers. With the `version`: `name` renames it and `definition` replaces its screen,
-collection, actions and summaries (these take the design capability; changing the
-collection also takes reading all records, `403 app_forbidden` with `read_records`
-otherwise, since its check against every row would tell of rows the caller can't read),
-`archived` takes it
-offline (`true`) or restores it (`false`; the publish capability). A new definition must fit the app's rows: every row must still satisfy the
-collection (`400` otherwise, naming the rows), so new fields are added as optional.
-Fields no longer declared stay in the rows, unseen, and come back if declared again.
-`200` with the app.
+Writers. With the `version`: `name` renames it and `definition` replaces the app's **draft**:
+its screen, collection, actions and summaries (these take the design capability), `archived`
+takes it offline (`true`) or restores it (`false`; the publish capability). A new definition is
+checked against the catalog, not against the rows, and changes nothing people use: the app
+keeps serving its live release until the draft is published. Fields no longer declared stay in
+the rows, unseen, and come back if declared again. `200` with the app.
 
 ### `POST …/apps/{app}/move`
 
@@ -1470,8 +1498,14 @@ of another workspace, `403` for one they may only read). `200` with the app.
 
 Launches the app: the A2UI messages that draw it with its rows, `createSurface`,
 `updateComponents` and `updateDataModel`, for the surface `app-<id>` and the catalog
-`https://taskto.ai/catalogs/apps/v1.json`. `409` while it is offline. The data model has
-the rows the caller may read, and the summaries over those rows alone.
+`https://taskto.ai/catalogs/apps/v1.json`. `409` while it is offline, and `409
+app_not_published` before its first release. It draws the **live release**; `?release=draft`
+draws the draft, and `?release=<number>` that release (`404 app_release_not_found`), both
+only for those who may design or publish the app (`403 app_forbidden`, `design`) unless the
+number is the live one. The draft is drawn with the app's real rows, to look at: it is for
+previews, and its actions are not run. The data model has the rows the caller may read, and the
+summaries over those rows alone. A client names the release it drew in its actions: it knows
+it from `live.number` of the app it read, which it passes as `?release=`.
 
 ### `POST …/apps/{app}/actions`
 
@@ -1485,7 +1519,95 @@ its field, or a row the app doesn't have), applies it, and answers with the
 `updateDataModel` message to apply: the rows the caller may read, an empty `/draft`, and the
 summaries over them.
 Form inputs arrive as text, so number and boolean fields accept their text too. `409`
-while the app is offline.
+while the app is offline, and `409 app_not_published` before its first release.
+
+**The release an action comes from.** The action may carry `"release": <number>`, the release
+its screen was drawn from (`…/surface?release=`); left out, it is the live one. From the live
+release the action runs as the live definition says. From another release (the app was
+published or rolled back since the screen was drawn) it runs as *that release* defines it,
+and is **applied only if the live release can take it as it is**: the live release declares
+the same action (same name and kind), every field the action sets is a field the live collection
+declares with the same type, and an insert gives every field the live collection requires. Then
+the live collection checks the values as always (a value outside the live limits is the usual
+`422` of that field). Otherwise nothing changes and the answer is `409 app_release_outdated`
+(`release`, `live`), which tells the client to reload the app. A release the app doesn't have is
+`404 app_release_not_found`. The data model that answers is drawn by the release the action
+came from, so that screen shows what it can; a value stored with another type than its
+field's current one is left out of the data model (and stays stored).
+
+### Drafts and releases
+
+An app has a **draft**, the definition builders (and the agent) edit, and **releases**:
+numbered, immutable copies of drafts that someone with the publish capability published. The
+app serves its **live release**; editing the draft (`PATCH`, `create_app`, the agent's
+`update_app`) never changes what people use. A new app is a draft with no release: nobody
+launches it until it is published. Publishing and rolling back take the **publish
+capability** (`403 app_forbidden`, `publish`: a builder without it, a user, a reader, a viewer
+of the space, and the agent, which has no tool for either) in a space the caller may write (`403`
+otherwise; `404` for anything of another space or workspace), and neither changes a single row.
+Releases are never edited or deleted; the history lasts as long as the app.
+
+Every route here is under `…/apps/{app}`. Each change names the app's `version` and, like every
+change of the app, answers `409 app_changed` with the app as it is now if it changed since: two
+people editing the draft never overwrite each other, and a publish is of the draft its
+publisher read.
+
+#### `POST …/apps/{app}/publish`
+
+`{"version": 4, "acknowledge": [{"change": "field_removed", "field": "notes"}]}`. Makes the
+draft the next release (its number is one more than any before) and the live one, and answers
+`200` with the app. First the server checks the draft against the catalog again (`400`), then
+against **the app's rows**. Changes of the collection against the live release that stored rows
+are affected by are **schema changes that must be acknowledged**, by naming each one in
+`acknowledge` and nothing else:
+
+| `change` | When |
+|---|---|
+| `field_removed` | a field is gone, and some row has a value for it (the value stays in the row, unseen) |
+| `field_type_changed` | a field's type changed, and some row has a value for it |
+| `field_required` | a field became required (or was added as required), and some row has no value for it |
+| `field_narrowed` | a field's `max_length`, `min` or `max` now refuses a value some row has |
+
+A change no stored row is affected by (a new optional field, a looser limit, a field nobody
+filled in) needs no acknowledgement. Without the exact acknowledgement the answer is `409
+app_migration_required` with `params.changes`, the list of `{change, field}` the publish makes
+(never rows or values), and nothing is published; acknowledging a change the publish doesn't
+make is `409 app_migration_unneeded`, and a malformed list `400 app_migration_invalid`. The
+acknowledgement is the whole migration: **rows are never rewritten**. Rows that don't fit the
+new collection stay as they are: a value of another type than its field's is left out of what
+the app shows, and an update of such a row must give the fields that don't fit. A draft equal
+to the live release is `409 app_nothing_to_publish`.
+
+#### `POST …/apps/{app}/rollback`
+
+`{"version": 4, "release": 2}`. Makes an earlier release the live one: the app serves it as
+published, with the rows as they are now, and **no data is rolled back**. The draft is left
+as it is (it then differs from the live release, and publishing it makes a new release, not a
+return to the one before). It is refused (`409 app_release_incompatible`, `params.fields`
+the fields that don't fit, never rows) unless every row fits that release's collection: its
+required fields present, every value of its field's type and within its limits; fields it
+doesn't declare are ignored, and kept. `409 app_release_already_live` for the live release,
+`404 app_release_not_found` for one the app doesn't have. `200` with the app.
+
+#### `GET …/apps/{app}/releases`
+
+For those who may design or publish the app (`403 app_forbidden`, `design`, otherwise): the
+history, newest first, without definitions:
+`{"releases": [{"number": 2, "definition_version": 1, "requires": […], "published_at": "…",
+"published_by": {…}, "live": true, "live_since": "…"}, …]}`. `live_since` is when it became
+live: its publish, or a rollback to it.
+
+#### `GET …/apps/{app}/releases/{release}`
+
+The release with its `definition`, for the same callers; `404 app_release_not_found`.
+
+**Capabilities.** A release records `definition_version` and `requires`
+([The definition](#the-definition)). The web app's catalog knows a set of capabilities and a
+definition version (`web/src/apps/catalog.tsx`, held to the server's by
+`internal/apps/testdata/catalog.json`); a release that needs one it doesn't know is not
+drawn: the app shows that it must be updated, and the page reloaded, instead of a broken
+screen. Every existing app became release 1, live, with its current definition also as its
+draft, when this arrived; nothing about who can use it changed.
 
 ## Model providers
 

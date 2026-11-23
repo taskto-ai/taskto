@@ -1,4 +1,34 @@
 {
+  "capabilities": [
+    "component.Button",
+    "component.Card",
+    "component.CheckBox",
+    "component.ChoicePicker",
+    "component.Column",
+    "component.DateTimeInput",
+    "component.Divider",
+    "component.Icon",
+    "component.List",
+    "component.Modal",
+    "component.Row",
+    "component.Slider",
+    "component.Stat",
+    "component.Tabs",
+    "component.Text",
+    "component.TextField",
+    "function.and",
+    "function.email",
+    "function.formatCurrency",
+    "function.formatDate",
+    "function.formatNumber",
+    "function.formatString",
+    "function.length",
+    "function.not",
+    "function.numeric",
+    "function.or",
+    "function.pluralize",
+    "function.required"
+  ],
   "components": {
     "Button": [
       "accessibility",
@@ -112,6 +142,7 @@
       "weight"
     ]
   },
+  "definition_version": 1,
   "functions": [
     "and",
     "email",
