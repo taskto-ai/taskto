@@ -79,6 +79,11 @@ type OfflineApp struct {
 	// writable.
 	CanInsert  bool   `json:"can_insert"`
 	CapturedAt string `json:"captured_at"`
+	// Operations says which of the downloaded records the caller's own operations made: the
+	// operation key (the idempotency key of the request that made the record) to the record's
+	// id. A device that sent a record and holds it in its outbox as well as in this download
+	// knows by it that the two are one.
+	Operations map[string]int64 `json:"operations"`
 }
 
 // offlineApp answers a download: the caller's view of the live release and their records.
@@ -127,7 +132,39 @@ func (s *Service) offlineApp(ctx context.Context, sp access.Space, actor Actor, 
 		CanInsert:  acc.Submit && may(sp, access.Write) == nil,
 		CapturedAt: now(),
 	}
+	if out.Operations, err = s.operationsOf(ctx, appID, actor.UserID, rows); err != nil {
+		return OfflineApp{}, err
+	}
 	return out, nil
+}
+
+// operationsOf is the caller's operations that made one of rows: key to the record's id.
+func (s *Service) operationsOf(ctx context.Context, appID, userID int64, rows []Row) (map[string]int64, error) {
+	out := map[string]int64{}
+	if len(rows) == 0 {
+		return out, nil
+	}
+	in := make(map[int64]bool, len(rows))
+	for _, r := range rows {
+		in[r.ID] = true
+	}
+	found, err := s.db.QueryContext(ctx, `SELECT operation, record_id FROM app_operations
+		WHERE app_id = ? AND user_id = ? AND record_id IS NOT NULL`, appID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = found.Close() }()
+	for found.Next() {
+		var key string
+		var id int64
+		if err := found.Scan(&key, &id); err != nil {
+			return nil, err
+		}
+		if in[id] {
+			out[key] = id
+		}
+	}
+	return out, found.Err()
 }
 
 func offlineDefinition(def Definition) OfflineDefinition {

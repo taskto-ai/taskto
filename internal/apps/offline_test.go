@@ -289,3 +289,82 @@ func (w *world) send2(u *user, s access.Space, a App, id string, data []byte, of
 		expect(w.e.t, w.chunk(u, s, a, id, off, data[off:min(off+chunk, len(data))]), http.StatusOK)
 	}
 }
+
+// A queued record is sent later, when the browser's session may be another account's: a request
+// that names the account it is for is refused for any other, before anything is read or written
+// as them, and before the space is looked at (a 404 would say what they may see).
+func TestARequestForAnotherAccountIsRefusedBeforeItDoesAnything(t *testing.T) {
+	w := newWorld(t)
+	w.mustSetRoles(w.alice, w.shared, w.sharedApp, grant(w.alice.id, access.AppRoles...))
+	as := func(id int64) map[string]string {
+		return map[string]string{access.ExpectedUserHeader: fmt.Sprint(id)}
+	}
+	rows := w.rowCount(w.sharedApp)
+	act := action(w.sharedApp, "add_expense", map[string]any{"description": "not mine", "amount": "1"})
+	act.Operation = "offline-op-9001"
+
+	// The session is alice's; the queue was the owner's.
+	rec := w.alice.doWith(as(w.owner.id), http.MethodPost, appPath(w.shared, w.sharedApp.ID, "/actions"), act)
+	expectCode(t, rec, http.StatusConflict, "session_account_changed")
+	if w.rowCount(w.sharedApp) != rows {
+		t.Fatal("a record was made as the wrong account")
+	}
+	// Photo uploads are the same.
+	expectCode(t, w.alice.doWith(as(w.owner.id), http.MethodPost, appPath(w.shared, w.sharedApp.ID, "/uploads"),
+		map[string]any{"field": "photos", "size": 10}), http.StatusConflict, "session_account_changed")
+	// Reads too, and a space the session can't open is no different: not a 404.
+	expectCode(t, w.bob.doWith(as(w.alice.id), http.MethodGet, appPath(w.alicePrivate, w.aliceApp.ID, ""), nil),
+		http.StatusConflict, "session_account_changed")
+	// Without a session it is the usual 401, and a value that is no account's is a 400.
+	anon := &user{e: w.e}
+	expect(t, anon.doWith(as(w.alice.id), http.MethodGet, appPath(w.shared, w.sharedApp.ID, ""), nil), http.StatusUnauthorized)
+	expectCode(t, w.alice.doWith(map[string]string{access.ExpectedUserHeader: "someone"}, http.MethodGet,
+		appPath(w.shared, w.sharedApp.ID, ""), nil), http.StatusBadRequest, "bad_request")
+
+	// Named for the session's own account, or not named, the request is as it always was.
+	expect(t, w.alice.doWith(as(w.alice.id), http.MethodPost, appPath(w.shared, w.sharedApp.ID, "/actions"), act), http.StatusOK)
+	if w.rowCount(w.sharedApp) != rows+1 {
+		t.Fatal("the request for the signed-in account made no record")
+	}
+}
+
+// A download says which of its records the caller's own operations made, so a device that sent a
+// record and then downloads again doesn't count it twice (once from its outbox, once as the
+// server's). Only the caller's, and only records the download holds.
+func TestADownloadSaysWhichRecordsTheCallersOperationsMade(t *testing.T) {
+	w := newWorld(t)
+	a, s := w.aliceApp, w.alicePrivate
+	send := func(op, description string) {
+		act := action(a, "add_expense", map[string]any{"description": description, "amount": "4"})
+		act.Operation = op
+		expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"), act), http.StatusOK)
+	}
+	send("offline-op-0101", "kept")
+	send("offline-op-0102", "later deleted")
+	var gone int64
+	if err := w.e.db.QueryRow(`SELECT record_id FROM app_operations WHERE operation = 'offline-op-0102'`).Scan(&gone); err != nil || gone == 0 {
+		t.Fatalf("the operation doesn't remember its record: %d, %v", gone, err)
+	}
+	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"),
+		action(a, "delete_expense", map[string]any{"id": gone})), http.StatusOK)
+
+	got := decode[OfflineApp](t, w.download(w.alice, s, a))
+	var kept int64
+	if err := w.e.db.QueryRow(`SELECT record_id FROM app_operations WHERE operation = 'offline-op-0101'`).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Operations) != 1 || got.Operations["offline-op-0101"] != kept {
+		t.Fatalf("operations = %v, want only offline-op-0101 → %d", got.Operations, kept)
+	}
+	// Someone else's download never names it.
+	w.mustSetRoles(w.alice, w.shared, w.sharedApp, grant(w.alice.id, access.AppRoles...))
+	act := action(w.sharedApp, "add_expense", map[string]any{"description": "alice's", "amount": "1"})
+	act.Operation = "offline-op-0103"
+	expect(t, w.alice.do(http.MethodPost, appPath(w.shared, w.sharedApp.ID, "/actions"), act), http.StatusOK)
+	if ops := decode[OfflineApp](t, w.download(w.bob, w.shared, w.sharedApp)).Operations; len(ops) != 0 {
+		t.Fatalf("bob's download names alice's operations: %v", ops)
+	}
+	if ops := decode[OfflineApp](t, w.download(w.alice, w.shared, w.sharedApp)).Operations; len(ops) != 1 {
+		t.Fatalf("alice's download = %v", ops)
+	}
+}

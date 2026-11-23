@@ -163,6 +163,7 @@ const (
 	// Offline use of apps (internal/apps/offline.go).
 
 	CodeOfflineDisabled Code = "offline_downloads_disabled" // 403: an admin turned off downloading this space's apps for offline use
+	CodeAccountChanged  Code = "session_account_changed"    // 409: the request was made for another account than the session's (the browser signed in as someone else)
 
 	// Home widgets and navigation pins (internal/apps/home.go).
 

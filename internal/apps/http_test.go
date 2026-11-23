@@ -66,6 +66,12 @@ type user struct {
 
 func (u *user) do(method, path string, body any) *httptest.ResponseRecorder {
 	u.e.t.Helper()
+	return u.doWith(nil, method, path, body)
+}
+
+// doWith is do with more request headers.
+func (u *user) doWith(headers map[string]string, method, path string, body any) *httptest.ResponseRecorder {
+	u.e.t.Helper()
 	var r *http.Request
 	if body == nil {
 		r = httptest.NewRequest(method, path, nil)
@@ -78,6 +84,9 @@ func (u *user) do(method, path string, body any) *httptest.ResponseRecorder {
 		r.Header.Set("Content-Type", "application/json")
 	}
 	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	for k, v := range headers {
+		r.Header.Set(k, v)
+	}
 	if u.cookie != nil {
 		r.AddCookie(u.cookie)
 	}

@@ -274,6 +274,38 @@ func (c *Checker) RequireSpace(need Access, next http.Handler) http.Handler {
 	}))
 }
 
+// ExpectedUserHeader names the account a request is meant for: a client that holds one
+// account's queued work and sends it later (the offline outbox, docs/offline.md) says whose it is,
+// since the browser's session cookie may belong to someone else by then.
+const ExpectedUserHeader = "X-Taskto-Expected-User"
+
+// ExpectUser refuses a request that names, in ExpectedUserHeader, another account than the
+// session's: 409 session_account_changed, before the space or anything in it is looked at, so
+// nothing is read or written as the wrong person and the answer says nothing of what they may
+// see. A request without the header passes unchanged, and one with an unreadable value is a 400.
+// A request without a session is the usual 401.
+func (c *Checker) ExpectUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		want := r.Header.Get(ExpectedUserHeader)
+		if want == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		c.auth.RequireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id, err := strconv.ParseInt(want, 10, 64)
+			if err != nil || id <= 0 {
+				writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, ExpectedUserHeader+" is an account's id")
+				return
+			}
+			if u, _ := auth.UserFrom(r.Context()); u.ID != id {
+				writeError(w, http.StatusConflict, apierr.CodeAccountChanged, "this request is for another account than the one signed in")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})).ServeHTTP(w, r)
+	})
+}
+
 // RequireSpaceAdmin is RequireSpace(Write) for workspace admins only: it answers 403 to
 // the space's other writers. It is for actions on a space's content that only an admin
 // may take, such as removing a file's old versions from its history.

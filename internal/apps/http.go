@@ -18,8 +18,14 @@ import (
 // they need a session, and the CSRF guard (auth.CSRF) checks every one that isn't a GET.
 // docs/api.md describes them.
 func (s *Service) Routes(mux *http.ServeMux) {
-	read := func(h http.HandlerFunc) http.Handler { return s.access.RequireSpace(access.Read, h) }
-	write := func(h http.HandlerFunc) http.Handler { return s.access.RequireSpace(access.Write, h) }
+	// Each route first checks the account the request says it is for, if it says (a queued
+	// offline record is sent later, and the browser's session may be someone else's by then).
+	read := func(h http.HandlerFunc) http.Handler {
+		return s.access.ExpectUser(s.access.RequireSpace(access.Read, h))
+	}
+	write := func(h http.HandlerFunc) http.Handler {
+		return s.access.ExpectUser(s.access.RequireSpace(access.Write, h))
+	}
 	const apps = "/api/workspaces/{workspace}/spaces/{space}/apps"
 
 	mux.Handle("GET "+apps, read(s.handleList))

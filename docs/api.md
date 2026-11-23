@@ -140,6 +140,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_files_full` | 409 | The app's attachments would take it over `max_mib` MiB in all. |
 | `app_files_unavailable` | 503 | This server keeps no files for apps. |
 | `offline_downloads_disabled` | 403 | An admin turned off downloading this space's apps for offline use. |
+| `session_account_changed` | 409 | The request names (`X-Taskto-Expected-User`) another account than the session's: a queue made by one account is being sent with another's session. Nothing was done. |
 | `request_too_large` | 413 | The request's body is over `max` bytes. |
 | `doc_not_found` | 404 | No such document, folder or version in the space. |
 | `doc_name_invalid` | 400 | `name` can't be a path in a space: empty parts, `..`, `.git`, `.taskto` (the server's own storage), a leading `/`, backslashes or control characters. |
@@ -1799,7 +1800,8 @@ snapshot, and the writes made against it come back as ordinary
   },
   "messages": [ … ],
   "scope": "all", "records": 120, "total": 120, "truncated": false,
-  "can_insert": true, "captured_at": "…"
+  "can_insert": true, "captured_at": "…",
+  "operations": {"off-6b0c…": 118}
 }
 ```
 
@@ -1816,19 +1818,35 @@ snapshot, and the writes made against it come back as ordinary
   reads, `truncated` whether they differ.
 - `can_insert`: the caller may add records now (the submit capability, in a writable space).
   Offline writes are inserts only.
+- `operations`: which of the downloaded records **the caller's own operations** made: the
+  operation key (see [Replaying an offline insert](#get-appsappoffline)) to the record's id. It
+  names only the caller's operations and only records the download holds. A device that sent a
+  record and downloads again knows by it that its entry for the record and the downloaded record
+  are one.
 
 `403 offline_downloads_disabled` while an admin has [turned downloads
 off](#patch-apiworkspacesworkspacespacesspace) for the space; `404` for a caller who may not view
 the app; `409 app_offline` while it is offline and `409 app_not_published` before its first
 release. A client that holds a download and is refused with `403 offline_downloads_disabled` or
-`404` removes its copy.
+`404` removes its copy, and one whose copy holds more records than the caller's `read_records`
+now says (`GET …/apps/{app}`) downloads it again.
 
 **Replaying an offline insert.** The client sends the action it queued to
 [`…/actions`](#post-appsappactions) with `release` set to the release its screen was drawn from
 and a stable `operation`. The server records the operation's receipt in the same transaction as
 the record, so sending it again (the answer was lost, the page was reopened) changes nothing and
-is answered as the first one was; another request under the same key is `409
-app_operation_reused`. An insert that names a photo (an attachment id) is accepted only when the
+is answered `200` with the rows the caller reads **as they are now**, not with the first answer's
+body (the receipt remembers the request and the record it made, not what was answered; a record
+deleted since is simply not among the rows); another request under the same key is `409
+app_operation_reused`.
+
+**For one account.** A request that is sent later than it was made, from a browser whose session
+may have changed hands, says whose it is: the header `X-Taskto-Expected-User` holds the id of the
+account. On any route of an app (the replay, the uploads, the check of the app), if the session is
+another account's the answer is `409 session_account_changed` before anything else is looked at (a
+space the session can't open is not a `404` then): nothing is read or written as the wrong
+account, and the client pauses the queue rather than count a failure. A request without the header
+is as it always was; a value that is no account's id is `400`. An insert that names a photo (an attachment id) is accepted only when the
 photo's upload has been finalized (`422 app_attachment_bad` otherwise), which is why the client
 uploads a queued insert's photos, with the resumable [upload routes](#photo-attachments), before
 it sends the insert.
