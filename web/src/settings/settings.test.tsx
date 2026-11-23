@@ -271,6 +271,36 @@ test('admins make a password reset link for a member, shown once, never for them
   expect(screen.getByRole('status').textContent).toContain('alice@example.com')
 })
 
+test('with password login off, a member has no reset link action', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/members': { body: { members: people } },
+    'GET /api/workspaces/1/invites': { body: { invites: [] } },
+    'GET /api/login/methods': { body: { password: false, sso: [{ id: 'authentik', name: 'Authentik' }] } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="members" />)
+  await screen.findByText('alice@example.com')
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Password reset link for Alice' })).toBeNull())
+  expect(screen.getByRole('button', { name: 'Remove Alice' })).toBeTruthy()
+})
+
+test('no reset link action until password login is confirmed, nor when the check fails', async () => {
+  let answer: (v: { status: number; body: unknown }) => void = () => {}
+  const pending = new Promise<{ status: number; body: unknown }>((resolve) => {
+    answer = resolve
+  })
+  fakeFetch({
+    'GET /api/workspaces/1/members': { body: { members: people } },
+    'GET /api/workspaces/1/invites': { body: { invites: [] } },
+    'GET /api/login/methods': () => pending,
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="members" />)
+  await screen.findByText('alice@example.com')
+  expect(screen.queryByRole('button', { name: 'Password reset link for Alice' })).toBeNull()
+  await act(async () => answer({ status: 503, body: { error: 'down' } }))
+  expect(screen.queryByRole('button', { name: 'Password reset link for Alice' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Remove Alice' })).toBeTruthy()
+})
+
 test("an admin's refused reset link says why", async () => {
   fakeFetch({
     'GET /api/workspaces/1/members': { body: { members: people } },

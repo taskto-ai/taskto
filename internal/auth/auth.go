@@ -46,6 +46,15 @@ type Options struct {
 	// TrustedProxies are the reverse proxies whose X-Forwarded-For is believed, for the
 	// client address the login limits use. Empty means none: the client is the direct peer.
 	TrustedProxies []netip.Prefix
+	// SSO are the OpenID Connect providers people may sign in with (LoadSSOProviders); none
+	// means password logins only.
+	SSO []SSOProvider
+	// PublicURL is the server's external origin, such as https://taskto.example.com, which the
+	// providers' redirect URIs are built on. Required with SSO.
+	PublicURL string
+	// DisablePasswordLogin turns off logging in, setting up an account on an invite, and
+	// using a reset link with a password. Needs SSO, or nobody could log in.
+	DisablePasswordLogin bool
 }
 
 // Login limits, in failed attempts per window; a successful login counts against none.
@@ -81,6 +90,8 @@ type Service struct {
 	perIP        *limiter
 	perAccountIP *limiter
 	perAccount   *limiter
+
+	sso *sso
 }
 
 // New returns the account system backed by sqlDB, which must be migrated.
@@ -103,6 +114,7 @@ func New(sqlDB *sql.DB, opts Options) *Service {
 	s.perIP = newLimiter(ipAttempts, attemptWindow, now)
 	s.perAccountIP = newLimiter(accountAndIPAttempts, attemptWindow, now)
 	s.perAccount = newLimiter(accountAttempts, attemptWindow, now)
+	s.sso = newSSO(opts.SSO, now)
 	return s
 }
 

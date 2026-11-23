@@ -143,7 +143,9 @@ curl -sS http://127.0.0.1:8080/api/setup \
   accounts prints none.
 - The log keeps the line, but the token is useless once setup is done.
 
-The owner then invites everyone else ([API](api.md#invites)).
+The owner then invites everyone else ([API](api.md#invites)). With
+[single sign-on](#single-sign-on), an invited person can sign in with Google or Authentik
+instead of choosing a password.
 
 Everyone changes their own password in **Settings → Password**, with their current one;
 that signs them out everywhere else. Someone who lost theirs asks an admin for a reset link
@@ -376,6 +378,51 @@ How it holds:
   ([agent-providers.md](agent-providers.md#schema)).
 
 The policy is read at startup: restart the server to change it.
+
+### Single sign-on
+
+People can sign in with Google, Authentik or any other OpenID Connect provider, once the
+operator lists it in a providers file. Only people with an account or a pending invite get in;
+nobody signs up by signing in. [sso.md](sso.md) has the provider-by-provider setup, how to
+restrict who may sign in, and the security notes.
+
+With Compose, put the providers file and the secrets it names in a directory next to the
+project, mount it read-only, and set the three variables in `.env`. The container runs as
+`65532`, so the files must be readable by that user: owned by
+it with mode `600`, in a directory it can traverse:
+
+```sh
+sudo chmod 600 sso/* && sudo chown -R 65532:65532 sso && sudo chmod 700 sso
+```
+
+The files' modes are set first: once `sso` is `65532`'s alone with mode `700`, your own shell
+can no longer expand `sso/*`.
+
+The host directory above it (the project directory) must let `65532` reach `sso`: at least
+execute permission for others. Keep the mount `:ro`. The public address must be
+the `https` one people use, since it makes the redirect URIs you register at the provider:
+
+```yaml
+# compose.override.yaml
+services:
+  taskto:
+    volumes:
+      - ./sso:/etc/taskto/sso:ro
+```
+
+```sh
+# .env
+TASKTO_SSO_PROVIDERS=/etc/taskto/sso/providers.json   # as the container sees it
+TASKTO_PUBLIC_URL=https://tasks.example.com
+# TASKTO_DISABLE_PASSWORD_LOGIN=true                  # once a provider works: no passwords
+```
+
+The redirect URI for a provider with the id `google` is
+`https://tasks.example.com/api/sso/google/callback`. A client secret named by
+`{"env": "VAR"}` has to be set in the server's environment too (`environment:` in the
+override), which is why `{"file": …}`, read from the mounted directory, is preferred. Restart the server
+after changing the file (`docker compose up -d taskto` after a change to `.env` or the override, which recreates the container; `restart` keeps the old environment). Turning passwords off leaves the owner signing in through the provider
+with the email they set up with ([sso.md](sso.md#turning-passwords-off)).
 
 ## Models
 

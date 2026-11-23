@@ -373,3 +373,72 @@ func TestPushContactMustBeMailtoOrHTTPS(t *testing.T) {
 		}
 	}
 }
+
+func TestSSOSettings(t *testing.T) {
+	file := writeConfig(t, `
+sso_providers = "/file/sso.json"
+public_url = "https://file.example.com"
+disable_password_login = true
+`)
+	got := load(t, nil, map[string]string{"TASKTO_CONFIG": file})
+	if got.SSOProviders != "/file/sso.json" || got.PublicURL != "https://file.example.com" || !got.DisablePasswordLogin {
+		t.Fatalf("from the file: %+v", got)
+	}
+	got = load(t, nil, map[string]string{"TASKTO_CONFIG": file, "TASKTO_SSO_PROVIDERS": "/env/sso.json",
+		"TASKTO_PUBLIC_URL": "https://env.example.com/", "TASKTO_DISABLE_PASSWORD_LOGIN": "false"})
+	if got.SSOProviders != "/env/sso.json" || got.PublicURL != "https://env.example.com" || got.DisablePasswordLogin {
+		t.Fatalf("from the environment: %+v", got)
+	}
+	got = load(t, []string{"-sso-providers", "/flag/sso.json", "-public-url", "https://flag.example.com", "-disable-password-login"},
+		map[string]string{"TASKTO_CONFIG": file, "TASKTO_PUBLIC_URL": "https://env.example.com"})
+	if got.SSOProviders != "/flag/sso.json" || got.PublicURL != "https://flag.example.com" || !got.DisablePasswordLogin {
+		t.Fatalf("from flags: %+v", got)
+	}
+}
+
+func TestSSOValidation(t *testing.T) {
+	sso := map[string]string{"TASKTO_SSO_PROVIDERS": "/etc/taskto/sso.json"}
+	with := func(extra map[string]string) map[string]string {
+		m := map[string]string{}
+		for k, v := range sso {
+			m[k] = v
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+	for name, tt := range map[string]struct {
+		env  map[string]string
+		fail string // a part of the error; "" means it loads
+	}{
+		"providers need a public url":           {sso, "-public-url"},
+		"https":                                 {with(map[string]string{"TASKTO_PUBLIC_URL": "https://taskto.example.com"}), ""},
+		"a port":                                {with(map[string]string{"TASKTO_PUBLIC_URL": "https://taskto.example.com:8443"}), ""},
+		"http":                                  {with(map[string]string{"TASKTO_PUBLIC_URL": "http://taskto.example.com"}), "must be https"},
+		"http localhost without insecure":       {with(map[string]string{"TASKTO_PUBLIC_URL": "http://localhost:8080"}), "must be https"},
+		"http localhost":                        {with(map[string]string{"TASKTO_PUBLIC_URL": "http://localhost:8080", "TASKTO_INSECURE_COOKIES": "true"}), ""},
+		"http 127.0.0.1":                        {with(map[string]string{"TASKTO_PUBLIC_URL": "http://127.0.0.1:8080", "TASKTO_INSECURE_COOKIES": "true"}), ""},
+		"http [::1]":                            {with(map[string]string{"TASKTO_PUBLIC_URL": "http://[::1]:8080", "TASKTO_INSECURE_COOKIES": "true"}), ""},
+		"http elsewhere with insecure cookies":  {with(map[string]string{"TASKTO_PUBLIC_URL": "http://taskto.example.com", "TASKTO_INSECURE_COOKIES": "true"}), "must be https"},
+		"a path":                                {with(map[string]string{"TASKTO_PUBLIC_URL": "https://taskto.example.com/app"}), "without a path"},
+		"a query":                               {with(map[string]string{"TASKTO_PUBLIC_URL": "https://taskto.example.com?a=b"}), "without a path"},
+		"a fragment":                            {with(map[string]string{"TASKTO_PUBLIC_URL": "https://taskto.example.com#a"}), "without a path"},
+		"credentials":                           {with(map[string]string{"TASKTO_PUBLIC_URL": "https://user:fake@taskto.example.com"}), "without a path"}, //nolint:gosec // G101: a fake, to be refused
+		"no host":                               {with(map[string]string{"TASKTO_PUBLIC_URL": "https://"}), "without a path"},
+		"another scheme":                        {with(map[string]string{"TASKTO_PUBLIC_URL": "ftp://taskto.example.com"}), "must be https"},
+		"passwords off without providers":       {map[string]string{"TASKTO_DISABLE_PASSWORD_LOGIN": "true"}, "-disable-password-login needs -sso-providers"},
+		"passwords off with providers":          {with(map[string]string{"TASKTO_PUBLIC_URL": "https://taskto.example.com", "TASKTO_DISABLE_PASSWORD_LOGIN": "true"}), ""},
+		"a public url alone is checked as well": {map[string]string{"TASKTO_PUBLIC_URL": "http://taskto.example.com"}, "must be https"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(nil, env(tt.env), io.Discard)
+			switch {
+			case tt.fail == "" && err != nil:
+				t.Fatalf("Load: %v", err)
+			case tt.fail != "" && (err == nil || !strings.Contains(err.Error(), tt.fail)):
+				t.Fatalf("Load error = %v, want one with %q", err, tt.fail)
+			}
+		})
+	}
+}

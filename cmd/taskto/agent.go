@@ -40,8 +40,9 @@ func agentPaths(dataDir string) (dir, socketDir, db string) {
 //
 // The sidecar reads the providers file the feed writes under <data>/agent/: the operator's
 // providers (-agent-providers) first, then the accounts in the database. Its tools call
-// back into the server through tools, served on a socket next to the sidecar's own.
-func startAgent(ctx context.Context, cfg config.Config, store *providers.Store, tools http.Handler, cli []providers.CLIProvider) (agentRuntime, error) {
+// back into the server through tools, served on a socket next to the sidecar's own. The
+// variables in dropEnv are kept out of its environment.
+func startAgent(ctx context.Context, cfg config.Config, store *providers.Store, tools http.Handler, cli []providers.CLIProvider, dropEnv []string) (agentRuntime, error) {
 	node, err := exec.LookPath(cfg.AgentNode)
 	if err != nil {
 		return agentRuntime{}, fmt.Errorf("agent runtime: Node.js executable %q not found (set -agent-node, or turn the agent runtime off): %w", cfg.AgentNode, err)
@@ -79,6 +80,8 @@ func startAgent(ctx context.Context, cfg config.Config, store *providers.Store, 
 		Entry:     entry,
 		SocketDir: socketDir,
 		DB:        db,
+		// Secrets the server read from its environment: the sidecar never sees them.
+		DropEnv: dropEnv,
 		// Always set, so the sidecar never picks up a different file from elsewhere. The
 		// browser tools are offered only while the agent browser is on.
 		Env: []string{"TASKTO_AGENT_PROVIDERS=" + feed.Path(), "TASKTO_AGENT_BROWSER=" + strconv.FormatBool(cfg.Browser)},

@@ -42,6 +42,11 @@ services:
       TASKTO_CLI_PROXY_URL: http://127.0.0.1:8081
       # The agent browser (docs/agent-browser.md): a browser per user in the CLI worker.
       TASKTO_BROWSER: ${TASKTO_BROWSER:-false}
+      # Single sign-on (docs/sso.md): the providers file as the container sees it, the
+      # server's external https address, and whether to turn passwords off. Empty is unset.
+      TASKTO_SSO_PROVIDERS: ${TASKTO_SSO_PROVIDERS:-}
+      TASKTO_PUBLIC_URL: ${TASKTO_PUBLIC_URL:-}
+      TASKTO_DISABLE_PASSWORD_LOGIN: ${TASKTO_DISABLE_PASSWORD_LOGIN:-}
     read_only: true
     tmpfs:
       - /tmp

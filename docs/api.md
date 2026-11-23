@@ -66,6 +66,14 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `reset_invalid` | 404 | The reset link is unknown, used or expired. |
 | `reset_own` | 400 | An admin changes their own password in Settings, not with a reset link. |
 | `reset_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `password_login_disabled` | 403 | Passwords are turned off on this server ([sso.md](sso.md#turning-passwords-off)): logging in, a new account with a password, making a reset link and using one answer this. |
+| `sso_unknown_provider` | 404 | No such single sign-on provider. |
+| `sso_failed` | 502 | The provider didn't answer. As `?sso_error=`: the provider or the exchange failed, or the person declined (details are in the server's log). |
+| `sso_expired` | | Only as `?sso_error=`: the sign-in's state is missing, doesn't match the browser's cookie, expired or was used already. Start again. |
+| `sso_email_unverified` | | Only as `?sso_error=`: the provider gave no email, or didn't verify it. |
+| `sso_google_email_untrusted` | | Only as `?sso_error=`: with Google, the email can't link an account or make one from an invite unless it ends in `@gmail.com` or the ID token has an `hd` claim (a Google Workspace account). |
+| `sso_no_account` | | Only as `?sso_error=`: no account has the email, and no invite is pending for it. |
+| `sso_account_linked_elsewhere` | | Only as `?sso_error=`: the email's account is linked to another identity of this provider. |
 | `space_not_found` | 404 | No such space, or the caller can't read it. |
 | `space_read_only` | 403 | The caller may only read this space. |
 | `space_archived` | 403 | The space is archived, so read-only. |
@@ -259,8 +267,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 
 ### Sessions
 
-Logging in (setup, login, accepting an invite as a new person, or setting a password, by
-changing it or with a reset link) sets the session cookie: `__Host-taskto_session`, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, lasting
+Logging in (setup, login, [signing in with a provider](#single-sign-on), accepting an invite as a
+new person, or setting a password, by changing it or with a reset link) sets the session cookie: `__Host-taskto_session`, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, lasting
 30 days. The token is 256 random bits; the database only keeps its SHA-256. Logging out
 deletes the session at once. With `insecure_cookies` (local plain-http development only)
 the cookie is called `taskto_session` and isn't `Secure`, since browsers refuse a
@@ -420,6 +428,79 @@ header is ignored ([install.md](install.md#the-clients-address-behind-a-proxy)).
 Passwords are hashed with argon2id (64 MiB, 3 passes, 4 lanes; RFC 9106's second
 recommended setting), at most two at a time to bound memory.
 
+`403 password_login_disabled` when the operator turned passwords off. An account made by
+signing in with a provider has no password: it gets the same `401` as a wrong one, in the
+same time.
+
+### `GET /api/login/methods`
+
+No login needed. How people can sign in here, for the login screen:
+
+```json
+{"password": true, "sso": [{"id": "google", "name": "Google"}, {"id": "authentik", "name": "Authentik"}]}
+```
+
+`password` is `false` when the operator turned passwords off; `sso` is `[]` without providers.
+
+## Single sign-on
+
+Signing in with an OpenID Connect provider the operator configured ([sso.md](sso.md)). Both
+routes refuse access tokens.
+
+### `POST /api/sso/{provider}/start`
+
+No login needed. `{"next": "/path#fragment"}`, where `next` is optional: the page to come back
+to. It must be a path on this server (one leading `/`, not `//` or `/\`, no backslash or
+control character, at most 2048 bytes); otherwise `/` is used.
+
+```json
+{"url": "https://accounts.example.com/o/oauth2/v2/auth?…"}
+```
+
+`200` with the provider's authorization URL, which the web app opens, and a cookie that holds
+the login's state: `__Host-taskto_sso`, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, for 10
+minutes (`taskto_sso` and not `Secure` with `insecure_cookies`). The state, a nonce and a PKCE
+verifier are kept in the server's memory only. `404 sso_unknown_provider`; `502 sso_failed`
+if the provider can't be reached; `429` over 30 starts per client address in 15 minutes, or
+when too many logins wait (`Retry-After`). It is a `POST`, so the CSRF guard applies.
+
+### `GET /api/sso/{provider}/callback`
+
+The provider redirects the browser here with `code` and `state`. It is the one `GET` that
+changes state, since a redirect can't be a `POST`. It acts only when `state` equals the
+`__Host-taskto_sso` cookie and a pending login of this provider that it uses up: a link
+forged for another browser, and a replay, find none, and a callback to another provider than
+the login was started for finds none and leaves the login for the right one. The code is
+exchanged with the PKCE verifier, without following a redirect. Every call to the provider is
+`https`; `http` is accepted only for a provider whose issuer is itself `http` on a loopback
+host (development), and only to loopback hosts. Discovery, keys and user info follow a redirect
+only within the origin they started from: the same scheme, port and host name, compared in
+ASCII letters only (a host name that isn't ASCII never matches, so Unicode look-alikes can't
+pass as the same origin). So nothing is downgraded to `http` or sent to another origin, user
+info's bearer token included. The ID token's signature, issuer, expiry and nonce
+are checked, its `aud` must be this client alone (a token that names another audience too is
+refused), and its `azp`, when present at all, must be the string of this client's ID (an empty,
+`null` or non-string `azp` is refused).
+
+It always answers `303`. It never clears the `__Host-taskto_sso` cookie, which expires with the
+state after 10 minutes and works once, so a slow callback can't take away a newer sign-in's
+cookie:
+
+- on success, to `next`, with a new session cookie (a session the browser already had is
+  revoked). An identity already linked logs in its user; otherwise a verified email (or a
+  `trust_email` provider's) that belongs to a user links the identity to them; otherwise a
+  pending invite for the email creates an account with no password and accepts every pending
+  invite for that email; otherwise it is refused. All of it in one transaction. With Google,
+  linking and creating need an address Google vouches for: a domain that is `gmail.com` in
+  ASCII letters, in either case, as the `email` claim has it, or an `hd` claim that isn't blank.
+  A `next` that is the invite screen (`/invite…`) goes to `/w/<id>/conversations` instead when
+  the sign-in made the account, since its invites are used up: the workspace is the one of the
+  invite whose token is in `next`'s fragment (`/invite#<token>`) if this sign-in accepted that
+  very invite, else of the first invite accepted (the oldest); another invite's token (someone
+  else's, or an expired one) never picks it. For an existing account the invite stays pending and `next` is kept;
+- on failure, to `/?sso_error=<code>`, one of the `sso_*` [error codes](#error-codes) above.
+  An error from the provider, such as `access_denied`, is `sso_failed`.
+
 ### `POST /api/logout`
 
 Revokes the session and clears the cookie. `204`, also without a session.
@@ -474,7 +555,8 @@ The caller's own password; the route names no user, and the body takes no other 
 
 `204` with a new session cookie. `400` without a current password, or with a new one that
 is too short or too long. `403 the current password is wrong`: `403` rather than `401`,
-since the session is fine. Wrong current passwords count against the
+since the session is fine, which is also the answer for an account that has no password (made by
+signing in with a provider). Wrong current passwords count against the
 [login limits](#post-apilogin), for the caller's email and address: past them, `429` with
 `Retry-After`, even with the right one. `409` if the password changed meanwhile.
 
@@ -492,7 +574,8 @@ fragment, like an invite's).
 `201`. `404` if the user isn't a member of the workspace. `400` for the admin's own
 account: they change it with their current password. `403` if the member also belongs to a
 workspace the admin doesn't administer: whoever has the link can take over the account, so
-only someone who administers every one of its workspaces can make one.
+only someone who administers every one of its workspaces can make one. `403 password_login_disabled`
+when the operator turned passwords off: a link nobody could use isn't made.
 
 ### `POST /api/password-reset`
 
@@ -500,7 +583,8 @@ No login needed. `{"token": "…", "password": "…"}` sets the password of the 
 link is for, ends its sessions and reset links, and logs it in here: `200` with the
 `GET /api/me` body and the session cookie (a session the browser already had, anyone's,
 is revoked). `400` for a password that is too short or too long, which leaves the link
-usable. `404` if the token is unknown, used, replaced or expired.
+usable. `404` if the token is unknown, used, replaced or expired. `403 password_login_disabled`
+when the operator turned passwords off.
 
 ## Members
 
@@ -563,7 +647,9 @@ No login needed. Two cases:
   the workspace. `200` with the `GET /api/me` body. Logged in as another address, `403`.
   Already a member, `409` (the invite stays unused).
 
-`404` if the token is unknown, used, withdrawn or expired.
+`404` if the token is unknown, used, withdrawn or expired. `403 password_login_disabled` for a
+new person when the operator turned passwords off: they sign in with a provider instead,
+which accepts every pending invite for their address. Joining as a logged-in user still works.
 
 ## Tokens
 

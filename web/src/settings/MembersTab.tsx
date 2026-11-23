@@ -3,7 +3,7 @@
 // the URL's fragment, which browsers don't send to servers or in Referer.
 
 import { type FormEvent, useState } from 'react'
-import { api, type Invite, type Member, ws } from '../api'
+import { ApiError, api, type Invite, type Member, ws } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Alert, ConfirmButton, CopyButton, day, useAction } from './parts'
@@ -25,6 +25,18 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
   const members = useLoad(() => api<{ members: Member[] }>(`${base}/members`).then((r) => r.members), [base])
   const invites = useLoad(() => api<{ invites: Invite[] }>(`${base}/invites`).then((r) => r.invites), [base])
   const action = useAction()
+  // A reset link sets a password: with password login turned off the server refuses it, so the
+  // action is offered only once the server has said password login is on (a server without the
+  // route, 404, has only passwords): not while the answer is pending, nor after it failed.
+  const methods = useLoad(
+    () =>
+      api<{ password: boolean }>('/api/login/methods').catch((e: unknown) => {
+        if (e instanceof ApiError && e.status === 404) return { password: true }
+        throw e
+      }),
+    [],
+  )
+  const passwordLogin = methods.data?.password === true
 
   const setRole = (m: Member, role: Role) =>
     action.run(() => api(`${base}/members/${m.id}`, { method: 'PATCH', body: { role } })).then(members.reload)
@@ -72,7 +84,7 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                       <option value="admin">{t('settings.members.roles.admin')}</option>
                     </select>
                   </label>
-                  {m.id !== me && (
+                  {m.id !== me && passwordLogin && (
                     <button
                       type="button"
                       className="tt-button"

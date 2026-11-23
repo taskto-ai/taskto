@@ -80,7 +80,11 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	match, err := s.hasher.verify(r.Context(), req.Current, hash)
+	// An account made by signing in with a provider has no password to match.
+	var match bool
+	if hash != "" {
+		match, err = s.hasher.verify(r.Context(), req.Current, hash)
+	}
 	if match || err != nil {
 		for _, lim := range limits {
 			lim.l.give(lim.key)
@@ -115,6 +119,11 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleCreateReset(w http.ResponseWriter, r *http.Request) {
+	// A link nobody could use: with passwords off, using one is refused too.
+	if s.opts.DisablePasswordLogin {
+		passwordLoginDisabled(w)
+		return
+	}
 	m, _ := MembershipFrom(r.Context())
 	admin, _ := UserFrom(r.Context())
 	userID, ok := pathID(w, r, "user", apierr.CodeMemberNotFound, "member not found")
@@ -145,6 +154,10 @@ func (s *Service) handleCreateReset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleUseReset(w http.ResponseWriter, r *http.Request) {
+	if s.opts.DisablePasswordLogin {
+		passwordLoginDisabled(w)
+		return
+	}
 	var req struct {
 		Token    string `json:"token"`
 		Password string `json:"password"`

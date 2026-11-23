@@ -551,6 +551,15 @@
     }
   },
   "auth": {
+    "methods": {
+      "title": "Sign in",
+      "error": "Couldn't find out how you can sign in. Check your connection and try again.",
+      "retry": "Retry"
+    },
+    "sso": {
+      "continue": "Continue with {name}",
+      "or": "or"
+    },
     "login": {
       "forgot": "Forgot your password? Ask a workspace admin for a reset link.",
       "title": "Log in",
@@ -560,6 +569,7 @@
     "reset": {
       "title": "Set a new password",
       "incomplete": "This reset link is incomplete: open the whole link you were sent.",
+      "off": "Password login is turned off on this server, so a reset link can't be used. Sign in with a provider instead.",
       "intro": "Choose a new password for your account. Anywhere else you are signed in is signed out.",
       "password": "New password",
       "hint": "At least 12 characters.",
@@ -588,6 +598,7 @@
       "joining": "Joining…",
       "join": "Join the workspace",
       "logOut": "Log out, to use another account",
+      "ssoIntro": "You were invited. Sign in with your provider, using the address the invite was sent to.",
       "loginTitle": "Log in to join",
       "loginIntro": "Log in to the account of the address the invite was sent to.",
       "loginSubmit": "Log in and join",
@@ -736,6 +747,14 @@
     "reset_invalid": "This reset link is unknown, used or expired: ask a workspace admin for a new one.",
     "reset_own": "Change your own password in Settings → Password, with your current one.",
     "reset_elsewhere": "This member also belongs to a workspace you don't administer, so only someone who administers all of their workspaces can make them a reset link.",
+    "password_login_disabled": "Passwords are turned off on this server: continue with your sign-in provider.",
+    "sso_unknown_provider": "That sign-in provider isn't set up on this server.",
+    "sso_failed": "Signing in with your provider didn't work. Try again, and tell whoever runs this server if it keeps failing.",
+    "sso_expired": "That sign-in took too long or was already used. Start again.",
+    "sso_email_unverified": "Your provider didn't confirm your email address, so you can't sign in with it.",
+    "sso_google_email_untrusted": "Google doesn't vouch for this email address: sign in with a Gmail or Google Workspace account, or use the address your invite names with another sign-in.",
+    "sso_no_account": "There's no account for this email. Ask a workspace admin for an invite.",
+    "sso_account_linked_elsewhere": "The account for this email is already linked to another sign-in from this provider. Ask a workspace admin for help.",
     "board_archived": "This board is archived: it is read-only.",
     "board_changed": "Someone changed this board meanwhile: reload and try again.",
     "card_changed": "Someone changed this card meanwhile: reload and try again.",

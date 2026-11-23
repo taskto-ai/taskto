@@ -101,6 +101,7 @@ func fakeSidecar(modes string) int {
 	list := strings.Split(modes, ",")
 	mode := list[min(starts, len(list)-1)]
 	record("start %s", mode)
+	record("secret %q", os.Getenv("TASKTO_TEST_DROPPED_SECRET"))
 	fmt.Fprintf(os.Stderr, "fake sidecar up: %s\n", mode)
 	if os.Getenv(ExitOnEOFEnv) == "1" {
 		// Like the real sidecar: the end of stdin means the supervisor's process is gone.
@@ -860,4 +861,23 @@ func TestToolsSocketRefusesAFileInItsPlace(t *testing.T) {
 	// The lock was released: another supervisor can start.
 	f.cfg.Tools = nil
 	f.start(t)
+}
+
+func TestDropEnvKeepsServerSecretsFromTheSidecar(t *testing.T) {
+	t.Setenv("TASKTO_TEST_DROPPED_SECRET", "hunter2")
+	for name, drop := range map[string][]string{"kept": nil, "dropped": {"TASKTO_TEST_DROPPED_SECRET"}} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t, "serve")
+			f.cfg.DropEnv = drop
+			f.start(t)
+			waitFor(t, "the sidecar's report of its environment", func() bool { return len(fakeEvents(f.dir, "secret")) > 0 })
+			want := `secret "hunter2"`
+			if drop != nil {
+				want = `secret ""`
+			}
+			if got := fakeEvents(f.dir, "secret")[0].what; got != want {
+				t.Fatalf("the sidecar saw %q, want %q", got, want)
+			}
+		})
+	}
 }

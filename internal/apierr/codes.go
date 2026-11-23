@@ -54,6 +54,18 @@ const (
 	CodeResetOwn                Code = "reset_own"
 	CodeResetElsewhere          Code = "reset_elsewhere"
 
+	// Single sign-on (internal/auth/sso.go). The callback redirects the browser to
+	// /?sso_error=<code>; the same codes name the API's own answers.
+
+	CodePasswordLoginDisabled     Code = "password_login_disabled" //nolint:gosec // G101: an error code, not a credential
+	CodeSSOUnknownProvider        Code = "sso_unknown_provider"
+	CodeSSOFailed                 Code = "sso_failed"
+	CodeSSOExpired                Code = "sso_expired"
+	CodeSSOEmailUnverified        Code = "sso_email_unverified"
+	CodeSSOGoogleEmailUntrusted   Code = "sso_google_email_untrusted"
+	CodeSSONoAccount              Code = "sso_no_account"
+	CodeSSOAccountLinkedElsewhere Code = "sso_account_linked_elsewhere"
+
 	// Spaces (internal/access).
 
 	CodeSpaceNotFound       Code = "space_not_found"
