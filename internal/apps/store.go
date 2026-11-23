@@ -66,6 +66,9 @@ var (
 	// ErrStale is for an update made against a version that is no longer the current
 	// one: someone else changed the app in between.
 	ErrStale = errors.New("it changed since you read it: reload and try again")
+	// ErrConflict is for an update, delete or restore of a record that has changed since
+	// the caller read it (or, for a restore, isn't deleted).
+	ErrConflict = errors.New("the record changed since you read it")
 	// ErrFull is for a row that would take an app over MaxRows or MaxDataSize, or an app
 	// that would take a space over maxApps.
 	ErrFull = errors.New("full")
@@ -122,6 +125,16 @@ func (v visibility) sees(creator sql.NullInt64) bool {
 	}
 	return false
 }
+
+// conflictError is ErrConflict for record id. Current is the record as it is now, as an
+// item, only if the caller may read it: a refusal gives away nothing they couldn't see.
+type conflictError struct {
+	id      int64
+	current map[string]any
+}
+
+func (e *conflictError) Error() string        { return ErrConflict.Error() }
+func (e *conflictError) Is(target error) bool { return target == ErrConflict }
 
 // fullError is ErrFull, saying which limit, with the API's code for it.
 type fullError struct {
@@ -250,15 +263,15 @@ func (s *Service) present(ctx context.Context, a Actor, ap *App) error {
 	return err
 }
 
-// countRows counts the rows of appID that v reads.
+// countRows counts the live rows of appID that v reads: deleted ones are not rows.
 func countRows(ctx context.Context, q queryer, appID int64, v visibility) (int, error) {
 	var n int
 	switch v.scope {
 	case access.ScopeAll:
-		err := q.QueryRowContext(ctx, `SELECT count(*) FROM app_rows WHERE app_id = ?`, appID).Scan(&n)
+		err := q.QueryRowContext(ctx, `SELECT count(*) FROM app_rows WHERE app_id = ? AND deleted_at IS NULL`, appID).Scan(&n)
 		return n, err
 	case access.ScopeOwn:
-		err := q.QueryRowContext(ctx, `SELECT count(*) FROM app_rows WHERE app_id = ? AND created_by = ?`, appID, v.user).Scan(&n)
+		err := q.QueryRowContext(ctx, `SELECT count(*) FROM app_rows WHERE app_id = ? AND deleted_at IS NULL AND created_by = ?`, appID, v.user).Scan(&n)
 		return n, err
 	}
 	return 0, nil
@@ -407,7 +420,7 @@ func (s *Service) rowCounts(ctx context.Context, spaceID, userID int64) (map[int
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT r.app_id, count(*), coalesce(sum(r.created_by = ?), 0)
 		FROM app_rows r JOIN apps a ON a.id = r.app_id
-		WHERE a.space_id = ? GROUP BY r.app_id`, userID, spaceID)
+		WHERE a.space_id = ? AND r.deleted_at IS NULL GROUP BY r.app_id`, userID, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -697,15 +710,16 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 	return moved, nil
 }
 
-// loadRows returns the rows of an app that v reads, oldest first.
+// loadRows returns the live rows of an app that v reads, oldest first: deleted ones are
+// left out, so they are in no screen, summary or check.
 func loadRows(ctx context.Context, q queryer, appID int64, v visibility) ([]Row, error) {
 	var rows *sql.Rows
 	var err error
 	switch v.scope {
 	case access.ScopeAll:
-		rows, err = q.QueryContext(ctx, `SELECT id, data FROM app_rows WHERE app_id = ? ORDER BY id`, appID)
+		rows, err = q.QueryContext(ctx, `SELECT id, revision, data FROM app_rows WHERE app_id = ? AND deleted_at IS NULL ORDER BY id`, appID)
 	case access.ScopeOwn:
-		rows, err = q.QueryContext(ctx, `SELECT id, data FROM app_rows WHERE app_id = ? AND created_by = ? ORDER BY id`, appID, v.user)
+		rows, err = q.QueryContext(ctx, `SELECT id, revision, data FROM app_rows WHERE app_id = ? AND deleted_at IS NULL AND created_by = ? ORDER BY id`, appID, v.user)
 	default:
 		return []Row{}, nil
 	}
@@ -717,7 +731,7 @@ func loadRows(ctx context.Context, q queryer, appID int64, v visibility) ([]Row,
 	for rows.Next() {
 		var r Row
 		var data string
-		if err := rows.Scan(&r.ID, &data); err != nil {
+		if err := rows.Scan(&r.ID, &r.Revision, &data); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(data), &r.Data); err != nil {
@@ -791,7 +805,8 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 		if err != nil {
 			return err
 		}
-		return apply(ctx, tx, actor, appID, def, ch, visibility{scope: acc.ModifyRecords, user: actor.UserID})
+		return apply(ctx, tx, actor, appID, def, ch,
+			visibility{scope: acc.ModifyRecords, user: actor.UserID}, readable(acc, actor.UserID))
 	})
 	if err != nil {
 		return nil, err
@@ -809,17 +824,19 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	return []Message{DataModel(SurfaceID(appID), def, rows)}, nil
 }
 
-// apply makes a change to an app's rows, within its bounds. modify is the rows the actor may
-// change: a row outside it is answered as one the app doesn't have, so which rows exist
-// isn't told to someone who may not touch them.
-func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change, modify visibility) error {
+// apply makes a change to an app's rows, within its bounds, and records it in their history.
+// modify is the rows the actor may change: a row outside it is answered as one the app doesn't
+// have, so which rows exist isn't told to someone who may not touch them. read is the rows
+// they may read, which decides whether a conflict shows the row as it is now.
+func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Definition, ch Change, modify, read visibility) error {
 	var count, size int
-	// In bytes, as len() counts below: length() of TEXT counts characters, which would let
-	// non-ASCII rows hold more than MaxDataSize.
-	if err := tx.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(length(CAST(data AS BLOB))), 0) FROM app_rows WHERE app_id = ?`, appID).
+	// Only live rows count against the limits. In bytes, as len() counts below: length() of
+	// TEXT counts characters, which would let non-ASCII rows hold more than MaxDataSize.
+	if err := tx.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(length(CAST(data AS BLOB))), 0) FROM app_rows WHERE app_id = ? AND deleted_at IS NULL`, appID).
 		Scan(&count, &size); err != nil {
 		return err
 	}
+	at := now()
 	switch ch.Kind {
 	case ActionInsert:
 		raw, err := json.Marshal(ch.Data)
@@ -829,24 +846,33 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		if count >= MaxRows || size+len(raw) > MaxDataSize {
 			return appFull(fmt.Sprintf("an app holds at most %d rows and %d MiB", MaxRows, MaxDataSize>>20))
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO app_rows (app_id, data, created_by, updated_by) VALUES (?, ?, ?, ?)`,
-			appID, string(raw), actor.UserID, actor.UserID)
-		return err
-	case ActionUpdate:
-		var data string
-		var creator sql.NullInt64
-		err := tx.QueryRowContext(ctx, `SELECT data, created_by FROM app_rows WHERE id = ? AND app_id = ?`, ch.ID, appID).Scan(&data, &creator)
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && !modify.sees(creator)) {
-			return invalidAs(apierr.CodeAppRowNotFound, nil, "the app has no row %d", ch.ID)
+		var id int64
+		if err := tx.QueryRowContext(ctx, `
+			INSERT INTO app_rows (app_id, data, revision,
+				created_at, created_by, created_by_agent, created_via, created_action,
+				updated_at, updated_by, updated_by_agent, updated_via, updated_action)
+			VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			appID, string(raw), at, actor.UserID, actor.Agent, via(actor), actionColumn(ch),
+			at, actor.UserID, actor.Agent, via(actor), actionColumn(ch)).Scan(&id); err != nil {
+			return err
 		}
+		return remember(ctx, tx, appID, id, 1, opInsert, string(raw), at, actor, ch)
+	case ActionUpdate, ActionDelete:
+		cur, err := liveRow(ctx, tx, appID, ch, modify, read, def)
 		if err != nil {
 			return err
 		}
-		var cur map[string]any
-		if err := json.Unmarshal([]byte(data), &cur); err != nil {
-			return err
+		if ch.Kind == ActionDelete {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE app_rows SET revision = ?, deleted_at = ?, deleted_by = ?, deleted_by_agent = ?, deleted_via = ?, deleted_action = ?
+				WHERE id = ? AND app_id = ?`,
+				cur.revision+1, at, actor.UserID, actor.Agent, via(actor), actionColumn(ch), ch.ID, appID)
+			if err != nil {
+				return err
+			}
+			return remember(ctx, tx, appID, ch.ID, cur.revision+1, opDelete, cur.data, at, actor, ch)
 		}
-		next, err := def.Collection.Merge(cur, ch.Data)
+		next, err := def.Collection.Merge(cur.fields, ch.Data)
 		if err != nil {
 			return err
 		}
@@ -854,35 +880,94 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		if err != nil {
 			return err
 		}
-		if size-len(data)+len(raw) > MaxDataSize {
+		if size-len(cur.data)+len(raw) > MaxDataSize {
 			return appFull(fmt.Sprintf("an app holds at most %d MiB", MaxDataSize>>20))
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE app_rows SET data = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
-			string(raw), now(), actor.UserID, ch.ID)
-		return err
-	case ActionDelete:
-		var creator sql.NullInt64
-		err := tx.QueryRowContext(ctx, `SELECT created_by FROM app_rows WHERE id = ? AND app_id = ?`, ch.ID, appID).Scan(&creator)
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && !modify.sees(creator)) {
-			return invalidAs(apierr.CodeAppRowNotFound, nil, "the app has no row %d", ch.ID)
+		if string(raw) == cur.canonical {
+			return nil // nothing changed: no new revision, nothing to remember
 		}
+		_, err = tx.ExecContext(ctx, `
+			UPDATE app_rows SET data = ?, revision = ?, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?, updated_action = ?
+			WHERE id = ? AND app_id = ?`,
+			string(raw), cur.revision+1, at, actor.UserID, actor.Agent, via(actor), actionColumn(ch), ch.ID, appID)
 		if err != nil {
 			return err
 		}
-		res, err := tx.ExecContext(ctx, `DELETE FROM app_rows WHERE id = ? AND app_id = ?`, ch.ID, appID)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return invalidAs(apierr.CodeAppRowNotFound, nil, "the app has no row %d", ch.ID)
-		}
-		return nil
+		return remember(ctx, tx, appID, ch.ID, cur.revision+1, opUpdate, string(raw), at, actor, ch)
 	}
 	return invalidf("unknown kind of action %q", ch.Kind)
+}
+
+// The operations a record's history lists.
+const (
+	opInsert  = "insert"
+	opUpdate  = "update"
+	opDelete  = "delete"
+	opRestore = "restore"
+)
+
+// actionColumn is the column value of the action that made a change: NULL for one that wasn't an
+// app's action (a restore).
+func actionColumn(ch Change) any {
+	if ch.Name == "" {
+		return nil
+	}
+	return ch.Name
+}
+
+// remember adds one version of a record to its history.
+func remember(ctx context.Context, tx *sql.Tx, appID, rowID, revision int64, op, data, at string, actor Actor, ch Change) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO app_row_history (app_id, row_id, revision, operation, data, at, actor, actor_agent, actor_via, action)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		appID, rowID, revision, op, data, at, actor.UserID, actor.Agent, via(actor), actionColumn(ch))
+	return err
+}
+
+// liveRecord is a live row as an update or delete finds it.
+type liveRecord struct {
+	revision  int64
+	data      string         // as stored
+	fields    map[string]any // data, decoded
+	canonical string         // data, encoded as a change encodes it
+}
+
+// liveRow reads the live row ch names for a change. A row that doesn't exist, is deleted or
+// is outside modify is answered as one the app doesn't have; one whose revision isn't the
+// one the change expected is a conflict.
+func liveRow(ctx context.Context, tx *sql.Tx, appID int64, ch Change, modify, read visibility, def Definition) (liveRecord, error) {
+	var rec liveRecord
+	var creator sql.NullInt64
+	err := tx.QueryRowContext(ctx, `SELECT data, revision, created_by FROM app_rows WHERE id = ? AND app_id = ? AND deleted_at IS NULL`, ch.ID, appID).
+		Scan(&rec.data, &rec.revision, &creator)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !modify.sees(creator)) {
+		return liveRecord{}, invalidAs(apierr.CodeAppRowNotFound, nil, "the app has no row %d", ch.ID)
+	}
+	if err != nil {
+		return liveRecord{}, err
+	}
+	if err := json.Unmarshal([]byte(rec.data), &rec.fields); err != nil {
+		return liveRecord{}, err
+	}
+	canonical, err := json.Marshal(rec.fields)
+	if err != nil {
+		return liveRecord{}, err
+	}
+	rec.canonical = string(canonical)
+	if ch.Expected != nil && *ch.Expected != rec.revision {
+		return liveRecord{}, conflict(ch.ID, rec, creator, read, def)
+	}
+	return rec, nil
+}
+
+// conflict is the error for a record whose revision isn't the one expected: with the record
+// as it is now if the caller reads it.
+func conflict(id int64, rec liveRecord, creator sql.NullInt64, read visibility, def Definition) error {
+	e := &conflictError{id: id}
+	if read.sees(creator) {
+		e.current = item(def, Row{ID: id, Revision: rec.revision, Data: rec.fields})
+	}
+	return e
 }
 
 // checkVersion refuses a missing version: versions start at 1.
