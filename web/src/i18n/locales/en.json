@@ -99,13 +99,13 @@
     "previewDraftNamed": "Preview the draft of {name}",
     "stage": {
       "live": "Live · release {number}",
-      "draft": "Draft · not published",
+      "draft": "Preview · sample data",
       "showDraft": "Preview the draft",
       "showLive": "Back to the live release",
-      "draftNote": "This is a preview of changes that aren’t published yet. Nobody else sees it, and its buttons don’t change any data.",
+      "draftNote": "This is a preview of changes that aren’t published yet, on sample data. Try it: its buttons work, but they change nothing real, and nobody else sees it.",
       "unpublishedNote": "You are looking at the live release, which everyone uses. It has changes that aren’t published yet.",
       "notPublished": "This app isn’t published yet: it can be launched once someone who may publish it does.",
-      "draftNoActions": "This is a draft preview: publish the app to use it."
+      "liveNote": "This is the live release. Its buttons change real data."
     },
     "releases": {
       "open": "History",
@@ -136,6 +136,95 @@
       "message": "This app was published with features this version of TaskTo.AI doesn’t have yet, so it can’t be shown here.",
       "needs": "Needs: {needs}",
       "update": "Update TaskTo.AI"
+    },
+    "builder": {
+      "build": "Build an app",
+      "continue": "Continue building",
+      "title": "Build an app",
+      "intro": "Describe the app you want. The agent makes a draft with sample data in a conversation, and you try it here before anyone else can use it. Nothing you try in the preview changes real data.",
+      "editTitle": "Edit with AI",
+      "editIntro": "Describe what should change. The agent changes a new draft of the app; the published app keeps working as it is until you publish the draft.",
+      "editing": "Editing {name}, in {space}.",
+      "edit": "Edit with AI",
+      "editNamed": "Edit {name} with AI",
+      "what": "What should the app do?",
+      "whatChange": "What should change?",
+      "placeholder": "For example: a tracker for my gym sessions, with the date, the exercise and how it went",
+      "changePlaceholder": "For example: add a notes field and a button to mark an item as done",
+      "where": "Where should it live?",
+      "wherePrivate": "In my private space",
+      "whereShared": "In a shared space",
+      "sharedSpace": "Shared space",
+      "privateNote": "Only you can see and use it. You can share it later by moving it to a shared space.",
+      "sharedNote": "Everyone who can open that space may use it once it is published, and only someone with the publisher role in the app can publish it.",
+      "noSharedSpaces": "You can’t change any shared space, so the app can only go in your private space.",
+      "inThisConversation": "The agent will build in this conversation.",
+      "backToConversation": "Back to the conversation",
+      "start": "Start building",
+      "startEdit": "Start editing",
+      "buildHere": "Build an app in this conversation",
+      "panes": "Builder view",
+      "tab": {
+        "build": "Build",
+        "preview": "Preview",
+        "updated": "(updated)"
+      },
+      "showingBuild": "Showing Build: the conversation with the agent.",
+      "showingPreview": "Showing Preview: the draft of the app.",
+      "preview": {
+        "empty": "Nothing to preview yet. Describe the app in Build: the agent’s draft shows here, with sample data."
+      },
+      "prompt": {
+        "private": "my private space (space id {id})",
+        "shared": "the shared space “{space}” (space id {id})",
+        "build": "Build me an app: {description}\n\nSave it in {where}, as a draft with a few rows of sample data so I can try it. Don’t publish it: I will try the draft and publish it myself. When it is saved, tell me in plain words what the app can read and change, and anything it needs that I should know about.",
+        "edit": "Change my app “{name}” (app id {app}, in space id {space}): {description}\n\nChange its draft only. The published release must keep working as it is until I publish the draft. Tell me what you changed and anything new it needs."
+      },
+      "audience": {
+        "title": "Who can use it",
+        "private": "Only you: it is in your private space.",
+        "space": "Everyone who can open {space}: its editors can add and change records, and its viewers can only look.",
+        "restricted": "Only people who have a role in this app. Its builders set the roles.",
+        "person": "{name}: {roles}"
+      },
+      "can": {
+        "title": "What it can read and change",
+        "read": "It reads and keeps records with these fields: {fields}.",
+        "insert": "Add records.",
+        "update": "Change records.",
+        "delete": "Delete records (a deleted record can be restored).",
+        "readOnly": "It only shows records: it can’t add, change or delete any.",
+        "nothingElse": "It can’t reach anything else: no other app, document or account."
+      },
+      "field": "{name} ({type})",
+      "publish": {
+        "title": "Publish",
+        "review": "Review and publish…",
+        "now": "Publish",
+        "confirmShared": "This makes the app live for everyone in {space} who may use it.",
+        "confirm": "Publish for {space}",
+        "donePersonal": "Published as release {number}. It is live in your private space.",
+        "doneShared": "Published as release {number}. It is live for the people who may use it in {space}.",
+        "needsPublisher": "You can build the draft, but publishing it needs the publisher role in this app. Ask someone who has it to publish.",
+        "readOnly": "You can only read this space, so you can’t publish here.",
+        "nothing": "Nothing new to publish: the draft is the live release."
+      }
+    },
+    "fieldType": {
+      "string": "text",
+      "number": "number",
+      "boolean": "yes or no",
+      "date": "date",
+      "time": "time",
+      "choice": "choice"
+    },
+    "needs": {
+      "design": "You can’t change this app: that needs the builder role in it.",
+      "publish": "You can’t publish this app: that needs the publisher role in it.",
+      "submit": "You can’t add records to this app: that needs a role that adds records.",
+      "modify_records": "You can’t change or delete records in this app with your role.",
+      "read_records": "Your role in this app doesn’t let you read its records.",
+      "manage_roles": "You can’t manage this app’s roles: that needs the builder role."
     }
   },
   "auth": {

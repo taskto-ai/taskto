@@ -45,9 +45,10 @@ import { Markdown } from '../markdown'
 import { Link, routePath } from '../router'
 import { CliLoginFlow } from '../settings/CliAccountsTab'
 import { Icon } from '../shell/Icon'
+import { readState, writeState } from '../uiState'
 import { useDictation } from './Dictation'
 import { type History, useHistory } from './history'
-import { type ChatMessage, CLI_TOOL, HELP_TOOL, pendingHelp, type ToolUse, transcript } from './transcript'
+import { type AppRef, type ChatMessage, CLI_TOOL, HELP_TOOL, pendingHelp, type ToolUse, transcript } from './transcript'
 import { type EventSourceFactory, type StreamStatus, useConversationStream } from './useConversationStream'
 
 // Its title, or for an untitled one, when it began. Outside a hook, for lists elsewhere too: a
@@ -83,6 +84,16 @@ function liveApps(messages: ChatMessage[]): Set<ToolUse> {
   return live
 }
 
+// The app the agent saved last in the conversation, and the tool call that saved it.
+function lastSavedApp(messages: ChatMessage[]): { app: AppRef; save: string } | null {
+  for (const m of [...messages].reverse()) {
+    for (const t of [...m.tools].reverse()) {
+      if (t.app) return { app: t.app, save: t.id }
+    }
+  }
+  return null
+}
+
 const STATUS_LABEL = {
   connecting: 'conversations.status.connecting',
   live: 'conversations.status.live',
@@ -96,6 +107,9 @@ export function ConversationView({
   backHref,
   onChanged,
   streams,
+  buildHref,
+  embedApps = true,
+  onSavedApp,
 }: {
   workspace: number
   id: number
@@ -103,6 +117,14 @@ export function ConversationView({
   // The conversation was sent to, renamed or archived: the list is out of date.
   onChanged: () => void
   streams?: EventSourceFactory
+  // Where to build an app in this conversation (the builder); no link without it.
+  buildHref?: string
+  // Whether the apps the agent saved show launched in the transcript. The builder shows the app in
+  // its own pane instead, and the transcript only links to it.
+  embedApps?: boolean
+  // Called with the app the agent saved last, and the tool call that saved it (which changes with
+  // each save, so the caller knows to read the app again).
+  onSavedApp?: (app: AppRef, save: string) => void
 }) {
   const t = useT()
   const base = `${ws(workspace)}/conversations/${id}`
@@ -114,7 +136,12 @@ export function ConversationView({
     view && older.history ? { ...view, entries: older.history.entries, before: older.history.before } : view,
   )
   const archived = Boolean(meta.data?.archived_at)
-  const apps = liveApps(messages)
+  const apps = embedApps ? liveApps(messages) : new Set<ToolUse>()
+  const saved = lastSavedApp(messages)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: told again for each new save only
+  useEffect(() => {
+    if (saved) onSavedApp?.(saved.app, saved.save)
+  }, [saved?.save])
 
   // The model it runs on, and what the caller may choose; with a CLI among either, the
   // caller's CLI accounts, for the picker's hints and the Reconnect banner.
@@ -195,6 +222,16 @@ export function ConversationView({
           <TitleBar conversation={meta.data} url={base} onChanged={changed} />
         ) : (
           <h2 className="tt-chat-title">{meta.error ? t('conversations.conversation') : '…'}</h2>
+        )}
+        {buildHref && !archived && (
+          <Link
+            href={buildHref}
+            className="tt-icon-button"
+            aria-label={t('apps.builder.buildHere')}
+            title={t('apps.builder.buildHere')}
+          >
+            <Icon name="apps" />
+          </Link>
         )}
         {browser.data?.enabled && (
           <button
@@ -757,7 +794,11 @@ function Composer({
   children?: ReactNode
 }) {
   const t = useT()
-  const [text, setText] = useState('')
+  // An unsent message is kept in this browser, so leaving and coming back finds it where it was.
+  const draftKey = `taskto:message:${base}`
+  const [text, setText] = useState(() => readState(draftKey) ?? '')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: written when the text changes
+  useEffect(() => writeState(draftKey, text.trim() ? text : null), [text])
   const [busy, setBusy] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)

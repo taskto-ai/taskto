@@ -281,12 +281,36 @@ test('the app is drawn from the release it names, and its actions name that rele
   })
   expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${base}/surface?release=3`, `POST ${base}/actions`])
   expect(calls[1].body).toMatchObject({ name: 'add_expense', release: 3 })
-  // A draft is drawn, never acted on.
+  expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${base}/surface?release=3`, `POST ${base}/actions`])
+})
+
+test("a draft is tried on sample rows the server makes, and its actions never reach the app's own", async () => {
+  const sample = [{ id: 1, revision: 1, data: { description: 'Coffee' } }]
+  const grown = [...sample, { id: 2, revision: 1, data: { description: 'Tea' } }]
+  const calls = fakeFetch({
+    'POST /api/workspaces/1/spaces/2/apps/1/preview': (call) =>
+      (call.body as { action?: unknown }).action
+        ? { body: { messages: afterAdd, rows: grown } }
+        : { body: { messages: surface, rows: sample } },
+  })
+  const base = '/api/workspaces/1/spaces/2/apps/1'
   const preview = httpTransport(base, 'draft')
-  await expect(
-    preview.act({ name: 'x', surfaceId: 'app-1', sourceComponentId: 'x', timestamp: 't', context: {} }),
-  ).rejects.toThrow('draft preview')
-  expect(calls).toHaveLength(2)
+  expect(await preview.load()).toEqual(surface)
+  const action = { name: 'add_expense', surfaceId: 'app-1', sourceComponentId: 'add', timestamp: 't', context: {} }
+  expect(await preview.act(action)).toEqual(afterAdd)
+  await preview.act(action)
+  // The first step sends nothing; the next ones send back the rows the last one left, with the action.
+  expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+    `POST ${base}/preview`,
+    `POST ${base}/preview`,
+    `POST ${base}/preview`,
+  ])
+  expect(calls[0].body).toEqual({})
+  expect(calls[1].body).toEqual({ rows: sample, action })
+  expect(calls[2].body).toEqual({ rows: grown, action })
+  // Loading again starts over from fresh sample rows.
+  await preview.load()
+  expect(calls[3].body).toEqual({})
 })
 
 for (const [name, component] of [

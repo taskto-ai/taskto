@@ -1645,7 +1645,7 @@ app_not_published` before its first release. It draws the **live release**; `?re
 draws the draft, and `?release=<number>` that release (`404 app_release_not_found`), both
 only for those who may design or publish the app (`403 app_forbidden`, `design`) unless the
 number is the live one. The draft is drawn with the app's real rows, to look at: it is for
-previews, and its actions are not run. The data model has the rows the caller may read, and the
+previews, and its actions are not run (to try a draft use [`…/preview`](#post-appsapppreview), which runs on sample rows instead). The data model has the rows the caller may read, and the
 summaries over those rows alone. A client names the release it drew in its actions: it knows
 it from `live.number` of the app it read, which it passes as `?release=`.
 
@@ -1689,6 +1689,33 @@ the fields the live release declares** (as it declares them), and its summaries 
 read such fields: nothing the live app leaves unseen, such as a field it removed, is returned. A
 value stored with another type than its field's current one is left out of the data model (and
 stays stored).
+
+### `POST …/apps/{app}/preview`
+
+Tries the draft on **sample rows, not the app's data**. For those who may design or publish the app
+(`403 app_forbidden`, `design`, for anyone else; `404` for an app the caller can't read, or of another
+space or workspace), in a space the caller may read; `409` while the app is offline. The draft is
+drawn or used with rows that the caller keeps and sends back, and the server **reads and writes none
+of the app's rows**: no row is stored, changed or deleted, no revision or history is made, and
+nothing an action could do outside the rows happens, whatever the action is. It changes no state at
+all, which is why it is a `POST`: the sample rows travel in the body.
+
+`{}` starts a preview: the answer's `rows` are a few sample rows made from the draft's collection
+(plausible values of every field, the same each time). `{"rows": [{"id": 1, "revision": 1, "data": {…}}, …],
+"action": {…}}` goes on from those rows: `action` is the A2UI client action a button sent, in the
+form of [`…/actions`](#post-appsappactions), and runs as the **draft** defines it, on the rows
+sent. Without `action` the rows are only drawn. A preview holds at most 100 rows (`409
+app_full`); rows must each have an `id` and a `revision` from 1, an `id` of their own, and fit the
+draft's collection (`422`; a client starts the preview again when the draft changed). An action the
+draft doesn't declare, a value that doesn't fit its field, or a row the sample rows don't have is
+`422`, as in a live app; a stale `expectedRevision` is `409 app_record_conflict`.
+
+`200` with `{"messages": […], "rows": […]}`: the A2UI messages that draw the screen (`createSurface`,
+`updateComponents`, `updateDataModel` for a start, as `…/surface` answers) or update it (as `…/actions`
+does), and the rows as the action left them, to send with the next step. The answer is the same
+for the draft of an app that was never published, which is how it is tried first. The web
+app's builder and its Apps page use this route for every draft they show, and label it a **Preview**
+with sample data, apart from the **Live** release.
 
 ### Drafts and releases
 

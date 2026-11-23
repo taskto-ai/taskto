@@ -1,7 +1,7 @@
 // Draws one personal app: the server sends A2UI messages, button actions go back to it,
 // and the messages it answers with update the screen.
 //
-// An app is drawn from one of its releases (or, to preview it, its draft), and its buttons name the
+// An app is drawn from one of its releases (or, to try it, its draft on sample data), and its buttons name the
 // release they were drawn from, so the server can tell an action of an older screen from the live
 // one's. A release that needs more than this client's catalog has (a component, a function, a
 // newer definition format) isn't drawn: the app says the client must be updated.
@@ -9,7 +9,7 @@
 import { A2uiSurface, type ReactCatalogComponent } from '@a2ui/react/v0_9'
 import { MessageProcessor, STRICT_VALIDATION, type SurfaceModel } from '@a2ui/web_core/v0_9'
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, api, type DefinitionNeeds, errorText } from '../api'
+import { ApiError, api, type DefinitionNeeds, errorText, type PreviewReply, type PreviewRow } from '../api'
 import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
 import { appsCatalog, unsupportedBy } from './catalog'
@@ -22,16 +22,35 @@ export type AppTransport = {
   act(action: ActionPayload): Promise<unknown[]>
 }
 
-// The app's routes on the server: base is …/spaces/{space}/apps/{app}. release is the live
-// release's number, which the screen is drawn from and its actions name; 'draft' draws the draft, a
-// preview whose actions don't run.
-export function httpTransport(base: string, release?: number | 'draft'): AppTransport {
-  if (release === 'draft') {
-    return {
-      load: () => api<unknown[]>(`${base}/surface?release=draft`),
-      act: () => Promise.reject(new Error(translate('apps.stage.draftNoActions'))),
-    }
+// The draft's preview: its screen and its buttons work, on sample rows the server makes and this
+// transport keeps (the server holds nothing of a preview and writes none of the app's rows:
+// docs/api.md, …/preview). A new transport starts a new preview, so a caller keeps one while the
+// preview is in use.
+export function previewTransport(base: string): AppTransport {
+  let rows: PreviewRow[] | undefined
+  const step = async (action?: ActionPayload) => {
+    const reply = await api<PreviewReply>(`${base}/preview`, {
+      method: 'POST',
+      body: action && rows ? { rows, action } : {},
+    })
+    rows = reply.rows
+    return reply.messages
   }
+  return {
+    // Loading starts over from the sample rows.
+    load: () => {
+      rows = undefined
+      return step()
+    },
+    act: (action) => step(action),
+  }
+}
+
+// The app's routes on the server: base is …/spaces/{space}/apps/{app}. release is the live
+// release's number, which the screen is drawn from and its actions name; 'draft' is the draft's
+// preview, whose actions run on sample rows (previewTransport) and never on the app's own.
+export function httpTransport(base: string, release?: number | 'draft'): AppTransport {
+  if (release === 'draft') return previewTransport(base)
   return {
     load: () => api<unknown[]>(release === undefined ? `${base}/surface` : `${base}/surface?release=${release}`),
     act: (action) =>

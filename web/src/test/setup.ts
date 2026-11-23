@@ -1,6 +1,7 @@
 // Runs before every test file (vite.config.ts, test.setupFiles).
 
 import { configure } from '@testing-library/react'
+import { afterEach } from 'vitest'
 
 // How long findBy… and waitFor wait for what the page ends up showing. Testing Library's
 // default, 1 s, is tight on a CI runner shared with other jobs: there, a language switch that
@@ -10,3 +11,13 @@ import { configure } from '@testing-library/react'
 // (vite.config.ts), so a page that never gets there still fails with Testing Library's own
 // message and the page it saw.
 configure({ asyncUtilTimeout: 4000 })
+
+// What a page keeps in the browser (an unsent message, the app being built) belongs to the test
+// that made it, not the next one.
+afterEach(() => {
+  try {
+    globalThis.localStorage?.clear()
+  } catch {
+    // A test environment without storage has none to clear.
+  }
+})

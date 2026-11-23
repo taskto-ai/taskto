@@ -899,14 +899,19 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	if err != nil {
 		return nil, err
 	}
-	shown := shownBy(live, def)
+	return answer(appID, shownBy(live, def), rows, change), nil
+}
+
+// answer is the messages that update a screen once change has been made to rows: the rows and
+// summaries as they are now and, for an app with screens, what the action does to the screen the
+// person is on. The record a detail screen shows is shown again after an update and emptied after
+// a delete, and the screen the action says it goes on to (Then) is opened. The live app and the
+// draft's preview (preview.go) answer alike.
+func answer(appID int64, shown Definition, rows []Row, change Change) []Message {
 	msgs := Refreshed(SurfaceID(appID), shown, rows, change.Kind == ActionInsert)
 	if !shown.hasScreens() {
-		return msgs, nil
+		return msgs
 	}
-	// An app with screens: what the action does to the screen the person is on. The record a
-	// detail screen shows is shown again after an update and emptied after a delete, and the
-	// screen the action says it goes on to (Then) is opened.
 	switch change.Kind {
 	case ActionUpdate:
 		record := map[string]any{}
@@ -922,7 +927,7 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	if change.Then != "" {
 		msgs = append(msgs, dataMessage(SurfaceID(appID), "/"+ScreenKey, change.Then))
 	}
-	return msgs, nil
+	return msgs
 }
 
 // navigates reports whether the action is a navigate action of the release it comes from, which

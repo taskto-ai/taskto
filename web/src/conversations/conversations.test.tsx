@@ -2,6 +2,7 @@
 
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { SESSION_LOST } from '../api'
 import { parseRoute, usePath } from '../router'
@@ -632,6 +633,22 @@ test("a saved app's screen shows in the conversation, as the server has it", asy
   expect(screen.getByText('Live · release 1')).toBeTruthy()
 })
 
+test("a live embed stays labelled Live and its buttons still act on the app's real rows", async () => {
+  const calls = await showEntries(toolEntries(1, 'update_app', { text: JSON.stringify(savedApp({ version: 2 })) }), {
+    'GET /api/workspaces/1/spaces/2/apps/1': { body: savedApp({ version: 2 }) },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
+    'POST /api/workspaces/1/spaces/2/apps/1/actions': { body: afterAdd },
+  })
+  await screen.findByText('Live · release 1')
+  await screen.findByText('Coffee')
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  await waitFor(() => expect(appCalls(calls).some((c) => c.method === 'POST')).toBe(true))
+  const posted = appCalls(calls).filter((c) => c.method === 'POST')
+  // The live app's own actions, naming the release the screen was drawn from; never a preview.
+  expect(posted.map((c) => c.path)).toEqual(['/api/workspaces/1/spaces/2/apps/1/actions'])
+  expect(posted[0].body).toMatchObject({ name: 'delete_expense', release: 1 })
+})
+
 test('the open link opens the app on the Apps page', async () => {
   await showEntries(toolEntries(1, 'update_app', { text: JSON.stringify(savedApp({ version: 2 })) }), {
     'GET /api/workspaces/1/spaces/2/apps/1': { body: savedApp({ version: 2 }) },
@@ -647,24 +664,24 @@ test('the agent changed the app: the conversation shows the live release, and th
   const calls = await showEntries(toolEntries(1, 'update_app', { text: JSON.stringify(savedApp({ version: 2 })) }), {
     'GET /api/workspaces/1/spaces/2/apps/1': { body: savedApp({ version: 2, unpublished_changes: true }) },
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
-    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=draft': { body: surface },
+    'POST /api/workspaces/1/spaces/2/apps/1/preview': { body: { messages: surface, rows: [] } },
   })
   // The live release is what people use, and it is said so; the agent's changes aren't in it.
   await screen.findByText('Live · release 1')
   expect(screen.getByText(/It has changes that aren’t published yet/)).toBeTruthy()
-  expect(appCalls(calls).some((c) => c.path.endsWith('release=draft'))).toBe(false)
+  expect(appCalls(calls).some((c) => c.path.endsWith('/preview'))).toBe(false)
   fireEvent.click(screen.getByRole('button', { name: 'Preview the draft' }))
-  await screen.findByText('Draft · not published')
-  await waitFor(() => expect(appCalls(calls).some((c) => c.path.endsWith('release=draft'))).toBe(true))
+  await screen.findByText('Preview · sample data')
+  await waitFor(() => expect(appCalls(calls).some((c) => c.path.endsWith('/preview'))).toBe(true))
 })
 
 test('a new app the agent made is a draft preview for its builders and a note for the rest', async () => {
   const fresh = { live: null, unpublished_changes: true }
   await showEntries(toolEntries(1, 'create_app', { text: JSON.stringify(savedApp(fresh)) }), {
     'GET /api/workspaces/1/spaces/2/apps/1': { body: savedApp(fresh) },
-    'GET /api/workspaces/1/spaces/2/apps/1/surface?release=draft': { body: surface },
+    'POST /api/workspaces/1/spaces/2/apps/1/preview': { body: { messages: surface, rows: [] } },
   })
-  await screen.findByText('Draft · not published')
+  await screen.findByText('Preview · sample data')
   await screen.findByText('Coffee')
   cleanup()
 

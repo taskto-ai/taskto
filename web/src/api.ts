@@ -176,6 +176,19 @@ export type AppRelease = DefinitionNeeds & {
 // A change of a collection a publish must acknowledge, by kind and field.
 export type SchemaChange = { change: string; field: string }
 
+// The parts of an app's definition the builder tells people about: what its rows hold and what
+// its buttons may do to them. Nothing else of a definition is read here.
+export type AppField = { name: string; type: 'string' | 'number' | 'boolean' | 'date' | 'time' | 'choice' }
+export type AppActionKind = 'insert' | 'update' | 'delete' | 'navigate'
+export type AppDraft = DefinitionNeeds & {
+  collection?: { fields: AppField[] }
+  actions?: Record<string, { kind: AppActionKind }>
+}
+
+// One sample row of a draft's preview: it lives in the browser, never on the server's disk.
+export type PreviewRow = { id: number; revision: number; data: Record<string, unknown> }
+export type PreviewReply = { messages: unknown[]; rows: PreviewRow[] }
+
 export type App = {
   id: number
   space_id: number
@@ -191,7 +204,7 @@ export type App = {
   // The draft differs from the live release (told only to those who may design or publish).
   unpublished_changes: boolean
   // The definition being edited, in a single app's reply, for those who may design or publish.
-  draft?: DefinitionNeeds
+  draft?: AppDraft
 }
 
 // Who made a change to an app's record, through the agent or an access token if so.
