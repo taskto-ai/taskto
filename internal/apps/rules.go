@@ -141,8 +141,8 @@ func (r Rule) checkAt(c Collection, depth int, nodes *int) error {
 	if !slices.Contains(ruleOps, r.Op) {
 		return fmt.Errorf("op must be one of %s", strings.Join(ruleOps, ", "))
 	}
-	if f.Type == TypeAttachment {
-		return fmt.Errorf("an attachment field can't be compared: a rule can't read %q", f.Name)
+	if f.Type == TypeAttachment || f.Type == TypeLocation || f.Type == TypeSignature {
+		return fmt.Errorf("a %s field can't be compared: a rule can't read %q", f.Type, f.Name)
 	}
 	ordered := f.Type == TypeNumber || f.Type == TypeDate || f.Type == TypeTime
 	if !ordered && r.Op != OpEq && r.Op != OpNe {
@@ -162,7 +162,7 @@ func (r Rule) checkAt(c Collection, depth int, nodes *int) error {
 // choice's must be one of its options.
 func (f Field) literal(v any) (any, error) {
 	switch f.Type {
-	case TypeString:
+	case TypeString, TypeBarcode:
 		s, ok := v.(string)
 		if !ok || utf8.RuneCountInString(s) > DefaultMaxLength {
 			return nil, fmt.Errorf("must be text of at most %d characters", DefaultMaxLength)
@@ -284,7 +284,8 @@ func compareFloat(a, b float64) int {
 // stored returns v as a value of the field's type with its limits not applied: the form rows
 // hold it in.
 func (f Field) stored(v any) (any, bool, error) {
-	f.MaxLength, f.Min, f.Max, f.Options, f.MaxFiles = math.MaxInt, nil, nil, nil, math.MaxInt
+	f.MaxLength, f.Min, f.Max, f.Options, f.MaxFiles, f.asStored = math.MaxInt, nil, nil, nil, math.MaxInt, true
+	f.Format = "" // a code stored under another format is still the text it was
 	return f.parse(v)
 }
 

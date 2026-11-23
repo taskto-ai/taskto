@@ -543,7 +543,11 @@ func breakingChanges(live *Collection, next Collection, rows []Row, blind bool) 
 		// A retyped field is still judged for what it now requires; its limits, of another
 		// type, are not compared.
 		retyped := nf.Type != was.Type
-		if retyped && anyRow(func(r Row) bool { return holds(r, was.Name) }) {
+		// A field that becomes a location or a signature is a change whether or not a row has a value:
+		// what it takes from then on is locked once stored, and what was pending for what it was (a photo
+		// waiting to be saved) is not a signature, which the publisher says by acknowledging it.
+		intoEvidence := retyped && (nf.Type == TypeLocation || nf.Type == TypeSignature)
+		if retyped && (intoEvidence || anyRow(func(r Row) bool { return holds(r, was.Name) })) {
 			out = append(out, SchemaChange{ChangeFieldTypeChanged, was.Name})
 		}
 		if nf.Required && !was.Required && anyRow(func(r Row) bool { return !holds(r, was.Name) }) {
@@ -609,6 +613,10 @@ func narrower(was, next Field) bool {
 		}
 	}
 	if was.Type == TypeAttachment && next.MaxFiles < was.MaxFiles {
+		return true
+	}
+	// A barcode field that now reads one format only, or another, refuses codes it took.
+	if was.Type == TypeBarcode && next.Format != "" && next.Format != was.Format {
 		return true
 	}
 	if next.Min != nil && (was.Min == nil || *next.Min > *was.Min) {

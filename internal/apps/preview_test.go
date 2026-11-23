@@ -337,7 +337,8 @@ func TestSampleRowsFitTheirCollections(t *testing.T) {
 			t.Errorf("%s: %d sample rows", ex.Name, len(rows))
 		}
 		for _, r := range rows {
-			if err := ex.Definition.Collection.Fits(r.Data); err != nil {
+			// A picture is the one thing a preview never holds, so a field for one isn't required of it.
+			if err := ex.Definition.Collection.forPreview().Fits(r.Data); err != nil {
 				t.Errorf("%s: %v", ex.Name, err)
 			}
 		}
@@ -413,5 +414,72 @@ func TestPreviewNeverReferencesAttachments(t *testing.T) {
 	}
 	if out, _ := jsonString(reply); strings.Contains(out, id) {
 		t.Fatalf("the preview returned an attachment id: %s", out)
+	}
+}
+
+// The capture fields have sample values a live app would take (a place, a code with its check digit),
+// and never a picture: a required signature leaves the preview's rows and actions working.
+func TestPreviewHandlesCaptureFields(t *testing.T) {
+	c := Collection{Fields: []Field{
+		{Name: "place", Type: TypeLocation, Required: true},
+		{Name: "ean", Type: TypeBarcode, Format: "ean_13", MaxLength: 20, Required: true},
+		{Name: "ean8", Type: TypeBarcode, Format: "ean_8", MaxLength: 20},
+		{Name: "upc", Type: TypeBarcode, Format: "upc_a", MaxLength: 20},
+		{Name: "upce", Type: TypeBarcode, Format: "upc_e", MaxLength: 20},
+		{Name: "qr", Type: TypeBarcode, Format: "qr_code", MaxLength: 6},
+		{Name: "signed", Type: TypeSignature, Required: true},
+		{Name: "photos", Type: TypeAttachment, Required: true},
+	}}
+	rows := SampleRows(c)
+	if len(rows) != sampleRowCount {
+		t.Fatalf("%d sample rows: a required capture field left them out", len(rows))
+	}
+	for _, r := range rows {
+		for _, f := range c.Fields {
+			v, has := r.Data[f.Name]
+			switch f.Type {
+			case TypeSignature, TypeAttachment:
+				if has {
+					t.Errorf("a sample row holds a picture: %s = %v", f.Name, v)
+				}
+			default:
+				// What a live app would take, as a person sends it: strictly, and against the clock.
+				if _, present, err := f.parse(v); err != nil || !present {
+					t.Errorf("%s = %v: %v", f.Name, v, err)
+				}
+			}
+		}
+	}
+	// The sample places and codes differ from row to row, and are the same on every call.
+	if rows[0].Data["ean"] == rows[1].Data["ean"] || !jsonEqual(SampleRows(c), rows) {
+		t.Errorf("sample codes: %v, %v", rows[0].Data["ean"], rows[1].Data["ean"])
+	}
+}
+
+// An app with a required signature previews an insert on a sample row, and the id of a real attachment
+// sent for the signature is dropped as a photo's is.
+func TestPreviewNeverReferencesASignature(t *testing.T) {
+	w := newWorld(t)
+	s := w.alicePrivate
+	a := w.createCapture(w.alice, s)
+	const id = "0123456789abcdef0123456789abcdef"
+	start := w.mustPreview(w.alice, s, a, PreviewRequest{})
+	for _, r := range start.Rows {
+		if _, has := r.Data["signed"]; has {
+			t.Fatalf("a sample row has a signature: %+v", r)
+		}
+		if _, has := r.Data["place"]; !has {
+			t.Fatalf("a sample row has no place: %+v", r)
+		}
+	}
+	given := []PreviewRow{{ID: 1, Revision: 1, Data: map[string]any{"title": "x", "signed": id}}}
+	reply := w.mustPreview(w.alice, s, a, PreviewRequest{Rows: given})
+	action := &ClientAction{Name: "add_note", SurfaceID: SurfaceID(a.ID), Context: map[string]any{"title": "y", "signed": id}}
+	reply = w.mustPreview(w.alice, s, a, PreviewRequest{Rows: reply.Rows, Action: action})
+	if len(reply.Rows) != 2 {
+		t.Fatalf("rows = %+v", reply.Rows)
+	}
+	if out, _ := jsonString(reply); strings.Contains(out, id) {
+		t.Fatalf("the preview returned a signature's id: %s", out)
 	}
 }

@@ -1,0 +1,72 @@
+{
+  "name": "Equipment checkout",
+  "definition": {
+    "components": [
+      { "id": "root", "component": "Column", "children": ["title", "out", "items", "form"] },
+      { "id": "title", "component": "Text", "text": "Equipment checkout", "variant": "h2" },
+      { "id": "out", "component": "Stat", "label": "Items checked out", "value": { "path": "/out" } },
+      { "id": "items", "component": "List", "children": { "componentId": "item", "path": "/items" } },
+      { "id": "item", "component": "Column", "children": ["item-head", "item-where", "item-signed"] },
+      { "id": "item-head", "component": "Row", "justify": "spaceBetween", "children": ["item-code", "item-who"] },
+      { "id": "item-code", "component": "Text", "text": { "path": "equipment" } },
+      { "id": "item-who", "component": "Text", "text": { "path": "borrower" }, "variant": "caption" },
+      { "id": "item-where", "component": "LocationInput", "field": "place", "readOnly": true, "value": { "path": "place" } },
+      { "id": "item-signed", "component": "Photos", "label": "Signature", "value": { "path": "signed" } },
+      {
+        "id": "form",
+        "component": "Column",
+        "children": ["equipment", "borrower", "condition", "notes", "place", "signed", "save"]
+      },
+      { "id": "equipment", "component": "BarcodeInput", "field": "equipment", "label": "Equipment tag", "value": { "path": "/draft/equipment" } },
+      { "id": "borrower", "component": "TextField", "label": "Borrower", "value": { "path": "/draft/borrower" } },
+      {
+        "id": "condition",
+        "component": "ChoicePicker",
+        "label": "Condition",
+        "variant": "mutuallyExclusive",
+        "displayStyle": "chips",
+        "options": [
+          { "label": "Good", "value": "good" },
+          { "label": "Worn", "value": "worn" },
+          { "label": "Damaged", "value": "damaged" }
+        ],
+        "value": { "path": "/draft/condition" }
+      },
+      { "id": "notes", "component": "TextField", "label": "Notes", "variant": "longText", "value": { "path": "/draft/notes" } },
+      { "id": "place", "component": "LocationInput", "field": "place", "label": "Where it was handed over", "value": { "path": "/draft/place" } },
+      { "id": "signed", "component": "SignatureInput", "field": "signed", "label": "Borrower's signature", "value": { "path": "/draft/signed" } },
+      { "id": "save-label", "component": "Text", "text": "Check out" },
+      {
+        "id": "save",
+        "component": "Button",
+        "variant": "primary",
+        "child": "save-label",
+        "action": {
+          "event": {
+            "name": "check_out",
+            "context": {
+              "equipment": { "path": "/draft/equipment" },
+              "borrower": { "path": "/draft/borrower" },
+              "condition": { "path": "/draft/condition" },
+              "notes": { "path": "/draft/notes" },
+              "place": { "path": "/draft/place" },
+              "signed": { "path": "/draft/signed" }
+            }
+          }
+        }
+      }
+    ],
+    "collection": {
+      "fields": [
+        { "name": "equipment", "type": "barcode", "required": true, "max_length": 100 },
+        { "name": "borrower", "type": "string", "required": true, "max_length": 100 },
+        { "name": "condition", "type": "choice", "options": ["good", "worn", "damaged"] },
+        { "name": "notes", "type": "string", "max_length": 1000 },
+        { "name": "place", "type": "location", "capture": "submit" },
+        { "name": "signed", "type": "signature", "required": true }
+      ]
+    },
+    "actions": { "check_out": { "kind": "insert" } },
+    "summaries": { "out": { "kind": "count" } }
+  }
+}

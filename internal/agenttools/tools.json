@@ -726,7 +726,7 @@
             "definition_version": {
               "type": "integer",
               "minimum": 1,
-              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time, choice or attachment fields, rules or navigation"
+              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time, choice, attachment, location, signature or barcode fields, rules or navigation"
             },
             "requires": {
               "type": "array",
@@ -792,8 +792,19 @@
                       },
                       "type": {
                         "type": "string",
-                        "enum": ["string", "number", "boolean", "date", "time", "choice", "attachment"],
-                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options, an attachment a list of photos (JPEG, PNG or GIF) that people upload with the PhotoInput component: you can't upload or read pictures, only see their ids and metadata in list_app_rows"
+                        "enum": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "date",
+                          "time",
+                          "choice",
+                          "attachment",
+                          "location",
+                          "signature",
+                          "barcode"
+                        ],
+                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options, an attachment a list of photos (JPEG, PNG or GIF) that people upload with the PhotoInput component: you can't upload or read pictures, only see their ids and metadata in list_app_rows; a location {lat, lon, accuracy_m, captured_at, source} that people capture with the LocationInput component, a signature one PNG that they draw with SignatureInput (both can't be changed once stored, unless the field is editable), a barcode the text of a code they scan or type with BarcodeInput"
                       },
                       "required": {
                         "type": "boolean"
@@ -821,7 +832,7 @@
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 10000,
-                        "description": "string fields; 1000 if left out"
+                        "description": "string and barcode fields; 1000 if left out"
                       },
                       "max_files": {
                         "type": "integer",
@@ -833,7 +844,35 @@
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 16777216,
-                        "description": "attachment fields: the size of each photo in bytes; 8 MiB if left out"
+                        "description": "attachment and signature fields: the size of each file in bytes; 8 MiB if left out for photos, 1 MiB for a signature"
+                      },
+                      "capture": {
+                        "type": "string",
+                        "enum": ["button", "submit"],
+                        "description": "location fields: take the position when the person presses the button (default) or when they submit the form; once, in the foreground, never in the background. An event context entry that passes a submit field is named as the field"
+                      },
+                      "format": {
+                        "type": "string",
+                        "enum": [
+                          "aztec",
+                          "codabar",
+                          "code_39",
+                          "code_93",
+                          "code_128",
+                          "data_matrix",
+                          "ean_8",
+                          "ean_13",
+                          "itf",
+                          "pdf417",
+                          "qr_code",
+                          "upc_a",
+                          "upc_e"
+                        ],
+                        "description": "barcode fields: the kind of code scanned; any if left out. ean_8, ean_13, upc_a and upc_e are checked as digits (with their check digit, but upc_e's)"
+                      },
+                      "editable": {
+                        "type": "boolean",
+                        "description": "location and signature fields: let a stored value be changed later; by default it can't be"
                       },
                       "min": {
                         "type": "number",
@@ -1089,7 +1128,7 @@
             "definition_version": {
               "type": "integer",
               "minimum": 1,
-              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time, choice or attachment fields, rules or navigation"
+              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time, choice, attachment, location, signature or barcode fields, rules or navigation"
             },
             "requires": {
               "type": "array",
@@ -1155,8 +1194,19 @@
                       },
                       "type": {
                         "type": "string",
-                        "enum": ["string", "number", "boolean", "date", "time", "choice", "attachment"],
-                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options, an attachment a list of photos (JPEG, PNG or GIF) that people upload with the PhotoInput component: you can't upload or read pictures, only see their ids and metadata in list_app_rows"
+                        "enum": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "date",
+                          "time",
+                          "choice",
+                          "attachment",
+                          "location",
+                          "signature",
+                          "barcode"
+                        ],
+                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options, an attachment a list of photos (JPEG, PNG or GIF) that people upload with the PhotoInput component: you can't upload or read pictures, only see their ids and metadata in list_app_rows; a location {lat, lon, accuracy_m, captured_at, source} that people capture with the LocationInput component, a signature one PNG that they draw with SignatureInput (both can't be changed once stored, unless the field is editable), a barcode the text of a code they scan or type with BarcodeInput"
                       },
                       "required": {
                         "type": "boolean"
@@ -1184,7 +1234,7 @@
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 10000,
-                        "description": "string fields; 1000 if left out"
+                        "description": "string and barcode fields; 1000 if left out"
                       },
                       "max_files": {
                         "type": "integer",
@@ -1196,7 +1246,35 @@
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 16777216,
-                        "description": "attachment fields: the size of each photo in bytes; 8 MiB if left out"
+                        "description": "attachment and signature fields: the size of each file in bytes; 8 MiB if left out for photos, 1 MiB for a signature"
+                      },
+                      "capture": {
+                        "type": "string",
+                        "enum": ["button", "submit"],
+                        "description": "location fields: take the position when the person presses the button (default) or when they submit the form; once, in the foreground, never in the background. An event context entry that passes a submit field is named as the field"
+                      },
+                      "format": {
+                        "type": "string",
+                        "enum": [
+                          "aztec",
+                          "codabar",
+                          "code_39",
+                          "code_93",
+                          "code_128",
+                          "data_matrix",
+                          "ean_8",
+                          "ean_13",
+                          "itf",
+                          "pdf417",
+                          "qr_code",
+                          "upc_a",
+                          "upc_e"
+                        ],
+                        "description": "barcode fields: the kind of code scanned; any if left out. ean_8, ean_13, upc_a and upc_e are checked as digits (with their check digit, but upc_e's)"
+                      },
+                      "editable": {
+                        "type": "boolean",
+                        "description": "location and signature fields: let a stored value be changed later; by default it can't be"
                       },
                       "min": {
                         "type": "number",

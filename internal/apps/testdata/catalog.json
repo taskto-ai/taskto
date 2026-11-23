@@ -1,5 +1,6 @@
 {
   "capabilities": [
+    "component.BarcodeInput",
     "component.Button",
     "component.Card",
     "component.CheckBox",
@@ -9,12 +10,14 @@
     "component.Divider",
     "component.Icon",
     "component.List",
+    "component.LocationInput",
     "component.Modal",
     "component.PhotoInput",
     "component.Photos",
     "component.Row",
     "component.Screens",
     "component.Show",
+    "component.SignatureInput",
     "component.Slider",
     "component.Stat",
     "component.Tabs",
@@ -25,6 +28,9 @@
     "effect.open_route",
     "effect.update_card",
     "field.attachment",
+    "field.barcode",
+    "field.location",
+    "field.signature",
     "function.and",
     "function.email",
     "function.formatCurrency",
@@ -41,6 +47,11 @@
     "slot.nav_pin.v1"
   ],
   "components": {
+    "BarcodeInput": [
+      "field",
+      "label",
+      "value"
+    ],
     "Button": [
       "accessibility",
       "action",
@@ -107,6 +118,12 @@
       "direction",
       "weight"
     ],
+    "LocationInput": [
+      "field",
+      "label",
+      "readOnly",
+      "value"
+    ],
     "Modal": [
       "accessibility",
       "content",
@@ -137,6 +154,12 @@
       "child",
       "source",
       "when"
+    ],
+    "SignatureInput": [
+      "field",
+      "label",
+      "readOnly",
+      "value"
     ],
     "Slider": [
       "accessibility",

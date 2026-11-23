@@ -190,7 +190,10 @@ func typed(f Field) string {
 		return "(CASE WHEN " + t + " = 'text' AND date(" + x + ") = " + x + " THEN " + x + " END)"
 	case TypeTime:
 		return "(CASE WHEN " + t + " = 'text' AND " + x + " GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(" + x + ", 1, 2) < '24' THEN " + x + " END)"
-	default: // string, choice
+	case TypeLocation:
+		// Counts only: a location is no value to compare or sort by.
+		return "(CASE WHEN " + t + " = 'object' THEN 1 END)"
+	default: // string, choice, barcode, signature
 		return "(CASE WHEN " + t + " = 'text' AND trim(" + x + ", " + blanks + ") <> '' THEN " + x + " END)"
 	}
 }
@@ -259,6 +262,9 @@ func sortOf(def Definition, name, dir string, deleted bool) (sortKey, error) {
 		if err != nil {
 			return sortKey{}, err
 		}
+		if f.Type == TypeLocation || f.Type == TypeSignature || f.Type == TypeAttachment {
+			return sortKey{}, invalidAs(apierr.CodeAppQueryField, apierr.Params{"field": name}, "a %s field can't be sorted by", f.Type)
+		}
 		k.expr, k.nullable = typed(f), true
 		if f.Type == TypeNumber || f.Type == TypeBoolean {
 			k.typ = keyNumber
@@ -286,18 +292,21 @@ func (c Condition) sql(def Definition) (string, []any, Condition, error) {
 	if err != nil {
 		return "", nil, c, err
 	}
+	if f.Type == TypeLocation || f.Type == TypeSignature {
+		return "", nil, c, invalidAs(apierr.CodeAppQueryCondition, apierr.Params{"field": c.Field, "op": c.Op}, "a %s field is evidence, not something to filter by", f.Type)
+	}
 	bad := func(format string, args ...any) error {
 		return invalidAs(apierr.CodeAppQueryCondition, apierr.Params{"field": c.Field, "op": c.Op}, format, args...)
 	}
 	switch c.Op {
 	case OpEq, OpNe:
 	case OpLt, OpLte, OpGt, OpGte:
-		if f.Type == TypeBoolean || f.Type == TypeChoice {
+		if f.Type == TypeBoolean || f.Type == TypeChoice || f.Type == TypeBarcode {
 			return "", nil, c, bad("a %s field is compared with eq or ne only", f.Type)
 		}
 	case OpContains:
-		if f.Type != TypeString {
-			return "", nil, c, bad("contains is for string fields")
+		if f.Type != TypeString && f.Type != TypeBarcode {
+			return "", nil, c, bad("contains is for string and barcode fields")
 		}
 	default:
 		return "", nil, c, bad("op must be one of eq, ne, lt, lte, gt, gte or contains")
@@ -334,7 +343,7 @@ func (c Condition) sql(def Definition) (string, []any, Condition, error) {
 func searchSQL(def Definition, terms []string) (string, []any) {
 	var cols []string
 	for _, f := range def.Collection.Fields {
-		if (f.Type == TypeString || f.Type == TypeChoice) && namePattern.MatchString(f.Name) {
+		if (f.Type == TypeString || f.Type == TypeChoice || f.Type == TypeBarcode) && namePattern.MatchString(f.Name) {
 			cols = append(cols, "coalesce("+typed(f)+", '')")
 		}
 	}

@@ -33,7 +33,15 @@ export const ATTACHMENT_ID = /^[0-9a-f]{32}$/
 
 // A field's value as the screen holds it: a list of attachment ids.
 export function photoIds(value: unknown): string[] {
+  // A signature field holds one id, as text.
+  if (typeof value === 'string') return ATTACHMENT_ID.test(value) ? [value] : []
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && ATTACHMENT_ID.test(v)) : []
+}
+
+// A signature field's value as the screen holds it: one attachment id.
+export function signatureId(value: unknown): string | undefined {
+  const id = Array.isArray(value) ? value[0] : value
+  return typeof id === 'string' && ATTACHMENT_ID.test(id) ? id : undefined
 }
 
 export function thumbnailUrl(base: string, id: string): string {

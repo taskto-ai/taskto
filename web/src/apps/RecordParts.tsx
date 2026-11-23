@@ -3,6 +3,7 @@
 
 import type { AppField, RecordAuthor, RecordVersion } from '../api'
 import { type Format, type T, useFormat, useT } from '../i18n'
+import { coordinates, isLocation } from './capture'
 import { photoIds } from './photos'
 
 // The name of who did something, and that it was through the agent.
@@ -20,6 +21,9 @@ function calendarDay(s: string): Date | null {
 // One value in the person's language: numbers, dates and yes/no as they read.
 export function shown(v: unknown, type: AppField['type'] | undefined, f: Format, t: T): string {
   if (v === undefined || v === null || v === '') return ''
+  // A captured location, in coordinates; a signature, as what it is (the picture is shown where there is room).
+  if (type === 'location' && isLocation(v)) return coordinates(v, f)
+  if (type === 'signature' && typeof v === 'string') return t('apps.signature.signed')
   if (typeof v === 'number') return f.number(v)
   if (typeof v === 'boolean') return t(v ? 'apps.records.yes' : 'apps.records.no')
   // A photo field holds attachment ids: what a person reads is how many, never the ids.

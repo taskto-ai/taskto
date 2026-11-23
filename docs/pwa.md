@@ -173,6 +173,7 @@ top bar in place on iOS; that the safe areas clear a notch in landscape; what a 
 IndexedDB after a restart or under storage pressure (the rest is in [offline.md](offline.md#what-the-tests-dont-cover)); that an update
 installed while the app is in the background prompts when it returns; and that the app opens
 offline after a phone's own restart.
+
 Push is tested without a push service of a browser's maker: the Go tests run a test push service
 and decrypt what it receives as a browser would (including RFC 8291's own example), the web tests
 fake the browser's push objects, and the worker's tests drive its `push` and `notificationclick`
@@ -180,3 +181,28 @@ handlers. Only a real device shows: that Chrome, Firefox and Safari accept the s
 identity and deliver, that an iPhone shows the notification of the installed app (and in what
 language), that a click opens the right window, and what each push service does with a late or
 repeated message.
+
+## Device capabilities in apps
+
+Personal apps can ask the phone for a few things (field types and their rules are in
+[api.md](api.md#location-signature-and-barcode-fields)). Each is asked for **on a person's action, in the
+foreground, once**, is feature-detected, and has a way round that is always on screen when the feature
+isn't. Nothing runs in the background, and nothing here is needed to use an app.
+
+| What | Feature used | When it can't be used | Offline |
+|---|---|---|---|
+| Location | `navigator.geolocation.getCurrentPosition`, once, on *Capture location* or when a form whose field says `capture: "submit"` is submitted. Never `watchPosition` (a test searches the source for it), never a background or periodic read. The accuracy and the device's time of the reading are kept. | Denied, unsupported, an insecure page, no fix, a timeout: each has its own message and the person **types the coordinates**, stored as entered by hand. A form that needs a location and can't get one isn't sent. | Works where the device has a fix (GPS needs no connection); the record is saved when the app can reach the server. |
+| Signature | A canvas with pointer events and `touch-action: none` **on the pad only**, so the page scrolls everywhere else. Strokes are kept as fractions of the pad's size, so turning the device redraws them. | A **typed name** confirmed with a checkbox, for the keyboard, switch devices and screen readers. | Saving uploads a PNG to the server; offline, the picture is kept on the device with the record, like a photo, and sent with it ([offline.md](offline.md)). |
+| Barcode and QR | The camera (`getUserMedia`) with the browser's own `BarcodeDetector` when it has one (it isn't in every browser), else zxing-wasm (MIT; it is ZXing-C++, Apache-2.0, compiled to WebAssembly) through the `barcode-detector` package (MIT), loaded the first time and served from the app's own assets, never from a CDN. Their licence notices are built into `/assets/THIRD_PARTY_NOTICES.txt`, beside the `.wasm` (see below). | **Typed entry**, always shown: a blocked, missing or insecure camera, or a decoder that can't load or can't run (it says it isn't supported, or fails every frame from the start): the camera is turned off and the field says why. | Scanning works offline: the decoder's `.wasm` (about 950 kB) is one of the precached files. |
+| Dictation | The chat box's recorder (`getUserMedia`, 16 kHz WAV) and the workspace's transcription route ([dictation.md](dictation.md)), beside free-text fields. | Off, with the reason, where the workspace has dictation off or the microphone is blocked; **the keyboard's own dictation key** still works and is named in the note. | **Needs a connection**: the speech goes to the server. Offline, the button is disabled and says so. |
+
+Browsers show their own prompt for the location, the camera and the microphone, and remember the answer
+per site; what the app adds is the words for each refusal. The server's side checks every value again
+(`internal/apps/capture.go`), whatever a client sent.
+
+**Licences of what is shipped.** The decoder is the one third-party code the build adds for these fields:
+`barcode-detector` (MIT), `zxing-wasm` (MIT) and ZXing-C++ (Apache-2.0), which the `.wasm` file is. Each licence
+asks for its notice to go with copies of the code, so the build writes `assets/THIRD_PARTY_NOTICES.txt`
+(`web/pwa/notices.ts`) from the installed packages' own `LICENSE` files and their versions, and the Apache-2.0 text kept
+in `web/licenses/`, and the server serves it next to the decoder's `.wasm`. The service worker does not precache it.
+A test checks that every notice is in it in full.

@@ -18,6 +18,7 @@ import {
   answerNavigate,
   applyUpdate,
   attachmentFields,
+  attachmentIdsOf,
   fieldsOf,
   itemsOf,
   parseInsert,
@@ -263,12 +264,12 @@ export function offlineTransport(
         throw new ApiError(403, 'not allowed', { code: 'app_forbidden', params: { capability: 'submit' } })
       const values = parseInsert(download.definition, context)
       const id = uuid()
-      // The photos the record holds: the ones staged in this form, which must still be here.
+      // The pictures the record holds (photos, and the picture of a signature): the ones staged in this
+      // form, which must still be here.
       const attachments: OutboxItem['attachments'] = []
       const blobs: BlobRow[] = []
       for (const field of attachmentFields(download.definition)) {
-        const list = values[field]
-        for (const localId of Array.isArray(list) ? (list as string[]) : []) {
+        for (const localId of attachmentIdsOf(values[field])) {
           const blob = ATTACHMENT_ID.test(localId) ? photos.take(localId) : undefined
           if (!blob) throw new ApiError(422, 'the photo is not here', { code: 'app_attachment_bad', params: { field } })
           const blobId = `${id}:${localId}`

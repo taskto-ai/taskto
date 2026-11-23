@@ -55,6 +55,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/apierr"
@@ -77,8 +78,8 @@ const CatalogID = "https://taskto.ai/catalogs/apps/v1.json"
 // update and delete. Version 2 adds screens with navigation between them, time and choice
 // fields, rules (conditionally required fields, the Show component, summaries over some rows),
 // the navigate action, effects on boards and documents, attachment fields (photos,
-// attachments.go) and contributions (contributions.go: home widgets and a navigation pin, each
-// slot a capability the release needs). A definition that says version 1 is read, checked and
+// attachments.go), location, signature and barcode fields (capture.go) and contributions
+// (contributions.go: home widgets and a navigation pin, each slot a capability the release needs). A definition that says version 1 is read, checked and
 // drawn as it always was, and can't use any of version 2.
 const DefinitionVersion = 2
 
@@ -129,6 +130,7 @@ const (
 	// TypeAttachment is a list of photos: attachment ids, which the records hold in place of
 	// bytes (definition version 2, attachments.go).
 	TypeAttachment = "attachment"
+	// TypeLocation, TypeSignature and TypeBarcode are in capture.go (definition version 2).
 )
 
 // Field is one typed field of a row.
@@ -153,6 +155,16 @@ type Field struct {
 	// MaxMaxFileBytes.
 	MaxFiles int `json:"max_files,omitempty"`
 	MaxBytes int `json:"max_bytes,omitempty"`
+	// Capture is when a location field is taken: CaptureButton (the default) or CaptureSubmit.
+	Capture string `json:"capture,omitempty"`
+	// Format is the kind of code a barcode field reads, one of BarcodeFormats; any if left out.
+	Format string `json:"format,omitempty"`
+	// Editable lets a stored location or signature be changed later, which no field does unless it
+	// says so (capture.go).
+	Editable bool `json:"editable,omitempty"`
+	// asStored reads a value as a row holds it: a location's captured_at is not held to the clock, and
+	// a signature is the plain id of its picture (never the list an attachment field held it in).
+	asStored bool
 }
 
 // The kinds of action: add a row built from the event's context and clear the form at
@@ -227,6 +239,10 @@ const (
 	// their limits (attachments.go). It starts with an underscore, as RevisionKey does, so no field
 	// or summary can have its name.
 	FilesKey = "_files"
+	// FieldsKey holds what a screen needs to know of the app's capture fields (capture.go): at
+	// /_fields/<field>, when a location is taken, a barcode's format, whether the field must have a
+	// value and whether it can be changed once stored. Underscore first, like FilesKey.
+	FieldsKey = "_fields"
 )
 
 // ErrInvalid matches every validation error (errors.Is); their messages say what is wrong.
@@ -308,6 +324,33 @@ func (d Definition) Check() (Definition, error) {
 				}
 				seen[o] = true
 			}
+		case TypeLocation:
+			uses2 = append(uses2, "a location field")
+			if f.Capture == "" {
+				f.Capture = CaptureButton
+			}
+			if f.Capture != CaptureButton && f.Capture != CaptureSubmit {
+				return Definition{}, invalidf("collection: field %q: capture is %q or %q", f.Name, CaptureButton, CaptureSubmit)
+			}
+		case TypeSignature:
+			uses2 = append(uses2, "a signature field")
+			if f.MaxBytes == 0 {
+				f.MaxBytes = DefaultSignatureBytes
+			}
+			if f.MaxBytes < 1 || f.MaxBytes > MaxMaxFileBytes {
+				return Definition{}, invalidf("collection: field %q: max_bytes is 1 to %d", f.Name, MaxMaxFileBytes)
+			}
+		case TypeBarcode:
+			uses2 = append(uses2, "a barcode field")
+			if f.MaxLength == 0 {
+				f.MaxLength = DefaultMaxLength
+			}
+			if f.MaxLength < 1 || f.MaxLength > MaxMaxLength {
+				return Definition{}, invalidf("collection: field %q: max_length is 1 to %d", f.Name, MaxMaxLength)
+			}
+			if f.Format != "" && !slices.Contains(BarcodeFormats, f.Format) {
+				return Definition{}, invalidf("collection: field %q: format is one of %s", f.Name, strings.Join(BarcodeFormats, ", "))
+			}
 		case TypeAttachment:
 			uses2 = append(uses2, "an attachment field")
 			if f.MaxFiles == 0 {
@@ -323,13 +366,25 @@ func (d Definition) Check() (Definition, error) {
 				return Definition{}, invalidf("collection: field %q: max_bytes is 1 to %d", f.Name, MaxMaxFileBytes)
 			}
 		default:
-			return Definition{}, invalidf("collection: field %q: type must be string, number, boolean, date, time, choice or attachment", f.Name)
+			return Definition{}, invalidf("collection: field %q: type must be string, number, boolean, date, time, choice, attachment, location, signature or barcode", f.Name)
 		}
-		if f.Type != TypeAttachment && (f.MaxFiles != 0 || f.MaxBytes != 0) {
-			return Definition{}, invalidf("collection: field %q: only an attachment field has max_files and max_bytes", f.Name)
+		if f.Type != TypeAttachment && f.MaxFiles != 0 {
+			return Definition{}, invalidf("collection: field %q: only an attachment field has max_files", f.Name)
 		}
-		if f.Type != TypeString && f.MaxLength != 0 {
-			return Definition{}, invalidf("collection: field %q: only a string field has max_length", f.Name)
+		if f.Type != TypeAttachment && f.Type != TypeSignature && f.MaxBytes != 0 {
+			return Definition{}, invalidf("collection: field %q: only an attachment or a signature field has max_bytes", f.Name)
+		}
+		if f.Type != TypeString && f.Type != TypeBarcode && f.MaxLength != 0 {
+			return Definition{}, invalidf("collection: field %q: only a string field or a barcode field has max_length", f.Name)
+		}
+		if f.Type != TypeLocation && f.Capture != "" {
+			return Definition{}, invalidf("collection: field %q: only a location field has capture", f.Name)
+		}
+		if f.Type != TypeBarcode && f.Format != "" {
+			return Definition{}, invalidf("collection: field %q: only a barcode field has format", f.Name)
+		}
+		if f.Type != TypeLocation && f.Type != TypeSignature && f.Editable {
+			return Definition{}, invalidf("collection: field %q: only a location or a signature field has editable", f.Name)
 		}
 		if f.Type != TypeNumber && (f.Min != nil || f.Max != nil) {
 			return Definition{}, invalidf("collection: field %q: only a number field has min and max", f.Name)
@@ -440,10 +495,12 @@ func (d Definition) Check() (Definition, error) {
 			return Definition{}, err
 		}
 	}
-	// A collection with an attachment field needs a client that knows how to hold one, whatever
-	// its screens draw.
-	if slices.ContainsFunc(out.Collection.Fields, func(f Field) bool { return f.Type == TypeAttachment }) {
-		requires = sortedKeys(setOf(append(requires, AttachmentCapability)))
+	// A collection with a field of a kind that needs a client that knows how to hold one (an
+	// attachment, a location, a signature, a barcode) requires it, whatever its screens draw.
+	for _, f := range out.Collection.Fields {
+		if capability, ok := fieldCapabilities[f.Type]; ok {
+			requires = sortedKeys(setOf(append(requires, capability)))
+		}
 	}
 	contributions, slots, err := d.checkContributions(screens)
 	if err != nil {
@@ -559,6 +616,9 @@ func dataModel(surfaceID string, def Definition, rows []Row, screen string, limi
 	value := map[string]any{"items": Items(def, shown), "draft": map[string]any{}}
 	if files := def.filesModel(); files != nil {
 		value[FilesKey] = files
+	}
+	if fields := def.fieldsModel(); fields != nil {
+		value[FieldsKey] = fields
 	}
 	for name, s := range def.Summaries {
 		value[name] = summarize(s, def.Collection, rows)
@@ -750,6 +810,15 @@ func Plan(surfaceID string, def Definition, action ClientAction) (Change, error)
 // collection: required fields present. Fields of the row that the collection no longer
 // declares are kept as they are, so declaring them again brings them back.
 func (c Collection) Merge(row, changes map[string]any) (map[string]any, error) {
+	out := merged(row, changes)
+	if err := c.Fits(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// merged is row with the changes applied (nil clears a field), checked by nobody.
+func merged(row, changes map[string]any) map[string]any {
 	out := map[string]any{}
 	for k, v := range row {
 		out[k] = v
@@ -761,10 +830,7 @@ func (c Collection) Merge(row, changes map[string]any) (map[string]any, error) {
 			out[k] = v
 		}
 	}
-	if err := c.Fits(out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return out
 }
 
 // Fits checks a stored row against the collection: every required field present, every
@@ -807,6 +873,7 @@ func (f Field) fits(row map[string]any) error {
 		}
 		return nil
 	}
+	f.asStored = true // a row keeps what was true when it was stored
 	_, _, err := f.parse(v)
 	return err
 }
@@ -827,11 +894,16 @@ func (f Field) parse(v any) (value any, present bool, err error) {
 		}
 	}
 	if s, isString := v.(string); isString {
-		s = strings.TrimSpace(s)
-		if s == "" {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
 			return nil, false, nil
 		}
-		v = s
+		// A scanner's text is taken as it was read: a line break or a tab around it is no padding to
+		// trim, but a character that isn't part of a code.
+		if f.Type == TypeBarcode && strings.IndexFunc(s, unicode.IsControl) >= 0 {
+			return nil, false, f.badBarcode()
+		}
+		v = trimmed
 	}
 	if v == nil {
 		return nil, false, nil
@@ -893,6 +965,16 @@ func (f Field) parse(v any) (value any, present bool, err error) {
 		return s, true, nil
 	case TypeAttachment:
 		return f.parseAttachments(v)
+	case TypeLocation:
+		return f.parseLocation(v)
+	case TypeSignature:
+		return f.parseSignature(v)
+	case TypeBarcode:
+		s, ok := v.(string)
+		if !ok {
+			return nil, false, invalidAs(apierr.CodeAppFieldNotBarcode, apierr.Params{"field": f.Name, "format": f.Format}, "%s must be text", f.Name)
+		}
+		return f.parseBarcode(s)
 	}
 	return nil, false, invalidf("%s has an unknown type", f.Name)
 }

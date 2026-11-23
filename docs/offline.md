@@ -10,7 +10,7 @@ What works offline, and what doesn't:
 | | Offline |
 |---|---|
 | Open a downloaded app, look around its screens | yes |
-| Add a record (an `insert` action), with photos | yes, kept on the device and sent later |
+| Add a record (an `insert` action), with photos, a signature, a location or a scanned code | yes, kept on the device and sent later |
 | Change or delete a record that was downloaded (an `update` or `delete` action), for the records the server said the person may change | yes, kept on the device and sent later, against the revision they were based on ([Changing and deleting](#changing-and-deleting-records)) |
 | Restore a deleted record, history, effects' progress, new photos on a record that exists | no: they need the server's records as they are |
 | Build or change an app with AI, publish, roll back, share, roles | no: online only, and the panel says so |
@@ -116,6 +116,14 @@ States, each shown on the item:
 | *Syncing…* | being sent now |
 | *Synced* | **the server acknowledged the record** (its answer is what makes it so) |
 | *Needs attention* | not sent, and not retried until the person says so; the input is kept |
+
+The capture fields work offline. The device checks a **location** (a position within the globe, its accuracy,
+a real `captured_at` from 2000 on and not ahead of the clock), a **barcode** (no control characters, its length
+and, for `ean_8`, `ean_13` and `upc_a`, its check digits) and a **signature** (one picture's id) as the server
+does (`web/src/offline/local.ts` mirrors `internal/apps/capture.go`), so a form that requires one isn't refused
+for lack of a value the offline parser didn't know. A **signature's picture is a queued photo**: staged on the
+device when the person signs, written with the record, uploaded first (for the signature field, as a PNG) and
+replaced by the server's id in the record that is sent. The server still checks everything again.
 
 A record's photos have a state of their own (*Photos: 1 of 2 sent*), since they can still be on
 their way when the record is not.
