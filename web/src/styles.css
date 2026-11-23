@@ -1,79 +1,95 @@
-/* The app's look. Colours are tokens on :root, set again for dark: by the system's setting,
-   unless the viewer picked a theme (data-theme on <html>, theme.ts). Below 48rem the sidebar
-   is a drawer and the conversations page shows the list or the open conversation. */
+/* The app's look: the taskto.ai website's identity, "the handoff". Ink on white and near-white,
+   structure drawn in hairlines, and one accent, emerald, which stands only for the AI (the node
+   dot beside what the agent says and does). The website is light only; the dark palette is this
+   app's own, grown from the website's ink and its terminal (#0B0D12 ground, #E9EDF3 text).
+
+   Colours are tokens on :root, each written once as light-dark(light, dark). Which side applies
+   is the page's colour scheme: the system's (`light dark`), unless the viewer picked a theme
+   (data-theme on <html>, theme.ts). Contrast is checked, not guessed: every text pair is at least
+   4.5:1 and every control border and focus ring at least 3:1 (the numbers are in docs/design.md).
+   Below 48rem the sidebar is a drawer and the conversations page shows the list or the open
+   conversation. */
 
 :root {
-  color-scheme: light;
-  --tt-canvas: #f6f6f3;
-  --tt-surface: #ffffff;
-  --tt-hover: rgba(30, 30, 28, 0.06);
-  --tt-fg: #1e1e1c;
-  --tt-muted: rgba(30, 30, 28, 0.64);
-  --tt-line: rgba(30, 30, 28, 0.12);
-  --tt-line-strong: rgba(30, 30, 28, 0.24);
-  --tt-accent: #1e1e1c;
-  --tt-on-accent: #ffffff;
-  --tt-accent-soft: rgba(47, 111, 235, 0.12);
-  --tt-bar: #24477f;
-  --tt-on-bar: #ffffff;
-  --tt-on-bar-muted: rgba(255, 255, 255, 0.72);
-  --tt-user: #e8eefb;
-  --tt-danger: #b42318;
-  --tt-success: #197734;
-  --tt-warning: #9e4a00;
-  --tt-focus: #2f6feb;
-  --tt-scrim: rgba(20, 20, 18, 0.42);
+  color-scheme: light dark;
 
-  --tt-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --tt-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Grounds: the page, and what sits on it (cards, inputs, the top bar). */
+  --tt-canvas: light-dark(#f6f7f9, #0b0d12);
+  --tt-surface: light-dark(#ffffff, #12161d);
+  --tt-hover: light-dark(rgba(11, 13, 18, 0.05), rgba(233, 237, 243, 0.07));
+  --tt-selected: light-dark(rgba(11, 13, 18, 0.08), rgba(233, 237, 243, 0.12));
+  --tt-user: light-dark(#eceef2, #1c2230);
+
+  /* Text: three levels in the website's ink family. */
+  --tt-fg: light-dark(#0b0d12, #e9edf3);
+  --tt-fg-soft: light-dark(#2a2f3a, #c9d0dc);
+  --tt-muted: light-dark(#565d6b, #9aa3b2);
+
+  /* Lines: a hairline between things, and a stronger one for the edge of a control. */
+  --tt-line: light-dark(#e4e7ec, #262c38);
+  --tt-line-strong: light-dark(#858e9e, #6b7384);
+
+  /* The primary action is ink on white, and the reverse in the dark. */
+  --tt-accent: light-dark(#0b0d12, #e9edf3);
+  --tt-accent-hover: light-dark(#2a2f3a, #ffffff);
+  --tt-on-accent: light-dark(#ffffff, #0b0d12);
+  --tt-accent-soft: var(--tt-selected);
+  --tt-focus: light-dark(#0b0d12, #e9edf3);
+
+  /* The AI node. The dot is the logo's green; the text voice is its deeper one. */
+  --tt-node: #00a86b;
+  --tt-node-text: light-dark(#00744a, #2bc98a);
+
+  /* The top bar is the page's white (the website's nav), cut off by a hairline. */
+  --tt-bar: var(--tt-surface);
+  --tt-on-bar: var(--tt-fg);
+  --tt-on-bar-muted: var(--tt-muted);
+
+  /* Status. Success is the emerald family's text voice, so the system keeps one green. */
+  --tt-danger: light-dark(#b42318, #ff7a72);
+  --tt-on-danger: light-dark(#ffffff, #0b0d12);
+  --tt-success: light-dark(#00744a, #2bc98a);
+  --tt-warning: light-dark(#9e4a00, #ffa733);
+
+  --tt-scrim: light-dark(rgba(11, 13, 18, 0.42), rgba(0, 0, 0, 0.6));
+  /* Only what you are meant to press, and what floats, has a shadow. */
+  --tt-shadow-lift: light-dark(0 8px 20px -12px rgba(11, 13, 18, 0.7), none);
+  --tt-shadow-pop: light-dark(0 12px 32px -12px rgba(11, 13, 18, 0.35), 0 12px 32px -12px rgba(0, 0, 0, 0.8));
+
+  /* Geist and Geist Mono (SIL OFL 1.1), served from the app itself (main.tsx): nothing is
+     fetched from another site. The system's fonts stand in until they load, and for any script
+     they don't cover. The mono face is for paths, commands and code only. */
+  --tt-font: "Geist Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --tt-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --tt-radius: 8px;
   --tt-topbar-h: 52px;
   --tt-sidebar-w: 232px;
   --tt-touch: 44px;
+
+  /* The apps renderer (A2UI) reads its own variables; these hand it the brand, so an app's
+     buttons, fields and choices look like the rest of the page, in both schemes. */
+  --a2ui-color-primary: var(--tt-accent);
+  --a2ui-color-primary-hover: var(--tt-accent-hover);
+  --a2ui-color-on-primary: var(--tt-on-accent);
+  --a2ui-color-secondary-hover: var(--tt-hover);
+  --a2ui-color-on-secondary: var(--tt-fg);
+  --a2ui-color-border: var(--tt-line-strong);
+  --a2ui-color-surface: var(--tt-surface);
+  --a2ui-color-input: var(--tt-surface);
+  --a2ui-color-on-input: var(--tt-fg);
+  --a2ui-color-on-surface: var(--tt-fg);
+  --a2ui-color-on-background: var(--tt-fg);
+  --a2ui-text-caption-color: var(--tt-muted);
+  --a2ui-choicepicker-color-error: var(--tt-danger);
+  --a2ui-datetimeinput-color-error: var(--tt-danger);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --tt-canvas: #161615;
-    --tt-surface: #1f1f1d;
-    --tt-hover: rgba(237, 237, 234, 0.07);
-    --tt-fg: #ededea;
-    --tt-muted: rgba(237, 237, 234, 0.64);
-    --tt-line: rgba(237, 237, 234, 0.12);
-    --tt-line-strong: rgba(237, 237, 234, 0.24);
-    --tt-accent: #ededea;
-    --tt-on-accent: #161615;
-    --tt-accent-soft: rgba(92, 148, 255, 0.18);
-    --tt-bar: #1b2c4a;
-    --tt-user: #24324a;
-    --tt-danger: #ff6e66;
-    --tt-success: #30d158;
-    --tt-warning: #ff9f0a;
-    --tt-focus: #79a6ff;
-    --tt-scrim: rgba(0, 0, 0, 0.6);
-  }
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --tt-canvas: #161615;
-  --tt-surface: #1f1f1d;
-  --tt-hover: rgba(237, 237, 234, 0.07);
-  --tt-fg: #ededea;
-  --tt-muted: rgba(237, 237, 234, 0.64);
-  --tt-line: rgba(237, 237, 234, 0.12);
-  --tt-line-strong: rgba(237, 237, 234, 0.24);
-  --tt-accent: #ededea;
-  --tt-on-accent: #161615;
-  --tt-accent-soft: rgba(92, 148, 255, 0.18);
-  --tt-bar: #1b2c4a;
-  --tt-user: #24324a;
-  --tt-danger: #ff6e66;
-  --tt-success: #30d158;
-  --tt-warning: #ff9f0a;
-  --tt-focus: #79a6ff;
-  --tt-scrim: rgba(0, 0, 0, 0.6);
 }
 
 *,
@@ -93,6 +109,20 @@ body {
   background: var(--tt-canvas);
   color: var(--tt-fg);
   font: 15px / 1.5 var(--tt-font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Headings are heavy and tight, as on the website, and break evenly. */
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
 }
 
 h1,
@@ -112,13 +142,32 @@ h3 {
 }
 
 code,
-pre {
+pre,
+kbd,
+samp {
   font-family: var(--tt-mono);
   font-size: 0.9em;
 }
 
 a {
   color: inherit;
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1.5px;
+}
+
+/* The parts of the browser nobody draws, drawn from the palette. */
+::selection {
+  background: var(--tt-fg);
+  color: var(--tt-canvas);
+}
+
+input,
+textarea {
+  caret-color: var(--tt-fg);
+}
+
+* {
+  scrollbar-color: var(--tt-line-strong) transparent;
 }
 
 :focus-visible {
@@ -189,9 +238,23 @@ textarea {
 }
 
 .tt-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: -0.03em;
   margin: 0;
+}
+
+/* The logo's mark: an ink arrow handing off to the emerald dot of the AI. */
+.tt-brand-mark {
+  width: 1.5em;
+  height: 1.5em;
+  flex: none;
+}
+
+.tt-brand-mark .tt-mark-dot {
+  fill: var(--tt-node);
 }
 
 /* Buttons. */
@@ -218,15 +281,23 @@ textarea {
   cursor: default;
 }
 
+.tt-button {
+  font-weight: 500;
+}
+
+/* The one thing you press: ink, with a tight lift, as on the website. */
 .tt-primary {
   background: var(--tt-accent);
   color: var(--tt-on-accent);
   border-color: var(--tt-accent);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  box-shadow: var(--tt-shadow-lift);
 }
 
 .tt-primary:hover:not(:disabled) {
-  background: var(--tt-accent);
-  opacity: 0.88;
+  background: var(--tt-accent-hover);
+  border-color: var(--tt-accent-hover);
 }
 
 .tt-icon-button {
@@ -267,7 +338,7 @@ textarea {
   padding-inline: 0.25rem;
   border-radius: 999px;
   background: var(--tt-danger);
-  color: #fff;
+  color: var(--tt-on-danger);
   font-size: 0.7rem;
   line-height: 1.1rem;
   text-align: center;
@@ -330,17 +401,7 @@ textarea {
 }
 
 .tt-auth-card .tt-brand {
-  color: var(--tt-bar);
-}
-
-:root[data-theme="dark"] .tt-auth-card .tt-brand {
-  color: var(--tt-focus);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .tt-auth-card .tt-brand {
-    color: var(--tt-focus);
-  }
+  font-size: 1.15rem;
 }
 
 .tt-auth-card p {
@@ -392,6 +453,7 @@ textarea {
   padding-right: max(0.5rem, env(safe-area-inset-right));
   background: var(--tt-bar);
   color: var(--tt-on-bar);
+  border-block-end: 1px solid var(--tt-line);
   min-width: 0;
 }
 
@@ -403,7 +465,7 @@ textarea {
 .tt-topbar select {
   background: transparent;
   color: inherit;
-  border-color: rgba(255, 255, 255, 0.3);
+  border-color: var(--tt-line-strong);
   min-height: 2.2rem;
   max-width: 12rem;
 }
@@ -439,7 +501,7 @@ textarea {
 }
 
 .tt-topbar .tt-icon-button:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--tt-hover);
 }
 
 .tt-account {
@@ -462,7 +524,7 @@ textarea {
   width: 2.1rem;
   height: 2.1rem;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.18);
+  background: var(--tt-selected);
   font-weight: 600;
 }
 
@@ -477,7 +539,7 @@ textarea {
   color: var(--tt-fg);
   border: 1px solid var(--tt-line);
   border-radius: var(--tt-radius);
-  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--tt-shadow-pop);
   display: grid;
   gap: 0.6rem;
 }
@@ -712,8 +774,15 @@ textarea {
   color: var(--tt-muted);
 }
 
+/* What the agent did is marked with the AI node: the logo's emerald dot. */
 .tt-tool::before {
-  content: "⚙ ";
+  content: "";
+  display: inline-block;
+  inline-size: 0.55em;
+  block-size: 0.55em;
+  margin-inline-end: 0.5em;
+  border-radius: 50%;
+  background: var(--tt-node);
 }
 
 .tt-tool-use {
@@ -2503,7 +2572,7 @@ body {
   background: var(--tt-surface);
   border: 1px solid var(--tt-line-strong);
   border-radius: 12px;
-  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--tt-shadow-pop);
 }
 
 .tt-update p {
