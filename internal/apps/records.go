@@ -74,15 +74,19 @@ type Records struct {
 	Truncated bool     `json:"truncated"`
 }
 
-const recordSelect = `
+const (
+	recordColumns = `
 	SELECT r.id, r.revision, r.data, r.created_by,
 		r.created_at, coalesce(cu.name, ''), r.created_by_agent, r.created_via, coalesce(r.created_action, ''),
 		r.updated_at, r.updated_by, coalesce(uu.name, ''), r.updated_by_agent, r.updated_via, coalesce(r.updated_action, ''),
-		r.deleted_at, r.deleted_by, coalesce(du.name, ''), r.deleted_by_agent, r.deleted_via, coalesce(r.deleted_action, '')
+		r.deleted_at, r.deleted_by, coalesce(du.name, ''), r.deleted_by_agent, r.deleted_via, coalesce(r.deleted_action, '')`
+	recordFrom = `
 	FROM app_rows r
 	LEFT JOIN users cu ON cu.id = r.created_by
 	LEFT JOIN users uu ON uu.id = r.updated_by
 	LEFT JOIN users du ON du.id = r.deleted_by`
+	recordSelect = recordColumns + recordFrom
+)
 
 // scanRecord reads a record selected with recordSelect, and its creator, which decides who
 // reads it.

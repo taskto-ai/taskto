@@ -7,20 +7,25 @@ import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'rea
 import { api, errorText, type Me, type Workspace } from '../api'
 import { BoardsPage } from '../boards/BoardsPage'
 import { ConversationsPage } from '../conversations/ConversationsPage'
+import { PinnedNav } from '../home/PinnedNav'
 import { automaticLocale, type Key, LOCALES, localeName, setPreferences, type T, useLocale, useT } from '../i18n'
 import { KnowledgePage } from '../knowledge/KnowledgePage'
 import { useInstall } from '../pwa/install'
 import { Link, navigate, parseRoute, type Route, routePath, type Section, usePath } from '../router'
 import { SettingsPage } from '../settings/SettingsPage'
 import { type Theme, useTheme } from '../theme'
+import { ErrorBoundary } from './ErrorBoundary'
 import { Icon } from './Icon'
 
 // The A2UI renderer is most of the app's code: loaded when Apps is opened.
 const AppsPage = lazy(() => import('../apps/AppsPage').then((m) => ({ default: m.AppsPage })))
+// Home draws its widgets with it too.
+const HomePage = lazy(() => import('../home/HomePage').then((m) => ({ default: m.HomePage })))
 
 const LAST_WORKSPACE = 'taskto.workspace'
 
 const NAV: { section: Section; label: Key }[] = [
+  { section: 'home', label: 'shell.sections.home' },
   { section: 'conversations', label: 'shell.sections.conversations' },
   { section: 'knowledge', label: 'shell.sections.knowledge' },
   { section: 'boards', label: 'shell.sections.boards' },
@@ -97,7 +102,10 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   // An open drawer takes focus, Escape closes it and gives focus back to its button.
   useEffect(() => {
     if (!drawer) return
-    sidebar.current?.querySelector<HTMLElement>('[aria-current="page"], a')?.focus()
+    ;(
+      sidebar.current?.querySelector<HTMLElement>('[aria-current="page"]') ??
+      sidebar.current?.querySelector<HTMLElement>('a')
+    )?.focus()
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       setDrawer(false)
@@ -171,6 +179,11 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
               <span>{t(n.label)}</span>
             </Link>
           ))}
+          {/* Pinned apps are listed after the platform's pages, in a section of their own: they can't
+              replace, reorder or hide those, and a failure here leaves the navigation as it is. */}
+          <ErrorBoundary fallback={null} resetKey={workspace.id}>
+            <PinnedNav workspace={workspace.id} path={path} />
+          </ErrorBoundary>
         </nav>
         {drawer && (
           <button
@@ -188,7 +201,10 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
           inert={drawer || undefined}
           key={`${workspace.id}/${route.section}`}
         >
-          <Page route={route} me={me} workspace={workspace} />
+          {/* A page that fails to draw leaves the shell around it (the menu, the settings) usable. */}
+          <ErrorBoundary fallback={<PageFailed />} resetKey={path}>
+            <Page route={route} me={me} workspace={workspace} />
+          </ErrorBoundary>
         </main>
       </div>
     </div>
@@ -197,6 +213,12 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
 
 function Page({ route, me, workspace }: { route: Route; me: Me; workspace: Workspace }): ReactNode {
   switch (route.section) {
+    case 'home':
+      return (
+        <Suspense fallback={<Loading />}>
+          <HomePage workspace={route.workspace} />
+        </Suspense>
+      )
     case 'conversations':
       return <ConversationsPage workspace={route.workspace} open={route.item} />
     case 'knowledge':
@@ -212,6 +234,20 @@ function Page({ route, me, workspace }: { route: Route; me: Me; workspace: Works
     case 'settings':
       return <SettingsPage me={me} workspace={workspace} tab={route.item} />
   }
+}
+
+function PageFailed() {
+  const t = useT()
+  return (
+    <div className="tt-section">
+      <p role="alert" className="tt-error">
+        {t('shell.pageFailed')}
+      </p>
+      <button type="button" className="tt-button" onClick={() => window.location.reload()}>
+        {t('shell.reload')}
+      </button>
+    </div>
+  )
 }
 
 function Loading() {

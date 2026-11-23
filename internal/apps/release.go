@@ -609,6 +609,9 @@ func narrower(was, next Field) bool {
 			}
 		}
 	}
+	if was.Type == TypeAttachment && next.MaxFiles < was.MaxFiles {
+		return true
+	}
 	if next.Min != nil && (was.Min == nil || *next.Min > *was.Min) {
 		return true
 	}

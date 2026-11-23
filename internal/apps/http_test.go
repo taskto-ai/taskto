@@ -30,6 +30,8 @@ type env struct {
 	db *sql.DB
 	s  *Service
 	h  http.Handler
+	// dataDir is where the spaces' files are.
+	dataDir string
 }
 
 func newEnv(t *testing.T) *env {
@@ -45,12 +47,14 @@ func newEnv(t *testing.T) *env {
 	}
 	accounts := auth.New(sqlDB, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
 	spaces := access.New(sqlDB, accounts)
-	s := New(sqlDB, spaces)
+	dataDir := t.TempDir()
+	s := New(sqlDB, spaces).WithFiles(dataDir)
 	mux := http.NewServeMux()
 	accounts.Routes(mux)
 	spaces.Routes(mux)
 	s.Routes(mux)
-	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux)}
+	s.HomeRoutes(mux, accounts)
+	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux, RawBodyRoutes...), dataDir: dataDir}
 }
 
 // user is a logged-in browser.
@@ -374,6 +378,7 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 			{http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": a.Version, "name": "Mine now"}},
 			{http.MethodPost, appPath(s, a.ID, "/move"), map[string]any{"version": a.Version, "space_id": s.ID}},
 			{http.MethodGet, appPath(s, a.ID, "/surface"), nil},
+			{http.MethodGet, appPath(s, a.ID, "/records/query"), nil},
 			{http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{"description": "x", "amount": "1"})},
 			{http.MethodGet, appPath(s, a.ID, "/roles"), nil},
 			{http.MethodPut, appPath(s, a.ID, "/roles"), map[string]any{"grants": []any{}}},

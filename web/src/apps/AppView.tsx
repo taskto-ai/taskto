@@ -15,12 +15,16 @@ import { applyUpdate, useUpdatePrompt } from '../pwa/update'
 import { EffectPreview } from './AppEffects'
 import { appsCatalog, unsupportedBy } from './catalog'
 import { keepLabelsLinked } from './labels'
+import { type AppFiles, AppFilesContext } from './PhotoInput'
 
 export type ActionPayload = Parameters<NonNullable<ConstructorParameters<typeof MessageProcessor>[1]>>[0]
 
 export type AppTransport = {
   load(): Promise<unknown[]>
   act(action: ActionPayload): Promise<unknown[]>
+  // Where the app's attachments are, for the photo components; left out where there is no server
+  // to hold them.
+  files?: AppFiles
 }
 
 // What a draft's button does in a preview: nothing is saved, and the answer is the effects it would
@@ -37,43 +41,83 @@ function newOperation(): string {
   return globalThis.crypto?.randomUUID?.() ?? `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
 }
 
+// What identifies one submission of a button: the action as the person sent it, without the
+// renderer's per-click timestamp, which differs on every press of the same pending submission.
+export function submissionKey(action: ActionPayload): string {
+  const { timestamp: _timestamp, ...rest } = action as ActionPayload & { timestamp?: unknown }
+  return JSON.stringify(rest)
+}
+
+// Makes the idempotency key (the server's `operation`) of each action sent. A submission gets one
+// key, made once; every press of the same submission while no answer has come (the connection
+// dropped, so the person can't know whether it was made) sends that key again, so the server
+// changes nothing a second time and queues no second card. Any answer, even a refusal, ends the
+// submission: the next press is a new one. The renderer's own timestamp doesn't make a press a
+// different submission.
+export function operationTracker(make: () => string = newOperation) {
+  let unanswered: { sent: string; operation: string } | null = null
+  return async function withOperation<T>(action: ActionPayload, send: (operation: string) => Promise<T>): Promise<T> {
+    const sent = submissionKey(action)
+    const operation = unanswered?.sent === sent ? unanswered.operation : make()
+    unanswered = { sent, operation }
+    try {
+      const answer = await send(operation)
+      unanswered = null
+      return answer
+    } catch (e) {
+      // An answer, even a refusal, is the end of it; no answer is not.
+      if (e instanceof ApiError) unanswered = null
+      throw e
+    }
+  }
+}
+
 // The app's routes on the server: base is …/spaces/{space}/apps/{app}. release is the live
 // release's number, which the screen is drawn from and its actions name; 'draft' draws the draft, a
-// preview whose actions run on nothing: the server says what they would set going.
+// preview whose actions run on nothing: the server says what they would set going. screen opens an
+// app with screens on one of them (a pin's); widget draws one of the live release's Home widgets
+// instead (a bounded view whose actions are the app's own, answered with the rows it holds).
 //
-// Every action carries an operation, its idempotency key. If the request fails without an answer
-// (the connection dropped, so the person can't know whether it was made), the same press made again
-// sends the same key: the server then changes nothing a second time and queues no second card.
-export function httpTransport(base: string, release?: number | 'draft'): AppTransport {
+// Every action carries an operation, its idempotency key (see operationTracker).
+export function httpTransport(
+  base: string,
+  release?: number | 'draft',
+  opts: { screen?: string; widget?: string } = {},
+): AppTransport {
+  const query = (params: Record<string, string | number | undefined>) => {
+    const q = new URLSearchParams()
+    for (const [key, value] of Object.entries(params)) if (value !== undefined) q.set(key, String(value))
+    const text = q.toString()
+    return text ? `?${text}` : ''
+  }
   if (release === 'draft') {
     return {
-      load: () => api<unknown[]>(`${base}/surface?release=draft`),
+      load: () => api<unknown[]>(`${base}/surface${query({ release: 'draft', screen: opts.screen })}`),
       act: async (action) => {
         const preview = await api<{ effects: AppEffect[] }>(`${base}/actions/preview`, { method: 'POST', body: action })
         throw new PreviewResult(preview.effects)
       },
+      files: { base, uploads: false },
     }
   }
-  let unanswered: { sent: string; operation: string } | null = null
+  const withOperation = operationTracker()
+  const post = (path: string, action: ActionPayload) =>
+    withOperation(action, (operation) =>
+      api<unknown[]>(path, {
+        method: 'POST',
+        body: release === undefined ? { ...action, operation } : { ...action, release, operation },
+      }),
+    )
+  if (opts.widget !== undefined) {
+    return {
+      load: () => api<unknown[]>(`${base}/surface${query({ widget: opts.widget })}`),
+      act: (action) => post(`${base}/actions${query({ widget: opts.widget })}`, action),
+    }
+  }
   return {
-    load: () => api<unknown[]>(release === undefined ? `${base}/surface` : `${base}/surface?release=${release}`),
-    act: async (action) => {
-      const sent = JSON.stringify(action)
-      const operation = unanswered?.sent === sent ? unanswered.operation : newOperation()
-      unanswered = { sent, operation }
-      try {
-        const answer = await api<unknown[]>(`${base}/actions`, {
-          method: 'POST',
-          body: release === undefined ? { ...action, operation } : { ...action, release, operation },
-        })
-        unanswered = null
-        return answer
-      } catch (e) {
-        // An answer, even a refusal, is the end of it; no answer is not.
-        if (e instanceof ApiError) unanswered = null
-        throw e
-      }
-    },
+    files: { base, uploads: true },
+    load: () => api<unknown[]>(`${base}/surface${query({ release, screen: opts.screen })}`),
+    act: (action) => post(`${base}/actions`, action),
   }
 }
 
@@ -187,7 +231,9 @@ export function AppView({
           {error}
         </p>
       )}
-      {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
+      <AppFilesContext.Provider value={transport.files ?? null}>
+        {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
+      </AppFilesContext.Provider>
       {simulated && <EffectPreview effects={simulated} />}
     </section>
   )

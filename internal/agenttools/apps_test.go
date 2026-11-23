@@ -318,3 +318,72 @@ func TestAgentEditsOnlyTheDraft(t *testing.T) {
 		t.Fatalf("show_app is %d bytes: it must leave room in a reply", len(raw))
 	}
 }
+
+// query_app_rows pages, filters and totals over all the rows its user reads, and no others.
+func TestQueryAppRowsPagesFiltersAndTotals(t *testing.T) {
+	w := newWorld(t)
+	created := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Team expenses", "definition": expenses(t)})
+	app := id(created["id"])
+	// A person publishes it (the release is made as the server does).
+	w.exec(`INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
+		SELECT id, 1, definition, json_extract(definition, '$.definition_version'), json_extract(definition, '$.requires') FROM apps WHERE id = ?`, app)
+	w.exec(`UPDATE apps SET live_release = 1, live_at = updated_at, draft_differs = 0 WHERE id = ?`, app)
+	for i := 1; i <= 9; i++ {
+		owner := w.alice
+		if i%3 == 0 {
+			owner = w.bob
+		}
+		w.exec(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, ?, ?)`, app,
+			fmt.Sprintf(`{"description": "Coffee %d", "amount": %d}`, i, i*10), owner)
+	}
+	ref := func(more map[string]any) map[string]any {
+		args := map[string]any{"space_id": w.shared, "app_id": app}
+		for k, v := range more {
+			args[k] = v
+		}
+		return args
+	}
+	sums := []any{map[string]any{"kind": "sum", "field": "amount"}, map[string]any{"kind": "max", "field": "amount"}}
+
+	// Pages of two, in the order asked for, each with the totals of every row that matches.
+	var got []float64
+	cursor := ""
+	for pages := 0; ; pages++ {
+		args := ref(map[string]any{"limit": 2, "sort": "amount", "dir": "desc", "aggregates": sums,
+			"filters": []any{map[string]any{"field": "description", "op": "contains", "value": "coffee"}}})
+		if cursor != "" {
+			args["cursor"] = cursor
+		}
+		page := w.ok(w.aliceConv, "query_app_rows", args)
+		if page["total"] != float64(9) || page["aggregates"].([]any)[0].(map[string]any)["value"] != float64(450) {
+			t.Fatalf("totals of page %d = %v", pages, page)
+		}
+		for _, r := range page["rows"].([]any) {
+			got = append(got, r.(map[string]any)["amount"].(float64))
+		}
+		next, more := page["next_cursor"].(string)
+		if !more {
+			break
+		}
+		cursor = next
+		if pages > 9 {
+			t.Fatal("paging doesn't end")
+		}
+	}
+	if fmt.Sprint(got) != "[90 80 70 60 50 40 30 20 10]" {
+		t.Fatalf("rows = %v", got)
+	}
+	// A cursor of another query is refused, as is a field the app doesn't have.
+	w.status(http.StatusBadRequest, w.aliceConv, "query_app_rows", ref(map[string]any{"limit": 2, "sort": "description", "cursor": cursor}))
+	w.status(http.StatusBadRequest, w.aliceConv, "query_app_rows", ref(map[string]any{"filters": []any{map[string]any{"field": "nope", "op": "eq", "value": 1}}}))
+	w.status(http.StatusBadRequest, w.aliceConv, "query_app_rows", ref(map[string]any{"unknown": true}))
+
+	// Alice becomes a plain user of the app: her agent's totals are of her own rows alone.
+	w.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'user')`, app, w.alice)
+	own := w.ok(w.aliceConv, "query_app_rows", ref(map[string]any{"aggregates": sums, "limit": 200}))
+	if own["total"] != float64(6) || own["aggregates"].([]any)[0].(map[string]any)["value"] != float64(270) || len(own["rows"].([]any)) != 6 {
+		t.Fatalf("a user's agent gets %v", own)
+	}
+	// Someone the app names no role for finds no app.
+	w.status(http.StatusNotFound, w.bobConv, "query_app_rows", ref(nil))
+}

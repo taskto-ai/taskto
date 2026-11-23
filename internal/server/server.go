@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"taskto.ai/taskto/internal/access"
@@ -55,6 +56,10 @@ type Options struct {
 	Dictation *dictation.Service
 	// Browser serves the agent browser (/api/me/browser and its live view); nil leaves it out.
 	Browser *agentbrowser.Service
+	// AppsReady, if set, is called with the apps service the server made, which keeps attachments
+	// in DataDir (none if that is empty), so its caller can run its maintenance
+	// (apps.Service.Maintain) for as long as it serves.
+	AppsReady func(*apps.Service)
 	// BackupDataDir is the data directory whose scheduled backups /healthz/backup and the
 	// admins' backup route report (internal/backup.Status). Empty reports none.
 	BackupDataDir string
@@ -75,7 +80,12 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	boardSvc.Routes(mux)
 	// The apps' routes list and retry their effects and check the targets they name; the
 	// server's own worker, which does them, is the one the command starts (apps.StartOutbox).
-	apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc}).Routes(mux)
+	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(apps.Platform{Boards: boardSvc})
+	appsService.Routes(mux)
+	appsService.HomeRoutes(mux, accounts)
+	if opts.AppsReady != nil {
+		opts.AppsReady(appsService)
+	}
 	if opts.Search != nil {
 		opts.Search.Knowledge().Routes(mux, spaces)
 		opts.Search.Routes(mux, accounts, spaces)
@@ -118,7 +128,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	mux.Handle("/", web)
 
 	// Every state-changing /api request, of any route, goes through the CSRF checks.
-	return auth.CSRF(mux, knowledge.RawBodyRoutes...), nil
+	return auth.CSRF(mux, append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...), nil
 }
 
 // healthz reports the version, whether the database answers, and the agent runtime's state.

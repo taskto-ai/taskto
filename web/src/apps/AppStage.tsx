@@ -10,16 +10,19 @@ import { useT } from '../i18n'
 import { AppView, httpTransport } from './AppView'
 
 // reloadKey is changed by the page when the app's data changed behind the screen (a record was restored);
-// onAction is called after one of the app's buttons ran.
+// screen is the one an app with screens opens on instead of its entry (a pin's); onAction is called
+// after one of the app's buttons ran.
 export function AppStage({
   base,
   app,
   reloadKey,
+  screen,
   onAction,
 }: {
   base: string
   app: App
   reloadKey?: number
+  screen?: string
   onAction?: () => void
 }) {
   const t = useT()
@@ -55,7 +58,7 @@ export function AppStage({
         release={needs}
         reloadKey={reloadKey}
         onAction={onAction}
-        transport={httpTransport(base, draft ? 'draft' : live?.number)}
+        transport={httpTransport(base, draft ? 'draft' : live?.number, { screen })}
       />
     </div>
   )

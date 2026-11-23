@@ -116,6 +116,44 @@ func (s *Service) listAppRows(ctx context.Context, c *call, args json.RawMessage
 	return res, err
 }
 
+// queryAppRows is list_app_rows with filters, search, an order and totals (apps.Query): a page
+// of the rows the user may read, and the totals of all that match.
+func (s *Service) queryAppRows(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		appRef
+		apps.Query
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	if err := s.appSpace(ctx, c, a.SpaceID); err != nil {
+		return nil, err
+	}
+	// A page that doesn't fit one reply is asked again with fewer rows, so the cursor it ends with
+	// is that of the last row sent, in the same keyset the pages are in.
+	q := a.Query
+	if q.Limit == 0 {
+		q.Limit = apps.DefaultPageSize
+	}
+	for {
+		page, err := s.o.Apps.QueryRows(ctx, appsActor(c), a.SpaceID, a.AppID, q)
+		if err != nil {
+			return nil, err
+		}
+		body, err := json.Marshal(page)
+		if err != nil {
+			return nil, err
+		}
+		if len(body) <= MaxResult {
+			return page, nil
+		}
+		if q.Limit == 1 {
+			return nil, invalidf("the next row alone is over a reply: read it with list_app_rows, or ask for fewer aggregates")
+		}
+		q.Limit /= 2
+	}
+}
+
 func (s *Service) createApp(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
 		SpaceID int64 `json:"space_id"`

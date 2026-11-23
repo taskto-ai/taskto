@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -193,6 +194,11 @@ type Service struct {
 	// wake tells the worker, if it runs in this process, that an entry was queued.
 	wake  chan struct{}
 	hooks outboxHooks
+	// dataDir holds the spaces' directories, where attachments are kept (WithFiles); empty if
+	// the service keeps no files.
+	dataDir string
+	locks   fileLocks
+	thumbs  chan struct{}
 }
 
 // outboxHooks are for tests to stop the worker where a crash would.
@@ -203,7 +209,7 @@ type outboxHooks struct {
 
 // New returns the apps service over sqlDB, which must be migrated.
 func New(sqlDB *sql.DB, c *access.Checker) *Service {
-	return &Service{db: sqlDB, access: c, clock: time.Now, wake: make(chan struct{}, 1)}
+	return &Service{db: sqlDB, access: c, clock: time.Now, wake: make(chan struct{}, 1), thumbs: make(chan struct{}, maxThumbnails)}
 }
 
 // timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the schema's format for times.
@@ -728,6 +734,11 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 		if cur.Version != version {
 			return ErrStale
 		}
+		// What the space's publishers set as defaults for its members stays in the space: the
+		// app's new members never chose it.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM home_defaults WHERE app_id = ?`, appID); err != nil {
+			return err
+		}
 		// Once the app is known to be there (an unknown one is a 404 first): a move to where it
 		// is would change nothing but its version.
 		if to.ID == sp.ID {
@@ -751,6 +762,11 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 	})
 	if err != nil {
 		return App{}, err
+	}
+	// The files follow the app to its new space. The app already works meanwhile, and if this
+	// stops half way Sweep goes on (attachments.go).
+	if err := s.relocate(ctx, appID); err != nil {
+		slog.Warn("apps: moving an app's attachments", "app", appID, "err", err)
 	}
 	if err := s.present(ctx, a, &moved); err != nil {
 		return App{}, err
@@ -803,7 +819,11 @@ func launchable(ctx context.Context, q queryer, spaceID, appID int64) (App, erro
 // the live release (ErrNotPublished before the first publish), "draft" for the draft, or a
 // release number; the draft and releases that are not live are for those who may design or
 // publish. Every screen is drawn with the same rows, those the caller reads.
-func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, appID int64, which string) ([]Message, error) {
+//
+// screen, for an app with screens, is the screen it opens on instead of its entry (what a pin
+// that names one asks for); a name that isn't one of the screens that don't show a record is
+// refused.
+func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, appID int64, which, screen string) ([]Message, error) {
 	if err := may(sp, access.Read); err != nil {
 		return nil, err
 	}
@@ -827,7 +847,13 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 	if err != nil {
 		return nil, err
 	}
-	return Surface(SurfaceID(a.ID), def, rows), nil
+	if screen != "" {
+		target, ok := def.screen(screen)
+		if !ok || target.Record {
+			return nil, invalidf("screen must name one of the app's screens that doesn't show a record")
+		}
+	}
+	return openedAt(Surface(SurfaceID(a.ID), def, rows), SurfaceID(a.ID), def, rows, screen), nil
 }
 
 // act runs a client action and returns the message that updates the screen. Errors in
@@ -1129,6 +1155,9 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 			at, actor.UserID, actor.Agent, via(actor), actionColumn(ch)).Scan(&id); err != nil {
 			return applied{}, err
 		}
+		if err := claimAttachments(ctx, tx, actor, appID, id, def, nil, ch.Data); err != nil {
+			return applied{}, err
+		}
 		if err := remember(ctx, tx, appID, id, 1, opInsert, string(raw), at, actor, ch); err != nil {
 			return applied{}, err
 		}
@@ -1163,6 +1192,9 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		if string(raw) == cur.canonical {
 			// Nothing changed: no new revision, nothing to remember, no effects.
 			return applied{id: ch.ID, revision: cur.revision, data: next}, nil
+		}
+		if err := claimAttachments(ctx, tx, actor, appID, ch.ID, def, cur.fields, next); err != nil {
+			return applied{}, err
 		}
 		_, err = tx.ExecContext(ctx, `
 			UPDATE app_rows SET data = ?, revision = ?, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?, updated_action = ?

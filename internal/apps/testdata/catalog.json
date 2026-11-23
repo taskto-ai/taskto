@@ -10,6 +10,8 @@
     "component.Icon",
     "component.List",
     "component.Modal",
+    "component.PhotoInput",
+    "component.Photos",
     "component.Row",
     "component.Screens",
     "component.Show",
@@ -22,6 +24,7 @@
     "effect.create_document",
     "effect.open_route",
     "effect.update_card",
+    "field.attachment",
     "function.and",
     "function.email",
     "function.formatCurrency",
@@ -33,7 +36,9 @@
     "function.numeric",
     "function.or",
     "function.pluralize",
-    "function.required"
+    "function.required",
+    "slot.home_widgets.v1",
+    "slot.nav_pin.v1"
   ],
   "components": {
     "Button": [
@@ -107,6 +112,15 @@
       "content",
       "trigger",
       "weight"
+    ],
+    "PhotoInput": [
+      "field",
+      "label",
+      "value"
+    ],
+    "Photos": [
+      "label",
+      "value"
     ],
     "Row": [
       "accessibility",

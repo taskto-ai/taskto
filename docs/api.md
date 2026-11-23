@@ -98,6 +98,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_release_incompatible` | 409 | A rollback to a release the app's data doesn't fit; `fields` names the fields that don't. |
 | `app_release_already_live` | 409 | The release to roll back to is the live one. |
 | `app_nothing_to_publish` | 409 | The draft is the live release's definition. |
+| `home_widget_not_found` | 404 | The app's live release offers no widget with that id. |
+| `home_limit` | 409 | A person has at most `max` widgets (or pins) in a workspace, and a space at most `max` default widgets (or pins). |
+| `home_order_invalid` | 400 | The ids to put in order aren't all the caller's own placements of that kind, or one is listed twice. |
+| `home_defaults_shared` | 409 | Defaults are only for the apps of shared spaces. |
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
 | `app_migration_invalid` | 400 | An acknowledgement that is malformed: an unknown `change`, a field that is no name, or one twice. |
@@ -111,6 +115,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
 | `app_row_not_found` | 422 | The action names a row the app doesn't have (any more), or one the caller may not change. |
 | `app_record_conflict` | 409 | The record changed since the client read it (or isn't deleted, for a restore); `params.id` is its ID, and `current` is the record as an item as it is now, only when the caller may read it. |
+| `app_query_cursor` | 400 | The `cursor` of a records query isn't one this query gave (it is another query's, another person's or damaged): start again from the first page. |
+| `app_query_field` | 400 | A records query names a `field` the live release doesn't declare, or can't use that way (a sum of text, a deletion time of live records). |
+| `app_query_condition` | 400 | A filter's operator or value doesn't fit its `field` (`op` says which operator). |
 | `app_field_required` | 422 | The action leaves out `field`, which the app requires. |
 | `app_field_too_long` | 422 | The value of `field` has more than `max` characters. |
 | `app_field_not_number` | 422 | The value of `field` isn't a number. |
@@ -120,9 +127,19 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_field_not_time` | 422 | The value of `field` isn't a time, `HH:MM` on a 24-hour clock. |
 | `app_field_not_option` | 422 | The value of `field`, a choice, isn't one of its options (or is several of them). |
 | `app_field_required_when` | 422 | `field` is required when the row meets the condition its `required_when` rule sets, and the action leaves it out. |
+| `app_field_files` | 400 / 422 | The value of `field`, an attachment field, isn't a list of at most `max` different attachment ids. |
+| `app_attachment_bad` | 422 | An attachment named in a record can't be used there: it isn't the caller's own upload for that `field` of this app, isn't finished, or is in a record already. The reason is never told, so someone else's id isn't told from one that doesn't exist, and the whole change is refused. |
+| `app_attachment_type` | 400 | The file isn't a JPEG, PNG or GIF picture the server can read, or has more pixels than it takes (`max_megapixels`); the upload is removed. |
+| `app_upload_size` | 400 | The declared size of an upload is 0 or over the `max` bytes `field` takes. |
+| `app_upload_offset` | 409 | A chunk wasn't at the offset the server is at, or the upload isn't complete: `params.offset` is the bytes the server has, where to continue from. |
+| `app_upload_state` | 409 | The upload can't take that now: it is finalized already (a chunk), or a record holds it (abandoning it). |
+| `app_upload_chunk` | 413 | A chunk is over 2 MiB, or runs past the declared size; `params.max` is what it may be. |
+| `app_uploads_pending` | 409 | The caller has `max` photos in this app that are in no record yet. |
+| `app_files_full` | 409 | The app's attachments would take it over `max_mib` MiB in all. |
+| `app_files_unavailable` | 503 | This server keeps no files for apps. |
 | `request_too_large` | 413 | The request's body is over `max` bytes. |
 | `doc_not_found` | 404 | No such document, folder or version in the space. |
-| `doc_name_invalid` | 400 | `name` can't be a path in a space: empty parts, `..`, `.git`, a leading `/`, backslashes or control characters. |
+| `doc_name_invalid` | 400 | `name` can't be a path in a space: empty parts, `..`, `.git`, `.taskto` (the server's own storage), a leading `/`, backslashes or control characters. |
 | `doc_path_too_long` | 400 | A path has at most `max` bytes. |
 | `doc_path_too_deep` | 400 | A path has at most `max` levels of folders. |
 | `doc_name_too_long` | 400 | A file or folder name has at most `max` bytes. |
@@ -272,8 +289,9 @@ Every `/api` request with a method other than `GET`, `HEAD` or `OPTIONS` must:
   without that header, an `Origin` must match the `Host`. Otherwise `403`.
 - have `Content-Type: application/json` when they carry a body. Otherwise `415`. A
   request without a body (`DELETE`, `POST /api/logout`) needs no content type; the
-  cross-origin rule above still applies to it. The one route that takes a file's bytes,
-  [`PUT …/docs/{path}`](#put-apiworkspacesworkspacespacesspacedocspath), also takes
+  cross-origin rule above still applies to it. The two routes that take bytes,
+  [`PUT …/docs/{path}`](#put-apiworkspacesworkspacespacesspacedocspath) and
+  [`PUT …/apps/{app}/uploads/{upload}`](#photo-attachments), also take
   `application/octet-stream`; no other route does.
 
 A cross-site form can't meet the second rule (it can't send either type), and a script on another site can't meet
@@ -1346,7 +1364,8 @@ the app's roles. **Design** is changing the app's draft, renaming it and moving 
 created, which includes the ones the agent created for them; records whose creator's
 account was deleted are in nobody's own, and only readers of all see them. Every way of
 reading records answers to the read scope: the screen's rows, its summaries (`count`,
-`sum`), `rows` in an app's list and the agent's `list_app_rows`. A change to a record the
+`sum`), `rows` in an app's list, the records query (pages, totals and aggregates) and the
+agent's `list_app_rows` and `query_app_rows`. A change to a record the
 caller may not change is answered as `app_row_not_found`.
 
 ### Records: revisions, history and deleting
@@ -1410,6 +1429,58 @@ The live records the caller may read, most recently changed first, at most 1,000
 holding the fields the **live release's** collection declares (the draft's don't count until
 published); `created_by` and the others are
 `{"id", "name", "agent", "via"}` or `null`. Read scope and `403`/`404` as for the history.
+
+### `GET …/apps/{app}/records/query`
+
+The data explorer's route: **a page** of the records the caller may read, filtered, searched and
+sorted by the server, with **totals over every record that matches**, never over the page.
+`{"records": [ … ], "next_cursor": "…" | null, "total": 412, "aggregates": [ … ]}`; each record is
+as in `GET …/records`. Parameters, all optional:
+
+| Parameter | Meaning |
+|---|---|
+| `state` | `live` (default) or `deleted`. |
+| `filter` | `field:op:value`, repeated, at most 8, **all** of which must hold (the value is what follows the second colon, so a time `12:30` is fine). `op` is `eq` or `ne` for every field, `lt`, `lte`, `gt`, `gte` for number, date, time and string fields, and `contains` for a string field (a case-insensitive substring, by Unicode case folding). The value is of the field's type; a number or a boolean may be text. A record with no value of the field equals nothing: `ne` matches it, the other operators don't (as in [rules](#personal-apps)). |
+| `q` | Words (at most 5, each at most 100 characters) that each have to be part of some string or choice field of the record, in any case. |
+| `sort` | A declared field, `_updated` (default), `_created`, `_deleted` (deleted records only) or `id`. |
+| `dir` | `asc` or `desc`: `desc` by default for the three times, `asc` for the rest. |
+| `limit` | Records in the page: 50 by default, at most 200. |
+| `cursor` | The `next_cursor` of the previous page **of the same query**. |
+| `aggregate` | `kind` or `kind:field`, repeated, at most 8: `count` (of the matching records, or with a field those that have a value of it), `sum` and `avg` of a number field, `min` and `max` of a number, date or time field. |
+
+**What a query reads.** The fields it names are the **live release's**, and a value counts only
+if it is of its field's type, as JSON holds it: a field the live release removed is in no filter,
+sort, search or total (it is a `400 app_query_field`), nor is a value stored before the field was
+retyped (a number kept as text, `"12"`, is shown as it is stored but is in no comparison, sort or
+sum, as in no summary). Deleted records are in none of the live ones, and the read scope of the
+caller's role (all records, or only the ones they created) applies to the page, to `total` and to
+every aggregate: they are computed by SQL over exactly the records the caller reads. A role that
+reads no record is `403 app_forbidden` (`read_records`), an app the caller can't see `404`.
+
+**The order is total.** Records are ordered by the sort key, those with no value of it last
+whichever the direction, and then by `id` in the same direction as the key. A page is read **by
+keyset**: it asks for the records after the position the cursor names in that order, so paging
+neither skips nor repeats a record that does not change meanwhile, whatever is inserted or deleted
+between the pages. A record whose own sort key changes meanwhile (one edited while paging by
+`_updated`) is read where it is when each page is asked: again if it moved into the pages still to
+come, not at all if it moved into the ones already read; sort by `_id` or `_created` for a walk
+that edits can't disturb. A text field orders by its first 200 characters, then by `id`, so a
+cursor stays short. `total` and `aggregates` are asked
+again with every page, so they are the whole matching set as of that request.
+
+**Cursors** are opaque. A cursor is only a position and a fingerprint of the query it ends a
+page of (the app, the caller, their read scope, the state, the filters, the search and the order,
+not the page size or the aggregates); a cursor of another query, or of another person, or damaged
+or too long, is `400 app_query_cursor`. The scope, the filters and everything else are decided
+again at every request, so a cursor, even one forged with a valid fingerprint, can put a caller
+anywhere in the order of the records they read and nowhere else.
+
+**Aggregates** come back in the order asked: `{"kind", "field", "value", "count"}`, `count` being
+the records the value was computed from (those with a value of the field). A `sum` or `count` over
+none is 0; `avg`, `min` and `max` over none are `null`, as is a result too large to be a number.
+Dates and times are given as the text they are. Numbers are summed as floating point in SQL, in
+no particular order, so a sum of many fractions may differ from one added in another order in its
+last digits.
 
 ### `GET …/apps/{app}/records/{record}/history`
 
@@ -1515,7 +1586,8 @@ saying what is wrong) unless:
   each component it draws and `function.<name>` for each function it calls. The server works
   it out from the screen and replaces whatever was sent, so a definition can't claim less than
   it uses; the list is in each release, and a client whose catalog lacks one shows that it
-  must update. A new component or function is a new capability.
+  must update. A new component or function is a new capability, and a collection with an
+  [attachment field](#photo-attachments) always requires `field.attachment`, whatever its screens draw.
 
 - **components** is the screen of an app with one, 1–300 A2UI components, one with the ID `root`
   (an app with several has `screens` instead, never both), each
@@ -1523,8 +1595,10 @@ saying what is wrong) unless:
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value) and `Show` (draws its child while a rule holds,
-  [below](#fields-and-rules)). `Screens`, the host of an app's screens, is the server's own and
+  address), plus `Stat` (a labelled value), `Show` (draws its child while a rule holds,
+  [below](#fields-and-rules)), and `PhotoInput` and `Photos` (a photo input and the thumbnails of
+  attachments, which upload to and draw from this server's own authenticated routes, never an
+  outside address: [Photo attachments](#photo-attachments)). `Screens`, the host of an app's screens, is the server's own and
   is refused in a definition. Props must have the catalog's types and enum
   values; dynamic values are a literal, a data binding `{"path": …}`, or a call of a
   catalog function returning the right type. Every component referred to must exist, no
@@ -1533,9 +1607,12 @@ saying what is wrong) unless:
   same catalog.
 - **collection.fields**, at most 50: `name` (a lowercase letter, then up to 39 lowercase
   letters, digits or `_`; not `id`, `items` or `draft`), `type` (`string`, `number`,
-  `boolean`, `date`: `YYYY-MM-DD`, `time`: `HH:MM` on a 24-hour clock, or `choice`), `required`,
+  `boolean`, `date`: `YYYY-MM-DD`, `time`: `HH:MM` on a 24-hour clock, `choice`, or `attachment`: a
+  list of photos), `required`,
   `required_when` (a rule), `max_length` (strings: 1–10000, 1000 when left out), `min` and `max`
-  (numbers), `options` (a choice's, 1–50 different texts of at most 100 characters).
+  (numbers), `options` (a choice's, 1–50 different texts of at most 100 characters), `max_files`
+  (an attachment field's: 1–10, 1 when left out) and `max_bytes` (each file's size: at most 16 MiB,
+  8 MiB when left out). An attachment field is version 2, and no rule can read it.
 - **actions**, 1–50, map an event name to its `kind`: `insert` adds a row from the
   event's context; `update` changes the fields the context gives of the row whose `id` it
   gives (blank text clears a field); `delete` removes the row whose `id` it gives; `navigate`
@@ -1544,10 +1621,30 @@ saying what is wrong) unless:
 - An insert or an update may have **effects**, at most 5 (see [Effects](#effects-of-actions)).
 - **summaries**, at most 20: `{"kind": "count"}` or `{"kind": "sum", "field": …}` of a
   number field, shown as text; `"where"`, a rule, narrows either to the rows it holds of.
+- **contributions** (optional, version 2): what the app offers the platform's [Home page and
+  navigation](#home-widgets-and-pins), in versioned slots:
+  `{"version": 1, "widgets": […], "pin": {…}}`. `version` is `1` (left out, it is). A widget is
+  `{"id", "title", "kind", "size"?, "summaries"?, "screen"?}`: an `id` (like a field's name,
+  unique among the app's widgets), a `title` of plain text (1–60 characters, one line, no space
+  at either end), a `kind` of `summaries` (1–4 `{"summary": a summary's name, "label": plain
+  text of 1–40 characters}`, each summary once), `screen` (`"screen"` names one of the app's
+  screens that doesn't show a record, so the app needs `screens`) or `shortcut` (only a title
+  that opens the app), and a `size` of `small` (the default), `medium` or `large`. At most 6
+  widgets. The `pin` is `{"label": plain text of 1–30 characters, "screen"?: a screen that shows
+  no record}`; the app is pinned under its name if it has none. Anything else is refused: an
+  unknown slot or key (`400 invalid_json`), a version this server doesn't read, text with control
+  characters or a line break, a reference to a summary or screen the app doesn't have, nothing at
+  all (`contributions` that offers neither widgets nor a pin). `requires` gains the capability of
+  each slot the definition fills, `slot.home_widgets.v1` and `slot.nav_pin.v1` (and, for a
+  summaries widget, `component.Column` and `component.Stat`, which draw it), so a client that
+  doesn't know a slot asks to be updated instead of drawing it wrongly. A contribution is only
+  an offer, plain data: it names no page, address or component of its own, and grants no access.
 - The whole definition is at most 48 KiB of JSON.
 
 The data model an app's screen binds to: `/items` is the live rows, each with its `id`, its
 revision as `_revision` and the collection's fields; `/draft` is an empty form; each summary is at `/<name>`.
+An app with attachment fields also has `/_files/<field>`, `{"max_files", "max_bytes"}`: the limits its
+photo input shows.
 An app with screens also has `/screen`, the name of the screen shown, and `/record`, the record a
 detail screen shows.
 
@@ -1611,6 +1708,13 @@ the record a screen shows; it hides an input and is never what limits a row.
 An app holds at most 5,000 live rows and 4 MiB of their data (`409` beyond; deleted
 records don't count, and restoring one needs room for it); a space at most 500 apps.
 
+What is capped, as it stays: a launched app's **screen** is drawn from all of its live rows at
+once (its items and summaries are computed in memory, so the 5,000 rows and 4 MiB are the
+limit of what one screen holds), `GET …/records` and `…/records/deleted` answer the 1,000 most
+recent, and `list_app_rows` reads every row a page at a time. The data explorer
+(`GET …/records/query`) and `query_app_rows` are not bound by those: pages and totals are
+computed in the database.
+
 ### `GET …/apps`
 
 The space's apps, by name, without definitions: `{"apps": [ … ]}`. Offline apps are left
@@ -1640,7 +1744,9 @@ Writers of both spaces, with the design capability in the app. Its role assignme
 behind: they were set for the old space's members, so the moved app is unrestricted until
 roles are set in the new space. `{"version": 1, "space_id": 7}`: moves the app, with its rows,
 to another space of the workspace the caller may write (`404` for one they can't read or
-of another workspace, `403` for one they may only read). `200` with the app.
+of another workspace, `403` for one they may only read). `200` with the app. The app's
+[attachments](#photo-attachments) go with it: their files are copied to the new space's directory
+after the move, and are read from wherever they are meanwhile.
 
 ### `GET …/apps/{app}/surface`
 
@@ -1654,6 +1760,17 @@ number is the live one. The draft is drawn with the app's real rows, to look at:
 previews, and its actions are not run. The data model has the rows the caller may read, and the
 summaries over those rows alone. A client names the release it drew in its actions: it knows
 it from `live.number` of the app it read, which it passes as `?release=`.
+
+`?screen=<name>` opens an app with screens on that screen instead of its entry (`400` unless it
+is one of its screens that doesn't show a record): what a pin that names a screen does.
+`?widget=<id>` draws one of the **live release's** [Home widgets](#home-widgets-and-pins)
+instead: a summaries widget is a column of `Stat` components over its summaries (the data model
+has only those, counted over the rows the caller reads); a screen widget is the app's own screens
+opened on the widget's, with at most 25 rows (the latest) in `/items`, its summaries counting
+every row the caller reads; a shortcut draws nothing. It is the app's surface, so it is refused
+as it is (`404` for a caller who may not view the app, `409` while it is offline or unpublished),
+and `404 home_widget_not_found` for a widget the release doesn't offer. `widget` can't be
+combined with `release` or `screen` (`400`).
 
 ### `POST …/apps/{app}/actions`
 
@@ -1695,6 +1812,9 @@ the fields the live release declares** (as it declares them), and its summaries 
 read such fields: nothing the live app leaves unseen, such as a field it removed, is returned. A
 value stored with another type than its field's current one is left out of the data model (and
 stays stored).
+
+An action may be sent with `?widget=<id>` (a widget's actions): it is the same action with the
+same checks, answered with at most 25 rows in `/items`.
 
 ### Effects of actions
 
@@ -1806,6 +1926,119 @@ that would apply, with `status: "simulated"`, what they would make in `detail` (
 is `new`), and an `error` with the code an effect would fail with if the caller couldn't write its
 target.
 
+### Photo attachments
+
+A record never holds a file: an `attachment` field holds a **list of attachment ids** (32 hexadecimal
+characters, from the system's random source), and the files are separate resources the server keeps
+in the managed storage of the space that holds the app, under its data directory
+(`.taskto/app-files/<app>/<id>`, with `<id>.thumb` beside it; the `.taskto` directory is the server's own, which no document name can lead into), never in the database, which keeps only their
+metadata. A photo is never an address: the catalog still has no `Image`, and nothing in a record can
+make a browser or the server fetch from outside. The `PhotoInput` component uploads and the `Photos`
+component draws thumbnails, both through the routes below with the viewer's own session. A browser
+that takes a photo with its camera sends it to the app; it may not also keep it in the device's
+camera roll, and nothing here promises that.
+
+An attachment field takes at most `max_files` pictures of at most `max_bytes` each. The accepted types
+are **JPEG, PNG and GIF**, found in the bytes themselves (never from the client's `Content-Type` or the
+file's name, and `svg`, `html` and the rest are refused), with a bound on the pixels (50 megapixels for a
+JPEG, 24 for the others), so a file can't take more memory to read than that. A photo is served to every
+reader of the record that holds it, so **the metadata inside it is removed when it is finalized**: a phone's
+location, the camera, the time and the rest (Exif and XMP, text and time chunks, comments), losslessly, without
+decoding or re-encoding, so the pixels are exactly the ones sent. A JPEG keeps its JFIF header, its colour
+profile and Adobe's colour transform, and, if the photo isn't upright, a minimal Exif segment holding its
+orientation alone, so a browser still shows it right. A PNG keeps every chunk but `eXIf`, `tEXt`, `zTXt`,
+`iTXt` and `tIME`; a GIF every block but comments and application extensions other than its loop control.
+A file whose structure can't be walked with certainty is refused (`400 app_attachment_type`), not guessed at.
+What is kept is therefore a little smaller than what was sent, and its `size` is the stored one.
+
+An attachment is made in steps, by a writer of the space whose roles in the app let them submit records
+or change some (otherwise `403 app_forbidden`; a viewer of the space is `403` as for any write). All the routes are under `…/apps/{app}`, need a session, and go through the
+[CSRF guard](#csrf). Every one of an upload's routes belongs to its **uploader**: anyone else, in the
+space or not, gets `404`, as for an upload that doesn't exist.
+
+#### `POST …/apps/{app}/uploads`
+
+`{"field": "photos", "size": 2345678}`: starts an upload for an attachment field of the live release
+(`409 app_not_published` before one), declaring the file's size in bytes (`400 app_upload_size` if it is 0
+or over the field's `max_bytes`). `201` with `{"id", "field", "status": "uploading", "size", "received": 0,
+"attached": false, "created_at", "chunk_size": 1048576, "max_chunk": 2097152}`. A person may have 20
+photos waiting to be saved in a record per app, and an app's attachments take at most 1 GiB in all
+(`409 app_uploads_pending`, `app_files_full`).
+
+#### `GET …/apps/{app}/uploads/{upload}`
+
+Where the server is: the same object, with `received`, the offset to continue from. For the uploader only.
+
+#### `PUT …/apps/{app}/uploads/{upload}?offset=N`
+
+One chunk: the body is the bytes, up to 2 MiB, as `application/octet-stream`. `offset` must be the
+server's `received`: the chunk is written at that offset and the answer is the object with the new
+`received`. At any other offset it is refused, `409 app_upload_offset` with `params.offset` the bytes the
+server has, and nothing is written. So a chunk that was applied but whose answer was lost, sent again, is
+never applied twice: the client asks where the server is (or reads it from the `409`) and continues from
+there. An upload interrupted by anything, the server's restart included, resumes the same way, and the
+finished file is exactly the bytes sent, once. The body is read whole before anything is written, so a
+connection that drops half way changes nothing; `413 app_upload_chunk` for a chunk that is too large or runs
+past the declared size; `409 app_upload_state` once the upload is finalized.
+
+#### `POST …/apps/{app}/uploads/{upload}/finalize`
+
+`{}`. Checks that all the bytes are there (`409 app_upload_offset` with where the server is, if not), that
+they are a picture of an accepted type within the pixel bound, and makes a thumbnail (a JPEG of at most
+320 pixels on a side, turned the way the picture's orientation says) with the standard library's image
+packages, and keeps the picture without its metadata (see above). A file that isn't an accepted picture is
+removed and answers `400 app_attachment_type`. `200` with the attachment: `"status": "ready"`,
+`content_type`, `width` and `height` as shown, and `size` and `received` now the **stored** size, the length the
+picture is served with (while it is uploading they are the declared size and what the server has). The
+received bytes are removed only after the attachment is saved as ready, so a finalize that was interrupted
+starts again from them, and the timer removes any that were left. Finalizing a ready attachment answers it
+again, so a retry is safe.
+
+#### `DELETE …/apps/{app}/uploads/{upload}`
+
+Removes an upload, or a ready photo, that no record holds yet. `204`; `409 app_upload_state` if a record holds it.
+
+#### Putting photos in records
+
+An insert or update names attachments in the field's value, a list of their ids (`{"photos": ["…", "…"]}` in
+the action's context, as a `PhotoInput` bound to `/draft/photos` sends). The server attaches them in the same
+transaction that writes the record, and **the whole change is refused, writing nothing, with `422
+app_attachment_bad`** unless each id that isn't already in that record's field is an attachment of this app
+and this field, uploaded by the caller, finalized, and in no record yet. More than `max_files`, a repeat, or
+anything that isn't an id is `app_field_files`. Every way that writes records goes through these checks,
+actions of an older release (whose screens may send anything) and the live release alike. An attachment is
+attached to one record, for good: replacing a photo in a record's list, deleting the record, and restoring it
+all keep the files, since the record's history refers to them.
+
+#### `GET …/apps/{app}/attachments/{attachment}` and `…/thumbnail`
+
+The picture, or its thumbnail, for whoever may **read the record it is in**: with the read scope of their
+role in the app, all records or only the ones they created ([App roles](#app-roles)), and **not for a
+deleted record** (nobody reads its attachments until it is restored). Before it is in a record only its
+uploader reads it, to see what they are about to submit. Whatever else, and for an attachment that doesn't
+exist, is the same `404`, with the same body. The answer has the type found in the bytes (`image/jpeg`,
+`image/png`, `image/gif`; the thumbnail is `image/jpeg`), `X-Content-Type-Options: nosniff`,
+`Content-Disposition: inline` with a file name made from the id (never a name from a person),
+`Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin`, and
+`Cache-Control: private, no-cache` with an `ETag`, so a shared cache keeps nothing and a browser asks the
+server (which checks access again) each time. `Range` and `If-None-Match` work.
+
+#### What lasts, and what is cleaned up
+
+- An attachment in no record **a day after its last change** (an abandoned upload, a photo taken and never
+  submitted) is removed with its files. This happens as an app's uploads start and on a timer
+  (`apps.Service.Maintain`, every ten minutes), which also removes a file no attachment of its space
+  knows (what a failed removal left) and the files of an app that no longer exists. A record's attachments
+  are never touched.
+- **Moving an app** to another space moves its files: each attachment names the space whose directory
+  holds its bytes, reads follow it, and after the move the server copies the files over and updates it,
+  which the timer retries if it was interrupted. The photos stay readable at every step, to the readers of
+  the app in its new space.
+- No route deletes an app or a space. When one does, the rows go with it (`ON DELETE CASCADE`) and the
+  sweep removes the files of an app whose row is gone, and a space's directory takes the rest with it.
+- The agent sees an attachment field's ids and metadata (`content_type`, `size`, `width`, `height`) in
+  `list_app_rows`, never the bytes; it has no tool to upload or attach a photo.
+
 ### Drafts and releases
 
 An app has a **draft**, the definition builders (and the agent) edit, and **releases**:
@@ -1894,6 +2127,94 @@ definition version (`web/src/apps/catalog.tsx`, held to the server's by
 drawn: the app shows that it must be updated, and the page reloaded, instead of a broken
 screen. Every existing app became release 1, live, with its current definition also as its
 draft, when this arrived; nothing about who can use it changed.
+
+## Home widgets and pins
+
+Each person has a **Home** page in a workspace: widgets from their apps, and **pins**, apps listed
+in the navigation in a section of their own, after the platform's pages. An app *offers* them
+in its definition ([`contributions`](#the-definition)); the person chooses which to use. A widget
+is a bounded view, never markup of its own, and a contribution can't replace the platform's login,
+settings, permission prompts or publishing controls: pins are one more link to launch an app, their
+labels are plain text, and what a widget shows or does is the app's own surface and actions
+(`GET …/apps/{app}/surface?widget=` and `POST …/apps/{app}/actions`), with the caller's access to
+the app, so a read scope of `own` shows only their own records' summaries and an action needs
+the capability it always does.
+
+What is on a person's Home is a list of **placements**, each naming an app and, for a widget, one
+of its widgets; they are stored per user and read back through the one place that answers app
+access, so nothing about a placement is trusted. Reading Home gives each item as the caller
+sees it **now**:
+
+- an app the caller can no longer view (a lost role, a space they left, an app moved where they
+  can't read it) or that was deleted is **left out** as if it were never placed, and comes back
+  if they get access again;
+- an app that is offline, was never published, or whose live release no longer has the widget is
+  **unavailable**: `state` is `unavailable` with a `reason` (`offline`, `unpublished`, `removed`),
+  and it has the app's name (the caller may view the app) and no widget, label or release;
+- otherwise `state` is `ready`, with the `widget` (or, for a pin, its `label` and `screen`, else the
+  app's name) and the live `release` (`number`, `definition_version`, `requires`) a client checks
+  before drawing it.
+
+Every route needs a session (`401`) and checks the workspace (`404` for another). Workspace routes
+are under `/api/workspaces/{workspace}/home`; a person's placements are theirs alone (another's
+id is `404`, never `403`).
+
+### `GET /api/workspaces/{workspace}/home`
+
+The caller's Home: `{"widgets": […], "pins": […], "hidden": […], "limits": {"widgets": 24,
+"pins": 20}}`. An item is `{"id"?, "default_id"?, "source": "personal"|"default", "kind":
+"widget"|"pin", "space_id", "app_id", "app_name", "widget_id"?, "widget"?, "label"?, "screen"?,
+"state", "reason"?, "release"?, "can_manage"?}`. The defaults of the caller's shared spaces
+come first, then their own in the order they chose; an item the caller placed themselves
+replaces the same default. `hidden` are the defaults they hid.
+
+### `GET /api/workspaces/{workspace}/home/available`
+
+The apps the caller may put on Home or pin: those they may view, online and published, in the
+spaces they read, `{"apps": [{"space_id", "space_name", "space_kind", "app_id", "name",
+"widgets", "pin", "can_set_defaults", "defaults"}]}`. `can_set_defaults` and the `defaults` set
+are only for those who may [set defaults](#shared-defaults) for the app.
+
+### `POST /api/workspaces/{workspace}/home/items`
+
+Places a widget or pins an app: `{"kind": "widget"|"pin", "space_id", "app_id", "widget"}`, with
+`widget` for a widget only. `201` with the item, going last; placing what is already placed
+returns it. `404` for a space of another workspace or an app the caller may not view,
+`409 app_offline` or `app_not_published`, `404 home_widget_not_found`, `409 home_limit` (24
+widgets, 20 pins per workspace), `400` for a request that isn't one of those shapes.
+
+### `DELETE /api/workspaces/{workspace}/home/items/{item}`
+
+Takes one of the caller's placements away. `204`; `404` for one that isn't theirs.
+
+### `PUT /api/workspaces/{workspace}/home/order`
+
+`{"kind": "widget"|"pin", "ids": […]}`: puts the caller's placements of that kind in the order
+of `ids`, the ones not listed after them. All or nothing: an id that isn't theirs, of that kind,
+or is listed twice is `400 home_order_invalid`. `200` with Home.
+
+### `PUT` and `DELETE /api/workspaces/{workspace}/home/hidden/{default}`
+
+Hides a default of a shared space the caller reads, from them alone, or shows it again. `204`,
+idempotent; `404` for a default of an app the caller may not view.
+
+### Shared defaults
+
+The people who may **publish** an app of a shared space (the app's `publish` capability, which
+every writer of the space has in an app without roles, and is the publisher role's in one with
+them) may set its widgets and pin as defaults for the space's members, who see them unless they
+hide them: a default changes what every member sees when they open TaskTo.AI, as publishing
+changes what every member uses. Defaults are for the apps of **shared** spaces only, are bounded
+(12 widgets and 8 pins per space), and go when the app moves to another space. Everyone who
+reads the space may list them; they are seen only for the apps they may view.
+
+- `GET …/spaces/{space}/home/defaults`: `{"defaults": […]}`, each item with `can_manage`, whether
+  the caller may remove it.
+- `POST …/spaces/{space}/home/defaults`: `{"kind", "app_id", "widget"}` as above. `201` with the
+  item (`default_id`). A reader of the space `403`, someone who may write the space but not publish
+  the app `403 app_forbidden` (`publish`), a private space `409 home_defaults_shared`.
+- `DELETE …/spaces/{space}/home/defaults/{default}`: `204`, with the same rights; `404` for a
+  default of another space.
 
 ## Model providers
 

@@ -589,7 +589,7 @@
   },
   {
     "name": "list_app_rows",
-    "description": "Read an app's data: the rows the user may read (all of them, or only the ones they created, by their role in the app), oldest first, each with its id, its _revision and the fields its collection declares. Deleted rows are not listed. An offline app's rows are kept and read too. A list too long for one reply is cut short, with truncated: true and next_after: call again with after set to it for the rest.",
+    "description": "Read an app's data: the rows the user may read (all of them, or only the ones they created, by their role in the app), oldest first, each with its id, its _revision and the fields its collection declares (an attachment field holds a list of {id, content_type, size, width, height}: the agent can read what photos a row has, never their bytes, and can't upload or attach one). Deleted rows are not listed. An offline app's rows are kept and read too. A list too long for one reply is cut short, with truncated: true and next_after: call again with after set to it for the rest.",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -608,6 +608,94 @@
           "type": "integer",
           "minimum": 0,
           "description": "only rows after this row id, from a previous reply's next_after: rows added or removed meanwhile don't shift the pages"
+        }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "query_app_rows",
+    "description": "Query an app's data with filters, search, sort and pages, and get totals over ALL the rows that match, not only the page: the rows the user may read (all of them, or only the ones they created, by their role in the app), each with its id, its _revision and the fields its live release's collection declares. Use it instead of list_app_rows when you need some rows, an order, a count or a sum. Filters all have to hold: a field, an op (eq, ne, lt, lte, gt, gte, or contains for a string) and a value of the field's type; a row with no value of the field equals nothing (ne matches it, the others don't). search is words that each have to be in some string or choice field. Rows are ordered by sort (a field, _updated, _created or id; _updated newest first by default) and then by id, rows without a value last; a page ends with next_cursor, which you pass as cursor, with the same query, for the next one: rows added or removed meanwhile don't shift the pages. total and aggregates are over every matching row. A number held as text is shown but is in no comparison, sort or sum. A page too long for one reply is made shorter: next_cursor continues after the last row sent.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["live", "deleted"],
+          "description": "live rows (the default) or deleted ones, which can be restored by a person"
+        },
+        "filters": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": { "type": "string", "description": "a field the app's live release declares" },
+              "op": {
+                "type": "string",
+                "enum": ["eq", "ne", "lt", "lte", "gt", "gte", "contains"],
+                "description": "lt, lte, gt and gte are for number, date, time and string fields; contains is a case-insensitive substring of a string field"
+              },
+              "value": {
+                "description": "a value of the field's type: text, a number, true or false, a date YYYY-MM-DD or a time HH:MM"
+              }
+            },
+            "required": ["field", "op", "value"],
+            "additionalProperties": false
+          },
+          "description": "conditions that all have to hold"
+        },
+        "search": {
+          "type": "string",
+          "description": "words (at most 5) that each have to be in some string or choice field, in any case"
+        },
+        "sort": {
+          "type": "string",
+          "description": "a field, or _updated, _created, _deleted (deleted rows only) or id"
+        },
+        "dir": {
+          "type": "string",
+          "enum": ["asc", "desc"],
+          "description": "the times are newest first by default, the rest ascending"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "rows in a page (default 50)"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "the previous page's next_cursor, with the same state, filters, search and sort"
+        },
+        "aggregates": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["count", "sum", "min", "max", "avg"] },
+              "field": {
+                "type": "string",
+                "description": "count: optional (the rows that have a value of it); sum and avg: a number field; min and max: a number, date or time field"
+              }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          "description": "values over all the matching rows, each with the count of rows it was computed from"
         }
       },
       "required": ["space_id", "app_id"],
@@ -638,7 +726,7 @@
             "definition_version": {
               "type": "integer",
               "minimum": 1,
-              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time or choice fields, rules or navigation"
+              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time, choice or attachment fields, rules or navigation"
             },
             "requires": {
               "type": "array",
@@ -704,8 +792,8 @@
                       },
                       "type": {
                         "type": "string",
-                        "enum": ["string", "number", "boolean", "date", "time", "choice"],
-                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options"
+                        "enum": ["string", "number", "boolean", "date", "time", "choice", "attachment"],
+                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options, an attachment a list of photos (JPEG, PNG or GIF) that people upload with the PhotoInput component: you can't upload or read pictures, only see their ids and metadata in list_app_rows"
                       },
                       "required": {
                         "type": "boolean"
@@ -734,6 +822,18 @@
                         "minimum": 1,
                         "maximum": 10000,
                         "description": "string fields; 1000 if left out"
+                      },
+                      "max_files": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "attachment fields: how many photos; 1 if left out"
+                      },
+                      "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 16777216,
+                        "description": "attachment fields: the size of each photo in bytes; 8 MiB if left out"
                       },
                       "min": {
                         "type": "number",
@@ -866,6 +966,85 @@
                 "required": ["kind"],
                 "additionalProperties": false
               }
+            },
+            "contributions": {
+              "type": "object",
+              "description": "what the app offers the Home page and the navigation (version 2 of the format): widgets people may put on their Home, and the pin's label. A widget is a bounded view, never markup: it shows summaries, one of the app's screens, or is only a shortcut that opens the app. Nothing here grants access: every widget reads and acts through the app, with the person's own role",
+              "properties": {
+                "version": {
+                  "type": "integer",
+                  "enum": [1],
+                  "description": "1; leave it out"
+                },
+                "widgets": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "a lowercase letter, then lowercase letters, digits or _ (at most 40), unique in the app"
+                      },
+                      "title": {
+                        "type": "string",
+                        "description": "plain text of 1 to 60 characters on one line"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": ["summaries", "screen", "shortcut"]
+                      },
+                      "size": {
+                        "type": "string",
+                        "enum": ["small", "medium", "large"],
+                        "description": "small if left out"
+                      },
+                      "summaries": {
+                        "type": "array",
+                        "maxItems": 4,
+                        "description": "summaries widget only: 1 to 4 of the app's summaries, each with its label",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "summary": {
+                              "type": "string",
+                              "description": "the name of one of the app's summaries"
+                            },
+                            "label": {
+                              "type": "string",
+                              "description": "plain text of 1 to 40 characters"
+                            }
+                          },
+                          "required": ["summary", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "screen": {
+                        "type": "string",
+                        "description": "screen widget only: one of the app's screens that doesn't show a record"
+                      }
+                    },
+                    "required": ["id", "title", "kind"],
+                    "additionalProperties": false
+                  }
+                },
+                "pin": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "description": "plain text of 1 to 30 characters"
+                    },
+                    "screen": {
+                      "type": "string",
+                      "description": "the screen the pin opens the app on (not a record screen); the entry if left out"
+                    }
+                  },
+                  "required": ["label"],
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
             }
           },
           "required": ["collection", "actions"],
@@ -910,7 +1089,7 @@
             "definition_version": {
               "type": "integer",
               "minimum": 1,
-              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time or choice fields, rules or navigation"
+              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time, choice or attachment fields, rules or navigation"
             },
             "requires": {
               "type": "array",
@@ -976,8 +1155,8 @@
                       },
                       "type": {
                         "type": "string",
-                        "enum": ["string", "number", "boolean", "date", "time", "choice"],
-                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options"
+                        "enum": ["string", "number", "boolean", "date", "time", "choice", "attachment"],
+                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options, an attachment a list of photos (JPEG, PNG or GIF) that people upload with the PhotoInput component: you can't upload or read pictures, only see their ids and metadata in list_app_rows"
                       },
                       "required": {
                         "type": "boolean"
@@ -1006,6 +1185,18 @@
                         "minimum": 1,
                         "maximum": 10000,
                         "description": "string fields; 1000 if left out"
+                      },
+                      "max_files": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "attachment fields: how many photos; 1 if left out"
+                      },
+                      "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 16777216,
+                        "description": "attachment fields: the size of each photo in bytes; 8 MiB if left out"
                       },
                       "min": {
                         "type": "number",
@@ -1138,6 +1329,85 @@
                 "required": ["kind"],
                 "additionalProperties": false
               }
+            },
+            "contributions": {
+              "type": "object",
+              "description": "what the app offers the Home page and the navigation (version 2 of the format): widgets people may put on their Home, and the pin's label. A widget is a bounded view, never markup: it shows summaries, one of the app's screens, or is only a shortcut that opens the app. Nothing here grants access: every widget reads and acts through the app, with the person's own role",
+              "properties": {
+                "version": {
+                  "type": "integer",
+                  "enum": [1],
+                  "description": "1; leave it out"
+                },
+                "widgets": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "description": "a lowercase letter, then lowercase letters, digits or _ (at most 40), unique in the app"
+                      },
+                      "title": {
+                        "type": "string",
+                        "description": "plain text of 1 to 60 characters on one line"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": ["summaries", "screen", "shortcut"]
+                      },
+                      "size": {
+                        "type": "string",
+                        "enum": ["small", "medium", "large"],
+                        "description": "small if left out"
+                      },
+                      "summaries": {
+                        "type": "array",
+                        "maxItems": 4,
+                        "description": "summaries widget only: 1 to 4 of the app's summaries, each with its label",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "summary": {
+                              "type": "string",
+                              "description": "the name of one of the app's summaries"
+                            },
+                            "label": {
+                              "type": "string",
+                              "description": "plain text of 1 to 40 characters"
+                            }
+                          },
+                          "required": ["summary", "label"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "screen": {
+                        "type": "string",
+                        "description": "screen widget only: one of the app's screens that doesn't show a record"
+                      }
+                    },
+                    "required": ["id", "title", "kind"],
+                    "additionalProperties": false
+                  }
+                },
+                "pin": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "description": "plain text of 1 to 30 characters"
+                    },
+                    "screen": {
+                      "type": "string",
+                      "description": "the screen the pin opens the app on (not a record screen); the entry if left out"
+                    }
+                  },
+                  "required": ["label"],
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
             }
           },
           "required": ["collection", "actions"],

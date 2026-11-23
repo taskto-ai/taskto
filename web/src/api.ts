@@ -171,7 +171,24 @@ export type AppRelease = DefinitionNeeds & {
   published_by: Author
   live: boolean
   live_since?: string
+  // In a single app's reply, for the live release.
+  definition?: AppDefinition
 }
+
+// A field of an app's collection, as its definition declares it.
+export type FieldType = 'string' | 'number' | 'boolean' | 'date' | 'time' | 'choice' | 'attachment'
+export type AppField = {
+  name: string
+  type: FieldType
+  required?: boolean
+  max_length?: number
+  min?: number
+  max?: number
+  options?: string[]
+}
+
+// What the records explorer needs of an app's definition: its fields, and which actions change records.
+export type AppDefinition = { collection: { fields: AppField[] }; actions: Record<string, { kind: string }> }
 
 // A change of a collection a publish must acknowledge, by kind and field.
 export type SchemaChange = { change: string; field: string }
@@ -192,6 +209,60 @@ export type App = {
   unpublished_changes: boolean
   // The definition being edited, in a single app's reply, for those who may design or publish.
   draft?: DefinitionNeeds
+}
+
+// A widget an app offers for Home (docs/api.md, Home): a bounded view, never markup of its own.
+export type Widget = {
+  id: string
+  title: string
+  kind: 'summaries' | 'screen' | 'shortcut'
+  size?: 'small' | 'medium' | 'large'
+  summaries?: { summary: string; label: string }[]
+  screen?: string
+}
+
+// What an app's navigation pin shows: its label, and the screen it opens the app on.
+export type Pin = { label: string; screen?: string }
+
+// A widget on someone's Home or a pin in their navigation, as the server works it out now. `id` is the
+// person's own placement, `default_id` the space default it is. An `unavailable` item has no widget
+// or label, only the app's name and why (`offline`, `unpublished`, `removed`).
+export type HomeItem = {
+  id?: number
+  default_id?: number
+  source: 'personal' | 'default'
+  kind: 'widget' | 'pin'
+  space_id: number
+  app_id: number
+  app_name: string
+  widget_id?: string
+  widget?: Widget
+  label?: string
+  screen?: string
+  state: 'ready' | 'unavailable'
+  reason?: 'offline' | 'unpublished' | 'removed'
+  release?: { number: number; definition_version: number; requires: string[] }
+  can_manage?: boolean
+}
+
+export type HomeView = {
+  widgets: HomeItem[]
+  pins: HomeItem[]
+  hidden: HomeItem[]
+  limits: { widgets: number; pins: number }
+}
+
+// An app the person may place on Home or pin, with what it offers.
+export type AvailableApp = {
+  space_id: number
+  space_name: string
+  space_kind: 'private' | 'shared'
+  app_id: number
+  name: string
+  widgets: Widget[]
+  pin: Pin | null
+  can_set_defaults: boolean
+  defaults: { id: number; kind: 'widget' | 'pin'; widget?: string }[]
 }
 
 // Who made a change to an app's record, through the agent or an access token if so.
@@ -239,6 +310,22 @@ export type AppEffect = {
   can_retry: boolean
 }
 export type AppEffectList = { effects: AppEffect[]; active: number; failed: number }
+
+// One value over every record a query matches: its count is how many records it was computed from.
+export type RecordAggregate = {
+  kind: 'count' | 'sum' | 'min' | 'max' | 'avg'
+  field?: string
+  value: number | string | null
+  count: number
+}
+
+// A page of an app's records, with the totals of all that match the query (…/records/query).
+export type RecordPage = {
+  records: AppRecord[]
+  next_cursor: string | null
+  total: number
+  aggregates: RecordAggregate[]
+}
 
 // One revision of a record: what was done, by whom, and the data it left.
 export type RecordVersion = {
