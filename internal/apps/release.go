@@ -363,7 +363,7 @@ func (s *Service) publishApp(ctx context.Context, sp access.Space, a Actor, appI
 		if unset := cur.draftDef.unsetTargets(); len(unset) > 0 {
 			return unsetError(unset)
 		}
-		if err := s.checkEffectTargets(ctx, a, cur.draftDef); err != nil {
+		if err := s.checkEffectTargets(ctx, sp.WorkspaceID, a, cur.draftDef); err != nil {
 			return err
 		}
 		if cur.Version != req.Version {
@@ -464,7 +464,7 @@ func (s *Service) rollbackApp(ctx context.Context, sp access.Space, a Actor, app
 			return ErrReleaseLive
 		}
 		// An earlier release's effects are the one who makes it live's to use, as at publishing.
-		if err := s.checkEffectTargets(ctx, a, *target.Definition); err != nil {
+		if err := s.checkEffectTargets(ctx, sp.WorkspaceID, a, *target.Definition); err != nil {
 			return err
 		}
 		// A release with the live release's collection changes nothing about how the rows are

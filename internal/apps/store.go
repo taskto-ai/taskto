@@ -566,7 +566,7 @@ func (s *Service) createAppWith(ctx context.Context, sp access.Space, a Actor, n
 	if err != nil {
 		return App{}, err
 	}
-	if err := s.checkEffectTargets(ctx, a, def); err != nil {
+	if err := s.checkEffectTargets(ctx, sp.WorkspaceID, a, def); err != nil {
 		return App{}, err
 	}
 	raw, err := json.Marshal(def)
@@ -649,7 +649,7 @@ func (s *Service) updateApp(ctx context.Context, sp access.Space, a Actor, appID
 		if checked, err = ch.Definition.Check(); err != nil {
 			return App{}, err
 		}
-		if err := s.checkEffectTargets(ctx, a, checked); err != nil {
+		if err := s.checkEffectTargets(ctx, sp.WorkspaceID, a, checked); err != nil {
 			return App{}, err
 		}
 		raw, err := json.Marshal(checked)

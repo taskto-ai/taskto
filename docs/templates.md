@@ -42,7 +42,8 @@ it came back (required once it is returned). A Home widget counts the items chec
 Who sees what: the install gives you the builder, publisher and data manager roles, and every
 other member the user role. A **user** reads and changes their own records only, and the counts
 they see are over those; a **data manager** reads and changes them all. Change who holds which
-role afterwards in the app's **Roles** panel.
+role afterwards in the app's **Roles** panel. If the installer later leaves the space, their roles go with them;
+the space's admin can still open the **Roles** panel and give someone the data manager role.
 
 ### Inspection (for a shared space, with a board)
 
@@ -66,11 +67,12 @@ who may design or publish copy its draft, everyone else its live release. It cop
 definition and nothing else:
 
 - no records, photos or signatures, no history, no deleted records;
-- no roles (the copy is unrestricted, so the space's own rules decide), no Home placements or
-  defaults, no releases;
+- no roles from the source (the copy is unrestricted, so the space's own rules decide, and its
+  creator has the roles the creator of any new app has), no Home placements or defaults, no
+  releases;
 - no effect's queued or finished work.
 
-An effect aimed at a board you can't write is **cleared**: the effect stays, and the copy can't be
+An effect aimed at a board you can't write, or in another workspace, is **cleared**: the effect stays, and the copy can't be
 published until you choose a board (the same picker as for the inspection template). Boards you
 can write are kept.
 

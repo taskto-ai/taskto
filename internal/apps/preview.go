@@ -57,6 +57,9 @@ type PreviewRequest struct {
 type PreviewReply struct {
 	Messages []Message    `json:"messages"`
 	Rows     []PreviewRow `json:"rows"`
+	// Effects are what the action would have set going on boards and documents, simulated on
+	// the same sample rows (nothing is made); left out when there are none.
+	Effects []EffectView `json:"effects,omitempty"`
 }
 
 // SampleRows makes the sample rows of a collection: a few rows of plausible values of every field,
@@ -164,6 +167,14 @@ func (c Collection) forPreview() Collection {
 	return out
 }
 
+// previewDefinition is def as a preview plans its actions: with the collection a preview holds
+// (forPreview), so that an action whose record would carry a photo or a signature isn't refused
+// for the lack of one.
+func previewDefinition(def Definition) Definition {
+	def.Collection = def.Collection.forPreview()
+	return def
+}
+
 // preview draws the app's draft, or runs one of its actions, on sample rows. It is for those who
 // may design or publish the app (the draft is theirs to see), and reads nothing of the app's data.
 func (s *Service) preview(ctx context.Context, sp access.Space, actor Actor, appID int64, req PreviewRequest) (PreviewReply, error) {
@@ -187,7 +198,7 @@ func (s *Service) preview(ctx context.Context, sp access.Space, actor Actor, app
 		return PreviewReply{Messages: Surface(surfaceID, def, rows), Rows: previewReply(rows)}, nil
 	}
 
-	ch, err := Plan(surfaceID, def, *req.Action)
+	ch, err := Plan(surfaceID, previewDefinition(def), *req.Action)
 	if err != nil {
 		return PreviewReply{}, err
 	}
@@ -205,7 +216,11 @@ func (s *Service) preview(ctx context.Context, sp access.Space, actor Actor, app
 	if rows, err = simulate(def, rows, ch); err != nil {
 		return PreviewReply{}, err
 	}
-	return PreviewReply{Messages: answer(a.ID, def, rows, ch), Rows: previewReply(rows)}, nil
+	reply := PreviewReply{Messages: answer(a.ID, def, rows, ch), Rows: previewReply(rows)}
+	if ch.Kind == ActionInsert || ch.Kind == ActionUpdate {
+		reply.Effects = s.simulatedEffects(ctx, actor.UserID, def, ch, rows)
+	}
+	return reply, nil
 }
 
 // simulate applies change to rows as the live app would to its own, in memory: the rows it

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -662,5 +663,225 @@ func TestDuplicatingAnAppWithAPhotoCopiesNoPhoto(t *testing.T) {
 		"description": "Mine", "amount": 1, "spent_on": "2026-11-03", "category": "food"})), http.StatusOK)
 	if items := w.items(w.alice, s, a); len(items) != 1 {
 		t.Fatalf("the source has %d records", len(items))
+	}
+}
+
+// The equipment checkout's installer is its only manager. When they leave the space their roles
+// go with them, and the space's administrator can still give someone the data manager role.
+func TestASharedInstallIsNeverLeftWithoutSomeoneToManageItsRoles(t *testing.T) {
+	w := newWorld(t)
+	s := w.crew()
+	a := w.publish(w.alice, s, w.mustInstall(w.alice, s, "equipment-checkout", nil))
+	if _, err := w.e.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, s.ID, w.alice.id); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.view(w.bob, s, a); got.Access.ManageRoles || got.Access.ReadRecords != access.ScopeOwn {
+		t.Fatalf("bob's access = %+v", got.Access)
+	}
+	// The workspace admin (the space's creator) reads the roles and hands bob the data manager's.
+	expect(t, w.owner.do(http.MethodGet, appPath(s, a.ID, "/roles"), nil), http.StatusOK)
+	expect(t, w.owner.do(http.MethodPut, appPath(s, a.ID, "/roles"), map[string]any{"grants": []map[string]any{
+		{"user_id": w.bob.id, "roles": []string{"data_manager"}},
+		{"user_id": nil, "roles": []string{"user"}},
+	}}), http.StatusOK)
+	if got := w.view(w.bob, s, a); got.Access.ReadRecords != access.ScopeAll {
+		t.Fatalf("bob's access after the grant = %+v", got.Access)
+	}
+	// The admin's right is to the roles alone: not to design the app or publish it.
+	if got := w.view(w.owner, s, a); !got.Access.ManageRoles || got.Access.Design || got.Access.Publish {
+		t.Fatalf("the admin's access = %+v", got.Access)
+	}
+}
+
+// A member who isn't an administrator of the workspace gets nothing from the rule.
+func TestOnlyAnAdministratorKeepsTheRightToManageRoles(t *testing.T) {
+	w := newWorld(t)
+	s := w.crew()
+	a := w.publish(w.alice, s, w.mustInstall(w.alice, s, "equipment-checkout", nil))
+	expect(t, w.bob.do(http.MethodPut, appPath(s, a.ID, "/roles"), map[string]any{"grants": []map[string]any{
+		{"user_id": w.bob.id, "roles": []string{"data_manager"}}}}), http.StatusForbidden)
+}
+
+// A value stored before a field was retyped isn't a date, whatever it starts with: it is in no month,
+// online or in the rows offline.
+func TestAMonthlySumIgnoresValuesThatAreNotDates(t *testing.T) {
+	w := newWorld(t)
+	was := currentMonth
+	currentMonth = func() string { return "2026-11" }
+	t.Cleanup(func() { currentMonth = was })
+	s := w.alicePrivate
+	a := w.publish(w.alice, s, w.mustInstall(w.alice, s, "expense-tracker", nil))
+	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{
+		"description": "x", "amount": 10, "spent_on": "2026-11-02", "category": "other"})), http.StatusOK)
+	for _, bad := range []string{`2026-11-31`, `2026-11-xx`, `2026-11-`} {
+		if _, err := w.e.db.Exec(`INSERT INTO app_rows (app_id, data, created_by, updated_by) VALUES (?, ?, ?, ?)`,
+			a.ID, `{"description":"old","amount":1000,"spent_on":"`+bad+`","category":"other"}`, w.alice.id, w.alice.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := w.surfaceData(w.alice, s, a)["month_total"]; got != "10.00" {
+		t.Fatalf("month_total = %v, want only the row with a real date", got)
+	}
+}
+
+// A release with a monthly summary needs a client that totals a month: an older one says it must be
+// updated instead of showing every month's total as this month's.
+func TestAMonthlySummaryRequiresTheCapability(t *testing.T) {
+	all, err := Templates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d Definition
+	for _, tpl := range all {
+		if tpl.ID == "expense-tracker" {
+			d = tpl.Definition
+		}
+	}
+	got, err := d.Check()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(got.Requires, SummaryMonthCapability) || !slices.Contains(Capabilities(), SummaryMonthCapability) {
+		t.Fatalf("requires = %v", got.Requires)
+	}
+	d, err = cloneDefinition(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, sum := range d.Summaries {
+		sum.MonthOf = ""
+		d.Summaries[name] = sum
+	}
+	if got, err = d.Check(); err != nil || slices.Contains(got.Requires, SummaryMonthCapability) {
+		t.Fatalf("summaries over every row need no new capability: %v %v", got.Requires, err)
+	}
+}
+
+// The inspection's signature is required of a real submission, and a preview holds none: its pass and
+// fail buttons still work, and a failure shows the one card it would make (and no more).
+func TestTheInspectionTemplateWorksInThePreview(t *testing.T) {
+	f := newFX(t)
+	s := f.shared
+	app := f.mustInstall(f.alice, s, "inspection", map[string]any{"board": map[string]any{"space_id": f.maint.ID, "board_id": f.board}})
+	start := f.mustPreview(f.alice, s, app, PreviewRequest{})
+	step := func(result, notes string) PreviewReply {
+		// The place is taken when the form is submitted; the signature is the one thing a preview can't hold.
+		ctx := map[string]any{"site": "East gate", "result": result, "place": where(nil)}
+		if notes != "" {
+			ctx["notes"] = notes
+		}
+		return f.mustPreview(f.alice, s, app, PreviewRequest{Rows: start.Rows, Action: &ClientAction{
+			Name: "submit_inspection", SurfaceID: SurfaceID(app.ID), SourceComponentID: "submit", Context: ctx}})
+	}
+	if pass := step("pass", ""); len(pass.Effects) != 0 || len(pass.Rows) != len(start.Rows)+1 {
+		t.Fatalf("a pass in the preview = %d effects, %d rows", len(pass.Effects), len(pass.Rows))
+	}
+	fail := step("fail", "Latch is broken")
+	if len(fail.Effects) != 1 || fail.Effects[0].Kind != EffectCreateCard || fail.Effects[0].Error != nil ||
+		fail.Effects[0].Status != StateSimulated || !strings.HasPrefix(fail.Effects[0].Detail.Title, "Failed inspection: East gate (#") {
+		t.Fatalf("a failure in the preview = %+v", fail.Effects)
+	}
+	// The same through the endpoint that only simulates the effects.
+	rec := f.alice.do(http.MethodPost, appPath(s, app.ID, "/actions/preview"), map[string]any{
+		"name": "submit_inspection", "surfaceId": SurfaceID(app.ID), "sourceComponentId": "submit",
+		"context": map[string]any{"site": "East gate", "result": "fail", "notes": "Latch is broken", "place": where(nil)}})
+	expect(t, rec, http.StatusOK)
+	if p := decode[Preview](t, rec); len(p.Effects) != 1 || p.Effects[0].Error != nil {
+		t.Fatalf("simulated = %+v", p)
+	}
+	// Nothing real was made.
+	f.work()
+	if n := f.count(`SELECT count(*) FROM app_rows WHERE app_id = ?`, app.ID) + f.count(`SELECT count(*) FROM app_effects WHERE app_id = ?`, app.ID); n != 0 {
+		t.Fatalf("a preview made %d rows", n)
+	}
+}
+
+// Returning an item in the equipment checkout's preview acts on the preview's sample rows: the app's own
+// rows are never read, so a return isn't reported as an error for want of a record the app doesn't hold.
+func TestAReturnInThePreviewNeverReadsTheAppsRows(t *testing.T) {
+	w := newWorld(t)
+	s := w.crew()
+	app := w.mustInstall(w.alice, s, "equipment-checkout", nil)
+	start := w.mustPreview(w.alice, s, app, PreviewRequest{})
+	if len(start.Rows) == 0 {
+		t.Fatal("the preview has no sample rows")
+	}
+	ret := map[string]any{"name": "return_item", "surfaceId": SurfaceID(app.ID), "sourceComponentId": "return",
+		"context": map[string]any{"id": start.Rows[0].ID, "status": "returned", "returned_on": "2026-11-21"}}
+	rec := w.alice.do(http.MethodPost, appPath(s, app.ID, "/actions/preview"), ret)
+	expect(t, rec, http.StatusOK)
+	if p := decode[Preview](t, rec); len(p.Effects) != 0 {
+		t.Fatalf("effects = %+v", p.Effects)
+	}
+	// The preview made no row of the app's own, and found the one it acted on among its sample rows.
+	var n int
+	if err := w.e.db.QueryRow(`SELECT count(*) FROM app_rows WHERE app_id = ?`, app.ID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the app holds %d rows (%v)", n, err)
+	}
+}
+
+// Someone who belongs to two workspaces can write a space of each, but an app only ever aims at the
+// workspace it is in: saving one that doesn't is refused, and a copy never keeps such a target.
+func TestAnAppNeverAimsAtAnotherWorkspace(t *testing.T) {
+	f := newFX(t)
+	// Alice is also an editor of a space of the other workspace, with a board there.
+	if _, err := f.e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, f.other, f.alice.id); err != nil {
+		t.Fatal(err)
+	}
+	f.e.addMember(f.stranger, f.otherShared, f.alice, access.RoleEditor)
+	var abroad int64
+	if err := f.e.db.QueryRow(`INSERT INTO boards (space_id, kind, name, created_by, updated_by) VALUES (?, 'team', 'Theirs', ?, ?) RETURNING id`,
+		f.otherShared.ID, f.stranger.id, f.stranger.id).Scan(&abroad); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := f.e.s.access.CanWrite(f.ctx(), f.alice.id, f.otherShared.ID); err != nil || !ok {
+		t.Fatalf("alice can't write the other workspace's space: %v %v", ok, err)
+	}
+	aimed, err := cloneDefinition(f.inspections())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, act := range aimed.Actions {
+		for i := range act.Effects {
+			if act.Effects[i].Kind == EffectCreateCard {
+				act.Effects[i].SpaceID, act.Effects[i].BoardID = f.otherShared.ID, abroad
+			}
+		}
+		aimed.Actions[name] = act
+	}
+
+	// Saving and updating refuse it, though the author may write both.
+	expectCode(t, f.alice.do(http.MethodPost, appsPath(f.shared, ""), map[string]any{"name": "Abroad", "definition": aimed}),
+		http.StatusBadRequest, "app_effect_target")
+	home := f.mustInstall(f.alice, f.shared, "inspection", map[string]any{"board": map[string]any{"space_id": f.maint.ID, "board_id": f.board}})
+	expectCode(t, f.alice.do(http.MethodPatch, appPath(f.shared, home.ID, ""), map[string]any{"version": home.Version, "definition": aimed}),
+		http.StatusBadRequest, "app_effect_target")
+	expectCode(t, f.install(f.alice, f.shared, "inspection", map[string]any{"board": map[string]any{"space_id": f.otherShared.ID, "board_id": abroad}}),
+		http.StatusBadRequest, "app_effect_target")
+
+	// A copy clears it, whatever the copier may write.
+	if err := f.e.s.clearForeignTargets(f.ctx(), f.shared.WorkspaceID, Actor{UserID: f.alice.id}, &aimed); err != nil {
+		t.Fatal(err)
+	}
+	if left := aimed.unsetTargets(); len(left) == 0 {
+		t.Fatal("the copy kept a target in another workspace")
+	}
+	// Its own workspace's boards stay, for a caller who may write them.
+	kept, err := cloneDefinition(f.inspections())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.e.s.clearForeignTargets(f.ctx(), f.shared.WorkspaceID, Actor{UserID: f.alice.id}, &kept); err != nil {
+		t.Fatal(err)
+	}
+	if len(kept.unsetTargets()) != 0 {
+		t.Fatal("a target the copier may write was cleared")
+	}
+	for _, act := range aimed.Actions {
+		for _, e := range act.Effects {
+			if e.SpaceID == f.otherShared.ID {
+				t.Fatalf("an effect still names the other workspace's space: %+v", e)
+			}
+		}
 	}
 }

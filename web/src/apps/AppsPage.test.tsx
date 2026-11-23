@@ -450,9 +450,31 @@ test('a launched app says it is live, and those who may review it can try the dr
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=4': { body: surface },
     'POST /api/workspaces/1/spaces/2/apps/1/preview': (call) =>
       (call.body as { action?: unknown }).action
-        ? { body: { messages: afterAdd, rows: [] } }
+        ? {
+            body: {
+              messages: afterAdd,
+              rows: [],
+              effects: [
+                {
+                  id: 0,
+                  operation: '',
+                  position: 0,
+                  kind: 'create_card',
+                  action: 'delete_expense',
+                  record: 0,
+                  record_revision: 0,
+                  status: 'simulated',
+                  attempts: 0,
+                  next_attempt_at: null,
+                  error: null,
+                  detail: { title: 'Fix Coffee' },
+                  done_at: null,
+                  can_retry: false,
+                },
+              ],
+            },
+          }
         : { body: { messages: surface, rows: [{ id: 1, revision: 1, data: {} }] } },
-    'POST /api/workspaces/1/spaces/2/apps/1/actions/preview': { body: { effects: [] } },
     'GET /api/workspaces/1/spaces/2/apps/1/effects?limit=50': { body: { effects: [], active: 0, failed: 0 } },
   })
   render(<Routed />)
@@ -466,13 +488,12 @@ test('a launched app says it is live, and those who may review it can try the dr
   await screen.findByText('Coffee')
   // Its buttons work, on the sample rows the preview sent: they never reach the app's own actions.
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-  // …and say what the button would have set going on boards and documents, which changes nothing.
+  // …and say what the button would have set going on boards and documents, which changes nothing:
+  // the step's own answer, so no other request is made and none reads the app's real records.
   await screen.findByText('Preview: nothing was saved')
+  await screen.findByText('Fix Coffee')
   const sent = calls.filter((c) => c.method === 'POST')
-  expect(sent.map((c) => c.path)).toEqual([
-    ...Array(2).fill('/api/workspaces/1/spaces/2/apps/1/preview'),
-    '/api/workspaces/1/spaces/2/apps/1/actions/preview',
-  ])
+  expect(sent.map((c) => c.path)).toEqual(Array(2).fill('/api/workspaces/1/spaces/2/apps/1/preview'))
   expect(sent[0].body).toEqual({}) // the start
   expect(sent[1].body).toMatchObject({ rows: [{ id: 1, revision: 1, data: {} }], action: { name: 'delete_expense' } })
   expect(calls.some((c) => c.path.endsWith('/actions'))).toBe(false)

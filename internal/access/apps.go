@@ -36,6 +36,13 @@ import (
 // the read scope, summaries (count, sum) and the counts in lists included.
 //
 // The space allows write: every capability; read: view and read all records.
+//
+// One more rule keeps an app from being left with nobody to set it right: in a shared space, a
+// workspace admin who may write the space (a member of it, as an editor) can always view the
+// app and manage its roles, whatever roles it assigns, and so can always give someone the
+// data manager role. Roles are removed with the member who held them (someone leaving the
+// space), so without this the last manager's departure would strand the app. It adds no
+// other capability: the admin reads or changes records only through roles they give themselves.
 
 // AppRole is a role in one app.
 type AppRole string
@@ -190,12 +197,18 @@ func defaultRoles(sp Access) []AppRole {
 
 // appAccess works out a user's access to an app: the capabilities of roles (nil if the app
 // is unrestricted), limited to what sp allows.
-func appAccess(sp Access, roles []AppRole, restricted bool) AppAccess {
+//
+// admin is whether the user administers the space (see the note on the rules above): it only
+// adds to what roles give, view and manage_roles, and never beyond the space's limit.
+func appAccess(sp Access, roles []AppRole, restricted, admin bool) AppAccess {
 	limit := spaceLimit(sp)
 	if !restricted {
 		roles = defaultRoles(sp)
 	}
 	got := roleCaps(roles)
+	if admin && limit.ManageRoles {
+		got.View, got.ManageRoles = true, true
+	}
 	return AppAccess{
 		Roles:         sortedRoles(roles),
 		Restricted:    restricted,
@@ -288,7 +301,24 @@ func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAcc
 		return AppAccess{}, err
 	}
 	roles, restricted := resolve(rows, userID, anyGrants)
-	return appAccess(sp.Access, roles, restricted), nil
+	admin, err := c.administers(ctx, userID, sp)
+	if err != nil {
+		return AppAccess{}, err
+	}
+	return appAccess(sp.Access, roles, restricted, admin), nil
+}
+
+// administers is whether userID is an administrator of sp: a workspace admin, in a shared space
+// (a private space has its owner alone, who holds every role of an app that has none assigned).
+func (c *Checker) administers(ctx context.Context, userID int64, sp Space) (bool, error) {
+	if sp.Kind != Shared {
+		return false, nil
+	}
+	var admin bool
+	err := c.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM memberships WHERE workspace_id = ? AND user_id = ? AND role = 'admin')`,
+		sp.WorkspaceID, userID).Scan(&admin)
+	return admin, err
 }
 
 // AppsIn returns what userID may do in each app of the space, by app ID, for a space they
@@ -324,10 +354,14 @@ func (c *Checker) AppsIn(ctx context.Context, userID int64, sp Space) (map[int64
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	admin, err := c.administers(ctx, userID, sp)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[int64]AppAccess, len(byApp))
 	for id, gs := range byApp {
 		roles, restricted := resolve(gs, userID, anyGrants[id])
-		out[id] = appAccess(sp.Access, roles, restricted)
+		out[id] = appAccess(sp.Access, roles, restricted, admin)
 	}
 	return out, nil
 }
@@ -482,7 +516,11 @@ func (c *Checker) SetAppGrants(ctx context.Context, actorID, spaceID, appID int6
 			}
 		}
 		roles, restricted := resolve(rows, actorID, len(rows) > 0)
-		if !appAccess(sp.Access, roles, restricted).ManageRoles {
+		admin, err := c.administers(ctx, actorID, sp)
+		if err != nil {
+			return err
+		}
+		if !appAccess(sp.Access, roles, restricted, admin).ManageRoles {
 			return ErrGrantLockout
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM app_roles WHERE app_id = ?`, appID); err != nil {

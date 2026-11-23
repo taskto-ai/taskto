@@ -292,7 +292,7 @@ func (s *Service) chooseBoard(ctx context.Context, sp access.Space, a Actor, ref
 	if target.WorkspaceID != sp.WorkspaceID {
 		return s.refusedTarget(ref.SpaceID)
 	}
-	return s.targetOfDefinition(ctx, a, ref.SpaceID, ref.BoardID, true)
+	return s.targetOfDefinition(ctx, sp.WorkspaceID, a, ref.SpaceID, ref.BoardID, true)
 }
 
 func (s *Service) refusedTarget(spaceID int64) error {
@@ -374,7 +374,7 @@ func (s *Service) duplicateApp(ctx context.Context, sp access.Space, a Actor, ap
 	}
 	// What the copier can't write isn't theirs to aim an app at: those targets are cleared, and the
 	// copy can't be published until they choose again (unsetTargets).
-	if err := s.clearForeignTargets(ctx, a, &def); err != nil {
+	if err := s.clearForeignTargets(ctx, dest.WorkspaceID, a, &def); err != nil {
 		return App{}, err
 	}
 	name := req.Name
@@ -389,7 +389,7 @@ func (s *Service) duplicateApp(ctx context.Context, sp access.Space, a Actor, ap
 // clearForeignTargets clears the target of every effect of def that a may not use: one they can't
 // write (a card or a document) or read (a route), or whose space is in another workspace. An
 // effect's name and templates stay, so choosing a board again is all that's left.
-func (s *Service) clearForeignTargets(ctx context.Context, a Actor, def *Definition) error {
+func (s *Service) clearForeignTargets(ctx context.Context, workspaceID int64, a Actor, def *Definition) error {
 	for name, act := range def.Actions {
 		effects := slices.Clone(act.Effects)
 		for i, e := range effects {
@@ -397,7 +397,7 @@ func (s *Service) clearForeignTargets(ctx context.Context, a Actor, def *Definit
 				continue
 			}
 			write := e.Kind == EffectCreateCard || e.Kind == EffectCreateDocument
-			err := s.targetOfDefinition(ctx, a, e.SpaceID, e.BoardID, write)
+			err := s.targetOfDefinition(ctx, workspaceID, a, e.SpaceID, e.BoardID, write)
 			if err == nil {
 				continue
 			}

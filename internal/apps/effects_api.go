@@ -384,9 +384,12 @@ type Preview struct {
 
 // previewAction works out what an action of the app's DRAFT would do about effects, and does
 // nothing: no record changes, no operation is kept, no entry is queued, no card or document is
-// made. It is for those who may design or publish the app, who look at the draft. An effect whose
-// target the caller couldn't write is reported with the code it would fail with.
-func (s *Service) previewAction(ctx context.Context, sp access.Space, a Actor, appID int64, action ClientAction) (Preview, error) {
+// made, and none of the app's rows is read. The action is tried, as in a preview, on the rows the
+// caller sends or else on sample rows made from the draft's collection (a preview holds no photos
+// or signatures, so those fields are never required). It is for those who may design or publish
+// the app, who look at the draft. An effect whose target the caller couldn't write is reported
+// with the code it would fail with.
+func (s *Service) previewAction(ctx context.Context, sp access.Space, a Actor, appID int64, req PreviewRequest) (Preview, error) {
 	if err := may(sp, access.Read); err != nil {
 		return Preview{}, err
 	}
@@ -397,12 +400,15 @@ func (s *Service) previewAction(ctx context.Context, sp access.Space, a Actor, a
 	if !reviews(acc) {
 		return Preview{}, forbidden(string(access.CapDesign))
 	}
+	if req.Action == nil {
+		return Preview{}, invalidf("an action to preview is needed")
+	}
 	ap, err := launchable(ctx, s.db, sp.ID, appID)
 	if err != nil {
 		return Preview{}, err
 	}
 	def := ap.draftDef
-	ch, err := Plan(SurfaceID(ap.ID), def, action)
+	ch, err := Plan(SurfaceID(ap.ID), previewDefinition(def), *req.Action)
 	if err != nil {
 		return Preview{}, err
 	}
@@ -416,35 +422,52 @@ func (s *Service) previewAction(ctx context.Context, sp access.Space, a Actor, a
 	if ch.Kind == ActionUpdate && acc.ModifyRecords == access.ScopeNone {
 		return Preview{}, forbidden(capModifyRecords)
 	}
-	data, id := ch.Data, int64(0)
-	if ch.Kind == ActionUpdate {
-		row, found, err := loadRow(ctx, s.db, appID, ch.ID, visibility{scope: acc.ModifyRecords, user: a.UserID})
-		if err != nil {
-			return Preview{}, err
-		}
-		if !found {
-			return Preview{}, invalidAs(apierr.CodeAppRowNotFound, nil, "the app has no row %d", ch.ID)
-		}
-		if data, err = def.Collection.Merge(row.Data, ch.Data); err != nil {
-			return Preview{}, err
-		}
-		id = row.ID
+	var rows []Row
+	if req.Rows == nil {
+		rows = SampleRows(def.Collection)
+	} else if rows, err = previewRows(def, req.Rows); err != nil {
+		return Preview{}, err
 	}
-	for i, e := range def.Actions[action.Name].Effects {
-		if !e.applies(def.Collection, data) {
+	if rows, err = simulate(def, rows, ch); err != nil {
+		return Preview{}, err
+	}
+	out.Effects = s.simulatedEffects(ctx, a.UserID, def, ch, rows)
+	return out, nil
+}
+
+// simulatedEffects is what ch, an insert or an update already made to rows (simulate), would set
+// going: the effects of its action that apply to the record it made, as a preview shows them.
+func (s *Service) simulatedEffects(ctx context.Context, userID int64, def Definition, ch Change, rows []Row) []EffectView {
+	out := []EffectView{}
+	var rec Row
+	for _, r := range rows {
+		if (ch.Kind == ActionInsert && r.ID > rec.ID) || (ch.Kind == ActionUpdate && r.ID == ch.ID) {
+			rec = r
+		}
+	}
+	if rec.ID == 0 {
+		return out
+	}
+	for i, e := range def.Actions[ch.Name].Effects {
+		if !e.applies(def.Collection, rec.Data) {
 			continue
 		}
-		p := e.payload(def.Collection, data, id)
+		// A new record has no number yet: its details say "new".
+		id := rec.ID
+		if ch.Kind == ActionInsert {
+			id = 0
+		}
+		p := e.payload(def.Collection, rec.Data, id)
 		v := EffectView{
-			Position: i, Kind: e.Kind, Name: e.Name, Action: action.Name, Record: id, Status: StateSimulated,
+			Position: i, Kind: e.Kind, Name: e.Name, Action: ch.Name, Record: id, Status: StateSimulated,
 			Detail: detailOf(p), NextAttemptAt: nil, DoneAt: nil,
 		}
-		if code := s.previewTarget(ctx, a.UserID, e, p); code != "" {
+		if code := s.previewTarget(ctx, userID, e, p); code != "" {
 			v.Error = &EffectError{Code: code}
 		}
-		out.Effects = append(out.Effects, v)
+		out = append(out, v)
 	}
-	return out, nil
+	return out
 }
 
 // previewTarget is the code an effect would fail with for lack of access to its target, or "".
@@ -469,7 +492,10 @@ func (s *Service) previewTarget(ctx context.Context, userID int64, e Effect, p p
 // every space and board its effects name: a definition can't point at what its author couldn't use
 // themselves. It tells nothing about a space the author can't read that they couldn't tell from
 // the refusal for any other. (Whoever acts is checked again when an effect runs.)
-func (s *Service) checkEffectTargets(ctx context.Context, a Actor, def Definition) error {
+//
+// A target is also always in workspaceID, the workspace of the app's space, whatever the author
+// can reach: an app doesn't act across workspaces, even for someone who belongs to both.
+func (s *Service) checkEffectTargets(ctx context.Context, workspaceID int64, a Actor, def Definition) error {
 	// A target is checked for each permission an effect needs of it: a route that only reads a
 	// board must not stand in for a card made on the same board, which writes.
 	type target struct {
@@ -488,7 +514,7 @@ func (s *Service) checkEffectTargets(ctx context.Context, a Actor, def Definitio
 				continue
 			}
 			seen = append(seen, t)
-			if err := s.targetOfDefinition(ctx, a, t.space, t.board, t.write); err != nil {
+			if err := s.targetOfDefinition(ctx, workspaceID, a, t.space, t.board, t.write); err != nil {
 				return err
 			}
 		}
@@ -496,7 +522,9 @@ func (s *Service) checkEffectTargets(ctx context.Context, a Actor, def Definitio
 	return nil
 }
 
-func (s *Service) targetOfDefinition(ctx context.Context, a Actor, spaceID, boardID int64, write bool) error {
+// targetOfDefinition checks that a may use the space and board an effect of an app of workspaceID
+// names: the space is in that workspace, and a reads it (writes it, for an effect that writes).
+func (s *Service) targetOfDefinition(ctx context.Context, workspaceID int64, a Actor, spaceID, boardID int64, write bool) error {
 	refused := invalidAs(apierr.CodeAppEffectTarget, apierr.Params{"space_id": spaceID},
 		"an effect targets space %d, which you can't %s: choose a space and board you can", spaceID, map[bool]string{true: "write", false: "read"}[write])
 	sp, err := s.access.Check(ctx, a.UserID, spaceID)
@@ -506,7 +534,7 @@ func (s *Service) targetOfDefinition(ctx context.Context, a Actor, spaceID, boar
 	if err != nil {
 		return err
 	}
-	if !sp.Access.Allows(access.Read) || (write && !sp.Access.Allows(access.Write)) {
+	if sp.WorkspaceID != workspaceID || !sp.Access.Allows(access.Read) || (write && !sp.Access.Allows(access.Write)) {
 		return refused
 	}
 	if boardID == 0 || s.platform.Boards == nil {
@@ -597,11 +625,15 @@ func (s *Service) handlePreviewAction(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var action ClientAction
-	if !readJSON(w, r, &action) {
+	// The body is an action, with the rows of the preview it is tried on, if any.
+	var body struct {
+		ClientAction
+		Rows []PreviewRow `json:"rows"`
+	}
+	if !readJSON(w, r, &body) {
 		return
 	}
-	out, err := s.previewAction(r.Context(), req.space, req.actor, req.app, action)
+	out, err := s.previewAction(r.Context(), req.space, req.actor, req.app, PreviewRequest{Action: &body.ClientAction, Rows: body.Rows})
 	if errors.Is(err, ErrInvalid) {
 		invalid(w, http.StatusUnprocessableEntity, err)
 		return

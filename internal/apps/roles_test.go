@@ -101,10 +101,13 @@ func TestAppWithoutRolesIsAsTheSpaceAllows(t *testing.T) {
 // A user can submit records without being able to redesign the app, and reads only their own.
 func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 	w := newWorld(t)
+	// A workspace admin always manages the roles of an app in a shared space, so the plain user
+	// here is an editor who isn't one.
+	w.e.addMember(w.owner, w.shared, w.mallory, access.RoleEditor)
 	s, a := w.shared, w.sharedApp
-	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppUser), grant(w.alice.id, access.AppRoles...))
+	w.mustSetRoles(w.alice, s, a, grant(w.mallory.id, access.AppUser), grant(w.alice.id, access.AppRoles...))
 
-	got := w.view(w.owner, s, a)
+	got := w.view(w.mallory, s, a)
 	if x := got.Access; !x.Restricted || !x.View || x.Design || x.Publish || !x.Submit || x.ManageRoles ||
 		x.ReadRecords != access.ScopeOwn || x.ModifyRecords != access.ScopeOwn {
 		t.Fatalf("the user's access = %+v", x)
@@ -115,21 +118,21 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 	}
 
 	// They submit, and the answer shows their record and the summary over it alone.
-	rec := w.add2(w.owner, s, a, "owner-lunch")
+	rec := w.add2(w.mallory, s, a, "owner-lunch")
 	expect(t, rec, http.StatusOK)
 	if body := rec.Body.String(); !strings.Contains(body, "owner-lunch") || strings.Contains(body, "team-lunch") || !strings.Contains(body, `"total":"10.00"`) {
 		t.Fatalf("after submitting: %s", body)
 	}
-	if rows := w.rowsOf(w.owner, s, a); len(rows) != 1 || rows[0] != "owner-lunch" {
+	if rows := w.rowsOf(w.mallory, s, a); len(rows) != 1 || rows[0] != "owner-lunch" {
 		t.Fatalf("the user reads %v", rows)
 	}
 	// The launched screen's summary too, and the list's count.
-	rec = w.owner.do(http.MethodGet, appPath(s, a.ID, "/surface"), nil)
+	rec = w.mallory.do(http.MethodGet, appPath(s, a.ID, "/surface"), nil)
 	expect(t, rec, http.StatusOK)
 	if !strings.Contains(rec.Body.String(), `"total":"10.00"`) || strings.Contains(rec.Body.String(), "team-lunch") {
 		t.Fatalf("surface: %s", rec.Body)
 	}
-	list := decode[struct{ Apps []App }](t, w.owner.do(http.MethodGet, appsPath(s, ""), nil)).Apps
+	list := decode[struct{ Apps []App }](t, w.mallory.do(http.MethodGet, appsPath(s, ""), nil)).Apps
 	if len(list) != 1 || list[0].Rows != 1 || list[0].Access.ReadRecords != access.ScopeOwn {
 		t.Fatalf("the user's list = %+v", list)
 	}
@@ -137,7 +140,7 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 	if rows := w.rowsOf(w.alice, s, a); len(rows) != 2 {
 		t.Fatalf("alice reads %v", rows)
 	}
-	rec = w.owner.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{"description": "second", "amount": "5"}))
+	rec = w.mallory.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{"description": "second", "amount": "5"}))
 	expect(t, rec, http.StatusOK)
 	if !strings.Contains(rec.Body.String(), `"total":"15.00"`) {
 		t.Fatalf("a user's total counts only their own records: %s", rec.Body)
@@ -148,13 +151,13 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 	}
 
 	// But not redesign: not the definition, the name, taking it offline, moving it, or roles.
-	mine := w.e.private(w.owner, w.ws)
-	expectForbidden(t, w.owner.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "name": "Mine now"}), "design")
-	expectForbidden(t, w.owner.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "definition": example(t)}), "design")
-	expectForbidden(t, w.owner.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "archived": true}), "publish")
-	expectForbidden(t, w.owner.do(http.MethodPost, appPath(s, a.ID, "/move"), map[string]any{"version": 1, "space_id": mine.ID}), "design")
-	expectForbidden(t, w.owner.do(http.MethodGet, rolesPath(s, a), nil), "manage_roles")
-	expectForbidden(t, w.setRoles(w.owner, s, a, fallback(access.AppBuilder)), "manage_roles")
+	mine := w.e.private(w.mallory, w.ws)
+	expectForbidden(t, w.mallory.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "name": "Mine now"}), "design")
+	expectForbidden(t, w.mallory.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "definition": example(t)}), "design")
+	expectForbidden(t, w.mallory.do(http.MethodPatch, appPath(s, a.ID, ""), map[string]any{"version": 1, "archived": true}), "publish")
+	expectForbidden(t, w.mallory.do(http.MethodPost, appPath(s, a.ID, "/move"), map[string]any{"version": 1, "space_id": mine.ID}), "design")
+	expectForbidden(t, w.mallory.do(http.MethodGet, rolesPath(s, a), nil), "manage_roles")
+	expectForbidden(t, w.setRoles(w.mallory, s, a, fallback(access.AppBuilder)), "manage_roles")
 	if got := w.view(w.alice, s, a); got.Name != "Team expenses" || got.Version != 1 || got.ArchivedAt != nil || got.SpaceID != s.ID {
 		t.Fatalf("the app changed: %+v", got)
 	}
@@ -166,7 +169,7 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 			theirs = it["id"].(float64)
 		}
 	}
-	rec = w.owner.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "delete_expense", map[string]any{"id": theirs}))
+	rec = w.mallory.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "delete_expense", map[string]any{"id": theirs}))
 	expect(t, rec, http.StatusUnprocessableEntity)
 	if decode[struct{ Code string }](t, rec).Code != "app_row_not_found" {
 		t.Fatalf("body %s", rec.Body)
@@ -174,8 +177,8 @@ func TestAppUserSubmitsButCantRedesign(t *testing.T) {
 	if rows := w.rowsOf(w.alice, s, a); len(rows) != 4 {
 		t.Fatalf("a record was deleted: %v", rows)
 	}
-	own := w.items(w.owner, s, a)[0]["id"]
-	expect(t, w.owner.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "delete_expense", map[string]any{"id": own})), http.StatusOK)
+	own := w.items(w.mallory, s, a)[0]["id"]
+	expect(t, w.mallory.do(http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "delete_expense", map[string]any{"id": own})), http.StatusOK)
 	if rows := w.rowsOf(w.alice, s, a); len(rows) != 3 {
 		t.Fatalf("rows after the user deleted one: %v", rows)
 	}
@@ -415,15 +418,16 @@ func TestAppRolesStayInTheirApp(t *testing.T) {
 // Every write checks the caller's roles again under the write lock, as it does the space's.
 func TestRolesAreCheckedAgainUnderTheWriteLock(t *testing.T) {
 	w := newWorld(t)
+	w.e.addMember(w.owner, w.shared, w.mallory, access.RoleEditor) // not an admin: an admin keeps the roles
 	ctx := context.Background()
 	s, a := w.shared, w.sharedApp
-	owner := Actor{UserID: w.owner.id}
+	owner := Actor{UserID: w.mallory.id}
 	// The owner's request was checked while the app was unrestricted; then roles narrow them.
-	snapshot, err := w.e.s.access.Check(ctx, w.owner.id, s.ID)
+	snapshot, err := w.e.s.access.Check(ctx, w.mallory.id, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.mustSetRoles(w.alice, s, a, grant(w.owner.id, access.AppReader), grant(w.alice.id, access.AppRoles...))
+	w.mustSetRoles(w.alice, s, a, grant(w.mallory.id, access.AppReader), grant(w.alice.id, access.AppRoles...))
 	name := "late"
 	if _, err := w.e.s.updateApp(ctx, snapshot, owner, a.ID, Changes{Version: 1, Name: &name}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("update with a stale snapshot = %v, want ErrForbidden", err)
@@ -434,8 +438,8 @@ func TestRolesAreCheckedAgainUnderTheWriteLock(t *testing.T) {
 	if _, err := w.e.s.setAppRoles(ctx, snapshot, owner, a.ID, nil); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("setting roles with a stale snapshot = %v, want ErrForbidden", err)
 	}
-	mine := w.e.private(w.owner, w.ws)
-	mineSnapshot, _ := w.e.s.access.Check(ctx, w.owner.id, mine.ID)
+	mine := w.e.private(w.mallory, w.ws)
+	mineSnapshot, _ := w.e.s.access.Check(ctx, w.mallory.id, mine.ID)
 	if _, err := w.e.s.moveApp(ctx, snapshot, owner, a.ID, 1, mineSnapshot); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("move with a stale snapshot = %v, want ErrForbidden", err)
 	}

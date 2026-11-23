@@ -254,7 +254,8 @@ export type AppDraft = DefinitionNeeds & {
 
 // One sample row of a draft's preview: it lives in the browser, never on the server's disk.
 export type PreviewRow = { id: number; revision: number; data: Record<string, unknown> }
-export type PreviewReply = { messages: unknown[]; rows: PreviewRow[] }
+// effects: what the action would have set going on boards and documents, simulated on the same rows.
+export type PreviewReply = { messages: unknown[]; rows: PreviewRow[]; effects?: AppEffect[] }
 
 export type App = {
   id: number
