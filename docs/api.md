@@ -132,6 +132,12 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_uploads_pending` | 409 | The caller has `max` photos in this app that are in no record yet. |
 | `app_files_full` | 409 | The app's attachments would take it over `max_mib` MiB in all. |
 | `app_files_unavailable` | 503 | This server keeps no files for apps. |
+| `app_field_not_location` | 422 | The value of `field`, a location field, isn't `{lat, lon, accuracy_m, captured_at, source}` within bounds ([Location, signature and barcode fields](#location-signature-and-barcode-fields)). |
+| `app_field_location_future` | 422 | A location's `captured_at` is more than five minutes ahead of the server's clock. |
+| `app_field_not_signature` | 422 | The value of `field`, a signature field, isn't the id of one attachment. |
+| `app_field_not_barcode` | 422 | The value of `field`, a barcode field, isn't the text of a code (no control characters, within `max_length`), or isn't valid for the `format` the field reads. |
+| `app_field_locked` | 422 | `field` holds a captured location or a signature, which no later change may alter or clear unless the field says `editable`. |
+| `app_signature_type` | 400 | The picture uploaded for a signature field isn't a PNG; the upload is removed. |
 | `request_too_large` | 413 | The request's body is over `max` bytes. |
 | `doc_not_found` | 404 | No such document, folder or version in the space. |
 | `doc_name_invalid` | 400 | `name` can't be a path in a space: empty parts, `..`, `.git`, `.taskto` (the server's own storage), a leading `/`, backslashes or control characters. |
@@ -1582,7 +1588,9 @@ saying what is wrong) unless:
   it out from the screen and replaces whatever was sent, so a definition can't claim less than
   it uses; the list is in each release, and a client whose catalog lacks one shows that it
   must update. A new component or function is a new capability, and a collection with an
-  [attachment field](#photo-attachments) always requires `field.attachment`, whatever its screens draw.
+  [attachment field](#photo-attachments) always requires `field.attachment`, and one with a
+  [location, signature or barcode field](#location-signature-and-barcode-fields) `field.location`,
+  `field.signature` or `field.barcode`, whatever its screens draw.
 
 - **components** is the screen of an app with one, 1–300 A2UI components, one with the ID `root`
   (an app with several has `screens` instead, never both), each
@@ -1593,7 +1601,8 @@ saying what is wrong) unless:
   address), plus `Stat` (a labelled value), `Show` (draws its child while a rule holds,
   [below](#fields-and-rules)), and `PhotoInput` and `Photos` (a photo input and the thumbnails of
   attachments, which upload to and draw from this server's own authenticated routes, never an
-  outside address: [Photo attachments](#photo-attachments)). `Screens`, the host of an app's screens, is the server's own and
+  outside address: [Photo attachments](#photo-attachments)), and `LocationInput`, `SignatureInput` and
+  `BarcodeInput` ([below](#location-signature-and-barcode-fields)). `Screens`, the host of an app's screens, is the server's own and
   is refused in a definition. Props must have the catalog's types and enum
   values; dynamic values are a literal, a data binding `{"path": …}`, or a call of a
   catalog function returning the right type. Every component referred to must exist, no
@@ -1602,12 +1611,14 @@ saying what is wrong) unless:
   same catalog.
 - **collection.fields**, at most 50: `name` (a lowercase letter, then up to 39 lowercase
   letters, digits or `_`; not `id`, `items` or `draft`), `type` (`string`, `number`,
-  `boolean`, `date`: `YYYY-MM-DD`, `time`: `HH:MM` on a 24-hour clock, `choice`, or `attachment`: a
-  list of photos), `required`,
+  `boolean`, `date`: `YYYY-MM-DD`, `time`: `HH:MM` on a 24-hour clock, `choice`, `attachment`: a
+  list of photos, or `location`, `signature` and `barcode`, [below](#location-signature-and-barcode-fields)), `required`,
   `required_when` (a rule), `max_length` (strings: 1–10000, 1000 when left out), `min` and `max`
   (numbers), `options` (a choice's, 1–50 different texts of at most 100 characters), `max_files`
   (an attachment field's: 1–10, 1 when left out) and `max_bytes` (each file's size: at most 16 MiB,
-  8 MiB when left out). An attachment field is version 2, and no rule can read it.
+  8 MiB when left out; a signature field's: 1 MiB when left out), and `capture`, `format` and `editable`
+  (a location's, a barcode's, and a location's or signature's). An attachment field is version 2, and no
+  rule can read it; neither can a rule read a location or a signature.
 - **actions**, 1–50, map an event name to its `kind`: `insert` adds a row from the
   event's context; `update` changes the fields the context gives of the row whose `id` it
   gives (blank text clears a field); `delete` removes the row whose `id` it gives; `navigate`
@@ -1638,7 +1649,10 @@ saying what is wrong) unless:
 The data model an app's screen binds to: `/items` is the live rows, each with its `id`, its
 revision as `_revision` and the collection's fields; `/draft` is an empty form; each summary is at `/<name>`.
 An app with attachment fields also has `/_files/<field>`, `{"max_files", "max_bytes"}`: the limits its
-photo input shows.
+photo input and the signature pad show (a signature field has `max_files` 1).
+An app with location, signature or barcode fields also has `/_fields/<field>`: `{"capture"}` (a location's: `"button"`
+or `"submit"`), `{"format"}` (a barcode's, `""` for any), and for each `{"required", "editable"}`, which the inputs
+follow.
 An app with screens also has `/screen`, the name of the screen shown, and `/record`, the record a
 detail screen shows.
 
@@ -1922,6 +1936,72 @@ server (which checks access again) each time. `Range` and `If-None-Match` work.
   sweep removes the files of an app whose row is gone, and a space's directory takes the rest with it.
 - The agent sees an attachment field's ids and metadata (`content_type`, `size`, `width`, `height`) in
   `list_app_rows`, never the bytes; it has no tool to upload or attach a photo.
+
+### Location, signature and barcode fields
+
+Three field types, definition version 2, for what a phone is good for in the field: where it is, a
+signature, a scanned code. Each needs a client that holds it (`field.location`, `field.signature`,
+`field.barcode`, always in the release's `requires`), and each has an input component that takes a
+`field` (the collection field it is for, which must be of its type), an optional `label` and a `value`
+(a data binding, such as `/draft/<field>`): `LocationInput`, `SignatureInput` and `BarcodeInput`.
+`LocationInput` and `SignatureInput` also take `readOnly`, which only shows what is stored (for a
+detail screen, or a list's template, where `Photos` draws a signature too).
+
+**Location** (`"type": "location"`). The value is an object, kept as
+`{"lat", "lon", "accuracy_m", "captured_at", "source"}`:
+
+- `lat` −90 to 90 and `lon` −180 to 180 (numbers, never text); `accuracy_m` 0 to 1,000,000 metres, which a
+  position from the device (`source` `"device"`) must give and one typed by hand (`"manual"`) may leave out;
+- `captured_at`, RFC 3339 from the year 2000 on, kept in UTC to the millisecond, and **not more than five
+  minutes ahead of the server's clock** (`422 app_field_location_future`; the phone's clock isn't the server's,
+  hence the margin). Reading a stored row never holds it to the clock again;
+- no other key. Anything else is `422 app_field_not_location`. An empty object is no value.
+
+The field's `capture` is `"button"` (the default) or `"submit"`. The web app reads the position **once, in the
+foreground**: when the person presses *Capture location*, or, for `"submit"`, when they press the form's button,
+which is why the button's event context must pass such a field under its **own name**
+(`{"place": {"path": "/draft/place"}}`; the server refuses a screen that names it otherwise). It uses the
+browser's one-shot position and never a subscription to changes, so nothing follows the device and nothing
+runs in the background (a test searches the web app and the agent's source for it). Where the browser can't give
+a position (denied, no support, an insecure page, a timeout) the person is told why and types the coordinates,
+which are stored as `"manual"`. A form whose field is `required` and can't get a position isn't sent.
+
+**Signature** (`"type": "signature"`, `max_bytes` 1 MiB when left out). The value is **one attachment id**
+(a list of one is read as that id). The input draws on a canvas pad with pointer events (`touch-action: none` on the
+pad only, so the page scrolls around it; undo and clear; the strokes are kept as fractions of the pad's size, so
+turning the device redraws them) or takes a typed name confirmed with a checkbox, for the keyboard, a switch
+device or a screen reader. The picture, always a PNG, is uploaded through the
+[photo upload](#photo-attachments) (the same three steps and limits, `POST …/uploads` with the signature
+field's name) and attached to the record the same way. A signature upload is checked to be a PNG by its bytes
+(`400 app_signature_type`, the upload removed), and a record can only claim a PNG as a signature. It is read
+like any attachment, by whoever reads the record; `Photos` draws it.
+
+**Barcode** (`"type": "barcode"`). The value is text, within `max_length` (1000 when left out), with no control
+characters; blank is no value. `format` (one of `aztec`, `codabar`, `code_39`, `code_93`, `code_128`,
+`data_matrix`, `ean_8`, `ean_13`, `itf`, `pdf417`, `qr_code`, `upc_a`, `upc_e`; any when left out) narrows what the
+camera reads, and for `ean_8`, `ean_13` and `upc_a` the server checks digits, length and the check digit
+(`upc_e`, digits only), however the code came in. A rule can compare a barcode with `eq` and `ne`; a filter takes
+`eq`, `ne` and `contains`. The web app scans with the browser's own `BarcodeDetector` when it has one, and where it
+hasn't (it isn't in every browser), with a bundled decoder (zxing-wasm through the `barcode-detector` package, MIT),
+a separate file that loads the first time it is needed and is served with the app, never from an outside
+address. **The code can always be typed**; a blocked, missing or insecure camera, or a decoder that couldn't
+load, leaves the typed field as it was.
+
+**Captured values are evidence.** Once a record holds a location or a signature, **no later change can alter or
+clear it**: an insert or update (a screen's, an older release's, the records explorer's, which sends the app's
+own update action) that would is refused whole with `422 app_field_locked`, and changes nothing, not even a new
+revision. Giving it again unchanged is fine, a record that has none takes one once (that is the capture), and
+a field that says `"editable": true` is not locked. The records explorer shows such values read-only. A location
+or a signature can't be filtered or sorted by (`400 app_query_field` / `app_query_condition`); a barcode is a
+text for both.
+
+The agent sees these values in `list_app_rows` (a signature as the picture's metadata, never its bytes) and has no
+tool to capture one.
+
+**Dictation.** Free-text fields on an app's screen get a microphone beside them in the web app, which is the chat
+box's recorder and the workspace's [dictation route](dictation.md) (`POST /api/workspaces/{workspace}/dictation/transcriptions`,
+for a member of the workspace). It needs a connection, because the speech is sent to the server: offline, or where
+the workspace has dictation off, the button is off and says so, and the keyboard's own dictation still works.
 
 ### Drafts and releases
 
