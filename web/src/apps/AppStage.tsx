@@ -39,21 +39,21 @@ export function AppStage({
   // The draft is only worth showing while it isn't the live release (the server says so, to those
   // who review): once it is published there is nothing left to preview, and the live app is the app.
   const unpublished = !live || app.unpublished_changes
+  // Nothing unpublished: the live app is shown, and a draft the agent saves next doesn't take the screen
+  // from the person using it (what they typed into the live form would be lost); they switch when ready.
+  if (live && !unpublished && wantsDraft) setWantsDraft(false)
   const draft = !!app.draft && reviewer && unpublished && (wantsDraft || !live)
   const liveNumber = live?.number
   // A preview keeps its sample rows in its transport, so the transport stays while the screen is
   // in use; a new draft (the app's version moved) is a new preview.
-  const version = draft ? app.version : 0
+  const version = app.version
+  const liveTransport = useMemo(() => httpTransport(base, liveNumber, { screen }), [base, liveNumber, screen])
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new version of the draft is a new preview
-  const transport = useMemo(
-    () => httpTransport(base, draft ? 'draft' : liveNumber, { screen }),
-    [base, draft, liveNumber, version, screen],
-  )
+  const draftTransport = useMemo(() => httpTransport(base, 'draft', { screen }), [base, version, screen])
 
   if (!live && !draft) {
     return <p className="tt-muted tt-small">{t('apps.stage.notPublished')}</p>
   }
-  const needs = (draft ? app.draft : live) ?? undefined
   const toggle = live && reviewer && app.unpublished_changes
   return (
     <div className="tt-stage" data-stage={draft ? 'draft' : 'live'}>
@@ -69,22 +69,40 @@ export function AppStage({
       </div>
       {draft && <p className="tt-muted tt-small">{t('apps.stage.draftNote')}</p>}
       {!draft && live && reviewer && app.unpublished_changes && (
-        <p className="tt-muted tt-small">{t('apps.stage.unpublishedNote')}</p>
+        <p className="tt-muted tt-small" role={builder ? 'status' : undefined}>
+          {t(builder ? 'apps.stage.newDraft' : 'apps.stage.unpublishedNote')}
+        </p>
       )}
       {!draft && live && builder && (
         <p className="tt-muted tt-small">
           {t(reviewer && !app.unpublished_changes ? 'apps.stage.nothingUnpublished' : 'apps.stage.liveNote')}
         </p>
       )}
-      <AppView
-        key={draft ? `draft-${version}` : live?.number}
-        surfaceId={`app-${app.id}`}
-        label={app.name}
-        release={needs}
-        reloadKey={reloadKey}
-        onAction={onAction}
-        transport={transport}
-      />
+      {/* The live screen stays drawn while the draft is looked at, so what was typed into it is still there. */}
+      {live && (
+        <div hidden={draft}>
+          <AppView
+            key={live.number}
+            surfaceId={`app-${app.id}`}
+            label={app.name}
+            release={live}
+            reloadKey={reloadKey}
+            onAction={onAction}
+            transport={liveTransport}
+          />
+        </div>
+      )}
+      {draft && (
+        <AppView
+          key={`draft-${version}`}
+          surfaceId={`app-${app.id}`}
+          label={app.name}
+          release={app.draft ?? undefined}
+          reloadKey={reloadKey}
+          onAction={onAction}
+          transport={draftTransport}
+        />
+      )}
     </div>
   )
 }

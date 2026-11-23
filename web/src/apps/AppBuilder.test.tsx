@@ -745,3 +745,33 @@ test('a shared publish confirmation closes when the draft changes, and publishes
   await waitFor(() => expect(calls.some((c) => c.path === `${base}/publish`)).toBe(true))
   expect(calls.find((c) => c.path === `${base}/publish`)?.body).toEqual({ version: 2, acknowledge: [] })
 })
+
+test('a draft the agent saves for a published app leaves the live form as it is, and says so', async () => {
+  narrowScreen(false)
+  let saved = false
+  const published = app({ version: 2, live: release(), unpublished_changes: false })
+  const calls = builderRoutes({
+    [`GET ${apps}`]: () => ({ body: saved ? { ...published, version: 3, unpublished_changes: true } : published }),
+    [`GET ${apps}/surface?release=1`]: { body: { messages: surface, rows: [] } },
+  })
+  await openBuilder()
+  const stage = panel('preview')
+  await within(stage).findByText('Live · release 1')
+  const field = (await within(stage).findByLabelText('Description')) as HTMLInputElement
+  fireEvent.change(field, { target: { value: 'Half-typed lunch' } })
+
+  // The agent saves a new draft: the live form stays, with what was typed, and a notice says a draft is ready.
+  saved = true
+  act(() => streams.sources[0].send({ type: 'value', value: { entries: savedEntries(1, app({ version: 3 })) } }))
+  await within(stage).findByText(/A new draft is ready/)
+  expect(within(stage).queryByText('Preview · sample data')).toBeNull()
+  expect((within(stage).getByLabelText('Description') as HTMLInputElement).value).toBe('Half-typed lunch')
+
+  // Looking at the draft and coming back finds the form as it was left.
+  fireEvent.click(within(stage).getByRole('button', { name: 'Preview the draft' }))
+  await within(stage).findByText('Preview · sample data')
+  fireEvent.click(within(stage).getByRole('button', { name: 'Back to the live release' }))
+  const back = within(stage).getByLabelText('Description') as HTMLInputElement
+  expect(back.value).toBe('Half-typed lunch')
+  expect(calls.length).toBeGreaterThan(0)
+})
