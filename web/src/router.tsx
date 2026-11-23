@@ -25,8 +25,8 @@ export function usePath(): string {
   return useSyncExternalStore(subscribe, () => window.location.pathname)
 }
 
-export type Section = 'conversations' | 'knowledge' | 'boards' | 'apps' | 'settings'
-export const SECTIONS: readonly Section[] = ['conversations', 'knowledge', 'boards', 'apps', 'settings']
+export type Section = 'home' | 'conversations' | 'knowledge' | 'boards' | 'apps' | 'settings'
+export const SECTIONS: readonly Section[] = ['home', 'conversations', 'knowledge', 'boards', 'apps', 'settings']
 
 // /w/{workspace}/{section}[/{item}]: anything else is null, and the shell picks a default.
 export type Route = { workspace: number; section: Section; item?: string }

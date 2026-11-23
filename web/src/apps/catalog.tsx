@@ -102,6 +102,10 @@ export const DEFINITION_VERSION = 2
 export const catalogCapabilities: ReadonlySet<string> = new Set([
   ...[...appsCatalog.components.keys()].map((name) => `component.${name}`),
   ...[...appsCatalog.functions.keys()].map((name) => `function.${name}`),
+  // The extension slots this client draws (internal/apps/contributions.go): Home's widgets and the
+  // navigation's pin.
+  'slot.home_widgets.v1',
+  'slot.nav_pin.v1',
 ])
 
 // What a release needs that this client doesn't have: a definition format newer than it reads, or

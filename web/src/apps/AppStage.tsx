@@ -9,8 +9,19 @@ import type { App } from '../api'
 import { useT } from '../i18n'
 import { AppView, httpTransport } from './AppView'
 
-// reloadKey is changed by the page when the app's data changed behind the screen (a record was restored).
-export function AppStage({ base, app, reloadKey }: { base: string; app: App; reloadKey?: number }) {
+// reloadKey is changed by the page when the app's data changed behind the screen (a record was restored);
+// screen is the one an app with screens opens on instead of its entry (a pin's).
+export function AppStage({
+  base,
+  app,
+  reloadKey,
+  screen,
+}: {
+  base: string
+  app: App
+  reloadKey?: number
+  screen?: string
+}) {
   const t = useT()
   const [wantsDraft, setWantsDraft] = useState(false)
   const reviewer = app.access.design || app.access.publish
@@ -43,7 +54,7 @@ export function AppStage({ base, app, reloadKey }: { base: string; app: App; rel
         label={app.name}
         release={needs}
         reloadKey={reloadKey}
-        transport={httpTransport(base, draft ? 'draft' : live?.number)}
+        transport={httpTransport(base, draft ? 'draft' : live?.number, { screen })}
       />
     </div>
   )
