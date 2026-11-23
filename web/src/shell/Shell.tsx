@@ -5,7 +5,7 @@
 
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react'
 import { api, errorText, type Me, type Workspace } from '../api'
-import { BrandMark } from '../BrandMark'
+import { BrandLogo } from '../BrandLogo'
 import { BoardsPage } from '../boards/BoardsPage'
 import { ConversationsPage } from '../conversations/ConversationsPage'
 import { PinnedNav } from '../home/PinnedNav'
@@ -173,8 +173,7 @@ function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
           <Icon name="menu" />
         </button>
         <span className="tt-brand">
-          <BrandMark />
-          {BRAND}
+          <BrandLogo name={BRAND} />
         </span>
         <label className="tt-workspace">
           <span className="tt-sr-only">{t('shell.workspace')}</span>

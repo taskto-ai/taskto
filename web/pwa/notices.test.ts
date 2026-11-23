@@ -33,6 +33,8 @@ test("the notices carry the fonts' licence and copyright line", () => {
     expect(text).toContain(`${name} ${version} (OFL-1.1)`)
     expect(text).toContain(readFileSync(join(root, 'node_modules', name, 'LICENSE'), 'utf8').trim())
   }
-  expect(text).toContain('Copyright 2024 The Geist Project Authors')
+  expect(text).toContain('Copyright 2016 The Inter Project Authors')
+  expect(text).toContain('Copyright 2022 The Bricolage Grotesque Project Authors')
+  expect(text).toContain('Copyright 2020 The JetBrains Mono Project Authors')
   expect(text).toContain('SIL OPEN FONT LICENSE Version 1.1')
 })

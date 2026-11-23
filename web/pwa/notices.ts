@@ -1,8 +1,8 @@
 // The licence notices of the code and fonts that are shipped inside the built app, written next to
 // it as /assets/THIRD_PARTY_NOTICES.txt (docs/pwa.md, "Device capabilities in apps").
 //
-// The fonts are Geist and Geist Mono (SIL Open Font License 1.1), as the Fontsource packages carry
-// them (docs/design.md). The OFL asks that its notice and the copyright line go with copies of the
+// The fonts are Inter, Bricolage Grotesque and JetBrains Mono (SIL Open Font License 1.1), as the
+// Fontsource packages carry them (docs/design.md). The OFL asks that its notice and the copyright line go with copies of the
 // font, which the packages' LICENSE files hold, so they are written here from the installed packages.
 //
 // What a user's browser downloads to scan a code is a decoder: zxing-wasm (MIT) is ZXing-C++
@@ -18,7 +18,11 @@ import type { Plugin } from 'vite'
 // The packages whose code is in the build and whose licence has a file of its own to ship.
 export const PACKAGES = ['barcode-detector', 'zxing-wasm'] as const
 // The packages whose font files are in the build.
-export const FONT_PACKAGES = ['@fontsource-variable/geist', '@fontsource-variable/geist-mono'] as const
+export const FONT_PACKAGES = [
+  '@fontsource-variable/inter',
+  '@fontsource-variable/bricolage-grotesque',
+  '@fontsource-variable/jetbrains-mono',
+] as const
 
 const rule = '='.repeat(78)
 
@@ -40,9 +44,10 @@ export function thirdPartyNotices(root: string): string {
   const parts = [
     `Third-party code and fonts in TaskTo.AI's web app
 
-The fonts the app is set in, Geist and Geist Mono, are served from the files beside this one
-(geist-*.woff2 and geist-mono-*.woff2), never from another site. They are used unmodified, under
-the SIL Open Font License 1.1, reproduced below with their copyright lines.
+The fonts the app is set in, Inter, Bricolage Grotesque and JetBrains Mono, are served from the
+files beside this one (inter-*.woff2, bricolage-grotesque-*.woff2 and jetbrains-mono-*.woff2),
+never from another site. They are used unmodified, under the SIL Open Font License 1.1,
+reproduced below with their copyright lines.
 `,
   ]
   for (const name of FONT_PACKAGES) parts.push(packageNotice(root, name))

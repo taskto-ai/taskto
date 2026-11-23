@@ -27,7 +27,7 @@ type Stroke = Point[]
 // The picture's size in pixels: three times as wide as high, as the pad is.
 export const SIGNATURE_WIDTH = 600
 export const SIGNATURE_HEIGHT = 200
-const INK = 'rgb(11 13 18)'
+const INK = 'rgb(17 17 16)'
 const PAPER = '#fff'
 
 // Draws strokes into a context of a canvas of w by h pixels, ink on paper.

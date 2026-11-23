@@ -3,7 +3,7 @@
 
 import { type FormEvent, type ReactNode, useRef, useState } from 'react'
 import { ApiError, api, errorText, type Me } from '../api'
-import { BrandMark } from '../BrandMark'
+import { BrandLogo } from '../BrandLogo'
 import { useT } from '../i18n'
 
 // The product's name, the same in every language.
@@ -14,8 +14,7 @@ function AuthFrame({ title, intro, children }: { title: string; intro?: ReactNod
     <main className="tt-auth">
       <div className="tt-auth-card">
         <p className="tt-brand">
-          <BrandMark />
-          {BRAND}
+          <BrandLogo name={BRAND} />
         </p>
         <h1>{title}</h1>
         {intro}

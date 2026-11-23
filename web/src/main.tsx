@@ -6,9 +6,12 @@ import { listenForInstall } from './pwa/install'
 import { UpdateBanner } from './pwa/UpdateBanner'
 import { registerServiceWorker } from './pwa/update'
 import { trackKeyboard } from './pwa/viewport'
-// The brand's fonts, from the app's own files (SIL OFL 1.1, licences in /assets/THIRD_PARTY_NOTICES.txt).
-import '@fontsource-variable/geist/wght.css'
-import '@fontsource-variable/geist-mono/wght.css'
+// The brand's fonts, from the app's own files (SIL OFL 1.1, licences in /assets/THIRD_PARTY_NOTICES.txt):
+// Inter for the interface, Bricolage Grotesque for headings (its weight axis only: the optical-size
+// axis is for display sizes the app has none of), JetBrains Mono for code.
+import '@fontsource-variable/bricolage-grotesque/wght.css'
+import '@fontsource-variable/inter/wght.css'
+import '@fontsource-variable/jetbrains-mono/wght.css'
 import './styles.css'
 import { applyTheme, storedTheme } from './theme'
 
