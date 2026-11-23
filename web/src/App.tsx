@@ -10,10 +10,11 @@ import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './a
 import { setPreferences, useT } from './i18n'
 import { leavePush } from './notifications/push'
 import { useOpenFromWorker } from './notifications/usePushSync'
+import { AccountChanged } from './offline/AccountChanged'
 import { ForeignGuard } from './offline/ForeignGuard'
 import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
-import { activate, deactivate, discardForeign, lastUser, unsentOf } from './offline/runtime'
+import { activate, deactivate, discardForeign, lastUser, type Unsent, unsentOf } from './offline/runtime'
 import { navigate } from './router'
 import { Shell } from './shell/Shell'
 import { claimDrafts, forgetDrafts } from './uiState'
@@ -37,11 +38,12 @@ const RESET_PATH = '/reset-password'
 
 // Signing out is the same from wherever it is asked: who, and where it leaves to.
 type Leaving = { user: number; next: Session }
+type Asked = Leaving & Unsent
 
 export function App() {
   const t = useT()
   const [session, setSession] = useState<Session>({ state: 'loading' })
-  const { runtime, foreign } = useRuntime()
+  const { runtime, foreign, problem } = useRuntime()
   // Unsent drafts kept in this browser belong to whoever is signed in: they are claimed before
   // anything is drawn, so another account never finds the last one's. What is kept for offline use
   // is the same: this account's, and no other's (another account's unsent records are put to the
@@ -59,7 +61,7 @@ export function App() {
     [claim],
   )
   // Records made on this device that haven't reached the server: asked about before signing out.
-  const [leaving, setLeaving] = useState<(Leaving & { count: number }) | null>(null)
+  const [leaving, setLeaving] = useState<Asked | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -121,19 +123,22 @@ export function App() {
   )
   // Signing out takes with it what this device kept of the account (drafts, downloads, the queue),
   // and a person with records not yet sent is asked first: every sign-out goes through here.
-  const signOut = useCallback(async ({ user, next }: Leaving) => {
+  // `keep`: the account's database is not deleted (the person chose so, since this version
+  // couldn't tell whether it holds unsent records).
+  const signOut = useCallback(async ({ user, next }: Leaving, keep = false) => {
     // This device's push subscription goes first, while the session can still say whose it is.
     await leavePush()
     await api('/api/logout', { method: 'POST' }).catch(() => {})
     forgetDrafts()
-    await deactivate({ purge: true, user })
+    await deactivate(keep ? { purge: false, keep: true, user } : { purge: true, user })
     setLeaving(null)
     setSession(next)
   }, [])
   const logOut = useCallback(
     async (who: Leaving) => {
-      const count = await unsentOf(who.user).catch(() => 0)
-      if (count > 0) setLeaving({ ...who, count })
+      // A database that can't be checked is not an empty one: the person is told, and chooses.
+      const unsent = await unsentOf(who.user)
+      if (unsent.count > 0 || unsent.unreadable) setLeaving({ ...who, ...unsent })
       else await signOut(who)
     },
     [signOut],
@@ -166,7 +171,9 @@ export function App() {
     <LogoutGuard
       runtime={runtime}
       count={leaving.count}
+      unreadable={leaving.unreadable}
       onSignOut={() => void signOut(leaving)}
+      onKeep={() => void signOut(leaving, true)}
       onCancel={() => setLeaving(null)}
     />
   )
@@ -181,6 +188,10 @@ export function App() {
         {leavingGuard}
       </>
     )
+
+  // Another account is signed in on this browser than the one this page holds: nothing of the
+  // account's is shown, and the page is reloaded to go on as whoever is signed in.
+  if (problem === 'account') return <AccountChanged />
 
   switch (session.state) {
     case 'loading':

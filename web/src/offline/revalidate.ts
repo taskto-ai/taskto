@@ -1,6 +1,7 @@
 // Asking the server whether what the device holds may still be held.
 
-import { ApiError, type App, api, type Space } from '../api'
+import { ApiError, type App, api, forAccount, type Space } from '../api'
+import { AccountChanged, assertSignedIn } from './account'
 import { downloadApp } from './download'
 import type { Download, OfflineStore, Scope } from './store'
 
@@ -15,37 +16,52 @@ type Verdict = 'keep' | 'revoked' | 'narrowed'
 // downloaded again, which is the server's own answer to what they read; if that can't be done it
 // goes, since it can't be kept as it is. Network trouble removes nothing. What was queued for the
 // app stays: it is the person's work, and it needs attention.
+//
+// Every request is made for the database's owner (`X-Taskto-Expected-User`): a session that is
+// another account's is refused by the server, and nothing is decided or written from it: the
+// revalidation stops, and the copy stays as it is.
 export async function revalidate(store: OfflineStore): Promise<Download[]> {
   const removed: Download[] = []
-  for (const d of await store.listDownloads()) {
-    const verdict = await check(d)
-    if (verdict === 'keep') continue
-    if (verdict === 'narrowed') {
-      try {
-        await downloadApp(store, d)
-        continue
-      } catch {
-        // Not refreshed: what the person no longer reads is not kept.
+  try {
+    for (const d of await store.listDownloads()) {
+      const verdict = await check(store.user, d)
+      if (verdict === 'keep') continue
+      if (verdict === 'narrowed') {
+        try {
+          await downloadApp(store, d)
+          continue
+        } catch (e) {
+          if (isWrongAccount(e)) throw e
+          // Not refreshed: what the person no longer reads is not kept.
+        }
       }
+      assertSignedIn(store.user)
+      await store.removeDownload(d)
+      removed.push(d)
     }
-    await store.removeDownload(d)
-    removed.push(d)
+  } catch (e) {
+    if (!isWrongAccount(e)) throw e
   }
   return removed
 }
 
+const isWrongAccount = (e: unknown) =>
+  e instanceof AccountChanged || (e instanceof ApiError && e.code === 'session_account_changed')
+
 // How much of an app's records a download holds, against what the person reads.
 const RANK = { none: 0, own: 1, all: 2 } as const
 
-async function check(d: Download): Promise<Verdict> {
+async function check(user: number, d: Download): Promise<Verdict> {
+  const headers = forAccount(user)
   try {
-    const space = await api<Space>(`/api/workspaces/${d.workspace}/spaces/${d.space}`)
+    const space = await api<Space>(`/api/workspaces/${d.workspace}/spaces/${d.space}`, { headers })
     if (space.offline_downloads === false) return 'revoked'
-    const app = await api<App>(appBase(d))
+    const app = await api<App>(appBase(d), { headers })
     const reads = app.access?.read_records
     if (reads !== undefined && RANK[reads] < RANK[d.scopeOf]) return 'narrowed'
     return 'keep'
   } catch (e) {
+    if (isWrongAccount(e)) throw e
     return e instanceof ApiError && (e.status === 403 || e.status === 404) ? 'revoked' : 'keep'
   }
 }

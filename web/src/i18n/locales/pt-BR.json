@@ -1635,6 +1635,11 @@
       "back": "Voltar aos apps baixados",
       "needsUpdate": "Esta versão do TaskTo.AI não consegue mostrar {name}."
     },
+    "accountChanged": {
+      "title": "A conta mudou",
+      "body": "Outra conta foi conectada neste navegador, ou esta saiu, em outra aba. Nada é mostrado aqui até você recarregar esta página.",
+      "reload": "Recarregar esta página"
+    },
     "foreign": {
       "title": "Registros de outra conta",
       "body_one": "Este navegador guarda {count} registro não enviado de outra conta. Entre nessa conta para enviá-lo ou descarte-o.",
@@ -1655,7 +1660,10 @@
       "syncing": "Sincronizando…",
       "discard": "Descartar e sair",
       "cancel": "Cancelar",
-      "stillWaiting": "Alguns registros ainda aguardam: o servidor não pôde recebê-los ainda. Tente de novo ou descarte-os."
+      "stillWaiting": "Alguns registros ainda aguardam: o servidor não pôde recebê-los ainda. Tente de novo ou descarte-os.",
+      "unreadableSchema": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e esta versão do TaskTo.AI não consegue verificar: foram salvos por uma versão mais nova. Você pode mantê-los e sair sem apagar nada, e depois entrar com a versão mais nova para enviá-los, ou descartá-los.",
+      "unreadableStorage": "Registros feitos neste dispositivo podem não ter chegado ao servidor, e o armazenamento do dispositivo não pode ser lido agora para verificar. Você pode mantê-los e sair sem apagar nada, ou descartá-los.",
+      "keep": "Mantê-los e sair"
     }
   },
   "notifications": {

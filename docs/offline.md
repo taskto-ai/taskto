@@ -55,8 +55,13 @@ space, which is its owner's alone.
 
 **A copy is asked about again** whenever the server can be reached after the device may have
 missed a change: when the app opens, when the same person signs in again after the app opened
-offline (the app's *Reconnect*, the network coming back), and on each fresh start. The server's
-answers decide: the person was removed from the space or the app, or it was moved or deleted
+offline (the app's *Reconnect*), when the network comes back (in any open tab, before the queue
+is sent), and on each fresh start. Every one of these requests (the download, the check of the
+space and of the app) names the account whose database it is for (`X-Taskto-Expected-User`), and
+the server refuses it for any other session. The answer is written only while this browser is
+still signed in as that account: a page that learned of another account's sign-in meanwhile
+writes nothing, and a revalidation that was refused as the wrong account decides nothing (the
+copy stays as it is). The server's answers decide: the person was removed from the space or the app, or it was moved or deleted
 (the copy is removed); downloads were turned off (removed); the person now reads fewer records
 than the copy holds, all of the app's where they now read only their own (the copy is
 downloaded again, which holds what they read now, and removed if that can't be done). What was
@@ -116,10 +121,11 @@ wait is over. A pass goes on until nothing is left that can be sent: a record ad
 is sent by it.
 
 **Only as the account that made them.** The browser's session can be another account's by the
-time a queue is sent (someone else signed in in another tab). So every request of a replay (the
-photos' uploads, the record, the check of the app) carries the id of the account the queue
-belongs to (`X-Taskto-Expected-User`), and the server refuses it with `409
-session_account_changed` for any other session, before it looks at anything else. The page also
+time a queue is sent (someone else signed in in another tab). So every request the offline code
+makes (a replay's photo uploads, its record and the check of the app, and the downloads and
+revalidation above) carries the id of the account the database belongs to
+(`X-Taskto-Expected-User`), and the server refuses it with `409 session_account_changed` for any
+other session, on any `/api` route and before it looks at anything else. The page also
 stops before it asks: it sends only while the account this browser says is signed in is the
 queue's. Either way **sending pauses** (*Sync is paused: this browser is signed in as someone
 else*), nothing is counted against the item, and it goes on when its owner signs in.
@@ -128,7 +134,11 @@ else*), nothing is counted against the item, and it goes on when its owner signs
 an item is claimed in its own IndexedDB transaction before it is sent (a lease that is renewed
 while it goes on and that runs out if its page is closed), so two tabs, or a tab and a page that
 was just closed, never send one item at once; a tab that finds another one sending looks again
-shortly. The photos' ids the server finalized are kept on the item, first one wins, so a send made
+shortly. Where there are no Web Locks the claim is kept alive for as long as the item's request is
+in flight, on a timer of its own (a third of the lease), whether or not the request makes
+progress: a photo upload whose chunk stalls still holds its claim, so no other tab starts it
+again. If the claim is lost anyway (another page took it, the item was discarded) the request is
+aborted at once and nothing of it is written. The photos' ids the server finalized are kept on the item, first one wins, so a send made
 again is the same request, and an item the server acknowledged is never put back to waiting.
 
 1. **Photos first.** Each photo is uploaded through the resumable upload routes (create → chunks →
@@ -149,7 +159,7 @@ What the answer means:
 | 2xx | *Synced*; the photos' copies on the device are released |
 | 401, the session ended | **sending pauses** (the item waits, no attempt is counted) until someone signs in again; then it resumes |
 | 409 `session_account_changed` | the session is another account's: **sending pauses** as above, the item waits as it was |
-| no answer, 5xx, 408, 425, 429 | transient: try again with backoff (2 s doubling to 5 min, with jitter); after 8 attempts, *Needs attention* with **Try again now** |
+| no answer, 5xx, 408, 425, 429 | transient: try again with backoff (2 s doubling to 5 min, with jitter), and the items behind it wait; after 8 attempts, *Needs attention* with **Try again now**, and the items behind it are sent (a record that gave up doesn't hold the queue) |
 | 403, 404 | access lost: *Needs attention*. If asking for the app itself is also refused, the revocation is confirmed: **replay is blocked and the downloaded copy is removed**; the queued input stays, for the person to deal with |
 | 409 archived, offline, outdated; 400/422 | the server refused it for good: *Needs attention* with the server's reason; never retried by itself |
 
@@ -163,22 +173,39 @@ the queue and the photos. A database's name is not a boundary on its own, so ano
 signing in is dealt with when it signs in:
 
 - **Signing in** makes the browser that account's (the *last user* marker moves first, so a
-  database that can't be opened is never replaced by the previous account's). What the last
+  database that can't be opened is never replaced by the previous account's). If the marker can't
+  be written (the storage is full or blocked) it is removed, so an offline start never opens the
+  previous account's database; if it can't be removed either, this page refuses to open any
+  database offline. What the last
   account kept is deleted at once: its downloads, its records that reached the server and their
   photos, and the whole database if nothing was left unsent. If **records of another account have
   not reached the server**, those alone stay, **sealed**: nothing of them is shown or sent, and
   the person signing in is **asked first, with nothing else on screen**: *This browser holds N
   unsent records of another account. Sign in as that account to send them, or discard them.*
   *Discard them* (asks again) deletes everything of that account on this device; signing out
-  leaves them for their owner to sign in and send. (A database written by a newer version than the
-  page can't be read here and is left as it is.)
+  leaves them for their owner to sign in and send. A database that can't be opened, read or cut
+  down at that point (written by a newer version, or a storage error that may pass) is **never
+  deleted by the sign-in**: it stays as it is, sealed, and is looked at again at the next
+  sign-in. When the app can't tell whether a database holds unsent work, it never deletes it
+  silently and never shows it to another account.)
 - **A database that can't be opened** (it is of a newer version, the storage isn't available) is
   said so, in words: the page never falls back to another account's database, and the offline
   view opens the signed-in account's own or none.
 - **Signing out**, from anywhere (the menu, the invite page), asks first if records on the device
   haven't reached the server: *Sync now*, *Discard and sign out*, or *Cancel*. Then the account's
   database is **deleted**: downloads, queue and photos, whether or not it had been opened in this
-  page.
+  page. If the queue **can't be opened or counted** (a newer version wrote it, the storage isn't
+  available) the count is not taken to be zero: the person is told that unsent records may exist
+  that this version can't check, and chooses *Keep them and sign out* (nothing is deleted; the
+  database stays for the version or the moment that can read it) or *Discard and sign out*
+  (asks again).
+- **Another tab changes the account.** A tab learns that the account signed in on this browser
+  changed (another tab signed in as someone else, or out: the browser's `storage` event and a
+  BroadcastChannel; or the server answered `409 session_account_changed` to one of its requests)
+  and lets go at once: its engine stops, what it holds in memory is dropped (the offline view
+  unmounts, with the records and photos on screen), and its connection to the database is closed
+  as soon as what the engine was writing is. It shows only *The account changed*, with a button to
+  reload the page, until it is reloaded as whoever is signed in. Nothing is deleted by it.
 - **An ended session** (it expired, or was ended elsewhere) is not signing out: the queue stays
   and sending pauses until the person signs in again.
 - **Revocation** (removed from the space or the app, the app moved or deleted, an admin turned

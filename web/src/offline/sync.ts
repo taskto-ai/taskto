@@ -52,7 +52,9 @@ type Outcome =
   | { kind: 'account' }
   // Not ours to send now (another tab holds it): left alone, looked at again when its claim ends.
   | { kind: 'skipped'; until?: number }
-  | { kind: 'transient'; error: ItemError }
+  // `exhausted`: it failed for the last time and now needs attention: the items behind it are not
+  // held back by it.
+  | { kind: 'transient'; error: ItemError; exhausted?: boolean }
   | { kind: 'attention'; reason: AttentionReason; error: ItemError; revoked?: boolean }
 
 export function describe(e: unknown): ItemError {
@@ -107,6 +109,17 @@ export type SyncDeps = {
   // The account this browser says is signed in now (null: nobody knows). A queue is sent only as
   // its owner: when this says someone else, sending pauses before a request is made.
   signedIn?: () => number | null
+  // Asks the server whether what the device holds may still be held. Called when the network comes
+  // back, before the queue is sent.
+  revalidate?: () => Promise<unknown>
+  // Runs fn every ms until the returned function is called: what keeps an item's claim alive while
+  // its request is in flight. A test's own.
+  heartbeat?: (fn: () => void, ms: number) => () => void
+}
+
+const realHeartbeat = (fn: () => void, ms: number) => {
+  const handle = setInterval(fn, ms)
+  return () => clearInterval(handle)
 }
 
 // An item's claim is no longer ours: another tab has it, so nothing of this send is written.
@@ -132,6 +145,10 @@ export class SyncEngine {
   private readonly upload: typeof uploadPhoto
   private readonly request: typeof api
   private lastRenew = 0
+  // The requests of sends in flight: aborted when the claim is lost, or the engine stops.
+  private readonly inflight = new Set<AbortController>()
+  // Settles when the pass that is running is over.
+  private active: Promise<void> | undefined
 
   constructor(
     private readonly store: OfflineStore,
@@ -176,7 +193,10 @@ export class SyncEngine {
   start(): () => void {
     this.stopped = false
     const kick = () => void this.run()
-    window.addEventListener('online', kick)
+    // The network is back: what the device holds is asked about first (a copy may have been
+    // revoked, and an account may have changed meanwhile), then the queue is sent.
+    const online = () => void this.revalidateThenRun()
+    window.addEventListener('online', online)
     const visible = () => document.visibilityState === 'visible' && kick()
     document.addEventListener('visibilitychange', visible)
     const lost = () => this.pause('session')
@@ -189,12 +209,29 @@ export class SyncEngine {
     kick()
     return () => {
       this.stopped = true
-      window.removeEventListener('online', kick)
+      for (const c of this.inflight) c.abort()
+      window.removeEventListener('online', online)
       document.removeEventListener('visibilitychange', visible)
       window.removeEventListener(SESSION_LOST, lost)
       window.removeEventListener('storage', storage)
       this.clear()
     }
+  }
+
+  // Resolves once the pass that is running (if any) has written what it was doing: what a page
+  // letting go of this engine waits for before closing the database.
+  idle(): Promise<void> {
+    return this.active && this.running ? this.active : Promise.resolve()
+  }
+
+  private async revalidateThenRun(): Promise<void> {
+    if (this.stopped || this.paused) return
+    try {
+      await this.deps.revalidate?.()
+    } catch {
+      // The server can't be asked, or the database is closed: the queue's own sends find out.
+    }
+    await this.run()
   }
 
   pause(reason: 'session' | 'account' | 'manual') {
@@ -282,6 +319,10 @@ export class SyncEngine {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return
     this.running = true
     this.emit()
+    let finished: () => void = () => {}
+    this.active = new Promise<void>((resolve) => {
+      finished = resolve
+    })
     // When to look again, apart from the items' own waits: a claim that ends, a tab that is sending.
     let wake: number | undefined
     try {
@@ -293,6 +334,7 @@ export class SyncEngine {
       // The database was closed (signing out, or deleted by another tab) while this ran.
     } finally {
       this.running = false
+      finished()
       this.emit()
     }
     // Wake up when the first item that is waiting is due.
@@ -359,8 +401,9 @@ export class SyncEngine {
       if (outcome.kind === 'skipped' && outcome.until !== undefined) {
         wake = Math.min(wake ?? Number.POSITIVE_INFINITY, outcome.until)
       }
-      // The network is down: the items behind this one would find the same.
-      if (outcome.kind === 'transient') return wake
+      // The network is down: the items behind this one would find the same. (An item that has run
+      // out of tries is the person's to deal with now: it holds nothing back.)
+      if (outcome.kind === 'transient' && !outcome.exhausted) return wake
     }
   }
 
@@ -409,12 +452,27 @@ export class SyncEngine {
       return { kind: 'skipped', until: claimed?.state === 'syncing' ? claimed.lease?.until : undefined }
     }
     this.lastRenew = this.now()
+    // The claim is kept for as long as this send is in flight, on a clock of its own: a request
+    // that stalls (a chunk that never answers) makes no progress to renew on, and a lease that ran
+    // out would let another tab start the same upload. If the claim is lost anyway (another tab
+    // took it, the item was discarded) the request is aborted at once.
+    const abort = new AbortController()
+    let lost = false
+    this.inflight.add(abort)
+    const beat = (this.deps.heartbeat ?? realHeartbeat)(() => {
+      this.renew(id, true).catch((e) => {
+        if (e instanceof LeaseLost || this.stopped) {
+          lost = true
+          abort.abort()
+        }
+      })
+    }, LEASE_MS / 3)
     try {
       // Photos first: the record is sent once every one of them is finalized on the server.
       for (const a of claimed.attachments) {
         const current = (await this.store.getItem(id))?.attachments.find((x) => x.localId === a.localId)
         if (!current || (current.state === 'uploaded' && current.serverId)) continue
-        await this.uploadOne(claimed, current)
+        await this.uploadOne(claimed, current, abort.signal)
       }
       const fresh = await this.store.getItem(id)
       if (!fresh) return { kind: 'synced' }
@@ -428,6 +486,7 @@ export class SyncEngine {
         // The photos are the ones persisted on the item: a retry sends the same request.
         body: { ...withServerPhotos(fresh), release: fresh.release, operation: fresh.operation },
         headers: this.headers,
+        signal: abort.signal,
       })
       // The server's answer is what makes it synced, whoever holds the claim now.
       await this.store.updateItem(id, (i) => ({
@@ -443,13 +502,29 @@ export class SyncEngine {
       await this.store.dropBlobs(id)
       return { kind: 'synced' }
     } catch (e) {
-      if (e instanceof LeaseLost) return { kind: 'skipped' }
+      // A send that lost its claim (or whose engine stopped) writes nothing: another tab has it.
+      if (lost || e instanceof LeaseLost) return { kind: 'skipped' }
+      if (this.stopped && abort.signal.aborted) {
+        // Stopped mid-send: the claim is let go, so the item is the next sender's at once, not
+        // when the lease runs out. (Nothing is counted against it.)
+        await this.store
+          .updateItem(id, (i) =>
+            i.state === 'syncing' && i.lease?.owner === this.owner
+              ? { ...i, state: 'queued', lease: undefined }
+              : undefined,
+          )
+          .catch(() => {})
+        return { kind: 'skipped' }
+      }
       if (e instanceof UploadCancelled) return { kind: 'transient', error: describe(e) }
       return this.failed(id, e)
+    } finally {
+      beat()
+      this.inflight.delete(abort)
     }
   }
 
-  private async uploadOne(item: OutboxItem, a: Attachment): Promise<void> {
+  private async uploadOne(item: OutboxItem, a: Attachment, signal: AbortSignal): Promise<void> {
     const blob = await this.store.getBlob(a.blobId)
     if (!blob) throw new ApiError(0, 'the photo is no longer on this device', { code: 'app_attachment_bad' })
     await this.patchAttachment(item.id, a.localId, { state: 'uploading' })
@@ -458,6 +533,7 @@ export class SyncEngine {
       onStarted: (uploadId) => void this.patchAttachment(item.id, a.localId, { uploadId }).catch(() => {}),
       onProgress: () => void this.renew(item.id).catch(() => {}),
       headers: this.headers,
+      signal,
       retries: 2,
     })
     // The first finalized id an item gets is the one it keeps: a send made again (after a failure, by
@@ -508,6 +584,7 @@ export class SyncEngine {
           case 'transient': {
             const attempts = i.attempts + 1
             if (attempts >= MAX_ATTEMPTS) {
+              result.exhausted = true
               return {
                 ...free,
                 state: 'attention',

@@ -9,14 +9,29 @@
 // for the person signing in, and is reported as `foreign` for them to decide about: sign in as
 // that account to send the records, or discard them (`discardForeign`). `deactivate({ purge })` is
 // signing out: with purge, the account's database itself is deleted.
+//
+// Failing closed: when this code can't tell whether a database holds unsent work (it can't be
+// opened, counted or cut down), the database is never deleted by itself and never shown to
+// another account: it is kept, sealed. And when a tab learns that the account signed in on the
+// browser is not the one it holds (`retire`), it lets go of everything it holds in memory and
+// shows nothing until it is reloaded.
 
-import { deleteDatabase, SchemaTooNew } from './idb'
+import { ACCOUNT_CHANGED_EVENT } from '../api'
+import {
+  forgetLast,
+  type LastUser,
+  lastUser,
+  markerStuck,
+  onAccountSignal,
+  rememberUser,
+  watchAccount,
+} from './account'
+import { SchemaTooNew } from './idb'
 import { revalidate } from './revalidate'
 import { type Download, OfflineStore } from './store'
 import { type SyncDeps, SyncEngine } from './sync'
 
 const USERS = 'taskto:offline-users'
-const LAST = 'taskto:offline-last'
 
 // Which users have a database on this browser. IndexedDB.databases() would say, but not everywhere,
 // so the browser's own storage keeps the list.
@@ -37,34 +52,7 @@ function writeUsers(list: number[]) {
   }
 }
 
-// Who signed in here last: enough to open the app offline, where the server can't be asked who
-// the session belongs to. (Not a credential: the server decides every send.)
-export type LastUser = { id: number; name: string }
-
-export function rememberUser(user: LastUser) {
-  try {
-    window.localStorage.setItem(LAST, JSON.stringify(user))
-  } catch {
-    // No storage: the app can't open offline, which it couldn't without it anyway.
-  }
-}
-
-export function lastUser(): LastUser | null {
-  try {
-    const v = JSON.parse(window.localStorage.getItem(LAST) ?? 'null') as Partial<LastUser> | null
-    return v && Number.isInteger(v.id) && typeof v.name === 'string' ? (v as LastUser) : null
-  } catch {
-    return null
-  }
-}
-
-function forgetLast(user?: number) {
-  try {
-    if (user === undefined || lastUser()?.id === user) window.localStorage.removeItem(LAST)
-  } catch {
-    // Nothing kept.
-  }
-}
+export { type LastUser, lastUser, rememberUser }
 
 export type Runtime = {
   user: number
@@ -79,9 +67,10 @@ export type Foreign = { users: number[]; count: number }
 
 export type RuntimeState = {
   runtime: Runtime | null
-  // Why there is no runtime: the database is of a newer version, or can't be opened. Never a reason
-  // to show another account's.
-  problem: 'schema' | 'unavailable' | null
+  // Why there is no runtime: the database is of a newer version, or can't be opened, or the account
+  // signed in on this browser is no longer this tab's ('account': nothing is shown until it is
+  // reloaded). Never a reason to show another account's.
+  problem: 'schema' | 'unavailable' | 'account' | null
   foreign: Foreign | null
 }
 
@@ -108,37 +97,79 @@ export function setSyncDeps(next: SyncDeps) {
 
 // Every other account's database on this browser goes, except one with unsent work: that one keeps
 // only the unsent records (with their photos), which are the person's own and not anyone else's to
-// read. What is left is reported, for the person signing in to decide about.
+// read. What is left is reported, for the person signing in to decide about. A database that can't
+// be told apart (it can't be opened, or read, or cut down: a newer version's, or a storage error
+// that may pass) is never deleted: it stays as it is, sealed, and is looked at again at the next
+// sign-in. Losing someone's unsent records is worse than keeping a database too long.
 async function sweep(user: number): Promise<Foreign | null> {
   const others = readUsers().filter((id) => id !== user)
   const keep: number[] = []
   const foreign: Foreign = { users: [], count: 0 }
   for (const id of others) {
+    let store: OfflineStore
     try {
-      const store = await OfflineStore.open(id)
+      store = await OfflineStore.open(id)
+    } catch {
+      keep.push(id)
+      continue
+    }
+    try {
       const unsent = await store.unsynced()
       if (unsent.length > 0) {
-        await store.keepOnlyUnsent()
-        store.close()
         keep.push(id)
         foreign.users.push(id)
         foreign.count += unsent.length
+        await store.keepOnlyUnsent()
+        store.close()
       } else {
         await store.destroy()
       }
-    } catch (e) {
-      // One that can't be read (a newer version's) stays as it is, for its owner's page to open; any
-      // other is deleted.
-      if (e instanceof SchemaTooNew) keep.push(id)
-      else await deleteDatabase(OfflineStore.databaseName(id)).catch(() => {})
+    } catch {
+      // Not read, cut down or deleted: whatever it holds stays, and is never opened for this person.
+      store.close()
+      if (!keep.includes(id)) keep.push(id)
     }
   }
   writeUsers([...keep, user])
   return foreign.count > 0 ? foreign : null
 }
 
-// Makes user's database the one in use, and starts sending their queue.
+// This tab learns that the account signed in on this browser is no longer the one it holds (another
+// tab signed in as someone else, or out; the server refused a request as another account's): it
+// stops sending, closes its connection to the database and drops what it holds, and says only that
+// the account changed. It shows nothing of the account's records or photos, and is reloaded to go on.
+function retire() {
+  const runtime = state.runtime
+  if (!runtime) return
+  runtime.stop()
+  set({ runtime: null, problem: 'account', foreign: null })
+  // The connection closes once what the engine was writing (an item put back to waiting, a claim
+  // let go) is written: a send in flight is aborted, and finishes at once.
+  void runtime.engine
+    .idle()
+    .catch(() => {})
+    .finally(() => runtime.store.close())
+}
+
+let watching = false
+function watch() {
+  if (watching) return
+  watching = true
+  watchAccount()
+  onAccountSignal((who) => {
+    if (state.runtime && state.runtime.user !== who) retire()
+  })
+  window.addEventListener(ACCOUNT_CHANGED_EVENT, (e) => {
+    // A request made for the account this tab holds was refused as another's.
+    const expected = (e as CustomEvent<{ expected?: number }>).detail?.expected
+    if (state.runtime && state.runtime.user === expected) retire()
+  })
+}
+
+// Makes user's database the one in use, and starts sending their queue. `name` says who signed in
+// (online); without it this is an offline start, for the account the browser's marker names.
 export async function activate(user: number, name?: string): Promise<RuntimeState> {
+  watch()
   if (opening) await opening.catch(() => {})
   if (state.runtime?.user === user) {
     if (name) rememberUser({ id: user, name })
@@ -150,8 +181,14 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
   }
   const attempt = (async () => {
     await teardown(false)
+    // A browser whose marker can't be trusted opens no database offline.
+    if (!name && markerStuck()) {
+      set({ runtime: null, problem: 'unavailable', foreign: null })
+      return state
+    }
     // The browser is this account's from here on, whatever becomes of opening its database: an
-    // error never leaves the last account's name for the next start to open.
+    // error never leaves the last account's name for the next start to open. When the marker can't
+    // be moved it is cleared, and when it can't be, offline starts are refused (account.ts).
     if (name) rememberUser({ id: user, name })
     const foreign = await sweep(user)
     try {
@@ -159,6 +196,8 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
       const engine = new SyncEngine(store, {
         // Who this browser says is signed in: a queue is sent only as its owner.
         signedIn: () => lastUser()?.id ?? null,
+        // Back online: what was downloaded is asked about before the queue is sent.
+        revalidate: () => revalidate(store),
         ...deps,
         // The app can't be opened any more: the copy of its records goes, the queue stays.
         onRevoked: async (item, why) => {
@@ -191,20 +230,26 @@ export async function discardForeign(): Promise<void> {
   set({ ...state, foreign: null })
 }
 
-// How many records of user's the server hasn't acknowledged: what signing out would lose. Counted
-// in the open database if it is the one in use, else by opening the user's (and closing it).
-export async function unsentOf(user: number): Promise<number> {
+// What signing out would lose: how many records of user's the server hasn't acknowledged, counted
+// in the open database if it is the one in use, else by opening the user's (and closing it). A
+// database that can't be opened or counted is not zero: `unreadable` says why, and the person is
+// told that unsent records may exist that this version can't check.
+export type Unsent = { count: number; unreadable: 'schema' | 'unavailable' | null }
+
+export async function unsentOf(user: number): Promise<Unsent> {
   const runtime = state.runtime
-  if (runtime?.user === user) return (await runtime.store.unsynced()).length
+  // A browser with no IndexedDB at all can hold nothing: that is zero, not unknown.
+  if (typeof indexedDB === 'undefined') return { count: 0, unreadable: null }
   try {
+    if (runtime?.user === user) return { count: (await runtime.store.unsynced()).length, unreadable: null }
     const store = await OfflineStore.open(user)
     try {
-      return (await store.unsynced()).length
+      return { count: (await store.unsynced()).length, unreadable: null }
     } finally {
       store.close()
     }
-  } catch {
-    return 0
+  } catch (e) {
+    return { count: 0, unreadable: e instanceof SchemaTooNew ? 'schema' : 'unavailable' }
   }
 }
 
@@ -234,8 +279,25 @@ async function teardown(purge: boolean, user?: number): Promise<void> {
 
 // Lets go of the user's database: it is closed, and with `purge` deleted, which is what signing
 // out does. `user` is who is signing out: their database goes even if it was never opened here.
-export async function deactivate({ purge, user }: { purge: boolean; user?: number }): Promise<void> {
+// With `keep`, the person chose to sign out without deleting a database whose unsent records this
+// version couldn't check: it stays (and stays listed, for its owner's next sign-in to deal with),
+// and the browser is nobody's.
+export async function deactivate({
+  purge,
+  user,
+  keep,
+}: {
+  purge: boolean
+  user?: number
+  keep?: boolean
+}): Promise<void> {
   if (opening) await opening.catch(() => {})
+  if (keep && !purge) {
+    if (user !== undefined) writeUsers([...readUsers(), user])
+    await teardown(false)
+    forgetLast(user)
+    return
+  }
   await teardown(purge, user)
 }
 

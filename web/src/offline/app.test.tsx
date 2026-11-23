@@ -289,3 +289,99 @@ test('signing out from an invite page with nothing unsent leaves nothing of the 
   await waitFor(async () => expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7'))
   expect(lastUser()).toBeNull()
 })
+
+// --- Third round of review.
+
+const LAST_KEY = 'taskto:offline-last'
+
+test('a tab that learns another account signed in shows only that, and nothing of the account’s records', async () => {
+  fakeFetch({ ...signedIn })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  // Another tab signs in as someone else.
+  window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
+  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY }))
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog.textContent).toMatch(/The account changed/)
+  expect(screen.queryByRole('banner')).toBeNull()
+  expect(document.body.textContent).not.toContain('Lunch')
+  expect(runtimeState().runtime).toBeNull()
+  // Its connection to the database is closed: nothing more can be read through it.
+  await waitFor(() => expect(runtime.store.listItems()).rejects.toThrow())
+  expect(screen.getByRole('button', { name: 'Reload this page' })).toBeTruthy()
+})
+
+test('a send refused because the session is another account’s shows the same, and keeps the record', async () => {
+  fakeFetch({
+    ...signedIn,
+    [`POST ${base}/actions`]: { status: 409, body: { error: 'another account', code: 'session_account_changed' } },
+  })
+  await signedInAs()
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  runtime.engine.pause('manual')
+  await runtime.store.enqueue(queued(), [])
+  runtime.engine.resume()
+  await screen.findByRole('alertdialog')
+  expect(screen.queryByRole('banner')).toBeNull()
+  // The record is still on the device, for its owner.
+  const reopened = await OfflineStore.open(7)
+  expect((await reopened.listItems()).map((i) => i.state)).toEqual(['queued'])
+  reopened.close()
+})
+
+// A database written by a newer version than this page.
+async function newerDatabase(user: number) {
+  await new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open(`taskto-offline-${user}`, 99)
+    open.onupgradeneeded = () => open.result.createObjectStore('future')
+    open.onsuccess = () => {
+      open.result.close()
+      resolve()
+    }
+    open.onerror = () => reject(open.error)
+  })
+  window.localStorage.setItem('taskto:offline-users', JSON.stringify([user]))
+}
+
+test('signing out when the outbox can’t be read warns that unsent records may exist, and keeps the database if asked', async () => {
+  await newerDatabase(7)
+  const calls = fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  render(<App />)
+  await screen.findByRole('banner')
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  // Not zero: nobody can say. The person is told, and nothing was signed out yet.
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog.textContent).toMatch(/may not have reached the server/)
+  expect(dialog.textContent).toMatch(/newer version/)
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Keep them and sign out' }))
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(true)
+  // Kept, and listed, for the next version to read: nothing was deleted.
+  expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
+  expect(JSON.parse(window.localStorage.getItem('taskto:offline-users') ?? '[]')).toContain(7)
+  expect(lastUser()).toBeNull()
+})
+
+test('…and discards it only when the person says so, after being asked', async () => {
+  await newerDatabase(7)
+  fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  render(<App />)
+  await screen.findByRole('banner')
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  await screen.findByRole('alertdialog')
+  // Cancelling keeps everything.
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+  expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  await screen.findByRole('alertdialog')
+  fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+  expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7')
+})

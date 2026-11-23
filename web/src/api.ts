@@ -36,12 +36,24 @@ export const EXPECTED_USER_HEADER = 'X-Taskto-Expected-User'
 
 export const forAccount = (user: number): Record<string, string> => ({ [EXPECTED_USER_HEADER]: String(user) })
 
-export type RequestInit = { method?: string; body?: unknown; bytes?: Blob; headers?: Record<string, string> }
+// A request made for an account was refused because the session is another one's: said to the page
+// (detail.expected is the account the request was for), whose offline view of that account stops.
+export const ACCOUNT_CHANGED_EVENT = 'taskto:account-changed'
+const ACCOUNT_CHANGED = 'session_account_changed'
+
+export type RequestInit = {
+  method?: string
+  body?: unknown
+  bytes?: Blob
+  headers?: Record<string, string>
+  signal?: AbortSignal
+}
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const extra = init.headers ?? {}
   const res = await fetch(path, {
     method: init.method ?? 'GET',
+    ...(init.signal ? { signal: init.signal } : {}),
     ...(init.bytes !== undefined
       ? { headers: { ...extra, 'Content-Type': 'application/octet-stream' }, body: init.bytes }
       : init.body !== undefined
@@ -55,6 +67,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     // A session that ended (logged out elsewhere, expired) sends the app back to the login.
     if (res.status === 401) window.dispatchEvent(new Event(SESSION_LOST))
+    if (res.status === 409 && data?.code === ACCOUNT_CHANGED) {
+      const expected = Number(extra[EXPECTED_USER_HEADER])
+      window.dispatchEvent(new CustomEvent(ACCOUNT_CHANGED_EVENT, { detail: { expected } }))
+    }
     const message = data && typeof data.error === 'string' ? data.error : `${res.status} ${res.statusText}`
     throw new ApiError(res.status, message, data)
   }

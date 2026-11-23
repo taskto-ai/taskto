@@ -16,9 +16,10 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { ApiError, forAccount, type OfflineApp } from '../api'
 import { forgetOperations } from '../apps/operations'
-import { uploadPhoto } from '../apps/photos'
+import { UploadCancelled, uploadPhoto } from '../apps/photos'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
+import { AccountChanged } from './account'
 import { downloadApp } from './download'
 import { LogoutGuard } from './LogoutGuard'
 import { itemsOf } from './local'
@@ -27,7 +28,7 @@ import { OfflineApp as OfflineAppView } from './OfflineShell'
 import { revalidate } from './revalidate'
 import { activate, deactivate, discardForeign, lastUser, rememberUser, runtimeState, setSyncDeps } from './runtime'
 import { type Download, NotSaved, OfflineStore, type OutboxItem, scopeKey } from './store'
-import { backoff, LOCK_RETRY_MS, MAX_ATTEMPTS, SyncEngine } from './sync'
+import { backoff, LEASE_MS, LOCK_RETRY_MS, MAX_ATTEMPTS, SyncEngine } from './sync'
 import { localPhotos, offlineTransport } from './transport'
 
 const scope = { workspace: 1, space: 2, app: 1 }
@@ -97,6 +98,9 @@ beforeEach(async () => {
   // Every test starts with a browser that has never been used.
   globalThis.indexedDB = new IDBFactory()
   window.localStorage.clear()
+  // The browser is signed in as the account most tests use (7): a response is written into a
+  // database only while the browser says it is its owner's.
+  rememberUser({ id: 7, name: 'Pat' })
   forgetOperations()
   await setPreferences({})
 })
@@ -1104,4 +1108,313 @@ test('a download that holds a record the device sent is not counted twice, and d
   })
   await downloadApp(store, scope)
   expect((await store.listItems()).map((i) => i.id)).toEqual([bus.id])
+})
+
+// --- Third round of review: accounts, sealed databases, and the sender.
+
+const LAST_KEY = 'taskto:offline-last'
+
+// Makes writing (or removing) the browser's last-user marker fail, as a full or blocked storage does.
+function breakMarker(removeToo: boolean) {
+  const set = Storage.prototype.setItem
+  const remove = Storage.prototype.removeItem
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+    if (key === LAST_KEY) throw new DOMException('full', 'QuotaExceededError')
+    return set.call(this, key, value)
+  })
+  if (removeToo) {
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+      if (key === LAST_KEY) throw new DOMException('blocked', 'SecurityError')
+      return remove.call(this, key)
+    })
+  }
+}
+
+test('a download and the checks of its copies are made for the database’s owner, and refused for another session', async () => {
+  const store = await openStore(7)
+  await store.putDownload(download(7, { scopeOf: 'all' }))
+  const calls = fakeFetch({
+    [`GET ${base}/offline`]: { body: offlineApp() },
+    'GET /api/workspaces/1/spaces/2': { body: { id: 2, offline_downloads: true } },
+    [`GET ${base}`]: { body: { id: 1, name: 'Expenses', access: { read_records: 'all' } } },
+  })
+  await downloadApp(store, scope)
+  await revalidate(store)
+  expect(calls.map((c) => c.path)).toEqual([`${base}/offline`, '/api/workspaces/1/spaces/2', base])
+  for (const c of calls) expect(c.headers[EXPECTED]).toBe('7')
+  // The session is another account's: the server refuses, nothing is decided from it, the copy stays.
+  const refused = fakeFetch({
+    'GET /api/workspaces/1/spaces/2': wrongAccount,
+    [`GET ${base}/offline`]: wrongAccount,
+  })
+  expect(await revalidate(store)).toEqual([])
+  expect((await store.listDownloads()).map((d) => d.key)).toEqual([scopeKey(scope)])
+  await expect(downloadApp(store, scope)).rejects.toMatchObject({ code: 'session_account_changed' })
+  expect(refused.length).toBeGreaterThan(0)
+})
+
+test('a response is never written into a database whose owner is no longer the account signed in here', async () => {
+  const store = await openStore(7)
+  fakeFetch({ [`GET ${base}/offline`]: { body: offlineApp() } })
+  // Another account signed in on this browser while the answer was on its way.
+  rememberUser({ id: 8, name: 'Bob' })
+  await expect(downloadApp(store, scope)).rejects.toBeInstanceOf(AccountChanged)
+  expect(await store.listDownloads()).toEqual([])
+  // And a browser that says nobody is signed in is no proof either.
+  window.localStorage.removeItem(LAST_KEY)
+  await expect(downloadApp(store, scope)).rejects.toBeInstanceOf(AccountChanged)
+  expect(await store.listDownloads()).toEqual([])
+})
+
+test('a transient storage error while another account signs in never deletes unsent work: it stays, sealed', async () => {
+  await activate(1, 'Alice')
+  const alice = runtimeState().runtime
+  if (!alice) throw new Error('no runtime')
+  await queue(alice.store, { description: 'Alice’s unsent', amount: '1' }, download(1))
+  await deactivate({ purge: false })
+  // The storage hiccups when Bob's sign-in opens hers to look.
+  const open = indexedDB.open.bind(indexedDB)
+  vi.spyOn(indexedDB, 'open').mockImplementation((name: string, version?: number) => {
+    if (name === 'taskto-offline-1') throw new DOMException('try again', 'UnknownError')
+    return open(name, version)
+  })
+  const state = await activate(2, 'Bob')
+  vi.restoreAllMocks()
+  expect(state.runtime?.user).toBe(2)
+  // Hers is still there, with her record, and still listed for her next sign-in: never shown to Bob.
+  expect(JSON.parse(window.localStorage.getItem('taskto:offline-users') ?? '[]')).toContain(1)
+  const sealed = await OfflineStore.open(1)
+  expect((await sealed.listItems()).map((i) => i.action.context.description)).toEqual(['Alice’s unsent'])
+  sealed.close()
+  expect(await state.runtime?.store.listItems()).toEqual([])
+})
+
+test('a marker that can’t be written is cleared, so an offline start never opens the last account’s', async () => {
+  await activate(1, 'Alice')
+  expect(lastUser()).toEqual({ id: 1, name: 'Alice' })
+  breakMarker(false)
+  await activate(2, 'Bob')
+  expect(lastUser()).toBeNull()
+  expect(window.localStorage.getItem(LAST_KEY)).toBeNull()
+})
+
+test('a marker that can’t be written or cleared turns offline starts off: no database is opened from it', async () => {
+  await activate(1, 'Alice')
+  await deactivate({ purge: false })
+  breakMarker(true)
+  await activate(2, 'Bob')
+  // The old marker is still in storage, and unusable: nobody is known here.
+  expect(window.localStorage.getItem(LAST_KEY)).toContain('Alice')
+  expect(lastUser()).toBeNull()
+  await deactivate({ purge: false })
+  expect(await activate(1)).toMatchObject({ runtime: null, problem: 'unavailable' })
+  expect(runtimeState().runtime).toBeNull()
+})
+
+test('a tab told that another account is signed in lets go of the offline view and says only that', async () => {
+  await activate(7, 'Pat')
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  await queue(runtime.store, { description: 'Pat’s secret', amount: '1' }, download(7))
+  // Another tab signs in as someone else.
+  window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  expect(runtimeState()).toMatchObject({ runtime: null, problem: 'account' })
+  // Its connection to the database is closed, and the engine stopped.
+  await waitFor(() => expect(runtime.store.listItems()).rejects.toThrow())
+  // Signing out in another tab is the same.
+  await activate(7, 'Pat')
+  expect(runtimeState().runtime?.user).toBe(7)
+  window.localStorage.removeItem(LAST_KEY)
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  expect(runtimeState()).toMatchObject({ runtime: null, problem: 'account' })
+  // The same account signing in again (the marker is this tab's) changes nothing here.
+  await activate(7, 'Pat')
+  window.dispatchEvent(new StorageEvent('storage', { key: LAST_KEY }))
+  expect(runtimeState().runtime?.user).toBe(7)
+})
+
+test('a request refused as another account’s retires the tab that made it, not one that has moved on', async () => {
+  await activate(7, 'Pat')
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  fakeFetch({ [`GET ${base}`]: wrongAccount })
+  // A request that was made for someone this tab no longer holds says nothing about it.
+  await expect(import('../api').then((m) => m.api(base, { headers: forAccount(9) }))).rejects.toMatchObject({
+    status: 409,
+  })
+  expect(runtimeState().runtime?.user).toBe(7)
+  await expect(import('../api').then((m) => m.api(base, { headers: forAccount(7) }))).rejects.toMatchObject({
+    status: 409,
+  })
+  expect(runtimeState()).toMatchObject({ runtime: null, problem: 'account' })
+})
+
+test('coming back online asks about the copies before the queue is sent', async () => {
+  const store = await openStore()
+  const order: string[] = []
+  let answer: () => void = () => {}
+  const calls = fakeFetch({
+    [`POST ${base}/actions`]: () => {
+      order.push('send')
+      return { body: [] }
+    },
+  })
+  const engine = engineOf(store, clock(), {
+    revalidate: () =>
+      new Promise<void>((resolve) => {
+        order.push('revalidate')
+        answer = resolve
+      }),
+  })
+  const stop = engine.start()
+  try {
+    await queue(store, { description: 'Made offline', amount: '1' })
+    window.dispatchEvent(new Event('online'))
+    await waitFor(() => expect(order).toEqual(['revalidate']))
+    // Not sent while the server is still being asked.
+    expect(calls).toHaveLength(0)
+    answer()
+    await waitFor(async () => expect((await store.listItems())[0].state).toBe('synced'))
+    expect(order).toEqual(['revalidate', 'send'])
+  } finally {
+    stop()
+  }
+})
+
+test('an item that has run out of tries does not hold back the next, and the earliest retry is scheduled', async () => {
+  const store = await openStore()
+  await queue(store, { description: 'First', amount: '1' })
+  await queue(store, { description: 'Second', amount: '2' })
+  await queue(store, { description: 'Third', amount: '3' })
+  const [first] = await store.listItems()
+  await store.updateItem(first.id, (i) => ({ ...i, attempts: MAX_ATTEMPTS - 1 }))
+  const calls = fakeFetch({
+    [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } },
+  })
+  const timers: { fn: () => void; ms: number }[] = []
+  const c = clock()
+  const engine = new SyncEngine(store, {
+    now: c.now,
+    setTimer: (fn, ms) => timers.push({ fn, ms }),
+    clearTimer: () => {},
+    random: () => 0.5,
+  })
+  await engine.run()
+  const [one, two, three] = await store.listItems()
+  // The first gave up and needs the person; the second was tried (and waits for its retry); the
+  // third is held back by the second, as the network seems to be down.
+  expect(one).toMatchObject({ state: 'attention', attention: 'gave_up' })
+  expect(two).toMatchObject({ state: 'queued', attempts: 1 })
+  expect(three).toMatchObject({ state: 'queued', attempts: 0 })
+  expect(calls.map((x) => (x.body as { context: { description: string } }).context.description)).toEqual([
+    'First',
+    'Second',
+  ])
+  // Woken when the second's wait is over, and no sooner than that.
+  expect(timers.map((t) => t.ms)).toEqual([backoff(1, () => 0.5)])
+})
+
+async function photoItem(store: OfflineStore) {
+  const d = download(store.user, {
+    definition: { ...definition, collection: { fields: [{ name: 'photos', type: 'attachment' } as never] } },
+  })
+  await store.putDownload(d)
+  const transport = offlineTransport(idle(store), d)
+  await transport.act(press('add_expense', { photos: [transport.photos.stage(blob('x', 'image/png'))] }))
+  return (await store.listItems())[0]
+}
+
+test('without Web Locks, a stalled upload keeps its claim, so no other tab starts it again; a lost claim aborts it', async () => {
+  const a = await openStore()
+  const item = await photoItem(a)
+  const b = await openStore()
+  const c = clock()
+  let beat: (() => void) | undefined
+  let signal: AbortSignal | undefined
+  // An upload whose chunk never answers: no progress, nothing to renew on, until it is aborted.
+  const stalled = vi.fn(
+    (_base: string, _field: string, _file: Blob, opts?: { signal?: AbortSignal }) =>
+      new Promise<never>((_resolve, reject) => {
+        signal = opts?.signal
+        opts?.signal?.addEventListener('abort', () => reject(new UploadCancelled()))
+      }),
+  )
+  const first = engineOf(a, c, {
+    upload: stalled as never,
+    heartbeat: (fn) => {
+      beat = fn
+      return () => {
+        beat = undefined
+      }
+    },
+  })
+  const running = first.run()
+  await waitFor(() => expect(stalled).toHaveBeenCalledTimes(1))
+  // Longer than a claim lasts, with a heartbeat on the way: it is renewed, whatever the request does.
+  for (let i = 0; i < 4; i++) {
+    c.advance(LEASE_MS / 3)
+    beat?.()
+    await waitFor(async () => expect((await a.getItem(item.id))?.lease?.until).toBe(c.now() + LEASE_MS))
+  }
+  const other = vi.fn()
+  await engineOf(b, c, { upload: other as never }).run()
+  expect(other).not.toHaveBeenCalled()
+  expect((await b.getItem(item.id))?.state).toBe('syncing')
+  // The claim is lost (another page took it, say): the request is aborted, and nothing is written.
+  await b.updateItem(item.id, (i) => ({ ...i, lease: { owner: 'another-tab', until: c.now() + LEASE_MS } }))
+  beat?.()
+  await running
+  expect(signal?.aborted).toBe(true)
+  expect(await b.getItem(item.id)).toMatchObject({ state: 'syncing', attempts: 0, lease: { owner: 'another-tab' } })
+})
+
+test('an engine stopped in the middle of a send aborts it and lets the item go, not counting a try', async () => {
+  const store = await openStore()
+  const item = await photoItem(store)
+  let signal: AbortSignal | undefined
+  const stalled = vi.fn(
+    (_base: string, _field: string, _file: Blob, opts?: { signal?: AbortSignal }) =>
+      new Promise<never>((_resolve, reject) => {
+        signal = opts?.signal
+        opts?.signal?.addEventListener('abort', () => reject(new UploadCancelled()))
+      }),
+  )
+  const engine = engineOf(store, clock(), { upload: stalled as never, heartbeat: () => () => {} })
+  const stop = engine.start()
+  await waitFor(() => expect(stalled).toHaveBeenCalledTimes(1))
+  expect((await store.getItem(item.id))?.state).toBe('syncing')
+  stop()
+  await engine.idle()
+  expect(signal?.aborted).toBe(true)
+  expect(await store.getItem(item.id)).toMatchObject({ state: 'queued', attempts: 0, lease: undefined })
+})
+
+test('a tab hears over the broadcast channel too that another account signed in', async () => {
+  const channels: { listeners: ((e: MessageEvent) => void)[]; posted: unknown[] }[] = []
+  class FakeChannel {
+    listeners: ((e: MessageEvent) => void)[] = []
+    posted: unknown[] = []
+    constructor() {
+      channels.push(this)
+    }
+    addEventListener(_type: string, fn: (e: MessageEvent) => void) {
+      this.listeners.push(fn)
+    }
+    postMessage(m: unknown) {
+      this.posted.push(m)
+    }
+  }
+  vi.stubGlobal('BroadcastChannel', FakeChannel)
+  await activate(7, 'Pat')
+  const runtime = runtimeState().runtime
+  if (!runtime) throw new Error('no runtime')
+  // What this tab did is announced to the others.
+  expect(channels[0].posted).toContainEqual({ user: 7 })
+  // The same account, heard from another tab: nothing changes.
+  for (const fn of channels[0].listeners) fn(new MessageEvent('message', { data: { user: 7 } }))
+  expect(runtimeState().runtime?.user).toBe(7)
+  // Another one: this tab lets go.
+  for (const fn of channels[0].listeners) fn(new MessageEvent('message', { data: { user: 8 } }))
+  expect(runtimeState()).toMatchObject({ runtime: null, problem: 'account' })
 })

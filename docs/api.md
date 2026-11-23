@@ -1944,10 +1944,13 @@ app_operation_reused`.
 
 **For one account.** A request that is sent later than it was made, from a browser whose session
 may have changed hands, says whose it is: the header `X-Taskto-Expected-User` holds the id of the
-account. On any route of an app (the replay, the uploads, the check of the app), if the session is
+account. On any route (an app's replay, uploads and checks, the space's metadata), if the session is
 another account's the answer is `409 session_account_changed` before anything else is looked at (a
 space the session can't open is not a `404` then): nothing is read or written as the wrong
-account, and the client pauses the queue rather than count a failure. A request without the header
+account, and the client pauses the queue rather than count a failure. The check is made for
+**every `/api` route** that carries the header, not only an app's (the offline client names the
+account on its downloads, on the space and app checks that revalidate them, and on the queue): the
+answer is the same `409` before the route's own checks. A request without the header
 is as it always was; a value that is no account's id is `400`. An insert that names a photo (an attachment id) is accepted only when the
 photo's upload has been finalized (`422 app_attachment_bad` otherwise), which is why the client
 uploads a queued insert's photos, with the resumable [upload routes](#photo-attachments), before

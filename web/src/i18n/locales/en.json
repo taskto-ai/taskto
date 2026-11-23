@@ -1620,6 +1620,11 @@
       "back": "Back to the downloaded apps",
       "needsUpdate": "This version of TaskTo.AI can’t draw {name}."
     },
+    "accountChanged": {
+      "title": "The account changed",
+      "body": "Another account was signed in on this browser, or this one signed out, in another tab. Nothing is shown here until you reload this page.",
+      "reload": "Reload this page"
+    },
     "foreign": {
       "title": "Records of another account",
       "body_one": "This browser holds {count} unsent record of another account. Sign in as that account to send it, or discard it.",
@@ -1637,7 +1642,10 @@
       "syncing": "Syncing…",
       "discard": "Discard and sign out",
       "cancel": "Cancel",
-      "stillWaiting": "Some records are still waiting: the server couldn’t take them yet. Try again, or discard them."
+      "stillWaiting": "Some records are still waiting: the server couldn’t take them yet. Try again, or discard them.",
+      "unreadableSchema": "Records you made on this device may not have reached the server, and this version of TaskTo.AI can’t check: they were saved by a newer version. You can keep them and sign out without deleting anything, then sign in with the newer version to send them, or discard them.",
+      "unreadableStorage": "Records you made on this device may not have reached the server, and the device’s storage can’t be read right now to check. You can keep them and sign out without deleting anything, or discard them.",
+      "keep": "Keep them and sign out"
     }
   },
   "notifications": {
