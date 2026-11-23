@@ -101,6 +101,7 @@
   --a2ui-color-on-surface: var(--tt-fg);
   --a2ui-color-on-background: var(--tt-fg);
   --a2ui-text-caption-color: var(--tt-muted);
+  --a2ui-textfield-color-error: var(--tt-danger);
   --a2ui-choicepicker-color-error: var(--tt-danger);
   --a2ui-datetimeinput-color-error: var(--tt-danger);
   /* Its buttons and choices are pills, as the app's are; its titles are the display face. */
@@ -203,6 +204,12 @@ a {
 input,
 textarea {
   caret-color: var(--tt-fg);
+}
+
+/* A placeholder is text: the browser's own is a faded grey under 4.5:1 on a dark field. */
+::placeholder {
+  color: var(--tt-muted);
+  opacity: 1;
 }
 
 * {
@@ -534,6 +541,27 @@ textarea {
   border-color: var(--tt-line-strong);
   min-height: 2.2rem;
   max-width: 12rem;
+  text-overflow: ellipsis;
+}
+
+/* The bar never overflows: what is fixed (the menu, the mark, the bell, the theme, the account)
+   keeps its size, and the workspace's name gives way, cut with an ellipsis. */
+.tt-topbar .tt-brand,
+.tt-topbar-end,
+.tt-menu-button {
+  flex: none;
+}
+
+.tt-topbar .tt-workspace {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 12rem;
+}
+
+.tt-workspace select {
+  width: 100%;
+  max-width: 100%;
 }
 
 .tt-topbar option {
@@ -1364,9 +1392,25 @@ button.tt-card[aria-current] {
 }
 
 /* The renderer colours a borderless button's text with its primary, which is the mint: too faint to
-   read on the page, so the deeper green stands in. */
+   read on the page, so the deeper green stands in. A button's label is a Text component, which
+   takes its colour from --_a2ui-text-color (and, as a caption, from its own muted colour), not
+   from the button's: so the token is set there too, and a label of any variant (a caption is the
+   one that was grey on mint) takes the ink of the button it is in. */
 .tt-app .a2ui-button.a2ui-button-borderless {
+  --_a2ui-text-color: var(--tt-link);
   color: var(--tt-link);
+}
+
+.tt-app .a2ui-button .a2ui-text,
+.tt-app .a2ui-button .a2ui-text.a2ui-text-caption {
+  color: inherit;
+}
+
+/* The renderer takes a field's outline away and shows focus as a change of border colour, which an
+   invalid field (its border is the error's) doesn't have: every field gets the app's focus ring. */
+.tt-app .a2ui-textfield:focus-visible {
+  outline: 2.5px solid var(--tt-focus);
+  outline-offset: 2px;
 }
 
 .tt-app .a2ui-tab-button.a2ui-tab-button-active {
@@ -2382,10 +2426,11 @@ fieldset {
     display: none;
   }
 
-  .tt-topbar select {
-    max-width: 8.5rem;
+  .tt-topbar .tt-workspace {
+    max-width: 10rem;
   }
 
+  /* The mark alone, from here down (a square box crops the drawing to the arrow and dot). */
   .tt-topbar .tt-logo {
     width: 1.5rem;
     aspect-ratio: 1;
@@ -2915,6 +2960,46 @@ html[data-keyboard="open"] .tt-composer {
 
 .tt-dictate-slot:empty {
   display: none;
+}
+
+/* A narrow phone has no room for the theme's word: the picker is its icon (the select lies over it,
+   unseen but pressable, and the ring shows on the icon's box), and the workspace's name gets what
+   is left. */
+@media (max-width: 30rem) {
+  .tt-topbar {
+    gap: 0.25rem;
+  }
+
+  .tt-topbar-end {
+    gap: 0.25rem;
+  }
+
+  .tt-topbar .tt-theme {
+    position: relative;
+    justify-content: center;
+    min-inline-size: var(--tt-touch);
+    min-block-size: var(--tt-touch);
+    border-radius: var(--tt-radius);
+  }
+
+  .tt-topbar .tt-theme .tt-icon {
+    display: block;
+  }
+
+  .tt-topbar .tt-theme select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    min-height: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .tt-topbar .tt-theme:has(select:focus-visible) {
+    outline: 2.5px solid var(--tt-focus);
+    outline-offset: 2px;
+  }
 }
 
 /* After the rules they override (the top bar's own controls are smaller). */

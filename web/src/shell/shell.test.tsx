@@ -316,6 +316,42 @@ test('the theme can be light, dark or the system one, and is remembered', async 
   expect(localStorage.getItem('taskto.theme')).toBeNull()
 })
 
+test("the theme picked in the app also sets the browser's theme-color, and the system's puts it back", async () => {
+  document.head.innerHTML = `
+    <meta name="theme-color" content="#faf8f4" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111110" media="(prefers-color-scheme: dark)" />`
+  const colors = () => [...document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')].map((m) => m.content)
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  render(<App />)
+  const theme = await screen.findByLabelText('Theme')
+
+  fireEvent.change(theme, { target: { value: 'dark' } })
+  expect(colors()).toEqual(['#111110', '#111110'])
+  fireEvent.change(theme, { target: { value: 'light' } })
+  expect(colors()).toEqual(['#faf8f4', '#faf8f4'])
+  fireEvent.change(theme, { target: { value: 'system' } })
+  expect(colors()).toEqual(['#faf8f4', '#111110'])
+  document.head.innerHTML = ''
+})
+
+test('the top bar gives way to a long workspace name: the mark stands for the logo, the whole name is its tooltip', async () => {
+  const long = 'Operations and Field Services'
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, workspaces: [{ id: 1, name: long, role: 'admin' }] } },
+    ...pages,
+  })
+  render(<App />)
+  const bar = (await screen.findByRole('banner')) as HTMLElement
+  const workspace = within(bar).getByLabelText('Workspace') as HTMLSelectElement
+  expect(workspace.title).toBe(long)
+  // The logo is one image with the product's name, which the stylesheet crops to its mark on a phone.
+  expect(within(bar).getByRole('img', { name: 'TaskTo.AI' })).toBeTruthy()
+  // What stays beside it, each reachable by its label.
+  expect(within(bar).getByLabelText('Theme')).toBeTruthy()
+  expect(within(bar).getByRole('link', { name: 'Notifications' })).toBeTruthy()
+})
+
 test('the menu button opens the sidebar as a drawer, and a link closes it', async () => {
   // Opened at a page's own URL: from /, the shell first goes to the default page, and that
   // change of page closes the drawer, so a click before it lands would be undone.

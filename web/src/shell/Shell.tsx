@@ -177,8 +177,10 @@ function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
         </span>
         <label className="tt-workspace">
           <span className="tt-sr-only">{t('shell.workspace')}</span>
+          {/* The name is cut to the room the bar has; the whole of it is the tooltip. */}
           <select
             value={workspace.id}
+            title={workspace.name}
             onChange={(e) => navigate(routePath({ workspace: Number(e.target.value), section: route.section }))}
           >
             {me.workspaces.map((w) => (

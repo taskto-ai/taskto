@@ -16,10 +16,25 @@ export function storedTheme(): Theme {
   return 'system'
 }
 
+// The page's ground in each theme: --tt-canvas in styles.css (a test keeps them equal), which
+// is what the top bar is, so the browser's own chrome (the address bar, the status bar) matches it.
+export const THEME_COLOR = { light: '#faf8f4', dark: '#111110' } as const
+
+// The `theme-color` metas in index.html follow the OS through their media queries, which is right
+// for the system's theme only. A picked theme sets every one of them to that theme's colour, and
+// the system's puts back what each had; the original is kept on the element itself.
+function applyThemeColor(theme: Theme) {
+  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+    meta.dataset.systemColor ??= meta.content
+    meta.content = theme === 'system' ? meta.dataset.systemColor : THEME_COLOR[theme]
+  }
+}
+
 export function applyTheme(theme: Theme) {
   const root = document.documentElement
   if (theme === 'system') delete root.dataset.theme
   else root.dataset.theme = theme
+  applyThemeColor(theme)
 }
 
 export function useTheme(): [Theme, (theme: Theme) => void] {

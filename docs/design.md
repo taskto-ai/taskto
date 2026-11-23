@@ -81,6 +81,12 @@ Dark (night / stone / surface / user message / soft mint on stone, the lowest):
 - danger 8.3 / 7.8 / 7.6 / 6.7 / 5.7; warning 10.4 / 9.8 / 9.5 / 8.4 / 7.1; night on danger 8.3;
 - the edge of a control: 5.3 / 5.0 / 4.8 / 4.2 / 3.6.
 
+Text of every kind meets 4.5:1, a placeholder (`::placeholder` is `--tt-muted`, 6.9 light and 7.3
+dark on a field) and an app's validation message (`--a2ui-textfield-color-error` is `--tt-danger`:
+6.2 / 6.6 light, 8.3 / 7.6 dark on the page / the field; the renderer's own `red` was 4.0 and 4.3).
+A field's focus is the ring, not a change of its border, so an invalid field (whose border is the
+error's) shows it too: `.tt-app .a2ui-textfield:focus-visible`, 17.8 light and 12.8 dark.
+
 When you change a colour, check the pair again; a literal that "looks close" is how a dark-mode
 badge ended up white on salmon.
 
@@ -130,8 +136,15 @@ The top bar and the login screens show the website's logo (`web/src/BrandLogo.ts
 `/logo.svg`): an arrow handing off to a dot, then "taskto.ai". The website's rule is that the logo
 stands in for the name, so the app shows it too, with its own name as the image's label. The arrow
 and the name take the page's text colour (ink on cream, cream on night, as the website's
-`logo-dark.svg`); the dot and ".ai" are the logo's green. On a phone the top bar shows the mark
-alone, the drawing cropped to its first 64 units.
+`logo-dark.svg`); the dot and ".ai" are the logo's green. On a phone (48rem and narrower) the top
+bar shows the mark alone, the drawing cropped to its first 64 units.
+
+**The top bar never overflows**, from 320px up, whatever the workspace is called. The menu, the
+mark, the bell, the theme and the account keep their size; the workspace's select is the part
+that gives way (`min-width: 0`, an ellipsis, the whole name as its tooltip). Under 30rem the theme
+picker is its icon alone, with the select laid over it unseen, so a name such as "Operations and
+Field Services" still leaves room for itself. Checked in a real browser at 320, 360 and 390px
+(and 768 and 1024) with "Acme", "Operations" and that name, in both themes.
 
 ## The apps renderer
 
@@ -145,11 +158,21 @@ button's text, a focused field's border, the picked tab and a slider's thumb. Ea
 token that can be seen on the page instead (the deep green, or the focus colour), because mint there
 would be 1.4:1 on cream. When the renderer gains another use of its primary, check it the same way.
 
+A button's label is a Text component, and the renderer colours Text from `--_a2ui-text-color` (a
+caption, from its own muted colour, over that). So `styles.css` points the label at the button's
+ink: the borderless button sets that variable to the deep green as well as its own `color`, and a
+label in a button inherits it in every variant, so a caption on a mint button is ink on mint
+(12.8:1) and not muted grey (1.6:1).
+
 ## Installed app
 
 `web/public/manifest.webmanifest` (`theme_color` and `background_color` cream `#faf8f4`) and the
 `theme-color` metas in `web/index.html` (cream; night `#111110` in the dark) match the top bar and
-the page. The icons are the website's app tile (its `favicon.svg` and apple touch icon): a logo-green
+the page. The metas follow the OS through their media queries, which is right for the System theme;
+when the person picks Light or Dark in the top bar, `web/src/theme.ts` sets both metas to that
+theme's colour (and System puts back each one's own), so the browser's address bar and status bar
+follow the app's choice, not the OS's. The two colours are `THEME_COLOR` there, which a test keeps
+equal to `--tt-canvas`, the metas and the manifest. The icons are the website's app tile (its `favicon.svg` and apple touch icon): a logo-green
 (`#00a86b`) square with the logo's arrow and dot in ink, drawn by `web/scripts/make-icons.mjs` from
 the same geometry as `icon.svg`. The top bar is light, so the iOS status bar is the default one (dark
 text), not `black-translucent`, whose white text it would hide.
