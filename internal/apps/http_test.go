@@ -379,6 +379,7 @@ func TestEveryRouteRefusesOutsiders(t *testing.T) {
 			{http.MethodPost, appPath(s, a.ID, "/move"), map[string]any{"version": a.Version, "space_id": s.ID}},
 			{http.MethodGet, appPath(s, a.ID, "/surface"), nil},
 			{http.MethodGet, appPath(s, a.ID, "/records/query"), nil},
+			{http.MethodGet, appPath(s, a.ID, "/offline"), nil},
 			{http.MethodPost, appPath(s, a.ID, "/actions"), action(a, "add_expense", map[string]any{"description": "x", "amount": "1"})},
 			{http.MethodGet, appPath(s, a.ID, "/roles"), nil},
 			{http.MethodPut, appPath(s, a.ID, "/roles"), map[string]any{"grants": []any{}}},

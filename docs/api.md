@@ -139,6 +139,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_uploads_pending` | 409 | The caller has `max` photos in this app that are in no record yet. |
 | `app_files_full` | 409 | The app's attachments would take it over `max_mib` MiB in all. |
 | `app_files_unavailable` | 503 | This server keeps no files for apps. |
+| `offline_downloads_disabled` | 403 | An admin turned off downloading this space's apps for offline use. |
 | `request_too_large` | 413 | The request's body is over `max` bytes. |
 | `doc_not_found` | 404 | No such document, folder or version in the space. |
 | `doc_name_invalid` | 400 | `name` can't be a path in a space: empty parts, `..`, `.git`, `.taskto` (the server's own storage), a leading `/`, backslashes or control characters. |
@@ -586,6 +587,7 @@ A space as the caller sees it:
 {
   "id": 4, "workspace_id": 1, "kind": "shared", "name": "Team",
   "archived_at": null, "created_at": "…",
+  "offline_downloads": true,
   "role": "editor", "access": "write"
 }
 ```
@@ -598,6 +600,9 @@ A space as the caller sees it:
   admins see spaces with `none`).
 - `archived_at`: when an admin archived the space, or `null`. Archived spaces are
   read-only, for editors too.
+- `offline_downloads`: whether the space's apps may be [downloaded for offline
+  use](#get-appsappoffline). `true` for a new space and for every private space; an admin
+  turns it off for a shared space whose data shouldn't be kept on devices.
 
 ### `GET /api/workspaces/{workspace}/spaces`
 
@@ -619,8 +624,10 @@ The space, for those who can read it, and for admins if it is shared. `404` othe
 
 ### `PATCH /api/workspaces/{workspace}/spaces/{space}`
 
-Admin only, shared spaces only (`404` for private ones). Renames, archives or unarchives:
-`{"name": "New name"}`, `{"archived": true}`, `{"archived": false}`, or several at once.
+Admin only, shared spaces only (`404` for private ones). Renames, archives or unarchives, and
+allows or refuses offline downloads:
+`{"name": "New name"}`, `{"archived": true}`, `{"archived": false}`,
+`{"offline_downloads": false}`, or several at once.
 Archiving an archived space keeps its first `archived_at`. `200` with the space; `400` for
 an empty body or name.
 
@@ -1773,6 +1780,58 @@ every row the caller reads; a shortcut draws nothing. It is the app's surface, s
 as it is (`404` for a caller who may not view the app, `409` while it is offline or unpublished),
 and `404 home_widget_not_found` for a widget the release doesn't offer. `widget` can't be
 combined with `release` or `screen` (`400`).
+
+### `GET …/apps/{app}/offline`
+
+Readers of the app. The app's **live release and the records the caller may read**, for the web
+app to keep on the device for [offline use](offline.md). Nothing is stored by the server: it is a
+snapshot, and the writes made against it come back as ordinary
+[actions](#post-appsappactions) under their `operation` keys.
+
+```json
+{
+  "app_id": 9, "space_id": 4, "name": "Expenses", "release": 3,
+  "definition": {
+    "definition_version": 2, "requires": ["component.Column", …],
+    "collection": {"fields": [ … ]}, "entry": "…", "screens": [{"name": "…", "record": true}],
+    "actions": {"add_expense": {"kind": "insert", "then": "…"}},
+    "summaries": {"total": {"kind": "sum", "field": "amount"}}
+  },
+  "messages": [ … ],
+  "scope": "all", "records": 120, "total": 120, "truncated": false,
+  "can_insert": true, "captured_at": "…"
+}
+```
+
+- `messages` are the A2UI messages [`…/surface`](#get-appsappsurface) sends for the live release:
+  they draw the app with the downloaded records, and its summaries count **those records only**.
+- `definition` is what a client needs to use the app without the server: what it requires of a
+  client (a client that lacks a capability shows an update-required state instead of the app),
+  the collection, and each action's kind, screens and `then`. It holds none of an action's
+  `effects` (their targets and templates are the server's), and no component.
+- `scope`: `all` records, or only the caller's `own` (from their roles in the app). The records
+  are those of every screen's own filter: none deleted, and each as the screen shows it, with no
+  field the collection doesn't declare and none of another type.
+- At most 2000 records, the latest: `records` is how many were sent, `total` how many the caller
+  reads, `truncated` whether they differ.
+- `can_insert`: the caller may add records now (the submit capability, in a writable space).
+  Offline writes are inserts only.
+
+`403 offline_downloads_disabled` while an admin has [turned downloads
+off](#patch-apiworkspacesworkspacespacesspace) for the space; `404` for a caller who may not view
+the app; `409 app_offline` while it is offline and `409 app_not_published` before its first
+release. A client that holds a download and is refused with `403 offline_downloads_disabled` or
+`404` removes its copy.
+
+**Replaying an offline insert.** The client sends the action it queued to
+[`…/actions`](#post-appsappactions) with `release` set to the release its screen was drawn from
+and a stable `operation`. The server records the operation's receipt in the same transaction as
+the record, so sending it again (the answer was lost, the page was reopened) changes nothing and
+is answered as the first one was; another request under the same key is `409
+app_operation_reused`. An insert that names a photo (an attachment id) is accepted only when the
+photo's upload has been finalized (`422 app_attachment_bad` otherwise), which is why the client
+uploads a queued insert's photos, with the resumable [upload routes](#photo-attachments), before
+it sends the insert.
 
 ### `POST …/apps/{app}/actions`
 

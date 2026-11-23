@@ -50,6 +50,8 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("GET "+apps+"/{app}/records/query", read(s.handleQuery))
 	mux.Handle("GET "+apps+"/{app}/records/{record}/history", read(s.handleHistory))
 	mux.Handle("POST "+apps+"/{app}/records/{record}/restore", write(s.handleRestore))
+	// The live release and the caller's records, to keep on a device (offline.go).
+	mux.Handle("GET "+apps+"/{app}/offline", read(s.handleOffline))
 	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
 	mux.Handle("PUT "+apps+"/{app}/roles", write(s.handleSetRoles))
 	// Attachments (attachments.go): the uploads, and the photos kept for records.

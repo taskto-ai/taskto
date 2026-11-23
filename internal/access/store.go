@@ -66,9 +66,10 @@ func (c *Checker) createShared(ctx context.Context, workspaceID, creatorID int64
 	return id, err
 }
 
-// updateShared renames a shared space, archives it or brings it back; nil leaves that
-// part as it is. Archiving an archived space keeps its first archiving time.
-func (c *Checker) updateShared(ctx context.Context, spaceID int64, name *string, archived *bool) error {
+// updateShared renames a shared space, archives it or brings it back, or allows or refuses
+// downloading its apps for offline use; nil leaves that part as it is. Archiving an archived space
+// keeps its first archiving time.
+func (c *Checker) updateShared(ctx context.Context, spaceID int64, name *string, archived, offline *bool) error {
 	var archivedAt any // nil: unchanged
 	if archived != nil {
 		archivedAt = ""
@@ -81,8 +82,9 @@ func (c *Checker) updateShared(ctx context.Context, spaceID int64, name *string,
 			name = coalesce(?, name),
 			archived_at = CASE WHEN ? IS NULL THEN archived_at
 			                   WHEN ? = '' THEN NULL
-			                   ELSE coalesce(archived_at, ?) END
-		WHERE id = ? AND kind = 'shared'`, name, archivedAt, archivedAt, archivedAt, spaceID)
+			                   ELSE coalesce(archived_at, ?) END,
+			offline_downloads = coalesce(?, offline_downloads)
+		WHERE id = ? AND kind = 'shared'`, name, archivedAt, archivedAt, archivedAt, offline, spaceID)
 	if err != nil {
 		return err
 	}
