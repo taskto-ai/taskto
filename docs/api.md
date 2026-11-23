@@ -105,6 +105,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
 | `app_row_not_found` | 422 | The action names a row the app doesn't have (any more), or one the caller may not change. |
+| `app_record_conflict` | 409 | The record changed since the client read it (or isn't deleted, for a restore); `params.id` is its ID, and `current` is the record as an item as it is now, only when the caller may read it. |
 | `app_field_required` | 422 | The action leaves out `field`, which the app requires. |
 | `app_field_too_long` | 422 | The value of `field` has more than `max` characters. |
 | `app_field_not_number` | 422 | The value of `field` isn't a number. |
@@ -1340,6 +1341,38 @@ reading records answers to the read scope: the screen's rows, its summaries (`co
 `sum`), `rows` in an app's list and the agent's `list_app_rows`. A change to a record the
 caller may not change is answered as `app_row_not_found`.
 
+### Records: revisions, history and deleting
+
+A record is a row of the app's collection. Each has a **revision**, 1 when it is created
+and up by one with every change (an update that changes nothing is not a change). Besides
+its data it keeps who made it, who last changed it and, once deleted, who deleted it,
+each with the time, whether it was the agent and which access token it used if it was, and
+the app's action that did it. Every revision is also kept whole, as a **version** in the
+record's history: its operation (`insert`, `update`, `delete` or `restore`), its data, who,
+when and by which action. A record that existed before revisions were kept has revision 1
+and one `synthetic` version holding its data as it was then, dated at its creation:
+earlier states were never kept.
+
+An update or delete says which revision it was made against (`expectedRevision` on the
+action, see below), and if the record has moved on it is refused with `409` and the code
+`app_record_conflict`, changing nothing. The answer carries `current`, the record as an
+item as it is now, if the caller may read it, and nothing else about it. **Omitting the
+revision is allowed:** the change then applies to the record as it is (last writer wins),
+which is what the agent's and scripts' callers do. The web app always sends it, from the
+`_revision` of the item the person acted on.
+
+**Deleting is a tombstone**: the record leaves every ordinary read, the screen, its
+summaries, the counts in lists, the agent's reads and the limits, but is kept (with its
+history) and can be restored. Tombstones stay, so a client that syncs later can be told
+what was deleted. They go only with the app.
+
+Reading a record's history, or the deleted ones, takes reading the record: the same read
+scope as for the record itself (every record, or only those the caller created; a role
+that reads no record, such as a builder alone, is `403 app_forbidden` with `read_records`).
+Restoring takes the right to change the record, as deleting did (`modify_records`, of all
+records or only the caller's own). A record the caller may not read or change is answered
+as one that doesn't exist (`404`).
+
 An app **without role assignments is unrestricted**, as every app was before roles: for a
 user who may write the space it is every role, for one who may only read it, `reader`. So
 nothing changes for an app until someone sets roles. An assignment is for one user, or with
@@ -1359,6 +1392,41 @@ An app as one caller sees it has `access`, what they may do:
   "publish": false, "submit": true, "manage_roles": false,
   "read_records": "own", "modify_records": "own"}
 ```
+
+### `GET …/apps/{app}/records`
+
+The live records the caller may read, most recently changed first, at most 1,000
+(`truncated`): `{"records": [ … ], "truncated": false}`. Each is
+`{"id", "revision", "data", "created_at", "created_by", "created_action", "updated_at",
+"updated_by", "updated_action", "deleted_at", "deleted_by", "deleted_action"}`, data
+holding the fields the collection declares; `created_by` and the others are
+`{"id", "name", "agent", "via"}` or `null`. Read scope and `403`/`404` as for the history.
+
+### `GET …/apps/{app}/records/{record}/history`
+
+A record's versions, newest first, at most 200 (`truncated` says if older ones were left
+out): `{"record": {…}, "history": [{"revision": 3, "operation": "update", "data": {…},
+"at": "…", "by": {"id", "name", "agent", "via"}, "action": "edit_expense"}, …],
+"truncated": false}`. `record` is the record as it is now, with its `revision`, `data`,
+who created, changed and deleted it, and `deleted_at` if it is deleted (its history can
+still be read). Data holds the fields the collection declares. Needs reading the record:
+`404` for one the caller may not read or that doesn't exist, `403` with `read_records`
+for a role that reads no record.
+
+### `GET …/apps/{app}/records/deleted`
+
+The app's deleted records the caller may read, most recently deleted first, at most 1,000
+(`truncated`), in the same shape as `GET …/records`.
+
+### `POST …/apps/{app}/records/{record}/restore`
+
+Writers who may change the record (`modify_records`). `{"expected_revision": 3}`, the
+revision of the deleted record the caller saw; it may be left out (`null`). Brings the
+record back, with its history, as a new revision, and answers with it. `409` with
+`app_record_conflict` if it isn't deleted, or has another revision; `409` with `app_full` if
+the app has no room for it; `400` if it no longer fits the collection, which changed since
+(the field's code, such as `app_field_required`); `409` with `app_offline` while the app is
+offline. The history and deleted routes work for an offline app, whose data is kept.
 
 ### `GET …/apps/{app}/roles`
 
@@ -1457,11 +1525,11 @@ saying what is wrong) unless:
   number field, shown as text.
 - The whole definition is at most 48 KiB of JSON.
 
-The data model an app's screen binds to: `/items` is the rows, each with its `id` and the
-collection's fields; `/draft` is an empty form; each summary is at `/<name>`.
+The data model an app's screen binds to: `/items` is the live rows, each with its `id`, its
+revision as `_revision` and the collection's fields; `/draft` is an empty form; each summary is at `/<name>`.
 
-An app holds at most 5,000 rows and 4 MiB of row data (`409` beyond); a space at most
-500 apps.
+An app holds at most 5,000 live rows and 4 MiB of their data (`409` beyond; deleted
+records don't count, and restoring one needs room for it); a space at most 500 apps.
 
 ### `GET …/apps`
 
@@ -1512,7 +1580,11 @@ it from `live.number` of the app it read, which it passes as `?release=`.
 Writers, and by the action's kind, the submit capability (`insert`) or the right to modify
 the row (`update` and `delete`, of all records or only the caller's own; else
 `403 app_forbidden`). The A2UI client action a button sent:
-`{"name": "add_expense", "surfaceId": "app-9", "sourceComponentId": "add", "timestamp": "…", "context": {…}}`.
+`{"name": "add_expense", "surfaceId": "app-9", "sourceComponentId": "add", "timestamp": "…", "context": {…}}`,
+with, for an update or a delete, the optional `"expectedRevision"` (see
+[Records](#records-revisions-history-and-deleting); `422` if it isn't a revision, or the
+action inserts, `409` `app_record_conflict` if the record has another one). A delete marks
+the record deleted: it can be restored.
 The server checks it against the app (`422` for an event the app doesn't declare,
 another surface, a context field the collection doesn't have, a value that doesn't fit
 its field, or a row the app doesn't have), applies it, and answers with the

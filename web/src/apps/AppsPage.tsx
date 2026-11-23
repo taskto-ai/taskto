@@ -14,6 +14,7 @@ import { has, type Key, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
+import { AppRecords } from './AppRecords'
 import { AppReleases } from './AppReleases'
 import { AppRoles } from './AppRoles'
 import { AppStage } from './AppStage'
@@ -425,6 +426,8 @@ function LaunchedApp({
 }) {
   const base = `${appsBase(workspace, space)}/${app}`
   const info = useLoad(() => api<App>(base), [base])
+  // Bumped when a record is restored, so the screen is loaded again with it.
+  const [restored, setRestored] = useState(0)
   const back = routePath({ workspace, section: 'apps' })
   const t = useT()
   const restore = async () => {
@@ -467,7 +470,13 @@ function LaunchedApp({
             <p className="tt-muted tt-small">{t('apps.noDataChanges')}</p>
           )}
           {info.data.access.read_records === 'own' && <p className="tt-muted tt-small">{t('apps.ownRecords')}</p>}
-          <AppStage base={base} app={info.data} />
+          <AppStage base={base} app={info.data} reloadKey={restored} />
+          <AppRecords
+            base={base}
+            access={info.data.access}
+            writable={writable}
+            onRestored={() => setRestored((n) => n + 1)}
+          />
         </>
       )}
     </div>

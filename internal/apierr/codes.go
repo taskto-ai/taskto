@@ -87,6 +87,7 @@ const (
 	CodeTooManyApps       Code = "too_many_apps"   // params: max
 	CodeAppFull           Code = "app_full"        // params: max_rows, max_mib
 	CodeAppRowNotFound    Code = "app_row_not_found"
+	CodeAppRecordConflict Code = "app_record_conflict"  // 409: the record changed since the client read it; params: id, revision
 	CodeAppFieldRequired  Code = "app_field_required"   // params: field
 	CodeAppFieldTooLong   Code = "app_field_too_long"   // params: field, max
 	CodeAppFieldNotNumber Code = "app_field_not_number" // params: field

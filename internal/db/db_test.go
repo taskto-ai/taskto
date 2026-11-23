@@ -609,7 +609,7 @@ func TestAppRolesMigrationAddsNoAssignments(t *testing.T) {
 func TestAppReleasesMigrationMakesEveryAppRelease1(t *testing.T) {
 	ctx := context.Background()
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
-	if _, err := migrate(ctx, sqlDB, upTo(t, 21)); err != nil {
+	if _, err := migrate(ctx, sqlDB, upTo(t, 23)); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "apps", "examples", "expenses.json"))
@@ -722,5 +722,90 @@ func TestAppReleasesMigrationMakesEveryAppRelease1(t *testing.T) {
 	var by sql.NullInt64
 	if err := sqlDB.QueryRowContext(ctx, `SELECT published_by FROM app_releases WHERE app_id = 5 AND number = 3`).Scan(&by); err != nil || by.Valid {
 		t.Fatalf("release's publisher after the user went = %v, %v", by, err)
+	}
+}
+
+// TestRecordRevisionsMigrationKeepsExistingRows upgrades a database whose apps have rows from
+// before revisions: each row is revision 1, live, with one synthetic history entry holding its
+// data, credited to its creator and dated at its creation; and history is append-only.
+func TestRecordRevisionsMigrationKeepsExistingRows(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
+	if _, err := migrate(ctx, sqlDB, upTo(t, 21)); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (id, email, name, password_hash) VALUES (1, 'a@example.com', 'A', 'x')`,
+		`INSERT INTO workspaces (id, name) VALUES (1, 'One')`,
+		`INSERT INTO memberships (workspace_id, user_id, role) VALUES (1, 1, 'admin')`,
+		`INSERT INTO spaces (id, workspace_id, kind, name) VALUES (10, 1, 'shared', 'Team')`,
+		`INSERT INTO apps (id, space_id, name, definition) VALUES (5, 10, 'Tracker', '{}')`,
+		`INSERT INTO app_rows (id, app_id, data, created_at, created_by, updated_at) VALUES
+			(7, 5, '{"title":"Milk"}', '2026-01-02T03:04:05.000Z', 1, '2026-02-03T04:05:06.000Z'),
+			(8, 5, '{"title":"Eggs"}', '2026-01-03T03:04:05.000Z', NULL, '2026-01-03T03:04:05.000Z')`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Migrate(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := sqlDB.QueryContext(ctx, `
+		SELECT r.id, r.revision, r.deleted_at IS NULL, h.revision, h.operation, h.data, h.at, h.actor, h.synthetic
+		FROM app_rows r JOIN app_row_history h ON h.row_id = r.id ORDER BY r.id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var id, revision, hrevision, synthetic int64
+		var live bool
+		var op, data, at string
+		var actor sql.NullInt64
+		if err := rows.Scan(&id, &revision, &live, &hrevision, &op, &data, &at, &actor, &synthetic); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%d r%d live=%v | r%d %s %s %s actor=%v synthetic=%d", id, revision, live, hrevision, op, data, at, actor, synthetic))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`7 r1 live=true | r1 insert {"title":"Milk"} 2026-01-02T03:04:05.000Z actor={1 true} synthetic=1`,
+		`8 r1 live=true | r1 insert {"title":"Eggs"} 2026-01-03T03:04:05.000Z actor={0 false} synthetic=1`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("rows after the upgrade:\n%q\nwant\n%q", got, want)
+	}
+	// Revisions only go forward, history is never rewritten, and a row's versions are unique.
+	for _, bad := range []string{
+		`UPDATE app_rows SET revision = 0 WHERE id = 7`,
+		`UPDATE app_row_history SET data = '{}' WHERE row_id = 7`,
+		`UPDATE app_row_history SET actor = 2 WHERE row_id = 7`,
+		`UPDATE app_row_history SET actor = NULL, data = '{}' WHERE row_id = 7`,
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data) VALUES (5, 7, 1, 'update', '{}')`,
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data) VALUES (5, 7, 2, 'purge', '{}')`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, bad); err == nil {
+			t.Fatalf("%s was accepted", bad)
+		}
+	}
+	// An account that goes leaves its history, unattributed (actor ON DELETE SET NULL).
+	for _, q := range []string{
+		`INSERT INTO users (id, email, name, password_hash) VALUES (3, 'c@example.com', 'C', 'x')`,
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor) VALUES (5, 7, 2, 'update', '{}', 3)`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM users WHERE id = 3`); err != nil {
+		t.Fatalf("deleting a user named in history: %v", err)
+	}
+	var actor sql.NullInt64
+	if err := sqlDB.QueryRowContext(ctx, `SELECT actor FROM app_row_history WHERE row_id = 7 AND revision = 2`).Scan(&actor); err != nil || actor.Valid {
+		t.Fatalf("history's actor after the user went = %v, %v", actor, err)
 	}
 }

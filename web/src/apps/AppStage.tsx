@@ -9,7 +9,8 @@ import type { App } from '../api'
 import { useT } from '../i18n'
 import { AppView, httpTransport } from './AppView'
 
-export function AppStage({ base, app }: { base: string; app: App }) {
+// reloadKey is changed by the page when the app's data changed behind the screen (a record was restored).
+export function AppStage({ base, app, reloadKey }: { base: string; app: App; reloadKey?: number }) {
   const t = useT()
   const [wantsDraft, setWantsDraft] = useState(false)
   const reviewer = app.access.design || app.access.publish
@@ -41,6 +42,7 @@ export function AppStage({ base, app }: { base: string; app: App }) {
         surfaceId={`app-${app.id}`}
         label={app.name}
         release={needs}
+        reloadKey={reloadKey}
         transport={httpTransport(base, draft ? 'draft' : live?.number)}
       />
     </div>

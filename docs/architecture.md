@@ -90,7 +90,7 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   agent), links to docs and conversations, and a blocked reason.
 - **Personal apps:** saved [A2UI](https://a2ui.org/) screens built from a fixed component
   catalog, a data collection with a schema, and actions served by Go (add, change or
-  delete a row). No generated code runs. `internal/apps` checks every saved screen
+  delete a row; a delete is recoverable, and each row keeps a revision and its history, so a stale edit is refused instead of overwriting a newer one). No generated code runs. `internal/apps` checks every saved screen
   strictly against the catalog, and every row against the schema; the browser's renderer
   checks again. An app lives in a space, so its access and its rows' are the space's, and
   sharing an app is moving it to a shared space. Inside that boundary, app roles (builder,

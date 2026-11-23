@@ -9,7 +9,7 @@
 import { A2uiSurface, type ReactCatalogComponent } from '@a2ui/react/v0_9'
 import { MessageProcessor, STRICT_VALIDATION, type SurfaceModel } from '@a2ui/web_core/v0_9'
 import { useEffect, useRef, useState } from 'react'
-import { api, type DefinitionNeeds, errorText } from '../api'
+import { ApiError, api, type DefinitionNeeds, errorText } from '../api'
 import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
 import { appsCatalog, unsupportedBy } from './catalog'
@@ -41,17 +41,24 @@ export function httpTransport(base: string, release?: number | 'draft'): AppTran
   }
 }
 
+// The code of the server's answer to a change made against a record that has moved on.
+const RECORD_CONFLICT = 'app_record_conflict'
+
 export function AppView({
   surfaceId,
   label,
   transport,
   release,
+  reloadKey = 0,
 }: {
   surfaceId: string
   label: string
   transport: AppTransport
   // What the definition drawn needs, when known: checked against this client's catalog first.
   release?: DefinitionNeeds
+  // Changed by the caller when the app's data changed behind the screen's back (a record was
+  // restored): the screen is loaded again.
+  reloadKey?: number
 }) {
   const [error, setError] = useState<string | null>(null)
   const [surface, setSurface] = useState<SurfaceModel<ReactCatalogComponent> | null>(null)
@@ -63,6 +70,7 @@ export function AppView({
   const unsupported = release ? unsupportedBy(release) : []
   const blocked = unsupported.length > 0
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new reloadKey is a reload
   useEffect(() => {
     if (blocked) return
     let live = true
@@ -72,13 +80,31 @@ export function AppView({
       if (errors.length > 0) throw new Error(translate('apps.invalidScreen', { error: JSON.stringify(errors[0]) }))
       if (live) setSurface(processor.model.surfacesMap.get(surfaceId) ?? null)
     }
+    // An update or a delete says which revision of its record the person saw (the item's
+    // _revision), so the server refuses it if someone changed the record since.
+    const withRevision = (action: ActionPayload): ActionPayload => {
+      const id = Number((action.context as { id?: unknown } | undefined)?.id)
+      if (!Number.isInteger(id) || id < 1) return action
+      const items: unknown = processor.model.surfacesMap.get(surfaceId)?.dataModel.get('/items')
+      const item = Array.isArray(items) ? items.find((i) => (i as { id?: unknown })?.id === id) : undefined
+      const revision = (item as { _revision?: unknown } | undefined)?._revision
+      return typeof revision === 'number' ? { ...action, expectedRevision: revision } : action
+    }
     const processor = new MessageProcessor<ReactCatalogComponent>(
       [appsCatalog],
       async (action) => {
         try {
-          apply(await transportRef.current.act(action))
+          apply(await transportRef.current.act(withRevision(action)))
           setError(null)
         } catch (e) {
+          if (e instanceof ApiError && e.code === RECORD_CONFLICT) {
+            // Show the record as it is now, so the next try is made against its latest revision.
+            try {
+              apply(await transportRef.current.load())
+            } catch {
+              // The conflict is what the person is told; the screen stays as it was.
+            }
+          }
           setError(errorText(e))
         }
       },
@@ -94,7 +120,7 @@ export function AppView({
     return () => {
       live = false
     }
-  }, [surfaceId, blocked])
+  }, [surfaceId, blocked, reloadKey])
 
   if (blocked) return <UpdateRequired label={label} unsupported={unsupported} />
 

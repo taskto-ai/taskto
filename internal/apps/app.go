@@ -24,6 +24,14 @@
 // Taking an app offline archives it: it can't be launched and its actions don't run, and
 // its rows are kept until it is restored.
 //
+// Records (the rows) are versioned. Each has a revision, 1 when created and bumped by every
+// change; an update or delete may name the revision it was made against, and if the record
+// has moved on it fails with ErrConflict and changes nothing. Every revision is kept in the
+// record's history, with who made it, when and by which action. A delete is a tombstone, not
+// a removal: the record leaves every ordinary read, screen, summary, count and limit, stays
+// in the list of deleted records, and can be restored (a new revision) by whoever may
+// change it. Reading a record's history, or the deleted ones, takes reading the record.
+//
 // An app has a draft and releases (release.go). Editing it, by a person or by the agent,
 // changes the draft; the app serves its live release until someone who may publish it
 // publishes the draft, after the server checks it against the catalog and the rows, or rolls
@@ -296,10 +304,11 @@ func (c Collection) field(name string) (Field, bool) {
 	return Field{}, false
 }
 
-// Row is one stored row: its ID and its data.
+// Row is one stored row: its ID, its revision and its data.
 type Row struct {
-	ID   int64
-	Data map[string]any
+	ID       int64
+	Revision int64
+	Data     map[string]any
 }
 
 // ClientAction is what the renderer sends when a component's action fires (A2UI
@@ -314,6 +323,12 @@ type ClientAction struct {
 	// asked for). Left out, the action is taken to come from the live release. See Service.act
 	// for what an action from a release that is not the live one may do.
 	Release *int64 `json:"release,omitempty"`
+	// ExpectedRevision is, for an update or a delete, the revision of the row the person
+	// saw when they acted (the "_revision" of its item). If the row has moved on, the action
+	// is refused as a conflict and changes nothing. Without it the action applies to the
+	// row as it is now: the web app always sends it; the agent's and scripts' callers may
+	// leave it out.
+	ExpectedRevision *int64 `json:"expectedRevision,omitempty"`
 }
 
 // Message is one A2UI server-to-client message.
@@ -341,22 +356,18 @@ func DataModel(surfaceID string, def Definition, rows []Row) Message {
 	return Message{"version": ProtocolVersion, "updateDataModel": map[string]any{"surfaceId": surfaceID, "path": "/", "value": value}}
 }
 
-// Items is the rows as the app shows them: each with its "id" and the fields the
-// collection declares, and none it no longer does. A value of another type than the field's
-// (a row from before the field's type changed, which a publish acknowledged) is left out too,
-// as if the row had none, but stays stored; one outside the field's limits is shown.
+// RevisionKey is the key of a row's revision in its item. A field's name can't start with
+// an underscore, so it never clashes with one.
+const RevisionKey = "_revision"
+
+// Items is the rows as the app shows them: each with its "id", its revision (RevisionKey)
+// and the fields the collection declares, and none it no longer does. A value of another type than
+// the field's (a row from before the field's type changed, which a publish acknowledged) is left
+// out too, as if the row had none, but stays stored; one outside the field's limits is shown.
 func Items(def Definition, rows []Row) []map[string]any {
 	items := make([]map[string]any, len(rows))
 	for i, r := range rows {
-		item := map[string]any{"id": r.ID}
-		for _, f := range def.Collection.Fields {
-			if v, ok := r.Data[f.Name]; ok {
-				if ofType(f, v) {
-					item[f.Name] = v
-				}
-			}
-		}
-		items[i] = item
+		items[i] = item(def, r)
 	}
 	return items
 }
@@ -366,6 +377,27 @@ func ofType(f Field, v any) bool {
 	f.MaxLength, f.Min, f.Max = math.MaxInt, nil, nil
 	_, present, err := f.parse(v)
 	return err == nil && present
+}
+
+func item(def Definition, r Row) map[string]any {
+	it := map[string]any{"id": r.ID, RevisionKey: r.Revision}
+	for _, f := range def.Collection.Fields {
+		if v, ok := r.Data[f.Name]; ok && ofType(f, v) {
+			it[f.Name] = v
+		}
+	}
+	return it
+}
+
+// declared is the fields of data that the collection declares.
+func declared(def Definition, data map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, f := range def.Collection.Fields {
+		if v, ok := data[f.Name]; ok {
+			out[f.Name] = v
+		}
+	}
+	return out
 }
 
 // summarize formats as text: A2UI binds text components to strings.
@@ -386,11 +418,15 @@ func summarize(s Summary, rows []Row) string {
 	}
 }
 
-// Change is what an action does to the rows: insert Data, or update or delete row ID.
+// Change is what an action does to the rows: insert Data, or update or delete row ID. Name
+// is the action's event name, kept with the change; Expected is the revision the row had
+// when the person saw it, if they said.
 type Change struct {
-	Kind string
-	ID   int64
-	Data map[string]any
+	Kind     string
+	Name     string
+	ID       int64
+	Data     map[string]any
+	Expected *int64
 }
 
 // Plan works out what action does, from the context alone: which row, and the fields it
@@ -404,7 +440,13 @@ func Plan(surfaceID string, def Definition, action ClientAction) (Change, error)
 	if !ok {
 		return Change{}, invalidf("unknown action %q", action.Name)
 	}
-	ch := Change{Kind: a.Kind}
+	ch := Change{Kind: a.Kind, Name: action.Name}
+	if action.ExpectedRevision != nil {
+		if a.Kind == ActionInsert || *action.ExpectedRevision < 1 {
+			return Change{}, invalidf("expectedRevision is the revision of the row an update or a delete was made against, from 1")
+		}
+		ch.Expected = action.ExpectedRevision
+	}
 	ctx := action.Context
 	if a.Kind != ActionInsert {
 		id, ok := rowID(ctx["id"])

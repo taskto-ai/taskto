@@ -32,6 +32,10 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("POST "+apps+"/{app}/rollback", write(s.handleRollback))
 	mux.Handle("GET "+apps+"/{app}/releases", read(s.handleReleases))
 	mux.Handle("GET "+apps+"/{app}/releases/{release}", read(s.handleRelease))
+	mux.Handle("GET "+apps+"/{app}/records", read(s.handleRecords))
+	mux.Handle("GET "+apps+"/{app}/records/deleted", read(s.handleDeleted))
+	mux.Handle("GET "+apps+"/{app}/records/{record}/history", read(s.handleHistory))
+	mux.Handle("POST "+apps+"/{app}/records/{record}/restore", write(s.handleRestore))
 	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
 	mux.Handle("PUT "+apps+"/{app}/roles", write(s.handleSetRoles))
 }
@@ -241,6 +245,82 @@ func (s *Service) handleRelease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rel)
 }
 
+// handleRecords lists the app's live records the caller may read, with their provenance.
+func (s *Service) handleRecords(w http.ResponseWriter, r *http.Request) {
+	s.list(w, r, false)
+}
+
+// handleDeleted lists the app's deleted records the caller may read.
+func (s *Service) handleDeleted(w http.ResponseWriter, r *http.Request) {
+	s.list(w, r, true)
+}
+
+func (s *Service) list(w http.ResponseWriter, r *http.Request, deleted bool) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	out, err := s.listRecords(r.Context(), req.space, req.actor, req.app, deleted)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// recordID reads the record in the path; one that isn't a number is as unknown as any.
+func recordID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("record"), 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, http.StatusNotFound, apierr.CodeNotFound, ErrNotFound.Error())
+		return 0, false
+	}
+	return id, true
+}
+
+// handleHistory answers a record's versions, to whoever may read the record.
+func (s *Service) handleHistory(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	id, ok := recordID(w, r)
+	if !ok {
+		return
+	}
+	out, err := s.recordHistory(r.Context(), req.space, req.actor, req.app, id)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleRestore brings a deleted record back.
+func (s *Service) handleRestore(w http.ResponseWriter, r *http.Request) {
+	req, ok := parse(w, r, true)
+	if !ok {
+		return
+	}
+	id, ok := recordID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		// ExpectedRevision is the revision of the deleted record the caller saw.
+		ExpectedRevision *int64 `json:"expected_revision"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	rec, err := s.restoreRecord(r.Context(), req.space, req.actor, req.app, id, body.ExpectedRevision)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rec)
+}
+
 // handleRoles answers the app's role assignments, to whoever manages them.
 func (s *Service) handleRoles(w http.ResponseWriter, r *http.Request) {
 	req, ok := parse(w, r, true)
@@ -307,7 +387,15 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var outdated *outdatedError
 	var incompatible *incompatibleError
 	var migration *migrationError
+	var conflict *conflictError
 	switch {
+	case errors.As(err, &conflict):
+		// With the record as it is now, if the caller reads it, so they can reapply their change.
+		body := map[string]any{"error": err.Error(), "code": apierr.CodeAppRecordConflict, "params": apierr.Params{"id": conflict.id}}
+		if conflict.current != nil {
+			body["current"] = conflict.current
+		}
+		writeJSON(w, http.StatusConflict, body)
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, apierr.CodeNotFound, ErrNotFound.Error())
 	case errors.Is(err, errSpaceArchived):

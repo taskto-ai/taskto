@@ -589,7 +589,7 @@
   },
   {
     "name": "list_app_rows",
-    "description": "Read an app's data: the rows the user may read (all of them, or only the ones they created, by their role in the app), oldest first, each with its id and the fields its collection declares. An offline app's rows are kept and read too. A list too long for one reply is cut short, with truncated: true and next_after: call again with after set to it for the rest.",
+    "description": "Read an app's data: the rows the user may read (all of them, or only the ones they created, by their role in the app), oldest first, each with its id, its _revision and the fields its collection declares. Deleted rows are not listed. An offline app's rows are kept and read too. A list too long for one reply is cut short, with truncated: true and next_after: call again with after set to it for the rest.",
     "read_only": true,
     "input_schema": {
       "type": "object",
