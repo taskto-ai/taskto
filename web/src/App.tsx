@@ -8,8 +8,10 @@ import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { ApiError, api, errorText, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
 import { setPreferences, useT } from './i18n'
+import { ForeignGuard } from './offline/ForeignGuard'
+import { useRuntime } from './offline/hooks'
 import { LogoutGuard } from './offline/LogoutGuard'
-import { activate, deactivate, lastUser, runtimeState } from './offline/runtime'
+import { activate, deactivate, discardForeign, lastUser, unsentOf } from './offline/runtime'
 import { navigate } from './router'
 import { Shell } from './shell/Shell'
 import { claimDrafts, forgetDrafts } from './uiState'
@@ -31,20 +33,31 @@ type Session =
 const INVITE_PATH = '/invite'
 const RESET_PATH = '/reset-password'
 
+// Signing out is the same from wherever it is asked: who, and where it leaves to.
+type Leaving = { user: number; next: Session }
+
 export function App() {
   const t = useT()
   const [session, setSession] = useState<Session>({ state: 'loading' })
+  const { runtime, foreign } = useRuntime()
   // Unsent drafts kept in this browser belong to whoever is signed in: they are claimed before
-  // anything is drawn, so another account never finds the last one's.
-  const signIn = useCallback((me: Me) => {
+  // anything is drawn, so another account never finds the last one's. What is kept for offline use
+  // is the same: this account's, and no other's (another account's unsent records are put to the
+  // person first, `foreign`). Sending what the account queued starts (or goes on, after the
+  // session ended and this person signed in again).
+  const claim = useCallback(async (me: Me) => {
     claimDrafts(me.user.id)
-    // What is kept for offline use is the same: this account's, and no other's. Sending what it
-    // queued starts (or goes on, after the session ended and this person signed in again).
-    void activate(me.user.id, me.user.name)
-    setSession({ state: 'in', me })
+    await activate(me.user.id, me.user.name)
   }, [])
+  const signIn = useCallback(
+    async (me: Me) => {
+      await claim(me)
+      setSession({ state: 'in', me })
+    },
+    [claim],
+  )
   // Records made on this device that haven't reached the server: asked about before signing out.
-  const [leaving, setLeaving] = useState<{ count: number } | null>(null)
+  const [leaving, setLeaving] = useState<(Leaving & { count: number }) | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -56,11 +69,14 @@ export function App() {
           if (e instanceof ApiError && e.status === 401) return null
           throw e
         })
+        // Signed in on the invite page is signed in: what this device keeps of the account is
+        // theirs from here, and is what signing out from the page takes away.
+        if (me) await claim(me)
         return setSession({ state: 'invite', me })
       }
       const me = await api<Me>('/api/me')
       await setPreferences({ user: me.user.locale ?? null })
-      signIn(me)
+      await signIn(me)
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) return setSession({ state: 'login' })
       // No answer at all (not a server's error): offline. If someone signed in here, the apps they
@@ -73,7 +89,7 @@ export function App() {
         setSession({ state: 'error', error: errorText(e) })
       }
     }
-  }, [signIn])
+  }, [signIn, claim])
 
   useEffect(() => {
     load()
@@ -90,25 +106,27 @@ export function App() {
   const logIn = useCallback(
     async (me: Me) => {
       await setPreferences({ user: me.user.locale ?? null })
-      signIn(me)
+      await signIn(me)
     },
     [signIn],
   )
   // Signing out takes with it what this device kept of the account (drafts, downloads, the queue),
-  // and a person with records not yet sent is asked first.
-  const signOut = useCallback(async () => {
+  // and a person with records not yet sent is asked first: every sign-out goes through here.
+  const signOut = useCallback(async ({ user, next }: Leaving) => {
     await api('/api/logout', { method: 'POST' }).catch(() => {})
     forgetDrafts()
-    await deactivate({ purge: true })
+    await deactivate({ purge: true, user })
     setLeaving(null)
-    setSession({ state: 'login' })
+    setSession(next)
   }, [])
-  const logOut = useCallback(async () => {
-    const runtime = runtimeState().runtime
-    const unsent = runtime ? await runtime.store.unsynced().catch(() => []) : []
-    if (unsent.length > 0) setLeaving({ count: unsent.length })
-    else await signOut()
-  }, [signOut])
+  const logOut = useCallback(
+    async (who: Leaving) => {
+      const count = await unsentOf(who.user).catch(() => 0)
+      if (count > 0) setLeaving({ ...who, count })
+      else await signOut(who)
+    },
+    [signOut],
+  )
   // Joined: on to the workspace the invite was for, the one that is new, and the token
   // leaves the address bar and the history entry.
   const joined = useCallback(
@@ -117,7 +135,7 @@ export function App() {
       const workspace = me.workspaces.find((w) => !known.has(w.id)) ?? me.workspaces[0]
       navigate(workspace ? `/w/${workspace.id}/conversations` : '/', { replace: true })
       void setPreferences({ user: me.user.locale ?? null })
-      signIn(me)
+      void signIn(me)
     },
     [signIn],
   )
@@ -126,16 +144,32 @@ export function App() {
     (me: Me) => {
       navigate('/', { replace: true })
       void setPreferences({ user: me.user.locale ?? null })
-      signIn(me)
+      void signIn(me)
     },
     [signIn],
   )
-  const leaveInvite = useCallback(async () => {
-    await api('/api/logout', { method: 'POST' }).catch(() => {})
-    forgetDrafts()
-    await deactivate({ purge: true })
-    setSession({ state: 'invite', me: null })
-  }, [])
+
+  // What stands in the way of a signed-in account: records of another account that this browser
+  // holds, which the person decides about first (nothing of them is shown).
+  const leavingGuard = leaving && (
+    <LogoutGuard
+      runtime={runtime}
+      count={leaving.count}
+      onSignOut={() => void signOut(leaving)}
+      onCancel={() => setLeaving(null)}
+    />
+  )
+  const foreignGuard = (me: Me) =>
+    foreign && (
+      <>
+        <ForeignGuard
+          count={foreign.count}
+          onDiscard={() => void discardForeign()}
+          onSignOut={() => void logOut({ user: me.user.id, next: { state: 'login' } })}
+        />
+        {leavingGuard}
+      </>
+    )
 
   switch (session.state) {
     case 'loading':
@@ -144,10 +178,21 @@ export function App() {
       return <SetupScreen onDone={logIn} />
     case 'login':
       return <LoginScreen onDone={logIn} />
-    case 'invite':
+    case 'invite': {
+      const me = session.me
+      if (me && foreign) return foreignGuard(me)
       return (
-        <InviteScreen token={window.location.hash.slice(1)} me={session.me} onDone={joined} onLogout={leaveInvite} />
+        <>
+          <InviteScreen
+            token={window.location.hash.slice(1)}
+            me={me}
+            onDone={joined}
+            onLogout={() => me && void logOut({ user: me.user.id, next: { state: 'invite', me: null } })}
+          />
+          {leavingGuard}
+        </>
       )
+    }
     case 'reset':
       return <ResetPasswordScreen token={window.location.hash.slice(1)} onDone={resetDone} />
     case 'error':
@@ -167,19 +212,15 @@ export function App() {
           <OfflineShell user={session.name} onReconnect={load} />
         </Suspense>
       )
-    case 'in':
+    case 'in': {
+      const me = session.me
+      if (foreign) return foreignGuard(me)
       return (
         <>
-          <Shell me={session.me} onLogout={logOut} />
-          {leaving && runtimeState().runtime && (
-            <LogoutGuard
-              runtime={runtimeState().runtime as NonNullable<ReturnType<typeof runtimeState>['runtime']>}
-              count={leaving.count}
-              onSignOut={() => void signOut()}
-              onCancel={() => setLeaving(null)}
-            />
-          )}
+          <Shell me={me} onLogout={() => void logOut({ user: me.user.id, next: { state: 'login' } })} />
+          {leavingGuard}
         </>
       )
+    }
   }
 }

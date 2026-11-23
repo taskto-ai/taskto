@@ -731,6 +731,7 @@
     "app_query_field": "O app não tem o campo “{field}” que possa ser usado aqui.",
     "app_query_condition": "O filtro em “{field}” não combina com o campo.",
     "offline_downloads_disabled": "Um administrador desativou os downloads offline deste espaço.",
+    "session_account_changed": "Este navegador está conectado como uma conta diferente daquela a que estes registros pertencem.",
     "offline_unsupported": "Isto exige conexão. Offline, você pode adicionar registros e navegar pela cópia baixada."
   },
   "language": {
@@ -1612,6 +1613,7 @@
     },
     "sync": {
       "paused": "A sincronização está pausada: entre de novo para enviar o que está aguardando.",
+      "account": "A sincronização está pausada: este navegador está conectado como outra pessoa. Entre na conta a que estes registros pertencem para enviá-los.",
       "offline": "Você está offline. Os registros aguardando são enviados quando você reconectar.",
       "running": "Sincronizando…",
       "now": "Sincronizar agora"
@@ -1625,6 +1627,17 @@
       "openNamed": "Abrir {name}",
       "back": "Voltar aos apps baixados",
       "needsUpdate": "Esta versão do TaskTo.AI não consegue mostrar {name}."
+    },
+    "foreign": {
+      "title": "Registros de outra conta",
+      "body_one": "Este navegador guarda {count} registro não enviado de outra conta. Entre nessa conta para enviá-lo ou descarte-o.",
+      "body_many": "Este navegador guarda {count} de registros não enviados de outra conta. Entre nessa conta para enviá-los ou descarte-os.",
+      "body_other": "Este navegador guarda {count} registros não enviados de outra conta. Entre nessa conta para enviá-los ou descarte-os.",
+      "signOut": "Sair para entrar nessa conta",
+      "discard": "Descartá-los",
+      "discardQuestion_one": "Descartar {count} registro que nunca foi enviado? Não é possível recuperá-lo.",
+      "discardQuestion_many": "Descartar {count} de registros que nunca foram enviados? Não é possível recuperá-los.",
+      "discardQuestion_other": "Descartar {count} registros que nunca foram enviados? Não é possível recuperá-los."
     },
     "logout": {
       "title": "Registros ainda não enviados",

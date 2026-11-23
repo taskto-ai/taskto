@@ -27,11 +27,13 @@ export function SyncNotice({ status, waiting }: { status: SyncStatus; waiting: n
     <p className="tt-muted tt-small" role="status">
       {status.paused === 'session'
         ? t('offline.sync.paused')
-        : !status.online
-          ? t('offline.sync.offline')
-          : status.running
-            ? t('offline.sync.running')
-            : null}
+        : status.paused === 'account'
+          ? t('offline.sync.account')
+          : !status.online
+            ? t('offline.sync.offline')
+            : status.running
+              ? t('offline.sync.running')
+              : null}
     </p>
   )
 }

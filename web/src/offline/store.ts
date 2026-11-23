@@ -55,6 +55,9 @@ export type Download = Scope & {
   truncated: boolean
   canInsert: boolean
   capturedAt: string
+  // Which of the downloaded records this person's own operations made: operation key → record id.
+  // The record an item of the outbox made is among the downloaded ones when its key is here.
+  operations: Record<string, number>
   // About how big the copy is, for the storage the person is shown.
   bytes: number
 }
@@ -120,6 +123,10 @@ export type OutboxItem = {
   updatedAt: string
   // When the server acknowledged it.
   syncedAt?: string
+  // Who is sending it, until when: taken in the item's own transaction before a send, renewed
+  // while it goes on, so two tabs (or a tab and a page that was closed) never send one item at
+  // once, with or without Web Locks. A lease that has run out is anyone's to take.
+  lease?: { owner: string; until: number }
 }
 
 export type BlobRow = { id: string; item: string; blob: Blob }
@@ -231,6 +238,16 @@ export class OfflineStore {
     return all.sort((a, b) => a.seq - b.seq)
   }
 
+  // Lets go of the app's records that a fresh download holds, those it names by their operation:
+  // the server has them, so the device's own copy (kept to show it until a download did) goes, and
+  // with it, if it had not been told so, the wait to send it.
+  async dropIncluded(scope: Scope, operations: Record<string, number>): Promise<void> {
+    if (Object.keys(operations).length === 0) return
+    for (const item of await this.listItems(scope)) {
+      if (item.state === 'synced' && item.operation in operations) await this.removeItem(item.id)
+    }
+  }
+
   // Changes an item as it is now in the database, in one transaction: the change is a function of
   // the stored item, so two tabs never overwrite each other's progress with a stale copy.
   async updateItem(id: string, change: (item: OutboxItem) => OutboxItem | undefined): Promise<OutboxItem | undefined> {
@@ -270,6 +287,26 @@ export class OfflineStore {
   // How many items the server hasn't acknowledged: what signing out would lose.
   async unsynced(): Promise<OutboxItem[]> {
     return (await this.listItems()).filter((i) => i.state !== 'synced')
+  }
+
+  // What remains when the account is no longer the one signed in here: only the records the server
+  // hasn't acknowledged, with their photos. Everything downloaded goes, and so do the records
+  // that were sent (and what they hold of the server's data). The unsent are the person's own
+  // work, which they send by signing in as the account again, or discard.
+  async keepOnlyUnsent(): Promise<void> {
+    await this.keep([DOWNLOADS, OUTBOX, BLOBS], async (tx) => {
+      const downloads = tx.store<Download>(DOWNLOADS)
+      for (const d of await downloads.getAll()) await downloads.delete(d.key)
+      const outbox = tx.store<OutboxItem>(OUTBOX)
+      const blobs = tx.store<BlobRow>(BLOBS)
+      const gone = new Set<string>()
+      for (const i of await outbox.getAll()) {
+        if (i.state !== 'synced') continue
+        gone.add(i.id)
+        await outbox.delete(i.id)
+      }
+      for (const b of await blobs.getAll()) if (gone.has(b.item)) await blobs.delete(b.id)
+    })
   }
 
   // --- the whole database

@@ -57,6 +57,8 @@ export type UploadOptions = {
   retries?: number
   // The wait before a retry, in milliseconds.
   backoff?: number
+  // Headers every request of the upload carries (the account the upload is for).
+  headers?: Record<string, string>
 }
 
 export class UploadCancelled extends Error {}
@@ -78,16 +80,18 @@ export async function uploadPhoto(
 ): Promise<Attachment> {
   const retries = opts.retries ?? 3
   const upload = (id: string, rest = '') => `${base}/uploads/${id}${rest}`
+  const headers = opts.headers
   let state: Attachment | undefined
   if (opts.resume) {
     try {
-      state = await api<Attachment>(upload(opts.resume))
+      state = await api<Attachment>(upload(opts.resume), { headers })
     } catch (e) {
       // Gone (it expired): start again.
       if (!(e instanceof ApiError && e.status === 404)) throw e
     }
   }
-  if (!state) state = await api<Attachment>(`${base}/uploads`, { method: 'POST', body: { field, size: file.size } })
+  if (!state)
+    state = await api<Attachment>(`${base}/uploads`, { method: 'POST', body: { field, size: file.size }, headers })
   const id = state.id
   opts.onStarted?.(id)
   if (state.status === 'ready') return state
@@ -99,10 +103,12 @@ export async function uploadPhoto(
     if (opts.cancelled?.()) throw new UploadCancelled()
     opts.onProgress?.(offset, file.size)
     try {
-      if (offset >= file.size) return await api<Attachment>(upload(id, '/finalize'), { method: 'POST', body: {} })
+      if (offset >= file.size)
+        return await api<Attachment>(upload(id, '/finalize'), { method: 'POST', body: {}, headers })
       const next = await api<Attachment>(`${upload(id)}?offset=${offset}`, {
         method: 'PUT',
         bytes: file.slice(offset, offset + chunk),
+        headers,
       })
       offset = next.received
       failures = 0
@@ -116,7 +122,7 @@ export async function uploadPhoto(
       if (!transient(e) || ++failures > retries) throw e
       await sleep((opts.backoff ?? 500) * failures)
       try {
-        offset = (await api<Attachment>(upload(id))).received
+        offset = (await api<Attachment>(upload(id), { headers })).received
       } catch {
         // Still not reachable: the next try finds out.
       }

@@ -65,9 +65,14 @@ export async function downloadApp(store: OfflineStore, scope: Scope): Promise<Do
     truncated: r.truncated,
     canInsert: r.can_insert,
     capturedAt: r.captured_at,
+    operations: r.operations ?? {},
     bytes: JSON.stringify(r.messages).length + JSON.stringify(r.definition).length,
   }
+  // The copy and the records of this device it already holds, in one step: a record the server
+  // has (it is among this download's) is the server's from now on, and the device's own entry for
+  // it, which would show it twice, goes.
   await store.putDownload(download)
+  await store.dropIncluded(scope, download.operations)
   // After the copy is kept: improves its chance to stay.
   void requestPersistence()
   return download

@@ -727,6 +727,7 @@
     "app_query_field": "The app has no field “{field}” that can be used here.",
     "app_query_condition": "The filter on “{field}” doesn’t fit the field.",
     "offline_downloads_disabled": "An admin turned off offline downloads for this space.",
+    "session_account_changed": "This browser is signed in as a different account than the one these records belong to.",
     "offline_unsupported": "This needs a connection. Offline, you can add records and look around the downloaded copy."
   },
   "language": {
@@ -1597,6 +1598,7 @@
     },
     "sync": {
       "paused": "Sync is paused: sign in again to send what is waiting.",
+      "account": "Sync is paused: this browser is signed in as someone else. Sign in as the account these records belong to, to send them.",
       "offline": "You’re offline. Waiting records are sent when you reconnect.",
       "running": "Syncing…",
       "now": "Sync now"
@@ -1610,6 +1612,15 @@
       "openNamed": "Open {name}",
       "back": "Back to the downloaded apps",
       "needsUpdate": "This version of TaskTo.AI can’t draw {name}."
+    },
+    "foreign": {
+      "title": "Records of another account",
+      "body_one": "This browser holds {count} unsent record of another account. Sign in as that account to send it, or discard it.",
+      "body_other": "This browser holds {count} unsent records of another account. Sign in as that account to send them, or discard them.",
+      "signOut": "Sign out to sign in as that account",
+      "discard": "Discard them",
+      "discardQuestion_one": "Discard {count} record that was never sent? It can’t be recovered.",
+      "discardQuestion_other": "Discard {count} records that were never sent? They can’t be recovered."
     },
     "logout": {
       "title": "Records not sent yet",

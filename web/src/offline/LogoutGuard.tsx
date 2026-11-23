@@ -13,7 +13,8 @@ export function LogoutGuard({
   onSignOut,
   onCancel,
 }: {
-  runtime: Runtime
+  // Null when the database is not open here: there is nothing to sync, only to discard.
+  runtime: Runtime | null
   // How many records had not reached the server when this was opened.
   count: number
   // Sign out now: what is kept for offline use is deleted by the caller.
@@ -36,6 +37,7 @@ export function LogoutGuard({
     setBusy(true)
     setStuck(false)
     try {
+      if (!runtime) return
       await runtime.engine.retry()
       const unsent = await runtime.store.unsynced()
       setLeft(unsent.length)
@@ -61,7 +63,7 @@ export function LogoutGuard({
             ref={first}
             type="button"
             className="tt-button tt-primary"
-            disabled={busy}
+            disabled={busy || !runtime}
             onClick={() => void sync()}
           >
             {busy ? t('offline.logout.syncing') : t('offline.logout.sync')}

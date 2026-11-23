@@ -29,14 +29,26 @@ export class ApiError extends Error {
 
 export const SESSION_LOST = 'taskto:session-lost'
 
-export async function api<T>(path: string, init: { method?: string; body?: unknown; bytes?: Blob } = {}): Promise<T> {
+// The account a request is meant for (docs/api.md): what is sent on behalf of an account that may
+// not be the one the browser's session belongs to any more (the offline queue) says whose it is,
+// and the server refuses it for anyone else, with `session_account_changed`.
+export const EXPECTED_USER_HEADER = 'X-Taskto-Expected-User'
+
+export const forAccount = (user: number): Record<string, string> => ({ [EXPECTED_USER_HEADER]: String(user) })
+
+export type RequestInit = { method?: string; body?: unknown; bytes?: Blob; headers?: Record<string, string> }
+
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const extra = init.headers ?? {}
   const res = await fetch(path, {
     method: init.method ?? 'GET',
     ...(init.bytes !== undefined
-      ? { headers: { 'Content-Type': 'application/octet-stream' }, body: init.bytes }
+      ? { headers: { ...extra, 'Content-Type': 'application/octet-stream' }, body: init.bytes }
       : init.body !== undefined
-        ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(init.body) }
-        : {}),
+        ? { headers: { ...extra, 'Content-Type': 'application/json' }, body: JSON.stringify(init.body) }
+        : Object.keys(extra).length > 0
+          ? { headers: extra }
+          : {}),
   })
   if (res.status === 204) return undefined as T
   const data = await res.json().catch(() => null)
@@ -249,6 +261,8 @@ export type OfflineApp = {
   truncated: boolean
   can_insert: boolean
   captured_at: string
+  // The caller's operation keys that made downloaded records: key → record id.
+  operations?: Record<string, number>
 }
 
 // A widget an app offers for Home (docs/api.md, Home): a bounded view, never markup of its own.

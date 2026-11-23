@@ -118,8 +118,12 @@ type Item = Record<string, unknown>
 export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
   const base = dataModelOf(download.messages)
   const downloaded = (Array.isArray(base?.items) ? (base.items as Item[]) : []).slice()
+  // A record this device sent is among the downloaded ones once a download was taken after the
+  // server had it (the download names the operation that made each of the person's records):
+  // it is the server's, shown once, and never again as the device's own.
   const local = queue
     .filter((q) => q.action.name in download.definition.actions)
+    .filter((q) => !(q.operation in (download.operations ?? {})))
     .map((q) => {
       // What the server will store: the values the context gives, parsed. (The queue holds the
       // context as sent; a context that parsed when it was queued parses again.)

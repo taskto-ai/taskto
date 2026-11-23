@@ -25,7 +25,10 @@ release** and the **records the person may read**, and keeps them in the browser
 download is the person's own view: the same filter every screen uses (their records only, if the
 app's roles say so; none deleted; each record as the screen shows it, with no field the collection
 doesn't declare), at most the latest 2000 records. It holds no action's effects (their targets are
-the server's) and no one else's data.
+the server's) and no one else's data. It also says which of the records the person's own
+operations made (`operations`, the keys that [replay](#sending-replay) sends), so that a record
+this device sent and a download that already holds it are the same record: see
+[Refreshing a download](#refreshing-a-download).
 
 The panel shows what the person is relying on:
 
@@ -46,9 +49,18 @@ app, with the same button online does.
 **Admins can turn offline downloads off for a shared space** (Settings → Spaces → *Allow offline
 downloads*, `offline_downloads` on the space): for data that shouldn't stay on devices. New
 downloads of the space's apps are refused (`403 offline_downloads_disabled`), and a device that
-already holds a copy removes it the next time the app opens with the server reachable (the
-device asks whether it may still keep each copy), and when sending its queue is refused. It is on for a new space, and always on for a private space, which is its owner's
-alone.
+already holds a copy removes it the next time it asks the server whether it may still keep each
+copy, and when sending its queue is refused. It is on for a new space, and always on for a private
+space, which is its owner's alone.
+
+**A copy is asked about again** whenever the server can be reached after the device may have
+missed a change: when the app opens, when the same person signs in again after the app opened
+offline (the app's *Reconnect*, the network coming back), and on each fresh start. The server's
+answers decide: the person was removed from the space or the app, or it was moved or deleted
+(the copy is removed); downloads were turned off (removed); the person now reads fewer records
+than the copy holds, all of the app's where they now read only their own (the copy is
+downloaded again, which holds what they read now, and removed if that can't be done). What was
+queued for the app stays.
 
 ## Using it offline
 
@@ -99,8 +111,25 @@ their way when the record is not.
 The queue is sent in the order it was made, **as the signed-in user, with the session the browser
 holds then**: nothing about who may do what is remembered from when a record was made, so the
 server's access checks run again on every send. It starts when the app opens, when the network
-comes back, when the page returns to the foreground, and when an item's wait is over. Where the
-browser has Web Locks, one tab at a time sends.
+comes back, when the page returns to the foreground, when an item is added, and when an item's
+wait is over. A pass goes on until nothing is left that can be sent: a record added while it ran
+is sent by it.
+
+**Only as the account that made them.** The browser's session can be another account's by the
+time a queue is sent (someone else signed in in another tab). So every request of a replay (the
+photos' uploads, the record, the check of the app) carries the id of the account the queue
+belongs to (`X-Taskto-Expected-User`), and the server refuses it with `409
+session_account_changed` for any other session, before it looks at anything else. The page also
+stops before it asks: it sends only while the account this browser says is signed in is the
+queue's. Either way **sending pauses** (*Sync is paused: this browser is signed in as someone
+else*), nothing is counted against the item, and it goes on when its owner signs in.
+
+**One sender per item.** Where the browser has Web Locks, one tab at a time sends. Everywhere,
+an item is claimed in its own IndexedDB transaction before it is sent (a lease that is renewed
+while it goes on and that runs out if its page is closed), so two tabs, or a tab and a page that
+was just closed, never send one item at once; a tab that finds another one sending looks again
+shortly. The photos' ids the server finalized are kept on the item, first one wins, so a send made
+again is the same request, and an item the server acknowledged is never put back to waiting.
 
 1. **Photos first.** Each photo is uploaded through the resumable upload routes (create → chunks →
    finalize). The upload's id is saved as soon as it exists, so an upload interrupted by the
@@ -109,8 +138,9 @@ browser has Web Locks, one tab at a time sends.
    there (the server also refuses one that names an unfinished upload, `app_attachment_bad`).
 2. **The record**, with its operation id and release. The server writes the record **and the
    operation's receipt in one transaction**, so sending it again (the answer was lost, the page was
-   reopened, two tabs) changes nothing and is answered as the first send was: **a record is made
-   exactly once**. The same id for a different request is refused (`app_operation_reused`).
+   reopened, two tabs) changes nothing and is answered with a 2xx (the rows as they are *now*, not the first
+   answer's body: the server keeps the request's receipt, not its answer, and a record deleted since
+   is simply not among them), which is what the device needs: **a record is made exactly once**. The same id for a different request is refused (`app_operation_reused`).
 
 What the answer means:
 
@@ -118,6 +148,7 @@ What the answer means:
 |---|---|
 | 2xx | *Synced*; the photos' copies on the device are released |
 | 401, the session ended | **sending pauses** (the item waits, no attempt is counted) until someone signs in again; then it resumes |
+| 409 `session_account_changed` | the session is another account's: **sending pauses** as above, the item waits as it was |
 | no answer, 5xx, 408, 425, 429 | transient: try again with backoff (2 s doubling to 5 min, with jitter); after 8 attempts, *Needs attention* with **Try again now** |
 | 403, 404 | access lost: *Needs attention*. If asking for the app itself is also refused, the revocation is confirmed: **replay is blocked and the downloaded copy is removed**; the queued input stays, for the person to deal with |
 | 409 archived, offline, outdated; 400/422 | the server refused it for good: *Needs attention* with the server's reason; never retried by itself |
@@ -128,19 +159,40 @@ and *Sync now* for the whole queue.
 ## Accounts, signing out and revocation
 
 Everything is kept in **one IndexedDB database per user**, `taskto-offline-<user id>`: downloads,
-the queue and the photos. Another account on the same browser never opens it:
+the queue and the photos. A database's name is not a boundary on its own, so another account
+signing in is dealt with when it signs in:
 
-- **Signing in** claims the browser for that account, like the unsent drafts do: any other
-  account's database with nothing waiting is deleted; one with unsent work keeps only that work,
-  sealed under its owner's id (its downloaded records are removed, and nobody else's code opens it).
-- **Signing out** asks first if records on the device haven't reached the server: *Sync now*,
-  *Discard and sign out*, or *Cancel*. Then the account's database is **deleted**: downloads, queue
-  and photos.
+- **Signing in** makes the browser that account's (the *last user* marker moves first, so a
+  database that can't be opened is never replaced by the previous account's). What the last
+  account kept is deleted at once: its downloads, its records that reached the server and their
+  photos, and the whole database if nothing was left unsent. If **records of another account have
+  not reached the server**, those alone stay, **sealed**: nothing of them is shown or sent, and
+  the person signing in is **asked first, with nothing else on screen**: *This browser holds N
+  unsent records of another account. Sign in as that account to send them, or discard them.*
+  *Discard them* (asks again) deletes everything of that account on this device; signing out
+  leaves them for their owner to sign in and send. (A database written by a newer version than the
+  page can't be read here and is left as it is.)
+- **A database that can't be opened** (it is of a newer version, the storage isn't available) is
+  said so, in words: the page never falls back to another account's database, and the offline
+  view opens the signed-in account's own or none.
+- **Signing out**, from anywhere (the menu, the invite page), asks first if records on the device
+  haven't reached the server: *Sync now*, *Discard and sign out*, or *Cancel*. Then the account's
+  database is **deleted**: downloads, queue and photos, whether or not it had been opened in this
+  page.
 - **An ended session** (it expired, or was ended elsewhere) is not signing out: the queue stays
   and sending pauses until the person signs in again.
 - **Revocation** (removed from the space or the app, the app moved or deleted, an admin turned
-  downloads off) is confirmed by the server when the app opens or on the next send, and removes the copy
-  of the records that person may no longer read.
+  downloads off, a narrower read scope) is confirmed by the server when the app opens, when the
+  same person returns online, or on the next send, and removes the copy of the records that
+  person may no longer read ([Downloading](#downloading)).
+
+## Refreshing a download
+
+A download is a snapshot, and a record this device sent may be in the next one. The download says
+which of its records the person's own operations made, and a record whose operation key is among
+them is the server's: the offline screen shows it **once**, and a fresh download removes the
+device's own entry for it. Until a download includes it, the entry is shown, labelled as saved
+here, and counted in "saved here"; the numbers never count it twice.
 
 What this doesn't do: the data is not encrypted at rest on the device, and someone with the
 unlocked device and the browser profile can read it, as with the browser's other site data. Use

@@ -5,7 +5,7 @@ import { vi } from 'vitest'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
 
 // body is the JSON sent, parsed; any other body (a file's Blob, text that isn't JSON) as it was.
-export type Call = { method: string; path: string; body: unknown }
+export type Call = { method: string; path: string; body: unknown; headers: Record<string, string> }
 type Answer = { status?: number; body?: unknown }
 // A function may answer later, to hold a request open.
 type Reply = Answer | ((call: Call) => Answer | Promise<Answer>)
@@ -29,7 +29,12 @@ export function fakeFetch(routes: Record<string, Reply>) {
       method,
       path: url.pathname + url.search,
       body: parseBody(init?.body),
-    }
+    } as Call
+    // The headers are there to be read, but not part of what a test compares calls by.
+    Object.defineProperty(call, 'headers', {
+      value: Object.fromEntries(new Headers(init?.headers).entries()),
+      enumerable: false,
+    })
     calls.push(call)
     const route = routes[`${method} ${call.path}`] ?? routes[`${method} ${url.pathname}`]
     const reply =

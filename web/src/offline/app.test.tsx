@@ -212,3 +212,80 @@ test('with no server and nobody known here, the app says it can’t reach it', a
   render(<App />)
   expect((await screen.findByRole('alert')).textContent).toMatch(/Can't reach the server/)
 })
+
+// Another account's unsent records are on this browser: nothing of them is shown, nothing else is
+// either, until the person signing in chooses.
+async function sealedUnsentOf(user: number) {
+  const store = await OfflineStore.open(user)
+  await store.putDownload({ ...download, user } as never)
+  await store.enqueue({ ...queued(), user }, [])
+  store.close()
+  window.localStorage.setItem('taskto:offline-users', JSON.stringify([user]))
+}
+
+test('another account’s unsent records block the person signing in until they discard them', async () => {
+  await sealedUnsentOf(1)
+  fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  render(<App />)
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog.textContent).toMatch(/1 unsent record of another account/)
+  // Nothing of the app is drawn behind it, and nothing of the other account is readable.
+  expect(screen.queryByRole('banner')).toBeNull()
+  expect(document.body.textContent).not.toContain('Lunch')
+  expect((await runtimeStateItems()).length).toBe(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Discard them' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
+  await screen.findByRole('banner')
+  expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-1')
+})
+
+test('…or sign out, to sign in as that account and send them', async () => {
+  await sealedUnsentOf(1)
+  fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  render(<App />)
+  await screen.findByRole('alertdialog')
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out to sign in as that account' }))
+  await screen.findByRole('heading', { name: /sign in|log in/i })
+  // Hers are kept for her; this account's own database is gone.
+  const names = (await indexedDB.databases()).map((d) => d.name)
+  expect(names).toContain('taskto-offline-1')
+  expect(names).not.toContain('taskto-offline-7')
+})
+
+async function runtimeStateItems() {
+  return (await runtimeState().runtime?.store.listItems()) ?? []
+}
+
+test('signing out from an invite page asks about unsent records and deletes the database', async () => {
+  window.history.replaceState(null, '', '/invite#token-token')
+  const store = await OfflineStore.open(7)
+  await store.enqueue(queued(), [])
+  store.close()
+  window.localStorage.setItem('taskto:offline-users', '[7]')
+  const calls = fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /^Log out, to use another account/ }))
+  // The same warning as anywhere else, and nothing was signed out yet.
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog.textContent).toMatch(/1 record on this device hasn’t reached the server/)
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
+  await waitFor(async () => expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7'))
+  expect(calls.some((c) => c.path === '/api/logout')).toBe(true)
+  expect(lastUser()).toBeNull()
+})
+
+test('signing out from an invite page with nothing unsent leaves nothing of the account on the device', async () => {
+  window.history.replaceState(null, '', '/invite#token-token')
+  const store = await OfflineStore.open(7)
+  await store.putDownload(download as never)
+  store.close()
+  window.localStorage.setItem('taskto:offline-users', '[7]')
+  rememberUser({ id: 7, name: 'Pat' })
+  fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: /^Log out, to use another account/ }))
+  await waitFor(async () => expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7'))
+  expect(lastUser()).toBeNull()
+})
