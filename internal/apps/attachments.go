@@ -31,7 +31,7 @@ import (
 // separate resources, kept in the managed storage of the space that holds the app
 // (<space>/.taskto/app-files/<app>/<id>, with <id>.thumb beside it), reached only through the server's
 // authenticated routes, never by an address anyone could hand to another. The database keeps
-// each one's metadata (app_attachments, migration 0025).
+// each one's metadata (app_attachments, migration 0028).
 //
 // An attachment is made in three steps, by someone who may submit or change the app's records:
 //

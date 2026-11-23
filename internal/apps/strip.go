@@ -29,7 +29,9 @@ func stripMetadata(data []byte, format string) ([]byte, error) {
 // stripJPEG walks a JPEG's segments from its start up to the start of its scan (SOS), leaving out
 // the application segments that hold metadata (APP1, where Exif and XMP live, APP3 to APP13, APP15)
 // and comments, and keeping the rest (APP0's JFIF header, APP2's colour profile, APP14's Adobe
-// transform, and every non-application segment). Everything from the scan on is copied unchanged.
+// transform, and every non-application segment). The scans are copied as they are, with the tables
+// between them (a progressive picture's), up to the end of the picture (EOI): what follows it, such
+// as the video of a phone's motion photo with its own metadata, is not the picture and is left out.
 //
 // The one thing of the metadata a browser needs to show the picture right is its orientation: if
 // it isn't 1, a minimal Exif segment holding it alone is put after the JFIF header.
@@ -61,9 +63,9 @@ func stripJPEG(data []byte) ([]byte, error) {
 		}
 		marker := data[i+1]
 		switch {
-		case marker == 0xda: // the scan: the picture's data, as it is, to the end
+		case marker == 0xda: // the first scan: from here on, the picture's data
 			insert()
-			return append(out, data[i:]...), nil
+			return copyScans(out, data, i)
 		case marker == 0x00 || marker == 0xd8 || marker == 0xd9 || (marker >= 0xd0 && marker <= 0xd7) || marker == 0x01:
 			// Not a segment that can come before the scan, or one that has no length: not a
 			// structure this walks with certainty.
@@ -85,6 +87,54 @@ func stripJPEG(data []byte) ([]byte, error) {
 			insert()
 		}
 		out = append(out, seg...)
+	}
+}
+
+// copyScans copies a JPEG's scans, from the SOS segment at i, and the segments between them, up to
+// and with its EOI marker: nothing after it. A metadata segment between scans is left out too.
+func copyScans(out, data []byte, i int) ([]byte, error) {
+	for {
+		// i is at a marker that has a length (SOS or a table): copy the segment.
+		if i+4 > len(data) {
+			return nil, errNotPicture
+		}
+		marker := data[i+1]
+		size := int(binary.BigEndian.Uint16(data[i+2:]))
+		if size < 2 || i+2+size > len(data) {
+			return nil, errNotPicture
+		}
+		if !dropsJPEGSegment(marker) {
+			out = append(out, data[i:i+2+size]...)
+		}
+		i += 2 + size
+		if marker == 0xda {
+			// Entropy-coded data: 0xff is followed by 0x00 (a stuffed byte), a restart marker or more
+			// 0xff fill; anything else is the next marker.
+			start := i
+			for {
+				if i+1 >= len(data) {
+					return nil, errNotPicture // no end of the picture
+				}
+				if data[i] == 0xff && data[i+1] != 0x00 && data[i+1] != 0xff && (data[i+1] < 0xd0 || data[i+1] > 0xd7) {
+					break
+				}
+				i++
+			}
+			out = append(out, data[start:i]...)
+		}
+		// i is at a marker, after any fill.
+		for i+1 < len(data) && data[i] == 0xff && data[i+1] == 0xff {
+			i++
+		}
+		if i+1 >= len(data) || data[i] != 0xff {
+			return nil, errNotPicture
+		}
+		switch m := data[i+1]; {
+		case m == 0xd9:
+			return append(out, 0xff, 0xd9), nil
+		case m == 0x00 || m == 0x01 || m == 0xd8 || (m >= 0xd0 && m <= 0xd7):
+			return nil, errNotPicture
+		}
 	}
 }
 

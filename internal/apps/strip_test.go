@@ -447,3 +447,27 @@ func TestAReceivedFileLeftAfterReadyIsSwept(t *testing.T) {
 	}
 	expect(t, w.fetch(w.alice, s, a, id, false), http.StatusOK)
 }
+
+// What follows a JPEG's end (the video of a phone's motion photo, with metadata of its own) is not
+// the picture, and is not kept.
+func TestJPEGTrailerAfterTheEndIsDropped(t *testing.T) {
+	original := photoWithMetadata(t, 1)
+	trailer := []byte("ftypmp42 GPS 48.8584N 2.2945E")
+	stripped, err := stripJPEG(append(append([]byte{}, original...), trailer...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stripped, []byte("GPS 48.8584N")) {
+		t.Fatal("the data after the picture's end was kept")
+	}
+	if !bytes.HasSuffix(stripped, []byte{0xff, 0xd9}) {
+		t.Fatal("the stripped picture doesn't end at its EOI")
+	}
+	if !reflect.DeepEqual(decodeAll(t, stripped), decodeAll(t, original)) {
+		t.Fatal("the pixels changed")
+	}
+	// A picture that never ends is refused rather than guessed at.
+	if _, err := stripJPEG(original[:len(original)-2]); !errors.Is(err, errNotPicture) {
+		t.Fatalf("a JPEG without its end: %v", err)
+	}
+}
