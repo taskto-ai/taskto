@@ -12,6 +12,7 @@ import goCatalog from '../../../internal/apps/testdata/catalog.json'
 import expectedAction from '../../../internal/apps/testdata/expenses.action.json'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
+import { ApiError } from '../api'
 import { type ActionPayload, AppView } from './AppView'
 import { appsCatalog } from './catalog'
 
@@ -81,6 +82,76 @@ test("a row's button sends the row's id", async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
   await waitFor(() => expect(sent).toHaveLength(1))
   expect(sent[0]).toMatchObject({ name: 'delete_expense', surfaceId: 'app-1', context: { id: 1 } })
+})
+
+test('a delete names the revision of the row the person saw, and an add names none', async () => {
+  const sent: ActionPayload[] = []
+  render(
+    <AppView
+      surfaceId="app-1"
+      label="Expenses"
+      transport={{
+        load: async () => surface,
+        act: async (action) => {
+          sent.push(action)
+          return afterAdd
+        },
+      }}
+    />,
+  )
+  await screen.findByText('Coffee')
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  fireEvent.input(field('Description'), { target: { value: 'Lunch' } })
+  fireEvent.input(field('Amount'), { target: { value: '12.25' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+  await waitFor(() => expect(sent).toHaveLength(2))
+  expect(sent[0]).toMatchObject({ name: 'delete_expense', expectedRevision: 1 })
+  expect(sent[1]).not.toHaveProperty('expectedRevision')
+})
+
+test("a conflict is told in the user's language and the screen shows the record as it is now", async () => {
+  let loads = 0
+  render(
+    <AppView
+      surfaceId="app-1"
+      label="Expenses"
+      transport={{
+        load: async () => {
+          loads++
+          return loads === 1 ? surface : afterAdd
+        },
+        act: async () => {
+          throw new ApiError(409, 'the record changed since you read it', {
+            code: 'app_record_conflict',
+            params: { id: 1 },
+          })
+        },
+      }}
+    />,
+  )
+  await screen.findByText('Coffee')
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  expect((await screen.findByRole('alert')).textContent).toBe(
+    'Someone else changed this record meanwhile. It is shown as it is now: check it and try again.',
+  )
+  // The screen was loaded again: it has the row the other change added.
+  await screen.findByText('Lunch')
+  expect(loads).toBe(2)
+})
+
+test('loads the screen again when told the data changed behind it', async () => {
+  let loads = 0
+  const transport = {
+    load: async () => {
+      loads++
+      return surface
+    },
+    act: async () => afterAdd,
+  }
+  const { rerender } = render(<AppView surfaceId="app-1" label="Expenses" transport={transport} reloadKey={0} />)
+  await screen.findByText('Coffee')
+  rerender(<AppView surfaceId="app-1" label="Expenses" transport={transport} reloadKey={1} />)
+  await waitFor(() => expect(loads).toBe(2))
 })
 
 test('shows what the server refused', async () => {

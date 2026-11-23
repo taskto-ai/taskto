@@ -59,7 +59,7 @@ func golden(t *testing.T, name string, got any) {
 	}
 }
 
-var seed = []Row{{ID: 1, Data: map[string]any{"description": "Coffee", "amount": 4.5}}}
+var seed = []Row{{ID: 1, Revision: 1, Data: map[string]any{"description": "Coffee", "amount": 4.5}}}
 
 func TestSurface(t *testing.T) {
 	golden(t, "expenses.surface.json", Surface(surfaceID, example(t), seed))
@@ -114,7 +114,7 @@ func TestPlanGoldenAction(t *testing.T) {
 	if ch.Kind != ActionInsert || ch.Data["description"] != "Lunch" || ch.Data["amount"] != 12.25 {
 		t.Fatalf("change = %+v", ch)
 	}
-	golden(t, "expenses.after-add.json", []Message{DataModel(surfaceID, def, append(seed, Row{ID: 2, Data: ch.Data}))})
+	golden(t, "expenses.after-add.json", []Message{DataModel(surfaceID, def, append(seed, Row{ID: 2, Revision: 1, Data: ch.Data}))})
 }
 
 // screen returns the example with change applied to its components, decoded as objects.
@@ -400,9 +400,9 @@ func TestPlanRefusesBadActions(t *testing.T) {
 
 func TestDataModelShowsDeclaredFieldsOnly(t *testing.T) {
 	def := todo(t)
-	msg := DataModel(surfaceID, def, []Row{{ID: 3, Data: map[string]any{"title": "Milk", "old": "hidden"}}})
+	msg := DataModel(surfaceID, def, []Row{{ID: 3, Revision: 2, Data: map[string]any{"title": "Milk", "old": "hidden"}}})
 	raw, _ := json.Marshal(msg)
-	if !strings.Contains(string(raw), `"items":[{"id":3,"title":"Milk"}]`) || strings.Contains(string(raw), "hidden") {
+	if !strings.Contains(string(raw), `"items":[{"_revision":2,"id":3,"title":"Milk"}]`) || strings.Contains(string(raw), "hidden") {
 		t.Fatalf("data model = %s", raw)
 	}
 }

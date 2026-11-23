@@ -7,11 +7,13 @@
         "draft": {},
         "items": [
           {
+            "_revision": 1,
             "amount": 4.5,
             "description": "Coffee",
             "id": 1
           },
           {
+            "_revision": 1,
             "amount": 12.25,
             "description": "Lunch",
             "id": 2

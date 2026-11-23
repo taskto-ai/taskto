@@ -171,6 +171,35 @@ export type App = {
   access: AppAccess
 }
 
+// Who made a change to an app's record, through the agent or an access token if so.
+export type RecordAuthor = { id: number; name: string; agent: boolean; via?: string }
+
+// One record of an app, with its revision and who made, changed and deleted it. `data` holds
+// the fields the app's collection declares.
+export type AppRecord = {
+  id: number
+  revision: number
+  data: Record<string, unknown>
+  created_at: string
+  created_by: RecordAuthor | null
+  updated_at: string
+  updated_by: RecordAuthor | null
+  deleted_at: string | null
+  deleted_by: RecordAuthor | null
+}
+
+// One revision of a record: what was done, by whom, and the data it left.
+export type RecordVersion = {
+  revision: number
+  operation: 'insert' | 'update' | 'delete' | 'restore'
+  data: Record<string, unknown>
+  at: string
+  by: RecordAuthor | null
+  action?: string
+  // The one version of a record that existed before revisions were kept.
+  synthetic?: boolean
+}
+
 export type Comment = { id: number; card_id: number; author: Author; body: string; created_at: string }
 
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
