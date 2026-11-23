@@ -30,3 +30,30 @@ export function readJson<T>(key: string): T | null {
     return null
   }
 }
+
+// What a person types and hasn't sent yet is theirs: the keys that hold it, which signing out
+// forgets and another account signing in on this browser never finds.
+const DRAFT_PREFIXES = ['taskto:builder', 'taskto:message:']
+const DRAFTS_OF = 'taskto:drafts-of'
+
+// forgetDrafts removes every unsent message and builder session kept in this browser.
+export function forgetDrafts(): void {
+  try {
+    const keys: string[] = []
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)
+      if (key && DRAFT_PREFIXES.some((p) => key.startsWith(p))) keys.push(key)
+    }
+    for (const key of keys) window.localStorage.removeItem(key)
+    window.localStorage.removeItem(DRAFTS_OF)
+  } catch {
+    // Nothing kept, nothing to forget.
+  }
+}
+
+// claimDrafts keeps the drafts in this browser for user, forgetting them first if they were
+// someone else's.
+export function claimDrafts(user: number): void {
+  if (readState(DRAFTS_OF) !== String(user)) forgetDrafts()
+  writeState(DRAFTS_OF, String(user))
+}
