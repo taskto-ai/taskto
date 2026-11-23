@@ -89,11 +89,14 @@ type CliEvent = {
   type: string
   text?: string
   status?: string
-  tool?: { name: string; input?: string; status: string; output?: string }
+  tool?: { id?: string; name: string; input?: string; status: string; output?: string; saved?: SavedApp }
   permission?: { id: string; tool: string; input?: string; status: string; reason?: string }
 }
 
 type Done = { status: string; text: string }
+
+/** An app the CLI saved with TaskTo's create_app or update_app (the server read it from the whole answer). */
+export type SavedApp = { space: number; app: number }
 
 /** A browser_help call's request to the user: why, and what to do. */
 type Help = { reason: string; message: string }
@@ -104,13 +107,29 @@ type Help = { reason: string; message: string }
  */
 class Helps {
   private help?: Help
+  // The apps the turn saved, by the call that saved each (a replayed event is the same call).
+  private apps = new Map<string, SavedApp>()
   /** Records a tool call event. */
   see(tool: NonNullable<CliEvent['tool']>): void {
+    const { saved } = tool
+    if (
+      saved &&
+      Number.isSafeInteger(saved.space) &&
+      Number.isSafeInteger(saved.app) &&
+      saved.space > 0 &&
+      saved.app > 0
+    ) {
+      this.apps.set(tool.id ?? `${this.apps.size}`, { space: saved.space, app: saved.app })
+    }
     if (tool.status !== 'in_progress') return
     this.help = helpOf(tool) ?? this.help
   }
   latest(): Help | undefined {
     return this.help
+  }
+  /** The apps the turn saved, in the order they were saved. */
+  savedApps(): SavedApp[] {
+    return [...this.apps.values()]
   }
 }
 
@@ -148,10 +167,15 @@ const MAX_HISTORY = 64 << 10
 // turn too. It is for people, not the model, which reads only the answer. Bounded.
 const MAX_TRANSCRIPT = 64 << 10
 
-function result(value: string, transcript: string, isError = false, help?: Help) {
+// How many saved apps a turn's result keeps: the last ones.
+const MAX_APPS = 20
+
+function result(value: string, transcript: string, isError = false, help?: Help, apps: SavedApp[] = []) {
   const details = {
     ...(transcript ? { transcript: transcript.slice(-MAX_TRANSCRIPT) } : {}),
     ...(help ? { help } : {}),
+    // The apps the CLI saved: the conversation shows them like the built-in agent's saved apps.
+    ...(apps.length > 0 ? { apps: apps.slice(-MAX_APPS) } : {}),
   }
   return {
     output: [{ type: 'text' as const, text: value }],
@@ -504,8 +528,14 @@ export function cliTools(socketPath: string, messagesOf: MessagesOf) {
           round++
           continue
         }
-        if (done.status === 'ok') return result(done.text, rec.text(), false, helps.latest())
-        return result(done.text || `the ${PRODUCT[cli]} turn failed`, rec.text(), true, helps.latest())
+        if (done.status === 'ok') return result(done.text, rec.text(), false, helps.latest(), helps.savedApps())
+        return result(
+          done.text || `the ${PRODUCT[cli]} turn failed`,
+          rec.text(),
+          true,
+          helps.latest(),
+          helps.savedApps(),
+        )
       }
     },
   })
