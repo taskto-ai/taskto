@@ -1,0 +1,44 @@
+{
+  "collection": {
+    "fields": [
+      { "name": "kind", "type": "choice", "options": ["task", "meeting", "other"] },
+      { "name": "title", "type": "string" },
+      { "name": "points", "type": "number" },
+      { "name": "done", "type": "boolean" },
+      { "name": "day", "type": "date" },
+      { "name": "at", "type": "time" }
+    ]
+  },
+  "cases": [
+    { "name": "choice equals its option", "rule": { "field": "kind", "op": "eq", "value": "other" }, "row": { "kind": "other" }, "holds": true },
+    { "name": "choice equals another option", "rule": { "field": "kind", "op": "eq", "value": "other" }, "row": { "kind": "task" }, "holds": false },
+    { "name": "a ChoicePicker's one-item list is its value", "rule": { "field": "kind", "op": "eq", "value": "other" }, "row": { "kind": ["other"] }, "holds": true },
+    { "name": "no value equals nothing", "rule": { "field": "kind", "op": "eq", "value": "other" }, "row": {}, "holds": false },
+    { "name": "no value differs from everything", "rule": { "field": "kind", "op": "ne", "value": "other" }, "row": {}, "holds": true },
+    { "name": "a different value differs", "rule": { "field": "kind", "op": "ne", "value": "other" }, "row": { "kind": "task" }, "holds": true },
+    { "name": "the same value doesn't differ", "rule": { "field": "kind", "op": "ne", "value": "other" }, "row": { "kind": "other" }, "holds": false },
+    { "name": "text from a form is the same text", "rule": { "field": "title", "op": "eq", "value": "Milk" }, "row": { "title": " Milk " }, "holds": true },
+    { "name": "blank text is no value", "rule": { "field": "title", "op": "ne", "value": "Milk" }, "row": { "title": "  " }, "holds": true },
+    { "name": "number over", "rule": { "field": "points", "op": "gt", "value": 3 }, "row": { "points": 4 }, "holds": true },
+    { "name": "number not over itself", "rule": { "field": "points", "op": "gt", "value": 3 }, "row": { "points": 3 }, "holds": false },
+    { "name": "number at least itself", "rule": { "field": "points", "op": "gte", "value": 3 }, "row": { "points": 3 }, "holds": true },
+    { "name": "number under", "rule": { "field": "points", "op": "lt", "value": 3 }, "row": { "points": 2.5 }, "holds": true },
+    { "name": "number at most", "rule": { "field": "points", "op": "lte", "value": 3 }, "row": { "points": 3.5 }, "holds": false },
+    { "name": "a number typed in a form", "rule": { "field": "points", "op": "eq", "value": 12 }, "row": { "points": "12" }, "holds": true },
+    { "name": "ordering is false for no value", "rule": { "field": "points", "op": "lt", "value": 3 }, "row": {}, "holds": false },
+    { "name": "boolean true", "rule": { "field": "done", "op": "eq", "value": true }, "row": { "done": true }, "holds": true },
+    { "name": "boolean false is not true", "rule": { "field": "done", "op": "eq", "value": true }, "row": { "done": false }, "holds": false },
+    { "name": "no boolean is not true", "rule": { "field": "done", "op": "ne", "value": true }, "row": {}, "holds": true },
+    { "name": "a boolean typed as text", "rule": { "field": "done", "op": "eq", "value": true }, "row": { "done": "true" }, "holds": true },
+    { "name": "date before", "rule": { "field": "day", "op": "lt", "value": "2026-12-01" }, "row": { "day": "2026-11-30" }, "holds": true },
+    { "name": "date not before itself", "rule": { "field": "day", "op": "lt", "value": "2026-12-01" }, "row": { "day": "2026-12-01" }, "holds": false },
+    { "name": "time after", "rule": { "field": "at", "op": "gte", "value": "09:30" }, "row": { "at": "17:05" }, "holds": true },
+    { "name": "time before", "rule": { "field": "at", "op": "lt", "value": "09:30" }, "row": { "at": "17:05" }, "holds": false },
+    { "name": "a value of the wrong type is no value", "rule": { "field": "points", "op": "ne", "value": 3 }, "row": { "points": "many" }, "holds": true },
+    { "name": "all holds when every part does", "rule": { "all": [{ "field": "kind", "op": "eq", "value": "other" }, { "field": "points", "op": "gt", "value": 1 }] }, "row": { "kind": "other", "points": 2 }, "holds": true },
+    { "name": "all fails when one part does", "rule": { "all": [{ "field": "kind", "op": "eq", "value": "other" }, { "field": "points", "op": "gt", "value": 1 }] }, "row": { "kind": "other", "points": 1 }, "holds": false },
+    { "name": "any holds when one part does", "rule": { "any": [{ "field": "kind", "op": "eq", "value": "other" }, { "field": "done", "op": "eq", "value": true }] }, "row": { "done": true }, "holds": true },
+    { "name": "any fails when none does", "rule": { "any": [{ "field": "kind", "op": "eq", "value": "other" }, { "field": "done", "op": "eq", "value": true }] }, "row": { "kind": "task" }, "holds": false },
+    { "name": "any inside all", "rule": { "all": [{ "any": [{ "field": "kind", "op": "eq", "value": "task" }, { "field": "kind", "op": "eq", "value": "meeting" }] }, { "field": "done", "op": "ne", "value": true }] }, "row": { "kind": "meeting" }, "holds": true }
+  ]
+}

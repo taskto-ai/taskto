@@ -11,6 +11,8 @@
     "component.List",
     "component.Modal",
     "component.Row",
+    "component.Screens",
+    "component.Show",
     "component.Slider",
     "component.Stat",
     "component.Tabs",
@@ -109,6 +111,15 @@
       "justify",
       "weight"
     ],
+    "Screens": [
+      "current",
+      "screens"
+    ],
+    "Show": [
+      "child",
+      "source",
+      "when"
+    ],
     "Slider": [
       "accessibility",
       "checks",
@@ -142,7 +153,7 @@
       "weight"
     ]
   },
-  "definition_version": 1,
+  "definition_version": 2,
   "functions": [
     "and",
     "email",

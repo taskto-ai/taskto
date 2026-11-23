@@ -638,7 +638,7 @@
             "definition_version": {
               "type": "integer",
               "minimum": 1,
-              "description": "the version of the definition's format; leave it out for the current one"
+              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time or choice fields, rules or navigation"
             },
             "requires": {
               "type": "array",
@@ -652,7 +652,42 @@
               "items": {
                 "type": "object"
               },
-              "description": "the screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\""
+              "description": "the screen of an app with ONE screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\". An app with several screens has screens instead, never both"
+            },
+            "screens": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "description": "the screens of an app with several: each {\"name\", \"root\", \"record\"?, \"components\"}. root is the id of the screen's root component (not \"root\"); all component ids are unique across the screens, and a component refers only to its own screen's. At most 300 components in all. record: true is a detail screen, opened with a record's id and showing it at /record. Buttons move between screens with a navigate action",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{0,39}$"
+                  },
+                  "root": {
+                    "type": "string"
+                  },
+                  "record": {
+                    "type": "boolean"
+                  },
+                  "components": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 300,
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "required": ["name", "root", "components"],
+                "additionalProperties": false
+              }
+            },
+            "entry": {
+              "type": "string",
+              "description": "the screen an app with screens opens on; it can't be a record screen"
             },
             "collection": {
               "type": "object",
@@ -669,10 +704,30 @@
                       },
                       "type": {
                         "type": "string",
-                        "enum": ["string", "number", "boolean", "date"]
+                        "enum": ["string", "number", "boolean", "date", "time", "choice"],
+                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options"
                       },
                       "required": {
                         "type": "boolean"
+                      },
+                      "required_when": {
+                        "type": "object",
+                        "description": "the field is required when this rule holds of the row, enforced on every insert and update whatever a screen shows: {\"field\", \"op\": eq|ne|lt|lte|gt|gte, \"value\": a literal of that field's type} or {\"all\": [rules]} or {\"any\": [rules]}, nested at most 3 deep, at most 16 parts. Not for a field that is always required",
+                        "properties": {
+                          "field": { "type": "string" },
+                          "op": { "type": "string", "enum": ["eq", "ne", "lt", "lte", "gt", "gte"] },
+                          "value": {},
+                          "all": { "type": "array", "items": { "type": "object" } },
+                          "any": { "type": "array", "items": { "type": "object" } }
+                        },
+                        "additionalProperties": false
+                      },
+                      "options": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "items": { "type": "string" },
+                        "description": "a choice field's options: different texts, at most 100 characters each"
                       },
                       "max_length": {
                         "type": "integer",
@@ -705,7 +760,15 @@
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "enum": ["insert", "update", "delete"]
+                    "enum": ["insert", "update", "delete", "navigate"]
+                  },
+                  "screen": {
+                    "type": "string",
+                    "description": "navigate: the screen it opens. The Button's event context is {\"id\": …} for a record screen, none otherwise"
+                  },
+                  "then": {
+                    "type": "string",
+                    "description": "insert, update or delete: the screen to open once it has run (not a record screen)"
                   }
                 },
                 "required": ["kind"],
@@ -725,6 +788,10 @@
                   "field": {
                     "type": "string",
                     "description": "the number field a sum adds"
+                  },
+                  "where": {
+                    "type": "object",
+                    "description": "count or sum only the rows this rule holds of (the same rule as required_when)"
                   }
                 },
                 "required": ["kind"],
@@ -732,7 +799,7 @@
               }
             }
           },
-          "required": ["components", "collection", "actions"],
+          "required": ["collection", "actions"],
           "additionalProperties": false
         }
       },
@@ -774,7 +841,7 @@
             "definition_version": {
               "type": "integer",
               "minimum": 1,
-              "description": "the version of the definition's format; leave it out for the current one"
+              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time or choice fields, rules or navigation"
             },
             "requires": {
               "type": "array",
@@ -788,7 +855,42 @@
               "items": {
                 "type": "object"
               },
-              "description": "the screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\""
+              "description": "the screen of an app with ONE screen: A2UI v0.9 components from app_catalog, each {\"id\", \"component\", …props}, one with the id \"root\". An app with several screens has screens instead, never both"
+            },
+            "screens": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 12,
+              "description": "the screens of an app with several: each {\"name\", \"root\", \"record\"?, \"components\"}. root is the id of the screen's root component (not \"root\"); all component ids are unique across the screens, and a component refers only to its own screen's. At most 300 components in all. record: true is a detail screen, opened with a record's id and showing it at /record. Buttons move between screens with a navigate action",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{0,39}$"
+                  },
+                  "root": {
+                    "type": "string"
+                  },
+                  "record": {
+                    "type": "boolean"
+                  },
+                  "components": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 300,
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "required": ["name", "root", "components"],
+                "additionalProperties": false
+              }
+            },
+            "entry": {
+              "type": "string",
+              "description": "the screen an app with screens opens on; it can't be a record screen"
             },
             "collection": {
               "type": "object",
@@ -805,10 +907,30 @@
                       },
                       "type": {
                         "type": "string",
-                        "enum": ["string", "number", "boolean", "date"]
+                        "enum": ["string", "number", "boolean", "date", "time", "choice"],
+                        "description": "a date is YYYY-MM-DD, a time HH:MM on a 24-hour clock, a choice one of its options"
                       },
                       "required": {
                         "type": "boolean"
+                      },
+                      "required_when": {
+                        "type": "object",
+                        "description": "the field is required when this rule holds of the row, enforced on every insert and update whatever a screen shows: {\"field\", \"op\": eq|ne|lt|lte|gt|gte, \"value\": a literal of that field's type} or {\"all\": [rules]} or {\"any\": [rules]}, nested at most 3 deep, at most 16 parts. Not for a field that is always required",
+                        "properties": {
+                          "field": { "type": "string" },
+                          "op": { "type": "string", "enum": ["eq", "ne", "lt", "lte", "gt", "gte"] },
+                          "value": {},
+                          "all": { "type": "array", "items": { "type": "object" } },
+                          "any": { "type": "array", "items": { "type": "object" } }
+                        },
+                        "additionalProperties": false
+                      },
+                      "options": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "items": { "type": "string" },
+                        "description": "a choice field's options: different texts, at most 100 characters each"
                       },
                       "max_length": {
                         "type": "integer",
@@ -841,7 +963,15 @@
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "enum": ["insert", "update", "delete"]
+                    "enum": ["insert", "update", "delete", "navigate"]
+                  },
+                  "screen": {
+                    "type": "string",
+                    "description": "navigate: the screen it opens. The Button's event context is {\"id\": …} for a record screen, none otherwise"
+                  },
+                  "then": {
+                    "type": "string",
+                    "description": "insert, update or delete: the screen to open once it has run (not a record screen)"
                   }
                 },
                 "required": ["kind"],
@@ -861,6 +991,10 @@
                   "field": {
                     "type": "string",
                     "description": "the number field a sum adds"
+                  },
+                  "where": {
+                    "type": "object",
+                    "description": "count or sum only the rows this rule holds of (the same rule as required_when)"
                   }
                 },
                 "required": ["kind"],
@@ -868,7 +1002,7 @@
               }
             }
           },
-          "required": ["components", "collection", "actions"],
+          "required": ["collection", "actions"],
           "additionalProperties": false
         },
         "archived": {

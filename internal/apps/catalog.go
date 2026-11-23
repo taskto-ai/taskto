@@ -46,6 +46,8 @@ const (
 	kTabs                      // a list of {title, child}
 	kOptions                   // a list of {label, value}
 	kIconName                  // an icon's name, an SVG path, or a binding
+	kRule                      // a rule (rules.go) over the collection's fields
+	kScreenRefs                // a list of {name, child}: the host of the screens' own
 )
 
 // prop is one prop of a component, or argument of a function.
@@ -131,6 +133,13 @@ var components = map[string]map[string]prop{
 	}),
 	// Ours: a labelled headline value, such as a total. Only these two props.
 	"Stat": {"label": req(kDynString), "value": req(kDynString)},
+	// Ours: draws its child only while its rule holds of the form (/draft, the default) or of
+	// the record a screen shows (/record). It hides an input; it decides nothing the server
+	// accepts (rules.go).
+	"Show": {"when": req(kRule), "source": enum("draft", "record"), "child": req(kComponentID)},
+	// Ours, and the server's: the host of an app's screens, which the server adds as the root
+	// (screens.go). An app's own components may not use it.
+	screensComponent: {"current": req(kDynString), "screens": req(kScreenRefs)},
 }
 
 // function is one function of the catalog: its arguments, what it returns, and whether it
@@ -194,22 +203,24 @@ const (
 
 // screenCheck validates one screen.
 type screenCheck struct {
-	actions map[string]Action // the events buttons may send
-	used    map[string]bool   // the capabilities the screen needs
-	ids     map[string]bool
-	refs    map[string][]string // component ID → the IDs it refers to
+	*screenScope
+	used map[string]bool // the capabilities the screen needs
+	ids  map[string]bool
+	refs map[string][]string // component ID → the IDs it refers to
 }
 
 // checkComponents validates a screen's components and returns them re-encoded, so what is
-// stored is exactly what was checked (no duplicate keys, nothing the decoder skipped).
-func checkComponents(raw []json.RawMessage, actions map[string]Action) ([]json.RawMessage, []string, error) {
+// stored is exactly what was checked (no duplicate keys, nothing the decoder skipped). root is
+// the id of its root component, "root" for an app with one screen. taken holds the ids of the
+// app's other screens' components, which this one's may not reuse, and gets this one's.
+func checkComponents(raw []json.RawMessage, root string, taken map[string]bool, scope *screenScope) ([]json.RawMessage, []string, error) {
 	if len(raw) == 0 {
 		return nil, nil, invalidf("components: a screen needs at least its root component")
 	}
 	if len(raw) > MaxComponents {
 		return nil, nil, invalidf("components: at most %d", MaxComponents)
 	}
-	c := &screenCheck{actions: actions, used: map[string]bool{}, ids: map[string]bool{}, refs: map[string][]string{}}
+	c := &screenCheck{screenScope: scope, used: map[string]bool{}, ids: map[string]bool{}, refs: map[string][]string{}}
 	decoded := make([]map[string]any, len(raw))
 	for i, r := range raw {
 		obj, err := decodeObject(r)
@@ -220,14 +231,20 @@ func checkComponents(raw []json.RawMessage, actions map[string]Action) ([]json.R
 		if id == "" || len(id) > maxIDLen {
 			return nil, nil, invalidf("components[%d]: id must be text of 1 to %d characters", i, maxIDLen)
 		}
-		if c.ids[id] {
+		if root != hostID && id == hostID {
+			return nil, nil, invalidf("components[%d]: the id %q is the server's, for the host of the screens: give a screen's root another id", i, hostID)
+		}
+		if c.ids[id] || (root != hostID && taken[id]) {
 			return nil, nil, invalidf("components[%d]: id %q is used twice", i, id)
 		}
 		c.ids[id] = true
 		decoded[i] = obj
 	}
-	if !c.ids["root"] {
-		return nil, nil, invalidf(`components: no component has the id "root"`)
+	for id := range c.ids {
+		taken[id] = true
+	}
+	if !c.ids[root] {
+		return nil, nil, invalidf("components: no component has the id %q", root)
 	}
 	out := make([]json.RawMessage, len(decoded))
 	for i, obj := range decoded {
@@ -265,8 +282,8 @@ func (c *screenCheck) component(id string, obj map[string]any) error {
 	name, _ := obj["component"].(string)
 	spec, ok := components[name]
 	c.used[ComponentCapability(name)] = true
-	if !ok {
-		return fmt.Errorf("%q is not a component of the catalog (it has %s)", obj["component"], strings.Join(componentNames(), ", "))
+	if !ok || name == screensComponent {
+		return fmt.Errorf("%q is not a component of the catalog (it has %s)", obj["component"], strings.Join(authorable(), ", "))
 	}
 	for key, v := range obj {
 		if key == "id" || key == "component" {
@@ -356,6 +373,14 @@ func (c *screenCheck) value(id string, p prop, v any, depth int) error {
 		return eachObject(v, func(i int, o map[string]any) error {
 			return c.object(id, o, map[string]prop{"label": req(kDynString), "value": req(kString)}, depth+1)
 		})
+	case kRule:
+		rule, err := ruleFromValue(v)
+		if err != nil {
+			return err
+		}
+		return rule.check(c.collection)
+	case kScreenRefs:
+		return fmt.Errorf("only the server adds the host of the screens")
 	case kIconName:
 		switch n := v.(type) {
 		case string:
@@ -519,13 +544,16 @@ func (c *screenCheck) action(id string, v any, depth int) error {
 	if !ok {
 		return fmt.Errorf(`must be {"event": {"name", "context"}} or {"functionCall": …}`)
 	}
+	var named Action
 	for key, val := range ev {
 		switch key {
 		case "name":
 			name, _ := val.(string)
-			if _, declared := c.actions[name]; !declared {
+			a, declared := c.actions[name]
+			if !declared {
 				return fmt.Errorf("event %q is not one of the app's actions", val)
 			}
+			named = a
 		case "context":
 			ctx, ok := val.(map[string]any)
 			if !ok {
@@ -540,8 +568,22 @@ func (c *screenCheck) action(id string, v any, depth int) error {
 			return fmt.Errorf("event: unknown key %q", key)
 		}
 	}
-	if _, named := ev["name"]; !named {
+	if _, given := ev["name"]; !given {
 		return fmt.Errorf("event needs a name")
+	}
+	if named.Kind == ActionNavigate {
+		// What navigating takes is known here: the record's id for a screen that shows one,
+		// and nothing else.
+		ctx, _ := ev["context"].(map[string]any)
+		_, hasID := ctx["id"]
+		switch target := c.screens[named.Screen]; {
+		case target.Record && !hasID:
+			return fmt.Errorf("event %q opens %q, which shows a record: its context needs the record's id", ev["name"], named.Screen)
+		case !target.Record && hasID:
+			return fmt.Errorf("event %q opens %q, which doesn't show a record: it takes no id", ev["name"], named.Screen)
+		case len(ctx) > 1 || (len(ctx) == 1 && !hasID):
+			return fmt.Errorf("event %q: navigating takes only the record's id", ev["name"])
+		}
 	}
 	return nil
 }
@@ -647,6 +689,12 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 func componentNames() []string { return sortedKeys(components) }
+
+// authorable are the components an app's own screens may use: all but the host of the screens,
+// which the server adds.
+func authorable() []string {
+	return slices.DeleteFunc(componentNames(), func(n string) bool { return n == screensComponent })
+}
 
 var iconNames = []string{"accountCircle", "add", "arrowBack", "arrowForward", "attachFile", "calendarToday",
 	"call", "camera", "check", "close", "delete", "download", "edit", "event", "error", "fastForward", "favorite",

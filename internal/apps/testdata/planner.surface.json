@@ -1,0 +1,427 @@
+[
+  {
+    "createSurface": {
+      "catalogId": "https://taskto.ai/catalogs/apps/v1.json",
+      "surfaceId": "app-1"
+    },
+    "version": "v0.9"
+  },
+  {
+    "updateComponents": {
+      "components": [
+        {
+          "component": "Screens",
+          "current": {
+            "path": "/screen"
+          },
+          "id": "root",
+          "screens": [
+            {
+              "child": "tasks-root",
+              "name": "tasks"
+            },
+            {
+              "child": "new-root",
+              "name": "new"
+            },
+            {
+              "child": "detail-root",
+              "name": "detail"
+            }
+          ]
+        },
+        {
+          "children": [
+            "tasks-title",
+            "tasks-open",
+            "tasks-list",
+            "tasks-new"
+          ],
+          "component": "Column",
+          "id": "tasks-root"
+        },
+        {
+          "component": "Text",
+          "id": "tasks-title",
+          "text": "Tasks",
+          "variant": "h2"
+        },
+        {
+          "component": "Stat",
+          "id": "tasks-open",
+          "label": "Open tasks",
+          "value": {
+            "path": "/open"
+          }
+        },
+        {
+          "children": {
+            "componentId": "task-row",
+            "path": "/items"
+          },
+          "component": "List",
+          "id": "tasks-list"
+        },
+        {
+          "align": "center",
+          "children": [
+            "task-title",
+            "task-category",
+            "task-open"
+          ],
+          "component": "Row",
+          "id": "task-row",
+          "justify": "spaceBetween"
+        },
+        {
+          "component": "Text",
+          "id": "task-title",
+          "text": {
+            "path": "title"
+          }
+        },
+        {
+          "component": "Text",
+          "id": "task-category",
+          "text": {
+            "path": "category"
+          },
+          "variant": "caption"
+        },
+        {
+          "component": "Text",
+          "id": "task-open-label",
+          "text": "Open"
+        },
+        {
+          "action": {
+            "event": {
+              "context": {
+                "id": {
+                  "path": "id"
+                }
+              },
+              "name": "open_task"
+            }
+          },
+          "child": "task-open-label",
+          "component": "Button",
+          "id": "task-open",
+          "variant": "borderless"
+        },
+        {
+          "component": "Text",
+          "id": "tasks-new-label",
+          "text": "New task"
+        },
+        {
+          "action": {
+            "event": {
+              "name": "new_task"
+            }
+          },
+          "child": "tasks-new-label",
+          "component": "Button",
+          "id": "tasks-new",
+          "variant": "primary"
+        },
+        {
+          "children": [
+            "new-title",
+            "new-name",
+            "new-category",
+            "new-note-when",
+            "new-date",
+            "new-time",
+            "new-actions"
+          ],
+          "component": "Column",
+          "id": "new-root"
+        },
+        {
+          "component": "Text",
+          "id": "new-title",
+          "text": "New task",
+          "variant": "h2"
+        },
+        {
+          "component": "TextField",
+          "id": "new-name",
+          "label": "Title",
+          "value": {
+            "path": "/draft/title"
+          }
+        },
+        {
+          "component": "ChoicePicker",
+          "displayStyle": "chips",
+          "id": "new-category",
+          "label": "Category",
+          "options": [
+            {
+              "label": "Work",
+              "value": "work"
+            },
+            {
+              "label": "Home",
+              "value": "home"
+            },
+            {
+              "label": "Other",
+              "value": "other"
+            }
+          ],
+          "value": {
+            "path": "/draft/category"
+          },
+          "variant": "mutuallyExclusive"
+        },
+        {
+          "child": "new-note",
+          "component": "Show",
+          "id": "new-note-when",
+          "when": {
+            "field": "category",
+            "op": "eq",
+            "value": "other"
+          }
+        },
+        {
+          "component": "TextField",
+          "id": "new-note",
+          "label": "What kind of task?",
+          "value": {
+            "path": "/draft/category_note"
+          }
+        },
+        {
+          "component": "DateTimeInput",
+          "enableDate": true,
+          "id": "new-date",
+          "label": "Due date",
+          "value": {
+            "path": "/draft/due_date"
+          }
+        },
+        {
+          "component": "DateTimeInput",
+          "enableTime": true,
+          "id": "new-time",
+          "label": "Due time",
+          "value": {
+            "path": "/draft/due_time"
+          }
+        },
+        {
+          "children": [
+            "new-back",
+            "new-add"
+          ],
+          "component": "Row",
+          "id": "new-actions"
+        },
+        {
+          "component": "Text",
+          "id": "new-back-label",
+          "text": "Back"
+        },
+        {
+          "action": {
+            "event": {
+              "name": "back_to_tasks"
+            }
+          },
+          "child": "new-back-label",
+          "component": "Button",
+          "id": "new-back"
+        },
+        {
+          "component": "Text",
+          "id": "new-add-label",
+          "text": "Add task"
+        },
+        {
+          "action": {
+            "event": {
+              "context": {
+                "category": {
+                  "path": "/draft/category"
+                },
+                "category_note": {
+                  "path": "/draft/category_note"
+                },
+                "due_date": {
+                  "path": "/draft/due_date"
+                },
+                "due_time": {
+                  "path": "/draft/due_time"
+                },
+                "title": {
+                  "path": "/draft/title"
+                }
+              },
+              "name": "add_task"
+            }
+          },
+          "child": "new-add-label",
+          "component": "Button",
+          "id": "new-add",
+          "variant": "primary"
+        },
+        {
+          "children": [
+            "detail-title",
+            "detail-category",
+            "detail-note-when",
+            "detail-due",
+            "detail-actions"
+          ],
+          "component": "Column",
+          "id": "detail-root"
+        },
+        {
+          "component": "Text",
+          "id": "detail-title",
+          "text": {
+            "path": "/record/title"
+          },
+          "variant": "h2"
+        },
+        {
+          "component": "Stat",
+          "id": "detail-category",
+          "label": "Category",
+          "value": {
+            "path": "/record/category"
+          }
+        },
+        {
+          "child": "detail-note",
+          "component": "Show",
+          "id": "detail-note-when",
+          "source": "record",
+          "when": {
+            "field": "category",
+            "op": "eq",
+            "value": "other"
+          }
+        },
+        {
+          "component": "Stat",
+          "id": "detail-note",
+          "label": "Kind",
+          "value": {
+            "path": "/record/category_note"
+          }
+        },
+        {
+          "component": "Stat",
+          "id": "detail-due",
+          "label": "Due",
+          "value": {
+            "path": "/record/due_date"
+          }
+        },
+        {
+          "children": [
+            "detail-back",
+            "detail-done",
+            "detail-delete"
+          ],
+          "component": "Row",
+          "id": "detail-actions"
+        },
+        {
+          "component": "Text",
+          "id": "detail-back-label",
+          "text": "Back"
+        },
+        {
+          "action": {
+            "event": {
+              "name": "back_to_tasks"
+            }
+          },
+          "child": "detail-back-label",
+          "component": "Button",
+          "id": "detail-back"
+        },
+        {
+          "component": "Text",
+          "id": "detail-done-label",
+          "text": "Mark done"
+        },
+        {
+          "action": {
+            "event": {
+              "context": {
+                "done": true,
+                "id": {
+                  "path": "/record/id"
+                }
+              },
+              "name": "complete_task"
+            }
+          },
+          "child": "detail-done-label",
+          "component": "Button",
+          "id": "detail-done",
+          "variant": "primary"
+        },
+        {
+          "component": "Text",
+          "id": "detail-delete-label",
+          "text": "Delete"
+        },
+        {
+          "action": {
+            "event": {
+              "context": {
+                "id": {
+                  "path": "/record/id"
+                }
+              },
+              "name": "delete_task"
+            }
+          },
+          "child": "detail-delete-label",
+          "component": "Button",
+          "id": "detail-delete",
+          "variant": "borderless"
+        }
+      ],
+      "surfaceId": "app-1"
+    },
+    "version": "v0.9"
+  },
+  {
+    "updateDataModel": {
+      "path": "/",
+      "surfaceId": "app-1",
+      "value": {
+        "draft": {},
+        "items": [
+          {
+            "_revision": 1,
+            "category": "home",
+            "due_time": "09:30",
+            "id": 1,
+            "title": "Pay rent"
+          },
+          {
+            "_revision": 1,
+            "category": "other",
+            "category_note": "errand",
+            "done": true,
+            "id": 2,
+            "title": "Fix the shelf"
+          }
+        ],
+        "open": "1",
+        "record": {},
+        "screen": "tasks"
+      }
+    },
+    "version": "v0.9"
+  }
+]

@@ -112,6 +112,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_field_too_small` | 422 | The value of `field` is under `min`. |
 | `app_field_too_large` | 422 | The value of `field` is over `max`. |
 | `app_field_not_date` | 422 | The value of `field` isn't a date, `YYYY-MM-DD`. |
+| `app_field_not_time` | 422 | The value of `field` isn't a time, `HH:MM` on a 24-hour clock. |
+| `app_field_not_option` | 422 | The value of `field`, a choice, isn't one of its options (or is several of them). |
+| `app_field_required_when` | 422 | `field` is required when the row meets the condition its `required_when` rule sets, and the action leaves it out. |
 | `request_too_large` | 413 | The request's body is over `max` bytes. |
 | `doc_not_found` | 404 | No such document, folder or version in the space. |
 | `doc_name_invalid` | 400 | `name` can't be a path in a space: empty parts, `..`, `.git`, a leading `/`, backslashes or control characters. |
@@ -1480,7 +1483,7 @@ sees the live release alone. See [Drafts and releases](#drafts-and-releases).
 
 ```json
 {
-  "definition_version": 1,
+  "definition_version": 2,
   "requires": ["component.Button", "component.Column", …],
   "components": [{"id": "root", "component": "Column", "children": ["title", "items", "form"]}, …],
   "collection": {"fields": [
@@ -1496,21 +1499,28 @@ The server checks every definition when it is saved, strictly, and refuses it (`
 saying what is wrong) unless:
 
 - **definition_version** is the version of the definition's own format, TaskTo.AI's,
-  independent of the A2UI protocol's version: `1` today (left out, it is the server's
+  independent of the A2UI protocol's version: `2` today (left out, it is the server's
   current). A higher one is refused (`app_definition_version`), and a client that finds a
-  release in a version it doesn't read asks to be updated instead of drawing it.
+  release in a version it doesn't read asks to be updated instead of drawing it. **Version 1**
+  (one screen; `string`, `number`, `boolean` and `date` fields; `insert`, `update` and
+  `delete`) is still read, checked and drawn exactly as it was; a definition that says `1` can't
+  use anything of version 2 (`400`), which is everything in [Screens](#screens-and-navigation),
+  [time and choice fields](#fields-and-rules) and [rules](#fields-and-rules).
 - **requires** lists the catalog **capabilities** the screen needs: `component.<Name>` for
   each component it draws and `function.<name>` for each function it calls. The server works
   it out from the screen and replaces whatever was sent, so a definition can't claim less than
   it uses; the list is in each release, and a client whose catalog lacks one shows that it
   must update. A new component or function is a new capability.
 
-- **components** is the screen, 1–300 A2UI components, one with the ID `root`, each
+- **components** is the screen of an app with one, 1–300 A2UI components, one with the ID `root`
+  (an app with several has `screens` instead, never both), each
   `{"id", "component", …props}` with only the catalog's components and props
   (`internal/apps/catalog.go`): A2UI's basic catalog without `Image`, `Video`,
   `AudioPlayer` and the `openUrl` function (an app is shared, and a picture from
   elsewhere would tell that server who opens it, and could carry the app's data in its
-  address), plus `Stat` (a labelled value). Props must have the catalog's types and enum
+  address), plus `Stat` (a labelled value) and `Show` (draws its child while a rule holds,
+  [below](#fields-and-rules)). `Screens`, the host of an app's screens, is the server's own and
+  is refused in a definition. Props must have the catalog's types and enum
   values; dynamic values are a literal, a data binding `{"path": …}`, or a call of a
   catalog function returning the right type. Every component referred to must exist, no
   component may contain itself, and every button's event must be one of the app's
@@ -1518,17 +1528,79 @@ saying what is wrong) unless:
   same catalog.
 - **collection.fields**, at most 50: `name` (a lowercase letter, then up to 39 lowercase
   letters, digits or `_`; not `id`, `items` or `draft`), `type` (`string`, `number`,
-  `boolean`, or `date`: `YYYY-MM-DD`), `required`, `max_length` (strings: 1–10000,
-  1000 when left out), `min` and `max` (numbers).
+  `boolean`, `date`: `YYYY-MM-DD`, `time`: `HH:MM` on a 24-hour clock, or `choice`), `required`,
+  `required_when` (a rule), `max_length` (strings: 1–10000, 1000 when left out), `min` and `max`
+  (numbers), `options` (a choice's, 1–50 different texts of at most 100 characters).
 - **actions**, 1–50, map an event name to its `kind`: `insert` adds a row from the
   event's context; `update` changes the fields the context gives of the row whose `id` it
-  gives (blank text clears a field); `delete` removes the row whose `id` it gives.
+  gives (blank text clears a field); `delete` removes the row whose `id` it gives; `navigate`
+  opens a screen (`"screen"`). An insert, update or delete may say `"then"`, a screen to open
+  once it has run.
 - **summaries**, at most 20: `{"kind": "count"}` or `{"kind": "sum", "field": …}` of a
-  number field, shown as text.
+  number field, shown as text; `"where"`, a rule, narrows either to the rows it holds of.
 - The whole definition is at most 48 KiB of JSON.
 
 The data model an app's screen binds to: `/items` is the live rows, each with its `id`, its
 revision as `_revision` and the collection's fields; `/draft` is an empty form; each summary is at `/<name>`.
+An app with screens also has `/screen`, the name of the screen shown, and `/record`, the record a
+detail screen shows.
+
+#### Screens and navigation
+
+An app has one screen (`components`) or several (`screens` and `entry`):
+
+```json
+"screens": [
+  {"name": "tasks", "root": "tasks-root", "components": [ … ]},
+  {"name": "detail", "root": "detail-root", "record": true, "components": [ … ]}
+],
+"entry": "tasks",
+"actions": {"open_task": {"kind": "navigate", "screen": "detail"},
+            "add_task": {"kind": "insert", "then": "tasks"}}
+```
+
+At most 12 screens, named like fields, and at most 300 components in all. Each screen has the ID of
+its root component (`root` is the server's, for the host that draws the screen `/screen` names).
+Every component's ID is unique across the screens, and a component refers only to those of its
+own screen. `entry` is the screen the app opens on and can't be a `record` screen: one that shows a
+record at `/record`, and is opened with the record's ID. A Button navigates by sending an event
+that names a `navigate` action: the event's `context` is `{"id": …}` for a `record` screen and is
+left out for any other (the server checks both when the definition is saved, and again on every
+action). The answer to the action is two `updateDataModel` messages, `/screen` and `/record`
+(the record as an item, read as the caller may read it; `422 app_row_not_found` for one they may
+not, or that isn't there): **nothing else in the data model is touched**, so what was typed
+into `/draft` is still there when the person comes back. Navigating changes no row, so it is
+open to everyone who may open the app, a viewer included; a screen drawn from an older release
+is navigated as that release defines it (a release the app doesn't have is answered as for any
+action: `404 app_release_not_found` to those who may run actions, a refusal to the others).
+Anything else an action answers, in an app with screens, replaces `/items` and the summaries
+only (and `/draft`, for an insert); an update also sends `/record` again, a delete empties it,
+and `then` opens its screen.
+
+#### Fields and rules
+
+A `time` is `HH:MM` (draw it with a `DateTimeInput` with `enableTime` and not `enableDate`); a
+`choice` holds one of its `options` (draw it with a `ChoicePicker`, whose value is a list: one
+choice is taken as the choice, none as no value, several are refused). A value outside the options
+is `422 app_field_not_option`; a bad time `422 app_field_not_time`.
+
+A **rule** is small, declarative data, never code:
+
+```json
+{"field": "category", "op": "eq", "value": "other"}
+{"all": [rule, …]}      {"any": [rule, …]}
+```
+
+`op` is `eq`, `ne`, `lt`, `lte`, `gt` or `gte`, the last four for number, date and time fields;
+the literal is of the field's type (a choice's is one of its options). A field with no value
+equals nothing: only `ne` holds for it. Rules nest `all` and `any` at most 3 deep, hold at most
+8 rules in a list and 16 parts in all, and are refused (`400`) if they name a field the collection
+doesn't declare or a literal that doesn't fit. A field's `required_when` makes it required when
+its rule holds of the row, and **the server enforces it on every insert and update**, whichever
+release's screen sent it and whether it came from a person or the agent: a missing field is `422
+app_field_required_when`. The `Show` component, `{"when": rule, "source": "draft" | "record",
+"child": id}`, draws its child while the rule holds of the form (`/draft`, the default) or of
+the record a screen shows; it hides an input and is never what limits a row.
 
 An app holds at most 5,000 live rows and 4 MiB of their data (`409` beyond; deleted
 records don't count, and restoring one needs room for it); a space at most 500 apps.
@@ -1581,7 +1653,7 @@ it from `live.number` of the app it read, which it passes as `?release=`.
 
 Writers, and by the action's kind, the submit capability (`insert`) or the right to modify
 the row (`update` and `delete`, of all records or only the caller's own; else
-`403 app_forbidden`). The A2UI client action a button sent:
+`403 app_forbidden`); a `navigate` action is for anyone who may open the app. The A2UI client action a button sent:
 `{"name": "add_expense", "surfaceId": "app-9", "sourceComponentId": "add", "timestamp": "…", "context": {…}}`,
 with, for an update or a delete, the optional `"expectedRevision"` (see
 [Records](#records-revisions-history-and-deleting); `422` if it isn't a revision, or the
@@ -1591,7 +1663,8 @@ The server checks it against the app (`422` for an event the app doesn't declare
 another surface, a context field the collection doesn't have, a value that doesn't fit
 its field, or a row the app doesn't have), applies it, and answers with the
 `updateDataModel` message to apply: the rows the caller may read, an empty `/draft`, and the
-summaries over them.
+summaries over them (for an app with screens, see [Screens and navigation](#screens-and-navigation):
+the data model isn't replaced, and a navigate action is open to readers).
 Form inputs arrive as text, so number and boolean fields accept their text too. `409`
 while the app is offline, and `409 app_not_published` before its first release.
 
@@ -1605,7 +1678,8 @@ declares with the same type, and an insert gives every field the live collection
 the live collection checks **the row the action would store** as always, an insert's and an
 update's alike, whichever release's screen it came from: a required field missing, or a value
 outside the live limits, is the usual error of that field (`app_field_required`,
-`app_field_too_long`, `app_field_too_small`, `app_field_too_large`…) and nothing is stored.
+`app_field_too_long`, `app_field_too_small`, `app_field_too_large`, `app_field_required_when`,
+`app_field_not_option`…) and nothing is stored.
 Otherwise nothing changes and the answer is `409 app_release_outdated` (`release`, `live`), which
 tells the client to reload the app. A release the app doesn't have is `404 app_release_not_found`,
 but only for a caller who may run actions at all (the right to add or to change records); the
@@ -1647,7 +1721,8 @@ are affected by are **schema changes that must be acknowledged**, by naming each
 | `field_removed` | a field is gone, and some row has a value for it (the value stays in the row, unseen) |
 | `field_type_changed` | a field's type changed, and some row has a value for it |
 | `field_required` | a field became required (or was added as required), and some row has no value for it |
-| `field_narrowed` | a field's `max_length`, `min` or `max` now refuses a value some row has |
+| `field_narrowed` | a field's `max_length`, `min` or `max`, or a choice's `options`, now refuses a value some row has |
+| `field_required_when` | a field gained a `required_when` rule, or its rule changed, and some row lacks the field where the new rule requires it |
 
 A change no stored row is affected by (a new optional field, a looser limit, a field nobody
 filled in) needs no acknowledgement. Without the exact acknowledgement the answer is `409

@@ -1168,6 +1168,42 @@ button.tt-card[aria-current] {
   border-radius: var(--tt-radius);
 }
 
+/* The inputs and buttons of an app's screens: fingers can use them, and a 360px phone fits them
+   (the form's inputs take the width they have, rows of buttons wrap instead of overflowing). */
+.tt-app .tt-screen {
+  min-inline-size: 0;
+}
+
+.tt-app input,
+.tt-app textarea,
+.tt-app select {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  min-block-size: var(--tt-touch);
+}
+
+.tt-app input[type="text"],
+.tt-app input[type="number"],
+.tt-app input[type="password"] {
+  inline-size: 100%;
+}
+
+.tt-app button {
+  min-block-size: var(--tt-touch);
+  min-inline-size: var(--tt-touch);
+}
+
+.tt-app .a2ui-chips-group,
+.tt-app .a2ui-date-time-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tt-app a2ui-basic-row {
+  flex-wrap: wrap;
+}
+
 /* An app the agent saved, launched in the conversation: compact, scrolling within itself. */
 .tt-app-preview {
   display: grid;

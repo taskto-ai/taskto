@@ -13,6 +13,7 @@ import { ApiError, api, type DefinitionNeeds, errorText } from '../api'
 import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
 import { appsCatalog, unsupportedBy } from './catalog'
+import { keepLabelsLinked } from './labels'
 
 export type ActionPayload = Parameters<NonNullable<ConstructorParameters<typeof MessageProcessor>[1]>>[0]
 
@@ -69,6 +70,11 @@ export function AppView({
   const t = useT()
   const unsupported = release ? unsupportedBy(release) : []
   const blocked = unsupported.length > 0
+  const root = useRef<HTMLElement>(null)
+
+  // The renderer's inputs aren't linked to their labels: name them for assistive technology.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the section exists once the screen is drawn
+  useEffect(() => (root.current ? keepLabelsLinked(root.current) : undefined), [blocked])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new reloadKey is a reload
   useEffect(() => {
@@ -125,7 +131,7 @@ export function AppView({
   if (blocked) return <UpdateRequired label={label} unsupported={unsupported} />
 
   return (
-    <section className="tt-app" aria-label={label}>
+    <section className="tt-app" aria-label={label} ref={root}>
       {error && (
         <p role="alert" className="tt-error">
           {error}
