@@ -2,6 +2,7 @@
 // requires, or a file's bytes as application/octet-stream to the one route that takes them;
 // the session is the cookie the browser keeps, so nothing here holds a token.
 
+import type { Rule } from './apps/rules'
 import { has, type Key, type Params, t } from './i18n'
 
 export class ApiError extends Error {
@@ -84,10 +85,17 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // What went wrong, for people: an API error in the user's language when the web app knows its
 // code, else the server's own words, else its status.
-export function errorText(e: unknown): string {
+//
+// fieldLabels says what a form calls its fields (by their names in the app): an error about a
+// field names it as the person sees it ("Notes (needed when it fails)"), not as the app's data does.
+export function errorText(e: unknown, fieldLabels?: ReadonlyMap<string, string>): string {
   if (e instanceof ApiError) {
     const key = e.code && `errors.${e.code}`
-    if (key && has(key)) return t(key as Key, e.params)
+    if (key && has(key)) {
+      const field = e.params?.field
+      const label = typeof field === 'string' ? fieldLabels?.get(field) : undefined
+      return t(key as Key, label ? { ...e.params, field: label } : e.params)
+    }
     const said = (e.body as { error?: unknown } | undefined)?.error
     if (typeof said !== 'string') return t('errors.http', { status: String(e.status) })
   }
@@ -249,7 +257,32 @@ export type SchemaChange = { change: string; field: string }
 export type AppActionKind = 'insert' | 'update' | 'delete' | 'navigate'
 export type AppDraft = DefinitionNeeds & {
   collection?: { fields: AppField[] }
-  actions?: Record<string, { kind: AppActionKind }>
+  actions?: Record<string, { kind: AppActionKind; effects?: DraftEffect[] }>
+}
+
+// An effect an action of a definition declares (internal/apps/effects.go): what a change sets going
+// on a board or in the documents of a space. Its target is by ID; the names are the app's
+// `effect_targets`.
+export type DraftEffect = {
+  kind: EffectKind
+  name?: string
+  when?: Rule
+  space_id?: number
+  board_id?: number
+  column?: string
+  card?: string
+  path?: string
+  route?: 'board' | 'card' | 'document'
+}
+
+// The space, and board, an effect of the draft acts on, with the names the caller may be told (none
+// for a space they can't read: docs/api.md).
+export type EffectTarget = {
+  space_id: number
+  space?: string
+  space_kind?: 'private' | 'shared'
+  board_id?: number
+  board?: string
 }
 
 // One sample row of a draft's preview: it lives in the browser, never on the server's disk.
@@ -273,6 +306,8 @@ export type App = {
   unpublished_changes: boolean
   // The definition being edited, in a single app's reply, for those who may design or publish.
   draft?: AppDraft
+  // The spaces and boards the draft's effects act on, by name when the caller may read them; with the draft.
+  effect_targets?: EffectTarget[]
   // The draft has effects with no board chosen yet (a template's, or a copy's whose boards its copier
   // can't write): it can't be published until one is. Told to those who may design or publish.
   needs_board?: boolean

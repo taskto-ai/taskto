@@ -11,6 +11,7 @@ import openDetail from '../../../internal/apps/testdata/planner.open-detail.json
 import openNew from '../../../internal/apps/testdata/planner.open-new.json'
 import openTasks from '../../../internal/apps/testdata/planner.open-tasks.json'
 import surface from '../../../internal/apps/testdata/planner.surface.json'
+import { ApiError } from '../api'
 import { type ActionPayload, AppView } from './AppView'
 import { DEFINITION_VERSION } from './catalog'
 
@@ -151,4 +152,31 @@ test('a client that reads version 2 asks for an update for version 3, and for a 
   )
   await screen.findByText('Update required')
   expect(screen.getByText(`Needs: definition_version.${DEFINITION_VERSION + 1}, component.Timeline`)).toBeTruthy()
+})
+
+test('an error about a field names it as the form does, and by its name when no input holds it', async () => {
+  const refuse = (field: string) => async (action: ActionPayload) => {
+    if (action.name !== 'add_task') return structuredClone(answers[action.name] ?? [])
+    throw new ApiError(422, 'x', { error: 'x', code: 'app_field_required', params: { field } })
+  }
+  const view = (field: string) => (
+    <AppView
+      surfaceId="app-1"
+      label="Task planner"
+      release={{ definition_version: DEFINITION_VERSION, requires: ['component.Screens', 'component.Show'] }}
+      transport={{ load: async () => structuredClone(surface), act: refuse(field) }}
+    />
+  )
+  const { rerender } = render(view('due_date'))
+  await screen.findByText('Tasks')
+  fireEvent.click(screen.getByRole('button', { name: 'New task' }))
+  await screen.findByRole('heading', { name: 'New task' })
+  fireEvent.click(screen.getByRole('button', { name: 'Add task' }))
+  // The input's label, "Due date", and not the field's name, "due_date".
+  expect((await screen.findByRole('alert')).textContent).toBe('Due date is required.')
+
+  // A field no input on the screen holds is named as the app does.
+  rerender(view('elsewhere'))
+  fireEvent.click(screen.getByRole('button', { name: 'Add task' }))
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('elsewhere is required.'))
 })

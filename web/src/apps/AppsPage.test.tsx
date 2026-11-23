@@ -351,13 +351,33 @@ test('shows what is live and what is only a draft, and offers Publish only to th
   expect(within(row('Tidy')).queryByRole('button', { name: /^Publish/ })).toBeNull()
 })
 
-test('publishing asks to acknowledge the schema changes the server names, then publishes with them', async () => {
+// The app as a single read tells it to a publisher: with its draft and where its effects go.
+const withEffects = (over: Record<string, unknown> = {}) =>
+  app({
+    space_id: 4,
+    unpublished_changes: true,
+    version: 5,
+    draft: {
+      ...draft,
+      actions: {
+        submit: {
+          kind: 'insert',
+          effects: [{ kind: 'create_card', name: 'fix', space_id: 7, board_id: 12 }],
+        },
+      },
+    },
+    effect_targets: [{ space_id: 7, space: 'Field team', space_kind: 'shared', board_id: 12, board: 'Maintenance' }],
+    ...over,
+  })
+
+test('publishing shows what the draft does first, asks to acknowledge the schema changes the server names, then publishes with them', async () => {
   const changes = [{ change: 'field_removed', field: 'notes' }]
   const calls = fakeFetch({
     'GET /api/workspaces/1/spaces': { body: { spaces: [crewSpace(4, 'Crew')] } },
     'GET /api/workspaces/1/spaces/4/apps?archived=true': {
       body: { apps: [app({ space_id: 4, unpublished_changes: true, version: 5 })] },
     },
+    'GET /api/workspaces/1/spaces/4/apps/1': { body: withEffects() },
     'POST /api/workspaces/1/spaces/4/apps/1/publish': (call) => {
       const ack = (call.body as { acknowledge: unknown[] }).acknowledge
       if (ack.length === 0) {
@@ -369,6 +389,13 @@ test('publishing asks to acknowledge the schema changes the server names, then p
   render(<Routed />)
   const crew = await screen.findByRole('region', { name: 'Crew' })
   fireEvent.click(await within(crew).findByRole('button', { name: 'Publish Expenses' }))
+
+  // The draft's effects are said before anything can be published, which hasn't been asked yet.
+  await within(crew).findByText('Creates a card on Maintenance (Field team).')
+  expect(calls.some((c) => c.method === 'POST')).toBe(false)
+  fireEvent.click(within(crew).getByRole('button', { name: 'Review and publish…' }))
+  expect(calls.some((c) => c.method === 'POST')).toBe(false)
+  fireEvent.click(within(crew).getByRole('button', { name: 'Publish for Crew' }))
 
   // Nothing is published yet: the changes are listed, and the person has to say they understand.
   const panel = await within(crew).findByRole('group', { name: 'This publish may change how your app treats its data' })

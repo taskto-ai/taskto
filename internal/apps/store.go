@@ -71,6 +71,10 @@ type App struct {
 	// Draft is the definition being edited, in a single app's reply, for callers who may design
 	// or publish: others see the live release's definition alone.
 	Draft *Definition `json:"draft,omitempty"`
+	// EffectTargets names the spaces and boards the draft's effects act on, as far as the caller may
+	// read them, so what the publish panel says about them can say which ones (effects_api.go). It
+	// comes with Draft, for the same callers.
+	EffectTargets []EffectTarget `json:"effect_targets,omitempty"`
 
 	// What the store read, for the service's own use: the draft, the live release's definition
 	// and whether they differ. They reach a reply only through present, by the caller's access.
@@ -307,6 +311,12 @@ func (s *Service) present(ctx context.Context, a Actor, ap *App) error {
 	ap.Access = acc
 	ap.finish(acc)
 	ap.Rows, err = countRows(ctx, s.db, ap.ID, readable(acc, a.UserID))
+	if err != nil {
+		return err
+	}
+	if ap.Draft != nil {
+		ap.EffectTargets, err = s.effectTargets(ctx, a, ap.SpaceID, ap.Draft)
+	}
 	return err
 }
 

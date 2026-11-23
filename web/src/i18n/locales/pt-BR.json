@@ -141,6 +141,8 @@
     "notPublished": "Não publicado",
     "unpublishedChanges": "Alterações não publicadas",
     "publish": "Publicar",
+    "closeReview": "Fechar revisão",
+    "closeReviewNamed": "Fechar a revisão de {name}",
     "publishNamed": "Publicar {name}",
     "previewDraft": "Ver o rascunho",
     "previewDraftNamed": "Ver o rascunho de {name}",
@@ -270,7 +272,39 @@
         "update": "Alterar registros.",
         "delete": "Excluir registros (um registro excluído pode ser restaurado).",
         "readOnly": "Só mostra registros: não pode adicionar, alterar nem excluir nenhum.",
-        "nothingElse": "Não alcança mais nada: nenhum outro app, documento ou conta."
+        "nothingElse": "Não alcança mais nada: nenhum outro app, documento ou conta.",
+        "effectsIntro": "Além dos próprios registros, ele também faz isto quando alguém aperta seus botões:",
+        "effectsAudit": "Ele faz isso como a pessoa que apertou o botão, e só o que essa pessoa pode fazer.",
+        "effect": {
+          "always": "{effect}.",
+          "when": "{effect}, só quando {rule}.",
+          "createCard": "Cria um cartão em {board}",
+          "updateCard": "Move para {column} o cartão que este registro criou",
+          "createDocument": "Cria um documento em {path} no espaço {space}",
+          "openBoard": "Oferece um link para {board}",
+          "openCard": "Oferece um link para o cartão que este registro criou",
+          "openDocument": "Oferece um link para o documento {path} no espaço {space}"
+        },
+        "target": {
+          "board": "{board} ({space})",
+          "boardHidden": "um quadro que você não vê",
+          "boardUnset": "um quadro que ainda não foi escolhido",
+          "spaceHidden": "um espaço que você não vê",
+          "spaceUnset": "um espaço que ainda não foi escolhido"
+        }
+      },
+      "rule": {
+        "eq": "{field} é {value}",
+        "ne": "{field} não é {value}",
+        "lt": "{field} é menor que {value}",
+        "lte": "{field} é no máximo {value}",
+        "gt": "{field} é maior que {value}",
+        "gte": "{field} é no mínimo {value}",
+        "text": "“{value}”",
+        "yes": "sim",
+        "no": "não",
+        "group": "({rule})",
+        "unknown": "a regra dele vale"
       },
       "field": "{name} ({type})",
       "publish": {
