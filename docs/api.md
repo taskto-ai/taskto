@@ -242,6 +242,11 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `consent_forbidden` | 403 | Only the space's owner or one of its editors can change its consent. |
 | `consent_no_model` | 409 | The workspace has no embeddings model to consent to. |
 | `consent_endpoint_changed` | 409 | The workspace's embeddings endpoint changed: review it, then consent again. |
+| `notification_not_found` | 404 | The notification isn't the caller's, or is gone. |
+| `push_endpoint_invalid` | 400 | A push subscription's `endpoint` isn't an `https` address of at most 2048 characters without credentials or a fragment. |
+| `push_keys_invalid` | 400 | A push subscription's `keys` aren't a P-256 public key (`p256dh`) and a 16-byte `auth` secret, base64url. |
+| `push_too_many_subscriptions` | 409 | The caller already has push turned on for `max` devices (a device that changes hands counts for its new person). |
+| `push_no_workspace` | 403 | The caller is in no workspace: push is for people who are in one. |
 
 ### Sessions
 
@@ -1327,6 +1332,103 @@ caller. `201` with the comment.
 The agent works boards through tools that call the same code, for the user it works for
 and with exactly that user's access. See [boards-agent-tools.md](boards-agent-tools.md)
 and [agent-tools.md](agent-tools.md).
+
+## Notifications
+
+The notification inbox and, for people who opt in, Web Push ([pwa.md](pwa.md#notifications),
+[install.md](install.md#web-push-notifications)). A notification is about one person in one
+workspace: its kind and the IDs of what it is about, never a copy of what the record says. What an
+item says is worked out each time it is read, or pushed, from what the recipient **may read at that
+moment**: once they can't read what it was about (the space's membership ended, the card or app is
+gone, the app's roles changed), the item is `{"kind": "changed"}` with no `params`, no IDs and the
+workspace's home as its target, and a push for it says the same. Notifications are made for:
+
+- `card_assigned`: a card was assigned to you by someone else (`params.title`; target: the card);
+- `app_effect_failed`: an effect of an app you acted in failed for good and waits for you to retry
+  it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one.
+
+Leaving a workspace deletes the person's notifications of it. Old ones are removed after 90 days
+(read) or 180 days, and past 500 per person and workspace. These routes take a session only (`403`
+with an access token) and the CSRF guard checks the ones that change something (send `{}` for a
+body that has no fields).
+
+An item:
+
+```json
+{"id": 12, "workspace_id": 1, "kind": "card_assigned", "params": {"title": "Fix the gate"},
+ "target": {"section": "boards", "item": "3:4:9"}, "read": false, "created_at": "…"}
+```
+
+`target` is an address of the web app under `/w/{workspace_id}/`: its section and item, as the
+app's router reads them. The page it opens checks access again.
+
+### `GET /api/workspaces/{workspace}/notifications`
+
+The caller's notifications in the workspace, newest first: `{"notifications": […], "more": true,
+"unread": 3}`. `limit` (1–50, default 30), `before` (a notification's ID: the page of older ones),
+`unread=true` (unread ones only). `unread` counts all the caller's unread ones, not the page's.
+`400` for a bad `limit` or `before`.
+
+### `GET /api/workspaces/{workspace}/notifications/count`
+
+`{"unread": 3}`: what the badge shows.
+
+### `POST /api/workspaces/{workspace}/notifications/{notification}/read`
+
+Marks one of the caller's notifications read. `204`; `404` for one that is someone else's, in
+another workspace, or gone.
+
+### `POST /api/workspaces/{workspace}/notifications/read`
+
+Marks all the caller's notifications of the workspace read. `204`.
+
+### `GET /api/me/notifications/{notification}`
+
+One notification of the caller's, whatever its workspace, as above: the address a push opens,
+`/notification/{id}`, which holds nothing but this ID. `404` (`notification_not_found`) for
+someone else's.
+
+### Web Push
+
+Push is optional, per device, and never needed: everything above works without it. A push is
+a prompt to look at the inbox, not a message and not a way to sync: the browser's push service
+carries it with a lifetime of an hour and may deliver it late, twice or not at all. What is sent is
+`{"id": 12, "kind": "card_assigned"}` (the kind is `changed` if the recipient may no longer read what
+it was about), encrypted to the browser (RFC 8291, `aes128gcm`), signed with the server's VAPID key
+(RFC 8292). These routes take a session only.
+
+### `GET /api/me/push/key`
+
+`{"public_key": "B…"}`: the server's VAPID public key, base64url, which a browser subscribes with
+(`applicationServerKey`). It is made once, when the server first starts, and its private half is
+sealed with the server key and never returned or logged.
+
+### `PUT /api/me/push/subscription`
+
+Registers the calling browser: `{"endpoint": "https://…", "keys": {"p256dh": "…", "auth": "…"}}`,
+what a browser's `PushSubscription` says (no other fields). `204`. The endpoint, the device's
+identity, is an `https` address of at most 2048 characters (`400 push_endpoint_invalid`), the keys
+a P-256 point and a 16-byte secret (`400 push_keys_invalid`), at most 20 devices per person
+(`409 push_too_many_subscriptions`; registering a device again is not another, but a browser that
+takes over another person's endpoint is one more of its new person's). The endpoint must be an
+address the server may connect to under its [egress policy](install.md#web-push-notifications): a
+loopback, private, link-local or metadata address is `400 egress_refused` here, as it is when a
+push is sent. A person who is in no workspace can't register one (`403 push_no_workspace`). It is
+bound to the session that made it: signing out, a session that expires or ends elsewhere, signing
+out everywhere and a password change remove it, and no push is sent to a subscription whose session
+has expired, even before it is removed (the server sweeps them hourly and checks at each push). A
+browser that is signed in as someone else takes the endpoint over, and what was queued for the
+first person is dropped. Only notifications made after this are pushed to the device.
+
+### `DELETE /api/me/push/subscription`
+
+`{"endpoint": "https://…"}`: removes the caller's subscription for that endpoint. `204`, also for one
+that isn't there or isn't theirs.
+
+Subscriptions also end when the push service answers a push with `404` or `410`, and when the person
+leaves the last workspace they were in. A push that fails with `429` or a server error is tried again
+(at most five tries in all, which holds across a restart, over less than an hour); one refused with another status (`400`, `401`, `403`,
+`413`), or to an address the [egress policy](install.md#web-push-notifications) refuses, is dropped.
 
 ## Personal apps
 

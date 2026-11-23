@@ -732,7 +732,12 @@
     "app_query_condition": "O filtro em “{field}” não combina com o campo.",
     "offline_downloads_disabled": "Um administrador desativou os downloads offline deste espaço.",
     "session_account_changed": "Este navegador está conectado como uma conta diferente daquela a que estes registros pertencem.",
-    "offline_unsupported": "Isto exige conexão. Offline, você pode adicionar registros e navegar pela cópia baixada."
+    "offline_unsupported": "Isto exige conexão. Offline, você pode adicionar registros e navegar pela cópia baixada.",
+    "notification_not_found": "Essa notificação não está disponível.",
+    "push_endpoint_invalid": "O endereço de push deste navegador não é válido.",
+    "push_keys_invalid": "As chaves de push deste navegador não são válidas.",
+    "push_too_many_subscriptions": "Você já ativou o push em {max} dispositivos. Desative em um deles primeiro.",
+    "push_no_workspace": "O push é para quem participa de um espaço de trabalho."
   },
   "language": {
     "label": "Idioma",
@@ -751,7 +756,8 @@
       "dictation": "Ditado",
       "password": "Senha",
       "tokens": "Tokens de acesso",
-      "about": "Sobre"
+      "about": "Sobre",
+      "notifications": "Notificações"
     },
     "general": {
       "language": "Idioma padrão",
@@ -1196,7 +1202,8 @@
       "boards": "Quadros",
       "apps": "Apps",
       "settings": "Configurações",
-      "home": "Início"
+      "home": "Início",
+      "notifications": "Notificações"
     },
     "noWorkspace": "Você não é membro de nenhum espaço de trabalho. Peça um convite a um administrador.",
     "logOut": "Sair",
@@ -1649,6 +1656,46 @@
       "discard": "Descartar e sair",
       "cancel": "Cancelar",
       "stillWaiting": "Alguns registros ainda aguardam: o servidor não pôde recebê-los ainda. Tente de novo ou descarte-os."
+    }
+  },
+  "notifications": {
+    "title": "Notificações",
+    "bell": "Notificações",
+    "bellUnread": "Notificações, {count} não lidas",
+    "intro": "O que aconteceu e que você pode querer ver. As notificações push são opcionais e servem só para avisar que há algo aqui.",
+    "pushSettings": "Configurações de notificações",
+    "none": "Nenhuma notificação ainda.",
+    "markAllRead": "Marcar todas como lidas",
+    "older": "Mostrar mais antigas",
+    "unread": "Não lida:",
+    "unavailable": "Esta notificação não está mais disponível.",
+    "openInbox": "Abrir suas notificações",
+    "kind": {
+      "card_assigned": "Um cartão foi atribuído a você: {title}",
+      "app_effect_failed": "Uma ação em {app} não terminou e precisa que você tente de novo",
+      "changed": "Algo mudou. Abra para ver o que você ainda pode ver."
+    },
+    "push": {
+      "card_assigned": "Um cartão foi atribuído a você",
+      "app_effect_failed": "Uma ação de um app precisa da sua atenção",
+      "changed": "Algo mudou"
+    },
+    "settings": {
+      "title": "Suas notificações",
+      "inbox": "As notificações sempre aparecem na sua caixa de entrada, mesmo que este navegador não consiga mostrar notificações push.",
+      "openInbox": "Abrir a caixa de entrada",
+      "pushTitle": "Notificações push neste dispositivo",
+      "pushIntro": "Opcional. Quando ativadas, este dispositivo é avisado de uma nova notificação mesmo com o TaskTo.AI fechado. Nada é enviado a ele até você ativar.",
+      "unsupported": "Este navegador não consegue receber notificações push aqui. Suas notificações continuam aparecendo na caixa de entrada.",
+      "iosInstall": "No iPhone e no iPad, as notificações push só funcionam no app instalado. Adicione o TaskTo.AI à Tela de Início (veja Sobre), abra-o por lá e volte a esta página. Suas notificações aparecem na caixa de entrada de qualquer forma.",
+      "denied": "As notificações estão bloqueadas para este site no seu navegador. Para ativar o push, permita notificações para este site nas configurações do navegador e volte aqui. Suas notificações continuam aparecendo na caixa de entrada.",
+      "dismissed": "Você não respondeu à pergunta do navegador, então o push continua desativado.",
+      "off": "O push está desativado neste dispositivo.",
+      "on": "O push está ativado neste dispositivo.",
+      "turnOn": "Ativar o push neste dispositivo",
+      "turnOff": "Desativar o push neste dispositivo",
+      "turnOffFailed": "O navegador deste dispositivo não encerrou a inscrição de push, então o push continua ativado. Tente de novo.",
+      "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo."
     }
   }
 }

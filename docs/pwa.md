@@ -94,6 +94,75 @@ offline is never rewritten by code that doesn't know its shape ([offline.md](off
 - **Pull to refresh** is off in the installed app (`overscroll-behavior`), so a stray pull can't
   reload a page with something typed.
 
+## Notifications
+
+Two parts, the second optional:
+
+- **The inbox** (`web/src/notifications/`, the bell in the top bar and `/w/{workspace}/notifications`)
+  lists what happened that a person may want to see: a card assigned to them, an action of an app
+  that failed for good and waits for their retry. It works in every browser, push or not, and is
+  what is true. The bell's count is asked for when the app opens, when it comes back to the
+  foreground, when something was read here, when a push reached the worker, and once a minute while
+  it is shown.
+- **Web Push** tells a device about a new notification when the app isn't open. It is
+  feature-detected (`PushManager`, `Notification`, a worker and a secure context are all asked for,
+  never the user agent), explicitly opted into, and never required. **Nothing is subscribed, asked
+  or pushed until the person clicks "Turn on push on this device" in Settings → Notifications**;
+  the browser's permission prompt comes from that click and from nowhere else. A browser that can't
+  push, or whose person said no, is told so (with how to allow it, if it was blocked) and keeps the
+  inbox. **On iOS push works only in the app installed on the Home Screen** (16.4 or later): in a
+  tab the page says so and offers no switch.
+
+A push is a prompt to look at the inbox. It is **not a delivery guarantee and not a way to sync**:
+the push service carries it with a lifetime of an hour, and it can arrive late, twice or never; the
+app learns what is new from the server, as always, and never from a push. A push that waited past
+its lifetime, or for a notification that was read meanwhile, is not sent.
+
+**What a push says.** The worker shows `TaskTo.AI` with one line for the kind of notification, in
+the person's language, and nothing else. The server sends only `{"id", "kind"}` (the
+notification's own ID, and its kind: `card_assigned`, `app_effect_failed`, or `changed`), encrypted
+to the browser (RFC 8291) and signed with the server's VAPID key (RFC 8292), both done with the
+standard library (`internal/notifications/webpush.go`). No title, no name, no ID of a card or app.
+The worker can't load the app's translations, so the page gives it the three lines when push is
+turned on and when the language changes; they are kept in a cache of their own
+(`taskto-push-strings`), which an update of the app leaves alone and which holds no one's data.
+
+**Access is checked when it is told, not when it was made.** A notification holds a kind and IDs.
+What an inbox item says (a card's title, an app's name) is worked out when it is read, and the
+payload's kind when it is pushed, from what the recipient may read **then**. A person who lost
+access to the space, the card or the app is told only that "something changed", in the inbox and in
+the push, with no names, no IDs and a link to the workspace's home.
+
+**The click.** A click on a push opens `/notification/{id}` (the open app's window is focused and
+sent there, without a reload, by a message the app checks; else a new window). A window that shows
+the login is sent there too, and the address stays through signing in, so the click isn't lost (the
+screens that hold a one-time token in their address, an invite, a password reset and the first
+setup, ignore the message). The app reads that
+notification as the signed-in person, marks it read and goes where it leads, an ordinary route
+(`/w/1/boards/3:4:9`) whose page checks access again. Someone else's notification, or one that is
+gone, is "not available". Signed out, the address is kept through the login. The server answers
+`/notification/{id}` with the app, like any route (a page navigation, network first).
+
+**When subscriptions end.**
+
+- The person turns push off on that device (the server forgets it, the browser unsubscribes). If
+  either fails, push stays on, as it was, Settings says why and the button tries again: it never
+  says "off" while this browser is still subscribed.
+- They **sign out** of that browser: the web app removes the device first, and the server removes a
+  subscription with the session it is bound to, so expiry, being signed out elsewhere and a
+  password change end it as well. The next sign-in turns push on again only for the same person,
+  and only if they had turned it on; a browser never hands its subscription to whoever signs in
+  next (the app keeps a small flag of whose it is, and registers it again at start only for them).
+  A session that expires ends its subscription even if nobody signs in: no push is sent to one
+  after its session's expiry, and the server removes them every hour.
+- The push service answers a push with `404` or `410`.
+- They leave their last workspace. Leaving one of several ends that workspace's notifications
+  (and the pushes queued for them) and no more. A person in no workspace can't register a device,
+  and the app doesn't try when it opens.
+
+The server side is `internal/notifications` ([api.md](api.md#notifications)); what a self-hosted
+server must reach is in [install.md](install.md#web-push-notifications).
+
 ## What the tests don't cover
 
 The tests run in jsdom and in a desktop Chromium that emulates a phone's viewport and touch.
@@ -104,3 +173,10 @@ top bar in place on iOS; that the safe areas clear a notch in landscape; what a 
 IndexedDB after a restart or under storage pressure (the rest is in [offline.md](offline.md#what-the-tests-dont-cover)); that an update
 installed while the app is in the background prompts when it returns; and that the app opens
 offline after a phone's own restart.
+Push is tested without a push service of a browser's maker: the Go tests run a test push service
+and decrypt what it receives as a browser would (including RFC 8291's own example), the web tests
+fake the browser's push objects, and the worker's tests drive its `push` and `notificationclick`
+handlers. Only a real device shows: that Chrome, Firefox and Safari accept the server's VAPID
+identity and deliver, that an iPhone shows the notification of the installed app (and in what
+language), that a click opens the right window, and what each push service does with a late or
+repeated message.

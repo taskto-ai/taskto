@@ -164,6 +164,22 @@ func (s *Service) currentUser(r *http.Request) (u User, ok bool, err error) {
 	return u, true, nil
 }
 
+// SessionID returns the database ID of the login the request carries, for what is bound to a
+// login and goes with it (a device's push subscription): ok is false for a request with no valid
+// session, such as one made with an access token.
+func (s *Service) SessionID(r *http.Request) (id int64, ok bool, err error) {
+	token := s.sessionToken(r)
+	if token == "" {
+		return 0, false, nil
+	}
+	err = s.db.QueryRowContext(r.Context(), `SELECT id FROM sessions WHERE token_hash = ? AND expires_at > ?`,
+		hashToken(token), stamp(s.now())).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return id, err == nil, err
+}
+
 type (
 	userKey       struct{}
 	membershipKey struct{}

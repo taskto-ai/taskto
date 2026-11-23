@@ -52,7 +52,12 @@ function boot(
     location: { origin: 'https://tasks.example.com' },
     addEventListener: (type: string, l: Listener) => listeners.set(type, l),
     skipWaiting: vi.fn(),
-    clients: { claim: vi.fn(async () => {}) },
+    clients: {
+      claim: vi.fn(async () => {}),
+      matchAll: vi.fn(async (): Promise<unknown[]> => []),
+      openWindow: vi.fn(async (_path: string) => null),
+    },
+    registration: { showNotification: vi.fn(async (_title: string, _options: unknown) => {}) },
   }
   const fetchCalls: { url: string; cache?: string }[] = []
   const fakeFetch = async (input: Request | string) => {
@@ -85,7 +90,13 @@ function boot(
     listeners.get('fetch')?.({ request: req, respondWith: (p: Promise<Response>) => (answer = p) })
     return answer ? await answer : 'pass'
   }
-  return { self, caches, fetchCalls, dispatchWait, request, listeners }
+  // An event with data the test gives (a push, a click, a message), and what the worker waited on.
+  const emit = async (type: string, event: Record<string, unknown>) => {
+    let work: Promise<unknown> = Promise.resolve()
+    listeners.get(type)?.({ ...event, waitUntil: (p: Promise<unknown>) => (work = p) })
+    await work
+  }
+  return { self, caches, fetchCalls, dispatchWait, request, listeners, emit }
 }
 
 const text = async (r: Response | 'pass') => (r === 'pass' ? r : r.text())
@@ -216,4 +227,110 @@ test('offline, an app route opens the cached page; a server route is not answere
   expect(await text(await flaky.request('/w/4/boards', { mode: 'navigate' }))).toBe('body of /index.html')
   expect(await text(await flaky.request('/invite', { mode: 'navigate' }))).toBe('body of /index.html')
   expect(await flaky.request('/api/me', { mode: 'navigate' })).toBe('pass')
+})
+
+// --- Push ----------------------------------------------------------------------------------
+
+const WORDS = {
+  card_assigned: 'A card was assigned to you',
+  app_effect_failed: 'An app action needs your attention',
+  changed: 'Something changed',
+}
+const pushOf = (data: unknown) => ({ data: { json: () => (typeof data === 'function' ? data() : data) } })
+const shown = (w: ReturnType<typeof boot>) => w.self.registration.showNotification.mock.calls
+
+test('a push shows the brand and the words for its kind, tagged and carrying only its ID', async () => {
+  await sw.emit('message', { data: { type: 'PUSH_STRINGS', strings: WORDS } })
+  await sw.emit('push', pushOf({ id: 42, kind: 'card_assigned' }))
+  expect(shown(sw)).toHaveLength(1)
+  const [title, options] = shown(sw)[0] as [string, Record<string, unknown>]
+  expect(title).toBe('TaskTo.AI')
+  expect(options).toEqual({
+    body: 'A card was assigned to you',
+    tag: 'taskto-notification-42',
+    data: { id: 42 },
+    icon: '/icons/icon-192.png',
+  })
+})
+
+test('a push shows something whatever it carries: unknown kinds and unreadable data say only the brand and a generic line', async () => {
+  // No words given yet (push turned on, the page not yet started): the brand alone.
+  await sw.emit('push', pushOf({ id: 7, kind: 'card_assigned' }))
+  expect((shown(sw)[0] as [string, { body: string }])[1].body).toBe('')
+  await sw.emit('message', { data: { type: 'PUSH_STRINGS', strings: WORDS } })
+  await sw.emit('push', pushOf({ id: 8, kind: 'something_new', title: 'Secret plan' }))
+  await sw.emit(
+    'push',
+    pushOf(() => {
+      throw new SyntaxError('not JSON')
+    }),
+  )
+  await sw.emit('push', { data: null })
+  await sw.emit('push', pushOf({ id: -3, kind: 'changed' }))
+  await sw.emit('push', pushOf({ id: '5; drop', kind: 'changed' }))
+  const calls = shown(sw) as [string, { body: string; tag: string; data: { id: number } }][]
+  expect(calls).toHaveLength(6)
+  for (const call of calls.slice(1)) {
+    expect(call[0]).toBe('TaskTo.AI')
+    expect(call[1].body).toBe('Something changed')
+  }
+  // Data that isn't a notification's ID is never used as one, and nothing the push said but the
+  // ID and the kind is shown.
+  expect(calls.slice(1).map((c) => c[1].data.id)).toEqual([8, 0, 0, 0, 0])
+  expect(JSON.stringify(calls)).not.toContain('Secret plan')
+})
+
+test('the words a page gives are kept only for the kinds the server sends, and short', async () => {
+  await sw.emit('message', {
+    data: { type: 'PUSH_STRINGS', strings: { ...WORDS, changed: 'x'.repeat(201), extra: 'ignored', card_assigned: 5 } },
+  })
+  await sw.emit('message', { data: { type: 'PUSH_STRINGS', strings: 'nope' } })
+  await sw.emit('push', pushOf({ id: 1, kind: 'card_assigned' }))
+  await sw.emit('push', pushOf({ id: 2, kind: 'changed' }))
+  await sw.emit('push', pushOf({ id: 3, kind: 'app_effect_failed' }))
+  const bodies = (shown(sw) as [string, { body: string }][]).map((c) => c[1].body)
+  expect(bodies).toEqual(['', '', 'An app action needs your attention'])
+  // They live apart from the app's caches, so an update of the app keeps them and a cleanup drops nothing of theirs.
+  expect(await sw.caches.keys()).toEqual(['taskto-push-strings'])
+})
+
+test('a push tells the open pages, which ask the inbox again', async () => {
+  const page = { url: 'https://tasks.example.com/w/1/home', postMessage: vi.fn() }
+  sw.self.clients.matchAll.mockResolvedValue([page])
+  await sw.emit('push', pushOf({ id: 1, kind: 'changed' }))
+  expect(page.postMessage).toHaveBeenCalledWith({ type: 'PUSH_RECEIVED' })
+})
+
+test('clicking a push opens the app at the notification, in a new window when none is open', async () => {
+  const close = vi.fn()
+  await sw.emit('notificationclick', { notification: { close, data: { id: 42 } } })
+  expect(close).toHaveBeenCalled()
+  expect(sw.self.clients.openWindow).toHaveBeenCalledWith('/notification/42')
+})
+
+test('clicking a push focuses the open app and tells it where to go, without reloading it', async () => {
+  const page = { url: 'https://tasks.example.com/w/1/boards', focus: vi.fn(async () => {}), postMessage: vi.fn() }
+  const other = { url: 'https://other.example.org/', focus: vi.fn(async () => {}), postMessage: vi.fn() }
+  sw.self.clients.matchAll.mockResolvedValue([other, page])
+  await sw.emit('notificationclick', { notification: { close: vi.fn(), data: { id: 9 } } })
+  expect(page.focus).toHaveBeenCalled()
+  expect(page.postMessage).toHaveBeenCalledWith({ type: 'OPEN', path: '/notification/9' })
+  expect(other.postMessage).not.toHaveBeenCalled()
+  expect(sw.self.clients.openWindow).not.toHaveBeenCalled()
+})
+
+test('a click on a notification with no usable ID opens the app, never a path made from the data', async () => {
+  for (const data of [undefined, {}, { id: 0 }, { id: '../../api/me' }, { id: 1.5 }]) {
+    await sw.emit('notificationclick', { notification: { close: vi.fn(), data } })
+  }
+  expect(sw.self.clients.openWindow.mock.calls.map((c) => c[0])).toEqual(['/', '/', '/', '/', '/'])
+})
+
+test('a push never makes the worker answer or store anything from the server', async () => {
+  await sw.dispatchWait('install')
+  const before = [...(await sw.caches.open('taskto-shell-v1')).entries.keys()]
+  await sw.emit('push', pushOf({ id: 1, kind: 'changed' }))
+  expect([...(await sw.caches.open('taskto-shell-v1')).entries.keys()]).toEqual(before)
+  expect(await sw.request('/notification/1', { mode: 'navigate' })).toBeInstanceOf(Response)
+  expect(await sw.request('/api/me/notifications/1')).toBe('pass')
 })

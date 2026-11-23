@@ -118,6 +118,9 @@ type Config struct {
 	// AddonsDir is where the operator installs add-ons, such as Desert Ant Voz. Empty means
 	// <data>/addons.
 	AddonsDir string
+	// PushContact is how the push services can reach whoever runs this server (the VAPID subject
+	// of RFC 8292): a mailto: or https: URL. Empty means the project's address.
+	PushContact string
 
 	// ConfigFile is the config file that was read, or "" if none was.
 	ConfigFile string
@@ -325,6 +328,18 @@ var settings = []setting{
 		usage: "where the operator installs add-ons such as Desert Ant Voz (default <data-dir>/addons)",
 		get:   func(c Config) string { return c.AddonsDir },
 		set:   func(c *Config, v string) error { c.AddonsDir = v; return nil },
+	},
+	{
+		flag: "push-contact", env: "TASKTO_PUSH_CONTACT", key: "push_contact",
+		usage: "how browsers' push services can reach you, a mailto: or https: URL (default https://taskto.ai)",
+		get:   func(c Config) string { return c.PushContact },
+		set: func(c *Config, v string) error {
+			if err := ValidatePushContact(v); err != nil {
+				return err
+			}
+			c.PushContact = v
+			return nil
+		},
 	},
 }
 
@@ -633,4 +648,30 @@ func stripComment(line string) string {
 		}
 	}
 	return line
+}
+
+// ValidatePushContact checks a VAPID contact: a mailto: address or an https: URL with a host,
+// which is all RFC 8292 allows a subject to be. "" is valid: the default.
+func ValidatePushContact(v string) error {
+	if v == "" {
+		return nil
+	}
+	u, err := url.Parse(v)
+	if err != nil || len(v) > 256 || strings.ContainsAny(v, " \t\r\n") {
+		return errors.New("must be a mailto: address or an https: URL")
+	}
+	switch u.Scheme {
+	case "mailto":
+		local, domain, ok := strings.Cut(u.Opaque, "@")
+		if ok && local != "" && domain != "" && !strings.Contains(domain, "@") {
+			return nil
+		}
+		return errors.New("a mailto: contact needs an address, mailto:you@example.org")
+	case "https":
+		if u.Hostname() != "" && u.User == nil {
+			return nil
+		}
+		return errors.New("an https: contact needs a host and no credentials")
+	}
+	return errors.New("must be a mailto: address or an https: URL")
 }

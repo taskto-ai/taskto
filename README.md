@@ -105,6 +105,7 @@ the default.
 | `-dictation-local` | `TASKTO_DICTATION_LOCAL` | `dictation_local` | `parakeet-v3` | the local speech model, every workspace's default dictation engine unless an admin picks the hosted API: `parakeet-v3`, `whistle` or `off`; downloaded on first use ([docs/install.md](docs/install.md#dictation)) |
 | `-dictation-cache` | `TASKTO_DICTATION_CACHE` | `dictation_cache` | `<data-dir>/cache/dictation` | where the local speech model's files are kept |
 | `-addons-dir` | `TASKTO_ADDONS_DIR` | `addons_dir` | `<data-dir>/addons` | where the operator installs add-ons such as Desert Ant Voz ([docs/install.md](docs/install.md#dictation)) |
+| `-push-contact` | `TASKTO_PUSH_CONTACT` | `push_contact` | `https://taskto.ai` | how browsers' push services can reach whoever runs the server (the VAPID contact): a `mailto:` or `https:` URL ([docs/install.md](docs/install.md#web-push-notifications)) |
 | `-config` | `TASKTO_CONFIG` | | | config file to read |
 
 The config file is a small subset of TOML: `key = value` lines, strings in double
