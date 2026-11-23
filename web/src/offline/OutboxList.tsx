@@ -1,16 +1,18 @@
 // The records made on this device, each with its own state: a local draft, queued, syncing,
 // synced (the server acknowledged it) or needing attention, and its photos' state apart, since a
 // record's photos can still be on their way when the record is not. The controls to recover are
-// here: try again now, keep as a draft, send, discard.
+// here: try again now, keep as a draft, send, discard. They are the offline writer's (writer.ts): in
+// a tab that isn't, the queue is shown and nothing here changes it.
 
 import { useState } from 'react'
 import { ApiError, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
-import { ConfirmButton } from '../settings/parts'
+import { DiscardButton } from './DiscardButton'
+import { useWriter } from './hooks'
 import { Resolve } from './Resolve'
 import type { Runtime } from './runtime'
-import { type Download, ItemChanged, kindOf, type OutboxItem, seenOf } from './store'
-import { RESOLVE, type SyncStatus } from './sync'
+import { type Download, kindOf, NotWriter, type OutboxItem } from './store'
+import { RESOLVE, type SyncStatus, waitsForEarlier } from './sync'
 
 // What a record is called in the list: the app, and its first filled-in value (for a change to a
 // record, the one it is about: as it was downloaded, else what the change sets).
@@ -70,6 +72,13 @@ export function OutboxList({
   const f = useFormat()
   const [resolving, setResolving] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const writer = useWriter(runtime)
+  // What a person's press does to the queue: a refusal (this tab lost the right meanwhile) is said.
+  const act = (go: () => Promise<unknown>) =>
+    void go().then(
+      () => setNotice(null),
+      (e) => setNotice(e instanceof NotWriter ? t('errors.offline_not_writer') : errorText(e)),
+    )
   // What the server has acknowledged and the person has not cleared from the list. A cleared one
   // stays (it keeps the record as the server has it on screen) until a download holds the change.
   const shown = items.filter((i) => !i.cleared)
@@ -84,7 +93,11 @@ export function OutboxList({
           <span className="tt-muted tt-small">{t('offline.queue.waiting', { count: waiting.length })}</span>
         )}
         {waiting.length > 0 && (
-          <button type="button" className="tt-button" onClick={() => void runtime.engine.retry()}>
+          <button
+            type="button"
+            className="tt-button"
+            onClick={() => act(() => (writer ? runtime.engine.retry() : runtime.engine.run()))}
+          >
             {t('offline.sync.now')}
           </button>
         )}
@@ -136,6 +149,9 @@ export function OutboxList({
               {item.state !== 'synced' && kind !== 'insert' && (
                 <span className="tt-muted tt-small">{t('offline.queue.pendingNote')}</span>
               )}
+              {item.state === 'queued' && waitsForEarlier(item, items) && (
+                <span className="tt-muted tt-small">{t('offline.queue.waitsEarlier')}</span>
+              )}
               {item.state === 'attention' && item.attention && (
                 <span role="alert" className="tt-error tt-small">
                   {t(`offline.attention.${item.attention}`, {
@@ -158,7 +174,7 @@ export function OutboxList({
                 </span>
               )}
               <span className="tt-row-actions">
-                {reviewable && (
+                {writer && reviewable && (
                   <button
                     type="button"
                     className="tt-button tt-primary"
@@ -169,53 +185,47 @@ export function OutboxList({
                     {t('offline.queue.review')}
                   </button>
                 )}
-                {(item.state === 'queued' || (item.state === 'attention' && !settle)) && (
+                {writer && (item.state === 'queued' || (item.state === 'attention' && !settle)) && (
                   <button
                     type="button"
                     className="tt-button"
                     aria-label={t('offline.queue.retryNamed', { name })}
-                    onClick={() => void runtime.engine.retry(item.id)}
+                    onClick={() => act(() => runtime.engine.retry(item.id))}
                   >
                     {t('offline.queue.retry')}
                   </button>
                 )}
-                {(item.state === 'queued' || item.state === 'attention') && (
+                {writer && (item.state === 'queued' || item.state === 'attention') && (
                   <button
                     type="button"
                     className="tt-button"
                     aria-label={t('offline.queue.holdNamed', { name })}
-                    onClick={() => void runtime.engine.hold(item.id)}
+                    onClick={() => act(() => runtime.engine.hold(item.id))}
                   >
                     {t('offline.queue.hold')}
                   </button>
                 )}
-                {item.state === 'draft' && (
+                {writer && item.state === 'draft' && (
                   <button
                     type="button"
                     className="tt-button tt-primary"
                     aria-label={t('offline.queue.sendNamed', { name })}
-                    onClick={() => void runtime.engine.release(item.id)}
+                    onClick={() => act(() => runtime.engine.release(item.id))}
                   >
                     {t('offline.queue.send')}
                   </button>
                 )}
-                {item.state !== 'synced' && item.state !== 'syncing' && (
-                  <ConfirmButton
-                    label={t('offline.queue.discard')}
+                {writer && item.state !== 'synced' && item.state !== 'syncing' && (
+                  <DiscardButton
+                    runtime={runtime}
+                    item={item}
                     name={name}
-                    question={t('offline.queue.discardQuestion')}
-                    confirm={t('offline.queue.discardConfirm')}
-                    onConfirm={() =>
-                      // Only the item as it was shown: one that changed meanwhile is not discarded unseen.
-                      void runtime.store.removeItem(item.id, seenOf(item)).then(
-                        () => setNotice(null),
-                        (e) => setNotice(e instanceof ItemChanged ? t('errors.offline_item_changed') : errorText(e)),
-                      )
-                    }
+                    onDone={() => setNotice(null)}
+                    onError={setNotice}
                   />
                 )}
               </span>
-              {resolving === item.id && reviewable && (
+              {writer && resolving === item.id && reviewable && (
                 <Resolve
                   runtime={runtime}
                   item={item}
@@ -228,16 +238,20 @@ export function OutboxList({
           )
         })}
       </ul>
-      {synced.length > 0 && (
+      {writer && synced.length > 0 && (
         <button
           type="button"
           className="tt-button"
           onClick={() =>
             // Out of the list, not out of the queue: a deleted record would be shown again from the
             // copy, which doesn't know of the deletion, until a download does.
-            void Promise.all(
-              synced.map((i) =>
-                runtime.store.updateItem(i.id, (x) => (x.state === 'synced' ? { ...x, cleared: true } : undefined)),
+            act(() =>
+              Promise.all(
+                synced.map((i) =>
+                  runtime.store.updateItem(i.id, (x) => (x.state === 'synced' ? { ...x, cleared: true } : undefined), {
+                    guarded: true,
+                  }),
+                ),
               ),
             )
           }

@@ -40,6 +40,7 @@ import {
 import { approvalOf, type Download, NotSaved, OfflineStore, type OutboxItem, scopeKey } from './store'
 import { backoff, LEASE_MS, LOCK_RETRY_MS, MAX_ATTEMPTS, SyncEngine } from './sync'
 import { localPhotos, offlineTransport } from './transport'
+import { soleWriter } from './writer.testing'
 
 const scope = { workspace: 1, space: 2, app: 1 }
 const base = '/api/workspaces/1/spaces/2/apps/1'
@@ -153,7 +154,13 @@ function engineOf(store: OfflineStore, c = clock(), extra: ConstructorParameters
 
 // An engine that sends nothing: the screen's button asks it to run, and the tests decide when.
 function idle(store: OfflineStore) {
-  return { user: store.user, store, engine: { run: async () => {} } as unknown as SyncEngine, stop: () => {} }
+  return {
+    user: store.user,
+    store,
+    engine: { run: async () => {} } as unknown as SyncEngine,
+    stop: () => {},
+    writer: soleWriter,
+  }
 }
 
 // Queues an insert the way the offline screen's button does, through the transport.
@@ -701,7 +708,7 @@ test('signing out with records not sent offers to sync or discard, and syncing s
   const store = await openStore()
   await queue(store, { description: 'A', amount: '1' })
   const engine = engineOf(store)
-  const runtime = { user: 7, store, engine, stop: () => {} }
+  const runtime = { user: 7, store, engine, stop: () => {}, writer: soleWriter }
   let up = false
   const calls = fakeFetch({
     [`POST ${base}/actions`]: () => (up ? { body: [] } : { status: 503, body: { error: 'busy' } }),

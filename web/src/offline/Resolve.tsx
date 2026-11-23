@@ -6,7 +6,6 @@
 import { useEffect, useId, useState } from 'react'
 import { ApiError, errorText } from '../api'
 import { type Format, useFormat, useT } from '../i18n'
-import { ConfirmButton } from '../settings/parts'
 import {
   type Deleted,
   findDeleted,
@@ -20,9 +19,10 @@ import {
   type ServerRecord,
   saveEdit,
 } from './choices'
+import { DiscardButton } from './DiscardButton'
 import { fieldsOf, parseUpdate } from './local'
 import type { Runtime } from './runtime'
-import { type Download, ItemChanged, kindOf, type OutboxItem, type Problem, seenOf, versionOf } from './store'
+import { type Download, kindOf, type OutboxItem, type Problem, seenOf, versionOf } from './store'
 
 type Field = Download['definition']['collection']['fields'][number]
 
@@ -129,7 +129,11 @@ export function Resolve({
       await go()
       onClose()
     } catch (e) {
-      if (e instanceof ApiError && e.code === REVIEW_AGAIN) setAgain((n) => n + 1)
+      // The record moved on, or the copy of the app was replaced while the server was read: what is
+      // shown is read again.
+      if (e instanceof ApiError && (e.code === REVIEW_AGAIN || e.code === 'offline_copy_changed')) {
+        setAgain((n) => n + 1)
+      }
       setError(errorText(e))
       setBusy(false)
     }
@@ -287,28 +291,30 @@ export function Resolve({
       {editing && def && (live ?? download) && (
         <EditForm
           fields={fields}
+          // What every field holds now: the record as the server has it (read again when it moved
+          // on) with the person's own change on top. A field they didn't touch follows it.
           initial={kind === 'update' ? { ...base, ...changed } : stripId(item.action.context)}
-          busy={busy}
+          busy={busy || server === 'loading'}
           onCancel={() => setEditing(false)}
-          onSave={(form) =>
-            void run(() => saveEdit(runtime, item, form, (live ?? download) as Download, current, seenOf(item)))
+          onSave={(form, touched) =>
+            void run(() =>
+              saveEdit(
+                runtime,
+                item,
+                form,
+                (live ?? download) as Download,
+                current,
+                seenOf(item),
+                // An update applies only what is the person's: their change, and what they edited.
+                kind === 'update' ? [...new Set([...Object.keys(changed), ...touched])] : undefined,
+              ),
+            )
           }
         />
       )}
 
       <p className="tt-row-actions">
-        <ConfirmButton
-          label={t('offline.queue.discard')}
-          name={name}
-          question={t('offline.queue.discardQuestion')}
-          confirm={t('offline.queue.discardConfirm')}
-          onConfirm={() => {
-            // Only the item as it was shown: one that changed meanwhile is not discarded unseen.
-            runtime.store.removeItem(item.id, seenOf(item)).then(onClose, (e) => {
-              setError(e instanceof ItemChanged ? t('errors.offline_item_changed') : errorText(e))
-            })
-          }}
-        />
+        <DiscardButton runtime={runtime} item={item} name={name} onDone={onClose} onError={setError} />
       </p>
     </section>
   )
@@ -396,6 +402,9 @@ function ChangeSummary({ fields, changed, f }: { fields: Field[]; changed: Recor
 }
 
 // The record's fields as inputs, by type: what the person edits to retry. Photos stay as they are.
+// A field shows what the person typed in it, and until they type, what `initial` says now: the form
+// remembers only the fields that were edited (`onSave` says which), so a record read again while it
+// is open comes with its new values in every other field, and only what the person changed is applied.
 function EditForm({
   fields,
   initial,
@@ -406,26 +415,25 @@ function EditForm({
   fields: Field[]
   initial: Record<string, unknown>
   busy: boolean
-  onSave: (form: Record<string, unknown>) => void
+  onSave: (form: Record<string, unknown>, touched: string[]) => void
   onCancel: () => void
 }) {
   const t = useT()
   const uid = useId()
-  const [form, setForm] = useState<Record<string, unknown>>(() =>
-    Object.fromEntries(
-      fields
-        .filter((x) => x.type !== 'attachment')
-        .map((x) => [x.name, initial[x.name] ?? (x.type === 'boolean' ? false : '')]),
-    ),
+  const [edits, setEdits] = useState<Record<string, unknown>>({})
+  const form = Object.fromEntries(
+    fields
+      .filter((x) => x.type !== 'attachment')
+      .map((x) => [x.name, x.name in edits ? edits[x.name] : (initial[x.name] ?? (x.type === 'boolean' ? false : ''))]),
   )
-  const set = (name: string, value: unknown) => setForm((prev) => ({ ...prev, [name]: value }))
+  const set = (name: string, value: unknown) => setEdits((prev) => ({ ...prev, [name]: value }))
   return (
     <form
       className="tt-resolve-form"
       aria-label={t('offline.resolve.edit')}
       onSubmit={(e) => {
         e.preventDefault()
-        onSave(form)
+        onSave(form, Object.keys(edits))
       }}
     >
       <h3>{t('offline.resolve.edit')}</h3>

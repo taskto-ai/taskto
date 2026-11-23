@@ -7,7 +7,8 @@
 //   downloads  an app's downloaded release and records, one per (workspace, space, app)
 //   outbox     the records made offline and waiting for the server, with where they go
 //   blobs      the photos of queued records, which stay until the server has them
-//   meta       small facts (the sequence for new items)
+//   meta       small facts (the sequence for new items, which tab is the offline writer, the
+//              generation of the downloaded copies)
 //
 // The schema is versioned. A version's migration runs once, in the upgrade's transaction, and a
 // database written by a newer version than this code reads is not touched (SchemaTooNew): the
@@ -78,6 +79,11 @@ export type Download = Scope & {
   modifiable?: number[]
   // About how big the copy is, for the storage the person is shown.
   bytes: number
+  // Which copy this is: raised each time a copy is put or removed (`putDownload`,
+  // `removeDownload`), and never by a change made to the copy it is (a choice about a conflict).
+  // What was read from the server for the copy held at some point is written into it only while
+  // this is still the copy it was read for (`resolve`: CopyChanged).
+  generation?: number
 }
 
 // What an item does: make a record, change a downloaded one, or delete one.
@@ -203,8 +209,10 @@ export type OutboxItem = {
   syncedAt?: string
   // Who is sending it, until when: taken in the item's own transaction before a send, renewed
   // while it goes on, so two tabs (or a tab and a page that was closed) never send one item at
-  // once, with or without Web Locks. A lease that has run out is anyone's to take.
-  lease?: { owner: string; until: number }
+  // once, with or without Web Locks. A lease that has run out is anyone's to take. `attempt` is
+  // the token of the send the claim was made for: only the send that holds it may write the answer
+  // it got (a late answer to a send that was superseded is dropped).
+  lease?: { owner: string; until: number; attempt?: string }
 }
 
 export type BlobRow = { id: string; item: string; blob: Blob }
@@ -262,6 +270,48 @@ export class RecordChanged extends Refused {
   }
 }
 
+// A change to existing records, a choice about one, or a discard, made by a tab that is not the
+// offline writer: only one tab of an account at a time makes them (docs/offline.md, "One writer").
+export class NotWriter extends Refused {
+  constructor() {
+    super('changes are being made in another tab')
+    this.name = 'NotWriter'
+  }
+}
+
+// What a choice read from the server was read for a downloaded copy that is not the one held now (a
+// revalidation or a new download replaced it meanwhile): nothing of it is written into the copy.
+export class CopyChanged extends Refused {
+  constructor() {
+    super('the downloaded copy changed meanwhile: review it again')
+    this.name = 'CopyChanged'
+  }
+}
+
+// The account signed in on this browser is not the one this database is for: nothing is written.
+export class AccountLapsed extends Refused {
+  constructor() {
+    super('the account signed in here is not this one')
+    this.name = 'AccountLapsed'
+  }
+}
+
+// What the item was when a person was shown it, for what only that state may be undone (a discard).
+export type SeenAs = Seen & { state: OutboxState }
+export const seenAs = (item: OutboxItem): SeenAs => ({ ...seenOf(item), state: item.state })
+
+// A record's queue as a screen was drawn from it: what an enqueue checks again in its transaction.
+export const queueSignature = (items: readonly OutboxItem[]): string =>
+  items
+    .filter((i) => kindOf(i) !== 'insert')
+    .map((i) => `${i.id}:${versionOf(i)}:${i.state}:${i.unconfirmed ? 1 : 0}`)
+    .sort()
+    .join(',')
+
+// The meta row that says which tab holds the right to change existing records, and until when.
+export const WRITER = 'writer'
+export type WriterRow = { key: typeof WRITER; owner: string; until: number }
+
 // A refusal of the device's own to keep something: shown as the failure it is.
 export class NotSaved extends Error {
   constructor(
@@ -278,6 +328,13 @@ type Listener = () => void
 export class OfflineStore {
   private listeners = new Set<Listener>()
   private closed = false
+  // The tab's identity as the offline writer, once the writer model is attached (writer.ts): the
+  // changes only the writer makes are written only while the database says it is this one. Without
+  // one nothing is checked (a tool or a test that has no competing tabs).
+  private writer: string | undefined
+  // Whether the account signed in here is this database's: asked in the transaction, right before
+  // each write.
+  private account: () => boolean = () => true
 
   private constructor(
     readonly user: number,
@@ -316,6 +373,57 @@ export class OfflineStore {
     for (const fn of [...this.listeners]) fn()
   }
 
+  // From now on the changes only the offline writer makes (a change to a record, a choice, a
+  // discard) are written only while `owner` is the one the database names (`claimWriter`).
+  attachWriter(owner: string | undefined) {
+    this.writer = owner
+  }
+
+  // Asks, for every write, whether the account signed in here is this database's. Asked inside the
+  // transaction that writes, after what it read and before what it puts, so a sign-in that came
+  // while an answer was on its way can't be written under the account that has left.
+  requireAccount(check: () => boolean) {
+    this.account = check
+  }
+
+  private assertAccount() {
+    if (!this.account()) throw new AccountLapsed()
+  }
+
+  // Inside a transaction that also reads META: the write is refused unless this tab is the writer.
+  private async assertWriter(tx: Tx) {
+    this.assertAccount()
+    if (this.writer === undefined) return
+    const row = await tx.store<WriterRow>(META).get(WRITER)
+    if (row?.owner !== this.writer) throw new NotWriter()
+  }
+
+  // The writer row, in one transaction: taken when `free` says the row (if any) is free to take.
+  // Answers whether `owner` holds it now.
+  async claimWriter(owner: string, until: number, free: (row: WriterRow | undefined) => boolean): Promise<boolean> {
+    return this.tx([META], 'readwrite', async (tx) => {
+      const meta = tx.store<WriterRow | { key: string; value: number }>(META)
+      if ((await meta.get(RETIRED)) !== undefined) return false
+      const row = (await meta.get(WRITER)) as WriterRow | undefined
+      if (row?.owner !== owner && !free(row)) return false
+      await meta.put({ key: WRITER, owner, until })
+      return true
+    })
+  }
+
+  // The writer row is let go, if it is `owner`'s.
+  async releaseWriter(owner: string): Promise<void> {
+    await this.tx([META], 'readwrite', async (tx) => {
+      const meta = tx.store<WriterRow>(META)
+      if ((await meta.get(WRITER))?.owner === owner) await meta.delete(WRITER)
+    })
+  }
+
+  // Whether `owner` holds the writer row now.
+  async writerIs(owner: string): Promise<boolean> {
+    return (await this.tx([META], 'readonly', (tx) => tx.store<WriterRow>(META).get(WRITER)))?.owner === owner
+  }
+
   private tx<R>(stores: string[], mode: IDBTransactionMode, fn: (tx: Tx) => Promise<R>): Promise<R> {
     if (this.closed) return Promise.reject(new Error('the offline database is closed'))
     return runTx(this.db, stores, mode, fn)
@@ -324,7 +432,10 @@ export class OfflineStore {
   // A write that must be kept: any failure is a NotSaved, the quota's told apart.
   private async keep<R>(stores: string[], fn: (tx: Tx) => Promise<R>): Promise<R> {
     try {
-      const out = await this.tx(stores, 'readwrite', fn)
+      const out = await this.tx(stores, 'readwrite', async (tx) => {
+        this.assertAccount()
+        return fn(tx)
+      })
       this.changed()
       return out
     } catch (e) {
@@ -337,8 +448,17 @@ export class OfflineStore {
 
   // --- downloads
 
+  // Keeps a copy as a new one: its generation is a new number, whatever the copy given says.
   putDownload(d: Download): Promise<void> {
-    return this.keep([DOWNLOADS], (tx) => tx.store<Download>(DOWNLOADS).put(d))
+    return this.keep([DOWNLOADS, META], async (tx) => {
+      d.generation = await nextGeneration(tx)
+      await tx.store<Download>(DOWNLOADS).put(d)
+    })
+  }
+
+  // The generation of the copy held for a scope, or null when none is.
+  async downloadGeneration(scope: Scope): Promise<number | null> {
+    return (await this.getDownload(scope))?.generation ?? null
   }
 
   getDownload(scope: Scope): Promise<Download | undefined> {
@@ -351,7 +471,10 @@ export class OfflineStore {
 
   // Removes an app's downloaded copy. What was queued for it stays: it is the person's work.
   removeDownload(scope: Scope): Promise<void> {
-    return this.keep([DOWNLOADS], (tx) => tx.store(DOWNLOADS).delete(scopeKey(scope)))
+    return this.keep([DOWNLOADS, META], async (tx) => {
+      await nextGeneration(tx)
+      await tx.store(DOWNLOADS).delete(scopeKey(scope))
+    })
   }
 
   // --- the outbox
@@ -374,27 +497,37 @@ export class OfflineStore {
     })
   }
 
-  // Records a change to a downloaded record (an update or a delete) in one transaction, with the
-  // items already waiting for that record in view: `build` gets the record's item that the server
+  // Records a change to a downloaded record (an update or a delete) in one transaction, with every
+  // item already made for that record in view: `build` gets the record's item that the server
   // hasn't acknowledged, if there is one, and answers the item to keep: a new one, or that one
-  // merged (it keeps its place in the queue, and its version goes up). It may throw a refusal
-  // (RecordBusy, RecordChanged): nothing is written then. Resolves once durable.
+  // merged (it keeps its place in the queue, and its version goes up). Refused, and nothing is
+  // written: by a tab that isn't the writer (NotWriter); when any item of the record may already be
+  // on the server (RecordBusy: sent and not answered for good); when any is a deletion, or the
+  // record's queue is not what `drawnFrom` (a `queueSignature`) says the screen was drawn from, an
+  // item having been added, answered or changed meanwhile (RecordChanged); and by what `build`
+  // throws. Resolves once durable.
   async changeRecord(
     scope: Scope,
     recordId: number,
     build: (prev: OutboxItem | undefined) => Omit<OutboxItem, 'seq' | 'version'> | OutboxItem,
+    drawnFrom?: string,
   ): Promise<OutboxItem> {
     return this.keep([OUTBOX, META], async (tx) => {
       const meta = tx.store<{ key: string; value: number }>(META)
       if ((await meta.get(RETIRED)) !== undefined) throw new NotSaved('unavailable')
+      await this.assertWriter(tx)
       const outbox = tx.store<OutboxItem>(OUTBOX)
-      const waiting = (await outbox.getAllByIndex('byApp', scopeKey(scope)))
-        .filter((i) => kindOf(i) !== 'insert' && i.record.id === recordId && i.state !== 'synced')
+      const all = (await outbox.getAllByIndex('byApp', scopeKey(scope)))
+        .filter((i) => kindOf(i) !== 'insert' && i.record.id === recordId)
         .sort((a, b) => a.seq - b.seq)
-      const next = build(waiting.at(-1))
+      if (all.some(mayBeOnServer)) throw new RecordBusy()
+      if (all.some((i) => kindOf(i) === 'delete')) throw new RecordChanged()
+      if (drawnFrom !== undefined && queueSignature(all) !== drawnFrom) throw new RecordChanged()
+      const prev = all.filter((i) => i.state !== 'synced').at(-1)
+      const next = build(prev)
       if ('seq' in next) {
         // The item as this transaction read it, one version on.
-        const merged = { ...next, version: versionOf(waiting.at(-1) as OutboxItem) + 1 }
+        const merged = { ...next, version: versionOf(prev as OutboxItem) + 1 }
         await outbox.put(merged)
         return merged
       }
@@ -412,18 +545,25 @@ export class OfflineStore {
   // nothing to change none. Only an item that still needs attention, and is still the item the
   // person was shown (its version and its operation key), is changed: a tab that moved it on
   // meanwhile wins, and what the person chose is refused (ItemChanged). Answers whether it was
-  // applied (`decide` may find nothing to change).
+  // applied (`decide` may find nothing to change). Only the offline writer chooses (NotWriter). With
+  // `copy` (the generation of the downloaded copy, or null for none, as it was when the server was
+  // read), a copy that is not that one any more (a revalidation or a download replaced it
+  // meanwhile) refuses the choice (CopyChanged): what was read is not written into another copy.
   async resolve(
     id: string,
     seen: Seen,
     decide: (item: OutboxItem, copy: Download | undefined) => { item: OutboxItem | null; copy?: Download } | undefined,
+    { copy: readFor }: { copy?: number | null } = {},
   ): Promise<boolean> {
-    return this.keep([OUTBOX, DOWNLOADS, BLOBS], async (tx) => {
+    return this.keep([OUTBOX, DOWNLOADS, BLOBS, META], async (tx) => {
+      await this.assertWriter(tx)
       const outbox = tx.store<OutboxItem>(OUTBOX)
       const current = await outbox.get(id)
       if (current?.state !== 'attention' || !isSeen(current, seen)) throw new ItemChanged()
       const downloads = tx.store<Download>(DOWNLOADS)
-      const decided = decide(current, await downloads.get(current.scopeKey))
+      const held = await downloads.get(current.scopeKey)
+      if (readFor !== undefined && (held?.generation ?? null) !== readFor) throw new CopyChanged()
+      const decided = decide(current, held)
       if (!decided) return false
       if (decided.item === null) {
         await outbox.delete(id)
@@ -480,14 +620,17 @@ export class OfflineStore {
   async updateItem(
     id: string,
     change: (item: OutboxItem) => OutboxItem | undefined,
-    { bump = true }: { bump?: boolean } = {},
+    { bump = true, guarded = false }: { bump?: boolean; guarded?: boolean } = {},
   ): Promise<OutboxItem | undefined> {
-    return this.keep([OUTBOX], async (tx) => {
+    return this.keep(guarded ? [OUTBOX, META] : [OUTBOX], async (tx) => {
+      if (guarded) await this.assertWriter(tx)
       const store = tx.store<OutboxItem>(OUTBOX)
       const current = await store.get(id)
       if (!current) return undefined
       const next = change(current)
       if (!next) return current
+      // Right before the write, after everything this transaction waited for.
+      this.assertAccount()
       const saved = { ...next, version: versionOf(current) + (bump ? 1 : 0), updatedAt: new Date().toISOString() }
       await store.put(saved)
       return saved
@@ -498,15 +641,29 @@ export class OfflineStore {
     return this.tx([BLOBS], 'readonly', (tx) => tx.store<BlobRow>(BLOBS).get(id)).then((r) => r?.blob)
   }
 
-  // Removes an item with its photos: a discard, or a synced one that is let go. With `seen`, only
-  // the item the person was shown: one that changed since is kept (ItemChanged).
-  async removeItem(id: string, seen?: Seen): Promise<void> {
+  // The person's discard of an item that was never acknowledged, with its photos: only the offline
+  // writer does it (NotWriter), and only the item as it was shown when the question was asked, its
+  // version, its operation and its state: one that changed since, or is gone, or that the server
+  // has acknowledged or may be sending, is kept (ItemChanged). A synced entry is never discarded:
+  // it is how the record is shown until a download has it.
+  async discardItem(id: string, seen: SeenAs): Promise<void> {
+    await this.keep([OUTBOX, BLOBS, META], async (tx) => {
+      await this.assertWriter(tx)
+      const outbox = tx.store<OutboxItem>(OUTBOX)
+      const current = await outbox.get(id)
+      if (!current || !isSeen(current, seen) || current.state !== seen.state) throw new ItemChanged()
+      if (current.state === 'synced' || current.state === 'syncing') throw new ItemChanged()
+      await outbox.delete(id)
+      const blobs = tx.store<BlobRow>(BLOBS)
+      for (const b of await blobs.getAll()) if (b.item === id) await blobs.delete(b.id)
+    })
+  }
+
+  // Removes an item with its photos: a synced one that a download holds is let go (the engine's and
+  // the download's, not a person's discard: `discardItem`).
+  async removeItem(id: string): Promise<void> {
     await this.keep([OUTBOX, BLOBS], async (tx) => {
       const outbox = tx.store<OutboxItem>(OUTBOX)
-      if (seen) {
-        const current = await outbox.get(id)
-        if (current && !isSeen(current, seen)) throw new ItemChanged()
-      }
       await outbox.delete(id)
       const blobs = tx.store<BlobRow>(BLOBS)
       for (const b of await blobs.getAll()) if (b.item === id) await blobs.delete(b.id)
@@ -594,4 +751,13 @@ function asNotSaved(e: unknown): NotSaved {
   if (name === 'StorageUnavailable' || name === 'InvalidStateError' || name === 'SecurityError')
     return new NotSaved('unavailable', e)
   return new NotSaved('failed', e)
+}
+
+// The next number for a copy of a download: one counter for the database, so a copy put after one
+// was removed is never mistaken for it.
+async function nextGeneration(tx: Tx): Promise<number> {
+  const meta = tx.store<{ key: string; value: number }>(META)
+  const next = ((await meta.get('downloadGen'))?.value ?? 0) + 1
+  await meta.put({ key: 'downloadGen', value: next })
+  return next
 }

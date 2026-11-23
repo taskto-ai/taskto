@@ -841,6 +841,8 @@
     "offline_nothing_to_change": "Nothing is different, so there is nothing to change.",
     "offline_field_removed": "The app no longer has the field “{field}”.",
     "offline_item_changed": "This changed in another tab or window. Review it again.",
+    "offline_not_writer": "Changes are being made in another tab. Take over here to change records from this tab.",
+    "offline_copy_changed": "The copy of this app on this device was replaced while this was being checked. It is shown as it is now: review it again.",
     "offline_review_again": "The record changed again meanwhile. It is shown as it is now: review it and choose again.",
     "offline_record_unreadable": "You can’t read this record any more, so your change can’t be applied on top of it. You can keep the server’s version or discard your change.",
     "offline_record_changed": "This record changed on this device (in another tab or window) since this screen was drawn. It is shown as it is now: check it and try again."
@@ -1641,6 +1643,11 @@
     "removePinNamed": "Remove {name} from the menu"
   },
   "offline": {
+    "writer": {
+      "elsewhere": "Changes are being made in another tab. Records and the queue are shown here, and changed there.",
+      "waiting": "Waiting for the other tab to let go…",
+      "takeOver": "Make changes here"
+    },
     "title": "Offline use",
     "download": "Download for offline use",
     "downloadNamed": "Download {name} for offline use",
@@ -1709,6 +1716,7 @@
       "itemDelete": "{app}: delete {summary}",
       "itemDeleteAny": "{app}: delete a record",
       "pendingNote": "Shown here as you left it; the server doesn’t have it yet.",
+      "waitsEarlier": "Waits for an earlier change to the same record to be answered.",
       "review": "Review",
       "reviewNamed": "Review {name}"
     },

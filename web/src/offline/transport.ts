@@ -32,7 +32,9 @@ import {
   kindOf,
   mayBeOnServer,
   NotSaved,
+  NotWriter,
   type OutboxItem,
+  queueSignature,
   RecordBusy,
   RecordChanged,
 } from './store'
@@ -89,6 +91,9 @@ export function localPhotos(): LocalPhotos & {
   }
 }
 
+// What a change, a choice or a discard is answered with in a tab that is not the offline writer.
+export const NOT_WRITER = 'offline_not_writer'
+
 export type OfflineTransport = AppTransport & {
   photos: ReturnType<typeof localPhotos>
 }
@@ -133,6 +138,8 @@ export function offlineTransport(
     kind: 'update' | 'delete',
     context: Record<string, unknown>,
   ) => {
+    // Only the tab that holds the offline writer changes existing records (writer.ts).
+    if (!runtime.writer.holds()) throw notWriter()
     const id = Number(context.id)
     if (!Number.isInteger(id)) throw new ApiError(422, 'bad request', { code: 'bad_request' })
     if (id < 0) throw new ApiError(409, 'not on the server yet', { code: 'offline_record_unsynced' })
@@ -194,36 +201,43 @@ export function offlineTransport(
     }
     let saved: OutboxItem
     try {
-      // Decided in the transaction, on the item as it is stored in it.
-      saved = await runtime.store.changeRecord(download, id, (prev) => {
-        if (!prev) return fresh
-        if (mayBeOnServer(prev)) throw new RecordBusy()
-        // Deleted in another tab meanwhile: this change was not made to anything.
-        if (kindOf(prev) === 'delete') throw new RecordChanged()
-        if (
-          prev.record.revision !== fresh.record.revision ||
-          prev.release !== fresh.release ||
-          prev.schema !== fresh.schema
-        )
-          throw new RecordChanged()
-        // Another action, or a deletion: its own item, which keeps its own identity.
-        if (kind !== 'update' || prev.action.name !== fresh.action.name) return fresh
-        // Not sent yet, so the request is still the person's to change: one item, under a new key.
-        return {
-          ...prev,
-          operation: fresh.operation,
-          updatedAt: now,
-          action: {
-            ...prev.action,
-            timestamp: fresh.action.timestamp,
-            context: { ...prev.action.context, ...context },
-          },
-        }
-      })
+      // Decided in the transaction, on the items of the record as they are stored in it, and only if
+      // they are what the screen was drawn from (`shown` and `expected` were read from `items`).
+      saved = await runtime.store.changeRecord(
+        download,
+        id,
+        (prev) => {
+          if (!prev) return fresh
+          if (mayBeOnServer(prev)) throw new RecordBusy()
+          // Deleted in another tab meanwhile: this change was not made to anything.
+          if (kindOf(prev) === 'delete') throw new RecordChanged()
+          if (
+            prev.record.revision !== fresh.record.revision ||
+            prev.release !== fresh.release ||
+            prev.schema !== fresh.schema
+          )
+            throw new RecordChanged()
+          // Another action, or a deletion: its own item, which keeps its own identity.
+          if (kind !== 'update' || prev.action.name !== fresh.action.name) return fresh
+          // Not sent yet, so the request is still the person's to change: one item, under a new key.
+          return {
+            ...prev,
+            operation: fresh.operation,
+            updatedAt: now,
+            action: {
+              ...prev.action,
+              timestamp: fresh.action.timestamp,
+              context: { ...prev.action.context, ...context },
+            },
+          }
+        },
+        queueSignature(items.filter((i) => i.record.id === id)),
+      )
     } catch (e) {
       if (e instanceof RecordBusy)
         throw new ApiError(409, 'an earlier change is being sent', { code: 'offline_record_busy' })
       if (e instanceof RecordChanged) throw recordChanged()
+      if (e instanceof NotWriter) throw notWriter()
       throw e instanceof NotSaved ? new Error(notSavedText(e)) : e
     }
     opts.onSaved?.(saved)
@@ -231,6 +245,7 @@ export function offlineTransport(
     return answerChange(download, await queue(), action.name, kind, id)
   }
   const recordChanged = () => new ApiError(409, 'this record changed', { code: 'offline_record_changed' })
+  const notWriter = () => new ApiError(409, 'changes are being made in another tab', { code: NOT_WRITER })
 
   return {
     photos,

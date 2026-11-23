@@ -14,6 +14,7 @@ import { OutboxList, SyncNotice } from './OutboxList'
 import type { Runtime } from './runtime'
 import { type Download, kindOf, type OutboxItem, scopeKey } from './store'
 import { type OfflineTransport, offlineTransport } from './transport'
+import { WriterNotice } from './WriterNotice'
 
 export function OfflineShell({ user, onReconnect }: { user: string; onReconnect: () => void }) {
   const t = useT()
@@ -48,6 +49,7 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
         </div>
       )}
       {problem === 'unavailable' && <p className="tt-muted">{t('offline.unavailable')}</p>}
+      {runtime && <WriterNotice runtime={runtime} />}
       {runtime && !download && (
         <>
           {data.loaded && data.downloads.length === 0 && <p className="tt-muted">{t('offline.shell.none')}</p>}
@@ -150,7 +152,10 @@ export function OfflineApp({
         </p>
       )}
       <AppView
-        key={scopeKey(download)}
+        // A screen is drawn from one release of the app, and a button on it is resolved in that one: a
+        // download that brought another release is drawn again, a fresh screen with its own buttons,
+        // never the old one's pressed under the new definition.
+        key={`${scopeKey(download)}@${download.release}`}
         surfaceId={`app-${download.app}`}
         label={download.name}
         transport={transport}

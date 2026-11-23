@@ -30,6 +30,7 @@ import { SchemaTooNew } from './idb'
 import { revalidate } from './revalidate'
 import { type Approval, type Download, OfflineStore, seenOf, type UnsentRef } from './store'
 import { type SyncDeps, SyncEngine } from './sync'
+import { OfflineWriter, type WriterDeps } from './writer'
 
 const USERS = 'taskto:offline-users'
 
@@ -58,6 +59,8 @@ export type Runtime = {
   user: number
   store: OfflineStore
   engine: SyncEngine
+  // Whether this tab is the one that changes existing records (writer.ts).
+  writer: OfflineWriter
   stop: () => void
 }
 
@@ -78,6 +81,7 @@ let state: RuntimeState = { runtime: null, problem: null, foreign: null }
 let opening: Promise<RuntimeState> | null = null
 const listeners = new Set<() => void>()
 let deps: SyncDeps = {}
+let writerDeps: WriterDeps = {}
 
 function set(next: RuntimeState) {
   state = next
@@ -91,8 +95,9 @@ export const subscribeRuntime = (fn: () => void) => {
 export const runtimeState = () => state
 
 // For tests: the engine's clock, transport and timers.
-export function setSyncDeps(next: SyncDeps) {
+export function setSyncDeps(next: SyncDeps, writer: WriterDeps = {}) {
   deps = next
+  writerDeps = writer
 }
 
 // Every other account's database on this browser goes, except one with unsent work: that one keeps
@@ -236,8 +241,19 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
           await deps.onRevoked?.(item, why)
         },
       })
-      const stop = engine.start()
-      set({ runtime: { user, store: opened, engine, stop }, problem: null, foreign })
+      const writer = new OfflineWriter(opened, writerDeps)
+      // Known before anything is shown: the first tab of the account is its writer.
+      await writer.start()
+      if (!current()) {
+        writer.stop()
+        return abandon(opened)
+      }
+      const stopEngine = engine.start()
+      const stop = () => {
+        stopEngine()
+        writer.stop()
+      }
+      set({ runtime: { user, store: opened, engine, writer, stop }, problem: null, foreign })
       // Whether what was downloaded may still be kept (access lost, downloads turned off, fewer
       // records readable): asked as soon as the server can be, and a refusal removes the copy.
       void revalidate(opened).catch(() => {})

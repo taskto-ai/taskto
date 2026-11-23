@@ -35,12 +35,17 @@ import {
   MIGRATIONS,
   OfflineStore,
   type OutboxItem,
+  queueSignature,
+  RecordBusy,
+  RecordChanged,
   SCHEMA_VERSION,
   scopeKey,
+  seenAs,
   seenOf,
 } from './store'
 import { SyncEngine } from './sync'
 import { offlineTransport } from './transport'
+import { soleWriter } from './writer.testing'
 
 const scope = { workspace: 1, space: 2, app: 1 }
 const base = '/api/workspaces/1/spaces/2/apps/1'
@@ -139,7 +144,7 @@ function runtimeOf(store: OfflineStore) {
     clearTimer: () => {},
     random: () => 0.5,
   })
-  return { user: store.user, store, engine, stop: () => {} }
+  return { user: store.user, store, engine, stop: () => {}, writer: soleWriter }
 }
 
 async function setup(patch: Partial<Download> = {}) {
@@ -1116,9 +1121,9 @@ test('every change to an item raises its version, and a choice made on an older 
   await store.updateItem(held.id, (i) => ({ ...i }), { bump: false })
   expect((await store.getItem(held.id))?.version).toBe(3)
   // Discarding what was shown at version 1 is refused, and nothing is removed.
-  await expect(store.removeItem(held.id, seenOf(first))).rejects.toBeInstanceOf(ItemChanged)
+  await expect(store.discardItem(held.id, seenAs(first))).rejects.toBeInstanceOf(ItemChanged)
   expect(await store.listItems()).toHaveLength(1)
-  await store.removeItem(held.id, seenOf(held))
+  await store.discardItem(held.id, seenAs(held))
   expect(await store.listItems()).toEqual([])
 })
 
@@ -1421,4 +1426,358 @@ test('a second deletion during a restore offers the restore again, at the deleti
   await engineOf(store).run()
   expect((await store.listItems())[0].state).toBe('synced')
   expect(row).toMatchObject({ deleted: false, rev: 6, data: { amount: 9 } })
+})
+
+// --- second review: one writer, and what each tab's choices and sends may write
+
+// The download's messages with the records given (ids with their revisions and fields).
+function withItems(items: unknown[]): unknown[] {
+  return (surface as unknown as { updateDataModel?: { path?: string; value?: unknown } }[]).map((m) =>
+    m.updateDataModel?.path === '/'
+      ? { ...m, updateDataModel: { ...m.updateDataModel, value: { ...(m.updateDataModel.value as object), items } } }
+      : m,
+  )
+}
+
+test('edit and try again applies only the fields the person changed: one they left alone follows the record as it is read again', async () => {
+  const { store, runtime, row } = await conflicted({ amount: 20 }, 2)
+  render(<Harness runtime={runtime} />)
+  const entry = await screen.findByText(/Expenses: change to Coffee/)
+  fireEvent.click(within(entry.closest('li') as HTMLElement).getByRole('button', { name: /Review/ }))
+  const review = await screen.findByRole('region', { name: /Review/ })
+  await within(review).findByText('20')
+  fireEvent.click(within(review).getByRole('button', { name: 'Edit and try again' }))
+  const form = await screen.findByRole('form', { name: 'Edit and try again' })
+  // The person's own change (the amount) and what the server has for the rest.
+  expect((within(form).getByLabelText('amount') as HTMLInputElement).value).toBe('9')
+  expect((within(form).getByLabelText('description') as HTMLInputElement).value).toBe('Coffee')
+  fireEvent.change(within(form).getByLabelText('kind'), { target: { value: 'food' } })
+  // The record moves on before they save: the description is somebody else's now.
+  row.data.description = 'Tea'
+  row.rev = 3
+  fireEvent.click(within(form).getByRole('button', { name: 'Save and try again' }))
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/changed|again/i))
+  // The form reads the record again: the field they didn't touch shows the new value, theirs stay.
+  await waitFor(() => expect((screen.getByLabelText('description') as HTMLInputElement).value).toBe('Tea'))
+  expect((screen.getByLabelText('kind') as HTMLSelectElement).value).toBe('food')
+  fireEvent.click(screen.getByRole('button', { name: 'Save and try again' }))
+  await waitFor(async () => expect((await store.listItems())[0].state).toBe('queued'))
+  const [saved] = await store.listItems()
+  expect(saved.record.revision).toBe(3)
+  // Only what the person changed: the stale description is not in the request.
+  expect(saved.action.context).toEqual({ id: 1, amount: 9, kind: 'food' })
+})
+
+// An engine whose requests the test answers by hand.
+function held() {
+  const waiting: ((answer: unknown) => void)[] = []
+  const request = vi.fn(
+    () =>
+      new Promise((resolve) => {
+        waiting.push(resolve)
+      }),
+  )
+  return { request: request as never, waiting, calls: request }
+}
+
+test('a late answer is written only for the operation and the attempt it belongs to', async () => {
+  const { store, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const c = clock()
+  const slow = held()
+  const running = engineOf(store, c, { request: slow.request }).run()
+  await waitFor(() => expect(slow.calls).toHaveBeenCalled())
+  const [sent] = await store.listItems()
+  // Meanwhile the person's choice made it another request, under another key, waiting to be sent.
+  await store.updateItem(sent.id, (i) => ({
+    ...i,
+    operation: 'op-replaced-0001',
+    state: 'queued',
+    lease: undefined,
+    unconfirmed: undefined,
+  }))
+  slow.waiting[0]([])
+  await running
+  // The first request's answer says nothing of the second: it is not marked synced.
+  expect(await store.getItem(sent.id)).toMatchObject({ state: 'queued', operation: 'op-replaced-0001' })
+})
+
+test('a late answer of a send that was superseded by another attempt touches neither the state nor the acknowledgement', async () => {
+  const a = await OfflineStore.open(7)
+  await a.putDownload(download(7))
+  const b = await OfflineStore.open(7)
+  const { runtime } = { runtime: runtimeOf(a) }
+  await offlineTransport(runtime, download(7)).act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const slow = held()
+  const early = clock()
+  const first = engineOf(a, early, { request: slow.request }).run()
+  await waitFor(() => expect(slow.calls).toHaveBeenCalled())
+  // Another tab, after the first one's claim ran out, takes the item and has the answer.
+  const later = clock()
+  later.advance(10 * 60_000)
+  const fast = vi.fn(async () => [
+    { updateDataModel: { path: '/items', value: [{ id: 1, _revision: 5, description: 'Coffee', amount: 9 }] } },
+  ])
+  await engineOf(b, later, { request: fast as never }).run()
+  expect((await b.listItems())[0]).toMatchObject({ state: 'synced', ack: { _revision: 5 } })
+  // The first one's answer comes now, and says another revision.
+  slow.waiting[0]([
+    { updateDataModel: { path: '/items', value: [{ id: 1, _revision: 2, description: 'Coffee', amount: 9 }] } },
+  ])
+  await first
+  const [after] = await b.listItems()
+  expect(after).toMatchObject({ state: 'synced', ack: { _revision: 5 } })
+  expect(after.attempts).toBe(1)
+})
+
+test('a discard is of the item as the question was asked: one that changed meanwhile is kept, and a synced entry is never discarded', async () => {
+  const { store, runtime, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  render(<Harness runtime={runtime} />)
+  const entry = await screen.findByText(/Expenses: change to Coffee/)
+  fireEvent.click(within(entry.closest('li') as HTMLElement).getByRole('button', { name: /Discard/ }))
+  // The question is open; the item is changed meanwhile (held as a draft in another tab, say).
+  const [asked] = await store.listItems()
+  await store.updateItem(asked.id, (i) => ({ ...i, state: 'draft' }))
+  await screen.findByText('Draft on this device')
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
+  await screen.findByText(/changed in another tab/)
+  expect(await store.listItems()).toHaveLength(1)
+
+  // Whatever the dialog says, an entry the server acknowledged is not removed by a discard.
+  fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  await store.updateItem(asked.id, (i) => ({ ...i, state: 'queued' }))
+  await engineOf(store).run()
+  const [synced] = await store.listItems()
+  expect(synced.state).toBe('synced')
+  await expect(store.discardItem(synced.id, seenAs(synced))).rejects.toBeInstanceOf(ItemChanged)
+  expect(await store.listItems()).toHaveLength(1)
+})
+
+test('a conflict choice whose server read was overtaken by a revalidation writes nothing into the copy that replaced it', async () => {
+  const { store, runtime, row, item } = await conflicted()
+  const server = fakeServer(new Map([[1, row]]))
+  void server
+  // The revalidation replaces the copy (the person reads fewer records now: the record is gone from
+  // it) while the answer to the read of the record is on its way.
+  fakeFetch({
+    [`GET ${base}/records/1/history`]: async () => {
+      await store.putDownload(download(7, { messages: withItems([]), records: 0, total: 0 }))
+      return {
+        body: {
+          record: { id: 1, revision: row.rev, data: row.data, deleted_at: null },
+          history: [],
+          truncated: false,
+        },
+      }
+    },
+  })
+  await expect(keepServer(runtime, item)).rejects.toMatchObject({ code: 'offline_copy_changed' })
+  // The narrower copy is what is kept: the record the person can't read is not put back.
+  const copy = (await store.getDownload(scope)) as Download
+  expect(itemsOf(copy, [])).toEqual([])
+  expect(await store.getItem(item.id)).toMatchObject({ state: 'attention', attention: 'conflict' })
+})
+
+test('a fresh download of another release draws its own screen: a button is resolved in the release its screen came from', async () => {
+  const { store, d, runtime } = await setup()
+  const { rerender } = render(<OfflineAppView runtime={runtime} download={d} items={[]} />)
+  await screen.findByText('Expense tracker')
+  const next = download(7, {
+    release: 4,
+    capturedAt: '2026-11-04T10:00:00.000Z',
+    messages: JSON.parse(JSON.stringify(surface).replace('Expense tracker', 'Expense tracker v4')),
+  })
+  await store.putDownload(next)
+  rerender(<OfflineAppView runtime={runtime} download={next} items={[]} />)
+  await screen.findByText('Expense tracker v4')
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  await waitFor(async () => expect(await store.listItems()).toHaveLength(1))
+  expect((await store.listItems())[0]).toMatchObject({ release: 4, kind: 'delete' })
+})
+
+test('an overlay based on one revision is never stamped over a download at another: it waits for review, and a synced no-op never masks a newer download', () => {
+  const rev3 = download(7, { messages: withItems([{ id: 1, _revision: 3, description: 'Tea', amount: 20 }]) })
+  const queued = {
+    kind: 'update',
+    state: 'queued',
+    seq: 1,
+    version: 1,
+    operation: 'op-overlay-0001',
+    record: { id: 1, revision: 1 },
+    action: { name: 'edit_expense', context: { id: 1, amount: '9' } },
+    attachments: [],
+  } as unknown as OutboxItem
+  // The download is at revision 3, the change was made on revision 1: the record is shown as the
+  // download has it, for review, never as revision 1's values with a revision they were not made on.
+  expect(itemsOf(rev3, [queued])).toEqual([{ id: 1, _revision: 3, _pending: 'review', description: 'Tea', amount: 20 }])
+  // On the revision the download holds, it is the person's change, said to be waiting.
+  const rev1 = download(7, { messages: withItems([{ id: 1, _revision: 1, description: 'Coffee', amount: 4.5 }]) })
+  expect(itemsOf(rev1, [queued])).toEqual([
+    { id: 1, _revision: 1, _pending: 'update', description: 'Coffee', amount: 9 },
+  ])
+  // A change the server has, that said nothing of the record it has: it does not cover a newer copy.
+  const noop = { ...queued, state: 'synced' } as OutboxItem
+  expect(itemsOf(rev3, [noop])).toEqual([{ id: 1, _revision: 3, description: 'Tea', amount: 20 }])
+  expect(itemsOf(rev1, [noop])).toEqual([{ id: 1, description: 'Coffee', amount: 9 }])
+  // One that did: the server's record, unless the copy is newer than its answer.
+  const acked = (revision: number) =>
+    ({ ...queued, state: 'synced', ack: { id: 1, _revision: revision, description: 'Mine', amount: 9 } }) as OutboxItem
+  expect(itemsOf(rev3, [acked(2)])).toEqual([{ id: 1, _revision: 3, description: 'Tea', amount: 20 }])
+  expect(itemsOf(rev3, [acked(4)])).toEqual([{ id: 1, _revision: 4, description: 'Mine', amount: 9 }])
+})
+
+test('an enqueue looks at every item of the record in its transaction: any that may be on the server blocks it, and any deletion refuses it', async () => {
+  const { store } = await setup()
+  const draft = (over: Partial<OutboxItem>) => ({
+    kind: 'update' as const,
+    id: `item-${Math.random()}`,
+    user: 7,
+    scopeKey: scopeKey(scope),
+    ...scope,
+    base,
+    release: 3,
+    schema: 1,
+    action: { name: 'edit_expense', surfaceId: 'app-1', sourceComponentId: '', timestamp: '', context: { id: 1 } },
+    operation: `op-${Math.random().toString(36).slice(2, 12)}`,
+    record: { id: 1, revision: 1 },
+    attachments: [],
+    state: 'queued' as const,
+    attempts: 0,
+    createdAt: '',
+    updatedAt: '',
+    ...over,
+  })
+  const fresh = draft({
+    action: { name: 'other', surfaceId: 'app-1', sourceComponentId: '', timestamp: '', context: { id: 1 } },
+  })
+  // An earlier item gave up after it was sent and may be on the server; a later one waits behind it.
+  const early = await store.enqueue(draft({ state: 'attention', attention: 'gave_up', unconfirmed: true }), [])
+  await store.enqueue(
+    draft({ action: { name: 'other', surfaceId: 'app-1', sourceComponentId: '', timestamp: '', context: { id: 1 } } }),
+    [],
+  )
+  await expect(store.changeRecord(scope, 1, () => fresh)).rejects.toBeInstanceOf(RecordBusy)
+  await store.removeItem(early.id)
+  // A deletion, even one the server has answered, is the end of the record's edits.
+  const gone = await store.enqueue(draft({ kind: 'delete', state: 'synced' }), [])
+  await expect(store.changeRecord(scope, 1, () => fresh)).rejects.toBeInstanceOf(RecordChanged)
+  await store.removeItem(gone.id)
+  // The queue a screen was drawn from is the queue the transaction sees: an item that was
+  // acknowledged since is a record at another revision.
+  const [mine] = await store.listItems(scope)
+  const drawn = queueSignature(await store.listItems(scope))
+  await store.updateItem(mine.id, (i) => ({ ...i, state: 'synced' }), { bump: false })
+  await expect(store.changeRecord(scope, 1, () => fresh, drawn)).rejects.toBeInstanceOf(RecordChanged)
+})
+
+test('an edit pressed while an earlier item of the record synced after the screen was read is refused, not based on a stale revision', async () => {
+  const { store, runtime, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  const [first] = await store.listItems()
+  // The queue is read for the screen, and the item is acknowledged before the change is written.
+  const list = runtime.store.listItems.bind(runtime.store)
+  vi.spyOn(runtime.store, 'listItems').mockImplementationOnce(async (s) => {
+    const items = await list(s)
+    await store.updateItem(first.id, (i) => ({ ...i, state: 'synced', syncedAt: 'now', unconfirmed: undefined }), {
+      bump: false,
+    })
+    return items
+  })
+  await expect(
+    transport.act(press('edit_expense', { id: 1, description: 'Later', amount: '1' }, 1)),
+  ).rejects.toMatchObject({ code: 'offline_record_changed' })
+  expect(await store.listItems()).toHaveLength(1)
+})
+
+test('an answer that is a refusal made before the operation was looked at leaves the change unconfirmed: only the server’s verdict on it clears that', async () => {
+  const { store, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const c = clock()
+  fakeFetch({ [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } } })
+  await engineOf(store, c).run()
+  expect((await store.listItems())[0]).toMatchObject({ state: 'queued', unconfirmed: true })
+  // Retried after access was lost: a refusal that says nothing of the first send.
+  fakeFetch({
+    [`POST ${base}/actions`]: { status: 403, body: { error: 'no', code: 'app_forbidden' } },
+    [`GET ${base}`]: { body: {} },
+  })
+  c.advance(10 * 60_000)
+  await engineOf(store, c).run()
+  const [refused] = await store.listItems()
+  expect(refused).toMatchObject({ state: 'attention', attention: 'access', unconfirmed: true })
+  await expect(transport.act(press('edit_expense', { id: 1, amount: '11' }, 1))).rejects.toMatchObject({
+    code: 'offline_record_busy',
+  })
+  // A verdict on the operation itself (the record is gone) is what says the server doesn't have it.
+  fakeFetch({ [`POST ${base}/actions`]: { status: 422, body: { error: 'no row', code: 'app_row_not_found' } } })
+  await engineOf(store, c).retry(refused.id)
+  expect((await store.listItems())[0]).toMatchObject({ state: 'attention', attention: 'deleted' })
+  expect((await store.listItems())[0].unconfirmed).toBeUndefined()
+})
+
+test('the account is checked in the transaction that writes the acknowledgement', async () => {
+  const { store, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  let who = 7
+  let answered = false
+  fakeFetch({
+    [`POST ${base}/actions`]: () => {
+      answered = true
+      return { body: [] }
+    },
+  })
+  // Another account signs in just as the answer is about to be written: after the send's own checks.
+  const write = store.updateItem.bind(store)
+  vi.spyOn(store, 'updateItem').mockImplementation((id, change, options) => {
+    if (answered) who = 8
+    return write(id, change, options)
+  })
+  await engineOf(store, clock(), { signedIn: () => who }).run()
+  expect((await store.getItem((await store.listItems())[0].id))?.state).not.toBe('synced')
+})
+
+test('a change to a record waits until the earlier change to it has an answer for good, so a delete never overtakes the edit before it', async () => {
+  const { store, runtime } = await setup()
+  const t = offlineTransport(runtime, download(7))
+  await t.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  await t.act(press('delete_expense', { id: 1 }, 1))
+  expect((await store.listItems()).map((i) => i.kind)).toEqual(['update', 'delete'])
+  const server = fakeServer()
+  // The edit's send is not answered: it waits, and may be on the server.
+  const real = server.calls
+  void real
+  const failing = fakeFetch({ [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } } })
+  const c = clock()
+  const engine = engineOf(store, c)
+  await engine.run()
+  expect(actionCalls(failing).map((x) => (x.body as { name: string }).name)).toEqual(['edit_expense'])
+  // Again, before the edit's wait is over: the delete is due, but not before the edit has its answer.
+  await engine.run()
+  expect(actionCalls(failing).map((x) => (x.body as { name: string }).name)).toEqual(['edit_expense'])
+  // The edit is answered, then the delete goes (and finds what the edit made of the record).
+  const ok = fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  c.advance(10 * 60_000)
+  await engineOf(store, c).run()
+  expect(actionCalls(ok).map((x) => (x.body as { name: string }).name)).toEqual(['edit_expense', 'delete_expense'])
+})
+
+test('in a tab that is not the writer a button that changes a record says so, and writes nothing', async () => {
+  const { store, d, runtime } = await setup()
+  const reader = { ...runtime, writer: { ...soleWriter, holds: () => false } } as unknown as typeof runtime
+  const transport = offlineTransport(reader, d)
+  await expect(transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))).rejects.toMatchObject({
+    code: 'offline_not_writer',
+  })
+  await expect(transport.act(press('delete_expense', { id: 1 }, 1))).rejects.toMatchObject({
+    code: 'offline_not_writer',
+  })
+  expect(await store.listItems()).toEqual([])
+  // The screen says it in words.
+  render(<OfflineAppView runtime={reader} download={d} items={[]} />)
+  await screen.findByText('Coffee')
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/Changes are being made in another tab/)
+  expect(await store.listItems()).toEqual([])
 })

@@ -128,6 +128,34 @@ replaced by the server's id in the record that is sent. The server still checks 
 A record's photos have a state of their own (*Photos: 1 of 2 sent*), since they can still be on
 their way when the record is not.
 
+### One writer: a single tab changes existing records
+
+Several tabs of one account share one queue, and what they would have to do to write it together
+(merge, re-check, never undo one another's choices) is far more than what a person needs. So
+**changes to existing records are made by one tab at a time, the offline writer**:
+
+- Only the writer **queues an edit or a deletion** of a downloaded record, **makes a choice** about
+  a change that needs attention (*Keep the server's version*, *Apply my change on top*, *Edit and try
+  again*, *Restore it and apply my change*, the repair), **discards** an item, holds or sends a draft,
+  tries an item again, and clears the synced entries from the list. Inserts are independent items
+  with keys of their own, and any tab may still queue them; every tab sends, as always
+  ([sending](#sending-replay)).
+- The other tabs of the account **show the queue and the records read-only**. They say *Changes are
+  being made in another tab*, hide those buttons, answer a press that would change a record with the
+  same words, and have a button, *Make changes here*, that **takes the right over**: it asks the
+  holder to let go and waits for the lock; the holder becomes a reader at once. Only the first tab
+  of an account is the writer without asking.
+- **Who holds it is the database's word, not what a tab believes.** A row in the database's `meta`
+  store names the writer's identity, and every write only the writer makes (`changeRecord`,
+  `resolve`, `discardItem`, the retry, hold, release and clear of an item) reads that row in its
+  own transaction and is **refused** (`NotWriter`) unless it names this tab. A tab that lost the
+  right while a write was on its way, a frozen tab that woke up, is refused by the database.
+- **How it is held.** Where the browser has Web Locks, the writer holds a lock named for the account
+  for as long as it keeps the right (it is let go when the tab closes) and writes the row when it
+  gets it. Where it hasn't, the row carries a **lease** that its holder renews with a heartbeat, and
+  anyone may take it once it has run out. A tab that closed lets go at once; one that froze loses
+  the right when the lease ends, if another tab asks.
+
 ### Versions: what makes two tabs agree
 
 Several tabs of one account, and a page that was closed, work on one queue, so no part of it is
@@ -146,7 +174,10 @@ The rules:
   choice, discard or approval carries the **version and operation key of the item they were shown**
   (`Seen`). One that no longer matches is **refused**, with *This changed in another tab or window.
   Review it again.*, and nothing is applied: the other tab's work is never overwritten by a
-  confirmation made on what was on screen before it.
+  confirmation made on what was on screen before it. A **discard** is bound to the item as it was
+  when the question was **asked**, its version, its operation and its state, not as it is drawn
+  when the answer is given (`discardItem`); it never removes an entry the server acknowledged
+  (those leave with a download that holds their change, or are only cleared from the list).
 - **Signing out loses only what was shown.** The records the person is told they would lose are
   listed with their versions, and *Discard and sign out* approves exactly those: an item that was
   changed since (a newer edit coalesced into it) or made since is not agreed to, nothing is
@@ -164,7 +195,16 @@ The rules:
 - **A button is resolved in the release its screen was drawn from.** The transport keeps the
   release `load` drew and resolves the pressed action in its definition, queues the item for that
   release, and never in a newer one downloaded meanwhile, where the same name may be another
-  action. The records it acts on are always the copy's as it is now.
+  action. The records it acts on are always the copy's as it is now. A download that brings
+  **another release** draws the screen again (the app's view is remounted, keyed by the release),
+  so the button on screen is always one of the release its transport resolves in.
+- **What was read for a copy is written only into that copy.** Each downloaded copy has a
+  **generation** (a counter of the database, raised whenever a copy is put or removed, never by
+  a change to the copy it is). A choice about a conflict takes the generation before it reads the
+  server, and the transaction that applies it **refuses** (`offline_copy_changed`) if the copy is
+  not that generation any more: a revalidation that narrowed what the person may read, or a new
+  download, was applied meanwhile, and the record that was read is never written back into the
+  copy that replaced it. What is shown is read again.
 - **The server's word is authoritative for values.** When an answer says the record's current
   revision (the answer to an update, including a replay of one the server already had, or one that
   set what was set already and so made no revision), the item keeps the record **as the server
@@ -202,12 +242,27 @@ else*), nothing is counted against the item, and it goes on when its owner signs
 **One sender per item.** Where the browser has Web Locks, one tab at a time sends. Everywhere,
 an item is claimed in its own IndexedDB transaction before it is sent (a lease that is renewed
 while it goes on and that runs out if its page is closed), so two tabs, or a tab and a page that
-was just closed, never send one item at once; a tab that finds another one sending looks again
+was just closed, never send one item at once. Each claim carries the **attempt token** of the send
+it was made for: what a send writes (its progress, its failure, **the acknowledgement**) is written
+only while the item is still *syncing*, under **the operation key it sent** and **that attempt's
+claim**. An answer that comes late, after the item was made another request by a choice or taken
+by another send, finds that and writes nothing: it never marks a different operation synced, and
+never replaces the acknowledgement or state of a newer attempt (the other send's own answer, the
+same operation's, gets its own); a tab that finds another one sending looks again
 shortly. Where there are no Web Locks the claim is kept alive for as long as the item's request is
 in flight, on a timer of its own (a third of the lease), whether or not the request makes
 progress: a photo upload whose chunk stalls still holds its claim, so no other tab starts it
 again. If the claim is lost anyway (another page took it, the item was discarded) the request is
 aborted at once and nothing of it is written.
+
+**Changes to one record are answered in the order they were made.** An item for a record is not
+sent while an earlier item for the same record has no answer for good (it is queued, being sent,
+waiting for its retry, held as a draft, or *needs attention* and was left unconfirmed): a deletion
+therefore never overtakes the edit before it, an edit is never reported *deleted* because its later
+deletion got there first, and the ordinary outcome of two changes made on one revision is a visible
+conflict on the second. An answer for good is the server's acknowledgement or its verdict (a
+conflict, a missing record, a field that doesn't fit). The revisions are not chained: the second
+item is still based on the revision the person saw.
 
 **Nothing is written or deleted on the strength of an answer that came too late.** Every request
 of a pass (the photos, the record, and the check of the app after a 403 or 404) carries the pass's
@@ -230,7 +285,11 @@ again is the same request, and an item the server acknowledged is never put back
    there (the server also refuses one that names an unfinished upload, `app_attachment_bad`).
 2. **The record**, with its operation id and release. The server writes the record **and the
    operation's receipt in one transaction**, so sending it again (the answer was lost, the page was
-   reopened, two tabs) changes nothing and is answered with a 2xx (the rows as they are *now*, not the first
+   reopened, two tabs) changes nothing and is answered with a 2xx (**also when what the person may do
+   changed meanwhile**: a request the caller made that committed is answered with its receipt, an
+   empty answer, where the access checks would now refuse it, so a device that lost the answer
+   learns that the change is in; only the space's own route check, before the server reads the
+   request, can still refuse a replay) (the rows as they are *now*, not the first
    answer's body: the server keeps the request's receipt, not its answer, and a record deleted since
    is simply not among them), which is what the device needs: **a record is made exactly once**. The same id for a different request is refused (`app_operation_reused`).
 
@@ -242,11 +301,11 @@ What the answer means:
 | 401, the session ended | **sending pauses** (the item waits, no attempt is counted) until someone signs in again; then it resumes |
 | 409 `session_account_changed` | the session is another account's: **sending pauses** as above, the item waits as it was |
 | no answer, 5xx, 408, 425, 429 | transient: try again with backoff (2 s doubling to 5 min, with jitter), and the items behind it wait; after 8 attempts, *Needs attention* with **Try again now**, and the items behind it are sent (a record that gave up doesn't hold the queue) |
-| 403, 404 | access lost: *Needs attention*. If asking for the app itself is also refused, the revocation is confirmed: **replay is blocked and the downloaded copy is removed**; the queued input stays, for the person to deal with |
+| 403, 404 | access lost: *Needs attention*. If asking for the app itself is also refused, the revocation is confirmed: **replay is blocked and the downloaded copy is removed**; the queued input stays, for the person to deal with. Such a refusal says nothing of an earlier send of the same change: a change that **may already be on the server** stays *unconfirmed* (it takes no further edit, and is never reused for another request) |
 | 409 `app_record_conflict` (an update or a delete) | the record changed since the change was based on it: *Needs attention*, a **conflict**, with the record as the server has it now if the person may read it; never retried by itself ([Conflicts](#conflicts-and-what-doesnt-fit)) |
 | 422 `app_row_not_found` (an update or a delete) | the record is gone (deleted, or no longer the person's to change): *Needs attention*, **deleted**; the change never brings it back |
 | 422 or 400 for a field the app no longer takes (removed, retyped, now required, a choice that is no longer one) | *Needs attention*, **schema**: the input is kept, with what doesn't fit, to repair or discard |
-| 409 archived, offline, outdated; 400/422 | the server refused it for good: *Needs attention* with the server's reason; never retried by itself |
+| 409 archived, offline, outdated; 400/422 | the server refused it for good: *Needs attention* with the server's reason; never retried by itself. Only the server's **verdict on the operation** (a conflict, a missing record, a field that doesn't fit, a release it can't take) says it doesn't have the change; a refusal made before it looked (access, an archived or unpublished app, a photo) leaves a change that was unconfirmed unconfirmed |
 
 The person's controls, on every item: *Try again now*, *Keep as draft* / *Send*, *Discard* (asks),
 and *Sync now* for the whole queue. A **permanent failure stops retrying**: every state that
@@ -269,7 +328,12 @@ like an insert does. What is defined, and why:
 - **Shown optimistically, and labelled.** The offline screen draws a changed record as the person
   left it (`_pending`), with the `_revision` it is based on, and leaves a deleted record out; the
   queue says it is a change the server doesn't have yet, and the screen says how many are waiting.
-  Counts and sums are over what is shown.
+  Counts and sums are over what is shown. A change is shown only on **the revision it was based
+  on**: over a copy that holds the record at another revision (a download was taken since) the
+  record is shown **as downloaded, marked for review** (`_pending: 'review'`), never with the
+  change's values and a revision they were not made on; and what the server acknowledged shows
+  only if no newer copy of the record is held (a no-op that left no revision of its own never
+  covers a newer download).
 - **Several changes of one action to one record are one item while none was sent**, on the same
   base ([versions](#versions-what-makes-two-tabs-agree)). The later values win; the item keeps its
   place in the queue and the revision it was first based on, and is sent under a new operation key
@@ -278,10 +342,19 @@ like an insert does. What is defined, and why:
   closed: the change may be on the server) the item is marked and the record takes no further
   change until it is known (*An earlier change to this record is being sent*): the key is never
   reused for a different request, and a change never goes out based on a revision that another
-  one of ours may have moved. **Only a definite answer clears the mark**: a refusal (a conflict, a
-  4xx) or the server's acknowledgement. An answer that says the session ended (401) or the account
-  is another's says nothing of an earlier send that went unanswered, and leaves the mark as it was
-  before that send.
+  one of ours may have moved. **Only a definite answer clears the mark**: the server's
+  acknowledgement, or its verdict on the operation (a conflict, a missing record, a field that
+  doesn't fit). An answer that says the session ended (401), that the account is another's, or that
+  access is lost or the app archived (403, 404: the server refused before it looked the operation
+  up) says nothing of an earlier send that went unanswered, and leaves the mark as it was before
+  that send.
+- **The whole queue of the record is looked at, in the transaction.** `changeRecord` reads **every**
+  item for the record, not the last one: any that may be on the server blocks the change (*being
+  sent*), any deletion (answered or not) refuses an edit, and the queue the screen was drawn from
+  (the items with their versions and states, as the transport read them for what it shows) must be
+  what the transaction reads: an item added, answered or changed between is a *record changed*
+  refusal, and the screen is drawn again, so a change is never based on a revision that an item
+  acknowledged meanwhile has moved.
 - **After the server acknowledged it**, the record is shown as the server answered it, with its
   revision, and the next change to the record is based on that revision. The screen is drawn again
   with it.
@@ -303,7 +376,7 @@ wins, and the choice is refused ([versions](#versions-what-makes-two-tabs-agree)
 
 | Situation | What the person sees | Choices |
 |---|---|---|
-| **Conflict**: two devices (or two people) changed the record from the same revision | a table of each field as it was when they started, their change, and the server's value now | *Apply my change on top* (the same change on the revision just shown, under a new key; for a deletion, *Delete it anyway*); *Keep the server's version* (their change is discarded and the copy holds the server's record); *Edit and try again* (a form of the record's fields, sending only what differs from the server's, so what they didn't touch is not overwritten); *Discard* |
+| **Conflict**: two devices (or two people) changed the record from the same revision | a table of each field as it was when they started, their change, and the server's value now | *Apply my change on top* (the same change on the revision just shown, under a new key; for a deletion, *Delete it anyway*); *Keep the server's version* (their change is discarded and the copy holds the server's record); *Edit and try again* (a form of the record's fields; **only the fields the person changed** are applied, onto the record as the server has it now, so what they didn't touch is never written: the form remembers just what was edited, and when the record is read again while it is open every other field shows the new values); *Discard* |
 | **Conflict, record no longer readable** | that there is a newer version they can't read | *Keep the server's version* (discard) |
 | **Deleted** on the server while it was changed here | who deleted it and when, from the list of deleted records | *Restore it and apply my change* (the restore is sent first, then the change on the revision it gives; a restore whose answer was lost is recognised as the same restore; a restore that finds the record deleted again at a newer revision is a deleted record still, and is offered again at the revision it has now), *Discard my change*. A deletion of a record already deleted has nothing left to send: *Clear this*. The restore is the person's own step and needs the right to modify; if it is refused the item says so |
 | **Schema**: a field removed, retyped, now required, a choice narrowed | what doesn't fit, field by field, checked against the app as it is live now (the copy is downloaded again to know it), and the input as entered | *Fix and try again* (a form of the live fields; the item is then made for the live release and its definition version, on a new key), *Discard* |
@@ -325,7 +398,10 @@ What a send finds out after any wait (the answer, a restore, a finished upload) 
 while the account that made the queue is still the one signed in here (the account epoch): a
 success that comes in after another account signed in changes nothing in the old account's queue,
 and the item stays as it was, unconfirmed, to be sent again, which the server answers with the
-same result. *Clear synced records* takes the entries out of the list, and an entry stays in the
+same result. The check is made **in the transaction that writes**: the store asks, after what it
+read and before what it puts, whether the account signed in here is the database's (and refuses
+the write, `AccountLapsed`, if not), so a sign-in that comes between the engine's own check and the
+write can't be written under the account that has left. *Clear synced records* takes the entries out of the list, and an entry stays in the
 queue (cleared) until a download that holds its change lets it go, so a deleted record is never
 shown again from a copy that doesn't know of the deletion yet.
 
@@ -434,5 +510,6 @@ the way the tests' stand-in server does (the Go tests cover the real server's si
 a stand-in for it); that a person reads the conflict table and the repair form comfortably on a
 phone-sized screen; that a phone's camera photo, held in IndexedDB as a blob, survives the app being killed
 in the background; that Web Locks and `online` events fire the way the code expects after a
-phone's sleep; that the offline view opens after a device restart with no network; and the
+phone's sleep, and that real tabs hand the offline writer over as the tests' small stand-in for Web Locks and
+for the channel between tabs does (the database's own refusal of a write by a tab that isn't the writer is tested); that the offline view opens after a device restart with no network; and the
 durability of a write on a phone that loses power right after "Saved on this device".

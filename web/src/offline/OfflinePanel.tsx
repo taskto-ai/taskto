@@ -11,6 +11,7 @@ import { useOfflineData, useRuntime } from './hooks'
 import { OutboxList } from './OutboxList'
 import { NotSaved, scopeKey } from './store'
 import { notSavedText } from './transport'
+import { WriterNotice } from './WriterNotice'
 
 export function OfflinePanel({
   workspace,
@@ -156,7 +157,16 @@ export function OfflinePanel({
       )}
       <p className="tt-muted tt-small">{t('offline.onlineOnly')}</p>
       {runtime && data.items.length > 0 && (
-        <OutboxList runtime={runtime} items={data.items} status={data.status} apps={apps} downloads={data.downloads} />
+        <>
+          <WriterNotice runtime={runtime} />
+          <OutboxList
+            runtime={runtime}
+            items={data.items}
+            status={data.status}
+            apps={apps}
+            downloads={data.downloads}
+          />
+        </>
       )}
     </section>
   )

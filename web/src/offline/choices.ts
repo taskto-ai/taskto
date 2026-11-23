@@ -16,16 +16,19 @@ import { downloadApp } from './download'
 import { applyUpdate, fieldsOf, parseField, parseInsert, parseUpdate, requireFields, withRecord } from './local'
 import type { Runtime } from './runtime'
 import {
+  CopyChanged,
   type Download,
   ItemChanged,
   kindOf,
+  NotWriter,
   type OutboxItem,
   type Problem,
   type Seen,
+  type SeenAs,
   seenOf,
   versionOf,
 } from './store'
-import { newOperation } from './transport'
+import { NOT_WRITER, newOperation } from './transport'
 
 type Definition = Download['definition']
 
@@ -61,21 +64,43 @@ const changedElsewhere = () => new ApiError(409, 'this changed in another tab', 
 export const REVIEW_AGAIN = 'offline_review_again'
 const reviewAgain = () => new ApiError(409, 'the record changed again', { code: REVIEW_AGAIN })
 
-// Runs a choice, which the store refuses when the item is not the one the person was shown.
+// Only the tab that holds the offline writer chooses (writer.ts): the others show the queue.
+const notWriter = () => new ApiError(409, 'changes are being made in another tab', { code: NOT_WRITER })
+
+// What was read from the server was read for a copy of the app that is not the one held now.
+const copyChanged = () => new ApiError(409, 'the downloaded copy changed', { code: 'offline_copy_changed' })
+
+// Runs a choice, which the store refuses when the item is not the one the person was shown, when
+// this tab is not the writer, or when the copy it read for was replaced.
 async function chosen<R>(go: () => Promise<R>): Promise<R> {
   try {
     return await go()
   } catch (e) {
     if (e instanceof ItemChanged) throw changedElsewhere()
+    if (e instanceof NotWriter) throw notWriter()
+    if (e instanceof CopyChanged) throw copyChanged()
     throw e
   }
 }
 
 // Refuses at once, before the server is asked anything, a choice made on an item that has moved
-// on; the store checks it again in the transaction that applies the choice.
-async function stillShown(runtime: Runtime, item: OutboxItem, seen: Seen): Promise<void> {
+// on, or in a tab that is not the writer; the store checks it again in the transaction that
+// applies the choice. Answers the generation of the downloaded copy as it is now, which the choice
+// is applied against (`resolve`'s `copy`): taken before the server is read, so that a copy replaced
+// while the answer was on its way (a revalidation that narrowed what the person reads) is never
+// written over with what was read for the old one.
+async function stillShown(runtime: Runtime, item: OutboxItem, seen: Seen): Promise<number | null> {
+  if (!runtime.writer.holds()) throw notWriter()
   const stored = await runtime.store.getItem(item.id)
   if (!stored || versionOf(stored) !== seen.version || stored.operation !== seen.operation) throw changedElsewhere()
+  return runtime.store.downloadGeneration(item)
+}
+
+// The person's discard of an item that was never acknowledged, as it was shown when they were
+// asked (its version, its operation and its state): nothing else is removed.
+export async function discard(runtime: Runtime, item: OutboxItem, seen: SeenAs): Promise<void> {
+  if (!runtime.writer.holds()) throw notWriter()
+  await chosen(() => runtime.store.discardItem(item.id, seen))
 }
 
 // A record as the server has it now, for the person who is signed in: read at the moment it is
@@ -108,13 +133,18 @@ export async function readCurrent(runtime: Runtime, item: OutboxItem): Promise<S
 // as the server has it right now (or no longer holds it: deleted, or not the person's to read: what
 // was cached of it is dropped, never written back).
 export async function keepServer(runtime: Runtime, item: OutboxItem, seen: Seen = seenOf(item)): Promise<boolean> {
-  await stillShown(runtime, item, seen)
+  const generation = await stillShown(runtime, item, seen)
   const server = item.attention === 'conflict' ? await readCurrent(runtime, item) : null
   return chosen(() =>
-    runtime.store.resolve(item.id, seen, (i, copy) => {
-      if (i.attention !== 'conflict' && i.attention !== 'deleted') return undefined
-      return { item: null, copy: copy && withRecord(copy, i.record.id, server?.current ?? null) }
-    }),
+    runtime.store.resolve(
+      item.id,
+      seen,
+      (i, copy) => {
+        if (i.attention !== 'conflict' && i.attention !== 'deleted') return undefined
+        return { item: null, copy: copy && withRecord(copy, i.record.id, server?.current ?? null) }
+      },
+      { copy: generation },
+    ),
   )
 }
 
@@ -129,19 +159,24 @@ export async function reapply(
   shown: Record<string, unknown> | null = item.conflict?.current ?? null,
   seen: Seen = seenOf(item),
 ): Promise<boolean> {
-  await stillShown(runtime, item, seen)
+  const generation = await stillShown(runtime, item, seen)
   const server = await readCurrent(runtime, item)
-  const current = await readable(runtime, item, seen, server)
+  const current = await readable(runtime, item, seen, server, generation)
   const revision = revisionOf(current)
   if (revision === undefined || revision !== revisionOf(shown)) throw reviewAgain()
   const done = await chosen(() =>
-    runtime.store.resolve(item.id, seen, (i, copy) => {
-      if (i.attention !== 'conflict') return undefined
-      return {
-        item: { ...requeued(i), record: { ...i.record, revision }, original: fieldsOf(current) },
-        copy: copy && withRecord(copy, i.record.id, current),
-      }
-    }),
+    runtime.store.resolve(
+      item.id,
+      seen,
+      (i, copy) => {
+        if (i.attention !== 'conflict') return undefined
+        return {
+          item: { ...requeued(i), record: { ...i.record, revision }, original: fieldsOf(current) },
+          copy: copy && withRecord(copy, i.record.id, current),
+        }
+      },
+      { copy: generation },
+    ),
   )
   if (done) await runtime.engine.run()
   return done
@@ -155,16 +190,22 @@ async function readable(
   item: OutboxItem,
   seen: Seen,
   server: ServerRecord,
+  generation: number | null,
 ): Promise<Record<string, unknown>> {
   if (server.current) return server.current
   await chosen(() =>
-    runtime.store.resolve(item.id, seen, (i, copy) => {
-      if (i.attention !== 'conflict') return undefined
-      const next: OutboxItem = server.deleted
-        ? { ...i, attention: 'deleted', conflict: undefined, restore: undefined }
-        : { ...i, conflict: { current: null } }
-      return { item: next, copy: copy && withRecord(copy, i.record.id, null) }
-    }),
+    runtime.store.resolve(
+      item.id,
+      seen,
+      (i, copy) => {
+        if (i.attention !== 'conflict') return undefined
+        const next: OutboxItem = server.deleted
+          ? { ...i, attention: 'deleted', conflict: undefined, restore: undefined }
+          : { ...i, conflict: { current: null } }
+        return { item: next, copy: copy && withRecord(copy, i.record.id, null) }
+      },
+      { copy: generation },
+    ),
   )
   throw server.deleted ? reviewAgain() : new ApiError(409, 'not readable', { code: 'offline_record_unreadable' })
 }
@@ -219,7 +260,9 @@ export async function refreshDefinition(runtime: Runtime, item: OutboxItem): Pro
 }
 
 // The change the person's edited values make, against the record as it is (`base`): an update
-// sends only the fields that differ from it, so what they didn't touch is not overwritten; an
+// sends only the fields the person changed (`changed`: theirs from the start, and those they edited)
+// that differ from the record as it is now, so what they didn't touch is never written (it is the
+// latest server record's, whatever the form showed when it was opened: base, mine, current); an
 // insert sends all that were entered. Refused, with the server's words, if it doesn't fit.
 export function contextFor(
   kind: 'insert' | 'update' | 'delete',
@@ -228,6 +271,7 @@ export function contextFor(
   base: Record<string, unknown>,
   kept: Record<string, unknown>,
   id: number,
+  changed?: readonly string[],
 ): Record<string, unknown> {
   const context: Record<string, unknown> = { ...kept }
   for (const f of def.collection.fields) {
@@ -235,6 +279,7 @@ export function contextFor(
     const value = form[f.name]
     if (kind === 'insert') {
       if (value !== undefined && value !== '' && value !== null) context[f.name] = value
+    } else if (changed !== undefined && !changed.includes(f.name)) {
     } else if (!same(value, base[f.name])) {
       context[f.name] = value === undefined ? '' : value
     }
@@ -258,7 +303,8 @@ const same = (a: unknown, b: unknown) => (a ?? '') === (b ?? '') || String(a ?? 
 // based on the record as the server has it if that is known. The record of a conflict is read at
 // this moment, and the form was made from `shown`: if it is not at that revision the person never
 // saw this one, and nothing is saved (REVIEW_AGAIN). Rejects with the server's words if the values
-// don't fit.
+// don't fit. For an update, `changed` names the fields the person changed: only those are applied,
+// onto the record as the server has it now.
 export async function saveEdit(
   runtime: Runtime,
   item: OutboxItem,
@@ -266,42 +312,48 @@ export async function saveEdit(
   live: Download,
   shown: Record<string, unknown> | null = item.conflict?.current ?? null,
   seen: Seen = seenOf(item),
+  changed?: readonly string[],
 ): Promise<boolean> {
   const kind = kindOf(item)
-  await stillShown(runtime, item, seen)
+  const generation = await stillShown(runtime, item, seen)
   let current: Record<string, unknown> | undefined
   if (kind === 'update' && item.attention === 'conflict') {
-    current = await readable(runtime, item, seen, await readCurrent(runtime, item))
+    current = await readable(runtime, item, seen, await readCurrent(runtime, item), generation)
     if (revisionOf(current) !== revisionOf(shown)) throw reviewAgain()
   }
   const base = kind === 'update' ? (current ? fieldsOf(current) : (item.original ?? {})) : {}
   const kept = Object.fromEntries(
     Object.entries(item.action.context).filter(([name]) => item.attachments.some((a) => a.field === name)),
   )
-  const context = contextFor(kind, live.definition, form, base, kept, item.record.id)
+  const context = contextFor(kind, live.definition, form, base, kept, item.record.id, changed)
   const revision = revisionOf(current)
   const done = await chosen(() =>
-    runtime.store.resolve(item.id, seen, (i, copy) => {
-      if (
-        i.attention === 'access' ||
-        i.attention === 'archived' ||
-        i.attention === 'photo' ||
-        i.attention === 'gave_up'
-      ) {
-        return undefined
-      }
-      const next = requeued({
-        ...i,
-        release: live.release,
-        schema: live.definition.definition_version,
-        action: { ...i.action, context },
-      })
-      if (kind === 'update') {
-        next.record = { ...i.record, revision: revision ?? i.record.revision }
-        if (current) next.original = fieldsOf(current)
-      }
-      return { item: next, copy: copy && current ? withRecord(copy, i.record.id, current) : copy }
-    }),
+    runtime.store.resolve(
+      item.id,
+      seen,
+      (i, copy) => {
+        if (
+          i.attention === 'access' ||
+          i.attention === 'archived' ||
+          i.attention === 'photo' ||
+          i.attention === 'gave_up'
+        ) {
+          return undefined
+        }
+        const next = requeued({
+          ...i,
+          release: live.release,
+          schema: live.definition.definition_version,
+          action: { ...i.action, context },
+        })
+        if (kind === 'update') {
+          next.record = { ...i.record, revision: revision ?? i.record.revision }
+          if (current) next.original = fieldsOf(current)
+        }
+        return { item: next, copy: copy && current ? withRecord(copy, i.record.id, current) : copy }
+      },
+      { copy: generation },
+    ),
   )
   if (done) await runtime.engine.run()
   return done

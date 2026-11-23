@@ -845,6 +845,8 @@
     "offline_nothing_to_change": "Nada é diferente, então não há o que alterar.",
     "offline_field_removed": "O app não tem mais o campo “{field}”.",
     "offline_item_changed": "Isto mudou em outra aba ou janela. Revise de novo.",
+    "offline_not_writer": "As alterações estão sendo feitas em outra aba. Assuma o controle aqui para alterar registros nesta aba.",
+    "offline_copy_changed": "A cópia deste app neste dispositivo foi substituída durante a verificação. Ela aparece como está agora: revise de novo.",
     "offline_review_again": "O registro mudou de novo nesse meio tempo. Ele aparece como está agora: revise e escolha outra vez.",
     "offline_record_unreadable": "Você não pode mais ler este registro, então sua alteração não pode ser aplicada sobre ele. Você pode manter a versão do servidor ou descartar a alteração.",
     "offline_record_changed": "Este registro mudou neste dispositivo (em outra aba ou janela) depois que esta tela foi desenhada. Ele aparece como está agora: confira e tente de novo."
@@ -1654,6 +1656,11 @@
     "removePinNamed": "Remover {name} do menu"
   },
   "offline": {
+    "writer": {
+      "elsewhere": "As alterações estão sendo feitas em outra aba. Os registros e a fila aparecem aqui e são alterados lá.",
+      "waiting": "Esperando a outra aba largar…",
+      "takeOver": "Fazer alterações aqui"
+    },
     "title": "Uso offline",
     "download": "Baixar para uso offline",
     "downloadNamed": "Baixar {name} para uso offline",
@@ -1724,6 +1731,7 @@
       "itemDelete": "{app}: excluir {summary}",
       "itemDeleteAny": "{app}: excluir um registro",
       "pendingNote": "Mostrado aqui como você deixou; o servidor ainda não o tem.",
+      "waitsEarlier": "Espera a resposta a uma alteração anterior no mesmo registro.",
       "review": "Revisar",
       "reviewNamed": "Revisar {name}"
     },

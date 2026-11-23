@@ -299,14 +299,35 @@ export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
   return [...items, ...created]
 }
 
-// One waiting change to a downloaded record, applied to what is shown.
+// One waiting change to a downloaded record, applied to what is shown. A change is applied only to
+// the revision it was based on: the downloaded record is at that revision (or says none), so the
+// values the change was made on, the values it sets and the revision shown are one record's. A
+// record the copy holds at another revision (a download was taken since) is not mixed with it:
+//   - a change the server has acknowledged is the server's word at its revision, and shows only
+//     if no newer copy of the record is held (a no-op that left no revision of its own, or an
+//     answer older than the copy, never masks the copy);
+//   - a change still waiting shows the record as downloaded, marked for review (`_pending:
+//     'review'`): sending it will say what became of it (a conflict, mostly), and no revision it
+//     wasn't made on is stamped on its values.
 function overlay(def: Definition, items: Item[], q: OutboxItem, kind: ChangeKind): Item[] {
   const at = items.findIndex((i) => i.id === q.record.id)
   if (at < 0) return items
+  const held = typeof items[at]._revision === 'number' ? (items[at]._revision as number) : undefined
+  const based = held === undefined || q.record.revision === null || held === q.record.revision
+  const replace = (next: Item) => items.map((it, i) => (i === at ? next : it))
+  if (q.state === 'synced') {
+    // What the server answered for an update it acknowledged is the record as it has it: its
+    // revision is only ever shown with its values, never with the ones this device made.
+    const ackRevision = typeof q.ack?._revision === 'number' ? q.ack._revision : undefined
+    if (kind === 'update' && q.ack && ackRevision !== undefined) {
+      return held === undefined || ackRevision >= held ? replace({ ...q.ack, id: q.record.id }) : items
+    }
+    // Without the server's word the copy is the only record there is: a newer one is never covered.
+    if (!based) return items
+  } else if (!based) {
+    return replace({ ...items[at], _pending: 'review' })
+  }
   if (kind === 'delete') return items.filter((_, i) => i !== at)
-  // What the server answered for an update it acknowledged is the record as it has it: its
-  // revision is only ever shown with its values, never with the ones this device made.
-  if (q.state === 'synced' && q.ack) return items.map((it, i) => (i === at ? { ...q.ack, id: q.record.id } : it))
   let changes: Record<string, unknown>
   try {
     changes = parseUpdate(def, q.action.context)
@@ -325,7 +346,7 @@ function overlay(def: Definition, items: Item[], q: OutboxItem, kind: ChangeKind
     next._pending = 'update'
     if (q.record.revision !== null) next._revision = q.record.revision
   }
-  return items.map((it, i) => (i === at ? next : it))
+  return replace(next)
 }
 
 // The downloaded record, as the server had it (before any change waiting here).
