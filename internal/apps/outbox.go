@@ -662,10 +662,10 @@ func (s *Service) createCard(ctx context.Context, e effectRow) (map[string]any, 
 	return map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "board_id": p.BoardID, "card_id": card.ID, "title": card.Title}, nil
 }
 
-// cardRef is a card an entry made, and where its record's link to it is.
+// cardRef is a card an entry made, as its record's link names it.
 type cardRef struct {
-	workspaceID, spaceID, boardID, cardID int64
-	lastMove                              int64
+	spaceID, boardID, cardID int64
+	lastMove                 int64
 }
 
 // linkedCard finds the card the create_card effect called name made for the entry's record, in the

@@ -553,7 +553,7 @@ func (e Effect) usedFields(c Collection) map[string]string {
 				if uses == nil {
 					uses = map[string]string{}
 				}
-				uses[text] = string(f.Type)
+				uses[text] = f.Type
 			}
 			return nil
 		})
@@ -565,7 +565,7 @@ func (e Effect) usedFields(c Collection) map[string]string {
 // type it had.
 func (p payload) usesHold(c Collection) bool {
 	for name, typ := range p.Uses {
-		if f, ok := c.field(name); !ok || string(f.Type) != typ {
+		if f, ok := c.field(name); !ok || f.Type != typ {
 			return false
 		}
 	}

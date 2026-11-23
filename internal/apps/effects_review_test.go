@@ -264,7 +264,7 @@ func TestAReleaseThatRemovesAFieldHidesWhatItFilledIn(t *testing.T) {
 	f.publish(f.alice, f.shared, cur)
 	f.mustSubmit(f.alice, "op-fields-001", "East gate", "fail")
 	f.work()
-	title := fmt.Sprintf("Fix East gate (leaking)")
+	title := "Fix East gate (leaking)"
 	if v := only(t, f.effects(f.alice, ""), EffectCreateCard); v.Detail.Title != title || v.Result["title"] != title {
 		t.Fatalf("card effect = %+v", v)
 	}
