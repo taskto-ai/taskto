@@ -106,6 +106,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
 | `app_row_not_found` | 422 | The action names a row the app doesn't have (any more), or one the caller may not change. |
 | `app_record_conflict` | 409 | The record changed since the client read it (or isn't deleted, for a restore); `params.id` is its ID, and `current` is the record as an item as it is now, only when the caller may read it. |
+| `app_query_cursor` | 400 | The `cursor` of a records query isn't one this query gave (it is another query's, another person's or damaged): start again from the first page. |
+| `app_query_field` | 400 | A records query names a `field` the live release doesn't declare, or can't use that way (a sum of text, a deletion time of live records). |
+| `app_query_condition` | 400 | A filter's operator or value doesn't fit its `field` (`op` says which operator). |
 | `app_field_required` | 422 | The action leaves out `field`, which the app requires. |
 | `app_field_too_long` | 422 | The value of `field` has more than `max` characters. |
 | `app_field_not_number` | 422 | The value of `field` isn't a number. |
@@ -1341,7 +1344,8 @@ the app's roles. **Design** is changing the app's draft, renaming it and moving 
 created, which includes the ones the agent created for them; records whose creator's
 account was deleted are in nobody's own, and only readers of all see them. Every way of
 reading records answers to the read scope: the screen's rows, its summaries (`count`,
-`sum`), `rows` in an app's list and the agent's `list_app_rows`. A change to a record the
+`sum`), `rows` in an app's list, the records query (pages, totals and aggregates) and the
+agent's `list_app_rows` and `query_app_rows`. A change to a record the
 caller may not change is answered as `app_row_not_found`.
 
 ### Records: revisions, history and deleting
@@ -1405,6 +1409,55 @@ The live records the caller may read, most recently changed first, at most 1,000
 holding the fields the **live release's** collection declares (the draft's don't count until
 published); `created_by` and the others are
 `{"id", "name", "agent", "via"}` or `null`. Read scope and `403`/`404` as for the history.
+
+### `GET …/apps/{app}/records/query`
+
+The data explorer's route: **a page** of the records the caller may read, filtered, searched and
+sorted by the server, with **totals over every record that matches**, never over the page.
+`{"records": [ … ], "next_cursor": "…" | null, "total": 412, "aggregates": [ … ]}`; each record is
+as in `GET …/records`. Parameters, all optional:
+
+| Parameter | Meaning |
+|---|---|
+| `state` | `live` (default) or `deleted`. |
+| `filter` | `field:op:value`, repeated, at most 8, **all** of which must hold (the value is what follows the second colon, so a time `12:30` is fine). `op` is `eq` or `ne` for every field, `lt`, `lte`, `gt`, `gte` for number, date, time and string fields, and `contains` for a string field (a case-insensitive substring, by Unicode case folding). The value is of the field's type; a number or a boolean may be text. A record with no value of the field equals nothing: `ne` matches it, the other operators don't (as in [rules](#personal-apps)). |
+| `q` | Words (at most 5, each at most 100 characters) that each have to be part of some string or choice field of the record, in any case. |
+| `sort` | A declared field, `_updated` (default), `_created`, `_deleted` (deleted records only) or `id`. |
+| `dir` | `asc` or `desc`: `desc` by default for the three times, `asc` for the rest. |
+| `limit` | Records in the page: 50 by default, at most 200. |
+| `cursor` | The `next_cursor` of the previous page **of the same query**. |
+| `aggregate` | `kind` or `kind:field`, repeated, at most 8: `count` (of the matching records, or with a field those that have a value of it), `sum` and `avg` of a number field, `min` and `max` of a number, date or time field. |
+
+**What a query reads.** The fields it names are the **live release's**, and a value counts only
+if it is of its field's type, as JSON holds it: a field the live release removed is in no filter,
+sort, search or total (it is a `400 app_query_field`), nor is a value stored before the field was
+retyped (a number kept as text, `"12"`, is shown as it is stored but is in no comparison, sort or
+sum, as in no summary). Deleted records are in none of the live ones, and the read scope of the
+caller's role (all records, or only the ones they created) applies to the page, to `total` and to
+every aggregate: they are computed by SQL over exactly the records the caller reads. A role that
+reads no record is `403 app_forbidden` (`read_records`), an app the caller can't see `404`.
+
+**The order is total.** Records are ordered by the sort key, those with no value of it last
+whichever the direction, and then by `id` in the same direction as the key. A page is read **by
+keyset**: it asks for the records after the position the cursor names in that order, so paging
+neither skips nor repeats a record that does not change meanwhile, whatever is inserted or deleted
+between the pages (a record whose own sort key changes meanwhile, one edited while paging by
+`_updated`, is seen at most where it was or where it is now). `total` and `aggregates` are asked
+again with every page, so they are the whole matching set as of that request.
+
+**Cursors** are opaque. A cursor is only a position and a fingerprint of the query it ends a
+page of (the app, the caller, their read scope, the state, the filters, the search and the order,
+not the page size or the aggregates); a cursor of another query, or of another person, or damaged
+or too long, is `400 app_query_cursor`. The scope, the filters and everything else are decided
+again at every request, so a cursor, even one forged with a valid fingerprint, can put a caller
+anywhere in the order of the records they read and nowhere else.
+
+**Aggregates** come back in the order asked: `{"kind", "field", "value", "count"}`, `count` being
+the records the value was computed from (those with a value of the field). A `sum` or `count` over
+none is 0; `avg`, `min` and `max` over none are `null`, as is a result too large to be a number.
+Dates and times are given as the text they are. Numbers are summed as floating point in SQL, in
+no particular order, so a sum of many fractions may differ from one added in another order in its
+last digits.
 
 ### `GET …/apps/{app}/records/{record}/history`
 
@@ -1604,6 +1657,13 @@ the record a screen shows; it hides an input and is never what limits a row.
 
 An app holds at most 5,000 live rows and 4 MiB of their data (`409` beyond; deleted
 records don't count, and restoring one needs room for it); a space at most 500 apps.
+
+What is capped, as it stays: a launched app's **screen** is drawn from all of its live rows at
+once (its items and summaries are computed in memory, so the 5,000 rows and 4 MiB are the
+limit of what one screen holds), `GET …/records` and `…/records/deleted` answer the 1,000 most
+recent, and `list_app_rows` reads every row a page at a time. The data explorer
+(`GET …/records/query`) and `query_app_rows` are not bound by those: pages and totals are
+computed in the database.
 
 ### `GET …/apps`
 
