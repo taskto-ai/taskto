@@ -743,7 +743,11 @@
     "offline_edit_unavailable": "Para alterar este registro offline, baixe o app de novo enquanto estiver online.",
     "offline_photos_unsupported": "Adicionar fotos a um registro que já existe exige conexão.",
     "offline_nothing_to_change": "Nada é diferente, então não há o que alterar.",
-    "offline_field_removed": "O app não tem mais o campo “{field}”."
+    "offline_field_removed": "O app não tem mais o campo “{field}”.",
+    "offline_item_changed": "Isto mudou em outra aba ou janela. Revise de novo.",
+    "offline_review_again": "O registro mudou de novo nesse meio tempo. Ele aparece como está agora: revise e escolha outra vez.",
+    "offline_record_unreadable": "Você não pode mais ler este registro, então sua alteração não pode ser aplicada sobre ele. Você pode manter a versão do servidor ou descartar a alteração.",
+    "offline_record_changed": "Este registro mudou neste dispositivo (em outra aba ou janela) depois que esta tela foi desenhada. Ele aparece como está agora: confira e tente de novo."
   },
   "language": {
     "label": "Idioma",
@@ -1712,7 +1716,9 @@
         "title": "Este registro mudou no servidor",
         "titleDelete": "Você excluiu um registro que mudou desde então",
         "intro": "Sua alteração não foi enviada, então nada foi sobrescrito. Compare-a com o registro como o servidor o tem agora e escolha.",
-        "unreadable": "O servidor tem uma versão mais nova deste registro, mas você não pode mais lê-lo, então sua alteração não pode ser aplicada. Você pode descartá-la."
+        "unreadable": "O servidor tem uma versão mais nova deste registro, mas você não pode mais lê-lo, então sua alteração não pode ser aplicada. Você pode descartá-la.",
+        "checking": "Verificando o que o servidor tem agora…",
+        "nowDeleted": "Este registro foi excluído no servidor nesse meio tempo. Sua alteração não pode ser aplicada sobre ele."
       },
       "deleted": {
         "title": "Este registro foi excluído no servidor",

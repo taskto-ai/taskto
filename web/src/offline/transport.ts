@@ -18,7 +18,6 @@ import {
   answerNavigate,
   applyUpdate,
   attachmentFields,
-  downloadedItem,
   fieldsOf,
   itemsOf,
   parseInsert,
@@ -26,7 +25,16 @@ import {
   viewOf,
 } from './local'
 import type { Runtime } from './runtime'
-import { type BlobRow, type Download, kindOf, mayBeOnServer, NotSaved, type OutboxItem, RecordBusy } from './store'
+import {
+  type BlobRow,
+  type Download,
+  kindOf,
+  mayBeOnServer,
+  NotSaved,
+  type OutboxItem,
+  RecordBusy,
+  RecordChanged,
+} from './store'
 
 const hex = (n: number) => {
   const bytes = new Uint8Array(n)
@@ -102,15 +110,28 @@ export function offlineTransport(
   const refresh = async () => {
     download = (await runtime.store.getDownload(copy)) ?? download
   }
+  // The release the screen on display was drawn from (its definition, as `load` read it): a button
+  // pressed on it is resolved there, never in a newer release that was downloaded since, where the
+  // same name may be another action. The records are always the copy's as it is now.
+  let drawn = copy
+  const screenOf = (): Download => ({ ...download, definition: drawn.definition, release: drawn.release })
   const base = `/api/workspaces/${download.workspace}/spaces/${download.space}/apps/${download.app}`
   const photos = localPhotos()
   const queue = () => runtime.store.listItems(download)
 
   // A change to a downloaded record: queued with the revision it is based on, and shown as the
-  // person left it. Several changes to one record are one item while none was sent (the later
-  // values win; a delete takes the place of the changes it makes pointless); once a send of it was
-  // started and not answered for good, the record takes no further change until it is known.
-  const change = async (action: ActionPayload, kind: 'update' | 'delete', context: Record<string, unknown>) => {
+  // person left it. Changes to one record are one item while none was sent only when they are the
+  // same action, made on the same base (the same revision, the same release): the later values
+  // win. A different action has other effects, and is an item of its own (so is a deletion); a
+  // change made on another base, or to a record deleted meanwhile, is refused, and never mixed
+  // with what is queued. Once a send of the item was started and not answered for good, the record
+  // takes no further change until it is known.
+  const change = async (
+    download: Download,
+    action: ActionPayload,
+    kind: 'update' | 'delete',
+    context: Record<string, unknown>,
+  ) => {
     const id = Number(context.id)
     if (!Number.isInteger(id)) throw new ApiError(422, 'bad request', { code: 'bad_request' })
     if (id < 0) throw new ApiError(409, 'not on the server yet', { code: 'offline_record_unsynced' })
@@ -126,6 +147,9 @@ export function offlineTransport(
     // The revision the person saw: mandatory, since the server decides by it.
     const expected = (action as { expectedRevision?: unknown }).expectedRevision
     if (typeof expected !== 'number' || !Number.isInteger(expected) || expected < 1) throw unavailable()
+    // The screen is drawn from another revision of the record than the device holds now (another
+    // tab settled it, or downloaded it again): the values and the revision are never mixed.
+    if (shown._revision !== expected) throw recordChanged()
     if (kind === 'update') {
       const changes = parseUpdate(download.definition, context)
       // New photos are held on the device for a record's insert; adding them to a record that
@@ -140,7 +164,7 @@ export function offlineTransport(
       if (Object.keys(changes).length === 0) return answerChange(download, items, action.name, kind, id)
     }
     const now = new Date().toISOString()
-    const fresh: Omit<OutboxItem, 'seq'> = {
+    const fresh: Omit<OutboxItem, 'seq' | 'version'> = {
       kind,
       id: uuid(),
       user: runtime.user,
@@ -160,7 +184,7 @@ export function offlineTransport(
       },
       operation: newOperation(),
       record: { id, revision: expected },
-      original: fieldsOf(downloadedItem(download, id) ?? shown),
+      original: fieldsOf(shown),
       attachments: [],
       state: 'queued',
       attempts: 0,
@@ -169,16 +193,25 @@ export function offlineTransport(
     }
     let saved: OutboxItem
     try {
+      // Decided in the transaction, on the item as it is stored in it.
       saved = await runtime.store.changeRecord(download, id, (prev) => {
         if (!prev) return fresh
         if (mayBeOnServer(prev)) throw new RecordBusy()
+        // Deleted in another tab meanwhile: this change was not made to anything.
+        if (kindOf(prev) === 'delete') throw new RecordChanged()
+        if (
+          prev.record.revision !== fresh.record.revision ||
+          prev.release !== fresh.release ||
+          prev.schema !== fresh.schema
+        )
+          throw new RecordChanged()
+        // Another action, or a deletion: its own item, which keeps its own identity.
+        if (kind !== 'update' || prev.action.name !== fresh.action.name) return fresh
         // Not sent yet, so the request is still the person's to change: one item, under a new key.
-        // A deleted record isn't shown, so a change to it can't come from the screen.
-        if (kindOf(prev) === 'delete') return prev
-        const merged: OutboxItem = { ...prev, operation: fresh.operation, updatedAt: now }
-        if (kind === 'delete') return { ...merged, kind: 'delete', action: fresh.action }
         return {
-          ...merged,
+          ...prev,
+          operation: fresh.operation,
+          updatedAt: now,
           action: {
             ...prev.action,
             timestamp: fresh.action.timestamp,
@@ -189,18 +222,21 @@ export function offlineTransport(
     } catch (e) {
       if (e instanceof RecordBusy)
         throw new ApiError(409, 'an earlier change is being sent', { code: 'offline_record_busy' })
+      if (e instanceof RecordChanged) throw recordChanged()
       throw e instanceof NotSaved ? new Error(notSavedText(e)) : e
     }
     opts.onSaved?.(saved)
     void runtime.engine.run()
     return answerChange(download, await queue(), action.name, kind, id)
   }
+  const recordChanged = () => new ApiError(409, 'this record changed', { code: 'offline_record_changed' })
 
   return {
     photos,
     files: { base, uploads: true, local: photos },
     load: async () => {
       await refresh()
+      drawn = download
       // The photos of records still queued are on this device: shown from there.
       const items = await queue()
       for (const item of items) {
@@ -213,10 +249,12 @@ export function offlineTransport(
     },
     act: async (action: ActionPayload) => {
       await refresh()
+      // Everything this press does is in the release its screen was drawn from.
+      const download = screenOf()
       const def = download.definition.actions[action.name]
       const context = (action.context ?? {}) as Record<string, unknown>
       if (def?.kind === 'navigate') return answerNavigate(download, await queue(), action.name, context)
-      if (def?.kind === 'update' || def?.kind === 'delete') return change(action, def.kind, context)
+      if (def?.kind === 'update' || def?.kind === 'delete') return change(download, action, def.kind, context)
       // Only a change to a record can be made without the server: everything else needs it.
       if (def?.kind !== 'insert') {
         throw new ApiError(409, 'this needs a connection', { code: 'offline_unsupported' })
@@ -239,7 +277,7 @@ export function offlineTransport(
         }
       }
       const now = new Date().toISOString()
-      const item: Omit<OutboxItem, 'seq'> = {
+      const item: Omit<OutboxItem, 'seq' | 'version'> = {
         kind: 'insert',
         id,
         user: runtime.user,

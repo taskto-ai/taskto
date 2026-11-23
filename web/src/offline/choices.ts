@@ -15,7 +15,16 @@ import { assertSignedIn } from './account'
 import { downloadApp } from './download'
 import { applyUpdate, fieldsOf, parseField, parseInsert, parseUpdate, requireFields, withRecord } from './local'
 import type { Runtime } from './runtime'
-import { type Download, kindOf, type OutboxItem, type Problem } from './store'
+import {
+  type Download,
+  ItemChanged,
+  kindOf,
+  type OutboxItem,
+  type Problem,
+  type Seen,
+  seenOf,
+  versionOf,
+} from './store'
 import { newOperation } from './transport'
 
 type Definition = Download['definition']
@@ -35,38 +44,129 @@ function requeued(i: OutboxItem): OutboxItem {
     problems: undefined,
     restore: undefined,
     unconfirmed: undefined,
+    unconfirmedBefore: undefined,
     lease: undefined,
   }
 }
 
-const currentRevision = (current: Record<string, unknown> | null | undefined): number | undefined =>
+const revisionOf = (current: Record<string, unknown> | null | undefined): number | undefined =>
   typeof current?._revision === 'number' ? current._revision : undefined
 
+// What the person chose was made on an item that is not what is stored now (another tab changed
+// it): nothing is applied, and they review it again.
+const changedElsewhere = () => new ApiError(409, 'this changed in another tab', { code: 'offline_item_changed' })
+
+// The record moved on since the person was shown it: nothing is applied, and the screen shows it
+// as it is now.
+export const REVIEW_AGAIN = 'offline_review_again'
+const reviewAgain = () => new ApiError(409, 'the record changed again', { code: REVIEW_AGAIN })
+
+// Runs a choice, which the store refuses when the item is not the one the person was shown.
+async function chosen<R>(go: () => Promise<R>): Promise<R> {
+  try {
+    return await go()
+  } catch (e) {
+    if (e instanceof ItemChanged) throw changedElsewhere()
+    throw e
+  }
+}
+
+// Refuses at once, before the server is asked anything, a choice made on an item that has moved
+// on; the store checks it again in the transaction that applies the choice.
+async function stillShown(runtime: Runtime, item: OutboxItem, seen: Seen): Promise<void> {
+  const stored = await runtime.store.getItem(item.id)
+  if (!stored || versionOf(stored) !== seen.version || stored.operation !== seen.operation) throw changedElsewhere()
+}
+
+// A record as the server has it now, for the person who is signed in: read at the moment it is
+// asked for, under the access they have now, never remembered from an earlier answer (what a
+// conflict was answered with may be a record they can no longer read, or have been shown before
+// the app changed). `current` is an item (its id, `_revision` and fields), or null: the person may
+// not read it (it is not theirs any more), or it is deleted (`deleted`).
+export type ServerRecord = { current: Record<string, unknown> | null; deleted: boolean }
+
+export async function readCurrent(runtime: Runtime, item: OutboxItem): Promise<ServerRecord> {
+  try {
+    const answer = await api<{
+      record: { id: number; revision: number; data: Record<string, unknown>; deleted_at?: string | null }
+    }>(`${item.base}/records/${item.record.id}/history`, { headers: runtime.engine.ownerHeaders() })
+    // What the server answered is only acted on while this account is the one signed in here.
+    assertSignedIn(runtime.store.user)
+    const r = answer.record
+    if (r.deleted_at) return { current: null, deleted: true }
+    return { current: { id: r.id, _revision: r.revision, ...r.data }, deleted: false }
+  } catch (e) {
+    assertSignedIn(runtime.store.user)
+    // The server doesn't show it to this person (403, 404): not readable, which is an answer. Any
+    // other failure (no connection, the wrong account) is not, and nothing is decided from it.
+    if (e instanceof ApiError && (e.status === 403 || e.status === 404)) return { current: null, deleted: false }
+    throw e
+  }
+}
+
 // Keeps the server's version: the change is discarded, and the copy on this device holds the record
-// as the server has it (or no longer holds it: deleted, or not the person's to read).
-export async function keepServer(runtime: Runtime, item: OutboxItem): Promise<boolean> {
-  return runtime.store.resolve(item.id, item.operation, (i, copy) => {
-    if (i.attention !== 'conflict' && i.attention !== 'deleted') return undefined
-    const current = i.attention === 'conflict' ? i.conflict?.current : null
-    return { item: null, copy: copy && withRecord(copy, i.record.id, current ?? null) }
-  })
+// as the server has it right now (or no longer holds it: deleted, or not the person's to read: what
+// was cached of it is dropped, never written back).
+export async function keepServer(runtime: Runtime, item: OutboxItem, seen: Seen = seenOf(item)): Promise<boolean> {
+  await stillShown(runtime, item, seen)
+  const server = item.attention === 'conflict' ? await readCurrent(runtime, item) : null
+  return chosen(() =>
+    runtime.store.resolve(item.id, seen, (i, copy) => {
+      if (i.attention !== 'conflict' && i.attention !== 'deleted') return undefined
+      return { item: null, copy: copy && withRecord(copy, i.record.id, server?.current ?? null) }
+    }),
+  )
 }
 
 // Applies the person's change on top of the record as the server has it now: the same change,
-// based on the revision they have just been shown. (A delete is made anyway.) Needs the record as
-// the server answered it: a change the person may not read the record of is theirs to discard.
-export async function reapply(runtime: Runtime, item: OutboxItem): Promise<boolean> {
-  const done = await runtime.store.resolve(item.id, item.operation, (i, copy) => {
-    const current = i.conflict?.current
-    const revision = currentRevision(current)
-    if (i.attention !== 'conflict' || !current || revision === undefined) return undefined
-    return {
-      item: { ...requeued(i), record: { ...i.record, revision }, original: fieldsOf(current) },
-      copy: copy && withRecord(copy, i.record.id, current),
-    }
-  })
+// based on the revision they have just been shown. (A delete is made anyway.) The record is read
+// at this moment: if it is not at the revision `shown` says, the person never saw this one, and
+// nothing is applied (REVIEW_AGAIN); a change the person may not read the record of is theirs to
+// discard.
+export async function reapply(
+  runtime: Runtime,
+  item: OutboxItem,
+  shown: Record<string, unknown> | null = item.conflict?.current ?? null,
+  seen: Seen = seenOf(item),
+): Promise<boolean> {
+  await stillShown(runtime, item, seen)
+  const server = await readCurrent(runtime, item)
+  const current = await readable(runtime, item, seen, server)
+  const revision = revisionOf(current)
+  if (revision === undefined || revision !== revisionOf(shown)) throw reviewAgain()
+  const done = await chosen(() =>
+    runtime.store.resolve(item.id, seen, (i, copy) => {
+      if (i.attention !== 'conflict') return undefined
+      return {
+        item: { ...requeued(i), record: { ...i.record, revision }, original: fieldsOf(current) },
+        copy: copy && withRecord(copy, i.record.id, current),
+      }
+    }),
+  )
   if (done) await runtime.engine.run()
   return done
+}
+
+// The record as the server has it, when the person may read it and it is live. When it is not:
+// deleted (the change is a change to a deleted record now), or not the person's to read, what was
+// cached of it is gone from the copy, and nothing is applied.
+async function readable(
+  runtime: Runtime,
+  item: OutboxItem,
+  seen: Seen,
+  server: ServerRecord,
+): Promise<Record<string, unknown>> {
+  if (server.current) return server.current
+  await chosen(() =>
+    runtime.store.resolve(item.id, seen, (i, copy) => {
+      if (i.attention !== 'conflict') return undefined
+      const next: OutboxItem = server.deleted
+        ? { ...i, attention: 'deleted', conflict: undefined, restore: undefined }
+        : { ...i, conflict: { current: null } }
+      return { item: next, copy: copy && withRecord(copy, i.record.id, null) }
+    }),
+  )
+  throw server.deleted ? reviewAgain() : new ApiError(409, 'not readable', { code: 'offline_record_unreadable' })
 }
 
 // What is not right with an item's input against a definition: each value that doesn't fit its
@@ -155,43 +255,54 @@ const same = (a: unknown, b: unknown) => (a ?? '') === (b ?? '') || String(a ?? 
 
 // Saves the person's edited values as the item's new request, against `def` (the app as it is
 // live now): its release and definition version are the ones it is now made for, and an update is
-// based on the record as the server has it if that is known. Rejects with the server's words if
-// the values don't fit.
+// based on the record as the server has it if that is known. The record of a conflict is read at
+// this moment, and the form was made from `shown`: if it is not at that revision the person never
+// saw this one, and nothing is saved (REVIEW_AGAIN). Rejects with the server's words if the values
+// don't fit.
 export async function saveEdit(
   runtime: Runtime,
   item: OutboxItem,
   form: Record<string, unknown>,
   live: Download,
+  shown: Record<string, unknown> | null = item.conflict?.current ?? null,
+  seen: Seen = seenOf(item),
 ): Promise<boolean> {
   const kind = kindOf(item)
-  const current = item.conflict?.current ?? undefined
+  await stillShown(runtime, item, seen)
+  let current: Record<string, unknown> | undefined
+  if (kind === 'update' && item.attention === 'conflict') {
+    current = await readable(runtime, item, seen, await readCurrent(runtime, item))
+    if (revisionOf(current) !== revisionOf(shown)) throw reviewAgain()
+  }
   const base = kind === 'update' ? (current ? fieldsOf(current) : (item.original ?? {})) : {}
   const kept = Object.fromEntries(
     Object.entries(item.action.context).filter(([name]) => item.attachments.some((a) => a.field === name)),
   )
   const context = contextFor(kind, live.definition, form, base, kept, item.record.id)
-  const revision = currentRevision(current)
-  const done = await runtime.store.resolve(item.id, item.operation, (i, copy) => {
-    if (
-      i.attention === 'access' ||
-      i.attention === 'archived' ||
-      i.attention === 'photo' ||
-      i.attention === 'gave_up'
-    ) {
-      return undefined
-    }
-    const next = requeued({
-      ...i,
-      release: live.release,
-      schema: live.definition.definition_version,
-      action: { ...i.action, context },
-    })
-    if (kind === 'update') {
-      next.record = { ...i.record, revision: revision ?? i.record.revision }
-      if (current) next.original = fieldsOf(current)
-    }
-    return { item: next, copy: copy && current ? withRecord(copy, i.record.id, current) : copy }
-  })
+  const revision = revisionOf(current)
+  const done = await chosen(() =>
+    runtime.store.resolve(item.id, seen, (i, copy) => {
+      if (
+        i.attention === 'access' ||
+        i.attention === 'archived' ||
+        i.attention === 'photo' ||
+        i.attention === 'gave_up'
+      ) {
+        return undefined
+      }
+      const next = requeued({
+        ...i,
+        release: live.release,
+        schema: live.definition.definition_version,
+        action: { ...i.action, context },
+      })
+      if (kind === 'update') {
+        next.record = { ...i.record, revision: revision ?? i.record.revision }
+        if (current) next.original = fieldsOf(current)
+      }
+      return { item: next, copy: copy && current ? withRecord(copy, i.record.id, current) : copy }
+    }),
+  )
   if (done) await runtime.engine.run()
   return done
 }
@@ -213,21 +324,33 @@ export async function findDeleted(runtime: Runtime, item: OutboxItem): Promise<D
 }
 
 // Chooses to restore a record that was deleted on the server and apply the person's change to
-// it. The restore is the engine's first step when it sends the item, and the change goes on top
-// of the revision the restore gives; if the restore is refused (the person may not), the item
-// says so and the person discards it. Never done by itself: only this choice brings a record back.
-export async function restoreAndApply(runtime: Runtime, item: OutboxItem, deleted: Deleted): Promise<boolean> {
-  const done = await runtime.store.resolve(item.id, item.operation, (i) => {
-    if (i.attention !== 'deleted' || kindOf(i) !== 'update') return undefined
-    return {
-      item: {
-        ...requeued(i),
-        restore: { revision: deleted.revision },
-        // A restore makes the next revision, which the change is based on.
-        record: { ...i.record, revision: deleted.revision + 1 },
-      },
-    }
-  })
+// it. The deletion is read again at this moment: if it is not the one the person was shown (it
+// was restored, or deleted again at a newer revision), nothing is applied (REVIEW_AGAIN). The
+// restore is the engine's first step when it sends the item, and the change goes on top of the
+// revision the restore gives; if the restore is refused (the person may not), the item says so
+// and the person discards it. Never done by itself: only this choice brings a record back.
+export async function restoreAndApply(
+  runtime: Runtime,
+  item: OutboxItem,
+  deleted: Deleted,
+  seen: Seen = seenOf(item),
+): Promise<boolean> {
+  await stillShown(runtime, item, seen)
+  const now = await findDeleted(runtime, item)
+  if (!now || now.revision !== deleted.revision) throw reviewAgain()
+  const done = await chosen(() =>
+    runtime.store.resolve(item.id, seen, (i) => {
+      if (i.attention !== 'deleted' || kindOf(i) !== 'update') return undefined
+      return {
+        item: {
+          ...requeued(i),
+          restore: { revision: now.revision },
+          // A restore makes the next revision, which the change is based on.
+          record: { ...i.record, revision: now.revision + 1 },
+        },
+      }
+    }),
+  )
   if (done) await runtime.engine.run()
   return done
 }

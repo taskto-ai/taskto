@@ -9,7 +9,7 @@ import { useFormat, useT } from '../i18n'
 import { ConfirmButton } from '../settings/parts'
 import { Resolve } from './Resolve'
 import type { Runtime } from './runtime'
-import { type Download, kindOf, type OutboxItem } from './store'
+import { type Download, ItemChanged, kindOf, type OutboxItem, seenOf } from './store'
 import { RESOLVE, type SyncStatus } from './sync'
 
 // What a record is called in the list: the app, and its first filled-in value (for a change to a
@@ -69,7 +69,11 @@ export function OutboxList({
   const t = useT()
   const f = useFormat()
   const [resolving, setResolving] = useState<string | null>(null)
-  const synced = items.filter((i) => i.state === 'synced')
+  const [notice, setNotice] = useState<string | null>(null)
+  // What the server has acknowledged and the person has not cleared from the list. A cleared one
+  // stays (it keeps the record as the server has it on screen) until a download holds the change.
+  const shown = items.filter((i) => !i.cleared)
+  const synced = shown.filter((i) => i.state === 'synced')
   const waiting = items.filter((i) => i.state !== 'synced')
 
   return (
@@ -86,9 +90,14 @@ export function OutboxList({
         )}
       </div>
       <SyncNotice status={status} waiting={waiting.length} />
-      {items.length === 0 && <p className="tt-muted">{t('offline.queue.none')}</p>}
+      {notice && (
+        <p role="alert" className="tt-error tt-small">
+          {notice}
+        </p>
+      )}
+      {shown.length === 0 && <p className="tt-muted">{t('offline.queue.none')}</p>}
       <ul className="tt-outbox-list">
-        {items.map((item) => {
+        {shown.map((item) => {
           const app = apps[item.scopeKey] ?? ''
           const summary = summaryOf(item)
           const kind = kindOf(item)
@@ -196,7 +205,13 @@ export function OutboxList({
                     name={name}
                     question={t('offline.queue.discardQuestion')}
                     confirm={t('offline.queue.discardConfirm')}
-                    onConfirm={() => void runtime.store.removeItem(item.id)}
+                    onConfirm={() =>
+                      // Only the item as it was shown: one that changed meanwhile is not discarded unseen.
+                      void runtime.store.removeItem(item.id, seenOf(item)).then(
+                        () => setNotice(null),
+                        (e) => setNotice(e instanceof ItemChanged ? t('errors.offline_item_changed') : errorText(e)),
+                      )
+                    }
                   />
                 )}
               </span>
@@ -217,7 +232,15 @@ export function OutboxList({
         <button
           type="button"
           className="tt-button"
-          onClick={() => void Promise.all(synced.map((i) => runtime.store.removeItem(i.id)))}
+          onClick={() =>
+            // Out of the list, not out of the queue: a deleted record would be shown again from the
+            // copy, which doesn't know of the deletion, until a download does.
+            void Promise.all(
+              synced.map((i) =>
+                runtime.store.updateItem(i.id, (x) => (x.state === 'synced' ? { ...x, cleared: true } : undefined)),
+              ),
+            )
+          }
         >
           {t('offline.queue.clearSynced')}
         </button>

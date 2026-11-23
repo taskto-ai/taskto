@@ -161,8 +161,9 @@ type Item = Record<string, unknown>
 // The records an app shows offline: the downloaded ones with the changes waiting on this device
 // applied, then the records queued here. A record the person changed is shown as they left it and
 // says so (`_pending`); one they deleted is not shown. `_revision` stays the revision the change
-// was based on, so a further change is based on it too; once the server acknowledged a change it
-// is the revision the server gave (unknown, and so left out, if its answer didn't say).
+// was based on, so a further change is based on it too; once the server acknowledged a change the
+// record is the server's, as it answered (unknown, and so with no revision, if its answer didn't
+// say).
 export function itemsOf(download: Download, queue: OutboxItem[]): Item[] {
   const base = dataModelOf(download.messages)
   let items = (Array.isArray(base?.items) ? (base.items as Item[]) : []).slice()
@@ -196,6 +197,9 @@ function overlay(def: Definition, items: Item[], q: OutboxItem, kind: ChangeKind
   const at = items.findIndex((i) => i.id === q.record.id)
   if (at < 0) return items
   if (kind === 'delete') return items.filter((_, i) => i !== at)
+  // What the server answered for an update it acknowledged is the record as it has it: its
+  // revision is only ever shown with its values, never with the ones this device made.
+  if (q.state === 'synced' && q.ack) return items.map((it, i) => (i === at ? { ...q.ack, id: q.record.id } : it))
   let changes: Record<string, unknown>
   try {
     changes = parseUpdate(def, q.action.context)
@@ -208,8 +212,8 @@ function overlay(def: Definition, items: Item[], q: OutboxItem, kind: ChangeKind
     else next[k] = v
   }
   if (q.state === 'synced') {
-    if (q.ackRevision !== undefined) next._revision = q.ackRevision
-    else delete next._revision
+    // The server didn't say what it has: the person's values, and no revision to base a change on.
+    delete next._revision
   } else {
     next._pending = 'update'
     if (q.record.revision !== null) next._revision = q.record.revision

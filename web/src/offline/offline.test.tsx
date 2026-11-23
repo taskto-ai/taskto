@@ -37,7 +37,7 @@ import {
   settle,
   unsentOf,
 } from './runtime'
-import { type Download, NotSaved, OfflineStore, type OutboxItem, scopeKey } from './store'
+import { approvalOf, type Download, NotSaved, OfflineStore, type OutboxItem, scopeKey } from './store'
 import { backoff, LEASE_MS, LOCK_RETRY_MS, MAX_ATTEMPTS, SyncEngine } from './sync'
 import { localPhotos, offlineTransport } from './transport'
 
@@ -429,7 +429,7 @@ test('a write the device refuses is never shown as saved, and the input is still
   await expect(store.enqueue({ ...(await fakeItem(store)) }, [])).rejects.toMatchObject({ reason: 'quota' })
 })
 
-async function fakeItem(store: OfflineStore): Promise<Omit<OutboxItem, 'seq'>> {
+async function fakeItem(store: OfflineStore): Promise<Omit<OutboxItem, 'seq' | 'version'>> {
   const now = new Date().toISOString()
   return {
     kind: 'insert',
@@ -686,8 +686,8 @@ test('signing out deletes the account’s database, the downloads and the queue 
   await runtime.store.putDownload(download(7))
   await queue(runtime.store, { description: 'x', amount: '1' }, download(7))
   expect((await indexedDB.databases()).map((x) => x.name)).toContain('taskto-offline-7')
-  const shown = (await runtime.store.unsynced()).map((i) => i.id)
-  await deactivate({ purge: true, approved: new Set(shown) })
+  const shown = await unsentOf(7)
+  await deactivate({ purge: true, approved: approvalOf(shown.items) })
   expect((await indexedDB.databases()).map((x) => x.name)).not.toContain('taskto-offline-7')
   expect(lastUser()).toBeNull()
   expect(runtimeState().runtime).toBeNull()
@@ -971,7 +971,7 @@ test('signing out deletes the account’s database even when it was never opened
   expect(await deactivate({ purge: true, user: 7 })).toHaveLength(1)
   expect((await indexedDB.databases()).map((x) => x.name)).toContain('taskto-offline-7')
   const shown = await unsentOf(7)
-  expect(await deactivate({ purge: true, user: 7, approved: new Set(shown.ids) })).toEqual([])
+  expect(await deactivate({ purge: true, user: 7, approved: approvalOf(shown.items) })).toEqual([])
   expect((await indexedDB.databases()).map((x) => x.name)).not.toContain('taskto-offline-7')
   expect(lastUser()).toBeNull()
 })
@@ -1545,7 +1545,7 @@ test('what is unsent that the person was not shown is never deleted by signing o
   const other = await OfflineStore.open(7)
   await queue(other, { description: 'Made just now', amount: '1' })
   other.close()
-  const left = await deactivate({ purge: true, user: 7, approved: new Set(asked.ids) })
+  const left = await deactivate({ purge: true, user: 7, approved: approvalOf(asked.items) })
   expect(left).toHaveLength(1)
   // Nothing was torn down, and nothing deleted.
   expect(runtimeState().runtime?.user).toBe(7)
@@ -1560,7 +1560,7 @@ test('a database found empty is marked as it is deleted: a stale tab can no long
   const stale = await OfflineStore.open(7)
   expect(await settle(7)).toEqual([])
   // The record is refused, so the person is told it was not saved, never that it was.
-  const item: Omit<OutboxItem, 'seq'> = {
+  const item: Omit<OutboxItem, 'seq' | 'version'> = {
     kind: 'insert',
     id: 'late',
     user: 7,

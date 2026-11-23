@@ -119,7 +119,10 @@ export function OfflineApp({
   // again, so the next change is based on the revision now. A record added by this screen's own
   // button is already in the answer, and the form being typed in is not drawn over.
   const signature = items
-    .map((i) => `${i.id}:${kindOf(i) === 'insert' ? '' : i.state === 'synced' ? i.ackRevision : i.record.revision}`)
+    .map(
+      (i) =>
+        `${i.id}:${kindOf(i) === 'insert' ? '' : i.state === 'synced' ? (i.ack?._revision ?? '') : i.record.revision}`,
+    )
     .join(',')
   const seen = useRef<string[]>(signature ? signature.split(',') : [])
   useEffect(() => {

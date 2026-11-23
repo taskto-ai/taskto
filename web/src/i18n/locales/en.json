@@ -739,7 +739,11 @@
     "offline_edit_unavailable": "To change this record offline, download the app again while you are online.",
     "offline_photos_unsupported": "Adding photos to a record that already exists needs a connection.",
     "offline_nothing_to_change": "Nothing is different, so there is nothing to change.",
-    "offline_field_removed": "The app no longer has the field “{field}”."
+    "offline_field_removed": "The app no longer has the field “{field}”.",
+    "offline_item_changed": "This changed in another tab or window. Review it again.",
+    "offline_review_again": "The record changed again meanwhile. It is shown as it is now: review it and choose again.",
+    "offline_record_unreadable": "You can’t read this record any more, so your change can’t be applied on top of it. You can keep the server’s version or discard your change.",
+    "offline_record_changed": "This record changed on this device (in another tab or window) since this screen was drawn. It is shown as it is now: check it and try again."
   },
   "language": {
     "label": "Language",
@@ -1694,7 +1698,9 @@
         "title": "This record changed on the server",
         "titleDelete": "You deleted a record that has changed since",
         "intro": "Your change was not sent, so nothing was overwritten. Compare it with the record as the server has it now, then choose.",
-        "unreadable": "The server has a newer version of this record, but you can no longer read it, so your change can’t be applied. You can discard it."
+        "unreadable": "The server has a newer version of this record, but you can no longer read it, so your change can’t be applied. You can discard it.",
+        "checking": "Checking what the server has now…",
+        "nowDeleted": "This record was deleted on the server meanwhile. Your change can’t be applied on top of it."
       },
       "deleted": {
         "title": "This record was deleted on the server",

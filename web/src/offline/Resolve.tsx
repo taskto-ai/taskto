@@ -12,14 +12,17 @@ import {
   findDeleted,
   keepServer,
   problemsOf,
+  REVIEW_AGAIN,
+  readCurrent,
   reapply,
   refreshDefinition,
   restoreAndApply,
+  type ServerRecord,
   saveEdit,
 } from './choices'
 import { fieldsOf, parseUpdate } from './local'
 import type { Runtime } from './runtime'
-import { type Download, kindOf, type OutboxItem, type Problem } from './store'
+import { type Download, ItemChanged, kindOf, type OutboxItem, type Problem, seenOf, versionOf } from './store'
 
 type Field = Download['definition']['collection']['fields'][number]
 
@@ -73,11 +76,28 @@ export function Resolve({
   const needsLive = reason === 'schema' || reason === 'refused' || reason === 'outdated'
   const [live, setLive] = useState<Download | undefined>(needsLive ? undefined : download)
   const [deleted, setDeleted] = useState<Deleted | null | 'loading'>(reason === 'deleted' ? 'loading' : null)
+  // The record as the server has it now, read when this opens (and again when the item changes, or
+  // a choice found the record had moved on): what is shown beside the person's change is never
+  // what an earlier answer was cached with.
+  const [server, setServer] = useState<ServerRecord | 'loading' | 'failed'>('loading')
+  const [again, setAgain] = useState(0)
 
-  // Asked once, when it opens: the app as it is now, or the deletion's revision.
+  // Asked when it opens, and again for another version of the item or after a review again: the
+  // app as it is now, the record, or the deletion's revision.
   // biome-ignore lint/correctness/useExhaustiveDependencies: for this item as it was shown
   useEffect(() => {
     let current = true
+    if (reason === 'conflict') {
+      setServer('loading')
+      readCurrent(runtime, item).then(
+        (r) => current && setServer(r),
+        (e) => {
+          if (!current) return
+          setServer('failed')
+          setError(errorText(e))
+        },
+      )
+    }
     if (needsLive && kind !== 'delete') {
       refreshDefinition(runtime, item).then(
         (d) => current && setLive(d),
@@ -85,6 +105,7 @@ export function Resolve({
       )
     }
     if (reason === 'deleted' && kind === 'update') {
+      setDeleted('loading')
       findDeleted(runtime, item).then(
         (d) => current && setDeleted(d),
         (e) => {
@@ -97,22 +118,25 @@ export function Resolve({
     return () => {
       current = false
     }
-  }, [item.id, item.operation])
+  }, [item.id, item.operation, versionOf(item), again])
 
   const run = async (go: () => Promise<boolean>) => {
     setBusy(true)
     setError(null)
     try {
-      // false: another tab moved the item on, and what was chosen was not applied.
+      // A choice is applied only to the item as it was shown: if another tab moved it on, or the
+      // record moved on, it says so (and what is shown is read again), and nothing is applied.
       await go()
       onClose()
     } catch (e) {
+      if (e instanceof ApiError && e.code === REVIEW_AGAIN) setAgain((n) => n + 1)
       setError(errorText(e))
       setBusy(false)
     }
   }
 
-  const current = item.conflict?.current ?? null
+  const loaded = server !== 'loading' && server !== 'failed' ? server : null
+  const current = loaded?.current ?? null
   const def = (live ?? download)?.definition
   const fields = def?.collection.fields ?? []
   const base = kind === 'update' ? (current ? fieldsOf(current) : (item.original ?? {})) : {}
@@ -132,10 +156,15 @@ export function Resolve({
         <>
           <h3>{kind === 'delete' ? t('offline.resolve.conflict.titleDelete') : t('offline.resolve.conflict.title')}</h3>
           <p className="tt-muted tt-small">{t('offline.resolve.conflict.intro')}</p>
+          {server === 'loading' && <p className="tt-muted tt-small">{t('offline.resolve.conflict.checking')}</p>}
           {current ? (
             <ConflictTable fields={fields} item={item} current={current} changed={changed} f={f} />
           ) : (
-            <p role="status">{t('offline.resolve.conflict.unreadable')}</p>
+            loaded && (
+              <p role="status">
+                {loaded.deleted ? t('offline.resolve.conflict.nowDeleted') : t('offline.resolve.conflict.unreadable')}
+              </p>
+            )
           )}
           <p className="tt-row-actions">
             {current && (
@@ -143,7 +172,7 @@ export function Resolve({
                 type="button"
                 className="tt-button tt-primary"
                 disabled={busy}
-                onClick={() => void run(() => reapply(runtime, item))}
+                onClick={() => void run(() => reapply(runtime, item, current, seenOf(item)))}
               >
                 {kind === 'delete' ? t('offline.resolve.deleteAnyway') : t('offline.resolve.reapply')}
               </button>
@@ -151,8 +180,8 @@ export function Resolve({
             <button
               type="button"
               className="tt-button"
-              disabled={busy}
-              onClick={() => void run(() => keepServer(runtime, item))}
+              disabled={busy || server === 'loading'}
+              onClick={() => void run(() => keepServer(runtime, item, seenOf(item)))}
             >
               {t('offline.resolve.keepServer')}
             </button>
@@ -194,7 +223,7 @@ export function Resolve({
                 type="button"
                 className="tt-button tt-primary"
                 disabled={busy}
-                onClick={() => void run(() => restoreAndApply(runtime, item, deleted))}
+                onClick={() => void run(() => restoreAndApply(runtime, item, deleted, seenOf(item)))}
               >
                 {t('offline.resolve.deleted.restore')}
               </button>
@@ -203,7 +232,7 @@ export function Resolve({
               type="button"
               className="tt-button"
               disabled={busy}
-              onClick={() => void run(() => keepServer(runtime, item))}
+              onClick={() => void run(() => keepServer(runtime, item, seenOf(item)))}
             >
               {kind === 'delete' ? t('offline.resolve.deleted.clear') : t('offline.resolve.deleted.discard')}
             </button>
@@ -261,7 +290,9 @@ export function Resolve({
           initial={kind === 'update' ? { ...base, ...changed } : stripId(item.action.context)}
           busy={busy}
           onCancel={() => setEditing(false)}
-          onSave={(form) => void run(() => saveEdit(runtime, item, form, (live ?? download) as Download))}
+          onSave={(form) =>
+            void run(() => saveEdit(runtime, item, form, (live ?? download) as Download, current, seenOf(item)))
+          }
         />
       )}
 
@@ -272,8 +303,10 @@ export function Resolve({
           question={t('offline.queue.discardQuestion')}
           confirm={t('offline.queue.discardConfirm')}
           onConfirm={() => {
-            void runtime.store.removeItem(item.id)
-            onClose()
+            // Only the item as it was shown: one that changed meanwhile is not discarded unseen.
+            runtime.store.removeItem(item.id, seenOf(item)).then(onClose, (e) => {
+              setError(e instanceof ItemChanged ? t('errors.offline_item_changed') : errorText(e))
+            })
           }}
         />
       </p>

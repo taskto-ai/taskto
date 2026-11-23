@@ -69,7 +69,7 @@ afterEach(async () => {
   await deactivate({ purge: false })
 })
 
-const queued = (): Omit<OutboxItem, 'seq'> => ({
+const queued = (): Omit<OutboxItem, 'seq' | 'version'> => ({
   kind: 'insert',
   id: 'item-1',
   user: 7,

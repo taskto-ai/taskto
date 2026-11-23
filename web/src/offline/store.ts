@@ -129,6 +129,14 @@ export type OutboxItem = {
   id: string
   // Order of making; items are sent in it.
   seq: number
+  // Counts every change made to the item, up from 1: each one is a compare-and-set in a single
+  // transaction against the version its maker read (`changeRecord`, `resolve`, `removeItem`,
+  // `retireOrKeepUnsent`), so a screen, a confirmation or a choice that was made on an older
+  // version is refused (ItemChanged) and never applied to what another tab made of the item.
+  // The engine's own writes (the claim on an item and its renewal, a photo's progress, what a send's
+  // answer made of it) leave it: whatever a person is shown of them comes after an action of theirs
+  // (a retry, a choice) that raised it. Items of an earlier build have none: 0.
+  version: number
   // Who made it, and where it goes.
   user: number
   scopeKey: string
@@ -159,13 +167,23 @@ export type OutboxItem = {
   // An update's or a delete's record as it was downloaded (its fields, without id and revision):
   // what the person saw when they changed it, to show beside the current one in a conflict.
   original?: Record<string, unknown>
-  // For an update or a delete the server acknowledged: the revision it gave the record, so a
-  // later change to it is based on that one.
-  ackRevision?: number
+  // For an update the server acknowledged: the record as the server answered it (an item: its id,
+  // `_revision` and fields), when the answer said so. The record is shown from it: the server's
+  // revision is only ever paired with the server's values, and a later change to the record is
+  // based on that revision. An answer that didn't say leaves none, and the record is shown as the
+  // person left it, with no revision to base a change on.
+  ack?: Record<string, unknown>
   // Set once a send was started and the server's answer wasn't a definite one (no answer, 5xx,
   // the page was closed): the change may be on the server. Such an item takes no further edit to
-  // its record, and its key is never reused for another request.
+  // its record, and its key is never reused for another request. Only a definite answer clears
+  // it: one that says the session ended says nothing of what an earlier send did.
   unconfirmed?: boolean
+  // Whether `unconfirmed` was set before the send that is in flight (which sets it): what an
+  // answer that isn't a definite one goes back to.
+  unconfirmedBefore?: boolean
+  // The person cleared it from the list once the server had it: it stays, to keep showing the
+  // record as the server has it, until a download that holds the change makes it go.
+  cleared?: boolean
   // The record as the server has it now, when it refused the change as a conflict.
   conflict?: Conflict
   // What doesn't fit the app as it is now, when it needs attention for that.
@@ -194,15 +212,53 @@ export type BlobRow = { id: string; item: string; blob: Blob }
 // What an item does: an item that says nothing was made by version 1 of the database, an insert.
 export const kindOf = (item: Pick<OutboxItem, 'kind'>): ChangeKind => item.kind ?? 'insert'
 
+export const versionOf = (item: Partial<Pick<OutboxItem, 'version'>>): number => item.version ?? 0
+
+// An item as someone was shown it: what a confirmation, an approval or a choice carries, and is
+// checked against in the transaction that applies it.
+export type Seen = { version: number; operation: string }
+export const seenOf = (item: Pick<OutboxItem, 'operation'> & Partial<Pick<OutboxItem, 'version'>>): Seen => ({
+  version: versionOf(item),
+  operation: item.operation,
+})
+const isSeen = (item: OutboxItem, seen: Seen) => versionOf(item) === seen.version && item.operation === seen.operation
+
+// An unsent item as the person was shown it, for what they approve to lose.
+export type UnsentRef = Seen & { id: string }
+export type Approval = ReadonlyMap<string, Seen>
+export const approvalOf = (refs: readonly UnsentRef[]): Approval => new Map(refs.map((r) => [r.id, r]))
+
 // A record's change is in the queue and may already be on the server: no other change is
 // written to the record until it is known (RecordBusy).
 export const mayBeOnServer = (item: OutboxItem): boolean => item.state === 'syncing' || item.unconfirmed === true
 
+// A write the store refuses, rather than fails: it is not about the device's storage, so it is
+// told as what it is and never as "not saved".
+export class Refused extends Error {}
+
 // A change to a record whose earlier change may already be on the server.
-export class RecordBusy extends Error {
+export class RecordBusy extends Refused {
   constructor() {
     super('an earlier change to this record may already be on the server')
     this.name = 'RecordBusy'
+  }
+}
+
+// What a confirmation, an approval or a choice was made on is not what is stored now: another tab
+// changed the item meanwhile, and the person is asked again about what is there.
+export class ItemChanged extends Refused {
+  constructor() {
+    super('this changed in another tab: review it again')
+    this.name = 'ItemChanged'
+  }
+}
+
+// A local change made on a screen that is not drawn from what the queue holds for its record (the
+// same base revision, the same release): never mixed with it. The person reopens the record.
+export class RecordChanged extends Refused {
+  constructor() {
+    super('this record changed: reopen it')
+    this.name = 'RecordChanged'
   }
 }
 
@@ -272,18 +328,10 @@ export class OfflineStore {
       this.changed()
       return out
     } catch (e) {
+      // A refusal (the transaction is aborted, nothing is written) says so, rather than that the
+      // device could not keep it.
+      if (e instanceof Refused) throw e
       throw asNotSaved(e)
-    }
-  }
-
-  // A write that is refused because the record is busy (the transaction is aborted, nothing is
-  // written) says so, rather than that the device could not keep it.
-  private async keepOrBusy<R>(stores: string[], fn: (tx: Tx) => Promise<R>): Promise<R> {
-    try {
-      return await this.keep(stores, fn)
-    } catch (e) {
-      if (e instanceof NotSaved && e.cause instanceof RecordBusy) throw e.cause
-      throw e
     }
   }
 
@@ -311,7 +359,7 @@ export class OfflineStore {
   // Commits a new item and its photos in one transaction, and resolves only once it is durable.
   // A rejection is a NotSaved, and nothing of the item is kept: the caller shows the failure and
   // keeps the person's input.
-  async enqueue(item: Omit<OutboxItem, 'seq'>, blobs: BlobRow[]): Promise<OutboxItem> {
+  async enqueue(item: Omit<OutboxItem, 'seq' | 'version'>, blobs: BlobRow[]): Promise<OutboxItem> {
     return this.keep([OUTBOX, BLOBS, META], async (tx) => {
       const meta = tx.store<{ key: string; value: number }>(META)
       // A database that was found empty and marked for deletion takes nothing more: the record is
@@ -319,7 +367,7 @@ export class OfflineStore {
       if ((await meta.get(RETIRED)) !== undefined) throw new NotSaved('unavailable')
       const seq = ((await meta.get('seq'))?.value ?? 0) + 1
       await meta.put({ key: 'seq', value: seq })
-      const saved = { ...item, seq }
+      const saved = { ...item, seq, version: 1 }
       await tx.store<OutboxItem>(OUTBOX).put(saved)
       for (const b of blobs) await tx.store<BlobRow>(BLOBS).put(b)
       return saved
@@ -329,13 +377,14 @@ export class OfflineStore {
   // Records a change to a downloaded record (an update or a delete) in one transaction, with the
   // items already waiting for that record in view: `build` gets the record's item that the server
   // hasn't acknowledged, if there is one, and answers the item to keep: a new one, or that one
-  // merged (it keeps its place in the queue). It may throw (RecordBusy). Resolves once durable.
+  // merged (it keeps its place in the queue, and its version goes up). It may throw a refusal
+  // (RecordBusy, RecordChanged): nothing is written then. Resolves once durable.
   async changeRecord(
     scope: Scope,
     recordId: number,
-    build: (prev: OutboxItem | undefined) => Omit<OutboxItem, 'seq'> | OutboxItem,
+    build: (prev: OutboxItem | undefined) => Omit<OutboxItem, 'seq' | 'version'> | OutboxItem,
   ): Promise<OutboxItem> {
-    return this.keepOrBusy([OUTBOX, META], async (tx) => {
+    return this.keep([OUTBOX, META], async (tx) => {
       const meta = tx.store<{ key: string; value: number }>(META)
       if ((await meta.get(RETIRED)) !== undefined) throw new NotSaved('unavailable')
       const outbox = tx.store<OutboxItem>(OUTBOX)
@@ -344,12 +393,14 @@ export class OfflineStore {
         .sort((a, b) => a.seq - b.seq)
       const next = build(waiting.at(-1))
       if ('seq' in next) {
-        await outbox.put(next)
-        return next
+        // The item as this transaction read it, one version on.
+        const merged = { ...next, version: versionOf(waiting.at(-1) as OutboxItem) + 1 }
+        await outbox.put(merged)
+        return merged
       }
       const seq = ((await meta.get('seq'))?.value ?? 0) + 1
       await meta.put({ key: 'seq', value: seq })
-      const saved = { ...next, seq }
+      const saved = { ...next, seq, version: 1 }
       await outbox.put(saved)
       return saved
     })
@@ -358,18 +409,19 @@ export class OfflineStore {
   // The person's choice about an item that needs attention, applied in the item's own
   // transaction together with the downloaded copy it changes: `decide` sees the item and the copy
   // as they are stored now and answers what to keep (item: null removes it, with its photos), or
-  // nothing to change none. Only an item that still needs attention, and is still the request
-  // the person was shown (its operation key), is changed: a tab that moved it on meanwhile wins.
-  // Answers whether it was applied.
+  // nothing to change none. Only an item that still needs attention, and is still the item the
+  // person was shown (its version and its operation key), is changed: a tab that moved it on
+  // meanwhile wins, and what the person chose is refused (ItemChanged). Answers whether it was
+  // applied (`decide` may find nothing to change).
   async resolve(
     id: string,
-    operation: string,
+    seen: Seen,
     decide: (item: OutboxItem, copy: Download | undefined) => { item: OutboxItem | null; copy?: Download } | undefined,
   ): Promise<boolean> {
     return this.keep([OUTBOX, DOWNLOADS, BLOBS], async (tx) => {
       const outbox = tx.store<OutboxItem>(OUTBOX)
       const current = await outbox.get(id)
-      if (current?.state !== 'attention' || current.operation !== operation) return false
+      if (current?.state !== 'attention' || !isSeen(current, seen)) throw new ItemChanged()
       const downloads = tx.store<Download>(DOWNLOADS)
       const decided = decide(current, await downloads.get(current.scopeKey))
       if (!decided) return false
@@ -378,7 +430,7 @@ export class OfflineStore {
         const blobs = tx.store<BlobRow>(BLOBS)
         for (const b of await blobs.getAll()) if (b.item === id) await blobs.delete(b.id)
       } else {
-        await outbox.put({ ...decided.item, updatedAt: new Date().toISOString() })
+        await outbox.put({ ...decided.item, version: versionOf(current) + 1, updatedAt: new Date().toISOString() })
       }
       if (decided.copy) await downloads.put(decided.copy)
       return true
@@ -420,15 +472,23 @@ export class OfflineStore {
   }
 
   // Changes an item as it is now in the database, in one transaction: the change is a function of
-  // the stored item, so two tabs never overwrite each other's progress with a stale copy.
-  async updateItem(id: string, change: (item: OutboxItem) => OutboxItem | undefined): Promise<OutboxItem | undefined> {
+  // the stored item, so two tabs never overwrite each other's progress with a stale copy. The
+  // version goes up with the change, unless `bump` is false: the engine's own writes (the claim on
+  // an item, its renewal, a photo's progress, what a send's answer made of it) are not changes
+  // anyone was shown; whatever of them a person sees next, they see after an action of theirs
+  // (a retry, a choice) that went through a bump.
+  async updateItem(
+    id: string,
+    change: (item: OutboxItem) => OutboxItem | undefined,
+    { bump = true }: { bump?: boolean } = {},
+  ): Promise<OutboxItem | undefined> {
     return this.keep([OUTBOX], async (tx) => {
       const store = tx.store<OutboxItem>(OUTBOX)
       const current = await store.get(id)
       if (!current) return undefined
       const next = change(current)
       if (!next) return current
-      const saved = { ...next, updatedAt: new Date().toISOString() }
+      const saved = { ...next, version: versionOf(current) + (bump ? 1 : 0), updatedAt: new Date().toISOString() }
       await store.put(saved)
       return saved
     })
@@ -438,10 +498,16 @@ export class OfflineStore {
     return this.tx([BLOBS], 'readonly', (tx) => tx.store<BlobRow>(BLOBS).get(id)).then((r) => r?.blob)
   }
 
-  // Removes an item with its photos: a discard, or a synced one that is let go.
-  async removeItem(id: string): Promise<void> {
+  // Removes an item with its photos: a discard, or a synced one that is let go. With `seen`, only
+  // the item the person was shown: one that changed since is kept (ItemChanged).
+  async removeItem(id: string, seen?: Seen): Promise<void> {
     await this.keep([OUTBOX, BLOBS], async (tx) => {
-      await tx.store(OUTBOX).delete(id)
+      const outbox = tx.store<OutboxItem>(OUTBOX)
+      if (seen) {
+        const current = await outbox.get(id)
+        if (current && !isSeen(current, seen)) throw new ItemChanged()
+      }
+      await outbox.delete(id)
       const blobs = tx.store<BlobRow>(BLOBS)
       for (const b of await blobs.getAll()) if (b.item === id) await blobs.delete(b.id)
     })
@@ -463,20 +529,25 @@ export class OfflineStore {
   // The one step that decides what becomes of a database that is let go of, in a single
   // transaction, so a record committed meanwhile is never lost between a count and a deletion:
   //   - nothing unsent (or only what `approved` names: records the person was shown and agreed to
-  //     lose): everything is cleared and the database is marked as being deleted, so that nothing
+  //     lose, each as it was shown, by its version and its operation: an item that changed since,
+  //     a newer edit coalesced into it, is not what they agreed to lose): everything is cleared and the database is marked as being deleted, so that nothing
   //     can be written to it after this; the answer is none, and the caller deletes it (`destroy`);
   //   - otherwise: only the records the server hasn't acknowledged are kept, with their photos
   //     (everything downloaded goes, and so do the records that were sent and what they hold of the
   //     server's data), and the answer is which; the unsent are the person's own work, which
   //     they send by signing in as the account again, or discard. (`seal: false`, for an account
   //     still signed in, leaves the database exactly as it is instead.)
-  async retireOrKeepUnsent(approved: ReadonlySet<string> = new Set(), seal = true): Promise<string[]> {
+  async retireOrKeepUnsent(approved: Approval = new Map(), seal = true): Promise<UnsentRef[]> {
     return this.keep([DOWNLOADS, OUTBOX, BLOBS, META], async (tx) => {
       const outbox = tx.store<OutboxItem>(OUTBOX)
       const items = await outbox.getAll()
       const unsent = items.filter((i) => i.state !== 'synced')
-      const everyApproved = unsent.every((i) => approved.has(i.id))
-      if (!everyApproved && !seal) return unsent.map((i) => i.id)
+      const everyApproved = unsent.every((i) => {
+        const shown = approved.get(i.id)
+        return shown !== undefined && isSeen(i, shown)
+      })
+      const refs = unsent.map((i): UnsentRef => ({ id: i.id, ...seenOf(i) }))
+      if (!everyApproved && !seal) return refs
       const downloads = tx.store<Download>(DOWNLOADS)
       for (const d of await downloads.getAll()) await downloads.delete(d.key)
       const blobs = tx.store<BlobRow>(BLOBS)
@@ -493,7 +564,7 @@ export class OfflineStore {
         await outbox.delete(i.id)
       }
       for (const b of await blobs.getAll()) if (gone.has(b.item)) await blobs.delete(b.id)
-      return unsent.map((i) => i.id)
+      return refs
     })
   }
 

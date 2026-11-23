@@ -20,14 +20,25 @@ import type { OfflineApp } from '../api'
 import { forgetOperations } from '../apps/operations'
 import { setPreferences } from '../i18n'
 import { type Call, fakeFetch } from '../test/fakes'
-import { keepServer, problemsOf, reapply, restoreAndApply, saveEdit } from './choices'
+import { type Deleted, findDeleted, keepServer, problemsOf, reapply, restoreAndApply, saveEdit } from './choices'
 import { downloadApp } from './download'
 import { useOfflineData } from './hooks'
 import { itemsOf } from './local'
 import { OfflineApp as OfflineAppView } from './OfflineShell'
 import { OutboxList } from './OutboxList'
 import { deactivate, rememberUser, runtimeState, setSyncDeps, settle, unsentOf } from './runtime'
-import { type Download, kindOf, MIGRATIONS, OfflineStore, type OutboxItem, SCHEMA_VERSION, scopeKey } from './store'
+import {
+  approvalOf,
+  type Download,
+  ItemChanged,
+  kindOf,
+  MIGRATIONS,
+  OfflineStore,
+  type OutboxItem,
+  SCHEMA_VERSION,
+  scopeKey,
+  seenOf,
+} from './store'
 import { SyncEngine } from './sync'
 import { offlineTransport } from './transport'
 
@@ -139,7 +150,7 @@ async function setup(patch: Partial<Download> = {}) {
   return { store, d, runtime, transport: offlineTransport(runtime, d) }
 }
 
-type Row = { rev: number; data: Record<string, unknown>; deleted?: boolean }
+type Row = { rev: number; data: Record<string, unknown>; deleted?: boolean; hidden?: boolean }
 
 // What the server decides about a record's revision, its deletion and its operations.
 function fakeServer(rows = new Map<number, Row>([[1, { rev: 1, data: { description: 'Coffee', amount: 4.5 } }]])) {
@@ -205,6 +216,23 @@ function fakeServer(rows = new Map<number, Row>([[1, { rev: 1, data: { descripti
           })),
       },
     }),
+    // A record as it is now, for whoever may read it (the record's history, whose `record` it is).
+    [`GET ${base}/records/1/history`]: () => {
+      const row = rows.get(1) as Row
+      if (row.hidden) return { status: 404, body: { error: 'no record', code: 'app_row_not_found' } }
+      return {
+        body: {
+          record: {
+            id: 1,
+            revision: row.rev,
+            data: row.data,
+            deleted_at: row.deleted ? '2026-11-03T09:00:00.000Z' : null,
+          },
+          history: [],
+          truncated: false,
+        },
+      }
+    },
     [`POST ${base}/records/1/restore`]: (call) => {
       const row = rows.get(1) as Row
       const at = (call.body as { expected_revision: number }).expected_revision
@@ -285,7 +313,7 @@ test('a change needs the revision the person saw, a record the server said may b
   })
 })
 
-test('several edits to one record are one item while none was sent: the later values win; a delete takes their place', async () => {
+test('several edits of one action to one record are one item while none was sent: the later values win; a deletion is an item of its own', async () => {
   const { store, d, transport } = await setup()
   await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
   const [first] = await store.listItems()
@@ -302,16 +330,19 @@ test('several edits to one record are one item while none was sent: the later va
   // The request changed, so it is made under a new key (the old one was never sent).
   expect(items[0].operation).not.toBe(first.operation)
   expect(itemsOf(d, items)[0]).toMatchObject({ description: 'Espresso', amount: 10, _pending: 'update' })
-  // Deleting the record makes the edits pointless: one deletion, based on the same revision.
+  // A deletion is another action, with an identity of its own (what it sets going is the server's
+  // to know): it is queued after the edit, on the same revision, and replaces nothing.
   await transport.act(press('delete_expense', { id: 1 }, 1))
   items = await store.listItems()
-  expect(items).toHaveLength(1)
-  expect(items[0]).toMatchObject({
+  expect(items).toHaveLength(2)
+  expect(items[0]).toMatchObject({ id: first.id, kind: 'update', action: { name: 'edit_expense' } })
+  expect(items[1]).toMatchObject({
     kind: 'delete',
     record: { id: 1, revision: 1 },
     action: { name: 'delete_expense', context: { id: 1 } },
   })
-  expect(items[0].original).toEqual({ description: 'Coffee', amount: 4.5 })
+  // What the person saw when they deleted it: the record with their edit.
+  expect(items[1].original).toEqual({ description: 'Espresso', amount: 10 })
   expect(itemsOf(d, items)).toEqual([])
 })
 
@@ -338,7 +369,7 @@ test('once a send was started and not answered for good, the record takes no fur
   c.advance(10 * 60_000)
   await engineOf(store, c).run()
   const [synced] = await store.listItems()
-  expect(synced).toMatchObject({ state: 'synced', ackRevision: 2 })
+  expect(synced).toMatchObject({ state: 'synced', ack: { id: 1, _revision: 2, description: 'Coffee', amount: 9 } })
   expect(synced.unconfirmed).toBeUndefined()
   expect(server.rows.get(1)?.rev).toBe(2)
   expect(itemsOf(d, [synced])[0]).toMatchObject({ amount: 9, _revision: 2 })
@@ -356,7 +387,7 @@ test('an edit is sent with the revision it was based on, its release and its key
   const engine = engineOf(store)
   await engine.run()
   const [item] = await store.listItems()
-  expect(item).toMatchObject({ state: 'synced', ackRevision: 2 })
+  expect(item).toMatchObject({ state: 'synced', ack: { id: 1, _revision: 2 } })
   const [call] = actionCalls(server.calls)
   expect(call.body).toMatchObject({
     name: 'edit_expense',
@@ -470,9 +501,11 @@ test('a stale choice is not applied: only an item that still needs attention, as
   // Another tab settled it meanwhile (a new request, under a new key).
   runtime.engine.gate = true
   expect(await reapply(runtime, conflicted)).toBe(true)
-  expect(await keepServer(runtime, conflicted)).toBe(false)
+  // What was chosen on the item as it was shown is refused for an item that has moved on, and
+  // says why: the person reviews it again.
+  await expect(keepServer(runtime, conflicted)).rejects.toMatchObject({ code: 'offline_item_changed' })
   runtime.engine.gate = true
-  expect(await reapply(runtime, conflicted)).toBe(false)
+  await expect(reapply(runtime, conflicted)).rejects.toMatchObject({ code: 'offline_item_changed' })
   expect((await store.listItems())[0].operation).not.toBe(conflicted.operation)
 })
 
@@ -518,12 +551,12 @@ test('a restore whose answer was lost is the same restore: the change goes on fr
   row.rev = 2
   await engineOf(store).run()
   const [item] = await store.listItems()
-  // The restore was made, but the answer never came (and the change was not sent yet).
+  // The person chooses to restore, and the restore is made, but its answer never comes.
+  await restoreAndApply(runtime, item, { revision: 2, at: null, by: null })
   row.deleted = false
   row.rev = 3
-  runtime.engine.gate = true
-  await restoreAndApply(runtime, item, { revision: 2, at: null, by: null })
-  await waitFor(async () => expect((await store.listItems())[0].state).toBe('synced'))
+  await engineOf(store).run()
+  expect((await store.listItems())[0].state).toBe('synced')
   expect(row).toMatchObject({ rev: 4, data: { amount: 9 } })
 })
 
@@ -697,7 +730,6 @@ test('values that don’t fit the app the person is repairing against are refuse
 
 test('a refusal for good, lost access, an archived app: needs attention, keeps the input and is never retried by itself', async () => {
   const { store, transport } = await setup()
-  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
   await transport.act(press('delete_expense', { id: 1 }, 1))
   const calls = fakeFetch({
     [`POST ${base}/actions`]: {
@@ -776,12 +808,12 @@ test('unsent changes are never lost by signing out or in as someone else: they a
   await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
   await transport.act(press('add_expense', { description: 'Tea', amount: '2' }))
   expect((await unsentOf(7)).count).toBe(2)
-  const left = await store.retireOrKeepUnsent(new Set(), false)
+  const left = await store.retireOrKeepUnsent(new Map(), false)
   expect(left).toHaveLength(2)
   expect(await store.listItems()).toHaveLength(2)
   // Only what the person was shown and agreed to lose goes.
   const [change] = (await store.listItems()).filter((i) => kindOf(i) === 'update')
-  expect(await store.retireOrKeepUnsent(new Set([change.id]), false)).toHaveLength(2)
+  expect(await store.retireOrKeepUnsent(approvalOf([{ id: change.id, ...seenOf(change) }]), false)).toHaveLength(2)
   expect(await store.listItems()).toHaveLength(2)
   // Sealed for another account: its downloads go, the unsent change stays.
   const kept = await store.retireOrKeepUnsent()
@@ -789,7 +821,7 @@ test('unsent changes are never lost by signing out or in as someone else: they a
   expect(await store.listDownloads()).toEqual([])
   expect((await store.listItems()).map((i) => i.state)).toEqual(['queued', 'queued'])
   expect(runtimeState().runtime).toBeNull()
-  expect(await settle(7, new Set())).toHaveLength(2)
+  expect(await settle(7, new Map())).toHaveLength(2)
 })
 
 // --- the database
@@ -1051,4 +1083,342 @@ test('a record added offline that no longer fits the app is repaired the same wa
     context: { description: 'Taxi', amount: '8', kind: 'meal' },
   })
   expect(actionCalls(calls)[0].body).not.toHaveProperty('expectedRevision')
+})
+
+// --- review fixes: one version per item, compare-and-set changes, and the server's word for values
+
+// An edit that the server refused as a conflict, with the server's record at `rev`.
+async function conflicted(patch: Record<string, unknown> = { amount: 20 }, rev = 2) {
+  const ctx = await setup()
+  await ctx.transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const server = fakeServer()
+  const row = server.rows.get(1) as Row
+  Object.assign(row.data, patch)
+  row.rev = rev
+  await engineOf(ctx.store).run()
+  const [item] = await ctx.store.listItems()
+  expect(item).toMatchObject({ state: 'attention', attention: 'conflict' })
+  return { ...ctx, server, row, item }
+}
+
+test('every change to an item raises its version, and a choice made on an older one is refused in the transaction', async () => {
+  const { store, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const [first] = await store.listItems()
+  expect(first.version).toBe(1)
+  await transport.act(press('edit_expense', { id: 1, amount: '10' }, 1))
+  const [merged] = await store.listItems()
+  expect(merged.version).toBe(2)
+  await store.updateItem(merged.id, (i) => ({ ...i, state: 'draft' }))
+  const [held] = await store.listItems()
+  expect(held.version).toBe(3)
+  // A claim's renewal is not a change of what a person was shown.
+  await store.updateItem(held.id, (i) => ({ ...i }), { bump: false })
+  expect((await store.getItem(held.id))?.version).toBe(3)
+  // Discarding what was shown at version 1 is refused, and nothing is removed.
+  await expect(store.removeItem(held.id, seenOf(first))).rejects.toBeInstanceOf(ItemChanged)
+  expect(await store.listItems()).toHaveLength(1)
+  await store.removeItem(held.id, seenOf(held))
+  expect(await store.listItems()).toEqual([])
+})
+
+test('a stale screen’s edit never joins an item made on another base: refused, and the record is shown again', async () => {
+  const { store, d, runtime, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const before = await store.listItems()
+  // Another tab downloaded the record at a newer revision: this screen still shows revision 1.
+  await store.putDownload(download(7, { messages: withRevision(2, { description: 'Coffee', amount: 20 }) }))
+  const stale = offlineTransport(runtime, d)
+  await stale.load()
+  await expect(stale.act(press('edit_expense', { id: 1, description: 'Stale' }, 3))).rejects.toMatchObject({
+    code: 'offline_record_changed',
+  })
+  // The values of one base and the revision of another are never put together.
+  expect(await store.listItems()).toEqual(before)
+
+  // The same, when the other tab's item appears between this tab's read of the queue and its write.
+  const listed = vi.spyOn(runtime.store, 'listItems').mockResolvedValueOnce([])
+  await expect(stale.act(press('edit_expense', { id: 1, description: 'Stale' }, 2))).rejects.toMatchObject({
+    code: 'offline_record_changed',
+  })
+  listed.mockRestore()
+  expect(await store.listItems()).toEqual(before)
+})
+
+test('a screen drawn from another revision than the device holds does not queue a change that mixes them', async () => {
+  const { store, d, runtime } = await setup()
+  const stale = offlineTransport(runtime, d)
+  await stale.load()
+  // Another tab downloaded the record again: the device holds revision 2, the screen shows 1.
+  await store.putDownload(download(7, { messages: withRevision(2, { description: 'Coffee', amount: 20 }) }))
+  await expect(stale.act(press('edit_expense', { id: 1, description: 'Stale' }, 1))).rejects.toMatchObject({
+    code: 'offline_record_changed',
+  })
+  expect(await store.listItems()).toEqual([])
+})
+
+// The download's messages with record 1 at a revision, as another tab's download would have them.
+function withRevision(revision: number, fields: Record<string, unknown>): unknown[] {
+  return (surface as unknown as { updateDataModel?: { path?: string; value?: unknown } }[]).map((m) =>
+    m.updateDataModel?.path === '/'
+      ? {
+          ...m,
+          updateDataModel: {
+            ...m.updateDataModel,
+            value: { ...(m.updateDataModel.value as object), items: [{ id: 1, _revision: revision, ...fields }] },
+          },
+        }
+      : m,
+  )
+}
+
+test('a button pressed on a screen resolves in the release the screen was drawn from, never in a newer download', async () => {
+  const { store, runtime, d } = await setup()
+  const transport = offlineTransport(runtime, d)
+  await transport.load()
+  // A newer release was downloaded meanwhile, where that name is a deletion.
+  await store.putDownload(
+    download(7, {
+      release: 4,
+      definition: { ...definition, actions: { ...definition.actions, edit_expense: { kind: 'delete' } } },
+    }),
+  )
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const [item] = await store.listItems()
+  expect(item).toMatchObject({ kind: 'update', release: 3, action: { name: 'edit_expense' } })
+})
+
+test('a different action on the same record is queued on its own, with its own identity; the same action is merged', async () => {
+  const two = { ...definition, actions: { ...definition.actions, set_amount: { kind: 'update' as const } } }
+  const { store, transport } = await setup({ definition: two })
+  await transport.act(press('edit_expense', { id: 1, description: 'Espresso' }, 1))
+  await transport.act(press('set_amount', { id: 1, amount: '9' }, 1))
+  const items = await store.listItems()
+  expect(items.map((i) => i.action.name)).toEqual(['edit_expense', 'set_amount'])
+  expect(items.map((i) => i.record.revision)).toEqual([1, 1])
+  await transport.act(press('set_amount', { id: 1, amount: '11' }, 1))
+  const after = await store.listItems()
+  expect(after).toHaveLength(2)
+  expect(after[1].action.context).toEqual({ id: 1, amount: '11' })
+})
+
+test('a change is not reported as saved when another tab’s deletion of the record won', async () => {
+  const { store, runtime, d, transport } = await setup()
+  await offlineTransport(runtime, d).act(press('delete_expense', { id: 1 }, 1))
+  const before = await store.listItems()
+  // This tab had read the queue before the deletion was written.
+  const listed = vi.spyOn(runtime.store, 'listItems').mockResolvedValueOnce([])
+  await expect(transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))).rejects.toMatchObject({
+    code: 'offline_record_changed',
+  })
+  listed.mockRestore()
+  expect(await store.listItems()).toEqual(before)
+})
+
+test('applying on top refuses a conflict another tab sent again: it carries the version the person was shown', async () => {
+  const { store, runtime, row, item } = await conflicted()
+  // Another tab tried again with the same request, and the record moved on once more.
+  row.data.amount = 25
+  row.rev = 5
+  await engineOf(store).retry(item.id)
+  const [again] = await store.listItems()
+  expect(again).toMatchObject({
+    attention: 'conflict',
+    operation: item.operation,
+    conflict: { current: { _revision: 5 } },
+  })
+  runtime.engine.gate = true
+  await expect(reapply(runtime, item)).rejects.toMatchObject({ code: 'offline_item_changed' })
+  expect(await store.listItems()).toEqual([again])
+})
+
+test('applying on top asks the server at the moment of the choice: a revision the person was not shown is not applied', async () => {
+  const { store, runtime, row, item } = await conflicted()
+  // The record moves on after the review was shown, with no change to the item.
+  row.data.amount = 30
+  row.rev = 3
+  runtime.engine.gate = true
+  await expect(reapply(runtime, item)).rejects.toMatchObject({ code: 'offline_review_again' })
+  await expect(
+    saveEdit(runtime, item, { description: 'Coffee', amount: '12' }, (await store.getDownload(scope)) as Download),
+  ).rejects.toMatchObject({ code: 'offline_review_again' })
+  expect(await store.listItems()).toEqual([item])
+  // Shown the record as it is now, the choice is applied on the revision just shown.
+  const shown = { id: 1, _revision: 3, description: 'Coffee', amount: 30 }
+  expect(await reapply(runtime, item, shown)).toBe(true)
+  expect((await store.listItems())[0]).toMatchObject({ record: { id: 1, revision: 3 }, original: { amount: 30 } })
+})
+
+test('keeping the server’s version writes the record as the server has it now, and drops one the person may no longer read', async () => {
+  const { store, runtime, row, item } = await conflicted()
+  // The cached answer holds a record; now the person's access is narrower and the server hides it.
+  expect(item.conflict?.current).toMatchObject({ amount: 20 })
+  row.hidden = true
+  expect(await keepServer(runtime, item)).toBe(true)
+  const copy = (await store.getDownload(scope)) as Download
+  expect(itemsOf(copy, [])).toEqual([])
+  expect(await store.listItems()).toEqual([])
+})
+
+test('a conflict is shown with the record as the server has it when it is opened, not as it was answered', async () => {
+  const { store, runtime, row, item } = await conflicted()
+  row.data.amount = 25
+  row.rev = 3
+  render(<Harness runtime={runtime} />)
+  const entry = await screen.findByText(/Expenses: change to Coffee/)
+  fireEvent.click(within(entry.closest('li') as HTMLElement).getByRole('button', { name: /Review/ }))
+  const review = await screen.findByRole('region', { name: /Review/ })
+  await within(review).findByText('25')
+  expect(within(review).queryByText('20')).toBeNull()
+  // What is chosen from that screen is applied on that revision.
+  runtime.engine.gate = true
+  fireEvent.click(within(review).getByRole('button', { name: 'Apply my change on top' }))
+  await waitFor(async () => expect((await store.listItems())[0].record.revision).toBe(3))
+  expect(item.version).toBeLessThan((await store.listItems())[0].version)
+})
+
+test('a replayed answer that carries another device’s revision is shown with that device’s values, never with mine', async () => {
+  const { store, d, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  // The server already had this operation (a no-op for it) and answers with the record as it is
+  // now: another device changed the amount, which made the next revision.
+  fakeFetch({
+    [`POST ${base}/actions`]: {
+      body: [
+        { updateDataModel: { path: '/items', value: [{ id: 1, _revision: 2, description: 'Coffee', amount: 20 }] } },
+      ],
+    },
+  })
+  await engineOf(store).run()
+  const [synced] = await store.listItems()
+  expect(synced.state).toBe('synced')
+  expect(itemsOf(d, [synced])).toEqual([{ id: 1, _revision: 2, description: 'Coffee', amount: 20 }])
+})
+
+test('signing out loses only what the person was shown: a newer edit of the same record is asked about again', async () => {
+  const { store, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const shown = await unsentOf(7)
+  // Another tab changes the same item (the same action, so the same item, under a new key).
+  await transport.act(press('edit_expense', { id: 1, amount: '11' }, 1))
+  const left = await settle(7, approvalOf(shown.items))
+  expect(left).toHaveLength(1)
+  expect(left[0].version).toBeGreaterThan(shown.items[0].version)
+  expect((await store.listItems())[0].action.context).toEqual({ id: 1, amount: '11' })
+  // Shown again, as it is now, it is what they agree to lose.
+  expect(await settle(7, approvalOf(left))).toEqual([])
+})
+
+test('an answer of 401 to a send that may already be on the server does not make the record free: its key is never reused', async () => {
+  const { store, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  fakeFetch({ [`POST ${base}/actions`]: { status: 503, body: { error: 'busy' } } })
+  const c = clock()
+  await engineOf(store, c).run()
+  const [sent] = await store.listItems()
+  expect(sent).toMatchObject({ state: 'queued', unconfirmed: true })
+  // Tried again: the session has ended.
+  fakeFetch({ [`POST ${base}/actions`]: { status: 401, body: { error: 'no session', code: 'unauthorized' } } })
+  c.advance(10 * 60_000)
+  await engineOf(store, c).run()
+  const [paused] = await store.listItems()
+  expect(paused).toMatchObject({ state: 'queued', unconfirmed: true, operation: sent.operation })
+  await expect(transport.act(press('edit_expense', { id: 1, amount: '11' }, 1))).rejects.toMatchObject({
+    code: 'offline_record_busy',
+  })
+  expect((await store.listItems())[0].operation).toBe(sent.operation)
+})
+
+test('a send that was never started before the session ended is free again', async () => {
+  const { store, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  fakeFetch({ [`POST ${base}/actions`]: { status: 401, body: { error: 'no session', code: 'unauthorized' } } })
+  await engineOf(store).run()
+  expect((await store.listItems())[0]).toMatchObject({ state: 'queued' })
+  expect((await store.listItems())[0].unconfirmed).toBeUndefined()
+})
+
+test('a late success after the account changed writes nothing to the old account’s queue', async () => {
+  const { store } = await setup()
+  const { transport } = { transport: offlineTransport(runtimeOf(store), (await store.getDownload(scope)) as Download) }
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  let signed = 7
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let started: () => void = () => {}
+  const inflight = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  fakeFetch({
+    [`POST ${base}/actions`]: async () => {
+      started()
+      await held
+      return {
+        body: [
+          { updateDataModel: { path: '/items', value: [{ id: 1, _revision: 2, description: 'Coffee', amount: 9 }] } },
+        ],
+      }
+    },
+  })
+  const engine = engineOf(store, clock(), { signedIn: () => signed })
+  const running = engine.run()
+  await inflight
+  // Another account signs in while the request is out; its answer then comes in.
+  signed = 8
+  release()
+  await running
+  const [item] = await store.listItems()
+  expect(item.state).not.toBe('synced')
+  expect(item.ack).toBeUndefined()
+  // It is the same request, still unconfirmed, for its owner to send again.
+  expect(item.unconfirmed).toBe(true)
+})
+
+test('clearing synced records keeps a deleted record out of the screen until a download confirms the deletion', async () => {
+  const { store, d, runtime } = await setup()
+  await offlineTransport(runtime, d).act(press('delete_expense', { id: 1 }, 1))
+  fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+  await engineOf(store).run()
+  expect((await store.listItems())[0].state).toBe('synced')
+  render(<Harness runtime={runtime} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Clear synced records' }))
+  await waitFor(async () => expect((await store.listItems())[0].cleared).toBe(true))
+  expect(screen.queryByRole('button', { name: 'Clear synced records' })).toBeNull()
+  // The copy still holds the record: the deletion is what keeps it from being shown.
+  const copy = (await store.getDownload(scope)) as Download
+  expect(itemsOf(copy, await store.listItems())).toEqual([])
+  // A download that no longer holds the record is what lets the entry go.
+  await store.dropIncluded(scope, {}, new Set())
+  expect(await store.listItems()).toEqual([])
+})
+
+test('a second deletion during a restore offers the restore again, at the deletion it has now', async () => {
+  const { store, runtime, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  const server = fakeServer()
+  const row = server.rows.get(1) as Row
+  row.deleted = true
+  row.rev = 2
+  await engineOf(store).run()
+  const [item] = await store.listItems()
+  expect(item).toMatchObject({ attention: 'deleted' })
+  await restoreAndApply(runtime, item, { revision: 2, at: null, by: null })
+  // Someone restored it and deleted it again before this send.
+  row.rev = 4
+  await engineOf(store).run()
+  const [again] = await store.listItems()
+  expect(again).toMatchObject({ state: 'attention', attention: 'deleted' })
+  expect(again.restore).toBeUndefined()
+  // The restore is offered at the revision of the deletion that is there now.
+  const found = await findDeleted(runtime, again)
+  expect(found?.revision).toBe(4)
+  await expect(restoreAndApply(runtime, again, { revision: 2, at: null, by: null })).rejects.toMatchObject({
+    code: 'offline_review_again',
+  })
+  await restoreAndApply(runtime, again, found as Deleted)
+  await engineOf(store).run()
+  expect((await store.listItems())[0].state).toBe('synced')
+  expect(row).toMatchObject({ deleted: false, rev: 6, data: { amount: 9 } })
 })
