@@ -176,7 +176,7 @@ export type AppRelease = DefinitionNeeds & {
 }
 
 // A field of an app's collection, as its definition declares it.
-export type FieldType = 'string' | 'number' | 'boolean' | 'date' | 'time' | 'choice'
+export type FieldType = 'string' | 'number' | 'boolean' | 'date' | 'time' | 'choice' | 'attachment'
 export type AppField = {
   name: string
   type: FieldType

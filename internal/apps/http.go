@@ -41,6 +41,10 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("POST "+apps+"/{app}/records/{record}/restore", write(s.handleRestore))
 	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
 	mux.Handle("PUT "+apps+"/{app}/roles", write(s.handleSetRoles))
+	// Attachments (attachments.go): the uploads, and the photos kept for records.
+	if s.dataDir != "" {
+		s.attachmentRoutes(mux, read, write, apps)
+	}
 }
 
 // maxBody bounds a request: a definition is at most MaxDefinitionSize, with room for the
@@ -433,8 +437,11 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var incompatible *incompatibleError
 	var migration *migrationError
 	var conflict *conflictError
+	var status *statusError
 	var apiErr *apierr.Error
 	switch {
+	case errors.As(err, &status):
+		writeError(w, status.status, status.code, status.msg, status.params)
 	case errors.As(err, &apiErr):
 		apierr.WriteError(w, apiErr)
 	case errors.As(err, &conflict):

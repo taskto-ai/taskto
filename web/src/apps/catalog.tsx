@@ -1,6 +1,6 @@
 // The component catalog personal apps may use: A2UI's basic components and functions, without
 // the ones that load or open outside addresses (an app is shared, and a picture from elsewhere
-// would tell that server who opens it), plus TaskTo.AI's own. A surface naming anything outside
+// would tell that server who opens it), plus TaskTo.AI's own (Stat, Show, PhotoInput, Photos). A surface naming anything outside
 // it is rejected by the renderer, so an app can only ever be built from these. The Go server
 // checks every saved app against the same catalog (internal/apps/catalog.go); its
 // testdata/catalog.json is the contract the tests hold both to.
@@ -8,6 +8,8 @@
 import { createComponentImplementation, useSignalValue } from '@a2ui/react/v0_9'
 import { basicCatalog, Catalog, CommonSchemas } from '@a2ui/web_core/v0_9'
 import { z } from 'zod'
+import { PhotoField, PhotoStrip, useAppFiles } from './PhotoInput'
+import { type PhotoLimits, photoIds } from './photos'
 import { holds, type Rule, type Values } from './rules'
 
 export const APPS_CATALOG_ID = 'https://taskto.ai/catalogs/apps/v1.json'
@@ -50,6 +52,53 @@ const Show = createComponentImplementation(ShowApi, ({ props, buildChild, contex
   return holds(props.when as Rule, values ?? {}) ? buildChild(props.child) : null
 })
 
+// An input for an attachment field: photos from the camera or the library, each uploaded to the
+// server, their ids held in value (a list at a path such as /draft/photos). field names the
+// collection's attachment field, whose limits the server puts at /_files/<field>.
+const PhotoInputApi = {
+  name: 'PhotoInput',
+  schema: z
+    .object({
+      field: z.string(),
+      label: CommonSchemas.DynamicString.optional(),
+      value: CommonSchemas.DynamicStringList,
+    })
+    .strict(),
+}
+
+const PhotoInput = createComponentImplementation(PhotoInputApi, ({ props, context }) => {
+  const files = useAppFiles()
+  const limits = useSignalValue(context.dataContext.dataModel.getSignal<PhotoLimits>(`/_files/${props.field}`))
+  const setValue = (props as { setValue?: (ids: string[]) => void }).setValue
+  return (
+    <PhotoField
+      label={props.label}
+      files={files}
+      field={props.field}
+      value={photoIds(props.value)}
+      limits={limits ?? undefined}
+      onChange={(ids) => setValue?.(ids)}
+    />
+  )
+})
+
+// The thumbnails of the attachments whose ids are in value, drawn from the server with the viewer's
+// own session: never from an outside address.
+const PhotosApi = {
+  name: 'Photos',
+  schema: z
+    .object({
+      label: CommonSchemas.DynamicString.optional(),
+      value: CommonSchemas.DynamicStringList,
+    })
+    .strict(),
+}
+
+const Photos = createComponentImplementation(PhotosApi, ({ props }) => {
+  const files = useAppFiles()
+  return files ? <PhotoStrip base={files.base} ids={photoIds(props.value)} label={props.label} /> : null
+})
+
 // The host of an app's screens, which the server adds as the root: it draws the screen the data
 // model names (/screen). Moving between screens only changes that, so what is typed into the form
 // (/draft) is where it was left.
@@ -88,6 +137,8 @@ export const appsCatalog = new Catalog(
     ...(TextField ? [TextField] : []),
     Stat,
     Show,
+    PhotoInput,
+    Photos,
     Screens,
   ],
   [...basicCatalog.functions.values()].filter((f) => !LEFT_OUT.has(f.name)),
@@ -102,6 +153,8 @@ export const DEFINITION_VERSION = 2
 export const catalogCapabilities: ReadonlySet<string> = new Set([
   ...[...appsCatalog.components.keys()].map((name) => `component.${name}`),
   ...[...appsCatalog.functions.keys()].map((name) => `function.${name}`),
+  // Holding an attachment field: reading its value as a list of attachment ids and sending them.
+  'field.attachment',
   // The extension slots this client draws (internal/apps/contributions.go): Home's widgets and the
   // navigation's pin.
   'slot.home_widgets.v1',

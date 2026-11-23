@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -186,11 +187,16 @@ const maxNameLen = 100
 type Service struct {
 	db     *sql.DB
 	access *access.Checker
+	// dataDir holds the spaces' directories, where attachments are kept (WithFiles); empty if
+	// the service keeps no files.
+	dataDir string
+	locks   fileLocks
+	thumbs  chan struct{}
 }
 
 // New returns the apps service over sqlDB, which must be migrated.
 func New(sqlDB *sql.DB, c *access.Checker) *Service {
-	return &Service{db: sqlDB, access: c}
+	return &Service{db: sqlDB, access: c, thumbs: make(chan struct{}, maxThumbnails)}
 }
 
 // timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the schema's format for times.
@@ -738,6 +744,11 @@ func (s *Service) moveApp(ctx context.Context, sp access.Space, a Actor, appID, 
 	if err != nil {
 		return App{}, err
 	}
+	// The files follow the app to its new space. The app already works meanwhile, and if this
+	// stops half way Sweep goes on (attachments.go).
+	if err := s.relocate(ctx, appID); err != nil {
+		slog.Warn("apps: moving an app's attachments", "app", appID, "err", err)
+	}
 	if err := s.present(ctx, a, &moved); err != nil {
 		return App{}, err
 	}
@@ -1096,6 +1107,9 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 			at, actor.UserID, actor.Agent, via(actor), actionColumn(ch)).Scan(&id); err != nil {
 			return err
 		}
+		if err := claimAttachments(ctx, tx, actor, appID, id, def, nil, ch.Data); err != nil {
+			return err
+		}
 		return remember(ctx, tx, appID, id, 1, opInsert, string(raw), at, actor, ch)
 	case ActionUpdate, ActionDelete:
 		cur, err := liveRow(ctx, tx, appID, ch, modify, read, def)
@@ -1125,6 +1139,9 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		}
 		if string(raw) == cur.canonical {
 			return nil // nothing changed: no new revision, nothing to remember
+		}
+		if err := claimAttachments(ctx, tx, actor, appID, ch.ID, def, cur.fields, next); err != nil {
+			return err
 		}
 		_, err = tx.ExecContext(ctx, `
 			UPDATE app_rows SET data = ?, revision = ?, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?, updated_action = ?
