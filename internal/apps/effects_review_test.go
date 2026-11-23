@@ -291,7 +291,9 @@ func TestACheckedTargetIsCheckedForEveryPermissionNeeded(t *testing.T) {
 	// A route that only reads a board comes first; a card made on the same board needs write.
 	look := Action{Kind: ActionUpdate, Effects: []Effect{{Kind: EffectOpenRoute, Route: RouteBoard, SpaceID: f.maint.ID, BoardID: f.board}}}
 	d := f.inspections()
-	d.Actions["a_look"] = look
+	submit := d.Actions["submit_inspection"]
+	submit.Effects = submit.Effects[:1] // the card, on the same board
+	d.Actions = map[string]Action{"a_look": look, "submit_inspection": submit}
 	if err := f.e.s.checkEffectTargets(f.ctx(), Actor{UserID: f.alice.id}, d); err != nil {
 		t.Fatalf("an editor of the target: %v", err)
 	}
