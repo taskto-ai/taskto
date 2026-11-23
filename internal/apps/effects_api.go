@@ -131,6 +131,12 @@ func (s *Service) view(e effectRow, caller Actor, canRead func(int64) bool, live
 		v.Error = &EffectError{Code: apierr.Code(e.errCode.String)}
 		if e.errParams.Valid && targetReadable {
 			_ = json.Unmarshal([]byte(e.errParams.String), &v.Error.Params)
+			// What the templates made of the record's fields is no more shown in an error than in
+			// a detail or a result, once the live release no longer declares those fields.
+			if !fieldsHold {
+				delete(v.Error.Params, "path")
+				delete(v.Error.Params, "title")
+			}
 		}
 	}
 	if e.state == StateDone && e.result.Valid {

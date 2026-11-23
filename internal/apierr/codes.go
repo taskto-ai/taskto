@@ -81,21 +81,25 @@ const (
 
 	// Personal apps (internal/apps).
 
-	CodeAppOffline        Code = "app_offline"
-	CodeAppChanged        Code = "app_changed"     // 409, with the app as it is now in "current"
-	CodeAppNameLength     Code = "app_name_length" // params: max
-	CodeTooManyApps       Code = "too_many_apps"   // params: max
-	CodeAppFull           Code = "app_full"        // params: max_rows, max_mib
-	CodeAppRowNotFound    Code = "app_row_not_found"
-	CodeAppRecordConflict Code = "app_record_conflict"  // 409: the record changed since the client read it; params: id, revision
-	CodeAppFieldRequired  Code = "app_field_required"   // params: field
-	CodeAppFieldTooLong   Code = "app_field_too_long"   // params: field, max
-	CodeAppFieldNotNumber Code = "app_field_not_number" // params: field
-	CodeAppFieldTooSmall  Code = "app_field_too_small"  // params: field, min
-	CodeAppFieldTooLarge  Code = "app_field_too_large"  // params: field, max
-	CodeAppFieldNotDate   Code = "app_field_not_date"   // params: field
-	CodeAppFieldNotTime   Code = "app_field_not_time"   // params: field
-	CodeAppFieldNotOption Code = "app_field_not_option" // params: field
+	CodeAppOffline     Code = "app_offline"
+	CodeAppChanged     Code = "app_changed"     // 409, with the app as it is now in "current"
+	CodeAppNameLength  Code = "app_name_length" // params: max
+	CodeTooManyApps    Code = "too_many_apps"   // params: max
+	CodeAppFull        Code = "app_full"        // params: max_rows, max_mib
+	CodeAppRowNotFound Code = "app_row_not_found"
+	// CodeAppPreviewFull is a preview at its own row limit (params: max_rows); CodeAppPreviewTooLarge
+	// a preview's request over its size limit (413; params: max_mib).
+	CodeAppPreviewFull     Code = "app_preview_full"
+	CodeAppPreviewTooLarge Code = "app_preview_too_large"
+	CodeAppRecordConflict  Code = "app_record_conflict"  // 409: the record changed since the client read it; params: id, revision
+	CodeAppFieldRequired   Code = "app_field_required"   // params: field
+	CodeAppFieldTooLong    Code = "app_field_too_long"   // params: field, max
+	CodeAppFieldNotNumber  Code = "app_field_not_number" // params: field
+	CodeAppFieldTooSmall   Code = "app_field_too_small"  // params: field, min
+	CodeAppFieldTooLarge   Code = "app_field_too_large"  // params: field, max
+	CodeAppFieldNotDate    Code = "app_field_not_date"   // params: field
+	CodeAppFieldNotTime    Code = "app_field_not_time"   // params: field
+	CodeAppFieldNotOption  Code = "app_field_not_option" // params: field
 	// CodeAppFieldRequiredWhen is a field the app requires when another field has a value
 	// (params: field).
 	CodeAppFieldRequiredWhen Code = "app_field_required_when"

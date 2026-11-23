@@ -238,15 +238,17 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 type effectRow struct {
 	id, appID, recordID, recordRevision, userID int64
 	position, attempts                          int
-	operation, action, name, kind, actionKind   string
-	agent                                       bool
-	via                                         sql.NullString
-	payload                                     payload
-	state                                       string
-	nextAttemptAt                               string
-	errCode, errParams, result                  sql.NullString
-	createdAt, updatedAt                        string
-	doneAt                                      sql.NullString
+	// lease is the token of the claim that holds the entry: it only grows (see claim).
+	lease                                     int64
+	operation, action, name, kind, actionKind string
+	agent                                     bool
+	via                                       sql.NullString
+	payload                                   payload
+	state                                     string
+	nextAttemptAt                             string
+	errCode, errParams, result                sql.NullString
+	createdAt, updatedAt                      string
+	doneAt                                    sql.NullString
 }
 
 const effectFrom = `
@@ -254,14 +256,14 @@ const effectFrom = `
 	JOIN app_operations o ON o.id = e.operation_id
 	JOIN app_rows r ON r.id = e.record_id`
 
-const effectColumns = `e.id, e.app_id, e.record_id, e.record_revision, e.user_id, e.position, e.attempts,
+const effectColumns = `e.id, e.app_id, e.record_id, e.record_revision, e.user_id, e.position, e.attempts, e.lease,
 	o.operation, o.action, e.name, e.kind, e.action_kind, e.acted_by_agent, e.acted_via, e.payload, e.state,
 	e.next_attempt_at, e.error_code, e.error_params, e.result, e.created_at, e.updated_at, e.done_at`
 
 func scanEffect(row scanner) (effectRow, error) {
 	var e effectRow
 	var raw string
-	if err := row.Scan(&e.id, &e.appID, &e.recordID, &e.recordRevision, &e.userID, &e.position, &e.attempts,
+	if err := row.Scan(&e.id, &e.appID, &e.recordID, &e.recordRevision, &e.userID, &e.position, &e.attempts, &e.lease,
 		&e.operation, &e.action, &e.name, &e.kind, &e.actionKind, &e.agent, &e.via, &raw, &e.state,
 		&e.nextAttemptAt, &e.errCode, &e.errParams, &e.result, &e.createdAt, &e.updatedAt, &e.doneAt); err != nil {
 		return effectRow{}, err
@@ -406,7 +408,7 @@ func (s *Service) claim(ctx context.Context) (effectRow, bool, error) {
 				}
 				continue
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE app_effects SET state = 'running', attempts = attempts + 1, lease_until = ?, updated_at = ? WHERE id = ?`,
+			if _, err := tx.ExecContext(ctx, `UPDATE app_effects SET state = 'running', attempts = attempts + 1, lease = lease + 1, lease_until = ?, updated_at = ? WHERE id = ?`,
 				s.stamp(t.Add(leaseTime)), at, id); err != nil {
 				return err
 			}
@@ -451,7 +453,7 @@ func (s *Service) succeed(ctx context.Context, e effectRow, result map[string]an
 	at := s.stamp(s.clock())
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE app_effects SET state = 'done', result = ?, error_code = NULL, error_params = NULL, lease_until = NULL, updated_at = ?, done_at = ?
-		WHERE id = ? AND state = 'running' AND attempts = ?`, string(raw), at, at, e.id, e.attempts)
+		WHERE id = ? AND state = 'running' AND lease = ?`, string(raw), at, at, e.id, e.lease)
 	return err
 }
 
@@ -473,12 +475,12 @@ func (s *Service) fail(ctx context.Context, e effectRow, cause error) error {
 		wait := min(backoffBase<<(e.attempts-1), backoffMax)
 		_, err := s.db.ExecContext(ctx, `
 			UPDATE app_effects SET state = 'pending', next_attempt_at = ?, lease_until = NULL, error_code = ?, error_params = ?, updated_at = ?
-			WHERE id = ? AND state = 'running' AND attempts = ?`, s.stamp(t.Add(wait)), string(ee.code), params, s.stamp(t), e.id, e.attempts)
+			WHERE id = ? AND state = 'running' AND lease = ?`, s.stamp(t.Add(wait)), string(ee.code), params, s.stamp(t), e.id, e.lease)
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE app_effects SET state = 'failed', lease_until = NULL, error_code = ?, error_params = ?, updated_at = ?
-		WHERE id = ? AND state = 'running' AND attempts = ?`, string(ee.code), params, s.stamp(t), e.id, e.attempts)
+		WHERE id = ? AND state = 'running' AND lease = ?`, string(ee.code), params, s.stamp(t), e.id, e.lease)
 	return err
 }
 
@@ -738,8 +740,20 @@ func (s *Service) updateCard(ctx context.Context, e effectRow) (map[string]any, 
 	return result, nil
 }
 
-// documentMessage is the commit message of a document an effect makes.
-const documentMessage = "Created by an app"
+// documentMessage is the commit message of a document an effect makes; documentAgent is who the
+// history says made it for the user.
+const (
+	documentMessage = "Created by an app"
+	documentAgent   = "TaskTo app"
+)
+
+// documentCommitMessage names the entry in the commit it makes, so that a try that finds the entry
+// again after a crash between the commit and the note that it was done can tell that the document
+// was made, whatever became of the document since (edited, moved, deleted). An entry's number is
+// never given again.
+func documentCommitMessage(e effectRow) string {
+	return fmt.Sprintf("%s [effect %d/%d]", documentMessage, e.appID, e.id)
+}
 
 func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]any, error) {
 	if s.platform.Docs == nil {
@@ -750,30 +764,49 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 	if err != nil {
 		return nil, err
 	}
-	// The checks are repeated right before the write: a document is in git, outside the database's
-	// transactions, so this is as close to it as they can be.
-	if err := s.authorizeApp(ctx, e); err != nil {
-		return nil, err
+	made := map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "path": p.Path}
+	message := documentCommitMessage(e)
+	// An entry that was claimed before may have made its document and been stopped before it
+	// noted so. Its commit is looked for by the message it was given: if it is there, the entry is
+	// done, and what the document is now is none of its business.
+	if e.lease > 1 {
+		if _, found, err := s.platform.Docs.FindCommit(ctx, sp, message, documentAgent); err != nil {
+			return nil, err
+		} else if found {
+			return made, nil
+		}
 	}
-	if _, err := s.target(ctx, e.userID, p.SpaceID, true); err != nil {
-		return nil, err
+	// The checks are repeated while the space's write lock is held, right before the commit: the
+	// entry may have waited for the lock, and what it was allowed when it began may have been
+	// withdrawn since.
+	guard := func() error {
+		if err := s.authorizeApp(ctx, e); err != nil {
+			return err
+		}
+		_, err := s.target(ctx, e.userID, p.SpaceID, true)
+		return err
 	}
-	by := knowledge.Author{Agent: "TaskTo app"}
+	if s.hooks.beforeDocument != nil {
+		s.hooks.beforeDocument(e)
+	}
+	by := knowledge.Author{Agent: documentAgent}
 	if err := s.db.QueryRowContext(ctx, `SELECT name, email FROM users WHERE id = ?`, e.userID).Scan(&by.Name, &by.Email); err != nil {
 		return nil, err
 	}
-	res, err := s.platform.Docs.Put(ctx, sp, p.Path, []byte(p.Content), "", by, documentMessage)
+	res, err := s.platform.Docs.PutIf(ctx, sp, p.Path, []byte(p.Content), "", by, message, guard)
 	switch {
 	case err == nil && res.Doc != nil:
-		return map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "path": p.Path, "version": res.Doc.Version}, nil
+		made["version"] = res.Doc.Version
+		return made, nil
 	case err == nil:
-		return map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "path": p.Path}, nil
+		return made, nil
 	case errors.Is(err, knowledge.ErrConflict):
 		// A document is there. Made by an earlier try that never noted it, if it is exactly what
 		// this entry writes; someone else's if not, and never overwritten.
 		doc, rerr := s.platform.Docs.Read(ctx, sp, p.Path, "")
 		if rerr == nil && bytes.Equal(doc.Content, []byte(p.Content)) {
-			return map[string]any{"workspace_id": sp.WorkspaceID, "space_id": p.SpaceID, "path": p.Path, "version": doc.Version}, nil
+			made["version"] = doc.Version
+			return made, nil
 		}
 		return nil, refuse(apierr.CodeAppEffectDocExists, apierr.Params{"path": p.Path})
 	case errors.Is(err, knowledge.ErrInvalid), errors.Is(err, knowledge.ErrTooLarge):

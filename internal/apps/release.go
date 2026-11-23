@@ -655,11 +655,19 @@ func acknowledged(found, ack []SchemaChange) error {
 }
 
 // liveTakes reports whether the live release can take an action of the release from, which
-// is not the live one (Service.act): the live release declares the same action, every field
-// the action sets is one it declares with the same type, and an insert gives every field it
+// is not the live one (Service.act): the live release declares the same action (its kind and
+// the screens it opens: whatever it sets going besides the change, its effects, is always the
+// live release's, so a release that only changed those takes the older screens' actions), every
+// field the action sets is one it declares with the same type, and an insert gives every field it
 // requires.
 func liveTakes(live, from Definition, name string, ch Change) bool {
-	if la, ok := live.Actions[name]; !ok || !reflect.DeepEqual(la, from.Actions[name]) {
+	la, ok := live.Actions[name]
+	if !ok {
+		return false
+	}
+	fa := from.Actions[name]
+	la.Effects, fa.Effects = nil, nil
+	if !reflect.DeepEqual(la, fa) {
 		return false
 	}
 	for field := range ch.Data {

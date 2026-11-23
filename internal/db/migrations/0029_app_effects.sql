@@ -53,6 +53,10 @@ CREATE TABLE app_effects (
     payload        TEXT NOT NULL CHECK (json_valid(payload) AND json_type(payload) = 'object'),
     state          TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'running', 'done', 'failed')),
     attempts       INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    -- The token of the claim that holds the entry: raised on every claim and never reset (a retry
+    -- restarts the attempts, not this), so a worker whose lease ran out can never complete or fail
+    -- the entry for a later claim, whatever attempt number each one is on.
+    lease          INTEGER NOT NULL DEFAULT 0 CHECK (lease >= 0),
     next_attempt_at TEXT NOT NULL,
     -- While 'running': until when the worker that took the entry owns it. A worker that died
     -- leaves a lease that runs out, and the entry is taken again.

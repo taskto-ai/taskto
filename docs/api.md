@@ -90,6 +90,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_name_length` | 400 | An app's name must have 1 to `max` characters. |
 | `too_many_apps` | 409 | The space has `max` apps. |
 | `app_full` | 409 | The app holds `max_rows` rows or `max_mib` MiB of data. |
+| `app_preview_full` | 409 | A [preview](#post-appsapppreview) holds `max_rows` sample rows already. |
+| `app_preview_too_large` | 413 | A preview's request, with all its sample rows, is over `max_mib` MiB. |
 | `app_forbidden` | 403 | The space allows it, but the caller's roles in the app don't: `capability` is `design`, `publish`, `submit`, `modify_records` or `manage_roles`. |
 | `app_definition_version` | 400 | The definition's `definition_version` is `version`, which this server doesn't read (it reads up to `supported`). |
 | `app_not_published` | 409 | The app has no release yet: it is a draft, so it can't be launched or have its actions run. |
@@ -1757,7 +1759,7 @@ app_not_published` before its first release. It draws the **live release**; `?re
 draws the draft, and `?release=<number>` that release (`404 app_release_not_found`), both
 only for those who may design or publish the app (`403 app_forbidden`, `design`) unless the
 number is the live one. The draft is drawn with the app's real rows, to look at: it is for
-previews, and its actions are not run. The data model has the rows the caller may read, and the
+previews, and its actions are not run (to try a draft use [`…/preview`](#post-appsapppreview), which runs on sample rows instead). The data model has the rows the caller may read, and the
 summaries over those rows alone. A client names the release it drew in its actions: it knows
 it from `live.number` of the app it read, which it passes as `?release=`.
 
@@ -1796,7 +1798,9 @@ its screen was drawn from (`…/surface?release=`); left out, it is the live one
 release the action runs as the live definition says. From another release (the app was
 published or rolled back since the screen was drawn) it runs as *that release* defines it,
 and is **applied only if the live release can take it as it is**: the live release declares
-the same action (same name and kind), every field the action sets is a field the live collection
+the same action (same name, kind and screens it opens; what it sets going besides the change, its
+`effects`, is the live release's whatever the older one said, so a release that only changed those
+refuses nothing), every field the action sets is a field the live collection
 declares with the same type, and an insert gives every field the live collection requires. Then
 the live collection checks **the row the action would store** as always, an insert's and an
 update's alike, whichever release's screen it came from: a required field missing, or a value
@@ -1862,18 +1866,24 @@ are committed **in the same transaction**. The request answers then; the server'
 entries afterwards, so they go on when nobody has the app open, and a crash loses none. An action
 may carry an `operation`, its **idempotency key** (8 to 64 letters, digits, `-`, `_`), which a
 client makes once for a press of a button and sends again with every retry of it (the web app keeps
-one key for each submission still waiting for an answer, whatever time the renderer stamped on each
-press, and makes a new one after any answer): a request made again under the same operation (by the
+one key for each submission whose outcome it doesn't know, whatever time the renderer stamped on each
+press, across a refresh or a reopened screen, and makes a new one only after a definite answer: a
+success, or a refusal with a code of its own (`4xx`); a dropped connection, a timeout, a `5xx` or a
+gateway's reply leaves the key to be sent again): a request made again under the same operation (by the
 same user, for the same app) changes nothing, queues nothing and is answered as the first was; one
-made for a different request is `409 app_operation_reused`. What makes a request "the same" is the
+made for a different request is `409 app_operation_reused`. A request already made is answered as it
+was even if the live release has changed since (a release that no longer takes the older screen's
+action doesn't turn the retry of a committed request into `409 app_release_outdated`: that is asked
+only of a request not yet made). What makes a request "the same" is the
 release it runs from (the `release` it names, or the live one), the action, its context and its
 `expectedRevision`: the same key and body run by another release is a different request. An action with effects and no `operation` is given one by the server
 (an update made against an `expectedRevision` can't be applied twice anyway). Entries are queued once and
 done at most once to effect: a card carries its entry's key, and an entry's number is never given
 again (even after the cleanup below), so doing the entry again after a crash between making the card
-and noting it finds the card, and no later entry can find an earlier one's; a document that is at the
-path with the very content the entry writes is the entry's own, a different one is never overwritten
-(`app_effect_doc_exists`); moving a card to the column it is in is nothing to do. An update that left
+and noting it finds the card, and no later entry can find an earlier one's; a document's commit names its entry in its message, so an entry found again after a crash between the
+commit and the note that it was done is done at once, **whatever became of the document since** (edited,
+moved, deleted: nothing is written again); a document that is at the path with the very content the
+entry writes is the entry's own too, a different one is never overwritten (`app_effect_doc_exists`); moving a card to the column it is in is nothing to do. An update that left
 the record as it was queues nothing. An action from an older release runs the **live** release's effects.
 
 **The record's card.** The card a `create_card` effect (by its `name`) made for a record is kept in a
@@ -1904,7 +1914,8 @@ them now: their own records or all), that the record is still there, and that th
 target; if not, the entry fails at once with `app_effect_app_access`, `app_effect_app_offline`,
 `app_effect_record_gone` or `app_effect_target_access` and does nothing. The checks are repeated as
 close to the write as the data allows: inside the transaction that makes or moves a card (which holds
-the write lock), and right before a document is written. Other
+the write lock), and for a document **while the space's write lock is held**, right before the commit,
+so a right withdrawn while the entry waited for the lock stops it. Other
 failures with a code of their own (`app_effect_target_gone`, `app_effect_board_offline`,
 `app_effect_invalid`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
 `app_effect_app_offline`) fail at once too; a failure that may pass (the database was busy, a card
@@ -1933,9 +1944,9 @@ app's); it is present only if the caller may read the space it points into.
 What an entry says of its target is for those who may read the target **now**, exactly as `result` is:
 for a caller who can't read the space an effect targets, `detail` keeps only the kind of route and
 `error.params` is left out (the status and `error.code` stay). And what the templates made of the
-record's fields (`detail.title`, `detail.path`, a result's `title` and `path`) is shown only while the
-live release still declares every field the entry was filled from, with the type it had: after a
-release removes or retypes one, those are left out.
+record's fields (`detail.title`, `detail.path`, a result's `title` and `path`, and the `path` of an
+error's `params`) is shown only while the live release still declares every field the entry was filled
+from, with the type it had: after a release removes or retypes one, those are left out.
 
 #### `GET …/apps/{app}/effects`
 
@@ -1953,7 +1964,8 @@ The same for one record.
 #### `POST …/apps/{app}/effects/{effect}/retry`
 
 Writers; body `{}`. Puts a failed effect back to be done, with its tries counted afresh, and answers
-it. Only the **user who acted** may retry it, and only while they hold the right the action needed
+it. Each time the worker takes an entry it is given a new claim, which only the worker holding it can
+complete or fail, so one slow after its lease ran out can't end a retry made since. Only the **user who acted** may retry it, and only while they hold the right the action needed
 (`403 app_forbidden`, `capability` `retry_effect`, `submit` or `modify_records`; an update needs the
 right to change that record, in the scope their roles give now); `409 app_effect_not_failed` for one
 that didn't fail; `409 app_effects_backlog` when the app already has 500 effects waiting (a retry is
@@ -1967,6 +1979,36 @@ kept, no entry is queued, no card or document is made. It answers `{"effects": [
 that would apply, with `status: "simulated"`, what they would make in `detail` (a new record's `id`
 is `new`), and an `error` with the code an effect would fail with if the caller couldn't write its
 target.
+
+### `POST …/apps/{app}/preview`
+
+Tries the draft on **sample rows, not the app's data**. For those who may design or publish the app
+(`403 app_forbidden`, `design`, for anyone else; `404` for an app the caller can't read, or of another
+space or workspace), in a space the caller may read; `409` while the app is offline. The draft is
+drawn or used with rows that the caller keeps and sends back, and the server **reads and writes none
+of the app's rows**: no row is stored, changed or deleted, no revision or history is made, and
+nothing an action could do outside the rows happens, whatever the action is. It changes no state at
+all, which is why it is a `POST`: the sample rows travel in the body.
+
+`{}` starts a preview: the answer's `rows` are a few sample rows made from the draft's collection
+(plausible values of every field, the same each time). `{"rows": [{"id": 1, "revision": 1, "data": {…}}, …],
+"action": {…}}` goes on from those rows: `action` is the A2UI client action a button sent, in the
+form of [`…/actions`](#post-appsappactions), and runs as the **draft** defines it, on the rows
+sent. Without `action` the rows are only drawn. A preview holds at most 100 rows (`409
+app_preview_full`, which names the preview's limit, not a live app's), and its request at most 8 MiB, since it carries every row
+(`413 app_preview_too_large`, unlike the 64 KiB of a definition's body); rows must each have an `id` and a `revision` from 1, an `id` of their own, and fit the
+draft's collection (`422`; a client starts the preview again when the draft changed). A preview holds no photos: the values
+of an `attachment` field, in the rows sent or in an action, are dropped, so a preview never reads or
+returns an attachment of the app, and sample rows have none. An action the
+draft doesn't declare, a value that doesn't fit its field, or a row the sample rows don't have is
+`422`, as in a live app; a stale `expectedRevision` is `409 app_record_conflict`.
+
+`200` with `{"messages": […], "rows": […]}`: the A2UI messages that draw the screen (`createSurface`,
+`updateComponents`, `updateDataModel` for a start, as `…/surface` answers) or update it (as `…/actions`
+does), and the rows as the action left them, to send with the next step. The answer is the same
+for the draft of an app that was never published, which is how it is tried first. The web
+app's builder and its Apps page use this route for every draft they show, and label it a **Preview**
+with sample data, apart from the **Live** release.
 
 ### Photo attachments
 

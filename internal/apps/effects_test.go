@@ -901,8 +901,8 @@ func withTitle(d Definition, title string) Definition {
 
 func TestAnOlderScreenRunsTheLiveReleasesEffects(t *testing.T) {
 	f := newFX(t)
-	// Publishing a release with other effects: an action of a screen drawn from release 1 is
-	// either refused as outdated or run as the live release says, never as the old one did.
+	// Publishing a release with other effects: an action of a screen drawn from release 1 is run
+	// as the live release says, never as the old one did.
 	d := withTitle(f.inspections(), "Urgent: {{site}}")
 	cur := f.mustPatchDraft(f.alice, f.shared, f.view(f.alice, f.shared, f.app), d)
 	f.publish(f.alice, f.shared, cur)
@@ -911,13 +911,11 @@ func TestAnOlderScreenRunsTheLiveReleasesEffects(t *testing.T) {
 	one := int64(1)
 	a.Release = &one
 	rec := f.alice.do(http.MethodPost, appPath(f.shared, f.app.ID, "/actions"), a)
-	if rec.Code == http.StatusOK {
-		t.Fatalf("an action of a release with other effects ran: %s", rec.Body.String())
-	}
-	expect(t, rec, http.StatusConflict)
+	expect(t, rec, http.StatusOK)
 	f.work()
-	if len(f.cards()) != 0 {
-		t.Fatal("a card was made")
+	cards := f.cards()
+	if len(cards) != 1 || !strings.HasPrefix(cards[0].Title, "Urgent: East gate") {
+		t.Fatalf("cards = %+v, want the live release's title", cards)
 	}
 }
 

@@ -205,6 +205,9 @@ type Service struct {
 type outboxHooks struct {
 	// afterWork is called once an entry's work is done and before it is noted as done.
 	afterWork func(effectRow) error
+	// beforeDocument is called once a document entry has passed its checks, right before it asks
+	// for the space's write lock to commit.
+	beforeDocument func(effectRow)
 }
 
 // New returns the apps service over sqlDB, which must be migrated.
@@ -926,9 +929,6 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 			return err
 		}
 		change = ch
-		if fromOlder && !liveTakes(live, def, action.Name, ch) {
-			return &outdatedError{release: *action.Release, live: a.Live.Number}
-		}
 		// What the action sets going besides the change is the live release's: an action of an
 		// older release was taken as the live one defines it (liveTakes).
 		effects := live.Actions[action.Name].Effects
@@ -948,8 +948,14 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 				return err
 			}
 			if replay {
-				return nil // made before: the change and its effects are in already
+				// Made before: the change and its effects are in already, and the answer is the
+				// first one's, whatever the live release has become since: it is asked of the
+				// live release's compatibility only for a request not yet made.
+				return nil
 			}
+		}
+		if fromOlder && !liveTakes(live, def, action.Name, ch) {
+			return &outdatedError{release: *action.Release, live: a.Live.Number}
 		}
 		ap, err := apply(ctx, tx, actor, appID, live, ch,
 			visibility{scope: acc.ModifyRecords, user: actor.UserID}, readable(acc, actor.UserID))
@@ -978,14 +984,19 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	if err != nil {
 		return nil, err
 	}
-	shown := shownBy(live, def)
+	return answer(appID, shownBy(live, def), rows, change), nil
+}
+
+// answer is the messages that update a screen once change has been made to rows: the rows and
+// summaries as they are now and, for an app with screens, what the action does to the screen the
+// person is on. The record a detail screen shows is shown again after an update and emptied after
+// a delete, and the screen the action says it goes on to (Then) is opened. The live app and the
+// draft's preview (preview.go) answer alike.
+func answer(appID int64, shown Definition, rows []Row, change Change) []Message {
 	msgs := Refreshed(SurfaceID(appID), shown, rows, change.Kind == ActionInsert)
 	if !shown.hasScreens() {
-		return msgs, nil
+		return msgs
 	}
-	// An app with screens: what the action does to the screen the person is on. The record a
-	// detail screen shows is shown again after an update and emptied after a delete, and the
-	// screen the action says it goes on to (Then) is opened.
 	switch change.Kind {
 	case ActionUpdate:
 		record := map[string]any{}
@@ -1001,7 +1012,7 @@ func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID i
 	if change.Then != "" {
 		msgs = append(msgs, dataMessage(SurfaceID(appID), "/"+ScreenKey, change.Then))
 	}
-	return msgs, nil
+	return msgs
 }
 
 // navigates reports whether the action is a navigate action of the release it comes from, which
