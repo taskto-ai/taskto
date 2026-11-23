@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Draws the app's PNG icons (public/icons/) from the same mark as icon.svg, with Chromium
+// Draws the app's PNG icons (public/icons/) from the same tile as icon.svg, with Chromium
 // through Playwright. Run it by hand when the mark changes: `node scripts/make-icons.mjs`;
-// the PNGs are committed, so a build needs no browser.
+// the PNGs are committed, so a build needs no browser. CHROMIUM_PATH names a Chromium to use
+// when Playwright's own isn't installed.
 //
 // - icon-192.png, icon-512.png: the rounded mark, for the manifest's "any" purpose;
 // - icon-maskable-512.png: full-bleed background with the mark inside the central 80%, the
@@ -16,16 +17,24 @@ import { chromium } from 'playwright'
 const out = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'icons')
 mkdirSync(out, { recursive: true })
 
-const BG = '#24477f'
-const CHECK = 'M136 268l86 86 160-188'
+// The taskto.ai website's app tile (its favicon): an emerald ground and the logo's mark, the arrow
+// and the dot both in ink, so the dot stays seen on the green. The mark is drawn on a 64-unit grid
+// and placed at 0.76 of the tile, as on the website.
+const BG = '#00a86b'
+const INK = '#0b0d12'
+const MARK = `<g transform="translate(61.6 61.6) scale(6.08)">
+      <path d="M8 32h22" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>
+      <path d="M24 22l10 10-10 10" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="51" cy="32" r="9" fill="${INK}"/>
+    </g>`
 
-// The mark's check spans 136..382 of 512; scale it about the centre for the full-bleed ones.
+// scale shrinks the mark about the centre for the full-bleed ones.
 function svg({ rounded, scale }) {
-  const rx = rounded ? 112 : 0
+  const rx = rounded ? 120 : 0
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <rect width="512" height="512" rx="${rx}" fill="${BG}"/>
   <g transform="translate(256 256) scale(${scale}) translate(-256 -256)">
-    <path d="${CHECK}" fill="none" stroke="#fff" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+    ${MARK}
   </g>
 </svg>`
 }
@@ -37,7 +46,7 @@ const icons = [
   { file: 'apple-touch-icon.png', size: 180, rounded: false, scale: 0.9 },
 ]
 
-const browser = await chromium.launch()
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined })
 try {
   for (const { file, size, rounded, scale } of icons) {
     const page = await browser.newPage({ viewport: { width: size, height: size } })

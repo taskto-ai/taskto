@@ -11,7 +11,8 @@ for it (HTTPS) and what people do is in [install.md](install.md#the-app-on-phone
   and `scope` all `/`), `display: standalone`, the theme and background colours, and icons:
   the mark in 192 and 512 pixels, a **maskable** 512 (a full-bleed background with the mark
   inside the central 80%, which launchers crop a shape from) and an SVG. `web/index.html`
-  links it, the iOS touch icon, and `theme-color`. The icons are drawn from one mark by
+  links it, the iOS touch icon, and `theme-color`. The colours and the icons' tile are the
+  website's brand ([design.md](design.md#installed-app)). The icons are drawn from one tile by
   `web/scripts/make-icons.mjs` (the PNGs are committed, so a build needs no browser). The
   manifest's names are the product's own, the same in every language.
 - **The service worker** (`web/pwa/sw.template.js`, built to `/sw.js`).
@@ -24,7 +25,8 @@ The build (`web/pwa/plugin.ts`, a Vite plugin that runs last) lists the static f
 build: the page, the manifest, the icons, and **every** script and stylesheet under `assets/`,
 the lazy-loaded ones too (the apps renderer, the language files). It writes the template to
 `dist/sw.js` with that list and a version, a hash of the files' content. The noVNC files of the
-agent browser's live view, source maps and the worker itself are left out.
+agent browser's live view, source maps and the worker itself are left out. The fonts' `.woff2`
+files (about 370 kB, [design.md](design.md#fonts)) are in the list, so the app is set in them offline.
 
 - **Install:** downloads every file of the list into one cache, `taskto-shell-<version>`,
   past the browser's HTTP cache. If any fails, the install fails and nothing is kept: a worker

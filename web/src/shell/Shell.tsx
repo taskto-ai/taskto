@@ -5,6 +5,7 @@
 
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react'
 import { api, errorText, type Me, type Workspace } from '../api'
+import { BrandLogo } from '../BrandLogo'
 import { BoardsPage } from '../boards/BoardsPage'
 import { ConversationsPage } from '../conversations/ConversationsPage'
 import { PinnedNav } from '../home/PinnedNav'
@@ -171,11 +172,15 @@ function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
         >
           <Icon name="menu" />
         </button>
-        <span className="tt-brand">{BRAND}</span>
+        <span className="tt-brand">
+          <BrandLogo name={BRAND} />
+        </span>
         <label className="tt-workspace">
           <span className="tt-sr-only">{t('shell.workspace')}</span>
+          {/* The name is cut to the room the bar has; the whole of it is the tooltip. */}
           <select
             value={workspace.id}
+            title={workspace.name}
             onChange={(e) => navigate(routePath({ workspace: Number(e.target.value), section: route.section }))}
           >
             {me.workspaces.map((w) => (

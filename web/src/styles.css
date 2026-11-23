@@ -1,79 +1,131 @@
-/* The app's look. Colours are tokens on :root, set again for dark: by the system's setting,
-   unless the viewer picked a theme (data-theme on <html>, theme.ts). Below 48rem the sidebar
-   is a drawer and the conversations page shows the list or the open conversation. */
+/* The app's look: the taskto.ai website's identity, "mint on paper". Warm cream paper, near-black
+   ink, and one electric mint that is always a fill (a button, a dot, a selected row) with ink on
+   top of it, never the colour of text on a light ground: mint is too light to read there. Where
+   the app needs a green to read or to press against a light ground (links, success), it is the
+   deeper green derived from the mint in docs/design.md. The website is light only; the dark
+   palette is this app's own, grown from the website's night (#111110) with the mint as it is.
+
+   Colours are tokens on :root, each written once as light-dark(light, dark). Which side applies
+   is the page's colour scheme: the system's (`light dark`), unless the viewer picked a theme
+   (data-theme on <html>, theme.ts). Contrast is checked, not guessed: every text pair is at least
+   4.5:1 and every control border and focus ring at least 3:1 (the numbers are in docs/design.md).
+   Below 48rem the sidebar is a drawer and the conversations page shows the list or the open
+   conversation. */
 
 :root {
-  color-scheme: light;
-  --tt-canvas: #f6f6f3;
-  --tt-surface: #ffffff;
-  --tt-hover: rgba(30, 30, 28, 0.06);
-  --tt-fg: #1e1e1c;
-  --tt-muted: rgba(30, 30, 28, 0.64);
-  --tt-line: rgba(30, 30, 28, 0.12);
-  --tt-line-strong: rgba(30, 30, 28, 0.24);
-  --tt-accent: #1e1e1c;
-  --tt-on-accent: #ffffff;
-  --tt-accent-soft: rgba(47, 111, 235, 0.12);
-  --tt-bar: #24477f;
-  --tt-on-bar: #ffffff;
-  --tt-on-bar-muted: rgba(255, 255, 255, 0.72);
-  --tt-user: #e8eefb;
-  --tt-danger: #b42318;
-  --tt-success: #197734;
-  --tt-warning: #9e4a00;
-  --tt-focus: #2f6feb;
-  --tt-scrim: rgba(20, 20, 18, 0.42);
+  color-scheme: light dark;
 
-  --tt-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --tt-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Grounds: the page (cream), the sidebar and quiet bands (stone), and what sits on them
+     (cards, inputs: white). The dark grounds step up from night. */
+  --tt-canvas: light-dark(#faf8f4, #111110);
+  --tt-stone: light-dark(#f1efe9, #181816);
+  --tt-surface: light-dark(#ffffff, #1b1b19);
+  --tt-hover: light-dark(rgba(17, 17, 16, 0.05), rgba(250, 248, 244, 0.07));
+  --tt-selected: light-dark(rgba(17, 17, 16, 0.08), rgba(250, 248, 244, 0.12));
+  --tt-user: light-dark(#f1efe9, #262624);
+
+  /* Text: ink, a softer ink, and the website's muted. */
+  --tt-fg: light-dark(#111110, #faf8f4);
+  --tt-fg-soft: light-dark(#2e2d2a, #d6d3cc);
+  --tt-muted: light-dark(#5c5a55, #aba89f);
+
+  /* Lines: a hairline (the website's ink at 15%) between things, the ink rule under the top bar,
+     and a stronger line for the edge of a control. */
+  --tt-line: light-dark(rgba(17, 17, 16, 0.15), rgba(250, 248, 244, 0.14));
+  --tt-rule: light-dark(#111110, rgba(250, 248, 244, 0.24));
+  --tt-line-strong: light-dark(#7e7b74, #8a877f);
+
+  /* The primary action is mint with ink on it, outlined in ink (a darker mint in the dark, where
+     ink would vanish). Mint is never the colour of text or of a thin line on light grounds. */
+  --tt-accent: #4cefa8;
+  --tt-accent-hover: #6bf5b8;
+  --tt-on-accent: #111110;
+  --tt-accent-edge: light-dark(#111110, #1fc98a);
+  --tt-accent-soft: light-dark(#dcfceb, rgba(76, 239, 168, 0.14));
+  /* The focus ring, and any thin line or text that must stand out as "current": ink on light,
+     mint on night (the website's own rule). */
+  --tt-focus: light-dark(#111110, #4cefa8);
+  /* Links and other green text: deep enough for 4.5:1 on every light ground; the mint itself in
+     the dark. */
+  --tt-link: light-dark(#006b45, #4cefa8);
+
+  /* The AI node: the mint dot, with the website's mint edge as its ring. The logo keeps its own
+     green (#00a86b), used in the mark only. */
+  --tt-node: #4cefa8;
+  --tt-node-edge: #1fc98a;
+  --tt-logo-dot: #00a86b;
+
+  /* The top bar is the page's cream (the website's nav), under an ink rule. */
+  --tt-bar: var(--tt-canvas);
+  --tt-on-bar: var(--tt-fg);
+  --tt-on-bar-muted: var(--tt-muted);
+
+  /* Status. Success is the link green, so the system keeps one green. */
+  --tt-danger: light-dark(#b42318, #ff8a82);
+  --tt-on-danger: light-dark(#ffffff, #111110);
+  --tt-success: var(--tt-link);
+  --tt-warning: light-dark(#9a4700, #ffb04d);
+
+  --tt-scrim: light-dark(rgba(17, 17, 16, 0.42), rgba(0, 0, 0, 0.6));
+  /* Only what you are meant to press, and what floats, has a shadow: the buttons' short hard lift
+     (the website's), and the soft one under a menu or a dialog. light-dark() takes colours only,
+     so the lengths stay outside it. */
+  --tt-shadow-lift: 0 2px 0 var(--tt-accent-edge);
+  --tt-shadow-lift-hover: 0 3px 0 var(--tt-accent-edge);
+  --tt-shadow-pop: 0 12px 32px -12px light-dark(rgba(17, 17, 16, 0.35), rgba(0, 0, 0, 0.8));
+
+  /* Fonts (SIL OFL 1.1), served from the app itself (main.tsx): nothing is fetched from another
+     site. The website's three: Inter for the interface and what people read, Bricolage Grotesque
+     for headings and the brand, JetBrains Mono for paths, commands, ids and code. The system's
+     fonts stand in until they load, and for any script these don't cover. */
+  --tt-font: "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --tt-display:
+    "Bricolage Grotesque Variable", "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --tt-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --tt-radius: 8px;
   --tt-topbar-h: 52px;
   --tt-sidebar-w: 232px;
   --tt-touch: 44px;
+
+  /* The apps renderer (A2UI) reads its own variables; these hand it the brand, so an app's
+     buttons, fields and choices look like the rest of the page, in both schemes. */
+  --a2ui-color-primary: var(--tt-accent);
+  --a2ui-color-primary-hover: var(--tt-accent-hover);
+  --a2ui-color-on-primary: var(--tt-on-accent);
+  --a2ui-color-secondary-hover: var(--tt-hover);
+  --a2ui-color-on-secondary: var(--tt-fg);
+  --a2ui-color-border: var(--tt-line-strong);
+  --a2ui-color-surface: var(--tt-surface);
+  --a2ui-color-input: var(--tt-surface);
+  --a2ui-color-on-input: var(--tt-fg);
+  --a2ui-color-on-surface: var(--tt-fg);
+  --a2ui-color-on-background: var(--tt-fg);
+  --a2ui-text-caption-color: var(--tt-muted);
+  --a2ui-textfield-color-error: var(--tt-danger);
+  --a2ui-choicepicker-color-error: var(--tt-danger);
+  --a2ui-datetimeinput-color-error: var(--tt-danger);
+  /* Its buttons and choices are pills, as the app's are; its titles are the display face. */
+  --a2ui-button-border-radius: 999px;
+  --a2ui-button-padding: 0.4rem 1rem;
+  --a2ui-button-font-weight: 600;
+  --a2ui-choicepicker-chip-font-size: 0.875rem;
+  --a2ui-choicepicker-chip-padding: 0.3rem 0.85rem;
+  --a2ui-choicepicker-chip-background-selected: var(--tt-accent);
+  --a2ui-font-family-title: var(--tt-display);
+  --a2ui-text-a-color: var(--tt-link);
+  /* Whatever the renderer colours with its primary must still be seen when that is the mint:
+     a focused field, the picked tab, a slider's thumb take the focus colour (ink; mint on night). */
+  --a2ui-textfield-color-border-focus: var(--tt-focus);
+  --a2ui-tabs-header-color-active: var(--tt-fg);
+  --a2ui-slider-thumb-color: var(--tt-focus);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --tt-canvas: #161615;
-    --tt-surface: #1f1f1d;
-    --tt-hover: rgba(237, 237, 234, 0.07);
-    --tt-fg: #ededea;
-    --tt-muted: rgba(237, 237, 234, 0.64);
-    --tt-line: rgba(237, 237, 234, 0.12);
-    --tt-line-strong: rgba(237, 237, 234, 0.24);
-    --tt-accent: #ededea;
-    --tt-on-accent: #161615;
-    --tt-accent-soft: rgba(92, 148, 255, 0.18);
-    --tt-bar: #1b2c4a;
-    --tt-user: #24324a;
-    --tt-danger: #ff6e66;
-    --tt-success: #30d158;
-    --tt-warning: #ff9f0a;
-    --tt-focus: #79a6ff;
-    --tt-scrim: rgba(0, 0, 0, 0.6);
-  }
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --tt-canvas: #161615;
-  --tt-surface: #1f1f1d;
-  --tt-hover: rgba(237, 237, 234, 0.07);
-  --tt-fg: #ededea;
-  --tt-muted: rgba(237, 237, 234, 0.64);
-  --tt-line: rgba(237, 237, 234, 0.12);
-  --tt-line-strong: rgba(237, 237, 234, 0.24);
-  --tt-accent: #ededea;
-  --tt-on-accent: #161615;
-  --tt-accent-soft: rgba(92, 148, 255, 0.18);
-  --tt-bar: #1b2c4a;
-  --tt-user: #24324a;
-  --tt-danger: #ff6e66;
-  --tt-success: #30d158;
-  --tt-warning: #ff9f0a;
-  --tt-focus: #79a6ff;
-  --tt-scrim: rgba(0, 0, 0, 0.6);
 }
 
 *,
@@ -93,6 +145,23 @@ body {
   background: var(--tt-canvas);
   color: var(--tt-fg);
   font: 15px / 1.5 var(--tt-font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Headings are Bricolage Grotesque, heavy and tight as on the website, and break evenly. Text,
+   labels and controls stay in Inter. */
+h1,
+h2,
+h3 {
+  font-family: var(--tt-display);
+  font-weight: 750;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
 }
 
 h1,
@@ -112,17 +181,43 @@ h3 {
 }
 
 code,
-pre {
+pre,
+kbd,
+samp {
   font-family: var(--tt-mono);
   font-size: 0.9em;
 }
 
 a {
   color: inherit;
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1.5px;
+}
+
+/* The parts of the browser nobody draws, drawn from the palette: a selection is mint with ink on
+   it, as on the website. */
+::selection {
+  background: var(--tt-accent);
+  color: var(--tt-on-accent);
+}
+
+input,
+textarea {
+  caret-color: var(--tt-fg);
+}
+
+/* A placeholder is text: the browser's own is a faded grey under 4.5:1 on a dark field. */
+::placeholder {
+  color: var(--tt-muted);
+  opacity: 1;
+}
+
+* {
+  scrollbar-color: var(--tt-line-strong) transparent;
 }
 
 :focus-visible {
-  outline: 2px solid var(--tt-focus);
+  outline: 2.5px solid var(--tt-focus);
   outline-offset: 2px;
 }
 
@@ -189,10 +284,27 @@ textarea {
 }
 
 .tt-brand {
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
   margin: 0;
 }
+
+/* The website's logo (BrandLogo.tsx): the arrow and the name in the page's ink, the dot and
+   ".ai" in the logo's own green. Its height is set; the width follows the drawing (238 by 64). */
+.tt-logo {
+  display: block;
+  height: 1.5rem;
+  width: auto;
+  aspect-ratio: 238 / 64;
+  flex: none;
+}
+
+.tt-logo .tt-logo-dot {
+  fill: var(--tt-logo-dot);
+}
+
+/* A bar with no room for the name shows the mark: a square box crops the drawing
+   (xMinYMid slice) to the arrow and dot at its start (the phone's top bar, below). */
 
 /* Buttons. */
 
@@ -202,15 +314,16 @@ textarea {
   justify-content: center;
   gap: 0.35rem;
   min-height: 2.4rem;
-  padding: 0.4rem 0.9rem;
+  padding: 0.4rem 1rem;
   border: 1px solid var(--tt-line-strong);
-  border-radius: var(--tt-radius);
+  /* Pills, as on the website. */
+  border-radius: 999px;
   background: var(--tt-surface);
   cursor: pointer;
 }
 
 .tt-button:hover:not(:disabled) {
-  background: var(--tt-hover);
+  background: var(--tt-stone);
 }
 
 .tt-button:disabled {
@@ -218,15 +331,45 @@ textarea {
   cursor: default;
 }
 
+.tt-button {
+  font-weight: 500;
+}
+
+/* The one thing you press: mint, outlined in ink, on a short hard lift that rises on hover and
+   presses in, as on the website. */
 .tt-primary {
   background: var(--tt-accent);
   color: var(--tt-on-accent);
-  border-color: var(--tt-accent);
+  border: 1.5px solid var(--tt-accent-edge);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  box-shadow: var(--tt-shadow-lift);
+  transition:
+    transform 0.14s ease,
+    box-shadow 0.14s ease,
+    background-color 0.14s ease;
 }
 
 .tt-primary:hover:not(:disabled) {
-  background: var(--tt-accent);
-  opacity: 0.88;
+  background: var(--tt-accent-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--tt-shadow-lift-hover);
+}
+
+.tt-primary:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tt-primary {
+    transition: none;
+  }
+
+  .tt-primary:hover:not(:disabled),
+  .tt-primary:active:not(:disabled) {
+    transform: none;
+  }
 }
 
 .tt-icon-button {
@@ -267,7 +410,7 @@ textarea {
   padding-inline: 0.25rem;
   border-radius: 999px;
   background: var(--tt-danger);
-  color: #fff;
+  color: var(--tt-on-danger);
   font-size: 0.7rem;
   line-height: 1.1rem;
   text-align: center;
@@ -329,18 +472,8 @@ textarea {
   gap: 0.75rem;
 }
 
-.tt-auth-card .tt-brand {
-  color: var(--tt-bar);
-}
-
-:root[data-theme="dark"] .tt-auth-card .tt-brand {
-  color: var(--tt-focus);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .tt-auth-card .tt-brand {
-    color: var(--tt-focus);
-  }
+.tt-auth-card .tt-logo {
+  height: 2rem;
 }
 
 .tt-auth-card p {
@@ -392,6 +525,8 @@ textarea {
   padding-right: max(0.5rem, env(safe-area-inset-right));
   background: var(--tt-bar);
   color: var(--tt-on-bar);
+  /* The website's nav is cream under a 1px ink rule. */
+  border-block-end: 1px solid var(--tt-rule);
   min-width: 0;
 }
 
@@ -403,9 +538,30 @@ textarea {
 .tt-topbar select {
   background: transparent;
   color: inherit;
-  border-color: rgba(255, 255, 255, 0.3);
+  border-color: var(--tt-line-strong);
   min-height: 2.2rem;
   max-width: 12rem;
+  text-overflow: ellipsis;
+}
+
+/* The bar never overflows: what is fixed (the menu, the mark, the bell, the theme, the account)
+   keeps its size, and the workspace's name gives way, cut with an ellipsis. */
+.tt-topbar .tt-brand,
+.tt-topbar-end,
+.tt-menu-button {
+  flex: none;
+}
+
+.tt-topbar .tt-workspace {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 12rem;
+}
+
+.tt-workspace select {
+  width: 100%;
+  max-width: 100%;
 }
 
 .tt-topbar option {
@@ -439,7 +595,7 @@ textarea {
 }
 
 .tt-topbar .tt-icon-button:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--tt-hover);
 }
 
 .tt-account {
@@ -462,7 +618,7 @@ textarea {
   width: 2.1rem;
   height: 2.1rem;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.18);
+  background: var(--tt-selected);
   font-weight: 600;
 }
 
@@ -477,7 +633,7 @@ textarea {
   color: var(--tt-fg);
   border: 1px solid var(--tt-line);
   border-radius: var(--tt-radius);
-  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--tt-shadow-pop);
   display: grid;
   gap: 0.6rem;
 }
@@ -502,7 +658,7 @@ textarea {
   flex-direction: column;
   gap: 2px;
   padding: 0.5rem;
-  background: var(--tt-surface);
+  background: var(--tt-stone);
   border-inline-end: 1px solid var(--tt-line);
   overflow-y: auto;
 }
@@ -712,8 +868,17 @@ textarea {
   color: var(--tt-muted);
 }
 
+/* What the agent did is marked with the AI node: the website's mint dot with its mint edge. The
+   words beside it carry the meaning; the dot is the signature. */
 .tt-tool::before {
-  content: "⚙ ";
+  content: "";
+  display: inline-block;
+  inline-size: 0.6em;
+  block-size: 0.6em;
+  margin-inline-end: 0.5em;
+  border-radius: 50%;
+  background: var(--tt-node);
+  box-shadow: inset 0 0 0 0.12em var(--tt-node-edge);
 }
 
 .tt-tool-use {
@@ -1181,7 +1346,7 @@ button.tt-card[aria-current] {
 }
 
 .tt-markdown a {
-  color: var(--tt-focus);
+  color: var(--tt-link);
 }
 
 /* A personal app's screen. */
@@ -1216,6 +1381,45 @@ button.tt-card[aria-current] {
 .tt-app button {
   min-block-size: var(--tt-touch);
   min-inline-size: var(--tt-touch);
+}
+
+/* The renderer's primary button and a picked choice are mint with ink on them, outlined in ink, as
+   the app's own primary buttons are; its stylesheet gives them no outline, so it is drawn here. */
+.tt-app .a2ui-button.a2ui-button-primary {
+  border: 1.5px solid var(--tt-accent-edge);
+  box-shadow: var(--tt-shadow-lift);
+  font-weight: 650;
+}
+
+/* The renderer colours a borderless button's text with its primary, which is the mint: too faint to
+   read on the page, so the deeper green stands in. A button's label is a Text component, which
+   takes its colour from --_a2ui-text-color (and, as a caption, from its own muted colour), not
+   from the button's: so the token is set there too, and a label of any variant (a caption is the
+   one that was grey on mint) takes the ink of the button it is in. */
+.tt-app .a2ui-button.a2ui-button-borderless {
+  --_a2ui-text-color: var(--tt-link);
+  color: var(--tt-link);
+}
+
+.tt-app .a2ui-button .a2ui-text,
+.tt-app .a2ui-button .a2ui-text.a2ui-text-caption {
+  color: inherit;
+}
+
+/* The renderer takes a field's outline away and shows focus as a change of border colour, which an
+   invalid field (its border is the error's) doesn't have: every field gets the app's focus ring. */
+.tt-app .a2ui-textfield:focus-visible {
+  outline: 2.5px solid var(--tt-focus);
+  outline-offset: 2px;
+}
+
+.tt-app .a2ui-tab-button.a2ui-tab-button-active {
+  border-bottom-color: var(--tt-focus);
+}
+
+.tt-app .a2ui-chip.a2ui-chip-selected {
+  border-color: var(--tt-accent-edge);
+  font-weight: 600;
 }
 
 .tt-app .a2ui-chips-group,
@@ -1452,7 +1656,7 @@ a.tt-button.tt-primary {
 }
 
 .tt-sort:focus-visible {
-  outline: 2px solid var(--tt-accent, currentColor);
+  outline: 2px solid var(--tt-focus);
   outline-offset: 2px;
 }
 
@@ -1484,7 +1688,7 @@ a.tt-button.tt-primary {
 }
 
 .tt-record-open:focus-visible {
-  outline: 2px solid var(--tt-accent, currentColor);
+  outline: 2px solid var(--tt-focus);
   outline-offset: 2px;
 }
 
@@ -1542,7 +1746,7 @@ a.tt-button.tt-primary {
   display: grid;
   gap: 0.5rem;
   padding: 0.6rem;
-  border: 2px solid var(--tt-accent, currentColor);
+  border: 2px solid var(--tt-focus);
   border-radius: var(--tt-radius);
 }
 
@@ -2041,7 +2245,7 @@ fieldset {
 }
 
 .tt-builder-tabs [role="tab"][aria-selected="true"] {
-  border-color: var(--tt-accent);
+  border-color: var(--tt-focus);
   font-weight: 600;
 }
 
@@ -2052,6 +2256,7 @@ fieldset {
   margin-inline-start: 0.4rem;
   border-radius: 50%;
   background: var(--tt-accent);
+  box-shadow: inset 0 0 0 1.5px var(--tt-accent-edge);
 }
 
 .tt-builder-panes {
@@ -2071,7 +2276,7 @@ fieldset {
 }
 
 .tt-builder-pane:focus-visible {
-  outline: 2px solid var(--tt-accent);
+  outline: 2px solid var(--tt-focus);
   outline-offset: -2px;
 }
 
@@ -2216,14 +2421,19 @@ fieldset {
     padding-inline-start: 0.25rem;
   }
 
-  .tt-topbar > .tt-brand,
   .tt-topbar-section,
   .tt-theme .tt-icon {
     display: none;
   }
 
-  .tt-topbar select {
-    max-width: 8.5rem;
+  .tt-topbar .tt-workspace {
+    max-width: 10rem;
+  }
+
+  /* The mark alone, from here down (a square box crops the drawing to the arrow and dot). */
+  .tt-topbar .tt-logo {
+    width: 1.5rem;
+    aspect-ratio: 1;
   }
 
   .tt-sidebar {
@@ -2427,7 +2637,7 @@ fieldset {
 }
 
 .tt-live[data-interactive] .tt-live-screen {
-  outline: 2px solid var(--tt-accent, currentColor);
+  outline: 2px solid var(--tt-focus);
 }
 
 @media (max-width: 640px) {
@@ -2503,7 +2713,7 @@ body {
   background: var(--tt-surface);
   border: 1px solid var(--tt-line-strong);
   border-radius: 12px;
-  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--tt-shadow-pop);
 }
 
 .tt-update p {
@@ -2596,7 +2806,7 @@ html[data-keyboard="open"] .tt-composer {
 
 .tt-photo a:focus-visible,
 .tt-photo-add label:focus-within {
-  outline: 2px solid var(--tt-accent);
+  outline: 2px solid var(--tt-focus);
   outline-offset: 2px;
 }
 
@@ -2750,6 +2960,46 @@ html[data-keyboard="open"] .tt-composer {
 
 .tt-dictate-slot:empty {
   display: none;
+}
+
+/* A narrow phone has no room for the theme's word: the picker is its icon (the select lies over it,
+   unseen but pressable, and the ring shows on the icon's box), and the workspace's name gets what
+   is left. */
+@media (max-width: 30rem) {
+  .tt-topbar {
+    gap: 0.25rem;
+  }
+
+  .tt-topbar-end {
+    gap: 0.25rem;
+  }
+
+  .tt-topbar .tt-theme {
+    position: relative;
+    justify-content: center;
+    min-inline-size: var(--tt-touch);
+    min-block-size: var(--tt-touch);
+    border-radius: var(--tt-radius);
+  }
+
+  .tt-topbar .tt-theme .tt-icon {
+    display: block;
+  }
+
+  .tt-topbar .tt-theme select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    min-height: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .tt-topbar .tt-theme:has(select:focus-visible) {
+    outline: 2.5px solid var(--tt-focus);
+    outline-offset: 2px;
+  }
 }
 
 /* After the rules they override (the top bar's own controls are smaller). */
@@ -3155,6 +3405,8 @@ html[data-keyboard="open"] .tt-composer {
   block-size: 0.5rem;
   border-radius: 50%;
   background: var(--tt-accent);
+  /* Mint is faint on cream, so the dot is ringed in ink (a darker mint in the dark). */
+  box-shadow: inset 0 0 0 1.5px var(--tt-accent-edge);
   position: absolute;
   inset-inline-start: -0.9rem;
   inset-block-start: 1rem;
