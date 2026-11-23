@@ -124,25 +124,40 @@ export async function enablePush(userId: number): Promise<void> {
   write(String(userId))
 }
 
-/** Turns push off for this device: the server forgets it, and so does the browser. */
+/** Thrown by disablePush when the browser wouldn't end its subscription. */
+export class PushUnsubscribeFailed extends Error {}
+
+/**
+ * Turns push off for this device: the server forgets it, then the browser does. It says what
+ * went wrong and leaves this device as it was, so that what Settings shows stays true and the
+ * person can try again: nothing is remembered as off until both are done (the server's answer
+ * to a delete of a device it doesn't know is the same as to one it does).
+ */
 export async function disablePush(): Promise<void> {
   const sub = await (await registration())?.pushManager.getSubscription()
+  if (sub) {
+    await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint } })
+    if (!(await sub.unsubscribe().catch(() => false))) throw new PushUnsubscribeFailed()
+  }
   write(null)
-  if (!sub) return
-  // Even if the server can't be told now, the browser's subscription ends, and the push service
-  // answers the server's next push with "gone", which removes it there.
-  await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint } }).catch(() => {})
-  await sub.unsubscribe().catch(() => {})
 }
 
 /**
  * Called when the person signs out, or the session ended: this device stops receiving what is
- * theirs. Best effort; the server removes a session's subscription itself.
+ * theirs, whatever it takes. Best effort and bounded: the server removes a session's subscription
+ * itself, and a push service that is told the subscription is over answers "gone" to the next one.
  */
 export async function leavePush(): Promise<void> {
   if (!pushSupported()) return
+  write(null)
+  const leave = async () => {
+    const sub = await (await registration())?.pushManager.getSubscription()
+    if (!sub) return
+    await api(SUBSCRIPTION_PATH, { method: 'DELETE', body: { endpoint: sub.endpoint } }).catch(() => {})
+    await sub.unsubscribe().catch(() => {})
+  }
   // Bounded: signing out never waits long on a browser that is slow to answer.
-  await Promise.race([disablePush().catch(() => {}), new Promise((done) => setTimeout(done, 3000))])
+  await Promise.race([leave().catch(() => {}), new Promise((done) => setTimeout(done, 3000))])
 }
 
 /**
@@ -150,9 +165,11 @@ export async function leavePush(): Promise<void> {
  * (a new login is a new session, and a browser can change its endpoint). A device that was
  * turned on by another person, that lost its permission or its subscription, is left alone and
  * forgotten here, never registered for this person. Says whether this device is registered.
+ * Nothing is registered for a person who is in no workspace: push is for people in one, and the
+ * server refuses it.
  */
-export async function syncPush(userId: number): Promise<boolean> {
-  if (read() !== String(userId) || !pushSupported()) return false
+export async function syncPush(userId: number, inWorkspace = true): Promise<boolean> {
+  if (!inWorkspace || read() !== String(userId) || !pushSupported()) return false
   const reg = await registration()
   const sub = await reg?.pushManager.getSubscription()
   if (!sub || Notification.permission !== 'granted') {

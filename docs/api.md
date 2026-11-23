@@ -243,7 +243,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `notification_not_found` | 404 | The notification isn't the caller's, or is gone. |
 | `push_endpoint_invalid` | 400 | A push subscription's `endpoint` isn't an `https` address of at most 2048 characters without credentials or a fragment. |
 | `push_keys_invalid` | 400 | A push subscription's `keys` aren't a P-256 public key (`p256dh`) and a 16-byte `auth` secret, base64url. |
-| `push_too_many_subscriptions` | 409 | The caller already has push turned on for `max` devices. |
+| `push_too_many_subscriptions` | 409 | The caller already has push turned on for `max` devices (a device that changes hands counts for its new person). |
+| `push_no_workspace` | 403 | The caller is in no workspace: push is for people who are in one. |
 
 ### Sessions
 
@@ -1400,11 +1401,16 @@ Registers the calling browser: `{"endpoint": "https://…", "keys": {"p256dh": "
 what a browser's `PushSubscription` says (no other fields). `204`. The endpoint, the device's
 identity, is an `https` address of at most 2048 characters (`400 push_endpoint_invalid`), the keys
 a P-256 point and a 16-byte secret (`400 push_keys_invalid`), at most 20 devices per person
-(`409 push_too_many_subscriptions`; registering a device again is not another). It is bound to the
-session that made it: signing out, a session that expires or ends elsewhere, signing out everywhere
-and a password change remove it. A browser that is signed in as someone else takes the endpoint over,
-and what was queued for the first person is dropped. Only notifications made after this are pushed
-to the device.
+(`409 push_too_many_subscriptions`; registering a device again is not another, but a browser that
+takes over another person's endpoint is one more of its new person's). The endpoint must be an
+address the server may connect to under its [egress policy](install.md#web-push-notifications): a
+loopback, private, link-local or metadata address is `400 egress_refused` here, as it is when a
+push is sent. A person who is in no workspace can't register one (`403 push_no_workspace`). It is
+bound to the session that made it: signing out, a session that expires or ends elsewhere, signing
+out everywhere and a password change remove it, and no push is sent to a subscription whose session
+has expired, even before it is removed (the server sweeps them hourly and checks at each push). A
+browser that is signed in as someone else takes the endpoint over, and what was queued for the
+first person is dropped. Only notifications made after this are pushed to the device.
 
 ### `DELETE /api/me/push/subscription`
 
@@ -1413,7 +1419,7 @@ that isn't there or isn't theirs.
 
 Subscriptions also end when the push service answers a push with `404` or `410`, and when the person
 leaves the last workspace they were in. A push that fails with `429` or a server error is tried again
-(at most five tries, over less than an hour); one refused with another status (`400`, `401`, `403`,
+(at most five tries in all, which holds across a restart, over less than an hour); one refused with another status (`400`, `401`, `403`,
 `413`), or to an address the [egress policy](install.md#web-push-notifications) refuses, is dropped.
 
 ## Personal apps

@@ -729,7 +729,8 @@
     "notification_not_found": "That notification isn't available.",
     "push_endpoint_invalid": "This browser's push address isn't valid.",
     "push_keys_invalid": "This browser's push keys aren't valid.",
-    "push_too_many_subscriptions": "You already have push turned on for {max} devices. Turn it off on one of them first."
+    "push_too_many_subscriptions": "You already have push turned on for {max} devices. Turn it off on one of them first.",
+    "push_no_workspace": "Push notifications are for people who are in a workspace."
   },
   "language": {
     "label": "Language",
@@ -1560,6 +1561,7 @@
       "on": "Push is on for this device.",
       "turnOn": "Turn on push on this device",
       "turnOff": "Turn off push on this device",
+      "turnOffFailed": "This device's browser wouldn't end its push subscription, so push is still on. Try again.",
       "caveat": "A push says only that something is new, never what it is, and opens the app, which checks what you may see. It can arrive late, or not at all: the inbox is the record. Signing out turns push off on that device."
     }
   }

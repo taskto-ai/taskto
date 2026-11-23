@@ -123,7 +123,10 @@ access to the space, the card or the app is told only that "something changed", 
 the push, with no names, no IDs and a link to the workspace's home.
 
 **The click.** A click on a push opens `/notification/{id}` (the open app's window is focused and
-sent there, without a reload, by a message the app checks; else a new window). The app reads that
+sent there, without a reload, by a message the app checks; else a new window). A window that shows
+the login is sent there too, and the address stays through signing in, so the click isn't lost (the
+screens that hold a one-time token in their address, an invite, a password reset and the first
+setup, ignore the message). The app reads that
 notification as the signed-in person, marks it read and goes where it leads, an ordinary route
 (`/w/1/boards/3:4:9`) whose page checks access again. Someone else's notification, or one that is
 gone, is "not available". Signed out, the address is kept through the login. The server answers
@@ -131,15 +134,20 @@ gone, is "not available". Signed out, the address is kept through the login. The
 
 **When subscriptions end.**
 
-- The person turns push off on that device (the server forgets it, the browser unsubscribes).
+- The person turns push off on that device (the server forgets it, the browser unsubscribes). If
+  either fails, push stays on, as it was, Settings says why and the button tries again: it never
+  says "off" while this browser is still subscribed.
 - They **sign out** of that browser: the web app removes the device first, and the server removes a
   subscription with the session it is bound to, so expiry, being signed out elsewhere and a
   password change end it as well. The next sign-in turns push on again only for the same person,
   and only if they had turned it on; a browser never hands its subscription to whoever signs in
   next (the app keeps a small flag of whose it is, and registers it again at start only for them).
+  A session that expires ends its subscription even if nobody signs in: no push is sent to one
+  after its session's expiry, and the server removes them every hour.
 - The push service answers a push with `404` or `410`.
 - They leave their last workspace. Leaving one of several ends that workspace's notifications
-  (and the pushes queued for them) and no more.
+  (and the pushes queued for them) and no more. A person in no workspace can't register a device,
+  and the app doesn't try when it opens.
 
 The server side is `internal/notifications` ([api.md](api.md#notifications)); what a self-hosted
 server must reach is in [install.md](install.md#web-push-notifications).

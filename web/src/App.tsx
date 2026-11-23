@@ -9,6 +9,7 @@ import { ApiError, api, errorText, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
 import { setPreferences, useT } from './i18n'
 import { leavePush } from './notifications/push'
+import { useOpenFromWorker } from './notifications/usePushSync'
 import { navigate } from './router'
 import { Shell } from './shell/Shell'
 import { claimDrafts, forgetDrafts } from './uiState'
@@ -61,6 +62,9 @@ export function App() {
   }, [load])
 
   const signedIn = session.state === 'in'
+  // A click on a push in a window that is open already: heard here, not in the shell, so it isn't
+  // lost while the login is showing.
+  useOpenFromWorker(session.state === 'in' || session.state === 'login' || session.state === 'loading')
   useEffect(() => {
     if (!signedIn) return
     // The session ended elsewhere (or expired): this device stops receiving the person's pushes.

@@ -270,7 +270,14 @@ and only then does that device get a prompt when something new arrives while Tas
 Nothing about it is required: with push off, unavailable or blocked, every workflow works, and a
 push is never the way anything is synced. The server makes its VAPID key pair by itself the first
 time it starts (the private key is sealed in the database with `server.key`, so a backup needs both,
-as for the other sealed secrets); there is nothing to configure.
+as for the other sealed secrets); nothing needs configuring, except, if you like, who the push
+services may contact:
+
+- **Contact.** Every push carries a contact (the VAPID subject, RFC 8292) that a push service may
+  use to reach whoever runs the server. It is `https://taskto.ai` unless you set `-push-contact`,
+  `TASKTO_PUSH_CONTACT` or `push_contact` in the config file (in that order of precedence) to a
+  `mailto:` address or an `https:` URL of your own, such as `mailto:ops@example.org`. Anything else
+  is refused at start.
 
 What the server needs to send a push:
 
@@ -281,7 +288,8 @@ What the server needs to send a push:
   only**, and that isn't configurable: an endpoint is an address a person's browser reported, so
   loopback, private, link-local, CGNAT and metadata addresses are refused on every connection
   (checked after DNS resolution, as for [provider accounts](#where-provider-accounts-may-connect)),
-  and redirects aren't followed. It doesn't use the `HTTP_PROXY` and `HTTPS_PROXY` variables: a
+  and redirects aren't followed. A subscription's address is checked against the same policy when a
+  browser registers it (the person is told it isn't allowed), as well as on every push. It doesn't use the `HTTP_PROXY` and `HTTPS_PROXY` variables: a
   network that only lets servers out through a proxy needs a transparent one, or an allowance
   for the push services' addresses.
 - **DNS** for those names, as for any outbound call.
@@ -296,7 +304,9 @@ minutes, then dropped, and the log says `a push service didn't answer` with the 
 `401`, `403`, `413`), or to an address the egress policy refuses, is dropped at once, and the log
 says so. A service that answers `404` or `410` for a subscription has ended it: the server removes
 it. A subscription is also removed when its person signs out of that browser, when its session
-ends, and when they leave their last workspace.
+ends (expired sessions are swept every hour, and no push is sent to one in the meantime), and when
+they leave their last workspace. Finished pushes and old notifications are purged on a schedule of
+their own, which a long queue of pushes doesn't hold up.
 
 On an iPhone or iPad, push works only for TaskTo.AI **installed on the Home Screen** (iOS 16.4 or
 later), as in the install steps above: the settings page says so, and in a Safari tab the inbox

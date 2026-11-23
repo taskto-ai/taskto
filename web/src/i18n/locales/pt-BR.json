@@ -733,7 +733,8 @@
     "notification_not_found": "Essa notificação não está disponível.",
     "push_endpoint_invalid": "O endereço de push deste navegador não é válido.",
     "push_keys_invalid": "As chaves de push deste navegador não são válidas.",
-    "push_too_many_subscriptions": "Você já ativou o push em {max} dispositivos. Desative em um deles primeiro."
+    "push_too_many_subscriptions": "Você já ativou o push em {max} dispositivos. Desative em um deles primeiro.",
+    "push_no_workspace": "O push é para quem participa de um espaço de trabalho."
   },
   "language": {
     "label": "Idioma",
@@ -1573,6 +1574,7 @@
       "on": "O push está ativado neste dispositivo.",
       "turnOn": "Ativar o push neste dispositivo",
       "turnOff": "Desativar o push neste dispositivo",
+      "turnOffFailed": "O navegador deste dispositivo não encerrou a inscrição de push, então o push continua ativado. Tente de novo.",
       "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo."
     }
   }

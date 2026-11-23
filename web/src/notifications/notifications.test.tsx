@@ -418,12 +418,14 @@ test('the open app follows the service worker to the notification a click named,
   void browser
   window.history.replaceState(null, '', '/w/1/home')
   fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: me },
     'GET /api/workspaces/1/notifications/count': { body: { unread: 0 } },
     'GET /api/workspaces/1/home': { body: { items: [] } },
     'GET /api/me/notifications/8': { body: item(8) },
     'POST /api/workspaces/1/notifications/8/read': { status: 204 },
   })
-  render(<Shell me={me} onLogout={() => {}} />)
+  render(<App />)
   await screen.findByRole('link', { name: 'Notifications' })
   const container = navigator.serviceWorker as unknown as { addEventListener: ReturnType<typeof vi.fn> }
   const handlers = container.addEventListener.mock.calls
@@ -440,4 +442,116 @@ test('the open app follows the service worker to the notification a click named,
   expect(window.location.pathname).toBe('/w/1/home')
   send({ type: 'OPEN', path: '/notification/8' })
   await waitFor(() => expect(window.location.pathname).toBe('/w/1/boards/3%3A4%3A8'))
+})
+
+test('a click on a push while the login is showing is kept: signing in opens the notification', async () => {
+  pushBrowser()
+  window.history.replaceState(null, '', '/w/1/home')
+  let session = false
+  const calls = fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': () => (session ? { body: me } : { status: 401, body: { error: 'log in', code: 'not_logged_in' } }),
+    'POST /api/login': () => {
+      session = true
+      return { body: me }
+    },
+    'GET /api/workspaces/1/notifications/count': { body: { unread: 0 } },
+    'GET /api/workspaces/1/spaces': { body: { spaces: [] } },
+    'GET /api/me/notifications/8': { body: item(8) },
+    'POST /api/workspaces/1/notifications/8/read': { status: 204 },
+  })
+  render(<App />)
+  await screen.findByRole('heading', { name: 'Log in' })
+  const container = navigator.serviceWorker as unknown as { addEventListener: ReturnType<typeof vi.fn> }
+  const handlers = container.addEventListener.mock.calls
+    .filter((c) => c[0] === 'message')
+    .map((c) => c[1] as (e: MessageEvent) => void)
+  act(() => {
+    for (const h of handlers) h({ data: { type: 'OPEN', path: '/notification/8' } } as MessageEvent)
+  })
+  expect(window.location.pathname).toBe('/notification/8')
+  // Still the login: nothing was read as nobody.
+  expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
+  expect(calls.some((c) => c.path === '/api/me/notifications/8')).toBe(false)
+
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'right password!' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/boards/3%3A4%3A8'))
+  expect(calls.some((c) => c.method === 'POST' && c.path === '/api/workspaces/1/notifications/8/read')).toBe(true)
+})
+
+test('a screen that holds a one-time token in its address is not replaced by a click on a push', async () => {
+  pushBrowser()
+  window.history.replaceState(null, '', '/reset-password#token-value')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } } })
+  render(<App />)
+  await screen.findByRole('heading', { name: /password/i })
+  const container = navigator.serviceWorker as unknown as {
+    addEventListener: ReturnType<typeof vi.fn>
+    removeEventListener: ReturnType<typeof vi.fn>
+  }
+  const removed = container.removeEventListener.mock.calls.map((c) => c[1])
+  const listening = container.addEventListener.mock.calls
+    .filter((c) => c[0] === 'message' && !removed.includes(c[1]))
+    .map((c) => c[1] as (e: MessageEvent) => void)
+  act(() => {
+    for (const h of listening) h({ data: { type: 'OPEN', path: '/notification/8' } } as MessageEvent)
+  })
+  expect(window.location.pathname).toBe('/reset-password')
+  expect(window.location.hash).toBe('#token-value')
+})
+
+// --- Turning push off, with the server or the browser failing ---------------------------------
+
+test('when the server cannot be told, push stays on, as it is, with the reason and a way to try again', async () => {
+  const sub = fakeSub()
+  pushBrowser({ permission: 'granted', subscription: sub })
+  localStorage.setItem('taskto.push', '1')
+  let down = true
+  const calls = fakeFetch({
+    'DELETE /api/me/push/subscription': () => (down ? { status: 500, body: {} } : { status: 204 }),
+  })
+  render(<NotificationsTab me={1} workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Turn off push on this device' }))
+  await screen.findByRole('alert')
+  // Nothing was changed on this device, and the page still says push is on.
+  expect(sub.unsubscribe).not.toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBe('1')
+  expect(screen.getByText('Push is on for this device.')).toBeTruthy()
+
+  down = false
+  fireEvent.click(screen.getByRole('button', { name: 'Turn off push on this device' }))
+  await screen.findByText('Push is off on this device.')
+  expect(sub.unsubscribe).toHaveBeenCalled()
+  expect(localStorage.getItem('taskto.push')).toBeNull()
+  expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(2)
+})
+
+test("when the browser won't end its subscription, push stays on and the person is told", async () => {
+  const sub = fakeSub()
+  sub.unsubscribe.mockResolvedValueOnce(false)
+  pushBrowser({ permission: 'granted', subscription: sub })
+  localStorage.setItem('taskto.push', '1')
+  fakeFetch({ 'DELETE /api/me/push/subscription': { status: 204 } })
+  render(<NotificationsTab me={1} workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Turn off push on this device' }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/wouldn't end its push subscription/)
+  expect(localStorage.getItem('taskto.push')).toBe('1')
+  expect(screen.getByText('Push is on for this device.')).toBeTruthy()
+})
+
+test('opening the app signed in with no workspace registers nothing', async () => {
+  pushBrowser({ permission: 'granted', subscription: fakeSub() })
+  localStorage.setItem('taskto.push', '1')
+  window.history.replaceState(null, '', '/')
+  const calls = fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, workspaces: [] } },
+    'PUT /api/me/push/subscription': { status: 204 },
+  })
+  render(<App />)
+  await waitFor(() => expect(calls.some((c) => c.path === '/api/me')).toBe(true))
+  await act(async () => {})
+  expect(pushCalls(calls)).toEqual([])
 })

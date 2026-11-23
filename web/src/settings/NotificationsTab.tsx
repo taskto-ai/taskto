@@ -6,7 +6,15 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useT } from '../i18n'
-import { disablePush, enablePush, PushDenied, type PushState, pushState, sendPushStrings } from '../notifications/push'
+import {
+  disablePush,
+  enablePush,
+  PushDenied,
+  type PushState,
+  PushUnsubscribeFailed,
+  pushState,
+  sendPushStrings,
+} from '../notifications/push'
 import { pushStrings } from '../notifications/strings'
 import { useInstall } from '../pwa/install'
 import { Link, routePath } from '../router'
@@ -40,7 +48,15 @@ export function NotificationsTab({ me, workspace }: { me: number; workspace: num
     await refresh()
   }
   const turnOff = async () => {
-    await action.run(disablePush)
+    // A failure leaves push on, as it is, with the reason beside the button to try again.
+    await action.run(async () => {
+      try {
+        await disablePush()
+      } catch (e) {
+        if (e instanceof PushUnsubscribeFailed) throw new Error(t('notifications.settings.turnOffFailed'))
+        throw e
+      }
+    })
     await refresh()
   }
 

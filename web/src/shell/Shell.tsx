@@ -22,7 +22,7 @@ import {
 import { KnowledgePage } from '../knowledge/KnowledgePage'
 import { parseNotificationPath } from '../notifications/api'
 import { NotificationsPage, OpenNotification } from '../notifications/NotificationsPage'
-import { useOpenFromWorker, usePushSync } from '../notifications/usePushSync'
+import { usePushSync } from '../notifications/usePushSync'
 import { useUnread } from '../notifications/useUnread'
 import { useInstall } from '../pwa/install'
 import { Link, navigate, parseRoute, type Route, routePath, type Section, usePath } from '../router'
@@ -78,8 +78,7 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
 
 function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
   const path = usePath()
-  usePushSync(me.user.id)
-  useOpenFromWorker()
+  usePushSync(me.user.id, me.workspaces.length > 0)
   const parsed = parseRoute(path)
   const member = (id: number) => me.workspaces.some((w) => w.id === id)
   const fallback = me.workspaces.find((w) => w.id === lastWorkspace()) ?? me.workspaces[0]
