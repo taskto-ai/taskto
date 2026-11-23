@@ -122,7 +122,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_record_conflict` | 409 | The record changed since the client read it (or isn't deleted, for a restore); `params.id` is its ID, and `current` is the record as an item as it is now, only when the caller may read it. |
 | `app_query_cursor` | 400 | The `cursor` of a records query isn't one this query gave (it is another query's, another person's or damaged): start again from the first page. |
 | `app_query_field` | 400 | A records query names a `field` the live release doesn't declare, or can't use that way (a sum of text, a deletion time of live records). |
-| `app_query_condition` | 400 | A filter's operator or value doesn't fit its `field` (`op` says which operator). |
+| `app_query_condition` | 400 | A filter's operator or value doesn't fit its `field` (`op` says which operator), or the field holds photos, a signature or a location, which can't be filtered by. |
 | `app_field_required` | 422 | The action leaves out `field`, which the app requires. |
 | `app_field_too_long` | 422 | The value of `field` has more than `max` characters. |
 | `app_field_not_number` | 422 | The value of `field` isn't a number. |
@@ -1786,7 +1786,10 @@ Each item (and `/record`) also has `_labels`, `{"<field>": "<label>"}` for each 
 for: the field's `option_labels` entry for the stored option, or the stored text where it has none. A screen
 that shows a choice binds to `_labels/<field>` (`/record/_labels/<field>` on a detail screen), because the field
 itself holds the stored option (`"food"`, not `"Food"`); the label changes nothing that is stored, filtered,
-sorted or compared by a rule. The records explorer and a record's history show labels the same way.
+sorted or compared by a rule. A definition whose screens bind to a label requires the capability `data.labels`, so
+a client that predates labels says it must be updated; a release that only changes labels is not a change of the
+collection (rolling back across it is not judged by the rows). The records explorer and a record's history show
+labels the same way.
 An app with attachment fields also has `/_files/<field>`, `{"max_files", "max_bytes"}`: the limits its
 photo input and the signature pad show (a signature field has `max_files` 1).
 An app with location, signature or barcode fields also has `/_fields/<field>`: `{"capture"}` (a location's: `"button"`
