@@ -1,10 +1,12 @@
 # Look and fonts
 
-The web app wears the identity of the taskto.ai website, "the handoff": ink on white and
-near-white, structure drawn in hairlines, heavy tight headings in Geist, and one accent, the
-emerald of the logo's dot, which stands for the AI. This page says how that is built so a
-change keeps it whole. It is a visual identity only: layouts, spacing and components are the
-app's own.
+The web app wears the identity of the taskto.ai website, "mint on paper": warm cream paper,
+near-black ink, one electric mint, headings in Bricolage Grotesque and text in Inter, objects
+drawn with a firm ink line and the buttons on a short hard lift. This page says how that is
+built so a change keeps it whole. It is a visual identity only: layouts, spacing and components
+are the app's own. (The website has been through other identities; this is the one it serves
+now, its "Electric Mint" page. The app follows the website's `tailwind.config.js` and
+`src/styles.css`, not an earlier look.)
 
 ## Tokens
 
@@ -16,70 +18,138 @@ literal below the token block**; use a token, or add one there with both sides.
 
 | Token | Light | Dark | For |
 |---|---|---|---|
-| `--tt-canvas` | `#f6f7f9` | `#0b0d12` | the page |
-| `--tt-surface` | `#ffffff` | `#12161d` | cards, inputs, the top bar |
-| `--tt-fg` / `--tt-fg-soft` / `--tt-muted` | `#0b0d12` / `#2a2f3a` / `#565d6b` | `#e9edf3` / `#c9d0dc` / `#9aa3b2` | the three levels of text |
-| `--tt-line` | `#e4e7ec` | `#262c38` | hairlines between things |
-| `--tt-line-strong` | `#858e9e` | `#6b7384` | the edge of a control (inputs, buttons) |
-| `--tt-hover`, `--tt-selected`, `--tt-user` | ink tints | light tints | hover, the current item, the person's own message |
-| `--tt-accent`, `--tt-accent-hover`, `--tt-on-accent` | ink, `#2a2f3a`, white | `#e9edf3`, white, `#0b0d12` | the primary button, which is ink |
-| `--tt-focus` | `#0b0d12` | `#e9edf3` | the focus ring (2px, offset 2px) |
-| `--tt-node`, `--tt-node-text` | `#00a86b`, `#00744a` | `#00a86b`, `#2bc98a` | the AI node (a dot) and emerald as text |
-| `--tt-danger`, `--tt-on-danger`, `--tt-success`, `--tt-warning` | `#b42318`, white, `#00744a`, `#9e4a00` | `#ff7a72`, `#0b0d12`, `#2bc98a`, `#ffa733` | status |
+| `--tt-canvas` | cream `#faf8f4` | night `#111110` | the page, and the top bar |
+| `--tt-stone` | stone `#f1efe9` | `#181816` | the sidebar, a board's columns, quiet bands |
+| `--tt-surface` | white | `#1b1b19` | cards, inputs, menus |
+| `--tt-fg` / `--tt-fg-soft` / `--tt-muted` | ink `#111110` / `#2e2d2a` / muted `#5c5a55` | cream `#faf8f4` / `#d6d3cc` / `#aba89f` | the three levels of text |
+| `--tt-line` | ink at 15% | cream at 14% | hairlines between things |
+| `--tt-rule` | ink | cream at 24% | the rule under the top bar |
+| `--tt-line-strong` | `#7e7b74` | `#8a877f` | the edge of a control (inputs, buttons) |
+| `--tt-hover`, `--tt-selected`, `--tt-user` | ink at 5% / 8%, stone | cream at 7% / 12%, `#262624` | hover, a pressed item, the person's own message |
+| `--tt-accent`, `--tt-accent-hover`, `--tt-on-accent` | mint `#4cefa8`, bright `#6bf5b8`, ink | the same | the primary button: a mint fill with ink on it |
+| `--tt-accent-edge` | ink | mint edge `#1fc98a` | the primary button's outline and its lift |
+| `--tt-accent-soft` | mint soft `#dcfceb` | mint at 14% | the current item (a nav link, a tab, a notice) |
+| `--tt-focus` | ink | mint | the focus ring (2.5px, offset 2px) and any thin line meaning "current" |
+| `--tt-link` | deep green `#006b45` | mint | links, success, any green text |
+| `--tt-node`, `--tt-node-edge` | mint, `#1fc98a` | the same | the AI's dot and its ring |
+| `--tt-logo-dot` | `#00a86b` | the same | the logo's green, in the logo only |
+| `--tt-danger`, `--tt-on-danger`, `--tt-warning` | `#b42318`, white, `#9a4700` | `#ff8a82`, night, `#ffb04d` | status |
 
-The website is light only. The dark palette is the app's own, grown from the website's ink and
-its terminal (`#0b0d12` ground, `#e9edf3` text).
+The website is light only. The dark palette is the app's own, grown from the website's night
+(`#111110`, which is also its terminal's ground), with the same mint on it.
 
-**Emerald means the AI.** It marks what the agent says and does (the dot before a tool line in
-a conversation, the dot in the logo) and nothing else: not a background, not a decoration. As
-text it is the deeper `--tt-node-text`. Success is that same deep green, so the system keeps
-one green and no second hue.
+### How the mint is used
+
+**Mint is a fill, never the colour of text.** It is a bright accent (about 1.4:1 on cream and
+white), so it carries ink on top of it (12.8:1) or it carries nothing. It is the primary button,
+the current item's soft tint, a chosen choice, the dot that stands for the AI, a selection's
+background. It is never a thin line or a word on a light ground: those use ink or the deep green.
+
+- **The deep green** (`#006b45`) is for what must be read or seen on light grounds: links, the
+  "Live" badge and other success text. It is the logo's own green (`#00a86b`, hue 158°) with
+  its lightness taken from 33% to 21% until every pair below passed. It is not a second accent:
+  it is the mint's text voice. In the dark the mint itself is readable (12.8:1 on night), so
+  `--tt-link` is the mint there.
+- **Focus** follows the website: an ink ring on light, a mint one on night.
+- **The logo's green** (`#00a86b`) lives only inside the logo, as on the website, which keeps
+  it out of the page's colours. A logotype is exempt from contrast rules (its `.ai` is 2.9:1 on
+  cream, as it is on the website's own nav).
+- **The AI's dot** is the website's node: mint with the mint edge as a ring. It marks what the
+  agent did (the dot before a tool line in a conversation) beside words that say it, so it never
+  carries a meaning alone. A dot that must be seen on its own (the inbox's unread mark, the app
+  builder's change mark) is ringed in ink.
 
 ### Contrast
 
-Checked numerically (WCAG 2.x relative luminance), every pair the app uses:
+Checked numerically (WCAG 2.x relative luminance) for every pair the app puts together, on every
+ground it can sit on: page, stone, white, the hover and selected tints, the soft mint, and in the
+dark night, stone, surface, the user's message and the soft mint.
 
-- text on its ground, at least 4.5:1: `--tt-fg` 19.4 / 15.4 (on surface, light / dark),
-  `--tt-muted` 6.6 / 7.1 on surface and 5.4 / 5.5 on the selected item, status colours between
-  5.4 and 9.1, `--tt-on-accent` on `--tt-accent` 19.4 / 16.5;
-- the edge of a control (`--tt-line-strong`) and the focus ring, at least 3:1 (3.1 / 3.8 for
-  the edge on the page, 19.4 / 15.4 for the ring);
-- the emerald dot is 2.9 to 3.1:1 on the light grounds. It is never the only carrier of a
-  meaning: it always sits beside words.
+Light (cream / stone / white / selected tint on stone, the darkest):
 
-When you change a colour, check the pair again; a literal that "looks close" is how a
-dark-mode badge ended up white on salmon.
+- `--tt-fg` 17.8 / 16.4 / 18.9 / 13.9; `--tt-fg-soft` 13.0 / 12.0 / 13.8 / 10.2;
+- `--tt-muted` 6.5 / 6.0 / 6.9 / 5.1;
+- `--tt-link` 6.2 / 5.7 / 6.6 / 4.9; danger 6.2 / 5.7 / 6.6 / 4.8; warning 6.0 / 5.6 / 6.4 / 4.7;
+- ink on mint 12.8, on bright mint 13.8; white on danger 6.6;
+- the edge of a control, `--tt-line-strong`: 4.0 / 3.7 / 4.2 / 3.1 (3:1 is the floor for the
+  edge of a control); the focus ring, ink: at least 13.9.
+
+Dark (night / stone / surface / user message / soft mint on stone, the lowest):
+
+- `--tt-fg` 17.8 / 16.8 / 16.3 / 14.3 / 12.2; `--tt-muted` 7.9 / 7.5 / 7.3 / 6.4 / 5.5;
+- mint as text (`--tt-link`, `--tt-focus`) 12.8 / 12.0 / 11.7 / 10.3 / 8.8;
+- danger 8.3 / 7.8 / 7.6 / 6.7 / 5.7; warning 10.4 / 9.8 / 9.5 / 8.4 / 7.1; night on danger 8.3;
+- the edge of a control: 5.3 / 5.0 / 4.8 / 4.2 / 3.6.
+
+When you change a colour, check the pair again; a literal that "looks close" is how a dark-mode
+badge ended up white on salmon.
+
+## The buttons
+
+Pills, as on the website. A plain button is white with a 1px control edge. **The primary button**
+(the one thing a screen asks you to press) is mint with ink on it, outlined in 1.5px ink and lifted
+on a hard 2px ink shadow that rises to 3px on hover and is pressed flat on click (in the dark, the
+outline and the lift are the mint edge). The motion stops under `prefers-reduced-motion`. Icon
+buttons, fields and cards keep the app's 8px radius.
 
 ## Fonts
 
-Geist (text) and Geist Mono (paths, commands and code, never labels or prose) are the
-website's fonts. They come from the npm packages `@fontsource-variable/geist` and
-`@fontsource-variable/geist-mono` (SIL Open Font License 1.1), imported in `web/src/main.tsx`
-and bundled by Vite as hashed `.woff2` files in `/assets/`. **Nothing is fetched from another
-site**, a CDN or a font service included: a self-hosted server must not tell a third party who
-visits it. `--tt-font` and `--tt-mono` keep the system's fonts as the fallback, which show
-until the files load (`font-display: swap`) and for scripts Geist doesn't cover (Arabic,
-Hebrew, CJK and others).
+The website's three families, each in the role the app needs:
 
-The files are split by script with `unicode-range`, so a person downloads only the scripts they
-see (about 30 kB for Latin). The service worker precaches all of them, about 155 kB in all, so
-the app is set in its fonts offline too.
+| Family | Role in the app | Website's role |
+|---|---|---|
+| Inter | all text, labels, the controls: a dense interface wants its plain, even forms | running text |
+| Bricolage Grotesque | headings (`h1` to `h3`, set heavy and tight), the apps' titles | headlines, and the site's default sans |
+| JetBrains Mono | paths, commands, ids and code, never labels or prose | eyebrows, paths, commands |
 
-The fonts' licence text and copyright lines go with the build, in
-`/assets/THIRD_PARTY_NOTICES.txt` (`web/pwa/notices.ts`, which a test covers), as the OFL asks.
+The website sets its body in Bricolage; the app doesn't, because forms, tables and long lists in a
+grotesque with character cost reading speed. Bricolage speaks where the website uses it to speak:
+in headings and in the brand. `--tt-font`, `--tt-display` and `--tt-mono` in `web/src/styles.css`
+name them, each with the system's fonts behind it.
+
+They come from the npm packages `@fontsource-variable/inter`, `@fontsource-variable/bricolage-grotesque`
+and `@fontsource-variable/jetbrains-mono` (SIL Open Font License 1.1), imported in
+`web/src/main.tsx` and bundled by Vite as hashed `.woff2` files in `/assets/`. Bricolage is the
+weight-axis build (`wght.css`); the website adds the optical-size axis for its display sizes, which
+the app has none of, and leaving it out saves about 50 kB. **Nothing is fetched from another site**,
+a CDN or a font service included: a self-hosted server must not tell a third party who visits it.
+The system's fonts show until the files load (`font-display: swap`) and for scripts these don't
+cover (Arabic, Hebrew, CJK and others).
+
+The files are split by script with `unicode-range`, so a person downloads only the scripts they see
+(about 130 kB for Latin: the `latin` file of each of the three, and each only when its family is used).
+The service worker precaches all of them, about 370 kB in all, so the app is set in its fonts
+offline too.
+
+The fonts' licence text and copyright lines go with the build, in `/assets/THIRD_PARTY_NOTICES.txt`
+(`web/pwa/notices.ts`, which a test covers), as the OFL asks.
+
+## The logo
+
+The top bar and the login screens show the website's logo (`web/src/BrandLogo.tsx`, drawn from its
+`/logo.svg`): an arrow handing off to a dot, then "taskto.ai". The website's rule is that the logo
+stands in for the name, so the app shows it too, with its own name as the image's label. The arrow
+and the name take the page's text colour (ink on cream, cream on night, as the website's
+`logo-dark.svg`); the dot and ".ai" are the logo's green. On a phone the top bar shows the mark
+alone, the drawing cropped to its first 64 units.
 
 ## The apps renderer
 
-The A2UI renderer styles itself from `--a2ui-*` custom properties with defaults of its own (a
-blue primary button, grey borders). `:root` sets them from the tokens above, so an app's
-buttons, fields, choices and captions follow the theme without any change to the renderer or to
-what an app can say.
+The A2UI renderer styles itself from `--a2ui-*` custom properties with defaults of its own (a blue
+primary button, grey borders). `:root` sets them from the tokens above, so an app's buttons, fields,
+choices and captions follow the theme without any change to the renderer or to what an app can say:
+pill buttons and choices, a mint primary button outlined in ink (the renderer draws it with no
+border, so `styles.css` adds one), the display face for titles, and the deep green for a borderless
+button's text. The renderer colours several things with its primary, which is the mint: a borderless
+button's text, a focused field's border, the picked tab and a slider's thumb. Each is pointed at a
+token that can be seen on the page instead (the deep green, or the focus colour), because mint there
+would be 1.4:1 on cream. When the renderer gains another use of its primary, check it the same way.
 
 ## Installed app
 
-`web/public/manifest.webmanifest` (`theme_color` white, `background_color` the page's
-`#f6f7f9`) and the `theme-color` metas in `web/index.html` (white; `#12161d` in the dark)
-match the top bar. The icons are the website's app tile, an emerald square with the ink arrow
-and dot, drawn by `web/scripts/make-icons.mjs` from the same geometry as `icon.svg`. The
-top bar is light, so the iOS status bar is the default one (dark text), not
-`black-translucent`, whose white text it would hide.
+`web/public/manifest.webmanifest` (`theme_color` and `background_color` cream `#faf8f4`) and the
+`theme-color` metas in `web/index.html` (cream; night `#111110` in the dark) match the top bar and
+the page. The icons are the website's app tile (its `favicon.svg` and apple touch icon): a logo-green
+(`#00a86b`) square with the logo's arrow and dot in ink, drawn by `web/scripts/make-icons.mjs` from
+the same geometry as `icon.svg`. The top bar is light, so the iOS status bar is the default one (dark
+text), not `black-translucent`, whose white text it would hide.
