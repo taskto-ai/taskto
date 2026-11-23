@@ -635,6 +635,16 @@
           "type": "object",
           "description": "what the app is made of: read app_catalog first. The server checks it strictly against the catalog.",
           "properties": {
+            "definition_version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "the version of the definition's format; leave it out for the current one"
+            },
+            "requires": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "the catalog capabilities the screen needs: the server works them out and replaces whatever is given"
+            },
             "components": {
               "type": "array",
               "minItems": 1,
@@ -761,6 +771,16 @@
           "type": "object",
           "description": "what the app is made of: read app_catalog first. The server checks it strictly against the catalog.",
           "properties": {
+            "definition_version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "the version of the definition's format; leave it out for the current one"
+            },
+            "requires": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "the catalog capabilities the screen needs: the server works them out and replaces whatever is given"
+            },
             "components": {
               "type": "array",
               "minItems": 1,
