@@ -180,6 +180,40 @@ test('installs into the private space by default and opens the draft with its au
   await within(panel).findByText(/Published as release 1/)
 })
 
+test('once published, the install page shows the live app and no longer offers to publish', async () => {
+  let published = false
+  const live = { ...needs, number: 1, published_at: 'x', published_by: null, live: true }
+  const calls = fakeFetch({
+    ...base,
+    'GET /api/workspaces/1/spaces/2/apps/9': () => ({
+      body: published ? app({ live, unpublished_changes: false }) : app(),
+    }),
+    'POST /api/workspaces/1/spaces/2/apps/9/preview': { body: { messages: surface, rows: [] } },
+    'GET /api/workspaces/1/spaces/2/apps/9/surface?release=1': { body: surface },
+    'POST /api/workspaces/1/spaces/2/apps/9/publish': () => {
+      published = true
+      return { body: app({ live, unpublished_changes: false }) }
+    },
+  })
+  window.history.replaceState(null, '', '/w/1/apps/installed-2-9')
+  render(<Routed />)
+  // A draft nobody has published is previewed on sample data, with the way to publish it.
+  await screen.findByText('Preview · sample data')
+  const panel = await screen.findByRole('region', { name: 'Publish' })
+  fireEvent.click(within(panel).getByRole('button', { name: 'Publish' }))
+  await within(panel).findByText(/Published as release 1/)
+
+  // Nothing is unpublished now: the live app is what the page shows, and says so.
+  await screen.findByText('Live · release 1')
+  expect(screen.queryByText('Preview · sample data')).toBeNull()
+  expect(screen.getByText(/Nothing is unpublished: the draft is the live release/)).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Preview the draft' })).toBeNull()
+  expect(within(panel).queryByRole('button', { name: /ublish/ })).toBeNull()
+  expect(calls.some((c) => c.path === '/api/workspaces/1/spaces/2/apps/9/surface?release=1')).toBe(true)
+  // And the way to the app where people use it.
+  expect(screen.getByRole('link', { name: 'Open Expense tracker in Apps' }).getAttribute('href')).toBe('/w/1/apps/2-9')
+})
+
 test('a template that makes cards needs a board the person may write: only those are offered', async () => {
   let refuse = true
   const calls = fakeFetch({

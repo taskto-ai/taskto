@@ -3,8 +3,9 @@
 // published and runs on sample data: its buttons work, and change nothing real. Anyone who may
 // view the app sees the live release; those who may design or publish it can switch to the draft
 // when it differs, and an app that was never published shows its draft alone (nobody else can
-// launch it yet). In the builder the draft is where the person starts, and can always be switched
-// to and from the live release.
+// launch it yet). In the builder the draft is where the person starts, and can be switched to and
+// from the live release, while there is something unpublished: a draft that is the live release
+// is nothing to preview, so the live app is shown.
 
 import { useMemo, useState } from 'react'
 import type { App } from '../api'
@@ -27,14 +28,18 @@ export function AppStage({
   reloadKey?: number
   screen?: string
   onAction?: () => void
-  // In the builder: the draft is shown first, and the way to the live release is always there.
+  // In the builder: the draft is shown first (while it has something the live release hasn't), and the
+  // way to the live release is there.
   builder?: boolean
 }) {
   const t = useT()
   const [wantsDraft, setWantsDraft] = useState(builder ?? false)
   const reviewer = app.access.design || app.access.publish
   const live = app.live
-  const draft = !!app.draft && reviewer && (wantsDraft || !live)
+  // The draft is only worth showing while it isn't the live release (the server says so, to those
+  // who review): once it is published there is nothing left to preview, and the live app is the app.
+  const unpublished = !live || app.unpublished_changes
+  const draft = !!app.draft && reviewer && unpublished && (wantsDraft || !live)
   const liveNumber = live?.number
   // A preview keeps its sample rows in its transport, so the transport stays while the screen is
   // in use; a new draft (the app's version moved) is a new preview.
@@ -49,7 +54,7 @@ export function AppStage({
     return <p className="tt-muted tt-small">{t('apps.stage.notPublished')}</p>
   }
   const needs = (draft ? app.draft : live) ?? undefined
-  const toggle = live && reviewer && (builder || app.unpublished_changes)
+  const toggle = live && reviewer && app.unpublished_changes
   return (
     <div className="tt-stage" data-stage={draft ? 'draft' : 'live'}>
       <div className="tt-stage-head">
@@ -66,7 +71,11 @@ export function AppStage({
       {!draft && live && reviewer && app.unpublished_changes && (
         <p className="tt-muted tt-small">{t('apps.stage.unpublishedNote')}</p>
       )}
-      {!draft && live && builder && <p className="tt-muted tt-small">{t('apps.stage.liveNote')}</p>}
+      {!draft && live && builder && (
+        <p className="tt-muted tt-small">
+          {t(reviewer && !app.unpublished_changes ? 'apps.stage.nothingUnpublished' : 'apps.stage.liveNote')}
+        </p>
+      )}
       <AppView
         key={draft ? `draft-${version}` : live?.number}
         surfaceId={`app-${app.id}`}

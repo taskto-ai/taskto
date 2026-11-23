@@ -152,7 +152,8 @@
       "draftNote": "Esta é uma prévia de alterações ainda não publicadas, com dados de exemplo. Experimente: os botões funcionam, mas não alteram nada real, e mais ninguém a vê.",
       "unpublishedNote": "Você está vendo a versão no ar, a que todos usam. Ela tem alterações que ainda não foram publicadas.",
       "notPublished": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer.",
-      "liveNote": "Esta é a versão no ar. Os botões dela alteram dados reais."
+      "liveNote": "Esta é a versão no ar. Os botões dela alteram dados reais.",
+      "nothingUnpublished": "Não há nada sem publicar: o rascunho é a versão no ar, então este é o app no ar. Os botões dele alteram dados reais."
     },
     "photos": {
       "label": "Fotos",

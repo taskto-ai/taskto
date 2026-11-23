@@ -13,7 +13,7 @@ import { Link, navigate, routePath } from '../router'
 import { spaceLabel } from '../spaces'
 import { appError, PublishPanel } from './AppPublish'
 import { AppStage } from './AppStage'
-import { installedPath } from './route'
+import { appPath, installedPath } from './route'
 
 // The template's own name and description in the user's language, when we have them; the server's
 // English text otherwise (a template added later still shows).
@@ -357,6 +357,11 @@ export function InstalledApp({ workspace, space, app }: { workspace: number; spa
     <div className="tt-section tt-installed">
       <div className="tt-pane-head">
         <h1>{info.data?.name ?? t('apps.app')}</h1>
+        {info.data?.live && (
+          <Link className="tt-button" href={appPath(workspace, space, app)}>
+            {t('apps.openNamedInApps', { name: info.data.name })}
+          </Link>
+        )}
         <Link className="tt-button" href={routePath({ workspace, section: 'apps' })}>
           {t('apps.all')}
         </Link>

@@ -384,10 +384,14 @@ test('a private app is published in one step, and the panel says who can use it 
   await within(section).findByText('Published as release 1. It is live in your private space.')
   const post = calls.find((c) => c.path === `${apps}/publish`)
   expect(post?.body).toEqual({ version: 1, acknowledge: [] })
-  // The live release now exists; the preview toggles to it, labelled Live.
-  fireEvent.click(await within(panel('preview')).findByRole('button', { name: 'Back to the live release' }))
+  // The draft is the live release now, so there is nothing to preview: the live app is shown, labelled
+  // Live, with no sample-data preview and no way back to one, and nothing left to publish.
   await within(panel('preview')).findByText('Live · release 1')
-  expect(within(panel('preview')).getByText(/Its buttons change real data/)).toBeTruthy()
+  expect(within(panel('preview')).queryByText('Preview · sample data')).toBeNull()
+  expect(within(panel('preview')).queryByRole('button', { name: 'Back to the live release' })).toBeNull()
+  expect(within(panel('preview')).queryByRole('button', { name: 'Preview the draft' })).toBeNull()
+  expect(within(panel('preview')).getByText(/Nothing is unpublished/)).toBeTruthy()
+  expect(within(section).queryByRole('button', { name: /ublish/ })).toBeNull()
 })
 
 test('a shared app needs the publisher role, and publishing it names who it goes to first', async () => {

@@ -150,7 +150,8 @@
       "draftNote": "This is a preview of changes that aren’t published yet, on sample data. Try it: its buttons work, but they change nothing real, and nobody else sees it.",
       "unpublishedNote": "You are looking at the live release, which everyone uses. It has changes that aren’t published yet.",
       "notPublished": "This app isn’t published yet: it can be launched once someone who may publish it does.",
-      "liveNote": "This is the live release. Its buttons change real data."
+      "liveNote": "This is the live release. Its buttons change real data.",
+      "nothingUnpublished": "Nothing is unpublished: the draft is the live release, so this is the live app. Its buttons change real data."
     },
     "photos": {
       "label": "Photos",
