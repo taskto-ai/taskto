@@ -1,10 +1,13 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -283,4 +286,66 @@ func (e *env) scalar(query string, args ...any) int64 {
 		e.t.Fatal(err)
 	}
 	return n
+}
+
+// slowRelay is a mail.Sender that takes a while, as a slow relay does, and gives up when the
+// context it is sent with is cancelled, as a real SMTP dial or write does.
+type slowRelay struct {
+	recorder
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *slowRelay) Send(ctx context.Context, m mail.Message) error {
+	close(s.started)
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.recorder.Send(ctx, m)
+}
+
+func TestInviteEmailSurvivesTheClientDisconnecting(t *testing.T) {
+	relay := &slowRelay{started: make(chan struct{}), release: make(chan struct{})}
+	e := newEnv(t, Options{
+		PublicURL: publicURL,
+		Mail:      mail.NewService(relay, mail.Info{Host: "smtp.example.com", Port: 587, Security: "starttls", From: "taskto@example.com"}),
+	})
+	owner, ws := e.setup()
+	var open sync.Once
+	release := func() { open.Do(func() { close(relay.release) }) }
+	t.Cleanup(release)
+
+	ctx, disconnect := context.WithCancel(context.Background())
+	defer disconnect()
+	req := owner.req(http.MethodPost, invitePath(ws), map[string]any{"email": "ana@example.com", "send_email": true}).WithContext(ctx)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- owner.send(req) }()
+
+	select {
+	case <-relay.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the relay was never reached")
+	}
+	// The client goes away while the relay is still working, then the relay finishes.
+	disconnect()
+	release()
+
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the handler never answered")
+	}
+	expect(t, rec, http.StatusCreated)
+	if msgs := relay.messages(); len(msgs) != 1 || msgs[0].To[0] != "ana@example.com" {
+		t.Fatalf("the email wasn't delivered after the disconnect: %+v", msgs)
+	}
+	if got := decode[emailedInvite](t, rec); got.EmailSent == nil || !*got.EmailSent {
+		t.Fatalf("reply = %s", rec.Body.String())
+	}
+	if n := len(e.events(audit.InviteEmailed)); n != 1 {
+		t.Fatalf("%d invite_emailed events, want 1", n)
+	}
 }

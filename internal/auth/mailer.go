@@ -304,9 +304,11 @@ func (s *Service) takeInviteMail(admin int64, email string) (release func(), wai
 
 // emailInvite emails the invite's link to its address, from the admin by, and reports whether
 // the relay took it. A failure is logged by its step and is no reason to refuse the invite,
-// whose link the admin has to pass on by hand then.
+// whose link the admin has to pass on by hand then. The invite is already committed, so the
+// send isn't tied to the request: a client that disconnects during a slow relay doesn't abort it
+// (the handler still waits, so a client that stays gets the answer), and the timeout bounds it.
 func (s *Service) emailInvite(ctx context.Context, m Membership, by User, inv Invite, token string) bool {
-	ctx, cancel := context.WithTimeout(ctx, inviteMailTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), inviteMailTimeout)
 	defer cancel()
 	days := int(math.Ceil(s.opts.InviteTTL.Hours() / 24))
 	err := s.opts.Mail.SendTemplate(ctx, inv.Email, s.inviteLocale(ctx, inv.Email, m, by.ID), "invite", map[string]string{
