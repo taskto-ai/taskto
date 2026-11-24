@@ -99,20 +99,28 @@ export function scenario(name, fn, { viewport = { width: 1280, height: 900 } } =
     let passed = false
     const messages = []
     t.after(async () => {
-      if (!passed && context) {
-        const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
-        const out = join(resultsDir, slug)
-        mkdirSync(out, { recursive: true })
-        await context.tracing.stop({ path: join(out, 'trace.zip') }).catch(() => {})
-        for (const [i, p] of context.pages().entries()) {
-          await p.screenshot({ path: join(out, `page-${i}.png`), fullPage: true, timeout: 5_000 }).catch(() => {})
+      try {
+        if (!passed && context) {
+          const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+          const out = join(resultsDir, slug)
+          mkdirSync(out, { recursive: true })
+          await context.tracing.stop({ path: join(out, 'trace.zip') }).catch(() => {})
+          for (const [i, p] of context.pages().entries()) {
+            await p.screenshot({ path: join(out, `page-${i}.png`), fullPage: true, timeout: 5_000 }).catch(() => {})
+          }
+          console.error(
+            `${name}: page errors: ${messages.join(' | ') || 'none'}\nserver log (last lines):\n${server.logs().trim().split('\n').slice(-15).join('\n')}`,
+          )
         }
-        console.error(
-          `${name}: page errors: ${messages.join(' | ') || 'none'}\nserver log (last lines):\n${server.logs().trim().split('\n').slice(-15).join('\n')}`,
-        )
+      } finally {
+        // Whatever went wrong saving the files (an unwritable results folder), the browser and
+        // the server still stop.
+        try {
+          await browser?.close()
+        } finally {
+          await server?.stop()
+        }
       }
-      await browser?.close().catch(() => {})
-      await server?.stop()
     })
     server = await startServer()
     browser = await chromium.launch()
