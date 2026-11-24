@@ -233,6 +233,31 @@ func TestMigrationFileProblems(t *testing.T) {
 	}
 }
 
+// TestEmbeddedMigrationNumbersAreUnique fails fast, before any database is opened, when two
+// pull requests that each took the next free number are both merged: every test that opens
+// a database would otherwise fail with the same opaque error. It names every clash, so the
+// later-merged file can be renumbered at once.
+func TestEmbeddedMigrationNumbersAreUnique(t *testing.T) {
+	entries, err := fs.ReadDir(migrations, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byNumber := map[string][]string{}
+	for _, e := range entries {
+		match := migrationName.FindStringSubmatch(e.Name())
+		if match == nil {
+			t.Errorf("%q isn't named NNNN_description.sql", e.Name())
+			continue
+		}
+		byNumber[match[1]] = append(byNumber[match[1]], e.Name())
+	}
+	for number, names := range byNumber {
+		if len(names) > 1 {
+			t.Errorf("migrations %s share the number %s: renumber the one merged later to the next free number", strings.Join(names, " and "), number)
+		}
+	}
+}
+
 func TestADatabaseFromANewerVersionIsRefused(t *testing.T) {
 	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
 	newer := fstest.MapFS{
