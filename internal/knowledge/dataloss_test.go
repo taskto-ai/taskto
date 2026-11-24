@@ -79,6 +79,11 @@ func TestUnicodeEquivalentNamesConflict(t *testing.T) {
 	must[Result](t)(s.Put(ctx, sp, "\u13a0.md", []byte("cherokee"), "", alice, ""))
 	_, err := s.Put(ctx, sp, "\uab70.md", []byte("replacement"), "", alice, "")
 	wantErr(t, err, ErrConflict)
+	// A case and a normalisation difference together: the full folds are canonically equivalent
+	// but not byte-equal, so they are compared normalised.
+	must[Result](t)(s.Put(ctx, sp, "\u0390.md", []byte("iota"), "", alice, ""))
+	_, err = s.Put(ctx, sp, "\u03aa\u0301.md", []byte("replacement"), "", alice, "")
+	wantErr(t, err, ErrConflict)
 
 	_, err = s.Move(ctx, sp, "draft.md", nfd+".md", "", alice, "")
 	wantErr(t, err, ErrConflict)
@@ -325,17 +330,28 @@ func TestRevisionUsesTheAncestryCache(t *testing.T) {
 	}
 	// A rewrite (draft.md becomes an unversioned file) gives the commits that held it new IDs.
 	must[Result](t)(s.Move(ctx, sp, "draft.md", "draft.zip", "", alice, ""))
+	h := must[History](t)(s.History(ctx, sp, "", "", 0))
+	inMain := map[string]bool{}
+	for _, c := range h.Commits {
+		inMain[c.Commit] = true
+	}
+	retired := 0
 	for _, old := range []string{v1.Commit, v2.Commit, v3.Commit} {
-		if _, err := s.Read(ctx, sp, "a.md", old); err == nil {
-			continue // a commit the rewrite kept
-		} else if !errors.Is(err, ErrNotFound) {
-			t.Fatalf("read at the rewritten commit %s: %v", old[:7], err)
+		_, err := s.Read(ctx, sp, "a.md", old)
+		switch {
+		case inMain[old] && err != nil:
+			t.Fatalf("read at %s, which main still has: %v", old[:7], err)
+		case !inMain[old]:
+			retired++
+			wantErr(t, err, ErrNotFound)
 		}
+	}
+	if retired == 0 {
+		t.Fatal("the rewrite gave no commit a new ID: the test checks nothing")
 	}
 	if got := readText(t, s, sp, "a.md", base.Commit); got != "one" {
 		t.Fatalf("a.md at the commit before the rewrite = %q", got)
 	}
-	h := must[History](t)(s.History(ctx, sp, "", "", 0))
 	for _, c := range h.Commits {
 		if got := readText(t, s, sp, "a.md", c.Commit); got != "one" {
 			t.Fatalf("a.md at %s = %q", c.Commit[:7], got)

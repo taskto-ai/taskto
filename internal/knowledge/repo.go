@@ -229,8 +229,12 @@ type nameKey struct{ nfc, fold string }
 
 func newNameKey(s string) nameKey {
 	nfc := norm.NFC.String(s)
-	return nameKey{nfc: nfc, fold: cases.Fold().String(nfc)}
+	return nameKey{nfc: nfc, fold: foldNFC(nfc)}
 }
+
+// foldNFC is the full case fold of nfc, normalised again: folding doesn't preserve
+// normalisation, so two names that fold to canonically equivalent text must be compared in one form.
+func foldNFC(nfc string) string { return norm.NFC.String(cases.Fold().String(nfc)) }
 
 // same reports whether a file system that treats them so has one file for both names: macOS and
 // Windows unpack é written as one character or as two to the same name, and ignore case. Two
@@ -239,7 +243,7 @@ func newNameKey(s string) nameKey {
 // scripts, such as Cherokee, where each catches names the other misses.
 func (k nameKey) same(name string) bool {
 	nfc := norm.NFC.String(name)
-	return strings.EqualFold(k.nfc, nfc) || k.fold == cases.Fold().String(nfc)
+	return strings.EqualFold(k.nfc, nfc) || k.fold == foldNFC(nfc)
 }
 
 func findEntry(entries []object.TreeEntry, name string) *object.TreeEntry {
