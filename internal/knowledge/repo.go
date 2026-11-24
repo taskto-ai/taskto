@@ -10,6 +10,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -18,6 +19,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/filesystem"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
@@ -112,19 +115,86 @@ func (r *repo) head() (*object.Commit, error) {
 	return object.GetCommit(r.st, ref.Hash())
 }
 
-// revision returns the commit at, or the head if at is empty.
-func (r *repo) revision(at string) (*object.Commit, error) {
-	if at == "" {
-		return r.head()
+// revision returns the commit at, or the head if at is empty. A commit that isn't in main's
+// history (one a failed change stored and left behind, say) is ErrNotFound, as if the
+// repository didn't have it: nothing a person could have seen is read from it. A commit the
+// repository doesn't have is refused before any history is read, and whether main reaches one it
+// has is answered from the space's cached ancestry (see ancestry), which only walks commits it
+// hasn't seen, and stops when ctx does.
+func (r *repo) revision(ctx context.Context, at string) (*object.Commit, error) {
+	head, err := r.head()
+	if at == "" || err != nil {
+		return head, err
 	}
 	if !isHash(at) {
 		return nil, fmt.Errorf("%w: %q isn't a commit ID", ErrInvalid, at)
 	}
-	c, err := object.GetCommit(r.st, plumbing.NewHash(at))
+	want := plumbing.NewHash(at)
+	notFound := fmt.Errorf("%w: commit %s", ErrNotFound, at)
+	if head == nil || r.st.HasEncodedObject(want) != nil {
+		return nil, notFound
+	}
+	in, err := r.state.anc.reaches(ctx, r, head, want)
+	switch {
+	case errors.Is(err, plumbing.ErrObjectNotFound):
+		return nil, notFound
+	case err != nil:
+		return nil, err
+	case !in:
+		return nil, notFound
+	}
+	c, err := object.GetCommit(r.st, want)
 	if errors.Is(err, plumbing.ErrObjectNotFound) {
-		return nil, fmt.Errorf("%w: commit %s", ErrNotFound, at)
+		return nil, notFound
 	}
 	return c, err
+}
+
+// ancestry is the commits of main, oldest first, as the last reader saw them. History is one
+// line and a commit's ID covers its parent's, so what lies below a commit never changes: a new
+// head is walked only down to a commit already known, and a head that went back (an undone
+// change) or a rewrite's new commits cut the chain at the commit they still share with it. No
+// other invalidation is needed. It holds a commit ID (about 60 bytes) per commit of the space,
+// while the Store runs.
+type ancestry struct {
+	mu    sync.Mutex
+	chain []plumbing.Hash
+	idx   map[plumbing.Hash]int
+}
+
+// reaches reports whether want is head or one of its ancestors.
+func (a *ancestry) reaches(ctx context.Context, r *repo, head *object.Commit, want plumbing.Hash) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var fresh []plumbing.Hash // head's commits not in the chain, newest first
+	keep := 0                 // how much of the chain head's history still shares
+	for c := head; c != nil; {
+		if k, ok := a.idx[c.Hash]; ok {
+			keep = k + 1
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		fresh = append(fresh, c.Hash)
+		var err error
+		if c, err = r.parent(c); err != nil {
+			return false, err
+		}
+	}
+	if a.idx == nil {
+		a.idx = map[plumbing.Hash]int{}
+	}
+	for _, h := range a.chain[keep:] {
+		delete(a.idx, h)
+	}
+	a.chain = a.chain[:keep]
+	for i := len(fresh) - 1; i >= 0; i-- {
+		a.idx[fresh[i]] = len(a.chain)
+		a.chain = append(a.chain, fresh[i])
+	}
+	_, ok := a.idx[want]
+	return ok, nil
 }
 
 // entryAt finds name in c's tree, walking it one element at a time. A nil c is the empty
@@ -154,6 +224,29 @@ func (r *repo) entryAt(c *object.Commit, name string) (*object.TreeEntry, error)
 		}
 	}
 	panic("unreachable")
+}
+
+// nameKey is a name prepared to be compared with sameName: normalised once, so a folder's
+// names are each normalised once per comparison and not twice.
+type nameKey struct{ nfc, fold string }
+
+func newNameKey(s string) nameKey {
+	nfc := norm.NFC.String(s)
+	return nameKey{nfc: nfc, fold: foldNFC(nfc)}
+}
+
+// foldNFC is the full case fold of nfc, normalised again: folding doesn't preserve
+// normalisation, so two names that fold to canonically equivalent text must be compared in one form.
+func foldNFC(nfc string) string { return norm.NFC.String(cases.Fold().String(nfc)) }
+
+// same reports whether a file system that treats them so has one file for both names: macOS and
+// Windows unpack é written as one character or as two to the same name, and ignore case. Two
+// names are the same if either their NFC forms are equal ignoring case (simple folding, which is
+// what those file systems do) or their full case folds are equal; the two tests differ for a few
+// scripts, such as Cherokee, where each catches names the other misses.
+func (k nameKey) same(name string) bool {
+	nfc := norm.NFC.String(name)
+	return strings.EqualFold(k.nfc, nfc) || k.fold == foldNFC(nfc)
 }
 
 func findEntry(entries []object.TreeEntry, name string) *object.TreeEntry {
@@ -220,6 +313,11 @@ func (r *repo) store(obj plumbing.EncodedObject) (plumbing.Hash, error) {
 type edit struct {
 	name string
 	hash plumbing.Hash
+	// checked is how many of name's leading elements are checked against their folder's other
+	// names for one a file system would treat as the same; 0 is all of them. A folder's
+	// move sets it to the destination's depth, so what the folder holds isn't checked against
+	// itself.
+	checked int
 }
 
 // moveEdits are the edits that move cur, the entry at from, to to: one for a document,
@@ -229,6 +327,7 @@ func (r *repo) moveEdits(cur *object.TreeEntry, from, to string) ([]edit, error)
 		return []edit{{name: from}, {name: to, hash: cur.Hash}}, nil
 	}
 	var removes, adds []edit
+	destDepth := strings.Count(to, "/") + 1
 	err := r.walk(cur.Hash, from, func(name string, e object.TreeEntry) error {
 		dest := to + strings.TrimPrefix(name, from)
 		// The destination folder passed the checks, but what's inside it can still end up
@@ -237,7 +336,9 @@ func (r *repo) moveEdits(cur *object.TreeEntry, from, to string) ([]edit, error)
 			return err
 		}
 		removes = append(removes, edit{name: name})
-		adds = append(adds, edit{name: dest, hash: e.Hash})
+		// Only the destination folder's own name is compared with its new siblings. What is
+		// inside came as it was: a folder with two spellings of a name moves whole.
+		adds = append(adds, edit{name: dest, hash: e.Hash, checked: destDepth})
 		return nil
 	})
 	return append(removes, adds...), err
@@ -260,7 +361,12 @@ func (r *repo) change(head *object.Commit, edits []edit, by Author, message stri
 	}
 	for _, e := range edits {
 		var err error
-		if root, err = r.setPath(root, strings.Split(e.name, "/"), e.name, e.hash); err != nil {
+		elems := strings.Split(e.name, "/")
+		checked := e.checked
+		if checked == 0 {
+			checked = len(elems)
+		}
+		if root, err = r.setPath(root, elems, e.name, e.hash, checked); err != nil {
 			return "", err
 		}
 	}
@@ -306,8 +412,9 @@ func (r *repo) result(commit, name string, h plumbing.Hash) (Result, error) {
 
 // setPath returns the hash of the tree treeHash (zero for none) with the file at elems
 // set to blob, or removed if blob is zero. A tree left empty is the zero hash. name is
-// the whole path, for errors.
-func (r *repo) setPath(treeHash plumbing.Hash, elems []string, name string, blob plumbing.Hash) (plumbing.Hash, error) {
+// the whole path, for errors. Only the first checked elements of elems are checked for a name in
+// their folder that a file system treats as the same.
+func (r *repo) setPath(treeHash plumbing.Hash, elems []string, name string, blob plumbing.Hash, checked int) (plumbing.Hash, error) {
 	var entries []object.TreeEntry
 	if !treeHash.IsZero() {
 		tree, err := object.GetTree(r.st, treeHash)
@@ -321,10 +428,16 @@ func (r *repo) setPath(treeHash plumbing.Hash, elems []string, name string, blob
 		if blob.IsZero() {
 			return plumbing.ZeroHash, fmt.Errorf("%w: %s", ErrNotFound, name)
 		}
-		// Two names that differ only by case are one file on macOS and Windows.
-		if j := slices.IndexFunc(entries, func(e object.TreeEntry) bool { return strings.EqualFold(e.Name, elems[0]) }); j >= 0 {
+		// Two names that differ only by case, or by how an accent is encoded (é as one
+		// character or as e and a combining accent), are one file on macOS and Windows: the
+		// second would overwrite the first in the checkout.
+		var key nameKey
+		if checked > 0 {
+			key = newNameKey(elems[0])
+		}
+		if j := slices.IndexFunc(entries, func(e object.TreeEntry) bool { return checked > 0 && key.same(e.Name) }); j >= 0 {
 			return plumbing.ZeroHash, errorf(apierr.CodeDocCaseConflict, apierr.Params{"name": elems[0], "other": entries[j].Name},
-				"%w: %q differs only by case from %q, which exists", ErrConflict, elems[0], entries[j].Name)
+				"%w: %q differs only by case or Unicode form from %q, which exists", ErrConflict, elems[0], entries[j].Name)
 		}
 	}
 
@@ -342,7 +455,7 @@ func (r *repo) setPath(treeHash plumbing.Hash, elems []string, name string, blob
 			}
 			sub = entries[i].Hash
 		}
-		h, err := r.setPath(sub, elems[1:], name, blob)
+		h, err := r.setPath(sub, elems[1:], name, blob, checked-1)
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
@@ -674,7 +787,7 @@ var errPageFull = errors.New("page full")
 // which is the order of the full paths, so a walk lists them sorted and can skip the folders
 // before after.
 func (r *repo) list(ctx context.Context, at, prefix, after string, limit int) (Page, error) {
-	head, err := r.revision(at)
+	head, err := r.revision(ctx, at)
 	if err != nil || head == nil {
 		return Page{}, err
 	}
@@ -744,7 +857,7 @@ func (r *repo) history(ctx context.Context, name, before string, limit int) (His
 		return History{}, err
 	}
 	if before != "" {
-		if c, err = r.revision(before); err != nil {
+		if c, err = r.revision(ctx, before); err != nil {
 			return History{}, err
 		}
 		if c, err = r.parent(c); err != nil {

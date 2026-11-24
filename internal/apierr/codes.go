@@ -216,6 +216,10 @@ const (
 	CodeHomeOrderInvalid   Code = "home_order_invalid"    // 400: the ids aren't the caller's of that kind
 	CodeHomeDefaultsShared Code = "home_defaults_shared"  // 409: defaults are for the apps of shared spaces
 
+	// The audit log's admin view (internal/server/audit.go).
+
+	CodeAuditTimeInvalid Code = "audit_time_invalid" // 400: from or to isn't a time in RFC 3339 in the years 1000 to 9999
+
 	// The knowledge base (internal/knowledge).
 
 	CodeRequestTooLarge   Code = "request_too_large"    // 413; params: max (bytes)

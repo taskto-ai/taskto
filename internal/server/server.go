@@ -100,6 +100,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	accounts := auth.New(sqlDB, opts.Auth)
 	accounts.Routes(mux)
 	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireOperator(backupStatus(opts.BackupDataDir)))
+	auditRoutes(mux, accounts, sqlDB)
 	mailRoutes(mux, accounts, opts.Mail, newMailTestGate(opts.MailTestCooldown, time.Now))
 	checklist.New(sqlDB, checklist.Options{
 		Email: opts.Mail.Configured,
