@@ -55,7 +55,7 @@ action, DOM snapshots and screenshots, the network) and a **screenshot** of each
 prints the browser's console errors and the end of the server's log. Open the trace with
 
 ```sh
-pnpm --filter @taskto/web exec playwright show-trace web/e2e-results/<scenario>/trace.zip
+pnpm --filter @taskto/web exec playwright show-trace e2e-results/<scenario>/trace.zip
 ```
 
 In CI the folder is kept as the **`web-e2e-results`** artifact of the run for 14 days, only when

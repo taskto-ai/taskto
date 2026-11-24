@@ -55,24 +55,28 @@ export async function startServer() {
     server.on('error', (e) => fail(new Error(`the server didn't start: ${e.message}`)))
     server.on('exit', (code) => fail(new Error(`the server exited (${code}):\n${logs}`)))
   })
-  const { addr, built, token } = await listening
-  assert.equal(built, 'true', 'the web app isn’t built into the binary: run make web-e2e (it builds first)')
-  return {
-    base: `http://${addr}`,
-    token,
-    logs: () => logs,
-    async stop() {
-      server.removeAllListeners('exit')
-      server.kill('SIGTERM')
+  const stop = async () => {
+    server.removeAllListeners('exit')
+    if (server.exitCode === null && server.signalCode === null) {
       await new Promise((resolve) => {
-        server.once('exit', resolve)
-        setTimeout(() => {
-          server.kill('SIGKILL')
+        const kill = setTimeout(() => server.kill('SIGKILL'), 10_000)
+        server.once('exit', () => {
+          clearTimeout(kill)
           resolve()
-        }, 10_000).unref()
+        })
+        server.kill('SIGTERM')
       })
-      rmSync(dir, { recursive: true, force: true })
-    },
+    }
+    rmSync(dir, { recursive: true, force: true })
+  }
+  // Until the server is up the caller has nothing to stop: a failed start cleans up here.
+  try {
+    const { addr, built, token } = await listening
+    assert.equal(built, 'true', 'the web app isn’t built into the binary: run make web-e2e (it builds first)')
+    return { base: `http://${addr}`, token, logs: () => logs, stop }
+  } catch (err) {
+    await stop()
+    throw err
   }
 }
 
@@ -82,31 +86,36 @@ export async function startServer() {
 export function scenario(name, fn, { viewport = { width: 1280, height: 900 } } = {}) {
   test(name, { timeout: 120_000 }, async () => {
     const server = await startServer()
-    const browser = await chromium.launch()
-    const context = await browser.newContext({ baseURL: server.base, viewport })
-    context.setDefaultTimeout(15_000)
-    await context.tracing.start({ screenshots: true, snapshots: true, sources: false })
-    const page = await context.newPage()
-    const messages = []
-    page.on('console', (m) => m.type() === 'error' && messages.push(`console: ${m.text()}`))
-    page.on('pageerror', (e) => messages.push(`pageerror: ${e.message}`))
     try {
-      await fn({ page, context, server, base: server.base, messages })
-      await context.tracing.stop()
-    } catch (err) {
-      const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
-      const out = join(resultsDir, slug)
-      mkdirSync(out, { recursive: true })
-      await context.tracing.stop({ path: join(out, 'trace.zip') }).catch(() => {})
-      for (const [i, p] of context.pages().entries()) {
-        await p.screenshot({ path: join(out, `page-${i}.png`), fullPage: true }).catch(() => {})
+      const browser = await chromium.launch()
+      try {
+        const context = await browser.newContext({ baseURL: server.base, viewport })
+        context.setDefaultTimeout(15_000)
+        await context.tracing.start({ screenshots: true, snapshots: true, sources: false })
+        const page = await context.newPage()
+        const messages = []
+        page.on('console', (m) => m.type() === 'error' && messages.push(`console: ${m.text()}`))
+        page.on('pageerror', (e) => messages.push(`pageerror: ${e.message}`))
+        try {
+          await fn({ page, context, server, base: server.base, messages })
+          await context.tracing.stop()
+        } catch (err) {
+          const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+          const out = join(resultsDir, slug)
+          mkdirSync(out, { recursive: true })
+          await context.tracing.stop({ path: join(out, 'trace.zip') }).catch(() => {})
+          for (const [i, p] of context.pages().entries()) {
+            await p.screenshot({ path: join(out, `page-${i}.png`), fullPage: true }).catch(() => {})
+          }
+          console.error(
+            `${name}: page errors: ${messages.join(' | ') || 'none'}\nserver log (last lines):\n${server.logs().trim().split('\n').slice(-15).join('\n')}`,
+          )
+          throw err
+        }
+      } finally {
+        await browser.close()
       }
-      console.error(
-        `${name}: page errors: ${messages.join(' | ') || 'none'}\nserver log (last lines):\n${server.logs().trim().split('\n').slice(-15).join('\n')}`,
-      )
-      throw err
     } finally {
-      await browser.close()
       await server.stop()
     }
   })

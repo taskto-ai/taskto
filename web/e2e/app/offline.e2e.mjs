@@ -26,6 +26,14 @@ scenario('a record added offline is kept on the device and syncs when back onlin
   await page.getByText('Saved on this device').first().waitFor()
   await page.getByText('Train ticket').first().waitFor()
 
+  // The record is on the device itself, not in the page: it is still there, still waiting, after
+  // the page is loaded again with no connection.
+  await page.reload()
+  await page.getByRole('heading', { name: 'Offline', exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Open Expense tracker' }).click()
+  await page.getByText('Train ticket').first().waitFor()
+  await page.getByText('Saved on this device, waiting to sync').first().waitFor()
+
   // The connection is back: the record is sent, and the server has it.
   await context.setOffline(false)
   await page.getByText('Synced', { exact: true }).first().waitFor()
