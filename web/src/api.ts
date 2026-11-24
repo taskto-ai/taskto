@@ -80,6 +80,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     const message = data && typeof data.error === 'string' ? data.error : `${res.status} ${res.statusText}`
     throw new ApiError(res.status, message, data)
   }
+  // T is the caller's word for what the server sends. The types that api.contract.ts lists are
+  // checked against the Go structs that make the replies, so a renamed field of one fails the
+  // build; the others are not.
   return data as T
 }
 
@@ -119,8 +122,8 @@ export type Workspace = { id: number; name: string; role: 'admin' | 'member'; lo
 export type Me = {
   user: { id: number; email: string; name: string; locale?: string }
   workspaces: Workspace[]
-  can_create_workspace?: boolean
-  is_operator?: boolean
+  can_create_workspace: boolean
+  is_operator: boolean
 }
 
 export type Conversation = {
@@ -413,6 +416,16 @@ export type HomeView = {
   limits: { widgets: number; pins: number }
 }
 
+// The first-run checklist an admin sees on Home (internal/checklist): each step is done by what exists
+// on the server, or skipped by an admin because it doesn't apply.
+export type ChecklistStep = 'invite' | 'provider' | 'space' | 'app' | 'email' | 'backups'
+export type Checklist = {
+  dismissed: boolean
+  // Every step that isn't optional is done or skipped.
+  complete: boolean
+  items: { id: ChecklistStep; state: 'done' | 'todo' | 'skipped'; optional: boolean }[]
+}
+
 // An app the person may place on Home or pin, with what it offers.
 export type AvailableApp = {
   space_id: number
@@ -502,11 +515,16 @@ export type RecordVersion = {
 }
 
 export type Comment = { id: number; card_id: number; author: Author; body: string; created_at: string }
+// A card as the card route sends it: with its comments, oldest first.
+export type CardWithThread = Card & { comments: Comment[] }
 
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
 
 export type Member = { id: number; email: string; name: string; role: 'admin' | 'member'; joined_at: string }
 export type Invite = { id: number; email: string; role: 'admin' | 'member'; created_at: string; expires_at: string }
+// The reply that makes an invite or an access token: the record, with its secret, shown only now.
+export type InviteCreated = Invite & { token: string }
+export type TokenCreated = Token & { token: string }
 export type SpaceMember = { id: number; email: string; name: string; role: 'editor' | 'viewer'; added_at: string }
 
 // An access token, without the token itself: the server returns that only when it makes one.
@@ -752,6 +770,10 @@ export type BackupStatus = {
 }
 
 export const backupPath = (workspace: number) => `${ws(workspace)}/backup`
+
+// Starts an export of what the caller owns in the workspace (docs/api.md#export-my-data): a POST that
+// answers `{download, expires_in}`, the address to go to for the zip, which works once.
+export const exportPath = (workspace: number) => `${ws(workspace)}/export`
 
 // The server's outgoing email (docs/install.md#email), for admins: where it sends through, never the
 // account or its password. `password` says whether the server signs in.

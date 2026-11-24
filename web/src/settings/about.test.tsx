@@ -7,7 +7,12 @@ import { setPreferences } from '../i18n'
 import { type Call, fakeFetch } from '../test/fakes'
 import { SettingsPage } from './SettingsPage'
 
-const me: Me = { user: { id: 1, email: 'owner@example.com', name: 'Owner' }, workspaces: [], is_operator: true }
+const me: Me = {
+  user: { id: 1, email: 'owner@example.com', name: 'Owner' },
+  workspaces: [],
+  can_create_workspace: false,
+  is_operator: true,
+}
 const notOperator: Me = { ...me, is_operator: false }
 const admin: Workspace = { id: 1, name: 'Home', role: 'admin' }
 const member: Workspace = { id: 1, name: 'Home', role: 'member' }
