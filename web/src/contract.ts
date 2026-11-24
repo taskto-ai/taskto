@@ -66,11 +66,17 @@ type Arrays<G, U, P extends string, Loose extends string, D extends unknown[]> =
   ? never
   : [U] extends [never]
     ? `${P}: the server sends an array`
-    : [G] extends [readonly (infer GE)[]]
-      ? [U] extends [readonly (infer UE)[]]
-        ? Problem<GE, UE, `${P}[]`, Loose, D>
-        : never
-      : never
+    : true extends IsTuple<U>
+      ? true extends IsTuple<G>
+        ? Elements<G, U, P, Loose, D>
+        : `${P}: the server sends a list of any length, and the web app's type is a tuple`
+      : Elements<G, U, P, Loose, D>
+
+type Elements<G, U, P extends string, Loose extends string, D extends unknown[]> = [G] extends [readonly (infer GE)[]]
+  ? [U] extends [readonly (infer UE)[]]
+    ? Problem<GE, UE, `${P}[]`, Loose, D>
+    : never
+  : never
 
 type Objects<G, U, P extends string, Loose extends string, D extends unknown[]> = [G] extends [never]
   ? never
@@ -81,16 +87,19 @@ type Objects<G, U, P extends string, Loose extends string, D extends unknown[]> 
       : never
 
 // A type with an index signature is a map: `Record<string, T>`.
-type IsMap<T> = string extends keyof T ? true : false
+type IsMap<T> = string extends keyof T ? true : number extends keyof T ? true : false
+
+// A tuple has a length of its own; a list does not.
+type IsTuple<T> = T extends readonly unknown[] ? (number extends T['length'] ? false : true) : false
 
 type Fields<G, U, P extends string, Loose extends string, D extends unknown[]> =
   IsMap<U> extends true
-    ? Problem<G[keyof G], U[keyof U & string], `${P}[]`, Loose, D>
+    ? Problem<G[keyof G], U[keyof U], `${P}[]`, Loose, D>
     : {
         [K in keyof U & string]-?: IsMap<G> extends true
           ? // biome-ignore lint/complexity/noBannedTypes: `{}` is how an optional key is told from a required one
             {} extends Pick<U, K>
-            ? Problem<G[keyof G & string], U[K], Join<P, K>, Loose, D>
+            ? Problem<G[keyof G], U[K], Join<P, K>, Loose, D>
             : `${Join<P, K>}: the server sends a map, which may not have it`
           : K extends keyof G
             ? FieldProblem<G, U, K, Join<P, K>, Loose, D>
@@ -187,4 +196,11 @@ export type Selftest = [
   Is<Says<Check<Server, { counts: Record<string, string> }>, 'counts[]: the server sends another type'>>,
   Is<Check<{ fixed: { a: number; b: number } }, { fixed: Record<string, number> }>>,
   Is<Says<Check<{ fixed: { a: number; b: string } }, { fixed: Record<string, number> }>, 'fixed[]'>>,
+  // A number-keyed map is a map too, its values compared.
+  Is<Says<Check<Server, { counts: Record<number, string> }>, 'counts[]: the server sends another type'>>,
+  Is<Check<Server, { counts: Record<number, number> }>>,
+  // A tuple has a length the server's list doesn't promise.
+  Is<Says<Check<Server, { tags: [string] }>, 'tags: the server sends a list of any length'>>,
+  Is<Says<Check<Server, { tags: readonly [string, string] }>, 'tags: the server sends a list of any length'>>,
+  Is<Check<{ pair: [string, string] }, { pair: [string, string] }>>,
 ]

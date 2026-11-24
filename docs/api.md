@@ -43,8 +43,9 @@ What the generator tells, as `encoding/json` writes it:
 
 - A key that may be **left out** (`?`: `omitempty` on a value that can be empty, `omitzero`, or
   a field of an embedded pointer that may be nil) is told apart from a value that may be
-  **null** (`| null`: a nil pointer, slice or map, a nil `[]byte`). A value left out when nil
-  is never null.
+  **null** (`| null`: a nil pointer, slice or map, a nil `[]byte`). A nil value that is left
+  out is not null, but a pointer that is not nil can hold one: an `omitempty` `*[]string` is
+  `p?: string[] | null`, since a pointer to a nil slice is written as `null`.
 - A type with a `MarshalJSON` or `MarshalText` of its own writes what its struct doesn't say, so
   the generator refuses it (a root, or any field, slice or map element of one) unless its wire
   shape is registered (`wireShapes` in `internal/apitypes/generate.go`: `time.Time` is a

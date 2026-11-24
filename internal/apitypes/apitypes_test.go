@@ -354,6 +354,9 @@ type wireSample struct {
 	Skipped            string          `json:"it's,omitempty"` //nolint:staticcheck // an invalid name, which encoding/json ignores
 	Text               map[string]int  `json:"text,omitempty"`
 	Number             *int            `json:"number,omitempty,string"`
+	PtrList            *[]string       `json:"ptr_list,omitempty"` // a pointer to a nil slice is written, as null
+	PtrText            *string         `json:"ptr_text,omitempty"`
+	PtrPtr             **[]string      `json:"ptr_ptr,omitempty"`
 	hidden             string          //nolint:unused // not written
 }
 
@@ -372,28 +375,33 @@ func TestShapeIsWhatEncodingWrites(t *testing.T) {
 		"empty, not nil":   {List: []string{}, Items: []string{}, Text: map[string]int{}, Cut: zeroSlice{}},
 		"filled in":        {List: []string{"a"}, Items: []string{"b"}, Raw: []byte("x"), Text: map[string]int{"a": 1}, Cut: zeroSlice{1}},
 		"zero struct":      {Zero: inner{}},
+		"a nil list held":  {PtrList: new([]string), PtrText: new(string), PtrPtr: new(*[]string)},
+		"a list held":      {PtrList: &[]string{"a"}},
 		"a nonzero struct": {Zero: inner{Deep: "d"}, Struct: inner{Deep: "d"}},
 	} {
 		sameAsEncoding(t, name, shape, v)
 	}
 	// The cases that made a field look wrong, said outright.
 	for key, want := range map[string]wireField{
-		"value":   {optional: true, null: true},  // an embedded pointer's nil *int: absent, or null when present
-		"name":    {optional: true, null: false}, // absent with the embedded pointer nil
-		"loud":    {},                            // an unexported embedded struct's fields come up
-		"tagged":  {},                            // and one with a name is that name
-		"plain":   {null: true},
-		"struct":  {},               // omitempty doesn't leave a struct out
-		"zero":    {optional: true}, // omitzero does
-		"list":    {optional: true}, // left out when empty: never null
-		"items":   {null: true},     // written as null when nil
-		"both":    {optional: true},
-		"cut":     {optional: true, null: true}, // a type that says its nil is not zero
-		"arr":     {},
-		"raw":     {null: true},
-		"-":       {},
-		"Skipped": {optional: true}, // an invalid name in a tag is ignored: the Go name
-		"number":  {optional: true},
+		"value":    {optional: true, null: true},  // an embedded pointer's nil *int: absent, or null when present
+		"name":     {optional: true, null: false}, // absent with the embedded pointer nil
+		"loud":     {},                            // an unexported embedded struct's fields come up
+		"tagged":   {},                            // and one with a name is that name
+		"plain":    {null: true},
+		"struct":   {},               // omitempty doesn't leave a struct out
+		"zero":     {optional: true}, // omitzero does
+		"list":     {optional: true}, // left out when empty: never null
+		"items":    {null: true},     // written as null when nil
+		"both":     {optional: true},
+		"cut":      {optional: true, null: true}, // a type that says its nil is not zero
+		"arr":      {},
+		"raw":      {null: true},
+		"-":        {},
+		"Skipped":  {optional: true}, // an invalid name in a tag is ignored: the Go name
+		"number":   {optional: true},
+		"ptr_list": {optional: true, null: true}, // a pointer, left out when nil, to a slice that may be nil
+		"ptr_text": {optional: true},
+		"ptr_ptr":  {optional: true, null: true},
 	} {
 		if got := shape[key]; got != want {
 			t.Errorf("%s: %+v, want %+v", key, got, want)

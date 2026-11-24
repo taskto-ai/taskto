@@ -90,7 +90,8 @@ func walk(v reflect.Value, path string, seen map[uintptr]bool, out *[]string) {
 	case reflect.Struct:
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
-			if !f.IsExported() {
+			// encoding/json writes the exported fields of an unexported embedded struct.
+			if !f.IsExported() && !f.Anonymous {
 				continue
 			}
 			p := path + "." + f.Name

@@ -62,3 +62,30 @@ func TestHas(t *testing.T) {
 		t.Error("a type holding none is")
 	}
 }
+
+type promoted struct {
+	Tags []string `apitypes:"nonnull"`
+}
+
+type embedder struct {
+	promoted
+	Other []string
+}
+
+type embedderPtr struct {
+	*promoted
+}
+
+// encoding/json writes the exported fields of an unexported embedded struct, so a promise
+// there is one the server has to keep.
+func TestViolationsLooksInsideUnexportedEmbeddedStructs(t *testing.T) {
+	if got := Violations(embedder{}); !slices.Equal(got, []string{"embedder.promoted.Tags"}) {
+		t.Errorf("an embedded struct: %v", got)
+	}
+	if got := Violations(embedderPtr{promoted: &promoted{}}); !slices.Equal(got, []string{"embedderPtr.promoted.Tags"}) {
+		t.Errorf("an embedded pointer: %v", got)
+	}
+	if got := Violations(embedder{promoted: promoted{Tags: []string{}}}); len(got) != 0 {
+		t.Errorf("a kept promise: %v", got)
+	}
+}

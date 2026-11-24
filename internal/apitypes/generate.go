@@ -166,7 +166,8 @@ func (g *generator) fail(format string, args ...any) {
 type field struct {
 	name     string
 	optional bool // the key may be absent
-	nonNull  bool // a nil slice, map or pointer is never written as null (it is left out, or promised)
+	nonNull  bool // a nil slice, map or pointer is never written as null (it is promised)
+	nilOmit  bool // a nil pointer, slice or map is left out, so the field itself is never null for it
 	free     bool // apitypes:"json"
 	typ      reflect.Type
 	depth    int
@@ -231,6 +232,11 @@ func (g *generator) structBody(t reflect.Type) string {
 				g.fail("%s.%s: apitypes:\"nonnull\" on a field that is never null", f.owner, f.goName)
 			}
 			g.nonNull = append(g.nonNull, f.owner.PkgPath()+"."+f.owner.Name()+"."+f.goName)
+		}
+		if f.nilOmit {
+			// A nil value is left out; a pointer that is not nil still holds what it holds: a nil
+			// slice, map or pointer, which is written as null.
+			nullable = nullable && f.typ.Kind() == reflect.Pointer && nilable(f.typ.Elem())
 		}
 		if nullable && !f.nonNull {
 			typ += " | null"
@@ -298,7 +304,8 @@ func collect(t reflect.Type, depth int, viaPointer bool, seen map[reflect.Type]b
 		out = append(out, field{
 			name:     name,
 			optional: viaPointer || omitEmpty || omitZero,
-			nonNull:  nilOmitted || hasOpt(tags, "nonnull"),
+			nonNull:  hasOpt(tags, "nonnull"),
+			nilOmit:  nilOmitted,
 			free:     hasOpt(tags, "json"),
 			promised: hasOpt(tags, "nonnull"),
 			typ:      typ,
