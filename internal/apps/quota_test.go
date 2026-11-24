@@ -184,6 +184,38 @@ func TestFinalizingTwoPicturesAtOnceCannotBothGrowPastTheQuota(t *testing.T) {
 	}
 }
 
+// failingFiles is a knowledge base that can't be measured.
+type failingFiles struct{}
+
+func (failingFiles) Usage(access.Space) (int64, int64, error) {
+	return 0, 0, errors.New("disk trouble")
+}
+
+// A finalize the quota couldn't judge (a space it can't measure) is refused as unavailable, stays an
+// upload that finalizes later, and leaves none of the files it wrote for the attempt.
+func TestFinalizeThatCannotBeMeasuredLeavesNoFilesAndCanBeRetried(t *testing.T) {
+	w := newWorld(t)
+	s := w.alicePrivate
+	a := w.createPhotos(w.alice, s, "Photos")
+	picture := testPNG(t, 640, 480)
+	id := w.start(w.alice, s, a, "photos", len(picture))
+	w.send(w.alice, s, a, id, picture, 4096)
+	w.e.s.WithQuota(quota.New(w.e.db, quota.Limits{User: 1 << 30}, failingFiles{}))
+	expectCode(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/uploads/"+id+"/finalize"), map[string]any{}), http.StatusServiceUnavailable, "quota_unavailable")
+	root, err := w.e.s.filesRoot(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	for _, ext := range []string{".thumb", ""} {
+		if _, err := root.Stat(fileName(a.ID, id, ext)); err == nil {
+			t.Errorf("the attempt left %q behind", ext)
+		}
+	}
+	w.e.s.WithQuota(quota.New(w.e.db, quota.Limits{User: 1 << 30}, &meterFiles{}))
+	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/uploads/"+id+"/finalize"), map[string]any{}), http.StatusOK)
+}
+
 // Bytes another write has reserved (a document being stored, say) count against an upload, and
 // give their place back when released.
 func TestAnUploadCountsWhatAWriteHasReservedAndNotYetStored(t *testing.T) {
@@ -242,7 +274,7 @@ func TestADocumentEffectOverTheQuotaFailsAsTheQuota(t *testing.T) {
 	})
 	f2.mustSubmit(f2.alice, "op-quota-002", "East gate", "fail")
 	f2.work()
-	if v := only(t, f2.effects(f2.alice, ""), EffectCreateDocument); v.Status == StateFailed && v.Error.Code == "app_effect_quota" {
-		t.Fatalf("an unmeasurable space failed the effect as the quota: %+v", v)
+	if v := only(t, f2.effects(f2.alice, ""), EffectCreateDocument); v.Status == StateFailed || v.Status == StateDone {
+		t.Fatalf("an unmeasurable space left the effect %+v, want it waiting to be tried again", v)
 	}
 }

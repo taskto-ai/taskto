@@ -576,7 +576,7 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		ready = u.Attachment
 		return err
 	})
-	if errors.Is(err, quota.ErrExceeded) {
+	if errors.Is(err, quota.ErrExceeded) || errors.Is(err, quota.ErrUnavailable) {
 		// Still an upload: what was written for it is written again when it finalizes.
 		for _, ext := range []string{".thumb", ""} {
 			if rerr := root.Remove(fileName(appID, id, ext)); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {

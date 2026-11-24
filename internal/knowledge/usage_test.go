@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -209,9 +210,14 @@ func TestQuotaReservationsAreReleasedAfterTheUsageIsPublished(t *testing.T) {
 	if atRelease[0].versioned <= 0 {
 		t.Fatalf("usage at release = %+v, want the commit's bytes counted", atRelease[0])
 	}
-	// A change that fails after reserving (a stale base) gives its bytes back all the same.
-	if _, err := s.Put(ctx, sp, "a.md", []byte("hi"), "not-the-version", alice, ""); err == nil {
-		t.Fatal("a stale put worked")
+	// A change that reserves and then fails (a base that is well formed but not the version) gives
+	// its bytes back all the same: the reservation is made before the base is compared.
+	before := held
+	if _, err := s.Put(ctx, sp, "a.md", []byte("hi"), strings.Repeat("0", 40), alice, ""); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a stale put: %v, want a conflict", err)
+	}
+	if held != before+1 {
+		t.Fatalf("the stale put reserved %d times, want once", held-before)
 	}
 	if held != released {
 		t.Fatalf("held %d, released %d: a failed change kept its reservation", held, released)
