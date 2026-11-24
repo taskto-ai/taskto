@@ -1071,7 +1071,10 @@ so in its status and the journal, and leaves the server as it was.
   or a pre-release, whose three images are published. A release whose images aren't there yet
   isn't available: the next run looks again. How to cut one: [releasing.md](releasing.md).
 - `main`: the newest commit on `main` whose CI passed, that descends from the one installed,
-  and whose images are published.
+  and whose images are published. **`main` ignores releases and the `manual-upgrade: true` marker**:
+  it takes every merge that passed CI, with no gate and nobody deciding, so a change that
+  needs a person (a new required setting, a step on the host) reaches the server as it is merged. It is for a server you use to try what is about to be released, not for
+  one that people depend on; the checks and the way back below are the same.
 - `off`: nothing runs by itself.
 
 `TASKTO_UPDATE_REPO` (default `taskto-ai/taskto`) is the repository it reads, for a fork.
@@ -1122,13 +1125,29 @@ never over an interrupted or stopped update.
    API, and every file of the new version (its `compose.yaml`, `deploy/Caddyfile`, the
    firewall script and `deploy/safety-check.sh`) is fetched at that SHA, never by a tag or a
    branch. It then checks, and refuses with nothing changed if any of this fails:
+   - the Compose inputs are the plain ones: `compose.yaml`, and `compose.override.yaml` when
+     it exists, and no other Compose file in `/srv/taskto` (`compose.yml`, `compose.override.yml`,
+     `docker-compose.yml`, `docker-compose.yaml`, `docker-compose.override.yml`,
+     `docker-compose.override.yaml`) and no `COMPOSE_FILE` in `.env` or the environment,
+     since Compose would read those as well. An install with any is refused, and updated by
+     hand. Every Compose call of the updater (the check of the new settings, `create`, `start`,
+     `stop` and the way back) is given the same explicit `--project-name`, `--env-file` and one
+     `-f` list, so what starts is what was checked;
    - the images the running containers use are on this machine, by their ids (what the
      running server, worker and, if it runs, the nightly backup have, not what a tag points
      at now); they are kept under `taskto-update-rollback:<image>` tags before the update
-     changes anything, so a moved tag or an image prune can't take them;
-   - the data volume is the one the running server has mounted at `/data` (never a name
-     assumed), in this install's Compose settings and, resolved to its effective Docker name,
-     in the new ones, for the server and every backup service;
+     changes anything, so that a moved version tag or a plain `docker image prune` (dangling
+     images) can't take them. They do **not** protect the images from `docker image prune -a`
+     or `docker system prune -a`: an image no container uses is removed whatever its tags. So
+     don't prune images while an update is blocked (the way back, and a person's rollback,
+     need them), and not before you have decided not to roll back;
+   - the data volume is mounted at `/data` as the running server has it (never a name
+     assumed): the same Docker volume, the same `volume.subpath` and the same read-only
+     setting, in this install's Compose settings and in the new ones, for the server and for
+     every service of TaskTo's, the backup services too, which are rendered with their
+     profiles on even when they are off. A candidate that mounts the data differently is
+     refused. So is one that would make a volume: every named volume the new settings use must
+     exist already, and an anonymous volume is refused, so `docker compose` never creates one;
    - the new settings, rendered with this install's `.env` and `compose.override.yaml`, run
      only the images it checks (an override that swaps in another image, or an older one of
      TaskTo's, is refused); all three images are pulled by tag and refused unless their
@@ -1142,7 +1161,10 @@ never over an interrupted or stopped update.
      privileged container, `cap_drop: ALL`, `no-new-privileges`, no capability added to the
      server and only the worker's four to the worker, no development switch or secret in
      either environment, CLI workers in container mode, the worker with none of the server's
-     data, no host path or Docker socket, and on its own network, the firewall's bridge);
+     data, no host path or Docker socket, and on its own network, the firewall's bridge; and
+     the two ways to get mounts without naming them: no service with `volumes_from`, and no
+     config or secret mounted into the worker; the user rule is the running check's, exactly
+     `65532:65532`);
    - the public address answers as the current version before anything changes (Caddy's HTTPS
      address from this machine, or in `traefik` mode the LAN port and `https://<domain>/healthz`
      as a visitor reaches it): a broken proxy isn't the update's to fix;
@@ -1156,8 +1178,13 @@ never over an interrupted or stopped update.
    revert, and after a stop until a person clears it.
 3. *Switch*: the old files are kept in `/var/lib/taskto-update/previous/`, the new ones and
    `TASKTO_VERSION` (in `/srv/taskto/.env` and `/etc/taskto/install.env`) put in, the tags
-   checked once more, and `docker compose up -d`; when `deploy/Caddyfile` changed, with the
-   HTTPS profile on, Caddy is recreated too, since it reads the file once.
+   checked once more, and then, since a tag can move at any moment before the containers
+   exist: `docker compose create` (the containers are made, nothing runs), a check that
+   **each container was made from the image id that was verified** for its service (a
+   container made from another image is removed, and the old version is put back), and only
+   then `docker compose start`. When `deploy/Caddyfile` changed, with the HTTPS profile on,
+   Caddy is recreated too, since it reads the file once. The way back is made and checked the
+   same way, against the ids the old containers had.
 4. *Check the server*: `/healthz` is `ok` at the new version with its agent runtime ready
    (and so is the proxy: `https://<domain>/healthz`, from this host), the services run, the
    firewall's rules are in, and `deploy/safety-check.sh`, the very script runbook step 12
@@ -1179,32 +1206,49 @@ migrations, and an older one can't read what a newer one wrote.
   (so it isn't tried again every night), and reports `rolled-back`. If putting the old version
   back fails too, it stops as below, with `rollback-failed`.
 - **After it started** (the server isn't healthy, a safety rule or the proxy check fails on
-  the running containers, or `up` fails once the server has run): the updater **stops the
-  stack** (`docker compose stop`, never `down`, never removing a volume), keeps the pre-update
-  backup, writes the `blocked` marker and keeps the transaction record, and reports `stopped`
-  loudly: the status, the journal and the notification say which backup to restore. It does
+  the running containers, or `start` fails once the server has run): the updater **turns off
+  the restart policies** of the project's containers (`docker update --restart=no`, so that a
+  reboot or a restart of Docker can't start the new version on the data it may have changed),
+  **stops the stack** (`docker compose stop`, never `down`, never removing a volume) and
+  checks that nothing is running, keeps the pre-update backup, writes the `blocked` marker and
+  keeps the transaction record, and reports `stopped` loudly: the status, the journal and the
+  notification say which backup to restore, and in which data volume (the one recorded in the
+  transaction, never a name assumed). If it can't confirm that nothing runs, the result is
+  `stop-failed`, not `stopped`, and says to stop the stack by hand now. The containers' restart
+  policies stay off until they are made again: the Rollback's steps remove the containers and
+  step 9 makes them again, with the Compose file's policies. It does
   **not** restore data, empty or copy a volume, or put anything back: it can't know what the
   new version did to the data. A person does, by hand: restore the backup named in the report
   with [Upgrade and rollback](#upgrade-and-rollback) (and
   [Rollback](../deploy/INSTALL.md#rollback) in the runbook), start the old version, check it
   and run `taskto-update --clear-block`.
 
+A release that was put back (`rolled-back`) is recorded as failed, durably (a file of its own,
+flushed and moved into place), **before** the transaction record is removed. If it can't be
+recorded (`/var/lib/taskto-update` isn't writable), the record stays, the result is
+`rolled-back` with exit status 2, and the next runs are blocked, so the release can't be tried
+again unseen: make the directory writable and run `taskto-update --clear-block`, which records
+the release first and refuses while it can't.
+
 While `/var/lib/taskto-update/transaction` exists nothing runs again, not even `--to`; every
 run says it is blocked (and notifies, below). It is the record that blocks: if the `blocked`
 marker can't be written, the record alone still does. `taskto-update --clear-block` removes
 both, and only if the server is healthy and answers as the version in `/srv/taskto/.env`
-(which is also the version in `/etc/taskto/install.env`); the release that was being
-installed is then recorded as not to be tried again by itself (unless it is the version now
-running, because a person finished the update by hand). Or remove
-`/var/lib/taskto-update/transaction` and `/var/lib/taskto-update/blocked`.
+(which is also the version in `/etc/taskto/install.env`), the worker's firewall rules are in,
+and the safety rules hold in the running containers (the updater fetches the rules of the
+version that runs, at its commit, and runs them as it does after an update; it refuses, and
+says which, when it can't). The release that was being installed is then recorded as not to be
+tried again by itself (unless it is the version now running, because a person finished the
+update by hand). Or remove `/var/lib/taskto-update/transaction` and
+`/var/lib/taskto-update/blocked`, and the checks are yours.
 
 **Alerts.** The unit fails (`systemctl status taskto-update`), and the status and the journal
 say why. For a message somewhere you will see, put one URL in
 `/etc/taskto/update-notify-url` (optional; root only, mode 600, since a webhook address is a
 secret; `install -m 600 /dev/null /etc/taskto/update-notify-url` and write the address into it).
 On every outcome but `up-to-date`, `skipped` and a dry run (so also `updated`, `failed`,
-`rolled-back`, `stopped`, `rollback-failed`, `interrupted` and every `blocked` night after a
-stop) the updater POSTs a small JSON body to it:
+`rolled-back`, `stopped`, `stop-failed`, `rollback-failed`, `interrupted` and every `blocked`
+night after a stop) the updater POSTs a small JSON body to it:
 
 ```json
 {"result":"stopped","from":"v0.2.0","to":"v0.3.0","reason":"…","backup":"/var/backups/taskto/…tar.gz","text":"taskto-update: stopped, v0.2.0 to v0.3.0: … (backup: …)"}
@@ -1220,8 +1264,8 @@ a command line (`ps` can't show it), and never logged; a notification has a shor
 down only leaves "the notification wasn't delivered" in the journal.
 
 **Where to look.** `/var/lib/taskto-update/status.json` has the last run: when, `result`
-(`updated`, `up-to-date`, `skipped`, `failed`, `rolled-back`, `stopped`, `rollback-failed`,
-`blocked`, `interrupted` or `cleared`), `from`, `to`, the commit (`sha`), the `reason`, the `backup` file, the
+(`updated`, `up-to-date`, `skipped`, `failed`, `rolled-back`, `stopped`, `stop-failed`,
+`rollback-failed`, `blocked`, `interrupted` or `cleared`), `from`, `to`, the commit (`sha`), the `reason`, the `backup` file, the
 images' `digests`, and `last_change`, the last run that changed or tried to change anything.
 Each run's one-line summary is in the journal: `journalctl -u taskto-update`. The unit fails
 (and `systemctl status taskto-update` shows it) when a run failed, rolled back, stopped, or is

@@ -12,15 +12,17 @@ put first, and **manual_upgrade** ticked when the release needs a person (below)
 workflow (`.github/workflows/release.yml`, the workflow's own `GITHUB_TOKEN` only, on a
 GitHub-hosted runner, the inputs reaching shell commands only as environment variables):
 
-1. checks the version is `vMAJOR.MINOR.PATCH` (the one grammar the updater uses: no leading
-   zeros, no suffix, at most 100 characters) and newer than the last release, and that its
-   tag doesn't exist;
+1. checks the version, the whole input and not just its first line, is `vMAJOR.MINOR.PATCH`
+   (the one grammar the updater uses: no leading zeros, no suffix, at most 100 characters)
+   and newer than the last release, and that its tag doesn't exist;
 2. checks CI passed on `main`'s head, and stops if it didn't, or hasn't finished;
-3. looks the tag up through the API once more, right before the push, and stops if it is
-   there (a push of an existing tag at the same commit would succeed, so the push alone
-   isn't the check), then tags that very commit, with `git push origin
-   <sha>:refs/tags/<version>`, which refuses a tag that exists at another commit, so a tag
-   is never moved;
+3. tags that very commit through the API's create-a-reference call (`POST
+   /repos/{owner}/{repo}/git/refs` with `ref=refs/tags/<version>` and the checked `sha`), which
+   GitHub answers with an error when the reference exists, whoever made it and at whatever
+   commit, even in the moment between the checks and this call: so a tag is never moved, nor
+   taken over (a `git push` of a tag that exists at the same commit would succeed, which is
+   why the push isn't used). The job has `contents: write` for this and the release, and
+   `actions: write` to start the images, and no other permission;
 4. creates the GitHub Release for that tag (`--verify-tag`) with the notes, and the line
    `manual-upgrade: true` first when **manual_upgrade** is ticked, so the marker is in the
    release from the moment it is published and no server can see it without; the generated
@@ -32,7 +34,7 @@ GitHub-hosted runner, the inputs reaching shell commands only as environment var
 Servers don't take the release before step 5 has finished: a release whose images aren't
 there yet doesn't count, and they look again the next night. Everything a server installs is
 taken from that one commit, and it refuses images that aren't labelled with it. A tag is never
-pushed twice, so a version's images never change; a mistake is fixed with the next version,
+created twice, so a version's images never change; a mistake is fixed with the next version,
 never by moving a tag.
 
 The first time, set each of the three packages to public in its settings

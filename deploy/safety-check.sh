@@ -17,6 +17,10 @@
 #
 #   TASKTO_ROOT  the Compose project (default /srv/taskto)
 #   DOCKER       the docker command (default docker)
+#
+# Compose is always given its inputs: the project name, DIR's .env, and DIR's compose.yaml and,
+# when it exists, compose.override.yaml, and no other file (the updater refuses an install that
+# has one). The same list the updater starts the stack with.
 set -euo pipefail
 
 DOCKER=${DOCKER:-docker}
@@ -29,6 +33,7 @@ case ${1:-} in
 		echo "usage: safety-check.sh [--static PROJECT-DIRECTORY]" >&2
 		exit 2
 	}
+	dir=$(cd "$dir" && pwd)
 	;;
 *)
 	echo "usage: safety-check.sh [--static PROJECT-DIRECTORY]" >&2
@@ -36,27 +41,33 @@ case ${1:-} in
 	;;
 esac
 cd "${TASKTO_ROOT:-/srv/taskto}"
+base=${dir:-$PWD}
+cargs=(--project-directory "$base" --project-name taskto --env-file "$base/.env" -f "$base/compose.yaml")
+[ ! -e "$base/compose.override.yaml" ] || cargs+=(-f "$base/compose.override.yaml")
 fail() {
 	echo "FAIL: $*"
 	exit 1
 }
 # docker, away from this script's own standard input (it may be the script itself).
 d() { "$DOCKER" "$@" </dev/null; }
+# docker compose, on the project's explicit inputs.
+c() { d compose "${cargs[@]}" "$@"; }
 
 if [ "$mode" = static ]; then
-	cfg=$(d compose --project-directory "$dir" config --format json) || fail "can't render the Compose settings"
+	cfg=$(c config --format json) || fail "can't render the Compose settings"
 	# A jq test on the settings, for one service (S): `t S 'filter'`.
 	t() { jq -e --arg s "$1" "$2" >/dev/null <<<"$cfg"; }
 	t taskto '.services[$s] != null' && t cli-worker '.services[$s] != null' || fail "the server or the CLI worker isn't in the Compose settings (is the cli profile on?)"
 
-	# The server runs as 65532: the Compose file's user if it sets one, else the image's.
+	# The server runs as 65532:65532, exactly as the running container check wants it: the
+	# Compose file's user if it sets one, else the image's.
 	user=$(jq -r '.services.taskto.user // empty' <<<"$cfg")
 	if [ -z "$user" ]; then
 		img=$(jq -r '.services.taskto.image // empty' <<<"$cfg")
 		[ -n "$img" ] || fail "the server has no image"
 		user=$(d image inspect --format '{{.Config.User}}' "$img") || fail "can't tell the server's user"
 	fi
-	[[ $user =~ ^65532(:65532)?$ ]] || fail "the server wouldn't run as 65532 (its user is '${user:-root}')"
+	[ "$user" = 65532:65532 ] || fail "the server wouldn't run as 65532:65532 (its user is '${user:-root}')"
 
 	# No capabilities, no new privileges, not privileged, in both; and beyond that nothing added:
 	# none for the server, exactly SETUID, SETGID, CHOWN and KILL for the worker. (The worker's own
@@ -79,7 +90,12 @@ if [ "$mode" = static ]; then
 	t taskto '.services.taskto.environment.TASKTO_CLI_WORKERS == "container"' || fail "CLI workers aren't in container mode"
 
 	# The worker can't see the server's data, has no host path and no Docker socket. A volume is
-	# its effective Docker name, which is what the same name in two services shares.
+	# its effective Docker name, which is what the same name in two services shares. No service
+	# takes another's mounts (volumes_from), and no file is mounted into the worker as a config or
+	# a secret (the running check sees both as host paths).
+	t taskto '[.services[] | select((.volumes_from // []) | length > 0)] | length == 0' || fail "a service takes another's mounts (volumes_from)"
+	t cli-worker '((.services[$s].configs // []) | length == 0) and ((.services[$s].secrets // []) | length == 0)' ||
+		fail "the worker has a config or a secret mounted"
 	dv=$(jq -r '. as $c | [.services.taskto.volumes[]? | select(.target == "/data" and .type == "volume") | ($c.volumes[.source // ""].name // .source)][0] // empty' <<<"$cfg")
 	[ -n "$dv" ] || fail "can't tell the server's data volume"
 	jq -e --arg v "$dv" '. as $c | [.services["cli-worker"].volumes[]? | select(.type == "bind" or (.type == "volume" and (($c.volumes[.source // ""].name // .source) == $v)))] | length == 0' <<<"$cfg" >/dev/null ||
@@ -99,8 +115,8 @@ if [ "$mode" = static ]; then
 	exit 0
 fi
 
-s=$(d compose ps -q taskto) || fail "can't list the server's container"
-w=$(d compose ps -q cli-worker) || fail "can't list the CLI worker's container"
+s=$(c ps -q taskto) || fail "can't list the server's container"
+w=$(c ps -q cli-worker) || fail "can't list the CLI worker's container"
 [ -n "$s" ] && [ -n "$w" ] || fail "the server or the CLI worker isn't running"
 # Whole `docker inspect` output of each, captured so a failure is a failure, not an empty pipe.
 si=$(d inspect "$s") || fail "can't inspect the server's container"
@@ -119,9 +135,9 @@ q '(.[0].HostConfig.CapAdd // []) | length == 0' <<<"$si" || fail "the server ha
 q '[(.[0].HostConfig.CapAdd // [])[] | ltrimstr("CAP_")] | sort == ["CHOWN","KILL","SETGID","SETUID"]' <<<"$wi" ||
 	fail "the worker has capabilities beyond SETUID, SETGID, CHOWN and KILL"
 
-d compose exec -T cli-worker true || fail "can't run a command in the worker"
+c exec -T cli-worker true || fail "can't run a command in the worker"
 # Without DAC capabilities a few root-only directories are unreadable, to the CLIs too.
-suid=$(d compose exec -T cli-worker find / -xdev -perm /6000 -type f 2>/dev/null || true)
+suid=$(c exec -T cli-worker find / -xdev -perm /6000 -type f 2>/dev/null || true)
 [ -z "$suid" ] || fail "the worker image has setuid or setgid programs: $suid"
 
 # No development switch and no secret in either environment (names only are shown).

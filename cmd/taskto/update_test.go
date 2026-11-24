@@ -434,7 +434,7 @@ func (e *updEnv) wantUntouched() {
 	if left, _ := os.ReadDir(e.backups); len(left) != 0 {
 		e.t.Errorf("%d backups made, want none", len(left))
 	}
-	for _, never := range []string{`^compose exec`, `^compose up`, `^compose down`, `^compose stop`, `^volume rm`, `^compose run`, `^run `, `^tag `, `^systemctl restart`} {
+	for _, never := range []string{`^compose exec`, `^compose create`, `^compose start`, `^update `, `^rm `, `^compose down`, `^compose stop`, `^volume rm`, `^compose run`, `^run `, `^tag `, `^systemctl restart`} {
 		if e.count(never) != 0 {
 			e.t.Errorf("a call matching %s was made", never)
 		}
@@ -558,7 +558,7 @@ func TestUpdateSucceeds(t *testing.T) {
 	if got := e.read("state/previous/.env"); !strings.Contains(got, "TASKTO_VERSION="+updOld) {
 		t.Errorf("previous .env = %q", got)
 	}
-	backedUp, up := e.index(`^compose exec -T taskto taskto backup -`), e.index(`^compose up -d --no-build --pull never --remove-orphans --wait .* @`+updNew+`$`)
+	backedUp, up := e.index(`^compose exec -T taskto taskto backup -`), e.index(`^compose start --wait --wait-timeout \d+ @`+updNew+`$`)
 	if backedUp < 0 || up < 0 || backedUp > up {
 		t.Errorf("backup at %d, up at %d: want the backup first", backedUp, up)
 	}
@@ -573,8 +573,18 @@ func TestUpdateSucceeds(t *testing.T) {
 			t.Errorf("the running %s image wasn't kept before the backup (call %d, backup %d)\n%s", n, i, backedUp, strings.Join(e.calls(), "\n"))
 		}
 	}
-	if e.count(`^compose stop|^compose down|^compose run|^volume|^run `) != 1 { // only `volume inspect`, for the disk check
-		t.Errorf("a command the updater never runs was run\n%s", strings.Join(e.calls(), "\n"))
+	if e.count(`^compose stop|^compose down|^compose run|^volume (rm|create|prune)|^run |^update |^rm `) != 0 {
+		t.Errorf("a command the updater never runs here was run\n%s", strings.Join(e.calls(), "\n"))
+	}
+	// Every named volume of the new settings was looked at, and none made.
+	for _, v := range []string{"taskto_data", "taskto_cli-run", "taskto_cli-homes", "taskto_caddy-data", "taskto_caddy-config"} {
+		if e.count(`^volume inspect `+v+`( |$)`) < 1 {
+			t.Errorf("the volume %s wasn't looked at before the switch", v)
+		}
+	}
+	// The containers were made, checked and only then started; one explicit list of Compose files.
+	if made, started := e.index(`^compose create `), e.index(`^compose start `); made < 0 || started < made || e.count(`^compose up`) != 0 {
+		t.Errorf("create at %d, start at %d, up %d: the containers are made before they start, never by up", made, started, e.count(`^compose up`))
 	}
 	if got := e.read("fake/running"); strings.TrimSpace(got) != updNew {
 		t.Errorf("the server runs %q", got)
@@ -611,7 +621,7 @@ func TestUpdateNeverDowngradesNorRepeats(t *testing.T) {
 	if code, out := e.run("--to", updNew); code != 1 || !strings.Contains(out, "already on") {
 		t.Fatalf("--to this release: exit %d\n%s", code, out)
 	}
-	if e.count(`^pull|^compose exec|^compose up`) != 0 {
+	if e.count(`^pull|^compose exec|^compose create|^compose start`) != 0 {
 		t.Error("something was pulled, backed up or started")
 	}
 }
@@ -793,7 +803,7 @@ func TestUpdateRefusesWithoutTheFirewallScript(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	e.wantStatus("failed", "isn't installed")
-	if e.count(`^pull|^compose exec|^compose up`) != 0 {
+	if e.count(`^pull|^compose exec|^compose create|^compose start`) != 0 {
 		t.Error("something was pulled, backed up or started")
 	}
 }
@@ -915,7 +925,7 @@ func TestUpdateMainChannelTakesAGreenDescendant(t *testing.T) {
 	e.setRunning(a)
 	e.publish(a)
 	e.write("etc/install.env", e.read("etc/install.env")+"TASKTO_UPDATE_CHANNEL='main'\n")
-	e.release(updNew, "a release the main channel doesn't look at", false, false)
+	e.release(updNew, "a release the main channel doesn't look at\n\nmanual-upgrade: true\n", false, false)
 	run := func(sha, conclusion string) map[string]any {
 		return map[string]any{"head_sha": sha, "head_branch": "main", "conclusion": conclusion}
 	}
@@ -1160,13 +1170,43 @@ func TestUpdateLogsInWithAConfigOfItsOwn(t *testing.T) {
 	}
 }
 
+// workflowStep is the shell script of a step of a workflow, by the step's name.
+func workflowStep(t *testing.T, workflow, name string) string {
+	t.Helper()
+	lines := strings.Split(readRepoFile(t, workflow), "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) != "- name: "+name {
+			continue
+		}
+		var script []string
+		in := false
+		for _, l := range lines[i+1:] {
+			if strings.HasPrefix(l, "      - ") {
+				break
+			}
+			switch {
+			case strings.TrimSpace(l) == "run: |":
+				in = true
+			case in && strings.HasPrefix(l, "          "):
+				script = append(script, strings.TrimPrefix(l, "          "))
+			case in && strings.TrimSpace(l) == "":
+				script = append(script, "")
+			}
+		}
+		return strings.Join(script, "\n")
+	}
+	t.Fatalf("%s has no step %q", workflow, name)
+	return ""
+}
+
 // Anything the updater does, the workflow that cuts a release makes possible: one commit,
-// the tag atomic at it, the notes complete before the release counts.
-func TestReleaseWorkflowTagsTheCheckedCommitAtomically(t *testing.T) {
+// the tag made by the API's create-a-reference call at it (which can't take over a tag that
+// exists), the notes complete before the release counts.
+func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
 	wf := readRepoFile(t, ".github/workflows/release.yml")
 	for _, want := range []string{
-		`git push origin "$GITHUB_SHA:refs/tags/$VERSION"`, // a tag that exists at another commit is refused
-		`git/ref/tags/$VERSION`,                            // and one at this commit is found first, through the API
+		`--method POST "repos/$GH_REPO/git/refs"`, // the API creates the reference only if there is none
+		`-f "ref=refs/tags/$VERSION"`, `-f "sha=$GITHUB_SHA"`,
 		`--verify-tag`,
 		`manual_upgrade:`, `notes:`,
 		`manual-upgrade: true`,
@@ -1176,16 +1216,30 @@ func TestReleaseWorkflowTagsTheCheckedCommitAtomically(t *testing.T) {
 			t.Errorf("release.yml doesn't have %q", want)
 		}
 	}
-	if strings.Contains(wf, "--target") || strings.Contains(wf, "--force") || strings.Contains(wf, "push -f") {
-		t.Error("release.yml makes the tag by other means than the atomic push, or forces")
+	// No git push of the tag (which succeeds for a tag that exists at the same commit), no force.
+	for _, never := range []string{"git push", "--target", "--force", "push -f"} {
+		if strings.Contains(wf, never) {
+			t.Errorf("release.yml has %q: the tag is made by the API, never pushed or forced", never)
+		}
 	}
-	// The tag is looked for through the API right before it is pushed: a push of an existing
-	// tag at the same commit succeeds, so the push alone doesn't say it was made new.
-	if i, j := strings.Index(wf, `git/ref/tags/$VERSION`), strings.Index(wf, `git push origin "$GITHUB_SHA:refs/tags/$VERSION"`); i < 0 || j < i {
-		t.Error("release.yml doesn't check through the API that the tag doesn't exist before pushing it")
+	if i, j := strings.Index(wf, `git/refs`), strings.Index(wf, `gh release create`); i < 0 || j < i {
+		t.Error("release.yml doesn't make the tag before it creates the release")
 	}
-	if strings.Contains(wf, "which fails if the tag exists") || strings.Contains(wf, "Fails if the tag exists, by anyone") {
-		t.Error("release.yml claims the push alone fails when the tag exists")
+	// The job's permissions: contents (the tag and the release) and actions (the images), and nothing broader.
+	job := wf[strings.Index(wf, "  release:\n"):]
+	perms := job[strings.Index(job, "    permissions:\n"):]
+	perms = perms[:strings.Index(perms, "    env:")]
+	var granted []string
+	for _, l := range strings.Split(perms, "\n")[1:] {
+		if l = strings.TrimSpace(l); l != "" {
+			granted = append(granted, strings.Fields(l)[0]+" "+strings.Fields(l)[1])
+		}
+	}
+	if strings.Join(granted, ",") != "contents: write,actions: write" || strings.Contains(wf, "write-all") {
+		t.Errorf("the release job's permissions are %v, want contents: write and actions: write only", granted)
+	}
+	if !strings.Contains(wf, "\npermissions:\n  contents: read\n") {
+		t.Error("the workflow's default permission isn't contents: read")
 	}
 	// An input reaches a shell only as an environment variable.
 	for i, line := range strings.Split(wf, "\n") {
@@ -1197,14 +1251,61 @@ func TestReleaseWorkflowTagsTheCheckedCommitAtomically(t *testing.T) {
 	if !strings.Contains(readRepoFile(t, ".github/scripts/images.sh"), `--label org.opencontainers.image.revision="$sha"`) {
 		t.Error("images.sh doesn't label the images with their commit")
 	}
+	docs := readRepoFile(t, "docs/releasing.md")
+	if !strings.Contains(docs, "POST\n   /repos/{owner}/{repo}/git/refs") || strings.Contains(docs, "git push origin") {
+		t.Error("docs/releasing.md doesn't describe the tag as made through the API")
+	}
+}
+
+// The tag step, run as written, with a gh that records what it is asked: it creates the
+// reference through the API, at the commit and for the version, and it stops, with nothing
+// else made, when the API refuses (the tag exists).
+func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
+	step := workflowStep(t, ".github/workflows/release.yml", "Create the tag at the commit CI passed on")
+	for _, tc := range []struct {
+		name     string
+		refuse   bool
+		wantFail bool
+	}{{"the tag is new", false, false}, {"the API says the reference exists", true, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			log := filepath.Join(dir, "gh-calls")
+			stub := "#!/bin/sh\necho \"$*\" >>" + log + "\nif [ -n \"$REFUSE\" ]; then echo 'HTTP 422: Reference already exists' >&2; exit 1; fi\n"
+			if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(stub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", "-e", "-c", step)
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "GH_REPO=o/r", "VERSION=v1.2.3", "GITHUB_SHA="+strings.Repeat("a", 40))
+			if tc.refuse {
+				cmd.Env = append(cmd.Env, "REFUSE=1")
+			}
+			out, err := cmd.CombinedOutput()
+			if (err != nil) != tc.wantFail {
+				t.Fatalf("err = %v, want failure %v\n%s", err, tc.wantFail, out)
+			}
+			b, _ := os.ReadFile(log)
+			for _, want := range []string{"api --method POST repos/o/r/git/refs", "ref=refs/tags/v1.2.3", "sha=" + strings.Repeat("a", 40)} {
+				if !strings.Contains(string(b), want) {
+					t.Errorf("gh was called with %q, want %q", b, want)
+				}
+			}
+			if strings.Count(string(b), "\n") != 1 {
+				t.Errorf("gh was called more than once: %q", b)
+			}
+			if tc.wantFail && !strings.Contains(string(out), "::error::can't create the tag v1.2.3") {
+				t.Errorf("the failure isn't reported: %s", out)
+			}
+		})
+	}
 }
 
 // The version check of release.yml, run as it is written there, and the updater's grammar
-// agree: vMAJOR.MINOR.PATCH, at most 100 characters.
+// agree: vMAJOR.MINOR.PATCH, at most 100 characters, and the whole input is the version: a
+// second line that isn't, whatever the first says, is refused.
 func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
 	var check string
 	for _, line := range strings.Split(readRepoFile(t, ".github/workflows/release.yml"), "\n") {
-		if strings.Contains(line, `printf '%s' "$VERSION" | grep -Eq`) {
+		if strings.Contains(line, `[[ $VERSION =~ `) {
 			check = strings.TrimSpace(line)
 		}
 	}
@@ -1214,6 +1315,7 @@ func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
 	for tag, ok := range map[string]bool{
 		"v1.2.3": true, tagOfLength(100): true, tagOfLength(101): false,
 		"v01.2.3": false, "v1.2.3-rc1": false, "1.2.3": false, "v1.2": false,
+		"v1.2.3\nv1.2.3": false, "v1.2.3\nx": false, "x\nv1.2.3": false, "v1.2.3\n": false, "v1.2.3\n\n": false, "": false,
 	} {
 		cmd := exec.Command("bash", "-c", `fail() { exit 1; }; `+check)
 		cmd.Env = append(os.Environ(), "VERSION="+tag)

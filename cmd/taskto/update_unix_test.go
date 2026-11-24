@@ -17,7 +17,7 @@ import (
 func TestUpdateKilledHalfWayIsFoundAndBlocks(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	e.write("fake/block-up", "") // `compose up` of the new version waits, for ever
+	e.write("fake/block-up", "") // `compose start` of the new version waits, for ever
 	cmd := e.command()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -25,10 +25,10 @@ func TestUpdateKilledHalfWayIsFoundAndBlocks(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(done) }()
-	for deadline := time.Now().Add(30 * time.Second); e.count(`^compose up`) == 0; time.Sleep(50 * time.Millisecond) {
+	for deadline := time.Now().Add(30 * time.Second); e.count(`^compose start`) == 0; time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			t.Fatal("the update never got to `compose up`")
+			t.Fatal("the update never got to `compose start`")
 		}
 	}
 	// .env is the new version's and the old server still runs: the state to be found.
@@ -67,8 +67,9 @@ func TestUpdateKilledHalfWayIsFoundAndBlocks(t *testing.T) {
 			t.Fatalf("docker was called by a run that is blocked\n%s", strings.Join(e.calls(), "\n"))
 		}
 	}
-	// A person who removes the record and leaves the .env as it is is stopped by the second
-	// defense: the server isn't the version the .env says.
+	// A person who starts the old version again, removes the record and leaves the .env as it is
+	// is stopped by the second defense: the server isn't the version the .env says.
+	e.setRunning(updOld)
 	if err := os.Remove(filepath.Join(e.state, "transaction")); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestUpdateKilledHalfWayIsFoundAndBlocks(t *testing.T) {
 func TestUpdateKilledAfterTheRevertIsBlockedAndNotRetried(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	e.failCalls(`^compose up .* @` + updNew + `$`)
+	e.failCalls(`^compose start .* @` + updNew + `$`)
 	// The first call of the old version's safety check, after the old version was started again.
 	e.write("fake/kill-on", "^compose exec -T cli-worker true @"+updOld+"$\n")
 	cmd := e.command()
@@ -123,12 +124,12 @@ func TestUpdateKilledAfterTheRevertIsBlockedAndNotRetried(t *testing.T) {
 	if code, out := e.run("--clear-block"); code != 0 {
 		t.Fatalf("clear-block: exit %d\n%s", code, out)
 	}
-	ups, backups := e.count(`^compose up`), e.count(`^compose exec -T taskto taskto backup`)
+	ups, backups := e.count(`^compose start`), e.count(`^compose exec -T taskto taskto backup`)
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("the run after clearing: exit %d", code)
 	}
 	e.wantStatus("skipped", "failed here before")
-	if e.count(`^compose up`) != ups || e.count(`^compose exec -T taskto taskto backup`) != backups {
+	if e.count(`^compose start`) != ups || e.count(`^compose exec -T taskto taskto backup`) != backups {
 		t.Error("the release that failed was tried again")
 	}
 }

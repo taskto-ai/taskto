@@ -91,7 +91,7 @@ func TestUpdaterNeverRestoresOrTouchesVolumes(t *testing.T) {
 		}
 	}
 	// The notification's URL never reaches a command line, where ps would show it.
-	for _, want := range []string{`"$CURL" -K -`, "connect-timeout", "max-time"} {
+	for _, want := range []string{`"$CURL" -q -K -`, "connect-timeout", "max-time"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the notification doesn't use %q", want)
 		}
@@ -121,9 +121,18 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 		edit, reason string
 		imageUser    string
 	}{
-		"the server runs as root":                       {edit: `.services.taskto.user = "0"`, reason: "the server wouldn't run as 65532"},
-		"the server runs as root by name":               {edit: `.services.taskto.user = "root:root"`, reason: "the server wouldn't run as 65532"},
-		"the server runs as another user":               {edit: `.services.taskto.user = "1000"`, reason: "the server wouldn't run as 65532"},
+		"the server runs as root":         {edit: `.services.taskto.user = "0"`, reason: "the server wouldn't run as 65532"},
+		"the server runs as root by name": {edit: `.services.taskto.user = "root:root"`, reason: "the server wouldn't run as 65532"},
+		"the server runs as another user": {edit: `.services.taskto.user = "1000"`, reason: "the server wouldn't run as 65532"},
+		// The live check wants exactly 65532:65532; so does this one.
+		"the server's user has no group":      {edit: `.services.taskto.user = "65532"`, reason: "the server wouldn't run as 65532:65532"},
+		"the server's user has another group": {edit: `.services.taskto.user = "65532:0"`, reason: "the server wouldn't run as 65532:65532"},
+		"the image's user has no group":       {imageUser: "65532", reason: "the server wouldn't run as 65532:65532"},
+		// Mounts inherited or made by Compose's other means.
+		"the worker takes the server's mounts":          {edit: `.services["cli-worker"].volumes_from = ["taskto"]`, reason: "volumes_from"},
+		"another service takes the server's mounts":     {edit: `.services.extra = {image: "caddy:2", volumes_from: ["taskto"]}`, reason: "volumes_from"},
+		"a config mounted into the worker":              {edit: `.services["cli-worker"].configs = [{source: "c", target: "/c"}]`, reason: "a config or a secret mounted"},
+		"a secret mounted into the worker":              {edit: `.services["cli-worker"].secrets = [{source: "s", target: "/run/secrets/s"}]`, reason: "a config or a secret mounted"},
 		"the server image's own user is root":           {imageUser: "root", reason: "the server wouldn't run as 65532"},
 		"a development switch in the server":            {edit: `.services.taskto.environment.TASKTO_INSECURE_COOKIES = "true"`, reason: "TASKTO_INSECURE_COOKIES"},
 		"a secret in the worker":                        {edit: `.services["cli-worker"].environment.OPENAI_API_KEY = "x"`, reason: "OPENAI_API_KEY"},
@@ -162,7 +171,7 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 			}
 			// Nothing was started, backed up, or kept as a way back: the candidate was never run.
 			e.wantUntouched()
-			if e.count(`^compose up`) != 0 || e.exists("state/previous") {
+			if e.count(`^compose start`) != 0 || e.exists("state/previous") {
 				t.Errorf("an unsafe candidate was started\n%s", strings.Join(e.calls(), "\n"))
 			}
 			if strings.TrimSpace(e.read("fake/running")) != updOld {
@@ -180,7 +189,7 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 		setup  func(e *updEnv)
 		reason string
 	}{
-		"docker compose up fails before the server starts": {func(e *updEnv) { e.failCalls(`^compose up .* @` + updNew + `$`) }, "docker compose up failed"},
+		"docker compose start fails before the server starts": {func(e *updEnv) { e.failCalls(`^compose start .* @` + updNew + `$`) }, "docker compose create and start failed"},
 		// An image tag moved after the checks, before the start: the start never happens.
 		"a tag moves between the checks and the start": {func(e *updEnv) {
 			e.write("fake/retag-on-backup", "ghcr.io/taskto-ai/taskto-cli-worker:"+updNew+"\n")
@@ -188,8 +197,8 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 		// The old tags moved too: the old images come back by the ids the containers had.
 		"the old version's tags have moved": {func(e *updEnv) {
 			e.write("fake/retagged", "ghcr.io/taskto-ai/taskto:"+updOld+"\nghcr.io/taskto-ai/taskto-cli-worker:"+updOld+"\n")
-			e.failCalls(`^compose up .* @` + updNew + `$`)
-		}, "docker compose up failed"},
+			e.failCalls(`^compose start .* @` + updNew + `$`)
+		}, "docker compose create and start failed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newUpdEnv(t)
@@ -232,12 +241,12 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 				t.Error("the backup isn't kept")
 			}
 			// The release that failed isn't tried again every night.
-			ups, backups := e.count(`^compose up`), e.count(`^compose exec -T taskto taskto backup`)
+			ups, backups := e.count(`^compose start`), e.count(`^compose exec -T taskto taskto backup`)
 			if code, _ := e.run(); code != 0 {
 				t.Fatalf("next run: exit %d", code)
 			}
 			e.wantStatus("skipped", "failed here before")
-			if e.count(`^compose up`) != ups || e.count(`^compose exec -T taskto taskto backup`) != backups {
+			if e.count(`^compose start`) != ups || e.count(`^compose exec -T taskto taskto backup`) != backups {
 				t.Errorf("the next run tried the failed release again\n%s", strings.Join(e.calls(), "\n"))
 			}
 		})
@@ -249,7 +258,7 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 	if code, _ := e.run(); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
-	if e.count(`^compose up .* @`+updNew+`$`) != 0 {
+	if e.count(`^compose start .* @`+updNew+`$`) != 0 {
 		t.Errorf("the new version was started on a tag that moved\n%s", strings.Join(e.calls(), "\n"))
 	}
 }
@@ -259,15 +268,15 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 // says which backup to restore.
 func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 	for name, setup := range map[string]func(e *updEnv){
-		"the server isn't healthy":                   func(e *updEnv) { e.write("fake/health-bad", updNew+"\n") },
-		"docker compose up fails after it started":   func(e *updEnv) { e.write("fake/upfail-after-start", updNew) },
-		"the server runs as root":                    func(e *updEnv) { e.mutate(updNew, "root") },
-		"the server has a development switch":        func(e *updEnv) { e.mutate(updNew, "insecure") },
-		"the server isn't in container mode":         func(e *updEnv) { e.mutate(updNew, "nomode") },
-		"the worker is given NET_ADMIN":              func(e *updEnv) { e.mutate(updNew, "netadmin") },
-		"the worker has a setuid program":            func(e *updEnv) { e.mutate(updNew, "suid") },
-		"the worker can see the data":                func(e *updEnv) { e.mutate(updNew, "workerdata") },
-		"the proxy still answers as the old version": func(e *updEnv) { e.write("fake/proxy-version", updOld) },
+		"the server isn't healthy":                    func(e *updEnv) { e.write("fake/health-bad", updNew+"\n") },
+		"docker compose start fails after it started": func(e *updEnv) { e.write("fake/upfail-after-start", updNew) },
+		"the server runs as root":                     func(e *updEnv) { e.mutate(updNew, "root") },
+		"the server has a development switch":         func(e *updEnv) { e.mutate(updNew, "insecure") },
+		"the server isn't in container mode":          func(e *updEnv) { e.mutate(updNew, "nomode") },
+		"the worker is given NET_ADMIN":               func(e *updEnv) { e.mutate(updNew, "netadmin") },
+		"the worker has a setuid program":             func(e *updEnv) { e.mutate(updNew, "suid") },
+		"the worker can see the data":                 func(e *updEnv) { e.mutate(updNew, "workerdata") },
+		"the proxy still answers as the old version":  func(e *updEnv) { e.write("fake/proxy-version", updOld) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newUpdEnv(t)
@@ -297,7 +306,7 @@ func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 			if e.count(`^compose stop`) != 1 {
 				t.Errorf("the stack wasn't stopped once\n%s", strings.Join(e.calls(), "\n"))
 			}
-			if n := e.count(`^compose up`); n != 1 {
+			if n := e.count(`^compose start`); n != 1 {
 				t.Errorf("%d starts: the update's only", n)
 			}
 			if e.count(`^tag sha256:run-\S+ ghcr.io/\S+:`+updOld+` `) != 0 {
@@ -375,7 +384,7 @@ func TestUpdateRevertFailureStopsAndStaysStopped(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	// The new version can't be started, and neither can the old.
-	e.failCalls(`^compose up .* @`+updNew+`$`, `^compose up .* @`+updOld+`$`)
+	e.failCalls(`^compose start .* @`+updNew+`$`, `^compose start .* @`+updOld+`$`)
 	code, out := e.run()
 	if code != 2 {
 		t.Fatalf("exit %d, want 2", code)
@@ -384,7 +393,7 @@ func TestUpdateRevertFailureStopsAndStaysStopped(t *testing.T) {
 	if !strings.Contains(out, "rollback-failed") {
 		t.Error("the journal doesn't say so")
 	}
-	if n := e.count(`^compose up`); n != 2 {
+	if n := e.count(`^compose start`); n != 2 {
 		t.Errorf("%d starts: the update's and the revert's, no more", n)
 	}
 	if tx := e.transaction(); tx["phase"] != "rollback-failed" {
@@ -404,22 +413,109 @@ func TestUpdateRevertFailureStopsAndStaysStopped(t *testing.T) {
 	e.wantStatus("rollback-failed", "")
 }
 
-// A failure's bookkeeping never gets in the revert's way: a `failed` file that can't be written
-// (here, a directory) still ends in the old version running.
-func TestUpdateRevertDoesNotDependOnBookkeeping(t *testing.T) {
+// The revert never depends on the bookkeeping: a `failed` file that can't be written (here, a
+// directory) still ends in the old version running. But a release that can't be recorded as
+// failed is not forgotten: the update's record stays, which blocks the next run, whatever it is
+// asked, with no candidate started, until a person has looked and cleared it.
+func TestUpdateRevertThatCantRecordTheFailureStaysBlocked(t *testing.T) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
-	e.failCalls(`^compose up .* @` + updNew + `$`)
+	e.failCalls(`^compose start .* @` + updNew + `$`)
 	if err := os.MkdirAll(filepath.Join(e.state, "failed"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if code, _ := e.run(); code != 1 {
-		t.Fatalf("exit %d, want 1", code)
+	if code, _ := e.run(); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
 	}
-	e.wantStatus("rolled-back", "")
+	e.wantStatus("rolled-back", "couldn't be recorded as failed")
 	e.wantOldFilesBack()
 	if strings.TrimSpace(e.read("fake/running")) != updOld {
 		t.Error("the old version isn't back")
+	}
+	if !e.exists("state/transaction") || !e.exists("state/blocked") {
+		t.Fatal("the record of the update was removed, though the failure wasn't recorded: the next night would try the release again")
+	}
+	if tx := e.transaction(); tx["phase"] != "rolled-back" {
+		t.Errorf("the record = %v", tx)
+	}
+	// The next runs, whatever they are asked, start nothing.
+	starts, calls := e.count(`^compose (create|start)`), len(e.calls())
+	for _, args := range [][]string{nil, {"--to", updNew}} {
+		code, out := e.run(args...)
+		if code != 1 || !strings.Contains(out, "blocked") || !strings.Contains(out, "couldn't be recorded as failed") {
+			t.Fatalf("the run after (%v): exit %d\n%s", args, code, out)
+		}
+	}
+	if e.count(`^compose (create|start)`) != starts || len(e.calls()) != calls {
+		t.Errorf("a candidate was started by a run that is blocked\n%s", strings.Join(e.calls(), "\n"))
+	}
+	// Clearing refuses while the failure still can't be recorded, and keeps the record.
+	if code, out := e.run("--clear-block"); code != 1 || !strings.Contains(out, "can't record "+updNew+" as failed") || !e.exists("state/transaction") {
+		t.Fatalf("clear-block with the record still unwritable: exit %d\n%s", code, out)
+	}
+	// Once a person has put the state right, clearing records the release, and it isn't tried again.
+	if err := os.Remove(filepath.Join(e.state, "failed")); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := e.run("--clear-block"); code != 0 {
+		t.Fatalf("clear-block: exit %d\n%s", code, out)
+	}
+	if !strings.Contains(e.read("state/failed"), updNew+"\n") || e.exists("state/transaction") {
+		t.Error("the release wasn't recorded as failed before the record was removed")
+	}
+	if code, _ := e.run(); code != 0 {
+		t.Fatalf("the run after clearing: exit %d", code)
+	}
+	e.wantStatus("skipped", "failed here before")
+	if e.count(`^compose (create|start)`) != starts {
+		t.Error("the release that failed was tried again")
+	}
+}
+
+// An update killed between writing that the release failed and removing the update's record
+// leaves both: the next run is blocked (interrupted), and once cleared the release is not
+// tried again. The failed list is written to a file of its own and moved into place, before
+// the record goes.
+func TestUpdateKilledBetweenTheFailureRecordAndTheTransaction(t *testing.T) {
+	e := newUpdEnv(t)
+	e.release(updNew, "", false, false)
+	e.write("state/failed", updNew+"\n")
+	e.write("state/transaction", `{"from":"`+updOld+`","to":"`+updNew+`","phase":"starting","backup":"","volume":"taskto_data"}`)
+	calls := len(e.calls())
+	for _, args := range [][]string{nil, {"--to", updNew}} {
+		if code, out := e.run(args...); code != 1 || !strings.Contains(out, "result=interrupted") {
+			t.Fatalf("the run (%v): exit %d\n%s", args, code, out)
+		}
+	}
+	if len(e.calls()) != calls {
+		t.Error("docker was called by a run that is blocked")
+	}
+	if code, out := e.run("--clear-block"); code != 0 {
+		t.Fatalf("clear-block: exit %d\n%s", code, out)
+	}
+	if strings.Count(e.read("state/failed"), updNew) != 1 {
+		t.Errorf("failed = %q: recorded twice, or not at all", e.read("state/failed"))
+	}
+	if code, _ := e.run(); code != 0 {
+		t.Fatal("the run after clearing")
+	}
+	e.wantStatus("skipped", "failed here before")
+	if e.count(`^compose (create|start)`) != 0 {
+		t.Error("the release that failed was tried again")
+	}
+	// The order, in the script: the failure is recorded (durably, through a file of its own that is
+	// moved into place) before the record of the update is removed, in the revert and in the clearing.
+	script := readRepoFile(t, "deploy/taskto-update.sh")
+	revert := script[strings.Index(script, "if revert; then"):]
+	if i, j := strings.Index(revert, `record_failed "$to"`), strings.Index(revert, `rm -f "$TX"`); i < 0 || j < i {
+		t.Error("the revert removes the record before it has recorded the failure")
+	}
+	rf := script[strings.Index(script, "record_failed() {"):]
+	rf = rf[:strings.Index(rf, "\n}\n")]
+	for _, want := range []string{`>"$f.new"`, "sync", `mv -fT "$f.new" "$f"`} {
+		if !strings.Contains(rf, want) {
+			t.Errorf("record_failed doesn't have %q", want)
+		}
 	}
 }
 
@@ -432,7 +528,7 @@ func TestUpdateUsesTheServersOwnVolume(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	e.wantStatus("updated", "")
-	if e.count(`^volume inspect acme_data `) != 1 || e.count(`taskto_data`) != 0 {
+	if e.count(`^volume inspect acme_data --format`) != 1 || e.count(`^volume inspect acme_data @`) != 1 || e.count(`taskto_data`) != 0 {
 		t.Errorf("the server's own volume wasn't the one looked at\n%s", strings.Join(e.calls(), "\n"))
 	}
 	e.wantNeverRestores()
@@ -476,12 +572,12 @@ func TestClearBlock(t *testing.T) {
 	}
 	e.wantStatus("cleared", "")
 	// The release that failed isn't tried again by itself.
-	ups := e.count(`^compose up`)
+	ups := e.count(`^compose start`)
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("the next run: exit %d", code)
 	}
 	e.wantStatus("skipped", "failed here before")
-	if e.count(`^compose up`) != ups {
+	if e.count(`^compose start`) != ups {
 		t.Error("the next run tried the failed release again")
 	}
 
@@ -561,7 +657,7 @@ func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	e.wantStatus("skipped", "v2.0.0 needs manual steps")
-	if e.count(`^pull|^compose up|^compose exec`) != 0 {
+	if e.count(`^pull|^compose create|^compose start|^compose exec`) != 0 {
 		t.Error("something was pulled, backed up or started")
 	}
 	e.gh.mu.Lock()
@@ -583,7 +679,7 @@ func TestUpdateReadsEveryPageOfReleases(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	e.wantStatus("skipped", "didn't answer (page 2")
-	if e.count(`^pull|^compose up|^compose exec`) != 0 {
+	if e.count(`^pull|^compose create|^compose start|^compose exec`) != 0 {
 		t.Error("something was pulled, backed up or started")
 	}
 
@@ -666,7 +762,7 @@ func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	e.wantStatus("updated", "")
-	if e.count(`^compose up .*--no-deps --force-recreate .* caddy @`+updNew+`$`) != 1 {
+	if e.count(`^compose create .*--no-deps --force-recreate caddy @`+updNew+`$`) != 1 {
 		t.Errorf("Caddy wasn't recreated\n%s", strings.Join(e.calls(), "\n"))
 	}
 	// Caddy's other image is pulled, and its image is the one the staged files name.
@@ -678,7 +774,7 @@ func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
 	e = newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	e.commitFile(updNew, "deploy/Caddyfile", "caddy changed\n")
-	e.failCalls(`^compose up -d --no-build --pull never --remove-orphans .* @` + updNew + `$`)
+	e.failCalls(`^compose start .* @` + updNew + `$`)
 	if code, _ := e.run(); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
@@ -686,7 +782,7 @@ func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
 	if got := e.read("srv/deploy/Caddyfile"); got != "caddy\n" {
 		t.Errorf("Caddyfile = %q", got)
 	}
-	if e.count(`^compose up .*--force-recreate .* caddy @`+updOld+`$`) != 1 {
+	if e.count(`^compose create .*--force-recreate caddy @`+updOld+`$`) != 1 {
 		t.Errorf("Caddy wasn't recreated after the revert\n%s", strings.Join(e.calls(), "\n"))
 	}
 }
@@ -753,8 +849,8 @@ func TestUpdateNotifies(t *testing.T) {
 		result string
 	}{
 		"a refused update":  {func(e *updEnv) { e.write("fake/no-rules", "") }, "failed"},
-		"a revert":          {func(e *updEnv) { e.failCalls(`^compose up .* @` + updNew + `$`) }, "rolled-back"},
-		"a failed revert":   {func(e *updEnv) { e.failCalls(`^compose up .* @`+updNew+`$`, `^compose up .* @`+updOld+`$`) }, "rollback-failed"},
+		"a revert":          {func(e *updEnv) { e.failCalls(`^compose start .* @` + updNew + `$`) }, "rolled-back"},
+		"a failed revert":   {func(e *updEnv) { e.failCalls(`^compose start .* @`+updNew+`$`, `^compose start .* @`+updOld+`$`) }, "rollback-failed"},
 		"an interrupted":    {func(e *updEnv) { e.write("state/transaction", `{"from":"v0.2.0","to":"v0.3.0","phase":"starting"}`) }, "interrupted"},
 		"a version on file": {func(e *updEnv) { e.setVersion(updNew) }, "blocked"},
 	} {

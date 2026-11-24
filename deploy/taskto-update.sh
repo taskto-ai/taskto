@@ -19,12 +19,21 @@
 # may have run migrations, which an older one can't read):
 #   before it started   the old files, .env and images are put back, the old version is started
 #                       and checked, the release is recorded as failed, and it is reported;
-#   after it started    the stack is stopped (`docker compose stop`), the backup is kept, the
+#   after it started    the stack's restart policies are turned off (`docker update
+#                       --restart=no`, so a reboot can't start it again) and it is stopped
+#                       (`docker compose stop`), and that is checked; the backup is kept, the
 #                       `blocked` marker and the transaction record are written, and it is
-#                       reported loudly with the backup to restore. The updater never restores
-#                       data, empties or copies a volume, or runs `taskto restore`: a person does,
-#                       with deploy/INSTALL.md's Rollback section, and then `taskto-update
+#                       reported loudly with the backup to restore (`stopped`; `stop-failed` when
+#                       the stop couldn't be confirmed). The updater never restores data,
+#                       empties or copies a volume, or runs `taskto restore`: a person does, with
+#                       deploy/INSTALL.md's Rollback section, and then `taskto-update
 #                       --clear-block`.
+#
+# Compose is always given its inputs: --project-name, --env-file and one -f list (compose.yaml
+# and compose.override.yaml when it exists), the same for the check of the new settings, `create`,
+# `start`, `stop` and the way back. An install with any other Compose file in its directory, or
+# COMPOSE_FILE set, is refused. The containers are made first (`create`), each is checked to have
+# the image that was verified, and only then started.
 #
 # Settings: /etc/taskto/install.env (or the environment, which wins):
 #   TASKTO_UPDATE_CHANNEL  release (default): the newest GitHub Release named vMAJOR.MINOR.PATCH
@@ -41,15 +50,18 @@
 # hold or past a manual-upgrade release; --dry-run chooses and checks, and changes nothing
 # (it does pull the images, and logs in to a private registry, to check them);
 # --clear-block, once a person has put an install right, removes the stop record, if the
-# server is healthy and is the version in .env.
+# server is healthy and is the version in .env, the worker's firewall rules are in and the safety
+# rules hold in the running containers.
 #
 # Every outside command and place is a variable (DOCKER, CURL, FLOCK, SYSTEMCTL, the
 # TASKTO_UPDATE_* paths and base URLs below), so cmd/taskto/update_test.go runs it against fakes.
 #
 # Exit status: 0 updated, up to date, skipped, dry run or cleared; 1 failed, rolled back (the
 # server is on its old version), or refusing to run (blocked, interrupted); 2 stopped (the
-# new server started and failed) or the way back failed too: nothing runs again until an
-# operator looks (the "blocked" file and the transaction record in the state directory).
+# new server started and failed; or stop-failed, when it couldn't be confirmed stopped), the way
+# back failed too, or a release that was rolled back couldn't be recorded as failed: nothing runs
+# again until an operator looks (the "blocked" file and the transaction record in the state
+# directory).
 set -euo pipefail
 export LC_ALL=C
 
@@ -75,12 +87,16 @@ PER_PAGE=${TASKTO_UPDATE_PER_PAGE:-100}
 MAX_PAGES=50
 TX=$STATE/transaction
 # The old version's images, kept under these tags (one per image) from the moment an update
-# starts, so nothing that prunes images or moves a version's tag can take them.
+# starts, so a moved version tag, or a plain `docker image prune` (dangling images), can't take
+# them. A prune of all unused images (with -a) still can: an image no container uses goes
+# whatever its tags.
 KEEP_TAG=taskto-update-rollback
 IMAGE_NAMES="taskto taskto-cli-worker taskto-backup"
 # The one grammar of a release version, and its longest tag, here and in .github/workflows/release.yml.
 SEMVER='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 MAX_TAG=100
+# Compose's project name, the one `name:` of compose.yaml.
+PROJECT=taskto
 
 log() { printf 'taskto-update: %s\n' "$*"; }
 
@@ -146,14 +162,14 @@ stage="" login_config=""
 # terminal outcome, so a run that is stopped half way is found, not mistaken for done. After a
 # failure that a person has to look at, it stays, in the phase `stopped` or `rollback-failed`,
 # until `taskto-update --clear-block`.
-phase="" volume="" old_server_image="" old_images='{}' new_images='{}' caddy_changed=0 from_sha="" cause=""
+phase="" volume="" data_mount="" old_server_image="" old_images='{}' old_service_images='{}' new_images='{}' new_ids='{}' caddy_changed=0 from_sha="" cause=""
 
 # --- the status: $STATE/status.json, and a line in the journal ---------------------------
 
 write_status() {
 	[ "$DRY" = 0 ] || return 0
 	local f=$STATE/status.json last=null change=false
-	case $result in updated | rolled-back | rollback-failed | stopped | interrupted) change=true ;; esac
+	case $result in updated | rolled-back | rollback-failed | stopped | stop-failed | interrupted) change=true ;; esac
 	if [ "$change" = false ] && [ -s "$f" ]; then last=$(jq -c '.last_change // null' "$f" 2>/dev/null) || last=null; fi
 	install -d -m 755 "$STATE"
 	jq -n --arg at "$started" --arg end "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg result "$result" --arg channel "$CHANNEL" \
@@ -173,7 +189,7 @@ write_status() {
 # `reason` and `backup`, and `text` (those in a sentence, for chat webhooks that want one).
 notify() {
 	[ "$DRY" = 0 ] && [ "$CLEAR" = 0 ] || return 0
-	case $result in updated | failed | rolled-back | rollback-failed | stopped | blocked | interrupted) ;; *) return 0 ;; esac
+	case $result in updated | failed | rolled-back | rollback-failed | stopped | stop-failed | blocked | interrupted) ;; *) return 0 ;; esac
 	[ -s "$NOTIFY_FILE" ] || return 0
 	local url body
 	url=$(head -n 1 "$NOTIFY_FILE" | tr -d '\r') || return 0
@@ -187,7 +203,7 @@ notify() {
 		 text: ("taskto-update: " + $result + (if $from != "" then ", " + $from else "" end) + (if $to != "" then " to " + $to else "" end)
 		        + (if $reason != "" then ": " + $reason else "" end) + (if $backup != "" then " (backup: " + $backup + ")" else "" end))}' >"$body" &&
 		printf 'url = "%s"\nrequest = "POST"\nheader = "Content-Type: application/json"\ndata-binary = "@%s"\nconnect-timeout = 5\nmax-time = 10\nfail\nsilent\noutput = "/dev/null"\n' "$url" "$body" |
-		"$CURL" -K - >/dev/null 2>&1; then
+		"$CURL" -q -K - >/dev/null 2>&1; then
 		log "notified"
 	else
 		log "the notification wasn't delivered (it never changes the outcome)"
@@ -224,7 +240,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-api() { "$CURL" -fsS --max-time 30 -H 'Accept: application/vnd.github+json' "$API/$1"; }
+api() { "$CURL" -q -fsS --max-time 30 -H 'Accept: application/vnd.github+json' "$API/$1"; }
 # relation CANDIDATE CURRENT: newer, same, older, diverged (not a descendant) or unknown.
 # Two release tags compare as semantic versions; anything else, through GitHub's compare.
 relation() {
@@ -255,7 +271,7 @@ resolve_sha() {
 	printf '%s' "$s"
 }
 # fetch SHA PATH DEST: a file of the repository at that commit.
-fetch() { "$CURL" -fsSL --max-time 60 -o "$3" "$RAW/$REPO/$1/$2"; }
+fetch() { "$CURL" -q -fsSL --max-time 60 -o "$3" "$RAW/$REPO/$1/$2"; }
 
 # docker for the registry only (login, manifest, pull), with a Docker config of this script's
 # own, so the operator's isn't changed.
@@ -378,7 +394,39 @@ choose_main() {
 
 # --- checking, before anything is touched ----------------------------------------------------
 
-compose() { "$DOCKER" compose "$@"; }
+# inputs DIR: A is the explicit Compose inputs of the project in DIR: its name, its .env, and its
+# compose.yaml with compose.override.yaml when there is one, no other file.
+inputs() {
+	A=(--project-directory "$1" --project-name "$PROJECT" --env-file "$1/.env" -f "$1/compose.yaml")
+	[ ! -e "$1/compose.override.yaml" ] || A+=(-f "$1/compose.override.yaml")
+}
+LIVE=() STAGE=() A=()
+compose() { "$DOCKER" compose "${LIVE[@]}" "$@"; }  # the install's project
+scompose() { "$DOCKER" compose "${STAGE[@]}" "$@"; } # the staged new settings
+# profile_args DIR: --profile for each one DIR/.env enables and for the backup services' (which
+# the nightly backup, or a by-hand backup, runs), one word per line, so a service of any of them
+# is rendered and checked.
+profile_args() {
+	local p
+	{ envget "$1/.env" COMPOSE_PROFILES | tr ',' '\n'; printf '%s\n' backup backup-schedule; } | sort -u | while IFS= read -r p; do
+		[ -z "$p" ] || printf '%s\n%s\n' --profile "$p"
+	done
+}
+# layout_ok: nothing in the install's directory can change which Compose files Compose reads.
+layout_ok() {
+	local f
+	for f in compose.yml compose.override.yml docker-compose.yml docker-compose.yaml docker-compose.override.yml docker-compose.override.yaml; do
+		if [ -e "$ROOT/$f" ] || [ -L "$ROOT/$f" ]; then
+			reason="$ROOT/$f is a Compose file the updater doesn't render (it uses compose.yaml and compose.override.yaml only): update by hand (deploy/INSTALL.md#updates)"
+			return 1
+		fi
+	done
+	if [ -n "${COMPOSE_FILE:-}" ] || [ -n "$(envget "$ROOT/.env" COMPOSE_FILE)" ]; then
+		reason="COMPOSE_FILE is set: the updater renders compose.yaml and compose.override.yaml only; update by hand (deploy/INSTALL.md#updates)"
+		return 1
+	fi
+	[ -f "$ROOT/compose.yaml" ] || { reason="no $ROOT/compose.yaml"; return 1; }
+}
 free_kb() { df -Pk "$1" | awk 'NR == 2 {print $4}'; }
 # nearest_dir PATH: PATH, or the closest directory above it that exists (a dry run makes nothing).
 nearest_dir() {
@@ -421,16 +469,25 @@ firewall_ok() {
 }
 https_on() { case ",$(envget "$ROOT/.env" COMPOSE_PROFILES)," in *,https,*) return 0 ;; *) return 1 ;; esac; }
 
-# The running server: its data volume (from what it has mounted at /data, never a name
-# assumed), and the images the running containers use: by id, as the containers have them,
-# never what a tag points at now. Each must still be on this machine, or nothing could put it back.
+# What a /data mount is, as a short text, the same for the running server (from `docker inspect`)
+# and for Compose's rendered settings: the volume's Docker name, its subpath and whether it is
+# read-only. Two mounts are the same when the texts are.
+DESC_DEF='def desc($n; $s; $ro): $n + (if $s != "" then " (subpath " + $s + ")" else "" end) + (if $ro then " (read-only)" else "" end);'
+
+# The running server: its data volume and how it is mounted (from what it has mounted at /data,
+# never a name assumed), and the images the running containers use: by id, as the containers
+# have them, never what a tag points at now. The three of TaskTo's must still be on this machine,
+# or nothing could put them back.
 resolve_running() {
-	local s mount pair svc n cid id
+	local s insp pair svc n cid id c info
 	s=$(compose ps -q taskto) && [ -n "$s" ] || { reason="the server isn't running"; return 1; }
-	mount=$("$DOCKER" inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}} {{.Name}}{{end}}{{end}}' "$s") ||
-		{ reason="can't inspect the server's container"; return 1; }
-	[[ $mount =~ ^volume\ ([A-Za-z0-9][A-Za-z0-9_.-]*)$ ]] || { reason="can't tell the server's data volume ('$mount' is mounted at /data)"; return 1; }
-	volume=${BASH_REMATCH[1]}
+	insp=$("$DOCKER" inspect "$s") || { reason="can't inspect the server's container"; return 1; }
+	volume=$(jq -r '[.[0].Mounts[]? | select(.Destination == "/data" and .Type == "volume") | .Name][0] // empty' <<<"$insp") || volume=""
+	[[ $volume =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { reason="can't tell the server's data volume"; return 1; }
+	data_mount=$(jq -r "$DESC_DEF"' .[0] as $c | [$c.Mounts[]? | select(.Destination == "/data")] as $m
+		| if ($m | length) != 1 then empty else
+		  desc($m[0].Name; ([$c.HostConfig.Mounts[]? | select(.Target == "/data")][0].VolumeOptions.Subpath // ""); ($m[0].RW == false)) end' <<<"$insp") || data_mount=""
+	[ -n "$data_mount" ] || { reason="can't tell how the server's data volume is mounted"; return 1; }
 	old_images='{}'
 	for pair in taskto:taskto cli-worker:taskto-cli-worker backup-schedule:taskto-backup; do
 		svc=${pair%%:*} n=${pair#*:}
@@ -446,30 +503,56 @@ resolve_running() {
 		old_images=$(jq -c --arg k "$n" --arg v "$id" '. + {($k): $v}' <<<"$old_images")
 	done
 	old_server_image=$(jq -r '.taskto' <<<"$old_images")
+	# Every running service's image id, by service: what the way back checks its containers against.
+	old_service_images='{}'
+	cid=$(compose ps -q) || { reason="can't list the running containers"; return 1; }
+	while IFS= read -r c; do
+		[ -n "$c" ] || continue
+		info=$("$DOCKER" inspect --format '{{index .Config.Labels "com.docker.compose.service"}} {{.Image}}' "$c") || { reason="can't inspect a running container"; return 1; }
+		read -r svc id <<<"$info"
+		[ -n "$svc" ] && [ -n "$id" ] || { reason="can't tell a running container's service and image"; return 1; }
+		old_service_images=$(jq -c --arg k "$svc" --arg v "$id" '. + {($k): $v}' <<<"$old_service_images")
+	done <<<"$cid"
 }
 
 # data_mounts CONFIG: "service<TAB>what its /data is" for every service of TaskTO's own (the
 # server, the backup jobs, and any service running one of TaskTo's images; not Caddy's, whose
-# /data is its own volume): the volume's effective Docker name, or what else it is.
+# /data is its own volume): the volume's effective Docker name with its subpath and whether it
+# is read-only (the text of DESC_DEF), or what else it is.
 data_mounts() {
-	jq -r --arg p "$prefix" '
+	jq -r --arg p "$prefix" "$DESC_DEF"'
 		def repo: sub("@.*$"; "") | sub(":[^/:]*$"; "");
 		. as $c
 		| .services | to_entries[]
 		| select((.key | IN("taskto", "backup", "backup-schedule")) or ((.value.image // "") | repo | IN($p + "taskto", $p + "taskto-cli-worker", $p + "taskto-backup")))
 		| .key as $k | (.value.volumes // [])[] | select(.target == "/data")
-		| [$k, (if .type == "volume" then ($c.volumes[.source // ""].name // "?") else "a " + .type + " mount" end)] | @tsv' <<<"$1"
+		| [$k, (if .type == "volume" then desc($c.volumes[.source // ""].name // "?"; (.volume.subpath // ""); (.read_only // false)) else "a " + .type + " mount" end)] | @tsv' <<<"$1"
 }
-# check_data_volume CONFIG WHAT: every one of those is the volume the running server has.
+# check_data_volume CONFIG WHAT: every one of those is mounted at /data exactly as the running
+# server has it (volume, subpath and read-only), the backup services included.
 check_data_volume() {
 	local out svc what seen=0
 	out=$(data_mounts "$1") || { reason="can't read the mounts of $2"; return 1; }
 	while IFS=$'\t' read -r svc what; do
 		[ -n "$svc" ] || continue
 		[ "$svc" != taskto ] || seen=1
-		[ "$what" = "$volume" ] || { reason="in $2, the /data of $svc is '$what', not '$volume', the volume the running server has"; return 1; }
+		[ "$what" = "$data_mount" ] || { reason="in $2, the /data of $svc is '$what', not '$data_mount', the mount the running server has"; return 1; }
 	done <<<"$out"
 	[ "$seen" = 1 ] || { reason="$2 has no /data volume for the server"; return 1; }
+}
+# volumes_exist CONFIG: every volume the enabled services mount exists already, and none is
+# anonymous, so that starting the new settings never creates one.
+volumes_exist() {
+	local v names
+	jq -e '[.services[].volumes[]? | select(.type == "volume" and ((.source // "") == ""))] | length == 0' <<<"$1" >/dev/null ||
+		{ reason="$to's Compose settings have an anonymous volume, which starting them would create"; return 1; }
+	names=$(jq -r '. as $c | [.services[].volumes[]? | select(.type == "volume") | ($c.volumes[.source].name // .source)] | unique[]' <<<"$1") ||
+		{ reason="can't read the volumes of $to's Compose settings"; return 1; }
+	while IFS= read -r v; do
+		[ -n "$v" ] || continue
+		"$DOCKER" volume inspect "$v" >/dev/null 2>&1 ||
+			{ reason="$to's Compose settings use the volume '$v', which doesn't exist: starting them would create it"; return 1; }
+	done <<<"$names"
 }
 
 # image_problems CONFIG: every service of TaskTo's (by name, or by running one of its images)
@@ -506,12 +589,12 @@ proxy_answers() {
 	if [ "$mode" = traefik ]; then
 		lan=$(envget "$INSTALL_ENV" TASKTO_LAN_IP)
 		[ -n "$lan" ] && [ -n "$domain" ] || return 1
-		h=$("$CURL" -fsS --max-time 5 "http://$lan/healthz" 2>/dev/null) || return 1
+		h=$("$CURL" -q -fsS --max-time 5 "http://$lan/healthz" 2>/dev/null) || return 1
 		jq -e --arg v "$1" '.version == $v' <<<"$h" >/dev/null 2>&1 || return 1
-		h=$("$CURL" -fsS --max-time 10 "https://$domain/healthz" 2>/dev/null) || return 1
+		h=$("$CURL" -q -fsS --max-time 10 "https://$domain/healthz" 2>/dev/null) || return 1
 	elif https_on; then
 		[ -n "$domain" ] || return 1
-		h=$("$CURL" -fsS --max-time 5 --resolve "$domain:443:127.0.0.1" "https://$domain/healthz" 2>/dev/null) || return 1
+		h=$("$CURL" -q -fsS --max-time 5 --resolve "$domain:443:127.0.0.1" "https://$domain/healthz" 2>/dev/null) || return 1
 	else
 		return 0
 	fi
@@ -519,7 +602,9 @@ proxy_answers() {
 }
 
 preflight() {
-	local n d img rev ref id out cfg bad
+	local n d img rev ref id out cfg bad info
+	local -a pargs
+	layout_ok || return 1
 	stage=$(mktemp -d) || return 1
 	mkdir "$stage/deploy" || return 1
 	sha=$(resolve_sha "$to") || { reason="can't resolve $to to a commit"; return 1; }
@@ -530,7 +615,7 @@ preflight() {
 	done
 	# The safety rules the old version is held to once it is started again.
 	fetch "$from_sha" deploy/safety-check.sh "$stage/safety-from.sh" ||
-		{ reason="can't fetch deploy/safety-check.sh of $from: it predates the updater, which can't check it. Update by hand (deploy/INSTALL.md, Updates, \"By hand\")"; return 1; }
+		{ reason="can't fetch deploy/safety-check.sh of $from: it predates the updater, which can't check it. Update by hand (deploy/INSTALL.md#updates, \"By hand\")"; return 1; }
 	chmod 644 "$stage/compose.yaml" "$stage/deploy/Caddyfile" || return 1
 	grep -q TASKTO_IMAGE_PREFIX "$stage/compose.yaml" || { reason="$to's compose.yaml predates published images"; return 1; }
 	# The worker's firewall is never changed here: a version that changes it is for a person.
@@ -540,33 +625,41 @@ preflight() {
 	fi
 	firewall_ok || { reason="the worker's firewall isn't in place (its unit, or its rules): runbook step 8's check says what"; return 1; }
 	resolve_running || return 1
-	cfg=$(compose config --format json 2>/dev/null) || { reason="docker compose config failed"; return 1; }
+	mapfile -t pargs < <(profile_args "$ROOT")
+	# This install's settings, with the backup services' profiles on too: the data is mounted the
+	# same way in each of TaskTo's services, those that aren't running included.
+	cfg=$(compose "${pargs[@]}" config --format json 2>/dev/null) || { reason="docker compose config failed"; return 1; }
 	check_data_volume "$cfg" "this install's Compose project" || return 1
 	# A broken proxy isn't the update's fault: nothing is changed on top of one.
 	proxy_needs || { reason="the proxy's settings (TASKTO_DOMAIN, TASKTO_LAN_IP) aren't in $ROOT/.env and $INSTALL_ENV: can't check the public address"; return 1; }
 	proxy_answers "$from" || { reason="the public address doesn't answer as $from before the update (the proxy isn't the update's to fix)"; return 1; }
 	check_disk || { [ -n "$reason" ] || reason="can't read the disk's free space"; return 1; }
 	registry_login || { reason="can't log in to the registry"; return 1; }
-	# The new Compose file with this install's own settings.
+	# The new Compose file with this install's own settings: the same two files, in the stage.
 	set_version "$ROOT/.env" "$to" "" >"$stage/.env" || return 1
 	[ ! -e "$ROOT/compose.override.yaml" ] || cat "$ROOT/compose.override.yaml" >"$stage/compose.override.yaml" || return 1
-	if ! out=$(compose --project-directory "$stage" config --quiet 2>&1) || [[ $out == *"is not set"* ]]; then
+	inputs "$stage"
+	STAGE=("${A[@]}")
+	if ! out=$(scompose config --quiet 2>&1) || [[ $out == *"is not set"* ]]; then
 		reason="$to's compose.yaml doesn't work with this install's settings: $(printf '%s' "$out" | head -n 3 | tr '\n' ' ')"
 		return 1
 	fi
-	cfg=$(compose --project-directory "$stage" config --format json 2>/dev/null) || { reason="can't render $to's Compose settings"; return 1; }
-	# Where the data is, and which images run, in the settings that will be started.
-	check_data_volume "$cfg" "$to's Compose settings" || return 1
-	bad=$(image_problems "$cfg") || { reason="can't read the images of $to's Compose settings"; return 1; }
+	cfg=$(scompose config --format json 2>/dev/null) || { reason="can't render $to's Compose settings"; return 1; }
+	# Where the data is, which images run and which volumes are used, in the settings that will be started.
+	out=$(scompose "${pargs[@]}" config --format json 2>/dev/null) || { reason="can't render $to's Compose settings with the backup services"; return 1; }
+	check_data_volume "$out" "$to's Compose settings" || return 1
+	volumes_exist "$cfg" || return 1
+	bad=$(image_problems "$out") || { reason="can't read the images of $to's Compose settings"; return 1; }
 	[ -z "$bad" ] || { reason="$to's Compose settings run an image that wasn't checked: $(head -n 1 <<<"$bad")"; return 1; }
-	# The three of TaskTo's are the commit's own (their revision label says so), and are known by their id.
+	# The three of TaskTo's are the commit's own (their revision label says so), and are known by their id:
+	# the label and the id come from one inspect of one reference.
 	for n in $IMAGE_NAMES; do
 		ref=$prefix$n:$to
 		dockerp pull --quiet "$ref" >/dev/null || { reason="can't pull $ref"; return 1; }
-		rev=$("$DOCKER" image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ref") || { reason="can't inspect $ref"; return 1; }
+		info=$("$DOCKER" image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}|{{.Id}}|{{index .RepoDigests 0}}' "$ref") || { reason="can't inspect $ref"; return 1; }
+		IFS='|' read -r rev id d <<<"$info"
 		[ "$rev" = "$sha" ] || { reason="$ref isn't built from $sha (its revision label is '${rev:-none}')"; return 1; }
-		d=$("$DOCKER" image inspect --format '{{index .RepoDigests 0}}' "$ref") || { reason="no digest for $ref"; return 1; }
-		id=$("$DOCKER" image inspect --format '{{.Id}}' "$ref") || { reason="no image id for $ref"; return 1; }
+		[ -n "$id" ] && [ -n "$d" ] || { reason="no image id or digest for $ref"; return 1; }
 		digests=$(jq -c --arg k "$n" --arg v "$d" '. + {($k): $v}' <<<"$digests")
 		new_images=$(jq -c --arg k "$ref" --arg v "$id" '. + {($k): $v}' <<<"$new_images")
 	done
@@ -583,6 +676,9 @@ preflight() {
 		id=$("$DOCKER" image inspect --format '{{.Id}}' "$img") || { reason="no image id for $img"; return 1; }
 		new_images=$(jq -c --arg k "$img" --arg v "$id" '. + {($k): $v}' <<<"$new_images")
 	done < <(jq -r '.services[].image // empty' <<<"$cfg")
+	# The image each service's container must be made from: the id that was checked for its image.
+	new_ids=$(jq -c --argjson i "$new_images" '[.services | to_entries[] | {(.key): ($i[.value.image // ""] // "?")}] | add // {}' <<<"$cfg") ||
+		{ reason="can't tell the images of $to's services"; return 1; }
 	cmp -s "$stage/deploy/Caddyfile" "$ROOT/deploy/Caddyfile" || { ! https_on || caddy_changed=1; }
 }
 
@@ -592,7 +688,7 @@ preflight() {
 step() {
 	local what=$1
 	shift
-	"$@" || { reason="$what failed"; return 1; }
+	"$@" || { reason="$what failed${reason:+ ($reason)}"; return 1; }
 }
 
 make_backup() {
@@ -638,10 +734,10 @@ protect_old_images() {
 tx_write() {
 	phase=$1
 	install -d -m 755 "$STATE" || return 1
-	jq -n --arg from "$from" --arg to "$to" --arg sha "$sha" --arg phase "$phase" --arg backup "$backup" --arg volume "$volume" \
+	jq -n --arg from "$from" --arg to "$to" --arg sha "$sha" --arg phase "$phase" --arg backup "$backup" --arg volume "$volume" --arg data_mount "$data_mount" \
 		--arg previous "$STATE/previous" --arg at "$started" --argjson old_images "$old_images" --arg old_server_image "$old_server_image" \
 		--arg why "$cause" \
-		'{from: $from, to: $to, sha: $sha, phase: $phase, why: $why, backup: $backup, volume: $volume, previous: $previous,
+		'{from: $from, to: $to, sha: $sha, phase: $phase, why: $why, backup: $backup, volume: $volume, data_mount: $data_mount, previous: $previous,
 		  old_server_image: $old_server_image, old_images: $old_images, started: $at}' >"$TX.new" &&
 		mv -f "$TX.new" "$TX" && sync
 }
@@ -676,7 +772,7 @@ images_unchanged() {
 }
 
 answers() { # VERSION: the server, and the proxy before it, are up as that version
-	last=$("$CURL" -fsS --max-time 5 "$HEALTH_URL" 2>/dev/null) || return 1
+	last=$("$CURL" -q -fsS --max-time 5 "$HEALTH_URL" 2>/dev/null) || return 1
 	jq -e --arg v "$1" '.status == "ok" and .agent == "ready" and .version == $v' <<<"$last" >/dev/null 2>&1 || return 1
 	proxy_answers "$1"
 }
@@ -699,11 +795,37 @@ verify() {
 	out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER bash "$2" 2>&1) || { reason="the safety rules: $(printf '%s' "$out" | tail -n 1)"; return 1; }
 }
 
-up() {
-	compose up -d --no-build --pull never --remove-orphans --wait --wait-timeout "$VERIFY_TIMEOUT" || return 1
+# created_match EXPECTED: every container of the project was made from the image that was
+# verified for its service (EXPECTED is {service: image id}), not from what a tag points at now.
+# A container of a service that has no entry doesn't match.
+created_match() {
+	local ids c info svc id want
+	ids=$(compose ps -aq) || { reason="can't list the containers just made"; return 1; }
+	[ -n "$ids" ] || { reason="no container was made"; return 1; }
+	while IFS= read -r c; do
+		[ -n "$c" ] || continue
+		info=$("$DOCKER" inspect --format '{{index .Config.Labels "com.docker.compose.service"}} {{.Image}}' "$c") || { reason="can't inspect a container just made"; return 1; }
+		read -r svc id <<<"$info"
+		want=$(jq -r --arg s "$svc" '.[$s] // empty' <<<"$1")
+		[ -n "$want" ] && [ "$want" = "$id" ] ||
+			{ reason="the container of ${svc:-a service} was made from the image '${id:-?}', not the checked '${want:-none}': a tag moved"; return 1; }
+	done <<<"$ids"
+}
+# remove_created: the containers that were made and never started (only those), for the way back.
+remove_created() {
+	local ids
+	ids=$("$DOCKER" ps -aq --filter "label=com.docker.compose.project=$PROJECT" --filter status=created) || return 1
+	[ -z "$ids" ] || xargs "$DOCKER" rm <<<"$ids" >/dev/null
+}
+# bring_up EXPECTED: make the containers, check them, start them. The images are checked on the
+# containers, after they are made and before anything of them runs, since a tag can move between
+# any earlier check and the start.
+bring_up() {
 	# Caddy reads its Caddyfile once, and a file that was replaced is a new file to its mount.
-	[ "$caddy_changed" = 0 ] ||
-		compose up -d --no-build --pull never --no-deps --force-recreate --wait --wait-timeout "$VERIFY_TIMEOUT" caddy
+	[ "$caddy_changed" = 0 ] || compose create --no-build --pull never --no-deps --force-recreate caddy || return 1
+	compose create --no-build --pull never --remove-orphans || return 1
+	created_match "$1" || { remove_created || true; return 1; }
+	compose start --wait --wait-timeout "$VERIFY_TIMEOUT"
 }
 
 apply_update() {
@@ -712,7 +834,7 @@ apply_update() {
 	# From here the new server may start, and write data.
 	step "recording the update" tx_write starting || return 1
 	step "checking the images" images_unchanged || return 1
-	step "docker compose up" up || return 1
+	step "docker compose create and start" bring_up "$new_ids" || return 1
 	verify "$to" "$stage/deploy/safety-check.sh"
 }
 
@@ -745,13 +867,45 @@ retag_old_images() {
 # the old version started and checked. The data was never touched, so there is none to restore.
 revert() {
 	local p=$STATE/previous
+	reason=""
 	step "putting the old files back" put "$p/compose.yaml" "$ROOT/compose.yaml" || return 1
 	step "putting the old files back" put "$p/.env" "$ROOT/.env" || return 1
 	step "putting the old files back" put "$p/deploy/Caddyfile" "$ROOT/deploy/Caddyfile" || return 1
 	step "putting the old files back" put "$p/install.env" "$INSTALL_ENV" || return 1
 	step "putting the old images back" retag_old_images || return 1
-	step "docker compose up" up || return 1
+	step "docker compose create and start" bring_up "$old_service_images" || return 1
 	verify "$from" "$stage/safety-from.sh"
+}
+
+# record_failed VERSION: the release is on the list of those not tried again, durably: the list
+# is written to a file of its own, flushed, and moved into place in one step. Fails when it
+# can't, and then nothing may be assumed recorded.
+record_failed() {
+	local f=$STATE/failed
+	install -d -m 755 "$STATE" || return 1
+	if [ -e "$f" ] || [ -L "$f" ]; then
+		[ -f "$f" ] || return 1
+		! grep -qxF "$1" "$f" || return 0
+	fi
+	{ if [ -f "$f" ]; then cat "$f"; fi && printf '%s\n' "$1"; } >"$f.new" && sync && mv -fT "$f.new" "$f" && sync
+}
+
+# stop_stack: the project's containers can't come back by themselves, and are stopped, and none
+# of them is running after. Their restart policies are turned off first, so that a reboot or a
+# restart of Docker can't start what is stopped. Fails when the stop can't be confirmed; the
+# policies' own failure only goes in $policy_note.
+policy_note=""
+stop_stack() {
+	local ids running
+	local -a all=()
+	ids=$("$DOCKER" ps -aq --filter "label=com.docker.compose.project=$PROJECT") || return 1
+	if [ -n "$ids" ]; then
+		mapfile -t all <<<"$ids"
+		"$DOCKER" update --restart=no "${all[@]}" >/dev/null || policy_note=" The restart policies of its containers couldn't be turned off: they may start again after a reboot."
+	fi
+	compose stop || true
+	running=$("$DOCKER" ps -q --filter "label=com.docker.compose.project=$PROJECT") || return 1
+	[ -z "$running" ]
 }
 
 # halt RESULT PHASE MESSAGE: the install is left as it is, for a person: the record of the
@@ -761,40 +915,46 @@ revert() {
 # can't be written changes nothing, since the record is there.
 halt() {
 	tx_write "$2" || log "can't rewrite $TX: its old content still blocks the next run"
-	printf '%s\n' "$to" >>"$STATE/failed" || true
+	record_failed "$to" || true
 	printf '%s\n' "$3" >"$STATE/blocked" || true
 	finish "$1" "$3" 2
 }
 
 # clear_block: for a person who has put the install right (the backup restored by hand with
 # the old version, or the update finished by hand): the record and the marker go, if the server
-# answers as the version in .env, so the next run starts from a known state. The release that
-# was being installed isn't tried again, unless that is the version now.
+# answers as the version in .env, the worker's firewall is in, and the safety rules hold in the
+# running containers (checked with the rules of the version that runs, at its commit), so the
+# next run starts from a known state. The release that was being installed isn't tried again,
+# unless that is the version now; that is recorded durably before the record goes, and the record
+# stays when it can't be.
 clear_block() {
 	[ -e "$TX" ] || [ -L "$TX" ] || [ -e "$STATE/blocked" ] || [ -L "$STATE/blocked" ] || {
 		result=cleared
 		log "nothing to clear: no update is stopped or interrupted"
 		exit 0
 	}
-	local t_to iv
+	local t_to iv sf out
+	refuse() {
+		result=refused
+		log "refusing: $*"
+		exit 1
+	}
 	iv=$(envget "$INSTALL_ENV" TASKTO_VERSION)
 	if [ -n "$iv" ] && [ "$iv" != "$from" ]; then
-		result=refused
-		log "refusing: $INSTALL_ENV says $iv, $ROOT/.env says $from: put them right first"
-		exit 1
+		refuse "$INSTALL_ENV says $iv, $ROOT/.env says $from: put them right first"
 	fi
-	if ! answers "$from"; then
-		result=refused
-		log "refusing: the server isn't healthy as $from, the version in $ROOT/.env (${last:-no answer}): start it, and check the data, first"
-		exit 1
-	fi
+	answers "$from" || refuse "the server isn't healthy as $from, the version in $ROOT/.env (${last:-no answer}): start it, and check the data, first"
+	firewall_ok || refuse "the worker's firewall isn't in place (its unit, or its rules): runbook step 8's check says what"
+	stage=$(mktemp -d) || refuse "no temporary directory"
+	sf=$(resolve_sha "$from") && fetch "$sf" deploy/safety-check.sh "$stage/safety.sh" || refuse "can't fetch deploy/safety-check.sh of $from to check the running containers with"
+	out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER bash "$stage/safety.sh" 2>&1) || refuse "the safety rules don't hold in the running containers: $(printf '%s' "$out" | tail -n 1)"
 	if [ -e "$TX" ]; then
 		t_to=$(jq -r '.to // empty' "$TX" 2>/dev/null) || t_to=""
 		# The release the stop was for is recorded as failed already, unless it is what runs now.
 		if [ -n "$t_to" ] && [ "$t_to" = "$from" ] && [ -f "$STATE/failed" ]; then
-			{ grep -vxF "$t_to" "$STATE/failed" >"$STATE/failed.new" || true; } && mv -f "$STATE/failed.new" "$STATE/failed" || true
+			{ grep -vxF "$t_to" "$STATE/failed" >"$STATE/failed.new" || true; } && mv -fT "$STATE/failed.new" "$STATE/failed" || true
 		elif [ -n "$t_to" ]; then
-			grep -qxF "$t_to" "$STATE/failed" 2>/dev/null || printf '%s\n' "$t_to" >>"$STATE/failed" || true
+			record_failed "$t_to" || refuse "can't record $t_to as failed in $STATE/failed, so the record stays: put $STATE right first"
 		fi
 	fi
 	rm -f "$TX" "$STATE/blocked"
@@ -807,7 +967,9 @@ clear_block() {
 # --- one run -----------------------------------------------------------------------------------
 
 [ -r "$ROOT/.env" ] || finish failed "no $ROOT/.env: not an install from deploy/INSTALL.md" 1
-cd "$ROOT" # where Compose finds the project
+cd "$ROOT"
+inputs "$ROOT" # Compose reads these files, this name and this .env, and no others
+LIVE=("${A[@]}")
 from=$(envget "$ROOT/.env" TASKTO_VERSION)
 prefix=$(envget "$ROOT/.env" TASKTO_IMAGE_PREFIX)
 port=$(envget "$ROOT/.env" TASKTO_PORT)
@@ -826,7 +988,13 @@ if [ -e "$TX" ]; then
 	case $tphase in
 	stopped | rollback-failed)
 		# What the failed run said stays the status.
-		result=blocked reason="the update from $from to $to ended in '$tphase' and was left for a person: restore the backup ${backup:-(none was made)} by hand (deploy/INSTALL.md, Rollback), then run taskto-update --clear-block"
+		result=blocked reason="the update from $from to $to ended in '$tphase' and was left for a person: restore the backup ${backup:-(none was made)} by hand, in the data volume '$(jq -r '.volume // "?"' "$TX" 2>/dev/null)' (deploy/INSTALL.md, Rollback), then run taskto-update --clear-block"
+		log "blocked: $reason"
+		notify || true
+		exit 1
+		;;
+	rolled-back)
+		result=blocked reason="the update from $from to $to was rolled back (the server is on $from), but $to couldn't be recorded as failed in $STATE/failed: make $STATE writable, then run taskto-update --clear-block, which records it"
 		log "blocked: $reason"
 		notify || true
 		exit 1
@@ -853,7 +1021,7 @@ if [ -z "$TO" ]; then
 fi
 # What is on record must be what runs: a server that answers as another version than the .env's
 # was changed outside the updater (or by one that didn't finish).
-health=$("$CURL" -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null) || finish failed "the server doesn't answer at $HEALTH_URL: not updating a server that isn't up" 1
+health=$("$CURL" -q -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null) || finish failed "the server doesn't answer at $HEALTH_URL: not updating a server that isn't up" 1
 running=$(jq -r '.version // empty' <<<"$health" 2>/dev/null) || running=""
 if [ "$running" != "$from" ]; then
 	reason="the server runs '${running:-no version}' but $ROOT/.env says $from: look at it, then run taskto-update --clear-block"
@@ -904,18 +1072,27 @@ fi
 cause=$reason
 if new_server_started; then
 	# The new server ran: it may have changed the data, in ways the old version can't read. No
-	# guess about it is safe, so nothing is undone: the stack is stopped, and a person restores.
+	# guess about it is safe, so nothing is undone: the stack is stopped (and can't restart by
+	# itself), and a person restores.
 	log "the update failed after the new server started ($cause): stopping"
-	note=""
-	compose stop || note=" (docker compose stop failed too: stop the stack by hand)"
-	halt stopped stopped "$to started and then failed ($cause). The stack is stopped$note and nothing was rolled back, since the new version may have changed the data: restore the backup $backup by hand (deploy/INSTALL.md, Rollback; docs/install.md#upgrade-and-rollback), then run taskto-update --clear-block"
+	restore="restore the backup $backup by hand, in the data volume '$volume' (deploy/INSTALL.md, Rollback; docs/install.md#upgrade-and-rollback), then run taskto-update --clear-block"
+	if stop_stack; then
+		halt stopped stopped "$to started and then failed ($cause). The stack is stopped, its containers' restart policies are turned off (docker update --restart=no; the Rollback's steps remove the containers and step 9 makes them again, with the Compose file's restart policies), and nothing was rolled back, since the new version may have changed the data: $restore.$policy_note"
+	fi
+	halt stop-failed stopped "$to started and then failed ($cause), and the stack could NOT be confirmed stopped: stop it by hand now (docker compose stop; docker ps), since a restart would run the new version on the data it may have changed. Nothing was rolled back: $restore.$policy_note"
 fi
 log "the update failed before the new server started ($cause): putting $from back"
 # The way back first; what is written about the failure comes after, and never stops it. The
-# record of the release that failed is written before the transaction is removed.
+# record of the release that failed is written, durably, before the transaction is removed, and
+# when it can't be the transaction stays and blocks the next run.
 if revert; then
-	printf '%s\n' "$to" >>"$STATE/failed" || true
-	rm -f "$TX" "$STATE/blocked"
-	finish rolled-back "$cause; the server is on $from again, its data not touched" 1
+	if record_failed "$to"; then
+		rm -f "$TX" "$STATE/blocked"
+		finish rolled-back "$cause; the server is on $from again, its data not touched" 1
+	fi
+	cause="$cause; the server is on $from again, its data not touched, but $to couldn't be recorded as failed in $STATE/failed"
+	tx_write rolled-back || log "can't rewrite $TX: its old content still blocks the next run"
+	printf '%s\n' "$cause: the update's record stays and blocks the next run until a person looks and runs taskto-update --clear-block" >"$STATE/blocked" || true
+	finish rolled-back "$cause: the update's record stays and blocks the next run until a person looks and runs taskto-update --clear-block" 2
 fi
 halt rollback-failed rollback-failed "$cause; putting $from back failed too ($reason): the install is left as it is, backup $backup (deploy/INSTALL.md, Rollback), then run taskto-update --clear-block"

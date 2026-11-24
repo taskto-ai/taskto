@@ -1269,7 +1269,9 @@ update `~/.config/taskto-install.env` is behind: before you run any step again, 
 3. Run steps 0, 1, 6, 7, 8 and 9, then 12, 13, 14 and 15, each with its check. (And step 16, to
    bring the updater itself to this version.)
 4. The previous images stay on the VM until you remove them (`docker image prune -a`, once
-   you won't roll back).
+   you won't roll back). Don't prune images while an update is blocked: the way back and a
+   rollback need them (the updater's `taskto-update-rollback` tags don't protect an image from
+   `docker image prune -a`, which removes every image no container uses, whatever its tags).
 
 ## Rollback
 
@@ -1280,9 +1282,12 @@ new server had started (a new server may have migrated the data, which an older 
   failed before the server's container ran): it puts the old files, `.env` and images back,
   starts the old version and checks it. The data was never touched. The release is recorded as
   failed and isn't tried again. Nothing to do; read the status to see why.
-- *After it started*: it runs `docker compose stop`, keeps the backup it took before, writes
+- *After it started*: it turns off the restart policies of the project's containers (`docker
+  update --restart=no`, so a reboot can't start them), runs `docker compose stop` and checks
+  that nothing runs, keeps the backup it took before, writes
   `/var/lib/taskto-update/blocked`, keeps `/var/lib/taskto-update/transaction` and fails the
-  unit, with the status `stopped`. The report (`/var/lib/taskto-update/status.json`, the journal,
+  unit, with the status `stopped` (`stop-failed`, with an instruction to stop the stack by hand
+  now, when it couldn't confirm the stop). Don't prune images while an update is blocked. The report (`/var/lib/taskto-update/status.json`, the journal,
   and the alert if step 16 set one) names the backup to restore. Nothing runs again, not even
   `--to`, until you have restored it and cleared the stop (below). If putting the old version
   back fails too (`rollback-failed`), the same. A run that was killed half way
@@ -1298,23 +1303,32 @@ the one that failed (a failed release isn't tried again by itself, but a newer o
 `touch /etc/taskto/update.hold` on the VM.
 
 1. Set `TASKTO_VERSION` back in `~/.config/taskto-install.env`, and run steps 0, 1, 6, 7 and 8.
-2. Replace the data with the backup, on the VM. `BACKUP` is the file the report names:
+2. Replace the data with the backup, on the VM. `BACKUP` is the file the report names, and
+   `VOLUME` is the data volume the update recorded (the report names it too: it is `.volume` in
+   `/var/lib/taskto-update/transaction`; it is the server's own volume, whatever its name).
+   For a rollback with no such record, `VOLUME` is the volume the server has at `/data`:
+   `docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}'
+   "$(docker compose ps -aq taskto)"`.
 
    ```sh
    . ~/.config/taskto-install.env
    vm <<'EOF'
    BACKUP=/var/backups/taskto/before-update-from-v0.1.0-20260101-030405.tar.gz
    cd /srv/taskto
+   VOLUME=$(jq -r '.volume // empty' /var/lib/taskto-update/transaction)
+   [ -n "$VOLUME" ] || { echo "FAIL: no recorded data volume: set VOLUME to the server's /data volume"; exit 1; }
    [ -s "$BACKUP" ] || { echo "FAIL: no $BACKUP"; exit 1; }
    docker compose down
-   docker run --rm </dev/null -v taskto_data:/from -v "taskto_data_rolled_back_$(date +%Y%m%d%H%M%S)":/to alpine cp -a /from/. /to/
-   docker volume rm taskto_data
+   docker run --rm </dev/null -v "$VOLUME":/from -v "${VOLUME}_rolled_back_$(date +%Y%m%d%H%M%S)":/to alpine cp -a /from/. /to/
+   docker volume rm "$VOLUME"
    docker compose run --rm --no-deps -T taskto restore - < "$BACKUP"
    EOF
    ```
 
-   The data you replaced is kept in a `taskto_data_rolled_back_*` volume; remove it once
-   you are sure.
+   The data you replaced is kept in a `<volume>_rolled_back_*` volume; remove it once
+   you are sure. (`docker compose down` removes the containers the updater left stopped, and
+   step 9's `docker compose up -d` makes them again with the Compose file's restart policies,
+   which the updater turned off on the stopped ones.)
 3. Run step 9, then 12, 13, 14 and 15.
 4. Clear the stop, once the old version runs and the data is right. This removes the record
    and the marker, if the server is healthy and answers as the version in `/srv/taskto/.env`

@@ -5,13 +5,13 @@
 # starts the Images workflow on the tag, which publishes ghcr.io/<owner>/taskto*:<tag>. Servers
 # on the release channel (docs/install.md#automatic-updates) take it once those images exist.
 #
-# The tag is made by pushing the commit CI passed on to refs/tags/<version>. A push of a tag
-# that exists is refused when it is at another commit, but succeeds when it is at this very
-# one, so the tag is first looked for through the API, right before the push, and the run
-# stops if it is there. The release is then created with --verify-tag, so it can only be for
-# that tag. The version is vMAJOR.MINOR.PATCH of at most 100 characters, as the updater
-# (deploy/taskto-update.sh) reads one. The inputs reach shell commands only as environment
-# variables, never in the command line itself.
+# The tag is made through the API's create-a-reference call (POST /git/refs), at the commit CI
+# passed on: GitHub creates the ref only if it doesn't exist, whoever else is making it at the
+# same moment, and refuses (422) otherwise, so the run can't take over a tag, not even one at
+# this same commit. The release is then created with --verify-tag, so it can only be for that
+# tag. The version is the whole of the input: one line, vMAJOR.MINOR.PATCH of at most 100
+# characters, as the updater (deploy/taskto-update.sh) reads one. The inputs reach shell
+# commands only as environment variables, never in the command line itself.
 #
 # Only the workflow's own GITHUB_TOKEN, on a GitHub-hosted runner. A tag made with that token
 # doesn't start other workflows, which is why the Images workflow is started here by name.
@@ -61,7 +61,7 @@ jobs:
       - name: Check the version and that CI passed
         run: |
           fail() { echo "::error::$*"; exit 1; }
-          printf '%s' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' && [ "${#VERSION}" -le 100 ] || fail "'$VERSION' isn't vMAJOR.MINOR.PATCH of at most 100 characters"
+          [[ $VERSION =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] && [ "${#VERSION}" -le 100 ] || fail "the version isn't vMAJOR.MINOR.PATCH of at most 100 characters, on one line"
           last=$(git tag -l 'v*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | sort -V | tail -n 1 || true)
           if [ -n "$last" ]; then
             [ "$VERSION" != "$last" ] && [ "$(printf '%s\n%s\n' "$last" "$VERSION" | sort -V | tail -n 1)" = "$VERSION" ] \
@@ -77,18 +77,14 @@ jobs:
           fi
           passed=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success" --jq '.total_count')
           [ "$passed" -ge 1 ] || fail "CI hasn't passed on main's head, $GITHUB_SHA: wait for it, or fix it"
-      - name: Tag the commit CI passed on
+      - name: Create the tag at the commit CI passed on
         run: |
-          # Right before the push: a push of an existing tag at this same commit would succeed.
-          if out=$(gh api "repos/$GH_REPO/git/ref/tags/$VERSION" 2>&1); then
-            echo "::error::the tag $VERSION exists"
-            exit 1
-          elif ! printf '%s' "$out" | grep -q 'HTTP 404'; then
-            echo "::error::can't tell whether the tag $VERSION exists: $out"
+          # The API creates a reference only if there is none: it answers 422 for one that exists
+          # (a tag made since the check above included), and the run stops.
+          if ! out=$(gh api --method POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$VERSION" -f "sha=$GITHUB_SHA" 2>&1); then
+            echo "::error::can't create the tag $VERSION (it exists, or the API refused): $out"
             exit 1
           fi
-          # A tag made between the check and the push, at another commit, is refused by the push.
-          git push origin "$GITHUB_SHA:refs/tags/$VERSION"
       - name: Create the release, and publish its images
         run: |
           # The notes are complete when the release is published: servers read the marker the
