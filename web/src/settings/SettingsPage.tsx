@@ -1,5 +1,5 @@
 // The workspace's settings, a tab each: general (its default language), members and invites,
-// shared spaces, model providers, CLI accounts, search, dictation, notifications (push on this
+// shared spaces, the audit log, model providers, CLI accounts, search, dictation, notifications (push on this
 // device), your password, access
 // tokens and about. Admins see them all; members see model providers (their own accounts, and
 // the workspace's to read), their own CLI accounts, search (their spaces' consent), dictation
@@ -10,6 +10,7 @@ import type { Me, Workspace } from '../api'
 import { type Key, useT } from '../i18n'
 import { Link, routePath } from '../router'
 import { AboutTab } from './AboutTab'
+import { AuditTab } from './AuditTab'
 import { CliAccountsTab } from './CliAccountsTab'
 import { DictationTab } from './DictationTab'
 import { GeneralTab } from './GeneralTab'
@@ -25,6 +26,7 @@ type Tab =
   | 'general'
   | 'members'
   | 'spaces'
+  | 'audit'
   | 'providers'
   | 'cli-accounts'
   | 'search'
@@ -38,6 +40,7 @@ const TABS: { tab: Tab; label: Key; admin: boolean }[] = [
   { tab: 'general', label: 'settings.tabs.general', admin: true },
   { tab: 'members', label: 'settings.tabs.members', admin: true },
   { tab: 'spaces', label: 'settings.tabs.spaces', admin: true },
+  { tab: 'audit', label: 'settings.tabs.audit', admin: true },
   { tab: 'providers', label: 'settings.tabs.providers', admin: false },
   { tab: 'cli-accounts', label: 'settings.tabs.cliAccounts', admin: false },
   { tab: 'search', label: 'settings.tabs.search', admin: false },
@@ -82,6 +85,8 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
       return <MembersTab workspace={workspace.id} me={me.user.id} />
     case 'spaces':
       return <SpacesTab workspace={workspace.id} />
+    case 'audit':
+      return <AuditTab workspace={workspace.id} />
     case 'providers':
       return <ProvidersTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'cli-accounts':

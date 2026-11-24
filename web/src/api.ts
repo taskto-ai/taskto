@@ -493,6 +493,24 @@ export type Comment = { id: number; card_id: number; author: Author; body: strin
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
 
 export type Member = { id: number; email: string; name: string; role: 'admin' | 'member'; joined_at: string }
+// One event of a workspace's audit log, with the names read when the log was (docs/audit.md).
+export type AuditEntry = {
+  id: number
+  at: string
+  action: string
+  actor_id: number | null
+  // The actor and the user an event is about, while members of the workspace; null for an
+  // anonymous event, a deleted user and one who has left.
+  actor: { name: string; email: string } | null
+  target_type: string
+  target_id: number | null
+  target_user: { name: string; email: string } | null
+  target_name: string | null
+  details: Record<string, string | number | boolean | string[]>
+  client_addr: string | null
+}
+export type AuditPage = { events: AuditEntry[]; next: string }
+
 export type Invite = { id: number; email: string; role: 'admin' | 'member'; created_at: string; expires_at: string }
 export type SpaceMember = { id: number; email: string; name: string; role: 'editor' | 'viewer'; added_at: string }
 

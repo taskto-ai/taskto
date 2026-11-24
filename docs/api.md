@@ -762,6 +762,53 @@ Admin only. `{"role": "viewer"}`. `204`; `404` if the user isn't a member of the
 Admin only. Removes the member from the space; their access ends with their next request.
 `204`; `404` if the user isn't a member of the space.
 
+## Audit log
+
+### `GET /api/workspaces/{workspace}/audit`
+
+Admins only (`403 admin_only` to a member, `404 workspace_not_found` to anyone who isn't in the
+workspace). A browser session only: an access token is refused (`403 token_refused`). The
+workspace's own security and admin events, newest first, as [the audit log](audit.md) records
+them. The workspace is the one in the path that the caller administers; no parameter names
+another, and events that belong to no workspace (logins, password changes, a person's own
+provider accounts) are never in the reply.
+
+Query, all optional:
+
+| Parameter | What |
+|---|---|
+| `action` | one action code, such as `member_removed` ([the list](audit.md#what-is-recorded)) |
+| `actor` | the id of the user who did it |
+| `target_type` | `user`, `workspace`, `invite`, `space`, `access_token`, `provider_account` or `shared_cli_account` |
+| `from`, `to` | RFC 3339 times; `from` is included, `to` is not |
+| `limit` | the page size, 1 to 200; 50 if omitted |
+| `cursor` | the `next` of the previous page |
+
+An unknown action or target type, or a malformed value, is `400 bad_request`.
+
+```json
+{
+  "events": [{
+    "id": 41, "at": "2026-03-05T14:30:00.000Z", "workspace_id": 1,
+    "action": "member_removed",
+    "actor_id": 1, "actor": {"name": "Owner", "email": "owner@example.com"},
+    "target_type": "user", "target_id": 9, "target_created_at": "2026-02-01T10:00:00.000Z",
+    "target_user": null, "target_name": null,
+    "details": {"role": "member"}, "client_addr": "203.0.113.9"
+  }],
+  "next": "…"
+}
+```
+
+`next` is empty on the last page; pages follow each other without gaps or repeats while events
+are added. The names are read when the log is, not when the event was recorded, and only for
+what belongs to the workspace: `actor` and `target_user` are the user while they are a member
+of it (otherwise `null`, and `actor_id` and `target_id` still say who), and `target_name` is the
+name of the workspace, a shared space, a provider account or a shared CLI account the event is
+about, if it still exists (matched by its id **and** creation time, since ids are reused;
+`null` otherwise). An access token's or an invite's name is never resolved. `details` are the
+facts the action declares, never free text.
+
 ## Knowledge base
 
 Each space's documents are Markdown files (`.md`) and other uploaded files in a git
