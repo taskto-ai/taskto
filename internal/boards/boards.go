@@ -154,6 +154,16 @@ type Comment struct {
 	Author    *Author `json:"author"`
 	Body      string  `json:"body"`
 	CreatedAt string  `json:"created_at"`
+	// Mentions are the people the body mentions (`@[label](user:ID)`) whom the reader may see in
+	// the space, by ID, with the name the server has for them: the name to show, since the label
+	// in the text is whatever its writer typed. Never nil.
+	Mentions []MentionedPerson `json:"mentions" apitypes:"nonnull"`
+}
+
+// MentionedPerson is a person a comment mentions, as the server names them.
+type MentionedPerson struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
 
 // Thread is a card with its comments, oldest first.

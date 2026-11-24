@@ -292,6 +292,11 @@ export type BoardsAuthor = {
   via?: string
 }
 
+export type BoardsMentionedPerson = {
+  id: number
+  name: string
+}
+
 export type Card = {
   id: number
   board_id: number
@@ -345,6 +350,7 @@ export type Comment = {
   author: BoardsAuthor | null
   body: string
   created_at: string
+  mentions: BoardsMentionedPerson[]
 }
 
 export type Conversation = {
