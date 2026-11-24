@@ -21,6 +21,7 @@ import (
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/dictation"
+	"taskto.ai/taskto/internal/export"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/mail"
 	"taskto.ai/taskto/internal/mcpserver"
@@ -76,6 +77,9 @@ type Options struct {
 	// in DataDir (none if that is empty), so its caller can run its maintenance
 	// (apps.Service.Maintain) for as long as it serves.
 	AppsReady func(*apps.Service)
+	// Export sets the limits of a person's export of their own data (docs/api.md#export-my-data);
+	// the zero value is the defaults. Tests shorten them.
+	Export export.Options
 	// BackupDataDir is the data directory whose scheduled backups /healthz/backup and the
 	// admins' backup route report (internal/backup.Status). Empty reports none.
 	BackupDataDir string
@@ -113,12 +117,18 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	if opts.Notifications != nil {
 		opts.Notifications.Routes(mux, accounts)
 	}
+	var kb *knowledge.Store
 	if opts.Search != nil {
-		opts.Search.Knowledge().Routes(mux, spaces)
+		kb = opts.Search.Knowledge()
+		kb.Routes(mux, spaces)
 		opts.Search.Routes(mux, accounts, spaces)
 	} else if opts.DataDir != "" {
-		knowledge.New(opts.DataDir, opts.Knowledge).Routes(mux, spaces)
+		kb = knowledge.New(opts.DataDir, opts.Knowledge)
+		kb.Routes(mux, spaces)
 	}
+	// A person's export of their own data reads through the same knowledge base, boards, apps and
+	// conversations the rest of the server uses, and writes nothing.
+	export.New(sqlDB, spaces, kb, boardSvc, appsService, opts.Conversations, opts.Export).Routes(mux, accounts)
 	if opts.Providers != nil {
 		opts.Providers.Routes(mux, accounts)
 	}

@@ -752,6 +752,10 @@ export type BackupStatus = {
 
 export const backupPath = (workspace: number) => `${ws(workspace)}/backup`
 
+// Starts an export of what the caller owns in the workspace (docs/api.md#export-my-data): a POST that
+// answers `{download, expires_in}`, the address to go to for the zip, which works once.
+export const exportPath = (workspace: number) => `${ws(workspace)}/export`
+
 // The server's outgoing email (docs/install.md#email), for admins: where it sends through, never the
 // account or its password. `password` says whether the server signs in.
 export type MailStatus =
