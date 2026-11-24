@@ -1206,13 +1206,21 @@ func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *te
 
 	// The push carries the kind and ID only; once access ends it says only that something changed.
 	w.svc.DrainOnce(context.Background())
-	payloads, requests := w.pushed(d)
-	if len(payloads) != 3 || payloads[0]["kind"] != notifications.KindCardDue && payloads[1]["kind"] != notifications.KindCardDue {
+	payloads, _ := w.pushed(d)
+	if len(payloads) != 3 {
 		t.Fatalf("payloads = %v", payloads)
 	}
-	for _, r := range requests {
-		if bytes.Contains(r.body, []byte("Renew")) || bytes.Contains(r.body, []byte("2030")) {
-			t.Fatal("the title or date is on the wire")
+	kinds := map[string]bool{}
+	for _, p := range payloads {
+		// What the device is sent, decrypted: the ID and the kind, and nothing of the record.
+		if len(p) != 2 || p["id"] == nil || p["kind"] == nil {
+			t.Fatalf("a push carries more than its ID and kind: %v", p)
+		}
+		kinds[p["kind"].(string)] = true
+	}
+	for _, kind := range []string{notifications.KindCardAssigned, notifications.KindCardDue, notifications.KindCardOverdue} {
+		if !kinds[kind] {
+			t.Fatalf("no push of kind %s: %v", kind, payloads)
 		}
 	}
 	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", w.ws, w.space.ID, w.bob.id), nil), http.StatusNoContent)
