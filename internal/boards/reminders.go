@@ -94,6 +94,30 @@ func reminderTimes(due string) (remind, overdue time.Time, err error) {
 // or the agent. It fails only for an error of the database: a reminder that can't be made (too
 // many waiting, a time out of the scheduler's range) is left out and the change stands.
 func (s *Service) syncReminders(ctx context.Context, tx *sql.Tx, cardID, previous int64) error {
+	return s.syncCard(ctx, tx, cardID, previous, nil)
+}
+
+// reminderCap remembers, through one walk over many cards, whose reminders the scheduler refused
+// for having too many waiting, so the walk can stop. A nil reminderCap remembers nothing.
+type reminderCap map[int64]map[schedule.Kind]bool
+
+func (c reminderCap) mark(user int64, kind schedule.Kind) {
+	if c[user] == nil {
+		c[user] = map[schedule.Kind]bool{}
+	}
+	c[user][kind] = true
+}
+
+func (c reminderCap) has(user int64, kind schedule.Kind) bool { return c[user][kind] }
+
+// both is whether neither kind of reminder can be added for user any more.
+func (c reminderCap) both(user int64) bool {
+	return c.has(user, KindDueReminder) && c.has(user, KindOverdue)
+}
+
+// syncCard is syncReminders that notes in capped (when not nil) the people the scheduler has no
+// room left for.
+func (s *Service) syncCard(ctx context.Context, tx *sql.Tx, cardID, previous int64, capped reminderCap) error {
 	if s.sched == nil {
 		return nil
 	}
@@ -174,6 +198,9 @@ func (s *Service) syncReminders(ctx context.Context, tx *sql.Tx, cardID, previou
 			if errors.Is(err, schedule.ErrTooMany) || errors.Is(err, schedule.ErrInvalid) {
 				// A person with a thousand reminders waiting gets no more; the change itself stands.
 				slog.Warn("boards: a reminder was not scheduled", "user", owner, "err", err)
+				if errors.Is(err, schedule.ErrTooMany) && capped != nil {
+					capped.mark(owner, j.kind)
+				}
 				continue
 			}
 			return err
@@ -192,8 +219,10 @@ func (s *Service) cancelReminders(ctx context.Context, tx *sql.Tx, userID, cardI
 }
 
 // syncCards brings the jobs of the cards the query selects (their IDs, one column) in line with
-// them, in tx.
-func (s *Service) syncCards(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
+// them, in tx. For a walk over the cards of one person (forUser, not 0) it stops once the
+// scheduler has refused both kinds of their reminders for having too many waiting, rather than
+// walk on with the membership change's write lock held: the change stands, as for a card's own.
+func (s *Service) syncCards(ctx context.Context, tx *sql.Tx, forUser int64, query string, args ...any) error {
 	if s.sched == nil {
 		return nil
 	}
@@ -213,9 +242,13 @@ func (s *Service) syncCards(ctx context.Context, tx *sql.Tx, query string, args 
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return err
 	}
+	capped := reminderCap{}
 	for _, id := range ids {
-		if err := s.syncReminders(ctx, tx, id, 0); err != nil {
+		if err := s.syncCard(ctx, tx, id, 0, capped); err != nil {
 			return err
+		}
+		if forUser != 0 && capped.both(forUser) {
+			break
 		}
 	}
 	return nil
@@ -229,13 +262,13 @@ const open = `c.col NOT IN ('done', 'archived')`
 
 // syncBoard follows a board that was archived or brought back: its cards' jobs go or come.
 func (s *Service) syncBoard(ctx context.Context, tx *sql.Tx, boardID int64) error {
-	return s.syncCards(ctx, tx, `SELECT c.id FROM cards c WHERE c.board_id = ? AND `+dated+` ORDER BY c.id`, boardID)
+	return s.syncCards(ctx, tx, 0, `SELECT c.id FROM cards c WHERE c.board_id = ? AND `+dated+` ORDER BY c.id`, boardID)
 }
 
 // SyncSpace follows a shared space that was archived or brought back: the jobs of its cards go or
 // come. It is the access package's ArchiveHook (access.Checker.OnArchiveChange).
 func (s *Service) SyncSpace(ctx context.Context, tx *sql.Tx, spaceID int64) error {
-	return s.syncCards(ctx, tx, `
+	return s.syncCards(ctx, tx, 0, `
 		SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id
 		WHERE b.space_id = ? AND `+dated+` ORDER BY c.id`, spaceID)
 }
@@ -244,7 +277,7 @@ func (s *Service) SyncSpace(ctx context.Context, tx *sql.Tx, spaceID int64) erro
 // are assigned to them come back (the schema dropped them when they left). It is the access
 // package's MemberHook (access.Checker.OnMemberAdded).
 func (s *Service) SyncSpaceMember(ctx context.Context, tx *sql.Tx, spaceID, userID int64) error {
-	return s.syncCards(ctx, tx, `
+	return s.syncCards(ctx, tx, userID, `
 		SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id
 		WHERE b.space_id = ? AND c.assignee_id = ? AND `+dated+` AND `+open+` ORDER BY c.id`, spaceID, userID)
 }
@@ -254,7 +287,7 @@ func (s *Service) SyncSpaceMember(ctx context.Context, tx *sql.Tx, spaceID, user
 // to it again (SyncSpaceMember), since they are no member of it now; their private space has. It is
 // the auth package's MemberHook (auth.Service.OnMemberAdded).
 func (s *Service) SyncWorkspaceMember(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) error {
-	return s.syncCards(ctx, tx, `
+	return s.syncCards(ctx, tx, userID, `
 		SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id JOIN spaces sp ON sp.id = b.space_id
 		WHERE sp.workspace_id = ? AND c.assignee_id = ? AND `+dated+` AND `+open+` ORDER BY c.id`, workspaceID, userID)
 }

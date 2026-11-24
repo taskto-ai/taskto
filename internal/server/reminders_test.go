@@ -92,13 +92,30 @@ func TestAPersonAddedBackHasTheirRemindersBack(t *testing.T) {
 		t.Fatalf("create card = %d %v", code, card)
 	}
 	cardID := id(card["id"])
+	// A card on their personal board, which is theirs whether or not they are in the space.
+	bobsBoard := s.scalar(`SELECT id FROM boards WHERE space_id = ?`, s.bob.private)
+	code, mine := s.browser(s.bob.cookie, http.MethodPost,
+		fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards/%d/cards", s.one, s.bob.private, bobsBoard), map[string]any{
+			"title": "Renew the passport", "due": due, "assignee": map[string]any{"kind": "user", "id": s.bob.id},
+		})
+	if code != http.StatusCreated {
+		t.Fatalf("create personal card = %d %v", code, mine)
+	}
+	personalID := id(mine["id"])
 	want := func(step string, remind, overdue bool) {
 		t.Helper()
 		if r, o := s.reminderJobs(s.bob.id, cardID); r != remind || o != overdue {
-			t.Fatalf("%s: reminder %v, overdue %v; want %v and %v", step, r, o, remind, overdue)
+			t.Fatalf("%s: shared card: reminder %v, overdue %v; want %v and %v", step, r, o, remind, overdue)
+		}
+	}
+	wantPersonal := func(step string, has bool) {
+		t.Helper()
+		if r, o := s.reminderJobs(s.bob.id, personalID); r != has || o != has {
+			t.Fatalf("%s: personal card: reminder %v, overdue %v; want both %v", step, r, o, has)
 		}
 	}
 	want("made", true, true)
+	wantPersonal("made", true)
 
 	members := fmt.Sprintf("/api/workspaces/%d/spaces/%d/members", s.one, s.team)
 	add := func() {
@@ -120,6 +137,7 @@ func TestAPersonAddedBackHasTheirRemindersBack(t *testing.T) {
 		t.Fatalf("remove from the workspace = %d %v", code, body)
 	}
 	want("left the workspace", false, false)
+	wantPersonal("left the workspace", false)
 	code, inv := s.browser(s.alice.cookie, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", s.one), map[string]any{"email": "bob@example.com"})
 	if code != http.StatusCreated {
 		t.Fatalf("invite = %d %v", code, inv)
@@ -127,6 +145,8 @@ func TestAPersonAddedBackHasTheirRemindersBack(t *testing.T) {
 	if code, body := s.browser(s.bob.cookie, http.MethodPost, "/api/invites/accept", map[string]any{"token": inv["token"]}); code != http.StatusOK {
 		t.Fatalf("accept = %d %v", code, body)
 	}
+	// Their personal board is theirs again at once; the shared space's card waits for the space.
+	wantPersonal("back in the workspace", true)
 	want("back in the workspace", false, false)
 	add()
 	want("added to the space again", true, true)

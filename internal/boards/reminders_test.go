@@ -1,9 +1,12 @@
 package boards
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -729,6 +732,43 @@ func TestAddingAPersonBackToTheWorkspaceBringsBackTheRemindersOfTheirPrivateSpac
 	w.run(at("2030-01-10", 8))
 	if n := w.notices(w.alice, notifications.KindCardDue); n != 2 {
 		t.Fatalf("notices = %d, want 2: one for each card", n)
+	}
+}
+
+// A person with room for two more jobs gets the two of the first card back, and the walk over
+// their other cards stops at the second card, which the scheduler refused both kinds for: it
+// doesn't go on holding the membership change's write lock to be refused again for each.
+func TestAddingAPersonBackStopsWalkingOnceTheirBoundIsReached(t *testing.T) {
+	w := newRemindWorld(t)
+	var cards []Card
+	for range 5 {
+		cards = append(cards, w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)}))
+	}
+	w.removeFromSpace(w.alice)
+	// Everything else of theirs is waiting, but for room for one card's two jobs.
+	stamp := at("2030-02-01", 8).Format("2006-01-02T15:04:05.000Z")
+	if _, err := w.e.db.Exec(`
+		WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+		INSERT INTO scheduled_jobs (kind, user_id, workspace_id, dedupe_key, run_at, created_at, updated_at)
+		SELECT ?, ?, ?, 'filler:' || i, ?, ?, ? FROM n`,
+		schedule.MaxPerUser-2, string(KindDueReminder), w.alice.id, w.ws, stamp, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	w.e.addMember(w.owner, w.shared, w.alice, access.RoleEditor)
+
+	wantJobs(t, w, w.alice, cards[0], at("2030-01-10", 8), at("2030-01-11", 8))
+	for _, c := range cards[1:] {
+		wantJobs(t, w, w.alice, c, time.Time{}, time.Time{})
+	}
+	// One refusal for each kind, at the second card, and none after it.
+	if n := strings.Count(logs.String(), "a reminder was not scheduled"); n != 2 {
+		t.Fatalf("refusals = %d, want 2 (the walk went on after the bound):\n%s", n, logs.String())
 	}
 }
 
