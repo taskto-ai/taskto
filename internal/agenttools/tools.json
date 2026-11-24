@@ -288,7 +288,7 @@
   },
   {
     "name": "list_boards",
-    "description": "List a space's boards: its personal board, or its team boards. archived: true includes the archived ones (their archived_at is set), which come last.",
+    "description": "List a space's boards: its personal board, or its team boards. archived: true includes the archived ones (their archived_at is set), which come last. When there are more boards than fit, truncated is true and next is the after of the next page (send the same archived).",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -301,6 +301,11 @@
         "archived": {
           "type": "boolean",
           "description": "include archived boards (default false)"
+        },
+        "after": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the next of the previous page: list the boards after this one"
         }
       },
       "required": ["space_id"],
@@ -793,7 +798,7 @@
   },
   {
     "name": "update_board",
-    "description": "Rename a board, or archive or unarchive it (archived: true takes it off list_boards and makes it read-only; archived: false brings it back). A personal board can be renamed but not archived. An archived board takes no other change until it is unarchived.",
+    "description": "Rename a board, or archive or unarchive it (archived: true takes it off list_boards and makes it read-only; archived: false brings it back). A personal board can be renamed but not archived. An archived board takes no change until it is unarchived, except a rename sent together with archived: false.",
     "read_only": false,
     "input_schema": {
       "type": "object",

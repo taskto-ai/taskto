@@ -3,6 +3,7 @@ package agenttools
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/boards"
@@ -44,9 +45,13 @@ func (s *Service) listBoards(ctx context.Context, c *call, args json.RawMessage)
 	var a struct {
 		SpaceID  int64 `json:"space_id"`
 		Archived bool  `json:"archived"`
+		After    int64 `json:"after"`
 	}
 	if err := decode(args, &a); err != nil {
 		return nil, err
+	}
+	if a.After < 0 {
+		return nil, errInvalid("after must be a board id from a previous next")
 	}
 	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
@@ -61,10 +66,25 @@ func (s *Service) listBoards(ctx context.Context, c *call, args json.RawMessage)
 	if err != nil {
 		return nil, err
 	}
-	n, res, err := fitting(len(list), func(n int) any { return map[string]any{"boards": list[:n]} })
-	if err == nil && n < len(list) {
-		res = map[string]any{"boards": list[:n], "truncated": true}
+	if a.After != 0 {
+		// The page after the board `after`, in the list's order.
+		i := slices.IndexFunc(list, func(b boards.Board) bool { return b.ID == a.After })
+		if i < 0 {
+			return nil, errInvalid("after is not a board of this list: use the next of the previous page, with the same archived")
+		}
+		list = list[i+1:]
 	}
+	// truncated and next are part of what is measured, so the page fits with them.
+	_, res, err := fitting(len(list), func(n int) any {
+		if n == len(list) {
+			return map[string]any{"boards": list[:n]}
+		}
+		next := a.After // nothing fit: no progress, which a board's size makes impossible
+		if n > 0 {
+			next = list[n-1].ID
+		}
+		return map[string]any{"boards": list[:n], "truncated": true, "next": next}
+	})
 	return res, err
 }
 
@@ -111,11 +131,13 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 	for i := range cards {
 		cards[i].Body = cutText(cards[i].Body, listBodyLen)
 	}
-	n, res, err := fitting(len(cards), func(n int) any { return map[string]any{"cards": cards[:n]} })
-	if err == nil && n < len(cards) {
-		res = map[string]any{"cards": cards[:n], "truncated": true,
+	_, res, err := fitting(len(cards), func(n int) any {
+		if n == len(cards) {
+			return map[string]any{"cards": cards[:n]}
+		}
+		return map[string]any{"cards": cards[:n], "truncated": true,
 			"notice": "more cards than fit: narrow the list with column, assignee, blocked, labels, due dates, overdue or text"}
-	}
+	})
 	return res, err
 }
 
@@ -131,24 +153,95 @@ func (s *Service) showCard(ctx context.Context, c *call, args json.RawMessage) (
 	if err != nil {
 		return nil, err
 	}
+	_, bodyCut := cut(t.Body, threadBodyLen)
 	t.Body = cutText(t.Body, threadBodyLen)
 	for i := range t.Comments {
 		t.Comments[i].Body = cutText(t.Comments[i].Body, commentLen)
 	}
-	// The newest comments that fit.
 	all := t.Comments
-	_, res, err := fitting(len(all), func(n int) any {
+	reply := func(body string, bodyCut bool, n int) any {
 		shown := t
+		shown.Body = body
 		shown.Comments = all[len(all)-n:]
-		if n == len(all) {
-			return shown
-		}
-		return struct {
-			boards.Thread
-			Omitted int `json:"older_comments_omitted"`
-		}{shown, len(all) - n}
-	})
+		return threadReply{Thread: shown, BodyTruncated: bodyCut, Omitted: len(all) - n}
+	}
+	// The body is cut first, to what fits with no comment at all...
+	body, cutMore, err := fitBody(t.Body, func(b string) any { return reply(b, true, 0) })
+	if err != nil {
+		return nil, err
+	}
+	bodyCut = bodyCut || cutMore
+	// ...then the newest comments that fit.
+	_, res, err := fitting(len(all), func(n int) any { return reply(body, bodyCut, n) })
 	return res, err
+}
+
+// threadReply is show_card's result: the card with its newest comments, and what was left out.
+type threadReply struct {
+	boards.Thread
+	BodyTruncated bool `json:"body_truncated,omitempty"`
+	Omitted       int  `json:"older_comments_omitted,omitempty"`
+}
+
+// cardReply is a card changed by a tool, its body cut if it would not fit in a result.
+type cardReply struct {
+	boards.Card
+	BodyTruncated bool `json:"body_truncated,omitempty"`
+}
+
+// cardResult shapes the result of a tool that changed a card, after the change was made:
+// a body of 32 KiB can be more than MaxResult once it is escaped as JSON, and the caller
+// must still be told the card changed, so the body is cut, with body_truncated: true.
+func cardResult(c boards.Card, err error) (any, error) {
+	if err != nil {
+		return nil, err
+	}
+	body, wasCut, err := fitBody(c.Body, func(b string) any {
+		shown := c
+		shown.Body = b
+		return cardReply{shown, true}
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.Body = body
+	return cardReply{c, wasCut}, nil
+}
+
+// commentReply is a comment added by comment_card, its body cut if it would not fit.
+type commentReply struct {
+	boards.Comment
+	BodyTruncated bool `json:"body_truncated,omitempty"`
+}
+
+// fitBody returns body, or the longest start of it, marked as cut, for which build(body)
+// marshals to at most MaxResult bytes, and whether it cut.
+func fitBody(body string, build func(body string) any) (string, bool, error) {
+	fits := func(b string) (bool, error) {
+		out, err := json.Marshal(build(b))
+		return len(out) <= MaxResult, err
+	}
+	if ok, err := fits(body); ok || err != nil {
+		return body, false, err
+	}
+	cutTo := func(n int) string {
+		short, _ := cut(body, n)
+		return short + truncatedNotes
+	}
+	lo, hi := 0, len(body) // cutTo(hi) is too long; cutTo(lo) fits if anything does
+	for lo < hi-1 {
+		mid := (lo + hi) / 2
+		ok, err := fits(cutTo(mid))
+		if err != nil {
+			return "", false, err
+		}
+		if ok {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return cutTo(lo), true, nil
 }
 
 func (s *Service) createCard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
@@ -162,7 +255,7 @@ func (s *Service) createCard(ctx context.Context, c *call, args json.RawMessage)
 	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
 	}
-	return s.o.Boards.CreateCard(ctx, actor(c), a.SpaceID, a.BoardID, a.NewCard)
+	return cardResult(s.o.Boards.CreateCard(ctx, actor(c), a.SpaceID, a.BoardID, a.NewCard))
 }
 
 func (s *Service) updateCard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
@@ -176,7 +269,7 @@ func (s *Service) updateCard(ctx context.Context, c *call, args json.RawMessage)
 	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
 	}
-	return s.o.Boards.UpdateCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.CardChanges)
+	return cardResult(s.o.Boards.UpdateCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.CardChanges))
 }
 
 func (s *Service) moveCard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
@@ -190,7 +283,7 @@ func (s *Service) moveCard(ctx context.Context, c *call, args json.RawMessage) (
 	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
 	}
-	return s.o.Boards.MoveCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Move)
+	return cardResult(s.o.Boards.MoveCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Move))
 }
 
 func (s *Service) commentCard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
@@ -204,7 +297,20 @@ func (s *Service) commentCard(ctx context.Context, c *call, args json.RawMessage
 	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
 	}
-	return s.o.Boards.Comment(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Body)
+	cm, err := s.o.Boards.Comment(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Body)
+	if err != nil {
+		return nil, err
+	}
+	body, wasCut, err := fitBody(cm.Body, func(b string) any {
+		shown := cm
+		shown.Body = b
+		return commentReply{shown, true}
+	})
+	if err != nil {
+		return nil, err
+	}
+	cm.Body = body
+	return commentReply{cm, wasCut}, nil
 }
 
 func (s *Service) setBlocked(ctx context.Context, c *call, args json.RawMessage) (any, error) {
@@ -220,7 +326,7 @@ func (s *Service) setBlocked(ctx context.Context, c *call, args json.RawMessage)
 	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
 	}
-	return s.o.Boards.SetBlocked(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Version, a.Reason, a.BlockedBy)
+	return cardResult(s.o.Boards.SetBlocked(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Version, a.Reason, a.BlockedBy))
 }
 
 func (s *Service) createBoard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
@@ -262,7 +368,7 @@ func (s *Service) archiveCard(ctx context.Context, c *call, args json.RawMessage
 	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
 	}
-	return s.o.Boards.ArchiveCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Version)
+	return cardResult(s.o.Boards.ArchiveCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Version))
 }
 
 func (s *Service) restoreCard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
@@ -277,7 +383,7 @@ func (s *Service) restoreCard(ctx context.Context, c *call, args json.RawMessage
 	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
 	}
-	return s.o.Boards.RestoreCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Version, a.Column)
+	return cardResult(s.o.Boards.RestoreCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Version, a.Column))
 }
 
 // cutText shortens s to n bytes, marking the cut.
