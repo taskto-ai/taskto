@@ -172,6 +172,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `home_limit` | 409 | A person has at most `max` widgets (or pins) in a workspace, and a space at most `max` default widgets (or pins). |
 | `home_order_invalid` | 400 | The ids to put in order aren't all the caller's own placements of that kind, or one is listed twice. |
 | `home_defaults_shared` | 409 | Defaults are only for the apps of shared spaces. |
+| `audit_time_invalid` | 400 | The audit log's `from` or `to` is outside the years 1000 to 9999. |
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
 | `app_migration_invalid` | 400 | An acknowledgement that is malformed: an unknown `change`, a field that is no name, or one twice. |
@@ -230,7 +231,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `doc_changed` | 409 | `path` has changed since the version the change was based on. |
 | `doc_deleted` | 409 | `path` was deleted since the version the change was based on. |
 | `doc_exists` | 409 | `path` already exists: to replace it, send the version you edited as `base_version`. |
-| `doc_case_conflict` | 409 | `name` differs only by case from `other`, which exists. |
+| `doc_case_conflict` | 409 | `name` differs only by case, or by how an accent is written, from `other`, which exists. |
 | `doc_path_taken` | 409 | A folder is at `path`, or a file is where one of its folders would be. |
 | `doc_move_into_itself` | 400 | A folder can't be moved into itself (`path`). |
 | `doc_move_kind` | 400 | The unversioned file `path` can't become a Markdown document, or the other way round. |
@@ -1096,6 +1097,53 @@ Admin only. `{"role": "viewer"}`. `204`; `404` if the user isn't a member of the
 Admin only. Removes the member from the space; their access ends with their next request.
 `204`; `404` if the user isn't a member of the space.
 
+## Audit log
+
+### `GET /api/workspaces/{workspace}/audit`
+
+Admins only (`403 admin_only` to a member, `404 workspace_not_found` to anyone who isn't in the
+workspace). A browser session only: an access token is refused (`403 token_refused`). The
+workspace's own security and admin events, newest first, as [the audit log](audit.md) records
+them. The workspace is the one in the path that the caller administers; no parameter names
+another, and events that belong to no workspace (logins, password changes, a person's own
+provider accounts) are never in the reply.
+
+Query, all optional:
+
+| Parameter | What |
+|---|---|
+| `action` | one action code, such as `member_removed` ([the list](audit.md#what-is-recorded)) |
+| `actor` | the id of the user who did it |
+| `target_type` | `user`, `workspace`, `invite`, `space`, `access_token`, `provider_account` or `shared_cli_account` |
+| `from`, `to` | RFC 3339 times in the years 1000 to 9999; `from` is included, `to` is not |
+| `limit` | the page size, 1 to 200; 50 if omitted |
+| `cursor` | the `next` of the previous page |
+
+An unknown action or target type, or a malformed value, is `400 bad_request`; a `from` or `to` outside the years 1000 to 9999 is `400 audit_time_invalid`.
+
+```json
+{
+  "events": [{
+    "id": 41, "at": "2026-03-05T14:30:00.000Z", "workspace_id": 1,
+    "action": "member_removed",
+    "actor_id": 1, "actor": {"name": "Owner", "email": "owner@example.com"},
+    "target_type": "user", "target_id": 9, "target_created_at": "2026-02-01T10:00:00.000Z",
+    "target_user": null, "target_name": null,
+    "details": {"role": "member"}, "client_addr": "203.0.113.9"
+  }],
+  "next": "…"
+}
+```
+
+`next` is empty on the last page; pages follow each other without gaps or repeats while events
+are added. The names are read when the log is, not when the event was recorded, and only for
+what belongs to the workspace: `actor` and `target_user` are the user while they are a member
+of it (otherwise `null`, and `actor_id` and `target_id` still say who), and `target_name` is the
+name of the workspace, a shared space, a provider account or a shared CLI account the event is
+about, if it still exists (matched by its id **and** creation time, since ids are reused;
+`null` otherwise). An access token's or an invite's name is never resolved. `details` are the
+facts the action declares, never free text.
+
 ## Knowledge base
 
 Each space's documents are Markdown files (`.md`) and other uploaded files in a git
@@ -1114,7 +1162,7 @@ the caller can't read is `404` on every route.
   backslash or a control character, or has a `.git` element in any spelling (`.GIT`,
   `.git.`, `git~1`, with ignorable Unicode): nothing in `.git` can be read or written
   through the API. A path has at most 16 levels and 1024 bytes, each name at most 255
-  bytes. Two names in a folder can't differ only by case (`409`).
+  bytes. Two names in a folder can't differ only by case, or by how an accent is written (é as one character or as e and a combining accent: the same file on macOS and Windows) (`409`).
 - **Versions.** A document's `version` is the git blob ID of its content (40 hex
   digits), or of its pointer for an unversioned file. A change to an existing document says which version it was based on, in
   `base_version`; if the document has changed since, the answer is `409` and nothing is
@@ -1277,7 +1325,7 @@ files, neither for an unversioned file.
 {"path": "notes/plan.md", "version": "…", "size": 7, "versioned": true, "content": "# Plan\n"}
 ```
 
-- `?at=<commit>`: the document as it was at that commit (`404` if it didn't exist then).
+- `?at=<commit>`: the document as it was at that commit (`404` if it didn't exist then, or if the commit isn't in the space's history: one a failed change left behind is never read).
 - `?raw=true`: the bytes themselves, as a download: `application/octet-stream` (audio
   and video: their media type, such as `video/mp4`, so the web app can play them),
   `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff` and
@@ -1360,7 +1408,7 @@ read), or one [taken out of history](#taking-a-files-old-versions-out-of-history
 can't be viewed or restored; `agent` is absent when the user made the change, and
 `<name> (access token)` for a change made with an [access token](#access-tokens). `limit`
 is 1 to 200, default 50; `next`, when there are more, is the `before` of the next page
-(`?before=<commit>`).
+(`?before=<commit>`: `404` if the commit isn't in the space's history, as for `?at=`).
 
 ### `GET /api/workspaces/{workspace}/spaces/{space}/history`
 
@@ -1377,7 +1425,8 @@ deleted document.
 ```
 
 `base_version` is optional and checked as above (`409`). `200` with the change's result;
-`404` if the document didn't exist at that commit; `410` for an unversioned file whose
+`404` if the document didn't exist at that commit, or if `commit` isn't in the space's history
+(a commit a failed change left behind is never a source); `410` for an unversioned file whose
 bytes at that commit are gone.
 
 ### `DELETE /api/workspaces/{workspace}/spaces/{space}/history/{path}`

@@ -5,9 +5,9 @@ from which address. It answers "who removed this member?", "who changed the mode
 and "did someone try to guess a password?" after the fact. Before it, such events only went to
 the server's log, which nobody could search by workspace and which rotates away.
 
-This page is about what is recorded and how. There is no screen or API for reading the log yet:
-the table is written, and kept, so that the admin view has history to show from the day it
-ships.
+This page is about what is recorded and how, and who may read it. Admins read their workspace's
+log in Settings, under Audit log, or through `GET /api/workspaces/{workspace}/audit`
+([api.md](api.md#audit-log)); see [Reading the log](#reading-the-log).
 
 ## What an event holds
 
@@ -112,6 +112,35 @@ Notes:
 - Personal provider accounts (a member's own) have no workspace, so they are in no workspace's
   log. The person did them; they aren't the admins' to review.
 
+## Reading the log
+
+An admin of a workspace reads that workspace's events: the settings tab and the API route behind
+the same check as the other admin routes (a member is refused, anyone outside the workspace
+gets not-found, and an access token is refused). They can filter by action, by who did it, by
+what kind of object it was done to and by time, and page back through the events with a cursor.
+
+- **Only the workspace's own events.** The route asks for the events of the workspace the
+  caller administers, taken from their membership, never from the request's parameters.
+  `audit.ListWorkspace` refuses to run without a workspace, so a missing one is an error and
+  not "every workspace"; the unrestricted `audit.List` is for tests and nothing that answers a
+  request uses it.
+- **Events of no workspace are not shown.** A login, a password change or reset use, a refused
+  single sign-on and a person's own provider account belong to a person, not to a workspace.
+  An admin does not see when members sign in, from where, or when they fail to: that would let
+  an admin watch people across everything else they belong to. If the workspace's admins should
+  see members' sign-ins, it is a decision to make on its own (it joins events to members by
+  current membership, so it would show a person's sign-ins to every workspace they are in,
+  which is more than their own workspace's).
+- **Names are read now, and only for the workspace.** The log keeps ids, not names. The reply
+  names an actor or a user an event is about while they are a member of the workspace; once they
+  have left, only their id is shown. A space, a provider account or a shared CLI account is named
+  only if it belongs to the workspace and is the object the event was about (its id and creation
+  time match); an access token's or an invite's name is not shown (an invite's address is in the
+  event's details). A name changed since the event shows as it is now.
+- **Pages.** Newest first, 50 events to a page (at most 200), by a cursor that holds the time and
+  id of the last event, so events recorded while someone pages don't shift the pages.
+- **Reading is not recorded.** Looking at the log makes no event.
+
 ## What is never recorded
 
 No password (current, new or wrong), session cookie, setup token, invite token, reset link or
@@ -167,6 +196,10 @@ events within the hour. Backups contain the log like the rest of the database.
   transaction.
 - A code is stable once released: a different meaning gets a new code.
 
-`audit.List` reads events (by workspace and action, newest first) for the tests and for the
-admin view; it checks no access, so whoever calls it decides who may see which workspace's
-events.
+`audit.ListWorkspace` reads one workspace's events for the admin view, with names, filters and a
+cursor; `audit.List` reads them (by workspace and action) for tests, and a zero workspace in it
+means every workspace's. Neither checks access: whoever calls them decides who may see which
+workspace's events, and a route must use `ListWorkspace` with the workspace its access check
+found. A new action needs its label in the web app (`settings.audit.actions.<code>` in each
+language, and the list in `web/src/settings/AuditTab.tsx`); a test checks it against
+`actions.go`, and the same for a new detail name or target type.
