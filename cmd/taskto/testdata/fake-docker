@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+# A stand-in for `docker`, for update_test.go: it records every call in $FAKE_DIR/calls, each
+# with the TASKTO_VERSION of the .env it ran against (" @v0.3.0"), and answers what
+# deploy/taskto-update.sh and deploy/safety-check.sh ask. A `docker compose` call is recorded
+# without Compose's global flags (-f, --project-name, --env-file, --profile; the project
+# directory only when it isn't the install's own, which is the staged copy of the new settings),
+# and in full, flags included, in $FAKE_DIR/calls-raw (and as JSON, each argument one string, in
+# calls-json). Files in $FAKE_DIR steer it:
+#   fail      extended regular expressions: a call whose line matches one of them fails
+#   kill-on   an extended regular expression: the first call whose line matches it kills the
+#             whole process group (the updater, started in one of its own), once
+#   running   the version of the server that `compose start` started (the fake /healthz reports
+#             it); `compose create` and `compose stop` remove it
+#   removed   the containers that were made were removed, and none since
+#   created   the containers `compose create` made and nothing started yet: "service image-id"
+#   block     holds a pull while it exists; block-up holds `compose start`
+#   volname   the name of the data volume the server has mounted (default taskto_data);
+#             nomount: it has none; config-volname: the one Compose's config names
+#   running-subpath, running-ro   the running server's /data mount has a subpath (the file's
+#             content) or is read-only
+#   missing-volumes     lines: a volume that `volume inspect` doesn't find
+#   mutate    lines "VERSION KIND": that version's running containers break a safety rule (KIND
+#             is root, insecure, nomode, netadmin, suid or workerdata)
+#   upfail-after-start  a version whose `compose start` starts it and then fails
+#   config-edit         a jq filter applied to the rendered settings of the staged project
+#   config-edit-backup  the same, applied only when a backup profile is on (a render with
+#                       `--profile backup`, as the updater does)
+#   config-edit-install the same, applied to the install's own project instead
+#   server-env          lines: more of the running server's environment (NAME=value)
+#   `compose create` takes the options of `docker compose create` only (no --no-deps), and
+#   replaces the containers of the services it names and of their dependencies, or of all
+#   backup-schedule     the nightly backup service has a running container
+#   stop-noop           `compose stop` stops nothing
+#   missing-images      lines: an image (a ref or an id) that `image inspect` doesn't find
+#   retagged            lines: a ref or id whose tag now has another id; retag-on-backup and
+#                       retag-on-create are copied to it when a backup is taken, or the
+#                       containers are made
+#   retag-wins          a moved tag (retagged) wins over a `docker tag` made since
+#   image-user          the Config.User of the images (default 65532:65532)
+#   revision-TAG        the revision label of the images tagged TAG
+set -u
+d=$FAKE_DIR
+raw="$*"
+orig=("$@")
+proj=$PWD
+staged=0
+pd=""
+profs=""
+CADDY_REF=caddy:2.11.9-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
+if [ "${1:-}" = compose ]; then
+	shift
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--project-directory) pd=$2 ;;
+		--profile) profs="$profs $2" ;;
+		--project-name | --env-file | -f) ;;
+		*) break ;;
+		esac
+		shift 2
+	done
+	set -- compose "$@"
+	if [ -n "$pd" ] && ! [ "$pd" -ef "$PWD" ]; then
+		proj=$pd
+		staged=1
+	fi
+fi
+ver=$(sed -n 's/^TASKTO_VERSION=//p' "$proj/.env" 2>/dev/null | tail -n 1)
+line="$* @$ver"
+[ "$staged" = 0 ] || line="compose --project-directory $proj ${line#compose }"
+echo "$line" >>"$d/calls"
+echo "$raw @$ver" >>"$d/calls-raw"
+# The same, with the argument boundaries kept: {"args": [...], "ver": "..."}, one per line.
+printf '%s\0' "${orig[@]}" | jq -Rsc --arg v "$ver" '{args: (split("\u0000")[:-1]), ver: $v}' >>"$d/calls-json"
+if [ -s "$d/fail" ] && grep -qE -f "$d/fail" <<<"$line"; then
+	echo "fake docker: $line fails" >&2
+	exit 1
+fi
+if [ -s "$d/kill-on" ] && grep -qE -f "$d/kill-on" <<<"$line"; then
+	rm -f "$d/kill-on"
+	pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+	[ -n "$pgid" ] || pgid=$(awk '{print $5}' "/proc/$$/stat")
+	kill -KILL -- "-$pgid"
+fi
+last=${*: -1}
+vol=$(cat "$d/volname" 2>/dev/null || echo taskto_data)
+running=$(cat "$d/running" 2>/dev/null || true)
+mutated() { grep -qx "$running $1" "$d/mutate" 2>/dev/null; }
+
+# image_id REF-OR-ID: the id an image has: an id is itself; a ref has the id it was last tagged
+# with, else the one a moved tag gives it, else its own.
+image_id() {
+	local t
+	case $1 in sha256:*)
+		echo "$1"
+		return
+		;;
+	esac
+	t=$(awk -v r="$1" '$2 == r {id = $1} END {print id}' "$d/tags" 2>/dev/null)
+	if [ -e "$d/retag-wins" ] && [ -s "$d/retagged" ] && grep -qxF "$1" "$d/retagged"; then
+		echo "sha256:swapped-$1"
+	elif [ -n "$t" ]; then
+		echo "$t"
+	elif [ -s "$d/retagged" ] && grep -qxF "$1" "$d/retagged"; then
+		echo "sha256:swapped-$1"
+	else
+		echo "sha256:id-$1"
+	fi
+}
+# The services that have a container: the server and the worker, Caddy with the https profile,
+# the nightly backup when it runs.
+services() {
+	echo taskto
+	echo cli-worker
+	grep -q '^COMPOSE_PROFILES=.*https' "$proj/.env" 2>/dev/null && echo caddy
+	[ ! -e "$d/backup-schedule" ] || echo backup-schedule
+}
+# cimage SERVICE: the image id the container of a service has now.
+cimage() {
+	local id
+	id=$(awk -v s="$1" '$1 == s {print $2}' "$d/created" 2>/dev/null)
+	if [ -n "$id" ]; then
+		echo "$id"
+	elif [ "$1" = caddy ]; then
+		echo "sha256:id-$CADDY_REF"
+	else
+		echo "sha256:run-$1-$running"
+	fi
+}
+
+# container ID: `docker inspect`'s JSON for the server or the worker, as the running version is.
+container() {
+	local user=65532:65532 capadd=null env mounts nets hostmounts='[]' sub ro=true
+	case $1 in
+	id-taskto)
+		mutated root && user=0
+		env='["TASKTO_CLI_WORKERS=container","TASKTO_DISABLE_PASSWORD_LOGIN="]'
+		mutated nomode && env='["TASKTO_CLI_WORKERS=off"]'
+		mutated insecure && env='["TASKTO_CLI_WORKERS=container","TASKTO_INSECURE_COOKIES=true"]'
+		[ ! -e "$d/running-ro" ] || ro=false
+		mounts=$(jq -cn --arg v "$vol" --argjson rw "$ro" '[{Type: "volume", Name: $v, Destination: "/data", RW: $rw}, {Type: "volume", Name: "taskto_cli-run", Destination: "/run/taskto-cli"}]')
+		[ ! -e "$d/nomount" ] || mounts='[{"Type":"volume","Name":"taskto_cli-run","Destination":"/run/taskto-cli"}]'
+		if [ -s "$d/running-subpath" ]; then
+			sub=$(cat "$d/running-subpath")
+			hostmounts=$(jq -cn --arg v "$vol" --arg s "$sub" '[{Type: "volume", Source: $v, Target: "/data", VolumeOptions: {Subpath: $s}}]')
+		fi
+		nets='{"taskto_default":{}}'
+		[ ! -s "$d/server-env" ] || env=$(jq -c --rawfile x "$d/server-env" '. + ($x | split("\n") | map(select(. != "")))' <<<"$env")
+		;;
+	*)
+		user=root
+		capadd='["CHOWN","KILL","SETGID","SETUID"]'
+		mutated netadmin && capadd='["CHOWN","KILL","NET_ADMIN","SETGID","SETUID"]'
+		env='["PATH=/usr/bin"]'
+		mounts='[{"Type":"volume","Name":"taskto_cli-homes","Destination":"/homes"},{"Type":"volume","Name":"taskto_cli-run","Destination":"/run/taskto-cli"}]'
+		mutated workerdata && mounts=$(jq -cn --arg v "$vol" '[{Type: "volume", Name: $v, Destination: "/data"}]')
+		nets='{"taskto_worker":{}}'
+		;;
+	esac
+	jq -cn --arg user "$user" --argjson capadd "$capadd" --argjson env "$env" --argjson mounts "$mounts" --argjson nets "$nets" --argjson hm "$hostmounts" \
+		'[{Config: {User: $user, Env: $env}, HostConfig: {CapDrop: ["ALL"], CapAdd: $capadd, SecurityOpt: ["no-new-privileges:true"], Privileged: false, Mounts: $hm},
+		   Mounts: $mounts, NetworkSettings: {Networks: $nets}}]'
+}
+
+# config_json: `docker compose config --format json` of the project: the settings of the Compose
+# file, as Compose renders them (a service's mounts in the long form, the networks and volumes
+# by their effective names), with Caddy when the https profile is on and the backup services
+# when their profiles are; the staged project's changed by config-edit.
+config_json() {
+	local https=0 cvol out backup=0 schedule=0
+	grep -q '^COMPOSE_PROFILES=.*https' "$proj/.env" 2>/dev/null && https=1
+	case " $profs " in *" https "*) https=1 ;; esac
+	case " $profs " in *" backup "*) backup=1 ;; esac
+	case " $profs " in *" backup-schedule "*) schedule=1 ;; esac
+	cvol=$(cat "$d/config-volname" 2>/dev/null || echo "$vol")
+	out=$(jq -cn --arg v "$ver" --arg vol "$cvol" --arg caddy "$CADDY_REF" --argjson https "$https" --argjson backup "$backup" --argjson schedule "$schedule" '
+		"ghcr.io/taskto-ai/" as $p
+		| {type: "volume", source: "data", target: "/data", volume: {}} as $data
+		| {type: "bind", source: "/srv/taskto/backup", target: "/run/taskto-backup", read_only: true} as $keys
+		| {name: "taskto",
+		   services: ({
+		     taskto: {image: ($p + "taskto:" + $v), cap_drop: ["ALL"], security_opt: ["no-new-privileges:true"],
+		              environment: {TASKTO_CLI_WORKERS: "container", TASKTO_DISABLE_PASSWORD_LOGIN: ""},
+		              volumes: [$data, {type: "volume", source: "cli-run", target: "/run/taskto-cli", volume: {}}],
+		              networks: {default: null}},
+		     "cli-worker": {image: ($p + "taskto-cli-worker:" + $v), cap_drop: ["ALL"], cap_add: ["SETUID", "SETGID", "CHOWN", "KILL"],
+		              security_opt: ["no-new-privileges:true"],
+		              volumes: [{type: "volume", source: "cli-homes", target: "/homes", volume: {}}, {type: "volume", source: "cli-run", target: "/run/taskto-cli", volume: {}}],
+		              networks: {worker: null}}
+		   } + (if $https == 1 then {caddy: {image: $caddy,
+		              volumes: [{type: "bind", source: "/srv/taskto/deploy/Caddyfile", target: "/etc/caddy/Caddyfile", read_only: true},
+		                        {type: "volume", source: "caddy-data", target: "/data", volume: {}},
+		                        {type: "volume", source: "caddy-config", target: "/config", volume: {}}],
+		              networks: {default: {ipv4_address: "172.29.80.10"}}}} else {} end)
+		     + (if $backup == 1 then {backup: {image: ($p + "taskto-backup:" + $v), volumes: [$data, $keys]}} else {} end)
+		     + (if $schedule == 1 then {"backup-schedule": {image: ($p + "taskto-backup:" + $v), volumes: [$data, $keys]}} else {} end)),
+		   networks: {default: {name: "taskto_default"},
+		              worker: {name: "taskto_worker", driver_opts: {"com.docker.network.bridge.name": "taskto-worker"}}},
+		   volumes: {data: {name: $vol}, "cli-homes": {name: "taskto_cli-homes"}, "cli-run": {name: "taskto_cli-run"},
+		             "caddy-data": {name: "taskto_caddy-data"}, "caddy-config": {name: "taskto_caddy-config"}}}')
+	if [ "$staged" = 1 ] && [ -s "$d/config-edit" ]; then out=$(jq -c -f "$d/config-edit" <<<"$out"); fi
+	if [ "$staged" = 0 ] && [ -s "$d/config-edit-install" ]; then out=$(jq -c -f "$d/config-edit-install" <<<"$out"); fi
+	if [ "$staged" = 1 ] && [ -s "$d/config-edit-backup" ] && [ $((backup + schedule)) -gt 0 ]; then out=$(jq -c -f "$d/config-edit-backup" <<<"$out"); fi
+	echo "$out"
+}
+
+case "$1" in
+manifest | logout) ;;
+tag) echo "$2 $3" >>"$d/tags" ;;
+login) echo "${DOCKER_CONFIG:-unset}" >>"$d/login-config" ;;
+pull)
+	echo "${DOCKER_CONFIG:-unset}" >>"$d/pull-config"
+	while [ -e "$d/block" ]; do sleep 0.1; done
+	;;
+info) echo "$d/root" ;;
+volume)
+	case "$2" in
+	inspect)
+		if [ -s "$d/missing-volumes" ] && grep -qxF "$3" "$d/missing-volumes"; then exit 1; fi
+		echo "$d/volume"
+		;;
+	esac
+	;;
+image)
+	if [ -s "$d/missing-images" ] && grep -qxF "$last" "$d/missing-images"; then exit 1; fi
+	case "$*" in
+	*Labels*RepoDigests*) echo "$(cat "$d/revision-${last##*:}" 2>/dev/null || true)|$(image_id "$last")|$last@sha256:$(printf '%s' "$last" | sha256sum | cut -c1-64)" ;;
+	*Config.User*) cat "$d/image-user" 2>/dev/null || echo 65532:65532 ;;
+	*.Id*) image_id "$last" ;;
+	esac
+	;;
+network) echo taskto-worker ;;
+ps)
+	all=0 made=0
+	for a in "$@"; do
+		case $a in
+		-aq) all=1 ;;
+		status=created) made=1 ;;
+		esac
+	done
+	if [ "$made" = 1 ]; then
+		[ ! -e "$d/created" ] || awk '{print "id-" $1}' "$d/created"
+	elif [ "$all" = 1 ]; then
+		{ [ -e "$d/running" ] || [ -e "$d/created" ]; } && services | sed 's/^/id-/'
+	else
+		[ ! -e "$d/running" ] || services | sed 's/^/id-/'
+	fi
+	;;
+update) ;;
+rm)
+	rm -f "$d/created"
+	touch "$d/removed"
+	;;
+inspect)
+	svc=${last#id-}
+	case "$*" in
+	*"com.docker.compose.service"*) echo "$svc $(cimage "$svc")" ;;
+	*"{{.Image}} {{.State.StartedAt}}"*)
+		if [ -e "$d/created" ]; then echo "$(cimage "$svc") 0001-01-01T00:00:00Z"; else echo "$(cimage "$svc") 2026-01-01T00:00:00Z"; fi
+		;;
+	*"{{.Image}}"*) echo "sha256:run-$svc-$running" ;;
+	*) container "$last" ;;
+	esac
+	;;
+compose)
+	shift
+	case "$1" in
+	config)
+		if grep -q NEEDS_NEW_SETTING "$proj/compose.yaml"; then
+			echo 'required variable TASKTO_NEEDS_NEW_SETTING is missing a value' >&2
+			exit 1
+		fi
+		case "$*" in
+		*json*) config_json ;;
+		esac
+		;;
+	exec)
+		case "$*" in
+		*"taskto backup"*)
+			echo "BACKUP-OF-$ver"
+			[ ! -s "$d/retag-on-backup" ] || cp "$d/retag-on-backup" "$d/retagged"
+			;;
+		*find*) ! mutated suid || echo /usr/bin/bad ;;
+		esac
+		;;
+	create)
+		# Only what `docker compose create --help` lists: anything else (--no-deps, which `up`
+		# has and `create` doesn't) is an error, as it is for Compose.
+		shift
+		targets=""
+		while [ $# -gt 0 ]; do
+			case $1 in
+			--build | --dry-run | --force-recreate | --no-build | --no-recreate | --quiet-pull | --remove-orphans | -y | --yes) ;;
+			--pull | --scale) shift ;;
+			-*)
+				echo "unknown flag: $1" >&2
+				exit 1
+				;;
+			*) targets="$targets $1" ;;
+			esac
+			shift
+		done
+		rm -f "$d/removed"
+		[ ! -s "$d/retag-on-create" ] || cp "$d/retag-on-create" "$d/retagged"
+		# The containers of the services named, and of those they depend on (Caddy on the
+		# server), or of all, are replaced: the old ones are gone, the new ones are made and not
+		# started. The others are left as they are, running or made.
+		want=""
+		for s in $targets; do
+			want="$want $s"
+			[ "$s" != caddy ] || want="$want taskto"
+		done
+		{
+			[ -z "$want" ] || [ ! -e "$d/created" ] || awk -v w="$want" 'BEGIN { n = split(w, a, " "); for (i = 1; i <= n; i++) m[a[i]] = 1 } !($1 in m)' "$d/created"
+			jq -r '.services | to_entries[] | [.key, .value.image] | @tsv' <<<"$(config_json)" | while IFS=$'\t' read -r s ref; do
+				if [ -n "$want" ]; then
+					case " $want " in *" $s "*) ;; *) continue ;; esac
+				fi
+				echo "$s $(image_id "$ref")"
+			done
+		} >"$d/created.new"
+		mv "$d/created.new" "$d/created"
+		if [ -z "$want" ] || [[ " $want " == *" taskto "* ]]; then rm -f "$d/running"; fi
+		;;
+	start)
+		while [ -e "$d/block-up" ]; do sleep 0.1; done
+		echo "$ver" >"$d/running"
+		rm -f "$d/created"
+		if [ "$(cat "$d/upfail-after-start" 2>/dev/null)" = "$ver" ]; then exit 1; fi
+		;;
+	stop) [ -e "$d/stop-noop" ] || rm -f "$d/running" ;;
+	ps)
+		case "$*" in
+		*--format*) echo running ;;
+		*)
+			# Containers that were made and then removed, and not made again, are gone.
+			if [ -e "$d/removed" ] && [ ! -e "$d/created" ] && [ ! -e "$d/running" ]; then exit 0; fi
+			case $last in
+			-q | -aq) services | sed 's/^/id-/' ;;
+			backup-schedule) [ ! -e "$d/backup-schedule" ] || echo "id-$last" ;;
+			*) echo "id-$last" ;;
+			esac
+			;;
+		esac
+		;;
+	esac
+	;;
+esac
+exit 0
