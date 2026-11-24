@@ -143,3 +143,20 @@ test('code keeps its text, and a highlight at the ends of an identifier does not
   expect(plain(id)).toBe('first_name_last')
   expect(marked(id)).toEqual(['first', 'last'])
 })
+
+test('a link destination may hold balanced parentheses, and a backslash escapes a mark', () => {
+  const link = cleanSnippet([
+    { text: 'See [guide](docs/(draft)/' },
+    { text: 'plan', match: true },
+    { text: '.md) now' },
+  ])
+  expect(plain(link)).toBe('See guide (docs/(draft)/plan.md) now')
+  expect(marked(link)).toEqual(['plan'])
+  expect(plain(cleanSnippet([{ text: 'See [guide](docs/(draft)/plan.md) now' }]))).toBe('See guide now')
+
+  expect(plain(cleanSnippet([{ text: 'Keep \\*literal\\* near ' }, { text: 'orchard', match: true }]))).toBe(
+    'Keep *literal* near orchard',
+  )
+  // An escaped backslash is one backslash, and the mark after it is a mark.
+  expect(plain(cleanSnippet([{ text: 'a \\\\ and *b*, \\[x\\](y) and \\`z\\`' }]))).toBe('a \\ and b, [x](y) and `z`')
+})

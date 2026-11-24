@@ -95,6 +95,7 @@ function bound(pieces: SnippetPiece[], limit: number): { text: string; matched: 
 const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff
 const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff
 
+const PUNCTUATION = /^[!-/:-@[-`{-~]$/
 const isSpace = (c: string) => c === '' || /\s/.test(c)
 const isWord = (c: string) => c !== '' && /[\p{L}\p{N}]/u.test(c)
 
@@ -150,7 +151,15 @@ function clean(source: string, sourceMatched: Uint8Array): SnippetPiece[] {
   const m = Uint8Array.from(matchedChars)
   const keep = new Uint8Array(n).fill(1)
   const insertBefore = new Map<number, string>()
-  const isLit = (i: number) => lit[i] === 1
+  // A character that is escaped (\*, \], \\) is text, like one in code.
+  const escaped = new Uint8Array(n)
+  for (let i = 0; i + 1 < n; ) {
+    if (t[i] === '\\' && lit[i] === 0 && PUNCTUATION.test(t[i + 1])) {
+      escaped[i + 1] = 1
+      i += 2
+    } else i++
+  }
+  const isLit = (i: number) => lit[i] === 1 || escaped[i] === 1
   // matches[i]: how many matched characters are before i.
   const matches = new Int32Array(n + 1)
   for (let i = 0; i < n; i++) matches[i + 1] = matches[i] + m[i]
@@ -165,7 +174,14 @@ function clean(source: string, sourceMatched: Uint8Array): SnippetPiece[] {
     return next
   }
   const nextBracket = nextOf(']')
-  const nextParen = nextOf(')')
+  // The ")" that closes each "(" (parentheses inside a destination may be balanced); -1 if none.
+  const closeOf = new Int32Array(n).fill(-1)
+  const opened: number[] = []
+  for (let i = 0; i < n; i++) {
+    if (isLit(i)) continue
+    if (t[i] === '(') opened.push(i)
+    else if (t[i] === ')' && opened.length > 0) closeOf[opened.pop() as number] = i
+  }
 
   // The runs of backticks outside code blocks, by length, for finding where a code span ends.
   const ticks = new Map<number, { starts: number[]; next: number }>()
@@ -208,6 +224,11 @@ function clean(source: string, sourceMatched: Uint8Array): SnippetPiece[] {
       i++
       continue
     }
+    if (c === '\\' && i + 1 < n && escaped[i + 1] === 1) {
+      dropOne(i) // the escape's backslash; the character after it is text
+      i += 2
+      continue
+    }
     if (c === '`') {
       let j = i
       while (j < n && t[j] === '`' && !isLit(j)) j++
@@ -232,8 +253,8 @@ function clean(source: string, sourceMatched: Uint8Array): SnippetPiece[] {
     if (c === '[' && linkClose < 0) {
       const close = nextBracket[i + 1]
       if (close < n && t[close + 1] === '(' && close + 1 < n) {
-        const paren = nextParen[close + 2]
-        if (paren < n) {
+        const paren = isLit(close + 1) ? -1 : closeOf[close + 1]
+        if (paren > 0) {
           const image = i > 0 && t[i - 1] === '!' && !isLit(i - 1) && keep[i - 1] === 1
           const brackets = !m[i] && !m[close]
           if (brackets) {
