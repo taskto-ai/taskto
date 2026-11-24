@@ -48,8 +48,8 @@ type stack struct {
 	dir string // the data directory
 	// sched is the scheduler the boards' reminders are on; its worker isn't started.
 	sched *schedule.Service
-	one int64
-	two int64
+	one   int64
+	two   int64
 
 	alice, bob, carol  person
 	secret, team       int64

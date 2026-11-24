@@ -1510,12 +1510,21 @@ kept in step with the card by the change that touches it:
   assignee cancels the previous person's and makes the new person's; changing or clearing `due`
   moves or cancels them; moving the card to `done` or archiving it cancels them, and moving it
   back (or restoring it) makes them again if their time is still ahead.
-- **Once.** Each is a notification with the job's occurrence as its dedupe key, so a retry or a
-  second run makes no second one, and edits that change neither `due`, the assignee nor the
-  card's column leave the jobs alone. A new date is a new reminder.
-- **Access.** When a job runs it checks again that the assignee may read the card's space (a person
-  who left it, or the workspace, gets nothing and the job fails), that the board isn't archived and
-  that the card still has the date, assignee and an open column the job was made for.
+- **Once.** A person is told once per card, kind and due date, however many times a job runs (a
+  retry, a clock that stepped back, a card given to someone else and back). Edits that change
+  neither `due`, the assignee nor the card's column leave the jobs alone, a reminder that is ready
+  but hasn't run yet included. A new date is a new reminder. An old notice whose card has a
+  different date now (or none) is shown as a plain "something changed" mention of the card.
+- **Where.** Every way of changing a card keeps the jobs: the web app's routes, the agent's tools,
+  the MCP tools and the apps' effects. Archiving a board or a shared space cancels its cards' jobs
+  and restoring it makes them again; a person who leaves a space or the workspace loses theirs; a
+  server that starts with dated cards that have none (made before reminders existed) schedules them.
+  A date the scheduler can't hold (the overdue notice of `8999-12-31` would be in the year 9000)
+  has no notice for that part, and the card is saved all the same.
+- **Access.** When a job runs, in the transaction that makes the notification, it checks that it is
+  still the job that was claimed, that the assignee may read the card's space (a person who left it,
+  or the workspace, gets nothing), that the space and board aren't archived and that the card still
+  has the date, assignee and an open column the job was made for.
 
 ### `GET /api/workspaces/{workspace}/notifications`
 

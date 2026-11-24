@@ -2,7 +2,6 @@ package boards
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -364,8 +363,6 @@ func TestNoReminderAfterTheAssigneeLostAccess(t *testing.T) {
 	}
 	_ = kept
 }
-
-func isAccessLost(err error) bool { return err != nil && errors.Is(err, schedule.ErrAccessLost) }
 
 func TestReminderChecksTheCardWhenItRuns(t *testing.T) {
 	w := newRemindWorld(t)
