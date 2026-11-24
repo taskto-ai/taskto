@@ -131,6 +131,11 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			case err != nil:
 				if ctx.Err() != nil {
+					// The stream ended while the check ran (the login was signed out, or the server
+					// is shutting down): say so as the end case does, so the client reconnects at once.
+					if r.Context().Err() == nil {
+						_ = out.event(interrupted)
+					}
 					return
 				}
 				failedChecks++
