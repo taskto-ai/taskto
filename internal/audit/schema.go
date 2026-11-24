@@ -97,7 +97,7 @@ var (
 var schemas = map[string]map[string]kind{
 	SetupCompleted:       {},
 	LoginSucceeded:       {"method": oneOf("password")},
-	LoginFailed:          {"method": oneOf("password"), "reason": oneOf("unknown_account", "no_password", "wrong_password")},
+	LoginFailed:          {"method": oneOf("password"), "reason": oneOf("unknown_account", "no_password", "wrong_password", "account_disabled")},
 	Logout:               {},
 	PasswordChanged:      {},
 	PasswordChangeFailed: {},
@@ -114,6 +114,8 @@ var schemas = map[string]map[string]kind{
 	InviteAccepted:    {"role": roles, "already_member": boolean},
 	MemberRoleChanged: {"from": roles, "to": roles},
 	MemberRemoved:     {"role": roles},
+	MemberDisabled:    {"logins_ended": number},
+	MemberEnabled:     {},
 
 	AccessTokenCreated: {"expires": boolean},
 	AccessTokenRevoked: {"cascade": cascadeFlag},

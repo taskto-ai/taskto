@@ -54,6 +54,13 @@ const (
 	CodeResetOwn                Code = "reset_own"
 	CodeResetElsewhere          Code = "reset_elsewhere"
 
+	// Disabling a member (internal/auth/disable.go). account_disabled is also what a login, a
+	// single sign-on and a reset link answer for a disabled account.
+
+	CodeAccountDisabled  Code = "account_disabled"
+	CodeDisableOwn       Code = "disable_own"
+	CodeDisableElsewhere Code = "disable_elsewhere"
+
 	// Single sign-on (internal/auth/sso.go). The callback redirects the browser to
 	// /?sso_error=<code>; the same codes name the API's own answers.
 

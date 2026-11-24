@@ -128,6 +128,7 @@ func (s *Service) TokenUser(ctx context.Context, raw string) (User, Token, error
 		SELECT t.id, t.workspace_id, t.name, t.created_at, t.expires_at, t.last_used_at, u.id, u.email, u.name
 		FROM access_tokens t JOIN users u ON u.id = t.user_id
 		WHERE t.token_hash = ? AND (t.expires_at IS NULL OR t.expires_at > ?)
+		  AND u.disabled_at IS NULL
 		  AND EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = t.workspace_id AND m.user_id = t.user_id)`,
 		hashToken(raw), stamp(now)).
 		Scan(&t.ID, &t.WorkspaceID, &t.Name, &t.CreatedAt, &t.ExpiresAt, &t.LastUsedAt, &u.ID, &u.Email, &u.Name)

@@ -580,6 +580,49 @@ func TestManagingASharedSpace(t *testing.T) {
 	expect(t, w.mallory.do(http.MethodGet, spacePath(s, ""), nil), http.StatusNotFound)
 }
 
+// A disabled account has no access to any space, which its person, its agents and anything
+// scheduled for it ask through the checker; its spaces and seats are kept, and come back with it.
+func TestDisabledAccountHasNoAccess(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	read := func() (bool, error) {
+		ok, err := w.e.c.CanRead(ctx, w.alice.id, w.shared.ID)
+		return ok, err
+	}
+	if ok, err := read(); err != nil || !ok {
+		t.Fatalf("before: CanRead = %v, %v", ok, err)
+	}
+	spaces := func() int {
+		got, err := w.e.c.Readable(ctx, w.alice.id, w.ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(got)
+	}
+	before := spaces()
+	if before == 0 {
+		t.Fatal("alice has no readable spaces to begin with")
+	}
+	expect(t, w.owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/disable", w.ws, w.alice.id), nil), http.StatusNoContent)
+	if _, err := w.e.c.Check(ctx, w.alice.id, w.shared.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Check while disabled = %v, want ErrNotFound", err)
+	}
+	if ok, _ := read(); ok {
+		t.Fatal("a disabled account can read a space")
+	}
+	if n := spaces(); n != 0 {
+		t.Fatalf("a disabled account has %d readable spaces", n)
+	}
+	// Others are untouched.
+	if ok, err := w.e.c.CanRead(ctx, w.bob.id, w.shared.ID); err != nil || !ok {
+		t.Fatalf("bob while alice is disabled: %v, %v", ok, err)
+	}
+	expect(t, w.owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/enable", w.ws, w.alice.id), nil), http.StatusNoContent)
+	if n := spaces(); n != before {
+		t.Fatalf("after enabling: %d readable spaces, want the %d from before", n, before)
+	}
+}
+
 func TestLeavingTheWorkspace(t *testing.T) {
 	w := newWorld(t)
 	var n int

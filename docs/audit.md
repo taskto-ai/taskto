@@ -45,7 +45,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 |---|---|---|---|---|
 | `setup_completed` | first-run setup | the new one | workspace | |
 | `login_succeeded` | a password login | | user | `method` |
-| `login_failed` | a wrong password, or an account with no password or that doesn't exist | | user, if it exists | `method`, `reason` (the account is the target; no actor, since whoever typed isn't known to be its owner) |
+| `login_failed` | a wrong password, an account with no password or that doesn't exist, or a right password for a disabled account | | user, if it exists | `method`, `reason` (the account is the target; no actor, since whoever typed isn't known to be its owner) |
 | `logout` | logging out of a live session: one that has expired is no logout, and records nothing | | user | |
 | `password_changed` | a user changes their own password | | user | |
 | `password_change_failed` | the current password was wrong | | user | |
@@ -58,6 +58,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `invite_created`, `invite_revoked` | an admin invites someone, or withdraws it | the invite's | invite | `email` (the full address), `role` |
 | `invite_accepted` | an invite is used, by a new account or an existing one | the invite's | invite | `role`, `already_member` |
 | `member_role_changed` | an admin changes a member's role | the workspace | user | `from`, `to` |
+| `member_disabled`, `member_enabled` | an admin switches a member's account off or on (one already in that state records nothing) | the workspace the admin asked in | user | `logins_ended` on a disable: the sessions it signed out |
 | `member_removed` | an admin removes a member | the workspace | user | `role`; the tokens and shared-space seats that go with it are events of their own (see below) |
 | `access_token_created`, `access_token_revoked` | a member makes or revokes their own token | the token's | access token | `expires`; `cascade` on one revoked by a member's removal |
 | `access_token_used` | a token authenticates a request, at most once a minute (the cadence of the token's `last_used_at`), through the REST API or MCP | the token's | access token | |

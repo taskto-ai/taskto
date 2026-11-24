@@ -207,6 +207,10 @@ func (s *Service) failReset(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusNotFound, apierr.CodeResetInvalid, err.Error())
 		return
 	}
+	if errors.Is(err, errAccountDisabled) {
+		accountDisabled(w)
+		return
+	}
 	serverError(w, r, err)
 }
 
@@ -275,17 +279,9 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 		if userID == by {
 			return errResetOwn
 		}
-		var elsewhere bool
-		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM memberships t
-				WHERE t.user_id = ? AND NOT EXISTS (
-					SELECT 1 FROM memberships a
-					WHERE a.workspace_id = t.workspace_id AND a.user_id = ? AND a.role = ?))`,
-			userID, by, RoleAdmin).Scan(&elsewhere); err != nil {
+		if all, err := administersAll(ctx, tx, by, userID); err != nil {
 			return err
-		}
-		if elsewhere {
+		} else if !all {
 			return errResetElsewhere
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM password_resets WHERE user_id = ?`, userID); err != nil {
@@ -307,21 +303,40 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 	return token, expires, nil
 }
 
+// administersAll reports whether by is an admin of every workspace userID belongs to: the
+// rule for acting on someone's sign-in (a reset link, disabling the account), so that an admin of
+// one workspace can't take over or lock out an account that reaches another.
+func administersAll(ctx context.Context, tx *sql.Tx, by, userID int64) (bool, error) {
+	var elsewhere bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM memberships t
+			WHERE t.user_id = ? AND NOT EXISTS (
+				SELECT 1 FROM memberships a
+				WHERE a.workspace_id = t.workspace_id AND a.user_id = ? AND a.role = ?))`,
+		userID, by, RoleAdmin).Scan(&elsewhere)
+	return !elsewhere, err
+}
+
 type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // resetUser returns the user a reset token is for, or errResetInvalid if it is unknown or
-// expired.
+// expired, and errAccountDisabled for a disabled account: no way back in but being enabled.
 func (s *Service) resetUser(ctx context.Context, q querier, token string) (User, error) {
 	var u User
+	var disabled bool
 	err := q.QueryRowContext(ctx, `
-		SELECT u.id, u.email, u.name
+		SELECT u.id, u.email, u.name, u.disabled_at IS NOT NULL
 		FROM password_resets p JOIN users u ON u.id = p.user_id
 		WHERE p.token_hash = ? AND p.expires_at > ?`, hashToken(token), stamp(s.now())).
-		Scan(&u.ID, &u.Email, &u.Name)
+		Scan(&u.ID, &u.Email, &u.Name, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, errResetInvalid
+	}
+	if err == nil && disabled {
+		return User{}, errAccountDisabled
 	}
 	return u, err
 }

@@ -496,7 +496,15 @@ export type Comment = { id: number; card_id: number; author: Author; body: strin
 
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
 
-export type Member = { id: number; email: string; name: string; role: 'admin' | 'member'; joined_at: string }
+export type Member = {
+  id: number
+  email: string
+  name: string
+  role: 'admin' | 'member'
+  joined_at: string
+  // An admin switched the account off: signed out, refused at login, everything kept.
+  disabled?: boolean
+}
 export type Invite = { id: number; email: string; role: 'admin' | 'member'; created_at: string; expires_at: string }
 export type SpaceMember = { id: number; email: string; name: string; role: 'editor' | 'viewer'; added_at: string }
 

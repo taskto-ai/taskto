@@ -41,6 +41,9 @@ type Member struct {
 	User
 	Role     Role   `json:"role"`
 	JoinedAt string `json:"joined_at"`
+	// Disabled says the account is switched off (disable.go): it keeps its membership and what it
+	// owns, and can't sign in or act until an admin enables it again.
+	Disabled bool `json:"disabled"`
 }
 
 // Invite is a pending invitation, without its token.
@@ -59,6 +62,9 @@ var (
 	errAlreadyMember = errors.New("already a member of this workspace")
 	errEmailTaken    = errors.New("an account with this email exists")
 	errInviteInvalid = errors.New("the invite is unknown, used or expired")
+	// errAccountDisabled is the answer of every way of signing in, or of acting as an account, for
+	// a disabled one (disable.go).
+	errAccountDisabled = errors.New("this account is disabled: ask a workspace admin to enable it")
 )
 
 // timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the format of the schema's
@@ -175,6 +181,14 @@ func (s *Service) insertSession(ctx context.Context, tx *sql.Tx, userID int64) (
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= ?`, stamp(now)); err != nil {
 		return "", err
 	}
+	// Every new session is made here, so a disabled account never gets one, whichever way it signed in.
+	var disabled bool
+	if err := tx.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM users WHERE id = ?`, userID).Scan(&disabled); err != nil {
+		return "", err
+	}
+	if disabled {
+		return "", errAccountDisabled
+	}
 	token, hash := newToken()
 	_, err := tx.ExecContext(ctx, `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)`,
 		hash, userID, stamp(now.Add(s.opts.SessionTTL)))
@@ -188,7 +202,7 @@ func (s *Service) sessionUser(ctx context.Context, token string) (User, error) {
 	err := s.db.QueryRowContext(ctx, `
 		SELECT u.id, u.email, u.name
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > ?`, hashToken(token), stamp(s.now())).
+		WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled_at IS NULL`, hashToken(token), stamp(s.now())).
 		Scan(&u.ID, &u.Email, &u.Name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, errNotFound
@@ -289,7 +303,7 @@ func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) 
 		order = "u.id"
 	}
 	query := `
-		SELECT u.id, u.email, u.name, m.role, m.created_at
+		SELECT u.id, u.email, u.name, m.role, m.created_at, u.disabled_at IS NOT NULL
 		FROM memberships m JOIN users u ON u.id = m.user_id
 		WHERE m.workspace_id = ? AND u.id > ?
 		ORDER BY ` + order
@@ -306,7 +320,7 @@ func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) 
 	all := []Member{}
 	for rows.Next() {
 		var m Member
-		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.Role, &m.JoinedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.Role, &m.JoinedAt, &m.Disabled); err != nil {
 			return nil, err
 		}
 		all = append(all, m)
@@ -338,15 +352,18 @@ func roleIn(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) (Role, e
 	return role, err
 }
 
-// checkNotLastAdmin fails with errLastAdmin if the workspace has only one admin. Call it
-// before demoting or removing an admin.
-func checkNotLastAdmin(ctx context.Context, tx *sql.Tx, workspaceID int64) error {
-	var admins int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE workspace_id = ? AND role = ?`,
-		workspaceID, RoleAdmin).Scan(&admins); err != nil {
+// checkNotLastAdmin fails with errLastAdmin unless the workspace has an admin besides userID
+// whose account is in use: a disabled admin can't run the workspace, so they don't count. Call
+// it before demoting or removing an admin.
+func checkNotLastAdmin(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) error {
+	var others int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT count(*) FROM memberships m JOIN users u ON u.id = m.user_id
+		WHERE m.workspace_id = ? AND m.role = ? AND m.user_id <> ? AND u.disabled_at IS NULL`,
+		workspaceID, RoleAdmin, userID).Scan(&others); err != nil {
 		return err
 	}
-	if admins <= 1 {
+	if others == 0 {
 		return errLastAdmin
 	}
 	return nil
@@ -360,7 +377,7 @@ func (s *Service) setRole(ctx context.Context, workspaceID, userID int64, role R
 			return err
 		}
 		if current == RoleAdmin {
-			if err := checkNotLastAdmin(ctx, tx, workspaceID); err != nil {
+			if err := checkNotLastAdmin(ctx, tx, workspaceID, userID); err != nil {
 				return err
 			}
 		}
@@ -381,7 +398,7 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 			return err
 		}
 		if current == RoleAdmin {
-			if err := checkNotLastAdmin(ctx, tx, workspaceID); err != nil {
+			if err := checkNotLastAdmin(ctx, tx, workspaceID, userID); err != nil {
 				return err
 			}
 		}

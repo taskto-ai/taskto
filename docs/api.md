@@ -66,6 +66,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `reset_invalid` | 404 | The reset link is unknown, used or expired. |
 | `reset_own` | 400 | An admin changes their own password in Settings, not with a reset link. |
 | `reset_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `account_disabled` | 403 | The account is disabled ([Disabling a member](#disabling-a-member)): a login with the right password, a single sign-on (as `?sso_error=`), a password reset link and an admin whose own account was disabled meanwhile answer this. A disabled account's access token is `token_invalid`. |
+| `disable_own` | 400 | An admin can't disable or enable their own account. |
+| `disable_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
 | `password_login_disabled` | 403 | Passwords are turned off on this server ([sso.md](sso.md#turning-passwords-off)): logging in, a new account with a password, making a reset link and using one answer this. |
 | `sso_unknown_provider` | 404 | No such single sign-on provider. |
 | `sso_failed` | 502 | The provider didn't answer. As `?sso_error=`: the provider or the exchange failed, or the person declined (details are in the server's log). |
@@ -603,8 +606,10 @@ when the operator turned passwords off.
 Any member. Members can see each other (boards need it to assign cards).
 
 ```json
-{"members": [{"id": 2, "email": "member@example.com", "name": "Member", "role": "member", "joined_at": "…"}]}
+{"members": [{"id": 2, "email": "member@example.com", "name": "Member", "role": "member", "joined_at": "…", "disabled": false}]}
 ```
+
+`disabled` is true for an account an admin switched off ([below](#disabling-a-member)).
 
 ### `PATCH /api/workspaces/{workspace}/members/{user}`
 
@@ -616,7 +621,47 @@ member; `409` if it would leave the workspace without an admin.
 Admin only. Removes the member; their access to the workspace, and to all its shared
 spaces, ends with their next request. Their private space is kept, closed (see
 [Spaces and access](#spaces-and-access)). `204`; `404` if the user isn't a member; `409`
-for the last admin.
+for the last admin. A disabled admin doesn't count as one: the workspace needs another whose
+account is in use.
+
+### Disabling a member
+
+An admin can switch an account off without removing it, for someone who is away, has lost a
+device or has left the company, and switch it on again later.
+
+While an account is disabled:
+
+- it is signed out everywhere at once, and its reset links end;
+- it can't log in: a password login with the right password is `403 account_disabled` (a wrong
+  one is the usual `401`, so nobody who doesn't know the password learns the account is off), a
+  single sign-on is refused with `?sso_error=account_disabled`, and a reset link sets nothing;
+- its access tokens, for the REST API and MCP, are refused (`401 token_invalid`);
+- its conversations' agents and CLI turns are refused at their next call: no new turn starts, a
+  turn running loses TaskTo's tools and its workspace account's proxy, and what a person's
+  agent or a scheduled job would do for it is refused as for someone with no space;
+- and what it owns stays: its memberships, spaces and their files, boards, apps, conversations,
+  access tokens and CLI logins. Enabling it restores its access as it was, except for the
+  sessions, which stay signed out: the person logs in again.
+
+An account belongs to every workspace its person is in, so the switch is the account's, not one
+workspace's, and the rule for who may flip it is the one for [password reset
+links](#post-apiworkspacesworkspacemembersuserpassword-reset): an admin of **every** workspace the
+account belongs to. Both routes take a session, never an access token (`403`), and no body.
+
+#### `POST /api/workspaces/{workspace}/members/{user}/disable`
+
+Admin only; the user must be a member of the workspace. `204`, also for an account that is
+disabled already (nothing changes and nothing is recorded). `400 disable_own` for the caller's own
+account; `403 disable_elsewhere` if the member belongs to a workspace the caller doesn't
+administer; `404 member_not_found`. The caller can't leave a workspace without an admin this way:
+the caller is an admin of each of the account's workspaces and in use themselves (`403
+account_disabled` for an admin disabled by another at the same moment).
+
+#### `POST /api/workspaces/{workspace}/members/{user}/enable`
+
+The same rules and answers; enabling an account that isn't disabled changes nothing. Recorded in
+the [audit log](audit.md) as `member_disabled` (with how many logins it ended) and
+`member_enabled`.
 
 ## Invites
 

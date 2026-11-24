@@ -144,11 +144,13 @@ const spaceColumns = `s.id, s.workspace_id, s.kind, s.name, s.archived_at, s.cre
 	CASE WHEN s.kind = 'private' AND s.owner_id = m.user_id THEN 'owner' ELSE coalesce(sm.role, '') END`
 
 // fromSpaceFor joins a space to userID's workspace membership and space membership: a
-// space in a workspace the user doesn't belong to yields no row at all. The user's ID is
-// its only parameter.
+// space in a workspace the user doesn't belong to yields no row at all, nor does any space for a
+// disabled account, which has no access to anything while it is off (what a scheduled job or an
+// agent finds when it asks on a person's behalf). The user's ID is its only parameter.
 const fromSpaceFor = `
 	FROM spaces s
 	JOIN memberships m ON m.workspace_id = s.workspace_id AND m.user_id = ?
+	JOIN users du ON du.id = m.user_id AND du.disabled_at IS NULL
 	LEFT JOIN space_members sm ON sm.space_id = s.id AND sm.user_id = m.user_id`
 
 type scanner interface{ Scan(dest ...any) error }

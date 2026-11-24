@@ -44,6 +44,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/workspaces/{workspace}/tokens/{token}", s.RequireMember(http.HandlerFunc(s.handleDeleteToken)))
 
 	s.passwordRoutes(mux)
+	s.disableRoutes(mux)
 	s.ssoRoutes(mux)
 }
 
@@ -223,9 +224,28 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	refund()
 
+	// Only after the password matched, so the answer doesn't tell anyone else that an account
+	// exists, or is off.
+	disabled, err := s.isDisabled(r.Context(), s.db, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if disabled {
+		s.loginFailed(r, u.ID, "account_disabled")
+		accountDisabled(w)
+		return
+	}
+
 	// The new session first, then drop the one the browser had: a failure in between
 	// leaves the user signed in rather than signed out.
 	token, err := s.newSession(r.Context(), u.ID)
+	if errors.Is(err, errAccountDisabled) {
+		// Disabled since the check above.
+		s.loginFailed(r, u.ID, "account_disabled")
+		accountDisabled(w)
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -471,6 +491,10 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	writeError(w, status, code, msg)
+}
+
+func accountDisabled(w http.ResponseWriter) {
+	writeError(w, http.StatusForbidden, apierr.CodeAccountDisabled, errAccountDisabled.Error())
 }
 
 func passwordLoginDisabled(w http.ResponseWriter) {
