@@ -278,3 +278,25 @@ func TestDocToolsAreIsolated(t *testing.T) {
 	// Purging history is no tool.
 	w.status(http.StatusNotFound, w.aliceConv, "remove_old_versions", map[string]any{"space_id": w.alicePrivate, "path": "x.md"})
 }
+
+// A chunk of characters that JSON writes as six bytes is shortened to fit the reply, and the
+// next piece continues after it, so the whole text is read.
+func TestReadDocEscapedChunkFits(t *testing.T) {
+	w := newWorld(t)
+	text := strings.Repeat("<", readChunk) + "end"
+	w.seed(w.alicePrivate, w.one, "angles.txt", []byte(text))
+	var got strings.Builder
+	offset := 0
+	for i := 0; i < 100; i++ {
+		out := w.ok(w.aliceConv, "read_doc", map[string]any{"space_id": w.alicePrivate, "path": "angles.txt", "offset": offset})
+		got.WriteString(out["content"].(string))
+		next, more := out["next_offset"].(float64)
+		if !more {
+			break
+		}
+		offset = int(next)
+	}
+	if got.String() != text {
+		t.Fatalf("read %d bytes, want %d", got.Len(), len(text))
+	}
+}

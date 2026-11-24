@@ -198,14 +198,22 @@ func (s *Service) readDoc(ctx context.Context, c *call, args json.RawMessage) (a
 	}
 	rest := string(doc.Content[a.Offset:])
 	content, more := cut(rest, readChunk)
-	reply := map[string]any{"path": doc.Path, "version": doc.Version, "size": doc.Size, "offset": a.Offset, "content": content}
-	if a.At != "" {
-		reply["at"] = a.At
+	for {
+		reply := map[string]any{"path": doc.Path, "version": doc.Version, "size": doc.Size, "offset": a.Offset, "content": content}
+		if a.At != "" {
+			reply["at"] = a.At
+		}
+		if more {
+			reply["next_offset"] = a.Offset + len(content)
+		}
+		// JSON escapes characters like < to six bytes: a chunk that fills its 32 KiB of text can
+		// make a reply over MaxResult, so it is shortened, and the next piece starts after it.
+		if out, err := json.Marshal(reply); err != nil || len(out) <= MaxResult || len(content) == 0 {
+			return reply, err
+		}
+		content, _ = cut(content, len(content)/2)
+		more = true
 	}
-	if more {
-		reply["next_offset"] = a.Offset + len(content)
-	}
-	return reply, nil
 }
 
 // docHistory lists the commits that changed a document, or the whole space's, newest first.

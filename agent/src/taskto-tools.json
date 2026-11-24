@@ -192,7 +192,7 @@
   },
   {
     "name": "delete_doc",
-    "description": "Delete a document or file (not a folder: delete what is in it) in a space the user may write. Its history stays: doc_history finds it and restore_doc brings it back. Ask the user first unless they asked for it.",
+    "description": "Delete a document or file (not a folder: delete what is in it) in a space the user may write. A document's history stays: doc_history finds it and restore_doc brings it back. An unversioned file (a large file, audio, video, an archive) is gone for good: its bytes are not kept. Ask the user first unless they asked for it.",
     "read_only": false,
     "input_schema": {
       "type": "object",
