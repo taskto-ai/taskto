@@ -207,7 +207,7 @@ func TestListMembersPagesASharedSpace(t *testing.T) {
 		t.Fatalf("%d people in %d pages", len(got), pages)
 	}
 	// alice and bob were in it from the start, with the 700 added.
-	if len(got) != 702 || !slices.IsSorted(got) || len(ids) != 702 {
-		t.Fatalf("%d people (workspace: %d), sorted: %v", len(got), len(ids), slices.IsSorted(got))
+	if len(ids) != 702 || !slices.Equal(got, ids) {
+		t.Fatalf("%d people, want the workspace's %d, each once, by id", len(got), len(ids))
 	}
 }
