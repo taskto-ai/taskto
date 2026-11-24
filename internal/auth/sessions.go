@@ -2,11 +2,13 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Your own sessions (docs/api.md#your-sessions): the browsers and devices logged in as you, to
@@ -135,19 +137,36 @@ func (s *Service) revokeSession(ctx context.Context, userID, id, current int64) 
 			return errSessionCurrent
 		}
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ? AND user_id = ?`, id, userID)
-	if err != nil {
-		return err
-	}
-	return mustAffect(res, errNotFound)
+	return s.write(ctx, func(tx *sql.Tx) error {
+		// The same test as sessionUser: one that has expired is no login to end, whether or not its
+		// row has been swept yet.
+		res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ? AND user_id = ? AND expires_at > ?`,
+			id, userID, stamp(s.now()))
+		if err != nil {
+			return err
+		}
+		if err := mustAffect(res, errNotFound); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.SessionRevoked,
+			TargetType: audit.TargetUser, Target: userID})
+	})
 }
 
 // revokeOtherSessions ends every session of userID but current, returning how many it ended.
 func (s *Service) revokeOtherSessions(ctx context.Context, userID, current int64) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND id <> ? AND expires_at > ?`,
-		userID, current, stamp(s.now()))
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	var n int64
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND id <> ? AND expires_at > ?`,
+			userID, current, stamp(s.now()))
+		if err != nil {
+			return err
+		}
+		if n, err = res.RowsAffected(); err != nil || n == 0 {
+			return err // none ended, nothing to record
+		}
+		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.OtherSessionsRevoked,
+			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"logins_ended": n}})
+	})
+	return n, err
 }

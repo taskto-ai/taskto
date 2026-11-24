@@ -99,6 +99,8 @@ var schemas = map[string]map[string]kind{
 	LoginSucceeded:       {"method": oneOf("password")},
 	LoginFailed:          {"method": oneOf("password"), "reason": oneOf("unknown_account", "no_password", "wrong_password")},
 	Logout:               {},
+	SessionRevoked:       {},
+	OtherSessionsRevoked: {"logins_ended": number},
 	PasswordChanged:      {},
 	PasswordChangeFailed: {},
 	PasswordResetCreated: {},

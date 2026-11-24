@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"taskto.ai/taskto/internal/audit"
 )
 
 const (
@@ -286,5 +288,47 @@ func TestRevokingASessionEndsItsPushSubscriptions(t *testing.T) {
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/me/sessions/%d", id), nil), http.StatusNoContent)
 	if n := e.count(`SELECT count(*) FROM push_subscriptions WHERE session_id = ?`, id); n != 0 {
 		t.Fatalf("%d subscriptions of a revoked session remain", n)
+	}
+}
+
+// Signing sessions out is a security action: recorded in the change's transaction, and a refused
+// request records nothing.
+func TestSessionRevokesAreAudited(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, ws := e.setup()
+	ownerID := e.userID(owner)
+	alice, _ := e.join(e.invite(owner, ws, "alice@example.com", RoleMember), "Alice")
+	phone := e.loginAs("owner@example.com", ownerPassword, safariIOS)
+	laptop := e.loginAs("owner@example.com", ownerPassword, firefoxMac)
+
+	var phoneID, lapID int64
+	for _, x := range e.sessionsOf(laptop) {
+		if x.Browser == "Safari" {
+			phoneID = x.ID
+		}
+		if x.Current {
+			lapID = x.ID
+		}
+	}
+	// Refused: another user's, the current one, one that isn't there. None records anything.
+	aliceSession := e.sessionsOf(alice)[0].ID
+	expect(t, laptop.do(http.MethodDelete, fmt.Sprintf("/api/me/sessions/%d", aliceSession), nil), http.StatusNotFound)
+	expect(t, laptop.do(http.MethodDelete, fmt.Sprintf("/api/me/sessions/%d", lapID), nil), http.StatusBadRequest)
+	expect(t, laptop.do(http.MethodDelete, "/api/me/sessions/99999", nil), http.StatusNotFound)
+	// Nothing to sign out: no event.
+	expect(t, alice.do(http.MethodDelete, "/api/me/sessions", nil), http.StatusOK)
+	if n := len(e.events(audit.SessionRevoked)) + len(e.events(audit.OtherSessionsRevoked)); n != 0 {
+		t.Fatalf("%d events for refusals and an empty sweep", n)
+	}
+
+	expect(t, laptop.do(http.MethodDelete, fmt.Sprintf("/api/me/sessions/%d", phoneID), nil), http.StatusNoContent)
+	wantEvent(t, e.one(audit.SessionRevoked), 0, ownerID, audit.TargetUser, ownerID)
+	_ = phone
+
+	expect(t, laptop.do(http.MethodDelete, "/api/me/sessions", nil), http.StatusOK)
+	ev := e.one(audit.OtherSessionsRevoked)
+	wantEvent(t, ev, 0, ownerID, audit.TargetUser, ownerID)
+	if fmt.Sprint(ev.Details["logins_ended"]) != "1" {
+		t.Fatalf("details = %v, want the 1 other login (the setup browser)", ev.Details)
 	}
 }

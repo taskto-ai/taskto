@@ -46,6 +46,8 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `setup_completed` | first-run setup | the new one | workspace | |
 | `login_succeeded` | a password login | | user | `method` |
 | `login_failed` | a wrong password, or an account with no password or that doesn't exist | | user, if it exists | `method`, `reason` (the account is the target; no actor, since whoever typed isn't known to be its owner) |
+| `session_revoked` | a user signs out one of their other sessions from Settings | | user | |
+| `other_sessions_revoked` | a user signs out all their other sessions (none ended records nothing) | | user | `logins_ended` |
 | `logout` | logging out of a live session: one that has expired is no logout, and records nothing | | user | |
 | `password_changed` | a user changes their own password | | user | |
 | `password_change_failed` | the current password was wrong | | user | |
