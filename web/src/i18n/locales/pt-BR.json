@@ -1819,6 +1819,56 @@
     },
     "removePinNamed": "Remover {name} do menu"
   },
+  "checklist": {
+    "title": "Configure seu workspace",
+    "intro": "Alguns passos que tornam este workspace útil para uma equipe. Cada um é concluído quando isso é verdade no servidor; pule os que não se aplicam a você.",
+    "progress": "{done} de {total} passos resolvidos",
+    "dismiss": "Dispensar a lista",
+    "optional": "Opcional",
+    "state": {
+      "done": "Concluído",
+      "todo": "A fazer",
+      "skipped": "Pulado"
+    },
+    "skip": "Pular",
+    "unskip": "Desfazer",
+    "skipNamed": "Pular: {name}",
+    "unskipNamed": "Desfazer o pulo: {name}",
+    "dismissedNote": "Você dispensou a lista de configuração. A mudança vale para todos os admins deste workspace.",
+    "show": "Mostrar a lista de configuração",
+    "steps": {
+      "invite": {
+        "title": "Convide sua equipe",
+        "text": "Adicione as pessoas com quem você trabalha. Trabalha sozinho? Pule este passo.",
+        "action": "Convidar pessoas"
+      },
+      "provider": {
+        "title": "Adicione um provedor de modelos",
+        "text": "Conecte o serviço de IA que o agente vai usar, para que todos no workspace possam conversar com ele.",
+        "action": "Adicionar um provedor"
+      },
+      "space": {
+        "title": "Crie um espaço compartilhado",
+        "text": "Um lugar para os documentos, quadros e apps em que sua equipe trabalha junta.",
+        "action": "Criar um espaço"
+      },
+      "app": {
+        "title": "Instale um modelo de app",
+        "text": "Comece de um app pronto, como um controle de despesas, e adapte ao seu jeito.",
+        "action": "Ver os modelos"
+      },
+      "email": {
+        "title": "Configure o e-mail",
+        "text": "Permite que o servidor envie convites e redefinições de senha. Quem administra o servidor configura; veja o guia de instalação.",
+        "action": "Ver o estado do servidor"
+      },
+      "backups": {
+        "title": "Configure os backups",
+        "text": "Uma cópia noturna de tudo, guardada fora deste servidor. Quem administra o servidor configura; veja o guia de instalação.",
+        "action": "Ver os backups"
+      }
+    }
+  },
   "offline": {
     "writer": {
       "elsewhere": "As alterações estão sendo feitas em outra aba. Os registros e a fila aparecem aqui e são alterados lá.",

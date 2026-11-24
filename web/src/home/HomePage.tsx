@@ -6,11 +6,14 @@
 // shell as they were. An app that went offline, was unpublished or removed the widget says so, with
 // no data; one the person lost access to isn't there at all.
 //
+// A workspace's admins also see its setup checklist above the widgets until it is done or they put it
+// away (SetupChecklist.tsx).
+//
 // "Customize" is where people choose: which widgets to show and in what order, which apps to pin to
 // the navigation, the defaults they hid, and, for those who may publish an app of a shared space, the
 // widgets and pin it offers to all its members by default.
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { type AvailableApp, api, errorText, type HomeItem, type HomeView, ws } from '../api'
 import { AppView, httpTransport } from '../apps/AppView'
 import { appPath } from '../apps/route'
@@ -19,12 +22,14 @@ import { useLoad } from '../load'
 import { Link } from '../router'
 import { ErrorBoundary } from '../shell/ErrorBoundary'
 import { Icon } from '../shell/Icon'
+import { ChecklistRestore, SetupChecklist } from './SetupChecklist'
 import { homeChanged, useHomeVersion } from './store'
 
 const itemKey = (i: HomeItem) => `${i.source}:${i.id ?? i.default_id}`
 
-export function HomePage({ workspace }: { workspace: number }) {
+export function HomePage({ workspace, admin = false }: { workspace: number; admin?: boolean }) {
   const t = useT()
+  const heading = useRef<HTMLHeadingElement>(null)
   const version = useHomeVersion()
   const home = useLoad(() => api<HomeView>(`${ws(workspace)}/home`), [workspace, version])
   const [customizing, setCustomizing] = useState(false)
@@ -61,7 +66,9 @@ export function HomePage({ workspace }: { workspace: number }) {
   return (
     <div className="tt-section tt-home">
       <div className="tt-pane-head">
-        <h1>{t('shell.sections.home')}</h1>
+        <h1 ref={heading} tabIndex={-1}>
+          {t('shell.sections.home')}
+        </h1>
         <button
           type="button"
           className="tt-button"
@@ -73,6 +80,8 @@ export function HomePage({ workspace }: { workspace: number }) {
         </button>
       </div>
       <p className="tt-muted">{t('home.intro')}</p>
+      {/* Where the keyboard goes when the checklist, which had it, is put away. */}
+      {admin && <SetupChecklist workspace={workspace} onDismissed={() => heading.current?.focus()} />}
       {(home.error || error) && (
         <p role="alert" className="tt-error">
           {error ?? home.error}
@@ -109,7 +118,15 @@ export function HomePage({ workspace }: { workspace: number }) {
       )}
       {customizing && home.data && (
         <div id="tt-home-customize">
-          <Customize workspace={workspace} home={home.data} run={run} move={move} remove={remove} hide={hide} />
+          <Customize
+            workspace={workspace}
+            admin={admin}
+            home={home.data}
+            run={run}
+            move={move}
+            remove={remove}
+            hide={hide}
+          />
         </div>
       )}
     </div>
@@ -242,6 +259,7 @@ function WidgetCard({
 
 function Customize({
   workspace,
+  admin,
   home,
   run,
   move,
@@ -249,6 +267,7 @@ function Customize({
   hide,
 }: {
   workspace: number
+  admin: boolean
   home: HomeView
   run: (change: () => Promise<unknown>) => Promise<void>
   move: (kind: 'widget' | 'pin', item: HomeItem, step: -1 | 1) => Promise<void>
@@ -280,6 +299,7 @@ function Customize({
 
   return (
     <div className="tt-home-customize">
+      {admin && <ChecklistRestore workspace={workspace} />}
       <section aria-labelledby="tt-home-pins">
         <h2 id="tt-home-pins">{t('home.pins')}</h2>
         <p className="tt-muted tt-small">{t('home.pinsIntro')}</p>

@@ -249,7 +249,7 @@ function Page({ route, me, workspace }: { route: Route; me: Me; workspace: Works
     case 'home':
       return (
         <Suspense fallback={<Loading />}>
-          <HomePage workspace={route.workspace} />
+          <HomePage workspace={route.workspace} admin={workspace.role === 'admin'} />
         </Suspense>
       )
     case 'conversations':

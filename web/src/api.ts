@@ -404,6 +404,16 @@ export type HomeView = {
   limits: { widgets: number; pins: number }
 }
 
+// The first-run checklist an admin sees on Home (internal/checklist): each step is done by what exists
+// on the server, or skipped by an admin because it doesn't apply.
+export type ChecklistStep = 'invite' | 'provider' | 'space' | 'app' | 'email' | 'backups'
+export type Checklist = {
+  dismissed: boolean
+  // Every step that isn't optional is done or skipped.
+  complete: boolean
+  items: { id: ChecklistStep; state: 'done' | 'todo' | 'skipped'; optional: boolean }[]
+}
+
 // An app the person may place on Home or pin, with what it offers.
 export type AvailableApp = {
   space_id: number
