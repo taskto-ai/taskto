@@ -116,8 +116,11 @@ you do to its records, and what your roles allow), `run_app_action` (add, change
 actions), `create_app` and `update_app`.
 `run_app_action` runs the app's own action as you, through the code behind the web app's: your roles in the
 app, the records you may modify, the collection's rules, the locks of captured values, the record's history and the
-action's effects all apply, and it is refused (`403`) where your role doesn't allow it. It changes data, so it carries
-no `readOnlyHint` and your client asks you first. `create_app` and
+action's effects all apply, and it is refused (`403`) where your role doesn't allow it. It changes data, so the
+server lists it with `readOnlyHint: false`; whether your MCP client then asks you before calling it is the client's
+own setting, separate from the permission prompt of TaskTo's CLI conversations ([cli-tools.md](cli-tools.md)), which
+the server doesn't control here. It takes the `expected_release` that `list_app_actions` returned and runs only if that
+is still the live release. `create_app` and
 `update_app` save the app's draft; publishing it, and rolling back, are for a person who may publish
 the app, in the web app ([drafts and releases](api.md#drafts-and-releases)): no tool does either. Read-only tools say so
 (`readOnlyHint`), so a client can call them without asking you each time. Results and

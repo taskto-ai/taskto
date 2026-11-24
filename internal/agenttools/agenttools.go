@@ -367,6 +367,8 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 	case errors.Is(err, boards.ErrStale), errors.Is(err, knowledge.ErrConflict), errors.Is(err, apps.ErrStale), errors.Is(err, apps.ErrFull),
 		errors.Is(err, apps.ErrOffline), errors.Is(err, apps.ErrNotPublished), errors.Is(err, apps.ErrOperationReused):
 		return &Refusal{http.StatusConflict, err.Error()}
+	case errors.Is(err, apps.ErrReleaseOutdated):
+		return &Refusal{http.StatusConflict, "the app's live release is not expected_release: nothing was done; call list_app_actions again and decide again"}
 	case errors.Is(err, apps.ErrConflict):
 		return &Refusal{http.StatusConflict, err.Error() + ": read the record again (query_app_rows) and decide again"}
 	case errors.Is(err, knowledge.ErrTooLarge), errors.Is(err, knowledge.ErrRepoFull):

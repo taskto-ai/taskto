@@ -185,13 +185,13 @@ func backlogError() error {
 }
 
 // enqueueEffects adds, in the transaction of the change, an entry for each effect of the action
-// that applies to the record as the change left it.
-func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID int64, def Definition, action Action, ap applied) error {
+// that applies to the record as the change left it, and returns how many it added.
+func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID int64, def Definition, action Action, ap applied) (int, error) {
 	if len(action.Effects) == 0 || !ap.changed {
-		return nil
+		return 0, nil
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE app_operations SET record_id = ? WHERE id = ?`, ap.id, opID); err != nil {
-		return err
+		return 0, err
 	}
 	var queued []int
 	for i, e := range action.Effects {
@@ -200,14 +200,14 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 		}
 	}
 	if len(queued) == 0 {
-		return nil
+		return 0, nil
 	}
 	var waiting int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM app_effects WHERE app_id = ? AND state IN ('pending', 'running')`, appID).Scan(&waiting); err != nil {
-		return err
+		return 0, err
 	}
 	if waiting+len(queued) > maxOutstanding {
-		return backlogError()
+		return 0, backlogError()
 	}
 	at := now()
 	for _, i := range queued {
@@ -222,17 +222,17 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 		}
 		raw, err := json.Marshal(p)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO app_effects (app_id, operation_id, position, name, kind, record_id, record_revision,
 				user_id, acted_by_agent, acted_via, action_kind, payload, state, next_attempt_at, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
 			appID, opID, i, e.Name, e.Kind, ap.id, ap.revision, actor.UserID, actor.Agent, via(actor), action.Kind, string(raw), at, at, at); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return len(queued), nil
 }
 
 // effectRow is an entry as the worker and the listings read it.

@@ -2,7 +2,10 @@ package apps
 
 import (
 	"errors"
+	"net/http"
 	"testing"
+
+	"taskto.ai/taskto/internal/access"
 )
 
 // The agent runs an app's actions through the code the action route runs: the effects they set
@@ -11,7 +14,7 @@ func TestAgentActionsSetEffectsGoingAsTheRouteDoes(t *testing.T) {
 	f := newFX(t)
 	agent := func(u *user) Actor { return Actor{UserID: u.id, Agent: true} }
 	run := func(a Actor, name string, ctx map[string]any, op string) (ActionResult, error) {
-		return f.e.s.RunAction(f.ctx(), a, f.shared.ID, f.app.ID, ActionRun{Action: name, Context: ctx, Operation: op})
+		return f.e.s.RunAction(f.ctx(), a, f.shared.ID, f.app.ID, ActionRun{Action: name, Context: ctx, Operation: op, ExpectedRelease: 1})
 	}
 
 	res, err := run(agent(f.alice), "submit_inspection", map[string]any{"site": "East gate", "result": "fail", "notes": "leaking"}, "agent-op-0001")
@@ -97,5 +100,137 @@ func TestAgentActionsAreListedByTheUsersAccess(t *testing.T) {
 	}
 	if _, err := f.e.s.Actions(f.ctx(), Actor{UserID: f.mallory.id, Agent: true}, f.shared.ID, f.app.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an outsider: %v", err)
+	}
+}
+
+// publishSecond publishes a second release of the inspections app, in which a failed inspection
+// makes only the card (in done), and returns it.
+func (f *fx) publishSecond() {
+	f.e.t.Helper()
+	def := f.inspections()
+	submit := def.Actions["submit_inspection"]
+	submit.Effects = submit.Effects[:1]
+	submit.Effects[0].Column = "done"
+	def.Actions["submit_inspection"] = submit
+	cur := f.view(f.alice, f.shared, f.app)
+	cur = f.mustPatchDraft(f.alice, f.shared, cur, def)
+	expect(f.e.t, f.tryPublish(f.alice, f.shared, cur), http.StatusOK)
+}
+
+// The agent's action runs from the release it was listed from: one published after the list is not
+// run, nor its effects set going, unless the agent listed again; a retry of what was run is still
+// answered as the first time was.
+func TestAgentActionRunsOnlyFromTheReleaseItWasListedFrom(t *testing.T) {
+	f := newFX(t)
+	agent := Actor{UserID: f.alice.id, Agent: true}
+	failed := map[string]any{"site": "East gate", "result": "fail", "notes": "leaking"}
+	run := func(release int64, ctx map[string]any, op string) (ActionResult, error) {
+		return f.e.s.RunAction(f.ctx(), agent, f.shared.ID, f.app.ID, ActionRun{Action: "submit_inspection", Context: ctx, Operation: op, ExpectedRelease: release})
+	}
+	if list, err := f.e.s.Actions(f.ctx(), agent, f.shared.ID, f.app.ID); err != nil || list.Release != 1 {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+	if _, err := run(0, failed, ""); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("no release: %v", err)
+	}
+	first, err := run(1, failed, "agent-op-0001")
+	if err != nil || first.EffectsQueued != 3 {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+
+	f.publishSecond()
+	rows, effects := f.count(`SELECT count(*) FROM app_rows`), f.count(`SELECT count(*) FROM app_effects`)
+
+	// Not run: it was listed from release 1 and the live one has other effects.
+	for _, op := range []string{"", "agent-op-0002"} {
+		if _, err := run(1, failed, op); !errors.Is(err, ErrReleaseOutdated) {
+			t.Fatalf("a new request from release 1 (operation %q): %v", op, err)
+		}
+	}
+	if _, err := run(9, failed, ""); !errors.Is(err, ErrReleaseOutdated) {
+		t.Fatalf("a release the app has not had: %v", err)
+	}
+	if f.count(`SELECT count(*) FROM app_rows`) != rows || f.count(`SELECT count(*) FROM app_effects`) != effects {
+		t.Fatal("a refused request changed something")
+	}
+
+	// An exact retry of the first request is answered as it was; another under its key is refused.
+	again, err := run(1, failed, "agent-op-0001")
+	if err != nil || !again.Replayed || again.ID != 0 {
+		t.Fatalf("retry = %+v, %v", again, err)
+	}
+	if _, err := run(1, map[string]any{"site": "West gate", "result": "fail"}, "agent-op-0001"); !errors.Is(err, ErrOperationReused) {
+		t.Fatalf("another request under the key: %v", err)
+	}
+	if f.count(`SELECT count(*) FROM app_rows`) != rows || f.count(`SELECT count(*) FROM app_effects`) != effects {
+		t.Fatal("a retry changed something")
+	}
+
+	// From the live release, what runs is its: one effect, not three.
+	second, err := run(2, failed, "")
+	if err != nil || second.EffectsQueued != 1 {
+		t.Fatalf("from release 2 = %+v, %v", second, err)
+	}
+	if n := f.count(`SELECT count(*) FROM app_effects`); n != effects+1 {
+		t.Fatalf("%d effects queued by release 2, want 1", n-effects)
+	}
+}
+
+// effects_queued is what was queued: an effect whose condition the record doesn't meet is not.
+func TestAgentActionCountsTheEffectsItQueued(t *testing.T) {
+	f := newFX(t)
+	agent := Actor{UserID: f.alice.id, Agent: true}
+	res, err := f.e.s.RunAction(f.ctx(), agent, f.shared.ID, f.app.ID, ActionRun{
+		Action: "submit_inspection", ExpectedRelease: 1, Context: map[string]any{"site": "East gate", "result": "pass"}})
+	if err != nil || !res.Changed || res.EffectsQueued != 0 {
+		t.Fatalf("a passed inspection = %+v, %v", res, err)
+	}
+	if n := f.count(`SELECT count(*) FROM app_effects`); n != 0 {
+		t.Fatalf("%d effects queued", n)
+	}
+}
+
+// What the agent is listed is read in one piece: a role lost and a release published while the list
+// is being made are not shown as the user's.
+func TestAgentActionsAreNotListedAcrossARevokedRole(t *testing.T) {
+	f := newFX(t)
+	agent := Actor{UserID: f.alice.id, Agent: true}
+	f.e.s.hooks.afterActionsAccess = func() {
+		f.e.s.hooks.afterActionsAccess = nil
+		f.publishSecond()
+		if _, err := f.e.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, f.shared.ID, f.alice.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if list, err := f.e.s.Actions(f.ctx(), agent, f.shared.ID, f.app.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a user who lost the space was listed release %d: %v", list.Release, err)
+	}
+
+	// A release published alone is simply the one listed.
+	f = newFX(t)
+	f.e.s.hooks.afterActionsAccess = func() {
+		f.e.s.hooks.afterActionsAccess = nil
+		f.publishSecond()
+	}
+	if list, err := f.e.s.Actions(f.ctx(), Actor{UserID: f.alice.id, Agent: true}, f.shared.ID, f.app.ID); err != nil || list.Release != 2 {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+
+	// A role that only changes is read again, and the list is the new role's.
+	f = newFX(t)
+	f.e.s.hooks.afterActionsAccess = func() {
+		f.e.s.hooks.afterActionsAccess = nil
+		if _, err := f.e.db.Exec(`UPDATE space_members SET role = ? WHERE space_id = ? AND user_id = ?`, access.RoleViewer, f.shared.ID, f.alice.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := f.e.s.Actions(f.ctx(), Actor{UserID: f.alice.id, Agent: true}, f.shared.ID, f.app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range list.Actions {
+		if a.Allowed {
+			t.Errorf("a viewer, as they became, may run %s", a.Name)
+		}
 	}
 }

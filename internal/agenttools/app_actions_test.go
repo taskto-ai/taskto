@@ -82,9 +82,18 @@ func (tm *team) args(more map[string]any) map[string]any {
 	return out
 }
 
+// run is args with the release the tests' app is live at.
+func (tm *team) run(more map[string]any) map[string]any {
+	out := tm.args(more)
+	if _, has := out["expected_release"]; !has {
+		out["expected_release"] = 1
+	}
+	return out
+}
+
 func (tm *team) add(conv int64, description string, amount float64) map[string]any {
 	tm.t.Helper()
-	return tm.ok(conv, "run_app_action", tm.args(map[string]any{"action": "add_expense", "context": map[string]any{"description": description, "amount": amount}}))
+	return tm.ok(conv, "run_app_action", tm.run(map[string]any{"action": "add_expense", "context": map[string]any{"description": description, "amount": amount}}))
 }
 
 func TestRunAppActionHonoursTheUsersRoles(t *testing.T) {
@@ -118,15 +127,15 @@ func TestRunAppActionHonoursTheUsersRoles(t *testing.T) {
 	aliceRow := id(tm.add(tm.aliceConv, "Team lunch", 60)["id"])
 
 	// A user changes their own record; the revision they read keeps a stale change out.
-	updated := tm.ok(tm.bobConv, "run_app_action", tm.args(map[string]any{"action": "edit_expense", "id": bobsRow, "expected_revision": 1, "context": map[string]any{"amount": 5}}))
+	updated := tm.ok(tm.bobConv, "run_app_action", tm.run(map[string]any{"action": "edit_expense", "id": bobsRow, "expected_revision": 1, "context": map[string]any{"amount": 5}}))
 	if id(updated["revision"]) != 2 || updated["changed"] != true || id(updated["id"]) != bobsRow {
 		t.Fatalf("update = %v", updated)
 	}
-	stale := tm.status(http.StatusConflict, tm.bobConv, "run_app_action", tm.args(map[string]any{"action": "edit_expense", "id": bobsRow, "expected_revision": 1, "context": map[string]any{"amount": 6}}))
+	stale := tm.status(http.StatusConflict, tm.bobConv, "run_app_action", tm.run(map[string]any{"action": "edit_expense", "id": bobsRow, "expected_revision": 1, "context": map[string]any{"amount": 6}}))
 	if !strings.Contains(stale["error"].(string), "changed since you read it") {
 		t.Fatalf("stale = %v", stale)
 	}
-	same := tm.ok(tm.bobConv, "run_app_action", tm.args(map[string]any{"action": "edit_expense", "id": bobsRow, "context": map[string]any{"amount": 5}}))
+	same := tm.ok(tm.bobConv, "run_app_action", tm.run(map[string]any{"action": "edit_expense", "id": bobsRow, "context": map[string]any{"amount": 5}}))
 	if same["changed"] != false || id(same["revision"]) != 2 {
 		t.Fatalf("an update that changes nothing = %v", same)
 	}
@@ -136,7 +145,7 @@ func TestRunAppActionHonoursTheUsersRoles(t *testing.T) {
 		{"action": "edit_expense", "id": aliceRow, "context": map[string]any{"amount": 1}},
 		{"action": "delete_expense", "id": aliceRow},
 	} {
-		out := tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.args(args))
+		out := tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.run(args))
 		if !strings.Contains(out["error"].(string), "has no row") {
 			t.Fatalf("another's record: %v", out)
 		}
@@ -146,10 +155,10 @@ func TestRunAppActionHonoursTheUsersRoles(t *testing.T) {
 	}
 
 	// The data manager changes anyone's, and deletes one; the deletion keeps the row, which a person can restore.
-	if out := tm.ok(tm.aliceConv, "run_app_action", tm.args(map[string]any{"action": "edit_expense", "id": bobsRow, "context": map[string]any{"amount": 7}})); id(out["revision"]) != 3 {
+	if out := tm.ok(tm.aliceConv, "run_app_action", tm.run(map[string]any{"action": "edit_expense", "id": bobsRow, "context": map[string]any{"amount": 7}})); id(out["revision"]) != 3 {
 		t.Fatalf("data manager's update = %v", out)
 	}
-	deleted := tm.ok(tm.aliceConv, "run_app_action", tm.args(map[string]any{"action": "delete_expense", "id": bobsRow}))
+	deleted := tm.ok(tm.aliceConv, "run_app_action", tm.run(map[string]any{"action": "delete_expense", "id": bobsRow}))
 	if deleted["kind"] != "delete" || id(deleted["revision"]) != 4 {
 		t.Fatalf("delete = %v", deleted)
 	}
@@ -158,14 +167,14 @@ func TestRunAppActionHonoursTheUsersRoles(t *testing.T) {
 	if err := tm.db.QueryRow(`SELECT deleted_at, deleted_by FROM app_rows WHERE id = ?`, bobsRow).Scan(&deletedAt, &deletedBy); err != nil || deletedAt == nil || deletedBy != tm.alice {
 		t.Fatalf("deleted = %v %v, %v", deletedAt, deletedBy, err)
 	}
-	tm.status(http.StatusBadRequest, tm.aliceConv, "run_app_action", tm.args(map[string]any{"action": "edit_expense", "id": bobsRow, "context": map[string]any{"amount": 8}}))
+	tm.status(http.StatusBadRequest, tm.aliceConv, "run_app_action", tm.run(map[string]any{"action": "edit_expense", "id": bobsRow, "context": map[string]any{"amount": 8}}))
 
 	// A reader and a builder, who may not submit or modify records, are refused, and nothing is written.
 	rows := tm.count(`SELECT count(*) FROM app_rows WHERE app_id = ?`, tm.app)
 	for _, conv := range []int64{tm.daveConv, tm.erinConv} {
-		tm.status(http.StatusForbidden, conv, "run_app_action", tm.args(map[string]any{"action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}}))
-		tm.status(http.StatusForbidden, conv, "run_app_action", tm.args(map[string]any{"action": "edit_expense", "id": aliceRow, "context": map[string]any{"amount": 1}}))
-		tm.status(http.StatusForbidden, conv, "run_app_action", tm.args(map[string]any{"action": "delete_expense", "id": aliceRow}))
+		tm.status(http.StatusForbidden, conv, "run_app_action", tm.run(map[string]any{"action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}}))
+		tm.status(http.StatusForbidden, conv, "run_app_action", tm.run(map[string]any{"action": "edit_expense", "id": aliceRow, "context": map[string]any{"amount": 1}}))
+		tm.status(http.StatusForbidden, conv, "run_app_action", tm.run(map[string]any{"action": "delete_expense", "id": aliceRow}))
 	}
 	if n := tm.count(`SELECT count(*) FROM app_rows WHERE app_id = ?`, tm.app); n != rows || tm.amountOf(aliceRow) != 60 {
 		t.Fatalf("a refused call wrote: %d rows, was %d", n, rows)
@@ -175,7 +184,7 @@ func TestRunAppActionHonoursTheUsersRoles(t *testing.T) {
 	}
 
 	// Nothing in the arguments grants a role.
-	tm.status(http.StatusBadRequest, tm.daveConv, "run_app_action", tm.args(map[string]any{"action": "add_expense", "role": "data_manager"}))
+	tm.status(http.StatusBadRequest, tm.daveConv, "run_app_action", tm.run(map[string]any{"action": "add_expense", "role": "data_manager"}))
 }
 
 func (tm *team) count(q string, args ...any) int {
@@ -208,7 +217,7 @@ func TestRunAppActionKeepsTheCollectionsRules(t *testing.T) {
 		"the wrong type":            {"description": "x", "amount": "lots"},
 		"too long":                  {"description": strings.Repeat("x", 201), "amount": 1},
 	} {
-		out := tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.args(map[string]any{"action": "add_expense", "context": context}))
+		out := tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.run(map[string]any{"action": "add_expense", "context": context}))
 		if out["error"] == "" {
 			t.Errorf("%s: %v", name, out)
 		}
@@ -217,19 +226,19 @@ func TestRunAppActionKeepsTheCollectionsRules(t *testing.T) {
 		t.Fatalf("%d rows written", n)
 	}
 	// The action must exist and change a record; the row's id is for an update or a delete only.
-	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.args(map[string]any{"action": "nope", "context": map[string]any{}}))
-	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.args(map[string]any{"context": map[string]any{}}))
-	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.args(map[string]any{"action": "add_expense", "id": 1, "context": map[string]any{"description": "x", "amount": 1}}))
-	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.args(map[string]any{"action": "edit_expense", "id": 1, "context": map[string]any{"id": 1}}))
-	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.args(map[string]any{"action": "edit_expense", "context": map[string]any{"amount": 1}}))
-	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.args(map[string]any{"action": "delete_expense", "id": 1, "context": map[string]any{"amount": 1}}))
-	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.args(map[string]any{"action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}, "operation": "short"}))
+	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.run(map[string]any{"action": "nope", "context": map[string]any{}}))
+	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.run(map[string]any{"context": map[string]any{}}))
+	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.run(map[string]any{"action": "add_expense", "id": 1, "context": map[string]any{"description": "x", "amount": 1}}))
+	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.run(map[string]any{"action": "edit_expense", "id": 1, "context": map[string]any{"id": 1}}))
+	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.run(map[string]any{"action": "edit_expense", "context": map[string]any{"amount": 1}}))
+	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.run(map[string]any{"action": "delete_expense", "id": 1, "context": map[string]any{"amount": 1}}))
+	tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", tm.run(map[string]any{"action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}, "operation": "short"}))
 }
 
 // A request made again under the same operation changes nothing twice.
 func TestRunAppActionOperationIsIdempotent(t *testing.T) {
 	tm := newTeam(t)
-	args := tm.args(map[string]any{"action": "add_expense", "operation": "agent-op-0001", "context": map[string]any{"description": "Taxi", "amount": 12}})
+	args := tm.run(map[string]any{"action": "add_expense", "operation": "agent-op-0001", "context": map[string]any{"description": "Taxi", "amount": 12}})
 	first := tm.ok(tm.bobConv, "run_app_action", args)
 	again := tm.ok(tm.bobConv, "run_app_action", args)
 	if again["replayed"] != true || again["id"] != nil || id(first["id"]) == 0 {
@@ -245,7 +254,7 @@ func TestRunAppActionOperationIsIdempotent(t *testing.T) {
 	args["context"] = map[string]any{"description": "Taxi home", "amount": 13}
 	tm.status(http.StatusConflict, tm.bobConv, "run_app_action", args)
 	// Another user's use of the key is theirs: it does not meet bob's.
-	other := tm.args(map[string]any{"action": "add_expense", "operation": "agent-op-0001", "context": map[string]any{"description": "Taxi", "amount": 12}})
+	other := tm.run(map[string]any{"action": "add_expense", "operation": "agent-op-0001", "context": map[string]any{"description": "Taxi", "amount": 12}})
 	if out := tm.ok(tm.aliceConv, "run_app_action", other); out["replayed"] != nil || id(out["id"]) == 0 {
 		t.Fatalf("alice's = %v", out)
 	}
@@ -291,7 +300,7 @@ func TestListAppActionsSaysWhatTheUserMayRun(t *testing.T) {
 			t.Errorf("a viewer of the space may run %s", name)
 		}
 	}
-	tm.status(http.StatusForbidden, tm.aliceConv, "run_app_action", tm.args(map[string]any{"action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}}))
+	tm.status(http.StatusForbidden, tm.aliceConv, "run_app_action", tm.run(map[string]any{"action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}}))
 }
 
 // The agent reaches an app through its owner's access alone, in the conversation's workspace.
@@ -307,7 +316,7 @@ func TestAppActionToolsAreIsolated(t *testing.T) {
 	for _, target := range []struct{ space, app int64 }{{tm.bobPrivate, bobs}, {tm.alicePrivate2, 1}, {missing, 1}} {
 		for tool, args := range map[string]map[string]any{
 			"list_app_actions": {},
-			"run_app_action":   {"action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}},
+			"run_app_action":   {"expected_release": 1, "action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}},
 		} {
 			args["space_id"], args["app_id"] = target.space, target.app
 			if out := tm.status(http.StatusNotFound, tm.aliceConv, tool, args); out["error"] != "not found" {
@@ -316,13 +325,13 @@ func TestAppActionToolsAreIsolated(t *testing.T) {
 		}
 	}
 	// Through a space it isn't in, an app isn't found either, and a conversation of the other workspace has no access to this one.
-	tm.status(http.StatusNotFound, tm.aliceConv, "run_app_action", map[string]any{"space_id": tm.alicePrivate, "app_id": bobs, "action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}})
-	tm.status(http.StatusNotFound, tm.aliceConv2, "run_app_action", tm.args(map[string]any{"action": "delete_expense", "id": row}))
+	tm.status(http.StatusNotFound, tm.aliceConv, "run_app_action", map[string]any{"space_id": tm.alicePrivate, "app_id": bobs, "expected_release": 1, "action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}})
+	tm.status(http.StatusNotFound, tm.aliceConv2, "run_app_action", tm.run(map[string]any{"action": "delete_expense", "id": row}))
 	tm.status(http.StatusNotFound, tm.aliceConv2, "list_app_actions", tm.ref)
 	// A member of the space who holds no role in a restricted app doesn't see it either.
 	tm.exec(`DELETE FROM app_roles WHERE app_id = ? AND user_id = ?`, tm.app, tm.dave)
 	tm.status(http.StatusNotFound, tm.daveConv, "list_app_actions", tm.ref)
-	tm.status(http.StatusNotFound, tm.daveConv, "run_app_action", tm.args(map[string]any{"action": "delete_expense", "id": row}))
+	tm.status(http.StatusNotFound, tm.daveConv, "run_app_action", tm.run(map[string]any{"action": "delete_expense", "id": row}))
 	if n := tm.count(`SELECT count(*) FROM app_rows WHERE app_id IN (?, ?) AND deleted_at IS NULL`, tm.app, bobs); n != 1 {
 		t.Fatalf("%d live rows, want alice's one", n)
 	}
@@ -332,11 +341,11 @@ func TestAppActionToolsAreIsolated(t *testing.T) {
 func TestRunAppActionNeedsALiveApp(t *testing.T) {
 	tm := newTeam(t)
 	draft := id(tm.ok(tm.aliceConv, "create_app", map[string]any{"space_id": tm.shared, "name": "Draft", "definition": expenses(t)})["id"])
-	args := map[string]any{"space_id": tm.shared, "app_id": draft, "action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}}
+	args := map[string]any{"space_id": tm.shared, "app_id": draft, "expected_release": 1, "action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}}
 	tm.status(http.StatusConflict, tm.aliceConv, "run_app_action", args)
 	tm.status(http.StatusConflict, tm.aliceConv, "list_app_actions", map[string]any{"space_id": tm.shared, "app_id": draft})
 	tm.exec(`UPDATE apps SET archived_at = updated_at WHERE id = ?`, tm.app)
-	tm.status(http.StatusConflict, tm.aliceConv, "run_app_action", tm.args(map[string]any{"action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}}))
+	tm.status(http.StatusConflict, tm.aliceConv, "run_app_action", tm.run(map[string]any{"action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}}))
 	if n := tm.count(`SELECT count(*) FROM app_rows`); n != 0 {
 		t.Fatalf("%d rows", n)
 	}
@@ -362,15 +371,15 @@ func TestRunAppActionLeavesCaptureFieldsToPeople(t *testing.T) {
 	w.publish(app)
 	ref := map[string]any{"space_id": w.alicePrivate, "app_id": app}
 	place := map[string]any{"lat": 1.5, "lon": 2.5, "accuracy_m": 5, "captured_at": "2026-01-01T10:00:00Z", "source": "manual"}
-	out := w.status(http.StatusBadRequest, w.aliceConv, "run_app_action", map[string]any{"space_id": ref["space_id"], "app_id": app, "action": "check_out", "context": map[string]any{"equipment": "drill", "place": place}})
+	out := w.status(http.StatusBadRequest, w.aliceConv, "run_app_action", map[string]any{"space_id": ref["space_id"], "app_id": app, "expected_release": 1, "action": "check_out", "context": map[string]any{"equipment": "drill", "place": place}})
 	if !strings.Contains(out["error"].(string), "only a person can capture") {
 		t.Fatalf("refusal = %v", out)
 	}
-	row := id(w.ok(w.aliceConv, "run_app_action", map[string]any{"space_id": ref["space_id"], "app_id": app, "action": "check_out", "context": map[string]any{"equipment": "drill"}})["id"])
+	row := id(w.ok(w.aliceConv, "run_app_action", map[string]any{"space_id": ref["space_id"], "app_id": app, "expected_release": 1, "action": "check_out", "context": map[string]any{"equipment": "drill"}})["id"])
 	// A person took the position; the agent's later changes keep it, and can't replace it.
 	w.exec(`UPDATE app_rows SET data = json_set(data, '$.place', json(?)) WHERE id = ?`, `{"lat":1.5,"lon":2.5,"accuracy_m":5,"captured_at":"2026-01-01T10:00:00Z","source":"device"}`, row)
-	w.status(http.StatusBadRequest, w.aliceConv, "run_app_action", map[string]any{"space_id": ref["space_id"], "app_id": app, "action": "fix", "id": row, "context": map[string]any{"place": place}})
-	w.ok(w.aliceConv, "run_app_action", map[string]any{"space_id": ref["space_id"], "app_id": app, "action": "fix", "id": row, "context": map[string]any{"equipment": "big drill"}})
+	w.status(http.StatusBadRequest, w.aliceConv, "run_app_action", map[string]any{"space_id": ref["space_id"], "app_id": app, "expected_release": 1, "action": "fix", "id": row, "context": map[string]any{"place": place}})
+	w.ok(w.aliceConv, "run_app_action", map[string]any{"space_id": ref["space_id"], "app_id": app, "expected_release": 1, "action": "fix", "id": row, "context": map[string]any{"equipment": "big drill"}})
 	var kept string
 	if err := w.db.QueryRow(`SELECT json_extract(data, '$.place.source') FROM app_rows WHERE id = ?`, row).Scan(&kept); err != nil || kept != "device" {
 		t.Fatalf("the captured position = %q, %v", kept, err)
@@ -380,7 +389,7 @@ func TestRunAppActionLeavesCaptureFieldsToPeople(t *testing.T) {
 // Over MCP the change carries the token's name, as the other tools' do, and the same checks run.
 func TestRunAppActionOverMCPNamesTheToken(t *testing.T) {
 	tm := newTeam(t)
-	args, _ := json.Marshal(tm.args(map[string]any{"action": "add_expense", "context": map[string]any{"description": "Train", "amount": 20}}))
+	args, _ := json.Marshal(tm.run(map[string]any{"action": "add_expense", "context": map[string]any{"description": "Train", "amount": 20}}))
 	out, err := tm.tools.Call(context.Background(), Caller{Workspace: tm.one, User: tm.bob, Token: "my laptop"}, "run_app_action", args)
 	if err != nil {
 		t.Fatal(err)
@@ -412,6 +421,116 @@ func TestAppActionToolsAskOnlyToWrite(t *testing.T) {
 			if !d.ReadOnly {
 				t.Error("list_app_actions changes nothing and should be read_only")
 			}
+		}
+	}
+}
+
+// publishTwo makes a second release of the app, as a person's publish would, whose add_expense sets
+// nothing going.
+func (tm *team) publishTwo() {
+	tm.t.Helper()
+	tm.exec(`INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
+		SELECT id, 2, json_remove(definition, '$.actions.add_expense.effects'), json_extract(definition, '$.definition_version'), json_extract(definition, '$.requires') FROM apps WHERE id = ?`, tm.app)
+	tm.exec(`UPDATE apps SET live_release = 2, live_at = updated_at WHERE id = ?`, tm.app)
+}
+
+// The action runs only from the release the agent listed: one published since is never run, nor its
+// effects set going, unasked; and a retry of a request is still answered as the first one was.
+func TestRunAppActionIsBoundToTheListedRelease(t *testing.T) {
+	tm := newTeam(t)
+	if out := tm.ok(tm.bobConv, "list_app_actions", tm.ref); id(out["release"]) != 1 {
+		t.Fatalf("listed = %v", out)
+	}
+	first := tm.run(map[string]any{"action": "add_expense", "operation": "agent-op-0001", "context": map[string]any{"description": "Taxi", "amount": 12}})
+	if out := tm.ok(tm.bobConv, "run_app_action", first); id(out["effects_queued"]) != 1 {
+		t.Fatalf("first = %v", out)
+	}
+	tm.publishTwo()
+	rows, effects := tm.count(`SELECT count(*) FROM app_rows`), tm.count(`SELECT count(*) FROM app_effects`)
+
+	// A retry of the same request answers as the first did: it is not a different request for the key.
+	if again := tm.ok(tm.bobConv, "run_app_action", first); again["replayed"] != true {
+		t.Fatalf("retry = %v", again)
+	}
+	// A new request from the release listed before is refused, whatever the app has become.
+	stale := tm.run(map[string]any{"action": "add_expense", "operation": "agent-op-0002", "context": map[string]any{"description": "Bus", "amount": 3}})
+	out := tm.status(http.StatusConflict, tm.bobConv, "run_app_action", stale)
+	if !strings.Contains(out["error"].(string), "list_app_actions") {
+		t.Fatalf("stale = %v", out)
+	}
+	delete(stale, "operation")
+	tm.status(http.StatusConflict, tm.bobConv, "run_app_action", stale)
+	// So is a release the app never had, and the same key for another request.
+	stale["expected_release"] = 7
+	tm.status(http.StatusConflict, tm.bobConv, "run_app_action", stale)
+	other := tm.run(map[string]any{"action": "add_expense", "operation": "agent-op-0001", "context": map[string]any{"description": "Taxi home", "amount": 13}})
+	tm.status(http.StatusConflict, tm.bobConv, "run_app_action", other)
+	if n := tm.count(`SELECT count(*) FROM app_rows`); n != rows {
+		t.Fatalf("%d rows written by refused calls", n-rows)
+	}
+	if n := tm.count(`SELECT count(*) FROM app_effects`); n != effects {
+		t.Fatalf("%d effects queued by refused calls", n-effects)
+	}
+
+	// Listed again, the new release is the one to run from, and its effects (none) are what happens.
+	if out := tm.ok(tm.bobConv, "list_app_actions", tm.ref); id(out["release"]) != 2 {
+		t.Fatalf("listed again = %v", out)
+	}
+	fresh := tm.ok(tm.bobConv, "run_app_action", tm.run(map[string]any{"expected_release": 2, "action": "add_expense", "context": map[string]any{"description": "Bus", "amount": 3}}))
+	if id(fresh["id"]) == 0 || id(fresh["effects_queued"]) != 0 {
+		t.Fatalf("fresh = %v", fresh)
+	}
+	if n := tm.count(`SELECT count(*) FROM app_effects`); n != effects {
+		t.Fatalf("%d effects queued by release 2", n-effects)
+	}
+}
+
+// expected_release is required, and what only looks like an argument is refused rather than guessed.
+func TestRunAppActionRefusesAmbiguousArguments(t *testing.T) {
+	tm := newTeam(t)
+	good := map[string]any{"action": "add_expense", "context": map[string]any{"description": "x", "amount": 1}}
+	with := func(k string, v any) map[string]any {
+		out := tm.args(map[string]any{"expected_release": 1})
+		for key, val := range good {
+			out[key] = val
+		}
+		if v == nil {
+			delete(out, k)
+		} else {
+			out[k] = v
+		}
+		return out
+	}
+	for name, args := range map[string]map[string]any{
+		"no expected_release":   with("expected_release", nil),
+		"expected_release zero": with("expected_release", 0),
+		"an empty operation":    with("operation", ""),
+		"id in context, insert": with("context", map[string]any{"description": "x", "amount": 1, "id": 4}),
+		"id in context, no id":  {"space_id": tm.shared, "app_id": tm.app, "expected_release": 1, "action": "edit_expense", "context": map[string]any{"id": 4}},
+		"a null id in context":  with("context", map[string]any{"description": "x", "amount": 1, "id": nil}),
+	} {
+		tm.status(http.StatusBadRequest, tm.bobConv, "run_app_action", args)
+		_ = name
+	}
+	if n := tm.count(`SELECT count(*) FROM app_rows`); n != 0 {
+		t.Fatalf("%d rows written", n)
+	}
+	// An omitted operation is fine, and the schema says the same of the id.
+	tm.ok(tm.bobConv, "run_app_action", with("operation", nil))
+	for _, d := range Definitions() {
+		if d.Name != "run_app_action" {
+			continue
+		}
+		var schema struct {
+			Required   []string                   `json:"required"`
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(d.InputSchema, &schema); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(schema.Required, ","), "expected_release") || !strings.Contains(string(schema.Properties["context"]), `"not":{"required":["id"]}`) &&
+			!strings.Contains(strings.Join(strings.Fields(string(schema.Properties["context"])), ""), `"not":{"required":["id"]}`) {
+			t.Fatalf("schema = %s", d.InputSchema)
 		}
 	}
 }

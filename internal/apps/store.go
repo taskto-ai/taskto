@@ -216,6 +216,9 @@ type outboxHooks struct {
 	// beforeDocument is called once a document entry has passed its checks, right before it asks
 	// for the space's write lock to commit.
 	beforeDocument func(effectRow)
+	// afterActionsAccess is called by Actions once it has read what the user may do, before it
+	// reads the release.
+	afterActionsAccess func()
 }
 
 // New returns the apps service over sqlDB, which must be migrated.
@@ -1013,6 +1016,10 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 			}
 			rel, err := loadRelease(ctx, tx, appID, *action.Release, true)
 			if err != nil {
+				if action.Exact && errors.Is(err, ErrReleaseNotFound) {
+					// Not told which releases exist: it isn't the live one, which is all it says.
+					return &outdatedError{release: *action.Release, live: a.Live.Number}
+				}
 				return err
 			}
 			def = *rel.Definition
@@ -1060,7 +1067,7 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 				return nil
 			}
 		}
-		if fromOlder && !liveTakes(live, def, action.Name, ch) {
+		if fromOlder && (action.Exact || !liveTakes(live, def, action.Name, ch)) {
 			return &outdatedError{release: *action.Release, live: a.Live.Number}
 		}
 		ap, err := apply(ctx, tx, actor, appID, live, ch,
@@ -1077,13 +1084,12 @@ func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, a
 			}
 		}
 		out.ap = ap
-		if err := enqueueEffects(ctx, tx, actor, appID, opID, live, live.Actions[action.Name], ap); err != nil {
+		n, err := enqueueEffects(ctx, tx, actor, appID, opID, live, live.Actions[action.Name], ap)
+		if err != nil {
 			return err
 		}
-		queued = len(effects) > 0 && ap.changed
-		if queued {
-			out.effects = len(effects)
-		}
+		out.effects = n
+		queued = n > 0
 		return nil
 	})
 	if err != nil {
