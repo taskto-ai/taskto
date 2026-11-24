@@ -561,18 +561,31 @@ describe('the output folder', () => {
     recordCaptures({ outDir, written: new Set(['desktop-light/boards']), prune: false })
     expect(has(outDir, 'desktop-light/old-screen')).toBe(true)
 
-    // A full run that failed nowhere replaces them; a screen it skipped on purpose stays.
-    const { removed } = recordCaptures({
-      outDir,
-      written: new Set(['desktop-light/boards']),
-      keep: ['phone-dark/drawer'],
-      prune: true,
-    })
-    expect(removed).toEqual(['desktop-light/old-screen'])
+    // A full run that failed nowhere replaces them.
+    const { removed } = recordCaptures({ outDir, written: new Set(['desktop-light/boards']), prune: true })
+    expect(removed).toEqual(['desktop-light/old-screen', 'phone-dark/drawer'])
     expect(has(outDir, 'desktop-light/old-screen')).toBe(false)
+    expect(has(outDir, 'phone-dark/drawer')).toBe(false)
     expect(has(outDir, 'desktop-light/boards')).toBe(true)
-    expect(has(outDir, 'phone-dark/drawer')).toBe(true)
-    expect([...readManifest(outDir)].sort()).toEqual(['desktop-light/boards', 'phone-dark/drawer'])
+    expect([...readManifest(outDir)]).toEqual(['desktop-light/boards'])
+  })
+
+  it('in a filtered run, drops the old picture of a selected capture that failed or was skipped, and keeps the rest', () => {
+    const outDir = temp()
+    const ids = ['desktop-light/boards', 'desktop-light/conversation', 'desktop-light/home']
+    for (const id of ids) put(outDir, id, 'old')
+    recordCaptures({ outDir, written: new Set(ids) })
+    // The run selected boards (failed) and conversation (skipped, no agent runtime); home was not selected.
+    recordCaptures({
+      outDir,
+      written: new Set(),
+      failed: ['desktop-light/boards', 'desktop-light/conversation'],
+      prune: false,
+    })
+    expect(has(outDir, 'desktop-light/boards')).toBe(false)
+    expect(has(outDir, 'desktop-light/conversation')).toBe(false)
+    expect(has(outDir, 'desktop-light/home')).toBe(true)
+    expect([...readManifest(outDir)]).toEqual(['desktop-light/home'])
   })
 
   it('removes the old picture of a capture that failed, since it would pass for the screen', () => {

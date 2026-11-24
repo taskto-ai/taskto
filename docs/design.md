@@ -213,7 +213,7 @@ what the browser reported). Options, by flag or environment variable:
 
 | Flag | Variable | |
 |---|---|---|
-| `--out DIR` | `TASKTO_SCREENS_OUT` | Where the PNGs go (default `web/screens/`). The script replaces only the files it writes, which it lists in `.screens-manifest.json` there: a full run that failed nowhere also removes the pictures an earlier run listed and this one didn't write, and no other file is ever deleted. |
+| `--out DIR` | `TASKTO_SCREENS_OUT` | Where the PNGs go (default `web/screens/`). The script replaces only the files it writes, which it lists in `.screens-manifest.json` there: a capture that failed or was skipped loses its old picture, a full run that failed nowhere also removes the pictures an earlier run listed and this one didn't write, and no other file is ever deleted. |
 | `--only TEXT[,TEXT]` | `TASKTO_SCREENS_ONLY` | Only the captures whose name contains one of the texts: `desktop-dark/`, `boards`, `phone-light/drawer`. |
 | `--list` | | Print the capture names and stop. |
 | `--strict` | | Fail on anything the browser reported too. |

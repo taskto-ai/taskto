@@ -613,14 +613,14 @@ export function readManifest(outDir) {
   }
 }
 
-// `written`: the ids this run saved. `failed`: those it could not (an old picture of one would
-// pass for the current screen, so it goes). `keep`: ids a run didn't try on purpose (a screen
-// that needs the agent runtime). `prune`: a full run that failed nowhere also removes the earlier
-// run's pictures it didn't write.
-export function recordCaptures({ outDir, written, failed = [], keep = [], prune = false }) {
+// `written`: the ids this run saved. `failed`: the selected ones it did not save, failed or
+// skipped (an old picture of one would pass for the current screen, so it goes, in a filtered run
+// too). `prune`: a full run that failed nowhere also removes the earlier run's pictures it didn't
+// write.
+export function recordCaptures({ outDir, written, failed = [], prune = false }) {
   const before = readManifest(outDir)
-  const remove = new Set(failed.filter((id) => before.has(id)))
-  if (prune) for (const id of before) if (!written.has(id) && !keep.includes(id)) remove.add(id)
+  const remove = new Set(failed.filter((id) => before.has(id) && !written.has(id)))
+  if (prune) for (const id of before) if (!written.has(id)) remove.add(id)
   for (const id of remove) rmSync(join(outDir, `${id}.png`), { force: true })
   const next = new Set([...before].filter((id) => !remove.has(id)))
   for (const id of written) next.add(id)
@@ -874,7 +874,7 @@ async function main() {
     if (recorded) return
     recorded = true
     try {
-      recordCaptures({ outDir, written, failed: failedIds, keep: skipped, prune })
+      recordCaptures({ outDir, written, failed: [...failedIds, ...skipped], prune })
     } catch (err) {
       console.error(`could not update ${MANIFEST}: ${redact(err.message)}`)
     }
