@@ -77,3 +77,58 @@ func TestUpdateKilledHalfWayIsFoundAndBlocks(t *testing.T) {
 	}
 	e.wantStatus("blocked", "the server runs '"+updOld+"' but")
 }
+
+// An update that is put back, and killed between the old version running again and the record of
+// what was done, is found by the next run and blocked; once a person has cleared it, the release
+// isn't tried again.
+func TestUpdateKilledAfterTheRevertIsBlockedAndNotRetried(t *testing.T) {
+	e := newUpdEnv(t)
+	e.release(updNew, "", false, false)
+	e.failCalls(`^compose up .* @` + updNew + `$`)
+	// The first call of the old version's safety check, after the old version was started again.
+	e.write("fake/kill-on", "^compose exec -T cli-worker true @"+updOld+"$\n")
+	cmd := e.command()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("the update wasn't killed")
+		}
+	case <-time.After(60 * time.Second):
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		t.Fatal("the update never got to the old version's checks")
+	}
+	if err := os.RemoveAll(e.tmp); err != nil {
+		t.Fatal(err)
+	}
+	e.sub("tmp")
+	if !e.exists("state/transaction") || e.exists("state/failed") {
+		t.Fatal("the run was killed after its bookkeeping, not before")
+	}
+	e.wantOldFilesBack()
+	calls := len(e.calls())
+	for _, args := range [][]string{nil, {"--to", updNew}} {
+		code, out := e.run(args...)
+		if code != 1 || !strings.Contains(out, "result=interrupted") || len(e.calls()) != calls {
+			t.Fatalf("the run after the kill (%v): exit %d, calls %d -> %d\n%s", args, code, calls, len(e.calls()), out)
+		}
+	}
+	// A person looked: the old version runs as .env says. Clearing it records the release as not to
+	// be retried, and the next run leaves it alone.
+	if code, out := e.run("--clear-block"); code != 0 {
+		t.Fatalf("clear-block: exit %d\n%s", code, out)
+	}
+	ups, backups := e.count(`^compose up`), e.count(`^compose exec -T taskto taskto backup`)
+	if code, _ := e.run(); code != 0 {
+		t.Fatalf("the run after clearing: exit %d", code)
+	}
+	e.wantStatus("skipped", "failed here before")
+	if e.count(`^compose up`) != ups || e.count(`^compose exec -T taskto taskto backup`) != backups {
+		t.Error("the release that failed was tried again")
+	}
+}

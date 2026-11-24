@@ -3,25 +3,44 @@
 # with the TASKTO_VERSION of the .env it ran against (" @v0.3.0"), and answers what
 # deploy/taskto-update.sh and deploy/safety-check.sh ask. Files in $FAKE_DIR steer it:
 #   fail      extended regular expressions: a call whose line matches one of them fails
-#   running   the version of the server that `compose up` started (the fake /healthz reports it)
+#   kill-on   an extended regular expression: the first call whose line matches it kills the
+#             whole process group (the updater, started in one of its own), once
+#   running   the version of the server that `compose up` started (the fake /healthz reports it);
+#             `compose stop` removes it
 #   block     holds a pull while it exists; block-up holds `compose up`
 #   volname   the name of the data volume the server has mounted (default taskto_data);
 #             nomount: it has none; config-volname: the one Compose's config names
-#   mutate    lines "VERSION KIND": that version's containers break a safety rule (KIND is root,
-#             insecure, nomode, netadmin, suid or workerdata)
+#   mutate    lines "VERSION KIND": that version's running containers break a safety rule (KIND
+#             is root, insecure, nomode, netadmin, suid or workerdata)
 #   upfail-after-start  a version whose `compose up` starts it and then fails
-#   images    what `compose config --images` prints
-#   revision-TAG  the revision label of the images tagged TAG
+#   config-edit         a jq filter applied to the rendered settings of the staged project
+#                       (`compose --project-directory DIR config --format json`)
+#   backup-schedule     the nightly backup service has a running container
+#   missing-images      lines: an image (a ref or an id) that `image inspect` doesn't find
+#   retagged            lines: a ref or id whose tag now has another id; retag-on-backup is
+#                       copied to it when a backup is taken
+#   image-user          the Config.User of the images (default 65532:65532)
+#   revision-TAG        the revision label of the images tagged TAG
 set -u
 d=$FAKE_DIR
 proj=$PWD
-if [ "${1:-}" = compose ] && [ "${2:-}" = --project-directory ]; then proj=$3; fi
+staged=0
+if [ "${1:-}" = compose ] && [ "${2:-}" = --project-directory ]; then
+	proj=$3
+	staged=1
+fi
 ver=$(sed -n 's/^TASKTO_VERSION=//p' "$proj/.env" 2>/dev/null | tail -n 1)
 line="$* @$ver"
 echo "$line" >>"$d/calls"
 if [ -s "$d/fail" ] && grep -qE -f "$d/fail" <<<"$line"; then
 	echo "fake docker: $line fails" >&2
 	exit 1
+fi
+if [ -s "$d/kill-on" ] && grep -qE -f "$d/kill-on" <<<"$line"; then
+	rm -f "$d/kill-on"
+	pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+	[ -n "$pgid" ] || pgid=$(awk '{print $5}' "/proc/$$/stat")
+	kill -KILL -- "-$pgid"
 fi
 last=${*: -1}
 vol=$(cat "$d/volname" 2>/dev/null || echo taskto_data)
@@ -55,6 +74,39 @@ container() {
 		   Mounts: $mounts, NetworkSettings: {Networks: $nets}}]'
 }
 
+# config_json: `docker compose config --format json` of the project: the settings of the Compose
+# file, as Compose renders them (a service's mounts in the long form, the networks and volumes
+# by their effective names), with Caddy when the https profile is on; the staged project's
+# changed by config-edit.
+config_json() {
+	local https=0 cvol out
+	grep -q '^COMPOSE_PROFILES=.*https' "$proj/.env" 2>/dev/null && https=1
+	cvol=$(cat "$d/config-volname" 2>/dev/null || echo "$vol")
+	out=$(jq -cn --arg v "$ver" --arg vol "$cvol" --argjson https "$https" '
+		"ghcr.io/taskto-ai/" as $p
+		| {name: "taskto",
+		   services: ({
+		     taskto: {image: ($p + "taskto:" + $v), cap_drop: ["ALL"], security_opt: ["no-new-privileges:true"],
+		              environment: {TASKTO_CLI_WORKERS: "container", TASKTO_DISABLE_PASSWORD_LOGIN: ""},
+		              volumes: [{type: "volume", source: "data", target: "/data", volume: {}}, {type: "volume", source: "cli-run", target: "/run/taskto-cli", volume: {}}],
+		              networks: {default: null}},
+		     "cli-worker": {image: ($p + "taskto-cli-worker:" + $v), cap_drop: ["ALL"], cap_add: ["SETUID", "SETGID", "CHOWN", "KILL"],
+		              security_opt: ["no-new-privileges:true"],
+		              volumes: [{type: "volume", source: "cli-homes", target: "/homes", volume: {}}, {type: "volume", source: "cli-run", target: "/run/taskto-cli", volume: {}}],
+		              networks: {worker: null}}
+		   } + (if $https == 1 then {caddy: {image: "caddy:2.11.9-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		              volumes: [{type: "bind", source: "/srv/taskto/deploy/Caddyfile", target: "/etc/caddy/Caddyfile", read_only: true},
+		                        {type: "volume", source: "caddy-data", target: "/data", volume: {}},
+		                        {type: "volume", source: "caddy-config", target: "/config", volume: {}}],
+		              networks: {default: {ipv4_address: "172.29.80.10"}}}} else {} end)),
+		   networks: {default: {name: "taskto_default"},
+		              worker: {name: "taskto_worker", driver_opts: {"com.docker.network.bridge.name": "taskto-worker"}}},
+		   volumes: {data: {name: $vol}, "cli-homes": {name: "taskto_cli-homes"}, "cli-run": {name: "taskto_cli-run"},
+		             "caddy-data": {name: "taskto_caddy-data"}, "caddy-config": {name: "taskto_caddy-config"}}}')
+	if [ "$staged" = 1 ] && [ -s "$d/config-edit" ]; then out=$(jq -c -f "$d/config-edit" <<<"$out"); fi
+	echo "$out"
+}
+
 case "$1" in
 manifest | logout | tag) ;;
 login) echo "${DOCKER_CONFIG:-unset}" >>"$d/login-config" ;;
@@ -69,19 +121,27 @@ volume)
 	esac
 	;;
 image)
+	if [ -s "$d/missing-images" ] && grep -qxF "$last" "$d/missing-images"; then exit 1; fi
 	case "$*" in
 	*Labels*) cat "$d/revision-${last##*:}" 2>/dev/null || true ;;
 	*RepoDigests*) echo "$last@sha256:$(printf '%s' "$last" | sha256sum | cut -c1-64)" ;;
-	*.Id*) echo "sha256:id-$last" ;;
+	*Config.User*) cat "$d/image-user" 2>/dev/null || echo 65532:65532 ;;
+	*.Id*)
+		if [ -s "$d/retagged" ] && grep -qxF "$last" "$d/retagged"; then
+			echo "sha256:swapped-$last"
+		else
+			case $last in sha256:*) echo "$last" ;; *) echo "sha256:id-$last" ;; esac
+		fi
+		;;
 	esac
 	;;
-run) ;; # the data moved aside
 network) echo taskto-worker ;;
 inspect)
+	svc=${last#id-}
 	case "$*" in
 	*"range .Mounts"*) [ -e "$d/nomount" ] || echo "volume $vol" ;;
-	*"{{.Image}} {{.State.StartedAt}}"*) echo "img-$running 2026-01-01T00:00:00Z" ;;
-	*"{{.Image}}"*) echo "img-$running" ;;
+	*"{{.Image}} {{.State.StartedAt}}"*) echo "sha256:run-$svc-$running 2026-01-01T00:00:00Z" ;;
+	*"{{.Image}}"*) echo "sha256:run-$svc-$running" ;;
 	*) container "$last" ;;
 	esac
 	;;
@@ -95,21 +155,15 @@ compose)
 			exit 1
 		fi
 		case "$*" in
-		*--images*)
-			if [ -s "$d/images" ]; then
-				cat "$d/images"
-			else
-				echo "ghcr.io/taskto-ai/taskto:$ver"
-				echo "ghcr.io/taskto-ai/taskto-cli-worker:$ver"
-				echo "caddy:2.11.9-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-			fi
-			;;
-		*json*) jq -cn --arg v "$(cat "$d/config-volname" 2>/dev/null || echo "$vol")" '{volumes: {data: {name: $v}}}' ;;
+		*json*) config_json ;;
 		esac
 		;;
 	exec)
 		case "$*" in
-		*"taskto backup"*) echo "BACKUP-OF-$ver" ;;
+		*"taskto backup"*)
+			echo "BACKUP-OF-$ver"
+			[ ! -s "$d/retag-on-backup" ] || cp "$d/retag-on-backup" "$d/retagged"
+			;;
 		*find*) ! mutated suid || echo /usr/bin/bad ;;
 		esac
 		;;
@@ -118,14 +172,18 @@ compose)
 		echo "$ver" >"$d/running"
 		if [ "$(cat "$d/upfail-after-start" 2>/dev/null)" = "$ver" ]; then exit 1; fi
 		;;
-	down) rm -f "$d/running" ;;
+	stop) rm -f "$d/running" ;;
 	ps)
 		case "$*" in
-		*-q* | *-aq*) echo "id-$last" ;;
+		*-q* | *-aq*)
+			case $last in
+			backup-schedule) [ ! -e "$d/backup-schedule" ] || echo "id-$last" ;;
+			*) echo "id-$last" ;;
+			esac
+			;;
 		*) echo running ;;
 		esac
 		;;
-	run) cat >"$d/restored" ;;
 	esac
 	;;
 esac

@@ -1013,8 +1013,9 @@ refuses to start on a database that has migrations it doesn't know, that is, one
 version has written: an older binary never runs on a schema it doesn't understand.
 
 So an upgrade can't be undone in place; the way back is the backup taken before it. A server
-installed with [deploy/INSTALL.md](../deploy/INSTALL.md) does all of this itself every night
-([Automatic updates](#automatic-updates)); what follows is the same by hand.
+installed with [deploy/INSTALL.md](../deploy/INSTALL.md) upgrades itself every night
+([Automatic updates](#automatic-updates)); when an upgrade fails after the new server has
+started, it stops and tells you, and the way back is the by-hand one that follows.
 
 **Upgrade**, say from v0.1.0 to v0.2.0:
 
@@ -1099,78 +1100,140 @@ reason in the status; none changes anything.
   exists, nothing runs (not even `--to`; the status says `interrupted`, with the phase, the
   backup and where the old files are): the files may be on either version. Look at it, put it
   right with [Upgrade and rollback](#upgrade-and-rollback) and the `previous/` files and the
-  backup it names, then remove the record.
+  backup it names, then run `taskto-update --clear-block`.
 - *A server that isn't the version on record.* If `/healthz` answers as another version than
   `/srv/taskto/.env` says, or doesn't answer, the run reports it and does nothing (for another
-  version it also writes the `blocked` file, which stays until someone removes it).
-- *A rollback that failed.* It stops, writes `/var/lib/taskto-update/blocked`, and no
-  automatic run changes anything until someone has looked and removed the file (or runs
-  `--to`).
+  version it also writes the `blocked` file, which stays until `taskto-update --clear-block`
+  removes it).
+- *An update that failed after the new server started, or whose way back failed.* See
+  [When an update fails](#when-an-update-fails): the stack is stopped (or left as it is),
+  and nothing runs again until a person has restored the backup and cleared it.
 
 `taskto-update --dry-run` chooses and checks and changes nothing on the install (it does pull
 the images, to check them, and logs in to a private registry for that, with a Docker config of
-its own that is removed after, so the operator's isn't changed); `taskto-update --to VERSION`
-(a release tag or a full commit SHA) installs that version, whatever the hold, the channel and
-the manual-upgrade marker say, but never an older one, and never over an interrupted update.
+its own that is removed after, so the operator's isn't changed; it makes no backup directory);
+`taskto-update --to VERSION` (a release tag or a full commit SHA) installs that version,
+whatever the hold, the channel and the manual-upgrade marker say, but never an older one, and
+never over an interrupted or stopped update.
 
 **One run**, with a lock so two never overlap:
 
 1. *Resolve and check, before touching anything.* The tag becomes one commit SHA, through the
    API, and every file of the new version (its `compose.yaml`, `deploy/Caddyfile`, the
    firewall script and `deploy/safety-check.sh`) is fetched at that SHA, never by a tag or a
-   branch. All three images are pulled by tag, and the updater refuses any whose
-   `org.opencontainers.image.revision` label isn't that SHA; their digests and ids are
-   recorded (the switch checks the tags still point to them, and a rollback puts the old tags
-   back to the ids the old images had, so neither side is a moving tag). Every other image of
-   the enabled services (Caddy's, pinned by digest) is pulled too, since the switch pulls
-   nothing. It checks the disk for a backup, a copy of the data and the images, the firewall,
-   and that the data volume is the one the running server has mounted at `/data` (never a
-   name assumed) and the one Compose names; and `docker compose config` with the new file and
-   this install's own `.env` and `compose.override.yaml`. A setting the new file needs that
-   isn't there stops it here, and the status says which.
+   branch. It then checks, and refuses with nothing changed if any of this fails:
+   - the images the running containers use are on this machine, by their ids (what the
+     running server, worker and, if it runs, the nightly backup have, not what a tag points
+     at now); they are kept under `taskto-update-rollback:<image>` tags before the update
+     changes anything, so a moved tag or an image prune can't take them;
+   - the data volume is the one the running server has mounted at `/data` (never a name
+     assumed), in this install's Compose settings and, resolved to its effective Docker name,
+     in the new ones, for the server and every backup service;
+   - the new settings, rendered with this install's `.env` and `compose.override.yaml`, run
+     only the images it checks (an override that swaps in another image, or an older one of
+     TaskTo's, is refused); all three images are pulled by tag and refused unless their
+     `org.opencontainers.image.revision` label is that SHA, and their ids are recorded (the
+     switch checks, right before it starts anything, that the tags still have them); every
+     other image of the enabled services (Caddy's, pinned by digest) is pulled too, since the
+     switch pulls nothing;
+   - the safety rules hold in those settings, **before anything is started**:
+     `deploy/safety-check.sh --static` checks the rendered new settings with the same rules as
+     runbook step 12 does on the running containers (the server's user is 65532, no
+     privileged container, `cap_drop: ALL`, `no-new-privileges`, no capability added to the
+     server and only the worker's four to the worker, no development switch or secret in
+     either environment, CLI workers in container mode, the worker with none of the server's
+     data, no host path or Docker socket, and on its own network, the firewall's bridge);
+   - the public address answers as the current version before anything changes (Caddy's HTTPS
+     address from this machine, or in `traefik` mode the LAN port and `https://<domain>/healthz`
+     as a visitor reaches it): a broken proxy isn't the update's to fix;
+   - the disk, the worker's firewall (its unit and rules), and `docker compose config` with the
+     new file; a setting the new file needs that isn't there stops it here, and the status
+     says which.
 2. *Back up* into `/var/backups/taskto/before-update-from-<old>-to-<new>-<time>.tar.gz`
    (root only, mode 600; it holds `server.key`). Then it writes the record,
    `/var/lib/taskto-update/transaction` (old and new version and commit, phase, backup,
-   volume, where the old files are kept), which stays until the run ends in a success, a
-   rollback or a failed rollback.
+   volume, where the old files are kept), which stays until the run ends in a success or a
+   revert, and after a stop until a person clears it.
 3. *Switch*: the old files are kept in `/var/lib/taskto-update/previous/`, the new ones and
-   `TASKTO_VERSION` (in `/srv/taskto/.env` and `/etc/taskto/install.env`) put in, and
-   `docker compose up -d`; when `deploy/Caddyfile` changed, with the HTTPS profile on, Caddy
-   is recreated too, since it reads the file once.
+   `TASKTO_VERSION` (in `/srv/taskto/.env` and `/etc/taskto/install.env`) put in, the tags
+   checked once more, and `docker compose up -d`; when `deploy/Caddyfile` changed, with the
+   HTTPS profile on, Caddy is recreated too, since it reads the file once.
 4. *Check the server*: `/healthz` is `ok` at the new version with its agent runtime ready
-   (and so is the proxy: `https://<domain>/healthz` through Caddy from the host itself, or the
-   LAN port in `traefik` mode), the services run, the firewall's rules are in, and
-   `deploy/safety-check.sh`, the very script runbook step 12 runs, holds in the running
-   containers (not root, `cap_drop: ALL` and `no-new-privileges`, no capability beyond the
-   worker's four, no setuid program, no development switch or secret in the environment, CLI
-   workers in container mode in the server's own, the worker with none of the server's data,
-   no host path, no Docker socket, and on its own network).
+   (and so is the proxy: `https://<domain>/healthz`, from this host), the services run, the
+   firewall's rules are in, and `deploy/safety-check.sh`, the very script runbook step 12
+   runs, holds in the running containers (what the static check can't see: a setuid program
+   in the worker's image, the network Docker made).
 5. *After a success*, and only then, the updater's own older backups are pruned: the newest
    three by the time in their names (regular files with the updater's name only, never this
    run's), and nothing else in that directory, nor the nightly backups.
-6. *If anything after the backup fails*, it puts the old files, images and settings back and
-   starts the old version, then checks it with its own safety script. If the new server
-   never started (a failed pull, a failed `up`), that is all: the data wasn't touched. If it
-   may have written data, the data is copied to a volume `<volume>_rolled_back_<time>` beside
-   the server's own (the volume itself is never removed; it is emptied only after the copy is
-   complete), the backup is restored by the old version's image, and the old version started
-   and checked. What is written about the failure (the list of releases not to try again, the
-   status) is written after the rollback and never stops it. That release isn't tried again on
-   this server. If the rollback fails too, it stops with the install as it is.
+
+## When an update fails
+
+What happens depends on one fact: did the **new server start**? A new server may have run
+migrations, and an older one can't read what a newer one wrote.
+
+- **Before it started** (a failed pull or check, the static safety check, `docker compose up`
+  failing before the server's container ran): nothing of the data was touched. The updater puts
+  the old files, `.env` and images back (the images by the ids the running containers had),
+  starts the old version, checks it with its own safety script, records the release as failed
+  (so it isn't tried again every night), and reports `rolled-back`. If putting the old version
+  back fails too, it stops as below, with `rollback-failed`.
+- **After it started** (the server isn't healthy, a safety rule or the proxy check fails on
+  the running containers, or `up` fails once the server has run): the updater **stops the
+  stack** (`docker compose stop`, never `down`, never removing a volume), keeps the pre-update
+  backup, writes the `blocked` marker and keeps the transaction record, and reports `stopped`
+  loudly: the status, the journal and the notification say which backup to restore. It does
+  **not** restore data, empty or copy a volume, or put anything back: it can't know what the
+  new version did to the data. A person does, by hand: restore the backup named in the report
+  with [Upgrade and rollback](#upgrade-and-rollback) (and
+  [Rollback](../deploy/INSTALL.md#rollback) in the runbook), start the old version, check it
+  and run `taskto-update --clear-block`.
+
+While `/var/lib/taskto-update/transaction` exists nothing runs again, not even `--to`; every
+run says it is blocked (and notifies, below). It is the record that blocks: if the `blocked`
+marker can't be written, the record alone still does. `taskto-update --clear-block` removes
+both, and only if the server is healthy and answers as the version in `/srv/taskto/.env`
+(which is also the version in `/etc/taskto/install.env`); the release that was being
+installed is then recorded as not to be tried again by itself (unless it is the version now
+running, because a person finished the update by hand). Or remove
+`/var/lib/taskto-update/transaction` and `/var/lib/taskto-update/blocked`.
+
+**Alerts.** The unit fails (`systemctl status taskto-update`), and the status and the journal
+say why. For a message somewhere you will see, put one URL in
+`/etc/taskto/update-notify-url` (optional; root only, mode 600, since a webhook address is a
+secret; `install -m 600 /dev/null /etc/taskto/update-notify-url` and write the address into it).
+On every outcome but `up-to-date`, `skipped` and a dry run (so also `updated`, `failed`,
+`rolled-back`, `stopped`, `rollback-failed`, `interrupted` and every `blocked` night after a
+stop) the updater POSTs a small JSON body to it:
+
+```json
+{"result":"stopped","from":"v0.2.0","to":"v0.3.0","reason":"…","backup":"/var/backups/taskto/…tar.gz","text":"taskto-update: stopped, v0.2.0 to v0.3.0: … (backup: …)"}
+```
+
+`text` is the same in a sentence, which Slack-compatible webhooks (Slack, Mattermost,
+Rocket.Chat, Discord's `/slack` address) show as the message. [ntfy](https://ntfy.sh) takes
+the body as the message (it shows the JSON; put its topic in the address). Anything that
+accepts a JSON POST works, and `result`, `from`, `to`, `reason` and `backup` are the generic
+format. The address is read from the file and given to `curl` on its standard input, never in
+a command line (`ps` can't show it), and never logged; a notification has a short timeout
+(5 s to connect, 10 s in all), is best effort, and never changes the outcome: a webhook that is
+down only leaves "the notification wasn't delivered" in the journal.
 
 **Where to look.** `/var/lib/taskto-update/status.json` has the last run: when, `result`
-(`updated`, `up-to-date`, `skipped`, `failed`, `rolled-back`, `rollback-failed`, `blocked`
-or `interrupted`), `from`, `to`, the commit (`sha`), the `reason`, the `backup` file, the
+(`updated`, `up-to-date`, `skipped`, `failed`, `rolled-back`, `stopped`, `rollback-failed`,
+`blocked`, `interrupted` or `cleared`), `from`, `to`, the commit (`sha`), the `reason`, the `backup` file, the
 images' `digests`, and `last_change`, the last run that changed or tried to change anything.
 Each run's one-line summary is in the journal: `journalctl -u taskto-update`. The unit fails
-(and `systemctl status taskto-update` shows it) when a run failed, rolled back, or is
+(and `systemctl status taskto-update` shows it) when a run failed, rolled back, stopped, or is
 blocked. Admins don't see it in the web app yet; the server doesn't read the host's files.
 Point monitoring at `/healthz`, which reports the version, and at the unit.
 
 **By hand.** `taskto-update --to` is the same steps for a version you choose. To go back to an
 older version yourself, follow [Upgrade and rollback](#upgrade-and-rollback) with the backup
 in `/var/backups/taskto`, and `touch /etc/taskto/update.hold` first, or the next night's run
-takes the newer release again.
+takes the newer release again. An install whose version has no updater (or no
+`deploy/safety-check.sh`) can't be updated by the updater: update it by hand once
+([deploy/INSTALL.md](../deploy/INSTALL.md#updates), "By hand").
 
 The updater is a file on the host, put there by step 16 of the runbook from the version that
 was installed then. A later version's fixes to it arrive when you run that step again.

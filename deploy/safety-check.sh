@@ -6,11 +6,35 @@
 # first rule that doesn't hold, and exits 1. It never prints a value from a container's
 # environment, only the names.
 #
+#   safety-check.sh                the running containers
+#   safety-check.sh --static DIR   the same rules, on the Compose settings of the project
+#                                  directory DIR as `docker compose config` renders them, with
+#                                  nothing started: the updater runs it on a new version's
+#                                  settings (with this install's .env and override) before
+#                                  it changes anything. What only a running container shows
+#                                  (a setuid program in the image, the network Docker made)
+#                                  is left to the live check, which still runs after the start.
+#
 #   TASKTO_ROOT  the Compose project (default /srv/taskto)
 #   DOCKER       the docker command (default docker)
 set -euo pipefail
 
 DOCKER=${DOCKER:-docker}
+mode=live dir=""
+case ${1:-} in
+"") ;;
+--static)
+	mode=static dir=${2:-}
+	[ $# -eq 2 ] && [ -n "$dir" ] || {
+		echo "usage: safety-check.sh [--static PROJECT-DIRECTORY]" >&2
+		exit 2
+	}
+	;;
+*)
+	echo "usage: safety-check.sh [--static PROJECT-DIRECTORY]" >&2
+	exit 2
+	;;
+esac
 cd "${TASKTO_ROOT:-/srv/taskto}"
 fail() {
 	echo "FAIL: $*"
@@ -18,6 +42,62 @@ fail() {
 }
 # docker, away from this script's own standard input (it may be the script itself).
 d() { "$DOCKER" "$@" </dev/null; }
+
+if [ "$mode" = static ]; then
+	cfg=$(d compose --project-directory "$dir" config --format json) || fail "can't render the Compose settings"
+	# A jq test on the settings, for one service (S): `t S 'filter'`.
+	t() { jq -e --arg s "$1" "$2" >/dev/null <<<"$cfg"; }
+	t taskto '.services[$s] != null' && t cli-worker '.services[$s] != null' || fail "the server or the CLI worker isn't in the Compose settings (is the cli profile on?)"
+
+	# The server runs as 65532: the Compose file's user if it sets one, else the image's.
+	user=$(jq -r '.services.taskto.user // empty' <<<"$cfg")
+	if [ -z "$user" ]; then
+		img=$(jq -r '.services.taskto.image // empty' <<<"$cfg")
+		[ -n "$img" ] || fail "the server has no image"
+		user=$(d image inspect --format '{{.Config.User}}' "$img") || fail "can't tell the server's user"
+	fi
+	[[ $user =~ ^65532(:65532)?$ ]] || fail "the server wouldn't run as 65532 (its user is '${user:-root}')"
+
+	# No capabilities, no new privileges, not privileged, in both; and beyond that nothing added:
+	# none for the server, exactly SETUID, SETGID, CHOWN and KILL for the worker. (The worker's own
+	# user is root, which makes the CLIs' Unix users; the CLIs never run as root.)
+	for s in taskto cli-worker; do
+		t "$s" '.services[$s] | ((.privileged // false) == false) and ((.cap_drop // []) == ["ALL"]) and ((.security_opt // []) == ["no-new-privileges:true"])' ||
+			fail "$s isn't capability-free with no-new-privileges, or is privileged"
+	done
+	t taskto '(.services[$s].cap_add // []) | length == 0' || fail "the server has capabilities added"
+	t cli-worker '[(.services[$s].cap_add // [])[] | ltrimstr("CAP_")] | sort == ["CHOWN","KILL","SETGID","SETUID"]' ||
+		fail "the worker has capabilities beyond SETUID, SETGID, CHOWN and KILL"
+	t taskto '[.services.taskto, .services["cli-worker"] | ((.command // []), (.entrypoint // [])) | if type == "array" then join(" ") else tostring end] | join(" ") | test("unsafe"; "i") | not' ||
+		fail "a container's command has a development switch"
+
+	# No development switch and no secret in either environment (names only are shown); the
+	# server's own environment has the CLI workers in container mode.
+	bad=$(jq -r '[.services.taskto, .services["cli-worker"]] | .[] | (.environment // {}) | to_entries[]
+		| select(((.key + "=" + ((.value // "") | tostring)) | test("INSECURE|UNSAFE|TOKEN|SECRET|PASSWORD|API_KEY"; "i")) and .key != "TASKTO_DISABLE_PASSWORD_LOGIN") | .key' <<<"$cfg")
+	[ -z "$bad" ] || fail "a development switch or a secret is in a container's environment: $(tr '\n' ' ' <<<"$bad")"
+	t taskto '.services.taskto.environment.TASKTO_CLI_WORKERS == "container"' || fail "CLI workers aren't in container mode"
+
+	# The worker can't see the server's data, has no host path and no Docker socket. A volume is
+	# its effective Docker name, which is what the same name in two services shares.
+	dv=$(jq -r '. as $c | [.services.taskto.volumes[]? | select(.target == "/data" and .type == "volume") | ($c.volumes[.source // ""].name // .source)][0] // empty' <<<"$cfg")
+	[ -n "$dv" ] || fail "can't tell the server's data volume"
+	jq -e --arg v "$dv" '. as $c | [.services["cli-worker"].volumes[]? | select(.type == "bind" or (.type == "volume" and (($c.volumes[.source // ""].name // .source) == $v)))] | length == 0' <<<"$cfg" >/dev/null ||
+		fail "the worker can see the server's data, or has a host path"
+	for s in taskto cli-worker; do
+		t "$s" '[.services[$s].volumes[]? | select(((.source // "") + (.target // "")) | contains("docker.sock"))] | length == 0' ||
+			fail "a container has the Docker socket"
+	done
+
+	# The worker is on one network, its own, which the server isn't on, and the firewall's bridge.
+	t cli-worker '(.services[$s].networks // {default: null}) | length == 1' || fail "the worker isn't on one network only"
+	net=$(jq -r '(.services["cli-worker"].networks // {default: null}) | keys[0]' <<<"$cfg")
+	jq -e --arg n "$net" '(.services.taskto.networks // {default: null}) | has($n) | not' <<<"$cfg" >/dev/null || fail "the server is on the worker's network"
+	jq -e --arg n "$net" '.networks[$n].driver_opts["com.docker.network.bridge.name"] == "taskto-worker"' <<<"$cfg" >/dev/null ||
+		fail "the worker's bridge isn't taskto-worker, the firewall's"
+	echo OK
+	exit 0
+fi
 
 s=$(d compose ps -q taskto) || fail "can't list the server's container"
 w=$(d compose ps -q cli-worker) || fail "can't list the CLI worker's container"

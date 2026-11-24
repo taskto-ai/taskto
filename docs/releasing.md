@@ -13,10 +13,14 @@ workflow (`.github/workflows/release.yml`, the workflow's own `GITHUB_TOKEN` onl
 GitHub-hosted runner, the inputs reaching shell commands only as environment variables):
 
 1. checks the version is `vMAJOR.MINOR.PATCH` (the one grammar the updater uses: no leading
-   zeros, no suffix) and newer than the last release, and that its tag doesn't exist;
+   zeros, no suffix, at most 100 characters) and newer than the last release, and that its
+   tag doesn't exist;
 2. checks CI passed on `main`'s head, and stops if it didn't, or hasn't finished;
-3. tags that very commit, with `git push origin <sha>:refs/tags/<version>`, which fails if
-   the tag exists, so a tag is never made twice or moved;
+3. looks the tag up through the API once more, right before the push, and stops if it is
+   there (a push of an existing tag at the same commit would succeed, so the push alone
+   isn't the check), then tags that very commit, with `git push origin
+   <sha>:refs/tags/<version>`, which refuses a tag that exists at another commit, so a tag
+   is never moved;
 4. creates the GitHub Release for that tag (`--verify-tag`) with the notes, and the line
    `manual-upgrade: true` first when **manual_upgrade** is ticked, so the marker is in the
    release from the moment it is published and no server can see it without; the generated
@@ -70,8 +74,8 @@ release and tells the operator to update the firewall by hand (runbook step 8) f
 
 A released database migration is never edited ([AGENTS.md](../AGENTS.md)), and a server
 refuses to start on a database a newer version has migrated. So an update can't be undone in
-place: the updater's way back is the backup it takes first, and anything written since is
-lost. Keep that in mind for a release that changes the schema: it should have run on real
+place: the way back is the backup the updater takes first, restored by a person (the
+updater itself never restores data), and anything written since is lost. Keep that in mind for a release that changes the schema: it should have run on real
 data before it is cut, and a migration that can't be reversed belongs in a version whose
 notes say so.
 

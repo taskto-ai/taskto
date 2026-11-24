@@ -9,5 +9,5 @@ Requires=docker.service
 Type=oneshot
 ExecStart=/usr/local/sbin/taskto-update
 # An update that is stopped half way would leave the install between two versions: it has no
-# time limit of its own, only its checks' (a health check that gives up, then the rollback).
+# time limit of its own, only its checks' (a health check that gives up, then putting the old version back or stopping the stack).
 TimeoutStartSec=infinity

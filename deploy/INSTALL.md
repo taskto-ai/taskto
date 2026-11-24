@@ -1053,11 +1053,14 @@ The VM keeps itself on the latest release ([docs/install.md](../docs/install.md#
 `/usr/local/sbin/taskto-update`, a script of the host, run every night at `TASKTO_UPDATE_AT`
 UTC by a systemd timer. It does the safe common case and leaves the rest to a person: it
 checks the new version, files and images from one commit, before touching anything, backs up
-into `/var/backups/taskto` (the last three kept), switches, checks the server and, if
-anything fails, goes back to the version before (restoring the backup only if the new server
-started). It never downgrades, and it leaves to a person a release whose notes say
-`manual-upgrade: true`, a version that changes the worker's firewall, and an update that was
-interrupted. It needs only what the earlier steps installed, and the server container never
+into `/var/backups/taskto` (the last three kept), switches and checks the server. Before the
+switch it checks the new Compose settings against the safety rules without starting anything,
+and refuses what breaks one. If anything fails before the new server has started, it puts the
+old version back; if it fails after, the new server may have changed the data, so it **stops
+the stack, keeps the backup, and alerts**, and a person restores the backup by hand (the
+[Rollback](#rollback) section): the updater never restores data or touches a volume. It never
+downgrades, and it leaves to a person a release whose notes say `manual-upgrade: true`, a
+version that changes the worker's firewall, and an update that was interrupted or stopped. It needs only what the earlier steps installed, and the server container never
 gets the Docker socket. With `TASKTO_UPDATE_CHANNEL=off` this step removes the timer and
 keeps the script, for `taskto-update --to`, when `TASKTO_VERSION` has one.
 
@@ -1068,7 +1071,7 @@ without the script never puts an empty file on the VM. Such a version is only fo
 ```sh
 . ~/.config/taskto-install.env
 if ! git cat-file -e "${TASKTO_VERSION}:deploy/taskto-update.sh" 2>/dev/null; then
-  [ "${TASKTO_UPDATE_CHANNEL:-}" = off ] || { echo "FAIL: $TASKTO_VERSION has no deploy/taskto-update.sh: install a newer version, or set TASKTO_UPDATE_CHANNEL=off"; false; }
+  [ "${TASKTO_UPDATE_CHANNEL:-}" = off ] || { echo "FAIL: $TASKTO_VERSION has no deploy/taskto-update.sh: update by hand to a version that has it (the Updates section below, \"By hand\"), or set TASKTO_UPDATE_CHANNEL=off"; false; }
   echo "SKIP: $TASKTO_VERSION predates the updater and updates are off"
 else
   (
@@ -1128,11 +1131,28 @@ EOF
 fi
 ```
 
+**Optional: an alert.** The unit fails when a run fails, and the status and the journal say
+why, but nobody reads a journal. To be told, put one address in `/etc/taskto/update-notify-url`
+on the VM: a [ntfy](https://ntfy.sh) topic, a Slack-compatible (Slack, Mattermost, Rocket.Chat)
+or any other webhook. The updater POSTs it a small JSON body, `{"result","from","to","reason",
+"backup","text"}`, on every outcome but up-to-date, skipped and a dry run, best effort and with
+a short timeout, and a failed notification never changes what the run did. The address may be
+a secret, so it is a file only root reads, never a command-line argument; on the VM:
+
+```sh
+sudo install -m 600 -o root -g root /dev/null /etc/taskto/update-notify-url
+sudoedit /etc/taskto/update-notify-url   # the one line: https://ntfy.sh/your-topic
+```
+
+It is optional, so no check here depends on it; the format is in
+[docs/install.md](../docs/install.md#when-an-update-fails).
+
 To hold updates for a while, make `/etc/taskto/update.hold` on the VM (`touch`), and remove it
 to go on. The last run's result is in `/var/lib/taskto-update/status.json`, each run's line
 in `journalctl -u taskto-update`. To run one by hand: `sudo taskto-update`, or `sudo
 taskto-update --to vX.Y.Z`. What the updater leaves to a person, and what to do then, is in
-[docs/install.md](../docs/install.md#automatic-updates).
+[docs/install.md](../docs/install.md#automatic-updates) and, for a stopped update, the
+[Rollback](#rollback) section below.
 
 ## Step 17: the restore drill
 
@@ -1194,21 +1214,25 @@ the owner's password is (`/etc/taskto/admin-password`, root-only). For the backu
 `/healthz/backup` line from step 15, the drill's line from step 17, the time they run, and
 that the repository's address and password are in `TASKTO_BACKUP_DIR` on your machine, for
 the owner's password manager; or that backups are off, and why. For the updates: the channel
-and the time, and the `taskto-update --dry-run` line from step 16; or that they are off, and why. No tokens, passwords,
+and the time, the `taskto-update --dry-run` line from step 16, and whether an alert address is set
+(not the address); or that they are off, and why. No tokens, passwords,
 repository addresses, private addresses or log excerpts with the setup token.
 
 ## Updates
 
 Automatic, by default: step 16's `taskto-update` takes the newest release every night, with
-a backup first and a rollback if the new version doesn't come up
-([docs/install.md](../docs/install.md#automatic-updates)). What it did is in
+a backup first; if the new version fails before it has started, it puts the old one back, and
+if it fails after, it stops and alerts and you restore the backup (the [Rollback](#rollback)
+section) ([docs/install.md](../docs/install.md#automatic-updates)). What it did is in
 `/var/lib/taskto-update/status.json` and `journalctl -u taskto-update`. The manual steps
 below are for a hold (`touch /etc/taskto/update.hold` stops the nightly runs; remove it to
 go on), for what the updater leaves to a person (a release whose notes say
 `manual-upgrade: true`, a version that changes `deploy/worker-firewall.sh`: run step 8 with
-it first, then `taskto-update --to`; an interrupted update; a server that isn't the version
-on record: [docs/install.md](../docs/install.md#automatic-updates)), and for an
-install with updates off.
+it first, then `taskto-update --to`; an interrupted or stopped update, below; a server that
+isn't the version on record: [docs/install.md](../docs/install.md#automatic-updates)), and for
+an install with updates off. A version before the updater (no `deploy/taskto-update.sh` or
+`deploy/safety-check.sh`) is updated once by the steps below, which also install the updater
+(step 16).
 
 Migrations only go forward: once a newer version has started on the data, an older one
 won't ([docs/install.md](../docs/install.md#upgrade-and-rollback)). So every update starts
@@ -1249,26 +1273,32 @@ update `~/.config/taskto-install.env` is behind: before you run any step again, 
 
 ## Rollback
 
-The updater rolls back by itself when an update fails after its backup: the old files and
-images go back and the old version starts. Only if the new server had started (and so may
-have written data) does it also move the data aside, into a volume beside the server's own
-(`<the data volume>_rolled_back_*`, a copy; the volume itself stays, and is emptied only
-after the copy), and restore the backup with the old version's image. If the rollback fails
-too it stops, leaves the install as it is, and runs nothing again until
-`/var/lib/taskto-update/blocked` is removed: the status says why, and the steps below are the
-way back by hand. An update that was stopped half way (the machine rebooted, the process was
-killed) leaves `/var/lib/taskto-update/transaction`, and nothing runs, not even `--to`, until
-it is removed: the files in `/srv/taskto` may be on either version, so look, put it right
-with the steps below (the old files are in `/var/lib/taskto-update/previous/`, the backup is
-named in the record), then remove it.
+**The updater never restores data.** What it does when an update fails depends on whether the
+new server had started (a new server may have migrated the data, which an older one can't read):
 
-To go back to the version before yourself, with the data from the backup taken before the
+- *Before it started* (a failed check, the static safety check, a `docker compose up` that
+  failed before the server's container ran): it puts the old files, `.env` and images back,
+  starts the old version and checks it. The data was never touched. The release is recorded as
+  failed and isn't tried again. Nothing to do; read the status to see why.
+- *After it started*: it runs `docker compose stop`, keeps the backup it took before, writes
+  `/var/lib/taskto-update/blocked`, keeps `/var/lib/taskto-update/transaction` and fails the
+  unit, with the status `stopped`. The report (`/var/lib/taskto-update/status.json`, the journal,
+  and the alert if step 16 set one) names the backup to restore. Nothing runs again, not even
+  `--to`, until you have restored it and cleared the stop (below). If putting the old version
+  back fails too (`rollback-failed`), the same. A run that was killed half way
+  (`interrupted`) leaves the record too, and is put right the same way: the files in
+  `/srv/taskto` may be on either version, so look, and the old ones are in
+  `/var/lib/taskto-update/previous/`.
+
+To go back to the version before, by hand, with the data from the backup taken before the
 update (the updater's are `/var/backups/taskto/before-update-from-<old>-to-<new>-<time>.tar.gz`,
-the last three kept), anything written since is lost. Put a hold first, or the next night's
-run takes the newer release again: `touch /etc/taskto/update.hold` on the VM.
+the last three kept; the exact file is in the report), anything written since is lost. Put a
+hold first, or once cleared the next night's run takes the newer release again unless it was
+the one that failed (a failed release isn't tried again by itself, but a newer one is):
+`touch /etc/taskto/update.hold` on the VM.
 
 1. Set `TASKTO_VERSION` back in `~/.config/taskto-install.env`, and run steps 0, 1, 6, 7 and 8.
-2. Replace the data with the backup, on the VM. `BACKUP` is the file from update step 1:
+2. Replace the data with the backup, on the VM. `BACKUP` is the file the report names:
 
    ```sh
    . ~/.config/taskto-install.env
@@ -1286,6 +1316,21 @@ run takes the newer release again: `touch /etc/taskto/update.hold` on the VM.
    The data you replaced is kept in a `taskto_data_rolled_back_*` volume; remove it once
    you are sure.
 3. Run step 9, then 12, 13, 14 and 15.
+4. Clear the stop, once the old version runs and the data is right. This removes the record
+   and the marker, if the server is healthy and answers as the version in `/srv/taskto/.env`
+   (it refuses otherwise, and says why); the release that failed is then not tried again by
+   itself. Or, if you would rather, remove `/var/lib/taskto-update/transaction` and
+   `/var/lib/taskto-update/blocked` yourself.
+
+   ```sh
+   . ~/.config/taskto-install.env
+   vm <<'EOF'
+   /usr/local/sbin/taskto-update --clear-block
+   EOF
+   ```
+
+   If you finished the update the other way (the new version is right, and you made it run),
+   set `TASKTO_VERSION` to it in both files, check it, and clear the stop the same way.
 
 ## Backups
 
