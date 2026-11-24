@@ -36,7 +36,7 @@
 // Everything seeded is invented: example.com addresses and made-up names.
 
 import { spawn } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { constants as osConstants, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -57,6 +57,10 @@ const owner = {
   password: 'sample-password-for-screens',
   workspace: 'Acme Studio',
 }
+
+// The second person of the sample data, who tells the owner of a card.
+const colleague = { name: 'Bruno Costa', password: 'sample-colleague-password-for-screens' }
+const INBOX_CARD = 'Review the launch checklist'
 
 // What a screen needs, in the order the run goes: before any account exists, with an account and
 // nothing in it, with the sample data, and signed out again.
@@ -275,7 +279,7 @@ export const SCREENS = [
     name: 'inbox',
     phase: 'seeded',
     show: (s) => s.go(s.path('inbox')),
-    ready: (s) => heading(s, 'Notifications'),
+    ready: (s) => [heading(s, 'Notifications'), text(s, INBOX_CARD)],
   },
   ...SETTINGS_TABS.map((tab) => ({
     name: `settings-${tab}`,
@@ -336,12 +340,12 @@ export const redact = (value) => {
 
 // Playwright's own debug traces (`DEBUG=pw:channel`) print every call's arguments, the session
 // cookie set on a browser context among them: the script keeps the other debug settings and drops
-// those.
+// those, and what it keeps (a `*`, say) excludes Playwright's namespaces explicitly.
 export function withoutPlaywrightDebug(debug) {
   const kept = String(debug ?? '')
     .split(/[\s,]+/)
     .filter((entry) => entry && !/^-?pw:/.test(entry))
-  return kept.length > 0 ? kept.join(',') : undefined
+  return kept.length > 0 ? [...kept, '-pw:*'].join(',') : undefined
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -432,20 +436,37 @@ export function launch({ bin, args, env, timeoutMs = 60_000, killAfterMs = 10_00
       } catch {}
     }
   }
+  // Whether anything of the child's process group is still there: a wrapper script that started
+  // the server without `exec` can exit before the server does.
+  const groupAlive = () => {
+    try {
+      process.kill(-proc.pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
   let stopping
   const server = {
     proc,
     logs: () => redact(logs),
-    // Stops it (SIGTERM, then SIGKILL after `killAfterMs`) and resolves once it has exited.
+    // Stops it and what it started (SIGTERM to the group, then SIGKILL after `killAfterMs`) and
+    // resolves once the child has exited and none of its group is left.
     stop() {
       stopping ??= new Promise((done) => {
-        if (!running()) return done()
+        if (proc.pid === undefined || (!running() && !groupAlive())) return done()
         const hard = setTimeout(() => signalGroup('SIGKILL'), killAfterMs)
-        proc.once('exit', () => {
-          clearTimeout(hard)
-          done()
-        })
-        proc.kill('SIGTERM')
+        const settle = () => {
+          if (running()) return
+          if (!groupAlive()) {
+            clearTimeout(hard)
+            return done()
+          }
+          setTimeout(settle, 20)
+        }
+        proc.once('exit', settle)
+        signalGroup('SIGTERM')
+        settle()
       })
       return stopping
     },
@@ -606,8 +627,13 @@ export function createClient(base, { fetchImpl = fetch, timeoutMs = 30_000 } = {
 export const MANIFEST = '.screens-manifest.json'
 const OWN = /^[a-z]+-(?:light|dark)\/[a-z0-9-]+$/
 
+// A symbolic link at the manifest's path is never followed, to read or to write: it is not the
+// list this script wrote.
+const manifestIsLink = (outDir) => lstatSync(join(outDir, MANIFEST), { throwIfNoEntry: false })?.isSymbolicLink()
+
 export function readManifest(outDir) {
   try {
+    if (manifestIsLink(outDir)) return new Set()
     const list = JSON.parse(readFileSync(join(outDir, MANIFEST), 'utf8')).captures
     return new Set(list.filter((id) => typeof id === 'string' && OWN.test(id)))
   } catch {
@@ -620,6 +646,7 @@ export function readManifest(outDir) {
 // too). `prune`: a full run that failed nowhere also removes the earlier run's pictures it didn't
 // write.
 export function recordCaptures({ outDir, written, failed = [], prune = false }) {
+  if (manifestIsLink(outDir)) throw new Error(`${MANIFEST} is a symbolic link: not writing through it`)
   const before = readManifest(outDir)
   const remove = new Set(failed.filter((id) => before.has(id) && !written.has(id)))
   if (prune) for (const id of before) if (!written.has(id)) remove.add(id)
@@ -627,15 +654,29 @@ export function recordCaptures({ outDir, written, failed = [], prune = false }) 
   const next = new Set([...before].filter((id) => !remove.has(id)))
   for (const id of written) next.add(id)
   mkdirSync(outDir, { recursive: true })
-  writeFileSync(join(outDir, MANIFEST), `${JSON.stringify({ captures: [...next].sort() }, null, 2)}\n`)
+  // A temporary file beside it, renamed over it: the manifest is whole or untouched.
+  const temporary = join(outDir, `${MANIFEST}.${process.pid}.tmp`)
+  try {
+    writeFileSync(temporary, `${JSON.stringify({ captures: [...next].sort() }, null, 2)}\n`, { flag: 'wx' })
+    renameSync(temporary, join(outDir, MANIFEST))
+  } catch (err) {
+    rmSync(temporary, { force: true })
+    throw err
+  }
   return { removed: [...remove].sort() }
 }
+
+// Whether the run succeeded: nothing failed, and in `--strict` the browser reported nothing. It
+// decides the exit status and, for a full run, whether the earlier run's other pictures are pruned.
+export const runSucceeded = ({ failures, issues, strict }) => failures.length === 0 && !(strict && issues.size > 0)
 
 // The run's one update of the output folder: `record(prune)` writes it the first time it is called
 // and does nothing after. `failedIds` and `skipped` are read when it runs. When the folder can't be
 // updated (the manifest's path is a directory, a read-only disk) the reason goes into `failures`, so
-// the run exits non-zero, and nothing is thrown: the cleanup that follows must still run.
-export function createRecorder({ outDir, written, failedIds, skipped, failures }) {
+// the run exits non-zero, and nothing is thrown: the cleanup that follows must still run. The
+// pictures this run made that the manifest couldn't take on (not in `owned`, the earlier manifest)
+// are removed, so that the next run, once the folder is right, doesn't refuse them as foreign.
+export function createRecorder({ outDir, written, owned = new Set(), failedIds, skipped, failures }) {
   let recorded = false
   return (prune) => {
     if (recorded) return
@@ -646,6 +687,7 @@ export function createRecorder({ outDir, written, failedIds, skipped, failures }
       const reason = `could not update ${MANIFEST}: ${redact(String(err.message).split('\n')[0])}`
       console.error(reason)
       failures.push(reason)
+      for (const id of written) if (!owned.has(id)) rmSync(join(outDir, `${id}.png`), { force: true })
     }
   }
 }
@@ -710,7 +752,7 @@ const isoDay = (offset) => {
 
 // The sample data, through the API as the owner. Dates are relative to today, so the labels that
 // depend on them (overdue, soon) read the same on every day. Returns the ids the screens use.
-async function seed({ api, workspace, agent, say }) {
+async function seed({ api, base, workspace, agent, say }) {
   const W = `/api/workspaces/${workspace}`
   const { spaces } = await api('GET', `${W}/spaces`)
   const mine = spaces.find((s) => s.kind === 'private') ?? spaces[0]
@@ -774,7 +816,29 @@ async function seed({ api, workspace, agent, say }) {
   for (const [title, column, extra] of cards.slice(0, 5))
     await api('POST', `${T}/boards/${teamBoard.id}/cards`, { title, column, ...extra })
 
-  await api('POST', `${W}/invites`, { email: 'bruno@example.com', role: 'member' })
+  // A second person, so that the owner's inbox has something in it (nothing the owner does tells
+  // the owner): Bruno takes up an invite, joins the team space, assigns the owner a card there and
+  // mentions them in a comment on it. A pending invite stays for the Members screen.
+  const invite = await api('POST', `${W}/invites`, { email: 'bruno@example.com', role: 'member' })
+  hide(invite.token)
+  hide(colleague.password)
+  const other = createClient(base)
+  const bruno = await other.call('POST', '/api/invites/accept', {
+    token: invite.token,
+    name: colleague.name,
+    password: colleague.password,
+  })
+  await api('POST', `${T}/members`, { user_id: bruno.user.id, role: 'editor' })
+  const ownerId = (await api('GET', '/api/me')).user.id
+  const assigned = await other.call('POST', `${T}/boards/${teamBoard.id}/cards`, {
+    title: INBOX_CARD,
+    column: 'todo',
+    assignee: { kind: 'user', id: ownerId },
+  })
+  await other.call('POST', `${T}/boards/${teamBoard.id}/cards/${assigned.id}/comments`, {
+    body: `@[${owner.name}](user:${ownerId}) can you take a look before Friday?`,
+  })
+  await api('POST', `${W}/invites`, { email: 'carla@example.com', role: 'member' })
   await api('POST', `${W}/tokens`, { name: 'laptop' })
 
   // Apps from the templates that need no board, installed and published; their widgets and pins
@@ -898,7 +962,7 @@ async function main() {
 
   // What a run leaves in the output folder: its own pictures in the manifest, the failed ones
   // removed, and after a run that failed nowhere the earlier run's others pruned.
-  const record = createRecorder({ outDir, written, failedIds, skipped, failures })
+  const record = createRecorder({ outDir, written, owned, failedIds, skipped, failures })
   cleanup.add(() => record(false))
 
   try {
@@ -1011,7 +1075,7 @@ async function main() {
     const needsSeed = plan.some((c) => c.screen.phase === 'seeded')
     if (needsSeed) {
       say('seeding the sample data')
-      const ids = await seed({ api, workspace, agent: server.agent, say })
+      const ids = await seed({ api, base: server.base, workspace, agent: server.agent, say })
       await runPhase('seeded', session, ids, workspace)
     }
     await runPhase('signed-out', undefined)
@@ -1021,7 +1085,7 @@ async function main() {
     if (log) console.error(`server log (last lines):\n${log.split('\n').slice(-15).join('\n')}`)
   } finally {
     // Whatever happened, the browser and the server stop and the data directory goes.
-    record(only.length === 0 && failures.length === 0)
+    record(only.length === 0 && runSucceeded({ failures, issues, strict: values.strict }))
     await cleanup.run()
     untrap()
   }
@@ -1047,7 +1111,7 @@ async function main() {
     say(`\n${failures.length} failed:`)
     for (const f of failures) say(`  ${f}`)
   }
-  return failures.length > 0 || (values.strict && issues.size > 0) ? 1 : 0
+  return runSucceeded({ failures, issues, strict: values.strict }) ? 0 : 1
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

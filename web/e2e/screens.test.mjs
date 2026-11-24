@@ -8,7 +8,17 @@
 
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,6 +39,7 @@ import {
   readManifest,
   recordCaptures,
   redact,
+  runSucceeded,
   SCREENS,
   SETTINGS_HEADINGS,
   SETTINGS_TABS,
@@ -55,6 +66,16 @@ if (mode === 'refuses') {
   console.error('ERROR taskto stopped err="must not be able to act as root"')
   process.exit(3)
 }
+if (mode === 'wrapper') {
+  // A launcher that starts the server without exec: the server ignores SIGTERM, the launcher does not.
+  const child = require('node:child_process').spawn(
+    process.execPath,
+    ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1e6)'],
+    { stdio: 'ignore' },
+  )
+  console.error('grandchild ' + child.pid)
+  process.on('SIGTERM', () => process.exit(0))
+}
 if (mode !== 'silent') console.error(line)
 setInterval(() => {}, 1e6)
 `
@@ -64,6 +85,7 @@ const fakes = {
   silent: ['silent', ''],
   refuses: ['refuses', ''],
   stubborn: ['stubborn', LISTENING],
+  wrapper: ['wrapper', LISTENING],
 }
 
 // Every server a test starts, stopped after it, whether or not the test got to stop it.
@@ -322,6 +344,19 @@ describe('launch', () => {
     const pid = server.proc.pid
     await server.stop()
     expect(alive(pid)).toBe(false)
+  })
+
+  it('stops what a launcher started too, not only the launcher', async () => {
+    const server = await start(fakes.wrapper, { killAfterMs: 50 })
+    const grandchild = Number(server.logs().match(/grandchild (\d+)/)[1])
+    try {
+      expect(alive(grandchild)).toBe(true)
+      await server.stop()
+      expect(alive(server.proc.pid)).toBe(false)
+      expect(alive(grandchild)).toBe(false)
+    } finally {
+      if (alive(grandchild)) process.kill(grandchild, 'SIGKILL')
+    }
   })
 
   it('hands the child to `track` as soon as it exists, before it is ready', async () => {
@@ -595,7 +630,9 @@ describe('the script’s own HTTP client', () => {
 
   it('turns off Playwright’s debug traces, which print every call’s arguments, and keeps the rest', () => {
     expect(withoutPlaywrightDebug('pw:channel')).toBeUndefined()
-    expect(withoutPlaywrightDebug('pw:api, other:thing pw:browser*')).toBe('other:thing')
+    expect(withoutPlaywrightDebug('pw:api, other:thing pw:browser*')).toBe('other:thing,-pw:*')
+    // A wildcard would take Playwright's namespaces in again: they are excluded by name.
+    expect(withoutPlaywrightDebug('*')).toBe('*,-pw:*')
     expect(withoutPlaywrightDebug(undefined)).toBeUndefined()
   })
 })
@@ -715,6 +752,54 @@ describe('the output folder', () => {
     } finally {
       errors.mockRestore()
     }
+  })
+
+  it('removes the pictures of a run whose manifest failed, so the next run can write them, and keeps the owned ones', () => {
+    const outDir = temp()
+    mkdirSync(join(outDir, MANIFEST), { recursive: true })
+    put(outDir, 'desktop-light/boards', 'new, not in any manifest')
+    put(outDir, 'desktop-light/home', 'replaced, but an earlier run wrote it')
+    const record = createRecorder({
+      outDir,
+      written: new Set(['desktop-light/boards', 'desktop-light/home']),
+      owned: new Set(['desktop-light/home']),
+      failedIds: [],
+      skipped: [],
+      failures: [],
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      record(false)
+    } finally {
+      errors.mockRestore()
+    }
+    expect(has(outDir, 'desktop-light/boards')).toBe(false)
+    expect(has(outDir, 'desktop-light/home')).toBe(true)
+  })
+
+  it('never writes through a symbolic link at the manifest’s path, and writes the manifest whole', () => {
+    const outDir = temp()
+    const target = join(temp(), 'precious.txt')
+    writeFileSync(target, 'not a manifest')
+    symlinkSync(target, join(outDir, MANIFEST))
+    put(outDir, 'desktop-light/boards')
+    expect(readManifest(outDir).size).toBe(0)
+    expect(() => recordCaptures({ outDir, written: new Set(['desktop-light/boards']) })).toThrow(/symbolic link/)
+    expect(readFileSync(target, 'utf8')).toBe('not a manifest')
+    expect(lstatSync(join(outDir, MANIFEST)).isSymbolicLink()).toBe(true)
+
+    // A regular manifest is replaced by rename: no temporary file is left.
+    const plain = temp()
+    recordCaptures({ outDir: plain, written: new Set(['desktop-light/boards']) })
+    expect(readdirSync(plain)).toEqual([MANIFEST])
+  })
+
+  it('counts a --strict run that the browser complained about as failed, for the exit status and the pruning', () => {
+    const issues = new Set(['desktop-light/home: console: boom'])
+    expect(runSucceeded({ failures: [], issues: new Set(), strict: true })).toBe(true)
+    expect(runSucceeded({ failures: [], issues, strict: false })).toBe(true)
+    expect(runSucceeded({ failures: [], issues, strict: true })).toBe(false)
+    expect(runSucceeded({ failures: ['x'], issues: new Set(), strict: false })).toBe(false)
   })
 
   it('records without a failure when the manifest can be written', () => {

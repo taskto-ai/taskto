@@ -183,7 +183,8 @@ A pull request that changes how the app looks attaches its captures from before 
 `make screens` makes them: it builds, starts the server on an empty temporary data directory and a
 free loopback port, seeds sample data through the HTTP API (invented names and `example.com`
 addresses only: documents, cards with labels and due dates, comments, a shared space with boards,
-an invite, an access token, apps installed from the templates and published, Home widgets and
+a second person who joins and assigns the owner a card and mentions them, so the inbox has
+notifications, a pending invite, an access token, apps installed from the templates and published, Home widgets and
 pins, conversations), and visits each screen in Playwright's Chromium (`web/e2e/screens.mjs`). It
 stops the server and removes the data directory when it ends, also when a step failed or it was
 interrupted (Ctrl-C, `SIGTERM` and `SIGHUP` stop and reap the server, close the browser, remove the
