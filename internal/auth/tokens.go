@@ -138,7 +138,7 @@ func (s *Service) TokenUser(ctx context.Context, raw string) (User, Token, error
 		return User{}, Token{}, err
 	}
 	if t.LastUsedAt == nil || *t.LastUsedAt <= stamp(now.Add(-tokenTouchEvery)) {
-		used, err := s.touchToken(ctx, u.ID, t, now)
+		used, err := s.touchToken(ctx, u.ID, t, hashToken(raw), now)
 		if err != nil {
 			// The request can go ahead: last_used_at is a hint for the user, not a control.
 			slog.WarnContext(ctx, "auth: recording an access token's use", "token_id", t.ID, "err", err)
@@ -152,14 +152,18 @@ func (s *Service) TokenUser(ctx context.Context, raw string) (User, Token, error
 // touchToken advances t's last_used_at and records the use, in one transaction, and only when the
 // advance happens: at most once a minute for a token, whoever asks first, so the log has a row
 // per minute of use and not one per request. It returns the new time, or "" when another
-// request advanced it first.
-func (s *Service) touchToken(ctx context.Context, user int64, t Token, now time.Time) (string, error) {
+// request advanced it first, or when the row is no longer the token that was authenticated: an
+// id can be reused after a revocation, so the update also matches the token's hash, user and
+// workspace.
+func (s *Service) touchToken(ctx context.Context, user int64, t Token, hash string, now time.Time) (string, error) {
 	used := stamp(now)
 	var advanced bool
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
 			UPDATE access_tokens SET last_used_at = ?
-			WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)`, used, t.ID, stamp(now.Add(-tokenTouchEvery)))
+			WHERE id = ? AND token_hash = ? AND user_id = ? AND workspace_id = ?
+			  AND (last_used_at IS NULL OR last_used_at <= ?)`,
+			used, t.ID, hash, user, t.WorkspaceID, stamp(now.Add(-tokenTouchEvery)))
 		if err != nil {
 			return err
 		}

@@ -11,7 +11,7 @@ ships.
 
 ## What an event holds
 
-Each event is one row of `audit_events` (`internal/db/migrations/0035_audit_events.sql`):
+Each event is one row of `audit_events` (`internal/db/migrations/0036_audit_events.sql`):
 
 | Column | What |
 |---|---|

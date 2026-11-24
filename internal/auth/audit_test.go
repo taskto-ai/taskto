@@ -473,6 +473,39 @@ func TestAuditTokenUseIsRecordedWhenLastUsedAdvances(t *testing.T) {
 	audittest.NoSecrets(t, e.db, map[string]string{"the token": raw})
 }
 
+// An id can be reused once a token is revoked, so a request that authenticated with the old
+// token must not touch, or record a use of, the token that took its id.
+func TestAuditTokenUseIgnoresAReusedID(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, ws := e.setup()
+	ownerID := e.userID(owner)
+	raw := e.accessToken(owner, ws)
+	var old Token
+	if err := e.db.QueryRow(`SELECT id, workspace_id, created_at FROM access_tokens`).Scan(&old.ID, &old.WorkspaceID, &old.CreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	// The token is revoked while a request that authenticated with it is in flight, and a
+	// new token takes its id.
+	if _, err := e.db.Exec(`DELETE FROM access_tokens WHERE id = ?`, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`INSERT INTO access_tokens (id, workspace_id, user_id, name, token_hash, created_at) VALUES (?, ?, ?, 'new', ?, ?)`,
+		old.ID, ws, ownerID, hashToken("ttp_the-token-that-took-the-id"), old.CreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	used, err := e.svc.touchToken(context.Background(), ownerID, old, hashToken(raw), e.svc.now())
+	if err != nil || used != "" {
+		t.Fatalf("touchToken = %q, %v; want nothing recorded", used, err)
+	}
+	var last *string
+	if err := e.db.QueryRow(`SELECT last_used_at FROM access_tokens WHERE id = ?`, old.ID).Scan(&last); err != nil {
+		t.Fatal(err)
+	}
+	if last != nil || len(e.events(audit.AccessTokenUsed)) != 0 {
+		t.Fatalf("the new token was touched: last_used_at = %v, events = %v", last, e.events(audit.AccessTokenUsed))
+	}
+}
+
 func TestAuditRemovingAMemberRecordsWhatGoesWithThem(t *testing.T) {
 	e := newEnv(t, Options{})
 	owner, ws := e.setup()
