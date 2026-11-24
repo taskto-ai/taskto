@@ -849,6 +849,7 @@
     "mail_auth_failed": "The SMTP server refused the sign-in. Check the user name and the password file.",
     "mail_rejected": "The SMTP server refused the message (reply {smtp_code}). The server's log has its answer.",
     "mail_failed": "The message couldn't be sent. The server's log says why.",
+    "mail_test_rate_limited": "You sent a test email a moment ago, or the server is busy sending others. Wait a little and try again.",
     "cli_workers_off": "CLI workers are off on this server.",
     "cli_workers_no_boundary": "CLI workers run in local mode on this server, with no boundary between users, so they work only while the server has a single user. An operator can run the CLI worker container instead.",
     "cli_not_installed": "{cli} isn't installed on this server.",

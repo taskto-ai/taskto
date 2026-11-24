@@ -222,6 +222,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `mail_auth_failed` | 502 | The SMTP server refused the sign-in. |
 | `mail_rejected` | 502 | The SMTP server refused the message, with its reply code `smtp_code`. |
 | `mail_failed` | 502 | The message couldn't be sent. |
+| `mail_test_rate_limited` | 429 | A test email was sent a moment ago by the caller, or the server's test sends are all busy; `Retry-After` says how long. |
 | `cli_workers_off` | 409 | CLI workers are off on this server (also a list's `reason_code`). |
 | `cli_workers_no_boundary` | 409 | CLI workers run in local mode, which allows a single user only (also a list's `reason_code`). |
 | `cli_not_installed` | 503 | The CLI, `cli`, isn't installed on this server. |
@@ -3083,7 +3084,13 @@ means it took it, not that it was delivered. Errors: `409 mail_not_configured`; 
 `egress_refused` (the egress policy refuses the SMTP server's address), `mail_connect_failed`,
 `mail_tls_failed`, `mail_auth_failed`, `mail_rejected` or `mail_failed`, which say at which step
 it failed. The SMTP server's own reply isn't in the answer, since it can name internal hosts and
-addresses; it is in the server's log.
+addresses, or repeat what was sent; the server's log has the step and the reply's number
+(`smtp_code`), and never the server's words.
+
+The route is limited, since each call sends a real message through the operator's relay: one
+test per person every 30 seconds, whichever workspace it is in (a failed one counts too), and
+three at once on the whole server. Past it, `429 mail_test_rate_limited` with a `Retry-After`
+header in seconds, and nothing is sent.
 
 ## Backups
 

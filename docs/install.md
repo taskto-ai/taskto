@@ -389,9 +389,9 @@ reset and invite links are still passed on by hand.
 
 | Setting | Flag / environment | |
 |---|---|---|
-| `smtp_host` | `-smtp-host`, `TASKTO_SMTP_HOST` | The SMTP server, a name or address without a port. Empty means no email. |
+| `smtp_host` | `-smtp-host`, `TASKTO_SMTP_HOST` | The SMTP server, a name or address without a port (an IPv6 address is written `2001:db8::25` or `[2001:db8::25]`). Empty means no email. |
 | `smtp_port` | `-smtp-port`, `TASKTO_SMTP_PORT` | `587` with `starttls`, `465` with `tls`, `25` with `none`, unless set. |
-| `smtp_security` | `-smtp-security`, `TASKTO_SMTP_SECURITY` | `starttls` (the default: the connection is upgraded to TLS before anything is sent, and a server that doesn't offer it is refused), `tls` (implicit TLS) or `none` (a relay on the same host or network you trust; a password is never sent this way except to `localhost`). The server's certificate is always checked. |
+| `smtp_security` | `-smtp-security`, `TASKTO_SMTP_SECURITY` | `starttls` (the default: the connection is upgraded to TLS before anything is sent, and a server that doesn't offer it is refused), `tls` (implicit TLS) or `none` (a relay on the same host or network you trust, **with no sign-in**: a user name and password are never sent without TLS, to any host, `localhost` too, so `none` with `smtp_username` stops the server at startup). The server's certificate is always checked. |
 | `smtp_from` | `-smtp-from`, `TASKTO_SMTP_FROM` | The sender of every message: `taskto@example.com` or `TaskTo <taskto@example.com>`. Required with `smtp_host`; use an address your SMTP server may send as. |
 | `smtp_username` | `-smtp-username`, `TASKTO_SMTP_USERNAME` | The account to sign in as (`PLAIN` or `LOGIN`). Leave out for a relay that lets the server send without signing in. |
 | `smtp_password_file` | `-smtp-password-file`, `TASKTO_SMTP_PASSWORD_FILE` | The absolute path of a file holding the password, which goes with `smtp_username`. |
@@ -425,7 +425,7 @@ services:
 # .env
 TASKTO_SMTP_HOST=smtp.example.com
 TASKTO_SMTP_FROM=TaskTo <taskto@example.com>
-TASKTO_SMTP_USERNAME=taskto@example.com
+TASKTO_SMTP_USERNAME=mailer-account
 TASKTO_SMTP_PASSWORD_FILE=/etc/taskto/smtp/password   # as the container sees it
 ```
 
@@ -433,10 +433,14 @@ Then `docker compose up -d taskto` (a change to `.env` needs the container recre
 log says `outgoing email is on`, with the host, port and security, never the account.
 
 **Check it:** an admin opens Settings → General → Email, which shows the server, the port, how it
-is secured and the sender, and presses **Send a test email**. The message goes to the admin's own
+is secured and the sender (the sender is shown to every workspace's admins; the user name and the
+password never are, so give the account a name that isn't also the sender's address if you
+would rather not show it), and presses **Send a test email**. The message goes to the admin's own
 address, in their language, and nowhere else. If it fails, the page says at which step (the
 connection, the TLS upgrade, the sign-in, or the server refusing the message); the server's own
-reply is in the log (`mail: the test email failed`), since it can name internal hosts.
+reply is not shown, since it can name internal hosts or repeat what was sent: the log
+(`mail: the test email failed`) has the step and the reply's number only, and never the server's
+words. The test is limited to one a person every 30 seconds, and three at once on the server.
 
 Messages are plain text with a simple HTML alternative, translated into the recipient's language
 (the one they picked, else their workspace's default, else English), with their texts in the

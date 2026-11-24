@@ -150,7 +150,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	if mailer.Configured() {
 		info := mailer.Info()
 		slog.Info("outgoing email is on", "host", info.Host, "port", info.Port, "security", info.Security,
-			"sign_in", info.PasswordSet, "egress", cfg.SMTPEgressPolicy().String())
+			"sign_in", info.SignsIn, "egress", cfg.SMTPEgressPolicy().String())
 	}
 	// One server per data directory, enforced before anything in it is opened. Deferred
 	// first, so the lock goes last, after the sidecar has stopped and the database closed.

@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"taskto.ai/taskto/internal/egress"
+	"taskto.ai/taskto/internal/mail"
 )
 
 // Config is the server's configuration.
@@ -233,10 +234,11 @@ var settings = []setting{
 		usage: "the SMTP server that sends the server's email (invitations, password resets, notifications); empty means no email",
 		get:   func(c Config) string { return c.SMTPHost },
 		set: func(c *Config, v string) error {
-			if strings.ContainsAny(v, " \t/:@") {
+			host, err := mail.NormalizeHost(v)
+			if err != nil {
 				return errors.New("want a host name or IP address, with the port in -smtp-port")
 			}
-			c.SMTPHost = v
+			c.SMTPHost = host
 			return nil
 		},
 	},
@@ -741,7 +743,7 @@ func Load(args []string, getenv func(string) string, output io.Writer) (Config, 
 
 // validateSMTP checks that the SMTP settings make sense together: a host needs a sender, a
 // username needs a password and the other way round, and a password is never sent over a
-// connection that isn't encrypted, except to a loopback relay.
+// connection that isn't encrypted: with -smtp-security none there is no sign-in, to any host.
 func validateSMTP(cfg Config) error {
 	if cfg.SMTPHost == "" {
 		if cfg.SMTPPort != 0 || cfg.SMTPSecurity != "" || cfg.SMTPFrom != "" || cfg.SMTPUsername != "" ||
@@ -756,19 +758,10 @@ func validateSMTP(cfg Config) error {
 	if (cfg.SMTPUsername == "") != (cfg.SMTPPasswordFile == "") {
 		return errors.New("config: -smtp-username and -smtp-password-file go together")
 	}
-	if cfg.SMTPUsername != "" && cfg.SMTPSecurityMode() == "none" && !isLoopbackHost(cfg.SMTPHost) {
-		return errors.New("config: -smtp-security none would send the password in clear text; use starttls or tls")
+	if cfg.SMTPUsername != "" && cfg.SMTPSecurityMode() == "none" {
+		return errors.New("config: -smtp-security none would send the password in clear text; use starttls or tls, or leave out -smtp-username")
 	}
 	return nil
-}
-
-// isLoopbackHost reports whether host is localhost or a loopback address.
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	a, err := netip.ParseAddr(strings.Trim(host, "[]"))
-	return err == nil && a.IsLoopback()
 }
 
 func readFile(cfg *Config, path string) error {

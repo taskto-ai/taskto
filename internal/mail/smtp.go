@@ -27,8 +27,8 @@ const (
 	STARTTLS Security = "starttls"
 	// TLS is implicit TLS from the first byte (port 465).
 	TLS Security = "tls"
-	// None is no encryption, for a trusted relay on the same host or network. A password is
-	// never sent this way except to a loopback address.
+	// None is no encryption, for a trusted relay on the same host or network that needs no
+	// sign-in: a username and password are never sent this way, to any address.
 	None Security = "none"
 )
 
@@ -68,10 +68,11 @@ type SMTP struct {
 
 // NewSMTP checks cfg and returns an SMTP sender. It connects to nothing.
 func NewSMTP(cfg SMTPConfig) (*SMTP, error) {
-	if _, ipErr := netip.ParseAddr(strings.Trim(cfg.Host, "[]")); cfg.Host == "" || strings.ContainsAny(cfg.Host, " \t/@") ||
-		(strings.Contains(cfg.Host, ":") && ipErr != nil) {
+	host, err := NormalizeHost(cfg.Host)
+	if err != nil || host == "" {
 		return nil, errors.New("mail: the SMTP host is a name or an address, without a port")
 	}
+	cfg.Host = host
 	switch cfg.Security {
 	case "":
 		cfg.Security = STARTTLS
@@ -92,8 +93,8 @@ func NewSMTP(cfg SMTPConfig) (*SMTP, error) {
 	if (cfg.Username == "") != (cfg.Password == "") {
 		return nil, errors.New("mail: the SMTP username and password go together")
 	}
-	if cfg.Username != "" && cfg.Security == None && !loopback(cfg.Host) {
-		return nil, errors.New("mail: a password isn't sent without encryption")
+	if cfg.Username != "" && cfg.Security == None {
+		return nil, errors.New("mail: a password isn't sent without encryption: use starttls or tls")
 	}
 	if cfg.Hello == "" {
 		cfg.Hello = "localhost"
@@ -107,7 +108,7 @@ func NewSMTP(cfg SMTPConfig) (*SMTP, error) {
 // Info is what admins are told of s: nothing secret.
 func (s *SMTP) Info() Info {
 	return Info{Host: s.cfg.Host, Port: s.cfg.Port, Security: string(s.cfg.Security), From: s.from.String(),
-		PasswordSet: s.cfg.Password != ""}
+		SignsIn: s.cfg.Password != ""}
 }
 
 // Send sends m through the server.
@@ -209,8 +210,8 @@ func (s *SMTP) tlsFor() *tls.Config {
 	return c
 }
 
-// authenticate signs in with the best mechanism the server offers that sends the password
-// only over TLS (or to a loopback address): PLAIN, else LOGIN.
+// authenticate signs in with the best mechanism the server offers: PLAIN, else LOGIN. Both
+// send the password only on a connection that is encrypted now, whatever the host's name.
 func (s *SMTP) authenticate(c *smtp.Client) error {
 	ok, offered := c.Extension("AUTH")
 	if !ok {
@@ -219,61 +220,110 @@ func (s *SMTP) authenticate(c *smtp.Client) error {
 	mechs := strings.Fields(strings.ToUpper(offered))
 	switch {
 	case slices.Contains(mechs, "PLAIN"):
-		return c.Auth(smtp.PlainAuth("", s.cfg.Username, s.cfg.Password, s.cfg.Host))
+		return c.Auth(&plainAuth{username: s.cfg.Username, password: s.cfg.Password})
 	case slices.Contains(mechs, "LOGIN"):
-		return c.Auth(&loginAuth{username: s.cfg.Username, password: s.cfg.Password, host: s.cfg.Host})
+		return c.Auth(&loginAuth{username: s.cfg.Username, password: s.cfg.Password})
 	}
 	return errors.New("the server offers no sign-in this server speaks (PLAIN or LOGIN)")
 }
 
+// errClearText is why a mechanism refuses to start: the connection isn't encrypted. net/smtp's
+// own PLAIN allows clear text to a host that is *named* localhost, which says nothing about
+// where the connection went; these never do.
+var errClearText = errors.New("refusing to send the password without encryption")
+
+// plainAuth is the PLAIN mechanism, which needs the connection to be encrypted.
+type plainAuth struct {
+	username, password string
+}
+
+func (a *plainAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	if !server.TLS {
+		return "", nil, errClearText
+	}
+	return "PLAIN", []byte("\x00" + a.username + "\x00" + a.password), nil
+}
+
+func (a *plainAuth) Next(_ []byte, more bool) ([]byte, error) {
+	if more {
+		return nil, errors.New("unexpected challenge from the server")
+	}
+	return nil, nil
+}
+
 // loginAuth is the LOGIN mechanism, which some servers (Microsoft 365 among them) offer in
-// place of PLAIN.
+// place of PLAIN. It needs the connection to be encrypted too. The server's prompts aren't
+// read ("Username:", "User Name" and others all occur): the first challenge is answered with
+// the user name, the second with the password, and a third is an error.
 type loginAuth struct {
-	username, password, host string
+	username, password string
+	answered           int
 }
 
 func (a *loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
-	if !server.TLS && !loopback(server.Name) {
-		return "", nil, errors.New("refusing to send the password without encryption")
+	if !server.TLS {
+		return "", nil, errClearText
 	}
-	if server.Name != a.host {
-		return "", nil, errors.New("wrong host name")
-	}
+	a.answered = 0
 	return "LOGIN", nil, nil
 }
 
-func (a *loginAuth) Next(challenge []byte, more bool) ([]byte, error) {
+func (a *loginAuth) Next(_ []byte, more bool) ([]byte, error) {
 	if !more {
 		return nil, nil
 	}
-	switch strings.ToLower(strings.TrimSpace(string(challenge))) {
-	case "username:":
+	a.answered++
+	switch a.answered {
+	case 1:
 		return []byte(a.username), nil
-	case "password:":
+	case 2:
 		return []byte(a.password), nil
 	}
 	return nil, errors.New("unexpected challenge from the server")
 }
 
-// failed classifies err as a *SendError at stage. A server's reply keeps its code and
-// moves a failure that isn't a reply's to stage; the context ending is a connect or send
-// failure of its own.
+// failed classifies err as a *SendError at stage. A server's reply keeps its code and nothing
+// else: its text can echo what was sent (a relay may repeat the sign-in in a rejection), so it
+// is dropped here, before the error is returned or logged. A failure that isn't a reply's is
+// moved to stage; the context ending is a connect or send failure of its own.
 func failed(ctx context.Context, stage Stage, err error) *SendError {
 	e := &SendError{Stage: stage, Err: err}
 	var tp *textproto.Error
 	if errors.As(err, &tp) {
 		e.Code = tp.Code
+		e.Err = fmt.Errorf("the server replied %d", tp.Code)
+		return e
 	}
-	if ctx.Err() != nil && e.Code == 0 {
+	if ctx.Err() != nil {
 		e.Err = fmt.Errorf("%w (%w)", err, ctx.Err())
 	}
 	return e
 }
 
-func loopback(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
+// NormalizeHost checks an SMTP server's host and returns it as the connection wants it: a
+// name or an address, without a port. An IPv6 address, bracketed or not, comes back without
+// brackets (they are added where the address and the port are joined). A zone ("%eth0") or
+// anything that makes a port, a user or a path is refused. "" is "".
+func NormalizeHost(host string) (string, error) {
+	if host == "" {
+		return "", nil
 	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	return ip != nil && ip.IsLoopback()
+	inner, bracketed := strings.CutPrefix(host, "[")
+	if bracketed {
+		var ok bool
+		if inner, ok = strings.CutSuffix(inner, "]"); !ok {
+			return "", errors.New("a bracket that isn't closed")
+		}
+	}
+	if bracketed || strings.Contains(host, ":") {
+		a, err := netip.ParseAddr(inner)
+		if err != nil || !a.Is6() || a.Zone() != "" {
+			return "", errors.New("a colon is only for an IPv6 address, and the port is its own setting")
+		}
+		return a.String(), nil
+	}
+	if strings.ContainsAny(host, " \t\r\n/@[]") {
+		return "", errors.New("not a host name or an address")
+	}
+	return host, nil
 }

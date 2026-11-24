@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"io/fs"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -175,6 +176,9 @@ func (c *Catalog) Render(locale, name string, params map[string]string) (Content
 	if len(missing) > 0 {
 		return Content{}, fmt.Errorf("mail: template %q needs the params %s", name, strings.Join(missing, ", "))
 	}
+	if actionURL != "" && !webURL(actionURL) {
+		return Content{}, fmt.Errorf("mail: template %q needs an absolute http or https action_url", name)
+	}
 
 	var text strings.Builder
 	text.WriteString(title + "\n\n")
@@ -206,6 +210,17 @@ func (c *Catalog) Render(locale, name string, params map[string]string) (Content
 	fmt.Fprintf(&h, `<p style="margin:24px 0 0;font-size:13px;color:#57534e">%s</p></div></body></html>`, html.EscapeString(footer))
 
 	return Content{Language: lang, Subject: subject, Text: text.String(), HTML: h.String()}, nil
+}
+
+// webURL reports whether s is an absolute http or https URL with a host: the only links a
+// message carries, so a value from elsewhere can't make one that runs code (javascript:) or
+// opens a local file.
+func webURL(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil || u.Hostname() == "" || strings.ContainsAny(s, " \t\r\n") {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
 }
 
 // rtl reports whether lang is written right to left, by its language: the web app decides

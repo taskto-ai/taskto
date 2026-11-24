@@ -3,11 +3,14 @@ package mail
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
 	netmail "net/mail"
 	"net/netip"
+	"net/smtp"
+	"net/textproto"
 	"strings"
 	"testing"
 	"time"
@@ -298,15 +301,23 @@ func TestNewSMTPChecksItsSettings(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if _, err := NewSMTP(SMTPConfig{Host: "127.0.0.1", From: "a@example.com", Security: None, Username: "u", Password: "p"}); err != nil {
-		t.Fatalf("a password to a loopback relay: %v", err)
+	// A sign-in is never sent in clear text, not even to localhost: the host's name says
+	// nothing about where the connection goes.
+	for _, host := range []string{"127.0.0.1", "localhost", "::1", "[::1]"} {
+		if _, err := NewSMTP(SMTPConfig{Host: host, From: "a@example.com", Security: None, Username: "u", Password: "p"}); err == nil {
+			t.Errorf("a password in clear text to %s: accepted", host)
+		}
+	}
+	// A relay that needs no sign-in works without encryption.
+	if _, err := NewSMTP(SMTPConfig{Host: "127.0.0.1", From: "a@example.com", Security: None}); err != nil {
+		t.Fatalf("a relay without sign-in: %v", err)
 	}
 }
 
 func TestInfoNeverHoldsThePassword(t *testing.T) {
 	m, _ := NewSMTP(SMTPConfig{Host: "smtp.example.com", From: "TaskTo <t@example.com>", Username: "user-x", Password: "pw-y"})
 	info := m.Info()
-	if !info.PasswordSet || info.Host != "smtp.example.com" || info.Port != 587 {
+	if !info.SignsIn || info.Host != "smtp.example.com" || info.Port != 587 {
 		t.Fatalf("%+v", info)
 	}
 }
@@ -319,5 +330,211 @@ func assertStage(t *testing.T, err error, stage Stage, code int) {
 	}
 	if se.Stage != stage || se.Code != code {
 		t.Fatalf("stage %s code %d (%v), want %s %d", se.Stage, se.Code, err, stage, code)
+	}
+}
+
+// A relay can repeat what it was sent in a rejection. The error keeps the stage and the reply's
+// code and nothing the relay said, so neither the API answer nor the log can leak it.
+func TestTheRelaysReplyTextIsNeverKept(t *testing.T) {
+	const secret = "s3cret-wrong"
+	check := func(t *testing.T, err error, stage Stage, code int, leaks ...string) {
+		t.Helper()
+		assertStage(t, err, stage, code)
+		var tp *textproto.Error
+		if errors.As(err, &tp) {
+			t.Fatalf("the error wraps the relay's reply: %v", tp)
+		}
+		for _, l := range append(leaks, "credentials refused", "no such user") {
+			if strings.Contains(err.Error(), l) || strings.Contains(fmtV(err), l) {
+				t.Fatalf("the error holds the relay's text %q: %v", l, err)
+			}
+		}
+		if !strings.Contains(err.Error(), "the server replied") {
+			t.Fatalf("the error doesn't say it was a reply: %v", err)
+		}
+	}
+	t.Run("sign-in echoed", func(t *testing.T) {
+		s := newFakeSMTP(t, false)
+		s.User, s.Pass, s.EchoAuth = "taskto-user", "right", true
+		err := s.sender(SMTPConfig{Username: "taskto-user", Password: secret}).Send(ctx(t), hello)
+		check(t, err, StageAuth, 535, secret, "taskto-user")
+	})
+	t.Run("login mechanism echoed", func(t *testing.T) {
+		s := newFakeSMTP(t, false)
+		s.User, s.Pass, s.EchoAuth, s.AuthMechs = "taskto-user", "right", true, "LOGIN"
+		err := s.sender(SMTPConfig{Username: "taskto-user", Password: secret}).Send(ctx(t), hello)
+		check(t, err, StageAuth, 535, secret, "taskto-user")
+	})
+	t.Run("recipient", func(t *testing.T) {
+		s := newFakeSMTP(t, false)
+		s.RejectRcpt = "550 5.1.1 no such user ana@example.com " + secret
+		check(t, s.sender(SMTPConfig{}).Send(ctx(t), hello), StageRejected, 550, secret, "ana@example.com")
+	})
+	t.Run("message", func(t *testing.T) {
+		s := newFakeSMTP(t, false)
+		s.RejectData = "554 5.7.1 no such user " + secret
+		check(t, s.sender(SMTPConfig{}).Send(ctx(t), hello), StageRejected, 554, secret)
+	})
+}
+
+func fmtV(err error) string {
+	return strings.Join([]string{err.Error(), strings.TrimSpace(errors.Unwrap(err).Error())}, " ")
+}
+
+// Sign-in needs an encrypted connection by the connection's own state, with PLAIN as with
+// LOGIN: net/smtp's PLAIN lets a host *named* localhost skip it, which says nothing about
+// where the connection went.
+func TestSignInMechanismsNeedAnEncryptedConnection(t *testing.T) {
+	for _, name := range []string{"localhost", "127.0.0.1", "smtp.example.com"} {
+		for mech, auth := range map[string]smtp.Auth{
+			"PLAIN": &plainAuth{username: "u", password: "p"},
+			"LOGIN": &loginAuth{username: "u", password: "p"},
+		} {
+			if _, _, err := auth.Start(&smtp.ServerInfo{Name: name, TLS: false, Auth: []string{mech}}); err == nil {
+				t.Errorf("%s to %s started without TLS", mech, name)
+			}
+			if _, _, err := auth.Start(&smtp.ServerInfo{Name: name, TLS: true, Auth: []string{mech}}); err != nil {
+				t.Errorf("%s to %s over TLS: %v", mech, name, err)
+			}
+		}
+	}
+	// PLAIN's initial response is the standard one.
+	_, resp, _ := (&plainAuth{username: "u", password: "p"}).Start(&smtp.ServerInfo{TLS: true})
+	if string(resp) != "\x00u\x00p" {
+		t.Fatalf("initial response = %q", resp)
+	}
+}
+
+// A sender with a quoted local part keeps its quotes in the envelope, and the Message-ID's
+// domain is what follows the last "@".
+func TestEnvelopeKeepsQuotedLocalParts(t *testing.T) {
+	s := newFakeSMTP(t, false)
+	m := hello
+	m.To = []string{`Ana <"ana smith"@example.com>`, `"a@b"@example.org`}
+	if err := s.sender(SMTPConfig{From: `"billing alerts"@example.com`}).Send(ctx(t), m); err != nil {
+		t.Fatal(err)
+	}
+	got := sentTo(t, s)
+	if got.From != `"billing alerts"@example.com` {
+		t.Fatalf("MAIL FROM = %q", got.From)
+	}
+	if len(got.To) != 2 || got.To[0] != `"ana smith"@example.com` || got.To[1] != `"a@b"@example.org` {
+		t.Fatalf("RCPT TO = %q", got.To)
+	}
+
+	// An address without a quote is as it was.
+	s = newFakeSMTP(t, false)
+	if err := s.sender(SMTPConfig{}).Send(ctx(t), hello); err != nil {
+		t.Fatal(err)
+	}
+	if got := sentTo(t, s); got.From != "taskto@example.com" || got.To[0] != "ana@example.com" {
+		t.Fatalf("envelope %q -> %q", got.From, got.To)
+	}
+}
+
+func TestMessageIDDomainIsAfterTheLastAt(t *testing.T) {
+	from, err := netmail.ParseAddress(`"odd@name"@example.com`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := build(from, hello, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := netmail.ReadMessage(strings.NewReader(string(env.data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id := msg.Header.Get("Message-ID"); !strings.HasSuffix(id, "@example.com>") || strings.Contains(id, "name") {
+		t.Fatalf("Message-ID = %q", id)
+	}
+}
+
+func TestNormalizeHost(t *testing.T) {
+	for in, want := range map[string]string{
+		"smtp.example.com":        "smtp.example.com",
+		"127.0.0.1":               "127.0.0.1",
+		"::1":                     "::1",
+		"[::1]":                   "::1",
+		"2001:db8::25":            "2001:db8::25",
+		"[2001:DB8:0:0:0:0:0:25]": "2001:db8::25",
+		"::ffff:192.0.2.1":        "::ffff:192.0.2.1",
+		"":                        "",
+	} {
+		if got, err := NormalizeHost(in); err != nil || got != want {
+			t.Errorf("NormalizeHost(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{
+		"smtp.example.com:587", "1.2.3.4:25", "[::1]:25", "[2001:db8::1]:587", "2001:db8::1:", "[::1", "::1]",
+		"fe80::1%eth0", "[fe80::1%eth0]", "[smtp.example.com]", "[1.2.3.4]", "user@host", "a b", "a/b", "host\n",
+	} {
+		if got, err := NormalizeHost(in); err == nil {
+			t.Errorf("NormalizeHost(%q) = %q; want an error", in, got)
+		}
+	}
+}
+
+func TestNewSMTPTakesIPv6Literals(t *testing.T) {
+	for _, host := range []string{"::1", "[::1]"} {
+		m, err := NewSMTP(SMTPConfig{Host: host, From: "a@example.com"})
+		if err != nil || m.cfg.Host != "::1" || m.Info().Host != "::1" {
+			t.Fatalf("%s: %+v, %v", host, m, err)
+		}
+	}
+	if _, err := NewSMTP(SMTPConfig{Host: "[::1]:587", From: "a@example.com"}); err == nil {
+		t.Fatal("an IPv6 host with a port was accepted")
+	}
+}
+
+// The LOGIN prompts' words are the server's: the first challenge asks for the user name and the
+// second for the password, whatever they say, and a third is refused.
+func TestLoginAnswersByStepNotByPromptText(t *testing.T) {
+	for _, prompts := range [][]string{{"Username:", "Password:"}, {"User Name", "Password"}, {"VXNlcm5hbWU6", "UGFzc3dvcmQ6"}, {"", ""}} {
+		a := &loginAuth{username: "user-x", password: "pw-y"}
+		if _, _, err := a.Start(&smtp.ServerInfo{TLS: true}); err != nil {
+			t.Fatal(err)
+		}
+		u, err := a.Next([]byte(prompts[0]), true)
+		if err != nil || string(u) != "user-x" {
+			t.Fatalf("%q: first answer %q, %v", prompts, u, err)
+		}
+		p, err := a.Next([]byte(prompts[1]), true)
+		if err != nil || string(p) != "pw-y" {
+			t.Fatalf("%q: second answer %q, %v", prompts, p, err)
+		}
+		if got, err := a.Next([]byte("Again:"), true); err == nil {
+			t.Fatalf("%q: a third challenge was answered with %q", prompts, got)
+		}
+	}
+}
+
+// A message with many recipients folds its To line: no line is over 998 characters (78 is the
+// advice), and every recipient is still there.
+func TestLongRecipientListsAreFolded(t *testing.T) {
+	from, _ := netmail.ParseAddress("taskto@example.com")
+	m := Message{Subject: "s", Text: "t"}
+	for i := range maxRecipients {
+		m.To = append(m.To, fmt.Sprintf("Recipient %02d with a rather long display name <person%02d@example.com>", i, i))
+	}
+	env, err := build(from, m, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(env.data), "\r\n") {
+		if len(line) > 998 {
+			t.Fatalf("a line of %d characters", len(line))
+		}
+	}
+	msg, err := netmail.ReadMessage(strings.NewReader(string(env.data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	to, err := msg.Header.AddressList("To")
+	if err != nil || len(to) != maxRecipients || to[49].Address != "person49@example.com" {
+		t.Fatalf("%d recipients, %v", len(to), err)
+	}
+	if len(env.to) != maxRecipients {
+		t.Fatalf("%d envelope recipients", len(env.to))
 	}
 }

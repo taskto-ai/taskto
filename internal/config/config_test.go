@@ -488,19 +488,23 @@ func TestSMTPValidation(t *testing.T) {
 		env  map[string]string
 		fail string
 	}{
-		"none":                  {nil, ""},
-		"a host and a sender":   {base, ""},
-		"a host without sender": {map[string]string{"TASKTO_SMTP_HOST": "smtp.example.com"}, "needs -smtp-from"},
-		"a sender without host": {map[string]string{"TASKTO_SMTP_FROM": "taskto@example.com"}, "need -smtp-host"},
-		"a bad sender":          {with(map[string]string{"TASKTO_SMTP_FROM": "not an address"}), "TASKTO_SMTP_FROM"},
-		"a host with a port":    {map[string]string{"TASKTO_SMTP_HOST": "smtp.example.com:587", "TASKTO_SMTP_FROM": "a@example.com"}, "-smtp-port"},
-		"a bad port":            {with(map[string]string{"TASKTO_SMTP_PORT": "70000"}), "port"},
-		"a bad security":        {with(map[string]string{"TASKTO_SMTP_SECURITY": "ssl"}), "starttls, tls or none"},
-		"a username alone":      {with(map[string]string{"TASKTO_SMTP_USERNAME": "u"}), "go together"},
-		"a relative password":   {with(map[string]string{"TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "smtp"}), "absolute"},
-		"credentials in clear":  {with(map[string]string{"TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "/p", "TASKTO_SMTP_SECURITY": "none"}), "clear text"},
-		"clear to a loopback":   {map[string]string{"TASKTO_SMTP_HOST": "127.0.0.1", "TASKTO_SMTP_FROM": "a@example.com", "TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "/p", "TASKTO_SMTP_SECURITY": "none"}, ""},
-		"a bad egress":          {with(map[string]string{"TASKTO_SMTP_EGRESS": "nonsense!"}), "egress"},
+		"none":                     {nil, ""},
+		"a host and a sender":      {base, ""},
+		"a host without sender":    {map[string]string{"TASKTO_SMTP_HOST": "smtp.example.com"}, "needs -smtp-from"},
+		"a sender without host":    {map[string]string{"TASKTO_SMTP_FROM": "taskto@example.com"}, "need -smtp-host"},
+		"a bad sender":             {with(map[string]string{"TASKTO_SMTP_FROM": "not an address"}), "TASKTO_SMTP_FROM"},
+		"a host with a port":       {map[string]string{"TASKTO_SMTP_HOST": "smtp.example.com:587", "TASKTO_SMTP_FROM": "a@example.com"}, "-smtp-port"},
+		"a bad port":               {with(map[string]string{"TASKTO_SMTP_PORT": "70000"}), "port"},
+		"a bad security":           {with(map[string]string{"TASKTO_SMTP_SECURITY": "ssl"}), "starttls, tls or none"},
+		"a username alone":         {with(map[string]string{"TASKTO_SMTP_USERNAME": "u"}), "go together"},
+		"a relative password":      {with(map[string]string{"TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "smtp"}), "absolute"},
+		"credentials in clear":     {with(map[string]string{"TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "/p", "TASKTO_SMTP_SECURITY": "none"}), "clear text"},
+		"clear to a loopback":      {map[string]string{"TASKTO_SMTP_HOST": "127.0.0.1", "TASKTO_SMTP_FROM": "a@example.com", "TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "/p", "TASKTO_SMTP_SECURITY": "none"}, "clear text"},
+		"clear to localhost":       {map[string]string{"TASKTO_SMTP_HOST": "localhost", "TASKTO_SMTP_FROM": "a@example.com", "TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "/p", "TASKTO_SMTP_SECURITY": "none"}, "clear text"},
+		"a relay without sign-in":  {map[string]string{"TASKTO_SMTP_HOST": "127.0.0.1", "TASKTO_SMTP_FROM": "a@example.com", "TASKTO_SMTP_SECURITY": "none"}, ""},
+		"an IPv6 host with a port": {map[string]string{"TASKTO_SMTP_HOST": "[::1]:587", "TASKTO_SMTP_FROM": "a@example.com"}, "-smtp-port"},
+		"an IPv6 zone":             {map[string]string{"TASKTO_SMTP_HOST": "fe80::1%eth0", "TASKTO_SMTP_FROM": "a@example.com"}, "-smtp-port"},
+		"a bad egress":             {with(map[string]string{"TASKTO_SMTP_EGRESS": "nonsense!"}), "egress"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(nil, env(tt.env), io.Discard)
@@ -511,5 +515,32 @@ func TestSMTPValidation(t *testing.T) {
 				t.Fatalf("Load error = %v, want one with %q", err, tt.fail)
 			}
 		})
+	}
+}
+
+// An IPv6 address is a host, bracketed or not, and is kept without brackets, as the connection
+// joins it to the port; a host with a port is still refused.
+func TestSMTPHostTakesIPv6Literals(t *testing.T) {
+	for in, want := range map[string]string{
+		"smtp.example.com": "smtp.example.com", "::1": "::1", "[::1]": "::1", "[2001:DB8::25]": "2001:db8::25", "2001:db8::25": "2001:db8::25",
+	} {
+		for how, args := range map[string][]string{
+			"flag": {"-smtp-host", in, "-smtp-from", "a@example.com"},
+			"env":  nil,
+		} {
+			e := env(map[string]string{})
+			if how == "env" {
+				e = env(map[string]string{"TASKTO_SMTP_HOST": in, "TASKTO_SMTP_FROM": "a@example.com"})
+			}
+			c, err := Load(args, e, io.Discard)
+			if err != nil || c.SMTPHost != want {
+				t.Errorf("%s %q: host %q, %v; want %q", how, in, c.SMTPHost, err, want)
+			}
+		}
+	}
+	for _, in := range []string{"[::1]:25", "::1]", "[::1", "1.2.3.4:25", "smtp.example.com:587"} {
+		if _, err := Load([]string{"-smtp-host", in, "-smtp-from", "a@example.com"}, env(nil), io.Discard); err == nil {
+			t.Errorf("%q accepted", in)
+		}
 	}
 }

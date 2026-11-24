@@ -26,6 +26,14 @@ type envelope struct {
 	data []byte
 }
 
+// envelopeAddress is a's address as MAIL FROM and RCPT TO take it: the bare address, with a
+// local part that needs quotes (`"billing alerts"@example.com`) quoted. Address.Address is the
+// unquoted text, which a server would read as something else.
+func envelopeAddress(a *netmail.Address) string {
+	bare := (&netmail.Address{Address: a.Address}).String()
+	return strings.TrimSuffix(strings.TrimPrefix(bare, "<"), ">")
+}
+
 // build checks m and renders it as an RFC 5322 message from from. Every header value is
 // built from parsed addresses and encoded words, so nothing in a subject or a name can
 // start a new header.
@@ -42,21 +50,23 @@ func build(from *netmail.Address, m Message, now time.Time) (*envelope, error) {
 	if strings.ContainsAny(m.Subject, "\r\n") {
 		return nil, errors.New("mail: the subject is one line")
 	}
-	env := &envelope{from: from.Address}
+	env := &envelope{from: envelopeAddress(from)}
 	var to []string
 	for _, raw := range m.To {
 		a, err := netmail.ParseAddress(raw)
 		if err != nil {
 			return nil, errors.New("mail: a recipient isn't an email address")
 		}
-		env.to = append(env.to, a.Address)
+		env.to = append(env.to, envelopeAddress(a))
 		to = append(to, a.String())
 	}
 
 	var buf bytes.Buffer
 	header := func(name, value string) { buf.WriteString(name + ": " + value + "\r\n") }
 	header("From", from.String())
-	header("To", strings.Join(to, ", "))
+	// A line is at most 998 characters, and 50 recipients with names make more: fold between
+	// addresses (a continuation line starts with a space).
+	header("To", strings.Join(to, ",\r\n "))
 	header("Subject", mime.QEncoding.Encode("utf-8", strings.TrimSpace(m.Subject)))
 	header("Date", now.Format(time.RFC1123Z))
 	id, err := messageID(from.Address)
@@ -117,8 +127,9 @@ func writeQP(w interface{ Write([]byte) (int, error) }, text string) error {
 // messageID makes a unique Message-ID in the sender's domain.
 func messageID(from string) (string, error) {
 	domain := "localhost"
-	if _, d, ok := strings.Cut(from, "@"); ok && d != "" {
-		domain = d
+	// The domain follows the last "@": a quoted local part may hold one.
+	if i := strings.LastIndex(from, "@"); i >= 0 && i < len(from)-1 {
+		domain = from[i+1:]
 	}
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

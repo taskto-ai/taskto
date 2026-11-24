@@ -81,8 +81,9 @@ type Info struct {
 	Security string `json:"security"`
 	// From is the sender of every message.
 	From string `json:"from"`
-	// PasswordSet is whether the server signs in to the SMTP server.
-	PasswordSet bool `json:"-"`
+	// SignsIn is whether the server signs in to the SMTP server (the name says nothing of the
+	// credentials, which Info never holds).
+	SignsIn bool `json:"-"`
 }
 
 // Service is the server's outgoing email: a Sender and what to tell admins about it. The

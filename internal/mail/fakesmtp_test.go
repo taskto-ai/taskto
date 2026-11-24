@@ -36,6 +36,7 @@ type fakeSMTP struct {
 	RejectRcpt string // a reply for RCPT, such as "550 5.1.1 no such user"
 	RejectData string // a reply after the message, such as "554 5.7.1 spam"
 	Hang       bool   // accept the connection and say nothing
+	EchoAuth   bool   // a refused sign-in's reply repeats the user name and the password, as a careless relay can
 
 	start    sync.Once // the server starts with its first sender: set the fields before
 	mu       sync.Mutex
@@ -210,18 +211,22 @@ func (s *fakeSMTP) handle(conn net.Conn) {
 				authed = user
 				reply("235 2.7.0 welcome")
 			} else {
-				reply("535 5.7.8 credentials refused")
+				if s.EchoAuth {
+					reply("535 5.7.8 credentials refused for %s with password %s", user, pass)
+				} else {
+					reply("535 5.7.8 credentials refused")
+				}
 			}
 		case "MAIL":
 			cur = received{TLS: isTLS, AuthedAs: authed}
-			cur.From = strings.Trim(strings.SplitN(strings.TrimPrefix(arg, "FROM:"), " ", 2)[0], "<>")
+			cur.From = pathOf(strings.TrimPrefix(arg, "FROM:"))
 			reply("250 2.1.0 ok")
 		case "RCPT":
 			if s.RejectRcpt != "" {
 				reply("%s", s.RejectRcpt)
 				continue
 			}
-			to := strings.Trim(strings.SplitN(strings.TrimPrefix(arg, "TO:"), " ", 2)[0], "<>")
+			to := pathOf(strings.TrimPrefix(arg, "TO:"))
 			cur.To = append(cur.To, to)
 			reply("250 2.1.5 ok")
 		case "DATA":
@@ -256,4 +261,14 @@ func (s *fakeSMTP) handle(conn net.Conn) {
 			reply("502 5.5.2 unknown")
 		}
 	}
+}
+
+// pathOf is the address in a MAIL FROM or RCPT TO argument: what is between the angle brackets
+// (a quoted local part may hold spaces and brackets).
+func pathOf(arg string) string {
+	i, j := strings.Index(arg, "<"), strings.LastIndex(arg, ">")
+	if i < 0 || j < i {
+		return arg
+	}
+	return arg[i+1 : j]
 }

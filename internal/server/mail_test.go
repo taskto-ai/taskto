@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/mail"
@@ -36,9 +38,15 @@ func (r *recorder) messages() []mail.Message {
 	return append([]mail.Message(nil), r.sent...)
 }
 
-var testInfo = mail.Info{Host: "smtp.example.com", Port: 587, Security: "starttls", From: `"TaskTo" <taskto@example.com>`, PasswordSet: true}
+var testInfo = mail.Info{Host: "smtp.example.com", Port: 587, Security: "starttls", From: `"TaskTo" <taskto@example.com>`, SignsIn: true}
 
 func mailStack(t *testing.T, rec *recorder) *stack {
+	t.Helper()
+	return newStackWith(t, func(o *Options) { o.Mail = mail.NewService(rec, testInfo); o.MailTestCooldown = -1 })
+}
+
+// limitedStack is a stack with the test route's real limits (the default cooldown).
+func limitedStack(t *testing.T, rec *recorder) *stack {
 	t.Helper()
 	return newStackWith(t, func(o *Options) { o.Mail = mail.NewService(rec, testInfo) })
 }
@@ -206,5 +214,128 @@ func TestMailTestFailuresAreCodesNotServerText(t *testing.T) {
 	_, body := s.browser(s.alice.cookie, http.MethodPost, mailPath(s.one, "/test"), map[string]any{})
 	if p, _ := body["params"].(map[string]any); p["smtp_code"] != float64(550) {
 		t.Fatalf("params = %v", body["params"])
+	}
+}
+
+// A person sends one test email per cooldown, in whichever workspace; the answer is a 429 with
+// a code the web app translates and how long to wait, and nothing more is sent.
+func TestMailTestHasACooldownPerPersonAcrossWorkspaces(t *testing.T) {
+	rec := &recorder{}
+	s := limitedStack(t, rec)
+	if code, body := s.browser(s.alice.cookie, http.MethodPost, mailPath(s.one, "/test"), map[string]any{}); code != http.StatusOK {
+		t.Fatalf("first: %d %v", code, body)
+	}
+	for _, ws := range []int64{s.one, s.two} {
+		r := s.request(http.MethodPost, mailPath(ws, "/test"), map[string]any{}, sameOrigin(s.alice.cookie))
+		if r.Code != http.StatusTooManyRequests || !strings.Contains(r.Body.String(), `"mail_test_rate_limited"`) {
+			t.Fatalf("workspace %d: %d %s", ws, r.Code, r.Body.String())
+		}
+		if secs, err := strconv.Atoi(r.Header().Get("Retry-After")); err != nil || secs < 1 || secs > 30 {
+			t.Fatalf("Retry-After = %q", r.Header().Get("Retry-After"))
+		}
+	}
+	if n := len(rec.messages()); n != 1 {
+		t.Fatalf("%d messages sent, want 1", n)
+	}
+}
+
+func TestMailTestCooldownIsForThePersonNotTheServer(t *testing.T) {
+	rec := &recorder{}
+	s := limitedStack(t, rec)
+	// carol is made an admin; she and alice each send their own.
+	s.exec(`UPDATE memberships SET role = 'admin' WHERE user_id = ? AND workspace_id = ?`, s.carol.id, s.one)
+	if code, body := s.browser(s.alice.cookie, http.MethodPost, mailPath(s.one, "/test"), map[string]any{}); code != http.StatusOK {
+		t.Fatalf("alice: %d %v", code, body)
+	}
+	if code, body := s.browser(s.alice.cookie, http.MethodPost, mailPath(s.one, "/test"), map[string]any{}); code != http.StatusTooManyRequests {
+		t.Fatalf("alice again: %d %v", code, body)
+	}
+	if code, body := s.browser(s.carol.cookie, http.MethodPost, mailPath(s.one, "/test"), map[string]any{}); code != http.StatusOK {
+		t.Fatalf("another person was limited by alice's send: %d %v", code, body)
+	}
+}
+
+// A failed send counts too: it is the relay that is being asked.
+func TestMailTestCooldownCountsFailuresToo(t *testing.T) {
+	rec := &recorder{err: &mail.SendError{Stage: mail.StageConnect, Err: errors.New("down")}}
+	s := limitedStack(t, rec)
+	if code, _ := s.browser(s.alice.cookie, http.MethodPost, mailPath(s.one, "/test"), map[string]any{}); code != http.StatusBadGateway {
+		t.Fatalf("first: %d", code)
+	}
+	if code, body := s.browser(s.alice.cookie, http.MethodPost, mailPath(s.one, "/test"), map[string]any{}); code != http.StatusTooManyRequests {
+		t.Fatalf("second: %d %v", code, body)
+	}
+}
+
+func TestMailTestGate(t *testing.T) {
+	now := time.Unix(1000, 0)
+	g := newMailTestGate(30*time.Second, func() time.Time { return now })
+
+	leave, ok, _ := g.enter(1)
+	if !ok {
+		t.Fatal("the first send was refused")
+	}
+	leave()
+	leave() // ending twice frees one slot, not two
+	if _, ok, wait := g.enter(1); ok || wait != 30*time.Second {
+		t.Fatalf("the same person at once: ok %v, wait %v", ok, wait)
+	}
+	now = now.Add(10 * time.Second)
+	if _, ok, wait := g.enter(1); ok || wait != 20*time.Second {
+		t.Fatalf("after 10s: ok %v, wait %v (a refusal must not restart the cooldown)", ok, wait)
+	}
+	now = now.Add(20 * time.Second)
+	if leave, ok, _ := g.enter(1); !ok {
+		t.Fatal("after the cooldown the send was refused")
+	} else {
+		leave()
+	}
+
+	// At most mailTestConcurrency at once, for different people; a refusal for being busy
+	// doesn't use the person's cooldown, and a finished send frees a place.
+	g = newMailTestGate(time.Second, func() time.Time { return now })
+	var leaves []func()
+	for u := int64(1); u <= mailTestConcurrency; u++ {
+		l, ok, _ := g.enter(u)
+		if !ok {
+			t.Fatalf("send %d refused", u)
+		}
+		leaves = append(leaves, l)
+	}
+	if _, ok, wait := g.enter(99); ok || wait <= 0 {
+		t.Fatalf("beyond the cap: ok %v, wait %v", ok, wait)
+	}
+	leaves[0]()
+	l, ok, _ := g.enter(99)
+	if !ok {
+		t.Fatal("a place was freed and 99 was still refused: the busy refusal used the cooldown")
+	}
+	l()
+
+	// A negative cooldown is none.
+	g = newMailTestGate(-1, func() time.Time { return now })
+	for range 5 {
+		l, ok, _ := g.enter(1)
+		if !ok {
+			t.Fatal("refused without a cooldown")
+		}
+		l()
+	}
+}
+
+// The ones that ended their cooldown don't pile up in memory.
+func TestMailTestGateForgetsEndedCooldowns(t *testing.T) {
+	now := time.Unix(0, 0)
+	g := newMailTestGate(time.Second, func() time.Time { return now })
+	for u := int64(0); u < 50; u++ {
+		l, ok, _ := g.enter(u)
+		if !ok {
+			t.Fatal("refused")
+		}
+		l()
+		now = now.Add(2 * time.Second)
+	}
+	if len(g.last) > 2 {
+		t.Fatalf("%d people remembered", len(g.last))
 	}
 }

@@ -282,6 +282,9 @@ const (
 	CodeMailAuthFailed    Code = "mail_auth_failed"
 	CodeMailRejected      Code = "mail_rejected" // params: smtp_code
 	CodeMailFailed        Code = "mail_failed"
+	// CodeMailTestRateLimited is a 429: the person sent a test email a moment ago, or the server's
+	// test sends are all busy. Retry-After says how long.
+	CodeMailTestRateLimited Code = "mail_test_rate_limited"
 
 	// CLI accounts, shared CLI accounts and automatic switching (internal/cliaccounts).
 

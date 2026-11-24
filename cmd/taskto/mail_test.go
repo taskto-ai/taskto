@@ -25,7 +25,7 @@ func TestLoadMailReadsThePasswordFromItsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	info := svc.Info()
-	if !svc.Configured() || info.Host != "smtp.example.com" || info.Port != 587 || info.Security != "starttls" || !info.PasswordSet {
+	if !svc.Configured() || info.Host != "smtp.example.com" || info.Port != 587 || info.Security != "starttls" || !info.SignsIn {
 		t.Fatalf("%+v", info)
 	}
 	// The variables that name the account are removed from the environment, set or not.

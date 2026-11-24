@@ -191,3 +191,24 @@ func TestServiceSendsATemplateInTheRecipientsLanguage(t *testing.T) {
 type senderFunc func(Message) error
 
 func (f senderFunc) Send(_ context.Context, m Message) error { return f(m) }
+
+// A link in a message is an absolute http or https URL: the value comes from elsewhere in the
+// server, and javascript:, data: or a path would make a message that attacks its reader.
+func TestRenderOnlyLinksToWebAddresses(t *testing.T) {
+	c := &Catalog{langs: map[string]file{"en": {Footer: "Footer", Messages: map[string]message{
+		"m": {Subject: "Hi", Title: "Title", Paragraphs: []string{"Hello"}, Action: "Open"},
+	}}}, order: []string{"en"}}
+	for _, ok := range []string{"https://taskto.example.com/reset?t=abc", "http://localhost:8080/x", "HTTPS://Example.com/"} {
+		if _, err := c.Render("en", "m", map[string]string{"action_url": ok}); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"javascript:alert(1)", "data:text/html,<b>x</b>", "file:///etc/passwd", "mailto:a@example.com", "ftp://example.com/",
+		"//example.com/x", "/reset?t=abc", "example.com/reset", "https:///path", "https://", "https://example.com/a b", "https://exa mple.com",
+	} {
+		if got, err := c.Render("en", "m", map[string]string{"action_url": bad}); err == nil {
+			t.Errorf("%q: rendered %q", bad, got.Text)
+		}
+	}
+}

@@ -102,7 +102,7 @@ the default.
 | `-provider-egress-personal` | `TASKTO_PROVIDER_EGRESS_PERSONAL` | `provider_egress_personal` | `any` | the same for members' personal provider accounts |
 | `-smtp-host` | `TASKTO_SMTP_HOST` | `smtp_host` | | the SMTP server that sends the server's email; empty means no email ([docs/install.md](docs/install.md#email)) |
 | `-smtp-port` | `TASKTO_SMTP_PORT` | `smtp_port` | `587`, `465` or `25` | the SMTP server's port, by `-smtp-security` |
-| `-smtp-security` | `TASKTO_SMTP_SECURITY` | `smtp_security` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (a trusted local relay) |
+| `-smtp-security` | `TASKTO_SMTP_SECURITY` | `smtp_security` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (a trusted local relay, with no sign-in) |
 | `-smtp-from` | `TASKTO_SMTP_FROM` | `smtp_from` | | the sender: an address, or `Name <address>`; needed with `-smtp-host` |
 | `-smtp-username` | `TASKTO_SMTP_USERNAME` | `smtp_username` | | the user to sign in as; goes with `-smtp-password-file` |
 | `-smtp-password-file` | `TASKTO_SMTP_PASSWORD_FILE` | `smtp_password_file` | | the file the SMTP password is read from at startup (an absolute path); the password is never a setting |
