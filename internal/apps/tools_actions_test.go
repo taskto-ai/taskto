@@ -234,3 +234,40 @@ func TestAgentActionsAreNotListedAcrossARevokedRole(t *testing.T) {
 		}
 	}
 }
+
+// A request that committed is answered with its receipt when the user's access has changed or the
+// app has gone offline since; one that did not commit is refused as it would be.
+func TestAgentActionRetryIsAnsweredAfterTheAppGoesOffline(t *testing.T) {
+	f := newFX(t)
+	agent := Actor{UserID: f.alice.id, Agent: true}
+	run := func(op, site string) (ActionResult, error) {
+		return f.e.s.RunAction(f.ctx(), agent, f.shared.ID, f.app.ID, ActionRun{
+			Action: "submit_inspection", ExpectedRelease: 1, Operation: op, Context: map[string]any{"site": site, "result": "pass"}})
+	}
+	if _, err := run("agent-op-0001", "East gate"); err != nil {
+		t.Fatal(err)
+	}
+	f.mustSetOffline(f.alice, f.shared, f.app)
+	rows := f.count(`SELECT count(*) FROM app_rows`)
+
+	receipt, err := run("agent-op-0001", "East gate")
+	if err != nil || !receipt.Replayed || receipt.Kind != ActionInsert || receipt.ID != 0 || receipt.Action != "submit_inspection" {
+		t.Fatalf("the retry = %+v, %v", receipt, err)
+	}
+	// Not another request under the key, nor one that was never made.
+	if _, err := run("agent-op-0001", "West gate"); !errors.Is(err, ErrOffline) {
+		t.Fatalf("another request under the key: %v", err)
+	}
+	if _, err := run("agent-op-0002", "East gate"); !errors.Is(err, ErrOffline) {
+		t.Fatalf("a request never made: %v", err)
+	}
+	// Nor one of a user who didn't make it, which the space doesn't show them.
+	other := Actor{UserID: f.mallory.id, Agent: true}
+	if _, err := f.e.s.RunAction(f.ctx(), other, f.shared.ID, f.app.ID, ActionRun{
+		Action: "submit_inspection", ExpectedRelease: 1, Operation: "agent-op-0001", Context: map[string]any{"site": "East gate", "result": "pass"}}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an outsider's: %v", err)
+	}
+	if n := f.count(`SELECT count(*) FROM app_rows`); n != rows {
+		t.Fatalf("%d rows written", n-rows)
+	}
+}

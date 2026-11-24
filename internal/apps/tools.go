@@ -276,6 +276,30 @@ type ActionResult struct {
 // action's effects are those of the web app. The agent sets no photo, signature or location (it
 // can't capture one): agentMaySet.
 func (s *Service) RunAction(ctx context.Context, a Actor, spaceID, appID int64, run ActionRun) (ActionResult, error) {
+	res, err := s.runAction(ctx, a, spaceID, appID, run)
+	// A request this user made before under the same operation and release, and that committed, is
+	// answered with its receipt even if their access has changed or the app has gone offline since
+	// (as the action route does, act): an agent that lost the answer must learn that it is in.
+	// The receipt names no record and carries no data; a request that did not commit is refused as
+	// it would be.
+	if err != nil && run.ExpectedRelease >= 1 &&
+		(errors.Is(err, ErrNotFound) || errors.Is(err, ErrReadOnly) || errors.Is(err, ErrForbidden) || errors.Is(err, ErrOffline)) {
+		action := ClientAction{
+			Name: run.Action, SurfaceID: SurfaceID(appID), Context: run.Context,
+			Release: &run.ExpectedRelease, ExpectedRevision: run.ExpectedRevision, Operation: run.Operation,
+		}
+		if s.committed(ctx, spaceID, a, appID, action) {
+			receipt := ActionResult{Action: run.Action, Replayed: true}
+			if rel, err := loadRelease(ctx, s.db, appID, run.ExpectedRelease, true); err == nil && rel.Definition != nil {
+				receipt.Kind = rel.Definition.Actions[run.Action].Kind
+			}
+			return receipt, nil
+		}
+	}
+	return res, err
+}
+
+func (s *Service) runAction(ctx context.Context, a Actor, spaceID, appID int64, run ActionRun) (ActionResult, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
 		return ActionResult{}, err
