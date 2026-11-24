@@ -107,7 +107,7 @@ prompts or sampling.
 
 ## What your agent can do
 
-The 21 tools of [agent-tools.md](agent-tools.md#the-tools): `list_spaces`, `list_members` (who a card can be assigned to), `search_docs`,
+The 27 tools of [agent-tools.md](agent-tools.md#the-tools): `list_spaces`, `list_members` (who a card can be assigned to), `search_docs`,
 `list_docs`, `read_doc`, `write_doc`, the board tools of
 [boards-agent-tools.md](boards-agent-tools.md), and the app tools: `app_catalog`,
 `list_apps`, `show_app`, `list_app_rows` (an app's data) and `query_app_rows` (filtered, sorted pages of it, with totals), `create_app` and `update_app`.

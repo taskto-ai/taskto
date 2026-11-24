@@ -154,6 +154,13 @@ func New(o Options) *Service {
 		"query_app_rows": s.queryAppRows,
 		"create_app":     s.createApp,
 		"update_app":     s.updateApp,
+
+		"list_app_templates":   s.listAppTemplates,
+		"install_app_template": s.installAppTemplate,
+		"duplicate_app":        s.duplicateApp,
+		"list_app_effects":     s.listAppEffects,
+		"list_app_releases":    s.listAppReleases,
+		"show_app_roles":       s.showAppRoles,
 	}
 	for _, name := range browserTools {
 		s.tools[name] = s.browserTool(name)
