@@ -144,14 +144,16 @@ func (x *Index) syncCards(ctx context.Context, in string) error {
 	if all {
 		in = "[]"
 	}
+	// Batches go by ID, each from where the last stopped, so a long backlog is scanned once.
+	var after int64
 	for {
 		rows, err := x.db.QueryContext(ctx, `SELECT c.id FROM cards c
 			JOIN boards b ON b.id = c.board_id
 			LEFT JOIN search_cards s ON s.card_id = c.id
-			WHERE (? OR b.space_id IN (SELECT value FROM json_each(?)))
+			WHERE c.id > ? AND (? OR b.space_id IN (SELECT value FROM json_each(?)))
 				AND (s.card_id IS NULL OR s.version != c.version OR s.text_format != ?
 					OR s.comment_id != coalesce((SELECT max(id) FROM card_comments WHERE card_id = c.id), 0))
-			ORDER BY c.id LIMIT ?`, all, in, textFormat, cardBatch)
+			ORDER BY c.id LIMIT ?`, after, all, in, textFormat, cardBatch)
 		if err != nil {
 			return err
 		}
@@ -174,6 +176,7 @@ func (x *Index) syncCards(ctx context.Context, in string) error {
 		if len(stale) == 0 {
 			return nil
 		}
+		after = stale[len(stale)-1]
 		if err := x.write(ctx, func(tx *sql.Tx) error {
 			for _, id := range stale {
 				if err := indexCard(ctx, tx, id); err != nil {

@@ -349,3 +349,23 @@ func TestCardsAreIndexedAtStartup(t *testing.T) {
 	}
 	wantTitles(t, "bob", w.searchCards(w.bob, nil, "capybara"), "Capybara census")
 }
+
+// A backlog longer than a batch is indexed in full, each batch from where the last stopped.
+func TestCardsBacklogLongerThanABatchIsIndexed(t *testing.T) {
+	w := newWorld(t)
+	board := w.teamBoard(w.alice, w.team, "Work")
+	total := 2*cardBatch + 17
+	for i := range total {
+		if _, err := w.e.idx.db.Exec(`INSERT INTO cards (board_id, title, col, rank) VALUES (?, ?, 'backlog', ?)`,
+			board, fmt.Sprintf("Wombat %d", i), fmt.Sprintf("r%05d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.e.idx.syncCards(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := w.e.idx.db.QueryRow(`SELECT count(*) FROM search_cards`).Scan(&n); err != nil || n != total {
+		t.Fatalf("indexed %d of %d cards: %v", n, total, err)
+	}
+}
