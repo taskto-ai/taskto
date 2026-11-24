@@ -246,4 +246,3 @@ func TestADocumentEffectOverTheQuotaFailsAsTheQuota(t *testing.T) {
 		t.Fatalf("an unmeasurable space failed the effect as the quota: %+v", v)
 	}
 }
-
