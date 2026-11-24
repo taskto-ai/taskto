@@ -155,7 +155,8 @@ test('dismissing puts it away, moves the keyboard to the page, and Customize bri
 
   fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Show the setup checklist' }))
-  await screen.findByRole('region', { name: 'Set up your workspace' })
+  // The button that had the keyboard is gone, so the checklist's own heading has it.
+  await waitFor(() => expect(document.activeElement?.id).toBe('tt-checklist-title'))
   // Shown again, so there is nothing to bring back.
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Show the setup checklist' })).toBeNull())
   expect(calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`)).toEqual([
@@ -235,4 +236,64 @@ test('a failed bringing back keeps its message, even while the list loads again'
   await waitFor(() => expect(calls.filter((c) => c.path === '/api/workspaces/1/checklist')).toHaveLength(4))
   expect(screen.getByRole('button', { name: 'Show the setup checklist' })).toBeTruthy()
   expect(screen.getByRole('alert')).toBe(alert)
+})
+
+test('skipping the last step moves the keyboard to the page and says the list is complete', async () => {
+  let skipped = false
+  const items = (): Checklist['items'] =>
+    list().items.map((i) => ({
+      ...i,
+      state: i.id === 'space' && skipped ? 'skipped' : i.optional || i.id === 'space' ? i.state : 'done',
+    }))
+  fakeFetch({
+    'GET /api/workspaces/1/home': { body: emptyHome },
+    'GET /api/workspaces/1/checklist': () => ({ body: list({ complete: skipped, items: items() }) }),
+    'PUT /api/workspaces/1/checklist/skipped/space': () => {
+      skipped = true
+      return { status: 204 }
+    },
+  })
+  render(<Shell me={admin} onLogout={() => {}} />)
+  const panel = await screen.findByRole('region', { name: 'Set up your workspace' })
+  const skip = within(panel).getByRole('button', { name: 'Skip: Create a shared space' })
+  skip.focus()
+  fireEvent.click(skip)
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Set up your workspace' })).toBeNull())
+  expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Home', level: 1 }))
+  expect(screen.getByText('The setup checklist is complete.').closest('[role="status"]')).toBeTruthy()
+})
+
+test('a dismissal that fails leaves the checklist, and the keyboard, where they were', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/home': { body: emptyHome },
+    'GET /api/workspaces/1/checklist': { body: list() },
+    'PUT /api/workspaces/1/checklist/dismissed': {
+      status: 403,
+      body: { code: 'admin_only', error: 'only a workspace admin can do this' },
+    },
+  })
+  render(<Shell me={admin} onLogout={() => {}} />)
+  const panel = await screen.findByRole('region', { name: 'Set up your workspace' })
+  const dismiss = within(panel).getByRole('button', { name: 'Dismiss checklist' })
+  dismiss.focus()
+  fireEvent.click(dismiss)
+  await within(panel).findByRole('alert')
+  expect(document.activeElement).toBe(dismiss)
+})
+
+test('a list that can’t be loaded again says so under what is shown', async () => {
+  let loads = 0
+  fakeFetch({
+    'GET /api/workspaces/1/home': { body: emptyHome },
+    'GET /api/workspaces/1/checklist': () =>
+      ++loads > 1 ? { status: 500, body: { code: 'internal', error: 'x' } } : { body: list() },
+    'PUT /api/workspaces/1/checklist/skipped/invite': { status: 204 },
+  })
+  render(<Shell me={admin} onLogout={() => {}} />)
+  const panel = await screen.findByRole('region', { name: 'Set up your workspace' })
+  fireEvent.click(within(panel).getByRole('button', { name: 'Skip: Invite your team' }))
+  const alert = await within(panel).findByRole('alert')
+  expect(alert.textContent).not.toBe('')
+  // What was shown is still there.
+  expect(within(panel).getAllByRole('listitem')).toHaveLength(6)
 })

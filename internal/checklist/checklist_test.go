@@ -118,7 +118,7 @@ func TestStepsAreDoneByWhatExists(t *testing.T) {
 	ctx := context.Background()
 
 	// The invite step: a second member, or an invite (accepted or not).
-	w.exec(`INSERT INTO invites (workspace_id, token_hash, email, role, expires_at) VALUES (?, 'h', 'b@example.com', 'member', '2999-01-01T00:00:00Z')`, w.ws)
+	w.exec(`INSERT INTO invites (workspace_id, token_hash, email, role, expires_at) VALUES (?, 'h', 'b@example.com', 'member', '2999-01-01T00:00:00.000Z')`, w.ws)
 	if got := w.view(svc, w.ws, w.ann)[Invite]; got != Done {
 		t.Fatalf("a pending invite: %s", got)
 	}
@@ -150,6 +150,7 @@ func TestStepsAreDoneByWhatExists(t *testing.T) {
 	}
 	w.exec(`UPDATE spaces SET archived_at = NULL WHERE id = ?`, space)
 
+	w.exec(`INSERT INTO space_members (space_id, user_id, role) VALUES (?, ?, 'editor')`, space, w.ann)
 	app := w.app(space)
 	if got := w.view(svc, w.ws, w.ann)[App]; got != Done {
 		t.Fatalf("app: %s", got)
@@ -197,6 +198,33 @@ func TestAnotherPersonsPrivateAppDoesNotCount(t *testing.T) {
 	w.app(private(w.ann))
 	if got := w.view(svc, w.ws, w.ann)[App]; got != Done {
 		t.Fatalf("the admin's own app: %s", got)
+	}
+}
+
+func TestASharedSpaceTheAdminIsNotInDoesNotCount(t *testing.T) {
+	w := newWorld(t)
+	svc := New(w.db, Options{})
+	space := w.sharedSpace(w.ws)
+	w.app(space)
+	if got := w.view(svc, w.ws, w.ann)[App]; got != Todo {
+		t.Fatalf("an app in a shared space the admin can't read: %s", got)
+	}
+	w.exec(`INSERT INTO space_members (space_id, user_id, role) VALUES (?, ?, 'viewer')`, space, w.ann)
+	if got := w.view(svc, w.ws, w.ann)[App]; got != Done {
+		t.Fatalf("an app in a shared space the admin is in: %s", got)
+	}
+}
+
+func TestOnlyAnOpenOrAcceptedInviteCounts(t *testing.T) {
+	w := newWorld(t)
+	svc := New(w.db, Options{})
+	w.exec(`INSERT INTO invites (workspace_id, token_hash, email, role, expires_at) VALUES (?, 'h', 'b@example.com', 'member', '2000-01-01T00:00:00.000Z')`, w.ws)
+	if got := w.view(svc, w.ws, w.ann)[Invite]; got != Todo {
+		t.Fatalf("an expired unused invite: %s", got)
+	}
+	w.exec(`UPDATE invites SET accepted_at = '1999-12-31T00:00:00.000Z'`)
+	if got := w.view(svc, w.ws, w.ann)[Invite]; got != Done {
+		t.Fatalf("an accepted invite: %s", got)
 	}
 }
 

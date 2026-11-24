@@ -6,7 +6,9 @@
 //
 // It is an extra on Home: while it loads, or if it can't be loaded, there is nothing to show and
 // the page is as it was without it. It is shown until every step that isn't optional is done or
-// skipped, or it is dismissed; the Customize panel brings a dismissed one back.
+// skipped, or it is dismissed; the Customize panel brings a dismissed one back. When it goes away
+// under the keyboard (dismissed, or its last step skipped) focus moves to the page's heading, and
+// finishing it is announced; when it comes back, focus moves to its own heading.
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { api, type Checklist, type ChecklistStep, errorText, ws } from '../api'
@@ -54,6 +56,10 @@ function subscribe(listener: () => void) {
   }
 }
 
+// Set by the control that brings the list back, taken by the list when it is shown again, so the
+// keyboard follows the button that is gone.
+let focusWhenShown = false
+
 function useChecklist(workspace: number) {
   const load = useLoad(() => api<Checklist>(checklistPath(workspace)), [workspace])
   const seen = useSyncExternalStore(subscribe, () => changes)
@@ -67,26 +73,71 @@ function useChecklist(workspace: number) {
   return load
 }
 
-export function SetupChecklist({ workspace, onDismissed }: { workspace: number; onDismissed?: () => void }) {
+export function SetupChecklist({
+  workspace,
+  onDismissed,
+  onCompleted,
+}: {
+  workspace: number
+  // Called once the checklist was put away, and once its last step was handled: the shown list is
+  // gone, and with it the keyboard's place.
+  onDismissed?: () => void
+  onCompleted?: () => void
+}) {
   const t = useT()
   const f = useFormat()
   const list = useChecklist(workspace)
   const [error, setError] = useState<string | null>(null)
+  const [finished, setFinished] = useState(false)
+  const title = useRef<HTMLHeadingElement>(null)
   const data = list.data
-  if (!data || data.dismissed || data.complete) return null
+  const shown = !!data && !data.dismissed && !data.complete
 
+  // A list that was shown and now has nothing left to do was finished by what the person did here.
+  const wasShown = useRef(false)
+  const completed = useRef(onCompleted)
+  completed.current = onCompleted
+  const complete = !!data && !data.dismissed && data.complete
+  useEffect(() => {
+    if (complete && wasShown.current) {
+      setFinished(true)
+      completed.current?.()
+    }
+    if (shown) setFinished(false)
+    wasShown.current = shown
+  }, [complete, shown])
+
+  // Brought back from Customize: the button that had the keyboard is gone.
+  useEffect(() => {
+    if (shown && focusWhenShown) {
+      focusWhenShown = false
+      title.current?.focus()
+    }
+  }, [shown])
+
+  // Always there, so that what it says when the list is finished is announced.
+  const status = (
+    <p role="status" className="tt-sr-only">
+      {finished ? t('checklist.completed') : ''}
+    </p>
+  )
+  if (!data || !shown) return status
+
+  // Whether the change was made; the list is loaded again either way.
   const run = async (change: () => Promise<unknown>) => {
+    let ok = false
     try {
       await change()
       setError(null)
+      ok = true
     } catch (e) {
       setError(errorText(e))
     }
     checklistChanged()
+    return ok
   }
   const dismiss = async () => {
-    await run(() => api(`${checklistPath(workspace)}/dismissed`, { method: 'PUT' }))
-    onDismissed?.()
+    if (await run(() => api(`${checklistPath(workspace)}/dismissed`, { method: 'PUT' }))) onDismissed?.()
   }
   const toggleSkip = (step: ChecklistStep, skipped: boolean) =>
     run(() => api(`${checklistPath(workspace)}/skipped/${step}`, { method: skipped ? 'DELETE' : 'PUT' }))
@@ -94,64 +145,72 @@ export function SetupChecklist({ workspace, onDismissed }: { workspace: number; 
   const required = data.items.filter((i) => !i.optional)
   const handled = required.filter((i) => i.state !== 'todo').length
   const first = data.items.find((i) => i.state === 'todo' && !i.optional)?.id
+  const problem = error ?? list.error
   return (
-    <section className="tt-checklist" aria-labelledby="tt-checklist-title">
-      <div className="tt-checklist-head">
-        <div>
-          <h2 id="tt-checklist-title">{t('checklist.title')}</h2>
-          <p className="tt-muted tt-small">{t('checklist.intro')}</p>
+    <>
+      <section className="tt-checklist" aria-labelledby="tt-checklist-title">
+        <div className="tt-checklist-head">
+          <div>
+            <h2 id="tt-checklist-title" ref={title} tabIndex={-1}>
+              {t('checklist.title')}
+            </h2>
+            <p className="tt-muted tt-small">{t('checklist.intro')}</p>
+          </div>
+          <button type="button" className="tt-button" onClick={dismiss}>
+            {t('checklist.dismiss')}
+          </button>
         </div>
-        <button type="button" className="tt-button" onClick={dismiss}>
-          {t('checklist.dismiss')}
-        </button>
-      </div>
-      <p role="status" className="tt-small">
-        {t('checklist.progress', { done: f.number(handled), total: f.number(required.length) })}
-      </p>
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
+        <p role="status" className="tt-small">
+          {t('checklist.progress', { done: f.number(handled), total: f.number(required.length) })}
         </p>
-      )}
-      <ol className="tt-checklist-steps">
-        {data.items.map((item) => {
-          const name = t(`checklist.steps.${item.id}.title` as Key)
-          return (
-            <li key={item.id} className="tt-checklist-step" data-state={item.state}>
-              <span className="tt-checklist-mark" data-state={item.state} aria-hidden="true" />
-              <div className="tt-checklist-text">
-                <h3>
-                  {name}
-                  <span className="tt-checklist-state" data-state={item.state}>
-                    {t(`checklist.state.${item.state}` as Key)}
-                  </span>
-                  {item.optional && <span className="tt-checklist-state">{t('checklist.optional')}</span>}
-                </h3>
-                <p className="tt-muted tt-small">{t(`checklist.steps.${item.id}.text` as Key)}</p>
-              </div>
-              {item.state !== 'done' && (
-                <div className="tt-checklist-actions">
-                  <Link
-                    className={item.id === first ? 'tt-button tt-primary' : 'tt-button'}
-                    href={stepPath(workspace, item.id)}
-                  >
-                    {t(`checklist.steps.${item.id}.action` as Key)}
-                  </Link>
-                  <button
-                    type="button"
-                    className="tt-button"
-                    aria-label={t(item.state === 'skipped' ? 'checklist.unskipNamed' : 'checklist.skipNamed', { name })}
-                    onClick={() => toggleSkip(item.id, item.state === 'skipped')}
-                  >
-                    {t(item.state === 'skipped' ? 'checklist.unskip' : 'checklist.skip')}
-                  </button>
+        {problem && (
+          <p role="alert" className="tt-error">
+            {problem}
+          </p>
+        )}
+        <ol className="tt-checklist-steps">
+          {data.items.map((item) => {
+            const name = t(`checklist.steps.${item.id}.title` as Key)
+            return (
+              <li key={item.id} className="tt-checklist-step" data-state={item.state}>
+                <span className="tt-checklist-mark" data-state={item.state} aria-hidden="true" />
+                <div className="tt-checklist-text">
+                  <h3>
+                    {name}
+                    <span className="tt-checklist-state" data-state={item.state}>
+                      {t(`checklist.state.${item.state}` as Key)}
+                    </span>
+                    {item.optional && <span className="tt-checklist-state">{t('checklist.optional')}</span>}
+                  </h3>
+                  <p className="tt-muted tt-small">{t(`checklist.steps.${item.id}.text` as Key)}</p>
                 </div>
-              )}
-            </li>
-          )
-        })}
-      </ol>
-    </section>
+                {item.state !== 'done' && (
+                  <div className="tt-checklist-actions">
+                    <Link
+                      className={item.id === first ? 'tt-button tt-primary' : 'tt-button'}
+                      href={stepPath(workspace, item.id)}
+                    >
+                      {t(`checklist.steps.${item.id}.action` as Key)}
+                    </Link>
+                    <button
+                      type="button"
+                      className="tt-button"
+                      aria-label={t(item.state === 'skipped' ? 'checklist.unskipNamed' : 'checklist.skipNamed', {
+                        name,
+                      })}
+                      onClick={() => toggleSkip(item.id, item.state === 'skipped')}
+                    >
+                      {t(item.state === 'skipped' ? 'checklist.unskip' : 'checklist.skip')}
+                    </button>
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ol>
+      </section>
+      {status}
+    </>
   )
 }
 
@@ -160,11 +219,13 @@ export function ChecklistRestore({ workspace }: { workspace: number }) {
   const t = useT()
   const list = useChecklist(workspace)
   const [error, setError] = useState<string | null>(null)
-  if (!list.data?.dismissed) return null
+  // Nothing to bring back once there is nothing left to do.
+  if (!list.data?.dismissed || list.data.complete) return null
   const show = async () => {
     try {
       await api(`${checklistPath(workspace)}/dismissed`, { method: 'DELETE' })
       setError(null)
+      focusWhenShown = true
     } catch (e) {
       setError(errorText(e))
     }

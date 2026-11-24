@@ -1823,6 +1823,7 @@
     "unskipNamed": "Undo skip: {name}",
     "dismissedNote": "You put the setup checklist away. The change applies to all of this workspace’s admins.",
     "show": "Show the setup checklist",
+    "completed": "The setup checklist is complete.",
     "steps": {
       "invite": {
         "title": "Invite your team",

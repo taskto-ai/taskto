@@ -3257,10 +3257,19 @@ html[data-keyboard="open"] .tt-composer {
   display: block;
   inline-size: 0.3rem;
   block-size: 0.6rem;
-  margin: 0.1rem auto 0;
+  margin-block: 0.1rem 0;
+  margin-inline: auto;
   border: solid var(--tt-on-accent);
-  border-width: 0 2px 2px 0;
+  border-block-start-width: 0;
+  border-inline-start-width: 0;
+  border-block-end-width: 2px;
+  border-inline-end-width: 2px;
   transform: rotate(45deg);
+}
+
+/* The check's long stroke is on the inline-end side, so it turns the other way when that is left. */
+.tt-checklist-mark[data-state="done"]:dir(rtl)::after {
+  transform: rotate(-45deg);
 }
 
 .tt-checklist-mark[data-state="skipped"] {

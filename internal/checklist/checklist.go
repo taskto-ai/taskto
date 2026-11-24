@@ -3,7 +3,7 @@
 // add an app, and, if the server's operator has set them up, email and backups), each marked
 // done by what exists, not by a tick.
 //
-// Only two things are stored (migration 0038): that the checklist was dismissed, and which
+// Only two things are stored (migration 0039): that the checklist was dismissed, and which
 // steps an admin skipped because they don't apply (a one-person workspace has no team to
 // invite). Both are the workspace's, shared by its admins. Everything else is read when the
 // checklist is asked for, so a step done by any route, the settings pages or the agent, is done
@@ -21,20 +21,24 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/auth"
 )
+
+// inviteTimeFormat is how invites store their expiry (internal/auth), so it compares as text.
+const inviteTimeFormat = "2006-01-02T15:04:05.000Z"
 
 // Item names a step.
 type Item string
 
 // The steps, in the order they are shown.
 const (
-	Invite   Item = "invite"   // someone besides the person who set up is a member, or was invited
+	Invite   Item = "invite"   // someone besides the person who set up is a member, or has an open or accepted invite
 	Provider Item = "provider" // the workspace has a model provider account
 	Space    Item = "space"    // the workspace has a shared space that isn't archived
-	App      Item = "app"      // an app exists in a shared space, or in the caller's own space
+	App      Item = "app"      // an app exists in a shared space the caller is in, or in the caller's own space
 	Email    Item = "email"    // the server can send email (the operator's SMTP settings)
 	Backups  Item = "backups"  // the server's scheduled backups have a status
 )
@@ -138,13 +142,16 @@ func (s *Service) done(ctx context.Context, workspaceID, userID int64) (map[Item
 	var invite, provider, space, app bool
 	err := s.db.QueryRowContext(ctx, `SELECT
 		(SELECT COUNT(*) FROM memberships WHERE workspace_id = ?1) > 1
-			OR EXISTS (SELECT 1 FROM invites WHERE workspace_id = ?1),
+			OR EXISTS (SELECT 1 FROM invites WHERE workspace_id = ?1
+				AND (accepted_at IS NOT NULL OR expires_at > ?3)),
 		EXISTS (SELECT 1 FROM provider_accounts WHERE workspace_id = ?1),
 		EXISTS (SELECT 1 FROM spaces WHERE workspace_id = ?1 AND kind = 'shared' AND archived_at IS NULL),
 		EXISTS (SELECT 1 FROM apps a JOIN spaces sp ON sp.id = a.space_id
 			WHERE sp.workspace_id = ?1 AND a.archived_at IS NULL AND sp.archived_at IS NULL
-			  AND (sp.kind = 'shared' OR sp.owner_id = ?2))`,
-		workspaceID, userID).Scan(&invite, &provider, &space, &app)
+			  AND (sp.owner_id = ?2
+			    OR (sp.kind = 'shared'
+			        AND EXISTS (SELECT 1 FROM space_members m WHERE m.space_id = sp.id AND m.user_id = ?2))))`,
+		workspaceID, userID, time.Now().UTC().Format(inviteTimeFormat)).Scan(&invite, &provider, &space, &app)
 	if err != nil {
 		return nil, err
 	}

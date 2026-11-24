@@ -80,8 +80,14 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
         </button>
       </div>
       <p className="tt-muted">{t('home.intro')}</p>
-      {/* Where the keyboard goes when the checklist, which had it, is put away. */}
-      {admin && <SetupChecklist workspace={workspace} onDismissed={() => heading.current?.focus()} />}
+      {/* Where the keyboard goes when the checklist, which had it, is put away or finished. */}
+      {admin && (
+        <SetupChecklist
+          workspace={workspace}
+          onDismissed={() => heading.current?.focus()}
+          onCompleted={() => heading.current?.focus()}
+        />
+      )}
       {(home.error || error) && (
         <p role="alert" className="tt-error">
           {error ?? home.error}

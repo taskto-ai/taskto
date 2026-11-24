@@ -1836,6 +1836,7 @@
     "unskipNamed": "Desfazer o pulo: {name}",
     "dismissedNote": "Você dispensou a lista de configuração. A mudança vale para todos os admins deste workspace.",
     "show": "Mostrar a lista de configuração",
+    "completed": "A lista de configuração está completa.",
     "steps": {
       "invite": {
         "title": "Convide sua equipe",

@@ -3216,10 +3216,10 @@ is whether the checklist was dismissed and which steps were skipped as not apply
 
 | `id` | Done when |
 |---|---|
-| `invite` | the workspace has a member besides one, or has an invite (pending or used) |
+| `invite` | the workspace has a member besides one, an invite that hasn't expired and wasn't used yet, or an accepted invite (an expired, unused invite doesn't count) |
 | `provider` | the workspace has a model provider account |
 | `space` | the workspace has a shared space that isn't archived |
-| `app` | an app that isn't archived is in a shared space of the workspace, or in the caller's own private space (other people's private apps are never counted) |
+| `app` | an app that isn't archived is in a shared space of the workspace that the caller is a member of, or in the caller's own private space (apps in spaces the caller can't read, and other people's private apps, are never counted) |
 | `email` | the server can send email ([Outgoing email](#outgoing-email)); optional |
 | `backups` | the server's scheduled backups have a status ([Backups](#backups)); optional |
 
