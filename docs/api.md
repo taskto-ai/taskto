@@ -1695,8 +1695,10 @@ kept in step with the card by the change that touches it:
   different date now (or none) is shown as a plain "something changed" mention of the card.
 - **Where.** Every way of changing a card keeps the jobs: the web app's routes, the agent's tools,
   the MCP tools and the apps' effects. Archiving a board or a shared space cancels its cards' jobs
-  and restoring it makes them again; a person who leaves a space or the workspace loses theirs; a
-  server that starts with dated cards that have none (made before reminders existed) schedules them.
+  and restoring it makes them again; a person who leaves a space or the workspace loses theirs, and
+  gets them back, for the cards still assigned to them and dated, when they are added to the space
+  again (a workspace's invite gives back those of their private space; a shared space's come with
+  adding them to it); a server that starts with dated cards that have none (made before reminders existed) schedules them.
   A date the scheduler can't hold (the overdue notice of `8999-12-31` would be in the year 9000)
   has no notice for that part, and the card is saved all the same.
 - **Access.** When a job runs, in the transaction that makes the notification, it checks that it is

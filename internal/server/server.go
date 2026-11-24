@@ -108,9 +108,12 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	boardSvc := boards.New(sqlDB, spaces)
 	if opts.Scheduler != nil {
 		// The handlers are the command's; this service only schedules, and follows spaces that are
-		// archived or brought back.
+		// archived or brought back, and people who are added to a space or a workspace (whose
+		// reminders the schema dropped when they left).
 		boardSvc.WithScheduler(opts.Scheduler)
 		spaces.OnArchiveChange(boardSvc.SyncSpace)
+		spaces.OnMemberAdded(boardSvc.SyncSpaceMember)
+		accounts.OnMemberAdded(boardSvc.SyncWorkspaceMember)
 	}
 	boardSvc.Routes(mux)
 	// The apps' routes list and retry their effects and check the targets they name; the
