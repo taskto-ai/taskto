@@ -104,7 +104,21 @@ type Service struct {
 	perAccount   *limiter
 
 	sso *sso
+
+	// memberHooks are told when a person is added to a workspace (OnMemberAdded).
+	memberHooks []MemberHook
 }
+
+// MemberHook is told, in the transaction that adds a person to a workspace, that it did, with the
+// workspace's and the person's IDs; the membership is already there. What the hook writes is
+// committed with the change, and an error it returns undoes it. It lets a feature that keeps timed
+// work for a person's access (package boards' reminders, which the schema drops when the access
+// ends) take it up again without this package knowing the feature. It is not called for a person
+// who already was a member.
+type MemberHook func(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) error
+
+// OnMemberAdded adds a hook. It is for startup, before the service serves requests.
+func (s *Service) OnMemberAdded(h MemberHook) { s.memberHooks = append(s.memberHooks, h) }
 
 // New returns the account system backed by sqlDB, which must be migrated.
 func New(sqlDB *sql.DB, opts Options) *Service {

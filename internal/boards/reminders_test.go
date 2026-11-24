@@ -1,13 +1,18 @@
 package boards
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/schedule"
 )
@@ -54,7 +59,15 @@ func newRemindWorld(t *testing.T) *remindWorld {
 	if err := w.e.s.EnableReminders(sch); err != nil {
 		t.Fatal(err)
 	}
+	followMembers(w.e)
 	return &remindWorld{world: w, clock: clock, sch: sch}
+}
+
+// followMembers has the reminders follow the people added to a space or a workspace, as the server
+// does when it has a scheduler.
+func followMembers(e *env) {
+	e.s.access.OnMemberAdded(e.s.SyncSpaceMember)
+	e.accounts.OnMemberAdded(e.s.SyncWorkspaceMember)
 }
 
 // card makes a card on the team board as the owner, with the given fields.
@@ -488,6 +501,7 @@ func newHookedWorld(t *testing.T, hook func(schedule.Job)) *remindWorld {
 		}
 	}
 	w.e.s.WithScheduler(sch)
+	followMembers(w.e)
 	return &remindWorld{world: w, clock: clock, sch: sch}
 }
 
@@ -582,6 +596,180 @@ func TestLeavingTheWorkspaceTakesTheRemindersAndTheirPlaceInTheBound(t *testing.
 	c := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
 	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", w.ws, w.alice.id), nil), http.StatusNoContent)
 	wantJobs(t, w, w.alice, c, time.Time{}, time.Time{})
+}
+
+func (w *remindWorld) removeFromSpace(u *user) {
+	w.e.t.Helper()
+	expect(w.e.t, w.owner.do(http.MethodDelete, spacePath(w.shared, fmt.Sprintf("/members/%d", u.id)), nil), http.StatusNoContent)
+}
+
+func TestAddingAPersonToASpaceBringsTheirRemindersBack(t *testing.T) {
+	w := newRemindWorld(t)
+	mine := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	bobs := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.bob.id)})
+	nobodys := w.newCard(map[string]any{"due": "2030-01-10"})
+	finished := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id), "column": "done"})
+	past := w.newCard(map[string]any{"due": "2030-01-01", "assignee": asUser(w.alice.id)})
+	wantJobs(t, w, w.alice, mine, at("2030-01-10", 8), at("2030-01-11", 8))
+	wantJobs(t, w, w.bob, bobs, at("2030-01-10", 8), at("2030-01-11", 8))
+
+	w.removeFromSpace(w.alice)
+	wantJobs(t, w, w.alice, mine, time.Time{}, time.Time{})
+	wantJobs(t, w, w.bob, bobs, at("2030-01-10", 8), at("2030-01-11", 8)) // not theirs to lose
+
+	var bobRevision int64
+	bobJob := func() {
+		t.Helper()
+		if err := w.e.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ? AND dedupe_key = ? AND kind = ?`,
+			w.bob.id, reminderKey(bobs.ID), KindDueReminder).Scan(&bobRevision); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bobJob()
+	before := bobRevision
+
+	w.e.addMember(w.owner, w.shared, w.alice, access.RoleEditor)
+	wantJobs(t, w, w.alice, mine, at("2030-01-10", 8), at("2030-01-11", 8))
+	// Only for the person who was added, and only for a card that can still have them.
+	wantJobs(t, w, w.alice, bobs, time.Time{}, time.Time{})
+	wantJobs(t, w, w.bob, bobs, at("2030-01-10", 8), at("2030-01-11", 8))
+	wantJobs(t, w, w.alice, nobodys, time.Time{}, time.Time{})
+	wantJobs(t, w, w.alice, finished, time.Time{}, time.Time{})
+	wantJobs(t, w, w.alice, past, time.Time{}, time.Time{})
+	if bobJob(); bobRevision != before {
+		t.Fatalf("another person's job was rewritten: revision %d, was %d", bobRevision, before)
+	}
+
+	w.run(at("2030-01-10", 8))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 1 {
+		t.Fatalf("notices after being added back = %d, want 1", n)
+	}
+	w.run(at("2030-01-11", 8))
+	if n := w.notices(w.alice, notifications.KindCardOverdue); n != 1 {
+		t.Fatalf("overdue notices after being added back = %d, want 1", n)
+	}
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 1 {
+		t.Fatalf("notices = %d, want still 1", n)
+	}
+}
+
+func TestAddingBackAPersonAfterTheirReminderWentOutDoesNotRemindThemTwice(t *testing.T) {
+	w := newRemindWorld(t)
+	c := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	w.run(at("2030-01-10", 8))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 1 {
+		t.Fatalf("notices = %d, want 1", n)
+	}
+	w.removeFromSpace(w.alice)
+	w.clock.set(at("2030-01-10", 9))
+	w.e.addMember(w.owner, w.shared, w.alice, access.RoleEditor)
+	// The morning is past, so no reminder is made again; the overdue notice is still ahead.
+	wantJobs(t, w, w.alice, c, time.Time{}, at("2030-01-11", 8))
+	w.run(at("2030-01-11", 8))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 1 {
+		t.Fatalf("notices = %d, want 1", n)
+	}
+	if n := w.notices(w.alice, notifications.KindCardOverdue); n != 1 {
+		t.Fatalf("overdue notices = %d, want 1", n)
+	}
+}
+
+func TestAddingAPersonBackKeepsTheJobsThatAreAsTheyShouldBe(t *testing.T) {
+	w := newRemindWorld(t)
+	c := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	// A job of theirs that is as it should be, as a restored backup or a second hook run leaves it.
+	var revision int64
+	if err := w.e.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ? AND dedupe_key = ? AND kind = ?`,
+		w.alice.id, reminderKey(c.ID), KindDueReminder).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := w.e.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := w.e.s.SyncSpaceMember(context.Background(), tx, w.shared.ID, w.alice.id); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.e.s.SyncWorkspaceMember(context.Background(), tx, w.ws, w.alice.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var after int64
+	if err := w.e.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ? AND dedupe_key = ? AND kind = ?`,
+		w.alice.id, reminderKey(c.ID), KindDueReminder).Scan(&after); err != nil || after != revision {
+		t.Fatalf("revision = %d, %v; want %d: a job that is as it should be stays", after, err, revision)
+	}
+}
+
+func TestAddingAPersonBackToTheWorkspaceBringsBackTheRemindersOfTheirPrivateSpace(t *testing.T) {
+	w := newRemindWorld(t)
+	mine := w.createCard(w.alice, w.alicePrivate, w.alicePersonal,
+		map[string]any{"title": "Mine", "due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	shared := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	wantJobs(t, w, w.alice, mine, at("2030-01-10", 8), at("2030-01-11", 8))
+
+	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", w.ws, w.alice.id), nil), http.StatusNoContent)
+	wantJobs(t, w, w.alice, mine, time.Time{}, time.Time{})
+	wantJobs(t, w, w.alice, shared, time.Time{}, time.Time{})
+
+	// Invited again, and accepts as the same person.
+	rec := w.owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", w.ws),
+		map[string]string{"email": "alice@example.com", "role": string(auth.RoleMember)})
+	expect(t, rec, http.StatusCreated)
+	token := decode[struct{ Token string }](t, rec).Token
+	expect(t, w.alice.do(http.MethodPost, "/api/invites/accept", map[string]string{"token": token}), http.StatusOK)
+
+	wantJobs(t, w, w.alice, mine, at("2030-01-10", 8), at("2030-01-11", 8))
+	// A shared space is theirs again only when they are added to it.
+	wantJobs(t, w, w.alice, shared, time.Time{}, time.Time{})
+	w.e.addMember(w.owner, w.shared, w.alice, access.RoleEditor)
+	wantJobs(t, w, w.alice, shared, at("2030-01-10", 8), at("2030-01-11", 8))
+
+	w.run(at("2030-01-10", 8))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 2 {
+		t.Fatalf("notices = %d, want 2: one for each card", n)
+	}
+}
+
+// A person with room for two more jobs gets the two of the first card back, and the walk over
+// their other cards stops at the second card, which the scheduler refused both kinds for: it
+// doesn't go on holding the membership change's write lock to be refused again for each.
+func TestAddingAPersonBackStopsWalkingOnceTheirBoundIsReached(t *testing.T) {
+	w := newRemindWorld(t)
+	var cards []Card
+	for range 5 {
+		cards = append(cards, w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)}))
+	}
+	w.removeFromSpace(w.alice)
+	// Everything else of theirs is waiting, but for room for one card's two jobs.
+	stamp := at("2030-02-01", 8).Format("2006-01-02T15:04:05.000Z")
+	if _, err := w.e.db.Exec(`
+		WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+		INSERT INTO scheduled_jobs (kind, user_id, workspace_id, dedupe_key, run_at, created_at, updated_at)
+		SELECT ?, ?, ?, 'filler:' || i, ?, ?, ? FROM n`,
+		schedule.MaxPerUser-2, string(KindDueReminder), w.alice.id, w.ws, stamp, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	w.e.addMember(w.owner, w.shared, w.alice, access.RoleEditor)
+
+	wantJobs(t, w, w.alice, cards[0], at("2030-01-10", 8), at("2030-01-11", 8))
+	for _, c := range cards[1:] {
+		wantJobs(t, w, w.alice, c, time.Time{}, time.Time{})
+	}
+	// One refusal for each kind, at the second card, and none after it.
+	if n := strings.Count(logs.String(), "a reminder was not scheduled"); n != 2 {
+		t.Fatalf("refusals = %d, want 2 (the walk went on after the bound):\n%s", n, logs.String())
+	}
 }
 
 func TestCardsDatedBeforeRemindersExistGetTheirsAtStart(t *testing.T) {
