@@ -18,6 +18,7 @@ import (
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/checklist"
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/dictation"
@@ -95,6 +96,13 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	accounts.Routes(mux)
 	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireAdmin(backupStatus(opts.BackupDataDir)))
 	mailRoutes(mux, accounts, opts.Mail, newMailTestGate(opts.MailTestCooldown, time.Now))
+	checklist.New(sqlDB, checklist.Options{
+		Email: opts.Mail.Configured,
+		Backups: func() (bool, error) {
+			_, ok, err := readBackupStatus(opts.BackupDataDir)
+			return ok, err
+		},
+	}).Routes(mux, accounts)
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
 	boardSvc := boards.New(sqlDB, spaces)
