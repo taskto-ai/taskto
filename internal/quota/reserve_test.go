@@ -21,15 +21,18 @@ type fakeFiles struct {
 	hook func(spaceID int64) error
 }
 
+// Usage reads the size first and runs the hook after, so a hook that holds the measurement
+// leaves it with the figure it read before.
 func (f *fakeFiles) Usage(sp access.Space) (int64, int64, error) {
+	f.mu.Lock()
+	n := f.size[sp.ID]
+	f.mu.Unlock()
 	if f.hook != nil {
 		if err := f.hook(sp.ID); err != nil {
 			return 0, 0, err
 		}
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.size[sp.ID], 0, nil
+	return n, 0, nil
 }
 
 func (f *fakeFiles) set(id, n int64) {
