@@ -1,5 +1,14 @@
 # Spike: Pi Durable as a sidecar for the Go server
 
+> **Since then:** the sidecar is `agent/src/` (about 2,000 lines, not 250), still pinned to
+> Pi Durable 1.5.2, and the Go server supervises it (`internal/agentrt/supervisor.go`). It
+> grew beyond the protocol below: a models catalog and a providers file the server
+> rewrites and has it reload, an egress policy for providers' endpoints, the agent's
+> language, the knowledge-base, board and app tools that call back into the server for the
+> conversation's owner, and the runner of CLI turns. Its integration tests are still
+> `make agent-it`. See [architecture.md](../architecture.md), [agent-tools.md](../agent-tools.md) and
+> [agent-providers.md](../agent-providers.md). The rest of this page is the spike as it was.
+
 **Verdict: go.** Pi Durable (`@earendil-works/pi-durable` 1.5.2) runs as a Node sidecar that only the Go server talks to.
 Everything the spike set out to check works, with no changes to Pi Durable and about 250 lines of sidecar.
 

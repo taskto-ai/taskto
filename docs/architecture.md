@@ -25,7 +25,7 @@ On top of these, users build **personal apps** by asking the agent.
 ## Components
 
 ```
-browser ── React app: OpenAgentUI chat + A2UI renderer
+browser ── React app: conversations chat + A2UI renderer
    │
    ▼
 Go server (single binary) ── auth, workspaces, permissions, knowledge base,
@@ -40,7 +40,7 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
                           own login
 ```
 
-- **Go server:** one binary with the frontend embedded. SQLite by default, Postgres later.
+- **Go server:** one binary with the frontend embedded. SQLite (no cgo); there is no other database.
 - **Agent runtime:** [Pi Durable](https://earendil.com/posts/pi-durable/) in a Node sidecar
   that only the Go server talks to, over a Unix socket. The server starts it, restarts it
   when it exits and stops it; it never outlives the server. Conversations survive crashes
