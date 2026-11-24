@@ -185,7 +185,9 @@ no extra process); it has no feature of its own.
   ([api.md](api.md#due-date-reminders)). Every path that changes a card shares the one scheduler
   (the command gives it to the HTTP server too), archiving a board or space follows through a hook
   (`access.Checker.OnArchiveChange`), the schema drops a person's jobs when they lose access to
-  the space or workspace (`0038`), and the server schedules the jobs of cards dated before
+  the space or workspace (`0038`) and hooks in the transaction that adds them back make them again
+  (`access.Checker.OnMemberAdded` for a shared space, `auth.Service.OnMemberAdded` for a workspace;
+  neither package knows the boards), and the server schedules the jobs of cards dated before
   reminders existed when it starts (`boards.Service.ReconcileReminders`).
 
 ## Agent safety

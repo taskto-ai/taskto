@@ -22,10 +22,11 @@ import (
 const fakePassword = "fake-test-password"
 
 type env struct {
-	t  *testing.T
-	db *sql.DB
-	s  *Service
-	h  http.Handler
+	t        *testing.T
+	db       *sql.DB
+	s        *Service
+	h        http.Handler
+	accounts *auth.Service
 }
 
 // newEnv serves the account, space and board routes, as the server does.
@@ -51,7 +52,7 @@ func newEnv(t *testing.T) *env {
 	accounts.Routes(mux)
 	spaces.Routes(mux)
 	s.Routes(mux)
-	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux)}
+	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux), accounts: accounts}
 }
 
 // user is a logged-in browser.

@@ -8,7 +8,8 @@ package boards
 // The jobs follow the card inside the transaction that changes it (syncReminders): a new or changed
 // due date or assignee schedules, moves or cancels them, and so does moving the card to done or
 // archiving it, archiving its board or its space (and bringing them back), and the assignee losing
-// access to the space (the schema drops their jobs with it). Nothing is scheduled for a card whose
+// access to the space (the schema drops their jobs with it) and getting it back (SyncSpaceMember and
+// SyncWorkspaceMember, hooks of the transaction that adds them). Nothing is scheduled for a card whose
 // assignee is the agent, for one nobody is assigned to, for an assignee who may not read the space,
 // or for a time that has already passed or that the scheduler can't hold (the card's date is
 // still saved: a reminder never fails a change to a card). A server that starts with cards that
@@ -223,6 +224,9 @@ func (s *Service) syncCards(ctx context.Context, tx *sql.Tx, query string, args 
 // dated is the cards of a board or space that can have reminders: assigned to a person, with a date.
 const dated = `c.assignee_id IS NOT NULL AND NOT c.assignee_agent AND c.due IS NOT NULL`
 
+// open is the cards a reminder can still be for: not finished or archived.
+const open = `c.col NOT IN ('done', 'archived')`
+
 // syncBoard follows a board that was archived or brought back: its cards' jobs go or come.
 func (s *Service) syncBoard(ctx context.Context, tx *sql.Tx, boardID int64) error {
 	return s.syncCards(ctx, tx, `SELECT c.id FROM cards c WHERE c.board_id = ? AND `+dated+` ORDER BY c.id`, boardID)
@@ -234,6 +238,25 @@ func (s *Service) SyncSpace(ctx context.Context, tx *sql.Tx, spaceID int64) erro
 	return s.syncCards(ctx, tx, `
 		SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id
 		WHERE b.space_id = ? AND `+dated+` ORDER BY c.id`, spaceID)
+}
+
+// SyncSpaceMember follows a person who was added to a shared space: the jobs of the cards in it that
+// are assigned to them come back (the schema dropped them when they left). It is the access
+// package's MemberHook (access.Checker.OnMemberAdded).
+func (s *Service) SyncSpaceMember(ctx context.Context, tx *sql.Tx, spaceID, userID int64) error {
+	return s.syncCards(ctx, tx, `
+		SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id
+		WHERE b.space_id = ? AND c.assignee_id = ? AND `+dated+` AND `+open+` ORDER BY c.id`, spaceID, userID)
+}
+
+// SyncWorkspaceMember follows a person who was added to a workspace: the jobs of the cards assigned
+// to them in the workspace's spaces come back. A shared space has none to find until they are added
+// to it again (SyncSpaceMember), since they are no member of it now; their private space has. It is
+// the auth package's MemberHook (auth.Service.OnMemberAdded).
+func (s *Service) SyncWorkspaceMember(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) error {
+	return s.syncCards(ctx, tx, `
+		SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id JOIN spaces sp ON sp.id = b.space_id
+		WHERE sp.workspace_id = ? AND c.assignee_id = ? AND `+dated+` AND `+open+` ORDER BY c.id`, workspaceID, userID)
 }
 
 // reconcileBatch is how many cards ReconcileReminders brings in line in one transaction.
