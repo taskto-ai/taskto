@@ -642,3 +642,25 @@ func TestCardSearchWithNothingIndexableSaysIncomplete(t *testing.T) {
 		t.Fatalf("an empty page of a search that could not catch up: %+v", got)
 	}
 }
+
+// A card removed from a page by the access check leaves the page short: the one read ahead
+// to know whether another page follows is not returned in its place, or the next page, which
+// starts after the limit, would repeat it.
+func TestCardSearchPageIsNotRefilledWithTheLookahead(t *testing.T) {
+	w := newWorld(t)
+	w.addCard(w.bob, w.private[w.bob], w.firstBoard(w.bob, w.private[w.bob]), "Quoll own", "")
+	board := w.teamBoard(w.alice, w.team, "Work")
+	w.addCard(w.alice, w.team, board, "Quoll team", "")
+
+	w.e.idx.afterCardSync = func() { w.removeMember(w.team, w.bob) }
+	page := func(offset int) *cardsReply {
+		rec := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/cards?q=quoll&limit=1&offset=%d", w.ws, offset), nil)
+		expect(t, rec, http.StatusOK)
+		r := decode[cardsReply](t, rec)
+		return &r
+	}
+	first := page(0)
+	if len(first.Results) != 0 || first.NextOffset == nil || *first.NextOffset != 1 {
+		t.Fatalf("first page = %+v", first)
+	}
+}

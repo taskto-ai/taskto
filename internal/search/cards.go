@@ -150,6 +150,13 @@ func (x *Index) SearchCards(ctx context.Context, checker *access.Checker, userID
 			names[r.SpaceID] = sp.Name
 		}
 	}
+	// One more than asked for was read, to know whether a page follows: that one is never
+	// returned, whatever the access check leaves of the others, or the next page would
+	// repeat it.
+	more := len(found) > q.Limit
+	if more {
+		found = found[:q.Limit]
+	}
 	for _, r := range found {
 		if names[r.SpaceID] == "" {
 			continue
@@ -157,15 +164,9 @@ func (x *Index) SearchCards(ctx context.Context, checker *access.Checker, userID
 		r.SpaceName = names[r.SpaceID]
 		res.Results = append(res.Results, r)
 	}
-	if len(found) > q.Limit {
-		// One more than asked for was read, to know whether a page follows.
-		if len(res.Results) > q.Limit {
-			res.Results = res.Results[:q.Limit]
-		}
-		// No next page past the deepest offset asked for: it would be refused.
-		if next := q.Offset + q.Limit; next <= MaxOffset {
-			res.NextOffset = &next
-		}
+	// No next page past the deepest offset asked for: it would be refused.
+	if next := q.Offset + q.Limit; more && next <= MaxOffset {
+		res.NextOffset = &next
 	}
 	return res, nil
 }
