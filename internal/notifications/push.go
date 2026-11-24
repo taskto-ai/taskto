@@ -50,17 +50,32 @@ const (
 // Start starts the worker and returns the function that stops it and waits for it. The data
 // directory has one server (package lockfile), so one worker. Sending and tidying each have a
 // goroutine and a schedule of their own: a backlog of pushes that never empties must not keep the
-// retention (or the sweep of subscriptions whose session ended) from running.
+// retention (or the sweep of subscriptions whose session ended) from running, and the email worker
+// has one too, so an SMTP server that is slow or down (each send may take its whole time limit)
+// can never delay a push.
 func (s *Service) Start(ctx context.Context) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	var running sync.WaitGroup
-	running.Add(2)
+	running.Add(3)
 	go func() {
 		defer running.Done()
 		poll := time.NewTicker(pushPoll)
 		defer poll.Stop()
 		for {
 			s.drain(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-poll.C:
+			}
+		}
+	}()
+	go func() {
+		defer running.Done()
+		poll := time.NewTicker(pushPoll)
+		defer poll.Stop()
+		for {
+			s.drainEmail(ctx)
 			select {
 			case <-ctx.Done():
 				return
@@ -319,6 +334,15 @@ func (s *Service) send(ctx context.Context, d delivery) (out outcome, status int
 func (s *Service) purge(ctx context.Context) error {
 	t := s.clock()
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM push_deliveries WHERE state <> 'pending' AND updated_at < ?`, s.stamp(t.Add(-keepDeliveries))); err != nil {
+		return err
+	}
+	// A mail still queued after that was never sendable (the server has no mail): it goes too.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM email_deliveries WHERE updated_at < ?`, s.stamp(t.Add(-keepDeliveries))); err != nil {
+		return err
+	}
+	// The ledger of mails is kept longer than any try or limit needs (an hour, a day), on its own
+	// clock: neither deleting notifications nor leaving a workspace shortens it.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM notification_email_ledger WHERE updated_at < ?`, s.stamp(t.Add(-keepDeliveries))); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `

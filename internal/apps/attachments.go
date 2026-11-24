@@ -23,6 +23,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/quota"
 )
 
 // Photo attachments.
@@ -161,6 +162,24 @@ func (s *Service) WithFiles(dataDir string) *Service {
 	return s
 }
 
+// WithQuota gives the service the storage quotas, which an upload is checked against when it
+// starts, at its declared size, and again when it is finalized, at what is kept.
+func (s *Service) WithQuota(q *quota.Service) *Service {
+	s.quota = q
+	return s
+}
+
+// reserveQuota refuses, with the quota's error, adding bytes that would take sp over a storage
+// quota, and otherwise holds them (with every other write's) until the returned reservation is
+// released, which the caller does once its transaction is over. q is the transaction the caller
+// holds, so the uploads it has reserved count. The reservation may be nil, and is safe to release.
+func (s *Service) reserveQuota(ctx context.Context, q quota.Queryer, sp access.Space, adding int64) (*quota.Reservation, error) {
+	if s.quota == nil {
+		return nil, nil
+	}
+	return s.quota.Reserve(ctx, q, sp, adding)
+}
+
 // lock serializes what is done to one attachment's bytes, in this process (which is the data
 // directory's only one). It returns what releases it.
 func (s *Service) lock(id string) func() {
@@ -284,6 +303,8 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 		slog.Warn("apps: removing expired attachments", "app", appID, "err", err)
 	}
 	var created Attachment
+	var held *quota.Reservation
+	defer func() { held.Release() }() // after the commit, which is when the rows count by themselves
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		if err := s.uploader(ctx, a, sp.ID, appID); err != nil {
 			return err
@@ -319,6 +340,11 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 		if total+in.Size > MaxAppFileBytes {
 			return &fullError{msg: fmt.Sprintf("an app's attachments take at most %d MiB", MaxAppFileBytes>>20),
 				code: apierr.CodeAppFilesFull, params: apierr.Params{"max_mib": MaxAppFileBytes >> 20}}
+		}
+		// The file's bytes, and the thumbnail finalizing will add, are the space's from now on.
+		var qerr error
+		if held, qerr = s.reserveQuota(ctx, tx, sp, in.Size); qerr != nil {
+			return qerr
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO app_attachments (id, app_id, space_id, field, kind, owner, status, size) VALUES (?, ?, ?, ?, ?, ?, 'uploading', ?)`,
@@ -514,9 +540,25 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		return Attachment{}, err
 	}
 	var ready Attachment
+	var held *quota.Reservation
+	defer func() { held.Release() }() // after the commit, which is when the rows count by themselves
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		if err := s.uploader(ctx, a, sp.ID, appID); err != nil {
 			return err
+		}
+		// What is kept is the picture and its thumbnail, which can be more than the size the upload
+		// declared (and reserved): the difference must fit, checked here, where the size it is
+		// measured against is the one the row has and the row changes with it.
+		var declared int64
+		if err := tx.QueryRowContext(ctx, `SELECT size FROM app_attachments WHERE id = ? AND app_id = ? AND owner = ? AND status = 'uploading'`,
+			id, appID, a.UserID).Scan(&declared); errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound // removed meanwhile
+		} else if err != nil {
+			return err
+		}
+		var qerr error
+		if held, qerr = s.reserveQuota(ctx, tx, sp, int64(len(stored))+int64(len(thumb))-declared); qerr != nil {
+			return qerr
 		}
 		// From here the size is the stored one (the length it is served with), no longer the declared one.
 		res, err := tx.ExecContext(ctx, `
@@ -534,6 +576,14 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		ready = u.Attachment
 		return err
 	})
+	if errors.Is(err, quota.ErrExceeded) || errors.Is(err, quota.ErrUnavailable) {
+		// Still an upload: what was written for it is written again when it finalizes.
+		for _, ext := range []string{".thumb", ""} {
+			if rerr := root.Remove(fileName(appID, id, ext)); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+				slog.Warn("apps: removing a picture the quota refused", "app", appID, "err", rerr)
+			}
+		}
+	}
 	if err != nil {
 		return ready, err
 	}
@@ -908,7 +958,9 @@ type Described struct {
 
 // describeAttachments replaces, in items (as Items made them), the ids an attachment field holds
 // by what each is: id, type, size and pixels. It never reads a file.
-func (s *Service) describeAttachments(ctx context.Context, appID int64, def Definition, items []map[string]any) error {
+//
+// spaceID, if not 0, says the app must be in that space: the same statement checks it.
+func describeAttachments(ctx context.Context, q queryer, spaceID, appID int64, def Definition, items []map[string]any) error {
 	var names []string
 	single := map[string]bool{}
 	for _, f := range def.Collection.Fields {
@@ -921,8 +973,9 @@ func (s *Service) describeAttachments(ctx context.Context, appID int64, def Defi
 		return nil
 	}
 	known := map[string]Described{}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, content_type, size, coalesce(width, 0), coalesce(height, 0) FROM app_attachments
-		WHERE app_id = ? AND status = 'ready'`, appID)
+	rows, err := q.QueryContext(ctx, `SELECT t.id, t.content_type, t.size, coalesce(t.width, 0), coalesce(t.height, 0) FROM app_attachments t
+		WHERE t.app_id = ? AND t.status = 'ready'
+		AND (? = 0 OR EXISTS (SELECT 1 FROM apps a WHERE a.id = t.app_id AND a.space_id = ?))`, appID, spaceID, spaceID)
 	if err != nil {
 		return err
 	}
@@ -992,6 +1045,9 @@ func (s *Service) relocate(ctx context.Context, appID int64) error {
 	}
 	var errs []error
 	for _, m := range moves {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		errs = append(errs, s.relocateOne(ctx, appID, m.id, m.space, home))
 	}
 	return errors.Join(errs...)
@@ -1079,6 +1135,9 @@ func (s *Service) Sweep(ctx context.Context, cutoff time.Time) error {
 	}
 	errs = append(errs, rows.Err(), rows.Close())
 	for _, id := range moved {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		errs = append(errs, s.relocate(ctx, id))
 	}
 	errs = append(errs, s.sweepStrays(ctx, cutoff))
@@ -1110,6 +1169,9 @@ func (s *Service) sweep(ctx context.Context, cutoff time.Time, appID int64) erro
 	}
 	var errs []error
 	for _, o := range olds {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		errs = append(errs, s.deleteExpired(ctx, o.id, o.app, cutoff))
 	}
 	return errors.Join(errs...)
@@ -1157,6 +1219,9 @@ func (s *Service) sweepStrays(ctx context.Context, cutoff time.Time) error {
 	}
 	var errs []error
 	for _, sp := range spaces {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		if _, err := os.Stat(filepath.Join(access.SpaceDir(s.dataDir, sp.workspace, sp.id), filesDir)); err != nil {
 			continue // no files, or nothing to see
 		}
@@ -1177,6 +1242,9 @@ func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.T
 	}
 	var errs []error
 	for _, dir := range apps {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		appID, err := strconv.ParseInt(dir.Name(), 10, 64)
 		if err != nil || !dir.IsDir() {
 			continue
@@ -1199,6 +1267,9 @@ func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.T
 			continue
 		}
 		for _, f := range files {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(errs, err)...)
+			}
 			id, suffix, _ := strings.Cut(f.Name(), ".")
 			// The received file of an attachment that is ready is a leftover of finalizing (it was
 			// stopped, or couldn't remove it): it holds the original, metadata included, and nothing

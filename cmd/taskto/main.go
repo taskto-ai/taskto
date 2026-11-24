@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/privcheck"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/quota"
 	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/server"
@@ -201,6 +203,10 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		MaxFileSize: cfg.KBMaxFileSize, LargeFileSize: cfg.KBLargeFileSize,
 		MaxRepoSize: cfg.KBMaxRepoSize, MaxUnversionedSize: cfg.KBMaxUnversionedSize,
 	})
+	// The storage quotas: writes that would take a space or its workspace over one are refused.
+	// With none set (the default) the check does nothing.
+	quotas := quota.New(sqlDB, quota.Limits{Workspace: cfg.StorageQuotaWorkspace, User: cfg.StorageQuotaUser}, kb)
+	kb.SetQuota(quotas.KnowledgeCheck())
 	// A history rewrite a stopped process left half done is finished before anyone reads.
 	if err := kb.Recover(ctx); err != nil {
 		return err
@@ -248,8 +254,12 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	defer stopEffects()
 	// The notification inbox, and Web Push for the people who turn it on: the VAPID key pair is made
 	// on first start, and the worker that sends pushes runs until the server stops.
-	notifier, err := notifications.New(ctx, sqlDB, spaces, notifications.Options{Key: key, Contact: cfg.PushContact})
+	notifier, err := notifications.New(ctx, sqlDB, spaces, notifications.Options{Key: key, Contact: cfg.PushContact, Mail: mailer, PublicURL: cfg.PublicURL})
 	if err != nil {
+		return err
+	}
+	// The daily email summary is a scheduled job: its handler is registered before the scheduler starts.
+	if err := notifier.AttachScheduler(scheduler); err != nil {
 		return err
 	}
 	stopPush := notifier.Start(ctx)
@@ -325,6 +335,15 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		slog.Info("first-run setup: no account exists yet; set up the owner with this setup token (POST /api/setup, see docs/install.md); it works until setup is done or the server restarts",
 			"setup_token", authOpts.SetupToken)
 	}
+	// The apps' attachment sweep runs in the background, for as long as the server runs. It is
+	// waited for before the database closes: left running, its query's connection closes after
+	// run returned, and that last close checkpoints the database while its file is still locked.
+	maintainCtx, stopMaintain := context.WithCancel(ctx)
+	var maintaining sync.WaitGroup
+	defer func() {
+		stopMaintain()
+		maintaining.Wait()
+	}()
 	handler, err := server.New(version, sqlDB, server.Options{
 		Notifications: notifier,
 		Scheduler:     scheduler,
@@ -339,10 +358,17 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		Browser:       browsers,
 		Dictation:     dictationService(cfg, sqlDB, key, kb),
 		BackupDataDir: cfg.DataDir,
+		Quota:         quotas,
 		Mail:          mailer,
 		// Photos that were never saved in a record are removed after a day, and an app moved to
 		// another space has its files follow it (internal/apps/attachments.go).
-		AppsReady: func(svc *apps.Service) { go svc.Maintain(ctx, 10*time.Minute) },
+		AppsReady: func(svc *apps.Service) {
+			maintaining.Add(1)
+			go func() {
+				defer maintaining.Done()
+				svc.Maintain(maintainCtx, 10*time.Minute)
+			}()
+		},
 	})
 	if err != nil {
 		return err

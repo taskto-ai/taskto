@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/apierr"
 )
 
 // The agent's app tools (docs/agent-tools.md) call the methods below. The agent works for
@@ -84,6 +85,66 @@ func (s *Service) UpdateApp(ctx context.Context, a Actor, spaceID, appID int64, 
 	return forAgent(ap), err
 }
 
+// InstallTemplate makes a new app in a space from a bundled template: a draft, nothing
+// published, with the template's own role assignments for the user as installTemplate makes
+// them (a template's roles are its definition's, not something the agent chooses).
+func (s *Service) InstallTemplate(ctx context.Context, a Actor, spaceID int64, templateID string, in Install) (App, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return App{}, err
+	}
+	ap, err := s.installTemplate(ctx, sp, a, templateID, in)
+	var status *statusError
+	if errors.As(err, &status) && status.code == apierr.CodeAppTemplateNotFound {
+		return App{}, invalidf("no template %q: list_app_templates has the ids", templateID)
+	}
+	return forAgent(ap), err
+}
+
+// DuplicateApp copies an app's definition into a new draft app, in the same space or another
+// of the workspace the user may write: no rows, roles, releases or secrets come with it.
+func (s *Service) DuplicateApp(ctx context.Context, a Actor, spaceID, appID int64, req DuplicateRequest) (App, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return App{}, err
+	}
+	ap, err := s.duplicateApp(ctx, sp, a, appID, req)
+	if errors.Is(err, ErrNotPublished) {
+		return App{}, invalidf(`the app has no live release to copy: ask for source "draft" if you may design it`)
+	}
+	return forAgent(ap), err
+}
+
+// ListEffects lists an app's effects (newest first) that the user may see: those of records
+// they may read, with the same view of what they made or why they failed as the API gives.
+func (s *Service) ListEffects(ctx context.Context, a Actor, spaceID, appID int64, f EffectFilter) (EffectList, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return EffectList{}, err
+	}
+	return s.listEffects(ctx, sp, a, appID, f)
+}
+
+// ListReleases lists an app's releases, newest first, without their definitions, for a user
+// who may design or publish the app.
+func (s *Service) ListReleases(ctx context.Context, a Actor, spaceID, appID int64) ([]Release, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return s.listReleases(ctx, sp, a, appID)
+}
+
+// AppRoles returns an app's role assignments, for a user who manages them. The agent only
+// reads them: there is no method here that sets them.
+func (s *Service) AppRoles(ctx context.Context, a Actor, spaceID, appID int64) ([]access.AppGrant, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return s.appRoles(ctx, sp, a, appID)
+}
+
 // ListRows returns an app's rows as the app shows them (Items), oldest first: those the
 // user may read, which for a user who reads only their own records are theirs. An offline
 // app's rows are kept, so they are read too. An attachment field holds each attachment's
@@ -97,11 +158,14 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 	if err != nil {
 		return nil, err
 	}
+	// The app, its rows and its attachments' metadata are each read asking for the app to be in
+	// this space, and once more at the end: an app that moves meanwhile is ErrNotFound, never its
+	// rows read from the space it left.
 	ap, err := app(ctx, s.db, sp.ID, appID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := loadRows(ctx, s.db, ap.ID, readable(acc, a.UserID))
+	rows, err := loadSpaceRows(ctx, s.db, sp.ID, ap.ID, readable(acc, a.UserID))
 	if err != nil {
 		return nil, err
 	}
@@ -113,8 +177,15 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 	items := Items(def, rows)
 	// An attachment field shows what each attachment is (id, type, size, pixels), never its bytes:
 	// the agent has no tool to read or to upload a file.
-	if err := s.describeAttachments(ctx, ap.ID, def, items); err != nil {
+	if err := describeAttachments(ctx, s.db, sp.ID, ap.ID, def, items); err != nil {
 		return nil, err
+	}
+	var still int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM apps WHERE id = ? AND space_id = ?`, ap.ID, sp.ID).Scan(&still); err != nil {
+		return nil, err
+	}
+	if still == 0 {
+		return nil, ErrNotFound
 	}
 	return items, nil
 }

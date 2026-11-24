@@ -112,7 +112,7 @@ test('signed in, an invite joins the new workspace and goes to it', async () => 
   expect(window.location.pathname).toBe('/w/9/conversations')
 })
 
-test('members see the providers, CLI accounts, search, dictation, notifications, password, tokens and about tabs only; admins see them all', async () => {
+test('members see the providers, CLI accounts, search, dictation, notifications, password, data, tokens, storage and about tabs only; admins see them all', async () => {
   fakeFetch({
     'GET /api/workspaces/1/providers': { body: { providers: [] } },
     'GET /api/me/providers': { body: { providers: [] } },
@@ -130,7 +130,9 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     'Dictation',
     'Notifications',
     'Password',
+    'Your data',
     'Access tokens',
+    'Storage',
     'About',
   ])
   // A member asking for an admin's tab gets the first of theirs.
@@ -157,7 +159,9 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     ['Dictation', '/w/1/settings/dictation'],
     ['Notifications', '/w/1/settings/notifications'],
     ['Password', '/w/1/settings/password'],
+    ['Your data', '/w/1/settings/data'],
     ['Access tokens', '/w/1/settings/tokens'],
+    ['Storage', '/w/1/settings/storage'],
     ['About', '/w/1/settings/about'],
   ])
   await screen.findByText('alice@example.com')
@@ -1045,4 +1049,53 @@ test('a second token waits until the first new one is done with', async () => {
   expect((screen.getByLabelText('New token') as HTMLInputElement).value).toBe('ttp_fake-7')
   fireEvent.click(screen.getByRole('button', { name: 'Done' }))
   expect((screen.getByRole('button', { name: 'Create token' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+// location.assign can't be spied on in jsdom (navigating isn't implemented): the page's location is
+// replaced for the test, keeping what the page reads.
+function stubAssign() {
+  const assign = vi.fn()
+  const { pathname, search, hash, href } = window.location
+  vi.stubGlobal('location', { pathname, search, hash, href, assign })
+  return assign
+}
+
+test('the data tab starts the export with a POST, then goes to the address it answers', async () => {
+  const assign = stubAssign()
+  const calls = fakeFetch({
+    'POST /api/workspaces/1/export': { body: { download: '/api/workspaces/1/export/abc', expires_in: 60 } },
+  })
+  render(<SettingsPage me={me} workspace={member} tab="data" />)
+  expect(screen.getByRole('heading', { name: 'Export your data' })).toBeTruthy()
+  // Looking at the tab starts nothing: the export begins when the button is pressed.
+  expect(calls).toEqual([])
+  expect(screen.queryByRole('link', { name: 'Download my data' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Download my data' }))
+  await waitFor(() => expect(assign).toHaveBeenCalledWith('/api/workspaces/1/export/abc'))
+  expect(calls).toEqual([{ method: 'POST', path: '/api/workspaces/1/export', body: {} }])
+})
+
+test('the data tab says plainly that a moved app and the conversations come with what is in them', () => {
+  fakeFetch({})
+  render(<SettingsPage me={me} workspace={member} tab="data" />)
+  expect(screen.getByText(/moved there from a shared space/)).toBeTruthy()
+  expect(screen.getByText(/teammates' too/)).toBeTruthy()
+  expect(screen.getByText(/shared documents the agent read for you/)).toBeTruthy()
+})
+
+test.each([
+  [409, 'export_running', 'You already have an export running. Wait for it to finish.'],
+  [
+    429,
+    'export_rate_limited',
+    'You exported a few times in the last hour, or the server is busy making other exports. Wait a little and try again.',
+  ],
+])('the data tab shows the translated reason for a %i', async (status, code, text) => {
+  const assign = stubAssign()
+  fakeFetch({ 'POST /api/workspaces/1/export': { status, body: { error: 'x', code } } })
+  render(<SettingsPage me={me} workspace={member} tab="data" />)
+  fireEvent.click(screen.getByRole('button', { name: 'Download my data' }))
+  expect((await screen.findByRole('alert')).textContent).toBe(text)
+  expect(assign).not.toHaveBeenCalled()
+  expect((screen.getByRole('button', { name: 'Download my data' }) as HTMLButtonElement).disabled).toBe(false)
 })

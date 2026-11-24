@@ -65,6 +65,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `space_updated` | rename, archive, offline downloads | the space's | space | `fields`, and the new `archived` and `offline_downloads` |
 | `space_member_added`, `space_member_role_changed`, `space_member_removed` | a shared space's members | the space's | space | `user_id`, `role`, or `from` and `to`; `cascade` on one removed with the member |
 | `provider_account_created`, `_updated`, `_removed` | a model provider account, a workspace's or a person's own | the account's, none for a personal one | account | `kind`, `scope`, `base_host`, `fields`, `api_key_set` or `api_key_changed` |
+| `data_export_started` | a member starts the export of their own data (`GET …/export`); one event per export that began, none for one turned away by its limits | the workspace | user (the exporter) | |
 | `shared_cli_account_created`, `_updated`, `_removed` | a workspace's shared CLI account | the workspace | account | `cli`, `base_host`, `fields`, `api_key_set` or `api_key_changed`; `members_signed_out` on removal |
 | `cli_account_modes_changed` | the default or members' modes for shared CLI accounts changed (a request that changes nothing records nothing) | the workspace | workspace | `default_mode` if it changed, `members_changed` |
 | `search_embeddings_changed` | the workspace's embeddings model is set or turned off, or its account is removed | the workspace | workspace | `enabled`, `account`; `cascade` when the account's removal turned it off |

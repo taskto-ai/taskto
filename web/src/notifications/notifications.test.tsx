@@ -173,6 +173,8 @@ test('nothing is asked or subscribed until the person turns push on, and then on
       card_assigned: 'A card was assigned to you',
       card_due: 'A card of yours is due',
       card_overdue: 'A card of yours is overdue',
+      card_comment: 'A card of yours has a new comment',
+      card_mention: 'You were mentioned in a comment',
       app_effect_failed: 'An app action needs your attention',
       changed: 'Something changed',
     },
@@ -206,6 +208,7 @@ test('a person who says no is shown the blocked explanation, and nothing is regi
 test('when the server refuses the subscription, the browser keeps none and the person sees why', async () => {
   const browser = pushBrowser()
   fakeFetch({
+    'GET /api/workspaces/1/notification-email': { body: emailChoices({ available: false }) },
     'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
     'PUT /api/me/push/subscription': {
       status: 409,
@@ -562,7 +565,10 @@ test("when the browser won't end its subscription, push stays on and the person 
   sub.unsubscribe.mockResolvedValueOnce(false)
   pushBrowser({ permission: 'granted', subscription: sub })
   localStorage.setItem('taskto.push', '1')
-  fakeFetch({ 'DELETE /api/me/push/subscription': { status: 204 } })
+  fakeFetch({
+    'GET /api/workspaces/1/notification-email': { body: emailChoices({ available: false }) },
+    'DELETE /api/me/push/subscription': { status: 204 },
+  })
   render(<NotificationsTab me={1} workspace={1} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Turn off push on this device' }))
   expect((await screen.findByRole('alert')).textContent).toMatch(/wouldn't end its push subscription/)
@@ -583,4 +589,171 @@ test('opening the app signed in with no workspace registers nothing', async () =
   await waitFor(() => expect(calls.some((c) => c.path === '/api/me')).toBe(true))
   await act(async () => {})
   expect(pushCalls(calls)).toEqual([])
+})
+
+const emailChoices = (over: Record<string, unknown> = {}) => ({
+  available: true,
+  address: { email: 'owner@example.com', state: 'verified' },
+  kinds: { card_assigned: 'off', app_effect_failed: 'off' },
+  digest: { hour: 8, timezone: 'UTC', chosen: false },
+  ...over,
+})
+
+test('email is chosen per kind, as it happens or in a daily summary, and is off until then', async () => {
+  pushBrowser({ permission: 'denied' })
+  let saved = emailChoices()
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
+    'PUT /api/workspaces/1/notification-email': (call) => {
+      const body = call.body as { kinds?: Record<string, string>; digest?: { hour: number; timezone: string } }
+      saved = {
+        ...saved,
+        kinds: { ...saved.kinds, ...body.kinds },
+        digest: body.digest ? { ...body.digest, chosen: true } : saved.digest,
+      } as typeof saved
+      return { body: saved }
+    },
+  })
+  render(<NotificationsTab me={1} workspace={1} />)
+  const assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
+  expect(assigned.value).toBe('off')
+  expect(screen.queryByLabelText('Send the daily summary at')).toBeNull()
+
+  fireEvent.change(assigned, { target: { value: 'instant' } })
+  await waitFor(() => expect(assigned.value).toBe('instant'))
+  fireEvent.change(screen.getByLabelText('An app action needs your attention'), { target: { value: 'digest' } })
+  await screen.findByLabelText('Send the daily summary at')
+  fireEvent.change(screen.getByLabelText('Send the daily summary at'), { target: { value: '18' } })
+  await waitFor(() =>
+    expect((screen.getByLabelText('Send the daily summary at') as HTMLSelectElement).value).toBe('18'),
+  )
+
+  const puts = calls.filter((c) => c.method === 'PUT').map((c) => c.body as Record<string, unknown>)
+  expect(puts[0]).toEqual({ kinds: { card_assigned: 'instant' } })
+  // The first summary takes the person's own time zone along.
+  expect(puts[1]?.kinds).toEqual({ app_effect_failed: 'digest' })
+  const first = puts[1]?.digest as { hour: number; timezone: string } | undefined
+  expect(first?.hour).toBe(8)
+  expect(puts[2]).toEqual({ digest: { hour: 18, timezone: first?.timezone } })
+})
+
+test('where the server can not send mail, email says so and offers nothing', async () => {
+  pushBrowser({ permission: 'denied' })
+  fakeFetch({ 'GET /api/workspaces/1/notification-email': { body: emailChoices({ available: false }) } })
+  render(<NotificationsTab me={1} workspace={1} />)
+  await screen.findByText(/Email isn't set up on this server/)
+  expect(screen.queryByLabelText('A card was assigned to you')).toBeNull()
+})
+
+test('email that is on can be turned off where the server can no longer send mail', async () => {
+  pushBrowser({ permission: 'denied' })
+  let saved = emailChoices({ available: false, kinds: { card_assigned: 'instant', app_effect_failed: 'off' } })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
+    'PUT /api/workspaces/1/notification-email': (call) => {
+      saved = { ...saved, kinds: { ...saved.kinds, ...(call.body as { kinds: object }).kinds } } as typeof saved
+      return { body: saved }
+    },
+  })
+  render(<NotificationsTab me={1} workspace={1} />)
+  await screen.findByText(/You can still turn email off/)
+  const assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
+  expect(assigned.value).toBe('instant')
+  // Nothing can be turned on, and off is still there.
+  const options = within(assigned).getAllByRole('option') as HTMLOptionElement[]
+  expect(options.filter((o) => o.disabled).map((o) => o.value)).toEqual(['instant', 'digest'])
+  fireEvent.change(assigned, { target: { value: 'off' } })
+  // With nothing on there is nothing left to turn off: the panel says email can't be set up.
+  await screen.findByText(/so notifications can't be sent by email/)
+  expect(screen.queryByLabelText('A card was assigned to you')).toBeNull()
+  expect(calls.filter((c) => c.method === 'PUT').map((c) => c.body)).toEqual([{ kinds: { card_assigned: 'off' } }])
+})
+
+test('the panel says whether the address is confirmed and sends the link', async () => {
+  pushBrowser({ permission: 'denied' })
+  let saved = emailChoices({
+    address: { email: 'owner@example.com', state: 'unverified' },
+    kinds: { card_assigned: 'instant', app_effect_failed: 'off' },
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
+    'POST /api/workspaces/1/notification-email/verification': () => {
+      saved = { ...saved, address: { email: 'owner@example.com', state: 'pending' } }
+      return { status: 204 }
+    },
+  })
+  render(<NotificationsTab me={1} workspace={1} />)
+  await screen.findByText(/This address isn't confirmed/)
+  expect(screen.getByText(/Notifications go to owner@example.com/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Send the confirmation link' }))
+  await screen.findByText(/We sent a link to this address/)
+  await screen.findByText(/A link was sent/)
+  expect(calls.some((c) => c.method === 'POST' && c.path.endsWith('/notification-email/verification'))).toBe(true)
+  expect(screen.getByRole('button', { name: 'Send the link again' })).toBeTruthy()
+})
+
+test('a confirmation link confirms the signed-in address once and clears the token from the address bar', async () => {
+  window.history.replaceState(null, '', '/confirm-notification-email#abc_DEF-123')
+  const calls = fakeFetch({
+    'GET /api/me': { body: me },
+    'POST /api/me/notification-email/confirm': { status: 204 },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByText(/Your address is confirmed/)
+  expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([{ token: 'abc_DEF-123' }])
+  expect(window.location.hash).toBe('')
+  expect(screen.getByRole('link', { name: 'Open notification settings' }).getAttribute('href')).toBe(
+    '/w/1/settings/notifications',
+  )
+})
+
+test('a confirmation link that does not work says why', async () => {
+  window.history.replaceState(null, '', '/confirm-notification-email#used')
+  fakeFetch({
+    'POST /api/me/notification-email/confirm': {
+      status: 400,
+      body: { error: 'x', code: 'notification_email_verification_invalid' },
+    },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByText(/That confirmation link doesn't work/)
+})
+
+test("a time zone the person picked is not replaced by the browser's when a summary is turned on again", async () => {
+  pushBrowser({ permission: 'denied' })
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+    timeZone: 'America/New_York',
+  } as Intl.ResolvedDateTimeFormatOptions)
+  let saved = emailChoices()
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
+    'PUT /api/workspaces/1/notification-email': (call) => {
+      const body = call.body as { kinds?: Record<string, string>; digest?: { hour: number; timezone: string } }
+      saved = {
+        ...saved,
+        kinds: { ...saved.kinds, ...body.kinds },
+        digest: body.digest ? { ...body.digest, chosen: true } : saved.digest,
+      } as typeof saved
+      return { body: saved }
+    },
+  })
+  const first = render(<NotificationsTab me={1} workspace={1} />)
+  let assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
+  fireEvent.change(assigned, { target: { value: 'digest' } })
+  const zone = (await screen.findByLabelText('Time zone')) as HTMLSelectElement
+  await waitFor(() => expect(zone.value).toBe('America/New_York'))
+  fireEvent.change(zone, { target: { value: 'UTC' } })
+  await waitFor(() => expect(saved.digest.timezone).toBe('UTC'))
+  fireEvent.change(assigned, { target: { value: 'off' } })
+  await waitFor(() => expect(saved.kinds.card_assigned).toBe('off'))
+  // Leaving the page and coming back forgets nothing: the server says the zone was chosen.
+  first.unmount()
+  render(<NotificationsTab me={1} workspace={1} />)
+  assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
+  await waitFor(() => expect(assigned.value).toBe('off'))
+  fireEvent.change(assigned, { target: { value: 'digest' } })
+  await waitFor(() => expect(saved.kinds.card_assigned).toBe('digest'))
+  const puts = calls.filter((c) => c.method === 'PUT').map((c) => c.body as { digest?: unknown })
+  expect(puts[puts.length - 1]).toEqual({ kinds: { card_assigned: 'digest' } })
+  expect(saved.digest.timezone).toBe('UTC')
 })

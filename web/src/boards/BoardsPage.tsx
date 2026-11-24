@@ -15,6 +15,7 @@ import {
   api,
   type Board,
   type Card,
+  type CardWithThread,
   type Comment,
   type Conversation,
   errorText,
@@ -26,7 +27,7 @@ import {
 import { conversationTitle } from '../conversations/ConversationView'
 import { type Key, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Markdown } from '../markdown'
+import { Markdown, type MentionNames } from '../markdown'
 import { Link, parseBoardItem, routePath } from '../router'
 import { Icon } from '../shell/Icon'
 import { SpacePicker, useSpaces } from '../spaces'
@@ -57,8 +58,6 @@ function blockedText(t: T, reason: string | null, cards: string): string {
   if (cards) return t('boards.blockedWaiting', { cards })
   return t('boards.blocked')
 }
-
-type CardWithThread = Card & { comments: Comment[] }
 
 // open is a link's item (boardItem): the space, board and card to open on.
 export function BoardsPage({ workspace, open }: { workspace: number; open?: string }) {
@@ -620,12 +619,21 @@ function AddCard({
 type Send = (base: Card) => Promise<Card>
 type Fields = Record<string, unknown> | ((base: Card) => Record<string, unknown>)
 
-// A thread with the comments of a newer read added, oldest first; the same array if none is
-// new, so nothing renders again.
+// A thread with a newer read's comments added, oldest first: new ones are added, and the read's copy
+// replaces the held one with the same ID if it differs (the names its mentions have can change);
+// comments held only here stay. The same array if nothing differs, so nothing renders again.
 function withComments(have: Comment[], read: Comment[]): Comment[] {
+  const server = new Map(read.map((c) => [c.id, c]))
+  let changed = false
+  const merged = have.map((c) => {
+    const fresh = server.get(c.id)
+    if (!fresh || JSON.stringify(fresh) === JSON.stringify(c)) return c
+    changed = true
+    return fresh
+  })
   const known = new Set(have.map((c) => c.id))
   const added = read.filter((c) => !known.has(c.id))
-  return added.length === 0 ? have : [...have, ...added].sort((a, b) => a.id - b.id)
+  return !changed && added.length === 0 ? have : [...merged, ...added].sort((a, b) => a.id - b.id)
 }
 
 // The open card: its fields, its thread, and the changes a writer can make. Each change is
@@ -877,6 +885,7 @@ function CardView({
             url={`${url}/comments`}
             comments={card.comments}
             canWrite={canWrite}
+            people={people.data}
             onAdded={(c) =>
               // Onto the latest card: a change saved while the comment was in flight stays.
               setLocal((latest) => {
@@ -1334,15 +1343,29 @@ function Links({
   )
 }
 
+// A mention of someone in a comment (docs/api.md#mentions): the person's ID is what counts, and the
+// name is only what is shown, so brackets, parentheses and line breaks can't be in it.
+const mentionOf = (p: Person) => `@[${p.name.replace(/[[\]()\\\r\n]+/g, ' ').trim() || p.id}](user:${p.id})`
+
+// Who a comment's mentions are, by ID, as the server names them to this reader. An ID the server
+// gave no name for (someone this reader can't see, or no one) shows as `unknown`, so the label in
+// the text, which anyone can write, is never what is shown.
+const mentionNames = (c: Comment, unknown: string): MentionNames => ({
+  names: new Map(c.mentions.map((m) => [String(m.id), m.name])),
+  unknown,
+})
+
 function Thread({
   url,
   comments,
   canWrite,
+  people,
   onAdded,
 }: {
   url: string
   comments: Comment[]
   canWrite: boolean
+  people: Person[] | undefined
   onAdded: (c: Comment) => void
 }) {
   const [body, setBody] = useState('')
@@ -1350,6 +1373,23 @@ function Thread({
   const [error, setError] = useState<string | null>(null)
   const t = useT()
   const f = useFormat()
+  const field = useRef<HTMLTextAreaElement>(null)
+  // Puts the person's mention where the cursor is, and the cursor after it.
+  const mention = (id: string) => {
+    const who = people?.find((p) => String(p.id) === id)
+    if (!who) return
+    const at = field.current
+    const start = at?.selectionStart ?? body.length
+    const end = at?.selectionEnd ?? start
+    const before = body.slice(0, start)
+    const token = `${before && !/\s$/.test(before) ? ' ' : ''}${mentionOf(who)} `
+    setBody(before + token + body.slice(end))
+    const caret = before.length + token.length
+    requestAnimationFrame(() => {
+      at?.focus()
+      at?.setSelectionRange(caret, caret)
+    })
+  }
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
@@ -1373,13 +1413,14 @@ function Thread({
             <span className="tt-muted tt-small">
               {[authorLabel(t, c.author), f.dateTime(c.created_at)].join(' · ')}
             </span>
-            <Markdown text={c.body} />
+            <Markdown text={c.body} mentions={mentionNames(c, t('boards.mentionUnknown'))} />
           </li>
         ))}
       </ol>
       {canWrite && (
         <form className="tt-form" onSubmit={submit}>
           <textarea
+            ref={field}
             aria-label={t('boards.commentField')}
             rows={3}
             value={body}
@@ -1391,6 +1432,21 @@ function Thread({
             </p>
           )}
           <div className="tt-actions">
+            {people && people.length > 0 && (
+              <select
+                aria-label={t('boards.mention')}
+                value=""
+                onChange={(e) => mention(e.target.value)}
+                disabled={busy}
+              >
+                <option value="">{t('boards.mentionPlaceholder')}</option>
+                {people.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
             <button type="submit" className="tt-button tt-primary" disabled={busy || !body.trim()}>
               {t('boards.commentSubmit')}
             </button>

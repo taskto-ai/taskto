@@ -56,6 +56,7 @@ import (
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/quota"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/serverkey"
 )
@@ -160,6 +161,13 @@ func New(o Options) *Service {
 		"update_app":       s.updateApp,
 		"list_app_actions": s.listAppActions,
 		"run_app_action":   s.runAppAction,
+
+		"list_app_templates":   s.listAppTemplates,
+		"install_app_template": s.installAppTemplate,
+		"duplicate_app":        s.duplicateApp,
+		"list_app_effects":     s.listAppEffects,
+		"list_app_releases":    s.listAppReleases,
+		"show_app_roles":       s.showAppRoles,
 	}
 	for _, name := range browserTools {
 		s.tools[name] = s.browserTool(name)
@@ -373,6 +381,10 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 		return &Refusal{http.StatusConflict, err.Error() + ": read the record again (query_app_rows) and decide again"}
 	case errors.Is(err, knowledge.ErrTooLarge), errors.Is(err, knowledge.ErrRepoFull):
 		return &Refusal{http.StatusRequestEntityTooLarge, err.Error()}
+	case errors.Is(err, quota.ErrExceeded):
+		return &Refusal{http.StatusInsufficientStorage, err.Error()}
+	case errors.Is(err, quota.ErrUnavailable):
+		return &Refusal{http.StatusServiceUnavailable, "the storage in use can't be measured right now; try again in a moment"}
 	case errors.Is(err, knowledge.ErrNotKept):
 		return &Refusal{http.StatusGone, err.Error()}
 	default:
