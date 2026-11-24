@@ -58,9 +58,15 @@ d() { "$DOCKER" "$@" </dev/null; }
 c() { d compose "${cargs[@]}" "$@"; }
 # jq: holds(PATH; READ_ONLY): a mount of host path PATH lets the server see what is in the updater's
 # state directory $state, other than its `public` directory read-only: the state itself, a directory
-# above it, or anything under it.
-HOLDS='def holds($p; $ro): ($p | rtrimstr("/")) as $p | ($state == $p or ($state | startswith($p + "/")) or
-	(($p | startswith($state + "/")) and ($p != $state + "/public" or $ro != true))); '
+# above it, or anything under it. Both paths are compared by their parts, with `.` and empty parts
+# (`//`) dropped, as the kernel reads them; a path with `..` in it is taken to hold the state,
+# since where it leads isn't worked out here (a symbolic link in a path isn't followed either:
+# the rule is on the paths Compose and Docker report).
+HOLDS='def parts: split("/") | map(select(. != "" and . != "."));
+	def holds($p; $ro): ($p | parts) as $p | ($state | parts) as $s
+		| (($p | index("..")) != null) or ($p == $s[0:($p | length)])
+		or (($p | length) > ($s | length) and $p[0:($s | length)] == $s and ($p != $s + ["public"] or $ro != true)); '
+
 
 if [ "$mode" = static ]; then
 	cfg=$(c config --format json) || fail "can't render the Compose settings"
@@ -188,11 +194,14 @@ done
 # The same for the updater's state as in the static check: the server may mount $state/public,
 # read-only. A named volume that binds a host path shows in the volume's options, not the mount's.
 hostpaths=$(jq -c '[.[0].Mounts[]? | select(.Type == "bind") | {p: (.Source // ""), ro: (.RW == false)}]' <<<"$si")
-for vn in $(jq -r '.[0].Mounts[]? | select(.Type == "volume") | .Name' <<<"$si"); do
+# Each mount keeps its own read-only flag: a volume can be mounted twice.
+while IFS= read -r m; do
+	[ -n "$m" ] || continue
+	vn=$(jq -r '.n' <<<"$m")
 	vo=$(d volume inspect --format '{{json .Options}}' "$vn") || fail "can't inspect the server's volume $vn"
-	hostpaths=$(jq -c --arg n "$vn" --argjson o "$vo" --argjson s "$si" '. + [{p: ($o.device // ""), ro: (([$s[0].Mounts[]? | select(.Name == $n)][0].RW) == false)}]' <<<"$hostpaths") ||
+	hostpaths=$(jq -c --argjson m "$m" --argjson o "$vo" '. + [{p: ($o.device // ""), ro: ($m.rw == false)}]' <<<"$hostpaths") ||
 		fail "can't read the options of the server's volume $vn"
-done
+done < <(jq -c '.[0].Mounts[]? | select(.Type == "volume") | {n: .Name, rw: .RW}' <<<"$si")
 jq -e --arg state "$state" "$HOLDS"'[.[] | select(.p != "") | select(holds(.p; .ro))] | length == 0' <<<"$hostpaths" >/dev/null ||
 	fail "the server has a host path that holds the updater's state (only $state/public, read-only, may be mounted)"
 

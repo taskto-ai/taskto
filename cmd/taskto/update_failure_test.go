@@ -153,6 +153,9 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 		"the server has a host directory above it":        {edit: `.services.taskto.volumes += [{type: "bind", source: "PARENT", target: "/var-lib", read_only: true}]`, reason: "a host path that holds the updater's state"},
 		"the server has the host's root":                  {edit: `.services.taskto.volumes += [{type: "bind", source: "/", target: "/host", read_only: true}]`, reason: "a host path that holds the updater's state"},
 		"the server has the state as a named volume":      {edit: `.services.taskto.volumes += [{type: "volume", source: "statevol", target: "/state", read_only: true, volume: {}}] | .volumes.statevol = {name: "taskto_statevol", driver: "local", driver_opts: {type: "none", o: "bind", device: "STATE"}}`, reason: "a host path that holds the updater's state"},
+		"the server has the state by another spelling":    {edit: `.services.taskto.volumes += [{type: "bind", source: "STATE/./previous", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has the state by a path with ..":      {edit: `.services.taskto.volumes += [{type: "bind", source: "STATE/public/../previous", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has the state with doubled slashes":   {edit: `.services.taskto.volumes += [{type: "bind", source: "STATE//previous", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
 		"the server has a directory above it as a volume": {edit: `.services.taskto.volumes += [{type: "volume", source: "statevol", target: "/state", read_only: true, volume: {}}] | .volumes.statevol = {name: "taskto_statevol", driver: "local", driver_opts: {type: "none", o: "bind", device: "PARENT"}}`, reason: "a host path that holds the updater's state"},
 		"the server can write the updater's status":       {edit: `(.services.taskto.volumes[] | select(.target == "/update-status") | .read_only) = false`, reason: "a host path that holds the updater's state"},
 		"the worker on the server's network":              {edit: `.services["cli-worker"].networks = {default: null}`, reason: "the server is on the worker's network"},
@@ -276,18 +279,19 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 // says which backup to restore.
 func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 	for name, setup := range map[string]func(e *updEnv){
-		"the server isn't healthy":                    func(e *updEnv) { e.write("fake/health-bad", updNew+"\n") },
-		"docker compose start fails after it started": func(e *updEnv) { e.write("fake/upfail-after-start", updNew) },
-		"the server runs as root":                     func(e *updEnv) { e.mutate(updNew, "root") },
-		"the server has a development switch":         func(e *updEnv) { e.mutate(updNew, "insecure") },
-		"the server isn't in container mode":          func(e *updEnv) { e.mutate(updNew, "nomode") },
-		"the worker is given NET_ADMIN":               func(e *updEnv) { e.mutate(updNew, "netadmin") },
-		"the worker has a setuid program":             func(e *updEnv) { e.mutate(updNew, "suid") },
-		"the worker can see the data":                 func(e *updEnv) { e.mutate(updNew, "workerdata") },
-		"the server can see the updater's state":      func(e *updEnv) { e.mutate(updNew, "updaterstate") },
-		"the server can write the updater's status":   func(e *updEnv) { e.mutate(updNew, "updaterwrite") },
-		"the server mounts the state as a volume":     func(e *updEnv) { e.mutate(updNew, "updatervolume") },
-		"the proxy still answers as the old version":  func(e *updEnv) { e.write("fake/proxy-version", updOld) },
+		"the server isn't healthy":                     func(e *updEnv) { e.write("fake/health-bad", updNew+"\n") },
+		"docker compose start fails after it started":  func(e *updEnv) { e.write("fake/upfail-after-start", updNew) },
+		"the server runs as root":                      func(e *updEnv) { e.mutate(updNew, "root") },
+		"the server has a development switch":          func(e *updEnv) { e.mutate(updNew, "insecure") },
+		"the server isn't in container mode":           func(e *updEnv) { e.mutate(updNew, "nomode") },
+		"the worker is given NET_ADMIN":                func(e *updEnv) { e.mutate(updNew, "netadmin") },
+		"the worker has a setuid program":              func(e *updEnv) { e.mutate(updNew, "suid") },
+		"the worker can see the data":                  func(e *updEnv) { e.mutate(updNew, "workerdata") },
+		"the server can see the updater's state":       func(e *updEnv) { e.mutate(updNew, "updaterstate") },
+		"the server can write the updater's status":    func(e *updEnv) { e.mutate(updNew, "updaterwrite") },
+		"the server mounts the state as a volume":      func(e *updEnv) { e.mutate(updNew, "updatervolume") },
+		"the server mounts the public volume writable": func(e *updEnv) { e.mutate(updNew, "updatervolumetwice") },
+		"the proxy still answers as the old version":   func(e *updEnv) { e.write("fake/proxy-version", updOld) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newUpdEnv(t)
