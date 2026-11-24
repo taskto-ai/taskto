@@ -208,7 +208,7 @@ func TestGenerateRejects(t *testing.T) {
 		Ptr   *code            `json:"ptr"`
 		Num   json.Number      `json:"num"`
 		Quote json.Number      `json:"quote,string"`
-		Deep  **int            `json:"deep,string"`
+		Deep  **int            `json:"deep,string"` //nolint:staticcheck // the option meets two pointers, which encoding/json ignores
 	}
 	out, err := Generate([]Root{{Name: "Okay", Type: reflect.TypeFor[okay]()}})
 	if err != nil {

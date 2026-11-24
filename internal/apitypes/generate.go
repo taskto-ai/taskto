@@ -432,7 +432,7 @@ func (g *generator) tsTypeVia(t reflect.Type, free, viaPtr bool) (string, bool) 
 	if t == numberType {
 		return "number", false
 	}
-	if !viaPtr && hasMarshaler(t) && !(t.Implements(jsonMarshaler) || t.Implements(textMarshaler)) {
+	if !viaPtr && hasMarshaler(t) && !t.Implements(jsonMarshaler) && !t.Implements(textMarshaler) {
 		g.fail("%s has a marshaler on its pointer only, which encoding/json uses when it can address the value: make it a value method or reach it through a pointer", t)
 		return "unknown", false
 	}
