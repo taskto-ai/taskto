@@ -101,16 +101,26 @@ var credentials = map[string]string{"claude": ".credentials.json", "codex": "aut
 // otherwise it returns.
 func Main() {
 	if len(os.Args) > 1 && os.Args[1] == cliworker.HelperArg {
-		os.Exit(cliworker.RunHelper())
+		exit(cliworker.RunHelper())
 	}
 	if len(os.Args) > 1 && os.Args[1] == cliworker.ApproveArg {
-		os.Exit(cliworker.RunApprove(os.Args[2:]))
+		exit(cliworker.RunApprove(os.Args[2:]))
 	}
 	name := filepath.Base(os.Args[0])
 	if _, ok := names[name]; !ok {
 		return
 	}
-	os.Exit(run(name, os.Args[1:]))
+	exit(run(name, os.Args[1:]))
+}
+
+// exit ends a process that is a fake, the helper or the permission hook. It is not os.Exit:
+// in a test binary built with -cover, os.Exit prints "warning: GOCOVERDIR not set, no
+// coverage data emitted" on stderr, and the worker reads a command's stderr along with its
+// stdout (the helper's JSON answers, a CLI's status), so under `go test -cover` every one of
+// these processes would spoil its own output. These processes have no coverage directory to
+// write to, so nothing is lost by leaving without the coverage exit hook.
+func exit(code int) {
+	syscall.Exit(code)
 }
 
 // Install puts the fakes in dir and returns their paths, by CLI name.
