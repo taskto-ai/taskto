@@ -26,3 +26,4 @@ dist/
 
 # CI's test reports (.github/workflows/ci.yml)
 vitest-results.json
+web/e2e-results/
