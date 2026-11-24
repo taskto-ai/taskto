@@ -19,6 +19,52 @@ and apps over MCP, at `/mcp`, with an access token: see [mcp.md](mcp.md).
 - **IDs** are integers.
 - Replies are `Cache-Control: no-store`.
 
+### API types
+
+The web app's types for the replies (`web/src/api.ts`) are checked against the Go structs that
+make them, so a field renamed or retyped in Go breaks the build instead of the page. This holds
+for each registered reply type (below); a type with no line in the contract is not checked:
+
+1. `internal/apitypes` lists the reply structs (`Roots`) and writes their shapes, read by
+   reflection as `encoding/json` writes them, to `web/src/api.gen.ts`
+   (`go generate ./internal/apitypes`). The file is committed, and `go test` fails when it is
+   not what the structs say.
+2. `web/src/api.contract.ts` checks each type `api.ts` declares against its generated shape
+   (`Check<Gen.Card, Api.Card>`): every field the web app reads must exist in the reply, be
+   present and non-null there unless the web app's type allows it, and have a type the
+   reply's is assignable to. `pnpm typecheck` (part of `pnpm build`) fails, naming the field,
+   when one does not. The web app's types may be wider than the generated ones and may leave
+   out fields it does not read. They may be narrower in one way: a union of string literals
+   for a Go string (`'admin' | 'member'`). `any` is refused on either side, and a field of
+   free-form JSON (`unknown`) is read as `unknown` or not at all. A Go map is a
+   `Record<string, T>`: the web app can't read a fixed key from it unless the key is optional.
+
+What the generator tells, as `encoding/json` writes it:
+
+- A key that may be **left out** (`?`: `omitempty` on a value that can be empty, `omitzero`, or
+  a field of an embedded pointer that may be nil) is told apart from a value that may be
+  **null** (`| null`: a nil pointer, slice or map, a nil `[]byte`). A nil value that is left
+  out is not null, but a pointer that is not nil can hold one: an `omitempty` `*[]string` is
+  `p?: string[] | null`, since a pointer to a nil slice is written as `null`.
+- A type with a `MarshalJSON` or `MarshalText` of its own writes what its struct doesn't say, so
+  the generator refuses it (a root, or any field, slice or map element of one) unless its wire
+  shape is registered (`wireShapes` in `internal/apitypes/generate.go`: `time.Time` is a
+  string; `apierr.Params` is a map of texts and numbers). A `MarshalText` alone is a string.
+- An `any`, `interface{}` or `json.RawMessage` is refused unless its field is tagged
+  `apitypes:"json"`, which tells it as `unknown`.
+- A nil slice or map is told `T[] | null`. A field the web app reads as a plain list is tagged
+  `apitypes:"nonnull"` and then told `T[]`: a promise that the server sends `[]` or `{}`, so
+  initialize it in Go. `TestNonNullFieldsAreKept` fails for a tagged field whose package has no
+  test calling `nonnull.Require` (`internal/apitypes/nonnull`) on what its routes reply.
+- A map's key is a string, an integer (`uintptr` too) or itself an `encoding.TextMarshaler`.
+
+To cover another reply, add its struct to `Roots`, run `go generate ./internal/apitypes`, and
+add a line to `api.contract.ts`. A reply struct that is not exported, or that a handler builds
+as a `map` or an anonymous struct, needs a named, exported struct first (the card route's
+reply is `boards.Thread`, a card with its comments). What this does not check: that a call's
+type argument (`api<Card[]>(…)`) is the reply of its path, or the values of a Go string
+type's constants.
+
 ### Error codes
 
 Every code is listed here and in `internal/apierr/codes.go`, the one list; a code keeps its

@@ -80,6 +80,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     const message = data && typeof data.error === 'string' ? data.error : `${res.status} ${res.statusText}`
     throw new ApiError(res.status, message, data)
   }
+  // T is the caller's word for what the server sends. The types that api.contract.ts lists are
+  // checked against the Go structs that make the replies, so a renamed field of one fails the
+  // build; the others are not.
   return data as T
 }
 
@@ -493,11 +496,16 @@ export type RecordVersion = {
 }
 
 export type Comment = { id: number; card_id: number; author: Author; body: string; created_at: string }
+// A card as the card route sends it: with its comments, oldest first.
+export type CardWithThread = Card & { comments: Comment[] }
 
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
 
 export type Member = { id: number; email: string; name: string; role: 'admin' | 'member'; joined_at: string }
 export type Invite = { id: number; email: string; role: 'admin' | 'member'; created_at: string; expires_at: string }
+// The reply that makes an invite or an access token: the record, with its secret, shown only now.
+export type InviteCreated = Invite & { token: string }
+export type TokenCreated = Token & { token: string }
 export type SpaceMember = { id: number; email: string; name: string; role: 'editor' | 'viewer'; added_at: string }
 
 // An access token, without the token itself: the server returns that only when it makes one.
