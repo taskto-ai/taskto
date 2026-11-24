@@ -1567,7 +1567,7 @@ place in its column; left out or past the end, the card goes last. `201` with th
 The card with its thread, oldest first:
 
 ```json
-{"id": 12, …, "comments": [{"id": 1, "card_id": 12, "author": {"id": 2, "name": "Member", "agent": false}, "body": "…", "created_at": "…"}]}
+{"id": 12, …, "comments": [{"id": 1, "card_id": 12, "author": {"id": 2, "name": "Member", "agent": false}, "body": "…", "created_at": "…", "mentions": []}]}
 ```
 
 ### `PATCH …/boards/{board}/cards/{card}`
@@ -1600,7 +1600,33 @@ last in the column it was archived from. `200` with the card; `400` if it isn't 
 ### `POST …/boards/{board}/cards/{card}/comments`
 
 Writers. `{"body": "Markdown…"}` (up to 32 KiB, not blank). Adds to the thread as the
-caller. `201` with the comment.
+caller. `201` with the comment. A comment tells people in their notifications
+([below](#notifications)): the card's assignee, and each person it mentions.
+
+#### Mentions
+
+A comment mentions a person with the token `@[Name](user:ID)`, where `ID` is their user ID (the
+`id` of the space's members, the agent's `list_members`). The web app's comment box writes it when
+you pick someone. The ID is what counts: a different or stale `Name` tells the person of that ID
+all the same, and `@name` typed as plain text is only text. A token counts only where Markdown
+shows it as a link in the text of a paragraph, heading or table cell: not in a fenced code block
+(also in a quote or a list item), not in a code span, not after a backslash (`\@[…](user:…)`), not
+in a link's address or an image's label, and its `Name` has no `[`, `]` or `\`. A comment mentions
+at most 20 people: the first 20 different IDs its tokens name, whether or not they exist or may
+read the space; each is told once.
+
+Every comment in an answer has `mentions`: the people its body mentions, as `[{"id": 5, "name":
+"Bo"}]`, with the name the server has for that ID, for those the reader may see in the space (its
+members). A token for anyone else, or an ID that doesn't exist, has no entry, so a comment can't be
+used to look up names. The web app shows a mention by this name, never by the `Name` in the text,
+and as a neutral placeholder when it has no entry.
+
+Who is told is decided in the transaction that writes the comment, with the card's assignee and
+everyone's access as they are then.
+
+A comment tells nobody who may not read the space at that moment, whether they are mentioned or
+assigned, and answers the same whether or not a mentioned ID exists, so it can't be used to find
+who is in a workspace. It never tells its author.
 
 ### The agent
 
@@ -1622,6 +1648,11 @@ workspace's home as its target, and a push for it says the same. Notifications a
 - `card_due`: a card assigned to you is due today (`params.title`, `params.due`; target: the
   card), and `card_overdue`: it was due yesterday and isn't done
   ([due-date reminders](#due-date-reminders));
+- `card_comment`: someone else commented on a card assigned to you (`params.title`; target: the
+  card). One per comment;
+- `card_mention`: someone else mentioned you in a comment on a card ([mentions](#mentions);
+  `params.title`; target: the card). One per comment: a person who is both the assignee and
+  mentioned in a comment is told of the mention only. No notification holds the comment's text;
 - `app_effect_failed`: an effect of an app you acted in failed for good and waits for you to retry
   it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one.
 
