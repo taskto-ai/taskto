@@ -100,6 +100,13 @@ the default.
 | `-disable-password-login` | `TASKTO_DISABLE_PASSWORD_LOGIN` | `disable_password_login` | `false` | turn password logins off, so everyone signs in with a provider; needs `-sso-providers` |
 | `-provider-egress-workspace` | `TASKTO_PROVIDER_EGRESS_WORKSPACE` | `provider_egress_workspace` | `any` | where workspaces' provider accounts may connect: `any`, `public`, or a comma-separated list of `public`, hosts, IP addresses and CIDR prefixes ([docs/install.md](docs/install.md#where-provider-accounts-may-connect)) |
 | `-provider-egress-personal` | `TASKTO_PROVIDER_EGRESS_PERSONAL` | `provider_egress_personal` | `any` | the same for members' personal provider accounts |
+| `-smtp-host` | `TASKTO_SMTP_HOST` | `smtp_host` | | the SMTP server that sends the server's email; empty means no email ([docs/install.md](docs/install.md#email)) |
+| `-smtp-port` | `TASKTO_SMTP_PORT` | `smtp_port` | `587`, `465` or `25` | the SMTP server's port, by `-smtp-security` |
+| `-smtp-security` | `TASKTO_SMTP_SECURITY` | `smtp_security` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (a trusted local relay, with no sign-in) |
+| `-smtp-from` | `TASKTO_SMTP_FROM` | `smtp_from` | | the sender: an address, or `Name <address>`; needed with `-smtp-host` |
+| `-smtp-username` | `TASKTO_SMTP_USERNAME` | `smtp_username` | | the user to sign in as; goes with `-smtp-password-file` |
+| `-smtp-password-file` | `TASKTO_SMTP_PASSWORD_FILE` | `smtp_password_file` | | the file the SMTP password is read from at startup (an absolute path); the password is never a setting |
+| `-smtp-egress` | `TASKTO_SMTP_EGRESS` | `smtp_egress` | `any` | where the SMTP connection may go, as the provider accounts' policy above |
 | `-agent` | `TASKTO_AGENT` | `agent` | `false` | run the agent runtime (see below) |
 | `-agent-node` | `TASKTO_AGENT_NODE` | `agent_node` | `node` | Node.js executable for the agent runtime, looked up in `PATH` unless it is a path |
 | `-agent-entry` | `TASKTO_AGENT_ENTRY` | `agent_entry` | see below | the agent runtime's entry point |
