@@ -264,17 +264,17 @@ func (s *Service) needKey(w http.ResponseWriter, r *http.Request) bool {
 
 func (s *Service) handleTwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
-	on, err := s.twoFactorOn(r.Context(), s.db, u.ID)
+	// One statement, so the two fields describe one committed state.
+	var on bool
+	var left int
+	err := s.db.QueryRowContext(r.Context(), `
+		SELECT EXISTS (SELECT 1 FROM user_totp WHERE user_id = ?1 AND enabled_at IS NOT NULL),
+		       CASE WHEN EXISTS (SELECT 1 FROM user_totp WHERE user_id = ?1 AND enabled_at IS NOT NULL)
+		            THEN (SELECT count(*) FROM user_recovery_codes WHERE user_id = ?1 AND used_at IS NULL) ELSE 0 END`,
+		u.ID).Scan(&on, &left)
 	if err != nil {
 		serverError(w, r, err)
 		return
-	}
-	left := 0
-	if on {
-		if err := s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM user_recovery_codes WHERE user_id = ? AND used_at IS NULL`, u.ID).Scan(&left); err != nil {
-			serverError(w, r, err)
-			return
-		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": on, "recovery_codes_left": left})
 }
@@ -309,12 +309,8 @@ func (s *Service) handleTwoFactorEnrol(w http.ResponseWriter, r *http.Request) {
 	err = s.write(r.Context(), func(tx *sql.Tx) error {
 		// The password that was checked must still be the user's: a change or reset meanwhile
 		// ended the sessions it could have used, and dropped the enrolments it could have made.
-		var current string
-		if err := tx.QueryRowContext(r.Context(), `SELECT password_hash FROM users WHERE id = ?`, u.ID).Scan(&current); err != nil {
+		if err := s.passwordUnchanged(r.Context(), tx, u.ID, verified); err != nil {
 			return err
-		}
-		if current != verified {
-			return errPasswordChanged
 		}
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO user_totp (user_id, secret, enrolment_id, enrolment_expires_at, created_at) VALUES (?, ?, ?, ?, ?)
@@ -409,7 +405,8 @@ func (s *Service) ownFactorAction(w http.ResponseWriter, r *http.Request, passwo
 	if !s.needKey(w, r) {
 		return false
 	}
-	if _, ok := s.checkOwnPassword(w, r, u, password); !ok {
+	verified, ok := s.checkOwnPassword(w, r, u, password)
+	if !ok {
 		return false
 	}
 	limits := append([]limitKey{{s.codePerIP, s.clientIP(r)}}, s.accountLimits(s.clientIP(r), u.ID)...)
@@ -418,6 +415,11 @@ func (s *Service) ownFactorAction(w http.ResponseWriter, r *http.Request, passwo
 		return false
 	}
 	err := s.write(r.Context(), func(tx *sql.Tx) error {
+		// The password that was checked must still be the user's: a change or reset meanwhile
+		// ended this session, and the request doesn't outlive it.
+		if err := s.passwordUnchanged(r.Context(), tx, u.ID, verified); err != nil {
+			return err
+		}
 		if on, err := s.twoFactorOn(r.Context(), tx, u.ID); err != nil {
 			return err
 		} else if !on {
@@ -540,12 +542,8 @@ func (s *Service) issueSignIn(ctx context.Context, tx *sql.Tx, userID int64) (si
 func (s *Service) passwordSignIn(ctx context.Context, userID int64, verifiedHash string) (signIn, error) {
 	var out signIn
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		var current string
-		if err := tx.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id = ?`, userID).Scan(&current); err != nil {
+		if err := s.passwordUnchanged(ctx, tx, userID, verifiedHash); err != nil {
 			return err
-		}
-		if current != verifiedHash {
-			return errPasswordChanged
 		}
 		var err error
 		if out, err = s.issueSignIn(ctx, tx, userID); err != nil || out.session == "" {
@@ -556,6 +554,19 @@ func (s *Service) passwordSignIn(ctx context.Context, userID int64, verifiedHash
 			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"method": "password"}})
 	})
 	return out, err
+}
+
+// passwordUnchanged fails with errPasswordChanged unless userID's password hash within tx is
+// verified, the one a request checked a password against.
+func (s *Service) passwordUnchanged(ctx context.Context, tx *sql.Tx, userID int64, verified string) error {
+	var current string
+	if err := tx.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id = ?`, userID).Scan(&current); err != nil {
+		return err
+	}
+	if current != verified {
+		return errPasswordChanged
+	}
+	return nil
 }
 
 // writeChallenge answers a password step that needs a code.

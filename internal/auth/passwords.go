@@ -192,17 +192,18 @@ func (s *Service) handleUseReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.InfoContext(r.Context(), "password set with a reset link; the user's sessions are signed out", "user_id", u.ID)
+	// With two-factor login on, the link earns a challenge, not a session: the same second step
+	// as a password login's, which replaces the browser's session once it passes. Until then the
+	// browser keeps the one it had (the account's own sessions ended with the reset).
+	if out.challenge != "" {
+		writeChallenge(w, out)
+		return
+	}
 	// As at login: the browser's earlier session, whoever's it was, ends.
 	if old := s.sessionToken(r); old != "" {
 		if err := s.deleteSession(r.Context(), old); err != nil {
 			slog.WarnContext(r.Context(), "auth: deleting the replaced session", "err", err)
 		}
-	}
-	// With two-factor login on, the link earns a challenge, not a session: the same second step
-	// as a password login's.
-	if out.challenge != "" {
-		writeChallenge(w, out)
-		return
 	}
 	s.setSessionCookie(w, out.session)
 	s.writeMe(w, r, http.StatusOK, u)

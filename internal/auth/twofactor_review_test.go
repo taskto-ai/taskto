@@ -437,3 +437,62 @@ func TestEnrolDuringPasswordChangeFails(t *testing.T) {
 		t.Fatal("an enrolment was made for a password that changed")
 	}
 }
+
+// Turning it off, or making new recovery codes, with a password that was changed meanwhile: the
+// request doesn't outlive the session the change ended.
+func TestFactorActionDuringPasswordChangeFails(t *testing.T) {
+	for _, path := range []string{"/api/me/two-factor/disable", "/api/me/two-factor/recovery-codes"} {
+		t.Run(path, func(t *testing.T) {
+			e := newEnv(t, Options{})
+			owner, _ := e.setup()
+			two := e.turnOn(owner, ownerPassword)
+			e.svc.hook = func(point string) {
+				if point != "own-password-verified" {
+					return
+				}
+				e.svc.hook = nil
+				if _, err := e.db.Exec(`UPDATE users SET password_hash = ?`, "$changed"); err != nil {
+					t.Error(err)
+				}
+			}
+			rec := owner.do(http.MethodPost, path, map[string]string{"password": ownerPassword, "code": e.codeNow(two.secret)})
+			expect(t, rec, http.StatusConflict)
+			if got := errCode(t, rec); got != "password_changed" {
+				t.Fatalf("code = %s", got)
+			}
+			if n := e.count(`SELECT count(*) FROM user_totp WHERE enabled_at IS NOT NULL`); n != 1 {
+				t.Fatal("two-factor login was turned off by a request that outlived its password")
+			}
+			if n := e.count(`SELECT count(*) FROM user_recovery_codes WHERE used_at IS NULL`); n != recoveryCodeCount {
+				t.Fatalf("recovery codes left = %d", n)
+			}
+		})
+	}
+}
+
+// A reset link that earns a challenge leaves the browser's own session alone until the code.
+func TestResetChallengeKeepsTheBrowsersSession(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, ws := e.setup()
+	member, memberMe := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
+	e.turnOn(member, otherPassword)
+	link := e.reset(owner, ws, memberMe.User.ID)
+	// The owner's browser redeems the member's link.
+	rec := owner.do(http.MethodPost, "/api/password-reset", map[string]string{"token": link, "password": newPassword})
+	expect(t, rec, http.StatusOK)
+	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
+}
+
+func TestTwoFactorStatusReportsCodesLeft(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, _ := e.setup()
+	rec := owner.do(http.MethodGet, "/api/me/two-factor", nil)
+	if got := decode[map[string]any](t, rec); got["enabled"] != false || got["recovery_codes_left"] != float64(0) {
+		t.Fatalf("status = %v", got)
+	}
+	e.turnOn(owner, ownerPassword)
+	rec = owner.do(http.MethodGet, "/api/me/two-factor", nil)
+	if got := decode[map[string]any](t, rec); got["enabled"] != true || got["recovery_codes_left"] != float64(recoveryCodeCount) {
+		t.Fatalf("status = %v", got)
+	}
+}
