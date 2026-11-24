@@ -1156,7 +1156,7 @@ func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *te
 			t.Fatal(err)
 		}
 		notice := notifications.Notice{UserID: w.bob.id, WorkspaceID: w.ws, Kind: kind,
-			Ref: notifications.Ref{Space: w.space.ID, Board: w.board, Card: card}, DedupeKey: "job:1:r0:" + kind}
+			Ref: notifications.Ref{Space: w.space.ID, Board: w.board, Card: card, Due: "2030-01-10"}, DedupeKey: "job:1:r0:" + kind}
 		// A retry makes nothing twice.
 		for range 2 {
 			if err := notifications.Add(context.Background(), tx, notice); err != nil {
@@ -1184,18 +1184,21 @@ func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *te
 		t.Fatalf("mallory's inbox has %d items", n)
 	}
 
-	// The date shown is the card's now; a cleared date leaves nothing to say.
-	if _, err := w.db.Exec(`UPDATE cards SET due = '2030-02-01' WHERE id = ?`, card); err != nil {
-		t.Fatal(err)
-	}
-	if got := w.inbox(w.bob, "").Notifications[1].Params["due"]; got != "2030-02-01" {
-		t.Fatalf("due = %q, want the card's current date", got)
-	}
-	if _, err := w.db.Exec(`UPDATE cards SET due = NULL WHERE id = ?`, card); err != nil {
-		t.Fatal(err)
-	}
-	if it := w.inbox(w.bob, "").Notifications[1]; it.Kind != notifications.KindChanged || len(it.Params) != 0 {
-		t.Fatalf("item for a card whose date was cleared = %+v", it)
+	// A notice says its date only while the card is still due then: once the date moved or was cleared,
+	// "overdue since" a day that may be ahead would be false, and it is a plain mention of the card.
+	for _, due := range []string{"2030-02-01", ""} {
+		if due == "" {
+			if _, err := w.db.Exec(`UPDATE cards SET due = NULL WHERE id = ?`, card); err != nil {
+				t.Fatal(err)
+			}
+		} else if _, err := w.db.Exec(`UPDATE cards SET due = ? WHERE id = ?`, due, card); err != nil {
+			t.Fatal(err)
+		}
+		for _, i := range []int{0, 1} {
+			if it := w.inbox(w.bob, "").Notifications[i]; it.Kind != notifications.KindChanged || len(it.Params) != 0 {
+				t.Fatalf("item %d for a card whose date is %q now = %+v", i, due, it)
+			}
+		}
 	}
 	if _, err := w.db.Exec(`UPDATE cards SET due = '2030-01-10' WHERE id = ?`, card); err != nil {
 		t.Fatal(err)

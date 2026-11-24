@@ -7,18 +7,23 @@ package boards
 //
 // The jobs follow the card inside the transaction that changes it (syncReminders): a new or changed
 // due date or assignee schedules, moves or cancels them, and so does moving the card to done or
-// archiving it. Nothing is scheduled for a card whose assignee is the agent, for one nobody is
-// assigned to, or for a time that has already passed.
+// archiving it, archiving its board or its space (and bringing them back), and the assignee losing
+// access to the space (the schema drops their jobs with it). Nothing is scheduled for a card whose
+// assignee is the agent, for one nobody is assigned to, for an assignee who may not read the space,
+// or for a time that has already passed or that the scheduler can't hold (the card's date is
+// still saved: a reminder never fails a change to a card). A server that starts with cards that
+// were dated before reminders existed schedules theirs (ReconcileReminders).
 //
 // A card's due date is a calendar date with no time zone, and TaskTo knows no person's time zone,
 // so "the morning" is reminderHour:00 UTC on the date. That is the same instant for everyone, and
 // the morning of the due day in the Americas and Europe; it is early afternoon in east Asia.
 //
 // A job is only a prompt: when it runs, the handler reads the card again and the assignee's access
-// again, and makes nothing if the card is gone, finished, archived, assigned to someone else, due
-// on another date than the job was made for, or the assignee may no longer read its space. A
-// notification is made with the job's occurrence key, so a retry or a second run of the same
-// occurrence makes none twice; a reschedule is a new occurrence.
+// again, in the transaction that makes the notification, and makes nothing if the job is no longer
+// the live claim, the card is gone, finished, archived, assigned to someone else, due on another
+// date than the job was made for, or the assignee may no longer read its space. A notification is
+// made once for a person, a card, a kind and a due date, whatever happens to the jobs: a retry, a
+// reschedule or a clock that stepped back make none twice.
 
 import (
 	"context"
@@ -50,6 +55,14 @@ type reminderPayload struct {
 	Due   string `json:"due"`
 }
 
+// WithScheduler has the service schedule reminders on sch, whose handlers another service of the
+// same database registered (EnableReminders): the HTTP routes and the agent's tools must both
+// keep the jobs, and a kind has one handler. sch is set before the service takes requests.
+func (s *Service) WithScheduler(sch *schedule.Service) *Service {
+	s.sched = sch
+	return s
+}
+
 // EnableReminders registers the reminders' handlers on sch, which must not have started, and has
 // the service schedule them from then on. A service without it makes none (tests of other parts).
 func (s *Service) EnableReminders(sch *schedule.Service) error {
@@ -75,25 +88,40 @@ func reminderTimes(due string) (remind, overdue time.Time, err error) {
 	return remind, remind.AddDate(0, 0, 1), nil
 }
 
-// syncReminders brings the jobs of a card in line with it, in tx, after a change of the card.
-// previous is the user the card was assigned to before the change, 0 for none or the agent.
-func (s *Service) syncReminders(ctx context.Context, tx *sql.Tx, sp access.Space, boardID, cardID, previous int64) error {
+// syncReminders brings the jobs of a card in line with it, in tx, after a change of the card or of
+// what the card is in. previous is the user the card was assigned to before the change, 0 for none
+// or the agent. It fails only for an error of the database: a reminder that can't be made (too
+// many waiting, a time out of the scheduler's range) is left out and the change stands.
+func (s *Service) syncReminders(ctx context.Context, tx *sql.Tx, cardID, previous int64) error {
 	if s.sched == nil {
 		return nil
 	}
 	var (
-		col      string
-		due      sql.NullString
-		assignee sql.NullInt64
-		agent    bool
+		col                           string
+		due                           sql.NullString
+		assignee                      sql.NullInt64
+		agent                         bool
+		boardArchived, spaceArchd     sql.NullString
+		spaceID, workspaceID, boardID int64
 	)
-	if err := tx.QueryRowContext(ctx, `SELECT col, due, assignee_id, assignee_agent FROM cards WHERE id = ?`, cardID).
-		Scan(&col, &due, &assignee, &agent); err != nil {
+	if err := tx.QueryRowContext(ctx, `
+		SELECT c.col, c.due, c.assignee_id, c.assignee_agent, b.archived_at, s.archived_at, s.id, s.workspace_id, b.id
+		FROM cards c JOIN boards b ON b.id = c.board_id JOIN spaces s ON s.id = b.space_id
+		WHERE c.id = ?`, cardID).
+		Scan(&col, &due, &assignee, &agent, &boardArchived, &spaceArchd, &spaceID, &workspaceID, &boardID); err != nil {
 		return err
 	}
 	var owner int64
-	if assignee.Valid && !agent && due.Valid && col != string(Done) && col != string(Archived) {
-		owner = assignee.Int64
+	if assignee.Valid && !agent && due.Valid && col != string(Done) && col != string(Archived) &&
+		!boardArchived.Valid && !spaceArchd.Valid {
+		// Only for someone who may read the space: a job of anyone else would fail when it came
+		// due, and hold a place of their bound until then.
+		switch _, err := s.access.CheckTx(ctx, tx, assignee.Int64, spaceID); {
+		case err == nil:
+			owner = assignee.Int64
+		case !errors.Is(err, access.ErrNotFound):
+			return err
+		}
 	}
 	// Whoever had them and no longer should, has no reminder.
 	for _, user := range []int64{previous, assignee.Int64} {
@@ -120,26 +148,31 @@ func (s *Service) syncReminders(ctx context.Context, tx *sql.Tx, sp access.Space
 		at   time.Time
 	}{{KindDueReminder, remind}, {KindOverdue, overdue}} {
 		job := schedule.Job{
-			Kind: j.kind, UserID: owner, WorkspaceID: sp.WorkspaceID, SpaceID: sp.ID,
+			Kind: j.kind, UserID: owner, WorkspaceID: workspaceID, SpaceID: spaceID,
 			DedupeKey: reminderKey(cardID), Payload: payload, RunAt: j.at,
 		}
-		if !j.at.After(now) {
+		// A job that is as it should be stays, whatever its time and state: one that is ready but has
+		// not run yet (the worker is behind, or the server was away) is not for a change of the card's
+		// labels to take away, and one that ran must not run again as a new occurrence.
+		switch existing, err := s.sched.Find(ctx, tx, owner, j.kind, job.DedupeKey); {
+		case err == nil && existing.RunAt.Equal(j.at) && existing.SpaceID == spaceID && string(existing.Payload) == string(payload):
+			continue
+		case err != nil && !errors.Is(err, schedule.ErrNotFound):
+			return err
+		}
+		// Each time is held to the scheduler's range by itself: the day after the last supported day
+		// has no overdue notice, and still has its reminder.
+		if !j.at.After(now) || j.at.After(schedule.MaxRunAt) {
 			// Too late to be a reminder; there is no catching up on a date that has passed.
 			if _, err := s.sched.Cancel(ctx, tx, owner, j.kind, job.DedupeKey); err != nil {
 				return err
 			}
 			continue
 		}
-		switch existing, err := s.sched.Find(ctx, tx, owner, j.kind, job.DedupeKey); {
-		case err == nil && existing.RunAt.Equal(j.at) && existing.SpaceID == sp.ID && string(existing.Payload) == string(payload):
-			continue // already as it should be; a reschedule would make a new occurrence of one that ran
-		case err != nil && !errors.Is(err, schedule.ErrNotFound):
-			return err
-		}
 		if _, err := s.sched.Reschedule(ctx, tx, job); err != nil {
-			if errors.Is(err, schedule.ErrTooMany) {
+			if errors.Is(err, schedule.ErrTooMany) || errors.Is(err, schedule.ErrInvalid) {
 				// A person with a thousand reminders waiting gets no more; the change itself stands.
-				slog.Warn("boards: too many scheduled jobs for a reminder", "user", owner)
+				slog.Warn("boards: a reminder was not scheduled", "user", owner, "err", err)
 				continue
 			}
 			return err
@@ -157,6 +190,103 @@ func (s *Service) cancelReminders(ctx context.Context, tx *sql.Tx, userID, cardI
 	return nil
 }
 
+// syncCards brings the jobs of the cards the query selects (their IDs, one column) in line with
+// them, in tx.
+func (s *Service) syncCards(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
+	if s.sched == nil {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := s.syncReminders(ctx, tx, id, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dated is the cards of a board or space that can have reminders: assigned to a person, with a date.
+const dated = `c.assignee_id IS NOT NULL AND NOT c.assignee_agent AND c.due IS NOT NULL`
+
+// syncBoard follows a board that was archived or brought back: its cards' jobs go or come.
+func (s *Service) syncBoard(ctx context.Context, tx *sql.Tx, boardID int64) error {
+	return s.syncCards(ctx, tx, `SELECT c.id FROM cards c WHERE c.board_id = ? AND `+dated+` ORDER BY c.id`, boardID)
+}
+
+// SyncSpace follows a shared space that was archived or brought back: the jobs of its cards go or
+// come. It is the access package's ArchiveHook (access.Checker.OnArchiveChange).
+func (s *Service) SyncSpace(ctx context.Context, tx *sql.Tx, spaceID int64) error {
+	return s.syncCards(ctx, tx, `
+		SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id
+		WHERE b.space_id = ? AND `+dated+` ORDER BY c.id`, spaceID)
+}
+
+// reconcileBatch is how many cards ReconcileReminders brings in line in one transaction.
+const reconcileBatch = 200
+
+// ReconcileReminders schedules the reminders of the cards that should have them and have none:
+// the cards dated before reminders existed, and those a restore or an access change left without.
+// It is idempotent (a card whose jobs are as they should be is not touched), and the server runs
+// it at start, before the scheduler's worker does.
+func (s *Service) ReconcileReminders(ctx context.Context) error {
+	if s.sched == nil {
+		return nil
+	}
+	// A card due yesterday still has its overdue notice ahead of it.
+	from := s.sched.Now().UTC().AddDate(0, 0, -1).Format(dateLayout)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id JOIN spaces s ON s.id = b.space_id
+		WHERE `+dated+` AND c.due >= ? AND c.col NOT IN ('done', 'archived')
+		  AND b.archived_at IS NULL AND s.archived_at IS NULL
+		ORDER BY c.id`, from)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for len(ids) > 0 {
+		n := min(reconcileBatch, len(ids))
+		batch := ids[:n]
+		ids = ids[n:]
+		if err := s.write(ctx, func(tx *sql.Tx) error {
+			for _, id := range batch {
+				if err := s.syncReminders(ctx, tx, id, 0); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // remind is the handler of both kinds: it notifies the job's owner of the card, if it still holds.
 func (s *Service) remind(notice string) schedule.Handler {
 	return func(ctx context.Context, job schedule.Job) error {
@@ -164,18 +294,23 @@ func (s *Service) remind(notice string) schedule.Handler {
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
 			return schedule.Permanent(fmt.Errorf("the payload is malformed: %w", err))
 		}
-		sp, err := s.access.Check(ctx, job.UserID, job.SpaceID)
-		switch {
-		case errors.Is(err, access.ErrNotFound):
-			return schedule.ErrAccessLost
-		case err != nil:
-			return err
-		case sp.WorkspaceID != job.WorkspaceID || !sp.Access.Allows(access.Read):
-			return schedule.ErrAccessLost
-		case sp.ArchivedAt != nil:
-			return nil // an archived space is left as it is
-		}
+		// Everything is checked in the transaction that makes the notification, which holds the write
+		// lock: what was true a moment ago (the claim, the access, the card) is true when it commits.
 		return s.write(ctx, func(tx *sql.Tx) error {
+			if holds, err := s.sched.Holds(ctx, tx, job); err != nil || !holds {
+				return err // cancelled or rescheduled since this try began: what replaced it speaks
+			}
+			sp, err := s.access.CheckTx(ctx, tx, job.UserID, job.SpaceID)
+			switch {
+			case errors.Is(err, access.ErrNotFound):
+				return schedule.ErrAccessLost
+			case err != nil:
+				return err
+			case sp.WorkspaceID != job.WorkspaceID:
+				return schedule.ErrAccessLost
+			case sp.ArchivedAt != nil:
+				return nil // an archived space is left as it is
+			}
 			var (
 				col      string
 				due      sql.NullString
@@ -183,7 +318,7 @@ func (s *Service) remind(notice string) schedule.Handler {
 				agent    bool
 				archived sql.NullString
 			)
-			err := tx.QueryRowContext(ctx, `
+			err = tx.QueryRowContext(ctx, `
 				SELECT c.col, c.due, c.assignee_id, c.assignee_agent, b.archived_at
 				FROM cards c JOIN boards b ON b.id = c.board_id
 				WHERE c.id = ? AND b.id = ? AND b.space_id = ?`, p.Card, p.Board, sp.ID).
@@ -203,8 +338,10 @@ func (s *Service) remind(notice string) schedule.Handler {
 			}
 			return notifications.Add(ctx, tx, notifications.Notice{
 				UserID: job.UserID, WorkspaceID: sp.WorkspaceID, Kind: notice,
-				Ref:       notifications.Ref{Space: sp.ID, Board: p.Board, Card: p.Card},
-				DedupeKey: job.Occurrence(),
+				Ref: notifications.Ref{Space: sp.ID, Board: p.Board, Card: p.Card, Due: p.Due},
+				// One for the person, the card, the kind (the notification's own) and the date, however
+				// many jobs there were: Alice, then Bob, then Alice again, or a clock that went back.
+				DedupeKey: fmt.Sprintf("card:%d:%s", p.Card, p.Due),
 			})
 		})
 	}

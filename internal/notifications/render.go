@@ -127,9 +127,10 @@ func (r *reader) describe(ctx context.Context, n stored) (params map[string]stri
 		item := strconv.FormatInt(sp.ID, 10) + ":" + strconv.FormatInt(n.ref.Board, 10) + ":" + strconv.FormatInt(n.ref.Card, 10)
 		params := map[string]string{"title": title}
 		if n.kind != KindCardAssigned {
-			// The date the card is due now, a calendar date: the web app formats it for the reader. A
-			// card whose date was cleared since has none to say, and is a plain mention of the card.
-			if !due.Valid {
+			// The date the card is due, a calendar date: the web app formats it for the reader. A card
+			// whose date was cleared or moved since the notice was made says nothing of it (the notice
+			// would read "overdue since" a day that may be ahead): it is a plain mention of the card.
+			if !due.Valid || due.String != n.ref.Due {
 				return nil, Target{}, false, nil
 			}
 			params["due"] = due.String

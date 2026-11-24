@@ -229,6 +229,18 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	// access.
 	spaces := access.New(sqlDB, nil)
 	boardSvc := boards.New(sqlDB, spaces)
+	// The scheduler: timed work that runs for people, later (package schedule). The features that
+	// use it register their handlers here, before anything that changes cards runs and before it
+	// starts; it stops before the database closes. Cards' due-date reminders and overdue notices
+	// are scheduled by every path that changes a card: the tools, the apps' effects (below) and the
+	// HTTP routes (server.Options.Scheduler); the cards dated before there were reminders get theirs.
+	scheduler := schedule.New(sqlDB, spaces, schedule.Options{})
+	if err := boardSvc.EnableReminders(scheduler); err != nil {
+		return err
+	}
+	if err := boardSvc.ReconcileReminders(ctx); err != nil {
+		return err
+	}
 	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb})
 	// The apps' effects (cards, documents) are done in the background, as the users who acted,
 	// so they go on when nobody has the app open. Stopped before the database closes.
@@ -242,13 +254,6 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	}
 	stopPush := notifier.Start(ctx)
 	defer stopPush()
-	// The scheduler: timed work that runs for people, later (package schedule). The features that
-	// use it register their handlers here, before it starts; it stops before the database closes.
-	scheduler := schedule.New(sqlDB, spaces, schedule.Options{})
-	// Cards' due-date reminders and overdue notices.
-	if err := boardSvc.EnableReminders(scheduler); err != nil {
-		return err
-	}
 	stopSchedule := scheduler.Start(ctx)
 	defer stopSchedule()
 	tools := agenttools.New(agenttools.Options{
@@ -322,6 +327,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	}
 	handler, err := server.New(version, sqlDB, server.Options{
 		Notifications: notifier,
+		Scheduler:     scheduler,
 		Auth:          authOpts,
 		DataDir:       cfg.DataDir,
 		AgentState:    agent.state,

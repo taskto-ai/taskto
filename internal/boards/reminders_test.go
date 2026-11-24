@@ -349,28 +349,20 @@ func TestNoReminderAfterTheAssigneeLostAccess(t *testing.T) {
 	c := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
 	kept := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.owner.id)})
 
-	// Alice leaves the space (not the workspace): her jobs fail without a handler call.
+	// Alice leaves the space (not the workspace): her jobs go with her access, in the same commit,
+	// and no longer hold places of her bound.
 	expect(t, w.owner.do(http.MethodDelete,
 		fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", w.ws, w.shared.ID, w.alice.id), nil), http.StatusNoContent)
+	wantJobs(t, w, w.alice, c, time.Time{}, time.Time{})
 	w.run(at("2030-01-10", 8))
 	if n := w.notices(w.alice, notifications.KindCardDue); n != 0 {
 		t.Fatalf("a reminder for someone who can't read the space: %d", n)
-	}
-	job, err := w.sch.Find(context.Background(), w.e.db, w.alice.id, KindDueReminder, reminderKey(c.ID))
-	if err != nil || job.State != schedule.StateFailed {
-		t.Fatalf("the job of the person who lost access: %+v, %v", job, err)
 	}
 	// The owner's, on the same morning, were sent.
 	if n := w.notices(w.owner, notifications.KindCardDue); n != 1 {
 		t.Fatalf("the owner's reminders = %d, want 1", n)
 	}
 	_ = kept
-
-	// And the handler itself refuses, if it is asked anyway: access is its own check.
-	err = w.e.s.remind(notifications.KindCardDue)(context.Background(), job)
-	if err == nil || !isAccessLost(err) {
-		t.Fatalf("the handler for a person who lost access: %v", err)
-	}
 }
 
 func isAccessLost(err error) bool { return err != nil && errors.Is(err, schedule.ErrAccessLost) }
@@ -447,5 +439,188 @@ func TestRemindersOffWithoutAScheduler(t *testing.T) {
 	var n int
 	if err := w.e.db.QueryRow(`SELECT count(*) FROM scheduled_jobs`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("scheduled jobs = %d, %v", n, err)
+	}
+}
+
+// A reminder that is ready but has not run yet (the worker is behind, or the server was away) is
+// not taken away by a change that has nothing to do with it.
+func TestALabelsOnlyChangeKeepsAReadyReminder(t *testing.T) {
+	w := newRemindWorld(t)
+	c := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	w.clock.set(at("2030-01-10", 9)) // the morning has come; the worker has not run
+	c = w.patch(c, map[string]any{"labels": []string{"money"}})
+	wantJobs(t, w, w.alice, c, at("2030-01-10", 8), at("2030-01-11", 8))
+	w.run(at("2030-01-10", 10))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 1 {
+		t.Fatalf("the reminder that was ready = %d notices, want 1", n)
+	}
+	// A date that moves to one already past still drops them: there is nothing to catch up on.
+	c = w.patch(c, map[string]any{"due": "2030-01-05"})
+	wantJobs(t, w, w.alice, c, time.Time{}, time.Time{})
+}
+
+func TestTheLastDayTheSchedulerHoldsStillSavesTheCard(t *testing.T) {
+	w := newRemindWorld(t)
+	// The overdue notice of this day would be in the year 9000, which no job can be.
+	c := w.newCard(map[string]any{"due": "8999-12-31", "assignee": asUser(w.alice.id)})
+	if c.Due == nil || *c.Due != "8999-12-31" {
+		t.Fatalf("the card's date = %v", c.Due)
+	}
+	wantJobs(t, w, w.alice, c, at("8999-12-31", 8), time.Time{})
+	// A patch to it, and from it, are no different.
+	c = w.patch(c, map[string]any{"labels": []string{"far"}})
+	wantJobs(t, w, w.alice, c, at("8999-12-31", 8), time.Time{})
+	c = w.patch(c, map[string]any{"due": "2030-01-10"})
+	wantJobs(t, w, w.alice, c, at("2030-01-10", 8), at("2030-01-11", 8))
+}
+
+// remindHooks is a world whose reminders' handlers run through hook first, as the same worker
+// would call them: what a test changes there is changed after the job was claimed.
+func newHookedWorld(t *testing.T, hook func(schedule.Job)) *remindWorld {
+	t.Helper()
+	w := newWorld(t)
+	clock := &fakeClock{t: at("2030-01-02", 9)}
+	sch := schedule.New(w.e.db, w.e.s.access, schedule.Options{Clock: clock.now})
+	for kind, notice := range map[schedule.Kind]string{KindDueReminder: notifications.KindCardDue, KindOverdue: notifications.KindCardOverdue} {
+		real := w.e.s.remind(notice)
+		if err := sch.Register(kind, func(ctx context.Context, job schedule.Job) error {
+			hook(job)
+			return real(ctx, job)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.e.s.WithScheduler(sch)
+	return &remindWorld{world: w, clock: clock, sch: sch}
+}
+
+func TestACancelledClaimMakesNoNotice(t *testing.T) {
+	var w *remindWorld
+	cancel := true
+	w = newHookedWorld(t, func(job schedule.Job) {
+		if cancel { // the card was reassigned and the job cancelled, after the worker took it
+			if _, err := w.sch.Cancel(context.Background(), w.e.db, job.UserID, job.Kind, job.DedupeKey); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	w.run(at("2030-01-10", 8))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 0 {
+		t.Fatalf("a job that was cancelled made %d notices", n)
+	}
+}
+
+func TestANoticeIsOncePerPersonCardKindAndDate(t *testing.T) {
+	w := newRemindWorld(t)
+	c := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	w.run(at("2030-01-10", 8))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 1 {
+		t.Fatalf("notices = %d, want 1", n)
+	}
+	// The clock stepped back and the job ran again as a new occurrence (a revision later): the person
+	// is not told twice of the same date.
+	if _, err := w.e.db.Exec(`UPDATE scheduled_jobs SET state = 'pending', revision = revision + 1, lease_until = NULL
+		WHERE dedupe_key = ?`, reminderKey(c.ID)); err != nil {
+		t.Fatal(err)
+	}
+	w.run(at("2030-01-10", 9))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 1 {
+		t.Fatalf("notices after the job ran again = %d, want 1", n)
+	}
+	if n := w.notices(w.alice, notifications.KindCardOverdue); n != 0 {
+		t.Fatalf("overdue notices = %d, want 0", n)
+	}
+	// A new date is news again.
+	c = w.patch(c, map[string]any{"due": "2030-01-20"})
+	w.run(at("2030-01-20", 8))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 2 {
+		t.Fatalf("notices after a new date = %d, want 2", n)
+	}
+}
+
+func TestAReminderChecksAccessInItsOwnTransaction(t *testing.T) {
+	var w *remindWorld
+	w = newHookedWorld(t, func(schedule.Job) {
+		// After the worker's own check and before the handler's: access ends, and the schema's
+		// cleanup of the person's jobs is out of the way so the handler is the one that must refuse.
+		for _, q := range []string{`DROP TRIGGER space_members_drop_jobs`,
+			fmt.Sprintf(`DELETE FROM space_members WHERE space_id = %d AND user_id = %d`, w.shared.ID, w.alice.id)} {
+			if _, err := w.e.db.Exec(q); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	w.run(at("2030-01-10", 8))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 0 {
+		t.Fatalf("a reminder for a person who lost access = %d", n)
+	}
+}
+
+func TestArchivingABoardOrASpaceTakesTheRemindersAndRestoringGivesThemBack(t *testing.T) {
+	w := newRemindWorld(t)
+	w.e.s.access.OnArchiveChange(w.e.s.SyncSpace)
+	c := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	wantJobs(t, w, w.alice, c, at("2030-01-10", 8), at("2030-01-11", 8))
+
+	patchBoard := func(archived bool) {
+		w.e.t.Helper()
+		expect(w.e.t, w.alice.do(http.MethodPatch, boardPath(w.shared, w.team.ID, ""),
+			map[string]any{"version": w.boardVersion(w.team.ID), "archived": archived}), http.StatusOK)
+	}
+	patchBoard(true)
+	wantJobs(t, w, w.alice, c, time.Time{}, time.Time{})
+	patchBoard(false)
+	wantJobs(t, w, w.alice, c, at("2030-01-10", 8), at("2030-01-11", 8))
+
+	expect(t, w.owner.do(http.MethodPatch, spacePath(w.shared, ""), map[string]bool{"archived": true}), http.StatusOK)
+	wantJobs(t, w, w.alice, c, time.Time{}, time.Time{})
+	expect(t, w.owner.do(http.MethodPatch, spacePath(w.shared, ""), map[string]bool{"archived": false}), http.StatusOK)
+	wantJobs(t, w, w.alice, c, at("2030-01-10", 8), at("2030-01-11", 8))
+}
+
+func TestLeavingTheWorkspaceTakesTheRemindersAndTheirPlaceInTheBound(t *testing.T) {
+	w := newRemindWorld(t)
+	c := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", w.ws, w.alice.id), nil), http.StatusNoContent)
+	wantJobs(t, w, w.alice, c, time.Time{}, time.Time{})
+}
+
+func TestCardsDatedBeforeRemindersExistGetTheirsAtStart(t *testing.T) {
+	w := newWorld(t) // no scheduler yet: these cards are as an older server made them
+	mk := func(fields map[string]any) Card { return w.createCard(w.alice, w.shared, w.team, fields) }
+	future := mk(map[string]any{"title": "future", "due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	today := mk(map[string]any{"title": "today", "due": "2030-01-02", "assignee": asUser(w.alice.id)})
+	yesterday := mk(map[string]any{"title": "yesterday", "due": "2030-01-01", "assignee": asUser(w.alice.id)})
+	longAgo := mk(map[string]any{"title": "long ago", "due": "2029-06-01", "assignee": asUser(w.alice.id)})
+	unassigned := mk(map[string]any{"title": "nobody", "due": "2030-01-10"})
+	agent := mk(map[string]any{"title": "agent", "due": "2030-01-10", "assignee": map[string]any{"kind": "agent"}})
+	done := mk(map[string]any{"title": "done", "due": "2030-01-10", "assignee": asUser(w.alice.id), "column": "done"})
+	onArchived := w.createBoard(w.alice, w.shared, "Later archived")
+	hidden := w.createCard(w.alice, w.shared, onArchived, map[string]any{"title": "hidden", "due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	expect(t, w.alice.do(http.MethodPatch, boardPath(w.shared, onArchived.ID, ""),
+		map[string]any{"version": onArchived.Version, "archived": true}), http.StatusOK)
+
+	clock := &fakeClock{t: at("2030-01-02", 9)}
+	sch := schedule.New(w.e.db, w.e.s.access, schedule.Options{Clock: clock.now})
+	if err := w.e.s.EnableReminders(sch); err != nil {
+		t.Fatal(err)
+	}
+	rw := &remindWorld{world: w, clock: clock, sch: sch}
+	for range 2 { // and again: it is idempotent
+		if err := w.e.s.ReconcileReminders(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		wantJobs(t, rw, w.alice, future, at("2030-01-10", 8), at("2030-01-11", 8))
+		// Due today, the morning is past and the overdue notice is still ahead.
+		wantJobs(t, rw, w.alice, today, time.Time{}, at("2030-01-03", 8))
+		for _, c := range []Card{yesterday, longAgo, unassigned, agent, done, hidden} {
+			wantJobs(t, rw, w.alice, c, time.Time{}, time.Time{})
+		}
+	}
+	var revision int64
+	if err := w.e.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE dedupe_key = ? AND kind = ?`, reminderKey(future.ID), KindDueReminder).Scan(&revision); err != nil || revision != 0 {
+		t.Fatalf("revision = %d, %v: a second pass must leave a job as it is", revision, err)
 	}
 }

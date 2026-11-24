@@ -72,6 +72,9 @@ type Ref struct {
 	Card   int64 `json:"card,omitempty"`
 	App    int64 `json:"app,omitempty"`
 	Effect int64 `json:"effect,omitempty"`
+	// Due is the date a card's reminder or overdue notice was made for, a calendar date: the
+	// notice says it only while the card is still due then.
+	Due string `json:"due,omitempty"`
 }
 
 // Notice is a notification to add.

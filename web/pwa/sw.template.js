@@ -150,7 +150,8 @@ async function showPush(event) {
   const kind = KINDS.includes(data?.kind) ? data.kind : 'changed'
   const strings = await readStrings()
   await self.registration.showNotification(BRAND, {
-    body: strings[kind] || '',
+    // A cache made before a kind existed lacks its words: the generic ones do.
+    body: strings[kind] || strings.changed || '',
     // One notification replaces its own earlier one, never another's.
     tag: id ? `taskto-notification-${id}` : 'taskto-notification',
     data: { id },
