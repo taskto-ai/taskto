@@ -64,7 +64,7 @@ the job fails.
 
 ## Writing a scenario
 
-- Use `scenario(name, async ({ page, context, server }) => { … })` from `support.mjs`, and
+- Use `scenario(name, async (s) => { const { page, context, server } = s; … })` from `support.mjs`, and
   `setUp(s)` to make the owner through the setup screen. Don't share a server between scenarios.
 - Find things the way a person does, by role and by the English label (`getByRole`,
   `getByLabel`), which the `t()` keys in `web/src/i18n/locales/en.json` give. The browser's

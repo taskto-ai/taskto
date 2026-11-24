@@ -85,40 +85,46 @@ export async function startServer() {
 }
 
 // A scenario: a fresh server, a browser context with its trace running, and `fn({ page, context,
-// server, base })`. When it fails, the trace (a zip for `playwright show-trace`) and a screenshot
-// of every open page are written to resultsDir, then the failure goes on.
+// server, base })`. When it fails, or times out, the trace (a zip for `playwright show-trace`) and
+// a screenshot of every open page are written to resultsDir.
 export function scenario(name, fn, { viewport = { width: 1280, height: 900 } } = {}) {
   test(name, { timeout: 120_000 }, async (t) => {
-    // Cleanup is registered with the test, not left to `finally` blocks: when the scenario times
-    // out while a browser call hangs, the function never returns, but these still run, so no
-    // browser or server outlives its scenario.
-    const server = await startServer()
-    t.after(() => server.stop())
-    const browser = await chromium.launch()
-    t.after(() => browser.close())
-    const context = await browser.newContext({ baseURL: server.base, viewport })
+    // Everything is torn down by one hook of the test, not by `finally` blocks: when a browser
+    // call hangs until the scenario times out, the function never returns, but the hook still
+    // runs. It saves the failure's files first, while the browser is open, then closes the browser
+    // and stops the server, so nothing outlives its scenario.
+    let browser
+    let context
+    let server
+    let passed = false
+    const messages = []
+    t.after(async () => {
+      if (!passed && context) {
+        const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+        const out = join(resultsDir, slug)
+        mkdirSync(out, { recursive: true })
+        await context.tracing.stop({ path: join(out, 'trace.zip') }).catch(() => {})
+        for (const [i, p] of context.pages().entries()) {
+          await p.screenshot({ path: join(out, `page-${i}.png`), fullPage: true, timeout: 5_000 }).catch(() => {})
+        }
+        console.error(
+          `${name}: page errors: ${messages.join(' | ') || 'none'}\nserver log (last lines):\n${server.logs().trim().split('\n').slice(-15).join('\n')}`,
+        )
+      }
+      await browser?.close().catch(() => {})
+      await server?.stop()
+    })
+    server = await startServer()
+    browser = await chromium.launch()
+    context = await browser.newContext({ baseURL: server.base, viewport })
     context.setDefaultTimeout(15_000)
     await context.tracing.start({ screenshots: true, snapshots: true, sources: false })
     const page = await context.newPage()
-    const messages = []
     page.on('console', (m) => m.type() === 'error' && messages.push(`console: ${m.text()}`))
     page.on('pageerror', (e) => messages.push(`pageerror: ${e.message}`))
-    try {
-      await fn({ page, context, server, base: server.base, messages })
-      await context.tracing.stop()
-    } catch (err) {
-      const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
-      const out = join(resultsDir, slug)
-      mkdirSync(out, { recursive: true })
-      await context.tracing.stop({ path: join(out, 'trace.zip') }).catch(() => {})
-      for (const [i, p] of context.pages().entries()) {
-        await p.screenshot({ path: join(out, `page-${i}.png`), fullPage: true }).catch(() => {})
-      }
-      console.error(
-        `${name}: page errors: ${messages.join(' | ') || 'none'}\nserver log (last lines):\n${server.logs().trim().split('\n').slice(-15).join('\n')}`,
-      )
-      throw err
-    }
+    await fn({ page, context, server, base: server.base, messages })
+    await context.tracing.stop()
+    passed = true
   })
 }
 
