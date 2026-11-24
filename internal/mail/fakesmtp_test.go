@@ -35,6 +35,7 @@ type fakeSMTP struct {
 	User, Pass    string // the only sign-in it accepts; empty accepts none
 	RejectRcpt    string // a reply for RCPT, such as "550 5.1.1 no such user"
 	RejectData    string // a reply after the message, such as "554 5.7.1 spam"
+	DropAfterData bool   // take the message and close the connection without answering it
 	Hang          bool   // accept the connection and say nothing
 	MalformedAuth bool   // the reply to a refused sign-in isn't a valid reply, and holds the password
 	EchoAuth      bool   // a refused sign-in's reply repeats the user name and the password, as a careless relay can
@@ -246,6 +247,13 @@ func (s *fakeSMTP) handle(conn net.Conn) {
 				data.WriteString(strings.TrimPrefix(l, ".") + "\r\n")
 			}
 			cur.Data = data.String()
+			if s.DropAfterData {
+				// Takes the message and loses the connection before it says so.
+				s.mu.Lock()
+				s.received = append(s.received, cur)
+				s.mu.Unlock()
+				return
+			}
 			if s.RejectData != "" {
 				reply("%s", s.RejectData)
 				continue

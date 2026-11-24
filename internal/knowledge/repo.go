@@ -667,10 +667,11 @@ func (r *repo) walk(h plumbing.Hash, dir string, fn func(name string, e object.T
 var errPageFull = errors.New("page full")
 
 // list returns the documents under the folder prefix, after the path after, at most
-// limit of them. A tree's entries are in git's order, which is the order of the full
-// paths, so a walk lists them sorted and can skip the folders before after.
-func (r *repo) list(ctx context.Context, prefix, after string, limit int) (Page, error) {
-	head, err := r.head()
+// limit of them, as of the commit at (the head if empty). A tree's entries are in git's order,
+// which is the order of the full paths, so a walk lists them sorted and can skip the folders
+// before after.
+func (r *repo) list(ctx context.Context, at, prefix, after string, limit int) (Page, error) {
+	head, err := r.revision(at)
 	if err != nil || head == nil {
 		return Page{}, err
 	}

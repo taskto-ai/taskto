@@ -515,7 +515,7 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 			params["capability"] = f.capability
 		}
 		writeError(w, http.StatusForbidden, apierr.CodeAppForbidden, err.Error(), params)
-	case errors.Is(err, errOperationReused):
+	case errors.Is(err, ErrOperationReused):
 		writeError(w, http.StatusConflict, apierr.CodeAppOperationReused, err.Error())
 	case errors.Is(err, errEffectNotFailed):
 		writeError(w, http.StatusConflict, apierr.CodeAppEffectNotFailed, err.Error())

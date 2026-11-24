@@ -15,7 +15,7 @@ import (
 // quotaStack is a stack whose knowledge base and apps hold the quotas in limits.
 func quotaStack(t *testing.T, limits quota.Limits) *stack {
 	t.Helper()
-	return newStackWithDB(t, func(o *Options, sqlDB *sql.DB) {
+	return newStackDB(t, func(o *Options, sqlDB *sql.DB) {
 		q := quota.New(sqlDB, limits, o.Search.Knowledge())
 		o.Search.Knowledge().SetQuota(func(sp access.Space, adding int64) error {
 			return q.CheckDB(t.Context(), sp, adding)

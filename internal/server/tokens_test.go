@@ -27,6 +27,7 @@ import (
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/serverkey"
 )
@@ -45,8 +46,10 @@ type stack struct {
 	db  *sql.DB
 	h   http.Handler
 	dir string // the data directory
-	one int64
-	two int64
+	// sched is the scheduler the boards' reminders are on; its worker isn't started.
+	sched *schedule.Service
+	one   int64
+	two   int64
 
 	alice, bob, carol  person
 	secret, team       int64
@@ -67,13 +70,13 @@ func newStack(t *testing.T) *stack { return newStackWith(t, nil) }
 func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	t.Helper()
 	if mod == nil {
-		return newStackWithDB(t, nil)
+		return newStackDB(t, nil)
 	}
-	return newStackWithDB(t, func(o *Options, _ *sql.DB) { mod(o) })
+	return newStackDB(t, func(o *Options, _ *sql.DB) { mod(o) })
 }
 
-// newStackWithDB is newStackWith for a change that needs the database.
-func newStackWithDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
+// newStackDB is newStackWith with the stack's database given to mod too, for a service that needs it.
+func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -93,12 +96,20 @@ func newStackWithDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
 	store := providers.NewStore(sqlDB, key)
 	index := search.New(sqlDB, kb, store, search.Options{})
 	spaces := access.New(sqlDB, nil)
+	// The scheduler and the boards' reminders, as the command sets them up: the handlers on the
+	// service the tools use, and the same scheduler given to the server for its HTTP routes.
+	boardSvc := boards.New(sqlDB, spaces)
+	sched := schedule.New(sqlDB, spaces, schedule.Options{})
+	if err := boardSvc.EnableReminders(sched); err != nil {
+		t.Fatal(err)
+	}
 	tools := agenttools.New(agenttools.Options{
-		DB: sqlDB, Key: key, Access: spaces, Boards: boards.New(sqlDB, spaces), Apps: apps.New(sqlDB, spaces),
+		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: apps.New(sqlDB, spaces),
 		Knowledge: kb, Search: index,
 	})
-	s := &stack{t: t, db: sqlDB, dir: dir, setupToken: auth.NewSetupToken()}
+	s := &stack{t: t, db: sqlDB, dir: dir, sched: sched, setupToken: auth.NewSetupToken()}
 	opts := Options{
+		Scheduler:     sched,
 		Auth:          auth.Options{InsecureCookies: true, SetupToken: s.setupToken, HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}},
 		Search:        index,
 		Providers:     providers.New(store, nil),

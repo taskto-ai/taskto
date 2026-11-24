@@ -47,7 +47,7 @@ type EffectView struct {
 	Detail EffectDetail `json:"detail"`
 	// Result is what a done effect made, if the caller may read where: a card's IDs, a
 	// document's path, a route as kind and IDs.
-	Result    map[string]any `json:"result,omitempty"`
+	Result    map[string]any `json:"result,omitempty" apitypes:"json"`
 	CreatedAt string         `json:"created_at,omitempty"`
 	UpdatedAt string         `json:"updated_at,omitempty"`
 	DoneAt    *string        `json:"done_at"`
@@ -76,7 +76,7 @@ func detailOf(p payload) EffectDetail {
 
 // EffectList is a page of effects, newest first, with how many of the app's wait and failed.
 type EffectList struct {
-	Effects []EffectView `json:"effects"`
+	Effects []EffectView `json:"effects" apitypes:"nonnull"`
 	// More is whether older effects than the page's last match too (ask again with before).
 	More bool `json:"more"`
 	// Active and Failed count the entries the caller may see that wait or run, and that failed.

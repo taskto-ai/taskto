@@ -936,7 +936,9 @@ type Described struct {
 
 // describeAttachments replaces, in items (as Items made them), the ids an attachment field holds
 // by what each is: id, type, size and pixels. It never reads a file.
-func (s *Service) describeAttachments(ctx context.Context, appID int64, def Definition, items []map[string]any) error {
+//
+// spaceID, if not 0, says the app must be in that space: the same statement checks it.
+func describeAttachments(ctx context.Context, q queryer, spaceID, appID int64, def Definition, items []map[string]any) error {
 	var names []string
 	single := map[string]bool{}
 	for _, f := range def.Collection.Fields {
@@ -949,8 +951,9 @@ func (s *Service) describeAttachments(ctx context.Context, appID int64, def Defi
 		return nil
 	}
 	known := map[string]Described{}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, content_type, size, coalesce(width, 0), coalesce(height, 0) FROM app_attachments
-		WHERE app_id = ? AND status = 'ready'`, appID)
+	rows, err := q.QueryContext(ctx, `SELECT t.id, t.content_type, t.size, coalesce(t.width, 0), coalesce(t.height, 0) FROM app_attachments t
+		WHERE t.app_id = ? AND t.status = 'ready'
+		AND (? = 0 OR EXISTS (SELECT 1 FROM apps a WHERE a.id = t.app_id AND a.space_id = ?))`, appID, spaceID, spaceID)
 	if err != nil {
 		return err
 	}

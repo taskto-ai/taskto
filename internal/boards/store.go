@@ -236,7 +236,13 @@ func (s *Service) updateBoard(ctx context.Context, sp access.Space, a Actor, boa
 				                   ELSE coalesce(archived_at, ?) END,
 				version = version + 1, updated_at = ?, updated_by = ?
 			WHERE id = ?`, ch.Name, archivedAt, archivedAt, archivedAt, now(), a.UserID, boardID)
-		return err
+		if err != nil {
+			return err
+		}
+		if ch.Archived != nil {
+			return s.syncBoard(ctx, tx, boardID) // its cards' reminders go, or come back
+		}
+		return nil
 	})
 	if err != nil {
 		return Board{}, err
@@ -650,6 +656,9 @@ func (s *Service) createCard(ctx context.Context, sp access.Space, a Actor, boar
 		if err := applyChanges(ctx, tx, sp, a, boardID, id, ch); err != nil {
 			return err
 		}
+		if err := s.syncReminders(ctx, tx, id, 0); err != nil {
+			return err
+		}
 		if nc.Created != nil {
 			return nc.Created(tx, id)
 		}
@@ -760,6 +769,9 @@ func (s *Service) moveCardIf(ctx context.Context, sp access.Space, a Actor, boar
 		if err := place(ctx, tx, boardID, cardID, column, nil, nil); err != nil {
 			return err
 		}
+		if err := s.syncReminders(ctx, tx, cardID, 0); err != nil {
+			return err
+		}
 		moved = true
 		_, err = tx.ExecContext(ctx, `
 			UPDATE cards SET version = version + 1, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?
@@ -826,7 +838,14 @@ func (s *Service) changeCard(ctx context.Context, sp access.Space, a Actor, boar
 		if c.Version != version {
 			return ErrStale
 		}
+		previous := int64(0) // who was reminded of the card
+		if c.Assignee != nil && c.Assignee.Kind == AssignUser {
+			previous = c.Assignee.ID
+		}
 		if err := change(tx, c); err != nil {
+			return err
+		}
+		if err := s.syncReminders(ctx, tx, cardID, previous); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `

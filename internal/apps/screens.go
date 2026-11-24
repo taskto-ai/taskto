@@ -32,7 +32,7 @@ type Screen struct {
 	// Record is a screen that shows one record, at /record, and that is opened with the
 	// record's id (the navigate action's context, {"id": …}).
 	Record     bool              `json:"record,omitempty"`
-	Components []json.RawMessage `json:"components"`
+	Components []json.RawMessage `json:"components" apitypes:"json"`
 }
 
 // Bounds of an app's screens. Its components in all are bounded by MaxComponents, as one

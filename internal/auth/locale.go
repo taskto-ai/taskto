@@ -31,9 +31,9 @@ func ValidLocale(tag string) bool {
 
 const errBadLocale = `locale must be a BCP 47 tag such as "pt-BR", or "" for none`
 
-// meUser is the user in GET /api/me: their own settings come with them there, and only
+// MeUser is the user in GET /api/me: their own settings come with them there, and only
 // there (a workspace's member list doesn't show anyone's).
-type meUser struct {
+type MeUser struct {
 	User
 	Locale string `json:"locale"`
 }
