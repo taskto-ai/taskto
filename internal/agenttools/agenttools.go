@@ -137,6 +137,7 @@ func New(o Options) *Service {
 		"list_spaces":      s.listSpaces,
 		"list_members":     s.listMembers,
 		"search_docs":      s.searchDocs,
+		"search_cards":     s.searchCards,
 		"list_docs":        s.listDocs,
 		"read_doc":         s.readDoc,
 		"write_doc":        s.writeDoc,
