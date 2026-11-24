@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -270,20 +271,37 @@ func (f *fake) garbage() {
 	}
 }
 
-// work runs the scenario's tool: a sleep (as a real sleep process, so stopping the turn has
-// a child to stop) and optionally a process that outlives the CLI.
-func (f *fake) work() {
+// work runs the scenario's tool: a wait of SleepMS and optionally a real process that outlives
+// the CLI (so stopping the turn has a child to stop). The wait is the fake's own, not a `sleep`
+// process: a foreground child killed by the stop's signal would end with an error this fake
+// used to ignore, and report the tool as done. A wait a signal cuts short is an error, and the
+// CLI that was told to stop fails like a real one.
+func (f *fake) work() error {
 	if f.scenario.Background {
 		bg := exec.Command("sleep", "300")
 		if f.scenario.HoldStdout {
 			bg.Stdout = os.Stdout
 		}
 		_ = bg.Start()
-		_ = os.WriteFile(filepath.Join(f.config, "background.pid"), []byte(fmt.Sprint(bg.Process.Pid)), 0o600)
+		// Written whole or not at all: a test that sees the file may stop the turn at once,
+		// and a file created but not yet written would then stay empty for good.
+		pidFile := filepath.Join(f.config, "background.pid")
+		_ = os.WriteFile(pidFile+".tmp", []byte(fmt.Sprint(bg.Process.Pid)), 0o600)
+		_ = os.Rename(pidFile+".tmp", pidFile)
 	}
 	if f.scenario.SleepMS > 0 {
-		_ = exec.Command("sleep", fmt.Sprintf("%.3f", float64(f.scenario.SleepMS)/1000)).Run()
+		interrupted := make(chan os.Signal, 1)
+		signal.Notify(interrupted, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+		defer signal.Stop(interrupted)
+		timer := time.NewTimer(time.Duration(f.scenario.SleepMS) * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case sig := <-interrupted:
+			return fmt.Errorf("the tool was interrupted by %v", sig)
+		}
 	}
+	return nil
 }
 
 func (f *fake) answer(prompt, session string) string {
@@ -486,7 +504,10 @@ func (f *fake) streamTurn(prompt, session string, resume bool) int {
 		f.emit(map[string]any{"type": "assistant", "session_id": session, "message": map[string]any{"role": "assistant", "content": []any{
 			map[string]any{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": map[string]any{"command": "sleep"}},
 		}}})
-		f.work()
+		if err := f.work(); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", f.name, err)
+			return 1
+		}
 		f.emit(map[string]any{"type": "user", "session_id": session, "message": map[string]any{"role": "user", "content": []any{
 			map[string]any{"type": "tool_result", "tool_use_id": "tool-1", "content": "slept", "is_error": false},
 		}}})
@@ -572,7 +593,10 @@ func (f *fake) codexExec(args []string) int {
 	if f.scenario.SleepMS > 0 || f.scenario.Background {
 		item := map[string]any{"id": "item_1", "type": "command_execution", "command": "/bin/sh -lc 'sleep'", "aggregated_output": "", "exit_code": nil, "status": "in_progress"}
 		f.emit(map[string]any{"type": "item.started", "item": item})
-		f.work()
+		if err := f.work(); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", f.name, err)
+			return 1
+		}
 		item["status"], item["exit_code"], item["aggregated_output"] = "completed", 0, "slept\n"
 		f.emit(map[string]any{"type": "item.completed", "item": item})
 	}

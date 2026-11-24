@@ -45,6 +45,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 
 	s.passwordRoutes(mux)
 	s.sessionRoutes(mux)
+	s.twoFactorRoutes(mux)
 	s.ssoRoutes(mux)
 }
 
@@ -223,14 +224,30 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	refund()
+	s.at("password-verified")
 
-	// The new session first, then drop the one the browser had: a failure in between
-	// leaves the user signed in rather than signed out.
-	token, err := s.newSession(r.Context(), u.ID)
+	// What the password earns is decided in one transaction that checks the hash is still the
+	// one that matched (a change or reset meanwhile ended the sessions and challenges the old
+	// password could make) and reads the two-factor state: a user with it on gets no session
+	// yet, but a challenge, which only the second step (twofactor.go) accepts, and the
+	// browser's own session is left as it is.
+	out, err := s.passwordSignIn(r.Context(), u.ID, hash)
+	if errors.Is(err, errPasswordChanged) {
+		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
 	}
+	if out.challenge != "" {
+		writeChallenge(w, out)
+		return
+	}
+
+	// The new session first, then drop the one the browser had: a failure in between
+	// leaves the user signed in rather than signed out.
+	token := out.session
 	if old := s.sessionToken(r); old != "" {
 		if err := s.deleteSession(r.Context(), old); err != nil {
 			// The new session works; the old one just lives until it expires.
@@ -275,6 +292,13 @@ func (s *Service) handleMembers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		serverError(w, r, err)
 		return
+	}
+	// Who has two-factor login on is for the admins, who can clear it, to see.
+	if m.Role == RoleAdmin {
+		if err := s.markTwoFactor(r.Context(), m.WorkspaceID, members); err != nil {
+			serverError(w, r, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string][]Member{"members": members})
 }

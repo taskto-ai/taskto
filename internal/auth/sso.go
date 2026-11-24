@@ -926,7 +926,7 @@ func (s *Service) ssoInvitedUser(ctx context.Context, tx *sql.Tx, email, name st
 			return User{}, ssoJoined{}, err
 		}
 		// Two invites to one workspace: the first one's role stands.
-		if err := join(ctx, tx, inv, u.ID); err != nil && !errors.Is(err, errAlreadyMember) {
+		if err := s.join(ctx, tx, inv, u.ID); err != nil && !errors.Is(err, errAlreadyMember) {
 			return User{}, ssoJoined{}, err
 		}
 		joined.invites = append(joined.invites, inv.id)

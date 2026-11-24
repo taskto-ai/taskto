@@ -42,6 +42,9 @@ type Member struct {
 	User
 	Role     Role   `json:"role"`
 	JoinedAt string `json:"joined_at"`
+	// TwoFactor says whether they have two-factor login on. Only an admin's view of the
+	// list has it.
+	TwoFactor *bool `json:"two_factor,omitempty"`
 }
 
 // Invite is a pending invitation, without its token.
@@ -151,20 +154,6 @@ func (s *Service) userByEmail(ctx context.Context, email string) (User, string, 
 		return User{}, "", errNotFound
 	}
 	return u, hash, err
-}
-
-// newSession logs userID in with a password and returns the session's token.
-func (s *Service) newSession(ctx context.Context, userID int64) (string, error) {
-	var token string
-	err := s.write(ctx, func(tx *sql.Tx) error {
-		var err error
-		if token, err = s.insertSession(ctx, tx, userID); err != nil {
-			return err
-		}
-		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.LoginSucceeded,
-			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"method": "password"}})
-	})
-	return token, err
 }
 
 // insertSession adds a session for userID, and drops the user's expired ones so they
@@ -609,7 +598,7 @@ func (s *Service) useInvite(ctx context.Context, tx *sql.Tx, inv pendingInvite) 
 	return mustAffect(res, errInviteInvalid)
 }
 
-func join(ctx context.Context, tx *sql.Tx, inv pendingInvite, userID int64) error {
+func (s *Service) join(ctx context.Context, tx *sql.Tx, inv pendingInvite, userID int64) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE invites SET accepted_by = ? WHERE id = ?`, userID, inv.id); err != nil {
 		return err
 	}
@@ -629,6 +618,13 @@ func join(ctx context.Context, tx *sql.Tx, inv pendingInvite, userID int64) erro
 		TargetType: audit.TargetInvite, Target: inv.id, Details: audit.Details{"role": string(inv.role), "already_member": n == 0}}); err != nil {
 		return err
 	}
+	if n > 0 {
+		for _, h := range s.memberHooks {
+			if err := h(ctx, tx, inv.workspaceID, userID); err != nil {
+				return err
+			}
+		}
+	}
 	return mustAffect(res, errAlreadyMember)
 }
 
@@ -638,7 +634,7 @@ func (s *Service) acceptAsUser(ctx context.Context, inv pendingInvite, userID in
 		if err := s.useInvite(ctx, tx, inv); err != nil {
 			return err
 		}
-		return join(ctx, tx, inv, userID)
+		return s.join(ctx, tx, inv, userID)
 	})
 }
 
@@ -662,7 +658,7 @@ func (s *Service) acceptAsNew(ctx context.Context, inv pendingInvite, name, pass
 		if u, err = insertUser(ctx, tx, inv.email, name, passwordHash); err != nil {
 			return err
 		}
-		if err := join(ctx, tx, inv, u.ID); err != nil {
+		if err := s.join(ctx, tx, inv, u.ID); err != nil {
 			return err
 		}
 		token, err = s.insertSession(ctx, tx, u.ID)

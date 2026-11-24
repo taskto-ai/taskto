@@ -18,6 +18,8 @@ const build = [
   'assets/AppsPage-def456.js', // the lazy-loaded apps renderer
   'assets/pt-BR-ghi789.js',
   'assets/index-abc123.js.map',
+  'assets/zxing_reader-jkl012.wasm', // the scanner's decoder
+  'assets/zxing_writer-mno345.wasm', // the QR writer's
   'vendor/novnc/core/rfb.js',
   'assets/THIRD_PARTY_NOTICES.txt',
   'sw.js',
@@ -31,6 +33,12 @@ test('precaches the page, public files and every chunk, lazy ones included', () 
   expect(entries).toContain('/assets/AppsPage-def456.js')
   expect(entries).toContain('/assets/pt-BR-ghi789.js')
   expect(entries).toContain('/assets/index-abc123.css')
+  // Scanning works offline, so its decoder is kept.
+  expect(entries).toContain('/assets/zxing_reader-jkl012.wasm')
+})
+
+test("leaves out the QR writer's .wasm: drawing the two-factor secret needs the server anyway", () => {
+  expect(precacheEntries(build).some((e) => e.includes('zxing_writer'))).toBe(false)
 })
 
 test('leaves out the worker itself, source maps, the vendored live view and the licence notices', () => {
