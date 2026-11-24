@@ -98,7 +98,7 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
     case 'password':
       return <PasswordTab />
     case 'data':
-      return <DataTab workspace={workspace.id} />
+      return <DataTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'tokens':
       return <TokensTab workspace={workspace.id} />
     case 'about':

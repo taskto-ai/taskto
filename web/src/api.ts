@@ -766,6 +766,10 @@ export const backupPath = (workspace: number) => `${ws(workspace)}/backup`
 // answers `{download, expires_in}`, the address to go to for the zip, which works once.
 export const exportPath = (workspace: number) => `${ws(workspace)}/export`
 
+// The same for an admin's export of the workspace's shared spaces they are a member of, and its
+// member list (docs/api.md#export-a-workspace).
+export const workspaceExportPath = (workspace: number) => `${ws(workspace)}/export/workspace`
+
 // The server's outgoing email (docs/install.md#email), for admins: where it sends through, never the
 // account or its password. `password` says whether the server signs in.
 export type MailStatus =

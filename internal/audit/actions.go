@@ -40,6 +40,8 @@ const (
 
 	// A person takes their own data out (internal/export).
 	DataExportStarted = "data_export_started"
+	// An admin takes out the shared spaces they are a member of, and the member list.
+	WorkspaceExportStarted = "workspace_export_started"
 
 	// Model provider accounts, shared CLI accounts, search and dictation.
 	ProviderAccountCreated   = "provider_account_created"

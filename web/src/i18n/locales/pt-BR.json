@@ -1100,7 +1100,14 @@
       "scope": "O que entra é decidido por onde cada coisa está e de quem é agora. Tudo o que está no seu espaço privado vai com você, inclusive um documento ou aplicativo movido para lá de um espaço compartilhado, e os registros desse aplicativo, também os de colegas. Suas próprias conversas vão inteiras e podem conter trechos de documentos compartilhados que o agente leu para você.",
       "never": "O conteúdo que continua em um espaço compartilhado nunca entra, mesmo onde você pode lê-lo, nem os dados de outras pessoas. Um manifesto no zip lista o que ele contém e o que precisou deixar de fora.",
       "download": "Baixar meus dados",
-      "limit": "Você pode exportar algumas vezes por hora, uma de cada vez. Se o download falhar, aguarde um pouco e tente de novo."
+      "limit": "Você pode exportar algumas vezes por hora, uma de cada vez. Se o download falhar, aguarde um pouco e tente de novo.",
+      "workspace": {
+        "title": "Exportar o espaço de trabalho",
+        "intro": "Baixe um zip com os espaços compartilhados deste espaço de trabalho: seus documentos, quadros com cartões e comentários, e aplicativos com seus registros, além da lista de membros do espaço de trabalho com nomes, e-mails e funções.",
+        "scope": "Só entram os espaços compartilhados de que você é membro, inclusive os arquivados, que ficam marcados, porque a exportação nunca mostra mais do que o aplicativo mostra. Para exportar outro espaço compartilhado, entre nele primeiro: os membros dele veem que você entrou. Nenhum espaço privado, nenhuma conversa e nada de outros espaços de trabalho entra. Um manifesto no zip lista o que ele contém e o que precisou deixar de fora.",
+        "download": "Baixar o espaço de trabalho",
+        "limit": "Conta nas mesmas poucas exportações por hora dos seus dados, uma de cada vez. Cada uma fica registrada no registro de auditoria."
+      }
     },
     "spaces": {
       "title": "Espaços compartilhados",
