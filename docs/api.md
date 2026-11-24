@@ -19,6 +19,28 @@ and apps over MCP, at `/mcp`, with an access token: see [mcp.md](mcp.md).
 - **IDs** are integers.
 - Replies are `Cache-Control: no-store`.
 
+### API types
+
+The web app's types for the replies (`web/src/api.ts`) are checked against the Go structs that
+make them, so a field renamed or retyped in Go breaks the build instead of the page:
+
+1. `internal/apitypes` lists the reply structs (`Roots`) and writes their shapes, read by
+   reflection as `encoding/json` writes them, to `web/src/api.gen.ts`
+   (`go generate ./internal/apitypes`). The file is committed, and `go test` fails when it is
+   not what the structs say.
+2. `web/src/api.contract.ts` checks each type `api.ts` declares against its generated shape
+   (`Check<Gen.Card, Api.Card>`): every field the web app reads must exist in the reply, be
+   present and non-null there unless the web app's type allows it, and have a type the reply's
+   fits. `pnpm typecheck` (part of `pnpm build`) fails, naming the field, when one does not.
+   The web app's types may be narrower than the generated ones (`'admin' | 'member'` for a Go
+   string) and may leave out fields it does not read.
+
+To cover another reply, add its struct to `Roots`, run `go generate ./internal/apitypes`, and
+add a line to `api.contract.ts`. A reply struct that is not exported, or that a handler builds
+as a `map`, needs a named, exported struct first. What this does not check: that a call's type
+argument (`api<Card[]>(…)`) is the reply of its path, a nil slice or map that Go writes as
+`null`, or the values of a Go string type's constants.
+
 ### Error codes
 
 Every code is listed here and in `internal/apierr/codes.go`, the one list; a code keeps its

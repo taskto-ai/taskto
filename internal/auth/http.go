@@ -53,9 +53,9 @@ const (
 	maxEmail   = 254
 )
 
-// me is the reply of GET /api/me, and of the calls that log someone in.
-type me struct {
-	User       meUser       `json:"user"`
+// Me is the reply of GET /api/me, and of the calls that log someone in.
+type Me struct {
+	User       MeUser       `json:"user"`
 	Workspaces []Membership `json:"workspaces"`
 }
 
@@ -70,7 +70,7 @@ func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u 
 		serverError(w, r, err)
 		return
 	}
-	writeJSON(w, status, me{User: meUser{User: u, Locale: locale}, Workspaces: ws})
+	writeJSON(w, status, Me{User: MeUser{User: u, Locale: locale}, Workspaces: ws})
 }
 
 func (s *Service) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
