@@ -5,7 +5,7 @@ PNPM ?= pnpm
 GOLANGCI_LINT = go tool -modfile=tools/go.mod golangci-lint
 
 # Runs Go and TypeScript lint, the Go tests, the translation check, and the web and agent
-# builds and tests. CI also runs the reference scan, ShellCheck and a standalone Go build,
+# builds and tests. CI also runs the reference scan, ShellCheck and a standalone Go build.
 # It leaves out the separate CI jobs that need more than a checkout: the secret scan
 # (gitleaks), the agent runtime integration tests (`make agent-it`), the CLI isolation tests
 # (root, in a container), the worker network test (privileged Docker), the backup
