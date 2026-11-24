@@ -13,6 +13,7 @@ import { request } from 'node:http'
 import { defineDoc, defineExtension, defineTool, type ToolExecutionApi } from '@earendil-works/pi-durable'
 import type { Schema } from '@earendil-works/pi-schema'
 import definitions from './taskto-tools.json' with { type: 'json' }
+import { testHooks } from './test-hooks.js'
 
 /** The conversation's capability for the tools socket; '' until the server sends one. */
 export const ToolAccess = defineDoc({
@@ -113,11 +114,13 @@ function refusal(reply: Reply): string {
 }
 
 /** A tool as the server defines it (internal/agenttools/tools.json, copied here by go generate). */
-type ToolSpec = {
+export type ToolSpec = {
   name: string
   description: string
   /** Reads are safe to run again after a crash; writes are not, so a crash never repeats one. */
   read_only: boolean
+  /** The conversation agent's alone, not listed over MCP: the agent browser's tools. */
+  conversation_only?: boolean
   input_schema: Schema<object>
 }
 
@@ -154,14 +157,15 @@ function serverTool(socketPath: string, spec: ToolSpec) {
 // server lists (internal/agenttools).
 const specs = definitions as ToolSpec[]
 
-/** The tools, calling the server on socketPath. The agent browser's (browser_*) are offered only
- * when the server has it on (TASKTO_AGENT_BROWSER=true), so the model isn't shown tools that would
- * only answer "off". */
+/** The tools, calling the server on socketPath. The conversation-only ones (`conversation_only` in
+ * tools.json: the agent browser's) are offered only when the server has the browser on
+ * (TASKTO_AGENT_BROWSER=true), so the model isn't shown tools that would only answer "off". */
 export function tasktoTools(socketPath: string, options: { browser?: boolean } = {}) {
   return defineExtension({
     name: 'taskto-tools',
-    tools: specs
-      .filter((spec) => options.browser || !spec.name.startsWith('browser_'))
+    // The integration tests' fixture tools (test-hooks.ts) come after the server's; none otherwise.
+    tools: [...specs, ...testHooks.extraToolSpecs]
+      .filter((spec) => options.browser || !spec.conversation_only)
       .map((spec) => serverTool(socketPath, spec)),
   })
 }

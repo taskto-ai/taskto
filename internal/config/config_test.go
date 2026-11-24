@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func env(vars map[string]string) func(string) string {
@@ -440,5 +441,137 @@ func TestSSOValidation(t *testing.T) {
 				t.Fatalf("Load error = %v, want one with %q", err, tt.fail)
 			}
 		})
+	}
+}
+
+func TestSMTPSettings(t *testing.T) {
+	cfg, err := Load(nil, env(map[string]string{ //nolint:gosec // G101: names of settings and a path, not credentials
+		"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "TaskTo <taskto@example.com>",
+		"TASKTO_SMTP_USERNAME": "taskto", "TASKTO_SMTP_PASSWORD_FILE": "/run/secrets/smtp",
+		"TASKTO_SMTP_EGRESS": "public",
+	}), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SMTPHost != "smtp.example.com" || cfg.SMTPSecurityMode() != "starttls" || cfg.SMTPPortNumber() != 587 ||
+		cfg.SMTPUsername != "taskto" || cfg.SMTPPasswordFile != "/run/secrets/smtp" || cfg.SMTPEgressPolicy().IsAny() {
+		t.Fatalf("config = %+v", cfg)
+	}
+	if !strings.Contains(cfg.SMTPFrom, "taskto@example.com") {
+		t.Fatalf("from = %q", cfg.SMTPFrom)
+	}
+
+	for security, port := range map[string]int{"starttls": 587, "tls": 465, "none": 25} {
+		c, err := Load([]string{"-smtp-host", "relay.example.com", "-smtp-from", "a@example.com", "-smtp-security", security}, env(nil), io.Discard)
+		if err != nil || c.SMTPPortNumber() != port {
+			t.Fatalf("%s: port %d, %v", security, c.SMTPPortNumber(), err)
+		}
+	}
+	c, err := Load([]string{"-smtp-host", "relay.example.com", "-smtp-from", "a@example.com", "-smtp-port", "2525"}, env(nil), io.Discard)
+	if err != nil || c.SMTPPortNumber() != 2525 {
+		t.Fatalf("port %d, %v", c.SMTPPortNumber(), err)
+	}
+}
+
+func TestSMTPValidation(t *testing.T) {
+	base := map[string]string{"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "taskto@example.com"}
+	with := func(extra map[string]string) map[string]string {
+		m := map[string]string{}
+		for k, v := range base {
+			m[k] = v
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+	for name, tt := range map[string]struct {
+		env  map[string]string
+		fail string
+	}{
+		"none":                     {nil, ""},
+		"a host and a sender":      {base, ""},
+		"a host without sender":    {map[string]string{"TASKTO_SMTP_HOST": "smtp.example.com"}, "needs -smtp-from"},
+		"a sender without host":    {map[string]string{"TASKTO_SMTP_FROM": "taskto@example.com"}, "need -smtp-host"},
+		"a bad sender":             {with(map[string]string{"TASKTO_SMTP_FROM": "not an address"}), "TASKTO_SMTP_FROM"},
+		"a host with a port":       {map[string]string{"TASKTO_SMTP_HOST": "smtp.example.com:587", "TASKTO_SMTP_FROM": "a@example.com"}, "-smtp-port"},
+		"a bad port":               {with(map[string]string{"TASKTO_SMTP_PORT": "70000"}), "port"},
+		"a bad security":           {with(map[string]string{"TASKTO_SMTP_SECURITY": "ssl"}), "starttls, tls or none"},
+		"a username alone":         {with(map[string]string{"TASKTO_SMTP_USERNAME": "u"}), "go together"},
+		"a relative password":      {with(map[string]string{"TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "smtp"}), "absolute"},
+		"credentials in clear":     {with(map[string]string{"TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "/p", "TASKTO_SMTP_SECURITY": "none"}), "clear text"},
+		"clear to a loopback":      {map[string]string{"TASKTO_SMTP_HOST": "127.0.0.1", "TASKTO_SMTP_FROM": "a@example.com", "TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "/p", "TASKTO_SMTP_SECURITY": "none"}, "clear text"},
+		"clear to localhost":       {map[string]string{"TASKTO_SMTP_HOST": "localhost", "TASKTO_SMTP_FROM": "a@example.com", "TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "/p", "TASKTO_SMTP_SECURITY": "none"}, "clear text"},
+		"a relay without sign-in":  {map[string]string{"TASKTO_SMTP_HOST": "127.0.0.1", "TASKTO_SMTP_FROM": "a@example.com", "TASKTO_SMTP_SECURITY": "none"}, ""},
+		"an IPv6 host with a port": {map[string]string{"TASKTO_SMTP_HOST": "[::1]:587", "TASKTO_SMTP_FROM": "a@example.com"}, "-smtp-port"},
+		"an IPv6 zone":             {map[string]string{"TASKTO_SMTP_HOST": "fe80::1%eth0", "TASKTO_SMTP_FROM": "a@example.com"}, "-smtp-port"},
+		"a bad egress":             {with(map[string]string{"TASKTO_SMTP_EGRESS": "nonsense!"}), "egress"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(nil, env(tt.env), io.Discard)
+			switch {
+			case tt.fail == "" && err != nil:
+				t.Fatalf("Load: %v", err)
+			case tt.fail != "" && (err == nil || !strings.Contains(err.Error(), tt.fail)):
+				t.Fatalf("Load error = %v, want one with %q", err, tt.fail)
+			}
+		})
+	}
+}
+
+// An IPv6 address is a host, bracketed or not, and is kept without brackets, as the connection
+// joins it to the port; a host with a port is still refused.
+func TestSMTPHostTakesIPv6Literals(t *testing.T) {
+	for in, want := range map[string]string{
+		"smtp.example.com": "smtp.example.com", "::1": "::1", "[::1]": "::1", "[2001:DB8::25]": "2001:db8::25", "2001:db8::25": "2001:db8::25",
+	} {
+		for how, args := range map[string][]string{
+			"flag": {"-smtp-host", in, "-smtp-from", "a@example.com"},
+			"env":  nil,
+		} {
+			e := env(map[string]string{})
+			if how == "env" {
+				e = env(map[string]string{"TASKTO_SMTP_HOST": in, "TASKTO_SMTP_FROM": "a@example.com"})
+			}
+			c, err := Load(args, e, io.Discard)
+			if err != nil || c.SMTPHost != want {
+				t.Errorf("%s %q: host %q, %v; want %q", how, in, c.SMTPHost, err, want)
+			}
+		}
+	}
+	for _, in := range []string{"[::1]:25", "::1]", "[::1", "1.2.3.4:25", "smtp.example.com:587"} {
+		if _, err := Load([]string{"-smtp-host", in, "-smtp-from", "a@example.com"}, env(nil), io.Discard); err == nil {
+			t.Errorf("%q accepted", in)
+		}
+	}
+}
+
+func TestAuditRetention(t *testing.T) {
+	if got := load(t, nil, nil).AuditRetention(); got != 365*24*time.Hour {
+		t.Fatalf("by default %v, want a year", got)
+	}
+	file := writeConfig(t, `audit_retention = "90"`)
+	// The file, then the environment over it, then the flag over both.
+	if got := load(t, []string{"-config", file}, nil).AuditRetention(); got != 90*24*time.Hour {
+		t.Fatalf("from the file: %v", got)
+	}
+	env := map[string]string{"TASKTO_AUDIT_RETENTION": "30"}
+	if got := load(t, []string{"-config", file}, env).AuditRetention(); got != 30*24*time.Hour {
+		t.Fatalf("env over file: %v", got)
+	}
+	if got := load(t, []string{"-config", file, "-audit-retention", "7"}, env).AuditRetention(); got != 7*24*time.Hour {
+		t.Fatalf("flag over env: %v", got)
+	}
+	// Off keeps everything: a retention of zero, which the sweep reads as no limit.
+	if got := load(t, []string{"-audit-retention", "off"}, nil).AuditRetention(); got != 0 {
+		t.Fatalf("off: %v, want 0", got)
+	}
+}
+
+func TestAuditRetentionMustBeDaysOrOff(t *testing.T) {
+	for _, bad := range []string{"0", "-5", "abc", "1.5", "40000", "1y", ""} {
+		if _, err := Load([]string{"-audit-retention", bad}, env(nil), io.Discard); err == nil {
+			t.Errorf("-audit-retention %q accepted", bad)
+		}
 	}
 }

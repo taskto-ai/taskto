@@ -107,7 +107,7 @@ prompts or sampling.
 
 ## What your agent can do
 
-The 20 tools of [agent-tools.md](agent-tools.md#the-tools): `list_spaces`, `search_docs`,
+The 21 tools of [agent-tools.md](agent-tools.md#the-tools): `list_spaces`, `list_members` (who a card can be assigned to), `search_docs`,
 `list_docs`, `read_doc`, `write_doc`, the board tools of
 [boards-agent-tools.md](boards-agent-tools.md), and the app tools: `app_catalog`,
 `list_apps`, `show_app`, `list_app_rows` (an app's data) and `query_app_rows` (filtered, sorted pages of it, with totals), `create_app` and `update_app`.
@@ -119,7 +119,7 @@ refusals are the conversation agent's: a refusal is a tool error (`isError`) say
 (`not found`, read-only, a stale version), for the model to act on. Their bounds are the
 same too: results of at most 64 KiB, documents read 32 KiB at a time.
 
-Start with `list_spaces`: every other tool takes a `space_id` from it.
+Start with `list_spaces`, for the tools that take a `space_id`. A card is assigned to a person by the `id` `list_members` returns.
 
 ## Who did what
 

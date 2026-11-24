@@ -1,7 +1,7 @@
 # HTTP API
 
 The API is JSON under `/api`. This page covers accounts, workspaces, members, spaces,
-access tokens, boards, personal apps, model providers, dictation, the backups' status, the knowledge base and its search;
+access tokens, boards, personal apps, model providers, dictation, the backups' status, outgoing email, the knowledge base and its search;
 later features add their routes here. People's own agents use the knowledge base, boards
 and apps over MCP, at `/mcp`, with an access token: see [mcp.md](mcp.md).
 
@@ -224,7 +224,14 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `endpoint_key_refused` | 200 | In a test's answer: the endpoint answered `status` (401 or 403) to the key. |
 | `endpoint_status` | 200 | In a test's answer: the endpoint answered `status`. |
 | `endpoint_no_models` | 200 | In a test's answer: the endpoint's `GET /models` isn't a list of models. |
-| `egress_refused` | 400 | The server's egress policy doesn't allow the endpoint's `host` (also in a test's answer, and 502 for a dictation). |
+| `egress_refused` | 400 | The server's egress policy doesn't allow the endpoint's `host` (also in a test's answer, and 502 for a dictation or a test email). |
+| `mail_not_configured` | 409 | The server's operator hasn't set an SMTP server ([install.md](install.md#email)). |
+| `mail_connect_failed` | 502 | The SMTP server at `host` couldn't be reached. |
+| `mail_tls_failed` | 502 | The connection to the SMTP server couldn't be made secure: its certificate isn't trusted, or it doesn't offer STARTTLS. |
+| `mail_auth_failed` | 502 | The SMTP server refused the sign-in. |
+| `mail_rejected` | 502 | The SMTP server refused the message, with its reply code `smtp_code`. |
+| `mail_failed` | 502 | The message couldn't be sent. |
+| `mail_test_rate_limited` | 429 | A test email was sent a moment ago by the caller, or the server's test sends are all busy; `Retry-After` says how long. |
 | `cli_workers_off` | 409 | CLI workers are off on this server (also a list's `reason_code`). |
 | `cli_workers_no_boundary` | 409 | CLI workers run in local mode, which allows a single user only (also a list's `reason_code`). |
 | `cli_not_installed` | 503 | The CLI, `cli`, isn't installed on this server. |
@@ -3182,6 +3189,44 @@ with the reason when the
 workspace has no engine or the local model isn't downloaded yet (call `warm`); `502` when
 the engine fails (the server log has the details, never the reply); `504` when it takes
 over 5 minutes.
+
+## Outgoing email
+
+The server's outgoing email ([install.md](install.md#email)) is one SMTP server for the whole
+server, set by its operator, so any workspace's admins see it, as they see the backups. Both routes
+are for admins, with a browser session (not an access token).
+
+### `GET /api/workspaces/{workspace}/mail`
+
+Whether the server can send email, and where:
+
+```json
+{"configured": true, "host": "smtp.example.com", "port": 587, "security": "starttls",
+ "from": "\"TaskTo\" <taskto@example.com>", "password": "set"}
+```
+
+`security` is `starttls`, `tls` or `none`. `password` is `"set"` or `"not set"`: whether the server
+signs in to the SMTP server. The user name and the password are never returned. Without an SMTP
+server the answer is `{"configured": false}`.
+
+### `POST /api/workspaces/{workspace}/mail/test`
+
+Sends a test message to **the caller's own address** (there is no way to name another recipient),
+in the caller's language: the one they picked, else the workspace's default, else English. The
+body is `{}`; anything else in it is ignored.
+
+`200` with `{"sent_to": "ana@example.com"}` once the SMTP server accepted the message. That
+means it took it, not that it was delivered. Errors: `409 mail_not_configured`; `502` with
+`egress_refused` (the egress policy refuses the SMTP server's address), `mail_connect_failed`,
+`mail_tls_failed`, `mail_auth_failed`, `mail_rejected` or `mail_failed`, which say at which step
+it failed. The SMTP server's own reply isn't in the answer, since it can name internal hosts and
+addresses, or repeat what was sent; the server's log has the step and the reply's number
+(`smtp_code`), and never the server's words.
+
+The route is limited, since each call sends a real message through the operator's relay: one
+test per person every 30 seconds, whichever workspace it is in (a failed one counts too), and
+three at once on the whole server. Past it, `429 mail_test_rate_limited` with a `Retry-After`
+header in seconds, and nothing is sent.
 
 ## Backups
 

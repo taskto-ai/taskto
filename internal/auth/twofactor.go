@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Two-factor login (docs/api.md#two-factor-login).
@@ -382,8 +383,11 @@ func (s *Service) handleTwoFactorConfirm(w http.ResponseWriter, r *http.Request)
 			return err
 		}
 		var err error
-		codes, err = s.replaceRecoveryCodes(r.Context(), tx, u.ID)
-		return err
+		if codes, err = s.replaceRecoveryCodes(r.Context(), tx, u.ID); err != nil {
+			return err
+		}
+		return audit.Record(r.Context(), tx, audit.Event{Actor: u.ID, Action: audit.TwoFactorEnabled,
+			TargetType: audit.TargetUser, Target: u.ID})
 	})
 	if err != nil {
 		if !errors.Is(err, errWrongCode) {
@@ -445,7 +449,11 @@ func (s *Service) handleTwoFactorDisable(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	ok := s.ownFactorAction(w, r, req.Password, req.Code, func(tx *sql.Tx, userID int64) error {
-		return dropTwoFactor(r.Context(), tx, userID)
+		if err := dropTwoFactor(r.Context(), tx, userID); err != nil {
+			return err
+		}
+		return audit.Record(r.Context(), tx, audit.Event{Actor: userID, Action: audit.TwoFactorDisabled,
+			TargetType: audit.TargetUser, Target: userID})
 	})
 	if !ok {
 		return
@@ -466,8 +474,11 @@ func (s *Service) handleTwoFactorRecoveryCodes(w http.ResponseWriter, r *http.Re
 	var codes []string
 	ok := s.ownFactorAction(w, r, req.Password, req.Code, func(tx *sql.Tx, userID int64) error {
 		var err error
-		codes, err = s.replaceRecoveryCodes(r.Context(), tx, userID)
-		return err
+		if codes, err = s.replaceRecoveryCodes(r.Context(), tx, userID); err != nil {
+			return err
+		}
+		return audit.Record(r.Context(), tx, audit.Event{Actor: userID, Action: audit.TwoFactorRecoveryCodesReplaced,
+			TargetType: audit.TargetUser, Target: userID})
 	})
 	if !ok {
 		return
@@ -537,8 +548,12 @@ func (s *Service) passwordSignIn(ctx context.Context, userID int64, verifiedHash
 			return errPasswordChanged
 		}
 		var err error
-		out, err = s.issueSignIn(ctx, tx, userID)
-		return err
+		if out, err = s.issueSignIn(ctx, tx, userID); err != nil || out.session == "" {
+			return err
+		}
+		// A session is a login; a challenge is not one until its code is given.
+		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.LoginSucceeded,
+			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"method": "password"}})
 	})
 	return out, err
 }
@@ -653,8 +668,11 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		if err := mustAffect(res, errChallengeInvalid); err != nil {
 			return err
 		}
-		token, err = s.insertSession(r.Context(), tx, userID)
-		if err != nil {
+		if token, err = s.insertSession(r.Context(), tx, userID); err != nil {
+			return err
+		}
+		if err := audit.Record(r.Context(), tx, audit.Event{Actor: userID, Action: audit.LoginSucceeded,
+			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"method": "password"}}); err != nil {
 			return err
 		}
 		// Read here, so a failure puts the spent code and challenge back rather than answering
@@ -667,6 +685,7 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	case err == nil && wrong:
+		s.loginFailed(r, userID, "wrong_code")
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongTwoFactorCode, errWrongCode.Error())
 		return
 	case err != nil:
@@ -727,8 +746,11 @@ func (s *Service) handleClearTwoFactor(w http.ResponseWriter, r *http.Request) {
 		if err := dropTwoFactor(r.Context(), tx, userID); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(r.Context(), `DELETE FROM sessions WHERE user_id = ?`, userID)
-		return err
+		if _, err := tx.ExecContext(r.Context(), `DELETE FROM sessions WHERE user_id = ?`, userID); err != nil {
+			return err
+		}
+		return audit.Record(r.Context(), tx, audit.Event{Workspace: m.WorkspaceID, Actor: admin.ID, Action: audit.TwoFactorCleared,
+			TargetType: audit.TargetUser, Target: userID})
 	})
 	switch {
 	case errors.Is(err, errNotFound):

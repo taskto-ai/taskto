@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Role is what a member may do in a workspace.
@@ -122,8 +124,11 @@ func (s *Service) setup(ctx context.Context, email, name, passwordHash, workspac
 			wsID, u.ID, RoleAdmin); err != nil {
 			return err
 		}
-		token, err = s.insertSession(ctx, tx, u.ID)
-		return err
+		if token, err = s.insertSession(ctx, tx, u.ID); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Workspace: wsID, Actor: u.ID, Action: audit.SetupCompleted,
+			TargetType: audit.TargetWorkspace, Target: wsID})
 	})
 	return u, token, err
 }
@@ -185,6 +190,28 @@ func (s *Service) deleteSession(ctx context.Context, token string) error {
 	return err
 }
 
+// endSession logs out the session token belongs to, and records it. A token that is no
+// session, such as one that expired, ends nothing and records nothing.
+func (s *Service) endSession(ctx context.Context, token string) error {
+	return s.write(ctx, func(tx *sql.Tx) error {
+		var userID int64
+		// The same test as sessionUser: a session that has expired is no longer a login to
+		// end, even while its row is still there to be swept.
+		err := tx.QueryRowContext(ctx, `DELETE FROM sessions WHERE token_hash = ? AND expires_at > ? RETURNING user_id`,
+			hashToken(token), stamp(s.now())).Scan(&userID)
+		if errors.Is(err, sql.ErrNoRows) {
+			// Still drop an expired row, unrecorded.
+			_, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hashToken(token))
+			return err
+		}
+		if err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.Logout,
+			TargetType: audit.TargetUser, Target: userID})
+	})
+}
+
 // workspacesOf lists the workspaces userID belongs to, oldest first.
 func (s *Service) workspacesOf(ctx context.Context, userID int64) ([]Membership, error) {
 	rows, err := s.db.QueryContext(ctx, `
@@ -222,11 +249,45 @@ func (s *Service) membership(ctx context.Context, workspaceID, userID int64) (Me
 }
 
 func (s *Service) members(ctx context.Context, workspaceID int64) ([]Member, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return Roster(ctx, s.db, workspaceID, RosterPage{})
+}
+
+// Queryer is what Roster reads through: a *sql.DB, or a transaction a caller keeps its other
+// reads consistent with.
+type Queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// RosterPage selects part of a roster. The zero value is all of it, by name.
+type RosterPage struct {
+	// ByID orders by user ID, a stable order to page through, instead of by name.
+	ByID bool
+	// AfterID, when above 0, leaves out the members whose user ID is not above it, and orders
+	// by user ID whatever ByID says.
+	AfterID int64
+	// Limit, when above 0, is the most members to return.
+	Limit int
+}
+
+// Roster lists the members of workspaceID, as the one definition of who is a member of a
+// workspace: the workspace's own page and the agent's list_members both read through it. It
+// checks nothing about the caller.
+func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) ([]Member, error) {
+	order := "u.name, u.id"
+	if page.ByID || page.AfterID > 0 {
+		order = "u.id"
+	}
+	query := `
 		SELECT u.id, u.email, u.name, m.role, m.created_at
 		FROM memberships m JOIN users u ON u.id = m.user_id
-		WHERE m.workspace_id = ?
-		ORDER BY u.name, u.id`, workspaceID)
+		WHERE m.workspace_id = ? AND u.id > ?
+		ORDER BY ` + order
+	args := []any{workspaceID, max(page.AfterID, 0)}
+	if page.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, page.Limit)
+	}
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -240,6 +301,19 @@ func (s *Service) members(ctx context.Context, workspaceID int64) ([]Member, err
 		all = append(all, m)
 	}
 	return all, rows.Err()
+}
+
+// IsMember reports whether userID is a member of workspaceID, reading through q.
+func IsMember(ctx context.Context, q interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}, workspaceID, userID int64) (bool, error) {
+	var one int
+	err := q.QueryRowContext(ctx, `SELECT 1 FROM memberships WHERE workspace_id = ? AND user_id = ?`,
+		workspaceID, userID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // roleIn returns userID's role in workspaceID within tx, or errNotFound.
@@ -279,9 +353,12 @@ func (s *Service) setRole(ctx context.Context, workspaceID, userID int64, role R
 				return err
 			}
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE memberships SET role = ? WHERE workspace_id = ? AND user_id = ?`,
-			role, workspaceID, userID)
-		return err
+		if _, err = tx.ExecContext(ctx, `UPDATE memberships SET role = ? WHERE workspace_id = ? AND user_id = ?`,
+			role, workspaceID, userID); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.MemberRoleChanged,
+			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"from": string(current), "to": string(role)}})
 	})
 }
 
@@ -297,10 +374,77 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 				return err
 			}
 		}
-		_, err = tx.ExecContext(ctx, `DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`,
-			workspaceID, userID)
-		return err
+		// What the removal takes with it, by the schema's triggers: the member's access tokens in
+		// the workspace and their places in its shared spaces. Read before they go, so each is
+		// recorded in this transaction like the removal.
+		tokens, err := removedTokens(ctx, tx, workspaceID, userID)
+		if err != nil {
+			return err
+		}
+		spaces, err := leftSpaces(ctx, tx, workspaceID, userID)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`,
+			workspaceID, userID); err != nil {
+			return err
+		}
+		if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.MemberRemoved,
+			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"role": string(current)}}); err != nil {
+			return err
+		}
+		for _, t := range tokens {
+			if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.AccessTokenRevoked,
+				TargetType: audit.TargetAccessToken, Target: t.id, TargetCreated: t.created, Details: audit.Details{"cascade": true}}); err != nil {
+				return err
+			}
+		}
+		for _, sp := range spaces {
+			if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.SpaceMemberRemoved,
+				TargetType: audit.TargetSpace, Target: sp.id,
+				Details: audit.Details{"user_id": userID, "role": sp.role, "cascade": true}}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+// cascaded is a row a removal deletes along with the membership.
+type cascaded struct {
+	id      int64
+	created string
+	role    string
+}
+
+func cascadedRows(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]cascaded, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var all []cascaded
+	for rows.Next() {
+		var c cascaded
+		if err := rows.Scan(&c.id, &c.created, &c.role); err != nil {
+			return nil, err
+		}
+		all = append(all, c)
+	}
+	return all, rows.Err()
+}
+
+// removedTokens lists userID's access tokens in workspaceID.
+func removedTokens(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) ([]cascaded, error) {
+	return cascadedRows(ctx, tx, `SELECT id, created_at, '' FROM access_tokens WHERE workspace_id = ? AND user_id = ? ORDER BY id`,
+		workspaceID, userID)
+}
+
+// leftSpaces lists the shared spaces of workspaceID that userID is a member of, with their role.
+func leftSpaces(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) ([]cascaded, error) {
+	return cascadedRows(ctx, tx, `
+		SELECT sp.id, sp.created_at, sm.role FROM space_members sm JOIN spaces sp ON sp.id = sm.space_id
+		WHERE sp.workspace_id = ? AND sm.user_id = ? ORDER BY sp.id`, workspaceID, userID)
 }
 
 // createInvite stores an invite to workspaceID for email and returns it with its token,
@@ -325,8 +469,11 @@ func (s *Service) createInvite(ctx context.Context, workspaceID, by int64, email
 		if err != nil {
 			return err
 		}
-		inv.ID, err = res.LastInsertId()
-		return err
+		if inv.ID, err = res.LastInsertId(); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: by, Action: audit.InviteCreated,
+			TargetType: audit.TargetInvite, Target: inv.ID, Details: audit.Details{"email": email, "role": string(role)}})
 	})
 	if err != nil {
 		return Invite{}, "", err
@@ -358,12 +505,21 @@ func (s *Service) pendingInvites(ctx context.Context, workspaceID int64) ([]Invi
 
 // deleteInvite withdraws an invite of workspaceID, or fails with errNotFound.
 func (s *Service) deleteInvite(ctx context.Context, workspaceID, inviteID int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM invites WHERE id = ? AND workspace_id = ? AND accepted_at IS NULL`,
-		inviteID, workspaceID)
-	if err != nil {
-		return err
-	}
-	return mustAffect(res, errNotFound)
+	return s.write(ctx, func(tx *sql.Tx) error {
+		var email, created string
+		var role Role
+		err := tx.QueryRowContext(ctx, `DELETE FROM invites WHERE id = ? AND workspace_id = ? AND accepted_at IS NULL RETURNING email, role, created_at`,
+			inviteID, workspaceID).Scan(&email, &role, &created)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.InviteRevoked,
+			TargetType: audit.TargetInvite, Target: inviteID, TargetCreated: created,
+			Details: audit.Details{"email": email, "role": string(role)}})
+	})
 }
 
 // mustAffect returns none if the statement behind res changed no row.
@@ -421,6 +577,16 @@ func join(ctx context.Context, tx *sql.Tx, inv pendingInvite, userID int64) erro
 		INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, ?)
 		ON CONFLICT DO NOTHING`, inv.workspaceID, userID, inv.role)
 	if err != nil {
+		return err
+	}
+	// The invite is used up even when the person was already a member (an account made from
+	// several invites to one workspace), so the event says which it was.
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if err := audit.Record(ctx, tx, audit.Event{Workspace: inv.workspaceID, Actor: userID, Action: audit.InviteAccepted,
+		TargetType: audit.TargetInvite, Target: inv.id, Details: audit.Details{"role": string(inv.role), "already_member": n == 0}}); err != nil {
 		return err
 	}
 	return mustAffect(res, errAlreadyMember)

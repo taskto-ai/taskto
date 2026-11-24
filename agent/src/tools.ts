@@ -1,5 +1,8 @@
 // Spike tools: a pause that streams progress, once replay-safe and once not, to see what
-// a crash in the middle of a tool call does to each.
+// a crash in the middle of a tool call does to each. Only the integration tests use them (the
+// scripted model calls them), and only through test-entry.ts, which turns them on in-process
+// (test-hooks.ts). No environment variable or setting of the server's does: the production model
+// is never shown them.
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { num, obj } from '@earendil-works/pi-schema'
 

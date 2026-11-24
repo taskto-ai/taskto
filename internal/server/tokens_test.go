@@ -61,7 +61,10 @@ type person struct {
 	private int64  // their private space in one
 }
 
-func newStack(t *testing.T) *stack {
+func newStack(t *testing.T) *stack { return newStackWith(t, nil) }
+
+// newStackWith is newStack with the server's options changed by mod.
+func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -86,14 +89,18 @@ func newStack(t *testing.T) *stack {
 		Knowledge: kb, Search: index,
 	})
 	s := &stack{t: t, db: sqlDB, dir: dir, setupToken: auth.NewSetupToken()}
-	s.h = newHandler(t, sqlDB, Options{
+	opts := Options{
 		Auth:          auth.Options{InsecureCookies: true, SetupToken: s.setupToken, HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}},
 		Search:        index,
 		Providers:     providers.New(store, nil),
 		Conversations: conversations.New(sqlDB, nil),
 		Tools:         tools,
 		BackupDataDir: dir,
-	})
+	}
+	if mod != nil {
+		mod(&opts)
+	}
+	s.h = newHandler(t, sqlDB, opts)
 	srv := httptest.NewServer(s.h)
 	t.Cleanup(srv.Close)
 	s.mcpURL = srv.URL + "/mcp"
@@ -408,6 +415,15 @@ func TestTokensReachOnlyTheirUsersSpacesInTheirWorkspace(t *testing.T) {
 		if got := id(sp.(map[string]any)["id"]); got != s.bob.private && got != s.team {
 			t.Errorf("bob's token lists space %d", got)
 		}
+	}
+	// list_members says nothing about a space bob can't read, as for the spaces' own routes.
+	for _, sp := range []int64{s.carol.private, s.secret} {
+		if code, refused, text := s.tool(bob, "list_members", map[string]any{"space_id": sp}); !refused || text != "error: not found" {
+			t.Errorf("bob's token lists the members of space %d = %d %v %q", sp, code, refused, text)
+		}
+	}
+	if got := s.toolOK(bob, "list_members", map[string]any{"space_id": s.bob.private})["members"].([]any); len(got) != 1 || id(got[0].(map[string]any)["id"]) != s.bob.id {
+		t.Errorf("bob's own space's members = %v", got)
 	}
 	if hits := s.toolOK(bob, "search_docs", map[string]any{"query": "needle"})["results"].([]any); len(hits) != 0 {
 		t.Errorf("bob's token finds %v", hits)

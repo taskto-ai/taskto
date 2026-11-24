@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Routes mounts the account endpoints on mux. docs/api.md describes them.
@@ -195,6 +196,12 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// An account made by signing in with a provider has no password: it fails like a wrong one.
 	if !known || hash == "" {
 		s.hasher.burn(r.Context(), req.Password)
+		// The address typed is never recorded: it may be a password typed in the wrong box.
+		reason := "unknown_account"
+		if known {
+			reason = "no_password"
+		}
+		s.loginFailed(r, u.ID, reason)
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
 		return
 	}
@@ -211,6 +218,7 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !match {
+		s.loginFailed(r, u.ID, "wrong_password")
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
 		return
 	}
@@ -249,9 +257,21 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.writeMe(w, r, http.StatusOK, u)
 }
 
+// loginFailed records a refused password login: of the user, or of no one when the account
+// doesn't exist. Attempts the limiters turn away aren't recorded: the log would fill at the rate
+// an attacker chooses.
+func (s *Service) loginFailed(r *http.Request, userID int64, reason string) {
+	// No actor: the person at the keyboard isn't known to be the account's owner, who is the target.
+	e := audit.Event{Action: audit.LoginFailed, Details: audit.Details{"method": "password", "reason": reason}}
+	if userID != 0 {
+		e.TargetType, e.Target = audit.TargetUser, userID
+	}
+	audit.Log(r.Context(), s.db, e)
+}
+
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if token := s.sessionToken(r); token != "" {
-		if err := s.deleteSession(r.Context(), token); err != nil {
+		if err := s.endSession(r.Context(), token); err != nil {
 			serverError(w, r, err)
 			return
 		}

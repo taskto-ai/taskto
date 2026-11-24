@@ -44,7 +44,7 @@ const Path = "/mcp"
 const maxBody = agenttools.MaxArgs + 64<<10
 
 // instructions are what a client tells its model about the server.
-const instructions = `TaskTo.AI: the knowledge base (Markdown documents in spaces) and the boards (cards in columns) of one workspace, as the user whose access token this is, with exactly their access. Start with list_spaces: every other tool takes a space_id from it. Documents are read with read_doc and changed with write_doc, passing the version read; cards are changed with the version last read.`
+const instructions = `TaskTo.AI: the knowledge base (Markdown documents in spaces) and the boards (cards in columns) of one workspace, as the user whose access token this is, with exactly their access. Start with list_spaces, for the tools that take a space_id. Documents are read with read_doc and changed with write_doc, passing the version read; cards are changed with the version last read.`
 
 type callerKey struct{}
 

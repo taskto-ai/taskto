@@ -22,6 +22,7 @@ import (
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/dictation"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/mail"
 	"taskto.ai/taskto/internal/mcpserver"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/providers"
@@ -60,6 +61,12 @@ type Options struct {
 	Browser *agentbrowser.Service
 	// Notifications serves the notification inbox and Web Push subscriptions; nil leaves them out.
 	Notifications *notifications.Service
+	// Mail is the server's outgoing email (docs/install.md#email); nil means the operator set up
+	// none. The admins' routes for it are there either way, and say so.
+	Mail *mail.Service
+	// MailTestCooldown is how long an admin waits between test emails; zero is 30 seconds and
+	// a negative duration is no wait. Tests shorten it.
+	MailTestCooldown time.Duration
 	// AppsReady, if set, is called with the apps service the server made, which keeps attachments
 	// in DataDir (none if that is empty), so its caller can run its maintenance
 	// (apps.Service.Maintain) for as long as it serves.
@@ -78,6 +85,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	accounts := auth.New(sqlDB, opts.Auth)
 	accounts.Routes(mux)
 	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireAdmin(backupStatus(opts.BackupDataDir)))
+	mailRoutes(mux, accounts, opts.Mail, newMailTestGate(opts.MailTestCooldown, time.Now))
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
 	boardSvc := boards.New(sqlDB, spaces)
@@ -138,7 +146,8 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	// Every state-changing /api request, of any route, goes through the CSRF checks, and every
 	// /api request that names the account it is for (the offline code does, on every request:
 	// downloads, revalidation, the queue) is refused for any other session.
-	return auth.CSRF(expectAccount(spaces, mux), append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...), nil
+	// The audit log's events carry the client's address, found as the login limits find it.
+	return accounts.ClientAddr(auth.CSRF(expectAccount(spaces, mux), append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...)), nil
 }
 
 // expectAccount applies access.Checker.ExpectUser to every /api request, so a client that names

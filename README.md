@@ -55,6 +55,7 @@ step-by-step install on a fresh Ubuntu VM.
 | [docs/templates.md](docs/templates.md) | the bundled app templates (expense tracker, equipment checkout, inspection), installing them and duplicating apps |
 | [docs/offline.md](docs/offline.md) | apps offline: downloads, the durable outbox for records made offline, sync, sign-out and revocation |
 | [docs/sso.md](docs/sso.md) | single sign-on with Google, Authentik or any OpenID Connect provider |
+| [docs/audit.md](docs/audit.md) | the audit log of security and admin actions: what is recorded, never recorded, and for how long |
 | [docs/api.md](docs/api.md) | the HTTP API |
 | [docs/mcp.md](docs/mcp.md) | using it from your own agents (Claude Code, Codex, any MCP client) with an access token |
 | [docs/cli-workers.md](docs/cli-workers.md), [docs/account-switching.md](docs/account-switching.md), [docs/cli-tools.md](docs/cli-tools.md) | the official CLIs on users' own accounts, with TaskTo's tools |
@@ -100,6 +101,13 @@ the default.
 | `-disable-password-login` | `TASKTO_DISABLE_PASSWORD_LOGIN` | `disable_password_login` | `false` | turn password logins off, so everyone signs in with a provider; needs `-sso-providers` |
 | `-provider-egress-workspace` | `TASKTO_PROVIDER_EGRESS_WORKSPACE` | `provider_egress_workspace` | `any` | where workspaces' provider accounts may connect: `any`, `public`, or a comma-separated list of `public`, hosts, IP addresses and CIDR prefixes ([docs/install.md](docs/install.md#where-provider-accounts-may-connect)) |
 | `-provider-egress-personal` | `TASKTO_PROVIDER_EGRESS_PERSONAL` | `provider_egress_personal` | `any` | the same for members' personal provider accounts |
+| `-smtp-host` | `TASKTO_SMTP_HOST` | `smtp_host` | | the SMTP server that sends the server's email; empty means no email ([docs/install.md](docs/install.md#email)) |
+| `-smtp-port` | `TASKTO_SMTP_PORT` | `smtp_port` | `587`, `465` or `25` | the SMTP server's port, by `-smtp-security` |
+| `-smtp-security` | `TASKTO_SMTP_SECURITY` | `smtp_security` | `starttls` | `starttls`, `tls` (implicit TLS) or `none` (a trusted local relay, with no sign-in) |
+| `-smtp-from` | `TASKTO_SMTP_FROM` | `smtp_from` | | the sender: an address, or `Name <address>`; needed with `-smtp-host` |
+| `-smtp-username` | `TASKTO_SMTP_USERNAME` | `smtp_username` | | the user to sign in as; goes with `-smtp-password-file` |
+| `-smtp-password-file` | `TASKTO_SMTP_PASSWORD_FILE` | `smtp_password_file` | | the file the SMTP password is read from at startup (an absolute path); the password is never a setting |
+| `-smtp-egress` | `TASKTO_SMTP_EGRESS` | `smtp_egress` | `any` | where the SMTP connection may go, as the provider accounts' policy above |
 | `-agent` | `TASKTO_AGENT` | `agent` | `false` | run the agent runtime (see below) |
 | `-agent-node` | `TASKTO_AGENT_NODE` | `agent_node` | `node` | Node.js executable for the agent runtime, looked up in `PATH` unless it is a path |
 | `-agent-entry` | `TASKTO_AGENT_ENTRY` | `agent_entry` | see below | the agent runtime's entry point |
@@ -113,6 +121,7 @@ the default.
 | `-dictation-local` | `TASKTO_DICTATION_LOCAL` | `dictation_local` | `parakeet-v3` | the local speech model, every workspace's default dictation engine unless an admin picks the hosted API: `parakeet-v3`, `whistle` or `off`; downloaded on first use ([docs/install.md](docs/install.md#dictation)) |
 | `-dictation-cache` | `TASKTO_DICTATION_CACHE` | `dictation_cache` | `<data-dir>/cache/dictation` | where the local speech model's files are kept |
 | `-addons-dir` | `TASKTO_ADDONS_DIR` | `addons_dir` | `<data-dir>/addons` | where the operator installs add-ons such as Desert Ant Voz ([docs/install.md](docs/install.md#dictation)) |
+| `-audit-retention` | `TASKTO_AUDIT_RETENTION` | `audit_retention` | `365` | days the audit log keeps its events, or `off` to stop deleting them by age (a workspace's events still go when it is deleted; [docs/audit.md](docs/audit.md)) |
 | `-push-contact` | `TASKTO_PUSH_CONTACT` | `push_contact` | `https://taskto.ai` | how browsers' push services can reach whoever runs the server (the VAPID contact): a `mailto:` or `https:` URL ([docs/install.md](docs/install.md#web-push-notifications)) |
 | `-config` | `TASKTO_CONFIG` | | | config file to read |
 

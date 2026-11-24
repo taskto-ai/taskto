@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/auth"
 )
 
@@ -59,9 +60,12 @@ func (c *Checker) createShared(ctx context.Context, workspaceID, creatorID int64
 		if id, err = res.LastInsertId(); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO space_members (space_id, user_id, role) VALUES (?, ?, ?)`,
-			id, creatorID, RoleEditor)
-		return err
+		if _, err = tx.ExecContext(ctx, `INSERT INTO space_members (space_id, user_id, role) VALUES (?, ?, ?)`,
+			id, creatorID, RoleEditor); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: creatorID, Action: audit.SpaceCreated,
+			TargetType: audit.TargetSpace, Target: id})
 	})
 	return id, err
 }
@@ -69,7 +73,7 @@ func (c *Checker) createShared(ctx context.Context, workspaceID, creatorID int64
 // updateShared renames a shared space, archives it or brings it back, or allows or refuses
 // downloading its apps for offline use; nil leaves that part as it is. Archiving an archived space
 // keeps its first archiving time.
-func (c *Checker) updateShared(ctx context.Context, spaceID int64, name *string, archived, offline *bool) error {
+func (c *Checker) updateShared(ctx context.Context, workspaceID, spaceID int64, name *string, archived, offline *bool) error {
 	var archivedAt any // nil: unchanged
 	if archived != nil {
 		archivedAt = ""
@@ -77,27 +81,62 @@ func (c *Checker) updateShared(ctx context.Context, spaceID int64, name *string,
 			archivedAt = time.Now().UTC().Format(timeFormat)
 		}
 	}
-	res, err := c.db.ExecContext(ctx, `
-		UPDATE spaces SET
-			name = coalesce(?, name),
-			archived_at = CASE WHEN ? IS NULL THEN archived_at
-			                   WHEN ? = '' THEN NULL
-			                   ELSE coalesce(archived_at, ?) END,
-			offline_downloads = coalesce(?, offline_downloads)
-		WHERE id = ? AND kind = 'shared'`, name, archivedAt, archivedAt, archivedAt, offline, spaceID)
-	if err != nil {
-		return err
-	}
-	return mustAffect(res, ErrNotFound)
+	return c.write(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE spaces SET
+				name = coalesce(?, name),
+				archived_at = CASE WHEN ? IS NULL THEN archived_at
+				                   WHEN ? = '' THEN NULL
+				                   ELSE coalesce(archived_at, ?) END,
+				offline_downloads = coalesce(?, offline_downloads)
+			WHERE id = ? AND kind = 'shared'`, name, archivedAt, archivedAt, archivedAt, offline, spaceID)
+		if err != nil {
+			return err
+		}
+		if err := mustAffect(res, ErrNotFound); err != nil {
+			return err
+		}
+		// What changed, and the two switches' new values; the new name isn't recorded, it is
+		// text a person typed.
+		details := audit.Details{}
+		var fields []string
+		if name != nil {
+			fields = append(fields, "name")
+		}
+		if archived != nil {
+			fields, details["archived"] = append(fields, "archived"), *archived
+		}
+		if offline != nil {
+			fields, details["offline_downloads"] = append(fields, "offline_downloads"), *offline
+		}
+		details["fields"] = fields
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.SpaceUpdated,
+			TargetType: audit.TargetSpace, Target: spaceID, Details: details})
+	})
 }
 
 // members lists a shared space's members, by name.
 func (c *Checker) members(ctx context.Context, spaceID int64) ([]Member, error) {
-	rows, err := c.db.QueryContext(ctx, `
+	return spaceMembers(ctx, c.db, spaceID, auth.RosterPage{})
+}
+
+// spaceMembers lists a shared space's members, as auth.Roster does a workspace's.
+func spaceMembers(ctx context.Context, q auth.Queryer, spaceID int64, page auth.RosterPage) ([]Member, error) {
+	order := "u.name, u.id"
+	if page.ByID || page.AfterID > 0 {
+		order = "u.id"
+	}
+	query := `
 		SELECT u.id, u.email, u.name, sm.role, sm.created_at
 		FROM space_members sm JOIN users u ON u.id = sm.user_id
-		WHERE sm.space_id = ?
-		ORDER BY u.name, u.id`, spaceID)
+		WHERE sm.space_id = ? AND u.id > ?
+		ORDER BY ` + order
+	args := []any{spaceID, max(page.AfterID, 0)}
+	if page.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, page.Limit)
+	}
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -131,25 +170,48 @@ func (c *Checker) addMember(ctx context.Context, workspaceID, spaceID, userID in
 		if err != nil {
 			return err
 		}
-		return mustAffect(res, errAlreadyMember)
+		if err := mustAffect(res, errAlreadyMember); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.SpaceMemberAdded,
+			TargetType: audit.TargetSpace, Target: spaceID, Details: audit.Details{"user_id": userID, "role": string(role)}})
 	})
 }
 
-func (c *Checker) setMemberRole(ctx context.Context, spaceID, userID int64, role Role) error {
-	res, err := c.db.ExecContext(ctx, `UPDATE space_members SET role = ? WHERE space_id = ? AND user_id = ?`,
-		role, spaceID, userID)
-	if err != nil {
-		return err
-	}
-	return mustAffect(res, errMemberNotFound)
+func (c *Checker) setMemberRole(ctx context.Context, workspaceID, spaceID, userID int64, role Role) error {
+	return c.write(ctx, func(tx *sql.Tx) error {
+		var from Role
+		err := tx.QueryRowContext(ctx, `SELECT role FROM space_members WHERE space_id = ? AND user_id = ?`, spaceID, userID).Scan(&from)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errMemberNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE space_members SET role = ? WHERE space_id = ? AND user_id = ?`,
+			role, spaceID, userID); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.SpaceMemberRoleChanged,
+			TargetType: audit.TargetSpace, Target: spaceID,
+			Details: audit.Details{"user_id": userID, "from": string(from), "to": string(role)}})
+	})
 }
 
-func (c *Checker) removeMember(ctx context.Context, spaceID, userID int64) error {
-	res, err := c.db.ExecContext(ctx, `DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, spaceID, userID)
-	if err != nil {
-		return err
-	}
-	return mustAffect(res, errMemberNotFound)
+func (c *Checker) removeMember(ctx context.Context, workspaceID, spaceID, userID int64) error {
+	return c.write(ctx, func(tx *sql.Tx) error {
+		var role Role
+		err := tx.QueryRowContext(ctx, `DELETE FROM space_members WHERE space_id = ? AND user_id = ? RETURNING role`,
+			spaceID, userID).Scan(&role)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errMemberNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.SpaceMemberRemoved,
+			TargetType: audit.TargetSpace, Target: spaceID, Details: audit.Details{"user_id": userID, "role": string(role)}})
+	})
 }
 
 // mustAffect returns none if the statement behind res changed no row.

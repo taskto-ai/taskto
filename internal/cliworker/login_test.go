@@ -231,3 +231,59 @@ func TestSignInURL(t *testing.T) {
 		}
 	}
 }
+
+// A warning on stderr (a CLI's, or the helper's runtime's) is not part of an answer: the JSON of
+// a status, of the helper's reads of Grok's credentials file and of Codex's usage limits is read
+// from stdout alone. Under `go test -cover` the helper and fakes print such a warning when they
+// exit through os.Exit.
+func TestStderrWarningsAreNotAnswers(t *testing.T) {
+	t.Run("claude status", func(t *testing.T) {
+		h := newHarness(t, nil)
+		h.user(t, 1, cliworker.Claude, clitest.Scenario{Warn: "warning: setting {deprecated} is ignored"}, true)
+		if st := status(t, h.w, 1, cliworker.Claude); !st.LoggedIn || st.Method != "claude.ai" {
+			t.Errorf("status = %+v", st)
+		}
+	})
+	noisy := func(cfg *cliworker.Config) { cfg.Helper = clitest.InstallNoisyHelper(t, t.TempDir()) }
+	t.Run("claude status through a noisy helper", func(t *testing.T) {
+		h := newHarness(t, noisy)
+		h.user(t, 1, cliworker.Claude, clitest.Scenario{}, true)
+		if st := status(t, h.w, 1, cliworker.Claude); !st.LoggedIn {
+			t.Errorf("status = %+v", st)
+		}
+	})
+	t.Run("codex status keeps reading its text", func(t *testing.T) {
+		// Codex answers on stderr; the noisy helper adds a line to it, and nothing else changes.
+		h := newHarness(t, noisy)
+		h.user(t, 1, cliworker.Codex, clitest.Scenario{}, true)
+		if st := status(t, h.w, 1, cliworker.Codex); !st.LoggedIn || st.Method != "chatgpt" {
+			t.Errorf("signed in: %+v", st)
+		}
+		h.user(t, 2, cliworker.Codex, clitest.Scenario{}, false)
+		if st := status(t, h.w, 2, cliworker.Codex); st.LoggedIn {
+			t.Errorf("signed out: %+v", st)
+		}
+	})
+	t.Run("grok credentials file", func(t *testing.T) {
+		h := newHarness(t, noisy)
+		h.user(t, 1, cliworker.Grok, clitest.Scenario{}, true)
+		if st := status(t, h.w, 1, cliworker.Grok); !st.LoggedIn || st.Method != "oauth" {
+			t.Errorf("signed in: %+v", st)
+		}
+		h.user(t, 2, cliworker.Grok, clitest.Scenario{}, false)
+		if st := status(t, h.w, 2, cliworker.Grok); st.LoggedIn {
+			t.Errorf("signed out: %+v", st)
+		}
+	})
+	t.Run("codex limits", func(t *testing.T) {
+		h := newHarness(t, noisy)
+		h.user(t, 1, cliworker.Codex, clitest.Scenario{RateLimits: true}, true)
+		var limits []cliworker.Limit
+		for _, e := range run(t, h.w, spec("noisy-limits", 1, cliworker.Codex, "hi")) {
+			limits = append(limits, e.Limits...)
+		}
+		if len(limits) == 0 {
+			t.Error("no limits")
+		}
+	})
+}

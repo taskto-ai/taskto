@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Changing a password, and reset links (docs/api.md#passwords).
@@ -95,6 +96,8 @@ func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !match {
+		audit.Log(r.Context(), s.db, audit.Event{Actor: u.ID, Action: audit.PasswordChangeFailed,
+			TargetType: audit.TargetUser, Target: u.ID})
 		// 403, not 401: the session is fine, and 401 would send the web app to the login.
 		writeError(w, http.StatusForbidden, apierr.CodeWrongPassword, errWrongPassword.Error())
 		return
@@ -242,8 +245,11 @@ func (s *Service) changePassword(ctx context.Context, userID int64, current, new
 		if err := mustAffect(res, errPasswordChanged); err != nil {
 			return err
 		}
-		token, err = s.signOutEverywhere(ctx, tx, userID)
-		return err
+		if token, err = s.signOutEverywhere(ctx, tx, userID); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.PasswordChanged,
+			TargetType: audit.TargetUser, Target: userID})
 	})
 	return token, err
 }
@@ -302,7 +308,12 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO password_resets (user_id, token_hash, created_by, created_at, expires_at)
 			VALUES (?, ?, ?, ?, ?)`, userID, hash, by, stamp(now), expires)
-		return err
+		if err != nil {
+			return err
+		}
+		// Never the link or its token: only that an admin made one, and for whom.
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: by, Action: audit.PasswordResetCreated,
+			TargetType: audit.TargetUser, Target: userID})
 	})
 	if err != nil {
 		return "", "", err
@@ -345,6 +356,10 @@ func (s *Service) useReset(ctx context.Context, token, passwordHash string) (Use
 			return err
 		}
 		if err := s.endSignIns(ctx, tx, u.ID); err != nil {
+			return err
+		}
+		if err := audit.Record(ctx, tx, audit.Event{Actor: u.ID, Action: audit.PasswordResetUsed,
+			TargetType: audit.TargetUser, Target: u.ID}); err != nil {
 			return err
 		}
 		out, err = s.issueSignIn(ctx, tx, u.ID)

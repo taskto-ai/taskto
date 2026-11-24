@@ -55,6 +55,11 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   the agent acting for a user. Admins don't get into private spaces. Each space has its
   own directory, `<data>/workspaces/<id>/spaces/<id>/`, reached only through paths that
   can't lead out of it. See [api.md](api.md#spaces-and-access).
+- **Audit log:** security and admin actions (logins, password resets, members, invites, spaces,
+  provider accounts, tokens, single sign-on, search and dictation settings) are recorded in
+  `audit_events` by the code that makes the change, in its transaction, with the actor, the
+  workspace, the target and the client's address, and never a secret
+  ([audit.md](audit.md)).
 - **Model providers:** workspaces and users add their own provider accounts (any
   OpenAI-compatible endpoint, local or hosted). The server stores them with their API keys
   encrypted under its own key, writes them into the sidecar's providers file and has it
@@ -124,6 +129,55 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   through the Go server). A clean, profile-less headless browser is for testing apps
   ([agent-browser.md](agent-browser.md)).
 - **Install:** `docker compose up` (Go binary + agent sidecar + optional Ollama); see [install.md](install.md).
+
+## Scheduled work
+
+Timed work for people (a card's due-date reminder, an integration's polling, an app's scheduled
+action) runs on one general scheduler, `internal/schedule`, not on tickers of its own. It is a
+library and a worker in the server process (the data directory has one server, so one worker, and
+no extra process); it has no feature of its own.
+
+- **Jobs are rows.** A job in `scheduled_jobs` has a kind, the user it runs for, its workspace (and
+  space), a small JSON payload of IDs and settings (no secret, no copy of what people wrote), when
+  it is due, and optionally a fixed interval for one that repeats. The kinds are a closed list: the
+  Go code of each feature registers a handler for its kind at startup, before the worker starts,
+  and nothing else can name one. A **dedupe key**, unique per owner and kind, names what the job is
+  for, so the same reminder can't be scheduled twice; `Schedule` leaves an existing one alone,
+  `Reschedule` replaces it (and re-arms one that already ran), `Cancel` removes it. All three take
+  the caller's transaction, so a job is made, moved or removed in the same commit as the change that
+  needs it, and a rolled-back change leaves no job.
+- **At least once, safe across restarts.** The worker takes a due job with a lease and runs its
+  handler with a time limit. A server that dies leaves the job running until the lease ends, and
+  the next server (or the same one, restarted) takes it again, so a handler runs more than once
+  for an occurrence in that case and must be idempotent. `Job.Occurrence()` is the same on every
+  try of an occurrence, and is the key of whatever a handler makes (a notification's dedupe key, a
+  card's origin); it includes the job's revision, which a reschedule raises, so work scheduled
+  again for the same time is a new occurrence. Each claim raises the job's lease token, and so does
+  a reschedule: a worker that was too slow, or whose job was changed or cancelled under it, can't
+  finish it for anyone else. The outcome of a try is also dropped if its lease had ended, checked
+  with the token and the state under the write lock; the expired lease is recovered like a crashed
+  worker's. A handler must honour its context: a try that returns after its time limit has failed,
+  even with `nil`, and stopping the server waits a bounded time for a handler that ignores it.
+  Failures are tried again with growing waits up to a bound that counts crashed tries too; a job
+  that used them all has failed and stays listed with its last error. A recurring job runs once
+  when due however many occurrences passed while the server was off, and keeps to its grid.
+- **Access is checked when the job runs, as its owner.** What a person could do when they
+  scheduled something says nothing about what they may do later. Before a handler is called the
+  worker checks, through `access.Checker`, that the owner can still read the job's space (or, with
+  none, belongs to its workspace); otherwise the job fails and the handler is never called. That
+  is a floor: each handler checks the rights its work needs, as close to the write as it can, and
+  stops the job by returning `schedule.ErrAccessLost`. Nothing runs with the authority of whoever
+  scheduled it or of the server, which is the rule the apps' effect outbox follows too.
+- **Bounded.** A person has at most 1000 jobs waiting or running, counted at every change into
+  those states (a finished job scheduled again too) by the statement that writes, so concurrent
+  callers can't pass it; a payload is at most 16 KiB; a recurring job repeats at most once a minute;
+  a job is due between the years 2000 and 8999 (its stored time sorts as text, and the database
+  refuses any other); and finished jobs are purged after a week.
+- **Cheap to poll.** Partial indexes order the pending jobs by when they are due and the running
+  ones by when their lease ends, so a poll reads the first row of each and a queue of finished jobs
+  costs nothing (`EXPLAIN QUERY PLAN` is checked in a test). The worker runs bounded batches, so
+  cleanup gets a turn however long the queue is, and fails a row whose time can't be read instead
+  of stopping on it.
 
 ## Agent safety
 

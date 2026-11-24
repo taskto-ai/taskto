@@ -20,6 +20,7 @@ import (
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/agenttools"
 	"taskto.ai/taskto/internal/apps"
+	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/cliworker"
@@ -32,6 +33,7 @@ import (
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/privcheck"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/server"
 	"taskto.ai/taskto/internal/serverkey"
@@ -141,6 +143,17 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	if err != nil {
 		return err
 	}
+	// The outgoing email's password is read the same way, and the variables that name the SMTP
+	// account are removed from the environment before any child starts.
+	mailer, err := loadMail(cfg, os.Unsetenv)
+	if err != nil {
+		return err
+	}
+	if mailer.Configured() {
+		info := mailer.Info()
+		slog.Info("outgoing email is on", "host", info.Host, "port", info.Port, "security", info.Security,
+			"sign_in", info.SignsIn, "egress", cfg.SMTPEgressPolicy().String())
+	}
 	// One server per data directory, enforced before anything in it is opened. Deferred
 	// first, so the lock goes last, after the sidecar has stopped and the database closed.
 	lock, err := lockfile.DataDir(cfg.DataDir)
@@ -168,6 +181,19 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		return err
 	}
 	store := providers.NewStore(sqlDB, key)
+
+	// The audit log's old events are removed in the background, for as long as the server runs;
+	// it stops before the database closes.
+	auditCtx, stopAudit := context.WithCancel(ctx)
+	auditDone := make(chan struct{})
+	go func() {
+		defer close(auditDone)
+		audit.Retain(auditCtx, sqlDB, cfg.AuditRetention(), time.Hour)
+	}()
+	defer func() {
+		stopAudit()
+		<-auditDone
+	}()
 
 	// The search index catches up with the knowledge base in the background; it stops
 	// before the database closes.
@@ -216,6 +242,11 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	}
 	stopPush := notifier.Start(ctx)
 	defer stopPush()
+	// The scheduler: timed work that runs for people, later (package schedule). The features that
+	// use it register their handlers here, before it starts; it stops before the database closes.
+	scheduler := schedule.New(sqlDB, spaces, schedule.Options{})
+	stopSchedule := scheduler.Start(ctx)
+	defer stopSchedule()
 	tools := agenttools.New(agenttools.Options{
 		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: appSvc,
 		Knowledge: kb, Search: index, Browser: browsers,
@@ -298,6 +329,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		Browser:       browsers,
 		Dictation:     dictationService(cfg, sqlDB, key, kb),
 		BackupDataDir: cfg.DataDir,
+		Mail:          mailer,
 		// Photos that were never saved in a record are removed after a day, and an app moved to
 		// another space has its files follow it (internal/apps/attachments.go).
 		AppsReady: func(svc *apps.Service) { go svc.Maintain(ctx, 10*time.Minute) },
