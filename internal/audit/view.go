@@ -88,6 +88,13 @@ func KnownTarget(t string) bool {
 	return ok
 }
 
+// upToMs is t as the log writes times, rounded up to the millisecond it stores: events are at
+// whole milliseconds, so "at >= from" and "at < to" mean the same with a bound that has finer
+// digits as with the first whole millisecond at or after it.
+func upToMs(t time.Time) string {
+	return t.UTC().Add(time.Millisecond - 1).Truncate(time.Millisecond).Format(timeLayout)
+}
+
 func cursorFor(r Row) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(r.At + "|" + strconv.FormatInt(r.ID, 10)))
 }
@@ -142,11 +149,11 @@ func ListWorkspace(ctx context.Context, db *sql.DB, workspace int64, q Query) (P
 	}
 	if !q.From.IsZero() {
 		where += ` AND at >= ?`
-		args = append(args, q.From.UTC().Format(timeLayout))
+		args = append(args, upToMs(q.From))
 	}
 	if !q.To.IsZero() {
 		where += ` AND at < ?`
-		args = append(args, q.To.UTC().Format(timeLayout))
+		args = append(args, upToMs(q.To))
 	}
 	if q.Cursor != "" {
 		at, id, err := parseCursor(q.Cursor)

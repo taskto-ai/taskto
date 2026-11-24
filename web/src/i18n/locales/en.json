@@ -1514,6 +1514,32 @@
         "scope": "Scope",
         "to": "To",
         "user_id": "Member number"
+      },
+      "values": {
+        "admin": "Admin",
+        "member": "Member",
+        "editor": "Editor",
+        "viewer": "Viewer",
+        "own_else_shared": "Own account, else shared",
+        "own": "Own account only",
+        "shared": "Shared account only",
+        "password": "Password",
+        "workspace": "Workspace",
+        "user": "Personal",
+        "unknown_account": "No such account",
+        "no_password": "The account has no password",
+        "wrong_password": "Wrong password",
+        "name": "Name",
+        "archived": "Archived",
+        "offline_downloads": "Offline downloads",
+        "locale": "Language",
+        "display_name": "Display name",
+        "base_url": "Address",
+        "api_key": "Key",
+        "compat": "Compatibility",
+        "models": "Models",
+        "label": "Label",
+        "model": "Model"
       }
     }
   },

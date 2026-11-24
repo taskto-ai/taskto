@@ -1525,6 +1525,32 @@
         "scope": "Escopo",
         "to": "Para",
         "user_id": "Número do membro"
+      },
+      "values": {
+        "admin": "Administrador",
+        "member": "Membro",
+        "editor": "Editor",
+        "viewer": "Leitor",
+        "own_else_shared": "Conta própria, senão a compartilhada",
+        "own": "Somente a conta própria",
+        "shared": "Somente a conta compartilhada",
+        "password": "Senha",
+        "workspace": "Espaço de trabalho",
+        "user": "Pessoal",
+        "unknown_account": "Conta inexistente",
+        "no_password": "A conta não tem senha",
+        "wrong_password": "Senha errada",
+        "name": "Nome",
+        "archived": "Arquivado",
+        "offline_downloads": "Downloads off-line",
+        "locale": "Idioma",
+        "display_name": "Nome de exibição",
+        "base_url": "Endereço",
+        "api_key": "Chave",
+        "compat": "Compatibilidade",
+        "models": "Modelos",
+        "label": "Rótulo",
+        "model": "Modelo"
       }
     }
   },

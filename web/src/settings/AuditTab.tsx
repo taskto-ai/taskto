@@ -3,7 +3,7 @@
 // names of people and things are the server's, read when the log is: a person who has left is
 // shown by their number only.
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { type AuditEntry, type AuditPage, api, type Member, ws } from '../api'
 import { type Format, has, type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -129,17 +129,23 @@ export function AuditTab({ workspace }: { workspace: number }) {
   const events = [...(first.data?.events ?? []), ...(shown?.events ?? [])]
   const next = shown ? shown.next : (first.data?.next ?? '')
 
+  // Bumped when what is shown is replaced, so an older page that was still on its way is dropped.
+  const generation = useRef(0)
   const change = (patch: Partial<Filters>) => {
+    generation.current++
     setOlder(null)
     setFilters((cur) => ({ ...cur, ...patch }))
   }
   const refresh = () => {
+    generation.current++
     setOlder(null)
     first.reload()
   }
   const more = () =>
     action.run(async () => {
+      const asked = generation.current
       const page = await api<AuditPage>(`${base}/audit?${query}&cursor=${encodeURIComponent(next)}`)
+      if (asked !== generation.current) return
       setOlder({ query, events: [...(shown?.events ?? []), ...page.events], next: page.next })
     })
 
@@ -240,6 +246,11 @@ export function AuditTab({ workspace }: { workspace: number }) {
 const actionKey = (a: string) => `settings.audit.actions.${a}` as Key
 const targetKey = (x: string) => `settings.audit.targets.${x}` as Key
 const detailKey = (d: string) => `settings.audit.details.${d}` as Key
+const valueKey = (v: string) => `settings.audit.values.${v}` as Key
+
+// The details whose values are codes with a translation (roles, modes, the names of fields); the
+// rest are names and addresses, shown as they are.
+const CODED = new Set(['role', 'from', 'to', 'default_mode', 'method', 'scope', 'reason', 'fields'])
 
 function Event({ e }: { e: AuditEntry }) {
   const t = useT()
@@ -281,18 +292,19 @@ function Details({ details, f }: { details: AuditEntry['details']; f: Format }) 
   const t = useT()
   const names = Object.keys(details).sort()
   if (names.length === 0) return null
-  const value = (v: AuditEntry['details'][string]): string => {
+  const code = (name: string, v: string) => (CODED.has(name) && has(`settings.audit.values.${v}`) ? t(valueKey(v)) : v)
+  const value = (name: string, v: AuditEntry['details'][string]): string => {
     if (typeof v === 'boolean') return t(v ? 'settings.audit.yes' : 'settings.audit.no')
     if (typeof v === 'number') return f.number(v)
-    if (Array.isArray(v)) return f.list(v)
-    return v
+    if (Array.isArray(v)) return f.list(v.map((x) => code(name, x)))
+    return code(name, v)
   }
   return (
     <dl className="tt-audit-details tt-small tt-muted">
       {names.map((n) => (
         <div key={n}>
           <dt>{has(`settings.audit.details.${n}`) ? t(detailKey(n)) : n}</dt>
-          <dd>{value(details[n])}</dd>
+          <dd>{value(n, details[n])}</dd>
         </div>
       ))}
     </dl>

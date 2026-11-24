@@ -76,6 +76,7 @@ test('admins read the log: actions translated, names, dates in their format, and
   // A member who has left has no name in the reply: the number is shown.
   expect(screen.getByText('Member number 9')).toBeTruthy()
   expect(screen.getByText('Role')).toBeTruthy()
+  expect(log().getByText('Member')).toBeTruthy() // the role's value, translated, not `member`
   expect(screen.getAllByText('203.0.113.9').length).toBe(2)
   const time = screen.getAllByRole('time')[0]
   expect(time.getAttribute('datetime')).toBe('2026-03-05T14:30:00.000Z')
@@ -114,6 +115,31 @@ test('filters go to the server, and older events are asked for with the cursor',
   fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
   await screen.findByRole('list', { name: 'Audit log' })
   expect(log().getByText('Member removed')).toBeTruthy()
+})
+
+test('an older page that was still on its way when the log was refreshed is dropped', async () => {
+  let release: (() => void) | undefined
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fakeFetch({
+    'GET /api/workspaces/1/members': { body: members },
+    'GET /api/workspaces/1/audit?limit=50': { body: first },
+    'GET /api/workspaces/1/audit?limit=50&cursor=cursor-1': async () => {
+      await held
+      return { body: { next: '', events: [entry({ id: 1, action: 'invite_created', target_type: 'invite' })] } }
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="audit" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Show older events' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+  await act(async () => {
+    release?.()
+    await held
+  })
+  await screen.findByRole('list', { name: 'Audit log' })
+  expect(log().queryByText('Invite sent')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Show older events' })).toBeTruthy()
 })
 
 test('a date range is sent as the whole days, from the start of the first to the end of the last', async () => {

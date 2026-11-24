@@ -219,3 +219,32 @@ func nullable2(s string) any {
 	}
 	return s
 }
+
+func TestListWorkspaceBoundsWithFinerDigitsKeepMillisecondEvents(t *testing.T) {
+	d := open(t)
+	ws := exec(t, d, `INSERT INTO workspaces (name) VALUES ('Home')`)
+	event(t, d, ws, 0, "2026-01-01T00:00:00.123Z", audit.SpaceCreated)
+	bound, err := time.Parse(time.RFC3339Nano, "2026-01-01T00:00:00.1235Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func(q audit.Query) int {
+		t.Helper()
+		page, err := audit.ListWorkspace(context.Background(), d, ws, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(page.Events)
+	}
+	// An event at .123 is before .1235: out of "from" it, in "to" it.
+	if n := count(audit.Query{From: bound}); n != 0 {
+		t.Errorf("from .1235 includes the event at .123 (%d)", n)
+	}
+	if n := count(audit.Query{To: bound}); n != 1 {
+		t.Errorf("to .1235 leaves out the event at .123 (%d)", n)
+	}
+	exact := bound.Add(-500 * time.Microsecond)
+	if count(audit.Query{From: exact}) != 1 || count(audit.Query{To: exact}) != 0 {
+		t.Error("a bound at the event's own millisecond is from-inclusive, to-exclusive")
+	}
+}
