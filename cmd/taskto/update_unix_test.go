@@ -3,9 +3,11 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -25,12 +27,10 @@ func startGroup(t *testing.T, cmd *exec.Cmd) <-chan struct{} {
 	done := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(done) }()
 	t.Cleanup(func() {
-		select {
-		case <-done:
-		default:
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			<-done
-		}
+		// The group is killed even when the leader has already exited: Wait doesn't wait for
+		// the leader's children, which stay in its group.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
 	})
 	return done
 }
@@ -46,6 +46,33 @@ func TestStartGroupReapsTheGroupOfATestThatStopsEarly(t *testing.T) {
 	if err := syscall.Kill(-pid, 0); err == nil {
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		t.Error("the process group of the test is still there")
+	}
+}
+
+// A child left in the group by a leader that has exited is gone when the test is over too.
+func TestStartGroupReapsAChildTheLeaderLeftBehind(t *testing.T) {
+	var child int
+	t.Run("leader exits first", func(t *testing.T) {
+		var out bytes.Buffer
+		cmd := exec.Command("sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!")
+		cmd.Stdout = &out
+		<-startGroup(t, cmd) // the leader has exited and been waited for; its child sleeps on
+		n, err := strconv.Atoi(strings.TrimSpace(out.String()))
+		if err != nil {
+			t.Fatalf("the leader's child: %q: %v", out.String(), err)
+		}
+		child = n
+		if err := syscall.Kill(child, 0); err != nil {
+			t.Fatalf("the child isn't running before the cleanup: %v", err)
+		}
+	})
+	// The killed child is reaped by whoever adopted it, which takes a moment; until then it
+	// still answers a signal 0.
+	for deadline := time.Now().Add(10 * time.Second); syscall.Kill(child, 0) == nil; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(child, syscall.SIGKILL)
+			t.Fatal("the child the leader left in its group is still there")
+		}
 	}
 }
 
