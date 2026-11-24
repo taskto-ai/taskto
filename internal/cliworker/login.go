@@ -427,7 +427,7 @@ func (w *Worker) Status(ctx context.Context, user int64, cli CLI, slot Slot) (Au
 	switch cli {
 	case Claude:
 		// Signed out, it exits 1 on Linux (0 on macOS) with the same JSON: read the JSON.
-		out, err := w.runQuick(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: []string{"auth", "status", "--json"}})
+		out, errOut, err := w.runQuick(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: []string{"auth", "status", "--json"}})
 		var ee *exec.ExitError
 		if err != nil && !errors.As(err, &ee) {
 			return AuthStatus{}, err
@@ -440,17 +440,19 @@ func (w *Worker) Status(ctx context.Context, user int64, cli CLI, slot Slot) (Au
 			out = out[i : j+1]
 		}
 		if err := json.Unmarshal(out, &st); err != nil {
+			slog.Warn("cliworker: unexpected status output", "cli", cli, "stderr", cut(strings.TrimSpace(string(errOut)), 512))
 			return AuthStatus{}, fmt.Errorf("unexpected status output from %s", cli.Name())
 		}
 		return AuthStatus{LoggedIn: st.LoggedIn, Method: st.AuthMethod}, nil
 	case Codex:
 		// Exit 0 means signed in ("Logged in using ChatGPT", on stderr), 1 not.
-		out, err := w.runQuick(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: []string{"login", "status"}})
+		// Its answer is text, which it prints on stderr: read both streams, here only.
+		out, errOut, err := w.runQuick(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: []string{"login", "status"}})
 		var ee *exec.ExitError
 		switch {
 		case err == nil:
 			method := "chatgpt"
-			if strings.Contains(strings.ToLower(string(out)), "api key") {
+			if strings.Contains(strings.ToLower(string(out)+" "+string(errOut)), "api key") {
 				method = "api_key"
 			}
 			return AuthStatus{LoggedIn: true, Method: method}, nil
@@ -460,7 +462,7 @@ func (w *Worker) Status(ctx context.Context, user int64, cli CLI, slot Slot) (Au
 			return AuthStatus{}, err
 		}
 	default:
-		out, err := w.runQuick(ctx, user, helperRequest{Op: "authfile", CLI: cli, Slot: slot})
+		out, _, err := w.runQuick(ctx, user, helperRequest{Op: "authfile", CLI: cli, Slot: slot})
 		if err != nil {
 			return AuthStatus{}, err
 		}
@@ -497,14 +499,14 @@ func (w *Worker) Logout(ctx context.Context, user int64, cli CLI, slot Slot) err
 	}
 	// A shared account's directory holds no login to sign out of.
 	if bin := w.cfg.Bins[cli]; bin != "" && !slot.Shared() {
-		if _, err := w.runQuick(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: logoutCommand(cli)}); err != nil {
+		if _, _, err := w.runQuick(ctx, user, helperRequest{Op: "exec", CLI: cli, Slot: slot, Bin: bin, Args: logoutCommand(cli)}); err != nil {
 			var ee *exec.ExitError
 			if !errors.As(err, &ee) { // "not logged in" is fine
 				slog.Warn("cliworker: logout", "cli", cli, "err", err)
 			}
 		}
 	}
-	_, err := w.runQuick(ctx, user, helperRequest{Op: "reset", CLI: cli, Slot: slot})
+	_, _, err := w.runQuick(ctx, user, helperRequest{Op: "reset", CLI: cli, Slot: slot})
 	return err
 }
 
@@ -515,7 +517,7 @@ func (w *Worker) codexLimits(user int64, slot Slot, thread string) []Limit {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := w.runQuick(ctx, user, helperRequest{Op: "limits", CLI: Codex, Slot: slot, Thread: thread})
+	out, _, err := w.runQuick(ctx, user, helperRequest{Op: "limits", CLI: Codex, Slot: slot, Thread: thread})
 	if err != nil {
 		slog.Warn("cliworker: reading Codex's usage limits", "err", err)
 		return nil
@@ -528,11 +530,14 @@ func (w *Worker) codexLimits(user int64, slot Slot, thread string) []Limit {
 }
 
 // runQuick runs a short helper request for user (a status, a logout, a read) and returns its
-// output: stdout, then stderr. It is stopped after 30 s or when ctx ends.
-func (w *Worker) runQuick(ctx context.Context, user int64, req helperRequest) ([]byte, error) {
+// stdout and stderr, apart: the helper's JSON answers and a CLI's JSON are on stdout, and a
+// warning on stderr (a runtime's, a CLI's) must never be parsed with them. A caller reads
+// stderr only for a CLI that answers there, or to say why. It is stopped after 30 s or when
+// ctx ends.
+func (w *Worker) runQuick(ctx context.Context, user int64, req helperRequest) (stdoutBytes, stderrBytes []byte, err error) {
 	cmd, header, err := w.helperCommand(user, req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -541,7 +546,7 @@ func (w *Worker) runQuick(ctx context.Context, user int64, req helperRequest) ([
 	cmd.Stdout = &limitedWriter{w: &stdout, n: 64 << 10}
 	cmd.Stderr = &limitedWriter{w: &stderr, n: 4 << 10}
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	done := make(chan struct{})
 	go func() {
@@ -563,9 +568,9 @@ func (w *Worker) runQuick(ctx context.Context, user int64, req helperRequest) ([
 		_ = signalGroup(cmd.Process.Pid, sigKill)
 	}
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	}
-	return append(stdout.Bytes(), stderr.Bytes()...), err
+	return stdout.Bytes(), stderr.Bytes(), err
 }
 
 type limitedWriter struct {
