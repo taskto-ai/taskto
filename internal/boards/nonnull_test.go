@@ -41,7 +41,9 @@ func TestCardListsAreNeverNil(t *testing.T) {
 	nonnull.Require(t, decode[Card](t, rec))
 
 	// A card with a comment, and the thread the tools give.
-	expect(t, w.alice.do(http.MethodPost, path+"/comments", map[string]string{"body": "hello"}), http.StatusCreated)
+	rec = w.alice.do(http.MethodPost, path+"/comments", map[string]string{"body": "hello"})
+	expect(t, rec, http.StatusCreated)
+	nonnull.Require(t, decode[Comment](t, rec))
 	thread := w.card(w.alice, w.shared, c)
 	if len(thread.Comments) != 1 {
 		t.Fatalf("comments: %+v", thread.Comments)

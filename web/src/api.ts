@@ -505,7 +505,16 @@ export type RecordVersion = {
   synthetic?: boolean
 }
 
-export type Comment = { id: number; card_id: number; author: Author; body: string; created_at: string }
+// Mentions are the people the body mentions that the reader may see in the space, by ID, with the
+// name the server has for them: what a mention shows, never the label typed into the text.
+export type Comment = {
+  id: number
+  card_id: number
+  author: Author
+  body: string
+  created_at: string
+  mentions: { id: number; name: string }[]
+}
 // A card as the card route sends it: with its comments, oldest first.
 export type CardWithThread = Card & { comments: Comment[] }
 

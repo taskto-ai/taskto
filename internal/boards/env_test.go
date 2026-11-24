@@ -26,6 +26,8 @@ type env struct {
 	db *sql.DB
 	s  *Service
 	h  http.Handler
+	// hooks run what a test sets at chosen moments of the database's use.
+	hooks *db.Hooks
 }
 
 // newEnv serves the account, space and board routes, as the server does.
@@ -36,7 +38,8 @@ var setupToken = auth.NewSetupToken()
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
-	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))
+	hooks := &db.Hooks{}
+	sqlDB, err := db.OpenHooked(ctx, filepath.Join(t.TempDir(), db.FileName), hooks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +54,7 @@ func newEnv(t *testing.T) *env {
 	accounts.Routes(mux)
 	spaces.Routes(mux)
 	s.Routes(mux)
-	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux)}
+	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux), hooks: hooks}
 }
 
 // user is a logged-in browser.

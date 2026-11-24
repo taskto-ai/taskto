@@ -714,7 +714,10 @@
     "filterLabel": "Label",
     "allLabels": "All labels",
     "overdueOnly": "Overdue only",
-    "noMatches": "No cards match."
+    "noMatches": "No cards match.",
+    "mention": "Mention someone",
+    "mentionPlaceholder": "Mention someone…",
+    "mentionUnknown": "Someone"
   },
   "errors": {
     "http": "The server answered {status}.",
@@ -2107,6 +2110,8 @@
       "card_assigned": "A card was assigned to you: {title}",
       "card_due": "Due {due}: {title}",
       "card_overdue": "Overdue since {due}: {title}",
+      "card_comment": "A card of yours has a new comment: {title}",
+      "card_mention": "You were mentioned in a comment on a card: {title}",
       "app_effect_failed": "An action in {app} didn't finish and needs you to retry it",
       "changed": "Something changed. Open it to see what you can still see."
     },
@@ -2114,6 +2119,8 @@
       "card_assigned": "A card was assigned to you",
       "card_due": "A card of yours is due",
       "card_overdue": "A card of yours is overdue",
+      "card_comment": "A card of yours has a new comment",
+      "card_mention": "You were mentioned in a comment",
       "app_effect_failed": "An app action needs your attention",
       "changed": "Something changed"
     },
