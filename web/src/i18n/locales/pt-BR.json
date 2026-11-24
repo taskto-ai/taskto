@@ -874,6 +874,8 @@
     "mail_rejected": "O servidor SMTP recusou a mensagem (resposta {smtp_code}). O log do servidor tem a resposta dele.",
     "mail_failed": "Não foi possível enviar a mensagem. O log do servidor diz por quê.",
     "mail_test_rate_limited": "Você enviou um e-mail de teste há pouco, ou o servidor está ocupado enviando outros. Aguarde um pouco e tente de novo.",
+    "export_running": "Você já tem uma exportação em andamento. Aguarde ela terminar.",
+    "export_rate_limited": "Você exportou algumas vezes na última hora, ou o servidor está ocupado com outras exportações. Aguarde um pouco e tente de novo.",
     "cli_workers_off": "Os workers de CLI estão desligados neste servidor.",
     "cli_workers_no_boundary": "Os workers de CLI rodam em modo local neste servidor, sem isolamento entre usuários, então só funcionam enquanto o servidor tiver um único usuário. Um operador pode usar o contêiner do worker de CLI no lugar.",
     "cli_not_installed": "O {cli} não está instalado neste servidor.",
@@ -1010,6 +1012,7 @@
       "search": "Busca",
       "dictation": "Ditado",
       "password": "Senha",
+      "data": "Seus dados",
       "tokens": "Tokens de acesso",
       "about": "Sobre",
       "notifications": "Notificações"
@@ -1082,6 +1085,17 @@
       "changing": "Alterando…",
       "change": "Alterar a senha",
       "changed": "Sua senha foi alterada, e suas outras sessões foram encerradas."
+    },
+    "data": {
+      "title": "Exportar seus dados",
+      "intro": "Baixe um zip com os seus dados neste espaço de trabalho. Ele é montado enquanto é enviado, então arquivos grandes não precisam caber na memória em lugar nenhum.",
+      "documents": "Os documentos e arquivos do seu espaço privado, como estão agora (sem as versões antigas).",
+      "boards": "Os cartões do seu quadro pessoal, inclusive os arquivados, com os comentários, em JSON e em Markdown.",
+      "conversations": "Suas conversas com o agente neste espaço de trabalho, com o histórico, em JSON.",
+      "apps": "Os registros dos aplicativos do seu espaço privado, em JSON (as fotos são listadas, não incluídas).",
+      "never": "O conteúdo de espaços compartilhados e os dados de outras pessoas nunca entram, mesmo onde você pode lê-los. Um manifesto no zip lista o que ele contém e o que precisou deixar de fora.",
+      "download": "Baixar meus dados",
+      "limit": "Você pode exportar algumas vezes por hora, uma de cada vez. Se o download falhar, aguarde um pouco e tente de novo."
     },
     "spaces": {
       "title": "Espaços compartilhados",

@@ -112,7 +112,7 @@ test('signed in, an invite joins the new workspace and goes to it', async () => 
   expect(window.location.pathname).toBe('/w/9/conversations')
 })
 
-test('members see the providers, CLI accounts, search, dictation, notifications, password, tokens and about tabs only; admins see them all', async () => {
+test('members see the providers, CLI accounts, search, dictation, notifications, password, data, tokens and about tabs only; admins see them all', async () => {
   fakeFetch({
     'GET /api/workspaces/1/providers': { body: { providers: [] } },
     'GET /api/me/providers': { body: { providers: [] } },
@@ -130,6 +130,7 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     'Dictation',
     'Notifications',
     'Password',
+    'Your data',
     'Access tokens',
     'About',
   ])
@@ -156,6 +157,7 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     ['Dictation', '/w/1/settings/dictation'],
     ['Notifications', '/w/1/settings/notifications'],
     ['Password', '/w/1/settings/password'],
+    ['Your data', '/w/1/settings/data'],
     ['Access tokens', '/w/1/settings/tokens'],
     ['About', '/w/1/settings/about'],
   ])
@@ -1044,4 +1046,15 @@ test('a second token waits until the first new one is done with', async () => {
   expect((screen.getByLabelText('New token') as HTMLInputElement).value).toBe('ttp_fake-7')
   fireEvent.click(screen.getByRole('button', { name: 'Done' }))
   expect((screen.getByRole('button', { name: 'Create token' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+test('the data tab offers the export as a plain download link, which makes no request of its own', () => {
+  const calls = fakeFetch({})
+  render(<SettingsPage me={me} workspace={member} tab="data" />)
+  const link = screen.getByRole('link', { name: 'Download my data' })
+  expect(link.getAttribute('href')).toBe('/api/workspaces/1/export')
+  expect(link.hasAttribute('download')).toBe(true)
+  expect(screen.getByRole('heading', { name: 'Export your data' })).toBeTruthy()
+  // Nothing is fetched by looking: the zip is made when the browser follows the link.
+  expect(calls).toEqual([])
 })

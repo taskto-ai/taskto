@@ -744,6 +744,10 @@ export type BackupStatus = {
 
 export const backupPath = (workspace: number) => `${ws(workspace)}/backup`
 
+// A zip of what the caller owns in the workspace (docs/api.md#export-my-data): a link to download, not a
+// call, so the browser saves it as it comes.
+export const exportPath = (workspace: number) => `${ws(workspace)}/export`
+
 // The server's outgoing email (docs/install.md#email), for admins: where it sends through, never the
 // account or its password. `password` says whether the server signs in.
 export type MailStatus =

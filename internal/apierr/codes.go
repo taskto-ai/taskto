@@ -289,6 +289,15 @@ const (
 	// test sends are all busy. Retry-After says how long.
 	CodeMailTestRateLimited Code = "mail_test_rate_limited"
 
+	// The export of a person's own data (internal/export).
+
+	// CodeExportRunning is a 409: the person has an export running already. Retry-After says
+	// when to look again.
+	CodeExportRunning Code = "export_running"
+	// CodeExportRateLimited is a 429: the person started their share of exports this hour, or the
+	// server's exports are all busy. Retry-After says how long.
+	CodeExportRateLimited Code = "export_rate_limited"
+
 	// CLI accounts, shared CLI accounts and automatic switching (internal/cliaccounts).
 
 	CodeCLIWorkersOff          Code = "cli_workers_off"

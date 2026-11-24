@@ -226,6 +226,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `mail_rejected` | 502 | The SMTP server refused the message, with its reply code `smtp_code`. |
 | `mail_failed` | 502 | The message couldn't be sent. |
 | `mail_test_rate_limited` | 429 | A test email was sent a moment ago by the caller, or the server's test sends are all busy; `Retry-After` says how long. |
+| `export_running` | 409 | The caller has an export of their data running; `Retry-After` says when to look again. |
+| `export_rate_limited` | 429 | The caller started their share of exports this hour, or the server's exports are all busy; `Retry-After` says how long. |
 | `cli_workers_off` | 409 | CLI workers are off on this server (also a list's `reason_code`). |
 | `cli_workers_no_boundary` | 409 | CLI workers run in local mode, which allows a single user only (also a list's `reason_code`). |
 | `cli_not_installed` | 503 | The CLI, `cli`, isn't installed on this server. |
@@ -689,6 +691,67 @@ past 50 tokens per member of a workspace.
 
 Revokes one of the caller's tokens: requests with it fail from now on. `204`, or `404`
 (also for someone else's token).
+
+## Export my data
+
+A person's own data in a workspace, as a zip they keep. It is the person's export, not the
+operator's: `taskto backup` takes the whole server's data directory, and this takes one person's
+share of one workspace, through the same access checks as everything else.
+
+### `GET /api/workspaces/{workspace}/export`
+
+Streams a zip (`200`, `Content-Type: application/zip`, `Content-Disposition: attachment;
+filename="taskto-export-YYYYMMDD.zip"`, `Cache-Control: no-store`). It changes nothing on the
+server, so it is a `GET`: the web app's button is a plain download link. It takes a session
+only (`403` with an access token, so a leaked token can't take a person's data out), and any
+member of the workspace may call it, for themselves.
+
+**What is in it: only what the caller owns in this workspace.**
+
+| Path in the zip | What |
+|---|---|
+| `documents/…` | The current version of every file in the caller's **private space**, under the names it has there, with a file's bytes as they are: Markdown and other versioned files from git, and large files, audio, video and archives (the [unversioned files](#unversioned-files)) from the space's own storage, never as a Git LFS pointer. Older versions aren't included. |
+| `boards/<id>-<name>.json`, `boards/<id>-<name>.md` | Each board of the private space, archived ones too (the personal board): the board and its cards (all columns, archived cards too), each with its thread of comments. The JSON is `{"board": {…}, "cards": [{…card as the API gives it…, "comments": […]}]}`, exactly what `GET …/cards/{card}` answers. The Markdown is the same, for reading: a heading per column, the cards, their bodies and comments. |
+| `conversations/<id>-<title>.json` | Each conversation the caller owns **in this workspace**, archived ones too: `{"conversation": {…as the conversations API gives it…}, "transcript": "complete", "entries": […]}`. The entries are the agent runtime's, oldest first, in the shape the web app draws, as `GET …/conversations/{conversation}/entries` pages them. If the agent runtime is off or no longer has the conversation, `transcript` is `"unavailable"`, `entries` is empty and the manifest says so. |
+| `apps/<id>-<name>.json` | Each app of the private space, offline ones too: `{"app": {id, name, archived_at, created_at, updated_at}, "records": […]}`. The records are the live ones (not deleted), as the agent's `list_app_rows` tool gives them (each field by name, with `id` and `revision`). An attachment field holds each photo's metadata, not its bytes; the app's definition isn't included (copy the app, or see [templates](templates.md)). |
+| `manifest.json` | `{"format": 1, "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, apps, records}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file that went, or whose bytes the server no longer has), `transcript` with `unavailable` and a conversation's ID, or `documents` with `off` when the server has no knowledge base; it is capped at 1000 (`"skipped_truncated": true` then). |
+
+**What is never in it:** shared spaces' content, even where the caller is a member or an editor;
+other people's private spaces, cards, conversations and records; the caller's data in other
+workspaces (export each workspace on its own); search indexes, tokens, sessions and every secret.
+Boards, apps and documents of a shared space belong to the space, not to a person, so ownership
+isn't the question there: someone who wants them copies them into their private space first.
+
+**Names inside the zip** come from people, so none is used as it is. Each element of a path is
+cleaned (a name's `/`, `\`, `:`, `*`, `?`, quotes, `<`, `>`, `|`, control and bidirectional
+characters become `_` or go; `.` and `..` become `_`; a trailing dot or space goes; names Windows
+reserves, such as `NUL` or `COM1`, get a `_` in front), cut to 120 bytes at a character
+boundary with the extension kept, and made unique, even on a file system that ignores case,
+with ` (2)`, ` (3)`… before the extension. No entry is absolute or has a `..`, so unpacking can't
+write outside its folder, and no name is ever joined to a file system path on the server: the
+zip is a stream.
+
+**Streamed.** The zip is written to the response as it is made, one entry at a time, with a data
+descriptor per entry and Zip64 where needed, and has no `Content-Length`. A file's bytes are
+copied through a fixed buffer, so a large file costs a buffer, not its size; audio, video and other
+files git doesn't version are stored as they are, not compressed again. What is held at once is
+one board's cards, one app's records or one conversation's history. The server never writes: the
+knowledge base's repositories are only read, through `internal/knowledge`.
+
+**If it stops.** The status goes out with the first bytes, so an export that fails or whose
+reader goes away is ended by cutting the connection: the zip has no end of central directory, so
+no unzipper takes it for whole. The manifest is the last entry, so a zip that has one is whole.
+
+**Limits.** One export at a time per person (`409 export_running`), at most 3 per hour per
+person and 4 at once on the whole server (`429 export_rate_limited`), both with `Retry-After`;
+a refused attempt isn't counted. They are in memory: a restart forgets them. A person who
+closes the download frees their slot at once. `401` without a session, `404` for a workspace
+the caller isn't a member of.
+
+Each export that begins is a `data_export_started` event on the [audit log](audit.md), with the
+exporter as actor and target; one turned away by its limits isn't.
+
+**The web app** has a "Your data" tab in Settings, for every member: a download link.
 
 ## Spaces
 

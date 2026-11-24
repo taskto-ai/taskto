@@ -870,6 +870,8 @@
     "mail_rejected": "The SMTP server refused the message (reply {smtp_code}). The server's log has its answer.",
     "mail_failed": "The message couldn't be sent. The server's log says why.",
     "mail_test_rate_limited": "You sent a test email a moment ago, or the server is busy sending others. Wait a little and try again.",
+    "export_running": "You already have an export running. Wait for it to finish.",
+    "export_rate_limited": "You exported a few times in the last hour, or the server is busy making other exports. Wait a little and try again.",
     "cli_workers_off": "CLI workers are off on this server.",
     "cli_workers_no_boundary": "CLI workers run in local mode on this server, with no boundary between users, so they work only while the server has a single user. An operator can run the CLI worker container instead.",
     "cli_not_installed": "{cli} isn't installed on this server.",
@@ -1006,6 +1008,7 @@
       "search": "Search",
       "dictation": "Dictation",
       "password": "Password",
+      "data": "Your data",
       "tokens": "Access tokens",
       "about": "About",
       "notifications": "Notifications"
@@ -1078,6 +1081,17 @@
       "changing": "Changing…",
       "change": "Change the password",
       "changed": "Your password is changed, and your other sessions are signed out."
+    },
+    "data": {
+      "title": "Export your data",
+      "intro": "Download a zip of your own data in this workspace. It is made as it is sent, so large files don't have to fit in memory anywhere.",
+      "documents": "The documents and files of your private space, as they are now (not their older versions).",
+      "boards": "Your personal board's cards, archived ones too, with their comments, as JSON and as Markdown.",
+      "conversations": "Your conversations with the agent in this workspace, with their history, as JSON.",
+      "apps": "The records of your private space's apps, as JSON (photos are listed, not included).",
+      "never": "Shared spaces' content and other people's data are never in it, even where you can read them. A manifest in the zip lists what it holds and anything it had to leave out.",
+      "download": "Download my data",
+      "limit": "You can export a few times an hour, one at a time. If the download fails, wait a little and try again."
     },
     "spaces": {
       "title": "Shared spaces",
