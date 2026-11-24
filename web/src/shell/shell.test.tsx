@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import type { Me } from '../api'
@@ -366,6 +367,37 @@ test('the menu button opens the sidebar as a drawer, and a link closes it', asyn
   expect(menu.getAttribute('aria-expanded')).toBe('true')
   fireEvent.click(within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('link', { name: 'Apps' }))
   expect(shell.dataset.drawer).toBe('closed')
+})
+
+test("a click on the menu button as soon as the shell is drawn isn't undone by the shell's first effects", async () => {
+  // In a browser a person can click before React has run the effects of the first draw (they run
+  // after it, in a task of their own); a draw inside act() runs them at once, so draw outside it.
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+  const before = env.IS_REACT_ACT_ENVIRONMENT
+  env.IS_REACT_ACT_ENVIRONMENT = false
+  const host = document.body.appendChild(document.createElement('div'))
+  const root = createRoot(host)
+  try {
+    root.render(<Shell me={me as unknown as Me} onLogout={() => {}} />)
+    // The observer's callback is a microtask of the commit, ahead of the effects' task.
+    await new Promise<void>((resolve) => {
+      const seen = new MutationObserver(() => {
+        if (!host.querySelector('.tt-menu-button')) return
+        seen.disconnect()
+        resolve()
+      })
+      seen.observe(host, { childList: true, subtree: true })
+    })
+    host.querySelector<HTMLButtonElement>('.tt-menu-button')?.click()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect((host.querySelector('.tt-shell') as HTMLElement).dataset.drawer).toBe('open')
+  } finally {
+    root.unmount()
+    host.remove()
+    env.IS_REACT_ACT_ENVIRONMENT = before
+  }
 })
 
 test('the drawer takes focus, makes the page inert, and Escape closes it back to its button', async () => {

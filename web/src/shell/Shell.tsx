@@ -120,8 +120,12 @@ function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
   // had it is hidden with the drawer. The page is inert while the drawer is open, and an inert
   // element can't take focus: it is focused once the drawer has closed (the effect below).
   const focusPage = useRef(false)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: closes on every path change
+  // Only a change of page closes it, not the first draw: that effect runs after the draw, and a
+  // click on the menu button before it would be undone.
+  const drawnAt = useRef(path)
   useEffect(() => {
+    if (drawnAt.current === path) return
+    drawnAt.current = path
     if (drawerOpen.current) focusPage.current = true
     setDrawer(false)
   }, [path])
