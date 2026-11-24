@@ -1010,7 +1010,7 @@ func TestNextOccurrence(t *testing.T) {
 	}{
 		{0, h}, {time.Minute, h}, {h - time.Nanosecond, h}, {h, 2 * h}, {h + 1, 2 * h}, {5*h + 30*time.Minute, 6 * h},
 	} {
-		if got := nextOccurrence(prev, h, prev.Add(tc.now)); !got.Equal(prev.Add(tc.want)) {
+		if got, ok := nextOccurrence(prev, h, prev.Add(tc.now)); !ok || !got.Equal(prev.Add(tc.want)) {
 			t.Errorf("now = prev+%v: next = prev+%v, want prev+%v", tc.now, got.Sub(prev), tc.want)
 		}
 	}

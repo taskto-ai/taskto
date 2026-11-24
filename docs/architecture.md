@@ -146,8 +146,13 @@ no extra process); it has no feature of its own.
   the next server (or the same one, restarted) takes it again, so a handler runs more than once
   for an occurrence in that case and must be idempotent. `Job.Occurrence()` is the same on every
   try of an occurrence, and is the key of whatever a handler makes (a notification's dedupe key, a
-  card's origin). Each claim raises the job's lease token, and so does a reschedule: a worker that
-  was too slow, or whose job was changed or cancelled under it, can't finish it for anyone else.
+  card's origin); it includes the job's revision, which a reschedule raises, so work scheduled
+  again for the same time is a new occurrence. Each claim raises the job's lease token, and so does
+  a reschedule: a worker that was too slow, or whose job was changed or cancelled under it, can't
+  finish it for anyone else. The outcome of a try is also dropped if its lease had ended, checked
+  with the token and the state under the write lock; the expired lease is recovered like a crashed
+  worker's. A handler must honour its context: a try that returns after its time limit has failed,
+  even with `nil`, and stopping the server waits a bounded time for a handler that ignores it.
   Failures are tried again with growing waits up to a bound that counts crashed tries too; a job
   that used them all has failed and stays listed with its last error. A recurring job runs once
   when due however many occurrences passed while the server was off, and keeps to its grid.
@@ -158,8 +163,16 @@ no extra process); it has no feature of its own.
   is a floor: each handler checks the rights its work needs, as close to the write as it can, and
   stops the job by returning `schedule.ErrAccessLost`. Nothing runs with the authority of whoever
   scheduled it or of the server, which is the rule the apps' effect outbox follows too.
-- **Bounded.** A person has at most 1000 jobs waiting, a payload is at most 16 KiB, a recurring job
-  repeats at most once a minute, and finished jobs are purged after a week.
+- **Bounded.** A person has at most 1000 jobs waiting or running, counted at every change into
+  those states (a finished job scheduled again too) by the statement that writes, so concurrent
+  callers can't pass it; a payload is at most 16 KiB; a recurring job repeats at most once a minute;
+  a job is due between the years 2000 and 8999 (its stored time sorts as text, and the database
+  refuses any other); and finished jobs are purged after a week.
+- **Cheap to poll.** Partial indexes order the pending jobs by when they are due and the running
+  ones by when their lease ends, so a poll reads the first row of each and a queue of finished jobs
+  costs nothing (`EXPLAIN QUERY PLAN` is checked in a test). The worker runs bounded batches, so
+  cleanup gets a turn however long the queue is, and fails a row whose time can't be read instead
+  of stopping on it.
 
 ## Agent safety
 

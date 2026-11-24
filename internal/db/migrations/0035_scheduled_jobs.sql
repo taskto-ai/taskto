@@ -21,8 +21,12 @@ CREATE TABLE scheduled_jobs (
     -- changes nothing and a changed schedule replaces it. Unique per owner and kind.
     dedupe_key   TEXT NOT NULL CHECK (length(dedupe_key) BETWEEN 1 AND 200),
     payload      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload) AND json_type(payload) = 'object'),
-    -- When it is due (UTC, millisecond text, so times compare as strings).
-    run_at       TEXT NOT NULL,
+    -- When it is due: UTC, millisecond text in exactly the form strftime('%Y-%m-%dT%H:%M:%fZ')
+    -- writes, so times compare as strings, and within the years the scheduler supports (2000 to
+    -- 8999). The round trip through strftime rejects any other text, so a time that sorts wrongly
+    -- (year 10000 sorts before today) or doesn't parse can't be stored.
+    run_at       TEXT NOT NULL CHECK (
+        strftime('%Y-%m-%dT%H:%M:%fZ', run_at) IS run_at AND run_at >= '2000-01-01T00:00:00.000Z' AND run_at < '9000-01-01T00:00:00.000Z'),
     -- NULL for a job that runs once; else the seconds between the occurrences of a recurring one.
     every_seconds INTEGER CHECK (every_seconds IS NULL OR every_seconds >= 60),
     state        TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'running', 'done', 'failed')),
@@ -33,12 +37,18 @@ CREATE TABLE scheduled_jobs (
     failed_runs  INTEGER NOT NULL DEFAULT 0 CHECK (failed_runs >= 0),
     -- When the next try is, after a failed one (NULL: at run_at). run_at itself names the occurrence
     -- and stays as it was through its retries.
-    retry_at     TEXT,
+    retry_at     TEXT CHECK (retry_at IS NULL OR (strftime('%Y-%m-%dT%H:%M:%fZ', retry_at) IS retry_at
+        AND retry_at >= '2000-01-01T00:00:00.000Z' AND retry_at < '9000-01-01T00:00:00.000Z')),
     -- The token of the claim that holds the job: raised on every claim and on every reschedule and
     -- never reset, so a worker whose lease ran out (or whose job was changed meanwhile) can never
     -- finish it for a later claim.
     lease        INTEGER NOT NULL DEFAULT 0 CHECK (lease >= 0),
-    lease_until  TEXT,
+    lease_until  TEXT CHECK (lease_until IS NULL OR (strftime('%Y-%m-%dT%H:%M:%fZ', lease_until) IS lease_until
+        AND lease_until >= '2000-01-01T00:00:00.000Z' AND lease_until < '9000-01-01T00:00:00.000Z')),
+    -- Raised on every reschedule and never otherwise, so it is the same on every try of an occurrence
+    -- and differs between a schedule and the one that replaced it, even at the same run_at: with the
+    -- id and run_at it names what a handler makes only once.
+    revision     INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
     -- A short reason the last try failed, for the people who run the server; never a secret.
     last_error   TEXT,
     last_run_at  TEXT,
@@ -48,7 +58,14 @@ CREATE TABLE scheduled_jobs (
     UNIQUE (user_id, kind, dedupe_key)
 ) STRICT;
 
--- The worker's question: what is due, or running with a lease that has ended.
-CREATE INDEX scheduled_jobs_due ON scheduled_jobs (state, run_at);
+-- The worker's questions, each answered by a partial index in the order it wants, so a poll reads
+-- the first row of each and never scans the queue or sorts it: the pending job that is due first
+-- (by its next try, else its run_at), and the running job whose lease ended first. A job that is
+-- done or failed is in neither, however many there are; the third is what the purge walks.
+CREATE INDEX scheduled_jobs_pending_due ON scheduled_jobs (coalesce(retry_at, run_at), id) WHERE state = 'pending';
+CREATE INDEX scheduled_jobs_lease_ended ON scheduled_jobs (lease_until, id) WHERE state = 'running';
+CREATE INDEX scheduled_jobs_finished ON scheduled_jobs (updated_at) WHERE state IN ('done', 'failed');
+-- The per-person bound counts the jobs that wait or run.
+CREATE INDEX scheduled_jobs_active_by_user ON scheduled_jobs (user_id) WHERE state IN ('pending', 'running');
 CREATE INDEX scheduled_jobs_by_workspace ON scheduled_jobs (workspace_id);
 CREATE INDEX scheduled_jobs_by_space ON scheduled_jobs (space_id) WHERE space_id IS NOT NULL;
