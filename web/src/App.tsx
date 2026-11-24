@@ -265,7 +265,10 @@ export function App() {
           <Shell
             me={me}
             onLogout={() => void logOut({ user: me.user.id, next: { state: 'login' } })}
-            onMe={(next) => setSession({ state: 'in', me: next })}
+            onMe={(next) =>
+              // Only the account still signed in: an answer that comes after logout must not bring the shell back.
+              setSession((s) => (s.state === 'in' && s.me.user.id === next.user.id ? { state: 'in', me: next } : s))
+            }
           />
           {leavingGuard}
         </>

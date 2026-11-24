@@ -106,6 +106,14 @@ func TestANewWorkspaceIsIsolatedFromTheFirst(t *testing.T) {
 	if code, _ := s.api(tok3, http.MethodGet, w1+"/members", nil); code != http.StatusNotFound {
 		t.Errorf("a token of the new workspace reads one's members = %d, want 404", code)
 	}
+	// The document the reverse check reads exists, and the token of its own workspace reads it, so
+	// "not found" below can only be the isolation and not a missing file.
+	if code, body := s.api(one, http.MethodPut, s.docs(s.one, s.alice.private)+"/anything.md", map[string]any{"content": "# Anything\n"}); code != http.StatusCreated {
+		t.Fatalf("a token of one writes a document in one = %d %v", code, body)
+	}
+	if got := s.toolOK(one, "read_doc", map[string]any{"space_id": s.alice.private, "path": "anything.md"}); got["content"] == nil {
+		t.Fatalf("a token of one can't read its own document: %v", got)
+	}
 	if code, refused, text := s.tool(tok3, "read_doc", map[string]any{"space_id": s.alice.private, "path": "anything.md"}); code != http.StatusOK || !refused || text != "error: not found" {
 		t.Errorf("a token of the new workspace reads one over MCP = %d %v %q", code, refused, text)
 	}

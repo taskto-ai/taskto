@@ -493,3 +493,57 @@ test('"New workspace" says why a server refused, and is not offered to those it 
   await screen.findByRole('navigation', { name: 'Sections' })
   expect(screen.queryByLabelText('New workspace')).toBeNull()
 })
+
+test('a workspace made after the person logged out does not bring the shell back', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: true } },
+    'POST /api/workspaces': async () => {
+      await held // the answer comes after the logout below
+      return {
+        status: 201,
+        body: { workspace: { id: 9, name: 'Late', role: 'admin' }, user: me.user, workspaces: me.workspaces },
+      }
+    },
+    'POST /api/logout': { status: 204 },
+    ...pages,
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  fireEvent.click(screen.getByLabelText('New workspace'))
+  fireEvent.change(screen.getByLabelText('Name of the new workspace'), { target: { value: 'Late' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  await screen.findByRole('heading', { name: 'Log in' })
+  await act(async () => {
+    release()
+    await held
+  })
+  expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
+})
+
+test('someone with no workspace is offered "New workspace" when the server lets them', async () => {
+  window.history.replaceState(null, '', '/')
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { user: me.user, workspaces: [], can_create_workspace: true } },
+  })
+  render(<App />)
+  await screen.findByText(/member of any workspace/)
+  expect(screen.getByLabelText('New workspace')).toBeTruthy()
+
+  cleanup()
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { user: me.user, workspaces: [], can_create_workspace: false } },
+  })
+  render(<App />)
+  await screen.findByText(/member of any workspace/)
+  expect(screen.queryByLabelText('New workspace')).toBeNull()
+})

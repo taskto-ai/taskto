@@ -147,6 +147,14 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
     return (
       <div className="tt-center">
         <p>{t('shell.noWorkspace')}</p>
+        {me.can_create_workspace && onMe && (
+          <NewWorkspace
+            onCreated={(next, created) => {
+              onMe(next)
+              navigate(routePath({ workspace: created.id, section: 'conversations' }))
+            }}
+          />
+        )}
         <button type="button" className="tt-button" onClick={onLogout}>
           {t('shell.logOut')}
         </button>
