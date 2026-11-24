@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # A stand-in for `docker`, for update_test.go: it records every call in $FAKE_DIR/calls, each
 # with the TASKTO_VERSION of the .env it ran against (" @v0.3.0"), and answers what
-# deploy/taskto-update.sh asks. $FAKE_DIR/fail holds extended regular expressions: a call
-# whose line matches one of them fails. $FAKE_DIR/running is the version of the server that
-# `compose up` started (the fake /healthz reports it); $FAKE_DIR/block holds a pull while it exists.
+# deploy/taskto-update.sh and deploy/safety-check.sh ask. Files in $FAKE_DIR steer it:
+#   fail      extended regular expressions: a call whose line matches one of them fails
+#   running   the version of the server that `compose up` started (the fake /healthz reports it)
+#   block     holds a pull while it exists; block-up holds `compose up`
+#   volname   the name of the data volume the server has mounted (default taskto_data);
+#             nomount: it has none; config-volname: the one Compose's config names
+#   mutate    lines "VERSION KIND": that version's containers break a safety rule (KIND is root,
+#             insecure, nomode, netadmin, suid or workerdata)
+#   upfail-after-start  a version whose `compose up` starts it and then fails
+#   images    what `compose config --images` prints
+#   revision-TAG  the revision label of the images tagged TAG
 set -u
 d=$FAKE_DIR
 proj=$PWD
@@ -16,9 +24,42 @@ if [ -s "$d/fail" ] && grep -qE -f "$d/fail" <<<"$line"; then
 	exit 1
 fi
 last=${*: -1}
+vol=$(cat "$d/volname" 2>/dev/null || echo taskto_data)
+running=$(cat "$d/running" 2>/dev/null || true)
+mutated() { grep -qx "$running $1" "$d/mutate" 2>/dev/null; }
+
+# container ID: `docker inspect`'s JSON for the server or the worker, as the running version is.
+container() {
+	local user=65532:65532 capadd=null env mounts nets
+	case $1 in
+	id-taskto)
+		mutated root && user=0
+		env='["TASKTO_CLI_WORKERS=container","TASKTO_DISABLE_PASSWORD_LOGIN="]'
+		mutated nomode && env='["TASKTO_CLI_WORKERS=off"]'
+		mutated insecure && env='["TASKTO_CLI_WORKERS=container","TASKTO_INSECURE_COOKIES=true"]'
+		mounts=$(jq -cn --arg v "$vol" '[{Type: "volume", Name: $v, Destination: "/data"}, {Type: "volume", Name: "taskto_cli-run", Destination: "/run/taskto-cli"}]')
+		nets='{"taskto_default":{}}'
+		;;
+	*)
+		user=root
+		capadd='["CHOWN","KILL","SETGID","SETUID"]'
+		mutated netadmin && capadd='["CHOWN","KILL","NET_ADMIN","SETGID","SETUID"]'
+		env='["PATH=/usr/bin"]'
+		mounts='[{"Type":"volume","Name":"taskto_cli-homes","Destination":"/homes"},{"Type":"volume","Name":"taskto_cli-run","Destination":"/run/taskto-cli"}]'
+		mutated workerdata && mounts=$(jq -cn --arg v "$vol" '[{Type: "volume", Name: $v, Destination: "/data"}]')
+		nets='{"taskto_worker":{}}'
+		;;
+	esac
+	jq -cn --arg user "$user" --argjson capadd "$capadd" --argjson env "$env" --argjson mounts "$mounts" --argjson nets "$nets" \
+		'[{Config: {User: $user, Env: $env}, HostConfig: {CapDrop: ["ALL"], CapAdd: $capadd, SecurityOpt: ["no-new-privileges:true"], Privileged: false},
+		   Mounts: $mounts, NetworkSettings: {Networks: $nets}}]'
+}
+
 case "$1" in
-manifest | login | logout) ;;
+manifest | logout | tag) ;;
+login) echo "${DOCKER_CONFIG:-unset}" >>"$d/login-config" ;;
 pull)
+	echo "${DOCKER_CONFIG:-unset}" >>"$d/pull-config"
 	while [ -e "$d/block" ]; do sleep 0.1; done
 	;;
 info) echo "$d/root" ;;
@@ -29,21 +70,19 @@ volume)
 	;;
 image)
 	case "$*" in
-	*--format*) echo "$last@sha256:$(printf '%s' "$last" | sha256sum | cut -c1-64)" ;;
+	*Labels*) cat "$d/revision-${last##*:}" 2>/dev/null || true ;;
+	*RepoDigests*) echo "$last@sha256:$(printf '%s' "$last" | sha256sum | cut -c1-64)" ;;
+	*.Id*) echo "sha256:id-$last" ;;
 	esac
 	;;
 run) ;; # the data moved aside
+network) echo taskto-worker ;;
 inspect)
-	unsafe=""
-	[ ! -s "$d/unsafe" ] || [ "$(cat "$d/running" 2>/dev/null)" != "$(cat "$d/unsafe")" ] || unsafe=yes
 	case "$*" in
-	*Config.User*) if [ -n "$unsafe" ]; then echo 0; else echo 65532:65532; fi ;;
-	*CapDrop*) echo '["ALL"] ["no-new-privileges:true"] false' ;;
-	*Config.Env*)
-		echo TASKTO_CLI_WORKERS=container
-		echo TASKTO_DISABLE_PASSWORD_LOGIN=
-		[ -z "$unsafe" ] || echo TASKTO_INSECURE_COOKIES=true
-		;;
+	*"range .Mounts"*) [ -e "$d/nomount" ] || echo "volume $vol" ;;
+	*"{{.Image}} {{.State.StartedAt}}"*) echo "img-$running 2026-01-01T00:00:00Z" ;;
+	*"{{.Image}}"*) echo "img-$running" ;;
+	*) container "$last" ;;
 	esac
 	;;
 compose)
@@ -55,13 +94,34 @@ compose)
 			echo 'required variable TASKTO_NEEDS_NEW_SETTING is missing a value' >&2
 			exit 1
 		fi
+		case "$*" in
+		*--images*)
+			if [ -s "$d/images" ]; then
+				cat "$d/images"
+			else
+				echo "ghcr.io/taskto-ai/taskto:$ver"
+				echo "ghcr.io/taskto-ai/taskto-cli-worker:$ver"
+				echo "caddy:2.11.9-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+			fi
+			;;
+		*json*) jq -cn --arg v "$(cat "$d/config-volname" 2>/dev/null || echo "$vol")" '{volumes: {data: {name: $v}}}' ;;
+		esac
 		;;
-	exec) echo "BACKUP-OF-$ver" ;;
-	up) echo "$ver" >"$d/running" ;;
+	exec)
+		case "$*" in
+		*"taskto backup"*) echo "BACKUP-OF-$ver" ;;
+		*find*) ! mutated suid || echo /usr/bin/bad ;;
+		esac
+		;;
+	up)
+		while [ -e "$d/block-up" ]; do sleep 0.1; done
+		echo "$ver" >"$d/running"
+		if [ "$(cat "$d/upfail-after-start" 2>/dev/null)" = "$ver" ]; then exit 1; fi
+		;;
 	down) rm -f "$d/running" ;;
 	ps)
 		case "$*" in
-		*-q*) echo "id-$last" ;;
+		*-q* | *-aq*) echo "id-$last" ;;
 		*) echo running ;;
 		esac
 		;;

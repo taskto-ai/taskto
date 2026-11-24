@@ -55,6 +55,7 @@ here is a secret. The published images are public, so no token is needed to pull
 | `TASKTO_BACKUP_AT` | `03:15` | When the nightly backup starts, `HH:MM` in UTC. |
 | `TASKTO_UPDATE_CHANNEL` | `release` | What the VM updates itself to (step 16, [docs/install.md](../docs/install.md#automatic-updates)): `release`, the newest GitHub Release; `main`, the newest commit whose CI passed; or `off`. |
 | `TASKTO_UPDATE_AT` | `04:30` | When the nightly update starts, `HH:MM` in UTC, spread by up to half an hour. Leave an hour or more after the backup. |
+| `TASKTO_UPDATE_REPO` | `taskto-ai/taskto` | The GitHub repository the updater reads releases from, `OWNER/NAME`. Change it only for a fork. |
 
 The sizes are for a VM of 4 cores and 12 GB, which leaves the server what it needs: its own
 process, the agent runtime and, while someone dictates, the speech model (about 1.2 GB).
@@ -103,6 +104,7 @@ TASKTO_BACKUP_AT=03:15
 # Automatic updates (step 16): release, main or off; and when, in UTC.
 TASKTO_UPDATE_CHANNEL=release
 TASKTO_UPDATE_AT=04:30
+TASKTO_UPDATE_REPO=taskto-ai/taskto
 
 # Runs its standard input as root on the VM, stopping at the first error.
 vm() { ssh -o BatchMode=yes -o ConnectTimeout=15 "$TASKTO_SSH" sudo -n bash -euo pipefail -s; }
@@ -163,10 +165,13 @@ case "${TASKTO_UPDATE_CHANNEL:-}" in
   off) ;;
   release|main)
     printf '%s' "${TASKTO_UPDATE_AT:-}" | grep -Eq '^([01][0-9]|2[0-3]):[0-5][0-9]$' || fail "TASKTO_UPDATE_AT isn't HH:MM"
-    git cat-file -e "${TASKTO_VERSION}:deploy/taskto-update.sh" || fail "$TASKTO_VERSION predates the automatic updates: set TASKTO_UPDATE_CHANNEL=off, or install a newer version"
+    git cat-file -e "${TASKTO_VERSION}:deploy/taskto-update.sh" && git cat-file -e "${TASKTO_VERSION}:deploy/safety-check.sh" \
+      || fail "$TASKTO_VERSION predates the automatic updates: set TASKTO_UPDATE_CHANNEL=off, or install a newer version"
     ;;
   *) fail "TASKTO_UPDATE_CHANNEL is '${TASKTO_UPDATE_CHANNEL:-}', not release, main or off" ;;
 esac
+printf '%s' "${TASKTO_UPDATE_REPO:-taskto-ai/taskto}" | grep -Eq '^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$' || fail "TASKTO_UPDATE_REPO isn't OWNER/NAME"
+[ -f deploy/safety-check.sh ] || fail "this checkout has no deploy/safety-check.sh, which step 12 runs: use a newer checkout of the runbook"
 echo OK
 )
 ```
@@ -190,7 +195,7 @@ TASKTO_BACKUPS=on TASKTO_BACKUP_CLIENT_CERT=off
   for v in TASKTO_MODE TASKTO_DOMAIN TASKTO_VERSION TASKTO_REGISTRY TASKTO_REGISTRY_USER \
     TASKTO_ADMIN_EMAIL TASKTO_ADMIN_NAME TASKTO_WORKSPACE TASKTO_LAN_IP TASKTO_PROXY_IP \
     TASKTO_CLI_WORKER_MEMORY TASKTO_CLI_WORKER_CPUS TASKTO_BROWSER TASKTO_BACKUPS TASKTO_BACKUP_AT \
-    TASKTO_BACKUP_CLIENT_CERT TASKTO_UPDATE_CHANNEL TASKTO_UPDATE_AT; do
+    TASKTO_BACKUP_CLIENT_CERT TASKTO_UPDATE_CHANNEL TASKTO_UPDATE_AT TASKTO_UPDATE_REPO; do
     echo "$v=$(q "$(eval "printf %s \"\${$v:-}\"")")"
   done
   echo 'VARS'
@@ -800,35 +805,23 @@ sign-up.
 ## Step 12: the agent safety rules, in the running containers
 
 [agent-safety.md](../docs/agent-safety.md) and the rules in [AGENTS.md](../AGENTS.md) are
-enforced by the code; this checks the install left them on.
+enforced by the code; this checks the install left them on. The checks are one script,
+`deploy/safety-check.sh`, which the updater runs too, after every update and every rollback,
+so the two can't drift: the server runs as 65532; both containers have `cap_drop: ALL`,
+`no-new-privileges` and aren't privileged; the server has no capability added and the worker
+exactly `SETUID`, `SETGID`, `CHOWN` and `KILL`; the worker has no setuid program, doesn't see
+the server's data, has no host path or Docker socket, and is on its own network (the
+firewall's bridge) only; no development switch and no secret is in either environment; and
+the server's own environment has `TASKTO_CLI_WORKERS=container`.
 
 **Run**: nothing to change.
 
-**Check**:
+**Check**: from this checkout's copy of the script, so it is the runbook's own rules that
+apply.
 
 ```sh
 . ~/.config/taskto-install.env
-vm <<'EOF'
-cd /srv/taskto
-fail() { echo "FAIL: $*"; exit 1; }
-s=$(docker compose ps -q taskto) w=$(docker compose ps -q cli-worker)
-[ "$(docker inspect --format '{{.Config.User}}' "$s")" = 65532:65532 ] || fail "the server doesn't run as 65532"
-for c in "$s" "$w"; do
-  docker inspect --format '{{json .HostConfig.CapDrop}} {{json .HostConfig.SecurityOpt}} {{.HostConfig.Privileged}}' "$c" \
-    | grep -q '^\["ALL"\] \["no-new-privileges:true"\] false$' || fail "$c isn't capability-free with no-new-privileges"
-done
-[ "$(docker inspect --format '{{json .HostConfig.CapAdd}}' "$w" | jq -c 'sort')" = '["CAP_CHOWN","CAP_KILL","CAP_SETGID","CAP_SETUID"]' ] \
-  || [ "$(docker inspect --format '{{json .HostConfig.CapAdd}}' "$w" | jq -c 'sort')" = '["CHOWN","KILL","SETGID","SETUID"]' ] \
-  || fail "the worker has capabilities beyond SETUID, SETGID, CHOWN and KILL"
-docker compose exec -T cli-worker true </dev/null || fail "can't run a command in the worker"
-# Without DAC capabilities a few root-only directories are unreadable, to the CLIs too.
-suid=$(docker compose exec -T cli-worker find / -xdev -perm /6000 -type f </dev/null 2>/dev/null || true)
-[ -z "$suid" ] || fail "the worker image has setuid or setgid programs: $suid"
-docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$s" "$w" | grep -v '^TASKTO_DISABLE_PASSWORD_LOGIN=' | grep -iE 'INSECURE|UNSAFE|TOKEN|SECRET|PASSWORD|API_KEY' && fail "a development switch or a secret is in a container's environment"
-docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$s" | grep -qx 'TASKTO_CLI_WORKERS=container' || fail "CLI workers aren't in container mode"
-docker inspect --format '{{range .Mounts}}{{println .Name}}{{end}}' "$w" | grep -qx taskto_data && fail "the worker can see the server's data"
-echo OK
-EOF
+vm < deploy/safety-check.sh
 ```
 
 ## Step 13: the open-internet checklist
@@ -1058,24 +1051,40 @@ About**. Point the owner's monitoring at `https://TASKTO_DOMAIN/healthz/backup`:
 
 The VM keeps itself on the latest release ([docs/install.md](../docs/install.md#automatic-updates)):
 `/usr/local/sbin/taskto-update`, a script of the host, run every night at `TASKTO_UPDATE_AT`
-UTC by a systemd timer. It checks the new version before touching anything, backs up into
-`/var/backups/taskto` (the last three kept), switches, checks the server and, if anything
-fails, restores the backup and goes back to the version before. It never downgrades, and
-leaves a release whose notes say `manual-upgrade: true` to a person. It needs only what the
-earlier steps installed, and the server container never gets the Docker socket. With
-`TASKTO_UPDATE_CHANNEL=off` this step removes the timer and keeps the script, for
-`taskto-update --to`.
+UTC by a systemd timer. It does the safe common case and leaves the rest to a person: it
+checks the new version, files and images from one commit, before touching anything, backs up
+into `/var/backups/taskto` (the last three kept), switches, checks the server and, if
+anything fails, goes back to the version before (restoring the backup only if the new server
+started). It never downgrades, and it leaves to a person a release whose notes say
+`manual-upgrade: true`, a version that changes the worker's firewall, and an update that was
+interrupted. It needs only what the earlier steps installed, and the server container never
+gets the Docker socket. With `TASKTO_UPDATE_CHANNEL=off` this step removes the timer and
+keeps the script, for `taskto-update --to`, when `TASKTO_VERSION` has one.
 
-**Run**:
+**Run**: every file is taken out of git and checked before anything is sent, so a version
+without the script never puts an empty file on the VM. Such a version is only for
+`TASKTO_UPDATE_CHANNEL=off`, and the step is then skipped.
 
 ```sh
 . ~/.config/taskto-install.env
-git show "${TASKTO_VERSION}:deploy/taskto-update.sh" | ssh -o BatchMode=yes "$TASKTO_SSH" \
-  "sudo -n sh -c 'cat > /usr/local/sbin/taskto-update.new && chmod 755 /usr/local/sbin/taskto-update.new && mv /usr/local/sbin/taskto-update.new /usr/local/sbin/taskto-update'"
-for u in taskto-update.service taskto-update.timer; do
-  git show "${TASKTO_VERSION}:deploy/$u" | ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /etc/systemd/system/$u.new && chmod 644 /etc/systemd/system/$u.new && mv /etc/systemd/system/$u.new /etc/systemd/system/$u'"
-done
-vm <<'EOF'
+if ! git cat-file -e "${TASKTO_VERSION}:deploy/taskto-update.sh" 2>/dev/null; then
+  [ "${TASKTO_UPDATE_CHANNEL:-}" = off ] || { echo "FAIL: $TASKTO_VERSION has no deploy/taskto-update.sh: install a newer version, or set TASKTO_UPDATE_CHANNEL=off"; false; }
+  echo "SKIP: $TASKTO_VERSION predates the updater and updates are off"
+else
+  (
+  set -e
+  d=$(mktemp -d)
+  trap 'rm -rf "$d"' EXIT
+  for f in taskto-update.sh taskto-update.service taskto-update.timer; do
+    git show "${TASKTO_VERSION}:deploy/$f" > "$d/$f"
+    [ -s "$d/$f" ] || { echo "FAIL: deploy/$f of $TASKTO_VERSION is empty"; exit 1; }
+  done
+  ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /usr/local/sbin/taskto-update.new && chmod 755 /usr/local/sbin/taskto-update.new && mv /usr/local/sbin/taskto-update.new /usr/local/sbin/taskto-update'" < "$d/taskto-update.sh"
+  for u in taskto-update.service taskto-update.timer; do
+    ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /etc/systemd/system/$u.new && chmod 644 /etc/systemd/system/$u.new && mv /etc/systemd/system/$u.new /etc/systemd/system/$u'" < "$d/$u"
+  done
+  )
+  vm <<'EOF'
 . /etc/taskto/install.env
 install -d -m 755 /var/lib/taskto-update
 if [ "${TASKTO_UPDATE_CHANNEL:-release}" = off ]; then
@@ -1087,13 +1096,20 @@ else
   systemctl enable --now taskto-update.timer >/dev/null 2>&1
 fi
 EOF
+fi
 ```
 
+(`TASKTO_UPDATE_REPO` went to `/etc/taskto/install.env` in step 1, where the updater reads it.)
+
 **Check**: the script is this version's, and a dry run, which chooses a version and checks it
-without changing anything, succeeds; the timer is on, or off if the channel is.
+(it pulls the images, to check them, but changes nothing on the install), succeeds; the timer
+is on, or off if the channel is.
 
 ```sh
 . ~/.config/taskto-install.env
+if ! git cat-file -e "${TASKTO_VERSION}:deploy/taskto-update.sh" 2>/dev/null; then
+  [ "${TASKTO_UPDATE_CHANNEL:-}" = off ] && echo "OK (skipped: updates are off, and $TASKTO_VERSION has no updater)"
+else
 (
 [ "$(git show "${TASKTO_VERSION}:deploy/taskto-update.sh" | shasum -a 256 | cut -c1-64)" = "$(ssh -o BatchMode=yes "$TASKTO_SSH" sha256sum /usr/local/sbin/taskto-update | cut -c1-64)" ] \
   || { echo "FAIL: /usr/local/sbin/taskto-update differs from $TASKTO_VERSION's"; exit 1; }
@@ -1109,12 +1125,14 @@ systemctl list-timers taskto-update.timer --no-pager | sed -n 1,2p
 /usr/local/sbin/taskto-update --dry-run || fail "the dry run: the lines above say why"
 echo OK
 EOF
+fi
 ```
 
 To hold updates for a while, make `/etc/taskto/update.hold` on the VM (`touch`), and remove it
 to go on. The last run's result is in `/var/lib/taskto-update/status.json`, each run's line
 in `journalctl -u taskto-update`. To run one by hand: `sudo taskto-update`, or `sudo
-taskto-update --to vX.Y.Z`.
+taskto-update --to vX.Y.Z`. What the updater leaves to a person, and what to do then, is in
+[docs/install.md](../docs/install.md#automatic-updates).
 
 ## Step 17: the restore drill
 
@@ -1186,8 +1204,11 @@ a backup first and a rollback if the new version doesn't come up
 ([docs/install.md](../docs/install.md#automatic-updates)). What it did is in
 `/var/lib/taskto-update/status.json` and `journalctl -u taskto-update`. The manual steps
 below are for a hold (`touch /etc/taskto/update.hold` stops the nightly runs; remove it to
-go on), for a release whose notes say `manual-upgrade: true` (follow them first), and for
-an install with updates off.
+go on), for what the updater leaves to a person (a release whose notes say
+`manual-upgrade: true`, a version that changes `deploy/worker-firewall.sh`: run step 8 with
+it first, then `taskto-update --to`; an interrupted update; a server that isn't the version
+on record: [docs/install.md](../docs/install.md#automatic-updates)), and for an
+install with updates off.
 
 Migrations only go forward: once a newer version has started on the data, an older one
 won't ([docs/install.md](../docs/install.md#upgrade-and-rollback)). So every update starts
@@ -1228,11 +1249,18 @@ update `~/.config/taskto-install.env` is behind: before you run any step again, 
 
 ## Rollback
 
-The updater rolls back by itself when an update fails after its backup: the old files, the
-data moved aside (`taskto_data_rolled_back_*`) and the backup restored by the old version's
-image. If that fails too it stops, leaves the install as it is, and runs nothing again until
+The updater rolls back by itself when an update fails after its backup: the old files and
+images go back and the old version starts. Only if the new server had started (and so may
+have written data) does it also move the data aside, into a volume beside the server's own
+(`<the data volume>_rolled_back_*`, a copy; the volume itself stays, and is emptied only
+after the copy), and restore the backup with the old version's image. If the rollback fails
+too it stops, leaves the install as it is, and runs nothing again until
 `/var/lib/taskto-update/blocked` is removed: the status says why, and the steps below are the
-way back by hand.
+way back by hand. An update that was stopped half way (the machine rebooted, the process was
+killed) leaves `/var/lib/taskto-update/transaction`, and nothing runs, not even `--to`, until
+it is removed: the files in `/srv/taskto` may be on either version, so look, put it right
+with the steps below (the old files are in `/var/lib/taskto-update/previous/`, the backup is
+named in the record), then remove it.
 
 To go back to the version before yourself, with the data from the backup taken before the
 update (the updater's are `/var/backups/taskto/before-update-from-<old>-to-<new>-<time>.tar.gz`,
