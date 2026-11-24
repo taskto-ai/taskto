@@ -487,10 +487,10 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var conflict *conflictError
 	var status *statusError
 	var apiErr *apierr.Error
-	var over *quota.Error
+	refusal, quotaRefusal := quota.AsAPI(err)
 	switch {
-	case errors.As(err, &over):
-		apierr.WriteError(w, over.API())
+	case quotaRefusal:
+		apierr.WriteError(w, refusal)
 	case errors.As(err, &status):
 		writeError(w, status.status, status.code, status.msg, status.params)
 	case errors.As(err, &apiErr):

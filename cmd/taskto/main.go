@@ -205,7 +205,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	// The storage quotas: writes that would take a space or its workspace over one are refused.
 	// With none set (the default) the check does nothing.
 	quotas := quota.New(sqlDB, quota.Limits{Workspace: cfg.StorageQuotaWorkspace, User: cfg.StorageQuotaUser}, kb)
-	kb.SetQuota(func(sp access.Space, adding int64) error { return quotas.CheckDB(context.Background(), sp, adding) })
+	kb.SetQuota(quotas.KnowledgeCheck())
 	// A history rewrite a stopped process left half done is finished before anyone reads.
 	if err := kb.Recover(ctx); err != nil {
 		return err

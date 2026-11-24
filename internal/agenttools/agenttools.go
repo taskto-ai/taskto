@@ -376,6 +376,8 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 		return &Refusal{http.StatusRequestEntityTooLarge, err.Error()}
 	case errors.Is(err, quota.ErrExceeded):
 		return &Refusal{http.StatusInsufficientStorage, err.Error()}
+	case errors.Is(err, quota.ErrUnavailable):
+		return &Refusal{http.StatusServiceUnavailable, "the storage in use can't be measured right now; try again in a moment"}
 	case errors.Is(err, knowledge.ErrNotKept):
 		return &Refusal{http.StatusGone, err.Error()}
 	default:

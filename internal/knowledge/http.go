@@ -387,9 +387,8 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var status int
 	var code apierr.Code
 	msg := err.Error()
-	var over *quota.Error
-	if errors.As(err, &over) {
-		apierr.WriteError(w, over.API())
+	if refusal, ok := quota.AsAPI(err); ok {
+		apierr.WriteError(w, refusal)
 		return
 	}
 	switch {

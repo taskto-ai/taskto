@@ -46,14 +46,21 @@ A write that adds content to a space and would take it, or its workspace, over a
 
 | Where | Checked |
 |---|---|
-| Knowledge base: creating or replacing a document or an upload (the web app, the REST API, the agent's tools and the effects of apps on documents) | before the change, inside the space's write lock, so two writers can't both fit; an unversioned file is checked at its own size, less the file it replaces |
-| App photos | when the upload starts, at its declared size, and when it is finalized, for what is kept (the picture without its metadata, and its thumbnail) beyond what was declared |
+| Knowledge base: creating or replacing a document or an upload (the web app, the REST API, the agent's tools and the effects of apps on documents) | before the change, inside the space's write lock, and reserved at once, so two writers can't both fit, in one space or in different ones of a workspace; an unversioned file is checked at its own size, less the file it replaces, once that is known |
+| App photos | when the upload starts, at its declared size, and when it is finalized, for what is kept (the picture without its metadata, and its thumbnail) beyond what was declared, in the transaction that records it; reserved the same way |
 
 The answer is `507` with the code `quota_user` (the private space's quota) or
 `quota_workspace` and `max_mib`, the quota in MiB; the web app shows it translated, and an
 agent's tool is refused with a `507` and the error's English text. Nothing is written, and the upload that
 started is the only trace of one refused at finalize, which can be finished once there is
 room, or abandoned.
+
+Every check reserves the bytes it lets through, counted with every other write's until that
+write's usage is published (or it failed), so writes that run at the same time, in different
+spaces or a document and a photo, are held to the quota together. The reservations live in
+memory, under a mutex held only to read and change them, never across git or the database.
+If a space can't be measured the write is refused with `503` and `quota_unavailable`, never
+let through on a guess; it can be tried again.
 
 A change that adds no content is never refused for a quota: deleting, moving and restoring
 a document. A full space can always make room. (A document delete frees the bytes of an

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"testing"
 
-	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/quota"
 )
 
@@ -17,9 +16,7 @@ func quotaStack(t *testing.T, limits quota.Limits) *stack {
 	t.Helper()
 	return newStackDB(t, func(o *Options, sqlDB *sql.DB) {
 		q := quota.New(sqlDB, limits, o.Search.Knowledge())
-		o.Search.Knowledge().SetQuota(func(sp access.Space, adding int64) error {
-			return q.CheckDB(t.Context(), sp, adding)
-		})
+		o.Search.Knowledge().SetQuota(q.KnowledgeCheck())
 		o.Quota = q
 	})
 }

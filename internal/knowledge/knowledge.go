@@ -211,7 +211,7 @@ type Store struct {
 	onChange []func(access.Space) // see OnChange
 
 	// quota is the storage quotas' check (SetQuota); nil for none.
-	quota func(sp access.Space, adding int64) error
+	quota func(sp access.Space, adding int64) (release func(), err error)
 }
 
 // spaceState is what the Store keeps per space while it runs.
@@ -421,7 +421,9 @@ func (s *Store) PutFile(ctx context.Context, sp access.Space, name string, src i
 // putUnversioned commits a pointer to the staged bytes at name, once they fit in the
 // space's unversioned size, and moves them into place.
 func (s *Store) putUnversioned(sp access.Space, name string, sg *staged, base string, by Author, message string) (Result, error) {
-	return s.put(sp, name, maxPointerSize, base, by, message, func(r *repo, cur *object.TreeEntry) (plumbing.Hash, error) {
+	// The quota is checked in here, once the bytes of the file it replaces are known: a replacement
+	// or a shrink near the cap is a change of its net size, not of the new file's.
+	return s.putCore(sp, name, maxPointerSize, false, base, by, message, nil, func(r *repo, cur *object.TreeEntry) (plumbing.Hash, error) {
 		r.collect = true
 		if !r.hasObject(sg.ptr.oid) {
 			used, err := r.unversionedSize()
@@ -441,14 +443,17 @@ func (s *Store) putUnversioned(sp access.Space, name string, sg *staged, base st
 			if used+sg.ptr.size > s.opts.MaxUnversionedSize {
 				return plumbing.ZeroHash, fmt.Errorf("%w: its unversioned files would be over %d bytes", ErrRepoFull, s.opts.MaxUnversionedSize)
 			}
-			// The bytes the change adds to the space, the replaced file's taken off: the write
-			// checked the pointer and the commit, these are the file's own.
-			if err := s.checkQuota(sp, sg.ptr.size-freed); err != nil {
+			// What the change adds to the space: the file's bytes, the replaced file's taken off,
+			// and the commit and its trees.
+			if err := s.reserveQuota(r, sp, sg.ptr.size-freed+changeOverhead); err != nil {
 				return plumbing.ZeroHash, err
 			}
 			if err := r.adopt(sg); err != nil {
 				return plumbing.ZeroHash, err
 			}
+		} else if err := s.reserveQuota(r, sp, changeOverhead); err != nil {
+			// The bytes are in the space already (a path points to them): only the commit is new.
+			return plumbing.ZeroHash, err
 		}
 		return r.storeBlob(sg.ptr.encode())
 	})
@@ -463,8 +468,14 @@ func (s *Store) put(sp access.Space, name string, adding int64, base string, by 
 // putIf is put with a guard, run once the write lock is held and before anything is read or
 // committed: if it returns an error, nothing is written and the error is the result.
 func (s *Store) putIf(sp access.Space, name string, adding int64, base string, by Author, message string, guard func() error, store func(r *repo, cur *object.TreeEntry) (plumbing.Hash, error)) (Result, error) {
+	return s.putCore(sp, name, adding, true, base, by, message, guard, store)
+}
+
+// putCore is putIf; the storage quota is checked before store runs for adding bytes if
+// quotaFirst, and by store itself if not (an unversioned file, whose net size it knows).
+func (s *Store) putCore(sp access.Space, name string, adding int64, quotaFirst bool, base string, by Author, message string, guard func() error, store func(r *repo, cur *object.TreeEntry) (plumbing.Hash, error)) (Result, error) {
 	var res Result
-	err := s.write(sp, adding, true, func(r *repo) error {
+	err := s.writeQ(sp, adding, quotaFirst, true, func(r *repo) error {
 		if guard != nil {
 			if err := guard(); err != nil {
 				return err
@@ -808,12 +819,18 @@ const changeOverhead = 1 << 10
 // space, which a full repository still takes. The OnChange functions run
 // after it, once the space is unlocked.
 func (s *Store) write(sp access.Space, adding int64, create bool, fn func(*repo) error) error {
-	err := s.writeLocked(sp, adding, create, fn)
+	return s.writeQ(sp, adding, true, create, fn)
+}
+
+// writeQ is write; quotaFirst says whether the storage quotas are checked, for adding bytes,
+// before fn runs. A change that knows better what it adds checks them itself (Store.reserveQuota).
+func (s *Store) writeQ(sp access.Space, adding int64, quotaFirst, create bool, fn func(*repo) error) error {
+	err := s.writeLocked(sp, adding, quotaFirst, create, fn)
 	s.changed(sp)
 	return err
 }
 
-func (s *Store) writeLocked(sp access.Space, adding int64, create bool, fn func(*repo) error) error {
+func (s *Store) writeLocked(sp access.Space, adding int64, quotaFirst, create bool, fn func(*repo) error) error {
 	st := s.state(sp.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -835,8 +852,15 @@ func (s *Store) writeLocked(sp access.Space, adding int64, create bool, fn func(
 		slog.Warn("knowledge: taking a file's old versions out of history; it is retried at the next change", "space", sp.ID, "err", err)
 	}
 	// Whatever the change does (the repair above may have changed things already), the usage
-	// is published again once the write is over.
-	defer s.publishUsage(r)
+	// is published again once the write is over. What the change reserved of the quotas is held
+	// until then, so no other write counts the space as smaller than it is, and given back once
+	// it is published.
+	defer func() {
+		s.publishUsage(r)
+		for _, release := range r.releases {
+			release()
+		}
+	}()
 	size, err := r.size()
 	if err != nil {
 		return err
@@ -850,9 +874,8 @@ func (s *Store) writeLocked(sp access.Space, adding int64, create bool, fn func(
 	// The storage quotas: a change that adds content (not one that deletes or moves, which a
 	// full space must be able to do) must fit. The usage they read is this space's as the
 	// repair above left it.
-	if adding > 0 && s.quota != nil {
-		s.publishUsage(r)
-		if err := s.checkQuota(sp, adding+changeOverhead); err != nil {
+	if adding > 0 && quotaFirst {
+		if err := s.reserveQuota(r, sp, adding+changeOverhead); err != nil {
 			return err
 		}
 	}

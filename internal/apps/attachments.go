@@ -169,13 +169,15 @@ func (s *Service) WithQuota(q *quota.Service) *Service {
 	return s
 }
 
-// checkQuota refuses, with the quota's error, adding bytes that would take sp over a storage
-// quota. q is the transaction the caller holds, so the uploads it has reserved count.
-func (s *Service) checkQuota(ctx context.Context, q quota.Queryer, sp access.Space, adding int64) error {
+// reserveQuota refuses, with the quota's error, adding bytes that would take sp over a storage
+// quota, and otherwise holds them (with every other write's) until the returned reservation is
+// released, which the caller does once its transaction is over. q is the transaction the caller
+// holds, so the uploads it has reserved count. The reservation may be nil, and is safe to release.
+func (s *Service) reserveQuota(ctx context.Context, q quota.Queryer, sp access.Space, adding int64) (*quota.Reservation, error) {
 	if s.quota == nil {
-		return nil
+		return nil, nil
 	}
-	return s.quota.Check(ctx, q, sp, adding)
+	return s.quota.Reserve(ctx, q, sp, adding)
 }
 
 // lock serializes what is done to one attachment's bytes, in this process (which is the data
@@ -301,6 +303,8 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 		slog.Warn("apps: removing expired attachments", "app", appID, "err", err)
 	}
 	var created Attachment
+	var held *quota.Reservation
+	defer func() { held.Release() }() // after the commit, which is when the rows count by themselves
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		if err := s.uploader(ctx, a, sp.ID, appID); err != nil {
 			return err
@@ -338,8 +342,9 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 				code: apierr.CodeAppFilesFull, params: apierr.Params{"max_mib": MaxAppFileBytes >> 20}}
 		}
 		// The file's bytes, and the thumbnail finalizing will add, are the space's from now on.
-		if err := s.checkQuota(ctx, tx, sp, in.Size); err != nil {
-			return err
+		var qerr error
+		if held, qerr = s.reserveQuota(ctx, tx, sp, in.Size); qerr != nil {
+			return qerr
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO app_attachments (id, app_id, space_id, field, kind, owner, status, size) VALUES (?, ?, ?, ?, ?, ?, 'uploading', ?)`,
@@ -523,13 +528,6 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	if err != nil {
 		return Attachment{}, err
 	}
-	// What is kept is the picture and its thumbnail, which can be more than the size the upload
-	// declared (and reserved): the difference must fit.
-	if grow := int64(len(stored)) + int64(len(thumb)) - u.Size; grow > 0 {
-		if err := s.checkQuota(ctx, s.db, sp, grow); err != nil {
-			return Attachment{}, err
-		}
-	}
 	// The order makes it safe to stop at any point. The received file (.part) is removed only once
 	// the store says the attachment is ready, so until then a retry finds it and does all this again;
 	// the thumbnail and the stored picture are each written whole or not at all. Bytes past the
@@ -542,9 +540,25 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		return Attachment{}, err
 	}
 	var ready Attachment
+	var held *quota.Reservation
+	defer func() { held.Release() }() // after the commit, which is when the rows count by themselves
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		if err := s.uploader(ctx, a, sp.ID, appID); err != nil {
 			return err
+		}
+		// What is kept is the picture and its thumbnail, which can be more than the size the upload
+		// declared (and reserved): the difference must fit, checked here, where the size it is
+		// measured against is the one the row has and the row changes with it.
+		var declared int64
+		if err := tx.QueryRowContext(ctx, `SELECT size FROM app_attachments WHERE id = ? AND app_id = ? AND owner = ? AND status = 'uploading'`,
+			id, appID, a.UserID).Scan(&declared); errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound // removed meanwhile
+		} else if err != nil {
+			return err
+		}
+		var qerr error
+		if held, qerr = s.reserveQuota(ctx, tx, sp, int64(len(stored))+int64(len(thumb))-declared); qerr != nil {
+			return qerr
 		}
 		// From here the size is the stored one (the length it is served with), no longer the declared one.
 		res, err := tx.ExecContext(ctx, `
@@ -562,6 +576,14 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 		ready = u.Attachment
 		return err
 	})
+	if errors.Is(err, quota.ErrExceeded) {
+		// Still an upload: what was written for it is written again when it finalizes.
+		for _, ext := range []string{".thumb", ""} {
+			if rerr := root.Remove(fileName(appID, id, ext)); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+				slog.Warn("apps: removing a picture the quota refused", "app", appID, "err", rerr)
+			}
+		}
+	}
 	if err != nil {
 		return ready, err
 	}

@@ -228,6 +228,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `knowledge_full` | 507 | The space's knowledge base is full. |
 | `quota_workspace` | 507 | The write would take the workspace over its storage quota of `max_mib` MiB. |
 | `quota_user` | 507 | The write would take the private space over its storage quota of `max_mib` MiB. |
+| `quota_unavailable` | 503 | The storage in use couldn't be measured; the write was refused, and trying again may work. |
 | `doc_not_kept` | 410 | Only the current version of an unversioned file is kept. |
 | `search_query_required` | 400 | A search needs something to search for. |
 | `search_query_too_long` | 400 | A search is at most `max` bytes of text. |
@@ -2603,7 +2604,7 @@ close to the write as the data allows: inside the transaction that makes or move
 the write lock), and for a document **while the space's write lock is held**, right before the commit,
 so a right withdrawn while the entry waited for the lock stops it. Other
 failures with a code of their own (`app_effect_target_gone`, `app_effect_board_offline`,
-`app_effect_invalid`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
+`app_effect_invalid`, `app_effect_quota`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
 `app_effect_app_offline`) fail at once too; a failure that may pass (the database was busy, a card
 being changed) is tried again after 5 s, 10 s, 20 s…, at most 5 tries in all (a worker that died on
 the last try doesn't give an entry another: its lease running out fails it), and then is failed

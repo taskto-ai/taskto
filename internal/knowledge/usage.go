@@ -56,14 +56,22 @@ func (st *spaceState) publish(u *usage) {
 	st.cache.cur = u
 }
 
-// fill stores a measurement made from generation gen, unless something was published since.
-func (st *spaceState) fill(gen uint64, u usage) {
+// fill stores a measurement made from generation gen, unless something was published since;
+// it returns the figure to answer with: the measurement if it was stored, the published one
+// if a write got there first, and the measurement as it is if the usage was cleared meanwhile
+// (a measurement that raced a write isn't kept).
+func (st *spaceState) fill(gen uint64, u usage) usage {
 	st.cacheMu.Lock()
 	defer st.cacheMu.Unlock()
 	if st.cache.gen == gen {
 		st.cache.gen++
 		st.cache.cur = &u
+		return u
 	}
+	if st.cache.cur != nil {
+		return *st.cache.cur
+	}
+	return u
 }
 
 // Usage is the bytes sp's knowledge base takes: what git keeps of it, every version
@@ -72,16 +80,17 @@ func (st *spaceState) fill(gen uint64, u usage) {
 // the counters the last change left, or one measurement of the files, once.
 func (s *Store) Usage(sp access.Space) (versioned, unversioned int64, err error) {
 	st := s.state(sp.ID)
-	if u, _, ok := st.published(); ok {
+	// One look at the cache gives both: that there is nothing published and the generation the
+	// measurement is stored under, so a write that publishes in between makes it stale.
+	u, gen, ok := st.published()
+	if ok {
 		return u.versioned, u.unversioned, nil
 	}
-	// Taken before measuring: a write that publishes meanwhile makes this one stale.
-	_, gen, _ := st.published()
-	u, err := s.measure(sp)
+	u, err = s.measure(sp)
 	if err != nil {
 		return 0, 0, err
 	}
-	st.fill(gen, u)
+	u = st.fill(gen, u)
 	return u.versioned, u.unversioned, nil
 }
 
@@ -106,16 +115,30 @@ func (s *Store) measure(sp access.Space) (usage, error) {
 
 // SetQuota sets the check every change that adds content makes first, inside the space's
 // write lock: sp and the bytes the change adds. An error refuses the change and is its
-// result, as it is. It is for the server's start, before the Store is used; internal/quota's
-// Service.CheckDB is the check.
-func (s *Store) SetQuota(check func(sp access.Space, adding int64) error) { s.quota = check }
+// result, as it is. Without one, release holds the bytes (they count against the quotas)
+// until the change's usage is published, and the write calls it then, whatever its result. It
+// is for the server's start, before the Store is used; internal/quota's Service.ReserveDB is
+// the check.
+func (s *Store) SetQuota(check func(sp access.Space, adding int64) (release func(), err error)) {
+	s.quota = check
+}
 
-// checkQuota is the quota's check for a change adding n bytes to sp.
-func (s *Store) checkQuota(sp access.Space, n int64) error {
+// reserveQuota is the quota's check for a change adding n bytes to sp, which holds them on r
+// until the write publishes the usage.
+func (s *Store) reserveQuota(r *repo, sp access.Space, n int64) error {
 	if s.quota == nil || n <= 0 {
 		return nil
 	}
-	return s.quota(sp, n)
+	// The usage the check reads for this space is as the repair this write began with left it.
+	s.publishUsage(r)
+	release, err := s.quota(sp, n)
+	if err != nil {
+		return err
+	}
+	if release != nil {
+		r.releases = append(r.releases, release)
+	}
+	return nil
 }
 
 // publishUsage records the usage of the space r is open on, with its write lock held.

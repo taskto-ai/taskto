@@ -39,6 +39,9 @@ type repo struct {
 	// collect is set by a change that can leave unversioned files' bytes nothing points
 	// to: the write runs gc after it.
 	collect bool
+	// releases give back what the write reserved of the storage quotas (Store.reserveQuota),
+	// once the usage is published.
+	releases []func()
 }
 
 // openRepo opens sp's repository. Without one, it creates it if create is set, and

@@ -85,15 +85,15 @@ func TestQuotaHookRefusesContentThatDoesNotFit(t *testing.T) {
 	sp := writable(1)
 	var asked []int64
 	var refuse atomic.Bool
-	s.SetQuota(func(got access.Space, adding int64) error {
+	s.SetQuota(func(got access.Space, adding int64) (func(), error) {
 		if got.ID != sp.ID {
 			t.Errorf("asked about space %d", got.ID)
 		}
 		asked = append(asked, adding)
 		if refuse.Load() {
-			return &quota.Error{Scope: quota.ScopeUser, Limit: 1 << 20, Used: 1 << 20}
+			return nil, &quota.Error{Scope: quota.ScopeUser, Limit: 1 << 20, Used: 1 << 20}
 		}
-		return nil
+		return func() {}, nil
 	})
 
 	doc := must[Result](t)(s.Put(ctx, sp, "a.md", []byte("hello"), "", alice, ""))
@@ -102,11 +102,12 @@ func TestQuotaHookRefusesContentThatDoesNotFit(t *testing.T) {
 		t.Fatalf("a document asked %v, want [%d]", asked, 5+changeOverhead)
 	}
 	asked = nil
-	// A large file asks twice: for its pointer, and for its own bytes.
+	// A large file asks once, for its own bytes and the commit's overhead, when it knows what the
+	// file it replaces frees.
 	big := bytesOf(200, 'b')
 	must[Result](t)(s.Put(ctx, sp, "big.bin", big, "", alice, ""))
-	if len(asked) != 2 || asked[1] != 200 {
-		t.Fatalf("an unversioned file asked %v, want its pointer's and then 200", asked)
+	if len(asked) != 1 || asked[0] != 200+changeOverhead {
+		t.Fatalf("an unversioned file asked %v, want [%d]", asked, 200+changeOverhead)
 	}
 
 	refuse.Store(true)
