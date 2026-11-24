@@ -727,7 +727,7 @@ test('a writer sets and clears the due date, and adds and removes labels, each o
   await waitFor(() => expect(sent('PATCH', `${C}/1`)[1]).toEqual({ version: 2, due: null }))
   await waitFor(() => expect(within(view).queryByRole('button', { name: 'Clear the due date' })).toBeNull())
   // The cleared date empties the field, which held the saved date.
-  expect((within(view).getByLabelText('Due date') as HTMLInputElement).value).toBe('')
+  await waitFor(() => expect((within(view).getByLabelText('Due date') as HTMLInputElement).value).toBe(''))
 
   // Labels: sent as typed (the server normalizes them), and the card shows what it returns.
   const add = async (text: string) => {
