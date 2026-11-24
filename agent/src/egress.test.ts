@@ -1,6 +1,7 @@
+import dns from 'node:dns'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { EgressRefused, egressFetch, parsePolicy, REFUSED, refusal, special } from './egress.js'
 
 const bytes = (address: string) => address.split('.').map(Number)
@@ -148,14 +149,22 @@ describe('refusal', () => {
 describe('egressFetch', () => {
   let server: Server
   let port: number
+  let reached: string[] = []
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    reached = []
+  })
 
   beforeAll(async () => {
     server = createServer((req, res) => {
+      reached.push(req.url ?? '')
       if (req.url === '/redirect') {
         res.writeHead(302, { Location: 'http://127.0.0.1:1/elsewhere' }).end()
         return
       }
-      res.writeHead(200, { 'Content-Type': 'text/plain' }).end('hello')
+      // Close the connection after each answer, so the next request has to connect, and look the name up, again.
+      res.writeHead(200, { 'Content-Type': 'text/plain', Connection: 'close' }).end('hello')
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     port = (server.address() as AddressInfo).port
@@ -187,6 +196,36 @@ describe('egressFetch', () => {
     await expect(fetcher(`http://localhost:${port}/`)).rejects.toThrow()
     expect(heard).toHaveLength(1)
     expect(heard[0]?.message).toMatch(/^the server's egress policy doesn't allow this endpoint: localhost resolves to /)
+  })
+
+  it('looks a name up for every connection, so a name that later resolves somewhere refused gets nowhere', async () => {
+    // DNS rebinding: the first answer is an address the policy allows, the next is one it doesn't.
+    // The resolver is stubbed, so the test doesn't depend on the machine's.
+    const answers = ['127.0.0.1', '10.0.0.5']
+    const asked: string[] = []
+    vi.spyOn(dns, 'lookup').mockImplementation(((host: string, _options: unknown, callback: unknown) => {
+      asked.push(host)
+      const address = answers[asked.length - 1] ?? '10.0.0.5'
+      ;(callback as (err: null, addresses: { address: string; family: number }[]) => void)(null, [
+        { address, family: 4 },
+      ])
+    }) as typeof dns.lookup)
+
+    const heard: EgressRefused[] = []
+    const fetcher = egressFetch(parsePolicy(['127.0.0.1'], 'egress'))((r) => heard.push(r))
+    const url = `http://rebind.example.test:${port}/first`
+
+    const first = await fetcher(url)
+    expect(first.status).toBe(200)
+    expect(await first.text()).toBe('hello')
+    expect(reached).toEqual(['/first'])
+
+    await expect(fetcher(`http://rebind.example.test:${port}/second`)).rejects.toThrow()
+    expect(asked).toEqual(['rebind.example.test', 'rebind.example.test'])
+    expect(heard).toHaveLength(1)
+    expect(heard[0]?.message).toBe(`${REFUSED}: rebind.example.test resolves to 10.0.0.5, not on the allowlist`)
+    // The refused connection never reached the server.
+    expect(reached).toEqual(['/first'])
   })
 
   it('connects to an address a prefix allows', async () => {

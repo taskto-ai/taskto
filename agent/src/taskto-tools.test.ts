@@ -39,7 +39,8 @@ describe('the server tools file', () => {
     expect(new Set(specs.map((s) => s.name)).size).toBe(specs.length)
     for (const spec of specs) {
       expect(spec.name, 'name').toMatch(/^[a-z][a-z0-9_]*$/)
-      expect(spec.description, spec.name).not.toBe('')
+      expect(typeof spec.description, spec.name).toBe('string')
+      expect(spec.description.trim(), spec.name).not.toBe('')
       expect(typeof spec.read_only, spec.name).toBe('boolean')
       expect(spec.input_schema.type, spec.name).toBe('object')
     }
@@ -69,7 +70,10 @@ describe('tool selection', () => {
     expect(names({ browser: true })).toEqual(specs.map((s) => s.name))
   })
 
-  it('names the extension and offers no test tool in production', () => {
+  // That the production entry (index.ts) registers no spike tools is covered by the integration test
+  // TestProductionSidecarRefusesThePauseTools (internal/agentrt/tools_it_test.go): this one only
+  // checks the hooks' defaults, which the test entry alone changes.
+  it('names the extension, and its test hooks are off by default', () => {
     expect(tasktoTools('/unused.sock').name).toBe('taskto-tools')
     expect(testHooks.extraToolSpecs).toEqual([])
     expect(testHooks.spikeTools).toBe(false)
@@ -202,12 +206,20 @@ describe('a tool call', () => {
   })
 
   it('rejects when the call was aborted, rather than reporting an unreachable server', async () => {
-    handler = () => {
-      // never answers
-    }
     const controller = new AbortController()
+    let arrived!: () => void
+    const requestArrived = new Promise<void>((resolve) => {
+      arrived = resolve
+    })
+    handler = () => {
+      // Never answers; the abort comes once the request is here.
+      arrived()
+    }
     const call = run('list_spaces', {}, 'cap-123', controller.signal)
-    setTimeout(() => controller.abort(), 50)
-    await expect(call).rejects.toThrow()
+    // Attach the assertion first so the rejection is never unhandled.
+    const rejection = expect(call).rejects.toMatchObject({ name: 'AbortError' })
+    await requestArrived
+    controller.abort()
+    await rejection
   })
 })
