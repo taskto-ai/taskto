@@ -147,6 +147,9 @@ func (s *Service) handleCreateReset(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errResetElsewhere):
 		writeError(w, http.StatusForbidden, apierr.CodeResetElsewhere, err.Error())
 		return
+	case errors.Is(err, errAccountDisabled):
+		accountDisabled(w)
+		return
 	case err != nil:
 		serverError(w, r, err)
 		return
@@ -266,8 +269,9 @@ func (s *Service) signOutEverywhere(ctx context.Context, tx *sql.Tx, userID int6
 
 // createReset makes a reset link for userID, a member of workspaceID, by the admin by, in
 // place of any earlier one. It fails with errNotFound if userID isn't a member,
-// errResetOwn for the admin's own account, and errResetElsewhere if userID belongs to a
-// workspace by doesn't administer.
+// errResetOwn for the admin's own account, errResetElsewhere if userID belongs to a
+// workspace by doesn't administer, and errAccountDisabled if by has been disabled since the
+// request was authenticated.
 func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64) (token, expires string, err error) {
 	now := s.now()
 	expires = stamp(now.Add(s.opts.ResetTTL))
@@ -283,6 +287,13 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 			return err
 		} else if !all {
 			return errResetElsewhere
+		}
+		// Read here, in the transaction that holds the write lock: a request that passed the
+		// middleware before the admin was disabled must not make a link that takes over an account.
+		if off, err := s.isDisabled(ctx, tx, by); err != nil {
+			return err
+		} else if off {
+			return errAccountDisabled
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM password_resets WHERE user_id = ?`, userID); err != nil {
 			return err

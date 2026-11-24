@@ -418,3 +418,29 @@ func TestAWorkspaceKeepsAnAdminInUse(t *testing.T) {
 	// The disabled admin themselves may go: the owner stays.
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, secondID), nil), http.StatusNoContent)
 }
+
+// A request that passed the middleware as an admin before that admin was disabled reaches the
+// transaction after the disable: it must not make a reset link, which would let a disabled
+// account take over another's.
+func TestDisabledAdminCantMakeAResetLink(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, ws := e.setup()
+	ownerID := e.userID(owner)
+	second, _ := e.join(e.invite(owner, ws, "admin2@example.com", RoleAdmin), "Admin Two")
+	secondID := e.userID(second)
+	member, _ := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
+	memberID := e.userID(member)
+
+	expect(t, owner.do(http.MethodPost, e.disablePath(ws, secondID, "disable"), nil), http.StatusNoContent)
+	_, _, err := e.svc.createReset(context.Background(), ws, secondID, memberID)
+	if !errors.Is(err, errAccountDisabled) {
+		t.Fatalf("createReset by a disabled admin = %v, want errAccountDisabled", err)
+	}
+	if n := e.count(`SELECT count(*) FROM password_resets WHERE user_id = ?`, memberID); n != 0 {
+		t.Fatalf("%d reset links were made for the member", n)
+	}
+	// An enabled admin still can.
+	if _, _, err := e.svc.createReset(context.Background(), ws, ownerID, memberID); err != nil {
+		t.Fatalf("createReset by the owner: %v", err)
+	}
+}
