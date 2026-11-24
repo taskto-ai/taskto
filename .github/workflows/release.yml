@@ -1,0 +1,56 @@
+# Cuts a release (docs/releasing.md): run it by hand from main with a version. It checks the
+# version is vMAJOR.MINOR.PATCH and newer than the last release, and that CI passed on
+# main's head; tags that commit, creates the GitHub Release with generated notes, and starts
+# the Images workflow on the tag, which publishes ghcr.io/<owner>/taskto*:<tag>. Servers on
+# the release channel (docs/install.md#automatic-updates) take it once those images exist.
+#
+# Only the workflow's own GITHUB_TOKEN, on a GitHub-hosted runner. A tag made with that token
+# doesn't start other workflows, which is why the Images workflow is started here by name.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version, vMAJOR.MINOR.PATCH, newer than the last release"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+
+jobs:
+  release:
+    name: Tag main, create the release, publish its images
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # the tag and the release
+      actions: write # to start the Images workflow on the tag
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check the version and that CI passed
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          printf '%s' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || fail "'$VERSION' isn't vMAJOR.MINOR.PATCH"
+          last=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+          if [ -n "$last" ]; then
+            [ "$VERSION" != "$last" ] && [ "$(printf '%s\n%s\n' "$last" "$VERSION" | sort -V | tail -n 1)" = "$VERSION" ] \
+              || fail "$VERSION isn't newer than the last release, $last"
+          fi
+          git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null && fail "the tag $VERSION exists"
+          passed=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success" --jq '.total_count')
+          [ "$passed" -ge 1 ] || fail "CI hasn't passed on main's head, $GITHUB_SHA: wait for it, or fix it"
+      - name: Create the release, and publish its images
+        run: |
+          gh release create "$VERSION" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
+          gh workflow run images.yml --ref "$VERSION"

@@ -5,6 +5,8 @@
 #
 # - A push to main publishes ghcr.io/<owner>/taskto*:<full commit SHA>.
 # - A version tag (v*) publishes ghcr.io/<owner>/taskto*:<tag>, built with that version.
+#   The Release workflow (docs/releasing.md) makes the tag with its own token, which doesn't
+#   start this workflow, so it starts it by hand on the tag (workflow_dispatch, below).
 # - A pull request that changes the Dockerfile, the CLI pins or this workflow builds them,
 #   without pushing, so a broken image is caught before it merges.
 #

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# A stand-in for `docker`, for update_test.go: it records every call in $FAKE_DIR/calls, each
+# with the TASKTO_VERSION of the .env it ran against (" @v0.3.0"), and answers what
+# deploy/taskto-update.sh asks. $FAKE_DIR/fail holds extended regular expressions: a call
+# whose line matches one of them fails. $FAKE_DIR/running is the version of the server that
+# `compose up` started (the fake /healthz reports it); $FAKE_DIR/block holds a pull while it exists.
+set -u
+d=$FAKE_DIR
+proj=$PWD
+if [ "${1:-}" = compose ] && [ "${2:-}" = --project-directory ]; then proj=$3; fi
+ver=$(sed -n 's/^TASKTO_VERSION=//p' "$proj/.env" 2>/dev/null | tail -n 1)
+line="$* @$ver"
+echo "$line" >>"$d/calls"
+if [ -s "$d/fail" ] && grep -qE -f "$d/fail" <<<"$line"; then
+	echo "fake docker: $line fails" >&2
+	exit 1
+fi
+last=${*: -1}
+case "$1" in
+manifest | login | logout) ;;
+pull)
+	while [ -e "$d/block" ]; do sleep 0.1; done
+	;;
+info) echo "$d/root" ;;
+volume)
+	case "$2" in
+	inspect) echo "$d/volume" ;;
+	esac
+	;;
+image)
+	case "$*" in
+	*--format*) echo "$last@sha256:$(printf '%s' "$last" | sha256sum | cut -c1-64)" ;;
+	esac
+	;;
+run) ;; # the data moved aside
+inspect)
+	unsafe=""
+	[ ! -s "$d/unsafe" ] || [ "$(cat "$d/running" 2>/dev/null)" != "$(cat "$d/unsafe")" ] || unsafe=yes
+	case "$*" in
+	*Config.User*) if [ -n "$unsafe" ]; then echo 0; else echo 65532:65532; fi ;;
+	*CapDrop*) echo '["ALL"] ["no-new-privileges:true"] false' ;;
+	*Config.Env*)
+		echo TASKTO_CLI_WORKERS=container
+		echo TASKTO_DISABLE_PASSWORD_LOGIN=
+		[ -z "$unsafe" ] || echo TASKTO_INSECURE_COOKIES=true
+		;;
+	esac
+	;;
+compose)
+	shift
+	[ "${1:-}" != --project-directory ] || shift 2
+	case "$1" in
+	config)
+		if grep -q NEEDS_NEW_SETTING "$proj/compose.yaml"; then
+			echo 'required variable TASKTO_NEEDS_NEW_SETTING is missing a value' >&2
+			exit 1
+		fi
+		;;
+	exec) echo "BACKUP-OF-$ver" ;;
+	up) echo "$ver" >"$d/running" ;;
+	down) rm -f "$d/running" ;;
+	ps)
+		case "$*" in
+		*-q*) echo "id-$last" ;;
+		*) echo running ;;
+		esac
+		;;
+	run) cat >"$d/restored" ;;
+	esac
+	;;
+esac
+exit 0

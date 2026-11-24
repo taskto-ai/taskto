@@ -42,6 +42,10 @@ jobs:
       # Docs and comments don't refer to anything outside the repository.
       - name: References
         run: go run .github/scripts/refguard.go
+      # The host's updater runs as root on a VM (deploy/taskto-update.sh); its tests are
+      # cmd/taskto/update_test.go, in the Go job.
+      - name: shellcheck
+        run: shellcheck -S warning deploy/taskto-update.sh cmd/taskto/testdata/fake-docker
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24

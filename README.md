@@ -49,7 +49,8 @@ step-by-step install on a fresh Ubuntu VM.
 | | |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | how it fits together |
-| [docs/install.md](docs/install.md) | install, HTTPS, backups, upgrades |
+| [docs/install.md](docs/install.md) | install, HTTPS, backups, upgrades and the automatic updates |
+| [docs/releasing.md](docs/releasing.md) | cutting a release, and what makes servers take it |
 | [docs/pwa.md](docs/pwa.md) | the installable app: manifest, offline shell, service worker, updates, phones |
 | [docs/templates.md](docs/templates.md) | the bundled app templates (expense tracker, equipment checkout, inspection), installing them and duplicating apps |
 | [docs/offline.md](docs/offline.md) | apps offline: downloads, the durable outbox for records made offline, sync, sign-out and revocation |

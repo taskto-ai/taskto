@@ -1,0 +1,13 @@
+# Installed by deploy/INSTALL.md (step 16), which sets the time (TASKTO_UPDATE_AT, in UTC) in
+# a drop-in. Nightly, a little after the nightly backup, spread by up to half an hour; a run
+# missed while the VM was off happens when it is next up.
+[Unit]
+Description=TaskTo.AI: look for a new release every night
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
