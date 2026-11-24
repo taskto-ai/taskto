@@ -93,11 +93,26 @@ func (c *Checker) updateShared(ctx context.Context, spaceID int64, name *string,
 
 // members lists a shared space's members, by name.
 func (c *Checker) members(ctx context.Context, spaceID int64) ([]Member, error) {
-	rows, err := c.db.QueryContext(ctx, `
+	return spaceMembers(ctx, c.db, spaceID, auth.RosterPage{})
+}
+
+// spaceMembers lists a shared space's members, as auth.Roster does a workspace's.
+func spaceMembers(ctx context.Context, q auth.Queryer, spaceID int64, page auth.RosterPage) ([]Member, error) {
+	order := "u.name, u.id"
+	if page.ByID || page.AfterID > 0 {
+		order = "u.id"
+	}
+	query := `
 		SELECT u.id, u.email, u.name, sm.role, sm.created_at
 		FROM space_members sm JOIN users u ON u.id = sm.user_id
-		WHERE sm.space_id = ?
-		ORDER BY u.name, u.id`, spaceID)
+		WHERE sm.space_id = ? AND u.id > ?
+		ORDER BY ` + order
+	args := []any{spaceID, max(page.AfterID, 0)}
+	if page.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, page.Limit)
+	}
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -134,6 +134,7 @@ func New(o Options) *Service {
 	s := &Service{o: o}
 	s.tools = map[string]tool{
 		"list_spaces":    s.listSpaces,
+		"list_members":   s.listMembers,
 		"search_docs":    s.searchDocs,
 		"list_docs":      s.listDocs,
 		"read_doc":       s.readDoc,
