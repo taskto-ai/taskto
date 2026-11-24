@@ -16,8 +16,8 @@
 //
 // The zip is streamed: it is written to the response as it is made, one entry at a time, and a
 // file's bytes are copied through, never held, so a large file costs a buffer, not its size. What
-// is held at a time is a page of a listing, a card's thread, a page of a conversation's history
-// or one app's records. The documents are read at one commit of the knowledge base, taken when
+// is held at a time, besides the zip's own header for each entry so far, is a page of a listing,
+// a card's thread, a page of a conversation's history or one app's records. The documents are read at one commit of the knowledge base, taken when
 // the export begins.
 package export
 
@@ -148,8 +148,19 @@ func (s *Service) handleStart(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusTooManyRequests, apierr.CodeExportRateLimited, "too many exports: try again in a little while")
 		return
 	}
-	token, err := s.tickets.issue(u.ID, m.WorkspaceID, session, leave)
+	// What can fail with a proper answer is read now, before the export is counted and before any
+	// byte of it is sent: a failure here uses none of the person's hour.
+	ex, err := s.prepare(r.Context(), u, m)
 	if err != nil {
+		s.gate.refund(u.ID)
+		leave()
+		slog.ErrorContext(r.Context(), "export: preparing", "user", u.ID, "workspace", m.WorkspaceID, "err", err)
+		apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "internal error")
+		return
+	}
+	token, err := s.tickets.issue(u.ID, m.WorkspaceID, session, leave, ex)
+	if err != nil {
+		s.gate.refund(u.ID)
 		leave()
 		slog.ErrorContext(r.Context(), "export: ticket", "user", u.ID, "err", err)
 		apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "internal error")
@@ -184,23 +195,16 @@ func (s *Service) handleDownload(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "internal error")
 		return
 	}
+	var ex *run
 	var leave func()
 	if ok {
-		leave, ok = s.tickets.redeem(r.PathValue("token"), u.ID, m.WorkspaceID, session)
+		ex, leave, ok = s.tickets.redeem(r.PathValue("token"), u.ID, m.WorkspaceID, session)
 	}
 	if !ok {
 		apierr.Write(w, http.StatusNotFound, apierr.CodeNotFound, "this export is gone or isn't yours: start it again")
 		return
 	}
 	defer leave()
-
-	// What can fail with a proper answer is read before the first byte of the zip is sent.
-	ex, err := s.prepare(r.Context(), u, m)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "export: preparing", "user", u.ID, "workspace", m.WorkspaceID, "err", err)
-		apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "internal error")
-		return
-	}
 
 	// The zip can take longer than any timeout the server might have, for a person on a slow
 	// connection, so there is no deadline for the whole of it: each write has its own, and one
@@ -276,7 +280,7 @@ type manifest struct {
 	Workspace  manifestWS     `json:"workspace"`
 	User       manifestUser   `json:"user"`
 	Counts     map[string]int `json:"counts"`
-	// Skipped lists what could not be included: Kind is "documents" (all of them), "document",
+	// Skipped lists what could not be included: Kind is "documents" or "conversations" (all of them), "document",
 	// "app" or "transcript" (a conversation's history), Reason "unavailable", "incomplete" (a
 	// history cut short) or "off", and Ref says which one (a document's path, an app's or a
 	// conversation's ID). Capped; Truncated says if it was.
@@ -577,6 +581,7 @@ func compactJSON(v any) ([]byte, error) {
 // conversations writes each of the person's conversations in the workspace under conversations/.
 func (ex *run) conversations(ctx context.Context) error {
 	if ex.svc.conversations == nil {
+		ex.skip("conversations", "off", "") // the server has none, which isn't the same as a person with none
 		return nil
 	}
 	for _, c := range ex.convs {

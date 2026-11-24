@@ -70,6 +70,16 @@ func (g *gate) keep(user int64, recent []time.Time) {
 	g.started[user] = recent
 }
 
+// refund takes back the start enter counted for user, for an export that failed before it began
+// to be made: only an export that is made uses one of the hour's. Call it before leave.
+func (g *gate) refund(user int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if n := len(g.started[user]); n > 0 {
+		g.keep(user, g.started[user][:n-1])
+	}
+}
+
 // enter lets user start an export, and returns the function that ends it. Otherwise it says why
 // not, and how long until trying again can work. A refused attempt isn't counted. A negative
 // perPerson or atOnce, for tests, is no limit of that kind.

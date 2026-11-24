@@ -718,7 +718,7 @@ for themselves.
 
 Streams the zip of an export that was started (`200`, `Content-Type: application/zip`,
 `Content-Disposition: attachment; filename="taskto-export-YYYYMMDD.zip"`, `Cache-Control:
-no-store`). It changes nothing on the server. The token is the one the `POST` answered with: random,
+no-store`). It changes no data on the server (the token it takes is used up, in memory). The token is the one the `POST` answered with: random,
 good once, for `expires_in` seconds, and only for the same person, workspace and login that started
 it; anything else is `404`. A `HEAD` is `405`, so nothing but the download uses the token. The web
 app's button does both: it posts, then goes to the address.
@@ -731,7 +731,7 @@ app's button does both: it posts, then goes to the address.
 | `boards/<id>-<name>.json`, `boards/<id>-<name>.md` | Each board of the private space, archived ones too (the personal board): the board and its cards (all columns, archived cards too, in the order of their IDs), each with its thread of comments. The JSON is `{"board": {…}, "cards": [{…card as the API gives it…, "comments": […]}]}`, exactly what `GET …/cards/{card}` answers. The Markdown is the same, for reading: a heading per card, with its column, details, body and comments. The two files are read one after the other, so a card edited between them can differ in them. |
 | `conversations/<id>-<title>.json` | Each conversation the caller owns **in this workspace**, archived ones too: `{"conversation": {…as the conversations API gives it…}, "entries": […], "transcript": "complete"}`. The entries are the agent runtime's, oldest first, in the shape the web app draws, as `GET …/conversations/{conversation}/entries` pages them, as the history was when its export began. If the agent runtime is off, no longer has the conversation or stops answering (each read waits at most 30 seconds), `transcript` is `"unavailable"` (`entries` empty) or `"incomplete"` (the entries read before it stopped), and the manifest says so. |
 | `apps/<id>-<name>.json` | Each app of the private space, offline ones too: `{"app": {id, name, archived_at, created_at, updated_at}, "records": […]}`. The records are the live ones (not deleted), as the agent's `list_app_rows` tool gives them (each field by name, with `id` and `revision`). An attachment field holds each photo's metadata, not its bytes; the app's definition isn't included (copy the app, or see [templates](templates.md)). |
-| `manifest.json` | `{"format": 1, "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, apps, records}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file whose bytes the server no longer has), `documents` with `unavailable` (the space's history was rewritten while the export read it) or `off` (the server has no knowledge base), `app` with `unavailable` and its ID (the app was moved out of the private space while the export read it), or `transcript` with `unavailable` or `incomplete` and a conversation's ID; it is capped at 1000 (`"skipped_truncated": true` then). |
+| `manifest.json` | `{"format": 1, "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, apps, records}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file whose bytes the server no longer has), `documents` with `unavailable` (the space's history was rewritten while the export read it) or `off` (the server has no knowledge base), `app` with `unavailable` and its ID (the app was moved out of the private space while the export read it), `conversations` with `off` (the server has none), or `transcript` with `unavailable` or `incomplete` and a conversation's ID; it is capped at 1000 (`"skipped_truncated": true` then). |
 
 **The scope is where a thing is now, and who owns a conversation.** The documents, boards and
 apps are those in the caller's private space at the moment each is read, so an app or a document
@@ -763,14 +763,14 @@ descriptor per entry and Zip64 where needed, and has no `Content-Length`. A file
 copied through a fixed buffer, so a large file costs a buffer, not its size; audio, video and other
 files git doesn't version are stored as they are, not compressed again. What is held at once is
 a page of a listing, one card's thread, a page of a conversation's history or one app's records,
-whatever the size of the space. The documents are listed and read at one commit of the knowledge
+whatever the size of the space, besides what a zip always keeps until its end (a header per entry, so the cost grows with how many files there are, not how large they are) and the list of the person's conversations. The documents are listed and read at one commit of the knowledge
 base, taken when the export reaches them, so a file renamed or replaced meanwhile appears once, as
-it was; a versioned file's bytes are read from git as they are copied. The server never writes:
+it was; a versioned file is read from git into memory (up to 1 MiB) or a temporary file that is removed when it has been sent, so a slow download never holds up changes to the space. The server never writes:
 the knowledge base's repositories are only read, through `internal/knowledge`.
 
 **If it stops.** The status goes out with the first bytes, so an export that fails or whose
 reader goes away is ended by cutting the connection: the zip has no end of central directory, so
-no unzipper takes it for whole. The manifest is the last entry, so a zip that has one is whole.
+no unzipper takes it for whole. The manifest is the last entry and the zip's end follows it, so a zip that opens in an unzipper, with its manifest, is whole.
 Each write has two minutes to be taken by the connection, so a download that stalls is ended and
 frees its slot; a download address nobody uses frees it when it expires.
 

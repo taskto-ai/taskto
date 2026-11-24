@@ -275,7 +275,7 @@ func (s *Store) ListAt(ctx context.Context, sp access.Space, at, prefix, after s
 		page, err = r.list(ctx, at, prefix, after, limit)
 		return err
 	})
-	if errors.Is(err, errNoRepo) && prefix == "" {
+	if errors.Is(err, errNoRepo) && prefix == "" && at == "" {
 		err = nil
 	}
 	if page.Docs == nil {

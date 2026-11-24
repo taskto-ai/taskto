@@ -11,23 +11,23 @@ import (
 func TestTicketIsSingleUseAndBound(t *testing.T) {
 	tk := newTickets(time.Minute)
 	var left atomic.Int32
-	token, err := tk.issue(1, 2, 3, func() { left.Add(1) })
+	token, err := tk.issue(1, 2, 3, func() { left.Add(1) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, wrong := range [][3]int64{{9, 2, 3}, {1, 9, 3}, {1, 2, 9}} {
-		if _, ok := tk.redeem(token, wrong[0], wrong[1], wrong[2]); ok {
+		if _, _, ok := tk.redeem(token, wrong[0], wrong[1], wrong[2]); ok {
 			t.Errorf("redeemed by %v", wrong)
 		}
 	}
-	if _, ok := tk.redeem("not-a-token", 1, 2, 3); ok {
+	if _, _, ok := tk.redeem("not-a-token", 1, 2, 3); ok {
 		t.Error("an unknown token was redeemed")
 	}
-	leave, ok := tk.redeem(token, 1, 2, 3)
+	_, leave, ok := tk.redeem(token, 1, 2, 3)
 	if !ok {
 		t.Fatal("the owner couldn't redeem")
 	}
-	if _, again := tk.redeem(token, 1, 2, 3); again {
+	if _, _, again := tk.redeem(token, 1, 2, 3); again {
 		t.Error("a ticket was redeemed twice")
 	}
 	if left.Load() != 0 {
@@ -42,7 +42,7 @@ func TestTicketIsSingleUseAndBound(t *testing.T) {
 func TestTicketExpiryFreesTheSlotOnce(t *testing.T) {
 	tk := newTickets(20 * time.Millisecond)
 	var left atomic.Int32
-	token, _ := tk.issue(1, 2, 3, func() { left.Add(1) })
+	token, _ := tk.issue(1, 2, 3, func() { left.Add(1) }, nil)
 	deadline := time.Now().Add(5 * time.Second)
 	for left.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -50,7 +50,7 @@ func TestTicketExpiryFreesTheSlotOnce(t *testing.T) {
 	if left.Load() != 1 {
 		t.Fatalf("slot freed %d times after the ticket expired", left.Load())
 	}
-	if _, ok := tk.redeem(token, 1, 2, 3); ok {
+	if _, _, ok := tk.redeem(token, 1, 2, 3); ok {
 		t.Error("an expired ticket was redeemed")
 	}
 }

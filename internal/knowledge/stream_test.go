@@ -1,8 +1,13 @@
 package knowledge
 
 import (
+	"bytes"
+	"errors"
 	"io"
+	"io/fs"
+	"os"
 	"testing"
+	"time"
 )
 
 // ListAt and Stream read one commit whatever the space does meanwhile: a file replaced, renamed or
@@ -68,15 +73,65 @@ func TestListAtAndStreamReadOneCommit(t *testing.T) {
 		wantErr(t, err, ErrNotKept)
 	}
 
-	// Closing a stream lets writers in: the space isn't held after it.
+	// A stream that is open holds nothing: a writer isn't kept waiting by a slow reader.
 	_, rc, err := s.Stream(ctx, sp, "a.md", "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Put(ctx, sp, "later.md", []byte("x"), "", alice, "")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a write waits for a reader that hasn't closed its stream")
+	}
 	_ = rc.Close()
-	must[Result](t)(s.Put(ctx, sp, "later.md", []byte("x"), "", alice, ""))
 
 	if _, _, err := s.Stream(ctx, sp, "a.md", "0123456789012345678901234567890123456789"); err == nil {
 		t.Error("a commit the repository doesn't have was read")
+	}
+	// A space with no repository has no commit to list at, though it lists as empty at the head.
+	if _, err := s.ListAt(ctx, writable(99), "0123456789012345678901234567890123456789", "", "", 0); err == nil {
+		t.Error("a listing at a commit of a space with no repository succeeded")
+	}
+	if page := must[Page](t)(s.ListAt(ctx, writable(99), "", "", "", 0)); len(page.Docs) != 0 {
+		t.Errorf("a space with no repository lists %v", page.Docs)
+	}
+}
+
+// A larger versioned file is spooled to a temporary file, read whole, and the file is gone once
+// the stream is closed.
+func TestStreamSpoolsALargerVersionedFile(t *testing.T) {
+	old := streamMemory
+	streamMemory = 8
+	t.Cleanup(func() { streamMemory = old })
+	s, _ := newStore(t, Options{})
+	sp := writable(1)
+	body := bytesOf(5000, 'q')
+	must[Result](t)(s.Put(ctx, sp, "long.md", body, "", alice, ""))
+	_, rc, err := s.Stream(ctx, sp, "long.md", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, ok := rc.(*spooled)
+	if !ok {
+		t.Fatalf("a %d byte file wasn't spooled: %T", len(body), rc)
+	}
+	name := f.Name()
+	got, err := io.ReadAll(rc)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("read %d bytes (%v), want %d", len(got), err, len(body))
+	}
+	if err := rc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(name); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the temporary file stays after Close: %v", err)
 	}
 }

@@ -72,3 +72,25 @@ func TestGateForgetsThePeopleItTurnsAway(t *testing.T) {
 		t.Errorf("the gate remembers %d people, want only the one who started", len(g.started))
 	}
 }
+
+// An export that fails before it is made doesn't use one of the person's hour.
+func TestGateRefundsAnExportThatNeverBegan(t *testing.T) {
+	g := newGate(1, time.Hour, -1, time.Now)
+	leave, why, _ := g.enter(1)
+	if why != allowed {
+		t.Fatalf("first = %v", why)
+	}
+	g.refund(1)
+	leave()
+	leave, why, _ = g.enter(1)
+	if why != allowed {
+		t.Fatalf("after a refunded one = %v, want allowed", why)
+	}
+	leave()
+	if _, why, _ := g.enter(1); why != tooMany {
+		t.Errorf("after one that was made = %v, want tooMany", why)
+	}
+	if len(g.started) != 1 {
+		t.Errorf("the gate remembers %d people", len(g.started))
+	}
+}

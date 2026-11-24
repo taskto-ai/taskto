@@ -44,7 +44,6 @@ func TestExportCardsReadsEachCardOnceWhileTheyMove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	slices.Sort(got)
 	if !slices.Equal(got, want) {
 		t.Fatalf("cards read = %v, want each of %v once", got, want)
 	}

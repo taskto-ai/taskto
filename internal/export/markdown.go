@@ -35,7 +35,11 @@ func writeCardMarkdown(w io.Writer, c boards.Thread) error {
 		fmt.Fprintf(&b, "- Document: %s\n", oneLine(d))
 	}
 	if c.Body != "" {
-		fmt.Fprintf(&b, "\n%s\n", strings.TrimRight(c.Body, "\n"))
+		// Quoted, every line, so an unclosed code fence in it can't swallow the next card.
+		b.WriteString("\n")
+		for line := range strings.SplitSeq(strings.TrimRight(c.Body, "\n"), "\n") {
+			fmt.Fprintf(&b, "> %s\n", line)
+		}
 	}
 	for _, cm := range c.Comments {
 		who := "(removed account)"
@@ -45,9 +49,9 @@ func writeCardMarkdown(w io.Writer, c boards.Thread) error {
 				who += " (agent)"
 			}
 		}
-		fmt.Fprintf(&b, "\n> **%s**, %s\n", who, cm.CreatedAt)
+		fmt.Fprintf(&b, "\n> > **%s**, %s\n", who, cm.CreatedAt)
 		for line := range strings.SplitSeq(strings.TrimRight(cm.Body, "\n"), "\n") {
-			fmt.Fprintf(&b, "> %s\n", line)
+			fmt.Fprintf(&b, "> > %s\n", line)
 		}
 	}
 	_, err := io.WriteString(w, b.String())

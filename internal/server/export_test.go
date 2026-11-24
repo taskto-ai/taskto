@@ -511,7 +511,7 @@ func TestExportDownloadAddressIsSingleUseAndBound(t *testing.T) {
 
 // A person who starts an export and never downloads it doesn't hold their slot for ever.
 func TestExportUnusedAddressFreesTheSlot(t *testing.T) {
-	s := exportStack(t, nil, func(o *Options) { o.Export = export.Options{PerPerson: -1, TicketTTL: 50 * time.Millisecond} })
+	s := exportStack(t, nil, func(o *Options) { o.Export = export.Options{PerPerson: -1, TicketTTL: 1500 * time.Millisecond} })
 	addr := downloadOf(t, s.startExport(s.alice.cookie, s.one))
 	if rec := s.startExport(s.alice.cookie, s.one); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"export_running"`) {
 		t.Fatalf("a second start while one waits = %d %s, want 409 export_running", rec.Code, rec.Body)

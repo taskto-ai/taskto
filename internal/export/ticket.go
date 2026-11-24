@@ -25,6 +25,7 @@ const (
 type ticket struct {
 	user, workspace, session int64
 	leave                    func()
+	ex                       *run // the export, prepared when it was started
 	timer                    *time.Timer
 }
 
@@ -48,14 +49,14 @@ func keyOf(token string) string {
 }
 
 // issue makes a ticket of the slot that leave gives back, and returns its token.
-func (t *tickets) issue(user, workspace, session int64, leave func()) (string, error) {
+func (t *tickets) issue(user, workspace, session int64, leave func(), ex *run) (string, error) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw[:])
 	key := keyOf(token)
-	tk := &ticket{user: user, workspace: workspace, session: session, leave: leave}
+	tk := &ticket{user: user, workspace: workspace, session: session, leave: leave, ex: ex}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.m[key] = tk
@@ -75,17 +76,17 @@ func (t *tickets) expire(key string, tk *ticket) {
 }
 
 // redeem takes the ticket of token, if it is this person's, for this workspace and this session,
-// and unused: it returns the function that ends the export. A ticket asked for by anyone else is
+// and unused: it returns the export and the function that ends it. A ticket asked for by anyone else is
 // left for its owner.
-func (t *tickets) redeem(token string, user, workspace, session int64) (leave func(), ok bool) {
+func (t *tickets) redeem(token string, user, workspace, session int64) (ex *run, leave func(), ok bool) {
 	key := keyOf(token)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	tk := t.m[key]
 	if tk == nil || tk.user != user || tk.workspace != workspace || tk.session != session {
-		return nil, false
+		return nil, nil, false
 	}
 	delete(t.m, key)
 	tk.timer.Stop()
-	return tk.leave, true
+	return tk.ex, tk.leave, true
 }

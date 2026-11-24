@@ -26,6 +26,10 @@ func TestCleanElemMakesNamesSafeAnywhere(t *testing.T) {
 		{"résumé ☕.md", "résumé ☕.md"},
 		{"bad\xffutf8", "badutf8"},
 		{".bashrc", ".bashrc"},
+		{"COM¹.md", "_COM¹.md"},
+		{"lpt³", "_lpt³"},
+		{strings.Repeat(".", 120) + "abcdefghijklmnop", "_"},
+		{"CON" + strings.Repeat(" ", 117) + "x", "_CON"},
 	} {
 		if got := cleanElem(tc.in, maxElemBytes); got != tc.want {
 			t.Errorf("cleanElem(%q) = %q, want %q", tc.in, got, tc.want)
@@ -74,12 +78,14 @@ func TestNamesNeverMakeAFileOfAFolder(t *testing.T) {
 	}
 	n = newNames()
 	n.claim("documents", "a_")
-	if got := n.claim("documents", "a_", "x.md"); strings.HasPrefix(got, "documents/a_/") {
+	got := n.claim("documents", "a_", "x.md")
+	if strings.HasPrefix(got, "documents/a_/") {
 		t.Errorf("a folder over a file: %q", got)
 	}
 	// The folder keeps its new name for the files that follow.
-	if a, b := n.claim("documents", "a_", "y.md"), n.claim("documents", "a_", "z.md"); strings.Split(a, "/")[1] != strings.Split(b, "/")[1] {
-		t.Errorf("one folder, two names: %q %q", a, b)
+	first := strings.Split(got, "/")[1]
+	if a, b := n.claim("documents", "a_", "y.md"), n.claim("documents", "a_", "z.md"); strings.Split(a, "/")[1] != first || strings.Split(b, "/")[1] != first {
+		t.Errorf("one folder, three names: %q %q %q", got, a, b)
 	}
 }
 
