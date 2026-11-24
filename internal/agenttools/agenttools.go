@@ -133,31 +133,33 @@ func Definitions() []Definition {
 func New(o Options) *Service {
 	s := &Service{o: o}
 	s.tools = map[string]tool{
-		"list_spaces":    s.listSpaces,
-		"list_members":   s.listMembers,
-		"search_docs":    s.searchDocs,
-		"list_docs":      s.listDocs,
-		"read_doc":       s.readDoc,
-		"write_doc":      s.writeDoc,
-		"move_doc":       s.moveDoc,
-		"delete_doc":     s.deleteDoc,
-		"doc_history":    s.docHistory,
-		"restore_doc":    s.restoreDoc,
-		"list_boards":    s.listBoards,
-		"list_cards":     s.listCards,
-		"show_card":      s.showCard,
-		"create_card":    s.createCard,
-		"update_card":    s.updateCard,
-		"move_card":      s.moveCard,
-		"comment_card":   s.commentCard,
-		"set_blocked":    s.setBlocked,
-		"app_catalog":    s.appCatalog,
-		"list_apps":      s.listApps,
-		"show_app":       s.showApp,
-		"list_app_rows":  s.listAppRows,
-		"query_app_rows": s.queryAppRows,
-		"create_app":     s.createApp,
-		"update_app":     s.updateApp,
+		"list_spaces":      s.listSpaces,
+		"list_members":     s.listMembers,
+		"search_docs":      s.searchDocs,
+		"list_docs":        s.listDocs,
+		"read_doc":         s.readDoc,
+		"write_doc":        s.writeDoc,
+		"move_doc":         s.moveDoc,
+		"delete_doc":       s.deleteDoc,
+		"doc_history":      s.docHistory,
+		"restore_doc":      s.restoreDoc,
+		"list_boards":      s.listBoards,
+		"list_cards":       s.listCards,
+		"show_card":        s.showCard,
+		"create_card":      s.createCard,
+		"update_card":      s.updateCard,
+		"move_card":        s.moveCard,
+		"comment_card":     s.commentCard,
+		"set_blocked":      s.setBlocked,
+		"app_catalog":      s.appCatalog,
+		"list_apps":        s.listApps,
+		"show_app":         s.showApp,
+		"list_app_rows":    s.listAppRows,
+		"query_app_rows":   s.queryAppRows,
+		"create_app":       s.createApp,
+		"update_app":       s.updateApp,
+		"list_app_actions": s.listAppActions,
+		"run_app_action":   s.runAppAction,
 	}
 	for _, name := range browserTools {
 		s.tools[name] = s.browserTool(name)
@@ -362,8 +364,13 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 	case errors.Is(err, boards.ErrReadOnly), errors.Is(err, boards.ErrBoardArchived), errors.Is(err, knowledge.ErrReadOnly), errors.Is(err, apps.ErrReadOnly),
 		errors.Is(err, apps.ErrForbidden):
 		return &Refusal{http.StatusForbidden, err.Error()}
-	case errors.Is(err, boards.ErrStale), errors.Is(err, knowledge.ErrConflict), errors.Is(err, apps.ErrStale), errors.Is(err, apps.ErrFull):
+	case errors.Is(err, boards.ErrStale), errors.Is(err, knowledge.ErrConflict), errors.Is(err, apps.ErrStale), errors.Is(err, apps.ErrFull),
+		errors.Is(err, apps.ErrOffline), errors.Is(err, apps.ErrNotPublished), errors.Is(err, apps.ErrOperationReused):
 		return &Refusal{http.StatusConflict, err.Error()}
+	case errors.Is(err, apps.ErrReleaseOutdated):
+		return &Refusal{http.StatusConflict, "the app's live release is not expected_release: nothing was done; call list_app_actions again and decide again"}
+	case errors.Is(err, apps.ErrConflict):
+		return &Refusal{http.StatusConflict, err.Error() + ": read the record again (query_app_rows) and decide again"}
 	case errors.Is(err, knowledge.ErrTooLarge), errors.Is(err, knowledge.ErrRepoFull):
 		return &Refusal{http.StatusRequestEntityTooLarge, err.Error()}
 	case errors.Is(err, knowledge.ErrNotKept):
