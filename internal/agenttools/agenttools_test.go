@@ -256,10 +256,10 @@ func TestConversationsCannotReachOtherUsersSpaces(t *testing.T) {
 			"write_doc":    {"path": "x.md", "content": "x"},
 			"search_docs":  {"query": "zanzibar"},
 			"list_boards":  {},
-			"list_cards":   {"board_id": w.bobPersonal},
+			"list_cards":   {"board_id": w.bobPersonal, "labels": []string{"x"}, "overdue": true, "sort": "due"},
 			"show_card":    {"board_id": w.bobPersonal, "card_id": bobCard.ID},
-			"create_card":  {"board_id": w.bobPersonal, "title": "x"},
-			"update_card":  {"board_id": w.bobPersonal, "card_id": bobCard.ID, "version": 1, "title": "x"},
+			"create_card":  {"board_id": w.bobPersonal, "title": "x", "due": "2026-01-01", "labels": []string{"x"}},
+			"update_card":  {"board_id": w.bobPersonal, "card_id": bobCard.ID, "version": 1, "title": "x", "due": nil, "labels": []string{}},
 			"move_card":    {"board_id": w.bobPersonal, "card_id": bobCard.ID, "version": 1, "column": "done"},
 			"comment_card": {"board_id": w.bobPersonal, "card_id": bobCard.ID, "body": "x"},
 			"set_blocked":  {"board_id": w.bobPersonal, "card_id": bobCard.ID, "version": 1, "reason": "x"},
@@ -349,6 +349,84 @@ func TestWritesAreTheUsersMadeByTheAgent(t *testing.T) {
 	// A card links conversations by the conversation API's ID, and only the user's own.
 	w.status(http.StatusBadRequest, w.aliceConv, "update_card", with(map[string]any{"version": thread["version"], "conversations": []string{strconv.FormatInt(w.bobConv, 10)}}))
 	w.status(http.StatusBadRequest, w.aliceConv, "update_card", with(map[string]any{"version": thread["version"], "conversations": []string{strconv.FormatInt(w.aliceConv2, 10)}}))
+}
+
+// The agent sets, reads, filters and sorts by a card's due date and labels, with the same
+// checks as the API.
+func TestCardDueDateAndLabels(t *testing.T) {
+	w := newWorld(t)
+	board := id(w.ok(w.aliceConv, "list_boards", map[string]any{"space_id": w.alicePrivate})["boards"].([]any)[0].(map[string]any)["id"])
+	space := map[string]any{"space_id": w.alicePrivate, "board_id": board}
+	with := func(extra map[string]any) map[string]any {
+		out := map[string]any{}
+		for _, m := range []map[string]any{space, extra} {
+			for k, v := range m {
+				out[k] = v
+			}
+		}
+		return out
+	}
+	a := w.ok(w.aliceConv, "create_card", with(map[string]any{"title": "a", "due": "2026-03-10", "labels": []string{"Bug", "urgent"}}))
+	b := w.ok(w.aliceConv, "create_card", with(map[string]any{"title": "b", "due": "2026-02-01", "labels": []string{"bug"}}))
+	w.ok(w.aliceConv, "create_card", with(map[string]any{"title": "c"}))
+	if a["due"] != "2026-03-10" || fmt.Sprint(a["labels"]) != "[bug urgent]" {
+		t.Fatalf("created card = %v", a)
+	}
+	titles := func(out map[string]any) string {
+		var got []string
+		for _, c := range out["cards"].([]any) {
+			got = append(got, c.(map[string]any)["title"].(string))
+		}
+		return fmt.Sprint(got)
+	}
+	for _, tt := range []struct {
+		args map[string]any
+		want string
+	}{
+		{map[string]any{"labels": []string{"BUG"}}, "[a b]"},
+		{map[string]any{"labels": []string{"bug", "urgent"}}, "[a]"},
+		{map[string]any{"due_before": "2026-02-28"}, "[b]"},
+		{map[string]any{"due_after": "2026-02-28"}, "[a]"},
+		{map[string]any{"overdue": true, "today": "2026-03-01"}, "[b]"},
+		{map[string]any{"sort": "due"}, "[b a c]"},
+	} {
+		if got := titles(w.ok(w.aliceConv, "list_cards", with(tt.args))); got != tt.want {
+			t.Errorf("list_cards %v = %s, want %s", tt.args, got, tt.want)
+		}
+	}
+	w.status(http.StatusBadRequest, w.aliceConv, "list_cards", with(map[string]any{"due_before": "soon"}))
+	w.status(http.StatusBadRequest, w.aliceConv, "list_cards", with(map[string]any{"sort": "rank"}))
+	// The store's limit on filter labels holds for the agent as for the API.
+	many := []string{}
+	for i := 0; i < 11; i++ {
+		many = append(many, fmt.Sprint("l", i))
+	}
+	w.status(http.StatusBadRequest, w.aliceConv, "list_cards", with(map[string]any{"labels": many}))
+	w.ok(w.aliceConv, "list_cards", with(map[string]any{"labels": many[:10]}))
+	w.status(http.StatusBadRequest, w.aliceConv, "create_card", with(map[string]any{"title": "x", "due": "2026-02-30"}))
+	w.status(http.StatusBadRequest, w.aliceConv, "create_card", with(map[string]any{"title": "x", "labels": []string{""}}))
+
+	ref := with(map[string]any{"card_id": id(b["id"])})
+	update := func(extra map[string]any) map[string]any {
+		out := map[string]any{"version": b["version"]}
+		for k, v := range ref {
+			out[k] = v
+		}
+		for k, v := range extra {
+			out[k] = v
+		}
+		return w.ok(w.aliceConv, "update_card", out)
+	}
+	b = update(map[string]any{"due": nil, "labels": []string{"docs"}})
+	if b["due"] != nil || fmt.Sprint(b["labels"]) != "[docs]" {
+		t.Fatalf("updated card = %v", b)
+	}
+	shown := w.ok(w.aliceConv, "show_card", ref)
+	if shown["due"] != nil || fmt.Sprint(shown["labels"]) != "[docs]" {
+		t.Fatalf("show_card = %v", shown)
+	}
+	// A stale version still fails, whatever the change.
+	w.status(http.StatusConflict, w.aliceConv, "update_card", with(map[string]any{"card_id": id(b["id"]), "version": 1, "due": "2027-01-01"}))
 }
 
 // Access is asked again on every call, so a change applies to the next one.

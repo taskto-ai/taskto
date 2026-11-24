@@ -179,6 +179,10 @@ export type Card = {
   docs: string[]
   // Conversation IDs in decimal: only a conversation's owner can add one, or open it.
   conversations: string[]
+  // A calendar date, YYYY-MM-DD, with no time or time zone; null for none.
+  due: string | null
+  // Free-text labels: lower case, sorted.
+  labels: string[]
   version: number
   updated_at: string
   updated_by: Author

@@ -69,6 +69,12 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 		AssigneeID int64               `json:"assignee_id"`
 		Blocked    *bool               `json:"blocked"`
 		Text       string              `json:"text"`
+		Labels     []string            `json:"labels"`
+		DueBefore  string              `json:"due_before"`
+		DueAfter   string              `json:"due_after"`
+		Overdue    bool                `json:"overdue"`
+		Today      string              `json:"today"`
+		Sort       boards.Sort         `json:"sort"`
 	}
 	if err := decode(args, &a); err != nil {
 		return nil, err
@@ -90,6 +96,7 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 	}
 	cards, err := s.o.Boards.ListCards(ctx, actor(c), a.SpaceID, a.BoardID, boards.Filter{
 		Column: a.Column, Assignee: a.Assignee, AssigneeID: a.AssigneeID, Blocked: a.Blocked, Text: a.Text,
+		Labels: a.Labels, DueBefore: a.DueBefore, DueAfter: a.DueAfter, Overdue: a.Overdue, Today: a.Today, Sort: a.Sort,
 	})
 	if err != nil {
 		return nil, err
@@ -100,7 +107,7 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 	n, res, err := fitting(len(cards), func(n int) any { return map[string]any{"cards": cards[:n]} })
 	if err == nil && n < len(cards) {
 		res = map[string]any{"cards": cards[:n], "truncated": true,
-			"notice": "more cards than fit: narrow the list with column, assignee, blocked or text"}
+			"notice": "more cards than fit: narrow the list with column, assignee, blocked, labels, due dates, overdue or text"}
 	}
 	return res, err
 }

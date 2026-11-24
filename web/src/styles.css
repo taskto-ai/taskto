@@ -1208,6 +1208,64 @@ button.tt-card[aria-current] {
   color: var(--tt-danger);
 }
 
+/* A card's due date (late ones in the danger colour) and labels, on the board and in the card. */
+.tt-due {
+  margin: 0;
+  color: var(--tt-muted);
+}
+
+.tt-due[data-overdue],
+input[data-overdue] {
+  color: var(--tt-danger);
+  font-weight: 600;
+}
+
+.tt-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding-inline: 0.5rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 999px;
+  background: var(--tt-accent-soft);
+  overflow-wrap: anywhere;
+}
+
+.tt-label .tt-icon-button {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.tt-label .tt-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.tt-planning {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-board-filters {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .tt-card-view {
   display: grid;
   gap: 0.75rem;
@@ -2554,7 +2612,8 @@ fieldset {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .tt-board[data-open="card"] > .tt-columns {
+  .tt-board[data-open="card"] > .tt-columns,
+  .tt-board[data-open="card"] > .tt-board-filters {
     display: none;
   }
 
