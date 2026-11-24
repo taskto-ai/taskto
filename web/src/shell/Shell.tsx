@@ -21,7 +21,8 @@ import {
   useT,
 } from '../i18n'
 import { KnowledgePage } from '../knowledge/KnowledgePage'
-import { parseNotificationPath } from '../notifications/api'
+import { EMAIL_CONFIRM_PATH, parseNotificationPath } from '../notifications/api'
+import { ConfirmEmail } from '../notifications/ConfirmEmail'
 import { NotificationsPage, OpenNotification } from '../notifications/NotificationsPage'
 import { usePushSync } from '../notifications/usePushSync'
 import { useUnread } from '../notifications/useUnread'
@@ -70,7 +71,11 @@ function rememberWorkspace(id: number) {
 // A push opens /notification/{id}: read as the signed-in person and followed to where it leads,
 // outside the shell, which would take that address for an unknown route.
 export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
-  const opening = parseNotificationPath(usePath())
+  const path = usePath()
+  const opening = parseNotificationPath(path)
+  if (path === EMAIL_CONFIRM_PATH) {
+    return <ConfirmEmail token={window.location.hash.slice(1)} workspace={me.workspaces[0]?.id ?? null} />
+  }
   if (opening !== null) {
     return <OpenNotification id={opening} fallbackWorkspace={me.workspaces[0]?.id ?? null} />
   }
@@ -115,8 +120,12 @@ function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
   // had it is hidden with the drawer. The page is inert while the drawer is open, and an inert
   // element can't take focus: it is focused once the drawer has closed (the effect below).
   const focusPage = useRef(false)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: closes on every path change
+  // Only a change of page closes it, not the first draw: that effect runs after the draw, and a
+  // click on the menu button before it would be undone.
+  const drawnAt = useRef(path)
   useEffect(() => {
+    if (drawnAt.current === path) return
+    drawnAt.current = path
     if (drawerOpen.current) focusPage.current = true
     setDrawer(false)
   }, [path])
@@ -249,7 +258,7 @@ function Page({ route, me, workspace }: { route: Route; me: Me; workspace: Works
     case 'home':
       return (
         <Suspense fallback={<Loading />}>
-          <HomePage workspace={route.workspace} />
+          <HomePage workspace={route.workspace} admin={workspace.role === 'admin'} />
         </Suspense>
       )
     case 'conversations':

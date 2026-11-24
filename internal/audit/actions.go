@@ -40,6 +40,9 @@ const (
 	SpaceMemberRoleChanged = "space_member_role_changed"
 	SpaceMemberRemoved     = "space_member_removed"
 
+	// A person takes their own data out (internal/export).
+	DataExportStarted = "data_export_started"
+
 	// Model provider accounts, shared CLI accounts, search and dictation.
 	ProviderAccountCreated   = "provider_account_created"
 	ProviderAccountUpdated   = "provider_account_updated"

@@ -840,6 +840,40 @@ func loadRows(ctx context.Context, q queryer, appID int64, v visibility) ([]Row,
 	return all, rows.Err()
 }
 
+// loadSpaceRows is loadRows for an app that must be in space spaceID: the same statement checks
+// it, so rows of an app that moved to another space are not read as this space's.
+func loadSpaceRows(ctx context.Context, q queryer, spaceID, appID int64, v visibility) ([]Row, error) {
+	var rows *sql.Rows
+	var err error
+	const from = `SELECT r.id, r.revision, r.data FROM app_rows r JOIN apps a ON a.id = r.app_id
+		WHERE r.app_id = ? AND a.space_id = ? AND r.deleted_at IS NULL`
+	switch v.scope {
+	case access.ScopeAll:
+		rows, err = q.QueryContext(ctx, from+` ORDER BY r.id`, appID, spaceID)
+	case access.ScopeOwn:
+		rows, err = q.QueryContext(ctx, from+` AND r.created_by = ? ORDER BY r.id`, appID, spaceID, v.user)
+	default:
+		return []Row{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	all := []Row{}
+	for rows.Next() {
+		var r Row
+		var data string
+		if err := rows.Scan(&r.ID, &r.Revision, &data); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(data), &r.Data); err != nil {
+			return nil, fmt.Errorf("app %d row %d: %w", appID, r.ID, err)
+		}
+		all = append(all, r)
+	}
+	return all, rows.Err()
+}
+
 // launchable returns an app with its definition, refusing one that is offline.
 func launchable(ctx context.Context, q queryer, spaceID, appID int64) (App, error) {
 	a, err := app(ctx, q, spaceID, appID)

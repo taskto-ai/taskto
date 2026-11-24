@@ -1,9 +1,9 @@
 // The workspace's settings, a tab each: general (its default language), members and invites,
 // shared spaces, model providers, CLI accounts, search, dictation, notifications (push on this
-// device), your password, access
+// device), your password, your data (a zip to download), access
 // tokens and about. Admins see them all; members see model providers (their own accounts, and
 // the workspace's to read), their own CLI accounts, search (their spaces' consent), dictation
-// (what is in use), notifications, their own password and access tokens, and about (the credits; admins also
+// (what is in use), notifications, their own password, data and access tokens, and about (the credits; admins also
 // see the server's backups there). The tab is the route's item.
 
 import type { Me, Workspace } from '../api'
@@ -11,6 +11,7 @@ import { type Key, useT } from '../i18n'
 import { Link, routePath } from '../router'
 import { AboutTab } from './AboutTab'
 import { CliAccountsTab } from './CliAccountsTab'
+import { DataTab } from './DataTab'
 import { DictationTab } from './DictationTab'
 import { GeneralTab } from './GeneralTab'
 import { MembersTab } from './MembersTab'
@@ -31,6 +32,7 @@ type Tab =
   | 'dictation'
   | 'notifications'
   | 'password'
+  | 'data'
   | 'tokens'
   | 'about'
 
@@ -44,6 +46,7 @@ const TABS: { tab: Tab; label: Key; admin: boolean }[] = [
   { tab: 'dictation', label: 'settings.tabs.dictation', admin: false },
   { tab: 'notifications', label: 'settings.tabs.notifications', admin: false },
   { tab: 'password', label: 'settings.tabs.password', admin: false },
+  { tab: 'data', label: 'settings.tabs.data', admin: false },
   { tab: 'tokens', label: 'settings.tabs.tokens', admin: false },
   { tab: 'about', label: 'settings.tabs.about', admin: false },
 ]
@@ -94,6 +97,8 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
       return <NotificationsTab me={me.user.id} workspace={workspace.id} />
     case 'password':
       return <PasswordTab />
+    case 'data':
+      return <DataTab workspace={workspace.id} />
     case 'tokens':
       return <TokensTab workspace={workspace.id} />
     case 'about':

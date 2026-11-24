@@ -3,7 +3,7 @@
 // the URL's fragment, which browsers don't send to servers or in Referer.
 
 import { type FormEvent, useState } from 'react'
-import { ApiError, api, type Invite, type Member, ws } from '../api'
+import { ApiError, api, type Invite, type InviteCreated, type Member, ws } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Alert, ConfirmButton, CopyButton, day, useAction } from './parts'
@@ -209,7 +209,7 @@ function InviteForm({ base, onInvited }: { base: string; onInvited: () => void }
     e.preventDefault()
     let invite: (Invite & { token: string }) | undefined
     const ok = await action.run(async () => {
-      invite = await api<Invite & { token: string }>(`${base}/invites`, { method: 'POST', body: { email, role } })
+      invite = await api<InviteCreated>(`${base}/invites`, { method: 'POST', body: { email, role } })
     })
     if (ok && invite) {
       setMade({ email: invite.email, link: inviteLink(invite.token), expires: invite.expires_at })
