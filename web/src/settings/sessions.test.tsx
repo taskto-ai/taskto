@@ -63,7 +63,10 @@ test('sessions list the device, the dates and which one is this device', async (
 })
 
 test('signing out one session asks first, sends the request and shows the list as it is then', async () => {
-  let sessions = [session({ id: 'session-3', current: true }), session({ id: 'session-2', browser: 'Safari', os: 'iOS' })]
+  let sessions = [
+    session({ id: 'session-3', current: true }),
+    session({ id: 'session-2', browser: 'Safari', os: 'iOS' }),
+  ]
   const calls = fakeFetch({
     'GET /api/me/sessions': () => ({ body: { sessions } }),
     'DELETE /api/me/sessions/session-2': () => {
@@ -83,7 +86,11 @@ test('signing out one session asks first, sends the request and shows the list a
 })
 
 test('signing out all the others is offered only with others, and asks first', async () => {
-  let sessions = [session({ id: 'session-3', current: true }), session({ id: 'session-2' }), session({ id: 'session-1', os: 'Linux' })]
+  let sessions = [
+    session({ id: 'session-3', current: true }),
+    session({ id: 'session-2' }),
+    session({ id: 'session-1', os: 'Linux' }),
+  ]
   const calls = fakeFetch({
     'GET /api/me/sessions': () => ({ body: { sessions } }),
     'DELETE /api/me/sessions': () => {
@@ -103,8 +110,13 @@ test('signing out all the others is offered only with others, and asks first', a
 
 test('a failed sign-out shows the translated error', async () => {
   fakeFetch({
-    'GET /api/me/sessions': { body: { sessions: [session({ id: 'session-3', current: true }), session({ id: 'session-2' })] } },
-    'DELETE /api/me/sessions/session-2': { status: 404, body: { error: 'session not found', code: 'session_not_found' } },
+    'GET /api/me/sessions': {
+      body: { sessions: [session({ id: 'session-3', current: true }), session({ id: 'session-2' })] },
+    },
+    'DELETE /api/me/sessions/session-2': {
+      status: 404,
+      body: { error: 'session not found', code: 'session_not_found' },
+    },
   })
   render(<SettingsPage me={me} workspace={member} tab="sessions" />)
   await screen.findByRole('list', { name: 'Your sessions' })
