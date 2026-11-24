@@ -14,9 +14,16 @@
 //                  runtime (see below); TASKTO_SCREENS_UNSAFE_AGENT=1
 //
 // The files are named `<size>-<theme>/<screen>.png`, the same on every run, so two runs (before
-// and after a change) can be compared file by file. Whatever the outcome, the server is stopped
-// and the data directory removed. It never runs in CI: it needs a built server (`make build`) and
-// takes minutes.
+// and after a change) can be compared file by file. Whatever the outcome, an interruption (Ctrl-C,
+// SIGTERM, SIGHUP) included, the server is stopped and reaped, the browser closed and the data
+// directory removed. It never runs in CI: it needs a built server (`make build`) and takes
+// minutes; its parts (starting and stopping the server, the cleanup, the HTTP client, the output
+// folder, the capture of one screen) are exported and tested without a browser (screens.test.mjs).
+//
+// A capture is only saved once the screen's own ready check is on the page (a heading, a control
+// or a seeded item that only that screen shows), so a wrong page is a failed capture, never a
+// picture. The script owns only the PNGs it writes, listed in `.screens-manifest.json` in the
+// output folder: it never deletes another file.
 //
 // The agent runtime: a conversation with replies needs the server started with -agent, where a
 // scripted offline model answers. The server refuses that when its user can run sudo without a
@@ -28,8 +35,8 @@
 // Everything seeded is invented: example.com addresses and made-up names.
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { constants as osConstants, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -43,20 +50,6 @@ export const SIZES = [
 ]
 export const THEMES = ['light', 'dark']
 
-export const SETTINGS_TABS = [
-  'general',
-  'members',
-  'spaces',
-  'providers',
-  'cli-accounts',
-  'search',
-  'dictation',
-  'notifications',
-  'password',
-  'tokens',
-  'about',
-]
-
 const owner = {
   email: 'ana@example.com',
   name: 'Ana Ribeiro',
@@ -68,20 +61,93 @@ const owner = {
 // nothing in it, with the sample data, and signed out again.
 export const PHASES = ['first-run', 'empty', 'seeded', 'signed-out']
 
-// Each screen: a stable name (the file's), its phase, and `show(s)`, which brings the screen up.
-// `s` has `page`, `go(path)`, `ids` (the seeded data) and `path(section, item)`. A screen that
-// can't find what it clicks throws, so a renamed control fails the run and doesn't silently
-// capture the wrong thing. `only: 'phone'` limits a screen to one size; `needsAgent` marks a
-// screen that exists only where the agent runtime runs (a conversation can't be made without it).
+// What the script looks for on a page, in English (it runs the app in English): a heading by its
+// exact name, or a text that is on the page.
+const heading = (s, name) => s.page.getByRole('heading', { name, exact: true })
+// A board's column: its heading is the name and the number of cards.
+const column = (s, name) => s.page.getByRole('heading', { name: new RegExp(`^${name} \\d+$`) })
+const text = (s, value, exact = false) => s.page.getByText(value, { exact })
+
+// The heading each Settings tab puts at the top of its panel.
+export const SETTINGS_HEADINGS = {
+  general: 'General',
+  members: 'Members',
+  spaces: 'Shared spaces',
+  providers: "This workspace's accounts",
+  'cli-accounts': 'Your CLI accounts',
+  search: 'Semantic search',
+  dictation: 'Dictation',
+  notifications: 'Your notifications',
+  password: 'Password',
+  data: 'Export your data',
+  tokens: 'Access tokens',
+  about: 'About TaskTo.AI',
+}
+export const SETTINGS_TABS = Object.keys(SETTINGS_HEADINGS)
+
+// Each screen: a stable name (the file's), its phase, `show(s)`, which brings the screen up, and
+// `ready(s)`, the locator (or a list of them) that only this screen, with its data, puts on the
+// page: the capture waits for all of them and fails when one never shows, so a stand-in page or a
+// screen that didn't load is never saved as a picture. `s` has `page`, `go(path)`, `ids` (the
+// seeded data), `agent` (whether the agent runtime runs) and `path(section, item)`. A screen that
+// can't find what it clicks throws, so a renamed control fails the run too. `only: 'phone'` limits
+// a screen to one size; `needsAgent` marks a screen that exists only where the agent runtime runs
+// (a conversation can't be made without it).
 export const SCREENS = [
-  { name: 'setup', phase: 'first-run', show: (s) => s.go('/') },
-  { name: 'login', phase: 'signed-out', show: (s) => s.go('/') },
-  ...['home', 'conversations', 'knowledge', 'boards', 'apps', 'inbox'].map((section) => ({
-    name: `empty-${section}`,
+  {
+    name: 'setup',
+    phase: 'first-run',
+    show: (s) => s.go('/'),
+    ready: (s) => [heading(s, 'Set up this server'), s.page.getByRole('button', { name: 'Create the owner' })],
+  },
+  {
+    name: 'login',
+    phase: 'signed-out',
+    show: (s) => s.go('/'),
+    ready: (s) => [heading(s, 'Log in'), s.page.getByRole('button', { name: 'Log in', exact: true })],
+  },
+  {
+    name: 'empty-home',
     phase: 'empty',
-    show: (s) => s.go(s.path(section)),
-  })),
-  { name: 'home', phase: 'seeded', show: (s) => s.go(s.path('home')) },
+    show: (s) => s.go(s.path('home')),
+    ready: (s) => [heading(s, 'Home'), text(s, 'Nothing on your Home yet')],
+  },
+  {
+    name: 'empty-conversations',
+    phase: 'empty',
+    show: (s) => s.go(s.path('conversations')),
+    ready: (s) => [heading(s, 'Conversations'), text(s, 'No conversations yet')],
+  },
+  {
+    name: 'empty-knowledge',
+    phase: 'empty',
+    show: (s) => s.go(s.path('knowledge')),
+    ready: (s) => [heading(s, 'Knowledge base'), text(s, 'No documents in this space yet.')],
+  },
+  {
+    name: 'empty-boards',
+    phase: 'empty',
+    show: (s) => s.go(s.path('boards')),
+    ready: (s) => [heading(s, 'Boards'), column(s, 'Backlog')],
+  },
+  {
+    name: 'empty-apps',
+    phase: 'empty',
+    show: (s) => s.go(s.path('apps')),
+    ready: (s) => [heading(s, 'Apps'), text(s, 'No apps here yet.')],
+  },
+  {
+    name: 'empty-inbox',
+    phase: 'empty',
+    show: (s) => s.go(s.path('inbox')),
+    ready: (s) => [heading(s, 'Notifications'), text(s, 'No notifications yet.')],
+  },
+  {
+    name: 'home',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('home')),
+    ready: (s) => [heading(s, 'Home'), text(s, `From ${s.ids.homeApp}`)],
+  },
   {
     name: 'home-customise',
     phase: 'seeded',
@@ -89,19 +155,35 @@ export const SCREENS = [
       await s.go(s.path('home'))
       await s.page.getByRole('button', { name: 'Customize' }).first().click()
     },
+    ready: (s) => [s.page.getByRole('button', { name: 'Done', exact: true }), heading(s, 'Add from your apps')],
   },
-  { name: 'conversations', phase: 'seeded', show: (s) => s.go(s.path('conversations')) },
+  {
+    name: 'conversations',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('conversations')),
+    ready: (s) => [
+      heading(s, 'Conversations'),
+      s.agent ? text(s, 'Plan the launch week') : text(s, 'No conversations yet'),
+    ],
+  },
   {
     name: 'conversation',
     phase: 'seeded',
     needsAgent: true,
     show: (s) => s.go(s.path('conversations', s.ids.conversation)),
+    ready: (s) => [heading(s, 'Plan the launch week'), text(s, 'Add a card to my board')],
   },
-  { name: 'knowledge', phase: 'seeded', show: (s) => s.go(s.path('knowledge')) },
+  {
+    name: 'knowledge',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('knowledge')),
+    ready: (s) => [heading(s, 'Knowledge base'), text(s, 'welcome.md', true)],
+  },
   {
     name: 'knowledge-document',
     phase: 'seeded',
     show: (s) => s.go(s.path('knowledge', `${s.ids.space}:welcome.md`)),
+    ready: (s) => [heading(s, 'Welcome'), heading(s, 'Getting started')],
   },
   {
     name: 'knowledge-editor',
@@ -110,6 +192,10 @@ export const SCREENS = [
       await s.go(s.path('knowledge', `${s.ids.space}:welcome.md`))
       await s.page.getByRole('button', { name: 'Edit', exact: true }).first().click()
     },
+    ready: (s) => [
+      s.page.getByRole('textbox', { name: 'Text' }),
+      s.page.getByRole('button', { name: 'Save', exact: true }),
+    ],
   },
   {
     name: 'knowledge-search',
@@ -119,20 +205,36 @@ export const SCREENS = [
       const box = s.page.getByRole('searchbox').first()
       await box.fill('launch')
       await box.press('Enter')
-      await s.page.getByText('Launch plan').first().waitFor()
     },
+    ready: (s) => [heading(s, 'Results for “launch”'), text(s, 'Launch plan')],
   },
-  { name: 'boards', phase: 'seeded', show: (s) => s.go(s.path('boards')) },
-  { name: 'board', phase: 'seeded', show: (s) => s.go(s.path('boards', `${s.ids.space}:${s.ids.board}`)) },
+  {
+    name: 'boards',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('boards')),
+    ready: (s) => [heading(s, 'Boards'), text(s, 'Write the launch post')],
+  },
+  {
+    name: 'board',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('boards', `${s.ids.space}:${s.ids.board}`)),
+    ready: (s) => [column(s, 'Backlog'), text(s, 'Dark mode contrast pass'), text(s, 'Audit log filters')],
+  },
   {
     name: 'board-shared',
     phase: 'seeded',
     show: (s) => s.go(s.path('boards', `${s.ids.team}:${s.ids.teamBoard}`)),
+    ready: (s) => [
+      column(s, 'Backlog'),
+      text(s, 'Quotas: design the usage view'),
+      s.page.locator('strong', { hasText: 'Launch' }),
+    ],
   },
   {
     name: 'card-open',
     phase: 'seeded',
     show: (s) => s.go(s.path('boards', `${s.ids.space}:${s.ids.board}:${s.ids.card}`)),
+    ready: (s) => [heading(s, 'Write the launch post'), text(s, 'Looks good. Can we add the pricing table?')],
   },
   {
     name: 'card-add',
@@ -141,16 +243,43 @@ export const SCREENS = [
       await s.go(s.path('boards', `${s.ids.space}:${s.ids.board}`))
       await s.page.getByRole('button', { name: 'Add a card' }).first().click()
     },
+    ready: (s) => [s.page.getByRole('form', { name: /^New card in/ }), text(s, 'Write the launch post')],
   },
-  { name: 'apps', phase: 'seeded', show: (s) => s.go(s.path('apps')) },
-  { name: 'apps-templates', phase: 'seeded', show: (s) => s.go(s.path('apps', 'templates')) },
-  { name: 'app-open', phase: 'seeded', show: (s) => s.go(s.path('apps', `${s.ids.space}-${s.ids.app}`)) },
-  { name: 'app-builder', phase: 'seeded', show: (s) => s.go(s.path('apps', `edit-${s.ids.space}-${s.ids.app}`)) },
-  { name: 'inbox', phase: 'seeded', show: (s) => s.go(s.path('inbox')) },
+  {
+    name: 'apps',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('apps')),
+    ready: (s) => [heading(s, 'Apps'), text(s, s.ids.appName)],
+  },
+  {
+    name: 'apps-templates',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('apps', 'templates')),
+    ready: (s) => [heading(s, 'Start from a template'), heading(s, 'Expense tracker')],
+  },
+  {
+    name: 'app-open',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('apps', `${s.ids.space}-${s.ids.app}`)),
+    ready: (s) => heading(s, s.ids.appName),
+  },
+  {
+    name: 'app-builder',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('apps', `edit-${s.ids.space}-${s.ids.app}`)),
+    ready: (s) => [heading(s, 'Edit with AI'), text(s, s.ids.appName)],
+  },
+  {
+    name: 'inbox',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('inbox')),
+    ready: (s) => heading(s, 'Notifications'),
+  },
   ...SETTINGS_TABS.map((tab) => ({
     name: `settings-${tab}`,
     phase: 'seeded',
     show: (s) => s.go(s.path('settings', tab)),
+    ready: (s) => [heading(s, 'Settings'), heading(s, SETTINGS_HEADINGS[tab])],
   })),
   {
     name: 'account-menu',
@@ -159,6 +288,7 @@ export const SCREENS = [
       await s.go(s.path('home'))
       await s.page.locator('.tt-account summary').click()
     },
+    ready: (s) => [heading(s, 'Home'), s.page.getByRole('button', { name: 'Log out' })],
   },
   {
     name: 'drawer',
@@ -168,6 +298,10 @@ export const SCREENS = [
       await s.go(s.path('home'))
       await s.page.locator('.tt-menu-button').click()
     },
+    ready: (s) => [
+      heading(s, 'Home'),
+      s.page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name: 'Boards' }),
+    ],
   },
 ]
 
@@ -183,89 +317,363 @@ export function captures() {
   )
 }
 
-// A secret never reaches the output: the setup token is in the server's log while no account
-// exists, and a log may be printed when something fails.
-const redact = (text) => text.replace(/setup_token=\S+/g, 'setup_token=[hidden]')
+// ---------------------------------------------------------------------------------------------
+// Secrets never reach the output. The setup token is in the server's log while no account exists;
+// the session cookie and the sample password are known once they exist. Every text the script
+// prints goes through `redact`, which also knows the values added with `hide`.
 
-// Starts bin/taskto on a fresh data directory and waits until it listens. Resolves to the server,
-// or, when it exits first, rejects with an error that carries the log.
-function launch(bin, dir, flags) {
-  // The server gets its own flags only: a TASKTO_* variable of this machine (a config file, a
-  // data directory, a provider) must not change what is captured.
-  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('TASKTO_')))
-  const proc = spawn(bin, ['-addr', '127.0.0.1:0', '-data-dir', join(dir, 'data'), '-insecure-cookies', ...flags], {
-    env,
-    stdio: ['ignore', 'ignore', 'pipe'],
-  })
-  let logs = ''
-  const server = {
-    proc,
-    logs: () => redact(logs),
-    stop: async () => {
-      proc.removeAllListeners('exit')
-      if (proc.exitCode === null && proc.signalCode === null) {
-        await new Promise((done) => {
-          const kill = setTimeout(() => proc.kill('SIGKILL'), 10_000)
-          proc.once('exit', () => {
-            clearTimeout(kill)
-            done()
-          })
-          proc.kill('SIGTERM')
-        })
+const hidden = new Set()
+export const hide = (value) => {
+  if (typeof value === 'string' && value.length >= 6) hidden.add(value)
+}
+export const redact = (value) => {
+  let out = String(value).replace(/setup_token=\S+/g, 'setup_token=[hidden]')
+  for (const secret of hidden) out = out.split(secret).join('[hidden]')
+  return out
+}
+
+// Playwright's own debug traces (`DEBUG=pw:channel`) print every call's arguments, the session
+// cookie set on a browser context among them: the script keeps the other debug settings and drops
+// those.
+export function withoutPlaywrightDebug(debug) {
+  const kept = String(debug ?? '')
+    .split(/[\s,]+/)
+    .filter((entry) => entry && !/^-?pw:/.test(entry))
+  return kept.length > 0 ? kept.join(',') : undefined
+}
+
+// ---------------------------------------------------------------------------------------------
+// The cleanup: what the run has to undo (the server, the browser, the data directory), run once,
+// in the reverse order of what was added, by an ordinary end, a failure and a signal alike.
+
+export function createCleanup() {
+  const tasks = []
+  const exits = []
+  let running
+  const cleanup = {
+    closing: false,
+    // `undo` is awaited by `run`; `now`, optional, is a synchronous last resort for when the
+    // process is about to exit with the work undone.
+    add(undo, now) {
+      if (now) exits.push(now)
+      if (cleanup.closing) {
+        // Added after the cleanup began (a server spawned as the interruption arrived): undo it at once.
+        Promise.resolve()
+          .then(undo)
+          .catch(() => {})
+        return
+      }
+      tasks.push(undo)
+    },
+    run() {
+      cleanup.closing = true
+      running ??= (async () => {
+        for (const undo of tasks.reverse())
+          await Promise.resolve()
+            .then(undo)
+            .catch(() => {})
+      })()
+      return running
+    },
+    // Runs when the process exits whatever else happened: only what is synchronous can.
+    last() {
+      for (const now of exits.reverse()) {
+        try {
+          now()
+        } catch {}
       }
     },
   }
+  return cleanup
+}
+
+// An interruption goes through the same cleanup as a failure, then the process exits with the
+// conventional code (128 plus the signal's number). Installed before anything is started.
+export function trapSignals(cleanup, { signals = ['SIGINT', 'SIGTERM', 'SIGHUP'], target = process, exit, say } = {}) {
+  const leave = exit ?? ((code) => process.exit(code))
+  const log = say ?? ((msg) => console.error(msg))
+  const handlers = signals.map((signal) => {
+    const handler = () => {
+      log(`${signal}: stopping the server and removing the temporary data`)
+      cleanup.run().finally(() => leave(128 + osConstants.signals[signal]))
+    }
+    target.on(signal, handler)
+    return [signal, handler]
+  })
+  return () => {
+    for (const [signal, handler] of handlers) target.off(signal, handler)
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The server.
+
+const READY_LINE = /taskto listening addr=(\S+).*web_app_built=(\w+)/
+const SETUP_TOKEN = /setup_token=([A-Za-z0-9_-]{43})/
+
+// Starts `bin args` and waits until it listens. Resolves to the server, or rejects with an error
+// that carries it (`err.server.logs()`), after the child has been stopped and reaped: whatever
+// the reason (it exited, it never said it listens, the web app isn't built, a timeout), nothing
+// is left running. `track(server)` is called as soon as the child exists, so a cleanup can reach
+// it while this is still waiting.
+export function launch({ bin, args, env, timeoutMs = 60_000, killAfterMs = 10_000, track = () => {} }) {
+  // Its own process group, so that a stubborn server and what it started can be killed together.
+  const proc = spawn(bin, args, { env, stdio: ['ignore', 'ignore', 'pipe'], detached: true })
+  let logs = ''
+  const running = () => proc.pid !== undefined && proc.exitCode === null && proc.signalCode === null
+  const signalGroup = (signal) => {
+    try {
+      process.kill(-proc.pid, signal)
+    } catch {
+      try {
+        proc.kill(signal)
+      } catch {}
+    }
+  }
+  let stopping
+  const server = {
+    proc,
+    logs: () => redact(logs),
+    // Stops it (SIGTERM, then SIGKILL after `killAfterMs`) and resolves once it has exited.
+    stop() {
+      stopping ??= new Promise((done) => {
+        if (!running()) return done()
+        const hard = setTimeout(() => signalGroup('SIGKILL'), killAfterMs)
+        proc.once('exit', () => {
+          clearTimeout(hard)
+          done()
+        })
+        proc.kill('SIGTERM')
+      })
+      return stopping
+    },
+    // Synchronous and not graceful: the last resort when the process is leaving.
+    kill() {
+      if (running()) signalGroup('SIGKILL')
+    },
+  }
+  proc.stderr.on('error', () => {})
+  track(server)
   return new Promise((ok, fail) => {
-    const giveUp = setTimeout(
-      () => fail(Object.assign(new Error('the server did not start in a minute'), { server })),
-      60_000,
-    )
-    const failWith = (err) => {
-      clearTimeout(giveUp)
-      fail(Object.assign(err, { server }))
+    let settled = false
+    const timer = setTimeout(() => reject(new Error('the server did not start in time')), timeoutMs)
+    const reject = (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      server.stop().then(() => fail(Object.assign(err, { server })))
     }
     proc.stderr.on('data', (chunk) => {
       logs = (logs + chunk).slice(-100_000)
-      const addr = logs.match(/taskto listening addr=(\S+).*web_app_built=(\w+)/)
-      const token = logs.match(/setup_token=([A-Za-z0-9_-]{43})/)
-      if (addr && token && !server.base) {
-        clearTimeout(giveUp)
-        if (addr[2] !== 'true') return failWith(new Error('the web app is not built into the binary: run make build'))
-        server.base = `http://${addr[1]}`
-        server.token = token[1]
-        ok(server)
-      }
+      if (settled) return
+      const addr = logs.match(READY_LINE)
+      const token = logs.match(SETUP_TOKEN)
+      if (!addr || !token) return
+      hide(token[1])
+      if (addr[2] !== 'true') return reject(new Error('the web app is not built into the binary: run make build'))
+      settled = true
+      clearTimeout(timer)
+      server.base = `http://${addr[1]}`
+      server.token = token[1]
+      ok(server)
     })
-    proc.on('error', (e) => failWith(new Error(`the server did not start: ${e.message}`)))
-    proc.on('exit', (code) => failWith(new Error(`the server exited (${code})`)))
+    proc.on('error', (e) => reject(new Error(`the server did not start: ${e.code ?? 'error'}`)))
+    proc.on('exit', (code, signal) => {
+      // Its last words may still be on the way: they say why (the agent runtime refused, say).
+      const exited = () => reject(new Error(`the server exited (${code ?? signal})`))
+      if (proc.stderr.readableEnded || proc.stderr.destroyed) return exited()
+      proc.stderr.once('end', exited)
+      proc.stderr.once('close', exited)
+      setTimeout(exited, 2_000).unref()
+    })
   })
 }
 
 // The server with the agent runtime when it accepts it. `agent` says what came of that: 'on', or
 // why not.
-async function startServer(dir, { unsafeAgent }) {
+async function startServer(dir, { unsafeAgent, cleanup }) {
   const bin = process.env.TASKTO_SCREENS_BIN || join(repo, 'bin/taskto')
   const entry = join(repo, 'agent/dist/index.js')
+  // The server gets its own flags only: a TASKTO_* variable of this machine (a config file, a
+  // data directory, a provider) must not change what is captured.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('TASKTO_')))
+  const start = (flags) => {
+    if (cleanup.closing) throw new Error('interrupted')
+    return launch({
+      bin,
+      env,
+      args: ['-addr', '127.0.0.1:0', '-data-dir', join(dir, 'data'), '-insecure-cookies', ...flags],
+      track: (server) =>
+        cleanup.add(
+          () => server.stop(),
+          () => server.kill(),
+        ),
+    })
+  }
   if (!existsSync(entry)) {
-    const server = await launch(bin, dir, [])
+    const server = await start([])
     return Object.assign(server, { agent: 'off: the agent runtime is not built (make build builds it)' })
   }
   const agentFlags = ['-agent', '-agent-entry', entry, ...(unsafeAgent ? ['-unsafe-privileged-agents'] : [])]
   try {
-    const server = await launch(bin, dir, agentFlags)
+    const server = await start(agentFlags)
     return Object.assign(server, { agent: unsafeAgent ? 'on (-unsafe-privileged-agents)' : 'on' })
   } catch (err) {
+    // launch has stopped the refused server already.
     const refused = /must not be able to act as root|act as root/.test(err.server?.logs() ?? '')
-    await err.server?.stop()
-    if (!refused) throw Object.assign(err, { message: `${err.message}:\n${err.server?.logs() ?? ''}` })
+    if (!refused) throw err
     rmSync(join(dir, 'data'), { recursive: true, force: true })
-    const server = await launch(bin, dir, [])
+    const server = await start([])
     return Object.assign(server, {
       agent:
         'off: the server refuses the agent runtime for a user who can run sudo without a password (docs/agent-safety.md)',
     })
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The script's own HTTP client, for the setup and the sample data. The session cookie is kept in
+// memory and sent back; a failed call is reported as its method, path and the status (or the
+// error's code) and never carries a header, a body or the raw error.
+
+export class ApiFailure extends Error {
+  constructor(method, path, status, code) {
+    super(`${method} ${path}: ${status ?? 'no answer'}${code ? ` (${code})` : ''}`)
+    this.name = 'ApiFailure'
+  }
+}
+
+const safeCode = (value) => (typeof value === 'string' && /^[A-Za-z0-9_.-]{1,60}$/.test(value) ? value : undefined)
+
+export function createClient(base, { fetchImpl = fetch, timeoutMs = 30_000 } = {}) {
+  const jar = new Map()
+  const remember = (res) => {
+    for (const line of res.headers.getSetCookie?.() ?? []) {
+      const [pair, ...attrs] = line.split(';')
+      const at = pair.indexOf('=')
+      if (at < 1) continue
+      const name = pair.slice(0, at).trim()
+      const value = pair.slice(at + 1).trim()
+      const gone = value === '' || attrs.some((a) => /^\s*max-age=0*\s*$/i.test(a))
+      if (gone) jar.delete(name)
+      else {
+        jar.set(name, value)
+        hide(value)
+      }
+    }
+  }
+  return {
+    // The cookies as a browser context takes them.
+    cookies: () => [...jar].map(([name, value]) => ({ name, value, url: base })),
+    async call(method, path, body) {
+      let res
+      try {
+        res = await fetchImpl(`${base}${path}`, {
+          method,
+          headers: {
+            ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+            ...(jar.size > 0 ? { Cookie: [...jar].map(([name, value]) => `${name}=${value}`).join('; ') } : {}),
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
+        })
+      } catch (err) {
+        throw new ApiFailure(method, path, undefined, safeCode(err?.cause?.code) ?? safeCode(err?.name))
+      }
+      remember(res)
+      if (!res.ok) {
+        const code = await res
+          .json()
+          .then((b) => safeCode(b?.code))
+          .catch(() => undefined)
+        throw new ApiFailure(method, path, res.status, code)
+      }
+      if (res.status === 204) return null
+      return res.json().catch(() => {
+        throw new ApiFailure(method, path, res.status, 'not_json')
+      })
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The output folder. The script writes `<size>-<theme>/<screen>.png` and lists in a manifest what
+// it wrote, so that it knows what is its own: stale captures of an earlier run are pruned from
+// that list, after a run that failed nowhere, and any other file in the folder is left alone.
+
+export const MANIFEST = '.screens-manifest.json'
+const OWN = /^[a-z]+-(?:light|dark)\/[a-z0-9-]+$/
+
+export function readManifest(outDir) {
+  try {
+    const list = JSON.parse(readFileSync(join(outDir, MANIFEST), 'utf8')).captures
+    return new Set(list.filter((id) => typeof id === 'string' && OWN.test(id)))
+  } catch {
+    return new Set()
+  }
+}
+
+// `written`: the ids this run saved. `failed`: those it could not (an old picture of one would
+// pass for the current screen, so it goes). `keep`: ids a run didn't try on purpose (a screen
+// that needs the agent runtime). `prune`: a full run that failed nowhere also removes the earlier
+// run's pictures it didn't write.
+export function recordCaptures({ outDir, written, failed = [], keep = [], prune = false }) {
+  const before = readManifest(outDir)
+  const remove = new Set(failed.filter((id) => before.has(id)))
+  if (prune) for (const id of before) if (!written.has(id) && !keep.includes(id)) remove.add(id)
+  for (const id of remove) rmSync(join(outDir, `${id}.png`), { force: true })
+  const next = new Set([...before].filter((id) => !remove.has(id)))
+  for (const id of written) next.add(id)
+  mkdirSync(outDir, { recursive: true })
+  writeFileSync(join(outDir, MANIFEST), `${JSON.stringify({ captures: [...next].sort() }, null, 2)}\n`)
+  return { removed: [...remove].sort() }
+}
+
+// ---------------------------------------------------------------------------------------------
+// One capture.
+
+export const READY_TIMEOUT = 15_000
+
+// Waits for every locator of the screen's ready check. A screen with no check, or one whose check
+// never shows, throws.
+export async function awaitReady(screen, s, timeout = READY_TIMEOUT) {
+  if (typeof screen.ready !== 'function') throw new Error(`${screen.name} has no ready check`)
+  const checks = [screen.ready(s)].flat().filter(Boolean)
+  if (checks.length === 0) throw new Error(`${screen.name} has an empty ready check`)
+  try {
+    await Promise.all(checks.map((check) => check.first().waitFor({ state: 'visible', timeout })))
+  } catch (err) {
+    throw new Error(`${screen.name} is not what the screen shows (ready check): ${String(err.message).split('\n')[0]}`)
+  }
+}
+
+// Brings the screen up, waits for its ready check and the page to settle, and saves the picture.
+// Returns `{ ok: true }` or `{ ok: false, error }`; never throws.
+export async function captureOne(c, s, { outDir, written, readyTimeout = READY_TIMEOUT }) {
+  try {
+    await c.screen.show(s)
+    await awaitReady(c.screen, s, readyTimeout)
+    // Fonts, the requests that follow the screen's first render, and two frames for a settled
+    // layout, so two runs match. The requests are best effort: a stream that stays open is no fault.
+    await s.page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {})
+    await s.page.evaluate(() =>
+      document.fonts.ready.then(
+        () => new Promise((frame) => requestAnimationFrame(() => requestAnimationFrame(frame))),
+      ),
+    )
+    // The screen is still the screen after settling.
+    await awaitReady(c.screen, s, readyTimeout)
+    mkdirSync(join(outDir, c.dir), { recursive: true })
+    await s.page.screenshot({ path: join(outDir, `${c.id}.png`), animations: 'disabled', caret: 'hide' })
+    written.add(c.id)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: redact(String(err.message).split('\n')[0]) }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The sample data.
 
 const isoDay = (offset) => {
   const d = new Date()
@@ -352,6 +760,7 @@ async function seed({ api, workspace, agent, say }) {
     apps.push(app)
   }
   const available = (await api('GET', `${W}/home/available`)).apps ?? []
+  let homeApp
   for (const app of available.slice(0, 3)) {
     for (const widget of (app.widgets ?? []).slice(0, 2)) {
       await api('POST', `${W}/home/items`, {
@@ -360,6 +769,7 @@ async function seed({ api, workspace, agent, say }) {
         app_id: app.app_id,
         widget: widget.id ?? widget,
       })
+      homeApp ??= app.name
     }
     if (app.pin) await api('POST', `${W}/home/items`, { kind: 'pin', space_id: app.space_id, app_id: app.app_id })
   }
@@ -397,9 +807,14 @@ async function seed({ api, workspace, agent, say }) {
     teamBoard: teamBoard.id,
     card: card.id,
     app: apps[0].id,
+    appName: apps[0].name,
+    homeApp: homeApp ?? apps[0].name,
     conversation: talk?.id,
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The run.
 
 async function main() {
   const { values } = parseArgs({
@@ -429,27 +844,58 @@ async function main() {
   const started = Date.now()
   const say = (msg) => console.log(msg)
 
-  // Left out of the module's top so that listing and testing the screens needs no browser.
-  const { chromium, request } = await import('playwright')
+  // Before anything is started: an interruption from here on stops what exists and removes the
+  // data directory, as a failure does.
+  const cleanup = createCleanup()
+  const untrap = trapSignals(cleanup)
+  process.once('exit', () => cleanup.last())
+
+  const debug = withoutPlaywrightDebug(process.env.DEBUG)
+  if (debug === undefined) delete process.env.DEBUG
+  else process.env.DEBUG = debug
+  hide(owner.password)
 
   const dir = mkdtempSync(join(tmpdir(), 'tt-screens-'))
-  let server
-  let browser
-  let apiContext
+  const removeDir = () => rmSync(dir, { recursive: true, force: true })
+  cleanup.add(removeDir, removeDir)
+
   const failures = []
   const issues = new Set()
   const skipped = []
+  const written = new Set()
+  const failedIds = []
+  let server
   let done = 0
+
+  // What a run leaves in the output folder: its own pictures in the manifest, the failed ones
+  // removed, and after a run that failed nowhere the earlier run's others pruned.
+  let recorded = false
+  const record = (prune) => {
+    if (recorded) return
+    recorded = true
+    try {
+      recordCaptures({ outDir, written, failed: failedIds, keep: skipped, prune })
+    } catch (err) {
+      console.error(`could not update ${MANIFEST}: ${redact(err.message)}`)
+    }
+  }
+  cleanup.add(() => record(false))
+
   try {
-    server = await startServer(dir, { unsafeAgent })
+    // Left out of the module's top so that listing and testing the screens needs no browser.
+    const { chromium } = await import('playwright')
+
+    server = await startServer(dir, { unsafeAgent, cleanup })
     say(`server up (agent runtime ${server.agent})`)
-    browser = await chromium.launch()
+    // Playwright's own signal handling is off: the script's handlers stop the browser, in order.
+    const browser = await chromium.launch({ handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false })
+    cleanup.add(() => browser.close())
 
     // A capture is a page in a context of its size and theme; the contexts share the owner's
     // session once there is one.
     const contexts = new Map()
-    const contextFor = async ({ size, theme, dir: name }, storageState) => {
-      const key = `${name}:${storageState ? 'in' : 'out'}`
+    const contextFor = async ({ size, theme, dir: name }, cookies) => {
+      const key = `${name}:${cookies ? 'in' : 'out'}`
       if (!contexts.has(key)) {
         const context = await browser.newContext({
           baseURL: server.base,
@@ -457,8 +903,8 @@ async function main() {
           colorScheme: theme,
           locale: 'en-US',
           timezoneId: 'UTC',
-          storageState,
         })
+        if (cookies) await context.addCookies(cookies)
         context.setDefaultTimeout(15_000)
         contexts.set(key, context)
       }
@@ -469,7 +915,7 @@ async function main() {
     // for the account get 401: that is the app asking who is there, not a fault.
     const watch = (page, phase, id) => {
       const quiet = phase === 'first-run' || phase === 'signed-out'
-      const note = (text) => issues.add(`${id}: ${text}`)
+      const note = (text) => issues.add(`${id}: ${redact(text)}`)
       page.on('console', (m) => {
         if (m.type() !== 'error') return
         if (quiet && /status of 401/.test(m.text())) return
@@ -487,36 +933,34 @@ async function main() {
       })
     }
 
-    const capture = async (c, storageState, ids, workspace) => {
-      const context = await contextFor(c, storageState)
+    const capture = async (c, cookies, ids, workspace) => {
+      const context = await contextFor(c, cookies)
       const page = await context.newPage()
       watch(page, c.screen.phase, c.id)
       const s = {
         page,
         ids,
+        agent: server.agent.startsWith('on'),
         path: (section, item) =>
           `/w/${workspace}/${section === 'inbox' ? 'notifications' : section}${item ? `/${encodeURIComponent(item)}` : ''}`,
         go: async (path) => {
-          await page.goto(path, { waitUntil: 'networkidle' })
+          await page.goto(path, { waitUntil: 'domcontentloaded' })
         },
       }
       try {
-        await c.screen.show(s)
-        // Fonts and a settled layout, with the animations stopped, so two runs match.
-        await page.evaluate(() => document.fonts.ready)
-        await page.waitForTimeout(400)
-        mkdirSync(join(outDir, c.dir), { recursive: true })
-        await page.screenshot({ path: join(outDir, `${c.id}.png`), animations: 'disabled', caret: 'hide' })
-        done++
-      } catch (err) {
-        failures.push(`${c.id}: ${String(err.message).split('\n')[0]}`)
+        const result = await captureOne(c, s, { outDir, written })
+        if (result.ok) done++
+        else {
+          failures.push(`${c.id}: ${result.error}`)
+          failedIds.push(c.id)
+        }
       } finally {
-        await page.close()
+        await page.close().catch(() => {})
       }
     }
 
     // Each phase's captures run side by side, one per size and theme.
-    const runPhase = async (phase, storageState, ids, workspace) => {
+    const runPhase = async (phase, cookies, ids, workspace) => {
       const todo = plan.filter((c) => c.screen.phase === phase)
       for (const c of todo) if (c.screen.needsAgent && !server.agent.startsWith('on')) skipped.push(c.id)
       const byScreen = Map.groupBy(
@@ -524,31 +968,15 @@ async function main() {
         (c) => c.screen.name,
       )
       for (const group of byScreen.values()) {
-        await Promise.all(group.map((c) => capture(c, storageState, ids, workspace)))
-      }
-    }
-
-    // A full run replaces the last one's files; a filtered run leaves the others alone.
-    if (only.length === 0) {
-      for (const c of plan) {
-        const d = join(outDir, c.dir)
-        if (existsSync(d)) for (const f of readdirSync(d)) if (f.endsWith('.png')) rmSync(join(d, f))
+        await Promise.all(group.map((c) => capture(c, cookies, ids, workspace)))
       }
     }
 
     await runPhase('first-run', undefined)
 
-    // The owner, through the API: the same session goes to every browser context.
-    apiContext = await request.newContext({ baseURL: server.base })
-    const api = async (method, path, body) => {
-      const res = await apiContext.fetch(path, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        data: body === undefined ? undefined : JSON.stringify(body),
-      })
-      if (!res.ok()) throw new Error(`${method} ${path}: ${res.status()} ${redact((await res.text()).slice(0, 200))}`)
-      return res.status() === 204 ? null : res.json()
-    }
+    // The owner, through the script's own client: the same session goes to every browser context.
+    const client = createClient(server.base)
+    const api = client.call
     const me = await api('POST', '/api/setup', {
       email: owner.email,
       name: owner.name,
@@ -557,7 +985,7 @@ async function main() {
       setup_token: server.token,
     })
     const workspace = me.workspaces[0].id
-    const session = await apiContext.storageState()
+    const session = client.cookies()
 
     await runPhase('empty', session, {}, workspace)
     const needsSeed = plan.some((c) => c.screen.phase === 'seeded')
@@ -568,15 +996,14 @@ async function main() {
     }
     await runPhase('signed-out', undefined)
   } catch (err) {
-    failures.push(`the run stopped: ${redact(String(err.message))}`)
-    if (server?.logs)
-      console.error(`server log (last lines):\n${server.logs().trim().split('\n').slice(-15).join('\n')}`)
+    failures.push(`the run stopped: ${redact(String(err.message).split('\n')[0])}`)
+    const log = (server ?? err.server)?.logs?.().trim()
+    if (log) console.error(`server log (last lines):\n${log.split('\n').slice(-15).join('\n')}`)
   } finally {
     // Whatever happened, the browser and the server stop and the data directory goes.
-    await apiContext?.dispose().catch(() => {})
-    await browser?.close().catch(() => {})
-    await server?.stop().catch(() => {})
-    rmSync(dir, { recursive: true, force: true })
+    record(only.length === 0 && failures.length === 0)
+    await cleanup.run()
+    untrap()
   }
 
   const seconds = Math.round((Date.now() - started) / 1000)
