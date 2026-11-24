@@ -21,13 +21,6 @@ func templateWith(t *testing.T, w *world, needsBoard bool) string {
 	return ""
 }
 
-// publish makes a release of the app as a person does, without going through the agent.
-func (w *world) publish(app int64) {
-	w.exec(`INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
-		SELECT id, 1, definition, 1, json_extract(definition, '$.requires') FROM apps WHERE id = ?`, app)
-	w.exec(`UPDATE apps SET live_release = 1, live_at = updated_at, draft_differs = 0 WHERE id = ?`, app)
-}
-
 // Installing a template and copying an app make drafts only: nothing is published, no rows,
 // releases or roles of the source come along, and the user's own access decides where.
 func TestTemplatesAndCopiesAreDraftsOnly(t *testing.T) {
