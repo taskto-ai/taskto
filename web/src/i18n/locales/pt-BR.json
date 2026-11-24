@@ -979,6 +979,7 @@
     "session_account_changed": "Este navegador está conectado como uma conta diferente daquela a que estes registros pertencem.",
     "offline_unsupported": "Isto exige conexão. Offline, você pode adicionar registros, alterar ou excluir os baixados e navegar pela cópia baixada.",
     "notification_not_found": "Essa notificação não está disponível.",
+    "notification_email_invalid": "As escolhas de e-mail não são válidas: espera-se um tipo, um modo, uma hora de 0 a 23 e um fuso horário como Europe/Lisbon.",
     "push_endpoint_invalid": "O endereço de push deste navegador não é válido.",
     "push_keys_invalid": "As chaves de push deste navegador não são válidas.",
     "push_too_many_subscriptions": "Você já ativou o push em {max} dispositivos. Desative em um deles primeiro.",
@@ -994,7 +995,10 @@
     "offline_copy_changed": "A cópia deste app neste dispositivo foi substituída durante a verificação. Ela aparece como está agora: revise de novo.",
     "offline_review_again": "O registro mudou de novo nesse meio tempo. Ele aparece como está agora: revise e escolha outra vez.",
     "offline_record_unreadable": "Você não pode mais ler este registro, então sua alteração não pode ser aplicada sobre ele. Você pode manter a versão do servidor ou descartar a alteração.",
-    "offline_record_changed": "Este registro mudou neste dispositivo (em outra aba ou janela) depois que esta tela foi desenhada. Ele aparece como está agora: confira e tente de novo."
+    "offline_record_changed": "Este registro mudou neste dispositivo (em outra aba ou janela) depois que esta tela foi desenhada. Ele aparece como está agora: confira e tente de novo.",
+    "notification_email_verification_invalid": "Esse link de confirmação não funciona: já foi usado, expirou ou foi substituído por um mais novo. Peça um novo em Configurações, Notificações.",
+    "notification_email_verification_too_soon": "Um link foi enviado agora há pouco. Veja sua caixa de entrada ou tente de novo em {seconds} segundos.",
+    "notification_email_verification_unavailable": "Não foi possível enviar o e-mail de confirmação. Tente de novo."
   },
   "language": {
     "label": "Idioma",
@@ -2126,7 +2130,34 @@
       "turnOn": "Ativar o push neste dispositivo",
       "turnOff": "Desativar o push neste dispositivo",
       "turnOffFailed": "O navegador deste dispositivo não encerrou a inscrição de push, então o push continua ativado. Tente de novo.",
-      "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo."
+      "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo.",
+      "emailTitle": "E-mail",
+      "emailIntro": "Opcional. Escolha quais notificações também são enviadas ao seu e-mail, neste espaço de trabalho. Nada é enviado até você escolher.",
+      "emailUnavailable": "O e-mail não está configurado neste servidor, então as notificações não podem ser enviadas por e-mail. Quem administra o servidor pode ativá-lo.",
+      "email": {
+        "card_assigned": "Um cartão foi atribuído a você",
+        "app_effect_failed": "Uma ação de app precisa da sua atenção"
+      },
+      "emailOff": "Não me enviar e-mail",
+      "emailInstant": "Enviar e-mail logo depois",
+      "emailDigest": "Incluir em um resumo diário",
+      "emailHour": "Enviar o resumo diário às",
+      "emailZone": "Fuso horário",
+      "emailCaveat": "Um e-mail diz apenas que algo aconteceu, nunca o que um cartão ou um app contém, e leva de volta ao TaskTo.AI, que verifica o que você pode ver. No máximo 20 são enviados a você por hora, e a caixa de entrada é sempre o registro.",
+      "emailUnavailableOff": "O e-mail não está configurado neste servidor. Você ainda pode desativar o e-mail.",
+      "emailAddress": "As notificações vão para {email}.",
+      "emailAddressVerified": "Este endereço está confirmado.",
+      "emailAddressPending": "Enviamos um link para este endereço. Abra-o para confirmar que é seu: nada é enviado por e-mail até lá.",
+      "emailAddressUnverified": "Este endereço não está confirmado, então nada é enviado por e-mail ainda. Envie um link de confirmação para você.",
+      "emailSendLink": "Enviar o link de confirmação",
+      "emailResendLink": "Enviar o link de novo",
+      "emailLinkSent": "O link foi enviado. Ele funciona uma vez e expira em 24 horas."
+    },
+    "confirmEmail": {
+      "title": "Confirme seu endereço de e-mail",
+      "working": "Confirmando seu endereço…",
+      "done": "Seu endereço está confirmado. As notificações que você escolheu agora podem ser enviadas por e-mail.",
+      "settings": "Abrir as configurações de notificações"
     }
   }
 }

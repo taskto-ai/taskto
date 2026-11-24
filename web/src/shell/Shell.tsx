@@ -21,7 +21,8 @@ import {
   useT,
 } from '../i18n'
 import { KnowledgePage } from '../knowledge/KnowledgePage'
-import { parseNotificationPath } from '../notifications/api'
+import { EMAIL_CONFIRM_PATH, parseNotificationPath } from '../notifications/api'
+import { ConfirmEmail } from '../notifications/ConfirmEmail'
 import { NotificationsPage, OpenNotification } from '../notifications/NotificationsPage'
 import { usePushSync } from '../notifications/usePushSync'
 import { useUnread } from '../notifications/useUnread'
@@ -70,7 +71,11 @@ function rememberWorkspace(id: number) {
 // A push opens /notification/{id}: read as the signed-in person and followed to where it leads,
 // outside the shell, which would take that address for an unknown route.
 export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
-  const opening = parseNotificationPath(usePath())
+  const path = usePath()
+  const opening = parseNotificationPath(path)
+  if (path === EMAIL_CONFIRM_PATH) {
+    return <ConfirmEmail token={window.location.hash.slice(1)} workspace={me.workspaces[0]?.id ?? null} />
+  }
   if (opening !== null) {
     return <OpenNotification id={opening} fallbackWorkspace={me.workspaces[0]?.id ?? null} />
   }

@@ -352,9 +352,13 @@ const (
 
 	// Notifications and Web Push (internal/notifications).
 
-	CodeNotificationNotFound     Code = "notification_not_found"      // 404: not the caller's, or gone
-	CodePushEndpointInvalid      Code = "push_endpoint_invalid"       // 400: a subscription's endpoint isn't an https address of at most 2048 characters
-	CodePushKeysInvalid          Code = "push_keys_invalid"           // 400: a subscription's keys aren't a P-256 key and a 16-byte secret
-	CodePushTooManySubscriptions Code = "push_too_many_subscriptions" // 409: the person has the most devices subscribed; params: max
-	CodePushNoWorkspace          Code = "push_no_workspace"           // 403: push is for people in a workspace, and the caller is in none
+	CodeNotificationNotFound     Code = "notification_not_found"                      // 404: not the caller's, or gone
+	CodePushEndpointInvalid      Code = "push_endpoint_invalid"                       // 400: a subscription's endpoint isn't an https address of at most 2048 characters
+	CodePushKeysInvalid          Code = "push_keys_invalid"                           // 400: a subscription's keys aren't a P-256 key and a 16-byte secret
+	CodePushTooManySubscriptions Code = "push_too_many_subscriptions"                 // 409: the person has the most devices subscribed; params: max
+	CodePushNoWorkspace          Code = "push_no_workspace"                           // 403: push is for people in a workspace, and the caller is in none
+	CodeNotificationEmailInvalid Code = "notification_email_invalid"                  // 400: an unknown kind or mode, an hour outside 0 to 23, or a time zone that isn't an IANA name
+	CodeEmailVerifyInvalid       Code = "notification_email_verification_invalid"     // 400: the confirmation link is unknown, used, expired or for an address the person no longer has
+	CodeEmailVerifyTooSoon       Code = "notification_email_verification_too_soon"    // 429: a link was sent a moment ago; params: seconds to wait
+	CodeEmailVerifyUnavailable   Code = "notification_email_verification_unavailable" // 502: the confirmation mail couldn't be sent
 )

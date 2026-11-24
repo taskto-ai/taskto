@@ -322,6 +322,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `push_keys_invalid` | 400 | A push subscription's `keys` aren't a P-256 public key (`p256dh`) and a 16-byte `auth` secret, base64url. |
 | `push_too_many_subscriptions` | 409 | The caller already has push turned on for `max` devices (a device that changes hands counts for its new person). |
 | `push_no_workspace` | 403 | The caller is in no workspace: push is for people who are in one. |
+| `notification_email_invalid` | 400 | An email choice that isn't one: another kind or mode, an hour outside 0 to 23, or a time zone that isn't an IANA name. |
+| `notification_email_verification_invalid` | 400 | The link that confirms the caller's email address is unknown, used, expired, replaced by a newer one, or for an address the caller no longer has. |
+| `notification_email_verification_too_soon` | 429 | A confirmation link was sent to the caller a moment ago (`Retry-After`; `seconds` says how long to wait). |
+| `notification_email_verification_unavailable` | 502 | The confirmation email couldn't be sent; another may be asked for at once. |
 
 ### Sessions
 
@@ -1694,6 +1698,58 @@ Marks all the caller's notifications of the workspace read. `204`.
 One notification of the caller's, whatever its workspace, as above: the address a push opens,
 `/notification/{id}`, which holds nothing but this ID. `404` (`notification_not_found`) for
 someone else's.
+
+### Notification email
+
+Email is optional, per person and workspace, and off until chosen ([pwa.md](pwa.md#email)). A mail
+carries no record data, only the kind of thing that happened and a link back; the daily summary only
+a count. Nothing is mailed to an address until its owner has confirmed it (below). These routes are
+for the workspace's members, about the caller only.
+
+#### `GET /api/workspaces/{workspace}/notification-email`
+
+`{"available": true, "address": {"email": "ana@example.com", "state": "verified"}, "kinds":
+{"card_assigned": "off", "app_effect_failed": "digest"}, "digest": {"hour": 8, "timezone": "UTC"}}`.
+`available` is false when the server has no SMTP server or no public URL (nothing can be turned on
+then, and everything can still be turned off). `address.state` is `unverified` (no link waits),
+`pending` (a link was sent and may still be opened) or `verified`; nothing is sent unless it is
+`verified`. Each kind is `off`, `instant` (a mail soon after, one for each notification) or `digest`
+(counted in the daily summary, sent at `hour` o'clock, 0 to 23, of the IANA `timezone`; the default
+is 8 o'clock UTC; `chosen` is false until the person has set the time themselves, so a client may
+offer its own zone then and never replaces one they chose).
+
+#### `PUT /api/workspaces/{workspace}/notification-email`
+
+`{"kinds": {"card_assigned": "instant"}, "digest": {"hour": 18, "timezone": "Europe/Lisbon"}}`; both
+fields are optional and what is left out stays. Answers with the new choices, as the GET does. `400
+notification_email_invalid` for another kind or mode, an hour outside 0 to 23 or a time zone that
+isn't an IANA name; `409 mail_not_configured` for turning anything on where `available` is false
+(turning things off always works). Turning something on for an address whose state is `unverified`
+mails it a confirmation link (the choice is kept even if the mail can't be sent: the state says so).
+Choosing `digest` for a kind schedules the person's summary on the
+[general scheduler](../internal/schedule/schedule.go) (job kind `notifications.digest`, one per
+person and workspace). It has no fixed interval: each run schedules the next at the same hour of the
+person's own date, so it keeps its hour through daylight saving time. The summary counts the kind's
+notifications that come after the kind was turned to `digest`, are still unread, are less than 48
+hours old, weren't counted in an earlier summary and that the person may still read: so its number
+can be lower than the inbox's. Having no kind on `digest` ends it,
+and so does leaving the workspace.
+
+#### `POST /api/workspaces/{workspace}/notification-email/verification`
+
+No body. Mails the caller's own address a link to confirm it (`204`), unless it is confirmed
+already (`204`, nothing sent). The link holds a random single-use token that the server keeps only
+as a SHA-256 hash and never logs; it expires after 24 hours, and a newer link replaces it. At most
+one link is sent every 5 minutes (`429 notification_email_verification_too_soon`, with
+`Retry-After`); `409 mail_not_configured` where the server can't send mail; `502
+notification_email_verification_unavailable` when the mail couldn't be sent (the wait isn't used).
+
+#### `POST /api/me/notification-email/confirm`
+
+`{"token": "..."}`, the part of the link after `#`. Confirms the signed-in caller's address, once
+(`204`); a token of someone else's, unknown, used, expired or for an address the caller no longer
+has is `400 notification_email_verification_invalid`. It takes a browser session, not an access
+token. The link opens `/confirm-notification-email` in the web app, which sends it.
 
 ### Web Push
 

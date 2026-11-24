@@ -975,6 +975,7 @@
     "session_account_changed": "This browser is signed in as a different account than the one these records belong to.",
     "offline_unsupported": "This needs a connection. Offline, you can add records, change or delete downloaded ones, and look around the downloaded copy.",
     "notification_not_found": "That notification isn't available.",
+    "notification_email_invalid": "The email choices aren't valid: a kind, a mode, an hour from 0 to 23 and a time zone such as Europe/Lisbon are expected.",
     "push_endpoint_invalid": "This browser's push address isn't valid.",
     "push_keys_invalid": "This browser's push keys aren't valid.",
     "push_too_many_subscriptions": "You already have push turned on for {max} devices. Turn it off on one of them first.",
@@ -990,7 +991,10 @@
     "offline_copy_changed": "The copy of this app on this device was replaced while this was being checked. It is shown as it is now: review it again.",
     "offline_review_again": "The record changed again meanwhile. It is shown as it is now: review it and choose again.",
     "offline_record_unreadable": "You can’t read this record any more, so your change can’t be applied on top of it. You can keep the server’s version or discard your change.",
-    "offline_record_changed": "This record changed on this device (in another tab or window) since this screen was drawn. It is shown as it is now: check it and try again."
+    "offline_record_changed": "This record changed on this device (in another tab or window) since this screen was drawn. It is shown as it is now: check it and try again.",
+    "notification_email_verification_invalid": "That confirmation link doesn't work: it was used, has expired, or was replaced by a newer one. Ask for a new link in Settings, Notifications.",
+    "notification_email_verification_too_soon": "A link was sent a moment ago. Check your inbox, or try again in {seconds} seconds.",
+    "notification_email_verification_unavailable": "The confirmation email couldn't be sent. Try again."
   },
   "language": {
     "label": "Language",
@@ -2106,7 +2110,34 @@
       "turnOn": "Turn on push on this device",
       "turnOff": "Turn off push on this device",
       "turnOffFailed": "This device's browser wouldn't end its push subscription, so push is still on. Try again.",
-      "caveat": "A push says only that something is new, never what it is, and opens the app, which checks what you may see. It can arrive late, or not at all: the inbox is the record. Signing out turns push off on that device."
+      "caveat": "A push says only that something is new, never what it is, and opens the app, which checks what you may see. It can arrive late, or not at all: the inbox is the record. Signing out turns push off on that device.",
+      "emailTitle": "Email",
+      "emailIntro": "Optional. Choose which notifications are also sent to your email address, in this workspace. Nothing is sent until you choose.",
+      "emailUnavailable": "Email isn't set up on this server, so notifications can't be sent by email. The person who runs the server can turn it on.",
+      "email": {
+        "card_assigned": "A card was assigned to you",
+        "app_effect_failed": "An app action needs your attention"
+      },
+      "emailOff": "Don't email me",
+      "emailInstant": "Email me soon after",
+      "emailDigest": "Include in a daily summary",
+      "emailHour": "Send the daily summary at",
+      "emailZone": "Time zone",
+      "emailCaveat": "An email says only that something happened, never what a card or an app holds, and links back to TaskTo.AI, which checks what you may see. At most 20 are sent to you in an hour, and the inbox is always the record.",
+      "emailUnavailableOff": "Email isn't set up on this server. You can still turn email off.",
+      "emailAddress": "Notifications go to {email}.",
+      "emailAddressVerified": "This address is confirmed.",
+      "emailAddressPending": "We sent a link to this address. Open it to confirm that it is yours: nothing is emailed to you until you do.",
+      "emailAddressUnverified": "This address isn't confirmed, so nothing is emailed to you yet. Send yourself a link to confirm it.",
+      "emailSendLink": "Send the confirmation link",
+      "emailResendLink": "Send the link again",
+      "emailLinkSent": "A link was sent. It works once and expires in 24 hours."
+    },
+    "confirmEmail": {
+      "title": "Confirm your email address",
+      "working": "Confirming your address…",
+      "done": "Your address is confirmed. Notifications you chose can now be emailed to you.",
+      "settings": "Open notification settings"
     }
   }
 }
