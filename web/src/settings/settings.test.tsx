@@ -323,6 +323,7 @@ test("an admin's refused reset link says why", async () => {
 
 test('everyone changes their own password with the current one; a wrong one is said, not a sign-out', async () => {
   const calls = fakeFetch({
+    'GET /api/me/two-factor': { body: { enabled: false, recovery_codes_left: 0 } },
     'POST /api/me/password': (call) =>
       (call.body as { current_password: string }).current_password === 'fake-current-password'
         ? { status: 204 }

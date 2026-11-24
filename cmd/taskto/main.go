@@ -305,7 +305,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	if cfg.InsecureCookies {
 		slog.Warn("the session cookie is sent over plain http (insecure_cookies): use this only on localhost")
 	}
-	authOpts := auth.Options{InsecureCookies: cfg.InsecureCookies, TrustedProxies: cfg.TrustedProxyPrefixes(),
+	authOpts := auth.Options{InsecureCookies: cfg.InsecureCookies, TrustedProxies: cfg.TrustedProxyPrefixes(), Key: key,
 		PublicURL: cfg.PublicURL, DisablePasswordLogin: cfg.DisablePasswordLogin}
 	authOpts.SSO = ssoProviders
 	if len(ssoProviders) > 0 {

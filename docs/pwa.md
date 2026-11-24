@@ -247,4 +247,7 @@ per site; what the app adds is the words for each refusal. The server's side che
 asks for its notice to go with copies of the code, so the build writes `assets/THIRD_PARTY_NOTICES.txt`
 (`web/pwa/notices.ts`) from the installed packages' own `LICENSE` files and their versions, and the Apache-2.0 text kept
 in `web/licenses/`, and the server serves it next to the decoder's `.wasm`. The service worker does not precache it.
+The same package's QR writer draws the secret of [two-factor login](api.md#two-factor-login) in Settings (it is loaded
+on that page, from the app's own files); its `.wasm` (about 670 kB) is covered by the same notice and, since turning
+two-factor login on needs the server anyway, the service worker does not precache it.
 A test checks that every notice is in it in full.

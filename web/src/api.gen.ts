@@ -443,6 +443,7 @@ export type Member = {
   name: string
   role: string
   joined_at: string
+  two_factor?: boolean
 }
 
 export type NotificationItem = {

@@ -97,12 +97,17 @@ var (
 var schemas = map[string]map[string]kind{
 	SetupCompleted:       {},
 	LoginSucceeded:       {"method": oneOf("password")},
-	LoginFailed:          {"method": oneOf("password"), "reason": oneOf("unknown_account", "no_password", "wrong_password")},
+	LoginFailed:          {"method": oneOf("password"), "reason": oneOf("unknown_account", "no_password", "wrong_password", "wrong_code")},
 	Logout:               {},
 	PasswordChanged:      {},
 	PasswordChangeFailed: {},
 	PasswordResetCreated: {},
 	PasswordResetUsed:    {},
+
+	TwoFactorEnabled:               {},
+	TwoFactorDisabled:              {},
+	TwoFactorRecoveryCodesReplaced: {},
+	TwoFactorCleared:               {},
 
 	SSOLoginSucceeded: {"provider": tag},
 	SSOLoginFailed:    {"provider": tag, "reason": tag},

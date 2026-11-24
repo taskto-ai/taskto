@@ -520,7 +520,15 @@ export type CardWithThread = Card & { comments: Comment[] }
 
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
 
-export type Member = { id: number; email: string; name: string; role: 'admin' | 'member'; joined_at: string }
+// two_factor is the admins' view only: whether the member has two-factor login on.
+export type Member = {
+  id: number
+  email: string
+  name: string
+  role: 'admin' | 'member'
+  joined_at: string
+  two_factor?: boolean
+}
 // One event of a workspace's audit log, with the names read when the log was (docs/audit.md).
 export type AuditEntry = {
   id: number
