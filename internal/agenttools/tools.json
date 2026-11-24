@@ -93,7 +93,7 @@
   },
   {
     "name": "read_doc",
-    "description": "Read a Markdown document (.md). Long documents come in pieces of 32 KiB: pass \"next_offset\" as \"offset\" for the next piece. \"version\" is what write_doc needs to change it.",
+    "description": "Read a Markdown document (.md) or a plain-text file of up to 1 MiB (code, data, notes: not binaries, and not large files, audio, video or archives), as it is now or, with \"at\", as it was at an older commit (from doc_history). Long files come in pieces of 32 KiB: pass \"next_offset\" as \"offset\" for the next piece. \"version\" is what write_doc needs to change a document (only when read as it is now).",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -110,6 +110,10 @@
         "offset": {
           "type": "integer",
           "minimum": 0
+        },
+        "at": {
+          "type": "string",
+          "description": "a commit from doc_history, to read the file as it was then; leave out for now"
         }
       },
       "required": ["space_id", "path"],
@@ -147,6 +151,138 @@
         }
       },
       "required": ["space_id", "path", "content"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "move_doc",
+    "description": "Rename or move a document, a file or a whole folder in a space the user may write; the destination must not exist. To move a document, pass the version you read as base_version (not for a folder). The change is the user's, made by their agent, and kept in the history.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the path now, like notes/plan.md, or a folder"
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the new path, like archive/plan.md"
+        },
+        "base_version": {
+          "type": "string",
+          "description": "the version from read_doc, to move the document only if it hasn't changed"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "what changed, for the history"
+        }
+      },
+      "required": ["space_id", "from", "to"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "delete_doc",
+    "description": "Delete a document or file (not a folder: delete what is in it) in a space the user may write. Its history stays: doc_history finds it and restore_doc brings it back. Ask the user first unless they asked for it.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "base_version": {
+          "type": "string",
+          "description": "the version from read_doc, to delete the document only if it hasn't changed"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "why, for the history"
+        }
+      },
+      "required": ["space_id", "path"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "doc_history",
+    "description": "List the commits that changed a document, newest first, with who made each (and the agent, if one did), when, its message, what happened to the document (create, update or delete) and its version after. Without a path, the whole space's commits. A commit goes to read_doc as \"at\" and to restore_doc as \"commit\". \"next\" is the \"before\" of the next page. It doesn't follow renames: look for the old path too.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "path": {
+          "type": "string",
+          "description": "the document; leave out for every change in the space"
+        },
+        "before": {
+          "type": "string",
+          "description": "the commit to list the ones before (a page's \"next\")"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "default 20"
+        }
+      },
+      "required": ["space_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "restore_doc",
+    "description": "Make a document what it was at an older commit (from doc_history), as a new commit, in a space the user may write; it also brings back a deleted document. It can't bring back an unversioned file's older versions (large files, audio, video, archives). To restore only if the document hasn't changed, pass the version you read as base_version.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the commit to restore the document from, from doc_history"
+        },
+        "base_version": {
+          "type": "string",
+          "description": "the version from read_doc, to restore only if the document hasn't changed"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "why, for the history"
+        }
+      },
+      "required": ["space_id", "path", "commit"],
       "additionalProperties": false
     }
   },
