@@ -82,6 +82,7 @@ export const SETTINGS_HEADINGS = {
   password: 'Password',
   data: 'Export your data',
   tokens: 'Access tokens',
+  storage: 'Storage',
   about: 'About TaskTo.AI',
 }
 export const SETTINGS_TABS = Object.keys(SETTINGS_HEADINGS)
