@@ -720,6 +720,7 @@
     "http": "The server answered {status}.",
     "internal": "Something went wrong on the server. Try again; if it keeps happening, the server's log says why.",
     "bad_request": "The server refused the request.",
+    "audit_time_invalid": "A date in the filters is outside the years 1000 to 9999.",
     "invalid_json": "The server couldn't read the request.",
     "not_found": "Not found.",
     "cross_origin": "The request was refused: it didn't come from this site.",

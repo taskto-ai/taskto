@@ -724,6 +724,7 @@
     "http": "O servidor respondeu {status}.",
     "internal": "Algo deu errado no servidor. Tente de novo; se continuar acontecendo, o log do servidor diz por quê.",
     "bad_request": "O servidor recusou a solicitação.",
+    "audit_time_invalid": "Uma data nos filtros está fora dos anos 1000 a 9999.",
     "invalid_json": "O servidor não conseguiu ler a solicitação.",
     "not_found": "Não encontrado.",
     "cross_origin": "A solicitação foi recusada: ela não veio deste site.",

@@ -205,3 +205,29 @@ func TestAuditLogDoesNotNameWhoLeft(t *testing.T) {
 		t.Fatalf("a former member's name or email is in the log's reply: %v", body)
 	}
 }
+
+// The log keeps times as text with a four-digit year, so a bound outside the years 1000 to 9999
+// compares wrongly, and the year 1 is the zero time, which would silently drop the bound.
+func TestAuditListRefusesTimeBoundsOutsideTheYears(t *testing.T) {
+	s := newStack(t)
+	for _, q := range []string{
+		"to=" + url.QueryEscape("0001-01-01T00:00:00Z"),
+		"from=" + url.QueryEscape("0001-01-01T00:00:00Z"),
+		"from=" + url.QueryEscape("0999-12-31T23:59:59Z"),
+		"from=" + url.QueryEscape("9999-12-31T23:59:59-05:00"), // 10000-01-01 in UTC
+	} {
+		code, body := s.browser(s.alice.cookie, http.MethodGet, auditPath(s.one, q), nil)
+		if code != http.StatusBadRequest || body["code"] != "audit_time_invalid" {
+			t.Errorf("%s: %d %v", q, code, body)
+		}
+	}
+	// A five-digit year isn't RFC 3339 at all.
+	if code, body := s.browser(s.alice.cookie, http.MethodGet, auditPath(s.one, "to="+url.QueryEscape("10000-01-01T00:00:00Z")), nil); code != http.StatusBadRequest {
+		t.Errorf("year 10000: %d %v", code, body)
+	}
+	for _, q := range []string{"from=" + url.QueryEscape("1000-01-01T00:00:00Z"), "to=" + url.QueryEscape("9999-12-31T23:59:59Z")} {
+		if code, body := s.browser(s.alice.cookie, http.MethodGet, auditPath(s.one, q), nil); code != http.StatusOK {
+			t.Errorf("%s: %d %v", q, code, body)
+		}
+	}
+}

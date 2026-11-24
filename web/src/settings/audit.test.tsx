@@ -157,6 +157,20 @@ test('a date range is sent as the whole days, from the start of the first to the
   expect(last.get('to')).toBe(new Date(2026, 2, 3).toISOString())
 })
 
+test('a day in the years 0 to 99 stays in that year, not in the 1900s', async () => {
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/members': { body: members },
+    'GET /api/workspaces/1/audit?limit=50': { body: { events: [], next: '' } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="audit" />)
+  expect(await screen.findByText('Nothing has been recorded yet.')).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('From'), { target: { value: '0050-03-01' } })
+  await screen.findByText('No events match these filters.').catch(() => undefined)
+  const last = new URL(calls.at(-1)?.path ?? '', 'http://localhost').searchParams
+  const from = new Date(last.get('from') ?? '')
+  expect([from.getFullYear(), from.getMonth(), from.getDate()]).toEqual([50, 2, 1])
+})
+
 test("members don't see the audit log, and don't ask for it", async () => {
   const calls = fakeFetch({})
   render(<SettingsPage me={me} workspace={member} tab="audit" />)

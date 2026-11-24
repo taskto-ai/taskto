@@ -101,7 +101,10 @@ const NONE: Filters = { action: '', actor: '', target: '', from: '', to: '' }
 // A date input's day, from midnight to midnight where the admin is: the server compares times.
 function dayStart(day: string, plus = 0): string {
   const [y, m, d] = day.split('-').map(Number)
-  return new Date(y, m - 1, d + plus).toISOString()
+  // setFullYear, not the constructor: years 0 to 99 are 1900 to 1999 there.
+  const date = new Date(2000, 0, 1)
+  date.setFullYear(y, m - 1, d + plus)
+  return date.toISOString()
 }
 
 function queryOf(f: Filters): string {

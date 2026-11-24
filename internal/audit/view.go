@@ -118,23 +118,16 @@ func parseCursor(c string) (at string, id int64, err error) {
 	return at, id, nil
 }
 
-// ListWorkspace returns one page of the events of workspace, newest first, with the names of
-// the people and things they are about. Only events whose workspace is this one: events of no
-// workspace (logins, password changes, personal provider accounts) belong to users, not to a
-// workspace, and are never in its log. It checks no access: its caller (the admin route) has
-// already decided that the caller administers workspace.
-func ListWorkspace(ctx context.Context, db *sql.DB, workspace int64, q Query) (Page, error) {
-	if workspace <= 0 {
-		return Page{}, ErrNoWorkspace
-	}
-	limit := q.Limit
+// listSQL is the statement of ListWorkspace for q, its arguments and the page size it clamps q.Limit to.
+func listSQL(workspace int64, q Query) (stmt string, args []any, limit int, err error) {
+	limit = q.Limit
 	if limit <= 0 {
 		limit = DefaultPage
 	}
 	limit = min(limit, MaxPage)
 
 	where := `workspace_id = ?`
-	args := []any{workspace}
+	args = []any{workspace}
 	if q.Action != "" {
 		where += ` AND action = ?`
 		args = append(args, q.Action)
@@ -156,15 +149,35 @@ func ListWorkspace(ctx context.Context, db *sql.DB, workspace int64, q Query) (P
 		args = append(args, upToMs(q.To))
 	}
 	if q.Cursor != "" {
-		at, id, err := parseCursor(q.Cursor)
-		if err != nil {
-			return Page{}, err
+		var at string
+		var id int64
+		if at, id, err = parseCursor(q.Cursor); err != nil {
+			return "", nil, 0, err
 		}
-		where += ` AND (at < ? OR (at = ? AND id < ?))`
-		args = append(args, at, at, id)
+		// A row-value comparison, so SQLite seeks the index (workspace_id, at DESC, id DESC) to the
+		// cursor; "at < ? OR (at = ? AND id < ?)" makes it walk the workspace's rows from the newest.
+		where += ` AND (at, id) < (?, ?)`
+		args = append(args, at, id)
 	}
-	rows, err := db.QueryContext(ctx, `SELECT id, at, workspace_id, actor_id, action, target_type, target_id, target_created_at, details, client_addr
-		FROM audit_events WHERE `+where+` ORDER BY at DESC, id DESC LIMIT ?`, append(args, limit+1)...)
+	stmt = `SELECT id, at, workspace_id, actor_id, action, target_type, target_id, target_created_at, details, client_addr
+		FROM audit_events WHERE ` + where + ` ORDER BY at DESC, id DESC LIMIT ?`
+	return stmt, append(args, limit+1), limit, nil
+}
+
+// ListWorkspace returns one page of the events of workspace, newest first, with the names of
+// the people and things they are about. Only events whose workspace is this one: events of no
+// workspace (logins, password changes, personal provider accounts) belong to users, not to a
+// workspace, and are never in its log. It checks no access: its caller (the admin route) has
+// already decided that the caller administers workspace.
+func ListWorkspace(ctx context.Context, db *sql.DB, workspace int64, q Query) (Page, error) {
+	if workspace <= 0 {
+		return Page{}, ErrNoWorkspace
+	}
+	stmt, args, limit, err := listSQL(workspace, q)
+	if err != nil {
+		return Page{}, err
+	}
+	rows, err := db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return Page{}, err
 	}

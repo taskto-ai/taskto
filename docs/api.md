@@ -115,6 +115,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `home_limit` | 409 | A person has at most `max` widgets (or pins) in a workspace, and a space at most `max` default widgets (or pins). |
 | `home_order_invalid` | 400 | The ids to put in order aren't all the caller's own placements of that kind, or one is listed twice. |
 | `home_defaults_shared` | 409 | Defaults are only for the apps of shared spaces. |
+| `audit_time_invalid` | 400 | The audit log's `from` or `to` is outside the years 1000 to 9999. |
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
 | `app_migration_invalid` | 400 | An acknowledgement that is malformed: an unknown `change`, a field that is no name, or one twice. |
@@ -787,11 +788,11 @@ Query, all optional:
 | `action` | one action code, such as `member_removed` ([the list](audit.md#what-is-recorded)) |
 | `actor` | the id of the user who did it |
 | `target_type` | `user`, `workspace`, `invite`, `space`, `access_token`, `provider_account` or `shared_cli_account` |
-| `from`, `to` | RFC 3339 times; `from` is included, `to` is not |
+| `from`, `to` | RFC 3339 times in the years 1000 to 9999; `from` is included, `to` is not |
 | `limit` | the page size, 1 to 200; 50 if omitted |
 | `cursor` | the `next` of the previous page |
 
-An unknown action or target type, or a malformed value, is `400 bad_request`.
+An unknown action or target type, or a malformed value, is `400 bad_request`; a `from` or `to` outside the years 1000 to 9999 is `400 audit_time_invalid`.
 
 ```json
 {

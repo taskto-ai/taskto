@@ -3,8 +3,10 @@ package audit_test
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -246,5 +248,75 @@ func TestListWorkspaceBoundsWithFinerDigitsKeepMillisecondEvents(t *testing.T) {
 	exact := bound.Add(-500 * time.Microsecond)
 	if count(audit.Query{From: exact}) != 1 || count(audit.Query{To: exact}) != 0 {
 		t.Error("a bound at the event's own millisecond is from-inclusive, to-exclusive")
+	}
+}
+
+// The cursor is a row-value comparison on the index's own order, so an older page seeks to the
+// cursor instead of walking the workspace's events from the newest.
+func TestListWorkspaceCursorSeeksTheIndex(t *testing.T) {
+	d := open(t)
+	ws := exec(t, d, `INSERT INTO workspaces (name) VALUES ('Home')`)
+	for i := range 20 {
+		event(t, d, ws, 0, fmt.Sprintf("2026-01-%02dT00:00:00.000Z", i+1), audit.SpaceCreated)
+	}
+	cursor := base64.RawURLEncoding.EncodeToString([]byte("2026-01-10T00:00:00.000Z|10"))
+	stmt, args, err := audit.ListSQL(ws, audit.Query{Cursor: cursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := d.Query("EXPLAIN QUERY PLAN "+stmt, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(plan, "; ")
+	if !strings.Contains(all, "USING INDEX audit_events_by_workspace (workspace_id=? AND at<?)") &&
+		!strings.Contains(all, "USING INDEX audit_events_by_workspace (workspace_id=? AND at<? AND at>?)") {
+		t.Fatalf("the cursor doesn't bound the index on at: %s", all)
+	}
+}
+
+func TestListWorkspaceCursorBreaksTiesById(t *testing.T) {
+	d := open(t)
+	ws := exec(t, d, `INSERT INTO workspaces (name) VALUES ('Home')`)
+	var ids []int64
+	for range 3 {
+		ids = append(ids, event(t, d, ws, 0, "2026-01-01T00:00:00.000Z", audit.SpaceCreated))
+	}
+	older := event(t, d, ws, 0, "2025-12-31T00:00:00.000Z", audit.SpaceCreated)
+	newer := event(t, d, ws, 0, "2026-01-02T00:00:00.000Z", audit.SpaceCreated)
+
+	// Pages of one event each: the three at one instant come by descending id, between the
+	// newer and the older, none skipped or repeated.
+	var got []int64
+	cursor := ""
+	for range 10 {
+		page, err := audit.ListWorkspace(context.Background(), d, ws, audit.Query{Limit: 1, Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range page.Events {
+			got = append(got, e.ID)
+		}
+		if page.Next == "" {
+			break
+		}
+		cursor = page.Next
+	}
+	want := []int64{newer, ids[2], ids[1], ids[0], older}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("paged %v, want %v", got, want)
 	}
 }

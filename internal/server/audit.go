@@ -31,9 +31,9 @@ func auditList(sqlDB *sql.DB) http.Handler {
 			apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "internal error")
 			return
 		}
-		q, msg := auditQuery(r.URL.Query())
+		q, code, msg := auditQuery(r.URL.Query())
 		if msg != "" {
-			apierr.Write(w, http.StatusBadRequest, apierr.CodeBadRequest, msg)
+			apierr.Write(w, http.StatusBadRequest, code, msg)
 			return
 		}
 		page, err := audit.ListWorkspace(r.Context(), sqlDB, m.WorkspaceID, q)
@@ -55,41 +55,58 @@ func auditList(sqlDB *sql.DB) http.Handler {
 }
 
 // auditQuery reads the filters of the list; msg says what is wrong with them, if anything.
-func auditQuery(v url.Values) (q audit.Query, msg string) {
+func auditQuery(v url.Values) (q audit.Query, code apierr.Code, msg string) {
+	code = apierr.CodeBadRequest
 	q.Action, q.TargetType, q.Cursor = v.Get("action"), v.Get("target_type"), v.Get("cursor")
 	if q.Action != "" && !audit.KnownAction(q.Action) {
-		return q, "action isn't an action of the log"
+		return q, code, "action isn't an action of the log"
 	}
 	if q.TargetType != "" && !audit.KnownTarget(q.TargetType) {
-		return q, "target_type isn't a kind of object the log records"
+		return q, code, "target_type isn't a kind of object the log records"
 	}
 	if s := v.Get("actor"); s != "" {
 		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil || n <= 0 {
-			return q, "actor isn't a user id"
+			return q, code, "actor isn't a user id"
 		}
 		q.Actor = n
 	}
 	if s := v.Get("limit"); s != "" {
 		n, err := strconv.Atoi(s)
 		if err != nil || n < 1 || n > audit.MaxPage {
-			return q, "limit is a number from 1 to " + strconv.Itoa(audit.MaxPage)
+			return q, code, "limit is a number from 1 to " + strconv.Itoa(audit.MaxPage)
 		}
 		q.Limit = n
 	}
 	var err error
-	if q.From, err = optionalTime(v.Get("from")); err != nil {
-		return q, "from isn't a time in RFC 3339"
+	if q.From, err = optionalTime(v.Get("from")); errors.Is(err, errTimeRange) {
+		return q, apierr.CodeAuditTimeInvalid, "from is outside the years 1000 to 9999"
+	} else if err != nil {
+		return q, code, "from isn't a time in RFC 3339"
 	}
-	if q.To, err = optionalTime(v.Get("to")); err != nil {
-		return q, "to isn't a time in RFC 3339"
+	if q.To, err = optionalTime(v.Get("to")); errors.Is(err, errTimeRange) {
+		return q, apierr.CodeAuditTimeInvalid, "to is outside the years 1000 to 9999"
+	} else if err != nil {
+		return q, code, "to isn't a time in RFC 3339"
 	}
-	return q, ""
+	return q, code, ""
 }
 
+var errTimeRange = errors.New("audit: a time bound outside the years 1000 to 9999")
+
+// optionalTime reads a time bound; "" is no bound. The log stores times as text with a four-digit
+// year, which compares as time only within the years 1000 to 9999, and the zero time (the year
+// 1) means "no bound" to audit.Query, so a bound outside those years is refused, not guessed.
 func optionalTime(s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil
 	}
-	return time.Parse(time.RFC3339, s)
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if y := t.UTC().Year(); y < 1000 || y > 9999 {
+		return time.Time{}, errTimeRange
+	}
+	return t, nil
 }
