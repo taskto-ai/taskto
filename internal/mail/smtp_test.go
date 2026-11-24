@@ -365,6 +365,19 @@ func TestTheRelaysReplyTextIsNeverKept(t *testing.T) {
 		err := s.sender(SMTPConfig{Username: "taskto-user", Password: secret}).Send(ctx(t), hello)
 		check(t, err, StageAuth, 535, secret, "taskto-user")
 	})
+	t.Run("a reply that is not a reply", func(t *testing.T) {
+		s := newFakeSMTP(t, false)
+		s.User, s.Pass, s.MalformedAuth = "taskto-user", "right", true
+		err := s.sender(SMTPConfig{Username: "taskto-user", Password: secret}).Send(ctx(t), hello)
+		var se *SendError
+		if !errors.As(err, &se) || se.Stage != StageAuth {
+			t.Fatalf("err = %v, want a sign-in failure", err)
+		}
+		var pe textproto.ProtocolError
+		if errors.As(err, &pe) || strings.Contains(err.Error(), secret) || strings.Contains(fmtV(err), secret) {
+			t.Fatalf("the error holds the relay's line: %v", err)
+		}
+	})
 	t.Run("recipient", func(t *testing.T) {
 		s := newFakeSMTP(t, false)
 		s.RejectRcpt = "550 5.1.1 no such user ana@example.com " + secret

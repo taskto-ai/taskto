@@ -30,13 +30,14 @@ type fakeSMTP struct {
 	implicit bool // TLS from the first byte
 
 	// What it offers and does; set before the first connection.
-	NoSTARTTLS bool
-	AuthMechs  string // "PLAIN LOGIN" by default; "-" for none
-	User, Pass string // the only sign-in it accepts; empty accepts none
-	RejectRcpt string // a reply for RCPT, such as "550 5.1.1 no such user"
-	RejectData string // a reply after the message, such as "554 5.7.1 spam"
-	Hang       bool   // accept the connection and say nothing
-	EchoAuth   bool   // a refused sign-in's reply repeats the user name and the password, as a careless relay can
+	NoSTARTTLS    bool
+	AuthMechs     string // "PLAIN LOGIN" by default; "-" for none
+	User, Pass    string // the only sign-in it accepts; empty accepts none
+	RejectRcpt    string // a reply for RCPT, such as "550 5.1.1 no such user"
+	RejectData    string // a reply after the message, such as "554 5.7.1 spam"
+	Hang          bool   // accept the connection and say nothing
+	MalformedAuth bool   // the reply to a refused sign-in isn't a valid reply, and holds the password
+	EchoAuth      bool   // a refused sign-in's reply repeats the user name and the password, as a careless relay can
 
 	start    sync.Once // the server starts with its first sender: set the fields before
 	mu       sync.Mutex
@@ -211,7 +212,9 @@ func (s *fakeSMTP) handle(conn net.Conn) {
 				authed = user
 				reply("235 2.7.0 welcome")
 			} else {
-				if s.EchoAuth {
+				if s.MalformedAuth {
+					reply("535x password=%s", pass)
+				} else if s.EchoAuth {
 					reply("535 5.7.8 credentials refused for %s with password %s", user, pass)
 				} else {
 					reply("535 5.7.8 credentials refused")

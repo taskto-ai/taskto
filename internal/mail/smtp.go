@@ -294,6 +294,12 @@ func failed(ctx context.Context, stage Stage, err error) *SendError {
 		e.Err = fmt.Errorf("the server replied %d", tp.Code)
 		return e
 	}
+	// A reply that isn't one (no code, or a code and no space) comes back with its whole line.
+	var pe textproto.ProtocolError
+	if errors.As(err, &pe) {
+		e.Err = errors.New("the server's reply was malformed")
+		return e
+	}
 	if ctx.Err() != nil {
 		e.Err = fmt.Errorf("%w (%w)", err, ctx.Err())
 	}

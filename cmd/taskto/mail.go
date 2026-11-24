@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -38,7 +39,9 @@ func loadMail(cfg config.Config, unsetenv func(string) error) (*mail.Service, er
 		}
 		password = strings.TrimRight(string(raw), "\r\n")
 		if password == "" {
-			return nil, fmt.Errorf("smtp password file %s is empty", cfg.SMTPPasswordFile)
+			// Not the path: the setting is named, and a value of a setting that holds a
+			// password's place never goes into a log line or an error.
+			return nil, errors.New("the smtp password file (smtp_password_file) is empty")
 		}
 	}
 	sender, err := mail.NewSMTP(mail.SMTPConfig{
