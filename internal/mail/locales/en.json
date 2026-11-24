@@ -35,6 +35,15 @@
         "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
       ],
       "action": "Open the notification"
+    },
+    "verify_email": {
+      "subject": "Confirm your email address for TaskTo.AI notifications",
+      "title": "Confirm your email address",
+      "paragraphs": [
+        "You asked TaskTo.AI to email notifications to this address. Open the link to confirm that it is yours: until you do, nothing is sent.",
+        "The link works once and expires in {hours} hours. If you didn't ask for this, ignore this message and nothing will be sent."
+      ],
+      "action": "Confirm this address"
     }
   }
 }

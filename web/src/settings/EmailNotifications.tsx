@@ -6,7 +6,14 @@ import { useMemo, useState } from 'react'
 import { api } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { EMAIL_KINDS, type EmailChoices, type EmailKind, type EmailMode, emailPath } from '../notifications/api'
+import {
+  EMAIL_KINDS,
+  type EmailChoices,
+  type EmailKind,
+  type EmailMode,
+  emailPath,
+  emailVerificationPath,
+} from '../notifications/api'
 import { Alert, useAction } from './parts'
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
@@ -53,6 +60,18 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
     void save({ kinds: { [kind]: mode }, digest })
   }
 
+  const [linkSent, setLinkSent] = useState(false)
+  const sendLink = async () => {
+    setLinkSent(false)
+    const ok = await action.run(async () => {
+      await api(emailVerificationPath(workspace), { method: 'POST', body: {} })
+      // The state is "waiting for the link" now.
+      setSaved(await api<EmailChoices>(emailPath(workspace)))
+    })
+    setLinkSent(ok)
+  }
+
+  const anyOn = choices ? EMAIL_KINDS.some((k) => choices.kinds[k] !== 'off') : false
   const usesDigest = choices ? EMAIL_KINDS.some((k) => choices.kinds[k] === 'digest') : false
 
   return (
@@ -61,8 +80,12 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
       <p className="tt-muted tt-small">{t('notifications.settings.emailIntro')}</p>
       {!choices && !loaded.error && <p className="tt-muted">{t('app.loading')}</p>}
       <Alert error={loaded.error} />
-      {choices && !choices.available && <p role="status">{t('notifications.settings.emailUnavailable')}</p>}
-      {choices?.available && (
+      {choices && !choices.available && (
+        <p role="status">
+          {t(anyOn ? 'notifications.settings.emailUnavailableOff' : 'notifications.settings.emailUnavailable')}
+        </p>
+      )}
+      {choices && (choices.available || anyOn) && (
         <>
           <ul className="tt-list">
             {EMAIL_KINDS.map((kind) => (
@@ -75,14 +98,36 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
                     onChange={(e) => setKind(kind, e.target.value as EmailMode)}
                   >
                     <option value="off">{t('notifications.settings.emailOff')}</option>
-                    <option value="instant">{t('notifications.settings.emailInstant')}</option>
-                    <option value="digest">{t('notifications.settings.emailDigest')}</option>
+                    <option value="instant" disabled={!choices.available}>
+                      {t('notifications.settings.emailInstant')}
+                    </option>
+                    <option value="digest" disabled={!choices.available}>
+                      {t('notifications.settings.emailDigest')}
+                    </option>
                   </select>
                 </label>
               </li>
             ))}
           </ul>
-          {usesDigest && (
+          {choices.available && (
+            <div className="tt-field">
+              <p className="tt-small">
+                {t('notifications.settings.emailAddress', { email: choices.address.email })}{' '}
+                {choices.address.state === 'verified' && t('notifications.settings.emailAddressVerified')}
+                {choices.address.state === 'pending' && t('notifications.settings.emailAddressPending')}
+                {choices.address.state === 'unverified' && t('notifications.settings.emailAddressUnverified')}
+              </p>
+              {choices.address.state !== 'verified' && (
+                <button type="button" className="tt-button" disabled={action.busy} onClick={() => void sendLink()}>
+                  {choices.address.state === 'pending'
+                    ? t('notifications.settings.emailResendLink')
+                    : t('notifications.settings.emailSendLink')}
+                </button>
+              )}
+              {linkSent && <p role="status">{t('notifications.settings.emailLinkSent')}</p>}
+            </div>
+          )}
+          {usesDigest && choices.available && (
             <div className="tt-inline-field">
               <label>
                 {t('notifications.settings.emailHour')}

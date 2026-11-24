@@ -446,7 +446,8 @@ words. The test is limited to one a person every 30 seconds, and three at once o
 for [single sign-on](sso.md); the links in a mail go there), people can choose in Settings →
 Notifications to be emailed about a kind of notification as it happens, or in one summary a day. It
 is off for everyone until they choose, and a mail says only what happened and links back, never what
-a card or an app holds ([pwa.md](pwa.md#email)). Without the SMTP server or the public URL the
+a card or an app holds ([pwa.md](pwa.md#email)). Before the first notification mail to an address,
+its owner opens a confirmation link sent to it. Without the SMTP server or the public URL the
 choices say so and nothing is sent.
 
 Messages are plain text with a simple HTML alternative, translated into the recipient's language

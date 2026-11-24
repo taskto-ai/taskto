@@ -591,6 +591,7 @@ test('opening the app signed in with no workspace registers nothing', async () =
 
 const emailChoices = (over: Record<string, unknown> = {}) => ({
   available: true,
+  address: { email: 'owner@example.com', state: 'verified' },
   kinds: { card_assigned: 'off', app_effect_failed: 'off' },
   digest: { hour: 8, timezone: 'UTC' },
   ...over,
@@ -640,4 +641,78 @@ test('where the server can not send mail, email says so and offers nothing', asy
   render(<NotificationsTab me={1} workspace={1} />)
   await screen.findByText(/Email isn't set up on this server/)
   expect(screen.queryByLabelText('A card was assigned to you')).toBeNull()
+})
+
+test('email that is on can be turned off where the server can no longer send mail', async () => {
+  pushBrowser({ permission: 'denied' })
+  let saved = emailChoices({ available: false, kinds: { card_assigned: 'instant', app_effect_failed: 'off' } })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
+    'PUT /api/workspaces/1/notification-email': (call) => {
+      saved = { ...saved, kinds: { ...saved.kinds, ...(call.body as { kinds: object }).kinds } } as typeof saved
+      return { body: saved }
+    },
+  })
+  render(<NotificationsTab me={1} workspace={1} />)
+  await screen.findByText(/You can still turn email off/)
+  const assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
+  expect(assigned.value).toBe('instant')
+  // Nothing can be turned on, and off is still there.
+  const options = within(assigned).getAllByRole('option') as HTMLOptionElement[]
+  expect(options.filter((o) => o.disabled).map((o) => o.value)).toEqual(['instant', 'digest'])
+  fireEvent.change(assigned, { target: { value: 'off' } })
+  // With nothing on there is nothing left to turn off: the panel says email can't be set up.
+  await screen.findByText(/so notifications can't be sent by email/)
+  expect(screen.queryByLabelText('A card was assigned to you')).toBeNull()
+  expect(calls.filter((c) => c.method === 'PUT').map((c) => c.body)).toEqual([{ kinds: { card_assigned: 'off' } }])
+})
+
+test('the panel says whether the address is confirmed and sends the link', async () => {
+  pushBrowser({ permission: 'denied' })
+  let saved = emailChoices({
+    address: { email: 'owner@example.com', state: 'unverified' },
+    kinds: { card_assigned: 'instant', app_effect_failed: 'off' },
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
+    'POST /api/workspaces/1/notification-email/verification': () => {
+      saved = { ...saved, address: { email: 'owner@example.com', state: 'pending' } }
+      return { status: 204 }
+    },
+  })
+  render(<NotificationsTab me={1} workspace={1} />)
+  await screen.findByText(/This address isn't confirmed/)
+  expect(screen.getByText(/Notifications go to owner@example.com/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Send the confirmation link' }))
+  await screen.findByText(/We sent a link to this address/)
+  await screen.findByText(/A link was sent/)
+  expect(calls.some((c) => c.method === 'POST' && c.path.endsWith('/notification-email/verification'))).toBe(true)
+  expect(screen.getByRole('button', { name: 'Send the link again' })).toBeTruthy()
+})
+
+test('a confirmation link confirms the signed-in address once and clears the token from the address bar', async () => {
+  window.history.replaceState(null, '', '/confirm-notification-email#abc_DEF-123')
+  const calls = fakeFetch({
+    'GET /api/me': { body: me },
+    'POST /api/me/notification-email/confirm': { status: 204 },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByText(/Your address is confirmed/)
+  expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([{ token: 'abc_DEF-123' }])
+  expect(window.location.hash).toBe('')
+  expect(screen.getByRole('link', { name: 'Open notification settings' }).getAttribute('href')).toBe(
+    '/w/1/settings/notifications',
+  )
+})
+
+test('a confirmation link that does not work says why', async () => {
+  window.history.replaceState(null, '', '/confirm-notification-email#used')
+  fakeFetch({
+    'POST /api/me/notification-email/confirm': {
+      status: 400,
+      body: { error: 'x', code: 'notification_email_verification_invalid' },
+    },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByText(/That confirmation link doesn't work/)
 })

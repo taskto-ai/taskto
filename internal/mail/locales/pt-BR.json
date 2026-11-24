@@ -35,6 +35,15 @@
         "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
       ],
       "action": "Abrir a notificação"
+    },
+    "verify_email": {
+      "subject": "Confirme seu endereço de e-mail para as notificações do TaskTo.AI",
+      "title": "Confirme seu endereço de e-mail",
+      "paragraphs": [
+        "Você pediu ao TaskTo.AI que envie notificações por e-mail para este endereço. Abra o link para confirmar que ele é seu: até lá, nada é enviado.",
+        "O link funciona uma vez e expira em {hours} horas. Se você não pediu isto, ignore esta mensagem e nada será enviado."
+      ],
+      "action": "Confirmar este endereço"
     }
   }
 }

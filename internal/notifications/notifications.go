@@ -129,12 +129,17 @@ func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
 		SELECT ?, id, ?, ? FROM push_subscriptions WHERE user_id = ?`, id, at, at, n.UserID); err != nil {
 		return err
 	}
-	// And a mail, if the person chose to have this kind mailed as it happens.
+	// And a mail, if the person chose to have this kind mailed as it happens and has confirmed the
+	// address it would go to (it is checked again when the mail is sent).
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO email_deliveries (notification_id, next_attempt_at, updated_at)
 		SELECT ?, ?, ? WHERE EXISTS (
 			SELECT 1 FROM notification_email_prefs
-			WHERE user_id = ? AND workspace_id = ? AND kind = ? AND mode = 'instant')`, id, at, at, n.UserID, n.WorkspaceID, n.Kind)
+			WHERE user_id = ? AND workspace_id = ? AND kind = ? AND mode = 'instant')
+		AND EXISTS (
+			SELECT 1 FROM notification_email_verification v JOIN users u ON u.id = v.user_id
+			WHERE v.user_id = ? AND v.verified_at IS NOT NULL AND v.address = u.email)`,
+		id, at, at, n.UserID, n.WorkspaceID, n.Kind, n.UserID)
 	return err
 }
 
@@ -181,6 +186,9 @@ type Service struct {
 	sched     *schedule.Service
 	// tidyEvery is how often the worker tidies; a field for tests.
 	tidyEvery time.Duration
+	// afterReserve runs between a mail's place in the ledger being reserved and the last check
+	// before it is submitted; a field for tests, which change the world in that gap.
+	afterReserve func()
 }
 
 // New returns the service over a migrated database, making the server's VAPID key pair if it has

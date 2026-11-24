@@ -37,9 +37,16 @@ export const INBOX_CHANGED = 'taskto:inbox-changed'
 export type EmailMode = 'off' | 'instant' | 'digest'
 export type EmailKind = 'card_assigned' | 'app_effect_failed'
 export const EMAIL_KINDS: EmailKind[] = ['card_assigned', 'app_effect_failed']
+export type EmailAddress = { email: string; state: 'unverified' | 'pending' | 'verified' }
 export type EmailChoices = {
   available: boolean
+  address: EmailAddress
   kinds: Record<EmailKind, EmailMode>
   digest: { hour: number; timezone: string }
 }
 export const emailPath = (workspace: number) => `${ws(workspace)}/notification-email`
+export const emailVerificationPath = (workspace: number) => `${emailPath(workspace)}/verification`
+export const EMAIL_CONFIRM_API = '/api/me/notification-email/confirm'
+
+/** The address in a confirmation mail's link: the token follows it, after `#`, so no log has it. */
+export const EMAIL_CONFIRM_PATH = '/confirm-notification-email'

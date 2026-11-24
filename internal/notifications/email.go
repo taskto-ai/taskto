@@ -19,10 +19,32 @@ import (
 // is off for everyone until they choose, in a workspace, for each kind of notification:
 //
 //   - instant: a mail soon after the notification is made, one for each (email_deliveries, sent by
-//     the push worker's loop with bounded tries);
+//     the email worker, a loop of its own so a slow SMTP server can't hold back a push);
 //   - digest: one mail a day, at the hour of the person's own time zone, that counts what
 //     happened since the last one (the general scheduler's job KindDigest, one per person and
-//     workspace).
+//     workspace; each run schedules the next from the local date, so daylight saving time
+//     moves nothing).
+//
+// # At most once
+//
+// A mail that went out twice is worse than one that never did, since the inbox has it either way.
+// Before a message is submitted to the relay, the attempt is written to the ledger
+// (notification_email_ledger) under a key that names what it is for: the notification for an
+// instant mail, the job's occurrence (schedule.Job.Occurrence) for a summary. A key with a row is
+// never submitted again, except when the relay definitely refused it before taking it (a reply
+// code, a refused connection or sign-in): then and only then a later try may send it. When the
+// outcome is unknown (the process stopped with the attempt written and no result, or the
+// connection was lost after the message was sent: mail.SendError.Ambiguous) the mail is counted
+// as sent and never sent again. The same ledger is what the hourly limit counts, so the limit
+// holds for concurrent workers and survives the notifications it counted being deleted.
+//
+// What may be mailed is checked again at the last point before the submission that can still
+// cancel it: the person's choice, their address's confirmation, their membership, their access to
+// what the notification is about and, for a summary, that the job is still this occurrence.
+//
+// # Confirmed addresses
+//
+// Nothing is mailed to an address until its owner has confirmed it (emailverify.go).
 //
 // A mail says what a push says and no more: the kind of thing that happened, in the person's
 // language, and a link back to the app. It never holds a title, a name, a comment or an ID of a
@@ -60,6 +82,9 @@ const (
 	emailSendTimeout  = 30 * time.Second
 	emailBackoffBase  = time.Minute
 	emailBackoffMax   = time.Hour
+	// digestTries is how many times a run of the summary is tried when sending it fails for a reason
+	// that may pass; after them what is waiting is left for the next summary.
+	digestTries = 3
 )
 
 // EmailKinds are the kinds a person may choose email for.
@@ -80,6 +105,9 @@ func emailKind(kind string) bool {
 type EmailChoices struct {
 	// Available says whether the server can send mail at all, and links back to itself.
 	Available bool `json:"available"`
+	// Address is where mail would go and whether its owner has confirmed it: nothing is sent
+	// before.
+	Address EmailAddress `json:"address"`
 	// Kinds says each kind's mode: off, instant or digest.
 	Kinds  map[string]string `json:"kinds"`
 	Digest EmailDigest       `json:"digest"`
@@ -124,6 +152,10 @@ func (s *Service) EmailChoices(ctx context.Context, userID, workspaceID int64) (
 	for _, k := range EmailKinds() {
 		out.Kinds[k] = ModeOff
 	}
+	var err error
+	if out.Address, err = s.addressOf(ctx, s.db, userID); err != nil {
+		return EmailChoices{}, err
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT kind, mode FROM notification_email_prefs WHERE user_id = ? AND workspace_id = ?`, userID, workspaceID)
 	if err != nil {
 		return EmailChoices{}, err
@@ -151,14 +183,20 @@ func (s *Service) EmailChoices(ctx context.Context, userID, workspaceID int64) (
 
 // SetEmailChoices changes what userID chose in the workspace, and schedules (or ends) the daily
 // summary to match. Turning anything on needs a server that can send mail (ErrEmailUnavailable);
-// turning things off never does. The caller has checked that userID is a member.
+// turning things off never does. The first time anything is turned on for an address that isn't
+// confirmed, a link to confirm it is mailed (emailverify.go), and nothing else is sent until it is
+// opened. The caller has checked that userID is a member.
 func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64, u EmailUpdate) error {
+	turnsOn := false
 	for kind, mode := range u.Kinds {
 		if !emailKind(kind) || (mode != ModeOff && mode != ModeInstant && mode != ModeDigest) {
 			return fmt.Errorf("%w: a kind is one of %s and its mode off, instant or digest", ErrEmailInvalid, strings.Join(EmailKinds(), ", "))
 		}
-		if mode != ModeOff && !s.emailReady() {
-			return ErrEmailUnavailable
+		if mode != ModeOff {
+			if !s.emailReady() {
+				return ErrEmailUnavailable
+			}
+			turnsOn = true
 		}
 	}
 	if d := u.Digest; d != nil {
@@ -169,32 +207,33 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 			return fmt.Errorf("%w: the time zone is an IANA name such as Europe/Lisbon", ErrEmailInvalid)
 		}
 	}
-	return s.write(ctx, func(tx *sql.Tx) error {
-		had, err := s.usesDigest(ctx, tx, userID, workspaceID)
-		if err != nil {
-			return err
-		}
+	err := s.write(ctx, func(tx *sql.Tx) error {
 		for kind, mode := range u.Kinds {
+			var err error
 			if mode == ModeOff {
 				_, err = tx.ExecContext(ctx, `DELETE FROM notification_email_prefs WHERE user_id = ? AND workspace_id = ? AND kind = ?`, userID, workspaceID, kind)
 			} else {
+				// since is where the notifications are when a kind turns to a summary: it counts what
+				// comes after, never what was already there or was mailed as it happened.
 				_, err = tx.ExecContext(ctx, `
-					INSERT INTO notification_email_prefs (user_id, workspace_id, kind, mode) VALUES (?, ?, ?, ?)
-					ON CONFLICT (user_id, workspace_id, kind) DO UPDATE SET mode = excluded.mode`, userID, workspaceID, kind, mode)
+					INSERT INTO notification_email_prefs (user_id, workspace_id, kind, mode, since)
+					VALUES (?, ?, ?, ?, (SELECT coalesce(max(id), 0) FROM notifications WHERE user_id = ? AND workspace_id = ?))
+					ON CONFLICT (user_id, workspace_id, kind) DO UPDATE SET mode = excluded.mode,
+						since = CASE WHEN notification_email_prefs.mode = 'digest' AND excluded.mode = 'digest'
+							THEN notification_email_prefs.since ELSE excluded.since END`,
+					userID, workspaceID, kind, mode, userID, workspaceID)
 			}
 			if err != nil {
 				return err
 			}
 		}
-		// A summary counts what comes after the choice: the cursor is where the notifications are now.
 		hour, zone := DefaultDigestHour, DefaultTimezone
 		if u.Digest != nil {
 			hour, zone = u.Digest.Hour, u.Digest.Timezone
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO notification_email_settings (user_id, workspace_id, digest_hour, timezone, digest_cursor)
-			VALUES (?, ?, ?, ?, (SELECT coalesce(max(id), 0) FROM notifications WHERE user_id = ? AND workspace_id = ?))
-			ON CONFLICT (user_id, workspace_id) DO NOTHING`, userID, workspaceID, hour, zone, userID, workspaceID); err != nil {
+			VALUES (?, ?, ?, ?, 0) ON CONFLICT (user_id, workspace_id) DO NOTHING`, userID, workspaceID, hour, zone); err != nil {
 			return err
 		}
 		if u.Digest != nil {
@@ -203,20 +242,12 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 				return err
 			}
 		}
+		if s.sched == nil {
+			return nil
+		}
 		now, err := s.usesDigest(ctx, tx, userID, workspaceID)
 		if err != nil {
 			return err
-		}
-		if now && !had {
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE notification_email_settings
-				SET digest_cursor = (SELECT coalesce(max(id), 0) FROM notifications WHERE user_id = ? AND workspace_id = ?)
-				WHERE user_id = ? AND workspace_id = ?`, userID, workspaceID, userID, workspaceID); err != nil {
-				return err
-			}
-		}
-		if s.sched == nil {
-			return nil
 		}
 		if !now {
 			_, err := s.sched.Cancel(ctx, tx, userID, KindDigest, digestKey(workspaceID))
@@ -225,23 +256,47 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 			}
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT digest_hour, timezone FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
-			userID, workspaceID).Scan(&hour, &zone); err != nil {
-			return err
-		}
-		at, err := loadZone(zone)
-		if err != nil {
-			return err
-		}
-		_, err = s.sched.Reschedule(ctx, tx, schedule.Job{
-			Kind: KindDigest, UserID: userID, WorkspaceID: workspaceID, DedupeKey: digestKey(workspaceID),
-			RunAt: nextDigest(s.clock(), hour, at), Every: 24 * time.Hour,
-		})
-		return err
+		return s.scheduleDigest(ctx, tx, userID, workspaceID)
 	})
+	if err != nil || !turnsOn {
+		return err
+	}
+	// The first choice for an address that isn't confirmed sends the link that confirms it. A link
+	// that can't be sent doesn't undo the choice: the settings say the address is unconfirmed, and
+	// ask for another.
+	if a, err := s.addressOf(ctx, s.db, userID); err == nil && a.State == AddressUnverified {
+		if err := s.SendVerification(ctx, userID, workspaceID); err != nil {
+			var soon *TooSoonError
+			if !errors.As(err, &soon) {
+				slog.Warn("notifications: no confirmation link was sent", "err", err)
+			}
+		}
+	}
+	return nil
 }
 
 func digestKey(workspaceID int64) string { return "workspace:" + strconv.FormatInt(workspaceID, 10) }
+
+// scheduleDigest sets the person's summary to run at the next hour o'clock of their own time zone.
+// There is one job and no fixed interval: each run schedules the next (nextDigestRun) from the local
+// date, so the summary stays at the hour across the change to and from daylight saving time.
+func (s *Service) scheduleDigest(ctx context.Context, q schedule.DBTX, userID, workspaceID int64) error {
+	var hour int
+	var zone string
+	if err := q.QueryRowContext(ctx, `SELECT digest_hour, timezone FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
+		userID, workspaceID).Scan(&hour, &zone); err != nil {
+		return err
+	}
+	loc, err := loadZone(zone)
+	if err != nil {
+		return err
+	}
+	_, err = s.sched.Reschedule(ctx, q, schedule.Job{
+		Kind: KindDigest, UserID: userID, WorkspaceID: workspaceID, DedupeKey: digestKey(workspaceID),
+		RunAt: nextDigest(s.clock(), hour, loc),
+	})
+	return err
+}
 
 func loadZone(name string) (*time.Location, error) {
 	if name == "Local" {
@@ -250,7 +305,8 @@ func loadZone(name string) (*time.Location, error) {
 	return time.LoadLocation(name)
 }
 
-// nextDigest is the next time after now that it is hour o'clock in loc.
+// nextDigest is the next time after now that it is hour o'clock in loc, from the local date: the
+// day after today is the date plus one, however long that day is.
 func nextDigest(now time.Time, hour int, loc *time.Location) time.Time {
 	local := now.In(loc)
 	at := time.Date(local.Year(), local.Month(), local.Day(), hour, 0, 0, 0, loc)
@@ -260,16 +316,16 @@ func nextDigest(now time.Time, hour int, loc *time.Location) time.Time {
 	return at.UTC()
 }
 
-func (s *Service) usesDigest(ctx context.Context, tx *sql.Tx, userID, workspaceID int64) (bool, error) {
+func (s *Service) usesDigest(ctx context.Context, q queryer, userID, workspaceID int64) (bool, error) {
 	var n int
-	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM notification_email_prefs WHERE user_id = ? AND workspace_id = ? AND mode = 'digest'`, userID, workspaceID).Scan(&n)
+	err := q.QueryRowContext(ctx, `SELECT count(*) FROM notification_email_prefs WHERE user_id = ? AND workspace_id = ? AND mode = 'digest'`, userID, workspaceID).Scan(&n)
 	return n > 0, err
 }
 
 // recipientOf is who a mail goes to and in which language: the person's own, else their workspace's.
-func (s *Service) recipientOf(ctx context.Context, userID, workspaceID int64) (address, locale string, err error) {
+func (s *Service) recipientOf(ctx context.Context, q queryer, userID, workspaceID int64) (address, locale string, err error) {
 	var userLocale, workspaceLocale string
-	err = s.db.QueryRowContext(ctx, `
+	err = q.QueryRowContext(ctx, `
 		SELECT u.email, u.locale, w.locale FROM users u, workspaces w
 		WHERE u.id = ? AND w.id = ? AND EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = u.id AND m.workspace_id = w.id)`,
 		userID, workspaceID).Scan(&address, &userLocale, &workspaceLocale)
@@ -279,99 +335,284 @@ func (s *Service) recipientOf(ctx context.Context, userID, workspaceID int64) (a
 	return address, workspaceLocale, err
 }
 
-// sendDigest is the handler of the daily summary, run as the person it is for: it counts their
-// unread notifications of the kinds they chose for the summary that came after the last one and
-// that they may still read, and mails the count with a link to the inbox. Nothing is sent when
-// there is none, or when the server can't send mail.
-func (s *Service) sendDigest(ctx context.Context, job schedule.Job) error {
+// The ledger's states (notification_email_ledger).
+const (
+	ledgerSending   = "sending"
+	ledgerSent      = "sent"
+	ledgerRefused   = "refused"
+	ledgerUnknown   = "unknown"
+	ledgerCancelled = "cancelled"
+)
+
+// slot is what reserving a mail's place in the ledger came to.
+type slot int
+
+const (
+	// slotReserved: the caller may submit the mail, and must record the outcome.
+	slotReserved slot = iota
+	// slotDone: the mail was submitted before (or may have been): it is never submitted again.
+	slotDone
+	// slotFull: the person has had the most instant mails in the hour.
+	slotFull
+)
+
+// reserve writes the attempt to key's row, in one transaction with the count the hourly limit
+// takes, before anything is submitted. An existing row decides: a mail that was sent, or whose
+// outcome is unknown (a try that was started and never recorded one is that) is done, with the
+// newest notification it covered; one the relay refused or that was cancelled gets a new try.
+func (s *Service) reserve(ctx context.Context, userID int64, key, kind string, upto int64) (slot, int64, error) {
+	out, covered := slotReserved, upto
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		out, covered = slotReserved, upto
+		now := s.now()
+		var state string
+		var prev int64
+		err := tx.QueryRowContext(ctx, `SELECT state, upto FROM notification_email_ledger WHERE key = ?`, key).Scan(&state, &prev)
+		switch {
+		case err == nil && (state == ledgerSent || state == ledgerUnknown):
+			out, covered = slotDone, prev
+			return nil
+		case err == nil && state == ledgerSending:
+			// A worker wrote the attempt and died without a result: the relay may have taken it.
+			out, covered = slotDone, prev
+			_, err = tx.ExecContext(ctx, `UPDATE notification_email_ledger SET state = ?, updated_at = ? WHERE key = ?`, ledgerUnknown, now, key)
+			return err
+		case err != nil && !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+		if kind == "instant" {
+			var recent int
+			if err := tx.QueryRowContext(ctx, `
+				SELECT count(*) FROM notification_email_ledger
+				WHERE user_id = ? AND kind = 'instant' AND state IN ('sending', 'sent', 'unknown') AND reserved_at > ?`,
+				userID, s.stamp(s.clock().Add(-time.Hour))).Scan(&recent); err != nil {
+				return err
+			}
+			if recent >= maxInstantPerHour {
+				out = slotFull
+				return nil
+			}
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO notification_email_ledger (user_id, key, kind, state, upto, attempts, reserved_at, updated_at)
+			VALUES (?, ?, ?, 'sending', ?, 1, ?, ?)
+			ON CONFLICT (key) DO UPDATE SET state = 'sending', upto = excluded.upto, attempts = attempts + 1,
+				reserved_at = excluded.reserved_at, updated_at = excluded.updated_at`, userID, key, kind, upto, now, now)
+		return err
+	})
+	return out, covered, err
+}
+
+// settleLedger records what came of the attempt under key. It is written even when the server is
+// stopping, since an attempt with no outcome is read as "may have been sent".
+func (s *Service) settleLedger(ctx context.Context, key, state string, upto int64) error {
+	_, err := s.db.ExecContext(context.WithoutCancel(ctx), `
+		UPDATE notification_email_ledger SET state = ?, upto = ?, updated_at = ? WHERE key = ? AND state = 'sending'`, state, upto, s.now(), key)
+	return err
+}
+
+// submission is how a send came out, for the ledger and for what to do next.
+type submission struct {
+	// state is the ledger's: sent, unknown (it may have been taken), refused (it was not) or
+	// cancelled (the server has no mail any more).
+	state string
+	// permanent: sending again can't help.
+	permanent bool
+	cause     error
+}
+
+// submitted classifies the result of mail.Service.Send. A failure of the relay's answer to the
+// message itself is the one case in which it is not known whether the mail was taken.
+func submitted(err error) submission {
+	var se *mail.SendError
+	switch {
+	case err == nil:
+		return submission{state: ledgerSent}
+	case errors.Is(err, mail.ErrNotConfigured):
+		return submission{state: ledgerCancelled}
+	case errors.As(err, &se):
+		slog.Warn("notifications: an email wasn't sent", "stage", se.Stage, "smtp_code", se.Code, "ambiguous", se.Ambiguous)
+		// The reply's code and the stage, never its words: they can name hosts and addresses.
+		cause := fmt.Errorf("mail: %s: %d", se.Stage, se.Code)
+		if se.Ambiguous {
+			return submission{state: ledgerUnknown, permanent: true, cause: cause}
+		}
+		return submission{state: ledgerRefused, permanent: se.Stage == mail.StageRejected && se.Code >= 500, cause: cause}
+	}
+	// Nothing reached the relay: the message could not be made.
+	slog.Warn("notifications: an email couldn't be made", "err", err)
+	return submission{state: ledgerRefused, cause: err}
+}
+
+// digestPlan is what a summary would say now.
+type digestPlan struct {
+	count           int
+	upto            int64
+	address, locale string
+}
+
+// digestPlanFor works out the summary of job's person: the unread notifications of the kinds they
+// chose for it, that came after the summary's cursor and after the kind was turned to a summary,
+// and that they may still read. ok is false when there is nothing to say, or nothing may be sent:
+// no mail, an unconfirmed address, no longer a member.
+func (s *Service) digestPlanFor(ctx context.Context, job schedule.Job) (p digestPlan, ok bool, err error) {
 	if !s.emailReady() {
-		return nil
+		return p, false, nil
+	}
+	if confirmed, err := s.verified(ctx, s.db, job.UserID); err != nil || !confirmed {
+		return p, false, err
 	}
 	var cursor int64
-	err := s.db.QueryRowContext(ctx, `SELECT digest_cursor FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
+	err = s.db.QueryRowContext(ctx, `SELECT digest_cursor FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
 		job.UserID, job.WorkspaceID).Scan(&cursor)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return p, false, nil
 	}
 	if err != nil {
-		return err
+		return p, false, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+storedColumns+` FROM notifications
 		WHERE user_id = ? AND workspace_id = ? AND id > ? AND read_at IS NULL AND created_at > ?
-		  AND kind IN (SELECT kind FROM notification_email_prefs WHERE user_id = ? AND workspace_id = ? AND mode = 'digest')
+		  AND EXISTS (SELECT 1 FROM notification_email_prefs p
+		              WHERE p.user_id = notifications.user_id AND p.workspace_id = notifications.workspace_id
+		                AND p.kind = notifications.kind AND p.mode = 'digest' AND notifications.id > p.since)
 		ORDER BY id`,
-		job.UserID, job.WorkspaceID, cursor, s.stamp(s.clock().Add(-digestWindow)), job.UserID, job.WorkspaceID)
+		job.UserID, job.WorkspaceID, cursor, s.stamp(s.clock().Add(-digestWindow)))
 	if err != nil {
-		return err
+		return p, false, err
 	}
 	var found []stored
 	for rows.Next() {
 		n, err := scanStored(rows)
 		if err != nil {
 			rows.Close()
-			return err
+			return p, false, err
 		}
 		found = append(found, n)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
+		return p, false, err
 	}
 	if len(found) == 0 {
-		return nil
+		return p, false, nil
 	}
 	// Only what the person may read now is counted, and so told.
 	reader := s.readerFor(job.UserID)
-	count := 0
 	for _, n := range found {
 		it, err := reader.item(ctx, n)
 		if err != nil {
-			return err
+			return p, false, err
 		}
 		if it.Kind != KindChanged {
-			count++
+			p.count++
 		}
 	}
-	if count > 0 {
-		address, locale, err := s.recipientOf(ctx, job.UserID, job.WorkspaceID)
-		if err != nil {
-			return schedule.Permanent(err)
-		}
-		sendCtx, cancel := context.WithTimeout(ctx, emailSendTimeout)
-		defer cancel()
-		if err := s.mail.SendTemplate(sendCtx, address, locale, "digest", map[string]string{
-			"count":      strconv.Itoa(count),
-			"action_url": s.publicURL + "/w/" + strconv.FormatInt(job.WorkspaceID, 10) + "/notifications",
-		}); err != nil {
-			cause, permanent := mailFailure(err)
-			switch {
-			case cause == nil:
-				return nil
-			case permanent:
-				return schedule.Permanent(cause)
-			}
-			return cause
-		}
+	p.upto = found[len(found)-1].id
+	if p.count == 0 {
+		// Nothing to tell, and nothing to count again: they are passed over.
+		return p, false, s.advanceDigest(ctx, job, p.upto)
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE notification_email_settings SET digest_cursor = ? WHERE user_id = ? AND workspace_id = ? AND digest_cursor < ?`,
-		found[len(found)-1].id, job.UserID, job.WorkspaceID, found[len(found)-1].id)
+	p.address, p.locale, err = s.recipientOf(ctx, s.db, job.UserID, job.WorkspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, false, nil
+	}
+	return p, err == nil, err
+}
+
+func (s *Service) advanceDigest(ctx context.Context, job schedule.Job, upto int64) error {
+	_, err := s.db.ExecContext(context.WithoutCancel(ctx), `
+		UPDATE notification_email_settings SET digest_cursor = ? WHERE user_id = ? AND workspace_id = ? AND digest_cursor < ?`,
+		upto, job.UserID, job.WorkspaceID, upto)
 	return err
 }
 
-// mailFailure says what to make of a failed send: the cause to keep and log, which holds the stage
-// and the server's reply code and never its words (they can name hosts and addresses), whether
-// trying again can't help, and nil for a server that has no mail any more.
-func mailFailure(err error) (cause error, permanent bool) {
-	var se *mail.SendError
-	switch {
-	case errors.Is(err, mail.ErrNotConfigured):
-		return nil, false
-	case errors.As(err, &se):
-		slog.Warn("notifications: an email wasn't sent", "stage", se.Stage, "smtp_code", se.Code)
-		return fmt.Errorf("mail: %s: %d", se.Stage, se.Code), se.Stage == mail.StageRejected && se.Code >= 500
+// current says whether job is still the occurrence of its person's summary: it is not once the
+// person has turned the summary off or changed its time (which schedules it anew).
+func (s *Service) current(ctx context.Context, q schedule.DBTX, job schedule.Job) (bool, error) {
+	if s.sched == nil {
+		return false, nil
 	}
-	slog.Warn("notifications: an email couldn't be made", "err", err)
-	return err, false
+	found, err := s.sched.Find(ctx, q, job.UserID, KindDigest, job.DedupeKey)
+	if errors.Is(err, schedule.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil && found.Occurrence() == job.Occurrence(), err
+}
+
+// sendDigest is the handler of the daily summary, run as the person it is for: it counts their
+// unread notifications of the kinds they chose for the summary that came after the last one and
+// that they may still read, and mails the count with a link to the inbox, at most once for the
+// occurrence however many times it is tried. Nothing is sent when there is none, when the server
+// can't send mail or when the address isn't confirmed. Whatever comes of it, the next summary is
+// scheduled, at the same hour of the person's own day.
+func (s *Service) sendDigest(ctx context.Context, job schedule.Job) error {
+	err := s.digestOnce(ctx, job)
+	if err != nil && ctx.Err() == nil && job.Attempts < digestTries {
+		return err // tried again, with the scheduler's waits
+	}
+	if err != nil {
+		slog.Warn("notifications: a summary was left for the next one", "job", job.ID, "err", err)
+	}
+	return s.digestNext(ctx, job)
+}
+
+// digestNext schedules the person's next summary, unless this occurrence has been replaced.
+func (s *Service) digestNext(ctx context.Context, job schedule.Job) error {
+	return s.write(context.WithoutCancel(ctx), func(tx *sql.Tx) error {
+		if ok, err := s.current(ctx, tx, job); err != nil || !ok {
+			return err
+		}
+		if on, err := s.usesDigest(ctx, tx, job.UserID, job.WorkspaceID); err != nil || !on {
+			return err
+		}
+		return s.scheduleDigest(ctx, tx, job.UserID, job.WorkspaceID)
+	})
+}
+
+func (s *Service) digestOnce(ctx context.Context, job schedule.Job) error {
+	plan, ok, err := s.digestPlanFor(ctx, job)
+	if err != nil || !ok {
+		return err
+	}
+	key := "digest:" + job.Occurrence()
+	got, covered, err := s.reserve(ctx, job.UserID, key, "digest", plan.upto)
+	if err != nil {
+		return err
+	}
+	if got == slotDone {
+		// An earlier try of this occurrence submitted it, or died trying: it is not sent again, and
+		// what it covered is not counted again.
+		return s.advanceDigest(ctx, job, covered)
+	}
+	// The last point that can still cancel it: the occurrence, the choices, the address and the
+	// person's access are asked again.
+	if s.afterReserve != nil {
+		s.afterReserve()
+	}
+	if cur, err := s.current(ctx, s.db, job); err != nil || !cur {
+		return errors.Join(err, s.settleLedger(ctx, key, ledgerCancelled, plan.upto))
+	}
+	plan, ok, err = s.digestPlanFor(ctx, job)
+	if err != nil || !ok {
+		return errors.Join(err, s.settleLedger(ctx, key, ledgerCancelled, plan.upto))
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, emailSendTimeout)
+	defer cancel()
+	res := submitted(s.mail.SendTemplate(sendCtx, plan.address, plan.locale, "digest", map[string]string{
+		"count":      strconv.Itoa(plan.count),
+		"action_url": s.publicURL + "/w/" + strconv.FormatInt(job.WorkspaceID, 10) + "/notifications",
+	}))
+	if err := s.settleLedger(ctx, key, res.state, plan.upto); err != nil {
+		return err
+	}
+	switch {
+	case res.state == ledgerSent || res.state == ledgerUnknown:
+		return s.advanceDigest(ctx, job, plan.upto)
+	case res.state == ledgerCancelled || res.permanent:
+		return nil
+	}
+	return res.cause
 }
 
 // emailDelivery is a queued mail.
@@ -426,14 +667,22 @@ func (s *Service) claimEmail(ctx context.Context) (emailDelivery, bool, error) {
 }
 
 func (s *Service) settleEmail(ctx context.Context, d emailDelivery, state string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE email_deliveries SET state = ?, updated_at = ? WHERE id = ?`, state, s.now(), d.id)
+	_, err := s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE email_deliveries SET state = ?, updated_at = ? WHERE id = ?`, state, s.now(), d.id)
 	return err
 }
 
-// runEmail makes one try: it drops what must not be mailed (read meanwhile, old, no longer chosen,
-// the person gone from the workspace, something they may no longer read, too many in the hour) and
-// otherwise sends the kind's message, with a link to the notification.
-func (s *Service) runEmail(ctx context.Context, d emailDelivery) error {
+// instantTarget is a notification that may be mailed now, and where.
+type instantTarget struct {
+	userID          int64
+	kind            string
+	address, locale string
+}
+
+// instantEligible decides whether the mail of notification id may go out now: it drops what must not
+// be mailed (gone, read meanwhile, old, no longer chosen, an address that isn't confirmed, the person
+// gone from the workspace, something they may no longer read). An error is a failure to find out.
+func (s *Service) instantEligible(ctx context.Context, id int64) (instantTarget, bool, error) {
+	var t instantTarget
 	var n stored
 	var ref string
 	var mode sql.NullString
@@ -442,53 +691,99 @@ func (s *Service) runEmail(ctx context.Context, d emailDelivery) error {
 		SELECT n.id, n.user_id, n.workspace_id, n.kind, n.ref, n.created_at, n.read_at IS NOT NULL,
 			(SELECT mode FROM notification_email_prefs p WHERE p.user_id = n.user_id AND p.workspace_id = n.workspace_id AND p.kind = n.kind),
 			EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = n.workspace_id AND m.user_id = n.user_id)
-		FROM notifications n WHERE n.id = ?`, d.notificationID).Scan(&n.id, &n.userID, &n.workspaceID, &n.kind, &ref, &n.createdAt, &n.read, &mode, &member)
+		FROM notifications n WHERE n.id = ?`, id).Scan(&n.id, &n.userID, &n.workspaceID, &n.kind, &ref, &n.createdAt, &n.read, &mode, &member)
+	if errors.Is(err, sql.ErrNoRows) {
+		return t, false, nil // the notification is gone
+	}
 	if err != nil {
-		return s.settleEmail(ctx, d, "failed") // the notification is gone
+		return t, false, err
 	}
-	if err := json.Unmarshal([]byte(ref), &n.ref); err != nil {
-		return s.settleEmail(ctx, d, "failed")
+	created, readable := readStored(ref, &n)
+	if !readable || n.read || !member || mode.String != ModeInstant || s.clock().Sub(created) > emailTTL || !emailKind(n.kind) || !s.emailReady() {
+		return t, false, nil
 	}
-	created, perr := time.Parse(timeFormat, n.createdAt)
-	if n.read || !member || mode.String != ModeInstant || perr != nil || s.clock().Sub(created) > emailTTL || !emailKind(n.kind) {
-		return s.settleEmail(ctx, d, "failed")
-	}
-	var recent int
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT count(*) FROM email_deliveries e JOIN notifications x ON x.id = e.notification_id
-		WHERE x.user_id = ? AND e.state = 'sent' AND e.updated_at > ?`, n.userID, s.stamp(s.clock().Add(-time.Hour))).Scan(&recent); err != nil {
-		return err
-	}
-	if recent >= maxInstantPerHour {
-		return s.settleEmail(ctx, d, "failed")
+	if confirmed, err := s.verified(ctx, s.db, n.userID); err != nil || !confirmed {
+		return t, false, err
 	}
 	it, err := s.readerFor(n.userID).item(ctx, n)
+	if err != nil || it.Kind == KindChanged {
+		return t, false, err
+	}
+	t = instantTarget{userID: n.userID, kind: n.kind}
+	t.address, t.locale, err = s.recipientOf(ctx, s.db, n.userID, n.workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return t, false, nil // not a member any more
+	}
+	return t, err == nil, err
+}
+
+// readStored reads the reference and the time of a stored notification; a notification that can't
+// be read is not mailed.
+func readStored(ref string, n *stored) (created time.Time, ok bool) {
+	if err := json.Unmarshal([]byte(ref), &n.ref); err != nil {
+		return time.Time{}, false
+	}
+	created, err := time.Parse(timeFormat, n.createdAt)
+	return created, err == nil
+}
+
+// runEmail makes one try of an instant mail: it checks that it may be mailed, reserves its place in
+// the ledger (the hourly limit is counted there, and a mail that was submitted before is not
+// submitted again), checks again at the last point that can still cancel it, and sends the kind's
+// message with a link to the notification.
+func (s *Service) runEmail(ctx context.Context, d emailDelivery) error {
+	target, ok, err := s.instantEligible(ctx, d.notificationID)
 	if err != nil {
 		return s.retryEmail(ctx, d, err)
 	}
-	if it.Kind == KindChanged {
+	if !ok {
 		return s.settleEmail(ctx, d, "failed")
 	}
-	address, locale, err := s.recipientOf(ctx, n.userID, n.workspaceID)
+	key := "instant:" + strconv.FormatInt(d.notificationID, 10)
+	got, _, err := s.reserve(ctx, target.userID, key, "instant", 0)
 	if err != nil {
+		return err
+	}
+	switch got {
+	case slotFull:
+		return s.settleEmail(ctx, d, "failed")
+	case slotDone:
+		// It was submitted by an earlier try, which may have died before it noted so.
+		return s.settleEmail(ctx, d, "sent")
+	}
+	if s.afterReserve != nil {
+		s.afterReserve()
+	}
+	target, ok, err = s.instantEligible(ctx, d.notificationID)
+	if err != nil || !ok {
+		state := ledgerCancelled
+		if err != nil {
+			state = ledgerRefused
+		}
+		err = errors.Join(err, s.settleLedger(ctx, key, state, 0))
+		if err != nil {
+			return s.retryEmail(ctx, d, err)
+		}
 		return s.settleEmail(ctx, d, "failed")
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, emailSendTimeout)
 	defer cancel()
-	err = s.mail.SendTemplate(sendCtx, address, locale, "notification_"+n.kind, map[string]string{
-		"action_url": s.publicURL + "/notification/" + strconv.FormatInt(n.id, 10),
-	})
-	if err == nil {
+	res := submitted(s.mail.SendTemplate(sendCtx, target.address, target.locale, "notification_"+target.kind, map[string]string{
+		"action_url": s.publicURL + "/notification/" + strconv.FormatInt(d.notificationID, 10),
+	}))
+	if err := s.settleLedger(ctx, key, res.state, 0); err != nil {
+		return err
+	}
+	switch {
+	case res.state == ledgerSent:
 		return s.settleEmail(ctx, d, "sent")
-	}
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	cause, permanent := mailFailure(err)
-	if cause == nil || permanent {
+	case res.state == ledgerUnknown:
+		slog.Warn("notifications: an email may or may not have been delivered; it isn't sent again", "delivery", d.id)
+		return s.settleEmail(ctx, d, "sent")
+	case res.state == ledgerCancelled || res.permanent:
 		return s.settleEmail(ctx, d, "failed")
 	}
-	return s.retryEmail(ctx, d, cause)
+	return s.retryEmail(ctx, d, res.cause)
 }
 
 // retryEmail moves a failed try's next one out, or gives the mail up after its last.
@@ -498,6 +793,6 @@ func (s *Service) retryEmail(ctx context.Context, d emailDelivery, cause error) 
 	}
 	after := min(emailBackoffBase<<(2*(d.attempts-1)), emailBackoffMax)
 	slog.Warn("notifications: an email will be tried again", "delivery", d.id, "attempt", d.attempts, "err", cause)
-	_, err := s.db.ExecContext(ctx, `UPDATE email_deliveries SET next_attempt_at = ?, updated_at = ? WHERE id = ?`, s.stamp(s.clock().Add(after)), s.now(), d.id)
+	_, err := s.db.ExecContext(context.WithoutCancel(ctx), `UPDATE email_deliveries SET next_attempt_at = ?, updated_at = ? WHERE id = ?`, s.stamp(s.clock().Add(after)), s.now(), d.id)
 	return err
 }

@@ -993,7 +993,10 @@
     "offline_copy_changed": "A cópia deste app neste dispositivo foi substituída durante a verificação. Ela aparece como está agora: revise de novo.",
     "offline_review_again": "O registro mudou de novo nesse meio tempo. Ele aparece como está agora: revise e escolha outra vez.",
     "offline_record_unreadable": "Você não pode mais ler este registro, então sua alteração não pode ser aplicada sobre ele. Você pode manter a versão do servidor ou descartar a alteração.",
-    "offline_record_changed": "Este registro mudou neste dispositivo (em outra aba ou janela) depois que esta tela foi desenhada. Ele aparece como está agora: confira e tente de novo."
+    "offline_record_changed": "Este registro mudou neste dispositivo (em outra aba ou janela) depois que esta tela foi desenhada. Ele aparece como está agora: confira e tente de novo.",
+    "notification_email_verification_invalid": "Esse link de confirmação não funciona: já foi usado, expirou ou foi substituído por um mais novo. Peça um novo em Configurações, Notificações.",
+    "notification_email_verification_too_soon": "Um link foi enviado agora há pouco. Veja sua caixa de entrada ou tente de novo em {seconds} segundos.",
+    "notification_email_verification_unavailable": "Não foi possível enviar o e-mail de confirmação. Tente de novo."
   },
   "language": {
     "label": "Idioma",
@@ -2074,7 +2077,21 @@
       "emailDigest": "Incluir em um resumo diário",
       "emailHour": "Enviar o resumo diário às",
       "emailZone": "Fuso horário",
-      "emailCaveat": "Um e-mail diz apenas que algo aconteceu, nunca o que um cartão ou um app contém, e leva de volta ao TaskTo.AI, que verifica o que você pode ver. No máximo 20 são enviados a você por hora, e a caixa de entrada é sempre o registro."
+      "emailCaveat": "Um e-mail diz apenas que algo aconteceu, nunca o que um cartão ou um app contém, e leva de volta ao TaskTo.AI, que verifica o que você pode ver. No máximo 20 são enviados a você por hora, e a caixa de entrada é sempre o registro.",
+      "emailUnavailableOff": "O e-mail não está configurado neste servidor. Você ainda pode desativar o e-mail.",
+      "emailAddress": "As notificações vão para {email}.",
+      "emailAddressVerified": "Este endereço está confirmado.",
+      "emailAddressPending": "Enviamos um link para este endereço. Abra-o para confirmar que é seu: nada é enviado por e-mail até lá.",
+      "emailAddressUnverified": "Este endereço não está confirmado, então nada é enviado por e-mail ainda. Envie um link de confirmação para você.",
+      "emailSendLink": "Enviar o link de confirmação",
+      "emailResendLink": "Enviar o link de novo",
+      "emailLinkSent": "O link foi enviado. Ele funciona uma vez e expira em 24 horas."
+    },
+    "confirmEmail": {
+      "title": "Confirme seu endereço de e-mail",
+      "working": "Confirmando seu endereço…",
+      "done": "Seu endereço está confirmado. As notificações que você escolheu agora podem ser enviadas por e-mail.",
+      "settings": "Abrir as configurações de notificações"
     }
   }
 }
