@@ -1062,8 +1062,9 @@ function Planning({
   const synced = useRef(card.due ?? '')
   useEffect(() => {
     const next = card.due ?? ''
-    setDue((draft) => (draft === synced.current ? next : draft))
+    const previous = synced.current
     synced.current = next
+    setDue((draft) => (draft === previous ? next : draft))
   }, [card.due])
   const t = useT()
   const f = useFormat()
