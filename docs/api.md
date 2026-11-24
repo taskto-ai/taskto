@@ -304,10 +304,16 @@ workspace, and acts with exactly that user's access there, checked again on ever
   | `…/spaces/{space}/docs…`, `GET …/history…`, `…/restore/…` | the [knowledge base](#knowledge-base), all of it but removing old versions from history |
   | `GET …/search`, `GET …/spaces/{space}/search` | [searching](#search) |
   | `…/spaces/{space}/boards…` | the [boards](#boards), all of it |
+  | `GET …/apps`, `GET …/apps/{app}`, `GET …/apps/{app}/surface`, `GET …/apps/{app}/releases[/{release}]`, `GET …/apps/{app}/records…` (the list, `deleted`, `query` and a record's `history` and `effects`), `GET …/apps/{app}/effects`, `POST …/apps/{app}/actions` | [personal apps](#personal-apps): reading an app and its rows, and running its actions, as the token's user: the space's access and the app's roles are checked as for a session, and rows a token adds or changes are marked with its name |
 
-  Personal apps are not here: a personal access token reaches them only through the
-  [MCP tools](mcp.md) at `/mcp` (such as `list_apps` and `create_app`). The apps' REST routes
-  need a session and answer `403` to a token.
+  The rest of the apps' routes take a session only (`403` with a token): creating, changing,
+  moving, copying, previewing, publishing and rolling back an app, its roles, installing a
+  template, restoring a record, retrying an effect, a device's [offline
+  download](#get-appsappoffline) and the photo uploads and attachments. They are the web
+  app's own (the builder, a device's queue, bytes that aren't JSON), and a token builds and
+  changes apps through the [MCP tools](mcp.md) (`create_app`, `update_app`), which check the
+  same rules. A request to an apps route that names an account (`X-Taskto-Expected-User`, the
+  offline outbox's) is a session's: with a token it is `403` too.
 
   Every other route answers `403` to a request carrying a token, whatever else it carries
   (a session cookie too): logging in and out, setup, `GET /api/me`, invites, managing
@@ -1573,8 +1579,9 @@ their rows; its **writers** create and change apps and run their actions (which 
 rows). A viewer's action is `403`. **Sharing** an app is moving it to a shared space,
 with its rows (`…/move`); a whole workspace shares an app through a shared space everyone
 is a member of. Every route below is under
-`/api/workspaces/{workspace}/spaces/{space}/apps`, needs a session (`401`), goes through
-the [CSRF guard](#csrf) unless it is a `GET`, and answers `404` for a space or app the
+`/api/workspaces/{workspace}/spaces/{space}/apps`, needs a session (`401`), or an
+[access token](#access-tokens) on the routes that read an app and run its actions (the others
+answer a token `403`), goes through the [CSRF guard](#csrf) unless it is a `GET`, and answers `404` for a space or app the
 caller can't read, or that isn't where the path says (an app of another space), and `403`
 for a write the caller may only read: a viewer, or an archived space. Besides, `403` with
 the code `app_forbidden` is for something the space allows but the caller's **roles in the

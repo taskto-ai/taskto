@@ -615,11 +615,9 @@ func TestTokensCannotCreateTokensOrChangeTheAccount(t *testing.T) {
 		{http.MethodPut, fmt.Sprintf("%s/spaces/%d/search/embedding", ws, s.alice.private), map[string]any{}},
 		{http.MethodGet, ws + "/conversations", nil},
 		{http.MethodPost, ws + "/conversations", map[string]any{}},
-		// The app routes take a session only: over a token, apps are the MCP tools'.
-		{http.MethodGet, s.apps(s.one, s.alice.private), nil},
+		// The apps' routes that build, publish, share or serve the web app itself take a session
+		// only; the ones that read an app and run its actions are in TestTokensUseTheAppsRoutes.
 		{http.MethodPost, s.apps(s.one, s.alice.private), map[string]any{"name": "x"}},
-		{http.MethodGet, s.apps(s.one, s.alice.private) + "/1/surface", nil},
-		{http.MethodPost, s.apps(s.one, s.alice.private) + "/1/actions", map[string]any{"name": "x"}},
 	}
 	for _, withSession := range []bool{false, true} {
 		for _, c := range refused {

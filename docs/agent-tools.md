@@ -165,5 +165,6 @@ app tools. `internal/agentrt/tools_it_test.go` runs the real sidecar against a s
 for the server's socket (what it sends, the capability kept across a restart), and `cmd/taskto/agenttools_it_test.go` the whole server
 with the sidecar and its scripted model (`make agent-it`).
 `internal/agenttools/definitions_test.go` checks every tool is defined once and the
-sidecar's copy is current, and `internal/server/tokens_test.go` the tools over MCP with
-access tokens, through the whole server.
+sidecar's copy is current, `internal/mcpserver`'s tests the endpoint's tool lists and hints and
+its refusals, and `internal/server/tokens_test.go` the tools over MCP with access tokens, through
+the whole server.
