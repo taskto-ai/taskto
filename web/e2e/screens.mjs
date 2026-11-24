@@ -36,7 +36,7 @@
 // Everything seeded is invented: example.com addresses and made-up names.
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { constants as osConstants, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -668,8 +668,10 @@ export async function awaitReady(screen, s, timeout = READY_TIMEOUT) {
 }
 
 // Brings the screen up, waits for its ready check and the page to settle, and saves the picture.
+// A file already at the picture's path is replaced only when an earlier run wrote it (`owned`, the
+// manifest's captures read before this run); another file there fails the capture and stays.
 // Returns `{ ok: true }` or `{ ok: false, error }`; never throws.
-export async function captureOne(c, s, { outDir, written, readyTimeout = READY_TIMEOUT }) {
+export async function captureOne(c, s, { outDir, written, owned = new Set(), readyTimeout = READY_TIMEOUT }) {
   try {
     await c.screen.show(s)
     await awaitReady(c.screen, s, readyTimeout)
@@ -683,8 +685,12 @@ export async function captureOne(c, s, { outDir, written, readyTimeout = READY_T
     )
     // The screen is still the screen after settling.
     await awaitReady(c.screen, s, readyTimeout)
+    const file = join(outDir, `${c.id}.png`)
+    if (!owned.has(c.id) && lstatSync(file, { throwIfNoEntry: false })) {
+      throw new Error(`${c.id}.png is there and this script did not write it: not replacing it`)
+    }
     mkdirSync(join(outDir, c.dir), { recursive: true })
-    await s.page.screenshot({ path: join(outDir, `${c.id}.png`), animations: 'disabled', caret: 'hide' })
+    await s.page.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
     written.add(c.id)
     return { ok: true }
   } catch (err) {
@@ -879,6 +885,8 @@ async function main() {
   const removeDir = () => rmSync(dir, { recursive: true, force: true })
   cleanup.add(removeDir, removeDir)
 
+  // The pictures an earlier run wrote: the only files this run may replace.
+  const owned = readManifest(outDir)
   const failures = []
   const issues = new Set()
   const skipped = []
@@ -959,7 +967,7 @@ async function main() {
         },
       }
       try {
-        const result = await captureOne(c, s, { outDir, written })
+        const result = await captureOne(c, s, { outDir, written, owned })
         if (result.ok) done++
         else {
           failures.push(`${c.id}: ${result.error}`)

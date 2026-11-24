@@ -238,6 +238,33 @@ describe('ready checks', () => {
     expect(saved).toEqual([])
   })
 
+  it('replaces a picture an earlier run wrote, never another file at the same path', async () => {
+    const outDir = temp()
+    mkdirSync(join(outDir, 'desktop-light'), { recursive: true })
+    writeFileSync(join(outDir, 'desktop-light/setup.png'), 'someone else’s picture')
+    const c = capture({ name: 'setup', show: async () => {}, ready: () => locator(true) })
+
+    const saved = []
+    const written = new Set()
+    const refused = await captureOne(c, { page: page(saved) }, { outDir, written, owned: new Set() })
+    expect(refused.ok).toBe(false)
+    expect(refused.error).toMatch(/desktop-light\/setup\.png is there and this script did not write it/)
+    expect(saved).toEqual([])
+    expect(written.size).toBe(0)
+    expect(readFileSync(join(outDir, 'desktop-light/setup.png'), 'utf8')).toBe('someone else’s picture')
+    // The failed capture does not take it away either.
+    recordCaptures({ outDir, written, failed: ['desktop-light/setup'], prune: false })
+    expect(readFileSync(join(outDir, 'desktop-light/setup.png'), 'utf8')).toBe('someone else’s picture')
+
+    const replaced = await captureOne(
+      c,
+      { page: page(saved) },
+      { outDir, written, owned: new Set(['desktop-light/setup']) },
+    )
+    expect(replaced).toEqual({ ok: true })
+    expect(readFileSync(join(outDir, 'desktop-light/setup.png'), 'utf8')).toBe('not a real picture')
+  })
+
   it('fails a capture whose screen could not be brought up', async () => {
     const saved = []
     const c = capture({
