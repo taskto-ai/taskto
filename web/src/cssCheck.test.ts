@@ -125,3 +125,35 @@ export const A = ({ h }: { h: string }) => <p className={HEALTH[h]}>x</p>
   expect(quiet.err).toBe('')
   expect(quiet.code).toBe(0)
 })
+
+test('a class is a whole name: `.not-tt-x` is no rule for tt-x, and `not-tt-x` is no use of it', () => {
+  const r = run('.not-tt-missing { color: red; }\n.tt-known { color: red; }\n', {
+    'A.tsx': component('"tt-known tt-missing"'),
+  })
+  expect(r.code).toBe(1)
+  expect(r.err).toContain('tt-missing is used but no rule')
+
+  const quiet = run('.tt-known { color: red; }\n', { 'A.tsx': component('"tt-known not-tt-else"') })
+  expect(quiet.err).toBe('')
+  expect(quiet.code).toBe(0)
+})
+
+test('a className in a comment uses nothing, and a // in a string is not a comment', () => {
+  const r = run('.tt-known { color: red; }\n', {
+    'A.tsx': [
+      '// <p className="tt-old">x</p>',
+      '/* className="tt-older" */',
+      'export const A = () => (',
+      '  <p className="tt-known">',
+      '    {/* className="tt-oldest" */}',
+      '    <a href="https://example.test/x" className="tt-after-url">x</a>',
+      '  </p>',
+      ')',
+      '',
+    ].join('\n'),
+  })
+  expect(r.code).toBe(1)
+  expect(r.err).not.toMatch(/tt-old\b|tt-older|tt-oldest/)
+  // The class after a URL's // is still read, and reported at its own line.
+  expect(r.err).toContain('src/A.tsx:6: tt-after-url is used but no rule')
+})

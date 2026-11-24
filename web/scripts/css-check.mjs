@@ -118,14 +118,15 @@ function splitSelectors(text) {
 
 // The `tt-` classes inside what a component passes as className: a string, or an expression
 // (a template, a conditional, a join) read up to its closing brace.
-export function classesUsed(source) {
+export function classesUsed(raw) {
+  const source = blankComments(raw)
   const used = new Map() // class → offset of the first use
   for (const m of source.matchAll(/\bclassName\s*=\s*/g)) {
     const start = m.index + m[0].length
     const end = expressionEnd(source, start)
     for (const c of source.slice(start, end).matchAll(CLASS)) {
-      // `--tt-fg`-style custom properties are not classes.
-      if (source[start + c.index - 1] === '-') continue
+      // A whole class name only: not `--tt-fg` (a custom property), nor the end of `not-tt-x`.
+      if (/[\w-]/.test(source[start + c.index - 1] ?? '')) continue
       if (!used.has(c[0])) used.set(c[0], start + c.index)
     }
   }
@@ -135,6 +136,35 @@ export function classesUsed(source) {
 
 // The strings of the lookup tables a component declares (`const NAME = { ok: 'tt-ok' }`,
 // `const NAME = ['tt-a']`; a name in capitals) that are class names only.
+// The source with its comments replaced by spaces (newlines kept, so offsets and lines stay):
+// `// className="tt-old"` and `{/* className="tt-old" */}` use nothing. Strings and templates are
+// skipped whole, so a `//` in a URL is not a comment.
+export function blankComments(source) {
+  let out = ''
+  for (let i = 0; i < source.length; ) {
+    const c = source[i]
+    let end = i + 1
+    if (c === '"' || c === "'") end = skipString(source, i, c) + 1
+    else if (c === '`') end = skipTemplate(source, i) + 1
+    else if (c === '/' && source[i + 1] === '/') {
+      end = source.indexOf('\n', i)
+      if (end < 0) end = source.length
+      out += ' '.repeat(end - i)
+      i = end
+      continue
+    } else if (c === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2)
+      end = close < 0 ? source.length : close + 2
+      out += source.slice(i, end).replace(/[^\n]/g, ' ')
+      i = end
+      continue
+    }
+    out += source.slice(i, end)
+    i = end
+  }
+  return out
+}
+
 function tableClasses(source, used) {
   for (const m of source.matchAll(/\bconst\s+[A-Z][A-Z0-9_]*\b[^=\n]*=\s*(?=[{[])/g)) {
     const start = m.index + m[0].length

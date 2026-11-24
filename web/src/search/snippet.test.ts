@@ -135,3 +135,11 @@ test.each(NASTY)('a snippet of 300,000 × %j between two words is cleaned in lin
   expect(performance.now() - unbounded).toBeLessThan(5000)
   expect(marked(all)).toEqual(['orchard'])
 })
+
+test('code keeps its text, and a highlight at the ends of an identifier does not make its underscores marks', () => {
+  expect(plain(cleanSnippet([{ text: 'Use `**kwargs` here' }]))).toBe('Use **kwargs here')
+  expect(plain(cleanSnippet([{ text: '```py\nx = 2 ** 3\n```' }]))).toBe('x = 2 ** 3')
+  const id = cleanSnippet([{ text: 'first', match: true }, { text: '_name_' }, { text: 'last', match: true }])
+  expect(plain(id)).toBe('first_name_last')
+  expect(marked(id)).toEqual(['first', 'last'])
+})

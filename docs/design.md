@@ -98,7 +98,10 @@ highlighted word of a search result a row of its own). `web/scripts/css-check.mj
 `make check` and CI, fails when a `.tt-` selector is declared twice at the top level of the file
 (a state or a screen size goes in an at-rule block; two different things get two names), and when
 a `tt-` class a component's `className` uses has no rule. A class that is deliberately an
-unstyled hook goes in the script's `UNSTYLED` list, with the reason.
+unstyled hook goes in the script's `UNSTYLED` list, with the reason. It reads class selectors
+(not an attribute selector's value), a component's `className`, and the strings of a lookup table
+in capitals (`const HEALTH_CLASS = { ok: 'tt-ok' }`); a class built from pieces is not seen, and
+the header of the script says what else it can't.
 
 ## The buttons
 
