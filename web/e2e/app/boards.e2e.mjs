@@ -48,10 +48,13 @@ scenario('a card is added to a board, moved between columns and commented on', a
     .getByRole('button', { name: /Write the release notes/ })
     .waitFor()
 
-  // And on to Done.
+  // The comment was stored with the card, not only shown: the reopened card has it after the reload.
   await column('Doing')
     .getByRole('button', { name: /Write the release notes/ })
     .click()
+  await page.getByText('Started on the draft.').waitFor()
+
+  // And on to Done.
   await page
     .getByRole('article', { name: 'Write the release notes' })
     .getByLabel('Column')

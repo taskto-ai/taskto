@@ -15,7 +15,9 @@ scenario('a record added offline is kept on the device and syncs when back onlin
 
   // The service worker has the app's files, so the page loads with no connection at all: the
   // server can't be reached, so what opens is the offline view with the downloaded app.
-  await page.evaluate(() => navigator.serviceWorker.ready)
+  // (A wait inside the page has no timeout of its own, so it is a polled one that fails at the
+  // context's default instead of hanging until the scenario's.)
+  await page.waitForFunction(() => navigator.serviceWorker.ready.then(() => true), null, { timeout: 15_000 })
   await context.setOffline(true)
   await page.reload()
   await page.getByRole('heading', { name: 'Offline', exact: true }).waitFor()

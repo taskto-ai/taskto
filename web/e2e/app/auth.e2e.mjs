@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { owner, scenario, setUp } from '../support.mjs'
 
 scenario('first-run setup creates the owner, and the owner can log out and back in', async (s) => {
-  const { page } = s
+  const { page, context, base } = s
 
   // A server with no account asks for its setup token, and a wrong one is refused.
   await page.goto('/')
@@ -25,10 +25,18 @@ scenario('first-run setup creates the owner, and the owner can log out and back 
   await page.reload()
   await page.getByRole('navigation', { name: 'Sections' }).waitFor()
 
+  // Logging out ends the session on the server too, not only on the screen: the cookie the
+  // browser had is refused afterwards.
+  const cookies = await context.cookies()
+  assert.ok(cookies.length > 0, 'the browser has a session cookie')
+  const cookie = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
+  assert.equal((await fetch(`${base}/api/me`, { headers: { cookie } })).status, 200)
+
   // Logging out shows the login screen; a wrong password is refused and the right one gets in.
   await page.getByLabel(`Account: ${owner.name}`).click()
   await page.getByRole('button', { name: 'Log out' }).click()
   await page.getByRole('heading', { name: 'Log in' }).waitFor()
+  assert.equal((await fetch(`${base}/api/me`, { headers: { cookie } })).status, 401)
   await page.getByLabel('Email').fill(owner.email)
   await page.getByLabel('Password').fill('not the password at all')
   await page.getByRole('button', { name: 'Log in' }).click()
@@ -41,7 +49,7 @@ scenario('first-run setup creates the owner, and the owner can log out and back 
 })
 
 scenario('setup is closed once the owner exists', async ({ page, server, context }) => {
-  await context.request.post('/api/setup', {
+  const first = await context.request.post('/api/setup', {
     headers: { 'Content-Type': 'application/json' },
     data: {
       email: owner.email,
@@ -51,6 +59,7 @@ scenario('setup is closed once the owner exists', async ({ page, server, context
       setup_token: server.token,
     },
   })
+  assert.equal(first.status(), 201, await first.text())
   const again = await context.request.post('/api/setup', {
     headers: { 'Content-Type': 'application/json' },
     data: {
@@ -61,7 +70,8 @@ scenario('setup is closed once the owner exists', async ({ page, server, context
       setup_token: server.token,
     },
   })
-  assert.ok(!again.ok(), 'a second setup must be refused')
+  assert.equal(again.status(), 409, await again.text())
+  assert.equal((await again.json()).code, 'setup_done')
   await context.clearCookies()
   await page.goto('/')
   await page.getByRole('heading', { name: 'Log in' }).waitFor()

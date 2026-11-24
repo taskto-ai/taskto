@@ -32,7 +32,11 @@ export const owner = {
 export async function startServer() {
   const dir = mkdtempSync(join(tmpdir(), 'tt-web-e2e-'))
   const bin = process.env.TASKTO_WEB_E2E_BIN || join(repo, 'bin/taskto')
+  // The server gets its own flags only: a TASKTO_* variable of the machine running the tests
+  // (a config file, a data directory, a provider) must not change what is under test.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('TASKTO_')))
   const server = spawn(bin, ['-addr', '127.0.0.1:0', '-data-dir', join(dir, 'data'), '-insecure-cookies'], {
+    env,
     stdio: ['ignore', 'ignore', 'pipe'],
   })
   let logs = ''
@@ -84,39 +88,36 @@ export async function startServer() {
 // server, base })`. When it fails, the trace (a zip for `playwright show-trace`) and a screenshot
 // of every open page are written to resultsDir, then the failure goes on.
 export function scenario(name, fn, { viewport = { width: 1280, height: 900 } } = {}) {
-  test(name, { timeout: 120_000 }, async () => {
+  test(name, { timeout: 120_000 }, async (t) => {
+    // Cleanup is registered with the test, not left to `finally` blocks: when the scenario times
+    // out while a browser call hangs, the function never returns, but these still run, so no
+    // browser or server outlives its scenario.
     const server = await startServer()
+    t.after(() => server.stop())
+    const browser = await chromium.launch()
+    t.after(() => browser.close())
+    const context = await browser.newContext({ baseURL: server.base, viewport })
+    context.setDefaultTimeout(15_000)
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: false })
+    const page = await context.newPage()
+    const messages = []
+    page.on('console', (m) => m.type() === 'error' && messages.push(`console: ${m.text()}`))
+    page.on('pageerror', (e) => messages.push(`pageerror: ${e.message}`))
     try {
-      const browser = await chromium.launch()
-      try {
-        const context = await browser.newContext({ baseURL: server.base, viewport })
-        context.setDefaultTimeout(15_000)
-        await context.tracing.start({ screenshots: true, snapshots: true, sources: false })
-        const page = await context.newPage()
-        const messages = []
-        page.on('console', (m) => m.type() === 'error' && messages.push(`console: ${m.text()}`))
-        page.on('pageerror', (e) => messages.push(`pageerror: ${e.message}`))
-        try {
-          await fn({ page, context, server, base: server.base, messages })
-          await context.tracing.stop()
-        } catch (err) {
-          const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
-          const out = join(resultsDir, slug)
-          mkdirSync(out, { recursive: true })
-          await context.tracing.stop({ path: join(out, 'trace.zip') }).catch(() => {})
-          for (const [i, p] of context.pages().entries()) {
-            await p.screenshot({ path: join(out, `page-${i}.png`), fullPage: true }).catch(() => {})
-          }
-          console.error(
-            `${name}: page errors: ${messages.join(' | ') || 'none'}\nserver log (last lines):\n${server.logs().trim().split('\n').slice(-15).join('\n')}`,
-          )
-          throw err
-        }
-      } finally {
-        await browser.close()
+      await fn({ page, context, server, base: server.base, messages })
+      await context.tracing.stop()
+    } catch (err) {
+      const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+      const out = join(resultsDir, slug)
+      mkdirSync(out, { recursive: true })
+      await context.tracing.stop({ path: join(out, 'trace.zip') }).catch(() => {})
+      for (const [i, p] of context.pages().entries()) {
+        await p.screenshot({ path: join(out, `page-${i}.png`), fullPage: true }).catch(() => {})
       }
-    } finally {
-      await server.stop()
+      console.error(
+        `${name}: page errors: ${messages.join(' | ') || 'none'}\nserver log (last lines):\n${server.logs().trim().split('\n').slice(-15).join('\n')}`,
+      )
+      throw err
     }
   })
 }

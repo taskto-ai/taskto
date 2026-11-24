@@ -30,6 +30,7 @@ Docker and never run in CI.
 ## Running them
 
 ```sh
+pnpm install --frozen-lockfile   # once, and after the lockfile changes
 make web-e2e
 ```
 
@@ -72,5 +73,5 @@ the job fails.
 - Check what the server stored through the API (`api(context, …)` uses the browser's own session),
   not only what the screen shows.
 - Keep one scenario to a few seconds: they run on every pull request, and the CI job's budget is
-  about ten minutes, browser download included.
+  15 minutes, browser download included.
 - Nothing here may reach the network or need a secret.
