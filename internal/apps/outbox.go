@@ -94,8 +94,8 @@ func (s *Service) WithPlatform(p Platform) *Service {
 }
 
 var (
-	// errOperationReused is for an operation (idempotency key) used before for another request.
-	errOperationReused = errors.New("that operation was used for a different request")
+	// ErrOperationReused is for an operation (idempotency key) used before for another request.
+	ErrOperationReused = errors.New("that operation was used for a different request")
 	// errEffectNotFailed is for retrying an effect that didn't fail.
 	errEffectNotFailed = errors.New("only a failed effect can be retried")
 )
@@ -139,7 +139,7 @@ func requestHash(release int64, action ClientAction) string {
 
 // beginOperation records the operation of a request, in the request's transaction. replay is true
 // if the same request was made under it before (its change and effects are in already), and a
-// different one is errOperationReused.
+// different one is ErrOperationReused.
 func beginOperation(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, key string, release int64, action ClientAction) (id int64, replay bool, err error) {
 	hash := requestHash(release, action)
 	res, err := tx.ExecContext(ctx, `
@@ -162,7 +162,7 @@ func beginOperation(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, k
 		return 0, false, err
 	}
 	if prev != hash {
-		return 0, false, errOperationReused
+		return 0, false, ErrOperationReused
 	}
 	return id, true, nil
 }

@@ -950,15 +950,50 @@ func (s *Service) actOnce(ctx context.Context, sp access.Space, actor Actor, app
 	if err := may(sp, access.Write); err != nil {
 		return nil, err
 	}
-	var def, live Definition
-	var acc access.AppAccess
-	var change Change
+	done, err := s.runChange(ctx, sp, actor, appID, action)
+	if err != nil {
+		return nil, err
+	}
+	// The screen's data is read after the change commits, outside the write lock, which every
+	// write on the server waits for: an app's rows can be up to MaxDataSize, and the next
+	// writer needn't wait while they are read and encoded. It shows the latest rows, a change
+	// committed meanwhile included.
+	// The answer carries the rows, and summaries, the caller reads: a user who adds a record
+	// to an app where they read only their own is not shown anyone else's.
+	rows, err := loadRows(ctx, s.db, appID, readable(done.acc, actor.UserID))
+	if err != nil {
+		return nil, err
+	}
+	return answer(appID, shownBy(done.live, done.def), rows, done.change), nil
+}
+
+// changeDone is what a change action did: the access the caller had when it ran, the live release's
+// definition and the one the action came from (the same unless it came from an older release),
+// the change planned and what it did to the record.
+type changeDone struct {
+	acc       access.AppAccess
+	def, live Definition
+	change    Change
+	ap        applied
+	// replayed is a request made before under its operation key: nothing was done again.
+	replayed bool
+	// effects is how many effects the change queued.
+	effects int
+}
+
+// runChange runs a client action that changes a record, in one transaction: the caller's rights are
+// checked again inside it, the change planned from the action and applied, the operation noted and
+// the action's effects queued. It is the whole of what an action does, for the web app and for the
+// agent alike. The caller has checked the space and that the action is not a navigation.
+func (s *Service) runChange(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) (changeDone, error) {
+	var out changeDone
 	queued := false
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		var err error
-		if acc, err = s.recheckApp(ctx, actor, sp.ID, appID); err != nil {
+		if out.acc, err = s.recheckApp(ctx, actor, sp.ID, appID); err != nil {
 			return err
 		}
+		acc := out.acc
 		a, err := launchable(ctx, tx, sp.ID, appID)
 		if err != nil {
 			return err
@@ -966,8 +1001,8 @@ func (s *Service) actOnce(ctx context.Context, sp access.Space, actor Actor, app
 		if a.liveDef == nil {
 			return ErrNotPublished
 		}
-		live = *a.liveDef
-		def = live
+		live := *a.liveDef
+		def := live
 		fromOlder := action.Release != nil && *action.Release != a.Live.Number
 		if fromOlder {
 			// Whether a release exists is for those who may run actions at all: the 404 for one
@@ -993,7 +1028,12 @@ func (s *Service) actOnce(ctx context.Context, sp access.Space, actor Actor, app
 		if err != nil {
 			return err
 		}
-		change = ch
+		if actor.Agent {
+			if err := agentMaySet(def, ch); err != nil {
+				return err
+			}
+		}
+		out.def, out.live, out.change = def, live, ch
 		// What the action sets going besides the change is the live release's: an action of an
 		// older release was taken as the live one defines it (liveTakes).
 		effects := live.Actions[action.Name].Effects
@@ -1016,6 +1056,7 @@ func (s *Service) actOnce(ctx context.Context, sp access.Space, actor Actor, app
 				// Made before: the change and its effects are in already, and the answer is the
 				// first one's, whatever the live release has become since: it is asked of the
 				// live release's compatibility only for a request not yet made.
+				out.replayed = true
 				return nil
 			}
 		}
@@ -1035,29 +1076,23 @@ func (s *Service) actOnce(ctx context.Context, sp access.Space, actor Actor, app
 				return err
 			}
 		}
+		out.ap = ap
 		if err := enqueueEffects(ctx, tx, actor, appID, opID, live, live.Actions[action.Name], ap); err != nil {
 			return err
 		}
 		queued = len(effects) > 0 && ap.changed
+		if queued {
+			out.effects = len(effects)
+		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return changeDone{}, err
 	}
 	if queued {
 		s.poke()
 	}
-	// The screen's data is read after the change commits, outside the write lock, which every
-	// write on the server waits for: an app's rows can be up to MaxDataSize, and the next
-	// writer needn't wait while they are read and encoded. It shows the latest rows, a change
-	// committed meanwhile included.
-	// The answer carries the rows, and summaries, the caller reads: a user who adds a record
-	// to an app where they read only their own is not shown anyone else's.
-	rows, err := loadRows(ctx, s.db, appID, readable(acc, actor.UserID))
-	if err != nil {
-		return nil, err
-	}
-	return answer(appID, shownBy(live, def), rows, change), nil
+	return out, nil
 }
 
 // answer is the messages that update a screen once change has been made to rows: the rows and

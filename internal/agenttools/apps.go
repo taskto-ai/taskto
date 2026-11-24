@@ -181,3 +181,55 @@ func (s *Service) updateApp(ctx context.Context, c *call, args json.RawMessage) 
 	}
 	return s.o.Apps.UpdateApp(ctx, appsActor(c), a.SpaceID, a.AppID, a.Changes)
 }
+
+// listAppActions is what the app's live release offers to run on its records, and what the
+// user's roles let them do.
+func (s *Service) listAppActions(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a appRef
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	if err := s.appSpace(ctx, c, a.SpaceID); err != nil {
+		return nil, err
+	}
+	return s.o.Apps.Actions(ctx, appsActor(c), a.SpaceID, a.AppID)
+}
+
+// runAppAction runs one of the app's actions that change a record, as the call's user, through
+// the code behind the web app's action route: their roles, the collection's rules, the locks of
+// captured values, the record's history and the action's effects all apply.
+func (s *Service) runAppAction(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		appRef
+		Action           string         `json:"action"`
+		ID               *int64         `json:"id"`
+		Context          map[string]any `json:"context"`
+		ExpectedRevision *int64         `json:"expected_revision"`
+		Operation        string         `json:"operation"`
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	if a.Action == "" {
+		return nil, invalidf("action is the name of one of the app's actions, from list_app_actions")
+	}
+	if err := s.appSpace(ctx, c, a.SpaceID); err != nil {
+		return nil, err
+	}
+	fields := map[string]any{}
+	for k, v := range a.Context {
+		fields[k] = v
+	}
+	if a.ID != nil {
+		if _, has := fields["id"]; has {
+			return nil, invalidf("give the row's id as id, not in context")
+		}
+		if *a.ID < 1 {
+			return nil, invalidf("id is a row's id, from 1")
+		}
+		fields["id"] = float64(*a.ID)
+	}
+	return s.o.Apps.RunAction(ctx, appsActor(c), a.SpaceID, a.AppID, apps.ActionRun{
+		Action: a.Action, Context: fields, ExpectedRevision: a.ExpectedRevision, Operation: a.Operation,
+	})
+}
