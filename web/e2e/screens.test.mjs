@@ -13,7 +13,7 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiFailure,
   awaitReady,
@@ -21,6 +21,7 @@ import {
   captures,
   createCleanup,
   createClient,
+  createRecorder,
   hide,
   launch,
   MANIFEST,
@@ -43,18 +44,41 @@ const scriptUrl = pathToFileURL(scriptPath).href
 // A made-up token of the length the server's is.
 const FAKE_TOKEN = 'x'.repeat(43)
 const LISTENING = `taskto listening addr=127.0.0.1:1 web_app_built=true setup_token=${FAKE_TOKEN}`
-const HOLD = 'setInterval(() => {}, 1e6)'
 
-// Tiny stand-ins for the server: Node children that run a script.
-const fakes = {
-  listening: `console.error(${JSON.stringify(LISTENING)}); ${HOLD}`,
-  notBuilt: `console.error(${JSON.stringify(LISTENING.replace('=true', '=false'))}); ${HOLD}`,
-  silent: HOLD,
-  refuses: `console.error('ERROR taskto stopped err="must not be able to act as root"'); process.exit(3)`,
-  stubborn: `process.on('SIGTERM', () => {}); console.error(${JSON.stringify(LISTENING)}); ${HOLD}`,
+// A tiny stand-in for the server: one constant Node script, run with `-e`. What differs between
+// the fakes (how it behaves, and the line it prints) is given as arguments and read on the other
+// side, so no source code is ever built from a value.
+const FAKE_SERVER = `
+const [mode, line] = process.argv.slice(1)
+if (mode === 'stubborn') process.on('SIGTERM', () => {})
+if (mode === 'refuses') {
+  console.error('ERROR taskto stopped err="must not be able to act as root"')
+  process.exit(3)
 }
-const start = (script, options = {}) =>
-  launch({ bin: process.execPath, args: ['-e', script], env: process.env, ...options })
+if (mode !== 'silent') console.error(line)
+setInterval(() => {}, 1e6)
+`
+const fakes = {
+  listening: ['listening', LISTENING],
+  notBuilt: ['listening', LISTENING.replace('=true', '=false')],
+  silent: ['silent', ''],
+  refuses: ['refuses', ''],
+  stubborn: ['stubborn', LISTENING],
+}
+
+// Every server a test starts, stopped after it, whether or not the test got to stop it.
+const started = []
+const start = (fake, options = {}) =>
+  launch({
+    bin: process.execPath,
+    args: ['-e', FAKE_SERVER, ...fake],
+    env: process.env,
+    ...options,
+    track: (server) => {
+      started.push(server)
+      options.track?.(server)
+    },
+  })
 
 const alive = (pid) => {
   try {
@@ -71,7 +95,8 @@ const temp = () => {
   temps.push(dir)
   return dir
 }
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(started.splice(0).map((server) => server.stop().catch(() => {})))
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -359,6 +384,29 @@ describe('the cleanup', () => {
   // A real Node process that does what the script does at its start (traps the signals, then
   // spawns a fake server and waits), given a real signal. `startup` is the signal arriving while
   // the server is starting, `running` while it waits for something else, such as the setup request.
+  // The program is a constant: the script's address, the directory and the fake server's source
+  // and arguments reach it as its arguments.
+  const INTERRUPTED = `
+    import { rmSync } from 'node:fs'
+    const [url, dir, ...fake] = process.argv.slice(1)
+    const { createCleanup, trapSignals, launch } = await import(url)
+    const cleanup = createCleanup()
+    trapSignals(cleanup, { say: () => {} })
+    cleanup.add(() => rmSync(dir, { recursive: true, force: true }))
+    launch({
+      bin: process.execPath,
+      args: ['-e', ...fake],
+      env: process.env,
+      track: (server) => {
+        cleanup.add(() => server.stop(), () => server.kill())
+        console.log('spawned ' + server.proc.pid)
+      },
+    }).then(
+      () => { console.log('ready'); setInterval(() => {}, 1e6) },
+      (err) => console.log('failed ' + err.message),
+    )
+  `
+
   const interrupted = async (mode, signal, code) => {
     const dir = temp()
     const child = spawn(
@@ -366,33 +414,17 @@ describe('the cleanup', () => {
       [
         '--input-type=module',
         '-e',
-        `
-        import { createCleanup, trapSignals, launch } from ${JSON.stringify(scriptUrl)}
-        import { rmSync } from 'node:fs'
-        const [dir, fake] = process.argv.slice(1)
-        const cleanup = createCleanup()
-        trapSignals(cleanup, { say: () => {} })
-        cleanup.add(() => rmSync(dir, { recursive: true, force: true }))
-        launch({
-          bin: process.execPath,
-          args: ['-e', fake],
-          env: process.env,
-          track: (server) => {
-            cleanup.add(() => server.stop(), () => server.kill())
-            console.log('spawned ' + server.proc.pid)
-          },
-        }).then(
-          () => { console.log('ready'); setInterval(() => {}, 1e6) },
-          (err) => console.log('failed ' + err.message),
-        )
-        `,
+        INTERRUPTED,
+        scriptUrl,
         dir,
-        mode === 'startup' ? fakes.silent : fakes.listening,
+        FAKE_SERVER,
+        ...(mode === 'startup' ? fakes.silent : fakes.listening),
       ],
       { stdio: ['ignore', 'pipe', 'inherit'] },
     )
     let out = ''
     let serverPid
+    let finished = false
     const waits = []
     child.stdout.on('data', (chunk) => {
       out += chunk
@@ -400,16 +432,38 @@ describe('the cleanup', () => {
       if (spawned) serverPid = Number(spawned[1])
       for (const wait of waits.splice(0)) wait()
     })
-    const until = async (marker) => {
-      while (!out.includes(marker)) await new Promise((resolve) => waits.push(resolve))
+    // `close`, not `exit`: it comes after the last of the child's output has been read.
+    const exited = new Promise((resolve) => child.once('close', (c, s) => resolve({ code: c, signal: s })))
+    const failedToSpawn = new Promise((_, reject) => child.once('error', reject))
+    // Waits for the child to print `marker`, and fails with what happened to it instead if it
+    // ends, or never starts, first.
+    const until = (marker) =>
+      Promise.race([
+        (async () => {
+          while (!out.includes(marker)) await new Promise((resolve) => waits.push(resolve))
+        })(),
+        failedToSpawn,
+        exited.then((result) => {
+          throw new Error(
+            `the child ended before it printed "${marker}": ${JSON.stringify(result)}, said: ${out.trim()}`,
+          )
+        }),
+      ])
+    try {
+      await until(mode === 'startup' ? 'spawned' : 'ready')
+      expect(alive(serverPid)).toBe(true)
+      child.kill(signal)
+      expect(await exited).toEqual({ code, signal: null })
+      expect(alive(serverPid)).toBe(false)
+      expect(existsSync(dir)).toBe(false)
+      finished = true
+    } finally {
+      // After a failure: nothing of the fixture is left running.
+      if (!finished) {
+        if (serverPid !== undefined && alive(serverPid)) process.kill(serverPid, 'SIGKILL')
+        child.kill('SIGKILL')
+      }
     }
-    const exited = new Promise((resolve) => child.once('exit', (c, s) => resolve({ code: c, signal: s })))
-    await until(mode === 'startup' ? 'spawned' : 'ready')
-    expect(alive(serverPid)).toBe(true)
-    child.kill(signal)
-    expect(await exited).toEqual({ code, signal: null })
-    expect(alive(serverPid)).toBe(false)
-    expect(existsSync(dir)).toBe(false)
   }
 
   it('on SIGINT while the server is starting: the server is reaped, the directory removed, exit 130', () =>
@@ -607,6 +661,48 @@ describe('the output folder', () => {
     expect([...readManifest(outDir)]).toEqual(['desktop-light/ok'])
     recordCaptures({ outDir, written: new Set(), prune: true })
     expect(existsSync(victim)).toBe(true)
+  })
+
+  it('makes the run fail when the manifest cannot be written, and still lets the cleanup go on', () => {
+    const outDir = temp()
+    // The manifest's path is a directory: the picture can be saved, the list of pictures cannot.
+    mkdirSync(join(outDir, MANIFEST), { recursive: true })
+    put(outDir, 'desktop-light/boards')
+    const failures = []
+    const record = createRecorder({
+      outDir,
+      written: new Set(['desktop-light/boards']),
+      failedIds: [],
+      skipped: [],
+      failures,
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(() => record(true)).not.toThrow()
+      expect(failures).toHaveLength(1)
+      expect(failures[0]).toMatch(new RegExp(`^could not update ${MANIFEST.replace('.', '\\.')}: `))
+      expect(errors).toHaveBeenCalledTimes(1)
+      // The run's one update: a second call (the cleanup's) neither tries again nor adds another failure.
+      record(false)
+      expect(failures).toHaveLength(1)
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  it('records without a failure when the manifest can be written', () => {
+    const outDir = temp()
+    put(outDir, 'desktop-light/boards')
+    const failures = []
+    createRecorder({
+      outDir,
+      written: new Set(['desktop-light/boards']),
+      failedIds: [],
+      skipped: [],
+      failures,
+    })(true)
+    expect(failures).toEqual([])
+    expect([...readManifest(outDir)]).toEqual(['desktop-light/boards'])
   })
 
   it('starts from nothing when there is no manifest, or a broken one', () => {

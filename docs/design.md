@@ -208,7 +208,7 @@ sample dates are relative to the day it runs, so "overdue" and "soon" read the s
 times of conversations are the time of the run, so those differ between two runs.
 
 When the browser logs an error or a request fails, the script lists it with the capture it
-happened in, and it exits non-zero when a screen could not be captured (`--strict` also fails on
+happened in, and it exits non-zero when a screen could not be captured or the list of pictures (the manifest) could not be written (`--strict` also fails on
 what the browser reported). Options, by flag or environment variable:
 
 | Flag | Variable | |
@@ -226,7 +226,7 @@ With `make`, pass flags in `SCREENS_ARGS`: `make screens SCREENS_ARGS="--only de
 with `-agent`, where the scripted offline model answers. The server refuses to start the agent
 when its user can run `sudo` without a password ([agent-safety.md](agent-safety.md)). The script
 tries `-agent` and, when the server refuses, starts it without: it says so, the conversation list
-is empty and the one conversation screen is skipped. On a development machine you can opt in to
+is captured empty and the conversation detail is skipped (no picture of it is made). On a development machine you can opt in to
 the override with `TASKTO_SCREENS_UNSAFE_AGENT=1` (or `--unsafe-agent`), which passes
 `-unsafe-privileged-agents`: for development only, a throwaway VM where the developer is root, say;
 never set it on a server people use. The script never sets it by itself.

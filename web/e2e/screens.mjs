@@ -28,9 +28,10 @@
 // The agent runtime: a conversation with replies needs the server started with -agent, where a
 // scripted offline model answers. The server refuses that when its user can run sudo without a
 // password (docs/agent-safety.md). Then the script starts the server without the agent, captures
-// the conversation screens with no replies, and says so. -unsafe-agent (or
-// TASKTO_SCREENS_UNSAFE_AGENT=1) passes -unsafe-privileged-agents, which turns that refusal into a
-// warning: for a development machine only, never a server people use.
+// the conversation list (empty), skips the conversation detail (it has no replies to show, so
+// no PNG is made of it), and says so. --unsafe-agent (or TASKTO_SCREENS_UNSAFE_AGENT=1) passes
+// -unsafe-privileged-agents, which turns that refusal into a warning: for a development machine
+// only, never a server people use.
 //
 // Everything seeded is invented: example.com addresses and made-up names.
 
@@ -629,6 +630,25 @@ export function recordCaptures({ outDir, written, failed = [], prune = false }) 
   return { removed: [...remove].sort() }
 }
 
+// The run's one update of the output folder: `record(prune)` writes it the first time it is called
+// and does nothing after. `failedIds` and `skipped` are read when it runs. When the folder can't be
+// updated (the manifest's path is a directory, a read-only disk) the reason goes into `failures`, so
+// the run exits non-zero, and nothing is thrown: the cleanup that follows must still run.
+export function createRecorder({ outDir, written, failedIds, skipped, failures }) {
+  let recorded = false
+  return (prune) => {
+    if (recorded) return
+    recorded = true
+    try {
+      recordCaptures({ outDir, written, failed: [...failedIds, ...skipped], prune })
+    } catch (err) {
+      const reason = `could not update ${MANIFEST}: ${redact(String(err.message).split('\n')[0])}`
+      console.error(reason)
+      failures.push(reason)
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // One capture.
 
@@ -869,16 +889,7 @@ async function main() {
 
   // What a run leaves in the output folder: its own pictures in the manifest, the failed ones
   // removed, and after a run that failed nowhere the earlier run's others pruned.
-  let recorded = false
-  const record = (prune) => {
-    if (recorded) return
-    recorded = true
-    try {
-      recordCaptures({ outDir, written, failed: [...failedIds, ...skipped], prune })
-    } catch (err) {
-      console.error(`could not update ${MANIFEST}: ${redact(err.message)}`)
-    }
-  }
+  const record = createRecorder({ outDir, written, failedIds, skipped, failures })
   cleanup.add(() => record(false))
 
   try {
@@ -1024,7 +1035,7 @@ async function main() {
     say('the browser reported no console error and no failed request')
   }
   if (failures.length > 0) {
-    say(`\n${failures.length} could not be captured:`)
+    say(`\n${failures.length} failed:`)
     for (const f of failures) say(`  ${f}`)
   }
   return failures.length > 0 || (values.strict && issues.size > 0) ? 1 : 0
