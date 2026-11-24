@@ -5,9 +5,41 @@ package audittest
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
+
+// decoded returns every key and string in the details column, as text.
+func decoded(column any) string {
+	raw, _ := column.(string)
+	if b, ok := column.([]byte); ok {
+		raw = string(b)
+	}
+	var v any
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		return ""
+	}
+	var out strings.Builder
+	var walk func(any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case string:
+			out.WriteString(v + "\x00")
+		case []any:
+			for _, x := range v {
+				walk(x)
+			}
+		case map[string]any:
+			for k, x := range v {
+				out.WriteString(k + "\x00")
+				walk(x)
+			}
+		}
+	}
+	walk(v)
+	return out.String()
+}
 
 // T is the part of *testing.T the check uses, so the check itself can be tested.
 type T interface {
@@ -48,8 +80,11 @@ func NoSecrets(t T, db *sql.DB, secrets map[string]string) {
 			}
 			fmt.Fprintf(&row, "%v\x00", v)
 		}
+		// The columns as stored, and the details as decoded: JSON escapes some characters
+		// (&, <, quotes, backslashes), which would hide a secret from the first check.
+		text := row.String() + "\x00" + decoded(*(cols[7].(*any)))
 		for name, value := range secrets {
-			if strings.Contains(row.String(), value) {
+			if strings.Contains(text, value) {
 				t.Errorf("the %s is in an audit row: %q", name, strings.ReplaceAll(row.String(), "\x00", " | "))
 			}
 		}

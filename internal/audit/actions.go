@@ -29,6 +29,7 @@ const (
 	// Access tokens.
 	AccessTokenCreated = "access_token_created"
 	AccessTokenRevoked = "access_token_revoked"
+	AccessTokenUsed    = "access_token_used"
 
 	// Spaces.
 	SpaceCreated           = "space_created"

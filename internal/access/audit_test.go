@@ -31,7 +31,7 @@ func TestAuditSpaces(t *testing.T) {
 		t.Fatalf("space_created = %d events, want 1", len(rows))
 	}
 	r := rows[0]
-	if *r.ActorID != owner.id || *r.TargetID != s.ID || r.TargetType != audit.TargetSpace || r.Details["name"] != "Team" {
+	if *r.ActorID != owner.id || *r.TargetID != s.ID || r.TargetType != audit.TargetSpace || r.Details["name"] != nil {
 		t.Fatalf("space_created = %+v", r)
 	}
 
@@ -61,7 +61,7 @@ func TestAuditSpaces(t *testing.T) {
 		t.Fatalf("space_updated = %+v", updated)
 	}
 	d := updated[0].Details
-	if d["name"] != "Crew" || d["archived"] != true || d["offline_downloads"] != true || fmt.Sprint(d["fields"]) != "[name archived offline_downloads]" {
+	if d["name"] != nil || d["archived"] != true || d["offline_downloads"] != true || fmt.Sprint(d["fields"]) != "[name archived offline_downloads]" {
 		t.Fatalf("details = %v", d)
 	}
 }

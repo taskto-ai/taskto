@@ -82,10 +82,11 @@ func (x *Index) setEmbeddings(ctx context.Context, workspaceID, userID int64, e 
 		if err != nil {
 			return err
 		}
-		// Which account and model the workspace's text goes to, or that it goes nowhere now.
+		// Which account the workspace's text goes to, or that it goes nowhere now. The model is a name a
+		// person typed: it isn't recorded.
 		details := audit.Details{"enabled": e != nil}
 		if e != nil {
-			details["account"], details["provider"], details["model"] = e.Account, e.Provider, e.Model
+			details["account"] = e.Account
 		}
 		if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: userID, Action: audit.SearchEmbeddingsChanged,
 			TargetType: audit.TargetWorkspace, Target: workspaceID, Details: details}); err != nil {

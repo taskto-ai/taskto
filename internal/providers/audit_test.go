@@ -34,7 +34,7 @@ func TestAuditWorkspaceProviderAccounts(t *testing.T) {
 	}
 	c := created[0]
 	if *c.ActorID != owner.id || *c.TargetID != id || c.TargetType != audit.TargetProvider ||
-		c.Details["name"] != "gateway" || c.Details["scope"] != "workspace" || c.Details["api_key_set"] != true ||
+		c.Details["name"] != nil || c.Details["kind"] != "openai-compatible" || c.Details["scope"] != "workspace" || c.Details["api_key_set"] != true ||
 		c.Details["base_host"] != "llm.example.com:8443" {
 		t.Fatalf("created = %+v", c)
 	}
@@ -64,7 +64,7 @@ func TestAuditWorkspaceProviderAccounts(t *testing.T) {
 
 	expect(t, owner.do(http.MethodDelete, one, nil), http.StatusNoContent)
 	removed := e.events(ws, audit.ProviderAccountRemoved)
-	if len(removed) != 1 || *removed[0].TargetID != id || removed[0].Details["name"] != "gateway" || *removed[0].ActorID != owner.id {
+	if len(removed) != 1 || *removed[0].TargetID != id || removed[0].Details["name"] != nil || *removed[0].ActorID != owner.id {
 		t.Fatalf("removed = %+v", removed)
 	}
 

@@ -87,7 +87,7 @@ func (s *Service) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) 
 				return err
 			}
 			return audit.Record(r.Context(), tx, audit.Event{Workspace: m.WorkspaceID, Action: audit.WorkspaceUpdated,
-				TargetType: audit.TargetWorkspace, Target: m.WorkspaceID, Details: audit.Details{"fields": []string{"locale"}, "locale": *req.Locale}})
+				TargetType: audit.TargetWorkspace, Target: m.WorkspaceID, Details: localeDetails(*req.Locale)})
 		})
 		if err != nil {
 			serverError(w, r, err)
@@ -117,4 +117,14 @@ func (s *Service) Language(r *http.Request, browser string) string {
 	}
 	m, _ := MembershipFrom(r.Context())
 	return m.Locale
+}
+
+// localeDetails are the details of a workspace's new default language: the tag, or only that the
+// language was cleared.
+func localeDetails(locale string) audit.Details {
+	d := audit.Details{"fields": []string{"locale"}}
+	if locale != "" {
+		d["locale"] = locale
+	}
+	return d
 }

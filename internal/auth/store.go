@@ -206,9 +206,14 @@ func (s *Service) deleteSession(ctx context.Context, token string) error {
 func (s *Service) endSession(ctx context.Context, token string) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
 		var userID int64
-		err := tx.QueryRowContext(ctx, `DELETE FROM sessions WHERE token_hash = ? RETURNING user_id`, hashToken(token)).Scan(&userID)
+		// The same test as sessionUser: a session that has expired is no longer a login to
+		// end, even while its row is still there to be swept.
+		err := tx.QueryRowContext(ctx, `DELETE FROM sessions WHERE token_hash = ? AND expires_at > ? RETURNING user_id`,
+			hashToken(token), stamp(s.now())).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil
+			// Still drop an expired row, unrecorded.
+			_, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hashToken(token))
+			return err
 		}
 		if err != nil {
 			return err
@@ -380,13 +385,77 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 				return err
 			}
 		}
+		// What the removal takes with it, by the schema's triggers: the member's access tokens in
+		// the workspace and their places in its shared spaces. Read before they go, so each is
+		// recorded in this transaction like the removal.
+		tokens, err := removedTokens(ctx, tx, workspaceID, userID)
+		if err != nil {
+			return err
+		}
+		spaces, err := leftSpaces(ctx, tx, workspaceID, userID)
+		if err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, `DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`,
 			workspaceID, userID); err != nil {
 			return err
 		}
-		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.MemberRemoved,
-			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"role": string(current)}})
+		if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.MemberRemoved,
+			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"role": string(current)}}); err != nil {
+			return err
+		}
+		for _, t := range tokens {
+			if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.AccessTokenRevoked,
+				TargetType: audit.TargetAccessToken, Target: t.id, TargetCreated: t.created, Details: audit.Details{"cascade": true}}); err != nil {
+				return err
+			}
+		}
+		for _, sp := range spaces {
+			if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.SpaceMemberRemoved,
+				TargetType: audit.TargetSpace, Target: sp.id,
+				Details: audit.Details{"user_id": userID, "role": sp.role, "cascade": true}}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+// cascaded is a row a removal deletes along with the membership.
+type cascaded struct {
+	id      int64
+	created string
+	role    string
+}
+
+func cascadedRows(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]cascaded, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var all []cascaded
+	for rows.Next() {
+		var c cascaded
+		if err := rows.Scan(&c.id, &c.created, &c.role); err != nil {
+			return nil, err
+		}
+		all = append(all, c)
+	}
+	return all, rows.Err()
+}
+
+// removedTokens lists userID's access tokens in workspaceID.
+func removedTokens(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) ([]cascaded, error) {
+	return cascadedRows(ctx, tx, `SELECT id, created_at, '' FROM access_tokens WHERE workspace_id = ? AND user_id = ? ORDER BY id`,
+		workspaceID, userID)
+}
+
+// leftSpaces lists the shared spaces of workspaceID that userID is a member of, with their role.
+func leftSpaces(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) ([]cascaded, error) {
+	return cascadedRows(ctx, tx, `
+		SELECT sp.id, sp.created_at, sm.role FROM space_members sm JOIN spaces sp ON sp.id = sm.space_id
+		WHERE sp.workspace_id = ? AND sm.user_id = ? ORDER BY sp.id`, workspaceID, userID)
 }
 
 // createInvite stores an invite to workspaceID for email and returns it with its token,
@@ -448,10 +517,10 @@ func (s *Service) pendingInvites(ctx context.Context, workspaceID int64) ([]Invi
 // deleteInvite withdraws an invite of workspaceID, or fails with errNotFound.
 func (s *Service) deleteInvite(ctx context.Context, workspaceID, inviteID int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
-		var email string
+		var email, created string
 		var role Role
-		err := tx.QueryRowContext(ctx, `DELETE FROM invites WHERE id = ? AND workspace_id = ? AND accepted_at IS NULL RETURNING email, role`,
-			inviteID, workspaceID).Scan(&email, &role)
+		err := tx.QueryRowContext(ctx, `DELETE FROM invites WHERE id = ? AND workspace_id = ? AND accepted_at IS NULL RETURNING email, role, created_at`,
+			inviteID, workspaceID).Scan(&email, &role, &created)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errNotFound
 		}
@@ -459,7 +528,8 @@ func (s *Service) deleteInvite(ctx context.Context, workspaceID, inviteID int64)
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.InviteRevoked,
-			TargetType: audit.TargetInvite, Target: inviteID, Details: audit.Details{"email": email, "role": string(role)}})
+			TargetType: audit.TargetInvite, Target: inviteID, TargetCreated: created,
+			Details: audit.Details{"email": email, "role": string(role)}})
 	})
 }
 

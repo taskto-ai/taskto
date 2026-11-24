@@ -65,7 +65,7 @@ func (c *Checker) createShared(ctx context.Context, workspaceID, creatorID int64
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: creatorID, Action: audit.SpaceCreated,
-			TargetType: audit.TargetSpace, Target: id, Details: audit.Details{"name": name}})
+			TargetType: audit.TargetSpace, Target: id})
 	})
 	return id, err
 }
@@ -96,11 +96,12 @@ func (c *Checker) updateShared(ctx context.Context, workspaceID, spaceID int64, 
 		if err := mustAffect(res, ErrNotFound); err != nil {
 			return err
 		}
-		// What changed, and to what: a name, and two switches, none of them secret.
+		// What changed, and the two switches' new values; the new name isn't recorded, it is
+		// text a person typed.
 		details := audit.Details{}
 		var fields []string
 		if name != nil {
-			fields, details["name"] = append(fields, "name"), *name
+			fields = append(fields, "name")
 		}
 		if archived != nil {
 			fields, details["archived"] = append(fields, "archived"), *archived

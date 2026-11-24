@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -450,9 +451,7 @@ func (s *Service) handleSharedCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		// The key is only said to be set; the address is kept as its host.
 		return audit.Record(r.Context(), tx, audit.Event{Workspace: ws, Action: audit.SharedCLIAccountCreated,
-			TargetType: audit.TargetSharedAccount, Target: id, Details: audit.Details{
-				"cli": string(*d.CLI), "label": *d.Label, "model": *d.Model, "base_host": audit.Host(*d.BaseURL), "api_key_set": true,
-			}})
+			TargetType: audit.TargetSharedAccount, Target: id, Details: sharedDetails(*d.CLI, *d.BaseURL, audit.Details{"api_key_set": true})})
 	})
 	if errors.Is(err, errTooMany) {
 		writeError(w, http.StatusConflict, apierr.CodeTooManySharedAccounts, fmt.Sprintf("a workspace has at most %d shared CLI accounts", maxShared),
@@ -531,41 +530,69 @@ func (s *Service) handleSharedUpdate(w http.ResponseWriter, r *http.Request, a s
 			return
 		}
 	}
-	label, baseURL, model, sealed := a.Label, a.BaseURL, a.Model, a.sealed
-	if d.Label != nil {
-		label = *d.Label
-	}
-	if d.BaseURL != nil {
-		baseURL = *d.BaseURL
-	}
-	if d.Model != nil {
-		model = *d.Model
-	}
-	if d.APIKey != nil {
-		var err error
-		if sealed, err = s.shared.Key.Seal([]byte(*d.APIKey), sharedKeyAD(a.ID)); err != nil {
-			serverError(w, r, err)
-			return
-		}
-	}
+	// The account is read again in the transaction that changes it, and the change is scoped to
+	// its workspace: what the handler read before may be gone, or its id may have been given to
+	// another workspace's account since.
+	var changed sharedRow
 	err := s.inTx(r.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(r.Context(), `UPDATE cli_shared_accounts SET label = ?, base_url = ?, model = ?, api_key = ?,
-			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, label, baseURL, model, sealed, a.ID); err != nil {
+		cur, err := scanShared(tx.QueryRowContext(r.Context(), `SELECT `+sharedColumns+` FROM cli_shared_accounts
+			WHERE id = ? AND workspace_id = ?`, a.ID, a.workspace))
+		if errors.Is(err, sql.ErrNoRows) {
+			return errSharedGone
+		}
+		if err != nil {
+			return err
+		}
+		if d.CLI != nil && *d.CLI != cur.CLI {
+			return errCLIChanged
+		}
+		label, baseURL, model, sealed := cur.Label, cur.BaseURL, cur.Model, cur.sealed
+		if d.Label != nil {
+			label = *d.Label
+		}
+		if d.BaseURL != nil {
+			baseURL = *d.BaseURL
+		}
+		if d.Model != nil {
+			model = *d.Model
+		}
+		if d.APIKey != nil {
+			if sealed, err = s.shared.Key.Seal([]byte(*d.APIKey), sharedKeyAD(cur.ID)); err != nil {
+				return err
+			}
+		}
+		res, err := tx.ExecContext(r.Context(), `UPDATE cli_shared_accounts SET label = ?, base_url = ?, model = ?, api_key = ?,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND workspace_id = ?`,
+			label, baseURL, model, sealed, cur.ID, cur.workspace)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			if err == nil {
+				err = errSharedGone
+			}
 			return err
 		}
 		fields := audit.Changed(map[string]bool{
-			"label": label != a.Label, "base_url": baseURL != a.BaseURL, "model": model != a.Model, "api_key": d.APIKey != nil,
+			"label": label != cur.Label, "base_url": baseURL != cur.BaseURL, "model": model != cur.Model, "api_key": d.APIKey != nil,
 		})
-		return audit.Record(r.Context(), tx, audit.Event{Workspace: a.workspace, Action: audit.SharedCLIAccountUpdated,
-			TargetType: audit.TargetSharedAccount, Target: a.ID, Details: audit.Details{
-				"cli": string(a.CLI), "label": label, "fields": fields, "base_host": audit.Host(baseURL), "api_key_changed": d.APIKey != nil,
-			}})
+		changed = cur
+		return audit.Record(r.Context(), tx, audit.Event{Workspace: cur.workspace, Action: audit.SharedCLIAccountUpdated,
+			TargetType: audit.TargetSharedAccount, Target: cur.ID, TargetCreated: cur.CreatedAt,
+			Details: sharedDetails(cur.CLI, baseURL, audit.Details{"fields": fields, "api_key_changed": d.APIKey != nil})})
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, errSharedGone):
+		writeError(w, http.StatusNotFound, apierr.CodeSharedAccountNotFound, "no such shared account")
+		return
+	case errors.Is(err, errCLIChanged):
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "an account's CLI doesn't change: add another account")
+		return
+	case err != nil:
 		serverError(w, r, err)
 		return
 	}
-	updated, _, err := s.sharedAccount(r.Context(), a.workspace, a.ID)
+	updated, _, err := s.sharedAccount(r.Context(), changed.workspace, changed.ID)
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -573,39 +600,75 @@ func (s *Service) handleSharedUpdate(w http.ResponseWriter, r *http.Request, a s
 	writeJSON(w, http.StatusOK, updated.SharedAccount)
 }
 
+var (
+	// errSharedGone is a shared account that isn't (or no longer is) the workspace's.
+	errSharedGone = errors.New("no such shared account")
+	errCLIChanged = errors.New("an account's CLI doesn't change")
+)
+
+// sharedDetails are the details of a shared account's event: the CLI and where the account's
+// requests go (the address's host alone). Its label and model are names a person typed, and
+// aren't recorded: the target's id says which account it was.
+func sharedDetails(cli cliworker.CLI, baseURL string, more audit.Details) audit.Details {
+	d := audit.Details{"cli": string(cli)}
+	if h := audit.Host(baseURL); h != "" {
+		d["base_host"] = h
+	}
+	maps.Copy(d, more)
+	return d
+}
+
 // handleSharedDelete removes the account, its members' sessions on it and, in the background,
 // what their CLIs kept for it on the worker.
 func (s *Service) handleSharedDelete(w http.ResponseWriter, r *http.Request, a sharedRow) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT user_id FROM cli_accounts WHERE shared_account_id = ?`, a.ID)
-	if err != nil {
-		serverError(w, r, err)
-		return
-	}
+	// The members' sessions on it, the delete and its event are one transaction, scoped to the
+	// workspace: a delete that finds nothing (the account is already gone, or its id belongs to
+	// another workspace's now) records nothing, so two deletes make one removal.
 	var users []int64
-	for rows.Next() {
-		var u int64
-		if err := rows.Scan(&u); err != nil {
-			rows.Close()
-			serverError(w, r, err)
-			return
+	err := s.inTx(r.Context(), func(tx *sql.Tx) error {
+		var cli, created string
+		err := tx.QueryRowContext(r.Context(), `SELECT cli, created_at FROM cli_shared_accounts WHERE id = ? AND workspace_id = ?`,
+			a.ID, a.workspace).Scan(&cli, &created)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errSharedGone
 		}
-		users = append(users, u)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		serverError(w, r, err)
-		return
-	}
-	err = s.inTx(r.Context(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(r.Context(), `DELETE FROM cli_shared_accounts WHERE id = ?`, a.ID); err != nil {
+		if err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(r.Context(), `SELECT user_id FROM cli_accounts WHERE shared_account_id = ?`, a.ID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var u int64
+			if err := rows.Scan(&u); err != nil {
+				return err
+			}
+			users = append(users, u)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		res, err := tx.ExecContext(r.Context(), `DELETE FROM cli_shared_accounts WHERE id = ? AND workspace_id = ?`, a.ID, a.workspace)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			if err == nil {
+				err = errSharedGone
+			}
 			return err
 		}
 		return audit.Record(r.Context(), tx, audit.Event{Workspace: a.workspace, Action: audit.SharedCLIAccountRemoved,
-			TargetType: audit.TargetSharedAccount, Target: a.ID, Details: audit.Details{
-				"cli": string(a.CLI), "label": a.Label, "members_signed_out": len(users),
-			}})
+			TargetType: audit.TargetSharedAccount, Target: a.ID, TargetCreated: created,
+			Details: audit.Details{"cli": cli, "members_signed_out": len(users)}})
 	})
+	if errors.Is(err, errSharedGone) {
+		writeError(w, http.StatusNotFound, apierr.CodeSharedAccountNotFound, "no such shared account")
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -755,7 +818,19 @@ func (s *Service) handleSetModes(w http.ResponseWriter, r *http.Request) {
 	}
 	ws := workspaceOf(r)
 	err := s.inTx(r.Context(), func(tx *sql.Tx) error {
+		// What is recorded is what changed: a request that sets the modes they already are
+		// changes, and records, nothing.
+		defaultChanged, membersChanged := false, 0
 		if req.DefaultMode != nil {
+			var old string
+			err := tx.QueryRowContext(r.Context(), `SELECT default_mode FROM cli_workspace_modes WHERE workspace_id = ?`, ws).Scan(&old)
+			if errors.Is(err, sql.ErrNoRows) {
+				old, err = string(OwnElseShared), nil
+			}
+			if err != nil {
+				return err
+			}
+			defaultChanged = old != string(*req.DefaultMode)
 			if _, err := tx.ExecContext(r.Context(), `INSERT INTO cli_workspace_modes (workspace_id, default_mode) VALUES (?, ?)
 				ON CONFLICT (workspace_id) DO UPDATE SET default_mode = excluded.default_mode`, ws, string(*req.DefaultMode)); err != nil {
 				return err
@@ -773,18 +848,32 @@ func (s *Service) handleSetModes(w http.ResponseWriter, r *http.Request) {
 			if !member {
 				return errNotMember
 			}
+			var old sql.NullString
+			err = tx.QueryRowContext(r.Context(), `SELECT mode FROM cli_member_modes WHERE workspace_id = ? AND user_id = ?`, ws, user).Scan(&old)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
 			if mode == nil {
 				_, err = tx.ExecContext(r.Context(), `DELETE FROM cli_member_modes WHERE workspace_id = ? AND user_id = ?`, ws, user)
+				if old.Valid {
+					membersChanged++
+				}
 			} else {
 				_, err = tx.ExecContext(r.Context(), `INSERT INTO cli_member_modes (workspace_id, user_id, mode) VALUES (?, ?, ?)
 					ON CONFLICT (workspace_id, user_id) DO UPDATE SET mode = excluded.mode`, ws, user, string(*mode))
+				if !old.Valid || old.String != string(*mode) {
+					membersChanged++
+				}
 			}
 			if err != nil {
 				return err
 			}
 		}
-		details := audit.Details{"members_changed": len(req.Members)}
-		if req.DefaultMode != nil {
+		if !defaultChanged && membersChanged == 0 {
+			return nil
+		}
+		details := audit.Details{"members_changed": membersChanged}
+		if defaultChanged {
 			details["default_mode"] = string(*req.DefaultMode)
 		}
 		return audit.Record(r.Context(), tx, audit.Event{Workspace: ws, Action: audit.CLIModesChanged,

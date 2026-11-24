@@ -30,7 +30,7 @@ func TestAuditEmbeddingsAndConsent(t *testing.T) {
 		t.Fatalf("search_embeddings_changed = %+v", set)
 	}
 	if s := set[0]; *s.ActorID != w.owner.id || *s.TargetID != w.ws || s.TargetType != audit.TargetWorkspace ||
-		s.Details["enabled"] != true || s.Details["account"] != float64(account) || s.Details["model"] != fakeModel {
+		s.Details["enabled"] != true || s.Details["account"] != float64(account) || s.Details["model"] != nil {
 		t.Fatalf("set = %+v", s)
 	}
 
@@ -69,5 +69,33 @@ func TestAuditSearchRefusalsRecordNothing(t *testing.T) {
 	expect(t, w.owner.do(http.MethodPut, settings, map[string]any{"embeddings": map[string]any{"account": account + 99, "model": fakeModel}}), http.StatusBadRequest)
 	if got := len(w.events(0, "")); got != n {
 		t.Fatalf("refusals left %d events", got-n)
+	}
+}
+
+func TestAuditRemovingTheEmbeddingsAccountRecordsWhatGoesWithIt(t *testing.T) {
+	w := newWorld(t)
+	account := w.setModel()
+	before := len(w.events(w.ws, audit.SearchEmbeddingsChanged))
+	consents := len(w.events(w.ws, audit.SearchConsentChanged))
+
+	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/providers/%d", w.ws, account), nil), http.StatusNoContent)
+
+	if n := len(w.events(w.ws, audit.ProviderAccountRemoved)); n != 1 {
+		t.Fatalf("provider_account_removed = %d events, want 1", n)
+	}
+	set := w.events(w.ws, audit.SearchEmbeddingsChanged)
+	if len(set) != before+1 || set[0].Details["enabled"] != false || set[0].Details["cascade"] != true ||
+		*set[0].TargetID != w.ws || set[0].Details["account"] != float64(account) || *set[0].ActorID != w.owner.id {
+		t.Fatalf("search_embeddings_changed = %+v, want the removal of the setting", set)
+	}
+	consent := w.events(w.ws, audit.SearchConsentChanged)
+	if len(consent) != consents+1 || consent[0].Details["enabled"] != false || consent[0].Details["cascade"] != true ||
+		*consent[0].TargetID != w.team.ID {
+		t.Fatalf("search_consent_changed = %+v, want the removal of the team space's consent", consent)
+	}
+	// What was recorded is what is gone.
+	var left int
+	if err := w.e.idx.db.QueryRow(`SELECT (SELECT count(*) FROM search_settings) + (SELECT count(*) FROM search_embedding_consent)`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("%d settings and consents left, %v", left, err)
 	}
 }

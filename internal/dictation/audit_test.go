@@ -31,7 +31,7 @@ func TestAuditDictationSettings(t *testing.T) {
 	}
 	r := rows[0]
 	if *r.ActorID != owner.id || *r.TargetID != ws || r.TargetType != audit.TargetWorkspace ||
-		r.Details["engine"] != "local" || r.Details["language"] != "pt" || r.Details["api_model"] != "whisper-large-v3" ||
+		r.Details["engine"] != "local" || r.Details["language"] != "pt" || r.Details["api_model"] != nil ||
 		r.Details["api_key_changed"] != true || r.Details["api_key_set"] != true || r.Details["base_host"] == "" {
 		t.Fatalf("event = %+v", r)
 	}

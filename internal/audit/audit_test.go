@@ -44,8 +44,8 @@ func TestRecordStoresTheEvent(t *testing.T) {
 	user := exec(t, d, `INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', '')`)
 
 	ctx := audit.WithClient(audit.WithActor(context.Background(), user), "203.0.113.9")
-	err := audit.Record(ctx, d, audit.Event{Workspace: ws, Action: audit.SpaceCreated, TargetType: audit.TargetSpace, Target: 7,
-		Details: audit.Details{"name": "Team", "archived": false, "n": 3, "fields": []string{"a", "b"}}})
+	err := audit.Record(ctx, d, audit.Event{Workspace: ws, Action: audit.SpaceUpdated, TargetType: audit.TargetSpace, Target: 7,
+		Details: audit.Details{"archived": false, "fields": []string{"name", "archived"}, "offline_downloads": true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,8 +54,8 @@ func TestRecordStoresTheEvent(t *testing.T) {
 		t.Fatalf("List = %+v, %v", rows, err)
 	}
 	r := rows[0]
-	if *r.WorkspaceID != ws || *r.ActorID != user || r.Action != "space_created" || r.TargetType != "space" || *r.TargetID != 7 ||
-		*r.ClientAddr != "203.0.113.9" || r.Details["name"] != "Team" || r.Details["archived"] != false {
+	if *r.WorkspaceID != ws || *r.ActorID != user || r.Action != "space_updated" || r.TargetType != "space" || *r.TargetID != 7 ||
+		*r.ClientAddr != "203.0.113.9" || r.Details["offline_downloads"] != true || r.Details["archived"] != false {
 		t.Fatalf("row = %+v", r)
 	}
 	if _, err := time.Parse("2006-01-02T15:04:05.000Z", r.At); err != nil {
@@ -98,18 +98,27 @@ func TestRecordRefusesWhatCouldHoldASecret(t *testing.T) {
 	}{
 		{"an action that isn't snake_case", "Login Succeeded", nil},
 		{"an empty action", "", nil},
+		{"an action without a schema", "made_up_action", nil},
 		{"a password", audit.PasswordChanged, audit.Details{"password": "hunter2-hunter2"}},
-		{"a new password", audit.PasswordChanged, audit.Details{"new_password": "x"}},
 		{"a token", audit.AccessTokenCreated, audit.Details{"token": "ttp_abc"}},
-		{"an api key", audit.ProviderAccountCreated, audit.Details{"api_key": "sk-123"}},
-		{"a key by another name", audit.ProviderAccountCreated, audit.Details{"Secret": "x"}},
+		{"a token's name", audit.AccessTokenCreated, audit.Details{"name": "ttp_abcdefghijklmnop"}},
+		{"a token's name when revoked", audit.AccessTokenRevoked, audit.Details{"name": "laptop"}},
+		{"a space's name", audit.SpaceCreated, audit.Details{"name": "Team"}},
+		{"a label", audit.SharedCLIAccountCreated, audit.Details{"label": "Company key"}},
+		{"a model", audit.SearchEmbeddingsChanged, audit.Details{"model": "text-embedding-3-small"}},
+		{"a key's value", audit.ProviderAccountCreated, audit.Details{"api_key": "sk-123"}},
+		{"a key's value under its boolean's name", audit.ProviderAccountCreated, audit.Details{"api_key_set": "sk-123"}},
 		{"a reset link", audit.PasswordResetCreated, audit.Details{"reset_link": "https://x/y"}},
 		{"a session", audit.Logout, audit.Details{"session_id": "abc"}},
-		{"a hash", audit.InviteCreated, audit.Details{"token_hash": "abc"}},
-		{"a list under a secret's name", audit.InviteCreated, audit.Details{"keys": []string{"a"}}},
-		{"a nested value", audit.InviteCreated, audit.Details{"user": map[string]string{"name": "x"}}},
-		{"a byte slice", audit.InviteCreated, audit.Details{"blob": []byte("x")}},
-		{"too many details", audit.InviteCreated, tooMany()},
+		{"a list of anything but fields", audit.SpaceUpdated, audit.Details{"fields": []string{"password"}}},
+		{"a nested value", audit.InviteCreated, audit.Details{"role": map[string]string{"name": "x"}}},
+		{"a byte slice", audit.InviteCreated, audit.Details{"email": []byte("a@example.com")}},
+		{"a role that isn't one", audit.InviteCreated, audit.Details{"role": "ttp_abcdefghijklmnop"}},
+		{"an email that is a token", audit.InviteCreated, audit.Details{"email": "ttp_abcdefghijklmnop"}},
+		{"a host with a path", audit.ProviderAccountCreated, audit.Details{"base_host": "example.com/v1?key=abc"}},
+		{"a tag with spaces", audit.SSOLoginFailed, audit.Details{"reason": "a password is here"}},
+		{"a number as a string", audit.SpaceMemberAdded, audit.Details{"user_id": "7"}},
+		{"a string as a boolean", audit.InviteAccepted, audit.Details{"already_member": "yes"}},
 	}
 	for _, c := range bad {
 		if err := audit.Record(context.Background(), d, audit.Event{Action: c.action, Details: c.details}); err == nil {
@@ -127,23 +136,38 @@ func TestRecordRefusesWhatCouldHoldASecret(t *testing.T) {
 	}
 }
 
-func tooMany() audit.Details {
-	d := audit.Details{}
-	for _, k := range strings.Split("abcdefghijklmnopq", "") {
-		d[k] = "x"
+func TestEveryActionHasASchemaWithNoSecretText(t *testing.T) {
+	d := open(t)
+	for _, action := range audit.Actions() {
+		// An empty set of details is valid for every action: an action without a schema isn't.
+		if err := audit.Record(context.Background(), d, audit.Event{Action: action}); err != nil {
+			t.Errorf("%s: %v", action, err)
+		}
 	}
-	return d
+	for action, schema := range audit.Schemas() {
+		for name, boolean := range schema {
+			if audit.SecretName(name) && !boolean {
+				t.Errorf("%s: detail %q is named like a secret and isn't a boolean", action, name)
+			}
+		}
+	}
 }
 
-func TestLongDetailsAreClipped(t *testing.T) {
+func TestTheValuesOfATextKindAreChecked(t *testing.T) {
 	d := open(t)
-	long := strings.Repeat("é", 500)
-	if err := audit.Record(context.Background(), d, audit.Event{Action: audit.SpaceCreated, Details: audit.Details{"name": long}}); err != nil {
-		t.Fatal(err)
+	good := []audit.Event{
+		{Action: audit.InviteCreated, Details: audit.Details{"email": "someone+tag@example.com", "role": "admin"}},
+		{Action: audit.SSOLoginFailed, Details: audit.Details{"provider": "google", "reason": "sso_no_account"}},
+		{Action: audit.ProviderAccountCreated, Details: audit.Details{"base_host": "llm.example.com:8443", "kind": "openai-compatible"}},
+		// The longest address an invite accepts is kept whole.
+		{Action: audit.InviteRevoked, Details: audit.Details{"email": strings.Repeat("a", 64) + "@" + strings.Repeat("b", 189), "role": "member"}},
+		{Action: audit.SpaceUpdated, Details: audit.Details{"fields": []string{"name"}}},
+		{Action: audit.SpaceMemberAdded, Details: audit.Details{"user_id": 7, "role": "editor"}},
 	}
-	rows, _ := audit.List(context.Background(), d, audit.Filter{})
-	if got := rows[0].Details["name"].(string); len([]rune(got)) != 200 {
-		t.Fatalf("name has %d characters, want 200", len([]rune(got)))
+	for _, e := range good {
+		if err := audit.Record(context.Background(), d, e); err != nil {
+			t.Errorf("%+v: %v", e, err)
+		}
 	}
 }
 
@@ -330,8 +354,8 @@ func (p *probe) Fatalf(f string, a ...any) { p.errors = append(p.errors, fmt.Spr
 
 func TestNoSecretsFindsOne(t *testing.T) {
 	d := open(t)
-	if err := audit.Record(context.Background(), d, audit.Event{Action: audit.SpaceCreated,
-		Details: audit.Details{"name": "contains-fake-secret-value"}}); err != nil {
+	if err := audit.Record(context.Background(), d, audit.Event{Action: audit.InviteCreated,
+		Details: audit.Details{"email": "contains-fake-secret-value@example.com"}}); err != nil {
 		t.Fatal(err)
 	}
 	var none probe
@@ -348,5 +372,65 @@ func TestNoSecretsFindsOne(t *testing.T) {
 	audittest.NoSecrets(&short, d, map[string]string{"a short probe": "abc"})
 	if len(short.errors) != 1 {
 		t.Fatalf("a probe of 3 characters was accepted: %v", short.errors)
+	}
+}
+
+func TestAnEventKnowsWhichObjectItIsAbout(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	exec(t, d, `INSERT INTO workspaces (name, created_at) VALUES ('Home', '2026-01-01T00:00:00.000Z')`)
+	first := exec(t, d, `INSERT INTO users (email, name, password_hash, created_at) VALUES ('a@example.com', 'A', '', '2026-01-02T00:00:00.000Z')`)
+	if err := audit.Record(ctx, d, audit.Event{Action: audit.LoginSucceeded, TargetType: audit.TargetUser, Target: first}); err != nil {
+		t.Fatal(err)
+	}
+	// The highest row's id is handed to the next row inserted: the event keeps whose it was.
+	exec(t, d, `DELETE FROM users WHERE id = ?`, first)
+	second := exec(t, d, `INSERT INTO users (email, name, password_hash, created_at) VALUES ('b@example.com', 'B', '', '2026-03-04T00:00:00.000Z')`)
+	if second != first {
+		t.Fatalf("the test needs the id to be reused: %d, then %d", first, second)
+	}
+	if err := audit.Record(ctx, d, audit.Event{Action: audit.LoginSucceeded, TargetType: audit.TargetUser, Target: second}); err != nil {
+		t.Fatal(err)
+	}
+	// A target already deleted: the caller gives its creation time.
+	if err := audit.Record(ctx, d, audit.Event{Action: audit.InviteRevoked, TargetType: audit.TargetInvite, Target: 9,
+		TargetCreated: "2026-05-06T00:00:00.000Z"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := audit.List(ctx, d, audit.Filter{Limit: 10})
+	var times []string
+	for _, r := range rows {
+		if r.TargetCreatedAt == nil {
+			t.Fatalf("%+v has no creation time", r)
+		}
+		times = append(times, *r.TargetCreatedAt)
+	}
+	want := []string{"2026-05-06T00:00:00.000Z", "2026-03-04T00:00:00.000Z", "2026-01-02T00:00:00.000Z"}
+	if fmt.Sprint(times) != fmt.Sprint(want) {
+		t.Fatalf("creation times = %v, want %v", times, want)
+	}
+}
+
+func TestNoSecretsSeesThroughJSONEscaping(t *testing.T) {
+	d := open(t)
+	// An address may hold characters JSON writes as escapes (the & is \u0026 in the column).
+	if _, err := d.Exec(`INSERT INTO audit_events (action, details) VALUES ('invite_created', ?)`,
+		`{"email":"fake\u0026secret-value@example.com"}`); err != nil {
+		t.Fatal(err)
+	}
+	var found probe
+	audittest.NoSecrets(&found, d, map[string]string{"an escaped secret": "fake&secret-value"})
+	if len(found.errors) != 1 {
+		t.Fatalf("reported %v, want one error for the escaped secret", found.errors)
+	}
+}
+
+func TestEveryTargetTypeHasATableWithCreationTimes(t *testing.T) {
+	d := open(t)
+	for _, typ := range audit.TargetTypes() {
+		table := audit.TargetTable(typ)
+		if _, err := d.Exec(`SELECT created_at FROM ` + table + ` WHERE id = 0`); err != nil { //nolint:gosec // a table of the package's fixed list
+			t.Errorf("%s: %v", typ, err)
+		}
 	}
 }

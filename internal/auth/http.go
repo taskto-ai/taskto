@@ -244,7 +244,8 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 // doesn't exist. Attempts the limiters turn away aren't recorded: the log would fill at the rate
 // an attacker chooses.
 func (s *Service) loginFailed(r *http.Request, userID int64, reason string) {
-	e := audit.Event{Actor: userID, Action: audit.LoginFailed, Details: audit.Details{"method": "password", "reason": reason}}
+	// No actor: the person at the keyboard isn't known to be the account's owner, who is the target.
+	e := audit.Event{Action: audit.LoginFailed, Details: audit.Details{"method": "password", "reason": reason}}
 	if userID != 0 {
 		e.TargetType, e.Target = audit.TargetUser, userID
 	}

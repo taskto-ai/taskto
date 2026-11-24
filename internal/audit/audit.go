@@ -6,11 +6,11 @@
 // a failed login, is recorded on its own (Log), and a failure to write it is logged, never
 // returned: it must not turn a refusal into a server error.
 //
-// The log never holds a secret. An event carries ids, a stable action code and a few
-// non-secret details; Record refuses details whose names say they are a password, token, key or
-// link (and any value that isn't a short string, number, boolean or list of strings), so a
-// careless call fails its test rather than leaking. This package stores and removes events; the
-// admin view is separate.
+// The log never holds a secret, and never free text. An event carries ids, a stable action code
+// and the few details its action is declared to have (schema.go), each of a fixed type: a
+// boolean, a number, a value from a fixed list, a host, an address. Record refuses any other
+// detail or a value of another type, so a careless call fails its test rather than leaking.
+// This package stores and removes events; the admin view is separate.
 package audit
 
 import (
@@ -25,7 +25,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // Event is one thing that happened. The zero value of an ID field means none.
@@ -41,24 +40,28 @@ type Event struct {
 	// TargetType and Target say what the action was done to: "user", "invite", "space"…
 	TargetType string
 	Target     int64
-	// Details are non-secret facts about the event; see Record for what they may hold.
+	// TargetCreated is when the target was created, as the target's own created_at holds it: with
+	// the type and the id, it says which object the event is about, since SQLite hands a deleted
+	// row's id to a later one. Record looks it up when it is empty and the target still exists; code
+	// that deletes the target passes it from the delete's RETURNING.
+	TargetCreated string
+	// Details are non-secret facts about the event, of the types schemas gives its action.
 	Details Details
 }
 
-// Details are an event's small set of non-secret facts. Values are strings, booleans, numbers or
-// lists of strings.
+// Details are an event's small set of non-secret facts: the ones its action declares (schema.go),
+// of the declared types.
 type Details map[string]any
 
 // Limits of an event's details.
 const (
-	maxDetailKeys   = 16
-	maxDetailString = 200
 	maxDetailList   = 16
 	maxDetailsBytes = 2048
 )
 
 // secretName matches the names of things that are secrets. A detail with such a name may only be
-// a boolean ("api_key_changed": true says that a key changed, not what it is).
+// a boolean ("api_key_changed": true says that a key changed, not what it is); schemas is
+// checked against it too.
 var secretName = regexp.MustCompile(`(?i)pass(word|wd|phrase)|secret|token|key|credential|hash|link|cookie|session|body|signature`)
 
 var validAction = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
@@ -98,26 +101,48 @@ type Execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
+// targetTables are the tables of the targets whose creation time an event records.
+var targetTables = map[string]string{
+	TargetUser:          "users",
+	TargetWorkspace:     "workspaces",
+	TargetInvite:        "invites",
+	TargetAccessToken:   "access_tokens",
+	TargetSpace:         "spaces",
+	TargetProvider:      "provider_accounts",
+	TargetSharedAccount: "cli_shared_accounts",
+}
+
 // Record adds e to the log through x, which should be the transaction of the change it
 // describes. The actor and the client address default to the ones on ctx. It fails for an event
-// without a valid action or with details that could hold a secret; the caller then rolls the
+// without a valid action or with details its action doesn't declare; the caller then rolls the
 // change back, which is the point: such an event is a bug to fix, not to hide.
 func Record(ctx context.Context, x Execer, e Event) error {
 	if !validAction.MatchString(e.Action) {
 		return fmt.Errorf("audit: %q is not a snake_case action", e.Action)
 	}
-	details, err := encode(e.Details)
+	details, err := encode(e.Action, e.Details)
 	if err != nil {
 		return fmt.Errorf("audit: %s: %w", e.Action, err)
 	}
 	if e.Actor == 0 {
 		e.Actor = ActorFrom(ctx)
 	}
+	// The target's creation time: given, or read from the target if it still exists. The table
+	// name comes from the fixed list above, never from the event.
+	args := []any{nullID(e.Workspace), nullID(e.Actor), e.Action, e.TargetType, nullID(e.Target), details, nullString(clientFrom(ctx))}
+	lookup := `NULL`
+	table, known := targetTables[e.TargetType]
+	switch {
+	case e.TargetCreated != "":
+		lookup = `?`
+		args = append(args, e.TargetCreated)
+	case known && e.Target != 0:
+		lookup = `(SELECT created_at FROM ` + table + ` WHERE id = ?)`
+		args = append(args, e.Target)
+	}
 	_, err = x.ExecContext(ctx, `
-		INSERT INTO audit_events (workspace_id, actor_id, action, target_type, target_id, details, client_addr)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		nullID(e.Workspace), nullID(e.Actor), e.Action, e.TargetType, nullID(e.Target), details,
-		nullString(clientFrom(ctx)))
+		INSERT INTO audit_events (workspace_id, actor_id, action, target_type, target_id, details, client_addr, target_created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, `+lookup+`)`, args...)
 	return err
 }
 
@@ -145,39 +170,29 @@ func nullString(s string) any {
 	return s
 }
 
-// encode checks details and returns them as JSON.
-func encode(d Details) (string, error) {
+// encode checks details against the schema of action and returns them as JSON.
+func encode(action string, d Details) (string, error) {
+	schema, ok := schemas[action]
+	if !ok {
+		return "", errors.New("an action without a schema")
+	}
 	if len(d) == 0 {
 		return "{}", nil
 	}
-	if len(d) > maxDetailKeys {
-		return "", errors.New("too many details")
-	}
 	out := make(map[string]any, len(d))
-	for k, v := range d {
-		switch v := v.(type) {
-		case bool:
-			out[k] = v
-			continue
-		case int, int64, float64:
-			out[k] = v
-		case string:
-			out[k] = clip(v)
-		case []string:
-			if len(v) > maxDetailList {
-				v = v[:maxDetailList]
-			}
-			list := make([]string, len(v))
-			for i, s := range v {
-				list[i] = clip(s)
-			}
-			out[k] = list
-		default:
-			return "", fmt.Errorf("detail %q: a %T isn't a string, number, boolean or list of strings", k, v)
+	for name, v := range d {
+		k, ok := schema[name]
+		if !ok {
+			return "", fmt.Errorf("detail %q isn't one of this action's", name)
 		}
-		if secretName.MatchString(k) {
-			return "", fmt.Errorf("detail %q is named like a secret: say only that it changed (a boolean), never its value", k)
+		if secretName.MatchString(name) && !k.boolean {
+			return "", fmt.Errorf("detail %q is named like a secret: say only that it changed (a boolean), never its value", name)
 		}
+		checked, err := k.check(v)
+		if err != nil {
+			return "", fmt.Errorf("detail %q: %w", name, err)
+		}
+		out[name] = checked
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {
@@ -187,13 +202,6 @@ func encode(d Details) (string, error) {
 		return "", errors.New("details too large")
 	}
 	return string(raw), nil
-}
-
-func clip(s string) string {
-	if utf8.RuneCountInString(s) <= maxDetailString {
-		return s
-	}
-	return string([]rune(s)[:maxDetailString])
 }
 
 // Changed lists the names of the fields that are set, sorted, for an event's "fields" detail.
@@ -210,15 +218,18 @@ func Changed(fields map[string]bool) []string {
 
 // Row is a stored event.
 type Row struct {
-	ID          int64          `json:"id"`
-	At          string         `json:"at"`
-	WorkspaceID *int64         `json:"workspace_id"`
-	ActorID     *int64         `json:"actor_id"`
-	Action      string         `json:"action"`
-	TargetType  string         `json:"target_type"`
-	TargetID    *int64         `json:"target_id"`
-	Details     map[string]any `json:"details"`
-	ClientAddr  *string        `json:"client_addr"`
+	ID          int64  `json:"id"`
+	At          string `json:"at"`
+	WorkspaceID *int64 `json:"workspace_id"`
+	ActorID     *int64 `json:"actor_id"`
+	Action      string `json:"action"`
+	TargetType  string `json:"target_type"`
+	TargetID    *int64 `json:"target_id"`
+	// TargetCreatedAt is when the target was created: the object an event is about is the one
+	// with its type, id and creation time (docs/audit.md).
+	TargetCreatedAt *string        `json:"target_created_at"`
+	Details         map[string]any `json:"details"`
+	ClientAddr      *string        `json:"client_addr"`
 }
 
 // Filter selects events for List. The zero value selects them all.
@@ -237,7 +248,7 @@ func List(ctx context.Context, db *sql.DB, f Filter) ([]Row, error) {
 	if f.Limit <= 0 {
 		f.Limit = 100
 	}
-	q := `SELECT id, at, workspace_id, actor_id, action, target_type, target_id, details, client_addr FROM audit_events WHERE 1 = 1`
+	q := `SELECT id, at, workspace_id, actor_id, action, target_type, target_id, target_created_at, details, client_addr FROM audit_events WHERE 1 = 1`
 	var args []any
 	if f.Workspace != 0 {
 		q += ` AND workspace_id = ?`
@@ -257,7 +268,7 @@ func List(ctx context.Context, db *sql.DB, f Filter) ([]Row, error) {
 	for rows.Next() {
 		var r Row
 		var details string
-		if err := rows.Scan(&r.ID, &r.At, &r.WorkspaceID, &r.ActorID, &r.Action, &r.TargetType, &r.TargetID, &details, &r.ClientAddr); err != nil {
+		if err := rows.Scan(&r.ID, &r.At, &r.WorkspaceID, &r.ActorID, &r.Action, &r.TargetType, &r.TargetID, &r.TargetCreatedAt, &details, &r.ClientAddr); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(details), &r.Details); err != nil {

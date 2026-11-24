@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strconv"
 	"time"
 
@@ -224,9 +225,7 @@ func (s *Store) create(ctx context.Context, o owner, d draft, user int64) (recor
 		// A personal account belongs to no workspace: its event has none either. The key is only
 		// said to be set; the address is kept as its host, which a URL's credentials never are.
 		return audit.Record(ctx, tx, audit.Event{Workspace: o.workspace, Actor: user, Action: audit.ProviderAccountCreated,
-			TargetType: audit.TargetProvider, Target: id, Details: audit.Details{
-				"name": d.name, "kind": d.kind, "scope": string(o.scope()), "base_host": audit.Host(d.baseURL), "api_key_set": d.apiKey != nil,
-			}})
+			TargetType: audit.TargetProvider, Target: id, Details: details(d.kind, o, d.baseURL, audit.Details{"api_key_set": d.apiKey != nil})})
 	})
 	return rec, err
 }
@@ -284,29 +283,82 @@ func (s *Store) update(ctx context.Context, o owner, id int64, change func(*draf
 			"models":       string(oldModels) != string(models),
 		})
 		return audit.Record(ctx, tx, audit.Event{Workspace: o.workspace, Action: audit.ProviderAccountUpdated,
-			TargetType: audit.TargetProvider, Target: id, Details: audit.Details{
-				"name": old.Name, "kind": old.Kind, "scope": string(o.scope()), "fields": fields,
-				"base_host": audit.Host(d.baseURL), "api_key_changed": keyChanged,
-			}})
+			TargetType: audit.TargetProvider, Target: id, Details: details(old.Kind, o, d.baseURL, audit.Details{"fields": fields, "api_key_changed": keyChanged})})
 	})
 	return rec, err
 }
 
-// remove deletes o's account id.
+// details are the details of an account's event: what kind of account and where it is, which
+// never holds a name a person typed. The address is its host alone, left out when it has none.
+func details(kind string, o owner, baseURL string, more audit.Details) audit.Details {
+	d := audit.Details{"kind": kind, "scope": string(o.scope())}
+	if h := audit.Host(baseURL); h != "" {
+		d["base_host"] = h
+	}
+	maps.Copy(d, more)
+	return d
+}
+
+// remove deletes o's account id. A workspace's embeddings setting and its spaces' consents that
+// name the account go with it (ON DELETE CASCADE), and are recorded in the same transaction.
 func (s *Store) remove(ctx context.Context, o owner, id int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
-		var name, kind string
-		err := tx.QueryRowContext(ctx, `DELETE FROM provider_accounts WHERE id = ? AND `+ownerCond+` RETURNING name, kind`,
-			append([]any{id}, o.args()...)...).Scan(&name, &kind)
+		settings, err := cascadedPairs(ctx, tx, `SELECT workspace_id, 0 FROM search_settings WHERE account_id = ?`, id)
+		if err != nil {
+			return err
+		}
+		consents, err := cascadedPairs(ctx, tx, `SELECT c.space_id, sp.workspace_id FROM search_embedding_consent c
+			JOIN spaces sp ON sp.id = c.space_id WHERE c.account_id = ?`, id)
+		if err != nil {
+			return err
+		}
+		var kind, created string
+		err = tx.QueryRowContext(ctx, `DELETE FROM provider_accounts WHERE id = ? AND `+ownerCond+` RETURNING kind, created_at`,
+			append([]any{id}, o.args()...)...).Scan(&kind, &created)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errNotFound
 		}
 		if err != nil {
 			return err
 		}
-		return audit.Record(ctx, tx, audit.Event{Workspace: o.workspace, Action: audit.ProviderAccountRemoved,
-			TargetType: audit.TargetProvider, Target: id, Details: audit.Details{"name": name, "kind": kind, "scope": string(o.scope())}})
+		if err := audit.Record(ctx, tx, audit.Event{Workspace: o.workspace, Action: audit.ProviderAccountRemoved,
+			TargetType: audit.TargetProvider, Target: id, TargetCreated: created,
+			Details: audit.Details{"kind": kind, "scope": string(o.scope())}}); err != nil {
+			return err
+		}
+		for _, st := range settings {
+			if err := audit.Record(ctx, tx, audit.Event{Workspace: st[0], Action: audit.SearchEmbeddingsChanged,
+				TargetType: audit.TargetWorkspace, Target: st[0],
+				Details: audit.Details{"enabled": false, "account": id, "cascade": true}}); err != nil {
+				return err
+			}
+		}
+		for _, c := range consents {
+			if err := audit.Record(ctx, tx, audit.Event{Workspace: c[1], Action: audit.SearchConsentChanged,
+				TargetType: audit.TargetSpace, Target: c[0], Details: audit.Details{"enabled": false, "cascade": true}}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+// cascadedPairs runs a query of two ids, read before the account's delete takes its rows.
+func cascadedPairs(ctx context.Context, tx *sql.Tx, query string, args ...any) ([][2]int64, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var all [][2]int64
+	for rows.Next() {
+		var p [2]int64
+		if err := rows.Scan(&p[0], &p[1]); err != nil {
+			return nil, err
+		}
+		all = append(all, p)
+	}
+	return all, rows.Err()
 }
 
 func nullJSON(raw json.RawMessage) any {

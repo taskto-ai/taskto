@@ -15,6 +15,10 @@ CREATE TABLE audit_events (
     action       TEXT NOT NULL,
     target_type  TEXT NOT NULL DEFAULT '',
     target_id    INTEGER,
+    -- The target's own created_at: SQLite hands a deleted row's id to a later one, so an event
+    -- is about the object with this type, id and creation time. NULL when the target was gone
+    -- or has no such time.
+    target_created_at TEXT,
     details      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(details)),
     client_addr  TEXT
 ) STRICT;

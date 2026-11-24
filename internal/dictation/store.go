@@ -101,11 +101,15 @@ func (s *Service) save(ctx context.Context, workspaceID, userID int64, st settin
 		return err
 	}
 	// The key is only said to have changed, and to be set; the address is kept as its host.
+	details := audit.Details{"engine": st.engine, "api_key_changed": newKey != nil, "api_key_set": sealed != nil, "notice_confirmed": noticeBy}
+	if st.language != "" {
+		details["language"] = st.language
+	}
+	if h := audit.Host(st.baseURL); h != "" {
+		details["base_host"] = h
+	}
 	if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: userID, Action: audit.DictationSettingsChanged,
-		TargetType: audit.TargetWorkspace, Target: workspaceID, Details: audit.Details{
-			"engine": st.engine, "language": st.language, "api_model": st.model, "base_host": audit.Host(st.baseURL),
-			"api_key_changed": newKey != nil, "api_key_set": sealed != nil, "notice_confirmed": noticeBy,
-		}}); err != nil {
+		TargetType: audit.TargetWorkspace, Target: workspaceID, Details: details}); err != nil {
 		return err
 	}
 	return tx.Commit()

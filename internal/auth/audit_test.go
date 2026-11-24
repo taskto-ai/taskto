@@ -62,6 +62,9 @@ func wantEvent(t *testing.T, r audit.Row, workspace, actor int64, targetType str
 	if r.At == "" {
 		t.Errorf("%s has no time", r.Action)
 	}
+	if target != 0 && r.TargetCreatedAt == nil {
+		t.Errorf("%s has no creation time for its target", r.Action)
+	}
 }
 
 func TestAuditSetupLoginLogout(t *testing.T) {
@@ -94,7 +97,8 @@ func TestAuditSetupLoginLogout(t *testing.T) {
 	if len(failed) != 2 {
 		t.Fatalf("login_failed = %d events, want 2", len(failed))
 	}
-	wantEvent(t, failed[0], 0, ownerID, audit.TargetUser, ownerID)
+	// The owner is the target, not the actor: whoever typed the password isn't known to be them.
+	wantEvent(t, failed[0], 0, 0, audit.TargetUser, ownerID)
 	if failed[0].Details["reason"] != "wrong_password" {
 		t.Errorf("details = %v", failed[0].Details)
 	}
@@ -261,8 +265,8 @@ func TestAuditAccessTokens(t *testing.T) {
 	id := decode[Token](t, rec).ID
 	created := e.one(audit.AccessTokenCreated)
 	wantEvent(t, created, ws, ownerID, audit.TargetAccessToken, id)
-	if created.Details["name"] != "laptop" || created.Details["expires"] != false {
-		t.Errorf("details = %v", created.Details)
+	if len(created.Details) != 1 || created.Details["expires"] != false {
+		t.Errorf("details = %v: a token's name isn't recorded", created.Details)
 	}
 
 	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/tokens/%d", ws, id), nil), http.StatusNoContent)
@@ -404,5 +408,155 @@ func TestAuditDetailsAreNotTheCallers(t *testing.T) {
 	failed := s.one(audit.SSOLoginFailed)
 	if failed.Details["reason"] != "provider_error" || strings.Contains(fmt.Sprint(failed.Details), "secret-words") {
 		t.Errorf("details = %v", failed.Details)
+	}
+}
+
+func TestAuditATokenNameIsNeverRecorded(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, ws := e.setup()
+	first := e.accessToken(owner, ws)
+	// A token pasted into the name box, as people do.
+	rec := owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/tokens", ws), map[string]string{"name": first})
+	expect(t, rec, http.StatusCreated)
+	id := decode[Token](t, rec).ID
+	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/tokens/%d", ws, id), nil), http.StatusNoContent)
+	audittest.NoSecrets(t, e.db, map[string]string{"a token typed as a token's name": first})
+}
+
+func TestAuditTokenUseIsRecordedWhenLastUsedAdvances(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, ws := e.setup()
+	ownerID := e.userID(owner)
+	raw := e.accessToken(owner, ws)
+	var id int64
+	if err := e.db.QueryRow(`SELECT id FROM access_tokens`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	ctx := audit.WithClient(context.Background(), "192.0.2.1")
+	use := func() {
+		t.Helper()
+		if _, _, err := e.svc.TokenUser(ctx, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	use()
+	wantEvent(t, e.one(audit.AccessTokenUsed), ws, ownerID, audit.TargetAccessToken, id)
+	// Many requests in the same minute are one use, as last_used_at has it.
+	for range 5 {
+		e.advance(5 * time.Second)
+		use()
+	}
+	if n := len(e.events(audit.AccessTokenUsed)); n != 1 {
+		t.Fatalf("access_token_used = %d events within a minute, want 1", n)
+	}
+	e.advance(time.Minute)
+	use()
+	if n := len(e.events(audit.AccessTokenUsed)); n != 2 {
+		t.Fatalf("access_token_used = %d events a minute later, want 2", n)
+	}
+	// The event and last_used_at are the same fact.
+	var last string
+	if err := e.db.QueryRow(`SELECT last_used_at FROM access_tokens WHERE id = ?`, id).Scan(&last); err != nil {
+		t.Fatal(err)
+	}
+	if rows := e.events(audit.AccessTokenUsed); rows[1].At == "" || last != stamp(e.now) {
+		t.Fatalf("last_used_at = %s, events = %+v", last, rows)
+	}
+	// A refused token (wrong, or its owner removed) is no use.
+	if _, _, err := e.svc.TokenUser(ctx, "ttp_not-a-token-of-anyone"); err == nil {
+		t.Fatal("an unknown token was accepted")
+	}
+	if n := len(e.events(audit.AccessTokenUsed)); n != 2 {
+		t.Fatalf("access_token_used = %d events after a refused token", n)
+	}
+	audittest.NoSecrets(t, e.db, map[string]string{"the token": raw})
+}
+
+func TestAuditRemovingAMemberRecordsWhatGoesWithThem(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, ws := e.setup()
+	ownerID := e.userID(owner)
+	member, _ := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
+	memberID := e.userID(member)
+
+	// Two tokens, a seat in a shared space, and, in another workspace, things that stay.
+	t1, t2 := e.accessToken(member, ws), e.accessToken(member, ws)
+	_, _ = t1, t2
+	var space int64
+	if err := e.db.QueryRow(`INSERT INTO spaces (workspace_id, kind, name) VALUES (?, 'shared', 'Team') RETURNING id`, ws).Scan(&space); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`INSERT INTO space_members (space_id, user_id, role) VALUES (?, ?, 'editor')`, space, memberID); err != nil {
+		t.Fatal(err)
+	}
+	other := e.addWorkspace(ownerID, "Other")
+	if _, err := e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, other, memberID); err != nil {
+		t.Fatal(err)
+	}
+	e.accessToken(member, other)
+
+	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, memberID), nil), http.StatusNoContent)
+
+	wantEvent(t, e.one(audit.MemberRemoved), ws, ownerID, audit.TargetUser, memberID)
+	revoked := e.events(audit.AccessTokenRevoked)
+	if len(revoked) != 2 {
+		t.Fatalf("access_token_revoked = %d events, want the member's 2 tokens of this workspace: %+v", len(revoked), revoked)
+	}
+	for _, r := range revoked {
+		if r.WorkspaceID == nil || *r.WorkspaceID != ws || r.Details["cascade"] != true || r.TargetCreatedAt == nil ||
+			r.ActorID == nil || *r.ActorID != ownerID {
+			t.Errorf("revoked = %+v", r)
+		}
+	}
+	left := e.events(audit.SpaceMemberRemoved)
+	if len(left) != 1 || *left[0].TargetID != space || left[0].Details["cascade"] != true || left[0].Details["role"] != "editor" ||
+		left[0].Details["user_id"] != float64(memberID) || *left[0].WorkspaceID != ws {
+		t.Fatalf("space_member_removed = %+v", left)
+	}
+	// What the schema deleted is what was recorded: the other workspace's token is still there.
+	if n := e.count(`SELECT count(*) FROM access_tokens WHERE user_id = ?`, memberID); n != 1 {
+		t.Fatalf("%d tokens left for the member, want the other workspace's one", n)
+	}
+}
+
+func TestAuditLogoutOfAnExpiredSessionRecordsNothing(t *testing.T) {
+	e := newEnv(t, Options{})
+	e.setup()
+	c, code := e.login("owner@example.com", ownerPassword)
+	if code != http.StatusOK {
+		t.Fatalf("login = %d", code)
+	}
+	e.advance(e.svc.opts.SessionTTL + time.Hour)
+	before := e.count(`SELECT count(*) FROM sessions`)
+	expect(t, c.do(http.MethodPost, "/api/logout", nil), http.StatusNoContent)
+	if n := len(e.events(audit.Logout)); n != 0 {
+		t.Fatalf("logout events = %d for a session that had expired", n)
+	}
+	// The expired row is gone all the same.
+	if n := e.count(`SELECT count(*) FROM sessions`); n != before-1 {
+		t.Fatalf("%d sessions left of %d", n, before)
+	}
+}
+
+func TestAuditTargetsOfAReusedIDAreToldApart(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, ws := e.setup()
+	create := func() Token {
+		rec := owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/tokens", ws), map[string]string{"name": "a"})
+		expect(t, rec, http.StatusCreated)
+		return decode[Token](t, rec)
+	}
+	first := create()
+	expect(t, owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/tokens/%d", ws, first.ID), nil), http.StatusNoContent)
+	e.advance(time.Hour)
+	second := create()
+	if second.ID != first.ID {
+		t.Skipf("SQLite didn't reuse the id (%d, then %d)", first.ID, second.ID)
+	}
+	created, revoked := e.events(audit.AccessTokenCreated), e.one(audit.AccessTokenRevoked)
+	if len(created) != 2 || *created[0].TargetCreatedAt != first.CreatedAt || *created[1].TargetCreatedAt != second.CreatedAt ||
+		*revoked.TargetCreatedAt != first.CreatedAt || first.CreatedAt == second.CreatedAt {
+		t.Fatalf("created = %+v, revoked = %+v: the first token's events must name its creation time", created, revoked)
 	}
 }
