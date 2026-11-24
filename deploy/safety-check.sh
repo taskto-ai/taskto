@@ -15,8 +15,10 @@
 #                                  (a setuid program in the image, the network Docker made)
 #                                  is left to the live check, which still runs after the start.
 #
-#   TASKTO_ROOT  the Compose project (default /srv/taskto)
-#   DOCKER       the docker command (default docker)
+#   TASKTO_ROOT          the Compose project (default /srv/taskto)
+#   DOCKER               the docker command (default docker)
+#   TASKTO_UPDATE_STATE  the updater's state directory (default /var/lib/taskto-update), which the
+#                        server may not see, except its `public` directory, read-only
 #
 # Compose is always given its inputs: the project name, DIR's .env, and DIR's compose.yaml and,
 # when it exists, compose.override.yaml, and no other file (the updater refuses an install that
@@ -24,6 +26,8 @@
 set -euo pipefail
 
 DOCKER=${DOCKER:-docker}
+state=${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}
+state=${state%/}
 mode=live dir=""
 case ${1:-} in
 "") ;;
@@ -109,6 +113,13 @@ if [ "$mode" = static ]; then
 		t "$s" '[.services[$s].volumes[]? | select(((.source // "") + (.target // "")) | contains("docker.sock"))] | length == 0' ||
 			fail "a container has the Docker socket"
 	done
+	# The server reads one thing of the host's updater, its status for admins: the directory
+	# $state/public, read-only. Nothing that holds the updater's own state (the transaction, the
+	# old files and .env, the backups), and no directory above it, which would hold it.
+	jq -e --arg state "$state" 'def bad: (.source // "" | rtrimstr("/")) as $p | ($state == $p or $p == "" or ($state | startswith($p + "/")) or
+			(($p | startswith($state + "/")) and ($p != $state + "/public" or .read_only != true)));
+		[.services.taskto.volumes[]? | select(.type == "bind" and bad)] | length == 0' <<<"$cfg" >/dev/null ||
+		fail "the server has a host path that holds the updater's state (only $state/public, read-only, may be mounted)"
 
 	# The worker is on one network, its own, which the server isn't on, and the firewall's bridge.
 	t cli-worker '(.services[$s].networks // {default: null}) | length == 1' || fail "the worker isn't on one network only"
@@ -167,6 +178,11 @@ for i in "$si" "$wi"; do
 	q '[.[0].Mounts[]? | select(((.Source // "") + (.Destination // "")) | contains("docker.sock"))] | length == 0' <<<"$i" ||
 		fail "a container has the Docker socket"
 done
+# The same for the updater's state as in the static check: the server may mount $state/public, read-only.
+jq -e --arg state "$state" 'def bad: (.Source // "" | rtrimstr("/")) as $p | ($state == $p or $p == "" or ($state | startswith($p + "/")) or
+		(($p | startswith($state + "/")) and ($p != $state + "/public" or .RW != false)));
+	[.[0].Mounts[]? | select(.Type == "bind" and bad)] | length == 0' <<<"$si" >/dev/null ||
+	fail "the server has a host path that holds the updater's state (only $state/public, read-only, may be mounted)"
 
 # The worker is on one network, its own, which the server isn't on, and the firewall's bridge.
 q '.[0].NetworkSettings.Networks | length == 1' <<<"$wi" || fail "the worker isn't on one network only"

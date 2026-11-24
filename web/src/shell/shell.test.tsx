@@ -22,6 +22,7 @@ const pages = {
   'GET /api/workspaces/4/conversations': { body: { conversations: [] } },
   // Settings → About, for an admin.
   'GET /api/workspaces/1/backup': { body: { health: 'none' } },
+  'GET /api/workspaces/1/updates': { body: { configured: false, running_version: 'dev', status: null } },
 }
 
 beforeEach(() => {

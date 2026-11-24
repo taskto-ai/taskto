@@ -3133,6 +3133,49 @@ scheduled time they were for. A success doesn't clear `last_error`: it is curren
 `last_error_at` is after `last_success`. With `health` `none`, the other fields are absent.
 A user or a URL's password in an error is replaced by `***`.
 
+### `GET /api/workspaces/{workspace}/updates`
+
+Admins, with a browser session (not an access token). The server's version, and what the
+host's updater last said about the automatic updates
+([docs/install.md](install.md#automatic-updates)). The updater runs on the host, outside the
+server, and writes a copy of its status into a directory the server mounts read-only; this
+only reads that copy, and never runs or changes the updater.
+
+```json
+{
+  "configured": true,
+  "running_version": "v0.3.0",
+  "stale": false,
+  "status": {
+    "version": 1,
+    "checked": "2026-03-10T03:10:05Z",
+    "channel": "release",
+    "hold": false,
+    "recorded_version": "v0.3.0",
+    "last_run": {"at": "2026-03-10T03:10:00Z", "finished": "2026-03-10T03:10:05Z", "result": "skipped",
+                 "from": "v0.3.0", "reason": "v0.4.0 needs manual steps (…): follow its notes, then run taskto-update --to v0.4.0"},
+    "last_change": {"at": "2026-03-01T03:12:00Z", "finished": "2026-03-01T03:15:30Z", "result": "updated",
+                    "from": "v0.2.0", "to": "v0.3.0", "backup": "/var/backups/taskto/before-update-….tar.gz"},
+    "needs_person": {"kind": "manual-upgrade", "reason": "v0.4.0 needs manual steps (…)"}
+  }
+}
+```
+
+`configured` is whether the server was told where the status is (`TASKTO_UPDATE_STATUS_DIR`;
+the Compose install sets it); `status` is `null` while the updater hasn't written one, and
+`stale` is true when it wasn't written for three days (the updater writes it on every run, so
+its timer isn't running). `running_version` is the server's own version, and
+`recorded_version` the one the install's `.env` says: they differ when someone changed the
+install outside the updater. `result` is the updater's: `updated`, `up-to-date`, `skipped`,
+`failed`, `rolled-back`, `rollback-failed`, `stopped`, `stop-failed`, `blocked`,
+`interrupted` or `cleared`; `last_change` is the last that changed the install (an update, or
+a failure of one), which a quiet night doesn't replace. `needs_person` is `null` unless the
+install waits for someone: `blocked` (an update stopped or was interrupted, or the server isn't
+the version on record; a person looks, puts it right and runs `taskto-update --clear-block` on
+the host) or `manual-upgrade` (a release's notes say so, or it changes the worker's firewall;
+follow them, then `taskto-update --to VERSION`). Texts are the updater's own words and may name
+paths on the host. A file that can't be read is a `500`.
+
 ### `GET /healthz/backup`
 
 No login, for outside monitoring: `200` while backups are on time (`ok`, `pending`,

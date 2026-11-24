@@ -443,6 +443,19 @@ func TestSSOValidation(t *testing.T) {
 	}
 }
 
+func TestUpdateStatusDir(t *testing.T) {
+	cfg, err := Load(nil, env(map[string]string{"TASKTO_UPDATE_STATUS_DIR": "/update-status"}), io.Discard)
+	if err != nil || cfg.UpdateStatusDir != "/update-status" {
+		t.Fatalf("%q, %v", cfg.UpdateStatusDir, err)
+	}
+	if cfg, err := Load(nil, env(nil), io.Discard); err != nil || cfg.UpdateStatusDir != "" {
+		t.Fatalf("default: %q, %v", cfg.UpdateStatusDir, err)
+	}
+	if _, err := Load([]string{"-update-status-dir", "relative/dir"}, env(nil), io.Discard); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("a relative path: %v", err)
+	}
+}
+
 func TestSMTPSettings(t *testing.T) {
 	cfg, err := Load(nil, env(map[string]string{ //nolint:gosec // G101: names of settings and a path, not credentials
 		"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "TaskTo <taskto@example.com>",

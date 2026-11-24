@@ -53,6 +53,11 @@
 # server is healthy and is the version in .env, the worker's firewall rules are in and the safety
 # rules hold in the running containers.
 #
+# What admins see (Settings → About): after every run, and on each night a stop is still waiting,
+# it writes a copy of its status, made for the server, to $STATE/public/status.json, which
+# compose.yaml mounts read-only into the server (write_public below). The server reads nothing
+# else of $STATE and runs nothing: deploy/safety-check.sh fails an install where it could.
+#
 # Every outside command and place is a variable (DOCKER, CURL, FLOCK, SYSTEMCTL, the
 # TASKTO_UPDATE_* paths and base URLs below), so cmd/taskto/update_test.go runs it against fakes.
 #
@@ -73,6 +78,8 @@ ROOT=${TASKTO_UPDATE_ROOT:-/srv/taskto}
 INSTALL_ENV=${TASKTO_UPDATE_INSTALL_ENV:-/etc/taskto/install.env}
 HOLD=${TASKTO_UPDATE_HOLD:-/etc/taskto/update.hold}
 STATE=${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}
+# The one directory the server may read (compose.yaml mounts it, read-only): the status for admins.
+PUBLIC=${TASKTO_UPDATE_PUBLIC:-$STATE/public}
 BACKUPS=${TASKTO_UPDATE_BACKUPS:-/var/backups/taskto}
 LOCK=${TASKTO_UPDATE_LOCK:-/run/taskto-update.lock}
 FIREWALL=${TASKTO_UPDATE_FIREWALL:-/usr/local/sbin/taskto-worker-firewall}
@@ -156,7 +163,7 @@ CHANNEL=$(setting TASKTO_UPDATE_CHANNEL release)
 REPO=$(setting TASKTO_UPDATE_REPO taskto-ai/taskto)
 KEEP=$(setting TASKTO_UPDATE_KEEP 3)
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-result="" from="" to="" sha="" reason="" backup="" digests='{}'
+result="" from="" to="" sha="" reason="" backup="" digests='{}' needs=""
 stage="" login_config=""
 # The transaction: what the run changes, kept in $TX from before the first change until a
 # terminal outcome, so a run that is stopped half way is found, not mistaken for done. After a
@@ -183,6 +190,42 @@ write_status() {
 		return 1
 	}
 	mv -f "$f.new" "$f"
+	write_public || log "can't write $PUBLIC/status.json"
+}
+
+# write_public: the part of the status the server shows its admins (Settings → About), in $PUBLIC,
+# the one directory compose.yaml mounts, read-only, into the server. It is a copy made for that:
+# no digests, nothing from the transaction, the old files or the backups, and never a setting
+# that may hold a secret (the notification address). It says what the server can't know: the
+# last run and the last change, the version on record, whether a hold is on, and whether the
+# install waits for a person (`needs_person`: kind `blocked`, cleared with `taskto-update
+# --clear-block`, or `manual-upgrade`, done by hand, then `taskto-update --to`). It is rewritten
+# whole and moved into place, so the server sees the old file or the new one, never part of one;
+# `checked` is when, so a status that stops being written shows as stale. A failure to write
+# it never changes the outcome.
+write_public() {
+	[ "$DRY" = 0 ] || return 0
+	local f=$PUBLIC/status.json priv=null kind="" why="" hold=false
+	if [ -s "$STATE/status.json" ]; then priv=$(jq -c '.' "$STATE/status.json" 2>/dev/null) || priv=null; fi
+	if [ -e "$STATE/blocked" ] || [ -e "$TX" ]; then
+		kind=blocked
+		why=$(head -c 4000 "$STATE/blocked" 2>/dev/null | tr -d '\000' || true)
+		[ -n "$why" ] || why=$(jq -r '.reason // ""' <<<"$priv")
+	elif [ -n "$needs" ]; then
+		kind=$needs why=$reason
+	fi
+	[ ! -e "$HOLD" ] || hold=true
+	install -d -m 755 "$PUBLIC" || return 1
+	jq -n --argjson priv "$priv" --arg checked "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg channel "$CHANNEL" --argjson hold "$hold" \
+		--arg recorded "$(envget "$ROOT/.env" TASKTO_VERSION)" --arg kind "$kind" --arg why "$why" '
+		def run: if . == null then null else {at, finished, result, from, to, reason, backup} end;
+		{version: 1, checked: $checked, channel: $channel, hold: $hold, recorded_version: $recorded,
+		 last_run: ($priv | run), last_change: ($priv.last_change // null | run),
+		 needs_person: (if $kind == "" then null else {kind: $kind, reason: $why} end)}' >"$f.new" || {
+		rm -f "$f.new"
+		return 1
+	}
+	chmod 644 "$f.new" && mv -f "$f.new" "$f"
 }
 
 # notify: the outcome, as JSON, POSTed to the URL in $NOTIFY_FILE, if there is one: any outcome
@@ -360,6 +403,7 @@ choose_release() {
 	# The release itself and every one between it and this install.
 	for ((i = pick; i < ${#tags[@]}; i++)); do
 		if [ "${manual[i]}" = true ]; then
+			needs="manual-upgrade"
 			finish skipped "${tags[i]} needs manual steps (its notes say manual-upgrade: true): follow its notes, then run taskto-update --to ${tags[pick]}"
 		fi
 	done
@@ -638,6 +682,7 @@ preflight() {
 	# The worker's firewall is never changed here: a version that changes it is for a person.
 	[ -e "$FIREWALL" ] || { reason="$FIREWALL isn't installed (runbook step 8)"; return 1; }
 	if ! cmp -s "$stage/deploy/worker-firewall.sh" "$FIREWALL"; then
+		needs="manual-upgrade"
 		finish skipped "the worker firewall changed in $to: update by hand (runbook step 8), then run taskto-update --to $to"
 	fi
 	firewall_ok || { reason="the worker's firewall isn't in place (its unit, or its rules): runbook step 8's check says what"; return 1; }
@@ -1029,12 +1074,14 @@ if [ -e "$TX" ]; then
 		# The stack couldn't be confirmed stopped: that comes first, since a restart would run the new version.
 		[ "$tphase" != stop-failed ] || reason="the stack of the failed update from $from to $to could NOT be confirmed stopped: stop it by hand now (docker compose stop; docker ps), since a restart would run the new version on the data it may have changed. Then, $reason"
 		log "blocked: $reason"
+		write_public || log "can't write $PUBLIC/status.json"
 		notify || true
 		exit 1
 		;;
 	rolled-back)
 		result=blocked reason="the update from $from to $to was rolled back (the server is on $from), but $to couldn't be recorded as failed in $STATE/failed: make $STATE writable, then run taskto-update --clear-block, which records it"
 		log "blocked: $reason"
+		write_public || log "can't write $PUBLIC/status.json"
 		notify || true
 		exit 1
 		;;
@@ -1051,6 +1098,9 @@ if [ -z "$TO" ] && [ -e "$STATE/blocked" ] && [ "$DRY" = 0 ]; then
 	# The status stays what the failed run said.
 	result=blocked reason="$(cat "$STATE/blocked"); look at it, then run taskto-update --clear-block (or taskto-update --to VERSION)"
 	log "blocked: $reason"
+	# Its own status stays, but the server's copy is made again: it says the install is still
+	# waiting, and when this was last looked at.
+	write_public || log "can't write $PUBLIC/status.json"
 	notify || true
 	exit 1
 fi

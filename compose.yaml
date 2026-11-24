@@ -28,7 +28,16 @@ services:
       - data:/data
       # The CLI worker's socket (the cli profile): only this container's user can open it.
       - cli-run:/run/taskto-cli
+      # What the host's updater says about the automatic updates (docs/install.md#automatic-updates),
+      # for admins to see (Settings > About): one directory it writes a copy of its status into,
+      # read-only here. The server gets nothing else of the updater: not its state, its backups or
+      # Docker (deploy/safety-check.sh checks it).
+      - type: bind
+        source: ${TASKTO_UPDATE_STATUS_SOURCE:-/var/lib/taskto-update/public}
+        target: /update-status
+        read_only: true
     environment:
+      TASKTO_UPDATE_STATUS_DIR: /update-status
       # Caddy's address on this project's network (below): the only proxy whose
       # X-Forwarded-For the server believes, for the login limits.
       TASKTO_TRUSTED_PROXIES: 172.29.80.10

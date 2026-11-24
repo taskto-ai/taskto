@@ -1,8 +1,20 @@
 // About: TaskTo.AI's licence, the credits of the third-party work this workspace uses, as
 // the server lists them (a local speech model's, or an add-on's while it is on), and for
-// admins, how the server's scheduled backups are doing (docs/install.md#backups).
+// admins, how the server's scheduled backups are doing (docs/install.md#backups) and what its
+// host's updater last did (docs/install.md#automatic-updates).
 
-import { ApiError, api, type BackupStatus, backupPath, type Credit, type DictationStatus, dictationPath } from '../api'
+import {
+  ApiError,
+  api,
+  type BackupStatus,
+  backupPath,
+  type Credit,
+  type DictationStatus,
+  dictationPath,
+  type UpdateRun,
+  type UpdateStatus,
+  updatesPath,
+} from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { InstallPanel } from '../pwa/InstallPanel'
@@ -42,8 +54,166 @@ export function AboutTab({ workspace, admin }: { workspace: number; admin: boole
           </ul>
         )}
       </section>
+      {admin && <UpdatesPanel workspace={workspace} />}
       {admin && <BackupsPanel workspace={workspace} />}
     </div>
+  )
+}
+
+const RESULTS = [
+  'updated',
+  'up-to-date',
+  'skipped',
+  'failed',
+  'rolled-back',
+  'rollback-failed',
+  'stopped',
+  'stop-failed',
+  'blocked',
+  'interrupted',
+  'cleared',
+] as const
+const CHANNELS = ['release', 'main', 'off'] as const
+// What the updater wrote may be a word this version doesn't know: it is shown as it is.
+const isResult = (r: string): r is (typeof RESULTS)[number] => (RESULTS as readonly string[]).includes(r)
+const isChannel = (c: string): c is (typeof CHANNELS)[number] => (CHANNELS as readonly string[]).includes(c)
+
+type UpdateHealth = 'ok' | 'hold' | 'off' | 'stale' | 'blocked' | 'manualUpgrade'
+
+const UPDATE_CLASS: Record<UpdateHealth, string | undefined> = {
+  ok: 'tt-ok',
+  hold: 'tt-warning',
+  off: 'tt-muted',
+  stale: 'tt-warning',
+  blocked: 'tt-error',
+  manualUpgrade: 'tt-warning',
+}
+
+// What the host's updater last did. The updater runs on the host, and the server only reads what
+// it wrote: nothing here runs or changes it, and what a person must do is done on the host.
+function UpdatesPanel({ workspace }: { workspace: number }) {
+  const t = useT()
+  const f = useFormat()
+  const updates = useLoad(() => api<UpdateStatus>(updatesPath(workspace)), [workspace])
+  const u = updates.data
+  const st = u?.status ?? null
+  const needs = st?.needs_person ?? null
+  let health: UpdateHealth | null = null
+  if (st) {
+    if (needs?.kind === 'blocked') health = 'blocked'
+    else if (needs?.kind === 'manual-upgrade') health = 'manualUpgrade'
+    else if (u?.stale) health = 'stale'
+    else if (st.channel === 'off') health = 'off'
+    else if (st.hold) health = 'hold'
+    else health = 'ok'
+  }
+  const mismatch = !!st?.recorded_version && !!u && st.recorded_version !== u.running_version
+  const label = (r: string) => (isResult(r) ? t(`settings.about.updates.result.${r}`) : r)
+  const run = (r: UpdateRun | null | undefined) => {
+    if (!r) return t('settings.about.updates.noRun')
+    const when = r.finished ?? r.at
+    return (
+      <>
+        {t('settings.about.updates.runLine', {
+          result: label(r.result),
+          time: when ? `${f.dateTime(when)} (${f.relative(when)})` : '',
+        })}
+        {r.to && (
+          <>
+            <br />
+            {t('settings.about.updates.versions', { from: r.from || '?', to: r.to })}
+          </>
+        )}
+        {r.reason && (
+          <>
+            <br />
+            <code>{r.reason}</code>
+          </>
+        )}
+        {r.backup && (
+          <>
+            <br />
+            {t.rich('settings.about.updates.backup', { path: <code>{r.backup}</code> })}
+          </>
+        )}
+      </>
+    )
+  }
+  return (
+    <section className="tt-panel" aria-labelledby="tt-updates">
+      <h2 id="tt-updates">{t('settings.about.updates.title')}</h2>
+      <p className="tt-muted">{t('settings.about.updates.intro')}</p>
+      <Alert error={updates.error} />
+      {!u && !updates.error && <p className="tt-muted">{t('app.loading')}</p>}
+      {u && !u.configured && <p className="tt-muted">{t('settings.about.updates.notConfigured')}</p>}
+      {u?.configured && !st && <p className="tt-muted">{t('settings.about.updates.noStatus')}</p>}
+      {health && (
+        <p className={UPDATE_CLASS[health]} role={health === 'blocked' ? 'alert' : undefined}>
+          {t(`settings.about.updates.health.${health}`)}
+        </p>
+      )}
+      {needs && (
+        <>
+          <p>
+            {t.rich(
+              needs.kind === 'blocked'
+                ? 'settings.about.updates.needs.blocked'
+                : 'settings.about.updates.needs.manualUpgrade',
+              {
+                command: (
+                  <code>{needs.kind === 'blocked' ? 'taskto-update --clear-block' : 'taskto-update --to VERSION'}</code>
+                ),
+              },
+            )}
+          </p>
+          {needs.reason && (
+            <p>{t.rich('settings.about.updates.needs.reason', { reason: <code>{needs.reason}</code> })}</p>
+          )}
+        </>
+      )}
+      {u && (
+        <dl className="tt-endpoint">
+          <dt>{t('settings.about.updates.running')}</dt>
+          <dd>
+            <code>{u.running_version}</code>
+          </dd>
+          {st?.recorded_version && (
+            <>
+              <dt>{t('settings.about.updates.recorded')}</dt>
+              <dd>
+                <code>{st.recorded_version}</code>
+                {mismatch && (
+                  <>
+                    <br />
+                    <span className="tt-warning">{t('settings.about.updates.mismatch')}</span>
+                  </>
+                )}
+              </dd>
+            </>
+          )}
+          {st && (
+            <>
+              <dt>{t('settings.about.updates.channel')}</dt>
+              <dd>
+                {t(st.hold ? 'settings.about.updates.channelHold' : 'settings.about.updates.channelName', {
+                  channel: isChannel(st.channel) ? t(`settings.about.updates.channelValue.${st.channel}`) : st.channel,
+                })}
+              </dd>
+              <dt>{t('settings.about.updates.lastRun')}</dt>
+              <dd>{run(st.last_run)}</dd>
+              <dt>{t('settings.about.updates.lastChange')}</dt>
+              <dd>{run(st.last_change)}</dd>
+              {st.checked && (
+                <>
+                  <dt>{t('settings.about.updates.checked')}</dt>
+                  <dd>{`${f.dateTime(st.checked)} (${f.relative(st.checked)})`}</dd>
+                </>
+              )}
+            </>
+          )}
+        </dl>
+      )}
+    </section>
   )
 }
 

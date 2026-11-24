@@ -1165,6 +1165,56 @@
         "retries_one": "A failed night is tried again once, {every} later.",
         "retries_other": "A failed night is tried again up to {count} times, every {every}.",
         "noRetries": "A failed night isn't tried again."
+      },
+      "updates": {
+        "title": "Updates",
+        "intro": "The server's host updates it by itself (docs/install.md, Automatic updates). This is what its updater last reported; the server only reads it, and can't run or change the updater.",
+        "notConfigured": "This server isn't set up to show the updater's status. The install guide (docs/install.md, Automatic updates) says how.",
+        "noStatus": "The updater hasn't reported yet. It runs every night on the host; until it has run once there is nothing to show.",
+        "health": {
+          "ok": "Updates are working.",
+          "hold": "Updates are on hold: no automatic run installs anything until the hold file is removed on the host.",
+          "off": "Automatic updates are off on this server (the channel is off).",
+          "stale": "The updater hasn't reported for days. Check its timer on the host (systemctl status taskto-update.timer).",
+          "blocked": "An update needs a person. Nothing updates until it is put right.",
+          "manualUpgrade": "A new release needs steps by hand, so it isn't installed automatically."
+        },
+        "needs": {
+          "blocked": "Look at what is below, put the install right on the host, then run {command} there. The install guide's Rollback section has the steps.",
+          "manualUpgrade": "Follow that release's notes on the host, then run {command} there, with its version.",
+          "reason": "What the updater said: {reason}"
+        },
+        "running": "Running version",
+        "recorded": "Version on record",
+        "mismatch": "This is not the version the install records. Someone changed the install outside the updater: it won't update until it is put right.",
+        "channel": "Channel",
+        "channelValue": {
+          "release": "Releases",
+          "main": "Main (every merge that passed CI)",
+          "off": "Off"
+        },
+        "checked": "Last report",
+        "lastRun": "Last run",
+        "lastChange": "Last change",
+        "noRun": "None yet",
+        "runLine": "{result}, {time}",
+        "versions": "{from} → {to}",
+        "backup": "Backup before it: {path}",
+        "result": {
+          "updated": "Updated",
+          "up-to-date": "Already up to date",
+          "skipped": "Nothing done",
+          "failed": "Failed, nothing changed",
+          "rolled-back": "Failed, the old version was put back",
+          "rollback-failed": "Failed, and the old version couldn't be put back",
+          "stopped": "Failed, and the server was stopped",
+          "stop-failed": "Failed, and the server couldn't be confirmed stopped",
+          "blocked": "Refused to run",
+          "interrupted": "Interrupted",
+          "cleared": "A person cleared a stop"
+        },
+        "channelHold": "{channel} (on hold)",
+        "channelName": "{channel}"
       }
     },
     "actions": {

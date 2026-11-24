@@ -396,6 +396,7 @@ reset and invite links are still passed on by hand.
 | `smtp_username` | `-smtp-username`, `TASKTO_SMTP_USERNAME` | The account to sign in as (`PLAIN` or `LOGIN`). Leave out for a relay that lets the server send without signing in. |
 | `smtp_password_file` | `-smtp-password-file`, `TASKTO_SMTP_PASSWORD_FILE` | The absolute path of a file holding the password, which goes with `smtp_username`. |
 | `smtp_egress` | `-smtp-egress`, `TASKTO_SMTP_EGRESS` | Where the connection may go: `any` (the default), `public`, or a comma-separated list of `public`, hosts, addresses and CIDR prefixes, as for [provider accounts](#where-provider-accounts-may-connect). Every connection is checked after name resolution. An internal relay on a private address needs it listed here, or `any`. |
+| `update_status_dir` | `-update-status-dir`, `TASKTO_UPDATE_STATUS_DIR` | The directory where the host's updater writes the status admins see in Settings → About, an absolute path. The server only reads it. The Compose install sets it to the read-only mount of the updater's `public` directory ([automatic updates](#automatic-updates)); empty, the page says no updater is shown. |
 
 **The password is never a setting.** It is read from its file when the server starts, kept only in
 memory, and is never logged, never returned by the API (the settings page says only whether the
@@ -1261,6 +1262,27 @@ never over an interrupted or stopped update.
 5. *After a success*, and only then, the updater's own older backups are pruned: the newest
    three by the time in their names (regular files with the updater's name only, never this
    run's), and nothing else in that directory, nor the nightly backups.
+
+**What admins see.** Settings → About shows an admin the version the server runs, the version
+on record in `.env`, the updater's channel and hold, its last run and last change (the result,
+when, the versions, the reason, the backup it made), and, while the install waits for a
+person, what to do: a stopped or interrupted update (`taskto-update --clear-block`, once the
+install is put right) or a release that needs steps by hand (`taskto-update --to VERSION`).
+The same is at [`GET /api/workspaces/{workspace}/updates`](api.md). The server gets it without
+gaining any power over the host: on every run (and each night a stop is still waiting) the
+updater writes a copy of its status, made for this, to `/var/lib/taskto-update/public/status.json`
+(`needs_person` in it is what the page's alert is made of), and `compose.yaml` mounts that one
+directory into the server, **read-only**, at `/update-status` (`TASKTO_UPDATE_STATUS_DIR`). The copy has
+no image digests, and nothing from the updater's own state (the transaction, the old files, the
+backups, the address a notification goes to); the server can't write there, run the updater,
+or reach Docker, and `deploy/safety-check.sh` fails an install whose server can see anything
+else of `/var/lib/taskto-update`, or can write there. Docker makes the directory on its
+own if it isn't there yet (root's, readable by the server), and `TASKTO_UPDATE_STATUS_SOURCE`
+in `.env` puts it somewhere else, if the updater's `TASKTO_UPDATE_PUBLIC` does too. On a machine that
+isn't a host install (a try-out with `docker compose up`), point `TASKTO_UPDATE_STATUS_SOURCE` at any
+directory you can mount; with no status in it the page shows only the server's version, as it does
+when the server wasn't told a directory at all. A status older than three days is called stale: the updater writes it on every run,
+so its timer isn't running.
 
 ## When an update fails
 

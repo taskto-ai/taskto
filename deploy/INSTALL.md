@@ -1089,7 +1089,7 @@ else
   )
   vm <<'EOF'
 . /etc/taskto/install.env
-install -d -m 755 /var/lib/taskto-update
+install -d -m 755 /var/lib/taskto-update /var/lib/taskto-update/public
 if [ "${TASKTO_UPDATE_CHANNEL:-release}" = off ]; then
   systemctl disable --now taskto-update.timer >/dev/null 2>&1 || true
 else
@@ -1150,7 +1150,8 @@ sends the address, secret included, and the message in the clear. It is optional
 
 To hold updates for a while, make `/etc/taskto/update.hold` on the VM (`touch`), and remove it
 to go on. The last run's result is in `/var/lib/taskto-update/status.json`, each run's line
-in `journalctl -u taskto-update`. To run one by hand: `sudo taskto-update`, or `sudo
+in `journalctl -u taskto-update`, and admins see it in **Settings → About** (a copy in
+`/var/lib/taskto-update/public/`, which the server mounts read-only). To run one by hand: `sudo taskto-update`, or `sudo
 taskto-update --to vX.Y.Z`. What the updater leaves to a person, and what to do then, is in
 [docs/install.md](../docs/install.md#automatic-updates) and, for a stopped update, the
 [Rollback](#rollback) section below.

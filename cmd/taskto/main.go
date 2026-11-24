@@ -315,7 +315,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		Browser:       browsers,
 		Dictation:     dictationService(cfg, sqlDB, key, kb),
 		BackupDataDir: cfg.DataDir,
-		Mail:          mailer,
+		// The host updater's status, read-only (docs/install.md#automatic-updates).
+		UpdateStatusDir: cfg.UpdateStatusDir,
+		Mail:            mailer,
 		// Photos that were never saved in a record are removed after a day, and an app moved to
 		// another space has its files follow it (internal/apps/attachments.go).
 		AppsReady: func(svc *apps.Service) { go svc.Maintain(ctx, 10*time.Minute) },

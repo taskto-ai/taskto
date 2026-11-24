@@ -1170,6 +1170,56 @@
         "retries_many": "Uma noite que falha é tentada de novo até {count} vezes, a cada {every}.",
         "retries_other": "Uma noite que falha é tentada de novo até {count} vezes, a cada {every}.",
         "noRetries": "Uma noite que falha não é tentada de novo."
+      },
+      "updates": {
+        "title": "Atualizações",
+        "intro": "O host do servidor o atualiza sozinho (docs/install.md, Atualizações automáticas). Isto é o que o atualizador informou por último; o servidor só lê, e não pode executar nem alterar o atualizador.",
+        "notConfigured": "Este servidor não está configurado para mostrar o estado do atualizador. O guia de instalação (docs/install.md, Atualizações automáticas) explica como.",
+        "noStatus": "O atualizador ainda não informou nada. Ele roda toda noite no host; até rodar uma vez, não há o que mostrar.",
+        "health": {
+          "ok": "As atualizações estão funcionando.",
+          "hold": "As atualizações estão em espera: nenhuma execução automática instala algo até o arquivo de espera ser removido no host.",
+          "off": "As atualizações automáticas estão desligadas neste servidor (o canal é off).",
+          "stale": "O atualizador não informa nada há dias. Veja o timer dele no host (systemctl status taskto-update.timer).",
+          "blocked": "Uma atualização precisa de uma pessoa. Nada é atualizado até isso ser resolvido.",
+          "manualUpgrade": "Uma nova versão precisa de passos manuais, então não é instalada automaticamente."
+        },
+        "needs": {
+          "blocked": "Veja o que está abaixo, acerte a instalação no host e rode {command} lá. A seção Rollback do guia de instalação tem os passos.",
+          "manualUpgrade": "Siga as notas dessa versão no host e rode {command} lá, com a versão.",
+          "reason": "O que o atualizador disse: {reason}"
+        },
+        "running": "Versão em execução",
+        "recorded": "Versão registrada",
+        "mismatch": "Esta não é a versão que a instalação registra. Alguém mudou a instalação fora do atualizador: ela não será atualizada até isso ser resolvido.",
+        "channel": "Canal",
+        "channelValue": {
+          "release": "Versões",
+          "main": "Main (todo merge que passou na CI)",
+          "off": "Desligado"
+        },
+        "checked": "Último relato",
+        "lastRun": "Última execução",
+        "lastChange": "Última mudança",
+        "noRun": "Nenhuma ainda",
+        "runLine": "{result}, {time}",
+        "versions": "{from} → {to}",
+        "backup": "Backup antes dela: {path}",
+        "result": {
+          "updated": "Atualizado",
+          "up-to-date": "Já estava em dia",
+          "skipped": "Nada foi feito",
+          "failed": "Falhou, nada mudou",
+          "rolled-back": "Falhou, a versão antiga foi recolocada",
+          "rollback-failed": "Falhou, e a versão antiga não pôde ser recolocada",
+          "stopped": "Falhou, e o servidor foi parado",
+          "stop-failed": "Falhou, e não se confirmou que o servidor parou",
+          "blocked": "Recusou-se a rodar",
+          "interrupted": "Interrompido",
+          "cleared": "Uma pessoa liberou uma parada"
+        },
+        "channelHold": "{channel} (em espera)",
+        "channelName": "{channel}"
       }
     },
     "actions": {

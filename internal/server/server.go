@@ -74,6 +74,10 @@ type Options struct {
 	// BackupDataDir is the data directory whose scheduled backups /healthz/backup and the
 	// admins' backup route report (internal/backup.Status). Empty reports none.
 	BackupDataDir string
+	// UpdateStatusDir is the directory the host's updater writes its status to, which the
+	// admins' update route reads (internal/updatestatus). Empty reports none. The server only
+	// reads it: it never runs the updater or touches Docker.
+	UpdateStatusDir string
 }
 
 // New returns the root HTTP handler, backed by the database sqlDB, which must be
@@ -85,6 +89,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	accounts := auth.New(sqlDB, opts.Auth)
 	accounts.Routes(mux)
 	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireAdmin(backupStatus(opts.BackupDataDir)))
+	mux.Handle("GET /api/workspaces/{workspace}/updates", accounts.RequireAdmin(updateStatus(version, opts.UpdateStatusDir)))
 	mailRoutes(mux, accounts, opts.Mail, newMailTestGate(opts.MailTestCooldown, time.Now))
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)

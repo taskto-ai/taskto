@@ -148,6 +148,11 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 		"the worker has the server's data under a name": {edit: `.services["cli-worker"].volumes += [{type: "volume", source: "alias", target: "/x", volume: {}}] | .volumes.alias = {name: "taskto_data"}`, reason: "the worker can see the server's data"},
 		"the worker has a host path":                    {edit: `.services["cli-worker"].volumes += [{type: "bind", source: "/etc", target: "/host"}]`, reason: "the worker can see the server's data, or has a host path"},
 		"the server has the Docker socket":              {edit: `.services.taskto.volumes += [{type: "bind", source: "/var/run/docker.sock", target: "/var/run/docker.sock"}]`, reason: "a container has the Docker socket"},
+		"the server has the updater's whole state":      {edit: `.services.taskto.volumes += [{type: "bind", source: "STATE", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has the updater's backups under it": {edit: `.services.taskto.volumes += [{type: "bind", source: "STATE/previous", target: "/previous", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has a host directory above it":      {edit: `.services.taskto.volumes += [{type: "bind", source: "PARENT", target: "/var-lib", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has the host's root":                {edit: `.services.taskto.volumes += [{type: "bind", source: "/", target: "/host", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server can write the updater's status":     {edit: `(.services.taskto.volumes[] | select(.target == "/update-status") | .read_only) = false`, reason: "a host path that holds the updater's state"},
 		"the worker on the server's network":            {edit: `.services["cli-worker"].networks = {default: null}`, reason: "the server is on the worker's network"},
 		"the worker on two networks":                    {edit: `.services["cli-worker"].networks = {worker: null, default: null}`, reason: "the worker isn't on one network only"},
 		"a worker bridge the firewall doesn't know":     {edit: `.networks.worker.driver_opts["com.docker.network.bridge.name"] = "docker9"`, reason: "the worker's bridge isn't taskto-worker"},
@@ -158,7 +163,7 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			if tc.edit != "" {
-				e.write("fake/config-edit", tc.edit)
+				e.write("fake/config-edit", strings.NewReplacer("PARENT", filepath.Dir(e.state), "STATE", e.state).Replace(tc.edit))
 			}
 			if tc.imageUser != "" {
 				e.write("fake/image-user", tc.imageUser)
@@ -277,6 +282,8 @@ func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 		"the worker is given NET_ADMIN":               func(e *updEnv) { e.mutate(updNew, "netadmin") },
 		"the worker has a setuid program":             func(e *updEnv) { e.mutate(updNew, "suid") },
 		"the worker can see the data":                 func(e *updEnv) { e.mutate(updNew, "workerdata") },
+		"the server can see the updater's state":      func(e *updEnv) { e.mutate(updNew, "updaterstate") },
+		"the server can write the updater's status":   func(e *updEnv) { e.mutate(updNew, "updaterwrite") },
 		"the proxy still answers as the old version":  func(e *updEnv) { e.write("fake/proxy-version", updOld) },
 	} {
 		t.Run(name, func(t *testing.T) {
