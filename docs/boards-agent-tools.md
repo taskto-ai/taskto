@@ -62,12 +62,13 @@ The tool schemas the sidecar registers mirror the Go types' JSON (`NewCard`,
 `CardChanges`, `Move`, `Filter`), and tool results are the JSON of `Board`, `Card`,
 `Thread` and `Comment`, the same shapes as the HTTP replies.
 
-A result is at most 64 KiB of JSON, and a body of 32 KiB can be more than that once it is
-escaped (`<` is six bytes). A tool that changes a card or adds a comment has done so
-before it answers, so it never fails for the size of the reply: the card's (or comment's)
-`body` is shortened until the reply fits, ends with `[…cut]` and the reply says
-`body_truncated: true`; `show_card` does the same for a body over what fits with no
-comment, after cutting it at 16 KiB. Read the whole body with the web app or the HTTP API.
+A result is at most 64 KiB of JSON, and a card can be more than that once it is escaped
+(a body of 32 KiB, `<` being six bytes; 50 doc paths of 1 KiB). A tool that changes a card
+or adds a comment has done so before it answers, so it never fails for the size of the
+reply: the last `docs` are left out (`docs_truncated: true`), then the card's (or
+comment's) `body` is shortened until the reply fits, ends with `[…cut]` and the reply says
+`body_truncated: true`. `show_card` does the same, for a body over what fits with no
+comment after cutting it at 16 KiB, and for the docs. Read the whole card with the web app or the HTTP API.
 
 ## A conversation that works a card
 

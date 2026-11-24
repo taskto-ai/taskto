@@ -169,3 +169,38 @@ func TestListBoardsPages(t *testing.T) {
 	w.status(400, w.aliceConv, "list_boards", map[string]any{"space_id": w.shared, "after": -1})
 	w.status(404, w.aliceConv, "list_boards", map[string]any{"space_id": w.bobPrivate, "after": archivedIDs[0]})
 }
+
+// A card with the most docs validation allows, each with the longest escaped path, is
+// answered too: the last docs are left out, and the reply says so.
+func TestCardRepliesFitWithManyLongDocs(t *testing.T) {
+	w := newWorld(t)
+	var docs []string
+	for i := range 50 {
+		docs = append(docs, fmt.Sprintf("%02d/%s.md", i, strings.Repeat("<", 240)))
+	}
+	card := w.ok(w.aliceConv, "create_card", map[string]any{
+		"space_id": w.alicePrivate, "board_id": w.alicePersonal, "title": "Linked", "docs": docs, "body": strings.Repeat("<", 4<<10),
+	})
+	checkFits(t, "create_card", card)
+	if card["docs_truncated"] != true || len(card["docs"].([]any)) == 0 || len(card["docs"].([]any)) >= len(docs) {
+		t.Fatalf("created card's docs = %d, docs_truncated = %v", len(card["docs"].([]any)), card["docs_truncated"])
+	}
+	if first := card["docs"].([]any)[0]; first != docs[0] {
+		t.Fatalf("first doc = %v", first)
+	}
+	cref := map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal, "card_id": id(card["id"])}
+	card = w.ok(w.aliceConv, "archive_card", map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal, "card_id": id(card["id"]), "version": card["version"]})
+	checkFits(t, "archive_card", card)
+	if card["column"] != "archived" || card["docs_truncated"] != true {
+		t.Fatalf("archived card = %v", card["docs_truncated"])
+	}
+	shown := w.ok(w.aliceConv, "show_card", cref)
+	checkFits(t, "show_card", shown)
+	if shown["docs_truncated"] != true {
+		t.Fatalf("shown card's docs_truncated = %v", shown["docs_truncated"])
+	}
+	stored, err := w.tools.o.Boards.ShowCard(context.Background(), boards.Actor{UserID: w.alice}, w.alicePrivate, w.alicePersonal, id(card["id"]))
+	if err != nil || len(stored.Docs) != len(docs) {
+		t.Fatalf("stored docs = %d, %v", len(stored.Docs), err)
+	}
+}

@@ -159,53 +159,106 @@ func (s *Service) showCard(ctx context.Context, c *call, args json.RawMessage) (
 		t.Comments[i].Body = cutText(t.Comments[i].Body, commentLen)
 	}
 	all := t.Comments
-	reply := func(body string, bodyCut bool, n int) any {
+	reply := func(c boards.Card, m cutMarks, n int) any {
 		shown := t
-		shown.Body = body
+		shown.Card = c
 		shown.Comments = all[len(all)-n:]
-		return threadReply{Thread: shown, BodyTruncated: bodyCut, Omitted: len(all) - n}
+		return threadReply{Thread: shown, cutMarks: m, Omitted: len(all) - n}
 	}
-	// The body is cut first, to what fits with no comment at all...
-	body, cutMore, err := fitBody(t.Body, func(b string) any { return reply(b, true, 0) })
+	// The card is cut first, to what fits with no comment at all...
+	card, marks, err := fitCard(t.Card, func(c boards.Card, m cutMarks) any { return reply(c, m, 0) })
 	if err != nil {
 		return nil, err
 	}
-	bodyCut = bodyCut || cutMore
+	marks.BodyTruncated = marks.BodyTruncated || bodyCut
 	// ...then the newest comments that fit.
-	_, res, err := fitting(len(all), func(n int) any { return reply(body, bodyCut, n) })
+	_, res, err := fitting(len(all), func(n int) any { return reply(card, marks, n) })
 	return res, err
+}
+
+// cutMarks say what a reply left out to fit in a result.
+type cutMarks struct {
+	BodyTruncated bool `json:"body_truncated,omitempty"`
+	DocsTruncated bool `json:"docs_truncated,omitempty"`
 }
 
 // threadReply is show_card's result: the card with its newest comments, and what was left out.
 type threadReply struct {
 	boards.Thread
-	BodyTruncated bool `json:"body_truncated,omitempty"`
-	Omitted       int  `json:"older_comments_omitted,omitempty"`
+	cutMarks
+	Omitted int `json:"older_comments_omitted,omitempty"`
 }
 
-// cardReply is a card changed by a tool, its body cut if it would not fit in a result.
+// cardReply is a card changed by a tool, its body and links cut if it would not fit in a result.
 type cardReply struct {
 	boards.Card
-	BodyTruncated bool `json:"body_truncated,omitempty"`
+	cutMarks
 }
 
 // cardResult shapes the result of a tool that changed a card, after the change was made:
-// a body of 32 KiB can be more than MaxResult once it is escaped as JSON, and the caller
-// must still be told the card changed, so the body is cut, with body_truncated: true.
+// a body of 32 KiB, or 50 doc paths, can be more than MaxResult once escaped as JSON, and
+// the caller must still be told the card changed, so the body, then the last docs, are
+// cut, with body_truncated and docs_truncated: true.
 func cardResult(c boards.Card, err error) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, wasCut, err := fitBody(c.Body, func(b string) any {
-		shown := c
-		shown.Body = b
-		return cardReply{shown, true}
-	})
+	c, marks, err := fitCard(c, func(c boards.Card, m cutMarks) any { return cardReply{c, m} })
 	if err != nil {
 		return nil, err
 	}
+	return cardReply{c, marks}, nil
+}
+
+// fitCard returns c with fewer docs, then a shorter body, until build(c, marks) marshals
+// to at most MaxResult bytes, and what it cut. build gets all the marks it may be given
+// while measuring, so the size it fits includes them.
+func fitCard(c boards.Card, build func(boards.Card, cutMarks) any) (boards.Card, cutMarks, error) {
+	fits := func(c boards.Card, m cutMarks) (bool, error) {
+		out, err := json.Marshal(build(c, m))
+		return len(out) <= MaxResult, err
+	}
+	if ok, err := fits(c, cutMarks{}); ok || err != nil {
+		return c, cutMarks{}, err
+	}
+	all := cutMarks{BodyTruncated: true, DocsTruncated: true}
+	var marks cutMarks
+	// The docs that fit with no body at all...
+	docs := c.Docs
+	bare := c
+	bare.Body = ""
+	if ok, err := fits(bare, all); err != nil {
+		return c, cutMarks{}, err
+	} else if !ok {
+		lo, hi := 0, len(docs) // docs[:hi] doesn't fit; docs[:lo] fits, if anything does
+		for lo < hi-1 {
+			mid := (lo + hi) / 2
+			bare.Docs = docs[:mid]
+			ok, err := fits(bare, all)
+			if err != nil {
+				return c, cutMarks{}, err
+			}
+			if ok {
+				lo = mid
+			} else {
+				hi = mid
+			}
+		}
+		c.Docs = docs[:lo]
+		marks.DocsTruncated = true
+	}
+	// ...then the start of the body that fits with them.
+	body, bodyCut, err := fitBody(c.Body, func(b string) any {
+		shown := c
+		shown.Body = b
+		return build(shown, all)
+	})
+	if err != nil {
+		return c, cutMarks{}, err
+	}
 	c.Body = body
-	return cardReply{c, wasCut}, nil
+	marks.BodyTruncated = bodyCut
+	return c, marks, nil
 }
 
 // commentReply is a comment added by comment_card, its body cut if it would not fit.
