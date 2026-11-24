@@ -19,6 +19,8 @@ export type Contract = [
   Is<Check<Gen.Member, Api.Member>>,
   Is<Check<Gen.Invite, Api.Invite>>,
   Is<Check<Gen.Token, Api.Token>>,
+  Is<Check<Gen.InviteCreated, Api.InviteCreated>>,
+  Is<Check<Gen.TokenCreated, Api.TokenCreated>>,
   // Spaces and the knowledge base.
   Is<Check<Gen.Space, Api.Space>>,
   Is<Check<Gen.Doc, Api.Doc>>,
@@ -27,6 +29,7 @@ export type Contract = [
   // An assignee is told apart by its kind: a user's has an ID, the agent's has none.
   Is<Check<Gen.Card, Api.Card, 'assignee.id'>>,
   Is<Check<Gen.Comment, Api.Comment>>,
+  Is<Check<Gen.CardThread, Api.CardWithThread, 'assignee.id'>>,
   Is<Check<Gen.BoardsAuthor, NonNullable<Api.Author>>>,
   // Conversations and notifications.
   Is<Check<Gen.Conversation, Api.Conversation>>,

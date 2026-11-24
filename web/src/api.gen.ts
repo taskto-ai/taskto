@@ -168,7 +168,7 @@ export type AppsEffectDetail = {
 
 export type AppsEffectError = {
   code: string
-  params?: Record<string, unknown>
+  params?: Record<string, string | number>
 }
 
 export type AppsField = {
@@ -227,7 +227,7 @@ export type AppsScreen = {
   name: string
   root: string
   record?: boolean
-  components: unknown[]
+  components: unknown[] | null
 }
 
 export type AppsSummary = {
@@ -315,6 +315,30 @@ export type Card = {
   updated_by: BoardsAuthor | null
 }
 
+export type CardThread = {
+  id: number
+  board_id: number
+  title: string
+  body: string
+  column: string
+  rank: string
+  archived_from: string | null
+  assignee: BoardsAssignee | null
+  blocked: boolean
+  blocked_reason: string | null
+  blocked_by: number[]
+  docs: string[]
+  conversations: string[]
+  due: string | null
+  labels: string[]
+  version: number
+  created_at: string
+  created_by: BoardsAuthor | null
+  updated_at: string
+  updated_by: BoardsAuthor | null
+  comments: Comment[]
+}
+
 export type Comment = {
   id: number
   card_id: number
@@ -393,6 +417,15 @@ export type Invite = {
   expires_at: string
 }
 
+export type InviteCreated = {
+  id: number
+  email: string
+  role: string
+  created_at: string
+  expires_at: string
+  token: string
+}
+
 export type Me = {
   user: AuthMeUser
   workspaces: Workspace[]
@@ -433,7 +466,7 @@ export type OfflineApp = {
   name: string
   release: number
   definition: AppsOfflineDefinition
-  messages: Record<string, unknown>[]
+  messages: (Record<string, unknown> | null)[]
   scope: string
   records: number
   total: number
@@ -478,6 +511,16 @@ export type Token = {
   created_at: string
   expires_at: string | null
   last_used_at: string | null
+}
+
+export type TokenCreated = {
+  id: number
+  workspace_id: number
+  name: string
+  created_at: string
+  expires_at: string | null
+  last_used_at: string | null
+  token: string
 }
 
 export type Widget = {

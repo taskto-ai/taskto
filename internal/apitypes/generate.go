@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"taskto.ai/taskto/internal/apierr"
 )
 
 // Header is the first lines of the generated file.
@@ -26,7 +29,9 @@ type generator struct {
 	names      map[reflect.Type]string // every struct type met, by TypeScript name
 	bodies     map[string]string       // TypeScript name → its type
 	todo       []reflect.Type
-	err        error
+	nonNull    []string // the fields tagged apitypes:"nonnull", as Type.Field
+	where      string   // the field being read, for errors
+	errs       []error  // every problem found, so one run lists them all
 }
 
 var (
@@ -37,10 +42,50 @@ var (
 	identifier    = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 )
 
+// wireShapes are the types with a MarshalJSON (or MarshalText) of their own whose JSON is
+// known: any other type with one is refused, since its struct says nothing of what it writes.
+var wireShapes = map[reflect.Type]wire{
+	timeType:                         {ts: "string"},
+	reflect.TypeFor[apierr.Params](): {ts: "Record<string, string | number>", null: true}, // a message's values are texts or numbers
+}
+
+// wire is the TypeScript type a type is written as, and whether a nil one is null.
+type wire struct {
+	ts   string
+	null bool
+}
+
+// A field's `apitypes` tag, a list of options, tells the generator what Go can't:
+//
+//   - json: the field holds free-form JSON (an any, a json.RawMessage, or a slice or map of
+//     them), written as unknown. Without it those are refused, so a field can't become
+//     unchecked by accident.
+//   - nonnull: a slice or map the server never sends as null (`[]` or `{}` when empty), told
+//     as T[] and not T[] | null. It is a promise the server keeps (initialized in Go) and a
+//     test checks (see TestNonNullFieldsAreKept).
+const tagName = "apitypes"
+
 // Generate returns the TypeScript declarations of roots, each type with the name it is
 // listed under, and of every struct they hold, named for its package and type (the
 // package's name and the type's, as in AccessAppAccess).
 func Generate(roots []Root) ([]byte, error) {
+	out, _, err := generate(roots)
+	return out, err
+}
+
+// NonNullFields lists the fields of roots tagged apitypes:"nonnull", each as Type.Field with
+// the Go type's package path, sorted.
+func NonNullFields(roots []Root) ([]string, error) {
+	_, g, err := generate(roots)
+	if err != nil {
+		return nil, err
+	}
+	out := slices.Clone(g.nonNull)
+	slices.Sort(out)
+	return slices.Compact(out), nil
+}
+
+func generate(roots []Root) ([]byte, *generator, error) {
 	g := &generator{
 		registered: map[reflect.Type]string{},
 		names:      map[reflect.Type]string{},
@@ -49,24 +94,27 @@ func Generate(roots []Root) ([]byte, error) {
 	for _, r := range roots {
 		t := derefAll(r.Type)
 		if t.Kind() != reflect.Struct {
-			return nil, fmt.Errorf("apitypes: %s is %s, not a struct", r.Name, t)
+			return nil, nil, fmt.Errorf("apitypes: %s is %s, not a struct", r.Name, t)
+		}
+		if _, known := wireShapes[t]; known || hasMarshaler(t) {
+			return nil, nil, fmt.Errorf("apitypes: %s (%s) writes itself with a MarshalJSON or MarshalText, so its struct says nothing of its JSON: register its wire shape", r.Name, t)
 		}
 		if prev, dup := g.registered[t]; dup {
-			return nil, fmt.Errorf("apitypes: %s is listed twice (%s, %s)", t, prev, r.Name)
+			return nil, nil, fmt.Errorf("apitypes: %s is listed twice (%s, %s)", t, prev, r.Name)
 		}
 		g.registered[t] = r.Name
 	}
 	for _, r := range roots {
 		g.name(derefAll(r.Type))
 	}
-	for len(g.todo) > 0 && g.err == nil {
+	for len(g.todo) > 0 {
 		t := g.todo[0]
 		g.todo = g.todo[1:]
 		body := g.structBody(t)
 		g.bodies[g.names[t]] = body
 	}
-	if g.err != nil {
-		return nil, g.err
+	if len(g.errs) > 0 {
+		return nil, nil, errors.Join(g.errs...)
 	}
 	keys := make([]string, 0, len(g.bodies))
 	for k := range g.bodies {
@@ -78,7 +126,7 @@ func Generate(roots []Root) ([]byte, error) {
 	for _, k := range keys {
 		fmt.Fprintf(&out, "\nexport type %s = %s\n", k, g.bodies[k])
 	}
-	return out.Bytes(), nil
+	return out.Bytes(), g, nil
 }
 
 // name returns the TypeScript name of the struct t, queueing it to be written.
@@ -101,17 +149,26 @@ func (g *generator) name(t reflect.Type) string {
 }
 
 func (g *generator) fail(format string, args ...any) {
-	if g.err == nil {
-		g.err = fmt.Errorf("apitypes: "+format, args...)
+	msg := fmt.Sprintf(format, args...)
+	if g.where != "" {
+		msg += " (at " + g.where + ")"
 	}
+	g.errs = append(g.errs, errors.New("apitypes: "+msg))
 }
 
+// field is one key encoding/json writes for a struct. It may be left out (optional) and, apart
+// from that, may be null: two things, since a key that is there can hold null.
 type field struct {
 	name     string
-	optional bool
+	optional bool // the key may be absent
+	nonNull  bool // a nil slice, map or pointer is never written as null (it is left out, or promised)
+	free     bool // apitypes:"json"
 	typ      reflect.Type
 	depth    int
 	tagged   bool
+	owner    reflect.Type
+	goName   string
+	promised bool // apitypes:"nonnull"
 }
 
 // structBody writes the object type of struct t as encoding/json writes the struct.
@@ -160,7 +217,20 @@ func (g *generator) structBody(t reflect.Type) string {
 		if f.optional {
 			opt = "?"
 		}
-		fmt.Fprintf(&b, "  %s%s: %s\n", key, opt, g.typeOf(f.typ, f.optional))
+		outer := g.where
+		g.where = f.owner.String() + "." + f.goName
+		typ, nullable := g.tsType(f.typ, f.free)
+		g.where = outer
+		if f.promised {
+			if !nullable {
+				g.fail("%s.%s: apitypes:\"nonnull\" on a field that is never null", f.owner, f.goName)
+			}
+			g.nonNull = append(g.nonNull, f.owner.PkgPath()+"."+f.owner.Name()+"."+f.goName)
+		}
+		if nullable && !f.nonNull {
+			typ += " | null"
+		}
+		fmt.Fprintf(&b, "  %s%s: %s\n", key, opt, typ)
 	}
 	b.WriteString("}")
 	return b.String()
@@ -168,7 +238,7 @@ func (g *generator) structBody(t reflect.Type) string {
 
 // collect lists the fields encoding/json would write for t, those of embedded structs
 // included, with how deep each is. viaPointer says t is embedded by a pointer: when that
-// is nil, its fields are left out.
+// is nil, its fields are left out. It follows typeFields in encoding/json.
 func collect(t reflect.Type, depth int, viaPointer bool, seen map[reflect.Type]bool) []field {
 	if seen[t] {
 		return nil
@@ -177,38 +247,113 @@ func collect(t reflect.Type, depth int, viaPointer bool, seen map[reflect.Type]b
 	defer delete(seen, t)
 	var out []field
 	for sf := range t.Fields() {
+		if sf.Anonymous {
+			et := sf.Type
+			if et.Kind() == reflect.Pointer {
+				et = et.Elem()
+			}
+			// An unexported embedded struct has its exported fields written; any other
+			// unexported embedded type is not.
+			if !sf.IsExported() && et.Kind() != reflect.Struct {
+				continue
+			}
+		} else if !sf.IsExported() {
+			continue
+		}
 		tag := sf.Tag.Get("json")
 		if tag == "-" {
 			continue
 		}
 		name, opts, _ := strings.Cut(tag, ",")
-		named := name != ""
-		if sf.Anonymous && name == "" {
-			et := derefAll(sf.Type)
-			if et.Kind() == reflect.Struct && !hasMarshaler(et) {
-				out = append(out, collect(et, depth+1, viaPointer || sf.Type.Kind() == reflect.Pointer, seen)...)
-				continue
-			}
+		if !validTag(name) {
+			name = ""
 		}
-		if !sf.IsExported() {
+		ft := sf.Type
+		if ft.Name() == "" && ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		if name == "" && sf.Anonymous && ft.Kind() == reflect.Struct {
+			out = append(out, collect(ft, depth+1, viaPointer || sf.Type.Kind() == reflect.Pointer, seen)...)
 			continue
 		}
+		tagged := name != ""
 		if name == "" {
 			name = sf.Name
 		}
-		optional := viaPointer || hasOpt(opts, "omitempty") || hasOpt(opts, "omitzero")
+		omitEmpty := hasOpt(opts, "omitempty") && emptyable(sf.Type)
+		omitZero := hasOpt(opts, "omitzero")
+		// A nil pointer, slice, map or interface left out is not null. omitzero asks the type's
+		// own IsZero when it has one, which may say a nil value is not zero.
+		nilOmitted := (omitEmpty && nilable(sf.Type)) || (omitZero && !hasIsZero(sf.Type))
 		typ := sf.Type
 		if hasOpt(opts, "string") {
 			typ = quoted(typ)
 		}
-		out = append(out, field{name: name, optional: optional, typ: typ, depth: depth, tagged: named})
+		tags := sf.Tag.Get(tagName)
+		out = append(out, field{
+			name:     name,
+			optional: viaPointer || omitEmpty || omitZero,
+			nonNull:  nilOmitted || hasOpt(tags, "nonnull"),
+			free:     hasOpt(tags, "json"),
+			promised: hasOpt(tags, "nonnull"),
+			typ:      typ,
+			depth:    depth,
+			tagged:   tagged,
+			owner:    t,
+			goName:   sf.Name,
+		})
 	}
 	return out
 }
 
+// validTag is encoding/json's test of a name in a tag; one that fails is ignored.
+func validTag(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case strings.ContainsRune("!#$%&()*+-./:;<=>?@[]^_{|}~ ", c):
+		case !unicode.IsLetter(c) && !unicode.IsDigit(c):
+			return false
+		}
+	}
+	return true
+}
+
+// emptyable is whether omitempty can leave out a value of type t: not a struct, nor an array
+// that has elements.
+func emptyable(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Array:
+		return t.Len() == 0
+	case reflect.Map, reflect.Slice, reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64, reflect.Interface, reflect.Pointer:
+		return true
+	}
+	return false
+}
+
+func nilable(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Interface, reflect.Pointer:
+		return true
+	}
+	return false
+}
+
+func hasIsZero(t reflect.Type) bool {
+	type zeroer interface{ IsZero() bool }
+	z := reflect.TypeFor[zeroer]()
+	return t.Implements(z) || reflect.PointerTo(t).Implements(z)
+}
+
 // quoted is the type of a field with the `string` option: a number, boolean or string is
 // written as a JSON string, and a nil pointer to one is still null. encoding/json looks through
-// one pointer only; others are left as they are.
+// one pointer only; others are left as they are. A type with a marshaler of its own writes
+// itself and ignores the option.
 func quoted(t reflect.Type) reflect.Type {
 	if t.Kind() == reflect.Pointer {
 		if q := quotedScalar(t.Elem()); q != t.Elem() {
@@ -220,9 +365,13 @@ func quoted(t reflect.Type) reflect.Type {
 }
 
 func quotedScalar(t reflect.Type) reflect.Type {
+	if hasMarshaler(t) {
+		return t
+	}
 	switch t.Kind() {
 	case reflect.Bool, reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64:
 		return reflect.TypeFor[string]()
 	}
 	return t
@@ -250,57 +399,87 @@ func derefAll(t reflect.Type) reflect.Type {
 	return t
 }
 
-// typeOf is the TypeScript type of a value of Go type t. A pointer that is null is told as
-// `| null`, unless the key is optional, when a nil pointer leaves the key out.
-func (g *generator) typeOf(t reflect.Type, optional bool) string {
+// tsType is the TypeScript type of a value of Go type t, without the `| null` that a nil
+// pointer, slice or map is written as, and whether it may be null. free is whether the field
+// has apitypes:"json".
+func (g *generator) tsType(t reflect.Type, free bool) (string, bool) {
 	if t.Kind() == reflect.Pointer {
-		inner := g.typeOf(t.Elem(), false)
-		if optional {
-			return inner
+		inner, _ := g.tsType(t.Elem(), free)
+		return inner, true
+	}
+	// A marshaler of its own comes before the kind: the struct says nothing of what it writes.
+	if w, ok := wireShapes[t]; ok {
+		return w.ts, w.null
+	}
+	if t == rawType {
+		if !free {
+			g.fail("a json.RawMessage is any JSON: tag its field apitypes:\"json\"")
 		}
-		return inner + " | null"
+		return "unknown", false
 	}
 	switch {
-	case t == timeType:
-		return "string"
-	case t == rawType:
-		return "unknown"
 	case isText(t):
-		return "string"
+		return "string", false
 	case hasMarshaler(t):
-		// Written by its own MarshalJSON: nothing to read from the struct.
-		return "unknown"
+		g.fail("%s writes itself with a MarshalJSON, so its struct says nothing of its JSON: register its wire shape", t)
+		return "unknown", false
 	}
 	switch t.Kind() {
 	case reflect.Bool:
-		return "boolean"
+		return "boolean", false
 	case reflect.String:
-		return "string"
+		return "string", false
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
 		reflect.Float32, reflect.Float64:
-		return "number"
+		return "number", false
 	case reflect.Interface:
-		return "unknown"
-	case reflect.Slice, reflect.Array:
-		if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 {
-			return "string" // []byte is base64
+		if !free {
+			g.fail("%s is any JSON: tag its field apitypes:\"json\", or give it a type", t)
 		}
-		return wrap(g.typeOf(t.Elem(), false)) + "[]"
+		return "unknown", false
+	case reflect.Slice, reflect.Array:
+		// encoding/json writes a byte slice as base64 unless its elements have marshalers.
+		if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 && !hasMarshaler(t.Elem()) {
+			return "string", true
+		}
+		return wrap(g.element(t.Elem(), free)) + "[]", t.Kind() == reflect.Slice
 	case reflect.Map:
-		if t.Key().Kind() != reflect.String && !isText(t.Key()) && !isInt(t.Key()) {
+		if !mapKeyOK(t.Key()) {
 			g.fail("%s: a map's key must be text or a number", t)
 		}
-		return "Record<string, " + g.typeOf(t.Elem(), false) + ">"
+		return "Record<string, " + g.element(t.Elem(), free) + ">", true
 	case reflect.Struct:
 		if t.Name() == "" {
 			// Written in place.
-			return strings.ReplaceAll(g.structBody(t), "\n", "\n  ")
+			return strings.ReplaceAll(g.structBody(t), "\n", "\n  "), false
 		}
-		return g.name(t)
+		return g.name(t), false
 	}
 	g.fail("%s can't be told as JSON", t)
-	return "unknown"
+	return "unknown", false
+}
+
+// element is the type of an element of a slice or map, null included: the field's promise of
+// nonnull is about the slice or map and says nothing of what is in it.
+func (g *generator) element(t reflect.Type, free bool) string {
+	s, nullable := g.tsType(t, free)
+	if nullable {
+		return s + " | null"
+	}
+	return s
+}
+
+// mapKeyOK is encoding/json's rule for a key: a string or integer kind, or a type that is
+// itself an encoding.TextMarshaler (its pointer being one is not enough).
+func mapKeyOK(k reflect.Type) bool {
+	switch k.Kind() {
+	case reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return true
+	}
+	return k.Implements(textMarshaler)
 }
 
 // isText is whether t is written as a string by its MarshalText and not by MarshalJSON.
@@ -308,15 +487,6 @@ func isText(t reflect.Type) bool {
 	pt := reflect.PointerTo(t)
 	return (t.Implements(textMarshaler) || pt.Implements(textMarshaler)) &&
 		!t.Implements(jsonMarshaler) && !pt.Implements(jsonMarshaler)
-}
-
-func isInt(t reflect.Type) bool {
-	switch t.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return true
-	}
-	return false
 }
 
 // wrap parenthesizes a union so [] applies to all of it.

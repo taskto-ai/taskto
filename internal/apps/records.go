@@ -30,7 +30,7 @@ const (
 type Record struct {
 	ID       int64          `json:"id"`
 	Revision int64          `json:"revision"`
-	Data     map[string]any `json:"data"`
+	Data     map[string]any `json:"data" apitypes:"json,nonnull"`
 
 	CreatedAt     string  `json:"created_at"`
 	CreatedBy     *Author `json:"created_by"`
@@ -49,7 +49,7 @@ type Version struct {
 	Revision int64 `json:"revision"`
 	// Operation is "insert", "update", "delete" or "restore".
 	Operation string         `json:"operation"`
-	Data      map[string]any `json:"data"`
+	Data      map[string]any `json:"data" apitypes:"json,nonnull"`
 	At        string         `json:"at"`
 	By        *Author        `json:"by"`
 	// Action is the app's action that made the change; empty for a restore.

@@ -48,6 +48,8 @@ func Roots() []Root {
 		root[auth.Member]("Member"),
 		root[auth.Invite]("Invite"),
 		root[auth.Token]("Token"),
+		root[auth.InviteCreated]("InviteCreated"),
+		root[auth.TokenCreated]("TokenCreated"),
 
 		// Spaces and the knowledge base.
 		root[access.Space]("Space"),
@@ -59,6 +61,7 @@ func Roots() []Root {
 		root[boards.Board]("Board"),
 		root[boards.Card]("Card"),
 		root[boards.Comment]("Comment"),
+		root[boards.Thread]("CardThread"),
 
 		// Conversations and notifications.
 		root[conversations.Conversation]("Conversation"),

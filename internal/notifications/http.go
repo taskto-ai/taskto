@@ -58,7 +58,7 @@ func (s *Service) serverError(w http.ResponseWriter, r *http.Request, err error)
 
 // List is a page of the inbox, newest first.
 type List struct {
-	Notifications []Item `json:"notifications"`
+	Notifications []Item `json:"notifications" apitypes:"nonnull"`
 	// More says whether older ones than the page's last exist (ask again with before).
 	More bool `json:"more"`
 	// Unread counts all the person's unread ones in the workspace, not only the page's.
