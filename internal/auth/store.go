@@ -39,6 +39,9 @@ type Member struct {
 	User
 	Role     Role   `json:"role"`
 	JoinedAt string `json:"joined_at"`
+	// TwoFactor says whether they have two-factor login on. Only an admin's view of the
+	// list has it.
+	TwoFactor *bool `json:"two_factor,omitempty"`
 }
 
 // Invite is a pending invitation, without its token.

@@ -43,6 +43,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/workspaces/{workspace}/tokens/{token}", s.RequireMember(http.HandlerFunc(s.handleDeleteToken)))
 
 	s.passwordRoutes(mux)
+	s.twoFactorRoutes(mux)
 	s.ssoRoutes(mux)
 }
 
@@ -215,6 +216,23 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	refund()
 
+	// A user with two-factor login on gets no session yet: a challenge, which only the second
+	// step (twofactor.go) accepts, and the browser's own session is left as it is.
+	on, err := s.twoFactorOn(r.Context(), s.db, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if on {
+		challenge, expires, err := s.newChallenge(r.Context(), u.ID)
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"two_factor_required": true, "challenge": challenge, "expires_at": expires})
+		return
+	}
+
 	// The new session first, then drop the one the browser had: a failure in between
 	// leaves the user signed in rather than signed out.
 	token, err := s.newSession(r.Context(), u.ID)
@@ -254,6 +272,13 @@ func (s *Service) handleMembers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		serverError(w, r, err)
 		return
+	}
+	// Who has two-factor login on is for the admins, who can clear it, to see.
+	if m.Role == RoleAdmin {
+		if err := s.markTwoFactor(r.Context(), m.WorkspaceID, members); err != nil {
+			serverError(w, r, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string][]Member{"members": members})
 }

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/serverkey"
 )
 
 // Options are the account system's settings. Zero values take the defaults.
@@ -55,6 +56,9 @@ type Options struct {
 	// DisablePasswordLogin turns off logging in, setting up an account on an invite, and
 	// using a reset link with a password. Needs SSO, or nobody could log in.
 	DisablePasswordLogin bool
+	// Key seals the secrets of two-factor login (internal/serverkey). Without one nobody can
+	// turn it on, and the routes that need it answer 500.
+	Key *serverkey.Key
 }
 
 // Login limits, in failed attempts per window; a successful login counts against none.
@@ -91,6 +95,13 @@ type Service struct {
 	perAccountIP *limiter
 	perAccount   *limiter
 
+	// The second step's limits (twofactor.go), apart from the login's: a wrong code is not a
+	// wrong password.
+	codePerIP        *limiter
+	codePerAccountIP *limiter
+	codePerAccount   *limiter
+
+	key *serverkey.Key
 	sso *sso
 }
 
@@ -114,6 +125,10 @@ func New(sqlDB *sql.DB, opts Options) *Service {
 	s.perIP = newLimiter(ipAttempts, attemptWindow, now)
 	s.perAccountIP = newLimiter(accountAndIPAttempts, attemptWindow, now)
 	s.perAccount = newLimiter(accountAttempts, attemptWindow, now)
+	s.codePerIP = newLimiter(codeIPAttempts, attemptWindow, now)
+	s.codePerAccountIP = newLimiter(codeAccountAndIPAttempts, attemptWindow, now)
+	s.codePerAccount = newLimiter(codeAccountAttempts, attemptWindow, now)
+	s.key = opts.Key
 	s.sso = newSSO(opts.SSO, now)
 	return s
 }

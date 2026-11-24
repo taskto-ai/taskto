@@ -251,6 +251,10 @@ func (s *Service) signOutEverywhere(ctx context.Context, tx *sql.Tx, userID int6
 	if _, err := tx.ExecContext(ctx, `DELETE FROM password_resets WHERE user_id = ?`, userID); err != nil {
 		return "", err
 	}
+	// A login that had the old password and is waiting on its code doesn't survive the change.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE user_id = ?`, userID); err != nil {
+		return "", err
+	}
 	return s.insertSession(ctx, tx, userID)
 }
 
@@ -269,17 +273,9 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 		if userID == by {
 			return errResetOwn
 		}
-		var elsewhere bool
-		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM memberships t
-				WHERE t.user_id = ? AND NOT EXISTS (
-					SELECT 1 FROM memberships a
-					WHERE a.workspace_id = t.workspace_id AND a.user_id = ? AND a.role = ?))`,
-			userID, by, RoleAdmin).Scan(&elsewhere); err != nil {
+		if all, err := administersAll(ctx, tx, by, userID); err != nil {
 			return err
-		}
-		if elsewhere {
+		} else if !all {
 			return errResetElsewhere
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM password_resets WHERE user_id = ?`, userID); err != nil {

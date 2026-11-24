@@ -31,7 +31,8 @@ function AuthLoading() {
   return <p className="tt-center tt-muted">{t('app.loading')}</p>
 }
 
-function useSubmit(send: () => Promise<Me>, onDone: (me: Me) => void) {
+// send may answer null: the step is done but nobody is logged in yet (a login that asks for a code).
+function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const submit = async (e: FormEvent) => {
@@ -39,7 +40,9 @@ function useSubmit(send: () => Promise<Me>, onDone: (me: Me) => void) {
     setBusy(true)
     setError(null)
     try {
-      onDone(await send())
+      const me = await send()
+      if (me) onDone(me)
+      else setBusy(false)
     } catch (err) {
       setError(errorText(err))
       setBusy(false)
@@ -252,11 +255,22 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   const ssoError = useSsoError()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const { busy, error, submit } = useSubmit(
-    () => api<Me>('/api/login', { method: 'POST', body: { email, password } }),
-    onDone,
-  )
+  // The challenge of a login whose password was right and that now asks for a code.
+  const [challenge, setChallenge] = useState<string | null>(null)
+  const { busy, error, submit } = useSubmit(async () => {
+    const reply = await api<Me | { two_factor_required: true; challenge: string }>('/api/login', {
+      method: 'POST',
+      body: { email, password },
+    })
+    if ('two_factor_required' in reply) {
+      setPassword('')
+      setChallenge(reply.challenge)
+      return null
+    }
+    return reply
+  }, onDone)
   if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
+  if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />
   const methods = loaded.state.methods
   return (
     <AuthFrame title={t('auth.login.title')}>
@@ -300,6 +314,61 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
           <p className="tt-muted tt-small">{t('auth.login.forgot')}</p>
         </form>
       )}
+    </AuthFrame>
+  )
+}
+
+// The second step of a login for someone with two-factor login on: a code from the authenticator
+// app, or a recovery code. A challenge that ran out or was used up goes back to the password.
+function TwoFactorStep({
+  challenge,
+  onDone,
+  onBack,
+}: {
+  challenge: string
+  onDone: (me: Me) => void
+  onBack: () => void
+}) {
+  const t = useT()
+  const [code, setCode] = useState('')
+  const [expired, setExpired] = useState(false)
+  const { busy, error, submit } = useSubmit(async () => {
+    try {
+      return await api<Me>('/api/login/two-factor', { method: 'POST', body: { challenge, code } })
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'two_factor_challenge_invalid') setExpired(true)
+      throw err
+    }
+  }, onDone)
+  return (
+    <AuthFrame title={t('auth.twoFactor.title')} intro={<p className="tt-muted">{t('auth.twoFactor.intro')}</p>}>
+      <form className="tt-form" onSubmit={submit}>
+        <label>
+          {t('auth.twoFactor.code')}
+          <input
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            required
+            disabled={expired}
+            autoComplete="one-time-code"
+            spellCheck={false}
+          />
+        </label>
+        {error && (
+          <p role="alert" className="tt-error">
+            {error}
+          </p>
+        )}
+        <div className="tt-row-actions">
+          <button type="submit" className="tt-button tt-primary" disabled={busy || expired}>
+            {busy ? t('auth.twoFactor.busy') : t('auth.twoFactor.submit')}
+          </button>
+          <button type="button" className="tt-button" onClick={onBack}>
+            {expired ? t('auth.twoFactor.again') : t('auth.twoFactor.back')}
+          </button>
+        </div>
+        <p className="tt-muted tt-small">{t('auth.twoFactor.lost')}</p>
+      </form>
     </AuthFrame>
   )
 }

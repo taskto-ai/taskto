@@ -206,3 +206,75 @@ test('a reset link with password login on still shows the form', async () => {
   render(<ResetPasswordScreen token="fake-reset-token" onDone={() => {}} />)
   expect(await screen.findByLabelText('New password')).toBeTruthy()
 })
+
+const owner = { user: { id: 1, email: 'owner@example.com', name: 'Owner' }, workspaces: [] }
+
+function fillLogin() {
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+}
+
+test('a login that asks for a code is not logged in until the code is given', async () => {
+  const onDone = vi.fn()
+  const calls = fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: { two_factor_required: true, challenge: 'fake-challenge', expires_at: 'x' } },
+    'POST /api/login/two-factor': (call) =>
+      (call.body as { code: string }).code === '123456'
+        ? { body: owner }
+        : { status: 401, body: { error: 'wrong', code: 'wrong_two_factor_code' } },
+  })
+  render(<LoginScreen onDone={onDone} />)
+  await screen.findByLabelText('Password')
+  fillLogin()
+  await screen.findByRole('heading', { name: 'Two-factor login' })
+  expect(onDone).not.toHaveBeenCalled()
+  // The password isn't kept in the page.
+  expect(screen.queryByLabelText('Password')).toBeNull()
+
+  const code = screen.getByLabelText('Code from your app, or a recovery code')
+  fireEvent.change(code, { target: { value: '000000' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  expect((await screen.findByRole('alert')).textContent).toContain('code is wrong')
+  expect(onDone).not.toHaveBeenCalled()
+
+  fireEvent.change(code, { target: { value: '123456' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(owner))
+  expect(calls.filter((c) => c.path === '/api/login/two-factor').map((c) => c.body)).toEqual([
+    { challenge: 'fake-challenge', code: '000000' },
+    { challenge: 'fake-challenge', code: '123456' },
+  ])
+})
+
+test('a login whose challenge ran out goes back to the password', async () => {
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: { two_factor_required: true, challenge: 'fake-challenge', expires_at: 'x' } },
+    'POST /api/login/two-factor': { status: 401, body: { error: 'gone', code: 'two_factor_challenge_invalid' } },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  fillLogin()
+  fireEvent.change(await screen.findByLabelText('Code from your app, or a recovery code'), {
+    target: { value: '123456' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  expect((await screen.findByRole('alert')).textContent).toContain('Log in again with your password')
+  expect((screen.getByLabelText('Code from your app, or a recovery code') as HTMLInputElement).disabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Log in again' }))
+  await screen.findByLabelText('Password')
+})
+
+test('a login without two-factor logs in as before', async () => {
+  const onDone = vi.fn()
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: owner },
+  })
+  render(<LoginScreen onDone={onDone} />)
+  await screen.findByLabelText('Password')
+  fillLogin()
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(owner))
+})
