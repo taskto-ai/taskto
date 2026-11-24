@@ -409,6 +409,15 @@ func TestTokensReachOnlyTheirUsersSpacesInTheirWorkspace(t *testing.T) {
 			t.Errorf("bob's token lists space %d", got)
 		}
 	}
+	// list_members says nothing about a space bob can't read, as for the spaces' own routes.
+	for _, sp := range []int64{s.carol.private, s.secret} {
+		if code, refused, text := s.tool(bob, "list_members", map[string]any{"space_id": sp}); !refused || text != "error: not found" {
+			t.Errorf("bob's token lists the members of space %d = %d %v %q", sp, code, refused, text)
+		}
+	}
+	if got := s.toolOK(bob, "list_members", map[string]any{"space_id": s.bob.private})["members"].([]any); len(got) != 1 || id(got[0].(map[string]any)["id"]) != s.bob.id {
+		t.Errorf("bob's own space's members = %v", got)
+	}
 	if hits := s.toolOK(bob, "search_docs", map[string]any{"query": "needle"})["results"].([]any); len(hits) != 0 {
 		t.Errorf("bob's token finds %v", hits)
 	}

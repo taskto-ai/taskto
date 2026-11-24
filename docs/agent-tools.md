@@ -75,6 +75,7 @@ results, `error: <message>`.
 | Tool | Arguments | Does |
 |---|---|---|
 | `list_spaces` | | The spaces the user can read in the conversation's workspace: `id`, `name`, `kind`, `access` (`read`/`write`), `archived`. |
+| `list_members` | `space_id`? | The people who can be assigned a card, with the `id` that `create_card` and `update_card` take as `assignee.id`: `id`, `name`, `email` and `role`. Without `space_id`, the workspace's members (`admin`/`member`), whom every member sees; with it, one space the user can read: a shared space's members (`editor`/`viewer`) or a private space's owner alone. A space the user can't read, of another workspace or that doesn't exist is `404 not found` alike, so a workspace admin who isn't in a shared space doesn't see its members either. Assign in a card's space with that space's `space_id`: the assignee must be able to see it. |
 | `search_docs` | `query`, `space_id`?, `limit`? (1–20, default 10), `offset`? | Search one space, or every space the user can read ([api.md](api.md#search)); semantic search only where its space consented. |
 | `list_docs` | `space_id`, `folder`?, `after`?, `limit`? (1–200, default 100) | A space's documents and files, by path; `next` is the `after` of the next page. |
 | `read_doc` | `space_id`, `path`, `offset`? | A Markdown document, 32 KiB at a time from `offset` (bytes); `next_offset` while there is more. `version` is what `write_doc` needs. |

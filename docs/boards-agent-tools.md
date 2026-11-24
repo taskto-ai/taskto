@@ -23,6 +23,10 @@ operations for the web app and other clients.
 - **Assigned to the agent** (`assignee: {"kind": "agent"}`) means "for the agent to do".
   It gives the agent no access: the card is worked when a user who can write it asks the
   agent to, in their conversation, with their access.
+- **Assigned to a person** (`assignee: {"kind": "user", "id": …}`) takes the `id` that
+  `list_members` returns (`list_members` with the card's `space_id`, for people who can see
+  the space). That tool lists only what the user can read, and the board methods check that the
+  assignee is a member of the workspace who can see the space.
 - **Updates carry versions.** The agent sends the `version` of the card it last read;
   `ErrStale` (409 over HTTP) means someone changed the card meanwhile: show it again,
   then decide. Tools never retry a stale update blindly.

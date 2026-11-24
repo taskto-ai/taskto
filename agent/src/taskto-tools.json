@@ -10,6 +10,22 @@
     }
   },
   {
+    "name": "list_members",
+    "description": "List the people who can be assigned a card: the members of the workspace, or, with space_id, the people who have access to that space (a shared space's members, or a private space's owner). Returns each person's id, name and email, and their role. create_card and update_card take the id as assignee.id; use space_id with the card's space, since the assignee must be able to see it. Only what the user can read is listed.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces; without it, the whole workspace's members"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "search_docs",
     "description": "Search the knowledge base: every space the user can read, or one space. Returns paths, titles and the passages that matched; read a document with read_doc.",
     "read_only": true,
@@ -257,7 +273,7 @@
                 "id": {
                   "type": "integer",
                   "minimum": 1,
-                  "description": "the user, for kind \"user\""
+                  "description": "the user, for kind \"user\", from list_members"
                 }
               },
               "required": ["kind"],
@@ -356,7 +372,7 @@
                 "id": {
                   "type": "integer",
                   "minimum": 1,
-                  "description": "the user, for kind \"user\""
+                  "description": "the user, for kind \"user\", from list_members"
                 }
               },
               "required": ["kind"],
