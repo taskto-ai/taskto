@@ -207,14 +207,19 @@ func collect(t reflect.Type, depth int, viaPointer bool, seen map[reflect.Type]b
 }
 
 // quoted is the type of a field with the `string` option: a number, boolean or string is
-// written as a JSON string, and a nil pointer to one is still null. Others are left as they are.
+// written as a JSON string, and a nil pointer to one is still null. encoding/json looks through
+// one pointer only; others are left as they are.
 func quoted(t reflect.Type) reflect.Type {
 	if t.Kind() == reflect.Pointer {
-		if q := quoted(t.Elem()); q != t.Elem() {
+		if q := quotedScalar(t.Elem()); q != t.Elem() {
 			return reflect.PointerTo(q)
 		}
 		return t
 	}
+	return quotedScalar(t)
+}
+
+func quotedScalar(t reflect.Type) reflect.Type {
 	switch t.Kind() {
 	case reflect.Bool, reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
