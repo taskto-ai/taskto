@@ -1,6 +1,8 @@
 package agenttools
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -17,6 +19,13 @@ func TestSearchRefusesNullAndNonPositiveArguments(t *testing.T) {
 		}
 		for _, v := range []any{nil, 0, -1, 21, "5", 1.5} {
 			w.status(http.StatusBadRequest, w.aliceConv, tool, map[string]any{"query": "zanzibar", "limit": v})
+		}
+		// A whole number written with a fraction part is an integer to JSON Schema: accepted.
+		for _, raw := range []string{"10.0", "1e1"} {
+			code, out := w.callWith("Bearer "+w.capability(w.aliceConv), tool, json.RawMessage(`{"query":"zanzibar","limit":`+raw+`,"space_id":`+fmt.Sprint(w.shared)+`.0}`))
+			if code != http.StatusOK {
+				t.Fatalf("%s with limit %s = %d %v", tool, raw, code, out)
+			}
 		}
 		// Left out, or valid, they are the usual search.
 		w.ok(w.aliceConv, tool, map[string]any{"query": "zanzibar"})

@@ -1358,7 +1358,9 @@ added, edited or deleted, queues the card in the same transaction, and a search 
 queued cards of the spaces it looks in before it answers, so it never quotes text older than
 the card. A card that changes while the search runs is looked for once more; if the index
 still can't catch up, the reply has `"incomplete": true` and leaves those cards out, and a
-later search finds them. A card goes with its board or space when that is deleted, and every
+later search finds them. An incomplete reply has no `next_offset`: an offset counts the cards
+indexed at that moment, so it could repeat or skip a card once the others are indexed; search again
+instead. A card goes with its board or space when that is deleted, and every
 card is indexed when the server starts. Who may read a space is checked again after the
 indexing, so a member removed meanwhile gets none of its cards.
 
@@ -1390,8 +1392,8 @@ Read access to the space (`404` for one the caller can't read). Query: `q`, `lim
   `/w/{workspace}/boards/{space_id}:{board_id}:{card_id}`.
 - `snippet`: the passage of the title, body or comments that matched, as plain text in
   pieces, as for a document: never markup.
-- `incomplete`: `true` when cards that changed during the search were left out.
-- `next_offset`: present when there are more results.
+- `incomplete`: `true` when cards that changed during the search were left out; then there is no `next_offset`.
+- `next_offset`: present when there are more results, and the reply is not incomplete.
 
 ### `GET /api/workspaces/{workspace}/search/cards`
 

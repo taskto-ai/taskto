@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 	"unicode/utf8"
 
@@ -114,13 +115,20 @@ func (s *Service) searchSpaces(ctx context.Context, c *call, args json.RawMessag
 	return a, limit, spaces, err
 }
 
-// wholeNumber reads a JSON number that is a whole number: not null, not a string.
+// maxWhole is the largest whole number a JSON number carries exactly (2^53).
+const maxWhole = 1 << 53
+
+// wholeNumber reads a JSON number that is a whole number, as JSON Schema's "integer" says
+// ("10.0" is one): not null, not a string, not fractional or out of range.
 func wholeNumber(raw json.RawMessage) (int64, bool) {
-	var n int64
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &n) != nil {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return 0, false
 	}
-	return n, true
+	var n float64
+	if json.Unmarshal(raw, &n) != nil || n != math.Trunc(n) || n < -maxWhole || n > maxWhole {
+		return 0, false
+	}
+	return int64(n), true
 }
 
 type cardHit struct {

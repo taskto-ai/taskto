@@ -56,10 +56,10 @@ type CardResult struct {
 // CardResults are a page of cards found, best first.
 type CardResults struct {
 	Results []CardResult `json:"results"`
-	// NextOffset is the next page's offset, if there are more results.
+	// NextOffset is the next page's offset, if there are more results; never with Incomplete.
 	NextOffset *int `json:"next_offset,omitempty"`
 	// Incomplete is true when cards changed that the index couldn't catch up with: those
-	// are left out, and a later search finds them.
+	// are left out, and a later search finds them. Such a reply has no NextOffset.
 	Incomplete bool `json:"incomplete,omitempty"`
 }
 
@@ -164,8 +164,10 @@ func (x *Index) SearchCards(ctx context.Context, checker *access.Checker, userID
 		r.SpaceName = names[r.SpaceID]
 		res.Results = append(res.Results, r)
 	}
-	// No next page past the deepest offset asked for: it would be refused.
-	if next := q.Offset + q.Limit; more && next <= MaxOffset {
+	// No next page past the deepest offset asked for: it would be refused. And none after an
+	// incomplete one: an offset counts the cards indexed now, and once the queued ones are
+	// the same offset would repeat a card or skip one.
+	if next := q.Offset + q.Limit; more && !res.Incomplete && next <= MaxOffset {
 		res.NextOffset = &next
 	}
 	return res, nil

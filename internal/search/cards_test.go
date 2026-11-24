@@ -306,15 +306,18 @@ func TestCardSearchPages(t *testing.T) {
 	}
 	var seen []string
 	next := 0
-	for range 5 {
+	// Pages of 2, 2 and 1, the first two saying where the next starts.
+	for i, want := range []struct{ size, next int }{{2, 2}, {2, 4}, {1, -1}} {
 		rec := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/cards?q=lemur&limit=2&offset=%d", w.ws, next), nil)
 		expect(t, rec, http.StatusOK)
 		page := decode[cardsReply](t, rec)
-		seen = append(seen, page.titles()...)
-		if page.NextOffset == nil {
-			break
+		if len(page.Results) != want.size || (want.next < 0) != (page.NextOffset == nil) || (page.NextOffset != nil && *page.NextOffset != want.next) {
+			t.Fatalf("page %d = %d cards, next %v; want %d, next %d", i, len(page.Results), page.NextOffset, want.size, want.next)
 		}
-		next = *page.NextOffset
+		seen = append(seen, page.titles()...)
+		if page.NextOffset != nil {
+			next = *page.NextOffset
+		}
 	}
 	if len(seen) != 5 {
 		t.Fatalf("pages gave %q", seen)
@@ -389,12 +392,14 @@ func TestCardSearchChecksAccessAgainAfterIndexing(t *testing.T) {
 	w.addCard(w.bob, w.private[w.bob], w.firstBoard(w.bob, w.private[w.bob]), "Okapi notes", "bob's own")
 
 	w.e.idx.afterCardSync = func() { w.removeMember(w.team, w.bob) }
-	for name, sp := range map[string]*access.Space{"the workspace": nil, "the space": &w.team} {
-		if sp != nil {
-			// The route's own check is passed before the removal: put bob back for it.
-			if _, err := w.e.idx.db.Exec(`INSERT OR IGNORE INTO space_members (space_id, user_id, role) VALUES (?, ?, 'viewer')`, w.team.ID, w.bob.id); err != nil {
-				t.Fatal(err)
-			}
+	for _, c := range []struct {
+		name string
+		sp   *access.Space
+	}{{"the workspace", nil}, {"the space", &w.team}} {
+		name, sp := c.name, c.sp
+		// Each case starts with bob in the team, and loses him during the search.
+		if _, err := w.e.idx.db.Exec(`INSERT OR IGNORE INTO space_members (space_id, user_id, role) VALUES (?, ?, 'viewer')`, w.team.ID, w.bob.id); err != nil {
+			t.Fatal(err)
 		}
 		got := w.searchCards(w.bob, sp, "okapi")
 		for _, r := range got.Results {
@@ -662,5 +667,26 @@ func TestCardSearchPageIsNotRefilledWithTheLookahead(t *testing.T) {
 	first := page(0)
 	if len(first.Results) != 0 || first.NextOffset == nil || *first.NextOffset != 1 {
 		t.Fatalf("first page = %+v", first)
+	}
+}
+
+// An incomplete page offers no continuation: its offset would count the cards indexed at
+// that moment, and repeat or skip one once the rest are.
+func TestCardSearchIncompletePageHasNoNextOffset(t *testing.T) {
+	w := newWorld(t)
+	board := w.teamBoard(w.alice, w.team, "Work")
+	for i := range 3 {
+		w.addCard(w.alice, w.team, board, fmt.Sprintf("Civet %d", i), "")
+	}
+	wantTitles(t, "bob", w.searchCards(w.bob, nil, "civet"), "Civet 0", "Civet 1", "Civet 2")
+	if _, err := w.e.idx.db.Exec(`CREATE TRIGGER sync_fails BEFORE DELETE ON search_card_queue BEGIN SELECT RAISE(ABORT, 'no'); END`); err != nil {
+		t.Fatal(err)
+	}
+	w.commentOn(w.alice, w.team, board, cardJSON{ID: 1}, "queued again")
+	rec := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/cards?q=civet&limit=1", w.ws), nil)
+	expect(t, rec, http.StatusOK)
+	got := decode[cardsReply](t, rec)
+	if !got.Incomplete || len(got.Results) != 1 || got.NextOffset != nil {
+		t.Fatalf("an incomplete page = %+v", got)
 	}
 }
