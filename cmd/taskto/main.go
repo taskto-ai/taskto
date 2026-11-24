@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -329,6 +330,15 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		slog.Info("first-run setup: no account exists yet; set up the owner with this setup token (POST /api/setup, see docs/install.md); it works until setup is done or the server restarts",
 			"setup_token", authOpts.SetupToken)
 	}
+	// The apps' attachment sweep runs in the background, for as long as the server runs. It is
+	// waited for before the database closes: left running, its query's connection closes after
+	// run returned, and that last close checkpoints the database while its file is still locked.
+	maintainCtx, stopMaintain := context.WithCancel(ctx)
+	var maintaining sync.WaitGroup
+	defer func() {
+		stopMaintain()
+		maintaining.Wait()
+	}()
 	handler, err := server.New(version, sqlDB, server.Options{
 		Notifications: notifier,
 		Scheduler:     scheduler,
@@ -346,7 +356,13 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		Mail:          mailer,
 		// Photos that were never saved in a record are removed after a day, and an app moved to
 		// another space has its files follow it (internal/apps/attachments.go).
-		AppsReady: func(svc *apps.Service) { go svc.Maintain(ctx, 10*time.Minute) },
+		AppsReady: func(svc *apps.Service) {
+			maintaining.Add(1)
+			go func() {
+				defer maintaining.Done()
+				svc.Maintain(maintainCtx, 10*time.Minute)
+			}()
+		},
 	})
 	if err != nil {
 		return err
