@@ -118,6 +118,8 @@ type ToolSpec = {
   description: string
   /** Reads are safe to run again after a crash; writes are not, so a crash never repeats one. */
   read_only: boolean
+  /** The conversation agent's alone, not listed over MCP: the agent browser's tools. */
+  conversation_only?: boolean
   input_schema: Schema<object>
 }
 
@@ -154,14 +156,14 @@ function serverTool(socketPath: string, spec: ToolSpec) {
 // server lists (internal/agenttools).
 const specs = definitions as ToolSpec[]
 
-/** The tools, calling the server on socketPath. The agent browser's (browser_*) are offered only
- * when the server has it on (TASKTO_AGENT_BROWSER=true), so the model isn't shown tools that would
- * only answer "off". */
+/** The tools, calling the server on socketPath. The conversation-only ones (`conversation_only` in
+ * tools.json: the agent browser's) are offered only when the server has the browser on
+ * (TASKTO_AGENT_BROWSER=true), so the model isn't shown tools that would only answer "off". */
 export function tasktoTools(socketPath: string, options: { browser?: boolean } = {}) {
   return defineExtension({
     name: 'taskto-tools',
     tools: specs
-      .filter((spec) => options.browser || !spec.name.startsWith('browser_'))
+      .filter((spec) => options.browser || !spec.conversation_only)
       .map((spec) => serverTool(socketPath, spec)),
   })
 }

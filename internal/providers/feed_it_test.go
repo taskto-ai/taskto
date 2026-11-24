@@ -49,6 +49,7 @@ func startAgent(t *testing.T, e *env, feed *Feed) *agentrt.Client {
 		"TASKTO_AGENT_SOCKET="+socket,
 		"TASKTO_AGENT_DB="+filepath.Join(dir, "agent.db"),
 		"TASKTO_AGENT_PROVIDERS="+feed.Path(),
+		"TASKTO_AGENT_SPIKE_TOOLS=1", // the pause tool the test's model calls
 	)
 	cmd.Stderr = e.logs
 	if err := cmd.Start(); err != nil {

@@ -131,6 +131,7 @@ process.stdout.write(JSON.stringify(view))
 }
 
 func TestConversationsThroughTheServer(t *testing.T) {
+	t.Setenv("TASKTO_AGENT_SPIKE_TOOLS", "1") // the pause tools the scripted model calls
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
 	}

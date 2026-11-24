@@ -15,6 +15,7 @@ import (
 )
 
 func TestSupervisorRestartsTheRealSidecar(t *testing.T) {
+	t.Setenv(spikeToolsEnv, "1") // the pause tools the scripted model calls
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
 	}

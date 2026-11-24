@@ -21,6 +21,10 @@ import (
 	"time"
 )
 
+// spikeToolsEnv turns on the sidecar's pause_safe and pause_once tools, which the scripted
+// model calls; the production sidecar doesn't install them (agent/src/tools.ts).
+const spikeToolsEnv = "TASKTO_AGENT_SPIKE_TOOLS"
+
 type sidecar struct {
 	t      *testing.T
 	dir    string
@@ -59,6 +63,7 @@ func (s *sidecar) start() {
 	s.cmd.Env = append(os.Environ(),
 		"TASKTO_AGENT_SOCKET="+s.socket,
 		"TASKTO_AGENT_DB="+filepath.Join(s.dir, "agent.db"),
+		spikeToolsEnv+"=1", // the pause tools the scripted model calls
 	)
 	s.cmd.Env = append(s.cmd.Env, s.env...)
 	s.cmd.Stderr = io.MultiWriter(testWriter{s.t}, &s.output)
