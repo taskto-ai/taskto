@@ -273,3 +273,30 @@ test('says when cards that changed just now were left out', async () => {
   const results = await screen.findByRole('region', { name: 'Search results' })
   expect((await within(results).findByRole('status')).textContent).toContain('changed just now')
 })
+
+test('says the cards are still being searched while the documents are shown', async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces } },
+    'GET /api/workspaces/1/spaces/2/docs': { body: { docs: [] } },
+    'GET /api/workspaces/1/spaces/2/search': {
+      body: { results: [result(spaces[0], 'notes/plan.md', 'Quarterly plan')], mode: 'fulltext' },
+    },
+    'GET /api/workspaces/1/spaces/2/search/cards': async () => {
+      await held
+      return { body: { results: [card(11, 'Orchard rollout')] } }
+    },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByText('No documents in this space yet.')
+  search('orchard')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  await within(results).findByRole('button', { name: /Quarterly plan/ })
+  expect(within(results).getByText('Searching the boards’ cards…')).toBeTruthy()
+  release()
+  await within(results).findByRole('link', { name: /Orchard rollout/ })
+  expect(within(results).queryByText('Searching the boards’ cards…')).toBeNull()
+})

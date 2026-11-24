@@ -625,3 +625,20 @@ func TestCardsOfAnOldFormatAreQueued(t *testing.T) {
 		t.Fatalf("%d cards queued, want the 1 of an old format", n)
 	}
 }
+
+// A search whose every match is waiting to be indexed again has an empty page, and says it
+// is incomplete: the flag comes with the page, even when the page has no rows.
+func TestCardSearchWithNothingIndexableSaysIncomplete(t *testing.T) {
+	w := newWorld(t)
+	board := w.teamBoard(w.alice, w.team, "Work")
+	c := w.addCard(w.alice, w.team, board, "Tapir", "")
+	wantTitles(t, "bob", w.searchCards(w.bob, nil, "tapir"), "Tapir")
+	if _, err := w.e.idx.db.Exec(`CREATE TRIGGER sync_fails BEFORE DELETE ON search_card_queue BEGIN SELECT RAISE(ABORT, 'no'); END`); err != nil {
+		t.Fatal(err)
+	}
+	w.patchCard(w.alice, w.team, board, c, map[string]any{"body": "tapir, changed"})
+	got := w.searchCards(w.bob, nil, "tapir")
+	if len(got.Results) != 0 || !got.Incomplete {
+		t.Fatalf("an empty page of a search that could not catch up: %+v", got)
+	}
+}

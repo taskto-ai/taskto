@@ -121,11 +121,8 @@ func (x *Index) SearchCards(ctx context.Context, checker *access.Checker, userID
 		if x.afterCardSync != nil {
 			x.afterCardSync()
 		}
-		if found, err = x.findCards(ctx, in, match, q); err != nil {
-			return CardResults{}, err
-		}
-		behind, err := x.cardsBehind(ctx, in)
-		if err != nil {
+		var behind bool
+		if found, behind, err = x.findCards(ctx, in, match, q); err != nil {
 			return CardResults{}, err
 		}
 		if !behind {
@@ -174,35 +171,48 @@ func (x *Index) SearchCards(ctx context.Context, checker *access.Checker, userID
 }
 
 // findCards returns one page of the cards, in the spaces in (a JSON array of IDs), that
-// match the FTS5 query match, best first, and one more if a page follows. A card whose
-// indexed text may be old, since it is in the queue, is left out.
-func (x *Index) findCards(ctx context.Context, in, match string, q Query) ([]CardResult, error) {
+// match the FTS5 query match, best first, and one more if a page follows; and whether any
+// card of those spaces was in the queue. A card whose indexed text may be old, since it is
+// in the queue, is left out of the page, so a page found while some were queued may be
+// short, or empty. Both come from one statement, so they are of one state of the database
+// (a plain read, never a transaction): a card queued at the moment of the page is never
+// missed by the flag, even when the page has no rows.
+func (x *Index) findCards(ctx context.Context, in, match string, q Query) ([]CardResult, bool, error) {
 	// The query's words in the title only, and in the title and body only.
 	titleMatch := "{title} : (" + match + ")"
 	bodyMatch := "{title body} : (" + match + ")"
-	rows, err := x.db.QueryContext(ctx, `SELECT c.id, b.space_id, b.id, b.name, c.title, c.col,
-			`+cardSnippetSQL+`
-		FROM search_card_fts
-		JOIN cards c ON c.id = search_card_fts.rowid
-		JOIN boards b ON b.id = c.board_id
-		WHERE search_card_fts MATCH ? AND b.space_id IN (SELECT value FROM json_each(?))
-			AND NOT EXISTS (SELECT 1 FROM search_card_queue WHERE card_id = c.id)
-		ORDER BY `+cardOrderSQL+` LIMIT ? OFFSET ?`, match, in, titleMatch, bodyMatch, q.Limit+1, q.Offset)
+	// The flag is a row of its own that the page is joined to, so it is there with no page.
+	rows, err := x.db.QueryContext(ctx, `SELECT st.behind, p.id, p.space_id, p.board_id, p.board_name, p.title, p.col, p.snippet
+		FROM (SELECT EXISTS (SELECT 1 `+queuedCardsSQL+`) AS behind) st
+		LEFT JOIN (
+			SELECT c.id AS id, b.space_id AS space_id, b.id AS board_id, b.name AS board_name, c.title AS title, c.col AS col,
+				`+cardSnippetSQL+` AS snippet
+			FROM search_card_fts
+			JOIN cards c ON c.id = search_card_fts.rowid
+			JOIN boards b ON b.id = c.board_id
+			WHERE search_card_fts MATCH ? AND b.space_id IN (SELECT value FROM json_each(?))
+				AND NOT EXISTS (SELECT 1 FROM search_card_queue WHERE card_id = c.id)
+			ORDER BY `+cardOrderSQL+` LIMIT ? OFFSET ?) p ON true`,
+		in, match, in, titleMatch, bodyMatch, q.Limit+1, q.Offset)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 	var found []CardResult
+	var behind bool
 	for rows.Next() {
-		var r CardResult
-		var snippet string
-		if err := rows.Scan(&r.CardID, &r.SpaceID, &r.BoardID, &r.BoardName, &r.Title, &r.Column, &snippet); err != nil {
-			return nil, err
+		var id, space, board sql.NullInt64
+		var boardName, title, col, snippet sql.NullString
+		if err := rows.Scan(&behind, &id, &space, &board, &boardName, &title, &col, &snippet); err != nil {
+			return nil, false, err
 		}
-		r.Snippet = segments(snippet)
-		found = append(found, r)
+		if !id.Valid {
+			continue
+		}
+		found = append(found, CardResult{CardID: id.Int64, SpaceID: space.Int64, BoardID: board.Int64,
+			BoardName: boardName.String, Title: title.String, Column: col.String, Snippet: segments(snippet.String)})
 	}
-	return found, rows.Err()
+	return found, behind, rows.Err()
 }
 
 // queuedCardsSQL is the queued cards of the spaces in (a JSON array of IDs), found by the
@@ -220,13 +230,6 @@ const queuedCardIDsSQL = `SELECT sq.card_id
 	JOIN boards b ON b.id = c.board_id
 	WHERE sq.card_id > ? AND (? OR b.space_id IN (SELECT value FROM json_each(?)))
 	ORDER BY sq.card_id LIMIT ?`
-
-// cardsBehind reports whether a card of the spaces in is waiting to be indexed again.
-func (x *Index) cardsBehind(ctx context.Context, in string) (bool, error) {
-	var behind bool
-	err := x.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 `+queuedCardsSQL+`)`, in).Scan(&behind)
-	return behind, err
-}
 
 // queueCards puts in the queue the cards that were never indexed, or in an older
 // textFormat: what the migration, or a change of the format, leaves.

@@ -240,6 +240,9 @@ function ResultPages({
           {t('search.results.more')}
         </button>
       )}
+      {(first.data || first.error) && !cards.first.data && !cards.first.error && (
+        <p className="tt-muted">{t('search.cards.searching')}</p>
+      )}
       {cards.first.error && (
         <p role="alert" className="tt-error">
           {t('search.cards.failed', { error: cards.first.error })}

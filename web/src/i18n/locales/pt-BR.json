@@ -1655,6 +1655,7 @@
       "label": "Cartões encontrados",
       "in": "{space} · {board} · {column}",
       "more": "Mais cartões",
+      "searching": "Buscando nos cartões dos quadros…",
       "failed": "Não foi possível buscar nos cartões dos quadros: {error}",
       "incomplete": "Alguns cartões mudaram agora há pouco e não estão nestes resultados. Busque de novo em instantes."
     },
