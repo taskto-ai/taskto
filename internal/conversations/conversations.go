@@ -67,6 +67,8 @@ type Service struct {
 	// language is the caller's language by default (auth.Service.Language, set by Routes),
 	// for the agent's replies (docs/i18n.md#the-agent-and-dictation).
 	language func(r *http.Request, browser string) string
+	// watchSession is auth.Service.WatchSession, set by Routes: a stream ends with its login.
+	watchSession func(r *http.Request, every time.Duration) (context.Context, context.CancelFunc)
 
 	// closing ends every event stream once the server shuts down (see EndStreams).
 	closing    context.Context

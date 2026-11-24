@@ -252,6 +252,21 @@ func TestEventsEndWhenOwnerDisabled(t *testing.T) {
 	waitFor(t, "the watch to close", w.isClosed)
 }
 
+// A stream ends with the login that opened it, at once, even if the account is enabled again
+// before the next heartbeat looks at it.
+func TestEventsEndWithTheirLogin(t *testing.T) {
+	e, srv, owner, ws, _ := newStreamEnv(t)
+	member := e.invite(owner, ws, "member@example.com")
+	conv := member.create(ws, nil)
+	e.svc.heartbeat = time.Hour // the heartbeat's check can't be what ends it
+	s := member.openEvents(srv, ws, conv.ID)
+	w := e.rt.watch(t, 0)
+	owner.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/disable", ws, member.id), nil)
+	owner.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/enable", ws, member.id), nil)
+	s.expectEnd(interruptedLine)
+	waitFor(t, "the watch to close", w.isClosed)
+}
+
 // blockingWriter is a ResponseWriter whose writes wait until the test lets them through, like
 // a client that has stopped reading.
 type blockingWriter struct {

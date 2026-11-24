@@ -223,10 +223,20 @@ func lookupIn(ctx context.Context, q Querier, userID, spaceID int64) (Space, err
 		`SELECT `+spaceColumns+fromSpaceFor+` WHERE s.id = ?`, userID, spaceID))
 	if errors.Is(err, sql.ErrNoRows) {
 		// A disabled account sees no space at all; say so, so that what acts for it later can wait.
-		if off, derr := disabledIn(ctx, q, userID); derr == nil && off {
+		off, derr := disabledIn(ctx, q, userID)
+		if derr != nil {
+			return Space{}, derr // not "not found": the caller may try again
+		}
+		if off {
 			return Space{}, ErrDisabled
 		}
-		return Space{}, ErrNotFound
+		// The account may have been enabled between the two reads: look at the space once more,
+		// so a person who has access again is never told they have none.
+		s, err = scanSpace(q.QueryRowContext(ctx,
+			`SELECT `+spaceColumns+fromSpaceFor+` WHERE s.id = ?`, userID, spaceID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return Space{}, ErrNotFound
+		}
 	}
 	return s, err
 }
