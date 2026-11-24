@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"testing"
+	"time"
 
+	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/quota"
 )
 
@@ -260,4 +263,86 @@ func TestTheAgentsWriteToolIsRefusedOverQuota(t *testing.T) {
 		t.Fatalf("write_doc over the quota = %d refused=%v %s", code, refused, out)
 	}
 	s.toolOK(token, "write_doc", map[string]any{"space_id": s.bob.private, "path": "small.md", "content": "# ok\n"})
+}
+
+// slowFiles is the knowledge base as the quotas measure it, letting a test hold each space's
+// measurement until the writers it runs side by side have all measured.
+type slowFiles struct {
+	quota.Files
+	hold func()
+}
+
+func (f slowFiles) Usage(sp access.Space) (int64, int64, error) {
+	v, u, err := f.Files.Usage(sp)
+	if f.hold != nil {
+		f.hold()
+	}
+	return v, u, err
+}
+
+// Two writers in different spaces of one workspace, each measuring the workspace before the other
+// has stored a byte, can't both take the room that fits only one of them.
+func TestWritesInDifferentSpacesCannotBothFitTheWorkspaceQuota(t *testing.T) {
+	var gate struct {
+		sync.Mutex
+		arrived int
+		both    chan struct{}
+	}
+	gate.both = make(chan struct{})
+	meet := func() {
+		gate.Lock()
+		gate.arrived++
+		mine := gate.arrived
+		if mine == 2 {
+			close(gate.both)
+		}
+		gate.Unlock()
+		if mine <= 2 {
+			select {
+			case <-gate.both:
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
+	s := newStackDB(t, func(o *Options, sqlDB *sql.DB) {
+		files := slowFiles{Files: o.Search.Knowledge(), hold: meet}
+		q := quota.New(sqlDB, quota.Limits{Workspace: 100 << 10}, files)
+		o.Search.Knowledge().SetQuota(q.KnowledgeCheck())
+		o.Quota = q
+	})
+
+	// 60 KiB each in two shared spaces: 100 KiB hold one of them and not both.
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	for i, w := range []struct {
+		who   person
+		space int64
+	}{{s.carol, s.secret}, {s.bob, s.team}} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes[i], _ = s.putClip(w.who.cookie, s.one, w.space, "x.mp4", 60<<10)
+		}()
+	}
+	wg.Wait()
+	created, full := 0, 0
+	for _, c := range codes {
+		switch c {
+		case http.StatusCreated:
+			created++
+		case http.StatusInsufficientStorage:
+			full++
+		}
+	}
+	if created != 1 || full != 1 {
+		t.Fatalf("answers = %v, want one 201 and one 507", codes)
+	}
+	// What is stored is under the quota, and nothing is left reserved: a small note still fits.
+	_, rep := s.usage(s.alice.cookie, s.one, "")
+	if total := rep["total"].(float64); total > 100<<10 {
+		t.Fatalf("the workspace stores %v bytes, over its 100 KiB quota", total)
+	}
+	if code, body := s.browser(s.bob.cookie, http.MethodPut, s.docs(s.one, s.team)+"/note.md", map[string]any{"content": "# Note\n"}); code != http.StatusCreated {
+		t.Fatalf("a note = %d %v", code, body)
+	}
 }
