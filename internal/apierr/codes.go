@@ -54,6 +54,18 @@ const (
 	CodeResetOwn                Code = "reset_own"
 	CodeResetElsewhere          Code = "reset_elsewhere"
 
+	// Two-factor login (internal/auth/twofactor.go).
+
+	CodeWrongTwoFactorCode      Code = "wrong_two_factor_code"
+	CodeTooManyTwoFactorCodes   Code = "too_many_two_factor_codes"
+	CodeTwoFactorChallenge      Code = "two_factor_challenge_invalid"
+	CodeTwoFactorAlreadyOn      Code = "two_factor_already_on"
+	CodeTwoFactorNotOn          Code = "two_factor_not_on"
+	CodeTwoFactorNotStarted     Code = "two_factor_not_started"
+	CodeTwoFactorNoPassword     Code = "two_factor_no_password" //nolint:gosec // G101: an error code, not a credential
+	CodeTwoFactorClearOwn       Code = "two_factor_clear_own"
+	CodeTwoFactorClearElsewhere Code = "two_factor_clear_elsewhere"
+
 	// Single sign-on (internal/auth/sso.go). The callback redirects the browser to
 	// /?sso_error=<code>; the same codes name the API's own answers.
 

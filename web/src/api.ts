@@ -520,7 +520,15 @@ export type CardWithThread = Card & { comments: Comment[] }
 
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
 
-export type Member = { id: number; email: string; name: string; role: 'admin' | 'member'; joined_at: string }
+// two_factor is the admins' view only: whether the member has two-factor login on.
+export type Member = {
+  id: number
+  email: string
+  name: string
+  role: 'admin' | 'member'
+  joined_at: string
+  two_factor?: boolean
+}
 export type Invite = { id: number; email: string; role: 'admin' | 'member'; created_at: string; expires_at: string }
 // The reply that makes an invite or an access token: the record, with its secret, shown only now.
 export type InviteCreated = Invite & { token: string }
