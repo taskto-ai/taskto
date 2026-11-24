@@ -503,3 +503,60 @@ func TestDisabledAdminChangesNothingInFlight(t *testing.T) {
 		t.Fatalf("setRole by the owner: %v", err)
 	}
 }
+
+// A two-factor enrolment that wasn't confirmed goes with disabling, which ended every way into
+// the account; the enrolment's secret was shown on a login that is gone.
+func TestDisableEndsAnUnconfirmedEnrolment(t *testing.T) {
+	tm := newTeam(t, Options{})
+	expect(t, tm.member.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{"password": otherPassword}), http.StatusOK)
+	if n := tm.e.count(`SELECT count(*) FROM user_totp WHERE user_id = ? AND enabled_at IS NULL`, tm.memberID); n != 1 {
+		t.Fatalf("%d enrolments before", n)
+	}
+	tm.disable()
+	if n := tm.e.count(`SELECT count(*) FROM user_totp WHERE user_id = ?`, tm.memberID); n != 0 {
+		t.Fatalf("%d enrolments after disabling", n)
+	}
+}
+
+// Disabling takes the half-done password logins that wait on a code. A disabled account earns no
+// challenge either; the confirmed two-factor login stays, so enabling restores it as it was.
+func TestDisableEndsHalfDoneLogins(t *testing.T) {
+	tm := newTeam(t, Options{})
+	e := tm.e
+	tf := e.turnOn(tm.member, otherPassword)
+
+	// A password login that waits on its code, and a second enrolment shown but not confirmed.
+	laptop := &client{e: e}
+	rec := laptop.login("member@example.com", otherPassword)
+	expect(t, rec, http.StatusOK)
+	challenge := decode[struct {
+		Challenge string `json:"challenge"`
+	}](t, rec).Challenge
+	if challenge == "" {
+		t.Fatal("no challenge")
+	}
+	if n := e.count(`SELECT count(*) FROM login_challenges WHERE user_id = ?`, tm.memberID); n != 1 {
+		t.Fatalf("%d challenges before", n)
+	}
+	tm.disable()
+	if n := e.count(`SELECT count(*) FROM login_challenges WHERE user_id = ?`, tm.memberID); n != 0 {
+		t.Errorf("%d challenges after disabling", n)
+	}
+	// The code can't finish the login now, and the password earns no new challenge.
+	expect(t, laptop.do(http.MethodPost, "/api/login/two-factor", map[string]string{"challenge": challenge, "code": e.codeNow(tf.secret)}), http.StatusUnauthorized)
+	expect(t, (&client{e: e}).login("member@example.com", otherPassword), http.StatusForbidden)
+	if n := e.count(`SELECT count(*) FROM login_challenges WHERE user_id = ?`, tm.memberID); n != 0 {
+		t.Errorf("a disabled account earned %d challenges", n)
+	}
+
+	// Enabling restores the confirmed two-factor login, as it was.
+	tm.enable()
+	e.nextStep()
+	rec = (&client{e: e}).login("member@example.com", otherPassword)
+	expect(t, rec, http.StatusOK)
+	if got := decode[struct {
+		Required bool `json:"two_factor_required"`
+	}](t, rec); !got.Required {
+		t.Fatal("two-factor login was lost by disabling")
+	}
+}

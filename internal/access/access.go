@@ -157,6 +157,8 @@ type Checker struct {
 	auth  *auth.Service
 	// archiveHooks are told when a shared space is archived or brought back (OnArchiveChange).
 	archiveHooks []ArchiveHook
+	// memberHooks are told when a person is added to a shared space (OnMemberAdded).
+	memberHooks []MemberHook
 }
 
 // ArchiveHook is told, in the transaction that archives a shared space or brings it back, that it
@@ -168,6 +170,16 @@ type ArchiveHook func(ctx context.Context, tx *sql.Tx, spaceID int64) error
 
 // OnArchiveChange adds a hook. It is for startup, before the checker serves requests.
 func (c *Checker) OnArchiveChange(h ArchiveHook) { c.archiveHooks = append(c.archiveHooks, h) }
+
+// MemberHook is told, in the transaction that adds a person to a shared space, that it did, with
+// the space's and the person's IDs; the membership is already there. As with an ArchiveHook, what
+// it writes is committed with the change and an error it returns undoes it: the schema drops a
+// person's timed work with their access, and the hook lets the feature that owns it take it up
+// again. It is not called for a person who already was a member.
+type MemberHook func(ctx context.Context, tx *sql.Tx, spaceID, userID int64) error
+
+// OnMemberAdded adds a hook. It is for startup, before the checker serves requests.
+func (c *Checker) OnMemberAdded(h MemberHook) { c.memberHooks = append(c.memberHooks, h) }
 
 // New returns the access layer over sqlDB, which must be migrated. a authenticates the
 // requests of RequireSpace and the space routes; it may be nil for code that only calls

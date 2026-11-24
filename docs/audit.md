@@ -44,13 +44,17 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | Action | When | Workspace | Target | Details |
 |---|---|---|---|---|
 | `setup_completed` | first-run setup | the new one | workspace | |
-| `login_succeeded` | a password login | | user | `method` |
-| `login_failed` | a wrong password, an account with no password or that doesn't exist, or a right password for a disabled account | | user, if it exists | `method`, `reason` (the account is the target; no actor, since whoever typed isn't known to be its owner) |
+| `login_succeeded` | a password login: with two-factor login on, once its code is given (the password alone makes a challenge, which is not a login) | | user | `method` |
+| `login_failed` | a wrong password, or an account with no password or that doesn't exist, or a right password for a disabled account, or a wrong code at the second step of a login | | user, if it exists | `method`, `reason` (`wrong_code` for the second step, `account_disabled` for a disabled account; the account is the target; no actor, since whoever typed isn't known to be its owner) |
 | `logout` | logging out of a live session: one that has expired is no logout, and records nothing | | user | |
 | `password_changed` | a user changes their own password | | user | |
 | `password_change_failed` | the current password was wrong | | user | |
 | `password_reset_created` | an admin makes a reset link | the admin's | the member | |
 | `password_reset_used` | a reset link sets a password | | user | |
+| `two_factor_enabled` | a user confirms their [two-factor login](api.md#two-factor-login) with a code | | user | |
+| `two_factor_disabled` | a user turns it off, with their password and a code | | user | |
+| `two_factor_recovery_codes_replaced` | a user makes new recovery codes | | user | |
+| `two_factor_cleared` | an admin clears a member's, who lost both their app and their recovery codes | the admin's | the member | |
 | `sso_login_succeeded` | a single sign-on login | | user | `provider` |
 | `sso_login_failed` | a refused single sign-on login | | | `provider`, `reason` |
 | `sso_identity_linked` | an identity is linked to an account | | user | `provider`, `created_account` |

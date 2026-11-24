@@ -13,6 +13,12 @@ const (
 	PasswordResetCreated = "password_reset_created"
 	PasswordResetUsed    = "password_reset_used"
 
+	// Two-factor login.
+	TwoFactorEnabled               = "two_factor_enabled"
+	TwoFactorDisabled              = "two_factor_disabled"
+	TwoFactorRecoveryCodesReplaced = "two_factor_recovery_codes_replaced"
+	TwoFactorCleared               = "two_factor_cleared"
+
 	// Single sign-on.
 	SSOLoginSucceeded = "sso_login_succeeded"
 	SSOLoginFailed    = "sso_login_failed"

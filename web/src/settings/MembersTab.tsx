@@ -48,6 +48,8 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
       .then(members.reload)
   const withdraw = (i: Invite) =>
     action.run(() => api(`${base}/invites/${i.id}`, { method: 'DELETE' })).then(invites.reload)
+  const clearTwoFactor = (m: Member) =>
+    action.run(() => api(`${base}/members/${m.id}/two-factor`, { method: 'DELETE' })).then(members.reload)
   const [reset, setReset] = useState<{ member: Member; link: string; expires: string } | null>(null)
   const makeReset = async (m: Member) => {
     let made: { token: string; expires_at: string } | undefined
@@ -121,6 +123,16 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                         onConfirm={() => setDisabled(m, true)}
                       />
                     ))}
+                  {m.id !== me && m.two_factor && (
+                    <ConfirmButton
+                      label={t('settings.members.clearTwoFactor')}
+                      name={m.name}
+                      question={t('settings.members.clearTwoFactorQuestion', { name: m.name })}
+                      confirm={t('settings.members.clearTwoFactorConfirm')}
+                      disabled={action.busy}
+                      onConfirm={() => clearTwoFactor(m)}
+                    />
+                  )}
                   {m.id !== me && (
                     <ConfirmButton
                       label={t('settings.members.remove')}

@@ -115,6 +115,15 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `account_disabled` | 403 | The account is disabled ([Disabling a member](#disabling-a-member)): a login with the right password, a single sign-on (as `?sso_error=`), a password reset link and an admin whose own account was disabled meanwhile answer this. A disabled account's access token is `token_invalid`. |
 | `disable_own` | 400 | An admin can't disable or enable their own account. |
 | `disable_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `wrong_two_factor_code` | 401 / 403 | The code from the authenticator app (or the recovery code) is wrong, was used already, or is for another time. `401` at the second step of a login, `403` for a logged-in user's own settings. |
+| `too_many_two_factor_codes` | 429 | Too many wrong codes; `Retry-After` says when to try again. |
+| `two_factor_challenge_invalid` | 401 | The half-done login is unknown, used, expired (5 minutes) or had too many wrong codes: log in with the password again. |
+| `two_factor_already_on` | 409 | Two-factor login is on already. |
+| `two_factor_not_on` | 409 | Two-factor login isn't on, for this user. |
+| `two_factor_not_started` | 409 | No secret waits to be confirmed: start with `enrol`. |
+| `two_factor_no_password` | 403 | The account has no password (it signs in with a provider), so there is no password login to protect. |
+| `two_factor_clear_own` | 400 | An admin turns off their own two-factor login in Settings, not by clearing it. |
+| `two_factor_clear_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
 | `password_login_disabled` | 403 | Passwords are turned off on this server ([sso.md](sso.md#turning-passwords-off)): logging in, a new account with a password, making a reset link and using one answer this. |
 | `sso_unknown_provider` | 404 | No such single sign-on provider. |
 | `sso_failed` | 502 | The provider didn't answer. As `?sso_error=`: the provider or the exchange failed, or the person declined (details are in the server's log). |
@@ -229,6 +238,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `doc_delete_folder` | 400 | `path` is a folder: delete its documents. |
 | `file_too_large` | 413 | `path` is over the limit of `max` bytes. |
 | `knowledge_full` | 507 | The space's knowledge base is full. |
+| `quota_workspace` | 507 | The write would take the workspace over its storage quota of `max_mib` MiB. |
+| `quota_user` | 507 | The write would take the private space over its storage quota of `max_mib` MiB. |
+| `quota_unavailable` | 503 | The storage in use couldn't be measured; the write was refused, and trying again may work. |
 | `doc_not_kept` | 410 | Only the current version of an unversioned file is kept. |
 | `search_query_required` | 400 | A search needs something to search for. |
 | `search_query_too_long` | 400 | A search is at most `max` bytes of text. |
@@ -501,6 +513,14 @@ recommended setting), at most two at a time to bound memory.
 signing in with a provider has no password: it gets the same `401` as a wrong one, in the
 same time.
 
+A user with [two-factor login](#two-factor-login) on gets no session from the right
+password: `200` with a challenge instead, no cookie, and the existing session cookie left
+alone. The login finishes at [`POST /api/login/two-factor`](#post-apilogintwo-factor).
+
+```json
+{"two_factor_required": true, "challenge": "…", "expires_at": "…"}
+```
+
 ### `GET /api/login/methods`
 
 No login needed. How people can sign in here, for the login screen:
@@ -609,7 +629,8 @@ get when their browser asks for none the web app has; `""` is English. Same tags
 
 A user changes their own password with the current one. An admin can make a reset link for
 a member who lost theirs. Either way, every session of the account ends, and so do its
-reset links; the browser that set the new password gets a new session. Access tokens keep
+reset links; the browser that set the new password gets a new session (with a reset link, only for an
+account without two-factor login: the others get a code to give first). Access tokens keep
 working: they are listed, and revoked, under [Tokens](#tokens). These routes take a
 session, never an access token (`403`). New passwords are 12 to 1024 characters, as at
 setup.
@@ -649,11 +670,126 @@ when the operator turned passwords off: a link nobody could use isn't made.
 ### `POST /api/password-reset`
 
 No login needed. `{"token": "…", "password": "…"}` sets the password of the account the
-link is for, ends its sessions and reset links, and logs it in here: `200` with the
+link is for, ends its sessions, half-done logins and reset links, and logs it in here: `200` with the
 `GET /api/me` body and the session cookie (a session the browser already had, anyone's,
-is revoked). `400` for a password that is too short or too long, which leaves the link
+is revoked). **For an account with [two-factor login](#two-factor-login) on, the link is no
+second factor**: the password is set and everything ends as above, but the answer is the login's
+challenge (`200`, `{"two_factor_required": true, "challenge": "…", "expires_at": "…"}`), no
+cookie and no session, and the browser finishes at [`POST /api/login/two-factor`](#post-apilogintwo-factor)
+with a code. A reset also drops a two-factor enrolment that wasn't confirmed. `400` for a password that is too short or too long, which leaves the link
 usable. `404` if the token is unknown, used, replaced or expired. `403 password_login_disabled`
 when the operator turned passwords off.
+
+## Two-factor login
+
+A user can ask for a code from an authenticator app (TOTP, RFC 6238: HMAC-SHA1, six digits,
+30-second steps) after the right password, on top of it. The routes under `/api/me/two-factor`
+take the caller's session, never an access token (`403`), and act on the caller only: none names a
+user, and none takes one in the body. `POST /api/login/two-factor` is the exception that needs
+no session (the password step gave a challenge, not a session), and an admin's clearing a member's
+is the other, both below.
+
+- **Where it applies.** The password login (`POST /api/login`). **Signing in with a provider
+  has no second step**: the identity provider's own sign-in, and its own two-factor login if
+  the operator asked it for one, is what vouches for the person
+  ([sso.md](sso.md#two-factor-login)). Access tokens and the CLI turns never had one and are
+  unaffected, and so is an invite's acceptance by a new person (they have none yet). A
+  password reset link's use is **not**: for an account with it on, the link sets the password and then
+  asks for a code, as a login does. An existing account that takes an invite logs in first, and
+  so is asked for its code too.
+- **The secret** is 160 random bits, kept sealed with the server's key
+  (`<data>/server.key`, AES-GCM, bound to the user) in `user_totp`, never in clear and never
+  returned again after the enrolment; losing the key makes it unreadable, as for the other
+  sealed secrets, and an admin then clears it. **Recovery codes** are ten of 60 random bits
+  (`xxxx-xxxx-xxxx`), shown once and kept as a keyed hash (HMAC under a key derived from the
+  server's); each works once.
+- **Codes.** A TOTP code is accepted for the current 30-second step and the one either side,
+  but only for a step later than the last one accepted for the user, so a code can't be
+  replayed (not in its own step, and not an earlier step's). A code is six digits; a recovery
+  code is twelve characters, with case, spaces and dashes not mattering.
+- **Limits.** The second step has limits of its own, in 15-minute windows, of wrong codes:
+  30 per client address, 10 per user from one address, and 30 per user from all addresses.
+  Over any of them, `429 too_many_two_factor_codes` with `Retry-After`, even with the right
+  code. One challenge also takes at most 5 wrong codes: they are counted, and the code
+  checked, in the transaction that uses the challenge up, so requests sent at once can't try
+  more. A wrong password in the routes below
+  counts against the [login limits](#post-apilogin), as at `POST /api/me/password`.
+
+### `POST /api/login/two-factor`
+
+The second step of a login that answered with a challenge. No session needed.
+
+```json
+{"challenge": "…", "code": "123456"}
+```
+
+`code` is the app's code or a recovery code. `200` with the `GET /api/me` body and the
+session cookie, as `POST /api/login` answers, and an existing session cookie on the request is
+revoked. The challenge is used up. `401 wrong_two_factor_code` for a wrong code, which leaves
+the challenge for another try (up to 5); `401 two_factor_challenge_invalid` for a challenge
+that is unknown, used, expired or used up. `400` without a code. Until this succeeds there is
+no session: the password step (a login, a reset link) makes the challenge in the transaction
+that checks the password hash is still the user's and reads whether two-factor login is on, so
+neither a concurrent enrolment nor a concurrent change of the password gets a session or a challenge it
+shouldn't; a change of the password ends every challenge. The challenge is a token only this route reads, stored as its SHA-256, and no
+other route accepts it, as a cookie or as an access token.
+
+### `GET /api/me/two-factor`
+
+```json
+{"enabled": true, "recovery_codes_left": 8}
+```
+
+### `POST /api/me/two-factor/enrol`
+
+`{"password": "…"}`: starts turning it on. `200`:
+
+```json
+{"enrolment": "…", "secret": "GEZDGNBVGY3TQOJQ…", "otpauth_uri": "otpauth://totp/TaskTo:me@example.com?secret=…&issuer=TaskTo&…"}
+```
+
+The web app draws `otpauth_uri` as a QR code in the browser (the secret goes nowhere else)
+and shows `secret` as text for typing in. Nothing is on yet: login asks for no code until
+[`confirm`](#post-apimetwo-factorconfirm), which needs `enrolment`, a random id for this
+enrolment that expires after 15 minutes. Asking again before that makes a new secret and a new
+id, and the earlier one can no longer be confirmed (another tab's code can't turn on a secret it
+didn't show). A change of the password, or a reset, drops an enrolment that wasn't confirmed.
+`403 wrong_password` (counted against the login limits); `409 two_factor_already_on`;
+`403 two_factor_no_password`; `403 password_login_disabled` when passwords are off, since
+two-factor login protects nothing then.
+
+### `POST /api/me/two-factor/confirm`
+
+`{"enrolment": "…", "code": "123456"}`: a code from the app for the secret `enrol` made,
+with the `enrolment` it answered, turns two-factor login on, and answers `200` with the recovery codes, this once:
+
+```json
+{"recovery_codes": ["k3m9-p0qz-7xaf", "…"]}
+```
+
+`403 wrong_two_factor_code`; `409 two_factor_not_started` without an `enrol` first, or with
+an `enrolment` that is missing, unknown, replaced by a later one or expired; `409 two_factor_already_on`.
+
+### `POST /api/me/two-factor/disable`
+
+`{"password": "…", "code": "…"}`: the password and a code (the app's, or a recovery code
+for someone who lost the phone). `204`; the secret, the recovery codes and any half-done
+logins are deleted. `403 wrong_password`, `403 wrong_two_factor_code`, `409 two_factor_not_on`.
+
+### `POST /api/me/two-factor/recovery-codes`
+
+Same body and errors as `disable`: makes ten new recovery codes, in place of all the old ones,
+and answers `200` with `{"recovery_codes": […]}` this once.
+
+### `DELETE /api/workspaces/{workspace}/members/{user}/two-factor`
+
+Admin only, no body. Clears a member's two-factor login: their secret, recovery codes and
+half-done logins are deleted and **their sessions end**, so a login of someone else's that
+got through is out too, and they log in with the password alone, to turn it on again.
+The rule is the password reset link's: the admin must administer every workspace the member
+belongs to (`403 two_factor_clear_elsewhere`), and can't use it on their own account
+(`400 two_factor_clear_own`). `404` if the user isn't a member of the workspace;
+`409 two_factor_not_on` if the member has none. `204`.
 
 ## Members
 
@@ -666,6 +802,9 @@ Any member. Members can see each other (boards need it to assign cards).
 ```
 
 `disabled` is true for an account an admin switched off ([below](#disabling-a-member)).
+
+An admin's list also has `"two_factor": true` or `false` for each member, which says whether
+they have [two-factor login](#two-factor-login) on, for the clear above; nobody else sees it.
 
 ### `PATCH /api/workspaces/{workspace}/members/{user}`
 
@@ -1012,6 +1151,11 @@ the caller can't read is `404` on every route.
   (`kb_max_unversioned_size`, `507` over it); deleting or replacing one frees its bytes.
   A `.md` file whose bytes aren't UTF-8 (an upload renamed to `.md`) reads back in
   `content_base64`, like an upload.
+- **Storage quotas.** Besides these limits of a space, the operator may set a storage quota
+  for each workspace and for each member's private space ([Storage usage](#storage-usage),
+  [quotas.md](quotas.md)). A write that adds content and wouldn't fit is `507` with
+  `quota_workspace` or `quota_user`; deleting, moving and restoring add none, so they are
+  never refused for it.
 
 A document as listed:
 
@@ -1752,8 +1896,10 @@ kept in step with the card by the change that touches it:
   different date now (or none) is shown as a plain "something changed" mention of the card.
 - **Where.** Every way of changing a card keeps the jobs: the web app's routes, the agent's tools,
   the MCP tools and the apps' effects. Archiving a board or a shared space cancels its cards' jobs
-  and restoring it makes them again; a person who leaves a space or the workspace loses theirs; a
-  server that starts with dated cards that have none (made before reminders existed) schedules them.
+  and restoring it makes them again; a person who leaves a space or the workspace loses theirs, and
+  gets them back, for the cards still assigned to them and dated, when they are added to the space
+  again (a workspace's invite gives back those of their private space; a shared space's come with
+  adding them to it); a server that starts with dated cards that have none (made before reminders existed) schedules them.
   A date the scheduler can't hold (the overdue notice of `8999-12-31` would be in the year 9000)
   has no notice for that part, and the card is saved all the same.
 - **Access.** When a job runs, in the transaction that makes the notification, it checks that it is
@@ -2684,7 +2830,7 @@ close to the write as the data allows: inside the transaction that makes or move
 the write lock), and for a document **while the space's write lock is held**, right before the commit,
 so a right withdrawn while the entry waited for the lock stops it. Other
 failures with a code of their own (`app_effect_target_gone`, `app_effect_board_offline`,
-`app_effect_invalid`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
+`app_effect_invalid`, `app_effect_quota`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
 `app_effect_app_offline`) fail at once too; a failure that may pass (the database was busy, a card
 being changed) is tried again after 5 s, 10 s, 20 s…, at most 5 tries in all (a worker that died on
 the last try doesn't give an entry another: its lease running out fails it), and then is failed
@@ -3491,6 +3637,56 @@ backup host:
 
 ```json
 {"status": "ok", "last_success": "2026-03-10T03:16:40Z", "due_by": "2026-03-11T10:15:00Z"}
+```
+
+## Storage usage
+
+What each space stores, and the operator's storage quotas ([quotas.md](quotas.md)). Sizes
+are in bytes; a quota of `0` is none, which is what a server has until its operator sets
+one (`-storage-quota-workspace`, `-storage-quota-user`). Both routes take a browser session,
+not an access token. The figures are the ones the server keeps as it writes: reading them
+walks nothing in git.
+
+### `GET /api/workspaces/{workspace}/usage`
+
+Admins. Every space of the workspace, and only that workspace's: the shared spaces and each
+member's private space, with its owner.
+
+```json
+{
+  "quota": {"workspace": 107374182400, "user": 10737418240},
+  "total": 123456789,
+  "spaces": [
+    {
+      "id": 4, "kind": "private", "name": "Private",
+      "owner": {"id": 7, "name": "Bob", "email": "bob@example.com"},
+      "knowledge_versioned": 1048576,
+      "knowledge_unversioned": 52428800,
+      "attachments": 3145728,
+      "total": 56623104,
+      "limit": 10737418240
+    },
+    {"id": 2, "kind": "shared", "name": "Team", "knowledge_versioned": 2097152,
+     "knowledge_unversioned": 0, "attachments": 0, "total": 2097152, "limit": 0}
+  ]
+}
+```
+
+`knowledge_versioned` is what git keeps of the space's knowledge base, every version
+included; `knowledge_unversioned` the bytes of its [unversioned files](#unversioned-files);
+`attachments` the apps' photos, thumbnails included, with the uploads on their way at the
+size they declared. `limit` is the quota of the space itself: the private space's, and `0`
+for a shared one, which only the workspace's quota bounds. `total` is the sum over all the
+spaces, the figure the workspace's quota is checked against. A member gets `403 admin_only`;
+someone who isn't in the workspace, `404 workspace_not_found`.
+
+### `GET /api/workspaces/{workspace}/usage/me`
+
+Any member. Their own private space in the workspace, in the same shape (`space` is `null`
+if they have none), and the quotas. It says nothing of any other member's.
+
+```json
+{"quota": {"workspace": 0, "user": 10737418240}, "space": {"id": 4, "kind": "private", "…": "…"}}
 ```
 
 ## Setup checklist

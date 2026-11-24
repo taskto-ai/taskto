@@ -168,7 +168,9 @@ func (s *Service) setDisabled(ctx context.Context, workspaceID, by, userID int64
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM password_resets WHERE user_id = ?`, userID); err != nil {
+		// The rest of what could still become a login: reset links, half-done password logins
+		// waiting on a code, and a two-factor enrolment that wasn't confirmed.
+		if err := s.endSignIns(ctx, tx, userID); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: by, Action: audit.MemberDisabled,

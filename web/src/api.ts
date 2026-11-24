@@ -520,14 +520,16 @@ export type CardWithThread = Card & { comments: Comment[] }
 
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
 
+// two_factor is the admins' view only: whether the member has two-factor login on. disabled is
+// an admin having switched the account off: signed out, refused at login, everything kept.
 export type Member = {
   id: number
   email: string
   name: string
   role: 'admin' | 'member'
   joined_at: string
-  // An admin switched the account off: signed out, refused at login, everything kept.
   disabled?: boolean
+  two_factor?: boolean
 }
 export type Invite = { id: number; email: string; role: 'admin' | 'member'; created_at: string; expires_at: string }
 // The reply that makes an invite or an access token: the record, with its secret, shown only now.
@@ -778,6 +780,27 @@ export type BackupStatus = {
 }
 
 export const backupPath = (workspace: number) => `${ws(workspace)}/backup`
+
+// Storage quotas and what each space stores (docs/quotas.md), in bytes. A limit of 0 is none.
+export type StorageLimits = { workspace: number; user: number }
+export type SpaceUsage = {
+  id: number
+  kind: 'private' | 'shared'
+  name: string
+  // For a private space: whose it is.
+  owner?: { id: number; name: string; email: string }
+  knowledge_versioned: number
+  knowledge_unversioned: number
+  attachments: number
+  total: number
+  // The quota of the space itself: the private space's, 0 for a shared one.
+  limit: number
+}
+// What admins read: every space of the workspace.
+export type StorageReport = { quota: StorageLimits; total: number; spaces: SpaceUsage[] }
+// What a member reads: their own private space (null if they have none here).
+export type MyStorage = { quota: StorageLimits; space: SpaceUsage | null }
+export const usagePath = (workspace: number) => `${ws(workspace)}/usage`
 
 // Starts an export of what the caller owns in the workspace (docs/api.md#export-my-data): a POST that
 // answers `{download, expires_in}`, the address to go to for the zip, which works once.
