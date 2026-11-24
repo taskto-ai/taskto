@@ -26,6 +26,7 @@ import (
 	"taskto.ai/taskto/internal/mcpserver"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/webui"
 )
@@ -61,6 +62,10 @@ type Options struct {
 	Browser *agentbrowser.Service
 	// Notifications serves the notification inbox and Web Push subscriptions; nil leaves them out.
 	Notifications *notifications.Service
+	// Scheduler is the general scheduler, whose reminders' handlers the command registered (boards'
+	// EnableReminders): the HTTP routes of cards schedule on it too, so a card dated on the web
+	// keeps its reminders like one dated by the agent. nil makes none.
+	Scheduler *schedule.Service
 	// Mail is the server's outgoing email (docs/install.md#email); nil means the operator set up
 	// none. The admins' routes for it are there either way, and say so.
 	Mail *mail.Service
@@ -89,6 +94,12 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
 	boardSvc := boards.New(sqlDB, spaces)
+	if opts.Scheduler != nil {
+		// The handlers are the command's; this service only schedules, and follows spaces that are
+		// archived or brought back.
+		boardSvc.WithScheduler(opts.Scheduler)
+		spaces.OnArchiveChange(boardSvc.SyncSpace)
+	}
 	boardSvc.Routes(mux)
 	// The apps' routes list and retry their effects and check the targets they name; the
 	// server's own worker, which does them, is the one the command starts (apps.StartOutbox).

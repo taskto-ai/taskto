@@ -12,6 +12,12 @@ import { INBOX_CHANGED, inboxPath, type NotificationItem, type NotificationList 
 
 const PAGE = 30
 
+// A due date is a calendar date, which the language's own format says; the rest is shown as it is.
+function shownParams(params: NotificationItem['params'], calendarDate: (ymd: string) => string) {
+  if (!params?.due) return params
+  return { ...params, due: calendarDate(params.due) }
+}
+
 export function NotificationsPage({ workspace }: { workspace: number }) {
   const t = useT()
   const f = useFormat()
@@ -94,7 +100,7 @@ export function NotificationsPage({ workspace }: { workspace: number }) {
                   className="tt-inbox-link"
                 >
                   {!item.read && <span className="tt-sr-only">{t('notifications.unread')} </span>}
-                  {t(`notifications.kind.${item.kind}`, item.params)}
+                  {t(`notifications.kind.${item.kind}`, shownParams(item.params, f.calendarDate))}
                 </Link>
                 <span className="tt-muted tt-small">{f.dateTime(item.created_at)}</span>
               </div>

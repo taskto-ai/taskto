@@ -178,6 +178,15 @@ no extra process); it has no feature of its own.
   costs nothing (`EXPLAIN QUERY PLAN` is checked in a test). The worker runs bounded batches, so
   cleanup gets a turn however long the queue is, and fails a row whose time can't be read instead
   of stopping on it.
+- **First user: due-date reminders.** A card with a due date and a person as its assignee has two
+  jobs for that person, `card.due-reminder` and `card.overdue`, keyed by the card. They are made,
+  moved and cancelled in the transaction of the card change that needs them, and their handlers
+  make a `card_due` and a `card_overdue` notification once per person, card, kind and date
+  ([api.md](api.md#due-date-reminders)). Every path that changes a card shares the one scheduler
+  (the command gives it to the HTTP server too), archiving a board or space follows through a hook
+  (`access.Checker.OnArchiveChange`), the schema drops a person's jobs when they lose access to
+  the space or workspace (`0038`), and the server schedules the jobs of cards dated before
+  reminders existed when it starts (`boards.Service.ReconcileReminders`).
 
 ## Agent safety
 

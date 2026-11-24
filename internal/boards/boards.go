@@ -27,6 +27,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/schedule"
 )
 
 // Column is where a card is on its board.
@@ -202,6 +203,8 @@ func invalidAs(code apierr.Code, params apierr.Params, msg string) error {
 type Service struct {
 	db     *sql.DB
 	access *access.Checker
+	// sched schedules the due-date reminders (reminders.go); nil makes none.
+	sched *schedule.Service
 }
 
 // New returns the boards service over sqlDB, which must be migrated.

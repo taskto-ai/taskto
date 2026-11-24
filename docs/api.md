@@ -1508,7 +1508,8 @@ A card:
 - `due`: a calendar date, `YYYY-MM-DD`, or `null`. It has no time and no time zone: a card
   due on the 31st is due on the 31st wherever it is read, and clients decide what "today"
   is for their person. A card is *overdue* when its `due` is before today and it isn't in
-  `done` or `archived`; the card doesn't say so, since that changes with the day.
+  `done` or `archived`; the card doesn't say so, since that changes with the day. Its assignee
+  is reminded as described under [due-date reminders](#due-date-reminders).
 - `labels`: up to 10 free-text labels per card, each 1–30 characters on one line. The server
   normalizes them (Unicode NFC, inner whitespace collapsed, case folded), drops repeats and
   returns them sorted, so `"Bug "` and `"bug"` are one label, as are a composed and a
@@ -1607,6 +1608,9 @@ gone, the app's roles changed), the item is `{"kind": "changed"}` with no `param
 workspace's home as its target, and a push for it says the same. Notifications are made for:
 
 - `card_assigned`: a card was assigned to you by someone else (`params.title`; target: the card);
+- `card_due`: a card assigned to you is due today (`params.title`, `params.due`; target: the
+  card), and `card_overdue`: it was due yesterday and isn't done
+  ([due-date reminders](#due-date-reminders));
 - `app_effect_failed`: an effect of an app you acted in failed for good and waits for you to retry
   it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one.
 
@@ -1624,6 +1628,39 @@ An item:
 
 `target` is an address of the web app under `/w/{workspace_id}/`: its section and item, as the
 app's router reads them. The page it opens checks access again.
+
+### Due-date reminders
+
+A card with a `due` date that is assigned to a person (not the agent, not nobody) is reminded to
+that person by two notifications: `card_due` on the morning of the due day and `card_overdue` on
+the morning after. They are made by jobs on the general scheduler ([architecture.md](architecture.md)),
+kept in step with the card by the change that touches it:
+
+- **When.** The morning is 08:00 UTC. A due date is a calendar date and TaskTo doesn't know a
+  person's time zone, so one instant is used for everyone (the morning of the day in the Americas
+  and Europe, the afternoon in east Asia). A job whose time has already passed when the date or
+  assignee is set is not made: setting a card due today after 08:00 gets no reminder but still the
+  overdue notice, and a date in the past gets none. A reminder that is delivered after its day (a
+  server that was off) is dropped, since the overdue notice says what is true then.
+- **Who.** Only the assignee. A card assigned to the agent, or to nobody, has none. Changing the
+  assignee cancels the previous person's and makes the new person's; changing or clearing `due`
+  moves or cancels them; moving the card to `done` or archiving it cancels them, and moving it
+  back (or restoring it) makes them again if their time is still ahead.
+- **Once.** A person is told once per card, kind and due date, however many times a job runs (a
+  retry, a clock that stepped back, a card given to someone else and back). Edits that change
+  neither `due`, the assignee nor the card's column leave the jobs alone, a reminder that is ready
+  but hasn't run yet included. A new date is a new reminder. An old notice whose card has a
+  different date now (or none) is shown as a plain "something changed" mention of the card.
+- **Where.** Every way of changing a card keeps the jobs: the web app's routes, the agent's tools,
+  the MCP tools and the apps' effects. Archiving a board or a shared space cancels its cards' jobs
+  and restoring it makes them again; a person who leaves a space or the workspace loses theirs; a
+  server that starts with dated cards that have none (made before reminders existed) schedules them.
+  A date the scheduler can't hold (the overdue notice of `8999-12-31` would be in the year 9000)
+  has no notice for that part, and the card is saved all the same.
+- **Access.** When a job runs, in the transaction that makes the notification, it checks that it is
+  still the job that was claimed, that the assignee may read the card's space (a person who left it,
+  or the workspace, gets nothing), that the space and board aren't archived and that the card still
+  has the date, assignee and an open column the job was made for.
 
 ### `GET /api/workspaces/{workspace}/notifications`
 
