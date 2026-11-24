@@ -16,7 +16,7 @@ import (
 )
 
 // What accounts email (docs/api.md#email-links): a reset link a person asks for from the login
-// page. It uses the server's one SMTP server (docs/install.md#email) and is on only when the
+// page, and the invite link an admin chooses to send. It uses the server's one SMTP server (docs/install.md#email) and is on only when the
 // operator also set the server's public address, which the link is built on: a link built from
 // the request's Host header could be made to point anywhere by whoever asks, and the person who
 // asks for a reset email isn't signed in.
@@ -46,6 +46,20 @@ const (
 	// mailTimeout bounds one email from the answer to the end of the send: the wait for a turn,
 	// the database work and the send.
 	mailTimeout = time.Minute
+)
+
+// Limits of invitations sent by email, per window. The admin is signed in, so they are not about
+// guessing; they keep a stolen session or a mistake from using the operator's relay to write to
+// strangers:
+//
+//   - per admin, across workspaces: how many people one admin writes to;
+//   - per invited address: how many times one inbox is written to, by anyone.
+const (
+	inviteAdminAttempts     = 30
+	inviteRecipientAttempts = 3
+	inviteWindow            = time.Hour
+	// inviteMailTimeout bounds the send, on top of the sender's own.
+	inviteMailTimeout = 45 * time.Second
 )
 
 // EmailLinks reports whether the server can email links: it has an SMTP server and a public
@@ -268,4 +282,61 @@ func (s *Service) recipientLocale(ctx context.Context, userID int64) (string, er
 			WHERE m.user_id = u.id AND w.locale <> '' ORDER BY w.id LIMIT 1), '')
 		FROM users u WHERE u.id = ?`, userID).Scan(&locale)
 	return locale, err
+}
+
+// takeInviteMail counts an invitation email by admin to email against both limits. It returns
+// a function that gives the attempts back, for an invite that wasn't made after all, or nil and
+// how long to wait.
+func (s *Service) takeInviteMail(admin int64, email string) (release func(), wait time.Duration) {
+	adminKey := strconv.FormatInt(admin, 10)
+	if ok, wait := s.invitePerAdmin.take(adminKey); !ok {
+		return nil, wait
+	}
+	if ok, wait := s.invitePerRecipient.take(email); !ok {
+		s.invitePerAdmin.give(adminKey)
+		return nil, wait
+	}
+	return func() {
+		s.invitePerAdmin.give(adminKey)
+		s.invitePerRecipient.give(email)
+	}, 0
+}
+
+// emailInvite emails the invite's link to its address, from the admin by, and reports whether
+// the relay took it. A failure is logged by its step and is no reason to refuse the invite,
+// whose link the admin has to pass on by hand then.
+func (s *Service) emailInvite(ctx context.Context, m Membership, by User, inv Invite, token string) bool {
+	ctx, cancel := context.WithTimeout(ctx, inviteMailTimeout)
+	defer cancel()
+	days := int(math.Ceil(s.opts.InviteTTL.Hours() / 24))
+	err := s.opts.Mail.SendTemplate(ctx, inv.Email, s.inviteLocale(ctx, inv.Email, m, by.ID), "invite", map[string]string{
+		"inviter":    by.Name,
+		"workspace":  m.WorkspaceName,
+		"days":       strconv.Itoa(days),
+		"action_url": s.opts.PublicURL + "/invite#" + token,
+	})
+	if err != nil {
+		logMailFailure(ctx, "auth: the invite email wasn't sent", by.ID, err)
+		return false
+	}
+	slog.InfoContext(ctx, "invite emailed", "invite_id", inv.ID, "workspace_id", m.WorkspaceID, "by", by.ID)
+	return true
+}
+
+// inviteLocale is the language of an invitation: the invited person's, if they already have an
+// account that picked one, else the workspace's default, else the inviting admin's own.
+func (s *Service) inviteLocale(ctx context.Context, email string, m Membership, admin int64) string {
+	if u, _, err := s.userByEmail(ctx, email); err == nil {
+		if locale, err := s.recipientLocale(ctx, u.ID); err == nil && locale != "" {
+			return locale
+		}
+	}
+	if m.Locale != "" {
+		return m.Locale
+	}
+	locale, err := s.UserLocale(ctx, admin)
+	if err != nil {
+		slog.WarnContext(ctx, "auth: reading the language of an invite email", "user_id", admin, "err", err)
+	}
+	return locale
 }
