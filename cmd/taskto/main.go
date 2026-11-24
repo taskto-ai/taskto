@@ -32,6 +32,7 @@ import (
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/privcheck"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/server"
 	"taskto.ai/taskto/internal/serverkey"
@@ -227,6 +228,11 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	}
 	stopPush := notifier.Start(ctx)
 	defer stopPush()
+	// The scheduler: timed work that runs for people, later (package schedule). The features that
+	// use it register their handlers here, before it starts; it stops before the database closes.
+	scheduler := schedule.New(sqlDB, spaces, schedule.Options{})
+	stopSchedule := scheduler.Start(ctx)
+	defer stopSchedule()
 	tools := agenttools.New(agenttools.Options{
 		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: appSvc,
 		Knowledge: kb, Search: index, Browser: browsers,
