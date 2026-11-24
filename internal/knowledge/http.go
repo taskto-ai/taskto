@@ -66,9 +66,9 @@ func (s *Store) handleList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
-// docReply is a document with its content: text for Markdown, base64 for uploads, none
+// DocReply is a document with its content: text for Markdown, base64 for uploads, none
 // for unversioned files.
-type docReply struct {
+type DocReply struct {
 	Entry
 	Content       *string `json:"content,omitempty"`
 	ContentBase64 *string `json:"content_base64,omitempty"`
@@ -98,7 +98,7 @@ func (s *Store) handleRead(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
-	reply := docReply{Entry: doc.Entry}
+	reply := DocReply{Entry: doc.Entry}
 	switch {
 	case !doc.Versioned:
 		// Its bytes can be any size: they are only sent as a download.

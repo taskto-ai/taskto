@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"taskto.ai/taskto/internal/access"
@@ -96,11 +97,14 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 	if err != nil {
 		return nil, err
 	}
+	// The app, its rows and its attachments' metadata are each read asking for the app to be in
+	// this space, and once more at the end: an app that moves meanwhile is ErrNotFound, never its
+	// rows read from the space it left.
 	ap, err := app(ctx, s.db, sp.ID, appID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := loadRows(ctx, s.db, ap.ID, readable(acc, a.UserID))
+	rows, err := loadSpaceRows(ctx, s.db, sp.ID, ap.ID, readable(acc, a.UserID))
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +116,15 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 	items := Items(def, rows)
 	// An attachment field shows what each attachment is (id, type, size, pixels), never its bytes:
 	// the agent has no tool to read or to upload a file.
-	if err := s.describeAttachments(ctx, ap.ID, def, items); err != nil {
+	if err := describeAttachments(ctx, s.db, sp.ID, ap.ID, def, items); err != nil {
 		return nil, err
+	}
+	var still int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM apps WHERE id = ? AND space_id = ?`, ap.ID, sp.ID).Scan(&still); err != nil {
+		return nil, err
+	}
+	if still == 0 {
+		return nil, ErrNotFound
 	}
 	return items, nil
 }
@@ -139,6 +150,210 @@ func (s *Service) QueryRows(ctx context.Context, a Actor, spaceID, appID int64, 
 		page.Rows[i] = it
 	}
 	return page, nil
+}
+
+// ActionInfo is one of an app's actions that change a record, as the agent is told of it.
+type ActionInfo struct {
+	Name string `json:"name"`
+	// Kind is "insert", "update" or "delete".
+	Kind string `json:"kind"`
+	// Allowed is whether the user's roles in the app let them run it: an insert is the right to
+	// submit records, an update or a delete the right to modify them (their own, or all).
+	Allowed bool `json:"allowed"`
+	// Effects are the kinds of what the action sets going once it has changed a record.
+	Effects []string `json:"effects,omitempty"`
+}
+
+// ActionList is what an app's live release offers the agent to run, and what the user may do.
+type ActionList struct {
+	// Release is the live release's number.
+	Release int64 `json:"release"`
+	// Access is what the user may do in the app: their roles and capabilities.
+	Access access.AppAccess `json:"access"`
+	// Collection is the live release's: the fields an action's context may set.
+	Collection Collection   `json:"collection"`
+	Actions    []ActionInfo `json:"actions"`
+}
+
+// Actions lists the actions of the app's live release that change a record (navigating changes
+// nothing), with whether the user may run each. Anyone who may open the app is told: its screens
+// say as much to them.
+//
+// What the user may do and the release are read apart, and a role revoked or a release published
+// between the two reads could pair one with the other: the access is read again after the
+// release, and the list is made only if it is the same (else all is read again), so what is
+// shown is what the user held while the release was read.
+func (s *Service) Actions(ctx context.Context, a Actor, spaceID, appID int64) (ActionList, error) {
+	for range actionsReads {
+		sp, err := s.space(ctx, a, spaceID)
+		if err != nil {
+			return ActionList{}, err
+		}
+		acc, err := s.appAccess(ctx, a, sp.ID, appID)
+		if err != nil {
+			return ActionList{}, err
+		}
+		if s.hooks.afterActionsAccess != nil {
+			s.hooks.afterActionsAccess()
+		}
+		ap, err := launchable(ctx, s.db, sp.ID, appID)
+		if err != nil {
+			return ActionList{}, err
+		}
+		if ap.liveDef == nil {
+			return ActionList{}, ErrNotPublished
+		}
+		again, err := s.space(ctx, a, spaceID)
+		if err != nil {
+			return ActionList{}, err
+		}
+		accAgain, err := s.appAccess(ctx, a, sp.ID, appID)
+		if err != nil {
+			return ActionList{}, err
+		}
+		if reflect.DeepEqual(sp, again) && reflect.DeepEqual(acc, accAgain) {
+			return actionList(sp, acc, ap), nil
+		}
+	}
+	return ActionList{}, ErrStale
+}
+
+// actionsReads is how many times Actions reads again when what the user may do changes under it.
+const actionsReads = 3
+
+// actionList is what the live release of ap offers a user with access acc in space sp.
+func actionList(sp access.Space, acc access.AppAccess, ap App) ActionList {
+	def := *ap.liveDef
+	out := ActionList{Release: ap.Live.Number, Access: acc, Collection: def.Collection, Actions: []ActionInfo{}}
+	for _, name := range sortedKeys(def.Actions) {
+		act := def.Actions[name]
+		info := ActionInfo{Name: name, Kind: act.Kind}
+		switch act.Kind {
+		case ActionInsert:
+			info.Allowed = acc.Submit
+		case ActionUpdate, ActionDelete:
+			info.Allowed = acc.ModifyRecords != access.ScopeNone
+		default:
+			continue
+		}
+		info.Allowed = info.Allowed && may(sp, access.Write) == nil
+		for _, e := range act.Effects {
+			info.Effects = append(info.Effects, e.Kind)
+		}
+		out.Actions = append(out.Actions, info)
+	}
+	return out
+}
+
+// ActionRun is a request to run one of an app's actions that changes a record.
+type ActionRun struct {
+	Action string
+	// Context is what the action's button would send: the fields to set and, for an update or a
+	// delete, the row's "id".
+	Context map[string]any
+	// ExpectedRevision is the revision of the row the caller saw, for an update or a delete; if the
+	// row has moved on, nothing changes (ErrConflict).
+	ExpectedRevision *int64
+	// ExpectedRelease is the number of the live release the caller decided from (ActionList.Release),
+	// required: the action runs only if it is the live release when it runs (ErrReleaseOutdated
+	// otherwise), so what it does, its effects included, is what the caller was told. A retry under
+	// the same Operation names the release of the request it repeats.
+	ExpectedRelease int64
+	// Operation is the request's idempotency key (ClientAction.Operation).
+	Operation string
+}
+
+// ActionResult is what an action did. It names the record and its revision but carries no data:
+// whether the user may read the record is for the read tools to say.
+type ActionResult struct {
+	Action string `json:"action"`
+	Kind   string `json:"kind"`
+	// ID and Revision are the record's, after the change: a deleted record's revision is that of
+	// its deletion. Both are absent for a request already made under the same operation.
+	ID       int64 `json:"id,omitempty"`
+	Revision int64 `json:"revision,omitempty"`
+	// Changed is false for an update that left the record as it was: no new revision, no effects.
+	Changed bool `json:"changed"`
+	// Replayed is a request made before under the same operation, which changed nothing again.
+	Replayed bool `json:"replayed,omitempty"`
+	// EffectsQueued is how many effects the change set going, for the server to do afterwards.
+	EffectsQueued int `json:"effects_queued"`
+}
+
+// RunAction runs one of the live release's actions that change a record, as the user: the same
+// code as the action route (store.go, runChange), so the user's roles, the records they may
+// modify, the collection's rules, the locks of captured values, the record's history and the
+// action's effects are those of the web app. The agent sets no photo, signature or location (it
+// can't capture one): agentMaySet.
+func (s *Service) RunAction(ctx context.Context, a Actor, spaceID, appID int64, run ActionRun) (ActionResult, error) {
+	res, err := s.runAction(ctx, a, spaceID, appID, run)
+	// A request this user made before under the same operation and release, and that committed, is
+	// answered with its receipt even if their access has changed or the app has gone offline since
+	// (as the action route does, act): an agent that lost the answer must learn that it is in.
+	// The receipt names no record and carries no data; a request that did not commit is refused as
+	// it would be.
+	if err != nil && run.ExpectedRelease >= 1 &&
+		(errors.Is(err, ErrNotFound) || errors.Is(err, ErrReadOnly) || errors.Is(err, ErrForbidden) || errors.Is(err, ErrOffline)) {
+		action := ClientAction{
+			Name: run.Action, SurfaceID: SurfaceID(appID), Context: run.Context,
+			Release: &run.ExpectedRelease, ExpectedRevision: run.ExpectedRevision, Operation: run.Operation,
+		}
+		if s.committed(ctx, spaceID, a, appID, action) {
+			receipt := ActionResult{Action: run.Action, Replayed: true}
+			if rel, err := loadRelease(ctx, s.db, appID, run.ExpectedRelease, true); err == nil && rel.Definition != nil {
+				receipt.Kind = rel.Definition.Actions[run.Action].Kind
+			}
+			return receipt, nil
+		}
+	}
+	return res, err
+}
+
+func (s *Service) runAction(ctx context.Context, a Actor, spaceID, appID int64, run ActionRun) (ActionResult, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if err := may(sp, access.Read); err != nil {
+		return ActionResult{}, err
+	}
+	if run.ExpectedRelease < 1 {
+		return ActionResult{}, invalidf("expected_release is the live release's number, from list_app_actions")
+	}
+	action := ClientAction{
+		Name: run.Action, SurfaceID: SurfaceID(appID), Context: run.Context,
+		Release: &run.ExpectedRelease, Exact: true,
+		ExpectedRevision: run.ExpectedRevision, Operation: run.Operation,
+	}
+	if s.navigates(ctx, sp, a, appID, action) {
+		return ActionResult{}, invalidf("%s only opens a screen: it changes no record, so there is nothing to run", run.Action)
+	}
+	if err := may(sp, access.Write); err != nil {
+		return ActionResult{}, err
+	}
+	done, err := s.runChange(ctx, sp, a, appID, action)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	res := ActionResult{Action: run.Action, Kind: done.change.Kind, EffectsQueued: done.effects, Replayed: done.replayed}
+	if !done.replayed {
+		res.ID, res.Revision, res.Changed = done.ap.id, done.ap.revision, done.ap.changed
+	}
+	return res, nil
+}
+
+// agentMaySet refuses an action of the agent that sets a photo, a signature or a location: it
+// can read them, never capture one, so what it stores of them would be made up. Leaving them out
+// of an update keeps them as they were.
+func agentMaySet(def Definition, ch Change) error {
+	for name := range ch.Data {
+		f, _ := def.Collection.field(name)
+		switch f.Type {
+		case TypeAttachment, TypeSignature, TypeLocation:
+			return invalidf("%s is a %s: only a person can capture one, leave it out", name, f.Type)
+		}
+	}
+	return nil
 }
 
 // RowsPage is QueryResult with its records as items.
@@ -240,6 +455,7 @@ var rules = []string{
 	`contributions (optional, definition version 2): what the app offers the Home page and the navigation, never markup or addresses: {"widgets"?: [{"id", "title", "kind": "summaries"|"screen"|"shortcut", "size"?: "small"|"medium"|"large", "summaries"? (kind summaries: 1 to 4 of {"summary": a summary's name, "label"}), "screen"? (kind screen: a screen that shows no record, so the app needs "screens")}], at most 6, "pin"?: {"label", "screen"?}}. Titles and labels are plain text on one line (60, 40 and 30 characters at most). Each person chooses which widgets sit on their Home and which apps they pin, and the people who may publish an app of a shared space may set defaults for its members; a widget shows only what its viewer may read and runs only what they may do in the app, so a contribution grants nothing.`,
 	`Saving a definition (create_app, update_app) saves the app's DRAFT: it changes nothing people use. They keep using the live release until a person who may publish the app publishes the draft, in the Apps page; you have no tool to publish. A new app is a draft only, and is not launchable until published.`,
 	`Publishing checks the draft against the app's rows: removing a field that rows have values for, changing a field's type, making a field required (or conditionally required) that some row lacks, or tightening its limits or a choice's options below a stored value needs the publisher to acknowledge it by name. So prefer adding fields as optional, and keep names and types of fields that have data.`,
+	`Records: list_app_actions says which of the LIVE release's actions change records and what the user's roles allow, and run_app_action runs one as the user, exactly as the app's own button would, if the release you listed (expected_release) is still the live one: an insert with the fields, an update with the row's id and the fields to change, a delete with the row's id. The user's roles in the app, the collection's rules, the locks of captured values and the action's effects all apply; the user must ask for it, and each call changes data people use. You can't set a photo, a signature or a location. To let the agent change something the app doesn't offer, add an action to the draft; it is used once a person publishes it.`,
 	`Image, Video, AudioPlayer and openUrl are not available: an app never loads or opens outside addresses.`,
 	`Photos: a collection field {"name", "type": "attachment", "max_files"? (1 to 10, default 1), "max_bytes"? (per file, at most 16 MiB, default 8 MiB), "required"?} holds JPEG, PNG or GIF pictures, which people upload with the PhotoInput component {"field": "<that field>", "label"?, "value": {"path": "/draft/<field>"}} (camera or library; on a detail screen with "source": "record" use "/record/<field>" and an update action whose context gives the field) and see with Photos {"value": {"path": "<field>"} inside a List template, or "/record/<field>", "label"?}, which draws thumbnails from this server, never from an outside address. The action's context passes the field's binding ({"path": "/draft/<field>"}) like any other. An attachment field needs definition_version 2, can't be used in a rule, and is stored as a list of attachment ids; the pictures themselves are separate resources that only people who may read the record can fetch. You can read their ids and metadata (list_app_rows) but you cannot upload, read or attach a picture yourself.`,
 	`Capture fields (definition version 2): a "location" field {"name", "type": "location", "capture"? ("button", the default, or "submit"), "editable"?, "required"?} holds {lat, lon, accuracy_m, captured_at, source: "device"|"manual"}, which people take with the LocationInput component {"field", "label"?, "value": {"path": "/draft/<field>"}, "readOnly"? (only shows what is stored)}: the browser asks for the position once, on the person's button or (capture "submit") when they press the form's submit button, never in the background; where it can't (denied, no support) the person types the coordinates, stored as source "manual". For capture "submit" the Button's event context must pass the field under its own name ({"<field>": {"path": "/draft/<field>"}}). A "signature" field {"name", "type": "signature", "max_bytes"?, "editable"?} holds one PNG, drawn (or confirmed by typing a name) with SignatureInput {"field", "label"?, "value": {"path": "/draft/<field>"}, "readOnly"?} and stored like a photo; show it with Photos. A stored location or signature is evidence: the server refuses every later change or clearing of it, from any screen, release or the records explorer, unless the field says "editable": true. A "barcode" field {"name", "type": "barcode", "format"? (aztec, codabar, code_39, code_93, code_128, data_matrix, ean_8, ean_13, itf, pdf417, qr_code, upc_a, upc_e), "max_length"?} holds the text of a code, scanned with the camera where the browser can and always typed otherwise, with BarcodeInput {"field", "label"?, "value": {"path": "/draft/<field>"}}; ean_8, ean_13 and upc_a are checked as digits with their check digit. None of the three can be used in a rule except a barcode (eq, ne); a location or a signature can't be filtered or sorted by. Text fields get a dictation button of their own, needing a connection; you do nothing for it. You can read these values (list_app_rows) but cannot capture them yourself.`,

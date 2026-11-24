@@ -8,6 +8,42 @@
         "Hello {name}, this is a test message from your TaskTo.AI server, sent at your request.",
         "If you can read it, the server can send email: invitations, password resets and notifications will reach people."
       ]
+    },
+    "digest": {
+      "subject": "Your TaskTo.AI notifications",
+      "title": "You have notifications waiting",
+      "paragraphs": [
+        "{count} of your notifications are unread since your last summary.",
+        "You get this summary because you turned it on in Settings, Notifications. It says only how many there are."
+      ],
+      "action": "Open your notifications"
+    },
+    "notification_card_assigned": {
+      "subject": "A card was assigned to you",
+      "title": "A card was assigned to you",
+      "paragraphs": [
+        "Open TaskTo.AI to see it.",
+        "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
+      ],
+      "action": "Open the notification"
+    },
+    "notification_app_effect_failed": {
+      "subject": "An app action needs your attention",
+      "title": "An app action needs your attention",
+      "paragraphs": [
+        "An action in one of your apps didn't finish and waits for you to retry it.",
+        "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
+      ],
+      "action": "Open the notification"
+    },
+    "verify_email": {
+      "subject": "Confirm your email address for TaskTo.AI notifications",
+      "title": "Confirm your email address",
+      "paragraphs": [
+        "You asked TaskTo.AI to email notifications to this address. Open the link to confirm that it is yours: until you do, nothing is sent.",
+        "The link works once and expires in {hours} hours. If you didn't ask for this, ignore this message and nothing will be sent."
+      ],
+      "action": "Confirm this address"
     }
   }
 }

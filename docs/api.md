@@ -19,6 +19,52 @@ and apps over MCP, at `/mcp`, with an access token: see [mcp.md](mcp.md).
 - **IDs** are integers.
 - Replies are `Cache-Control: no-store`.
 
+### API types
+
+The web app's types for the replies (`web/src/api.ts`) are checked against the Go structs that
+make them, so a field renamed or retyped in Go breaks the build instead of the page. This holds
+for each registered reply type (below); a type with no line in the contract is not checked:
+
+1. `internal/apitypes` lists the reply structs (`Roots`) and writes their shapes, read by
+   reflection as `encoding/json` writes them, to `web/src/api.gen.ts`
+   (`go generate ./internal/apitypes`). The file is committed, and `go test` fails when it is
+   not what the structs say.
+2. `web/src/api.contract.ts` checks each type `api.ts` declares against its generated shape
+   (`Check<Gen.Card, Api.Card>`): every field the web app reads must exist in the reply, be
+   present and non-null there unless the web app's type allows it, and have a type the
+   reply's is assignable to. `pnpm typecheck` (part of `pnpm build`) fails, naming the field,
+   when one does not. The web app's types may be wider than the generated ones and may leave
+   out fields it does not read. They may be narrower in one way: a union of string literals
+   for a Go string (`'admin' | 'member'`). `any` is refused on either side, and a field of
+   free-form JSON (`unknown`) is read as `unknown` or not at all. A Go map is a
+   `Record<string, T>`: the web app can't read a fixed key from it unless the key is optional.
+
+What the generator tells, as `encoding/json` writes it:
+
+- A key that may be **left out** (`?`: `omitempty` on a value that can be empty, `omitzero`, or
+  a field of an embedded pointer that may be nil) is told apart from a value that may be
+  **null** (`| null`: a nil pointer, slice or map, a nil `[]byte`). A nil value that is left
+  out is not null, but a pointer that is not nil can hold one: an `omitempty` `*[]string` is
+  `p?: string[] | null`, since a pointer to a nil slice is written as `null`.
+- A type with a `MarshalJSON` or `MarshalText` of its own writes what its struct doesn't say, so
+  the generator refuses it (a root, or any field, slice or map element of one) unless its wire
+  shape is registered (`wireShapes` in `internal/apitypes/generate.go`: `time.Time` is a
+  string; `apierr.Params` is a map of texts and numbers). A `MarshalText` alone is a string.
+- An `any`, `interface{}` or `json.RawMessage` is refused unless its field is tagged
+  `apitypes:"json"`, which tells it as `unknown`.
+- A nil slice or map is told `T[] | null`. A field the web app reads as a plain list is tagged
+  `apitypes:"nonnull"` and then told `T[]`: a promise that the server sends `[]` or `{}`, so
+  initialize it in Go. `TestNonNullFieldsAreKept` fails for a tagged field whose package has no
+  test calling `nonnull.Require` (`internal/apitypes/nonnull`) on what its routes reply.
+- A map's key is a string, an integer (`uintptr` too) or itself an `encoding.TextMarshaler`.
+
+To cover another reply, add its struct to `Roots`, run `go generate ./internal/apitypes`, and
+add a line to `api.contract.ts`. A reply struct that is not exported, or that a handler builds
+as a `map` or an anonymous struct, needs a named, exported struct first (the card route's
+reply is `boards.Thread`, a card with its comments). What this does not check: that a call's
+type argument (`api<Card[]>(…)`) is the reply of its path, or the values of a Go string
+type's constants.
+
 ### Error codes
 
 Every code is listed here and in `internal/apierr/codes.go`, the one list; a code keeps its
@@ -235,6 +281,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `mail_rejected` | 502 | The SMTP server refused the message, with its reply code `smtp_code`. |
 | `mail_failed` | 502 | The message couldn't be sent. |
 | `mail_test_rate_limited` | 429 | A test email was sent a moment ago by the caller, or the server's test sends are all busy; `Retry-After` says how long. |
+| `export_running` | 409 | The caller has an export of their data running; `Retry-After` says when to look again. |
+| `export_rate_limited` | 429 | The caller started their share of exports this hour, or the server's exports are all busy; `Retry-After` says how long. |
 | `cli_workers_off` | 409 | CLI workers are off on this server (also a list's `reason_code`). |
 | `cli_workers_no_boundary` | 409 | CLI workers run in local mode, which allows a single user only (also a list's `reason_code`). |
 | `cli_not_installed` | 503 | The CLI, `cli`, isn't installed on this server. |
@@ -283,6 +331,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `push_keys_invalid` | 400 | A push subscription's `keys` aren't a P-256 public key (`p256dh`) and a 16-byte `auth` secret, base64url. |
 | `push_too_many_subscriptions` | 409 | The caller already has push turned on for `max` devices (a device that changes hands counts for its new person). |
 | `push_no_workspace` | 403 | The caller is in no workspace: push is for people who are in one. |
+| `notification_email_invalid` | 400 | An email choice that isn't one: another kind or mode, an hour outside 0 to 23, or a time zone that isn't an IANA name. |
+| `notification_email_verification_invalid` | 400 | The link that confirms the caller's email address is unknown, used, expired, replaced by a newer one, or for an address the caller no longer has. |
+| `notification_email_verification_too_soon` | 429 | A confirmation link was sent to the caller a moment ago (`Retry-After`; `seconds` says how long to wait). |
+| `notification_email_verification_unavailable` | 502 | The confirmation email couldn't be sent; another may be asked for at once. |
 
 ### Sessions
 
@@ -829,6 +881,101 @@ past 50 tokens per member of a workspace.
 
 Revokes one of the caller's tokens: requests with it fail from now on. `204`, or `404`
 (also for someone else's token).
+
+## Export my data
+
+A person's own data in a workspace, as a zip they keep. It is the person's export, not the
+operator's: `taskto backup` takes the whole server's data directory, and this takes one person's
+share of one workspace, through the same access checks as everything else.
+
+### `POST /api/workspaces/{workspace}/export`
+
+Starts an export: it takes one of the caller's exports of the hour, records a
+`data_export_started` event on the [audit log](audit.md), and answers `200` with the address to
+download the zip from:
+
+```json
+{"download": "/api/workspaces/1/export/<token>", "expires_in": 60}
+```
+
+It is a `POST`, with a JSON body (`{}`), so the [CSRF guard](#csrf) covers it: a link, a
+cross-site navigation or a prefetch is a `GET`, and starts nothing, uses up none of the hour's
+exports and writes nothing to the audit log. It takes a session only (`403` with an access token,
+so a leaked token can't take a person's data out), and any member of the workspace may call it,
+for themselves.
+
+### `GET /api/workspaces/{workspace}/export/{token}`
+
+Streams the zip of an export that was started (`200`, `Content-Type: application/zip`,
+`Content-Disposition: attachment; filename="taskto-export-YYYYMMDD.zip"`, `Cache-Control:
+no-store`). It changes no data on the server (the token it takes is used up, in memory). The token is the one the `POST` answered with: random,
+good once, for `expires_in` seconds, and only for the same person, workspace and login that started
+it; anything else is `404`. A `HEAD` is `405`, so nothing but the download uses the token. The web
+app's button does both: it posts, then goes to the address.
+
+**What is in it: only what the caller owns in this workspace.**
+
+| Path in the zip | What |
+|---|---|
+| `documents/…` | The current version of every file in the caller's **private space**, under the names it has there, with a file's bytes as they are: Markdown and other versioned files from git, and large files, audio, video and archives (the [unversioned files](#unversioned-files)) from the space's own storage, never as a Git LFS pointer. Older versions aren't included. |
+| `boards/<id>-<name>.json`, `boards/<id>-<name>.md` | Each board of the private space, archived ones too (the personal board): the board and its cards (all columns, archived cards too, in the order of their IDs), each with its thread of comments. The JSON is `{"board": {…}, "cards": [{…card as the API gives it…, "comments": […]}]}`, exactly what `GET …/cards/{card}` answers. The Markdown is the same, for reading: a heading per card, with its column, details, body and comments. The two files are read one after the other, so a card edited between them can differ in them. |
+| `conversations/<id>-<title>.json` | Each conversation the caller owns **in this workspace**, archived ones too: `{"conversation": {…as the conversations API gives it…}, "entries": […], "transcript": "complete"}`. The entries are the agent runtime's, oldest first, in the shape the web app draws, as `GET …/conversations/{conversation}/entries` pages them, as the history was when its export began. If the agent runtime is off, no longer has the conversation or stops answering (each read waits at most 30 seconds), `transcript` is `"unavailable"` (`entries` empty) or `"incomplete"` (the entries read before it stopped), and the manifest says so. |
+| `apps/<id>-<name>.json` | Each app of the private space, offline ones too: `{"app": {id, name, archived_at, created_at, updated_at}, "records": […]}`. The records are the live ones (not deleted), as the agent's `list_app_rows` tool gives them (each field by name, with `id` and `revision`). An attachment field holds each photo's metadata, not its bytes; the app's definition isn't included (copy the app, or see [templates](templates.md)). |
+| `manifest.json` | `{"format": 1, "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, apps, records}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file whose bytes the server no longer has), `documents` with `unavailable` (the space's history was rewritten while the export read it) or `off` (the server has no knowledge base), `app` with `unavailable` and its ID (the app was moved out of the private space while the export read it), `conversations` with `off` (the server has none), or `transcript` with `unavailable` or `incomplete` and a conversation's ID; it is capped at 1000 (`"skipped_truncated": true` then). |
+
+**The scope is where a thing is now, and who owns a conversation.** The documents, boards and
+apps are those in the caller's private space at the moment each is read, so an app or a document
+that was moved into it from a shared space is exported, and an app that is moved out meanwhile is
+left out and listed in the manifest. An app's records are all its live records, including those
+teammates added while it was shared. The caller's conversations are exported whole: a transcript
+can hold text from shared documents the agent read for the caller. The Settings text says so.
+
+**What is never in it:** the content of a shared space (where it still is when it is read), even
+where the caller is a member or an editor; other people's private spaces, cards, conversations and
+records; the caller's data in other workspaces (export each workspace on its own); search indexes,
+tokens, sessions and every secret. Boards, apps and documents of a shared space belong to the
+space, not to a person, so ownership isn't the question there: someone who wants them copies them
+into their private space first.
+
+**Names inside the zip** come from people, so none is used as it is. Each element of a path is
+cleaned (a name's `/`, `\`, `:`, `*`, `?`, quotes, `<`, `>`, `|`, control and bidirectional
+characters become `_` or go; `.` and `..` become `_`; a trailing dot or space goes; names Windows
+reserves, such as `NUL` or `COM1`, get a `_` in front), cut to 120 bytes at a character
+boundary with the extension kept (a name that is nothing after that becomes `_`), and made unique
+even on a file system that ignores case or writes an accent the other way (names are compared
+normalized to NFC and case-folded), with ` (2)`, ` (3)`… before the extension. A folder keeps the
+name it was given for all its files, and two different folders never share one. No entry is absolute or has a `..`, so unpacking can't
+write outside its folder, and no name is ever joined to a file system path on the server: the
+zip is a stream.
+
+**Streamed.** The zip is written to the response as it is made, one entry at a time, with a data
+descriptor per entry and Zip64 where needed, and has no `Content-Length`. A file's bytes are
+copied through a fixed buffer, so a large file costs a buffer, not its size; audio, video and other
+files git doesn't version are stored as they are, not compressed again. What is held at once is
+a page of a listing, one card's thread, a page of a conversation's history or one app's records,
+whatever the size of the space, besides what a zip always keeps until its end (a header per entry, so the cost grows with how many files there are, not how large they are) and the list of the person's conversations. The documents are listed and read at one commit of the knowledge
+base, taken when the export reaches them, so a file renamed or replaced meanwhile appears once, as
+it was; a versioned file is read from git into memory (up to 1 MiB) or a temporary file that is removed when it has been sent, so a slow download never holds up changes to the space. The server never writes:
+the knowledge base's repositories are only read, through `internal/knowledge`.
+
+**If it stops.** The status goes out with the first bytes, so an export that fails or whose
+reader goes away is ended by cutting the connection: the zip has no end of central directory, so
+no unzipper takes it for whole. The manifest is the last entry and the zip's end follows it, so a zip that opens in an unzipper, with its manifest, is whole.
+Each write has two minutes to be taken by the connection, so a download that stalls is ended and
+frees its slot; a download address nobody uses frees it when it expires.
+
+**Limits.** One export at a time per person (`409 export_running`), at most 3 per hour per
+person and 4 at once on the whole server (`429 export_rate_limited`), both with `Retry-After`, on
+the `POST`; a refused attempt isn't counted. A started export holds its slot from the `POST` until
+its download ends or its address expires. They are in memory: a restart forgets them. A person who
+closes the download frees their slot at once. `401` without a session, `404` for a workspace
+the caller isn't a member of.
+
+Each export that is started is a `data_export_started` event on the [audit log](audit.md), with
+the exporter as actor and target; one turned away by its limits isn't.
+
+**The web app** has a "Your data" tab in Settings, for every member: a button that posts, shows
+the 409 and 429 reasons in the person's language, and goes to the address it is given.
 
 ## Spaces
 
@@ -1687,6 +1834,58 @@ Marks all the caller's notifications of the workspace read. `204`.
 One notification of the caller's, whatever its workspace, as above: the address a push opens,
 `/notification/{id}`, which holds nothing but this ID. `404` (`notification_not_found`) for
 someone else's.
+
+### Notification email
+
+Email is optional, per person and workspace, and off until chosen ([pwa.md](pwa.md#email)). A mail
+carries no record data, only the kind of thing that happened and a link back; the daily summary only
+a count. Nothing is mailed to an address until its owner has confirmed it (below). These routes are
+for the workspace's members, about the caller only.
+
+#### `GET /api/workspaces/{workspace}/notification-email`
+
+`{"available": true, "address": {"email": "ana@example.com", "state": "verified"}, "kinds":
+{"card_assigned": "off", "app_effect_failed": "digest"}, "digest": {"hour": 8, "timezone": "UTC"}}`.
+`available` is false when the server has no SMTP server or no public URL (nothing can be turned on
+then, and everything can still be turned off). `address.state` is `unverified` (no link waits),
+`pending` (a link was sent and may still be opened) or `verified`; nothing is sent unless it is
+`verified`. Each kind is `off`, `instant` (a mail soon after, one for each notification) or `digest`
+(counted in the daily summary, sent at `hour` o'clock, 0 to 23, of the IANA `timezone`; the default
+is 8 o'clock UTC; `chosen` is false until the person has set the time themselves, so a client may
+offer its own zone then and never replaces one they chose).
+
+#### `PUT /api/workspaces/{workspace}/notification-email`
+
+`{"kinds": {"card_assigned": "instant"}, "digest": {"hour": 18, "timezone": "Europe/Lisbon"}}`; both
+fields are optional and what is left out stays. Answers with the new choices, as the GET does. `400
+notification_email_invalid` for another kind or mode, an hour outside 0 to 23 or a time zone that
+isn't an IANA name; `409 mail_not_configured` for turning anything on where `available` is false
+(turning things off always works). Turning something on for an address whose state is `unverified`
+mails it a confirmation link (the choice is kept even if the mail can't be sent: the state says so).
+Choosing `digest` for a kind schedules the person's summary on the
+[general scheduler](../internal/schedule/schedule.go) (job kind `notifications.digest`, one per
+person and workspace). It has no fixed interval: each run schedules the next at the same hour of the
+person's own date, so it keeps its hour through daylight saving time. The summary counts the kind's
+notifications that come after the kind was turned to `digest`, are still unread, are less than 48
+hours old, weren't counted in an earlier summary and that the person may still read: so its number
+can be lower than the inbox's. Having no kind on `digest` ends it,
+and so does leaving the workspace.
+
+#### `POST /api/workspaces/{workspace}/notification-email/verification`
+
+No body. Mails the caller's own address a link to confirm it (`204`), unless it is confirmed
+already (`204`, nothing sent). The link holds a random single-use token that the server keeps only
+as a SHA-256 hash and never logs; it expires after 24 hours, and a newer link replaces it. At most
+one link is sent every 5 minutes (`429 notification_email_verification_too_soon`, with
+`Retry-After`); `409 mail_not_configured` where the server can't send mail; `502
+notification_email_verification_unavailable` when the mail couldn't be sent (the wait isn't used).
+
+#### `POST /api/me/notification-email/confirm`
+
+`{"token": "..."}`, the part of the link after `#`. Confirms the signed-in caller's address, once
+(`204`); a token of someone else's, unknown, used, expired or for an address the caller no longer
+has is `400 notification_email_verification_invalid`. It takes a browser session, not an access
+token. The link opens `/confirm-notification-email` in the web app, which sends it.
 
 ### Web Push
 
@@ -3341,6 +3540,58 @@ backup host:
 ```json
 {"status": "ok", "last_success": "2026-03-10T03:16:40Z", "due_by": "2026-03-11T10:15:00Z"}
 ```
+
+## Setup checklist
+
+The first-run checklist on an admin's Home (`internal/checklist`): the steps that make a new
+workspace useful to a team. Whether a step is done is never stored. It is worked out from what
+exists when the checklist is asked for, so a step done anywhere (the settings pages, the agent) is
+done here, and a step undone is open again. What is stored, per workspace and shared by its admins,
+is whether the checklist was dismissed and which steps were skipped as not applying.
+
+| `id` | Done when |
+|---|---|
+| `invite` | the workspace has a member besides one, an invite that hasn't expired and wasn't used yet, or an accepted invite (an expired, unused invite doesn't count) |
+| `provider` | the workspace has a model provider account |
+| `space` | the workspace has a shared space that isn't archived |
+| `app` | an app that isn't archived is in a shared space of the workspace that the caller is a member of, or in the caller's own private space (apps in spaces the caller can't read, and other people's private apps, are never counted) |
+| `email` | the server can send email ([Outgoing email](#outgoing-email)); optional |
+| `backups` | the server's scheduled backups have a status ([Backups](#backups)); optional |
+
+The answer says whether things exist, never what they are. Every route is for the workspace's
+admins, with a browser session (not an access token): `403 admin_only` for a member, `404
+workspace_not_found` for someone outside the workspace.
+
+### `GET /api/workspaces/{workspace}/checklist`
+
+```json
+{
+  "dismissed": false,
+  "complete": false,
+  "items": [
+    {"id": "invite", "state": "todo", "optional": false},
+    {"id": "provider", "state": "done", "optional": false},
+    {"id": "space", "state": "skipped", "optional": false},
+    {"id": "app", "state": "todo", "optional": false},
+    {"id": "email", "state": "todo", "optional": true},
+    {"id": "backups", "state": "done", "optional": true}
+  ]
+}
+```
+
+`state` is `done`, `todo` or `skipped`; a step that is done is `done` even if it was skipped.
+`complete` is true when every step that isn't `optional` is `done` or `skipped`. The web app shows
+the checklist while it isn't `dismissed` and isn't `complete`.
+
+### `PUT /api/workspaces/{workspace}/checklist/dismissed`, `DELETE …`
+
+Puts the checklist away for the whole workspace, or brings it back. `204`, and the same again is
+`204`.
+
+### `PUT /api/workspaces/{workspace}/checklist/skipped/{item}`, `DELETE …`
+
+Marks a step (an `id` above) as not applying, or takes the mark off. `204`; `404 not_found` for a
+step that doesn't exist.
 
 ## CLI accounts
 

@@ -895,6 +895,8 @@
     "mail_rejected": "O servidor SMTP recusou a mensagem (resposta {smtp_code}). O log do servidor tem a resposta dele.",
     "mail_failed": "Não foi possível enviar a mensagem. O log do servidor diz por quê.",
     "mail_test_rate_limited": "Você enviou um e-mail de teste há pouco, ou o servidor está ocupado enviando outros. Aguarde um pouco e tente de novo.",
+    "export_running": "Você já tem uma exportação em andamento. Aguarde ela terminar.",
+    "export_rate_limited": "Você exportou algumas vezes na última hora, ou o servidor está ocupado com outras exportações. Aguarde um pouco e tente de novo.",
     "cli_workers_off": "Os workers de CLI estão desligados neste servidor.",
     "cli_workers_no_boundary": "Os workers de CLI rodam em modo local neste servidor, sem isolamento entre usuários, então só funcionam enquanto o servidor tiver um único usuário. Um operador pode usar o contêiner do worker de CLI no lugar.",
     "cli_not_installed": "O {cli} não está instalado neste servidor.",
@@ -998,6 +1000,7 @@
     "session_account_changed": "Este navegador está conectado como uma conta diferente daquela a que estes registros pertencem.",
     "offline_unsupported": "Isto exige conexão. Offline, você pode adicionar registros, alterar ou excluir os baixados e navegar pela cópia baixada.",
     "notification_not_found": "Essa notificação não está disponível.",
+    "notification_email_invalid": "As escolhas de e-mail não são válidas: espera-se um tipo, um modo, uma hora de 0 a 23 e um fuso horário como Europe/Lisbon.",
     "push_endpoint_invalid": "O endereço de push deste navegador não é válido.",
     "push_keys_invalid": "As chaves de push deste navegador não são válidas.",
     "push_too_many_subscriptions": "Você já ativou o push em {max} dispositivos. Desative em um deles primeiro.",
@@ -1013,7 +1016,10 @@
     "offline_copy_changed": "A cópia deste app neste dispositivo foi substituída durante a verificação. Ela aparece como está agora: revise de novo.",
     "offline_review_again": "O registro mudou de novo nesse meio tempo. Ele aparece como está agora: revise e escolha outra vez.",
     "offline_record_unreadable": "Você não pode mais ler este registro, então sua alteração não pode ser aplicada sobre ele. Você pode manter a versão do servidor ou descartar a alteração.",
-    "offline_record_changed": "Este registro mudou neste dispositivo (em outra aba ou janela) depois que esta tela foi desenhada. Ele aparece como está agora: confira e tente de novo."
+    "offline_record_changed": "Este registro mudou neste dispositivo (em outra aba ou janela) depois que esta tela foi desenhada. Ele aparece como está agora: confira e tente de novo.",
+    "notification_email_verification_invalid": "Esse link de confirmação não funciona: já foi usado, expirou ou foi substituído por um mais novo. Peça um novo em Configurações, Notificações.",
+    "notification_email_verification_too_soon": "Um link foi enviado agora há pouco. Veja sua caixa de entrada ou tente de novo em {seconds} segundos.",
+    "notification_email_verification_unavailable": "Não foi possível enviar o e-mail de confirmação. Tente de novo."
   },
   "language": {
     "label": "Idioma",
@@ -1031,6 +1037,7 @@
       "search": "Busca",
       "dictation": "Ditado",
       "password": "Senha",
+      "data": "Seus dados",
       "tokens": "Tokens de acesso",
       "about": "Sobre",
       "notifications": "Notificações"
@@ -1135,6 +1142,18 @@
       "changing": "Alterando…",
       "change": "Alterar a senha",
       "changed": "Sua senha foi alterada, e suas outras sessões foram encerradas."
+    },
+    "data": {
+      "title": "Exportar seus dados",
+      "intro": "Baixe um zip com os seus dados neste espaço de trabalho. Ele é montado enquanto é enviado, então arquivos grandes não precisam caber na memória em lugar nenhum.",
+      "documents": "Os documentos e arquivos do seu espaço privado, como estão agora (sem as versões antigas).",
+      "boards": "Os cartões do seu quadro pessoal, inclusive os arquivados, com os comentários, em JSON e em Markdown.",
+      "conversations": "Suas conversas com o agente neste espaço de trabalho, com o histórico, em JSON.",
+      "apps": "Os registros dos aplicativos do seu espaço privado, em JSON (as fotos são listadas, não incluídas).",
+      "scope": "O que entra é decidido por onde cada coisa está e de quem é agora. Tudo o que está no seu espaço privado vai com você, inclusive um documento ou aplicativo movido para lá de um espaço compartilhado, e os registros desse aplicativo, também os de colegas. Suas próprias conversas vão inteiras e podem conter trechos de documentos compartilhados que o agente leu para você.",
+      "never": "O conteúdo que continua em um espaço compartilhado nunca entra, mesmo onde você pode lê-lo, nem os dados de outras pessoas. Um manifesto no zip lista o que ele contém e o que precisou deixar de fora.",
+      "download": "Baixar meus dados",
+      "limit": "Você pode exportar algumas vezes por hora, uma de cada vez. Se o download falhar, aguarde um pouco e tente de novo."
     },
     "spaces": {
       "title": "Espaços compartilhados",
@@ -1872,6 +1891,57 @@
     },
     "removePinNamed": "Remover {name} do menu"
   },
+  "checklist": {
+    "title": "Configure seu workspace",
+    "intro": "Alguns passos que tornam este workspace útil para uma equipe. Cada um é concluído quando isso é verdade no servidor; pule os que não se aplicam a você.",
+    "progress": "{done} de {total} passos resolvidos",
+    "dismiss": "Dispensar a lista",
+    "optional": "Opcional",
+    "state": {
+      "done": "Concluído",
+      "todo": "A fazer",
+      "skipped": "Pulado"
+    },
+    "skip": "Pular",
+    "unskip": "Desfazer",
+    "skipNamed": "Pular: {name}",
+    "unskipNamed": "Desfazer o pulo: {name}",
+    "dismissedNote": "Você dispensou a lista de configuração. A mudança vale para todos os admins deste workspace.",
+    "show": "Mostrar a lista de configuração",
+    "completed": "A lista de configuração está completa.",
+    "steps": {
+      "invite": {
+        "title": "Convide sua equipe",
+        "text": "Adicione as pessoas com quem você trabalha. Trabalha sozinho? Pule este passo.",
+        "action": "Convidar pessoas"
+      },
+      "provider": {
+        "title": "Adicione um provedor de modelos",
+        "text": "Conecte o serviço de IA que o agente vai usar, para que todos no workspace possam conversar com ele.",
+        "action": "Adicionar um provedor"
+      },
+      "space": {
+        "title": "Crie um espaço compartilhado",
+        "text": "Um lugar para os documentos, quadros e apps em que sua equipe trabalha junta.",
+        "action": "Criar um espaço"
+      },
+      "app": {
+        "title": "Instale um modelo de app",
+        "text": "Comece de um app pronto, como um controle de despesas, e adapte ao seu jeito.",
+        "action": "Ver os modelos"
+      },
+      "email": {
+        "title": "Configure o e-mail",
+        "text": "Permite que o servidor envie convites e redefinições de senha. Quem administra o servidor configura; veja o guia de instalação.",
+        "action": "Ver o estado do servidor"
+      },
+      "backups": {
+        "title": "Configure os backups",
+        "text": "Uma cópia noturna de tudo, guardada fora deste servidor. Quem administra o servidor configura; veja o guia de instalação.",
+        "action": "Ver os backups"
+      }
+    }
+  },
   "offline": {
     "writer": {
       "elsewhere": "As alterações estão sendo feitas em outra aba. Os registros e a fila aparecem aqui e são alterados lá.",
@@ -2113,7 +2183,34 @@
       "turnOn": "Ativar o push neste dispositivo",
       "turnOff": "Desativar o push neste dispositivo",
       "turnOffFailed": "O navegador deste dispositivo não encerrou a inscrição de push, então o push continua ativado. Tente de novo.",
-      "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo."
+      "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo.",
+      "emailTitle": "E-mail",
+      "emailIntro": "Opcional. Escolha quais notificações também são enviadas ao seu e-mail, neste espaço de trabalho. Nada é enviado até você escolher.",
+      "emailUnavailable": "O e-mail não está configurado neste servidor, então as notificações não podem ser enviadas por e-mail. Quem administra o servidor pode ativá-lo.",
+      "email": {
+        "card_assigned": "Um cartão foi atribuído a você",
+        "app_effect_failed": "Uma ação de app precisa da sua atenção"
+      },
+      "emailOff": "Não me enviar e-mail",
+      "emailInstant": "Enviar e-mail logo depois",
+      "emailDigest": "Incluir em um resumo diário",
+      "emailHour": "Enviar o resumo diário às",
+      "emailZone": "Fuso horário",
+      "emailCaveat": "Um e-mail diz apenas que algo aconteceu, nunca o que um cartão ou um app contém, e leva de volta ao TaskTo.AI, que verifica o que você pode ver. No máximo 20 são enviados a você por hora, e a caixa de entrada é sempre o registro.",
+      "emailUnavailableOff": "O e-mail não está configurado neste servidor. Você ainda pode desativar o e-mail.",
+      "emailAddress": "As notificações vão para {email}.",
+      "emailAddressVerified": "Este endereço está confirmado.",
+      "emailAddressPending": "Enviamos um link para este endereço. Abra-o para confirmar que é seu: nada é enviado por e-mail até lá.",
+      "emailAddressUnverified": "Este endereço não está confirmado, então nada é enviado por e-mail ainda. Envie um link de confirmação para você.",
+      "emailSendLink": "Enviar o link de confirmação",
+      "emailResendLink": "Enviar o link de novo",
+      "emailLinkSent": "O link foi enviado. Ele funciona uma vez e expira em 24 horas."
+    },
+    "confirmEmail": {
+      "title": "Confirme seu endereço de e-mail",
+      "working": "Confirmando seu endereço…",
+      "done": "Seu endereço está confirmado. As notificações que você escolheu agora podem ser enviadas por e-mail.",
+      "settings": "Abrir as configurações de notificações"
     }
   }
 }

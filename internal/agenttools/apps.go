@@ -181,3 +181,67 @@ func (s *Service) updateApp(ctx context.Context, c *call, args json.RawMessage) 
 	}
 	return s.o.Apps.UpdateApp(ctx, appsActor(c), a.SpaceID, a.AppID, a.Changes)
 }
+
+// listAppActions is what the app's live release offers to run on its records, and what the
+// user's roles let them do.
+func (s *Service) listAppActions(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a appRef
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	if err := s.appSpace(ctx, c, a.SpaceID); err != nil {
+		return nil, err
+	}
+	return s.o.Apps.Actions(ctx, appsActor(c), a.SpaceID, a.AppID)
+}
+
+// runAppAction runs one of the app's actions that change a record, as the call's user, through
+// the code behind the web app's action route: their roles, the collection's rules, the locks of
+// captured values, the record's history and the action's effects all apply.
+func (s *Service) runAppAction(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		appRef
+		Action           string         `json:"action"`
+		ID               *int64         `json:"id"`
+		Context          map[string]any `json:"context"`
+		ExpectedRevision *int64         `json:"expected_revision"`
+		ExpectedRelease  *int64         `json:"expected_release"`
+		// Operation is a pointer to tell an omitted key from an empty one, which is refused.
+		Operation *string `json:"operation"`
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	if a.Action == "" {
+		return nil, invalidf("action is the name of one of the app's actions, from list_app_actions")
+	}
+	if _, has := a.Context["id"]; has {
+		return nil, invalidf("give the row's id as id, not in context")
+	}
+	if a.Operation != nil && *a.Operation == "" {
+		return nil, invalidf("operation is 8 to 64 letters, digits, - or _: leave it out to make no key")
+	}
+	if err := s.appSpace(ctx, c, a.SpaceID); err != nil {
+		return nil, err
+	}
+	if a.ExpectedRelease == nil || *a.ExpectedRelease < 1 {
+		return nil, invalidf("expected_release is the release number list_app_actions gave: the action runs only if it is still the live one")
+	}
+	fields := map[string]any{}
+	for k, v := range a.Context {
+		fields[k] = v
+	}
+	if a.ID != nil {
+		if *a.ID < 1 {
+			return nil, invalidf("id is a row's id, from 1")
+		}
+		fields["id"] = float64(*a.ID)
+	}
+	operation := ""
+	if a.Operation != nil {
+		operation = *a.Operation
+	}
+	return s.o.Apps.RunAction(ctx, appsActor(c), a.SpaceID, a.AppID, apps.ActionRun{
+		Action: a.Action, Context: fields, ExpectedRevision: a.ExpectedRevision, ExpectedRelease: *a.ExpectedRelease, Operation: operation,
+	})
+}

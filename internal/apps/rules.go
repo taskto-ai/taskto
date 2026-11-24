@@ -54,7 +54,7 @@ const (
 type Rule struct {
 	Field string `json:"field,omitempty"`
 	Op    string `json:"op,omitempty"`
-	Value any    `json:"value,omitempty"`
+	Value any    `json:"value,omitempty" apitypes:"json"`
 	All   []Rule `json:"all,omitempty"`
 	Any   []Rule `json:"any,omitempty"`
 }

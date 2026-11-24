@@ -187,6 +187,34 @@ func TestRejections(t *testing.T) {
 	assertStage(t, s.sender(SMTPConfig{}).Send(ctx(t), hello), StageRejected, 554)
 }
 
+// A connection lost after the message was sent says nothing of whether the server took it: that,
+// and only that, is ambiguous, so a caller that must not send twice can tell it from a refusal.
+func TestOnlyALostAnswerToTheMessageIsAmbiguous(t *testing.T) {
+	s := newFakeSMTP(t, false)
+	s.DropAfterData = true
+	err := s.sender(SMTPConfig{}).Send(ctx(t), hello)
+	var se *SendError
+	if !errors.As(err, &se) || !se.Ambiguous || se.Code != 0 {
+		t.Fatalf("err = %#v", err)
+	}
+	if len(s.messages()) != 1 {
+		t.Fatal("the fake should have taken the message")
+	}
+	for name, setup := range map[string]func(*fakeSMTP){
+		"a refused recipient": func(s *fakeSMTP) { s.RejectRcpt = "550 5.1.1 no such user" },
+		"a refused message":   func(s *fakeSMTP) { s.RejectData = "451 4.3.0 try later" },
+	} {
+		s := newFakeSMTP(t, false)
+		setup(s)
+		if err := s.sender(SMTPConfig{}).Send(ctx(t), hello); !errors.As(err, &se) || se.Ambiguous {
+			t.Fatalf("%s: err = %#v", name, err)
+		}
+	}
+	if err := newFakeSMTP(t, false).sender(SMTPConfig{Username: "u", Password: "p"}).Send(ctx(t), hello); !errors.As(err, &se) || se.Ambiguous {
+		t.Fatalf("a refused sign-in: err = %#v", err)
+	}
+}
+
 func TestEgressPolicyRefusesTheConnection(t *testing.T) {
 	s := newFakeSMTP(t, false)
 	m := s.sender(SMTPConfig{Egress: egress.MustParse("public")})

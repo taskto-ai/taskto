@@ -442,6 +442,14 @@ reply is not shown, since it can name internal hosts or repeat what was sent: th
 (`mail: the test email failed`) has the step and the reply's number only, and never the server's
 words. The test is limited to one a person every 30 seconds, and three at once on the server.
 
+**Notification email.** With an SMTP server **and** `public_url` (the server's external origin, as
+for [single sign-on](sso.md); the links in a mail go there), people can choose in Settings →
+Notifications to be emailed about a kind of notification as it happens, or in one summary a day. It
+is off for everyone until they choose, and a mail says only what happened and links back, never what
+a card or an app holds ([pwa.md](pwa.md#email)). Before the first notification mail to an address,
+its owner opens a confirmation link sent to it. Without the SMTP server or the public URL the
+choices say so and nothing is sent.
+
 Messages are plain text with a simple HTML alternative, translated into the recipient's language
 (the one they picked, else their workspace's default, else English), with their texts in the
 binary (`internal/mail/locales`, one file per language). A language without a message uses
