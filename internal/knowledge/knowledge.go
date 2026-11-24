@@ -254,6 +254,13 @@ func (s *Store) state(spaceID int64) *spaceState {
 // List returns the documents of sp, by path, from the folder prefix ("" for all), after
 // the path after, at most limit of them (0 for DefaultListLimit).
 func (s *Store) List(ctx context.Context, sp access.Space, prefix, after string, limit int) (Page, error) {
+	return s.ListAt(ctx, sp, "", prefix, after, limit)
+}
+
+// ListAt is List as of the commit at (the head if empty), so a reader that lists in pages, and
+// reads each document at the same commit (Open, Stream), sees one state of the space however
+// the space changes meanwhile. A commit the repository no longer has is ErrNotFound.
+func (s *Store) ListAt(ctx context.Context, sp access.Space, at, prefix, after string, limit int) (Page, error) {
 	if prefix != "" {
 		if err := checkPath(prefix); err != nil {
 			return Page{}, err
@@ -265,7 +272,7 @@ func (s *Store) List(ctx context.Context, sp access.Space, prefix, after string,
 	}
 	var page Page
 	err = s.read(sp, func(r *repo) error {
-		page, err = r.list(ctx, prefix, after, limit)
+		page, err = r.list(ctx, at, prefix, after, limit)
 		return err
 	})
 	if errors.Is(err, errNoRepo) && prefix == "" {

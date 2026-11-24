@@ -1093,7 +1093,8 @@
       "boards": "Os cartões do seu quadro pessoal, inclusive os arquivados, com os comentários, em JSON e em Markdown.",
       "conversations": "Suas conversas com o agente neste espaço de trabalho, com o histórico, em JSON.",
       "apps": "Os registros dos aplicativos do seu espaço privado, em JSON (as fotos são listadas, não incluídas).",
-      "never": "O conteúdo de espaços compartilhados e os dados de outras pessoas nunca entram, mesmo onde você pode lê-los. Um manifesto no zip lista o que ele contém e o que precisou deixar de fora.",
+      "scope": "O que entra é decidido por onde cada coisa está e de quem é agora. Tudo o que está no seu espaço privado vai com você, inclusive um documento ou aplicativo movido para lá de um espaço compartilhado, e os registros desse aplicativo, também os de colegas. Suas próprias conversas vão inteiras e podem conter trechos de documentos compartilhados que o agente leu para você.",
+      "never": "O conteúdo que continua em um espaço compartilhado nunca entra, mesmo onde você pode lê-lo, nem os dados de outras pessoas. Um manifesto no zip lista o que ele contém e o que precisou deixar de fora.",
       "download": "Baixar meus dados",
       "limit": "Você pode exportar algumas vezes por hora, uma de cada vez. Se o download falhar, aguarde um pouco e tente de novo."
     },

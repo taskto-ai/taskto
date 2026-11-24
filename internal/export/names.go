@@ -6,6 +6,9 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 // The names inside the zip come from people (a document's path, a board's name, a
@@ -49,13 +52,21 @@ func cleanElem(s string, limit int) string {
 	}
 	name := strings.TrimLeft(b.String(), " ")
 	name = strings.TrimRight(name, ". ")
-	if name == "" {
+	return finish(shorten(name, limit))
+}
+
+// finish makes name a name that can be made a file of: cutting a name short can leave nothing
+// (a long run of dots before a long "extension"), and a cut can leave a name Windows reserves. It
+// is the last step of every name, after it is cut and after a suffix is added.
+func finish(name string) string {
+	name = strings.TrimRight(name, " ")
+	if strings.Trim(name, ".") == "" {
 		return "_"
 	}
 	if stem, _, _ := strings.Cut(name, "."); reservedNames[strings.ToLower(strings.TrimRight(stem, " "))] {
 		name = "_" + name
 	}
-	return shorten(name, limit)
+	return name
 }
 
 // shorten cuts name to at most limit bytes at a character boundary, keeping a short extension.
@@ -85,36 +96,58 @@ func cutBytes(s string, n int) string {
 // slug is a short readable form of a name for an entry's name: its cleaned, shortened text.
 func slug(s string) string { return cleanElem(s, slugBytes) }
 
-// names hands out the entry names of one zip, so no two are the same: not even on a file system
-// that ignores case, and none is both a folder and a file.
+// foldKey is what two names are the same by, for a file system that treats them so: macOS and
+// Windows unpack é written as one character or as two to the same name, and ignore case.
+func foldKey(s string) string { return cases.Fold().String(norm.NFC.String(s)) }
+
+// names hands out the entry names of one zip, so no two are the same by foldKey, and none is both
+// a folder and a file. A folder is remembered by where it is and the name it had, so the files of
+// one folder stay together, and two folders whose names are cleaned to the same name, or differ
+// only in case or in how an accent is written, are two folders.
 type names struct {
-	files map[string]bool // lower-cased full names of entries
-	dirs  map[string]bool // lower-cased folders that entries are in
+	files   map[string]bool   // foldKeys of entries
+	dirs    map[string]bool   // foldKeys of folders that entries are in
+	folders map[string]string // an assigned parent path and a folder's own name: the name it was given
 }
 
-func newNames() *names { return &names{files: map[string]bool{}, dirs: map[string]bool{}} }
+func newNames() *names {
+	return &names{files: map[string]bool{}, dirs: map[string]bool{}, folders: map[string]string{}}
+}
 
-// claim returns the entry name for elems, a path made of elements that cleanElem made safe: elems
-// joined with "/", with " (2)", " (3)"… added to the first element that collides, if any does.
+// claim returns the entry name for elems, the elements of a path as people named them: each is
+// cleaned (cleanElem), and made unique among its siblings with " (2)", " (3)"… before its
+// extension if it collides, so the entry's whole name is unique too.
 func (n *names) claim(elems ...string) string {
-	elems = append([]string(nil), elems...)
-	for i := range elems {
+	assigned := make([]string, 0, len(elems))
+	for i, raw := range elems {
 		last := i == len(elems)-1
-		orig := elems[i]
+		parent := strings.Join(assigned, "/")
+		known := parent + "\x00" + raw
+		if !last {
+			if name, ok := n.folders[known]; ok {
+				assigned = append(assigned, name)
+				continue
+			}
+		}
+		clean := cleanElem(raw, maxElemBytes)
+		name := clean
+		var key string
 		for k := 2; ; k++ {
-			key := strings.ToLower(strings.Join(elems[:i+1], "/"))
-			if last && !n.files[key] && !n.dirs[key] || !last && !n.files[key] {
+			key = foldKey(strings.Join(append(assigned[:len(assigned):len(assigned)], name), "/"))
+			if !n.files[key] && !n.dirs[key] {
 				break
 			}
-			elems[i] = withSuffix(orig, " ("+strconv.Itoa(k)+")")
+			name = withSuffix(clean, " ("+strconv.Itoa(k)+")")
 		}
+		if last {
+			n.files[key] = true
+		} else {
+			n.dirs[key] = true
+			n.folders[known] = name
+		}
+		assigned = append(assigned, name)
 	}
-	full := strings.Join(elems, "/")
-	n.files[strings.ToLower(full)] = true
-	for i := 1; i < len(elems); i++ {
-		n.dirs[strings.ToLower(strings.Join(elems[:i], "/"))] = true
-	}
-	return full
+	return strings.Join(assigned, "/")
 }
 
 // withSuffix puts suffix before name's extension, keeping the result within maxElemBytes.
@@ -124,5 +157,5 @@ func withSuffix(name, suffix string) string {
 		ext = ""
 	}
 	stem := cutBytes(strings.TrimSuffix(name, ext), maxElemBytes-len(ext)-len(suffix))
-	return stem + suffix + ext
+	return finish(stem + suffix + ext)
 }

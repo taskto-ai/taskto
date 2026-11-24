@@ -56,3 +56,19 @@ func TestGateLimitsTheServer(t *testing.T) {
 		t.Errorf("after one ended = %v, want allowed", why)
 	}
 }
+
+// A person turned away because the server is busy leaves nothing in the gate's memory.
+func TestGateForgetsThePeopleItTurnsAway(t *testing.T) {
+	g := newGate(-1, time.Hour, 1, time.Now)
+	if _, why, _ := g.enter(1); why != allowed {
+		t.Fatalf("first = %v", why)
+	}
+	for u := int64(2); u < 50; u++ {
+		if _, why, _ := g.enter(u); why != busy {
+			t.Fatalf("person %d = %v, want busy", u, why)
+		}
+	}
+	if len(g.started) != 1 {
+		t.Errorf("the gate remembers %d people, want only the one who started", len(g.started))
+	}
+}

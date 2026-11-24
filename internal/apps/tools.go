@@ -96,11 +96,14 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 	if err != nil {
 		return nil, err
 	}
+	// The app, its rows and its attachments' metadata are each read asking for the app to be in
+	// this space, and once more at the end: an app that moves meanwhile is ErrNotFound, never its
+	// rows read from the space it left.
 	ap, err := app(ctx, s.db, sp.ID, appID)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := loadRows(ctx, s.db, ap.ID, readable(acc, a.UserID))
+	rows, err := loadSpaceRows(ctx, s.db, sp.ID, ap.ID, readable(acc, a.UserID))
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +115,15 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 	items := Items(def, rows)
 	// An attachment field shows what each attachment is (id, type, size, pixels), never its bytes:
 	// the agent has no tool to read or to upload a file.
-	if err := s.describeAttachments(ctx, ap.ID, def, items); err != nil {
+	if err := describeAttachments(ctx, s.db, sp.ID, ap.ID, def, items); err != nil {
 		return nil, err
+	}
+	var still int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM apps WHERE id = ? AND space_id = ?`, ap.ID, sp.ID).Scan(&still); err != nil {
+		return nil, err
+	}
+	if still == 0 {
+		return nil, ErrNotFound
 	}
 	return items, nil
 }

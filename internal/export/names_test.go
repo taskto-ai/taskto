@@ -91,3 +91,73 @@ func TestSuffixKeepsWithinTheLimit(t *testing.T) {
 		t.Errorf("claim = %q", got)
 	}
 }
+
+// A long run of dots before a long "extension" is cut to nothing: the name falls back to one that
+// can be a file, never an empty element (which would make a folder entry of a file).
+func TestCleanElemNeverCutsANameToNothing(t *testing.T) {
+	for _, in := range []string{
+		strings.Repeat(".", 130) + strings.Repeat("x", 30),
+		"." + strings.Repeat("y", 300),
+		strings.Repeat(".", 200) + "a.b",
+		strings.Repeat(" .", 100) + "name",
+	} {
+		got := cleanElem(in, maxElemBytes)
+		if got == "" || strings.Trim(got, ". ") == "" || len(got) > maxElemBytes || strings.ContainsAny(got, "/\\") {
+			t.Errorf("cleanElem(%.20q… %d bytes) = %q", in, len(in), got)
+		}
+		n := newNames()
+		n.claim("documents", in)
+		again := n.claim("documents", in) // the suffixed name is a name too
+		if parts := strings.Split(again, "/"); len(parts) != 2 || parts[1] == "" || len(parts[1]) > maxElemBytes {
+			t.Errorf("claim of a repeated %.20q… = %q", in, again)
+		}
+	}
+}
+
+// Two names that a file system treats as one (an accent written as one character or two, a
+// different case) are two entries in the zip, and still two once unpacked there.
+func TestNamesAreUniqueByNormalizationAndCase(t *testing.T) {
+	n := newNames()
+	nfc, nfd := "café.md", "café.md"
+	got := []string{
+		n.claim("documents", nfc),
+		n.claim("documents", nfd),
+		n.claim("documents", "CAFÉ.md"),
+		n.claim("documents", "Straße.md"),
+		n.claim("documents", "STRASSE.md"),
+	}
+	seen := map[string]bool{}
+	for _, name := range got {
+		if key := foldKey(name); seen[key] {
+			t.Errorf("%q repeats an earlier name once folded: %v", name, got)
+		} else {
+			seen[key] = true
+		}
+	}
+}
+
+// Folders that are different in the knowledge base stay different when their names are cleaned to
+// the same name, or fold to the same name, and a folder's files stay together.
+func TestNamesKeepDistinctFoldersApart(t *testing.T) {
+	n := newNames()
+	a := n.claim("documents", "a:b", "x.md") // "a:b" is cleaned to "a_b"
+	b := n.claim("documents", "a_b", "x.md")
+	c := n.claim("documents", "A_B", "x.md")
+	again := n.claim("documents", "a:b", "y.md")
+	nfd := n.claim("documents", "é", "x.md")
+	nfc := n.claim("documents", "é", "x.md")
+	folder := func(s string) string { return strings.Split(s, "/")[1] }
+	if folder(a) == folder(b) || folder(a) == folder(c) || folder(b) == folder(c) || folder(nfd) == folder(nfc) {
+		t.Errorf("distinct folders were merged: %q %q %q, %q %q", a, b, c, nfd, nfc)
+	}
+	if folder(a) != folder(again) {
+		t.Errorf("one folder, two names: %q and %q", a, again)
+	}
+	seen := map[string]bool{}
+	for _, name := range []string{a, b, c, again, nfd, nfc} {
+		if k := foldKey(name); seen[k] {
+			t.Errorf("entry %q repeats another once folded", name)
+		}
+		seen[foldKey(name)] = true
+	}
+}

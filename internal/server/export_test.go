@@ -12,10 +12,12 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/export"
@@ -140,9 +142,44 @@ func unzip(t *testing.T, rec *httptest.ResponseRecorder) map[string][]byte {
 	return out
 }
 
+// startExport is the POST that starts an export.
+func (s *stack) startExport(cookie string, ws int64) *httptest.ResponseRecorder {
+	s.t.Helper()
+	return s.request(http.MethodPost, exportPath(ws), map[string]any{}, sameOrigin(cookie))
+}
+
+// downloadOf is the address a start gave.
+func downloadOf(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var got struct {
+		Download  string `json:"download"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start = %d %s", rec.Code, rec.Body)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Download == "" || got.ExpiresIn <= 0 {
+		t.Fatalf("start answered %s (%v)", rec.Body, err)
+	}
+	return got.Download
+}
+
+// export starts an export and downloads it. What the start refuses is returned as it is.
 func (s *stack) export(cookie string, ws int64) *httptest.ResponseRecorder {
 	s.t.Helper()
-	return s.request(http.MethodGet, exportPath(ws), nil, sameOrigin(cookie))
+	start := s.startExport(cookie, ws)
+	if start.Code != http.StatusOK {
+		return start
+	}
+	return s.request(http.MethodGet, downloadOf(s.t, start), nil, sameOrigin(cookie))
+}
+
+// downloadRequest starts an export and returns the request that downloads it.
+func (s *stack) downloadRequest(cookie string, ws int64) *http.Request {
+	s.t.Helper()
+	r := httptest.NewRequest(http.MethodGet, downloadOf(s.t, s.startExport(cookie, ws)), nil)
+	sameOrigin(cookie)(r)
+	return r
 }
 
 // A person's export holds what they own in the workspace and nothing else: not other people's
@@ -376,7 +413,7 @@ func TestExportOfAnotherPersonHasNoneOfTheFirstsData(t *testing.T) {
 
 func TestExportNeedsAMemberWithASessionNotAToken(t *testing.T) {
 	s := exportStack(t, nil, nil)
-	if rec := s.request(http.MethodGet, exportPath(s.one), nil); rec.Code != http.StatusUnauthorized {
+	if rec := s.request(http.MethodPost, exportPath(s.one), map[string]any{}); rec.Code != http.StatusUnauthorized {
 		t.Errorf("no session = %d, want 401", rec.Code)
 	}
 	// Bob isn't in workspace two.
@@ -386,12 +423,111 @@ func TestExportNeedsAMemberWithASessionNotAToken(t *testing.T) {
 		t.Error("a non-member got a zip")
 	}
 	token, _ := s.newToken(s.alice.cookie, s.one, "agent")
-	if rec := s.request(http.MethodGet, exportPath(s.one), nil, bearer(token)); rec.Code != http.StatusForbidden {
+	if rec := s.request(http.MethodPost, exportPath(s.one), map[string]any{}, bearer(token)); rec.Code != http.StatusForbidden {
 		t.Errorf("an access token = %d, want 403: tokens don't take a person's data out", rec.Code)
 	}
-	// A POST, which would change state, isn't the route.
-	if rec := s.request(http.MethodPost, exportPath(s.one), map[string]any{}, sameOrigin(s.alice.cookie)); rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
-		t.Errorf("POST = %d, want 405", rec.Code)
+	if n := s.scalar(`SELECT count(*) FROM audit_events WHERE action = 'data_export_started'`); n != 0 {
+		t.Errorf("%d exports recorded for requests that were all refused", n)
+	}
+}
+
+// A GET changes nothing, so a link, a cross-site navigation or a prefetch can't start an export, use
+// up the person's hour of exports or write to the audit log: only the CSRF-guarded POST does.
+func TestExportIsNotStartedByAGet(t *testing.T) {
+	s := exportStack(t, nil, nil)
+	cross := func(r *http.Request) {
+		r.Header.Set("Sec-Fetch-Site", "cross-site")
+		r.Header.Set("Sec-Fetch-Mode", "navigate")
+		r.Header.Set("Cookie", "taskto_session="+s.alice.cookie)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if rec := s.request(method, exportPath(s.one), nil, cross); (rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound) || bytes.HasPrefix(rec.Body.Bytes(), []byte("PK")) {
+			t.Errorf("%s of the start route = %d, want 405 or 404 and no zip", method, rec.Code)
+		}
+	}
+	// Guessing a download address is no use, and starts nothing either.
+	if rec := s.request(http.MethodGet, exportPath(s.one)+"/guess", nil, cross); rec.Code != http.StatusNotFound {
+		t.Errorf("GET of an unknown address = %d, want 404", rec.Code)
+	}
+	// The POST is guarded against other sites and needs JSON.
+	if rec := s.request(http.MethodPost, exportPath(s.one), map[string]any{}, cross); rec.Code != http.StatusForbidden {
+		t.Errorf("a cross-site POST = %d, want 403", rec.Code)
+	}
+	r := httptest.NewRequest(http.MethodPost, exportPath(s.one), strings.NewReader("x=1"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	sameOrigin(s.alice.cookie)(r)
+	if rec := httptest.NewRecorder(); func() int { s.h.ServeHTTP(rec, r); return rec.Code }() != http.StatusUnsupportedMediaType {
+		t.Errorf("a form POST wasn't refused as the wrong content type")
+	}
+	if n := s.scalar(`SELECT count(*) FROM audit_events WHERE action = 'data_export_started'`); n != 0 {
+		t.Errorf("%d exports recorded for requests that started none", n)
+	}
+	// None of that used a slot: a real export still works, three times (the hour's limit).
+	for i := range 3 {
+		if rec := s.export(s.alice.cookie, s.one); rec.Code != http.StatusOK {
+			t.Fatalf("export %d = %d %s", i+1, rec.Code, rec.Body)
+		}
+	}
+}
+
+// The download address is for one person, one session, one use and a short time.
+func TestExportDownloadAddressIsSingleUseAndBound(t *testing.T) {
+	s := exportStack(t, nil, func(o *Options) { o.Export = export.Options{PerPerson: -1} })
+	addr := downloadOf(t, s.startExport(s.alice.cookie, s.one))
+
+	// Another person, with the address, gets nothing, and the address stays good for its owner.
+	if rec := s.request(http.MethodGet, addr, nil, sameOrigin(s.bob.cookie)); rec.Code != http.StatusNotFound {
+		t.Errorf("bob with alice's address = %d, want 404", rec.Code)
+	}
+	// So does the same person from another login: the address is bound to the session.
+	login := s.request(http.MethodPost, "/api/login", map[string]any{"email": "alice@example.com", "password": fakePassword})
+	other := sessionCookie(login)
+	if other == "" || other == s.alice.cookie {
+		t.Fatalf("no second session: %d %s", login.Code, login.Body)
+	}
+	if rec := s.request(http.MethodGet, addr, nil, sameOrigin(other)); rec.Code != http.StatusNotFound {
+		t.Errorf("alice's other session = %d, want 404", rec.Code)
+	}
+	// A HEAD isn't a download, and doesn't use the address.
+	if rec := s.request(http.MethodHead, addr, nil, sameOrigin(s.alice.cookie)); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("HEAD = %d, want 405", rec.Code)
+	}
+	rec := s.request(http.MethodGet, addr, nil, sameOrigin(s.alice.cookie))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "zip") {
+		t.Fatalf("the owner's download = %d %s", rec.Code, rec.Body)
+	}
+	unzip(t, rec)
+	// Once: a second download of the same address is gone.
+	if rec := s.request(http.MethodGet, addr, nil, sameOrigin(s.alice.cookie)); rec.Code != http.StatusNotFound {
+		t.Errorf("second download = %d, want 404", rec.Code)
+	}
+	// Another workspace's path doesn't take the address either.
+	addr2 := downloadOf(t, s.startExport(s.alice.cookie, s.one))
+	elsewhere := strings.Replace(addr2, fmt.Sprintf("/workspaces/%d/", s.one), fmt.Sprintf("/workspaces/%d/", s.two), 1)
+	if rec := s.request(http.MethodGet, elsewhere, nil, sameOrigin(s.alice.cookie)); rec.Code != http.StatusNotFound {
+		t.Errorf("an address under another workspace = %d, want 404", rec.Code)
+	}
+}
+
+// A person who starts an export and never downloads it doesn't hold their slot for ever.
+func TestExportUnusedAddressFreesTheSlot(t *testing.T) {
+	s := exportStack(t, nil, func(o *Options) { o.Export = export.Options{PerPerson: -1, TicketTTL: 50 * time.Millisecond} })
+	addr := downloadOf(t, s.startExport(s.alice.cookie, s.one))
+	if rec := s.startExport(s.alice.cookie, s.one); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"export_running"`) {
+		t.Fatalf("a second start while one waits = %d %s, want 409 export_running", rec.Code, rec.Body)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if rec := s.startExport(s.alice.cookie, s.one); rec.Code == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the slot of an address nobody used is never freed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rec := s.request(http.MethodGet, addr, nil, sameOrigin(s.alice.cookie)); rec.Code != http.StatusNotFound {
+		t.Errorf("an expired address = %d, want 404", rec.Code)
 	}
 }
 
@@ -468,8 +604,7 @@ func TestExportStreamsLargeFiles(t *testing.T) {
 	s.putFile(s.alice.cookie, s.one, s.alice.private, "media/big.mp4", big.Bytes())
 	big.Reset()
 
-	r := httptest.NewRequest(http.MethodGet, exportPath(s.one), nil)
-	sameOrigin(s.alice.cookie)(r)
+	r := s.downloadRequest(s.alice.cookie, s.one)
 	out := &discard{h: http.Header{}}
 	var before, after runtime.MemStats
 	runtime.GC()
@@ -507,8 +642,7 @@ func TestExportStopsWhenThePersonGoes(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	r := httptest.NewRequest(http.MethodGet, exportPath(s.one), nil).WithContext(ctx)
-	sameOrigin(s.alice.cookie)(r)
+	r := s.downloadRequest(s.alice.cookie, s.one).WithContext(ctx)
 	rec := &cancelOnWrite{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
 	var got any
 	func() {
@@ -524,5 +658,52 @@ func TestExportStopsWhenThePersonGoes(t *testing.T) {
 	// The slot is free again: the person can export at once.
 	if rec := s.export(s.alice.cookie, s.one); rec.Code != http.StatusOK {
 		t.Errorf("export after a cancelled one = %d", rec.Code)
+	}
+}
+
+// stalled is a connection that stops taking bytes: a write waits for the write deadline the server
+// set, and fails when it passes. Without a deadline it waits as long as the test lets it.
+type stalled struct {
+	h        http.Header
+	deadline time.Time
+	hung     bool
+}
+
+func (s *stalled) Header() http.Header { return s.h }
+func (s *stalled) WriteHeader(int)     {}
+func (s *stalled) SetWriteDeadline(t time.Time) error {
+	s.deadline = t
+	return nil
+}
+
+func (s *stalled) Write([]byte) (int, error) {
+	if s.deadline.IsZero() {
+		s.hung = true
+		time.Sleep(3 * time.Second)
+		return 0, errors.New("no deadline was set")
+	}
+	time.Sleep(time.Until(s.deadline))
+	return 0, os.ErrDeadlineExceeded
+}
+
+// A download whose connection stalls is ended by the idle deadline, and frees the person's slot.
+func TestExportEndsWhenTheConnectionStalls(t *testing.T) {
+	s := exportStack(t, nil, func(o *Options) { o.Export = export.Options{IdleTimeout: 150 * time.Millisecond} })
+	s.put(s.alice.cookie, s.one, s.alice.private, "plan.md", "alice-plan")
+	r := s.downloadRequest(s.alice.cookie, s.one)
+	out := &stalled{h: http.Header{}}
+	var got any
+	func() {
+		defer func() { got = recover() }()
+		s.h.ServeHTTP(out, r)
+	}()
+	if out.hung {
+		t.Fatal("a write was made with no deadline: a stalled connection would hold the export for ever")
+	}
+	if err, _ := got.(error); !errors.Is(err, http.ErrAbortHandler) {
+		t.Errorf("a stalled export ended with %v, want the connection cut", got)
+	}
+	if rec := s.export(s.alice.cookie, s.one); rec.Code != http.StatusOK {
+		t.Errorf("export after a stalled one = %d: the slot wasn't freed", rec.Code)
 	}
 }

@@ -10,9 +10,15 @@
 // writes anything: the knowledge base's git repositories are only read, through
 // knowledge.Store.
 //
+// Starting an export is a POST (it uses one of the person's few exports of the hour and is
+// recorded on the audit log), which hands back a short-lived, single-use download address bound
+// to the person's session; the download is a GET of that address, which only reads (ticket.go).
+//
 // The zip is streamed: it is written to the response as it is made, one entry at a time, and a
-// file's bytes are copied through, never held, so a large file costs a buffer, not its size.
-// What is held at a time is one board's cards, one app's records or one conversation's history.
+// file's bytes are copied through, never held, so a large file costs a buffer, not its size. What
+// is held at a time is a page of a listing, a card's thread, a page of a conversation's history
+// or one app's records. The documents are read at one commit of the knowledge base, taken when
+// the export begins.
 package export
 
 import (
@@ -58,6 +64,11 @@ type Options struct {
 	AtOnce int
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// TicketTTL is how long a download address is good for; zero is a minute.
+	TicketTTL time.Duration
+	// IdleTimeout is how long the export waits for the person's connection to take what it
+	// has written, before it gives up and frees its slot; zero is two minutes.
+	IdleTimeout time.Duration
 }
 
 // Service serves the export.
@@ -69,6 +80,9 @@ type Service struct {
 	apps          *apps.Service
 	conversations *conversations.Service // nil: the server has none
 	gate          *gate
+	tickets       *tickets
+	idle          time.Duration
+	auth          *auth.Service
 	now           func() time.Time
 }
 
@@ -77,23 +91,52 @@ type Service struct {
 // manifest says so.
 func New(sqlDB *sql.DB, spaces *access.Checker, kb *knowledge.Store, b *boards.Service, a *apps.Service, convs *conversations.Service, opts Options) *Service {
 	g := newGate(opts.PerPerson, opts.Window, opts.AtOnce, opts.Now)
-	return &Service{db: sqlDB, spaces: spaces, knowledge: kb, boards: b, apps: a, conversations: convs, gate: g, now: g.now}
+	idle := opts.IdleTimeout
+	if idle <= 0 {
+		idle = defaultIdleTimeout
+	}
+	return &Service{db: sqlDB, spaces: spaces, knowledge: kb, boards: b, apps: a, conversations: convs, gate: g,
+		tickets: newTickets(opts.TicketTTL), idle: idle, now: g.now}
 }
 
-// Path is the route of the export, for the workspace named in the path.
-const Path = "/api/workspaces/{workspace}/export"
+// Path is the route that starts an export, for the workspace named in the path; DownloadPath is
+// the address it hands back.
+const (
+	Path         = "/api/workspaces/{workspace}/export"
+	DownloadPath = Path + "/{token}"
+)
 
 // Routes mounts the export on mux behind a's membership check. It doesn't accept access tokens
 // (auth.AcceptTokens), so a leaked token can't take a person's data out.
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
-	mux.Handle("GET "+Path, a.RequireMember(http.HandlerFunc(s.handle)))
+	s.auth = a
+	mux.Handle("POST "+Path, a.RequireMember(http.HandlerFunc(s.handleStart)))
+	mux.Handle("GET "+DownloadPath, a.RequireMember(http.HandlerFunc(s.handleDownload)))
 }
 
-// handle is GET /api/workspaces/{workspace}/export. It changes nothing on the server, so a plain
-// GET serves it, and a link downloads it.
-func (s *Service) handle(w http.ResponseWriter, r *http.Request) {
+// started is the answer of a start: where to get the zip, and for how many seconds.
+type started struct {
+	Download  string `json:"download"`
+	ExpiresIn int    `json:"expires_in"`
+}
+
+// handleStart is POST /api/workspaces/{workspace}/export: it takes the person's slot (one at a
+// time, a few an hour), records the export on the audit log, and returns the address to download
+// it from, once, within a minute, from this session. Only this request counts and is recorded, so
+// a link someone else sends the person, or a page that navigates them, starts nothing.
+func (s *Service) handleStart(w http.ResponseWriter, r *http.Request) {
 	u, _ := auth.UserFrom(r.Context())
 	m, _ := auth.MembershipFrom(r.Context())
+	session, ok, err := s.auth.SessionID(r)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "export: session", "user", u.ID, "err", err)
+		apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "internal error")
+		return
+	}
+	if !ok {
+		apierr.Write(w, http.StatusForbidden, apierr.CodeTokenRefused, "exporting your data needs a browser login")
+		return
+	}
 
 	leave, why, wait := s.gate.enter(u.ID)
 	if why != allowed {
@@ -103,6 +146,50 @@ func (s *Service) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		apierr.Write(w, http.StatusTooManyRequests, apierr.CodeExportRateLimited, "too many exports: try again in a little while")
+		return
+	}
+	token, err := s.tickets.issue(u.ID, m.WorkspaceID, session, leave)
+	if err != nil {
+		leave()
+		slog.ErrorContext(r.Context(), "export: ticket", "user", u.ID, "err", err)
+		apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "internal error")
+		return
+	}
+	// Taking data out is a security event: recorded once the export is known to begin.
+	audit.Log(r.Context(), s.db, audit.Event{Workspace: m.WorkspaceID, Actor: u.ID, Action: audit.DataExportStarted,
+		TargetType: audit.TargetUser, Target: u.ID})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(started{
+		Download:  "/api/workspaces/" + strconv.FormatInt(m.WorkspaceID, 10) + "/export/" + token,
+		ExpiresIn: max(1, int(math.Ceil(s.tickets.ttl.Seconds()))),
+	})
+}
+
+// handleDownload is GET /api/workspaces/{workspace}/export/{token}: the zip of an export that was
+// started. It changes nothing on the server, so a GET serves it; a HEAD (which would be the same
+// route) is refused, so nothing but the download itself uses up the ticket.
+func (s *Service) handleDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		apierr.Write(w, http.StatusMethodNotAllowed, apierr.CodeBadRequest, "download the export with a GET")
+		return
+	}
+	u, _ := auth.UserFrom(r.Context())
+	m, _ := auth.MembershipFrom(r.Context())
+	session, ok, err := s.auth.SessionID(r)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "export: session", "user", u.ID, "err", err)
+		apierr.Write(w, http.StatusInternalServerError, apierr.CodeInternal, "internal error")
+		return
+	}
+	var leave func()
+	if ok {
+		leave, ok = s.tickets.redeem(r.PathValue("token"), u.ID, m.WorkspaceID, session)
+	}
+	if !ok {
+		apierr.Write(w, http.StatusNotFound, apierr.CodeNotFound, "this export is gone or isn't yours: start it again")
 		return
 	}
 	defer leave()
@@ -115,15 +202,12 @@ func (s *Service) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Taking data out is a security event: recorded once the export is known to begin, whether or
-	// not the person's connection lasts to its end.
-	audit.Log(r.Context(), s.db, audit.Event{Workspace: m.WorkspaceID, Actor: u.ID, Action: audit.DataExportStarted,
-		TargetType: audit.TargetUser, Target: u.ID})
-
 	// The zip can take longer than any timeout the server might have, for a person on a slow
-	// connection; the request's context ends it when they go.
+	// connection, so there is no deadline for the whole of it: each write has its own, and one
+	// the connection doesn't take in time ends the export and frees its slot.
 	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Time{})
+	out := &idleWriter{w: w, rc: rc, idle: s.idle}
+	out.arm()
 	h := w.Header()
 	h.Set("Content-Type", "application/zip")
 	h.Set("Content-Disposition", `attachment; filename="taskto-export-`+s.now().UTC().Format("20060102")+`.zip"`)
@@ -131,7 +215,7 @@ func (s *Service) handle(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 
-	cw := &countingWriter{w: w}
+	cw := &countingWriter{w: out}
 	if err := ex.write(r.Context(), cw); err != nil {
 		// The status went out with the first bytes: a zip that stops is the way to say it failed
 		// (it has no end, so no unzipper takes it for whole), and the connection is cut.
@@ -139,6 +223,25 @@ func (s *Service) handle(w http.ResponseWriter, r *http.Request) {
 		panic(http.ErrAbortHandler)
 	}
 	slog.InfoContext(r.Context(), "export: done", "user", u.ID, "workspace", m.WorkspaceID, "bytes", cw.n)
+}
+
+// idleWriter gives each write its own deadline, the idle timeout from when it starts: a
+// connection that takes what is written keeps the export going however long the zip is, and one
+// that stops taking it fails the write, which ends the export.
+type idleWriter struct {
+	w    io.Writer
+	rc   *http.ResponseController
+	idle time.Duration
+}
+
+func (i *idleWriter) arm() {
+	// A writer that can't have a deadline (a test's) has none.
+	_ = i.rc.SetWriteDeadline(time.Now().Add(i.idle))
+}
+
+func (i *idleWriter) Write(p []byte) (int, error) {
+	i.arm()
+	return i.w.Write(p)
 }
 
 type countingWriter struct {
@@ -173,9 +276,10 @@ type manifest struct {
 	Workspace  manifestWS     `json:"workspace"`
 	User       manifestUser   `json:"user"`
 	Counts     map[string]int `json:"counts"`
-	// Skipped lists what could not be included: Kind is "documents" (all of them), "document"
-	// or "transcript" (a conversation's history), Reason "unavailable" or "off", and Ref says
-	// which one (a document's path, a conversation's ID). Capped; Truncated says if it was.
+	// Skipped lists what could not be included: Kind is "documents" (all of them), "document",
+	// "app" or "transcript" (a conversation's history), Reason "unavailable", "incomplete" (a
+	// history cut short) or "off", and Ref says which one (a document's path, an app's or a
+	// conversation's ID). Capped; Truncated says if it was.
 	Skipped   []skipped `json:"skipped"`
 	Truncated bool      `json:"skipped_truncated,omitempty"`
 }
@@ -277,7 +381,10 @@ func (ex *run) json(name string, v any) error {
 }
 
 // documents writes the current version of every file of the private space's knowledge base, under
-// documents/, with the names they have there.
+// documents/, with the names they have there. The space is read at one commit, the head when the
+// export reaches it: the listing, in pages, and every file are of that commit, so a file renamed
+// or replaced meanwhile is neither listed twice nor missed, and an unversioned file is the one the
+// commit points to.
 func (ex *run) documents(ctx context.Context) error {
 	kb := ex.svc.knowledge
 	if ex.space == nil {
@@ -287,14 +394,26 @@ func (ex *run) documents(ctx context.Context) error {
 		ex.skip("documents", "off", "")
 		return nil
 	}
+	at, err := kb.Head(ctx, *ex.space)
+	if err != nil {
+		return fmt.Errorf("reading the knowledge base's head: %w", err)
+	}
+	if at == "" {
+		return nil // nothing was ever saved
+	}
 	after := ""
 	for {
-		page, err := kb.List(ctx, *ex.space, "", after, knowledge.MaxListLimit)
+		page, err := kb.ListAt(ctx, *ex.space, at, "", after, knowledge.MaxListLimit)
+		if errors.Is(err, knowledge.ErrNotFound) {
+			// The commit went: the space's history was rewritten since (an old version taken out of it).
+			ex.skip("documents", "unavailable", "")
+			return nil
+		}
 		if err != nil {
 			return fmt.Errorf("listing documents: %w", err)
 		}
 		for _, e := range page.Docs {
-			if err := ex.document(ctx, e); err != nil {
+			if err := ex.document(ctx, e, at); err != nil {
 				return err
 			}
 		}
@@ -305,12 +424,12 @@ func (ex *run) documents(ctx context.Context) error {
 	}
 }
 
-func (ex *run) document(ctx context.Context, e knowledge.Entry) error {
-	_, f, err := ex.svc.knowledge.Open(ctx, *ex.space, e.Path, "")
+func (ex *run) document(ctx context.Context, e knowledge.Entry, at string) error {
+	_, f, err := ex.svc.knowledge.Stream(ctx, *ex.space, e.Path, at)
 	switch {
 	case errors.Is(err, knowledge.ErrNotKept), errors.Is(err, knowledge.ErrNotFound):
-		// A file that went since the listing, or whose bytes the server no longer has: the
-		// manifest says so, and the rest is exported.
+		// A file whose bytes the server no longer has: the manifest says so, and the rest is
+		// exported.
 		ex.skip("document", "unavailable", e.Path)
 		return nil
 	case err != nil:
@@ -318,12 +437,8 @@ func (ex *run) document(ctx context.Context, e knowledge.Entry) error {
 	}
 	defer f.Close()
 
-	elems := strings.Split(e.Path, "/")
-	for i, el := range elems {
-		elems[i] = cleanElem(el, maxElemBytes)
-	}
 	// Files git doesn't version are large or already compressed: audio, video, archives.
-	w, err := ex.entry(ex.names.claim(append([]string{"documents"}, elems...)...), !e.Versioned)
+	w, err := ex.entry(ex.names.claim(append([]string{"documents"}, strings.Split(e.Path, "/")...)...), !e.Versioned)
 	if err != nil {
 		return err
 	}
@@ -347,62 +462,117 @@ func (c *ctxReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
-// boardFile is a board's JSON: the board, and its cards with their comments.
-type boardFile struct {
-	Board boards.Board    `json:"board"`
-	Cards []boards.Thread `json:"cards"`
-}
-
 // boards writes each board of the private space as JSON and as Markdown, under boards/. A board's
-// cards are held while it is written.
+// cards are read a page at a time and written as they come, once for each file: what is held is a
+// card's thread, however many cards there are. The two files are read on their own, so a card
+// edited between them can differ in them.
 func (ex *run) boards(ctx context.Context) error {
 	if ex.space == nil {
 		return nil
 	}
-	var cur *boardFile
-	flush := func() error {
-		if cur == nil {
-			return nil
-		}
-		defer func() { cur = nil }()
-		base := cleanElem(strconv.FormatInt(cur.Board.ID, 10)+"-"+slug(cur.Board.Name), maxElemBytes)
-		if err := ex.json(ex.names.claim("boards", base+".json"), cur); err != nil {
-			return err
-		}
-		w, err := ex.entry(ex.names.claim("boards", base+".md"), false)
-		if err != nil {
-			return err
-		}
-		if err := writeBoardMarkdown(w, *cur); err != nil {
-			return err
-		}
-		ex.mf.Counts["boards"]++
-		return nil
-	}
-	err := ex.svc.boards.Export(ctx, ex.user.ID, ex.space.ID,
-		func(b boards.Board) error {
-			if err := flush(); err != nil {
-				return err
-			}
-			cur = &boardFile{Board: b, Cards: []boards.Thread{}}
-			return ctx.Err()
-		},
-		func(_ boards.Board, t boards.Thread) error {
-			cur.Cards = append(cur.Cards, t)
-			ex.mf.Counts["cards"]++
-			ex.mf.Counts["comments"] += len(t.Comments)
-			return ctx.Err()
-		})
+	list, err := ex.svc.boards.ExportBoards(ctx, ex.user.ID, ex.space.ID)
 	if err != nil {
 		return fmt.Errorf("exporting boards: %w", err)
 	}
-	return flush()
+	for _, b := range list {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		base := cleanElem(strconv.FormatInt(b.ID, 10)+"-"+slug(b.Name), maxElemBytes)
+		if err := ex.boardJSON(ctx, b, base); err != nil {
+			return err
+		}
+		if err := ex.boardMarkdown(ctx, b, base); err != nil {
+			return err
+		}
+		ex.mf.Counts["boards"]++
+	}
+	return nil
 }
 
-// A conversation's file is {"conversation": {…}, "transcript": "complete" or "unavailable" (the
-// agent runtime couldn't give the history), "entries": […]}. Its entries are the agent runtime's,
-// as the web app reads them (docs/api.md#export-my-data). It is written by hand, entry by entry,
-// so a long history isn't encoded in one piece.
+// boardJSON is the board's file: {"board": {…}, "cards": [{…card and its comments…}, …]}, written by
+// hand, card by card.
+func (ex *run) boardJSON(ctx context.Context, b boards.Board, base string) error {
+	w, err := ex.entry(ex.names.claim("boards", base+".json"), false)
+	if err != nil {
+		return err
+	}
+	head, err := compactJSON(b)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "{\n  \"board\": %s,\n  \"cards\": [", head); err != nil {
+		return err
+	}
+	n := 0
+	err = ex.svc.boards.ExportCards(ctx, ex.user.ID, ex.space.ID, b.ID, func(t boards.Thread) error {
+		sep := ",\n    "
+		if n == 0 {
+			sep = "\n    "
+		}
+		n++
+		line, err := compactJSON(t)
+		if err != nil {
+			return err
+		}
+		if _, err := io.WriteString(w, sep); err != nil {
+			return err
+		}
+		if _, err := w.Write(line); err != nil {
+			return err
+		}
+		ex.mf.Counts["cards"]++
+		ex.mf.Counts["comments"] += len(t.Comments)
+		return ctx.Err()
+	})
+	if err != nil {
+		return fmt.Errorf("exporting a board's cards: %w", err)
+	}
+	if n > 0 {
+		if _, err := io.WriteString(w, "\n  "); err != nil {
+			return err
+		}
+	}
+	_, err = io.WriteString(w, "]\n}\n")
+	return err
+}
+
+func (ex *run) boardMarkdown(ctx context.Context, b boards.Board, base string) error {
+	w, err := ex.entry(ex.names.claim("boards", base+".md"), false)
+	if err != nil {
+		return err
+	}
+	if err := writeBoardHeading(w, b); err != nil {
+		return err
+	}
+	err = ex.svc.boards.ExportCards(ctx, ex.user.ID, ex.space.ID, b.ID, func(t boards.Thread) error {
+		if err := writeCardMarkdown(w, t); err != nil {
+			return err
+		}
+		return ctx.Err()
+	})
+	if err != nil {
+		return fmt.Errorf("exporting a board's cards: %w", err)
+	}
+	return nil
+}
+
+// compactJSON is v as one line, with <, > and & as they are.
+func compactJSON(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(b.Bytes(), "\n"), nil
+}
+
+// A conversation's file is {"conversation": {…}, "entries": […], "transcript": "complete", "unavailable"
+// (the agent runtime couldn't give the history at all) or "incomplete" (it stopped part-way: the
+// entries are those read)}. Its entries are the agent runtime's, as the web app reads them
+// (docs/api.md#export-my-data). It is written by hand, entry by entry, so a long history isn't
+// encoded in one piece.
 
 // conversations writes each of the person's conversations in the workspace under conversations/.
 func (ex *run) conversations(ctx context.Context) error {
@@ -424,21 +594,21 @@ func (ex *run) conversation(ctx context.Context, c conversations.Conversation) e
 	name := ex.names.claim("conversations", cleanElem(strconv.FormatInt(c.ID, 10)+"-"+slug(c.Title), maxElemBytes)+".json")
 	var w io.Writer
 	n := 0
-	start := func(status string) error {
+	start := func() error {
 		var err error
 		if w, err = ex.entry(name, false); err != nil {
 			return err
 		}
-		meta, err := json.Marshal(c)
+		meta, err := compactJSON(c)
 		if err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(w, "{\n  \"conversation\": %s,\n  \"transcript\": %q,\n  \"entries\": [", meta, status)
+		_, err = fmt.Fprintf(w, "{\n  \"conversation\": %s,\n  \"entries\": [", meta)
 		return err
 	}
 	err := ex.svc.conversations.ExportEntries(ctx, c, func(e json.RawMessage) error {
 		if w == nil {
-			if err := start("complete"); err != nil {
+			if err := start(); err != nil {
 				return err
 			}
 		}
@@ -457,28 +627,30 @@ func (ex *run) conversation(ctx context.Context, c conversations.Conversation) e
 		_, err := w.Write(line.Bytes())
 		return err
 	})
+	status := "complete"
 	switch {
 	case errors.Is(err, conversations.ErrNoTranscript):
-		// The agent runtime is off or has lost it: the conversation's own record is still the
-		// person's, and the manifest says its history is missing.
-		ex.skip("transcript", "unavailable", strconv.FormatInt(c.ID, 10))
-		if err := start("unavailable"); err != nil {
-			return err
+		// The agent runtime is off, lost the history or stopped answering: the conversation's own
+		// record is still the person's, and the manifest says what is missing of its history.
+		status = "unavailable"
+		if n > 0 {
+			status = "incomplete"
 		}
+		ex.skip("transcript", status, strconv.FormatInt(c.ID, 10))
 	case err != nil:
 		return fmt.Errorf("exporting conversation: %w", err)
-	case w == nil:
-		if err := start("complete"); err != nil {
+	}
+	if w == nil {
+		if err := start(); err != nil {
 			return err
 		}
 	}
 	if n > 0 {
-		_, err = io.WriteString(w, "\n  ")
-		if err != nil {
+		if _, err := io.WriteString(w, "\n  "); err != nil {
 			return err
 		}
 	}
-	if _, err := io.WriteString(w, "]\n}\n"); err != nil {
+	if _, err := fmt.Fprintf(w, "],\n  \"transcript\": %q\n}\n", status); err != nil {
 		return err
 	}
 	ex.mf.Counts["conversations"]++
@@ -515,6 +687,12 @@ func (ex *run) apps(ctx context.Context) error {
 			return err
 		}
 		rows, err := ex.svc.apps.ListRows(ctx, actor, ex.space.ID, ap.ID)
+		if errors.Is(err, apps.ErrNotFound) {
+			// The app moved out of the private space (into a shared one) since the listing: it is
+			// the space's now, not the person's, so its records stay out.
+			ex.skip("app", "unavailable", strconv.FormatInt(ap.ID, 10))
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("reading an app's records: %w", err)
 		}

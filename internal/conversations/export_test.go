@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/agentrt"
 )
@@ -111,6 +112,104 @@ func TestExportEntriesSaysWhenTheHistoryIsOutOfReach(t *testing.T) {
 			err = e.svc.ExportEntries(context.Background(), list[0], func(json.RawMessage) error { called = true; return nil })
 			if !errors.Is(err, ErrNoTranscript) || called {
 				t.Errorf("ExportEntries = %v (called %v), want ErrNoTranscript and nothing emitted", err, called)
+			}
+		})
+	}
+}
+
+// hookRuntime is the fake agent runtime with a hook on each read of the history.
+type hookRuntime struct {
+	Runtime
+	onEntries func(ctx context.Context, before int64) error
+}
+
+func (h hookRuntime) Entries(ctx context.Context, conv, before int64, limit int) (json.RawMessage, error) {
+	if h.onEntries != nil {
+		if err := h.onEntries(ctx, before); err != nil {
+			return nil, err
+		}
+	}
+	return h.Runtime.Entries(ctx, conv, before, limit)
+}
+
+// Entries added to a history while it is exported neither repeat nor cut the entries before them:
+// the export is of the history as it was when it began.
+func TestExportEntriesIgnoresEntriesAddedMeanwhile(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	agent := c.agentIDForTest(t, e)
+	const n = 2*exportPage + 5
+	for i := range n {
+		e.rt.inputs[agent] = append(e.rt.inputs[agent], agentrt.Input{Content: fmt.Sprintf("m%d", i)})
+	}
+	added := false
+	e.svc.agent = func(context.Context) (Runtime, error) {
+		return hookRuntime{Runtime: e.rt, onEntries: func(_ context.Context, before int64) error {
+			if before != 0 && !added { // while the first read goes back through the history
+				added = true
+				e.rt.mu.Lock()
+				defer e.rt.mu.Unlock()
+				for i := range 30 {
+					e.rt.inputs[agent] = append(e.rt.inputs[agent], agentrt.Input{Content: fmt.Sprintf("late%d", i)})
+				}
+			}
+			return nil
+		}}, nil
+	}
+	list, err := e.svc.ExportList(context.Background(), ws, owner.id)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list = %v, %v", list, err)
+	}
+	var ids []int64
+	err = e.svc.ExportEntries(context.Background(), list[0], func(raw json.RawMessage) error {
+		id, err := entryID(raw)
+		ids = append(ids, id)
+		return err
+	})
+	if err != nil || !added || len(ids) != n {
+		t.Fatalf("exported %d entries (%v, entries added %v), want the %d there at the start", len(ids), err, added, n)
+	}
+	for i, id := range ids {
+		if id != int64(i+1) {
+			t.Fatalf("entry %d has ID %d: repeated, missing or out of order", i, id)
+		}
+	}
+}
+
+// An agent runtime that doesn't answer doesn't hold an export: it is out of reach after the time
+// each read, and its readiness, is given.
+func TestExportEntriesGivesUpOnAStalledAgentRuntime(t *testing.T) {
+	for name, stall := range map[string]func(*env, *hookRuntime){
+		"a page that never comes": func(e *env, h *hookRuntime) {
+			h.onEntries = func(ctx context.Context, _ int64) error { <-ctx.Done(); return ctx.Err() }
+			e.svc.agent = func(context.Context) (Runtime, error) { return *h, nil }
+		},
+		"a runtime that never gets ready": func(e *env, _ *hookRuntime) {
+			e.svc.agent = func(ctx context.Context) (Runtime, error) { <-ctx.Done(); return nil, ctx.Err() }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, false)
+			owner, ws := e.setup()
+			owner.create(ws, nil)
+			list, err := e.svc.ExportList(context.Background(), ws, owner.id)
+			if err != nil || len(list) != 1 {
+				t.Fatalf("list = %v, %v", list, err)
+			}
+			e.svc.exportTimeout, e.svc.readyWait = 30*time.Millisecond, 30*time.Millisecond
+			stall(e, &hookRuntime{Runtime: e.rt})
+			done := make(chan error, 1)
+			go func() {
+				done <- e.svc.ExportEntries(context.Background(), list[0], func(json.RawMessage) error { return nil })
+			}()
+			select {
+			case err := <-done:
+				if !errors.Is(err, ErrNoTranscript) {
+					t.Fatalf("ExportEntries = %v, want ErrNoTranscript", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the export waits for ever on a stalled agent runtime")
 			}
 		})
 	}

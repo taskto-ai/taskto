@@ -60,6 +60,16 @@ func newGate(perPerson int, window time.Duration, atOnce int, now func() time.Ti
 		started: map[int64][]time.Time{}, active: map[int64]bool{}}
 }
 
+// keep remembers the starts of user that are within the window, or forgets the person if there
+// are none, so a map entry is never an empty one.
+func (g *gate) keep(user int64, recent []time.Time) {
+	if len(recent) == 0 {
+		delete(g.started, user)
+		return
+	}
+	g.started[user] = recent
+}
+
 // enter lets user start an export, and returns the function that ends it. Otherwise it says why
 // not, and how long until trying again can work. A refused attempt isn't counted. A negative
 // perPerson or atOnce, for tests, is no limit of that kind.
@@ -77,11 +87,11 @@ func (g *gate) enter(user int64) (leave func(), why refusal, wait time.Duration)
 		}
 	}
 	if g.perPerson > 0 && len(recent) >= g.perPerson {
-		g.started[user] = recent
+		g.keep(user, recent)
 		return nil, tooMany, g.window - now.Sub(recent[0])
 	}
 	if g.atOnce > 0 && g.total >= g.atOnce {
-		g.started[user] = recent
+		g.keep(user, recent) // possibly none: a refused person leaves nothing behind
 		return nil, busy, busyRetryAfter
 	}
 	for u, times := range g.started { // forget the people whose starts have all expired
