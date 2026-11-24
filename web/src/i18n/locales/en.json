@@ -563,10 +563,12 @@
     "twoFactor": {
       "title": "Two-factor login",
       "intro": "Your password was right. Enter the code from your authenticator app to finish logging in.",
+      "introReset": "Your new password is set. Enter the code from your authenticator app to finish logging in.",
       "code": "Code from your app, or a recovery code",
       "busy": "Checking…",
       "submit": "Log in",
       "back": "Back to the password",
+      "toLogin": "Go to the login",
       "again": "Log in again",
       "lost": "Lost your phone? Use one of the recovery codes you saved. If you have none left, ask a workspace admin to clear your two-factor login."
     },

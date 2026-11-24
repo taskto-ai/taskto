@@ -31,6 +31,11 @@ function AuthLoading() {
   return <p className="tt-center tt-muted">{t('app.loading')}</p>
 }
 
+// What a password step (a login, a reset link) answers for an account with two-factor login on:
+// no session, a challenge for POST /api/login/two-factor.
+type Challenged = { two_factor_required: true; challenge: string }
+const needsCode = (reply: Me | Challenged): reply is Challenged => 'two_factor_required' in reply
+
 // send may answer null: the step is done but nobody is logged in yet (a login that asks for a code).
 function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
   const [busy, setBusy] = useState(false)
@@ -258,11 +263,11 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   // The challenge of a login whose password was right and that now asks for a code.
   const [challenge, setChallenge] = useState<string | null>(null)
   const { busy, error, submit } = useSubmit(async () => {
-    const reply = await api<Me | { two_factor_required: true; challenge: string }>('/api/login', {
+    const reply = await api<Me | Challenged>('/api/login', {
       method: 'POST',
       body: { email, password },
     })
-    if ('two_factor_required' in reply) {
+    if (needsCode(reply)) {
       setPassword('')
       setChallenge(reply.challenge)
       return null
@@ -320,28 +325,45 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
 
 // The second step of a login for someone with two-factor login on: a code from the authenticator
 // app, or a recovery code. A challenge that ran out or was used up goes back to the password.
+// It is the step of a password login, of an invite taken with an account and of a reset link
+// (`reset`: the password is set, and going back means the login). `finish` is what is left to do
+// with the session the code made (accepting an invite); if it fails the code isn't asked for again,
+// since the challenge is used up and the person is signed in.
 function TwoFactorStep({
   challenge,
   onDone,
   onBack,
+  reset = false,
+  finish,
 }: {
   challenge: string
   onDone: (me: Me) => void
   onBack: () => void
+  reset?: boolean
+  finish?: (me: Me) => Promise<Me>
 }) {
   const t = useT()
   const [code, setCode] = useState('')
   const [expired, setExpired] = useState(false)
+  const [verified, setVerified] = useState<Me | null>(null)
   const { busy, error, submit } = useSubmit(async () => {
-    try {
-      return await api<Me>('/api/login/two-factor', { method: 'POST', body: { challenge, code } })
-    } catch (err) {
-      if (err instanceof ApiError && err.code === 'two_factor_challenge_invalid') setExpired(true)
-      throw err
+    let me = verified
+    if (!me) {
+      try {
+        me = await api<Me>('/api/login/two-factor', { method: 'POST', body: { challenge, code } })
+      } catch (err) {
+        if (err instanceof ApiError && err.code === 'two_factor_challenge_invalid') setExpired(true)
+        throw err
+      }
+      setVerified(me)
     }
+    return finish ? finish(me) : me
   }, onDone)
   return (
-    <AuthFrame title={t('auth.twoFactor.title')} intro={<p className="tt-muted">{t('auth.twoFactor.intro')}</p>}>
+    <AuthFrame
+      title={t('auth.twoFactor.title')}
+      intro={<p className="tt-muted">{t(reset ? 'auth.twoFactor.introReset' : 'auth.twoFactor.intro')}</p>}
+    >
       <form className="tt-form" onSubmit={submit}>
         <label>
           {t('auth.twoFactor.code')}
@@ -349,7 +371,7 @@ function TwoFactorStep({
             value={code}
             onChange={(e) => setCode(e.target.value)}
             required
-            disabled={expired}
+            disabled={expired || verified !== null}
             autoComplete="one-time-code"
             spellCheck={false}
           />
@@ -364,7 +386,7 @@ function TwoFactorStep({
             {busy ? t('auth.twoFactor.busy') : t('auth.twoFactor.submit')}
           </button>
           <button type="button" className="tt-button" onClick={onBack}>
-            {expired ? t('auth.twoFactor.again') : t('auth.twoFactor.back')}
+            {reset ? t('auth.twoFactor.toLogin') : expired ? t('auth.twoFactor.again') : t('auth.twoFactor.back')}
           </button>
         </div>
         <p className="tt-muted tt-small">{t('auth.twoFactor.lost')}</p>
@@ -382,10 +404,22 @@ export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: 
   const [password, setPassword] = useState('')
   const [again, setAgain] = useState('')
   const mismatch = again !== '' && password !== again
-  const { busy, error, submit } = useSubmit(
-    () => api<Me>('/api/password-reset', { method: 'POST', body: { token, password } }),
-    onDone,
-  )
+  // With two-factor login on the link sets the password and asks for a code: no session before.
+  const [challenge, setChallenge] = useState<string | null>(null)
+  const { busy, error, submit } = useSubmit(async () => {
+    const reply = await api<Me | Challenged>('/api/password-reset', { method: 'POST', body: { token, password } })
+    if (needsCode(reply)) {
+      setPassword('')
+      setAgain('')
+      setChallenge(reply.challenge)
+      return null
+    }
+    return reply
+  }, onDone)
+  // The link is used up, so there is no form to go back to: back is the login, with the new password.
+  if (challenge) {
+    return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => window.location.assign('/')} reset />
+  }
   if (!token) {
     return (
       <AuthFrame title={t('auth.reset.title')}>
@@ -472,14 +506,23 @@ export function InviteScreen({
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((f) => ({ ...f, [key]: e.target.value }))
   const accept = (body: object) => api<Me>('/api/invites/accept', { method: 'POST', body: { token, ...body } })
+  // An existing account with two-factor login on gets a challenge from the login, not a session:
+  // the code comes first, and the invite is accepted after it.
+  const [challenge, setChallenge] = useState<string | null>(null)
   const { busy, error, submit } = useSubmit(
     async () => {
       if (me) return accept({})
       if (mode === 'login') {
-        before.current = await api<Me>('/api/login', {
+        const reply = await api<Me | Challenged>('/api/login', {
           method: 'POST',
           body: { email: form.email, password: form.password },
         })
+        if (needsCode(reply)) {
+          setForm((f) => ({ ...f, password: '' }))
+          setChallenge(reply.challenge)
+          return null
+        }
+        before.current = reply
         return accept({})
       }
       try {
@@ -496,6 +539,19 @@ export function InviteScreen({
     (joined) => onDone(joined, before.current),
   )
 
+  if (challenge) {
+    return (
+      <TwoFactorStep
+        challenge={challenge}
+        onDone={(joined) => onDone(joined, before.current)}
+        onBack={() => setChallenge(null)}
+        finish={(loggedIn) => {
+          before.current = loggedIn
+          return accept({})
+        }}
+      />
+    )
+  }
   if (!token) {
     return (
       <AuthFrame title={t('auth.invite.title')}>

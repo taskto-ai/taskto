@@ -45,6 +45,8 @@ const (
 	challengeTTL = 5 * time.Minute
 	// challengeAttempts is how many wrong codes one challenge takes before it is dropped.
 	challengeAttempts = 5
+	// enrolmentTTL is how long the secret an enrolment showed can be confirmed.
+	enrolmentTTL = 15 * time.Minute
 )
 
 // The second step's limits, in wrong codes per window. They have the login's shape, with a
@@ -296,11 +298,16 @@ func (s *Service) handleTwoFactorEnrol(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	now := s.now()
+	enrolment, enrolmentHash := newToken()
 	err = s.write(r.Context(), func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(r.Context(), `
-			INSERT INTO user_totp (user_id, secret, created_at) VALUES (?, ?, ?)
-			ON CONFLICT (user_id) DO UPDATE SET secret = excluded.secret, last_step = 0, created_at = excluded.created_at
-			WHERE user_totp.enabled_at IS NULL`, u.ID, sealed, stamp(s.now()))
+			INSERT INTO user_totp (user_id, secret, enrolment_id, enrolment_expires_at, created_at) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (user_id) DO UPDATE SET secret = excluded.secret, last_step = 0,
+				enrolment_id = excluded.enrolment_id, enrolment_expires_at = excluded.enrolment_expires_at,
+				created_at = excluded.created_at
+			WHERE user_totp.enabled_at IS NULL`,
+			u.ID, sealed, enrolmentHash, stamp(now.Add(enrolmentTTL)), stamp(now))
 		if err != nil {
 			return err
 		}
@@ -311,6 +318,7 @@ func (s *Service) handleTwoFactorEnrol(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
+		"enrolment":   enrolment,
 		"secret":      secretEncoding.EncodeToString(secret),
 		"otpauth_uri": totpURI(secret, u.Email),
 	})
@@ -321,7 +329,8 @@ func (s *Service) handleTwoFactorEnrol(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleTwoFactorConfirm(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
 	var req struct {
-		Code string `json:"code"`
+		Enrolment string `json:"enrolment"`
+		Code      string `json:"code"`
 	}
 	if !readJSON(w, r, &req) || !s.needKey(w, r) {
 		return
@@ -334,7 +343,12 @@ func (s *Service) handleTwoFactorConfirm(w http.ResponseWriter, r *http.Request)
 	var codes []string
 	err := s.write(r.Context(), func(tx *sql.Tx) error {
 		var pending bool
-		if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS (SELECT 1 FROM user_totp WHERE user_id = ? AND enabled_at IS NULL)`, u.ID).Scan(&pending); err != nil {
+		// The code must be for the enrolment that showed the secret: one that was replaced by a
+		// later enrolment (another tab's), or that ran out, is not confirmable.
+		if err := tx.QueryRowContext(r.Context(), `
+			SELECT EXISTS (SELECT 1 FROM user_totp
+				WHERE user_id = ? AND enabled_at IS NULL AND enrolment_id = ? AND enrolment_expires_at > ?)`,
+			u.ID, hashToken(req.Enrolment), stamp(s.now())).Scan(&pending); err != nil {
 			return err
 		}
 		if !pending {
@@ -348,7 +362,9 @@ func (s *Service) handleTwoFactorConfirm(w http.ResponseWriter, r *http.Request)
 		if err := s.useCode(r.Context(), tx, u.ID, req.Code, true); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(r.Context(), `UPDATE user_totp SET enabled_at = ? WHERE user_id = ?`, stamp(s.now()), u.ID); err != nil {
+		if _, err := tx.ExecContext(r.Context(), `
+			UPDATE user_totp SET enabled_at = ?, enrolment_id = NULL, enrolment_expires_at = NULL WHERE user_id = ?`,
+			stamp(s.now()), u.ID); err != nil {
 			return err
 		}
 		var err error
@@ -458,20 +474,61 @@ func dropTwoFactor(ctx context.Context, tx *sql.Tx, userID int64) error {
 	return nil
 }
 
-// newChallenge makes the half-done login of userID, and drops the expired ones.
-func (s *Service) newChallenge(ctx context.Context, userID int64) (token, expires string, err error) {
+// signIn is what a verified password earns: a session, or for a user with two-factor login
+// on a challenge for the second step and no session.
+type signIn struct {
+	session   string
+	challenge string
+	expires   string
+}
+
+// issueSignIn makes what userID's verified password earns, within tx: the factor state is
+// read here, in the transaction that inserts the session or the challenge, so enrolling
+// that commits meanwhile can't leave a password-only session behind.
+func (s *Service) issueSignIn(ctx context.Context, tx *sql.Tx, userID int64) (signIn, error) {
+	on, err := s.twoFactorOn(ctx, tx, userID)
+	if err != nil {
+		return signIn{}, err
+	}
+	if !on {
+		session, err := s.insertSession(ctx, tx, userID)
+		return signIn{session: session}, err
+	}
 	now := s.now()
-	expires = stamp(now.Add(challengeTTL))
-	token, hash := newToken()
-	err = s.write(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE expires_at <= ?`, stamp(now)); err != nil {
+	out := signIn{expires: stamp(now.Add(challengeTTL))}
+	var hash string
+	out.challenge, hash = newToken()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE expires_at <= ?`, stamp(now)); err != nil {
+		return signIn{}, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO login_challenges (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+		hash, userID, stamp(now), out.expires)
+	return out, err
+}
+
+// passwordSignIn is issueSignIn for a login whose password was checked against verifiedHash:
+// it fails with errPasswordChanged if the user's password isn't that hash any more (changed
+// or reset since), which also ended the challenges the old one could have made.
+func (s *Service) passwordSignIn(ctx context.Context, userID int64, verifiedHash string) (signIn, error) {
+	var out signIn
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		var current string
+		if err := tx.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id = ?`, userID).Scan(&current); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO login_challenges (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
-			hash, userID, stamp(now), expires)
+		if current != verifiedHash {
+			return errPasswordChanged
+		}
+		var err error
+		out, err = s.issueSignIn(ctx, tx, userID)
 		return err
 	})
-	return token, expires, err
+	return out, err
+}
+
+// writeChallenge answers a password step that needs a code.
+func writeChallenge(w http.ResponseWriter, out signIn) {
+	writeJSON(w, http.StatusOK, map[string]any{"two_factor_required": true, "challenge": out.challenge, "expires_at": out.expires})
 }
 
 // handleLoginTwoFactor is the second step of a password login that asked for a code: it
@@ -503,9 +560,12 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	}
-	var challengeID, userID int64
-	err := s.db.QueryRowContext(r.Context(), `SELECT id, user_id FROM login_challenges WHERE token_hash = ? AND expires_at > ?`,
-		hashToken(req.Challenge), stamp(s.now())).Scan(&challengeID, &userID)
+	// Only to know whose limits to count against; the transaction below looks the challenge up
+	// again, by its hash and this user, and is what decides.
+	challengeHash := hashToken(req.Challenge)
+	var userID int64
+	err := s.db.QueryRowContext(r.Context(), `SELECT user_id FROM login_challenges WHERE token_hash = ? AND expires_at > ?`,
+		challengeHash, stamp(s.now())).Scan(&userID)
 	if errors.Is(err, sql.ErrNoRows) {
 		fail()
 		return
@@ -520,18 +580,51 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		tooManyCodes(w, wait)
 		return
 	}
+	s.at("challenge-found")
 	var token string
+	var wrong bool
 	err = s.write(r.Context(), func(tx *sql.Tx) error {
-		// The challenge goes in the same transaction as the code is spent and the session
-		// made: a wrong code puts all of it back, and two requests can't both use it.
-		res, err := tx.ExecContext(r.Context(), `DELETE FROM login_challenges WHERE id = ? AND expires_at > ?`, challengeID, stamp(s.now()))
+		// The challenge is read, its attempts checked and counted, the code spent and the
+		// challenge used up in this one transaction, which holds the write lock: requests
+		// racing on one challenge go one at a time, and can't take it past its attempts. It is
+		// always addressed by its hash and its user, never by a row id that could be reused.
+		var attempts int
+		err := tx.QueryRowContext(r.Context(), `
+			SELECT attempts FROM login_challenges WHERE token_hash = ? AND user_id = ? AND expires_at > ?`,
+			challengeHash, userID, stamp(s.now())).Scan(&attempts)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errChallengeInvalid
+		}
+		if err != nil {
+			return err
+		}
+		if attempts >= challengeAttempts {
+			return errChallengeInvalid
+		}
+		err = s.useCode(r.Context(), tx, userID, req.Code, false)
+		if errors.Is(err, errWrongCode) {
+			// The wrong code is counted, and commits. Too many wrong codes for one challenge ends
+			// it: the password goes in again.
+			wrong = true
+			if _, err := tx.ExecContext(r.Context(), `
+				UPDATE login_challenges SET attempts = attempts + 1 WHERE token_hash = ? AND user_id = ?`,
+				challengeHash, userID); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(r.Context(), `
+				DELETE FROM login_challenges WHERE token_hash = ? AND user_id = ? AND attempts >= ?`,
+				challengeHash, userID, challengeAttempts)
+			return err
+		}
+		if err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(r.Context(), `DELETE FROM login_challenges WHERE token_hash = ? AND user_id = ? AND expires_at > ?`,
+			challengeHash, userID, stamp(s.now()))
 		if err != nil {
 			return err
 		}
 		if err := mustAffect(res, errChallengeInvalid); err != nil {
-			return err
-		}
-		if err := s.useCode(r.Context(), tx, userID, req.Code, false); err != nil {
 			return err
 		}
 		token, err = s.insertSession(r.Context(), tx, userID)
@@ -541,14 +634,7 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errChallengeInvalid):
 		fail()
 		return
-	case errors.Is(err, errWrongCode):
-		// Too many wrong codes for one challenge ends it: the password goes in again.
-		if _, err := s.db.ExecContext(r.Context(), `UPDATE login_challenges SET attempts = attempts + 1 WHERE id = ?`, challengeID); err != nil {
-			slog.WarnContext(r.Context(), "auth: counting a wrong two-factor code", "err", err)
-		}
-		if _, err := s.db.ExecContext(r.Context(), `DELETE FROM login_challenges WHERE id = ? AND attempts >= ?`, challengeID, challengeAttempts); err != nil {
-			slog.WarnContext(r.Context(), "auth: dropping a used-up challenge", "err", err)
-		}
+	case err == nil && wrong:
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongTwoFactorCode, errWrongCode.Error())
 		return
 	case err != nil:

@@ -10,12 +10,17 @@ ALTER TABLE users DROP COLUMN totp_secret;
 -- sealed (AES-GCM, bound to the user), never plain. enabled_at is NULL while the user has
 -- the secret but hasn't confirmed it with a code: such a row doesn't ask for a code at
 -- login. last_step is the last 30-second step whose code was accepted: a code of that
--- step or an earlier one is refused, so a code works once.
+-- step or an earlier one is refused, so a code works once. While the row isn't confirmed,
+-- enrolment_id is the random id of the enrolment that showed the secret, and
+-- enrolment_expires_at when it stops being confirmable: confirming needs both, so another
+-- tab's later enrolment (a new secret, a new id) can't be confirmed by this one's code.
 CREATE TABLE user_totp (
     user_id    INTEGER PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
     secret     BLOB NOT NULL,
     enabled_at TEXT,
     last_step  INTEGER NOT NULL DEFAULT 0,
+    enrolment_id         TEXT,
+    enrolment_expires_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ) STRICT;
 

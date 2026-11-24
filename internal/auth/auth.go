@@ -103,6 +103,17 @@ type Service struct {
 
 	key *serverkey.Key
 	sso *sso
+
+	// hook is nil outside tests, which set it to make another request land at a named point
+	// of a login route, where a race would.
+	hook func(point string)
+}
+
+// at calls the test hook, if there is one, at a named point.
+func (s *Service) at(point string) {
+	if s.hook != nil {
+		s.hook(point)
+	}
 }
 
 // New returns the account system backed by sqlDB, which must be migrated.

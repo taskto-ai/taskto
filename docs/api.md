@@ -557,7 +557,8 @@ get when their browser asks for none the web app has; `""` is English. Same tags
 
 A user changes their own password with the current one. An admin can make a reset link for
 a member who lost theirs. Either way, every session of the account ends, and so do its
-reset links; the browser that set the new password gets a new session. Access tokens keep
+reset links; the browser that set the new password gets a new session (with a reset link, only for an
+account without two-factor login: the others get a code to give first). Access tokens keep
 working: they are listed, and revoked, under [Tokens](#tokens). These routes take a
 session, never an access token (`403`). New passwords are 12 to 1024 characters, as at
 setup.
@@ -597,9 +598,13 @@ when the operator turned passwords off: a link nobody could use isn't made.
 ### `POST /api/password-reset`
 
 No login needed. `{"token": "…", "password": "…"}` sets the password of the account the
-link is for, ends its sessions and reset links, and logs it in here: `200` with the
+link is for, ends its sessions, half-done logins and reset links, and logs it in here: `200` with the
 `GET /api/me` body and the session cookie (a session the browser already had, anyone's,
-is revoked). `400` for a password that is too short or too long, which leaves the link
+is revoked). **For an account with [two-factor login](#two-factor-login) on, the link is no
+second factor**: the password is set and everything ends as above, but the answer is the login's
+challenge (`200`, `{"two_factor_required": true, "challenge": "…", "expires_at": "…"}`), no
+cookie and no session, and the browser finishes at [`POST /api/login/two-factor`](#post-apilogintwo-factor)
+with a code. A reset also drops a two-factor enrolment that wasn't confirmed. `400` for a password that is too short or too long, which leaves the link
 usable. `404` if the token is unknown, used, replaced or expired. `403 password_login_disabled`
 when the operator turned passwords off.
 
@@ -614,8 +619,10 @@ the body. An admin's clearing a member's is the one exception, below.
   has no second step**: the identity provider's own sign-in, and its own two-factor login if
   the operator asked it for one, is what vouches for the person
   ([sso.md](sso.md#two-factor-login)). Access tokens and the CLI turns never had one and are
-  unaffected, and so is an invite's acceptance and a password reset link's use (the next
-  login still asks for a code).
+  unaffected, and so is an invite's acceptance by a new person (they have none yet). A
+  password reset link's use is **not**: for an account with it on, the link sets the password and then
+  asks for a code, as a login does. An existing account that takes an invite logs in first, and
+  so is asked for its code too.
 - **The secret** is 160 random bits, kept sealed with the server's key
   (`<data>/server.key`, AES-GCM, bound to the user) in `user_totp`, never in clear and never
   returned again after the enrolment; losing the key makes it unreadable, as for the other
@@ -629,7 +636,9 @@ the body. An admin's clearing a member's is the one exception, below.
 - **Limits.** The second step has limits of its own, in 15-minute windows, of wrong codes:
   30 per client address, 10 per user from one address, and 30 per user from all addresses.
   Over any of them, `429 too_many_two_factor_codes` with `Retry-After`, even with the right
-  code. One challenge also takes at most 5 wrong codes. A wrong password in the routes below
+  code. One challenge also takes at most 5 wrong codes: they are counted, and the code
+  checked, in the transaction that uses the challenge up, so requests sent at once can't try
+  more. A wrong password in the routes below
   counts against the [login limits](#post-apilogin), as at `POST /api/me/password`.
 
 ### `POST /api/login/two-factor`
@@ -645,7 +654,10 @@ session cookie, as `POST /api/login` answers, and an existing session cookie on 
 revoked. The challenge is used up. `401 wrong_two_factor_code` for a wrong code, which leaves
 the challenge for another try (up to 5); `401 two_factor_challenge_invalid` for a challenge
 that is unknown, used, expired or used up. `400` without a code. Until this succeeds there is
-no session: the challenge is a token only this route reads, stored as its SHA-256, and no
+no session: the password step (a login, a reset link) makes the challenge in the transaction
+that checks the password hash is still the user's and reads whether two-factor login is on, so
+neither a concurrent enrolment nor a concurrent change of the password gets a session or a challenge it
+shouldn't; a change of the password ends every challenge. The challenge is a token only this route reads, stored as its SHA-256, and no
 other route accepts it, as a cookie or as an access token.
 
 ### `GET /api/me/two-factor`
@@ -659,27 +671,30 @@ other route accepts it, as a cookie or as an access token.
 `{"password": "…"}`: starts turning it on. `200`:
 
 ```json
-{"secret": "GEZDGNBVGY3TQOJQ…", "otpauth_uri": "otpauth://totp/TaskTo:me@example.com?secret=…&issuer=TaskTo&…"}
+{"enrolment": "…", "secret": "GEZDGNBVGY3TQOJQ…", "otpauth_uri": "otpauth://totp/TaskTo:me@example.com?secret=…&issuer=TaskTo&…"}
 ```
 
 The web app draws `otpauth_uri` as a QR code in the browser (the secret goes nowhere else)
 and shows `secret` as text for typing in. Nothing is on yet: login asks for no code until
-[`confirm`](#post-apimetwo-factorconfirm). Asking again before that makes a new secret.
+[`confirm`](#post-apimetwo-factorconfirm), which needs `enrolment`, a random id for this
+enrolment that expires after 15 minutes. Asking again before that makes a new secret and a new
+id, and the earlier one can no longer be confirmed (another tab's code can't turn on a secret it
+didn't show). A change of the password, or a reset, drops an enrolment that wasn't confirmed.
 `403 wrong_password` (counted against the login limits); `409 two_factor_already_on`;
 `403 two_factor_no_password`; `403 password_login_disabled` when passwords are off, since
 two-factor login protects nothing then.
 
 ### `POST /api/me/two-factor/confirm`
 
-`{"code": "123456"}`: a code from the app for the secret `enrol` made turns two-factor login
-on, and answers `200` with the recovery codes, this once:
+`{"enrolment": "…", "code": "123456"}`: a code from the app for the secret `enrol` made,
+with the `enrolment` it answered, turns two-factor login on, and answers `200` with the recovery codes, this once:
 
 ```json
 {"recovery_codes": ["k3m9-p0qz-7xaf", "…"]}
 ```
 
-`403 wrong_two_factor_code`; `409 two_factor_not_started` without an `enrol` first;
-`409 two_factor_already_on`.
+`403 wrong_two_factor_code`; `409 two_factor_not_started` without an `enrol` first, or with
+an `enrolment` that is missing, unknown, replaced by a later one or expired; `409 two_factor_already_on`.
 
 ### `POST /api/me/two-factor/disable`
 

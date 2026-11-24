@@ -105,14 +105,15 @@ func (e *env) turnOn(c *client, password string) tfa {
 	rec := c.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{"password": password})
 	expect(e.t, rec, http.StatusOK)
 	got := decode[struct {
+		Enrolment  string `json:"enrolment"`
 		Secret     string `json:"secret"`
 		OtpauthURI string `json:"otpauth_uri"`
 	}](e.t, rec)
 	secret, err := secretEncoding.DecodeString(got.Secret)
-	if err != nil || len(secret) != totpSecretBytes || !strings.Contains(got.OtpauthURI, got.Secret) {
+	if err != nil || len(secret) != totpSecretBytes || !strings.Contains(got.OtpauthURI, got.Secret) || got.Enrolment == "" {
 		e.t.Fatalf("enrol reply = %+v, %v", got, err)
 	}
-	rec = c.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"code": e.codeNow(secret)})
+	rec = c.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"enrolment": got.Enrolment, "code": e.codeNow(secret)})
 	expect(e.t, rec, http.StatusOK)
 	codes := decode[struct {
 		Codes []string `json:"recovery_codes"`
@@ -183,7 +184,8 @@ func TestTwoFactorEnrolment(t *testing.T) {
 	// Asking again before confirming replaces the secret.
 	rec = owner.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{"password": ownerPassword})
 	expect(t, rec, http.StatusOK)
-	secret, err := secretEncoding.DecodeString(decode[struct{ Secret string }](t, rec).Secret)
+	second := decode[struct{ Enrolment, Secret string }](t, rec)
+	secret, err := secretEncoding.DecodeString(second.Secret)
 	if err != nil || first == secretEncoding.EncodeToString(secret) {
 		t.Fatalf("the second secret is the first: %v", err)
 	}
@@ -193,7 +195,7 @@ func TestTwoFactorEnrolment(t *testing.T) {
 	// A code of the replaced secret, or a wrong one, confirms nothing.
 	oldCode := totpCode([]byte(mustBase32(t, first)), totpStep(e.now.Unix()))
 	for _, code := range []string{"000000", "abcdef", "", oldCode} {
-		rec = owner.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"code": code})
+		rec = owner.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"enrolment": second.Enrolment, "code": code})
 		expect(t, rec, http.StatusForbidden)
 		if got := errCode(t, rec); got != "wrong_two_factor_code" {
 			t.Fatalf("code %q: %s", code, got)
@@ -203,7 +205,7 @@ func TestTwoFactorEnrolment(t *testing.T) {
 		t.Fatal("a wrong code turned it on")
 	}
 
-	rec = owner.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"code": e.codeNow(secret)})
+	rec = owner.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"enrolment": second.Enrolment, "code": e.codeNow(secret)})
 	expect(t, rec, http.StatusOK)
 	codes := decode[struct {
 		Codes []string `json:"recovery_codes"`

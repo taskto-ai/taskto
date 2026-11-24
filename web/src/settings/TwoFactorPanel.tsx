@@ -12,7 +12,7 @@ import { Alert, CopyButton, useAction } from './parts'
 import { qrSvg, svgSource } from './qr'
 
 type Status = { enabled: boolean; recovery_codes_left: number }
-type Setup = { secret: string; otpauth_uri: string }
+type Setup = { enrolment: string; secret: string; otpauth_uri: string }
 
 export function TwoFactorPanel() {
   const t = useT()
@@ -110,7 +110,10 @@ function Confirm({
     e.preventDefault()
     let got: { recovery_codes: string[] } | undefined
     const ok = await action.run(async () => {
-      got = await api<{ recovery_codes: string[] }>('/api/me/two-factor/confirm', { method: 'POST', body: { code } })
+      got = await api<{ recovery_codes: string[] }>('/api/me/two-factor/confirm', {
+        method: 'POST',
+        body: { enrolment: setup.enrolment, code },
+      })
     })
     if (ok && got) onCodes(got.recovery_codes)
   }

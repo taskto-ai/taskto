@@ -44,7 +44,7 @@ test('turning it on: the password, then the secret as a QR code and as text, the
     'GET /api/me/two-factor': () => ({ body: { enabled, recovery_codes_left: enabled ? 10 : 0 } }),
     'POST /api/me/two-factor/enrol': (call) =>
       (call.body as { password: string }).password === 'fake-password-123'
-        ? { body: { secret: 'AAAABBBBCCCCDDDD', otpauth_uri: URI } }
+        ? { body: { enrolment: 'fake-enrolment', secret: 'AAAABBBBCCCCDDDD', otpauth_uri: URI } }
         : { status: 403, body: { error: 'wrong', code: 'wrong_password' } },
     'POST /api/me/two-factor/confirm': (call) => {
       if ((call.body as { code: string }).code !== '123456')
@@ -80,7 +80,10 @@ test('turning it on: the password, then the secret as a QR code and as text, the
   fireEvent.click(screen.getByRole('button', { name: 'Confirm and turn on' }))
   const list = await screen.findByRole('list', { name: 'Your recovery codes' })
   expect(list.textContent).toBe('aaaa-bbbb-ccccdddd-eeee-ffff')
-  expect(sent(calls, 'POST', '/api/me/two-factor/confirm').at(-1)).toEqual({ code: '123456' })
+  expect(sent(calls, 'POST', '/api/me/two-factor/confirm').at(-1)).toEqual({
+    enrolment: 'fake-enrolment',
+    code: '123456',
+  })
 
   // Once they are saved the codes are gone from the page, and the panel says it is on.
   fireEvent.click(screen.getByRole('button', { name: 'I saved them' }))
@@ -138,7 +141,9 @@ test('with it on: new recovery codes and turning it off take the password and a 
 test('cancelling the enrolment forgets the secret', async () => {
   fakeFetch({
     'GET /api/me/two-factor': { body: { enabled: false, recovery_codes_left: 0 } },
-    'POST /api/me/two-factor/enrol': { body: { secret: 'AAAABBBBCCCCDDDD', otpauth_uri: URI } },
+    'POST /api/me/two-factor/enrol': {
+      body: { enrolment: 'fake-enrolment', secret: 'AAAABBBBCCCCDDDD', otpauth_uri: URI },
+    },
   })
   render(<SettingsPage me={me} workspace={member} tab="password" />)
   await screen.findByText('Two-factor login is off.')

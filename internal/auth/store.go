@@ -150,17 +150,6 @@ func (s *Service) userByEmail(ctx context.Context, email string) (User, string, 
 	return u, hash, err
 }
 
-// newSession logs userID in and returns the session's token.
-func (s *Service) newSession(ctx context.Context, userID int64) (string, error) {
-	var token string
-	err := s.write(ctx, func(tx *sql.Tx) error {
-		var err error
-		token, err = s.insertSession(ctx, tx, userID)
-		return err
-	})
-	return token, err
-}
-
 // insertSession adds a session for userID, and drops the user's expired ones so they
 // don't pile up.
 func (s *Service) insertSession(ctx context.Context, tx *sql.Tx, userID int64) (string, error) {

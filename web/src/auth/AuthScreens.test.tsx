@@ -278,3 +278,111 @@ test('a login without two-factor logs in as before', async () => {
   fillLogin()
   await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(owner))
 })
+
+const challenged = { two_factor_required: true, challenge: 'fake-challenge', expires_at: 'x' }
+const codeLabel = 'Code from your app, or a recovery code'
+
+test('a reset link for an account with two-factor login asks for a code and is not logged in before it', async () => {
+  const onDone = vi.fn()
+  const assign = stubAssign()
+  const calls = fakeFetch({
+    'GET /api/login/methods': { body: both },
+    'POST /api/password-reset': { body: challenged },
+    'POST /api/login/two-factor': (call) =>
+      (call.body as { code: string }).code === '123456'
+        ? { body: owner }
+        : { status: 401, body: { error: 'wrong', code: 'wrong_two_factor_code' } },
+  })
+  render(<ResetPasswordScreen token="fake-reset-token" onDone={onDone} />)
+  fireEvent.change(await screen.findByLabelText('New password'), { target: { value: 'fake-new-password-123' } })
+  fireEvent.change(screen.getByLabelText('New password again'), { target: { value: 'fake-new-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set the password' }))
+  await screen.findByRole('heading', { name: 'Two-factor login' })
+  screen.getByText(/Your new password is set/)
+  expect(onDone).not.toHaveBeenCalled()
+  expect(screen.queryByLabelText('New password')).toBeNull()
+
+  fireEvent.change(screen.getByLabelText(codeLabel), { target: { value: '000000' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  expect((await screen.findByRole('alert')).textContent).toContain('code is wrong')
+  expect(onDone).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText(codeLabel), { target: { value: '123456' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(owner))
+  expect(calls.filter((c) => c.path === '/api/login/two-factor').map((c) => c.body)).toEqual([
+    { challenge: 'fake-challenge', code: '000000' },
+    { challenge: 'fake-challenge', code: '123456' },
+  ])
+
+  // The link is used up: back is the login, not the password form.
+  fireEvent.click(screen.getByRole('button', { name: 'Go to the login' }))
+  expect(assign).toHaveBeenCalledWith('/')
+})
+
+function fillInviteLogin() {
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: /Log in/ }))
+}
+
+// An existing account is asked to log in first on an invite: with two-factor login on, the code
+// comes before the invite is accepted.
+test('an invite taken with an account that has two-factor login asks for the code, then accepts', async () => {
+  const joined = { ...owner, workspaces: [{ id: 7 }] }
+  const onDone = vi.fn()
+  const calls = fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/invites/accept': (call) =>
+      (call.body as { name?: string }).name
+        ? { status: 409, body: { error: 'exists', code: 'email_taken' } }
+        : { body: joined },
+    'POST /api/login': { body: challenged },
+    'POST /api/login/two-factor': { body: owner },
+  })
+  render(<InviteScreen token="fake-invite-token" me={null} onDone={onDone} onLogout={() => {}} />)
+  fireEvent.change(await screen.findByLabelText('Your name'), { target: { value: 'Owner' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create the account' }))
+  await screen.findByRole('heading', { name: 'Log in to join' })
+  fillInviteLogin()
+  await screen.findByRole('heading', { name: 'Two-factor login' })
+  // Not accepted, and not told it is signed in, before the code.
+  expect(calls.filter((c) => c.path === '/api/invites/accept')).toHaveLength(1)
+  expect(onDone).not.toHaveBeenCalled()
+
+  fireEvent.change(screen.getByLabelText(codeLabel), { target: { value: '123456' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(joined, owner))
+  expect(calls.filter((c) => c.path === '/api/invites/accept').at(-1)?.body).toEqual({ token: 'fake-invite-token' })
+})
+
+// The code is used up once it passed: if accepting fails after it, trying again accepts, and
+// doesn't ask for the code again.
+test('an invite whose acceptance fails after the code retries the acceptance only', async () => {
+  const joined = { ...owner, workspaces: [{ id: 7 }] }
+  const onDone = vi.fn()
+  let accepts = 0
+  const calls = fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/invites/accept': () => {
+      accepts++
+      if (accepts === 1) return { status: 409, body: { error: 'exists', code: 'email_taken' } }
+      return accepts === 2 ? { status: 500, body: { error: 'down' } } : { body: joined }
+    },
+    'POST /api/login': { body: challenged },
+    'POST /api/login/two-factor': { body: owner },
+  })
+  render(<InviteScreen token="fake-invite-token" me={null} onDone={onDone} onLogout={() => {}} />)
+  fireEvent.change(await screen.findByLabelText('Your name'), { target: { value: 'Owner' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create the account' }))
+  await screen.findByRole('heading', { name: 'Log in to join' })
+  fillInviteLogin()
+  fireEvent.change(await screen.findByLabelText(codeLabel), { target: { value: '123456' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await screen.findByRole('alert')
+  expect(onDone).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(joined, owner))
+  expect(calls.filter((c) => c.path === '/api/login/two-factor')).toHaveLength(1)
+})

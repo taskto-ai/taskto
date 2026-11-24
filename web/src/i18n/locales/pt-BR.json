@@ -567,10 +567,12 @@
     "twoFactor": {
       "title": "Login em duas etapas",
       "intro": "Sua senha está certa. Digite o código do seu app autenticador para concluir o login.",
+      "introReset": "Sua nova senha foi definida. Digite o código do seu app autenticador para concluir o login.",
       "code": "Código do app ou código de recuperação",
       "busy": "Verificando…",
       "submit": "Entrar",
       "back": "Voltar para a senha",
+      "toLogin": "Ir para o login",
       "again": "Entrar de novo",
       "lost": "Perdeu o celular? Use um dos códigos de recuperação que você guardou. Se não tiver mais nenhum, peça a um administrador do espaço de trabalho para limpar o seu login em duas etapas."
     },
