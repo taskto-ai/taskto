@@ -127,3 +127,43 @@ func TestGenerateRejects(t *testing.T) {
 		}
 	}
 }
+
+type left struct {
+	X int `json:"x"`
+}
+
+type right struct {
+	X int `json:"x"`
+}
+
+type clash struct {
+	left
+	right //nolint:govet // the clash is what the test is about
+}
+
+type optionalInner struct {
+	ID int `json:"id"`
+}
+
+type viaPointer struct {
+	*optionalInner
+	N *int `json:"n,string"`
+}
+
+func TestGenerateEmbedding(t *testing.T) {
+	// Two embedded structs with the same name at the same depth: encoding/json writes neither.
+	if _, err := Generate([]Root{{Name: "Clash", Type: reflect.TypeFor[clash]()}}); err == nil {
+		t.Error("an ambiguous field was not rejected")
+	}
+	out, err := Generate([]Root{{Name: "V", Type: reflect.TypeFor[viaPointer]()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	// A nil embedded pointer leaves its fields out; a pointer with the string option is still null.
+	for _, want := range []string{"  id?: number\n", "  n: string | null\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the output lacks %q:\n%s", want, got)
+		}
+	}
+}

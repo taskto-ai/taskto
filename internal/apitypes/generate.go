@@ -116,20 +116,37 @@ type field struct {
 
 // structBody writes the object type of struct t as encoding/json writes the struct.
 func (g *generator) structBody(t reflect.Type) string {
-	fields := collect(t, 0, map[reflect.Type]bool{})
-	// The shallowest field of a name wins, as in encoding/json; a tie of tagged fields is
-	// dropped there, so it is an error here.
-	best := map[string]field{}
+	// Of the fields of a name, the shallowest wins, as in encoding/json; of those at that depth
+	// the one that is tagged. If that leaves several, encoding/json writes none of them, which
+	// is an error here: the reply is not what its struct says.
+	byName := map[string][]field{}
 	var order []string
-	for _, f := range fields {
-		cur, seen := best[f.name]
-		switch {
-		case !seen:
+	for _, f := range collect(t, 0, false, map[reflect.Type]bool{}) {
+		if _, seen := byName[f.name]; !seen {
 			order = append(order, f.name)
-			best[f.name] = f
-		case f.depth < cur.depth, f.depth == cur.depth && f.tagged && !cur.tagged:
-			best[f.name] = f
 		}
+		byName[f.name] = append(byName[f.name], f)
+	}
+	best := map[string]field{}
+	for name, fs := range byName {
+		top := slices.MinFunc(fs, func(a, b field) int { return a.depth - b.depth }).depth
+		var shallow, tagged []field
+		for _, f := range fs {
+			if f.depth == top {
+				shallow = append(shallow, f)
+				if f.tagged {
+					tagged = append(tagged, f)
+				}
+			}
+		}
+		if len(tagged) > 0 {
+			shallow = tagged
+		}
+		if len(shallow) != 1 {
+			g.fail("%s: the field %q is ambiguous (encoding/json writes none of them)", t, name)
+			return "unknown"
+		}
+		best[name] = shallow[0]
 	}
 	var b strings.Builder
 	b.WriteString("{\n")
@@ -150,8 +167,9 @@ func (g *generator) structBody(t reflect.Type) string {
 }
 
 // collect lists the fields encoding/json would write for t, those of embedded structs
-// included, with how deep each is.
-func collect(t reflect.Type, depth int, seen map[reflect.Type]bool) []field {
+// included, with how deep each is. viaPointer says t is embedded by a pointer: when that
+// is nil, its fields are left out.
+func collect(t reflect.Type, depth int, viaPointer bool, seen map[reflect.Type]bool) []field {
 	if seen[t] {
 		return nil
 	}
@@ -168,7 +186,7 @@ func collect(t reflect.Type, depth int, seen map[reflect.Type]bool) []field {
 		if sf.Anonymous && name == "" {
 			et := derefAll(sf.Type)
 			if et.Kind() == reflect.Struct && !hasMarshaler(et) {
-				out = append(out, collect(et, depth+1, seen)...)
+				out = append(out, collect(et, depth+1, viaPointer || sf.Type.Kind() == reflect.Pointer, seen)...)
 				continue
 			}
 		}
@@ -178,13 +196,31 @@ func collect(t reflect.Type, depth int, seen map[reflect.Type]bool) []field {
 		if name == "" {
 			name = sf.Name
 		}
-		optional := hasOpt(opts, "omitempty") || hasOpt(opts, "omitzero")
-		out = append(out, field{name: name, optional: optional, typ: sf.Type, depth: depth, tagged: named})
+		optional := viaPointer || hasOpt(opts, "omitempty") || hasOpt(opts, "omitzero")
+		typ := sf.Type
 		if hasOpt(opts, "string") {
-			out[len(out)-1].typ = reflect.TypeFor[string]()
+			typ = quoted(typ)
 		}
+		out = append(out, field{name: name, optional: optional, typ: typ, depth: depth, tagged: named})
 	}
 	return out
+}
+
+// quoted is the type of a field with the `string` option: a number, boolean or string is
+// written as a JSON string, and a nil pointer to one is still null. Others are left as they are.
+func quoted(t reflect.Type) reflect.Type {
+	if t.Kind() == reflect.Pointer {
+		if q := quoted(t.Elem()); q != t.Elem() {
+			return reflect.PointerTo(q)
+		}
+		return t
+	}
+	switch t.Kind() {
+	case reflect.Bool, reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
+		return reflect.TypeFor[string]()
+	}
+	return t
 }
 
 func hasOpt(opts, want string) bool {

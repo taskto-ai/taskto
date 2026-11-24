@@ -22,7 +22,8 @@ and apps over MCP, at `/mcp`, with an access token: see [mcp.md](mcp.md).
 ### API types
 
 The web app's types for the replies (`web/src/api.ts`) are checked against the Go structs that
-make them, so a field renamed or retyped in Go breaks the build instead of the page:
+make them, so a field renamed or retyped in Go breaks the build instead of the page. This holds
+for each registered reply type (below); a type with no line in the contract is not checked:
 
 1. `internal/apitypes` lists the reply structs (`Roots`) and writes their shapes, read by
    reflection as `encoding/json` writes them, to `web/src/api.gen.ts`

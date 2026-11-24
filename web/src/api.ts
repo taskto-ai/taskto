@@ -80,8 +80,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     const message = data && typeof data.error === 'string' ? data.error : `${res.status} ${res.statusText}`
     throw new ApiError(res.status, message, data)
   }
-  // T is the caller's word for what the server sends. The types here are checked against the Go
-  // structs that make the replies (api.contract.ts), so a renamed field fails the build.
+  // T is the caller's word for what the server sends. The types that api.contract.ts lists are
+  // checked against the Go structs that make the replies, so a renamed field of one fails the
+  // build; the others are not.
   return data as T
 }
 
