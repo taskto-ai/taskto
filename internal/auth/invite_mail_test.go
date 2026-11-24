@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/audit/audittest"
 	"taskto.ai/taskto/internal/mail"
 )
 
@@ -238,4 +240,37 @@ func (e *env) exec(t *testing.T, query string, args ...any) {
 	if _, err := e.db.Exec(query, args...); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestAnEmailedInviteIsAuditedOnlyWhenTheRelayTookIt(t *testing.T) {
+	e, sent := mailEnv(t, nil)
+	owner, ws := e.setup()
+	ownerID := e.userID(owner)
+
+	rec := owner.do(http.MethodPost, invitePath(ws), map[string]any{"email": "ana@example.com", "send_email": true})
+	expect(t, rec, http.StatusCreated)
+	inv := decode[emailedInvite](t, rec)
+	row := e.one(audit.InviteEmailed)
+	wantEvent(t, row, ws, ownerID, audit.TargetInvite, e.scalar(`SELECT id FROM invites WHERE email = 'ana@example.com'`))
+	audittest.NoSecrets(t, e.db, map[string]string{"the invite token": inv.Token})
+
+	// Not asked for, or refused by the relay: no such event, though the invite is made either way.
+	expect(t, owner.do(http.MethodPost, invitePath(ws), map[string]any{"email": "bea@example.com"}), http.StatusCreated)
+	sent.err = errors.New("the relay is down")
+	expect(t, owner.do(http.MethodPost, invitePath(ws), map[string]any{"email": "cai@example.com", "send_email": true}), http.StatusCreated)
+	if n := len(e.events(audit.InviteEmailed)); n != 1 {
+		t.Fatalf("%d invite_emailed events, want 1", n)
+	}
+	if n := len(e.events(audit.InviteCreated)); n != 3 {
+		t.Fatalf("%d invite_created events, want 3", n)
+	}
+}
+
+func (e *env) scalar(query string, args ...any) int64 {
+	e.t.Helper()
+	var n int64
+	if err := e.db.QueryRow(query, args...).Scan(&n); err != nil {
+		e.t.Fatal(err)
+	}
+	return n
 }

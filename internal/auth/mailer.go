@@ -319,6 +319,8 @@ func (s *Service) emailInvite(ctx context.Context, m Membership, by User, inv In
 		logMailFailure(ctx, "auth: the invite email wasn't sent", by.ID, err)
 		return false
 	}
+	audit.Log(ctx, s.db, audit.Event{Workspace: m.WorkspaceID, Actor: by.ID, Action: audit.InviteEmailed,
+		TargetType: audit.TargetInvite, Target: inv.ID})
 	slog.InfoContext(ctx, "invite emailed", "invite_id", inv.ID, "workspace_id", m.WorkspaceID, "by", by.ID)
 	return true
 }
