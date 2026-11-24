@@ -40,10 +40,10 @@ plus `ErrInvalid` with a message the model can act on.
 | Tool | Go method (`*boards.Service`) | HTTP equivalent | Does |
 |---|---|---|---|
 | `list_boards` | `ListBoards(ctx, actor, space)` | `GET …/boards` | The space's boards that aren't archived. |
-| `list_cards` | `ListCards(ctx, actor, space, board, Filter)` | `GET …/cards` | Cards in board order. `Filter`: `Column`, `Assignee` (`user` + `AssigneeID`, `agent`, `none`), `Blocked`, `Text`. |
+| `list_cards` | `ListCards(ctx, actor, space, board, Filter)` | `GET …/cards` | Cards in board order, or by due date. `Filter`: `Column`, `Assignee` (`user` + `AssigneeID`, `agent`, `none`), `Blocked`, `Text`, `Labels` (all of them), `DueBefore` and `DueAfter` (dates, inclusive), `Overdue` (with `Today`, the user's date; default today in UTC) and `Sort` (`board` or `due`). Each card carries `due` and `labels`. |
 | `show_card` | `ShowCard(ctx, actor, space, board, card)` | `GET …/cards/{card}` | The card with its thread. |
-| `create_card` | `CreateCard(ctx, actor, space, board, NewCard)` | `POST …/cards` | A new card; `Title` required; column, position, assignee, blocked state, docs and conversations optional. |
-| `update_card` | `UpdateCard(ctx, actor, space, board, card, CardChanges)` | `PATCH …/cards/{card}` | Edits title, body, assignee, blocked state, docs, conversations; needs `Version`. |
+| `create_card` | `CreateCard(ctx, actor, space, board, NewCard)` | `POST …/cards` | A new card; `Title` required; column, position, assignee, blocked state, docs, conversations, due date and labels optional. |
+| `update_card` | `UpdateCard(ctx, actor, space, board, card, CardChanges)` | `PATCH …/cards/{card}` | Edits title, body, assignee, blocked state, docs, conversations, due date (`null` clears it) and labels (the whole list); needs `Version`. |
 | `move_card` | `MoveCard(ctx, actor, space, board, card, Move)` | `POST …/cards/{card}/move` | To a column (not `archived`) at a 0-based position; needs `Version`. |
 | `comment_card` | `Comment(ctx, actor, space, board, card, body)` | `POST …/cards/{card}/comments` | Adds to the thread. |
 | `set_blocked` | `SetBlocked(ctx, actor, space, board, card, version, reason, blockedBy)` | `PATCH …/cards/{card}` | Sets why the card is blocked and the cards (same board) it waits for; a nil reason and no cards unblock it. |

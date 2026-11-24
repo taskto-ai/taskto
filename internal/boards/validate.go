@@ -8,8 +8,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
@@ -23,7 +27,41 @@ const (
 	maxReasonLen = 1000 // blocked reasons, in characters
 	maxLinks     = 50   // of each kind, and blockers
 	maxPathLen   = 1024 // doc paths, in bytes
+	maxLabels    = 10   // labels on a card
+	maxLabelLen  = 30   // a label, in characters
 )
+
+// dateLayout is how a due date is written: a calendar date, no time zone.
+const dateLayout = "2006-01-02"
+
+// checkDate returns s if it is a real calendar date written YYYY-MM-DD.
+func checkDate(s string) (string, bool) {
+	t, err := time.Parse(dateLayout, s)
+	if err != nil || t.Format(dateLayout) != s {
+		return "", false
+	}
+	return s, true
+}
+
+// normalizeLabel normalizes a label, the one place that does: Unicode NFC (so a composed and
+// a decomposed "é" are one label), trimmed, inner whitespace collapsed to single spaces, and
+// case folded (Unicode's full case folding, so "ΟΣ" and "οσ" and "ος" are one label),
+// then NFC again, since folding can denormalize. Clients send what people typed. It fails for
+// an empty label, a long one, or one with control characters.
+func normalizeLabel(s string) (string, error) {
+	bad := func() error {
+		return invalidAs(apierr.CodeCardLabelInvalid, apierr.Params{"max": maxLabelLen},
+			fmt.Sprintf("a label has 1 to %d characters, on one line", maxLabelLen))
+	}
+	if !utf8.ValidString(s) {
+		return "", bad()
+	}
+	l := norm.NFC.String(cases.Fold().String(norm.NFC.String(strings.Join(strings.Fields(s), " "))))
+	if n := utf8.RuneCountInString(l); n < 1 || n > maxLabelLen || hasControl(l) {
+		return "", bad()
+	}
+	return l, nil
+}
 
 // Optional is a field that can be left out, set to null, or set to a value, for the
 // fields of an update where null means "clear it".
@@ -118,6 +156,30 @@ func (s *Service) validate(ctx context.Context, sp access.Space, ch *CardChanges
 			}
 		}
 		ch.Conversations = &convs
+	}
+	if ch.Due.Value != nil {
+		d, ok := checkDate(strings.TrimSpace(*ch.Due.Value))
+		if !ok {
+			return invalidAs(apierr.CodeCardDueInvalid, nil, `due must be a calendar date like "2026-03-31"; null clears it`)
+		}
+		ch.Due.Value = &d
+	}
+	if ch.Labels != nil {
+		labels := make([]string, 0, len(*ch.Labels))
+		for _, l := range *ch.Labels {
+			n, err := normalizeLabel(l)
+			if err != nil {
+				return err
+			}
+			if !slices.Contains(labels, n) {
+				labels = append(labels, n)
+			}
+		}
+		if len(labels) > maxLabels {
+			return invalidAs(apierr.CodeTooManyLabels, apierr.Params{"max": maxLabels}, fmt.Sprintf("a card has at most %d labels", maxLabels))
+		}
+		slices.Sort(labels)
+		ch.Labels = &labels
 	}
 	if as := ch.Assignee.Value; as != nil {
 		switch as.Kind {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   browserLocale,
@@ -194,5 +194,24 @@ describe('browserLocale', () => {
     expect(browserLocale()).toBe('')
     browser(['de-1996'])
     expect(browserLocale()).toBe('de')
+  })
+})
+
+describe('calendar dates', () => {
+  const zone = process.env.TZ
+  afterEach(() => {
+    if (zone === undefined) delete process.env.TZ
+    else process.env.TZ = zone
+  })
+
+  it('shows the day that was written, in any year and time zone', () => {
+    const { result } = renderHook(() => useFormat())
+    // Years under 100 aren't 19xx.
+    expect(result.current.calendarDate('0099-01-02')).toBe('Jan 2, 99')
+    // Apia skipped 2011-12-30: a local-time date for it lands on the 31st.
+    process.env.TZ = 'Pacific/Apia'
+    expect(result.current.calendarDate('2011-12-30')).toBe('Dec 30, 2011')
+    process.env.TZ = 'America/Los_Angeles'
+    expect(result.current.calendarDate('2026-03-08')).toBe('Mar 8, 2026')
   })
 })

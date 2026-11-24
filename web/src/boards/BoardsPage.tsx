@@ -1,13 +1,14 @@
 // Boards: a space's boards, the chosen board's cards by column, and the open card. Writers
 // add, rename and archive boards, add and edit cards, assign them, link documents and
 // conversations to them, move them between columns (with the Column field, or by dragging
-// them), comment and mark them blocked; viewers only read. Every change sends the version
+// them), comment, mark them blocked, and give them a due date and labels (the board can be
+// narrowed to a label, or to the overdue cards); viewers only read. Every change sends the version
 // last read: if someone changed the card meanwhile, the server answers 409 with the card as
 // it is, and the writer chooses to take that or to redo their change over it. The open
 // card's thread is polled, so others' comments appear. On a phone it is the board or the
 // open card.
 
-import { type DragEvent, type FormEvent, useEffect, useState } from 'react'
+import { type DragEvent, type FormEvent, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   type Author,
@@ -29,6 +30,7 @@ import { Markdown } from '../markdown'
 import { Link, parseBoardItem, routePath } from '../router'
 import { Icon } from '../shell/Icon'
 import { SpacePicker, useSpaces } from '../spaces'
+import { isOverdue, useToday } from './due'
 import { usePoll } from './poll'
 
 // Every column's name, the archived one included.
@@ -343,6 +345,10 @@ function BoardView({
   // The open card as a drag moved it, for the card view to show.
   const [moved, setMoved] = useState<Card | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The board's filters, applied to the cards already loaded: a label, and only the overdue.
+  const [label, setLabel] = useState('')
+  const [overdueOnly, setOverdueOnly] = useState(false)
+  const today = useToday()
   const t = useT()
   const f = useFormat()
   if (cards.error && !cards.data)
@@ -387,6 +393,14 @@ function BoardView({
     setOver(column)
   }
 
+  // The chosen label stays chosen, and listed, when no card has it any more (a reload took
+  // its last card): the board shows no cards until the person clears the filter.
+  const allLabels = [...new Set([...cards.data.flatMap((c) => c.labels), ...(label ? [label] : [])])].sort()
+  const shownLabel = label
+  const filtering = shownLabel !== '' || overdueOnly
+  const shown = (c: Card) => (!shownLabel || c.labels.includes(shownLabel)) && (!overdueOnly || isOverdue(c, today))
+  const filterable = allLabels.length > 0 || cards.data.some((c) => c.due !== null) || filtering
+
   return (
     <div className="tt-board" data-open={open ? 'card' : 'board'}>
       {error && (
@@ -394,9 +408,30 @@ function BoardView({
           {error}
         </p>
       )}
+      {filterable && (
+        <fieldset className="tt-board-filters" aria-label={t('boards.filters')}>
+          {allLabels.length > 0 && (
+            <label className="tt-inline-field">
+              {t('boards.filterLabel')}
+              <select value={shownLabel} onChange={(e) => setLabel(e.target.value)}>
+                <option value="">{t('boards.allLabels')}</option>
+                {allLabels.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="tt-inline-field">
+            <input type="checkbox" checked={overdueOnly} onChange={(e) => setOverdueOnly(e.target.checked)} />
+            {t('boards.overdueOnly')}
+          </label>
+        </fieldset>
+      )}
       <div className="tt-columns">
         {COLUMNS.map((col) => {
-          const inColumn = cards.data?.filter((c) => c.column === col.id) ?? []
+          const inColumn = cards.data?.filter((c) => c.column === col.id && shown(c)) ?? []
           return (
             <section
               key={col.id}
@@ -436,12 +471,29 @@ function BoardView({
                       onClick={() => setOpen(c.id)}
                     >
                       <span>{c.title}</span>
+                      {c.due && (
+                        <span className="tt-due tt-small" data-overdue={isOverdue(c, today) || undefined}>
+                          {t(isOverdue(c, today) ? 'boards.overdueOn' : 'boards.dueOn', {
+                            date: f.calendarDate(c.due),
+                          })}
+                        </span>
+                      )}
+                      {c.labels.length > 0 && (
+                        <span className="tt-labels">
+                          {c.labels.map((l) => (
+                            <span key={l} className="tt-label tt-small">
+                              {l}
+                            </span>
+                          ))}
+                        </span>
+                      )}
                       {c.blocked && <span className="tt-blocked tt-small">{t('boards.blocked')}</span>}
                       {c.assignee && <span className="tt-muted tt-small">{assigneeLabel(t, c.assignee)}</span>}
                     </button>
                   </li>
                 ))}
               </ul>
+              {filtering && inColumn.length === 0 && <p className="tt-muted tt-small">{t('boards.noMatches')}</p>}
               {canWrite && (
                 <AddCard
                   url={url}
@@ -638,7 +690,9 @@ function CardView({
     })
   }, [moved, editing, first])
 
-  const change = async (send: Send, base: Card | undefined = card): Promise<boolean> => {
+  // keepEditor: a change from elsewhere on the card (its due date, labels) doesn't close the
+  // editor of the title and description, whose unsaved draft would be lost.
+  const change = async (send: Send, base: Card | undefined = card, keepEditor = false): Promise<boolean> => {
     if (!card || !base) return false
     setBusy(true)
     setError(null)
@@ -647,7 +701,7 @@ function CardView({
       // Onto the latest card: a comment added while this was in flight stays.
       setLocal((latest) => ({ ...updated, comments: (latest ?? card).comments }))
       setConflict(null)
-      setEditing(false)
+      if (!keepEditor) setEditing(false)
       onChanged()
       return true
     } catch (err) {
@@ -775,7 +829,8 @@ function CardView({
           </div>
           {editing ? (
             <EditCard
-              key={card.version}
+              // Per card, not per version: a due date or label saved meanwhile keeps the draft.
+              key={card.id}
               card={card}
               busy={busy || conflict !== null}
               onSave={(fields) => change(patch(fields))}
@@ -804,6 +859,12 @@ function CardView({
             canWrite={canWrite}
             busy={busy || conflict !== null}
             onSet={(reason, by) => change(patch({ blocked_reason: reason, blocked_by: by }))}
+          />
+          <Planning
+            card={card}
+            canWrite={canWrite}
+            busy={busy || conflict !== null}
+            onChange={(fields) => change(patch(fields), card, true)}
           />
           <Links
             workspace={workspace}
@@ -974,6 +1035,126 @@ function Blocked({
         </button>
       </div>
     </form>
+  )
+}
+
+// The card's due date and labels. A due date is a calendar day, so it reads the same wherever
+// it is seen; it is late from the day after, for a card that isn't done. Labels are free text
+// the server normalizes (Unicode form, case, spaces), so what people type is sent as it is and
+// the card shown is the server's. A label is added or removed over the latest card's, so
+// redoing the change keeps the labels others set. The due date is a draft until it is saved
+// (with Enter or the button), so typing a date a part at a time never saves the part.
+function Planning({
+  card,
+  canWrite,
+  busy,
+  onChange,
+}: {
+  card: Card
+  canWrite: boolean
+  busy: boolean
+  onChange: (fields: Fields) => Promise<boolean>
+}) {
+  const [due, setDue] = useState(card.due ?? '')
+  const [label, setLabel] = useState('')
+  // The draft follows the card's date when that changes (a save, or someone else's edit),
+  // unless it has been edited since: a date typed while a save was pending stays to be saved.
+  const synced = useRef(card.due ?? '')
+  useEffect(() => {
+    const next = card.due ?? ''
+    const previous = synced.current
+    synced.current = next
+    setDue((draft) => (draft === previous ? next : draft))
+  }, [card.due])
+  const t = useT()
+  const f = useFormat()
+  const editable = canWrite && card.column !== 'archived'
+  const today = useToday()
+  const overdue = isOverdue(card, today)
+  const typed = label.trim()
+  const add = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!typed) return
+    // The server normalizes and removes repeats; the field empties once it has saved.
+    // Only if it still holds what was sent: a label typed meanwhile stays.
+    const sent = label
+    if (await onChange((base) => ({ labels: [...base.labels, typed] }))) setLabel((now) => (now === sent ? '' : now))
+  }
+  const saveDue = (e: FormEvent) => {
+    e.preventDefault()
+    // Emptying a part of the field gives '': clearing is the button's.
+    if (due && due !== card.due) void onChange({ due })
+  }
+  return (
+    <>
+      <div className="tt-planning">
+        {editable ? (
+          <form className="tt-actions" onSubmit={saveDue}>
+            <label className="tt-inline-field">
+              {t('boards.dueDate')}
+              <input
+                type="date"
+                value={due}
+                data-overdue={overdue || undefined}
+                onChange={(e) => setDue(e.target.value)}
+              />
+            </label>
+            <button type="submit" className="tt-button" disabled={busy || !due || due === card.due}>
+              {t('boards.saveDue')}
+            </button>
+            {card.due && (
+              <button type="button" className="tt-button" disabled={busy} onClick={() => onChange({ due: null })}>
+                {t('boards.clearDue')}
+              </button>
+            )}
+          </form>
+        ) : card.due ? (
+          <p className="tt-due" data-overdue={overdue || undefined}>
+            {t(overdue ? 'boards.overdueOn' : 'boards.dueOn', { date: f.calendarDate(card.due) })}
+          </p>
+        ) : (
+          <p className="tt-muted">{t('boards.noDue')}</p>
+        )}
+      </div>
+      <section className="tt-planning" aria-label={t('boards.labels')}>
+        {card.labels.length > 0 ? (
+          <ul className="tt-labels">
+            {card.labels.map((l) => (
+              <li key={l} className="tt-label">
+                {l}
+                {editable && (
+                  <button
+                    type="button"
+                    className="tt-icon-button"
+                    aria-label={t('boards.removeLabel', { label: l })}
+                    disabled={busy}
+                    onClick={() => onChange((base) => ({ labels: base.labels.filter((x) => x !== l) }))}
+                  >
+                    <Icon name="close" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="tt-muted">{t('boards.noLabels')}</p>
+        )}
+        {editable && (
+          <form className="tt-actions" onSubmit={add}>
+            <input
+              aria-label={t('boards.labelField')}
+              value={label}
+              maxLength={30}
+              placeholder={t('boards.labelPlaceholder')}
+              onChange={(e) => setLabel(e.target.value)}
+            />
+            <button type="submit" className="tt-button" disabled={busy || !typed}>
+              {t('boards.addLabel')}
+            </button>
+          </form>
+        )}
+      </section>
+    </>
   )
 }
 

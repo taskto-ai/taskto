@@ -93,6 +93,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `doc_path_invalid` | 400 | `path` isn't a document path within the space, like `notes/plan.md`. |
 | `assignee_no_access` | 400 | The assignee isn't a member of the workspace who can read the space. |
 | `card_blocker_not_found` | 400 | Card `id`, which the card would wait for, isn't on the board (any more). |
+| `card_due_invalid` | 400 | A due date (or `due_before`, `due_after`, `today`) isn't a calendar date like `2026-03-31`. |
+| `card_label_invalid` | 400 | A label must be 1 to `max` characters, on one line. |
+| `too_many_labels` | 400 | A card has more than `max` labels, or a list filters by more than `max`. |
 | `app_offline` | 409 | The app is offline: restore it to launch it or run its actions. |
 | `app_changed` | 409 | The app changed since the client read it; `current` is the app as it is now. |
 | `app_name_length` | 400 | An app's name must have 1 to `max` characters. |
@@ -1330,6 +1333,7 @@ A card:
   "assignee": {"kind": "user", "id": 5, "name": "Member"},
   "blocked": true, "blocked_reason": "waiting for legal", "blocked_by": [9],
   "docs": ["launch/post.md"], "conversations": ["7"],
+  "due": "2026-03-31", "labels": ["launch", "writing"],
   "version": 4,
   "created_at": "…", "created_by": {"id": 2, "name": "Member", "agent": false},
   "updated_at": "…", "updated_by": {"id": 2, "name": "Member", "agent": true, "via": "laptop"}
@@ -1361,6 +1365,15 @@ A card:
   owner can open the conversation (`404` for anyone else). Up to 50 of each, and of
   `blocked_by`; repeats are dropped.
 - `title`: one line, 1–200 characters. `body`: Markdown, up to 32 KiB.
+- `due`: a calendar date, `YYYY-MM-DD`, or `null`. It has no time and no time zone: a card
+  due on the 31st is due on the 31st wherever it is read, and clients decide what "today"
+  is for their person. A card is *overdue* when its `due` is before today and it isn't in
+  `done` or `archived`; the card doesn't say so, since that changes with the day.
+- `labels`: up to 10 free-text labels per card, each 1–30 characters on one line. The server
+  normalizes them (Unicode NFC, inner whitespace collapsed, case folded), drops repeats and
+  returns them sorted, so `"Bug "` and `"bug"` are one label, as are a composed and a
+  decomposed `é`, and `ΟΣ` and `ος`. Clients send what people typed and show what comes back. Labels belong to the card, not to a board:
+  there is no list of labels to manage, and a label is in use as long as a card has it.
 
 ### `GET …/boards/{board}/cards`
 
@@ -1374,6 +1387,12 @@ combined with AND:
 | `assignee` | `me`, `agent`, `none` (unassigned), or a user ID |
 | `blocked` | `true` or `false` |
 | `q` | cards whose title or body contains the text, ignoring ASCII case (up to 200 characters) |
+| `label` | cards that have this label (normalized like a card's labels); repeat it, up to 10 times, to require several (`too_many_labels` past that, for the agent's `list_cards` too) |
+| `due_before` | cards due on or before this date (`YYYY-MM-DD`); cards without a due date are never kept |
+| `due_after` | cards due on or after this date |
+| `overdue` | `true`: cards due before today that aren't `done` or `archived` |
+| `today` | the date `overdue` counts from, `YYYY-MM-DD`; default today in UTC. Send your own, since the server doesn't know the reader's time zone |
+| `sort` | `board` (default: by column, then rank) or `due` (soonest due date first, cards without one last, each group in board order) |
 
 ### `POST …/boards/{board}/cards`
 
@@ -1383,7 +1402,8 @@ Writers. `title` is required; everything else is optional:
 {
   "title": "Write the launch post", "body": "…", "column": "todo", "position": 0,
   "assignee": {"kind": "user", "id": 5}, "blocked_reason": "…", "blocked_by": [9],
-  "docs": ["launch/post.md"], "conversations": ["7"]
+  "docs": ["launch/post.md"], "conversations": ["7"],
+  "due": "2026-03-31", "labels": ["launch", "writing"]
 }
 ```
 
@@ -1401,8 +1421,9 @@ The card with its thread, oldest first:
 ### `PATCH …/boards/{board}/cards/{card}`
 
 Writers. Edits the fields it names, with the `version`: `title`, `body`, `assignee`,
-`blocked_reason`, `blocked_by`, `docs`, `conversations`. `null` clears `assignee` and
-`blocked_reason`; the lists replace the whole list (`[]` clears it). Setting the blocked
+`blocked_reason`, `blocked_by`, `docs`, `conversations`, `due`, `labels`. `null` clears
+`assignee`, `blocked_reason` and `due`; the lists, `labels` included, replace the whole list
+(`[]` clears it). Setting the blocked
 state is this route: `{"version": 4, "blocked_reason": "…", "blocked_by": [9]}`, and
 `{"version": 5, "blocked_reason": null, "blocked_by": []}` to unblock. `200` with the
 card; `400` with nothing to change.

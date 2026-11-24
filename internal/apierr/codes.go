@@ -90,6 +90,9 @@ const (
 	CodeDocPathInvalid      Code = "doc_path_invalid"      // params: path
 	CodeAssigneeNoAccess    Code = "assignee_no_access"
 	CodeCardBlockerNotFound Code = "card_blocker_not_found" // params: id
+	CodeCardDueInvalid      Code = "card_due_invalid"
+	CodeCardLabelInvalid    Code = "card_label_invalid" // params: max
+	CodeTooManyLabels       Code = "too_many_labels"    // params: max
 
 	// Personal apps (internal/apps).
 
