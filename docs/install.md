@@ -433,7 +433,7 @@ Then `docker compose up -d taskto` (a change to `.env` needs the container recre
 log says `outgoing email is on`, with the host, port and security, never the account.
 
 **Check it:** an admin opens Settings → General → Email, which shows the server, the port, how it
-is secured and the sender (the sender is shown to every workspace's admins; the user name and the
+is secured and the sender (the sender is shown to the operators, the admins of the first workspace; the user name and the
 password never are, so give the account a name that isn't also the sender's address if you
 would rather not show it), and presses **Send a test email**. The message goes to the admin's own
 address, in their language, and nowhere else. If it fails, the page says at which step (the
@@ -513,7 +513,14 @@ one outside the admins adds workspaces to your storage. A person who is a member
 workspaces only, or of none (they were removed from theirs), can't create one under `admins`.
 Changing the setting needs a restart (`docker compose up -d taskto` after editing `.env`),
 and workspaces already made stay as they are. Each creation is in the audit log
-(`workspace_created`).
+(`workspace_created`), on the new workspace's own log, not the first's. Whatever the setting, one
+account can create at most 10 workspaces and 5 an hour, so a single session can't fill the server.
+
+**Operators.** The people who run the server are the admins of the workspace setup made (the
+first one; a stored marker, not an id). Only they see what belongs to the whole server in
+Settings: the backups' status (which can name the backup host) and the outgoing email. The admins
+of a workspace someone else created, with `anyone`, don't, and their requests for those get `403`
+(`operator_only`). Everything else an admin does is inside their own workspace.
 
 ```sh
 # .env

@@ -89,7 +89,7 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	mux.Handle("GET /healthz/backup", backupHealth(opts.BackupDataDir))
 	accounts := auth.New(sqlDB, opts.Auth)
 	accounts.Routes(mux)
-	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireAdmin(backupStatus(opts.BackupDataDir)))
+	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireOperator(backupStatus(opts.BackupDataDir)))
 	mailRoutes(mux, accounts, opts.Mail, newMailTestGate(opts.MailTestCooldown, time.Now))
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)

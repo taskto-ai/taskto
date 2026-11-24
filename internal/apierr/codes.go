@@ -23,6 +23,9 @@ const (
 
 	CodeWorkspaceNotFound   Code = "workspace_not_found"
 	CodeWorkspaceCreation   Code = "workspace_creation_refused" // 403: this server doesn't let the caller create a workspace
+	CodeWorkspaceLimit      Code = "workspace_limit"            // 403: the caller made as many workspaces as an account may; params: max
+	CodeTooManyWorkspaces   Code = "too_many_workspaces"        // 429, with Retry-After: too many made lately
+	CodeOperatorOnly        Code = "operator_only"              // 403: only the server's operator, an admin of its first workspace
 	CodeSetupDone           Code = "setup_done"
 	CodeSetupToken          Code = "setup_token"
 	CodeEmailInvalid        Code = "email_invalid"

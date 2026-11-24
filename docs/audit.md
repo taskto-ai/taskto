@@ -43,7 +43,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 
 | Action | When | Workspace | Target | Details |
 |---|---|---|---|---|
-| `setup_completed` | first-run setup | the new one | workspace | |
+| `setup_completed` | first-run setup | the new one (its own log, not the first workspace's) | workspace | |
 | `login_succeeded` | a password login | | user | `method` |
 | `login_failed` | a wrong password, or an account with no password or that doesn't exist | | user, if it exists | `method`, `reason` (the account is the target; no actor, since whoever typed isn't known to be its owner) |
 | `logout` | logging out of a live session: one that has expired is no logout, and records nothing | | user | |

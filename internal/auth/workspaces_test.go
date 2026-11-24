@@ -3,8 +3,10 @@ package auth
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
@@ -248,4 +250,155 @@ func TestCreateWorkspaceIsIsolatedFromTheOthers(t *testing.T) {
 	expect(t, member.do(http.MethodGet, mine+"/members", nil), http.StatusOK)
 	// The last admin of their own can't leave it either.
 	expect(t, member.do(http.MethodDelete, fmt.Sprintf("%s/members/%d", mine, mi.User.ID), nil), http.StatusConflict)
+}
+
+// create makes a workspace as c, with the name the test gives, and returns the response.
+func createAs(c *client, name string) *httptest.ResponseRecorder {
+	return c.do(http.MethodPost, "/api/workspaces", map[string]string{"name": name})
+}
+
+// With -workspace-creation=anyone a single account can't make workspaces without end: past a
+// fixed number, whatever the time between them, it is refused (403 workspace_limit), and
+// others are unaffected.
+func TestAnAccountCreatesAtMostSomeWorkspaces(t *testing.T) {
+	e := newEnv(t, Options{WorkspaceCreation: CreateByAnyone})
+	owner, home := e.setup()
+	member, _ := e.join(e.invite(owner, home, "member@example.com", RoleMember), "Member")
+	for i := 0; i < maxWorkspacesPerUser; i++ {
+		expect(t, createAs(member, fmt.Sprintf("W%d", i)), http.StatusCreated)
+		e.advance(workspaceWindow) // slowly enough that the rate limit never applies
+	}
+	before := e.count(`SELECT count(*) FROM workspaces`)
+	rec := createAs(member, "One too many")
+	expect(t, rec, http.StatusForbidden)
+	got := decode[struct {
+		Code   string
+		Params map[string]any
+	}](t, rec)
+	if got.Code != string(apierr.CodeWorkspaceLimit) || got.Params["max"] != float64(maxWorkspacesPerUser) {
+		t.Errorf("answer = %+v", got)
+	}
+	if n := e.count(`SELECT count(*) FROM workspaces`); n != before {
+		t.Errorf("a refused creation made %d workspaces", n-before)
+	}
+	if me := decode[me](t, member.do(http.MethodGet, "/api/me", nil)); !me.CanCreateWorkspace {
+		// can_create_workspace is about the setting; the limit answers on the call.
+		t.Errorf("can_create_workspace = false under anyone")
+	}
+	// Somebody else is not counted against them, nor is the cap shared.
+	expect(t, createAs(owner, "Owner's own"), http.StatusCreated)
+}
+
+// A burst of creations is slowed down (429 too_many_workspaces with Retry-After), and
+// allowed again as the oldest leaves the hour.
+func TestCreatingWorkspacesIsRateLimitedPerAccount(t *testing.T) {
+	e := newEnv(t, Options{WorkspaceCreation: CreateByAnyone})
+	owner, home := e.setup()
+	member, _ := e.join(e.invite(owner, home, "member@example.com", RoleMember), "Member")
+	other, _ := e.join(e.invite(owner, home, "other@example.com", RoleMember), "Other")
+	for i := 0; i < workspaceBurst; i++ {
+		expect(t, createAs(member, fmt.Sprintf("W%d", i)), http.StatusCreated)
+		e.advance(time.Minute)
+	}
+	rec := createAs(member, "Too soon")
+	expect(t, rec, http.StatusTooManyRequests)
+	if code := decode[struct{ Code string }](t, rec).Code; code != string(apierr.CodeTooManyWorkspaces) {
+		t.Errorf("code = %q", code)
+	}
+	// The first of the five was 5 minutes ago: it leaves the window in 55 minutes.
+	if got := rec.Header().Get("Retry-After"); got != "3300" {
+		t.Errorf("Retry-After = %q, want 3300", got)
+	}
+	expect(t, createAs(other, "Not limited by member"), http.StatusCreated)
+	e.advance(54 * time.Minute)
+	expect(t, createAs(member, "Still too soon"), http.StatusTooManyRequests)
+	e.advance(2 * time.Minute)
+	expect(t, createAs(member, "Now fine"), http.StatusCreated)
+}
+
+// The server's own workspace is the one setup made, and its admins are the operators:
+// not an admin of a workspace they or others made later.
+func TestOnlyAdminsOfTheSetupWorkspaceAreOperators(t *testing.T) {
+	e := newEnv(t, Options{WorkspaceCreation: CreateByAnyone})
+	owner, home := e.setup()
+	ownerID := e.userID(owner)
+	member, _ := e.join(e.invite(owner, home, "member@example.com", RoleMember), "Member")
+	admin, _ := e.join(e.invite(owner, home, "admin@example.com", RoleAdmin), "Admin")
+	isOp := func(c *client) bool { return decode[me](t, c.do(http.MethodGet, "/api/me", nil)).IsOperator }
+	if !isOp(owner) || !isOp(admin) || isOp(member) {
+		t.Fatalf("operators: owner %v, admin %v, member %v", isOp(owner), isOp(admin), isOp(member))
+	}
+	// Making a workspace of their own makes someone its admin, not an operator.
+	expect(t, createAs(member, "Mine"), http.StatusCreated)
+	if isOp(member) {
+		t.Fatal("a member who made a workspace is an operator")
+	}
+	// The setup workspace is marked, and only it; a created one carries its creator.
+	if n := e.count(`SELECT count(*) FROM workspaces WHERE is_setup = 1 AND id = ? AND created_by = ?`, home, ownerID); n != 1 {
+		t.Errorf("setup workspace marked %d times", n)
+	}
+	expect(t, createAs(owner, "Another"), http.StatusCreated)
+	if n := e.count(`SELECT count(*) FROM workspaces WHERE is_setup = 1`); n != 1 {
+		t.Errorf("%d setup workspaces", n)
+	}
+	// Demoted from the setup workspace, someone is no operator.
+	expect(t, owner.do(http.MethodPatch, fmt.Sprintf("/api/workspaces/%d/members/%d", home, e.userID(admin)),
+		map[string]string{"role": "member"}), http.StatusNoContent)
+	if isOp(admin) {
+		t.Fatal("a demoted admin is still an operator")
+	}
+}
+
+// A name that could hide or reorder what a reader sees is refused, in a workspace's name and
+// in setup's.
+func TestNamesRefuseControlAndBidiCharacters(t *testing.T) {
+	bad := map[string]string{
+		"NUL":                    "Ho\x00me",
+		"newline":                "Ho\nme",
+		"tab":                    "Ho\tme",
+		"escape":                 "Ho\x1bme",
+		"DEL":                    "Ho\x7fme",
+		"C1 control":             "Ho\u0085me",
+		"line separator":         "Ho\u2028me",
+		"paragraph separator":    "Ho\u2029me",
+		"right-to-left override": "Ho\u202eme",
+		"left-to-right embed":    "Ho\u202ame",
+		"pop directional":        "Ho\u202cme",
+		"left-to-right isolate":  "Ho\u2066me",
+		"pop isolate":            "Ho\u2069me",
+	}
+	for name, s := range bad {
+		if validName(s) {
+			t.Errorf("validName(%s) = true", name)
+		}
+	}
+	for _, s := range []string{"Home", "Ação — projeto", "日本語の名前", "O'Brien & Sons", "a b", "مرحبا"} {
+		if !validName(s) {
+			t.Errorf("validName(%q) = false", s)
+		}
+	}
+	e := newEnv(t, Options{})
+	owner, _ := e.setup()
+	before := e.count(`SELECT count(*) FROM workspaces`)
+	for name, s := range bad {
+		rec := createAs(owner, s)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: creating a workspace = %d, want 400", name, rec.Code)
+		}
+	}
+	if n := e.count(`SELECT count(*) FROM workspaces`); n != before {
+		t.Errorf("%d workspaces with a bad name were made", n-before)
+	}
+
+	// Setup, for the owner's name and the first workspace's.
+	fresh := newEnv(t, Options{})
+	for field, s := range map[string]string{"name": "Ow\u202ener", "workspace_name": "Ho\x00me"} {
+		body := map[string]string{"email": "owner@example.com", "name": "Owner", "password": ownerPassword,
+			"workspace_name": "Home", "setup_token": testSetupToken}
+		body[field] = s
+		expect(t, fresh.client().do(http.MethodPost, "/api/setup", body), http.StatusBadRequest)
+	}
+	if n := fresh.count(`SELECT count(*) FROM users`); n != 0 {
+		t.Errorf("setup with a bad name made %d users", n)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/apierr"
@@ -61,6 +62,9 @@ type me struct {
 	// CanCreateWorkspace is whether POST /api/workspaces would let this user in, under the
 	// operator's setting: the web app offers "New workspace" only then.
 	CanCreateWorkspace bool `json:"can_create_workspace"`
+	// IsOperator is whether the user is an admin of the workspace the server's setup made: only
+	// then does the web app show what belongs to the whole server (backups, email).
+	IsOperator bool `json:"is_operator"`
 }
 
 func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u User) {
@@ -85,7 +89,11 @@ func (s *Service) meOf(r *http.Request, u User) (me, error) {
 	if err != nil {
 		return me{}, err
 	}
-	return me{User: meUser{User: u, Locale: locale}, Workspaces: ws, CanCreateWorkspace: can}, nil
+	operator, err := s.IsOperator(r.Context(), u.ID)
+	if err != nil {
+		return me{}, err
+	}
+	return me{User: meUser{User: u, Locale: locale}, Workspaces: ws, CanCreateWorkspace: can, IsOperator: operator}, nil
 }
 
 func (s *Service) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
@@ -501,11 +509,18 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var status int
 	var code apierr.Code
 	var msg string
+	var rate *workspaceRateError
 	switch {
 	case errors.Is(err, errSetupDone):
 		status, code, msg = http.StatusConflict, apierr.CodeSetupDone, errSetupDone.Error()
 	case errors.Is(err, errCreationRefused):
 		status, code, msg = http.StatusForbidden, apierr.CodeWorkspaceCreation, errCreationRefused.Error()
+	case errors.Is(err, errWorkspaceLimit):
+		writeError(w, http.StatusForbidden, apierr.CodeWorkspaceLimit, err.Error(), apierr.Params{"max": maxWorkspacesPerUser})
+		return
+	case errors.As(err, &rate):
+		limited(w, rate.wait, apierr.CodeTooManyWorkspaces, rate.Error())
+		return
 	case errors.Is(err, errNotFound):
 		status, code, msg = http.StatusNotFound, apierr.CodeNotFound, "not found"
 	case errors.Is(err, errLastAdmin):
@@ -557,9 +572,18 @@ func normalizeEmail(s string) (string, bool) {
 	return s, err == nil && addr.Address == s
 }
 
+// validName reports whether s is 1 to maxNameLen characters with none that could hide or
+// reorder what a reader sees: no control character (NUL, a newline), no line or paragraph
+// separator and no bidirectional override or isolate.
 func validName(s string) bool {
 	n := utf8.RuneCountInString(s)
-	return n >= 1 && n <= maxNameLen
+	if n < 1 || n > maxNameLen {
+		return false
+	}
+	return !strings.ContainsFunc(s, func(r rune) bool {
+		return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' ||
+			(r >= '\u202a' && r <= '\u202e') || (r >= '\u2066' && r <= '\u2069')
+	})
 }
 
 // readJSON decodes the request body into v, strictly: unknown fields and trailing data

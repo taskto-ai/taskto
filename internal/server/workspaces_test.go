@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/apps"
+	"taskto.ai/taskto/internal/backup"
+	"taskto.ai/taskto/internal/mail"
 )
 
 // A workspace made through the API is as separate from the others as the first one is: the
@@ -147,5 +150,60 @@ func TestAnyoneMayCreateAWorkspaceWhenTheOperatorSaysSo(t *testing.T) {
 	// Bob is still only a member of the workspace he came from.
 	if code, _ := s.browser(s.bob.cookie, http.MethodGet, fmt.Sprintf("/api/workspaces/%d/invites", s.one), nil); code != http.StatusForbidden {
 		t.Errorf("bob lists one's invites = %d, want 403", code)
+	}
+}
+
+// What belongs to the whole server (its backups, its outgoing email) is for operators, the
+// admins of the workspace setup made: not for someone who is admin of a workspace they made
+// themselves, where -workspace-creation=anyone lets any member make one.
+func TestServerWideViewsAreForOperatorsNotForAdminsOfCreatedWorkspaces(t *testing.T) {
+	rec := &recorder{}
+	s := newStackWith(t, func(o *Options) {
+		o.Auth.WorkspaceCreation = "anyone"
+		o.Mail = mail.NewService(rec, testInfo)
+		o.MailTestCooldown = -1
+	})
+	writeBackupStatus(t, s.dir, backup.Status{At: "03:15", LastError: "restic: dial tcp backup.internal.example:8000: refused",
+		LastErrorAt: time.Now().UTC()})
+	bobs := s.createWorkspace(s.bob.cookie, "Bob's")
+	for name, tt := range map[string]struct {
+		cookie string
+		ws     int64
+		want   int
+	}{
+		"the operator, in the first workspace":       {s.alice.cookie, s.one, http.StatusOK},
+		"the operator, in a workspace she made":      {s.alice.cookie, s.two, http.StatusOK},
+		"an admin of a workspace they made":          {s.bob.cookie, bobs, http.StatusForbidden},
+		"the same person, a member of the first one": {s.bob.cookie, s.one, http.StatusForbidden},
+	} {
+		for _, path := range []string{
+			fmt.Sprintf("/api/workspaces/%d/backup", tt.ws),
+			mailPath(tt.ws, ""),
+		} {
+			code, body := s.browser(tt.cookie, http.MethodGet, path, nil)
+			if code != tt.want {
+				t.Errorf("%s: GET %s = %d %v, want %d", name, path, code, body, tt.want)
+			}
+			if tt.ws == bobs && body["code"] != "operator_only" {
+				t.Errorf("%s: GET %s code = %v, want operator_only", name, path, body["code"])
+			}
+			if tt.want == http.StatusForbidden && (body["last_error"] != nil || body["host"] != nil) {
+				t.Errorf("%s: GET %s leaked %v", name, path, body)
+			}
+		}
+	}
+	// A test message goes through the operator's relay: not for them either.
+	if code, body := s.browser(s.bob.cookie, http.MethodPost, mailPath(bobs, "/test"), map[string]any{}); code != http.StatusForbidden || body["code"] != "operator_only" {
+		t.Errorf("bob's test email = %d %v", code, body)
+	}
+	if got := rec.messages(); len(got) != 0 {
+		t.Fatalf("a non-operator sent %d messages through the relay", len(got))
+	}
+	// /api/me says who may see them, which the web app uses.
+	for who, want := range map[string]bool{"alice": true, "bob": false, "carol": false} {
+		cookie := map[string]string{"alice": s.alice.cookie, "bob": s.bob.cookie, "carol": s.carol.cookie}[who]
+		if _, body := s.browser(cookie, http.MethodGet, "/api/me", nil); body["is_operator"] != want {
+			t.Errorf("%s: is_operator = %v, want %v", who, body["is_operator"], want)
+		}
 	}
 }

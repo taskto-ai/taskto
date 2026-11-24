@@ -7,7 +7,8 @@ import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
 import { SettingsPage } from './SettingsPage'
 
-const me: Me = { user: { id: 1, email: 'owner@example.com', name: 'Owner' }, workspaces: [] }
+const me: Me = { user: { id: 1, email: 'owner@example.com', name: 'Owner' }, workspaces: [], is_operator: true }
+const notOperator: Me = { ...me, is_operator: false }
 const admin: Workspace = { id: 1, name: 'Home', role: 'admin' }
 const member: Workspace = { id: 1, name: 'Home', role: 'member' }
 
@@ -79,5 +80,13 @@ test("members don't see the email settings, and don't ask for them", async () =>
   const calls = fakeFetch({})
   render(<SettingsPage me={me} workspace={member} tab="about" />)
   await screen.findByText(/Nothing this workspace uses now asks for a credit/)
+  expect(calls.filter((c) => c.path.includes('/mail'))).toEqual([])
+})
+
+test("an admin who doesn't run the server doesn't see the email settings or ask for them", async () => {
+  const calls = fakeFetch({})
+  render(<SettingsPage me={notOperator} workspace={admin} />)
+  await screen.findByRole('heading', { name: 'General' })
+  expect(screen.queryByRole('heading', { name: 'Email' })).toBeNull()
   expect(calls.filter((c) => c.path.includes('/mail'))).toEqual([])
 })

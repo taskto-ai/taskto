@@ -77,7 +77,7 @@ export function SettingsPage({ me, workspace, tab }: { me: Me; workspace: Worksp
 function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace }) {
   switch (tab) {
     case 'general':
-      return <GeneralTab workspace={workspace} email={me.user.email} />
+      return <GeneralTab workspace={workspace} email={me.user.email} operator={me.is_operator === true} />
     case 'members':
       return <MembersTab workspace={workspace.id} me={me.user.id} />
     case 'spaces':
@@ -97,6 +97,6 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
     case 'tokens':
       return <TokensTab workspace={workspace.id} />
     case 'about':
-      return <AboutTab workspace={workspace.id} admin={workspace.role === 'admin'} />
+      return <AboutTab workspace={workspace.id} operator={workspace.role === 'admin' && me.is_operator === true} />
   }
 }
