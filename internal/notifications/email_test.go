@@ -1018,12 +1018,12 @@ func TestSavingAnotherChoiceLeavesADueSummaryWhereItWas(t *testing.T) {
 	ctx := context.Background()
 	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
 	w.assign("Today", w.bob)
+	// It is due, and another kind is chosen (and an empty save) before the worker comes to it.
+	w.later(26 * time.Hour)
 	var before int64
 	if err := w.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	// It is due, and another kind is chosen (and an empty save) before the worker comes to it.
-	w.later(26 * time.Hour)
 	w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindAppEffectFailed: "instant"}})
 	w.put(w.bob, map[string]any{})
 	var after int64
@@ -1034,10 +1034,17 @@ func TestSavingAnotherChoiceLeavesADueSummaryWhereItWas(t *testing.T) {
 	if n := len(w.box.messages()); n != 1 {
 		t.Fatalf("%d summaries", n)
 	}
-	// A change of the hour does move it.
+	// A change of the hour does move it, to the next 09:00 UTC.
+	if err := w.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
 	w.put(w.bob, map[string]any{"digest": map[string]any{"hour": 9, "timezone": "UTC"}})
-	if err := w.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&after); err != nil || after == before {
-		t.Fatalf("revision %d after a new hour (%v)", after, err)
+	var at string
+	if err := w.db.QueryRow(`SELECT revision, run_at FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&after, &at); err != nil || after == before {
+		t.Fatalf("revision %d after a new hour, was %d (%v)", after, before, err)
+	}
+	if due, err := time.Parse("2006-01-02T15:04:05.000Z", at); err != nil || due.Hour() != 9 || !due.After(time.Now().Add(w.skew)) {
+		t.Fatalf("run_at %s (%v), want the next 09:00 UTC", at, err)
 	}
 }
 
@@ -1133,5 +1140,24 @@ func TestAChoiceIsNotStoredForSomeoneWhoLeftMeanwhileOrFromNull(t *testing.T) {
 	expect(t, rec, http.StatusBadRequest)
 	if !strings.Contains(rec.Body.String(), `"invalid_json"`) || w.count("notification_email_settings", "user_id = ?", w.mallory.id) != 0 {
 		t.Fatal(rec.Body.String())
+	}
+}
+
+func TestTheSummarysZoneIsTheDefaultUntilThePersonSetsTheTime(t *testing.T) {
+	w := newMailWorld(t)
+	if got := decode[notifications.EmailChoices](t, w.get(w.bob)); got.Digest.Chosen {
+		t.Fatalf("digest = %+v", got.Digest)
+	}
+	// A choice of a kind alone doesn't set it.
+	if got := w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "instant"}}); got.Digest.Chosen {
+		t.Fatalf("digest = %+v", got.Digest)
+	}
+	got := w.put(w.bob, map[string]any{"digest": map[string]any{"hour": 8, "timezone": "UTC"}})
+	if !got.Digest.Chosen || got.Digest.Timezone != "UTC" {
+		t.Fatalf("digest = %+v", got.Digest)
+	}
+	// A client can't set it by itself: it is an answer.
+	if got := w.put(w.mallory, map[string]any{"digest": map[string]any{"hour": 8, "timezone": "UTC", "chosen": false}}); !got.Digest.Chosen {
+		t.Fatalf("digest = %+v", got.Digest)
 	}
 }

@@ -117,6 +117,10 @@ type EmailChoices struct {
 type EmailDigest struct {
 	Hour     int    `json:"hour"`
 	Timezone string `json:"timezone"`
+	// Chosen says the person has set the time themselves, so their zone, UTC included, is theirs;
+	// before, it is the default, which the settings page may replace with the browser's. Answers
+	// only: a change of it is ignored.
+	Chosen bool `json:"chosen"`
 }
 
 // EmailUpdate is a change to a person's choices: what is nil stays.
@@ -176,8 +180,8 @@ func (s *Service) EmailChoices(ctx context.Context, userID, workspaceID int64) (
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return EmailChoices{}, err
 	}
-	err = s.db.QueryRowContext(ctx, `SELECT digest_hour, timezone FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
-		userID, workspaceID).Scan(&out.Digest.Hour, &out.Digest.Timezone)
+	err = s.db.QueryRowContext(ctx, `SELECT digest_hour, timezone, timezone_chosen FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
+		userID, workspaceID).Scan(&out.Digest.Hour, &out.Digest.Timezone, &out.Digest.Chosen)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return EmailChoices{}, err
 	}
@@ -258,7 +262,7 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 			return err
 		}
 		if u.Digest != nil {
-			if _, err := tx.ExecContext(ctx, `UPDATE notification_email_settings SET digest_hour = ?, timezone = ? WHERE user_id = ? AND workspace_id = ?`,
+			if _, err := tx.ExecContext(ctx, `UPDATE notification_email_settings SET digest_hour = ?, timezone = ?, timezone_chosen = 1 WHERE user_id = ? AND workspace_id = ?`,
 				hour, zone, userID, workspaceID); err != nil {
 				return err
 			}
@@ -651,6 +655,10 @@ func (s *Service) digestOnce(ctx context.Context, job schedule.Job) error {
 		return errors.Join(err, s.settleLedger(ctx, key, ledgerCancelled, plan.upto))
 	}
 	plan, ok, err = s.digestPlanFor(ctx, job)
+	if err == nil && ok {
+		// The plan takes a moment: the occurrence is asked once more before anything is submitted.
+		ok, err = s.current(ctx, s.db, job)
+	}
 	if err != nil || !ok {
 		return errors.Join(err, s.settleLedger(ctx, key, ledgerCancelled, plan.upto))
 	}

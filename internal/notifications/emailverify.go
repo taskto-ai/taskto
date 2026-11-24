@@ -178,9 +178,17 @@ func (s *Service) SendVerification(ctx context.Context, userID, workspaceID int6
 			return nil
 		}
 		// The link was not sent: it is withdrawn, and another may be asked for now.
-		_, _ = s.db.ExecContext(context.WithoutCancel(ctx), `
-			UPDATE notification_email_verification SET token_hash = NULL, expires_at = NULL, sent_at = NULL
-			WHERE user_id = ? AND token_hash = ?`, userID, hash)
+		// (The token_hash condition keeps this from clearing a newer link.) If it can't be written,
+		// the link stays pending until it expires, which the caller is told by the error all the same.
+		for attempt := 0; attempt < 2; attempt++ {
+			_, werr := s.db.ExecContext(context.WithoutCancel(ctx), `
+				UPDATE notification_email_verification SET token_hash = NULL, expires_at = NULL, sent_at = NULL
+				WHERE user_id = ? AND token_hash = ?`, userID, hash)
+			if werr == nil {
+				break
+			}
+			slog.Warn("notifications: a confirmation link that wasn't sent couldn't be withdrawn", "attempt", attempt+1, "err", werr)
+		}
 		return ErrVerifyNotSent
 	}
 	return nil

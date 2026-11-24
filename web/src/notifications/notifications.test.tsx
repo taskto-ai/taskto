@@ -593,7 +593,7 @@ const emailChoices = (over: Record<string, unknown> = {}) => ({
   available: true,
   address: { email: 'owner@example.com', state: 'verified' },
   kinds: { card_assigned: 'off', app_effect_failed: 'off' },
-  digest: { hour: 8, timezone: 'UTC' },
+  digest: { hour: 8, timezone: 'UTC', chosen: false },
   ...over,
 })
 
@@ -607,7 +607,7 @@ test('email is chosen per kind, as it happens or in a daily summary, and is off 
       saved = {
         ...saved,
         kinds: { ...saved.kinds, ...body.kinds },
-        digest: body.digest ?? saved.digest,
+        digest: body.digest ? { ...body.digest, chosen: true } : saved.digest,
       } as typeof saved
       return { body: saved }
     },
@@ -730,13 +730,13 @@ test("a time zone the person picked is not replaced by the browser's when a summ
       saved = {
         ...saved,
         kinds: { ...saved.kinds, ...body.kinds },
-        digest: body.digest ?? saved.digest,
+        digest: body.digest ? { ...body.digest, chosen: true } : saved.digest,
       } as typeof saved
       return { body: saved }
     },
   })
-  render(<NotificationsTab me={1} workspace={1} />)
-  const assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
+  const first = render(<NotificationsTab me={1} workspace={1} />)
+  let assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
   fireEvent.change(assigned, { target: { value: 'digest' } })
   const zone = (await screen.findByLabelText('Time zone')) as HTMLSelectElement
   await waitFor(() => expect(zone.value).toBe('America/New_York'))
@@ -744,6 +744,11 @@ test("a time zone the person picked is not replaced by the browser's when a summ
   await waitFor(() => expect(saved.digest.timezone).toBe('UTC'))
   fireEvent.change(assigned, { target: { value: 'off' } })
   await waitFor(() => expect(saved.kinds.card_assigned).toBe('off'))
+  // Leaving the page and coming back forgets nothing: the server says the zone was chosen.
+  first.unmount()
+  render(<NotificationsTab me={1} workspace={1} />)
+  assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
+  await waitFor(() => expect(assigned.value).toBe('off'))
   fireEvent.change(assigned, { target: { value: 'digest' } })
   await waitFor(() => expect(saved.kinds.card_assigned).toBe('digest'))
   const puts = calls.filter((c) => c.method === 'PUT').map((c) => c.body as { digest?: unknown })

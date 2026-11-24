@@ -42,7 +42,7 @@ export type EmailChoices = {
   available: boolean
   address: EmailAddress
   kinds: Record<EmailKind, EmailMode>
-  digest: { hour: number; timezone: string }
+  digest: { hour: number; timezone: string; chosen: boolean }
 }
 export const emailPath = (workspace: number) => `${ws(workspace)}/notification-email`
 export const emailVerificationPath = (workspace: number) => `${emailPath(workspace)}/verification`

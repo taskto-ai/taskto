@@ -1572,7 +1572,8 @@ then, and everything can still be turned off). `address.state` is `unverified` (
 `pending` (a link was sent and may still be opened) or `verified`; nothing is sent unless it is
 `verified`. Each kind is `off`, `instant` (a mail soon after, one for each notification) or `digest`
 (counted in the daily summary, sent at `hour` o'clock, 0 to 23, of the IANA `timezone`; the default
-is 8 o'clock UTC).
+is 8 o'clock UTC; `chosen` is false until the person has set the time themselves, so a client may
+offer its own zone then and never replaces one they chose).
 
 #### `PUT /api/workspaces/{workspace}/notification-email`
 
@@ -1586,7 +1587,9 @@ Choosing `digest` for a kind schedules the person's summary on the
 [general scheduler](../internal/schedule/schedule.go) (job kind `notifications.digest`, one per
 person and workspace). It has no fixed interval: each run schedules the next at the same hour of the
 person's own date, so it keeps its hour through daylight saving time. The summary counts the kind's
-notifications that come after the kind was turned to `digest`. Having no kind on `digest` ends it,
+notifications that come after the kind was turned to `digest`, are still unread, are less than 48
+hours old, weren't counted in an earlier summary and that the person may still read: so its number
+can be lower than the inbox's. Having no kind on `digest` ends it,
 and so does leaving the workspace.
 
 #### `POST /api/workspaces/{workspace}/notification-email/verification`

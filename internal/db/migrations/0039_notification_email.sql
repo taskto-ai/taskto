@@ -16,13 +16,16 @@ CREATE TABLE notification_email_prefs (
 ) STRICT;
 
 -- When the daily summary is sent (the hour of the person's own time zone, an IANA name) and the
--- last notification it has gone through, so one is counted in one summary only.
+-- last notification it has gone through, so one is counted in one summary only. timezone_chosen says
+-- whether the person has set the time and zone themselves: until then the zone is a default the
+-- settings page may replace with the browser's.
 CREATE TABLE notification_email_settings (
     user_id       INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     workspace_id  INTEGER NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
     digest_hour   INTEGER NOT NULL DEFAULT 8 CHECK (digest_hour BETWEEN 0 AND 23),
     timezone      TEXT NOT NULL DEFAULT 'UTC' CHECK (length(timezone) BETWEEN 1 AND 64),
     digest_cursor INTEGER NOT NULL DEFAULT 0,
+    timezone_chosen INTEGER NOT NULL DEFAULT 0 CHECK (timezone_chosen IN (0, 1)),
     PRIMARY KEY (user_id, workspace_id)
 ) STRICT;
 
