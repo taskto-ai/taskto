@@ -85,7 +85,7 @@ export function TemplatesPage({ workspace }: { workspace: number }) {
   const [chosen, setChosen] = useState<string | null>(null)
 
   return (
-    <div className="tt-section tt-templates">
+    <div className="tt-section">
       <div className="tt-pane-head">
         <h1>{t('apps.templates.title')}</h1>
         <Link className="tt-button" href={routePath({ workspace, section: 'apps' })}>

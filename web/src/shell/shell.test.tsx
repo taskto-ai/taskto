@@ -462,3 +462,52 @@ test('the account menu leads to the install guidance', async () => {
   await screen.findByRole('heading', { name: 'Install the app' })
   expect(window.location.pathname).toBe('/w/1/settings/about')
 })
+
+// The account menu is a <details>: open, with the page behind it and a control outside it.
+async function openAccountMenu() {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  const { container } = render(<App />)
+  await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull())
+  await screen.findByText('Pick a conversation, or start a new one.')
+  const menu = container.querySelector('details.tt-account') as HTMLDetailsElement
+  const summary = menu.querySelector('summary') as HTMLElement
+  menu.open = true
+  return { menu, summary, container }
+}
+
+test('Escape closes the account menu and gives focus back to its summary', async () => {
+  const { menu, summary } = await openAccountMenu()
+  const logout = within(menu).getByRole('button', { name: 'Log out' })
+  logout.focus()
+  expect(menu.open).toBe(true)
+
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(menu.open).toBe(false)
+  expect(document.activeElement).toBe(summary)
+})
+
+test('a press or focus outside the account menu closes it; inside it does not', async () => {
+  const { menu, container } = await openAccountMenu()
+  const inside = within(menu).getByRole('button', { name: 'Log out' })
+  fireEvent.pointerDown(inside)
+  fireEvent.focusIn(inside)
+  expect(menu.open).toBe(true)
+
+  fireEvent.pointerDown(container.querySelector('main') as HTMLElement)
+  expect(menu.open).toBe(false)
+
+  menu.open = true
+  fireEvent.focusIn(screen.getByRole('button', { name: 'Skip to the content' }))
+  expect(menu.open).toBe(false)
+})
+
+test('Escape with the account menu closed leaves focus where it is', async () => {
+  const { menu, summary } = await openAccountMenu()
+  menu.open = false
+  const skip = screen.getByRole('button', { name: 'Skip to the content' })
+  skip.focus()
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(document.activeElement).toBe(skip)
+  expect(document.activeElement).not.toBe(summary)
+})

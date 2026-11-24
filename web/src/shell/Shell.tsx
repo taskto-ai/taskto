@@ -345,9 +345,32 @@ function ThemeSelect({ theme, onChange, t }: { theme: Theme; onChange: (theme: T
 function AccountMenu({ me, workspace, onLogout, t }: { me: Me; workspace: number; onLogout: () => void; t: T }) {
   const { name, email } = me.user
   const { installed } = useInstall()
+  const menu = useRef<HTMLDetailsElement>(null)
+  const summary = useRef<HTMLElement>(null)
+  // A <details> only closes on its summary: Escape, and a press or focus outside it, close it
+  // too, and Escape gives focus back to the summary, which the menu's items had.
+  useEffect(() => {
+    const close = () => menu.current?.removeAttribute('open')
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !menu.current?.open) return
+      close()
+      summary.current?.focus()
+    }
+    const onOutside = (e: Event) => {
+      if (menu.current?.open && e.target instanceof Node && !menu.current.contains(e.target)) close()
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('pointerdown', onOutside)
+    document.addEventListener('focusin', onOutside)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onOutside)
+      document.removeEventListener('focusin', onOutside)
+    }
+  }, [])
   return (
-    <details className="tt-account">
-      <summary aria-label={t('shell.account', { name })}>
+    <details className="tt-account" ref={menu}>
+      <summary ref={summary} aria-label={t('shell.account', { name })}>
         <span className="tt-avatar" aria-hidden>
           {name.trim().charAt(0).toUpperCase() || '?'}
         </span>
@@ -363,7 +386,7 @@ function AccountMenu({ me, workspace, onLogout, t }: { me: Me; workspace: number
           <Link
             className="tt-button"
             href={routePath({ workspace, section: 'settings', item: 'about' })}
-            onClick={(e) => e.currentTarget.closest('details')?.removeAttribute('open')}
+            onClick={() => menu.current?.removeAttribute('open')}
           >
             {t('shell.installApp')}
           </Link>

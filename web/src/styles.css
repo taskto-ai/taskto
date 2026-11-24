@@ -66,6 +66,9 @@
   --tt-success: var(--tt-link);
   --tt-warning: light-dark(#9a4700, #ffb04d);
 
+  /* A cross, as a shape to mask with: its colour comes from the element that uses it. */
+  --tt-clear-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.1 8 6.6l4.5-4.5 1.4 1.4L9.4 8l4.5 4.5-1.4 1.4L8 9.4l-4.5 4.5-1.4-1.4L6.6 8 2.1 3.5z'/%3E%3C/svg%3E");
+
   --tt-scrim: light-dark(rgba(17, 17, 16, 0.42), rgba(0, 0, 0, 0.6));
   /* Only what you are meant to press, and what floats, has a shadow: the buttons' short hard lift
      (the website's), and the soft one under a menu or a dialog. light-dark() takes colours only,
@@ -206,6 +209,23 @@ textarea {
   caret-color: var(--tt-fg);
 }
 
+/* The search field's clear button is the browser's blue: drawn in the muted text colour, the
+   ink on hover (a mask, so the theme's colour fills it). */
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  inline-size: 1rem;
+  block-size: 1rem;
+  cursor: pointer;
+  background-color: var(--tt-muted);
+  -webkit-mask: var(--tt-clear-icon) center / contain no-repeat;
+  mask: var(--tt-clear-icon) center / contain no-repeat;
+}
+
+input[type="search"]::-webkit-search-cancel-button:hover {
+  background-color: var(--tt-fg);
+}
+
 /* A placeholder is text: the browser's own is a faded grey under 4.5:1 on a dark field. */
 ::placeholder {
   color: var(--tt-muted);
@@ -276,6 +296,9 @@ textarea {
   place-content: center;
   gap: 1rem;
   padding: 1rem;
+  /* Screens without the shell (setup, login, errors) keep clear of the status and home bars. */
+  padding-block-start: max(1rem, env(safe-area-inset-top));
+  padding-block-end: max(1rem, env(safe-area-inset-bottom));
   text-align: center;
 }
 
@@ -319,6 +342,7 @@ textarea {
   /* Pills, as on the website. */
   border-radius: 999px;
   background: var(--tt-surface);
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -329,10 +353,6 @@ textarea {
 .tt-button:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.tt-button {
-  font-weight: 500;
 }
 
 /* The one thing you press: mint, outlined in ink, on a short hard lift that rises on hover and
@@ -460,6 +480,9 @@ textarea {
   display: grid;
   place-items: center;
   padding: 1rem;
+  /* Clear of the status and home bars, as .tt-center is. */
+  padding-block-start: max(1rem, env(safe-area-inset-top));
+  padding-block-end: max(1rem, env(safe-area-inset-bottom));
 }
 
 .tt-auth-card {
@@ -556,9 +579,7 @@ textarea {
 
 /* The bar never overflows: what is fixed (the menu, the mark, the bell, the theme, the account)
    keeps its size, and the workspace's name gives way, cut with an ellipsis. */
-.tt-topbar .tt-brand,
-.tt-topbar-end,
-.tt-menu-button {
+.tt-topbar .tt-brand {
   flex: none;
 }
 
@@ -588,6 +609,7 @@ textarea {
 }
 
 .tt-topbar-end {
+  flex: none;
   margin-inline-start: auto;
   display: flex;
   align-items: center;
@@ -601,6 +623,7 @@ textarea {
 }
 
 .tt-menu-button {
+  flex: none;
   display: none;
 }
 
@@ -807,9 +830,6 @@ textarea {
 .tt-chat > .tt-pane-head {
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--tt-line);
-}
-
-.tt-chat > .tt-pane-head {
   flex-wrap: nowrap;
 }
 
@@ -1062,24 +1082,6 @@ button.tt-recording {
   gap: 0.4rem;
 }
 
-.tt-notice,
-.tt-conflict {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0.5rem 0.75rem;
-  border-radius: var(--tt-radius);
-  border-inline-start: 3px solid var(--tt-focus);
-  background: var(--tt-accent-soft);
-}
-
-.tt-conflict {
-  border-inline-start-color: var(--tt-warning);
-  background: var(--tt-hover);
-}
-
 .tt-search {
   display: flex;
   flex-wrap: wrap;
@@ -1151,11 +1153,6 @@ button.tt-recording {
   border: 1px dashed var(--tt-line-strong);
   border-radius: var(--tt-radius);
   min-width: 0;
-}
-
-.tt-history {
-  display: grid;
-  gap: 0.5rem;
 }
 
 .tt-history-entry {
@@ -1361,35 +1358,31 @@ input[data-overdue] {
   margin-bottom: 0;
 }
 
-.tt-markdown h1,
-.tt-markdown h2,
+.tt-markdown h1 {
+  margin: 1rem 0 0.4rem;
+  font-size: 1.35rem;
+}
+
+.tt-markdown h2 {
+  margin: 1rem 0 0.4rem;
+}
+
 .tt-markdown h3,
 .tt-markdown h4,
 .tt-markdown h5,
 .tt-markdown h6 {
   margin: 1rem 0 0.4rem;
-}
-
-.tt-markdown h1 {
-  font-size: 1.35rem;
-}
-
-.tt-markdown h3,
-.tt-markdown h4,
-.tt-markdown h5,
-.tt-markdown h6 {
   font-size: 0.95rem;
 }
 
 .tt-markdown p,
 .tt-markdown ul,
-.tt-markdown ol,
-.tt-markdown pre,
-.tt-markdown blockquote {
+.tt-markdown ol {
   margin: 0 0 0.75rem;
 }
 
 .tt-markdown pre {
+  margin: 0 0 0.75rem;
   padding: 0.6rem 0.75rem;
   background: var(--tt-hover);
   border-radius: var(--tt-radius);
@@ -1403,9 +1396,28 @@ input[data-overdue] {
 }
 
 .tt-markdown blockquote {
+  margin: 0 0 0.75rem;
   padding-inline-start: 0.75rem;
   border-inline-start: 3px solid var(--tt-line-strong);
   color: var(--tt-muted);
+}
+
+/* A task list item: the box, then its words, in the place of the bullet. Read-only. */
+.tt-markdown .tt-task-item {
+  list-style: none;
+  margin-inline-start: -1.4rem;
+}
+
+.tt-markdown .tt-task-item > label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.tt-markdown .tt-task-item input {
+  flex: none;
+  min-height: 0;
+  margin: 0;
 }
 
 .tt-markdown hr {
@@ -1553,12 +1565,19 @@ input[data-overdue] {
 }
 
 .tt-app-actions,
-.tt-app-rename,
 .tt-app-move {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+.tt-app-rename {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  flex: 1;
 }
 
 .tt-app-roles {
@@ -1575,10 +1594,6 @@ input[data-overdue] {
   text-align: start;
 }
 
-.tt-app-rename {
-  flex: 1;
-}
-
 a.tt-button {
   color: inherit;
   text-decoration: none;
@@ -1590,8 +1605,7 @@ a.tt-button.tt-primary {
 
 /* The records of a launched app, their history and the deleted ones. */
 
-.tt-records,
-.tt-records-panel {
+.tt-records {
   display: grid;
   gap: 0.5rem;
   min-inline-size: 0;
@@ -1602,6 +1616,9 @@ a.tt-button.tt-primary {
 }
 
 .tt-records-panel {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
   padding: 0.75rem;
   background: var(--tt-surface);
   border: 1px solid var(--tt-line);
@@ -1617,8 +1634,7 @@ a.tt-button.tt-primary {
   gap: 0.4rem;
 }
 
-.tt-record-list,
-.tt-history {
+.tt-record-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1639,6 +1655,11 @@ a.tt-button.tt-primary {
 }
 
 .tt-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
   padding-inline-start: 0.75rem;
   border-inline-start: 2px solid var(--tt-line);
 }
@@ -1766,8 +1787,7 @@ a.tt-button.tt-primary {
   margin: 0;
 }
 
-.tt-record-fields > div,
-.tt-record-field {
+.tt-record-fields > div {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 0.5rem;
@@ -1791,6 +1811,7 @@ a.tt-button.tt-primary {
 .tt-record-field {
   display: grid;
   gap: 0.2rem;
+  align-items: baseline;
 }
 
 .tt-record-field input,
@@ -1812,10 +1833,13 @@ a.tt-button.tt-primary {
 
 .tt-conflict {
   display: grid;
+  align-items: center;
   gap: 0.5rem;
+  margin: 0;
   padding: 0.6rem;
   border: 2px solid var(--tt-focus);
   border-radius: var(--tt-radius);
+  background: var(--tt-hover);
 }
 
 .tt-conflict-table {
@@ -1896,7 +1920,6 @@ a.tt-button.tt-primary {
   gap: 0.4rem;
 }
 
-.tt-app-migration,
 .tt-app-releases {
   flex-basis: 100%;
   display: grid;
@@ -1907,6 +1930,12 @@ a.tt-button.tt-primary {
 }
 
 .tt-app-migration {
+  flex-basis: 100%;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
   margin: 0;
   min-inline-size: 0;
 }
@@ -2081,6 +2110,29 @@ fieldset {
   gap: 0.5rem;
 }
 
+/* A headline number in an app (the Stat component): a small muted label over a larger value, with
+   no indent from the browser's list defaults. */
+.tt-stat {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+  padding: 0;
+}
+
+.tt-stat-label {
+  margin: 0;
+  color: var(--tt-muted);
+  font-size: 0.85rem;
+}
+
+.tt-stat-value {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
 .tt-ok {
   color: var(--tt-success);
 }
@@ -2089,7 +2141,17 @@ fieldset {
   color: var(--tt-warning);
 }
 
-.tt-notice,
+.tt-notice {
+  display: grid;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: var(--tt-radius);
+  border-inline-start: 3px solid var(--tt-focus);
+  background: var(--tt-accent-soft);
+}
+
 .tt-confirm-box {
   display: grid;
   gap: 0.6rem;
@@ -2110,13 +2172,13 @@ fieldset {
   font-size: 0.85rem;
 }
 
-.tt-snippet {
+.tt-setup-snippet {
   display: grid;
   gap: 0.4rem;
   min-width: 0;
 }
 
-.tt-snippet pre {
+.tt-setup-snippet pre {
   margin: 0;
   padding: 0.6rem 0.75rem;
   background: var(--tt-hover);
@@ -2421,13 +2483,14 @@ fieldset {
   max-inline-size: 42rem;
 }
 
-.tt-builder-form,
-.tt-builder-where {
+.tt-builder-form {
   display: grid;
   gap: 0.6rem;
 }
 
 .tt-builder-where {
+  display: grid;
+  gap: 0.6rem;
   margin: 0;
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--tt-line);
@@ -2757,10 +2820,6 @@ body {
   outline: none; /* focused by the skip link and the drawer, not a control */
 }
 
-.tt-warning {
-  color: var(--tt-warning);
-}
-
 .tt-steps {
   display: grid;
   gap: 0.4rem;
@@ -2816,13 +2875,6 @@ html[data-keyboard="open"] .tt-composer {
   }
 }
 
-/* Screens without the shell (setup, login, errors) keep clear of the status and home bars. */
-.tt-auth,
-.tt-center {
-  padding-block-start: max(1rem, env(safe-area-inset-top));
-  padding-block-end: max(1rem, env(safe-area-inset-bottom));
-}
-
 /* Photos of an app: the input (camera and library), the uploads on their way, and the thumbnails. */
 
 .tt-photos {
@@ -2839,7 +2891,6 @@ html[data-keyboard="open"] .tt-composer {
   font-weight: 600;
 }
 
-.tt-photo-grid,
 .tt-photo-uploads {
   display: grid;
   gap: 0.5rem;
@@ -2849,6 +2900,11 @@ html[data-keyboard="open"] .tt-composer {
 }
 
 .tt-photo-grid {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr));
 }
 
@@ -3081,9 +3137,7 @@ html[data-keyboard="open"] .tt-composer {
 
 /* Effects of an app's actions: what they set going, and the ones that failed. */
 
-.tt-effects,
-.tt-effects-panel,
-.tt-effects-preview {
+.tt-effects {
   display: grid;
   gap: 0.5rem;
   min-inline-size: 0;
@@ -3099,6 +3153,9 @@ html[data-keyboard="open"] .tt-composer {
 
 .tt-effects-panel,
 .tt-effects-preview {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
   padding: 0.75rem;
   background: var(--tt-surface);
   border: 1px solid var(--tt-line);

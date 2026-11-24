@@ -1,0 +1,212 @@
+#!/usr/bin/env node
+// Checks the web app's one global stylesheet (src/styles.css) against its components. CI runs it;
+// so can anyone: `pnpm --filter @taskto/web run css`.
+//
+// Fails on:
+// - a `.tt-` selector declared more than once at the top level of the stylesheet (a second rule
+//   with the same selector silently overrides or merges with the first; a state or a screen size
+//   goes in an at-rule block, or in a selector of its own);
+// - a `tt-` class a component's className uses that no rule of the stylesheet mentions.
+//
+// Dependency-free: the stylesheet is read by a small scanner (comments and strings skipped), the
+// components by looking at what each className holds.
+//
+// --root <dir> checks another web directory (its src/ and src/styles.css), for the script's tests.
+
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Classes that components use as hooks (for tests, for scripts, or to say what an element is)
+// and that deliberately have no rule. Each needs a reason; a class that is merely not styled yet
+// gets a rule, not an entry here.
+export const UNSTYLED = new Map([
+  // (none today)
+])
+
+const CLASS = /tt-[a-z0-9]+(?:-[a-z0-9]+)*/g
+
+// The stylesheet's rules at depth 0: each with its selector list and the classes it names.
+// At-rules (@media, @keyframes, @font-face, @layer …) are not rules here, but the classes inside
+// an at-rule's block still count as styled.
+export function scan(css) {
+  const top = [] // selectors declared at the top level, each with its line
+  const mentioned = new Set()
+  let depth = 0
+  let prelude = ''
+  let preludeLine = 1
+  let line = 1
+  for (let i = 0; i < css.length; i++) {
+    const c = css[i]
+    if (c === '\n') line++
+    if (c === '/' && css[i + 1] === '*') {
+      const end = css.indexOf('*/', i + 2)
+      const stop = end === -1 ? css.length : end + 2
+      for (const ch of css.slice(i, stop)) if (ch === '\n') line++
+      i = stop - 1
+      continue
+    }
+    if (c === '"' || c === "'") {
+      let j = i + 1
+      while (j < css.length && css[j] !== c) j += css[j] === '\\' ? 2 : 1
+      prelude += css.slice(i, j + 1)
+      i = j
+      continue
+    }
+    if (c === '{') {
+      const text = prelude.trim()
+      const isAt = text.startsWith('@')
+      for (const m of text.matchAll(CLASS)) mentioned.add(m[0])
+      if (!isAt && depth === 0) {
+        for (const sel of splitSelectors(text)) top.push({ selector: sel, line: preludeLine })
+      }
+      depth++
+      prelude = ''
+      continue
+    }
+    if (c === '}') {
+      depth = Math.max(0, depth - 1)
+      prelude = ''
+      continue
+    }
+    if (c === ';') {
+      prelude = ''
+      continue
+    }
+    if (prelude.trim() === '') preludeLine = line
+    prelude += c
+  }
+  return { top, mentioned }
+}
+
+// "a, b > c" → ["a", "b > c"], not splitting inside parentheses (:is(a, b)).
+function splitSelectors(text) {
+  const out = []
+  let depth = 0
+  let cur = ''
+  for (const c of text) {
+    if (c === '(') depth++
+    if (c === ')') depth--
+    if (c === ',' && depth === 0) {
+      out.push(cur)
+      cur = ''
+    } else cur += c
+  }
+  out.push(cur)
+  return out.map((s) => s.replace(/\s+/g, ' ').trim()).filter(Boolean)
+}
+
+// The `tt-` classes inside what a component passes as className: a string, or an expression
+// (a template, a conditional, a join) read up to its closing brace.
+export function classesUsed(source) {
+  const used = new Map() // class → offset of the first use
+  for (const m of source.matchAll(/\bclassName\s*=\s*/g)) {
+    const start = m.index + m[0].length
+    const end = expressionEnd(source, start)
+    for (const c of source.slice(start, end).matchAll(CLASS)) {
+      // `--tt-fg`-style custom properties are not classes.
+      if (source[start + c.index - 1] === '-') continue
+      if (!used.has(c[0])) used.set(c[0], start + c.index)
+    }
+  }
+  return used
+}
+
+function expressionEnd(s, start) {
+  const open = s[start]
+  if (open === '"' || open === "'") {
+    const close = s.indexOf(open, start + 1)
+    return close === -1 ? s.length : close + 1
+  }
+  if (open !== '{') return start
+  let depth = 0
+  for (let i = start; i < s.length; i++) {
+    const c = s[i]
+    if (c === '"' || c === "'") {
+      i = skipString(s, i, c)
+    } else if (c === '`') {
+      i = skipTemplate(s, i)
+    } else if (c === '{') depth++
+    else if (c === '}' && --depth === 0) return i + 1
+  }
+  return s.length
+}
+
+function skipString(s, i, q) {
+  let j = i + 1
+  while (j < s.length && s[j] !== q) j += s[j] === '\\' ? 2 : 1
+  return j
+}
+
+// A template literal, whose ${ } holes hold code (and may hold templates).
+function skipTemplate(s, i) {
+  let j = i + 1
+  while (j < s.length && s[j] !== '`') {
+    if (s[j] === '\\') j += 2
+    else if (s[j] === '$' && s[j + 1] === '{') {
+      let depth = 0
+      for (j += 1; j < s.length; j++) {
+        if (s[j] === '`') j = skipTemplate(s, j)
+        else if (s[j] === '"' || s[j] === "'") j = skipString(s, j, s[j])
+        else if (s[j] === '{') depth++
+        else if (s[j] === '}' && --depth === 0) break
+      }
+      j++
+    } else j++
+  }
+  return j
+}
+
+function components(dir, out = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) components(path, out)
+    else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) out.push(path)
+  }
+  return out
+}
+
+export function check(web) {
+  const errors = []
+  const stylesheet = join(web, 'src/styles.css')
+  const { top, mentioned } = scan(readFileSync(stylesheet, 'utf8'))
+
+  const seen = new Map()
+  for (const { selector, line } of top) {
+    if (!/\.tt-/.test(selector)) continue
+    if (seen.has(selector)) {
+      errors.push(
+        `src/styles.css:${line}: ${selector} is declared again (first at line ${seen.get(selector)}): merge the two, or give one its own class`,
+      )
+    } else seen.set(selector, line)
+  }
+
+  const unstyled = new Map()
+  for (const file of components(join(web, 'src'))) {
+    const source = readFileSync(file, 'utf8')
+    for (const [cls, offset] of classesUsed(source)) {
+      if (mentioned.has(cls) || UNSTYLED.has(cls) || unstyled.has(cls)) continue
+      const line = source.slice(0, offset).split('\n').length
+      unstyled.set(cls, `${relative(web, file)}:${line}`)
+    }
+  }
+  for (const [cls, where] of unstyled) {
+    errors.push(`${where}: ${cls} is used but no rule in src/styles.css has it: style it, or remove it`)
+  }
+  for (const cls of UNSTYLED.keys()) {
+    if (mentioned.has(cls)) errors.push(`${cls} is in the allowlist but now has a rule: remove it from the allowlist`)
+  }
+  return errors
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const at = process.argv.indexOf('--root')
+  const web = at > 0 ? process.argv[at + 1] : join(dirname(fileURLToPath(import.meta.url)), '..')
+  const errors = check(web)
+  if (errors.length > 0) {
+    console.error(`css-check: ${errors.length} problem${errors.length === 1 ? '' : 's'}\n`)
+    for (const e of errors) console.error(`  ${e}`)
+    process.exit(1)
+  }
+  console.log('css-check: no selector is declared twice, and every tt- class a component uses has a rule')
+}

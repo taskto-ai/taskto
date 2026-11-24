@@ -335,3 +335,47 @@ test(
   },
   TIMEOUT_MS,
 )
+
+test('task list items are read-only checkboxes, labelled by their text', () => {
+  const { container } = render(
+    <Markdown
+      text={['- [ ] write the post', '- [x] get **approval**', '- [X] ship it', '- plain item', '1. [ ] numbered'].join(
+        '\n',
+      )}
+    />,
+  )
+  const boxes = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+  expect(boxes.map((b) => b.checked)).toEqual([false, true, true, false])
+  expect(boxes.every((b) => b.disabled)).toBe(true)
+  // The text is the box's label, so a screen reader names it; the brackets are gone.
+  expect(boxes.map((b) => b.closest('label')?.textContent)).toEqual([
+    'write the post',
+    'get approval',
+    'ship it',
+    'numbered',
+  ])
+  expect(container.querySelector('label strong')?.textContent).toBe('approval')
+  expect(container.textContent).not.toContain('[')
+  expect(container.querySelectorAll('li')).toHaveLength(5)
+  expect(container.querySelectorAll('li.tt-task-item')).toHaveLength(4)
+})
+
+test('a task item keeps its nested list, and a bracket that is not a box stays text', () => {
+  const { container } = render(
+    <Markdown
+      text={['- [x] parent', '  - [ ] child', '  - child two', '', '- [] no box', '- [ ]', '- [y] nope'].join('\n')}
+    />,
+  )
+  const boxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+  expect([...boxes].map((b) => b.checked)).toEqual([true, false])
+  expect(container.querySelector('li.tt-task-item ul')).not.toBeNull()
+  expect(container.textContent).toContain('[] no box')
+  expect(container.textContent).toContain('[ ]')
+  expect(container.textContent).toContain('[y] nope')
+})
+
+test('a task item makes no HTML either', () => {
+  const { container } = render(<Markdown text="- [ ] <img src=x onerror=alert(1)> done" />)
+  expect(container.querySelector('img')).toBeNull()
+  expect(container.querySelector('label')?.textContent).toBe('<img src=x onerror=alert(1)> done')
+})

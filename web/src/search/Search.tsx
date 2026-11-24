@@ -9,6 +9,7 @@ import { api, errorText, type Space, ws } from '../api'
 import { type Key, type T, useT } from '../i18n'
 import { useLoad } from '../load'
 import { spaceLabel } from '../spaces'
+import { cleanSnippet } from './snippet'
 
 export type SearchQuery = { q: string; scope: 'space' | 'workspace' }
 
@@ -188,15 +189,7 @@ function ResultPages({
                     ? t('search.results.inSpace', { space: r.space_name, path: r.path })
                     : r.path}
                 </span>
-                {r.snippet.length > 0 && (
-                  <span className="tt-snippet tt-small">
-                    {/* Plain text in pieces, never markup: matches are marked by the element. */}
-                    {r.snippet.map((s, i) =>
-                      // biome-ignore lint/suspicious/noArrayIndexKey: pieces have no identity but their place
-                      s.match ? <mark key={i}>{s.text}</mark> : <span key={i}>{s.text}</span>,
-                    )}
-                  </span>
-                )}
+                <Snippet pieces={r.snippet} />
               </button>
             </li>
           ))}
@@ -208,5 +201,21 @@ function ResultPages({
         </button>
       )}
     </section>
+  )
+}
+
+// What the document says around the match, as running text: its Markdown marks are left out for
+// display (the server's result is unchanged). Plain text in pieces, never markup; the matches are
+// marked by the element.
+function Snippet({ pieces }: { pieces: SearchResult['snippet'] }) {
+  const shown = cleanSnippet(pieces)
+  if (shown.length === 0) return null
+  return (
+    <span className="tt-snippet tt-small">
+      {shown.map((s, i) =>
+        // biome-ignore lint/suspicious/noArrayIndexKey: pieces have no identity but their place
+        s.match ? <mark key={i}>{s.text}</mark> : <span key={i}>{s.text}</span>,
+      )}
+    </span>
   )
 }
