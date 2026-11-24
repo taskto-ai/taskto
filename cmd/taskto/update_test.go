@@ -162,9 +162,11 @@ type updEnv struct {
 	extra                                []string
 }
 
-func newUpdEnv(t *testing.T) *updEnv {
+// needTools skips the test when a program it runs isn't on PATH, and fails it on CI, whose
+// runner has them: a missing program is never taken for the result of what it should have run.
+func needTools(t *testing.T, tools ...string) {
 	t.Helper()
-	for _, tool := range []string{"bash", "curl", "jq", "flock"} {
+	for _, tool := range tools {
 		if _, err := exec.LookPath(tool); err != nil {
 			if os.Getenv("CI") != "" {
 				t.Fatalf("%s is needed to test the updater, and CI's runner has it", tool)
@@ -172,7 +174,17 @@ func newUpdEnv(t *testing.T) *updEnv {
 			t.Skipf("no %s", tool)
 		}
 	}
-	dir := t.TempDir()
+}
+
+func newUpdEnv(t *testing.T) *updEnv { return newUpdEnvIn(t, t.TempDir()) }
+
+// newUpdEnvIn is newUpdEnv with everything under dir.
+func newUpdEnvIn(t *testing.T, dir string) *updEnv {
+	t.Helper()
+	needTools(t, "bash", "curl", "jq", "flock")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	e := &updEnv{t: t, dir: dir}
 	e.srv, e.state, e.backups, e.fake, e.tmp = e.sub("srv"), e.sub("state"), e.sub("backups"), e.sub("fake"), e.sub("tmp")
 	e.etc = e.sub("etc")
@@ -1261,6 +1273,7 @@ func TestReleaseWorkflowTagsTheCheckedCommitThroughTheAPI(t *testing.T) {
 // reference through the API, at the commit and for the version, and it stops, with nothing
 // else made, when the API refuses (the tag exists).
 func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
+	needTools(t, "bash")
 	step := workflowStep(t, ".github/workflows/release.yml", "Create the tag at the commit CI passed on")
 	for _, tc := range []struct {
 		name     string
@@ -1268,14 +1281,18 @@ func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
 		wantFail bool
 	}{{"the tag is new", false, false}, {"the API says the reference exists", true, true}} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
+			// A directory with a space in its name: the stub's log is quoted, whatever TMPDIR is.
+			dir := filepath.Join(t.TempDir(), "a directory")
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
 			log := filepath.Join(dir, "gh-calls")
-			stub := "#!/bin/sh\necho \"$*\" >>" + log + "\nif [ -n \"$REFUSE\" ]; then echo 'HTTP 422: Reference already exists' >&2; exit 1; fi\n"
+			stub := "#!/bin/sh\necho \"$*\" >>\"$GH_CALLS_LOG\"\nif [ -n \"$REFUSE\" ]; then echo 'HTTP 422: Reference already exists' >&2; exit 1; fi\n"
 			if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(stub), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			cmd := exec.Command("bash", "-e", "-c", step)
-			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "GH_REPO=o/r", "VERSION=v1.2.3", "GITHUB_SHA="+strings.Repeat("a", 40))
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "GH_CALLS_LOG="+log, "GH_REPO=o/r", "VERSION=v1.2.3", "GITHUB_SHA="+strings.Repeat("a", 40))
 			if tc.refuse {
 				cmd.Env = append(cmd.Env, "REFUSE=1")
 			}
@@ -1303,6 +1320,7 @@ func TestReleaseWorkflowTagStepStopsWhenTheTagExists(t *testing.T) {
 // agree: vMAJOR.MINOR.PATCH, at most 100 characters, and the whole input is the version: a
 // second line that isn't, whatever the first says, is refused.
 func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
+	needTools(t, "bash")
 	var check string
 	for _, line := range strings.Split(readRepoFile(t, ".github/workflows/release.yml"), "\n") {
 		if strings.Contains(line, `[[ $VERSION =~ `) {
@@ -1320,6 +1338,11 @@ func TestReleaseWorkflowAndUpdaterAgreeOnATag(t *testing.T) {
 		cmd := exec.Command("bash", "-c", `fail() { exit 1; }; `+check)
 		cmd.Env = append(os.Environ(), "VERSION="+tag)
 		err := cmd.Run()
+		// Only the check's own refusal (a plain exit status) is a result; bash not starting is not.
+		var exit *exec.ExitError
+		if err != nil && !errors.As(err, &exit) {
+			t.Fatalf("release.yml's check couldn't be run on %q: %v", tag, err)
+		}
 		if (err == nil) != ok {
 			t.Errorf("release.yml on %q (%d characters): accepted %v, want %v", tag, len(tag), err == nil, ok)
 		}

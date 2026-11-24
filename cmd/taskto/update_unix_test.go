@@ -4,12 +4,50 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+// startGroup starts cmd as the leader of a process group of its own, and makes sure the group is
+// gone and the leader reaped when the test ends, however it ends: a test that stops at a failed
+// assertion before its own kill leaves no process (a fake docker that waits for ever, holding the
+// updater's lock) behind. done is closed once the leader has been waited for.
+func startGroup(t *testing.T, cmd *exec.Cmd) <-chan struct{} {
+	t.Helper()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		default:
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+		}
+	})
+	return done
+}
+
+// The group of a test that fails before it kills it is gone when that test is over.
+func TestStartGroupReapsTheGroupOfATestThatStopsEarly(t *testing.T) {
+	var pid int
+	t.Run("stops at once", func(t *testing.T) {
+		cmd := exec.Command("sleep", "60")
+		startGroup(t, cmd)
+		pid = cmd.Process.Pid // and returns, as a t.Fatal would, without a kill of its own
+	})
+	if err := syscall.Kill(-pid, 0); err == nil {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		t.Error("the process group of the test is still there")
+	}
+}
 
 // An update killed after it has replaced .env (a crash, a reboot, a full disk) is found by the
 // next run, not mistaken for an install that is up to date: nothing runs again until a
@@ -19,12 +57,7 @@ func TestUpdateKilledHalfWayIsFoundAndBlocks(t *testing.T) {
 	e.release(updNew, "", false, false)
 	e.write("fake/block-up", "") // `compose start` of the new version waits, for ever
 	cmd := e.command()
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(done) }()
+	done := startGroup(t, cmd)
 	for deadline := time.Now().Add(30 * time.Second); e.count(`^compose start`) == 0; time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

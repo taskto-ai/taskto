@@ -102,6 +102,7 @@ func TestUpdaterNeverRestoresOrTouchesVolumes(t *testing.T) {
 }
 
 func TestSafetyCheckTakesOnlyItsOwnArguments(t *testing.T) {
+	needTools(t, "bash")
 	script, _ := filepath.Abs(filepath.Join("..", "..", "deploy", "safety-check.sh"))
 	for _, args := range [][]string{{"--nope"}, {"--static"}, {"--static", "a", "b"}} {
 		out, err := exec.Command("bash", append([]string{script}, args...)...).CombinedOutput()
@@ -762,8 +763,13 @@ func TestUpdateRecreatesCaddyForAChangedCaddyfile(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	e.wantStatus("updated", "")
-	if e.count(`^compose create .*--no-deps --force-recreate caddy @`+updNew+`$`) != 1 {
+	// Compose's own options for `create` (the fake docker refuses the others, --no-deps among them),
+	// before the create of all, and before anything is started.
+	if e.count(`^compose create --no-build --pull never --force-recreate caddy @`+updNew+`$`) != 1 || e.count(`--no-deps`) != 0 {
 		t.Errorf("Caddy wasn't recreated\n%s", strings.Join(e.calls(), "\n"))
+	}
+	if c, all, start := e.index(`^compose create .*caddy @`+updNew+`$`), e.index(`^compose create --no-build --pull never --remove-orphans @`+updNew+`$`), e.index(`^compose start `); c < 0 || c > all || all > start {
+		t.Errorf("Caddy created at %d, all at %d, start at %d: want that order", c, all, start)
 	}
 	// Caddy's other image is pulled, and its image is the one the staged files name.
 	if e.index(`^pull --quiet caddy:2.11.9-alpine@sha256:`) < 0 || e.index(`^pull --quiet caddy:`) > e.index(`^compose exec -T taskto taskto backup`) {

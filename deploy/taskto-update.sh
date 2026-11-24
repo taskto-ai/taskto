@@ -130,7 +130,7 @@ while [ $# -gt 0 ]; do
 	--dry-run) DRY=1 ;;
 	--clear-block) CLEAR=1 ;;
 	--to)
-		[ $# -ge 2 ] || usage
+		[ $# -ge 2 ] && [ -n "$2" ] || usage
 		TO=$2
 		shift
 		;;
@@ -160,9 +160,9 @@ result="" from="" to="" sha="" reason="" backup="" digests='{}'
 stage="" login_config=""
 # The transaction: what the run changes, kept in $TX from before the first change until a
 # terminal outcome, so a run that is stopped half way is found, not mistaken for done. After a
-# failure that a person has to look at, it stays, in the phase `stopped` or `rollback-failed`,
-# until `taskto-update --clear-block`.
-phase="" volume="" data_mount="" old_server_image="" old_images='{}' old_service_images='{}' new_images='{}' new_ids='{}' caddy_changed=0 from_sha="" cause=""
+# failure that a person has to look at, it stays, in the phase `stopped`, `stop-failed` or
+# `rollback-failed`, until `taskto-update --clear-block`.
+phase="" volume="" subpath="" data_mount="" data_key="" old_server_image="" old_images='{}' old_service_images='{}' new_images='{}' new_ids='{}' caddy_changed=0 from_sha="" cause=""
 
 # --- the status: $STATE/status.json, and a line in the journal ---------------------------
 
@@ -177,7 +177,11 @@ write_status() {
 		--argjson digests "$digests" --argjson last "$last" --argjson change "$change" '
 		{at: $at, finished: $end, result: $result, channel: $channel, from: $from, to: $to, sha: $sha,
 		 reason: $reason, backup: $backup, digests: $digests} as $s
-		| $s + {last_change: (if $change then $s else $last end)}' >"$f.new"
+		| $s + {last_change: (if $change then $s else $last end)}' >"$f.new" || {
+		# A write that failed half way (a full disk) leaves the last status as it was.
+		rm -f "$f.new"
+		return 1
+	}
 	mv -f "$f.new" "$f"
 }
 
@@ -469,25 +473,30 @@ firewall_ok() {
 }
 https_on() { case ",$(envget "$ROOT/.env" COMPOSE_PROFILES)," in *,https,*) return 0 ;; *) return 1 ;; esac; }
 
-# What a /data mount is, as a short text, the same for the running server (from `docker inspect`)
-# and for Compose's rendered settings: the volume's Docker name, its subpath and whether it is
-# read-only. Two mounts are the same when the texts are.
-DESC_DEF='def desc($n; $s; $ro): $n + (if $s != "" then " (subpath " + $s + ")" else "" end) + (if $ro then " (read-only)" else "" end);'
+# What a /data mount is, the same for the running server (from `docker inspect`) and for
+# Compose's rendered settings: the volume's Docker name, its subpath and whether it is read-only.
+# Two mounts are the same when their keys are (those three values as a JSON array, in base64 so
+# nothing in a name can mix with the rest, and no value can pass for another); the description is
+# for the messages only.
+DESC_DEF='def key($n; $s; $ro): [$n, $s, $ro] | tojson | @base64;
+	def desc($n; $s; $ro): $n + (if $s != "" then " (subpath " + $s + ")" else "" end) + (if $ro then " (read-only)" else "" end);'
 
 # The running server: its data volume and how it is mounted (from what it has mounted at /data,
 # never a name assumed), and the images the running containers use: by id, as the containers
 # have them, never what a tag points at now. The three of TaskTo's must still be on this machine,
 # or nothing could put them back.
 resolve_running() {
-	local s insp pair svc n cid id c info
+	local s insp pair svc n cid id c info mount
 	s=$(compose ps -q taskto) && [ -n "$s" ] || { reason="the server isn't running"; return 1; }
 	insp=$("$DOCKER" inspect "$s") || { reason="can't inspect the server's container"; return 1; }
 	volume=$(jq -r '[.[0].Mounts[]? | select(.Destination == "/data" and .Type == "volume") | .Name][0] // empty' <<<"$insp") || volume=""
 	[[ $volume =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { reason="can't tell the server's data volume"; return 1; }
-	data_mount=$(jq -r "$DESC_DEF"' .[0] as $c | [$c.Mounts[]? | select(.Destination == "/data")] as $m
+	mount=$(jq -c "$DESC_DEF"' .[0] as $c | [$c.Mounts[]? | select(.Destination == "/data")] as $m
+		| ([$c.HostConfig.Mounts[]? | select(.Target == "/data")][0].VolumeOptions.Subpath // "") as $s
 		| if ($m | length) != 1 then empty else
-		  desc($m[0].Name; ([$c.HostConfig.Mounts[]? | select(.Target == "/data")][0].VolumeOptions.Subpath // ""); ($m[0].RW == false)) end' <<<"$insp") || data_mount=""
-	[ -n "$data_mount" ] || { reason="can't tell how the server's data volume is mounted"; return 1; }
+		  {key: key($m[0].Name; $s; ($m[0].RW == false)), desc: desc($m[0].Name; $s; ($m[0].RW == false)), subpath: $s} end' <<<"$insp") || mount=""
+	[ -n "$mount" ] || { reason="can't tell how the server's data volume is mounted"; return 1; }
+	data_mount=$(jq -r '.desc' <<<"$mount") data_key=$(jq -r '.key' <<<"$mount") subpath=$(jq -r '.subpath' <<<"$mount")
 	old_images='{}'
 	for pair in taskto:taskto cli-worker:taskto-cli-worker backup-schedule:taskto-backup; do
 		svc=${pair%%:*} n=${pair#*:}
@@ -517,8 +526,8 @@ resolve_running() {
 
 # data_mounts CONFIG: "service<TAB>what its /data is" for every service of TaskTO's own (the
 # server, the backup jobs, and any service running one of TaskTo's images; not Caddy's, whose
-# /data is its own volume): the volume's effective Docker name with its subpath and whether it
-# is read-only (the text of DESC_DEF), or what else it is.
+# /data is its own volume): "service, key, description" for each: the volume's effective Docker
+# name with its subpath and whether it is read-only (DESC_DEF), or what else it is.
 data_mounts() {
 	jq -r --arg p "$prefix" "$DESC_DEF"'
 		def repo: sub("@.*$"; "") | sub(":[^/:]*$"; "");
@@ -526,19 +535,27 @@ data_mounts() {
 		| .services | to_entries[]
 		| select((.key | IN("taskto", "backup", "backup-schedule")) or ((.value.image // "") | repo | IN($p + "taskto", $p + "taskto-cli-worker", $p + "taskto-backup")))
 		| .key as $k | (.value.volumes // [])[] | select(.target == "/data")
-		| [$k, (if .type == "volume" then desc($c.volumes[.source // ""].name // "?"; (.volume.subpath // ""); (.read_only // false)) else "a " + .type + " mount" end)] | @tsv' <<<"$1"
+		| (if .type == "volume" then [key($c.volumes[.source // ""].name // "?"; (.volume.subpath // ""); (.read_only // false)), desc($c.volumes[.source // ""].name // "?"; (.volume.subpath // ""); (.read_only // false))]
+		   else [(["mount", .type] | tojson | @base64), "a " + .type + " mount"] end) as $m
+		| [$k, $m[0], $m[1]] | @tsv' <<<"$1"
 }
 # check_data_volume CONFIG WHAT: every one of those is mounted at /data exactly as the running
-# server has it (volume, subpath and read-only), the backup services included.
+# server has it (volume, subpath and read-only: compared as values, never as the text of the
+# message), the backup services included; and a backup service the settings have mounts it.
 check_data_volume() {
-	local out svc what seen=0
+	local out svc key what seen=0 mounted=" " s
 	out=$(data_mounts "$1") || { reason="can't read the mounts of $2"; return 1; }
-	while IFS=$'\t' read -r svc what; do
+	while IFS=$'\t' read -r svc key what; do
 		[ -n "$svc" ] || continue
 		[ "$svc" != taskto ] || seen=1
-		[ "$what" = "$data_mount" ] || { reason="in $2, the /data of $svc is '$what', not '$data_mount', the mount the running server has"; return 1; }
+		mounted="$mounted$svc "
+		[ "$key" = "$data_key" ] || { reason="in $2, the /data of $svc is '$what', not '$data_mount', the mount the running server has"; return 1; }
 	done <<<"$out"
 	[ "$seen" = 1 ] || { reason="$2 has no /data volume for the server"; return 1; }
+	# A backup job with no /data would back up whatever its image has there.
+	for s in $(jq -r '.services | keys[] | select(IN("backup", "backup-schedule"))' <<<"$1"); do
+		case $mounted in *" $s "*) ;; *) reason="in $2, $s has no /data mount: the backup would not be of the server's data"; return 1 ;; esac
+	done
 }
 # volumes_exist CONFIG: every volume the enabled services mount exists already, and none is
 # anonymous, so that starting the new settings never creates one.
@@ -734,10 +751,10 @@ protect_old_images() {
 tx_write() {
 	phase=$1
 	install -d -m 755 "$STATE" || return 1
-	jq -n --arg from "$from" --arg to "$to" --arg sha "$sha" --arg phase "$phase" --arg backup "$backup" --arg volume "$volume" --arg data_mount "$data_mount" \
+	jq -n --arg from "$from" --arg to "$to" --arg sha "$sha" --arg phase "$phase" --arg backup "$backup" --arg volume "$volume" --arg subpath "$subpath" --arg data_mount "$data_mount" \
 		--arg previous "$STATE/previous" --arg at "$started" --argjson old_images "$old_images" --arg old_server_image "$old_server_image" \
 		--arg why "$cause" \
-		'{from: $from, to: $to, sha: $sha, phase: $phase, why: $why, backup: $backup, volume: $volume, data_mount: $data_mount, previous: $previous,
+		'{from: $from, to: $to, sha: $sha, phase: $phase, why: $why, backup: $backup, volume: $volume, subpath: $subpath, data_mount: $data_mount, previous: $previous,
 		  old_server_image: $old_server_image, old_images: $old_images, started: $at}' >"$TX.new" &&
 		mv -f "$TX.new" "$TX" && sync
 }
@@ -822,7 +839,9 @@ remove_created() {
 # any earlier check and the start.
 bring_up() {
 	# Caddy reads its Caddyfile once, and a file that was replaced is a new file to its mount.
-	[ "$caddy_changed" = 0 ] || compose create --no-build --pull never --no-deps --force-recreate caddy || return 1
+	# `create` takes no --no-deps: naming Caddy makes it, and what it depends on (the server),
+	# new, and not started, as the create below does for all of them.
+	[ "$caddy_changed" = 0 ] || compose create --no-build --pull never --force-recreate caddy || return 1
 	compose create --no-build --pull never --remove-orphans || return 1
 	created_match "$1" || { remove_created || true; return 1; }
 	compose start --wait --wait-timeout "$VERIFY_TIMEOUT"
@@ -893,15 +912,24 @@ record_failed() {
 # stop_stack: the project's containers can't come back by themselves, and are stopped, and none
 # of them is running after. Their restart policies are turned off first, so that a reboot or a
 # restart of Docker can't start what is stopped. Fails when the stop can't be confirmed; the
-# policies' own failure only goes in $policy_note.
-policy_note=""
+# policies' own failure (or that they couldn't be looked up) only goes in $policy_note, and
+# when they are off, $policy_off says so; the stop is tried, and confirmed, either way.
+policy_note="" policy_off=""
 stop_stack() {
-	local ids running
+	local ids running listed=1
 	local -a all=()
-	ids=$("$DOCKER" ps -aq --filter "label=com.docker.compose.project=$PROJECT") || return 1
-	if [ -n "$ids" ]; then
+	ids=$("$DOCKER" ps -aq --filter "label=com.docker.compose.project=$PROJECT") || listed=0
+	if [ "$listed" = 0 ]; then
+		policy_note=" The containers couldn't be listed, so their restart policies couldn't be turned off: they may start again after a reboot."
+	elif [ -z "$ids" ]; then
+		policy_off=1
+	else
 		mapfile -t all <<<"$ids"
-		"$DOCKER" update --restart=no "${all[@]}" >/dev/null || policy_note=" The restart policies of its containers couldn't be turned off: they may start again after a reboot."
+		if "$DOCKER" update --restart=no "${all[@]}" >/dev/null; then
+			policy_off=1
+		else
+			policy_note=" The restart policies of its containers couldn't be turned off: they may start again after a reboot."
+		fi
 	fi
 	compose stop || true
 	running=$("$DOCKER" ps -q --filter "label=com.docker.compose.project=$PROJECT") || return 1
@@ -933,7 +961,7 @@ clear_block() {
 		log "nothing to clear: no update is stopped or interrupted"
 		exit 0
 	}
-	local t_to iv sf out
+	local t_to iv sf out rc
 	refuse() {
 		result=refused
 		log "refusing: $*"
@@ -952,7 +980,14 @@ clear_block() {
 		t_to=$(jq -r '.to // empty' "$TX" 2>/dev/null) || t_to=""
 		# The release the stop was for is recorded as failed already, unless it is what runs now.
 		if [ -n "$t_to" ] && [ "$t_to" = "$from" ] && [ -f "$STATE/failed" ]; then
-			{ grep -vxF "$t_to" "$STATE/failed" >"$STATE/failed.new" || true; } && mv -fT "$STATE/failed.new" "$STATE/failed" || true
+			# grep says 1 when nothing is left (an empty list is right), and 2 when it couldn't
+			# finish (a full disk): then the list stays as it is, and so does the stop.
+			rc=0
+			grep -vxF -e "$t_to" "$STATE/failed" >"$STATE/failed.new" || rc=$?
+			if [ "$rc" -gt 1 ] || ! mv -fT "$STATE/failed.new" "$STATE/failed"; then
+				rm -f "$STATE/failed.new"
+				refuse "can't take $t_to off $STATE/failed, so the record stays: put $STATE right first"
+			fi
 		elif [ -n "$t_to" ]; then
 			record_failed "$t_to" || refuse "can't record $t_to as failed in $STATE/failed, so the record stays: put $STATE right first"
 		fi
@@ -986,9 +1021,13 @@ if [ -e "$TX" ]; then
 	backup=$(jq -r '.backup // ""' "$TX" 2>/dev/null) || backup=""
 	tphase=$(jq -r '.phase // "?"' "$TX" 2>/dev/null) || tphase="?"
 	case $tphase in
-	stopped | rollback-failed)
+	stopped | stop-failed | rollback-failed)
 		# What the failed run said stays the status.
-		result=blocked reason="the update from $from to $to ended in '$tphase' and was left for a person: restore the backup ${backup:-(none was made)} by hand, in the data volume '$(jq -r '.volume // "?"' "$TX" 2>/dev/null)' (deploy/INSTALL.md, Rollback), then run taskto-update --clear-block"
+		tvol=$(jq -r '.volume // "?"' "$TX" 2>/dev/null) || tvol="?"
+		tsub=$(jq -r '.subpath // ""' "$TX" 2>/dev/null) || tsub=""
+		result=blocked reason="the update from $from to $to ended in '$tphase' and was left for a person: restore the backup ${backup:-(none was made)} by hand, in the data volume '$tvol'${tsub:+ (its subpath '$tsub')} (deploy/INSTALL.md, Rollback), then run taskto-update --clear-block"
+		# The stack couldn't be confirmed stopped: that comes first, since a restart would run the new version.
+		[ "$tphase" != stop-failed ] || reason="the stack of the failed update from $from to $to could NOT be confirmed stopped: stop it by hand now (docker compose stop; docker ps), since a restart would run the new version on the data it may have changed. Then, $reason"
 		log "blocked: $reason"
 		notify || true
 		exit 1
@@ -1075,11 +1114,13 @@ if new_server_started; then
 	# guess about it is safe, so nothing is undone: the stack is stopped (and can't restart by
 	# itself), and a person restores.
 	log "the update failed after the new server started ($cause): stopping"
-	restore="restore the backup $backup by hand, in the data volume '$volume' (deploy/INSTALL.md, Rollback; docs/install.md#upgrade-and-rollback), then run taskto-update --clear-block"
+	restore="restore the backup $backup by hand, in the data volume '$volume'${subpath:+ (its subpath '$subpath')} (deploy/INSTALL.md, Rollback; docs/install.md#upgrade-and-rollback), then run taskto-update --clear-block"
 	if stop_stack; then
-		halt stopped stopped "$to started and then failed ($cause). The stack is stopped, its containers' restart policies are turned off (docker update --restart=no; the Rollback's steps remove the containers and step 9 makes them again, with the Compose file's restart policies), and nothing was rolled back, since the new version may have changed the data: $restore.$policy_note"
+		off=""
+		[ -z "$policy_off" ] || off=", its containers' restart policies are turned off (docker update --restart=no; the Rollback's steps remove the containers and step 9 makes them again, with the Compose file's restart policies)"
+		halt stopped stopped "$to started and then failed ($cause). The stack is stopped$off, and nothing was rolled back, since the new version may have changed the data: $restore.$policy_note"
 	fi
-	halt stop-failed stopped "$to started and then failed ($cause), and the stack could NOT be confirmed stopped: stop it by hand now (docker compose stop; docker ps), since a restart would run the new version on the data it may have changed. Nothing was rolled back: $restore.$policy_note"
+	halt stop-failed stop-failed "$to started and then failed ($cause), and the stack could NOT be confirmed stopped: stop it by hand now (docker compose stop; docker ps), since a restart would run the new version on the data it may have changed. Nothing was rolled back: $restore.$policy_note"
 fi
 log "the update failed before the new server started ($cause): putting $from back"
 # The way back first; what is written about the failure comes after, and never stops it. The

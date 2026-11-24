@@ -1214,7 +1214,10 @@ migrations, and an older one can't read what a newer one wrote.
   keeps the transaction record, and reports `stopped` loudly: the status, the journal and the
   notification say which backup to restore, and in which data volume (the one recorded in the
   transaction, never a name assumed). If it can't confirm that nothing runs, the result is
-  `stop-failed`, not `stopped`, and says to stop the stack by hand now. The containers' restart
+  `stop-failed`, not `stopped`, and says to stop the stack by hand now; the record keeps that
+  phase, so each blocked night repeats the instruction until you clear the stop. If the
+  restart policies couldn't be turned off (or the containers couldn't be listed to do it), the
+  report says so, and never that they are off. The containers' restart
   policies stay off until they are made again: the Rollback's steps remove the containers and
   step 9 makes them again, with the Compose file's policies. It does
   **not** restore data, empty or copy a volume, or put anything back: it can't know what the
@@ -1258,8 +1261,10 @@ night after a stop) the updater POSTs a small JSON body to it:
 Rocket.Chat, Discord's `/slack` address) show as the message. [ntfy](https://ntfy.sh) takes
 the body as the message (it shows the JSON; put its topic in the address). Anything that
 accepts a JSON POST works, and `result`, `from`, `to`, `reason` and `backup` are the generic
-format. The address is read from the file and given to `curl` on its standard input, never in
-a command line (`ps` can't show it), and never logged; a notification has a short timeout
+format. An `https://` address is the one to use: the address, which may hold a secret, and the
+message are sent as they are, so an `http://` one (accepted, for a receiver on a network you
+trust) sends them in the clear. The address is read from the file and given to `curl` on its
+standard input, never in a command line (`ps` can't show it), and never logged; a notification has a short timeout
 (5 s to connect, 10 s in all), is best effort, and never changes the outcome: a webhook that is
 down only leaves "the notification wasn't delivered" in the journal.
 

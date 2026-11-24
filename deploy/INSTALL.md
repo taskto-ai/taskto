@@ -1144,7 +1144,8 @@ sudo install -m 600 -o root -g root /dev/null /etc/taskto/update-notify-url
 sudoedit /etc/taskto/update-notify-url   # the one line: https://ntfy.sh/your-topic
 ```
 
-It is optional, so no check here depends on it; the format is in
+Use an `https://` address: an `http://` one (accepted, for a receiver on a network you trust)
+sends the address, secret included, and the message in the clear. It is optional, so no check here depends on it; the format is in
 [docs/install.md](../docs/install.md#when-an-update-fails).
 
 To hold updates for a while, make `/etc/taskto/update.hold` on the VM (`touch`), and remove it
@@ -1303,24 +1304,40 @@ the one that failed (a failed release isn't tried again by itself, but a newer o
 `touch /etc/taskto/update.hold` on the VM.
 
 1. Set `TASKTO_VERSION` back in `~/.config/taskto-install.env`, and run steps 0, 1, 6, 7 and 8.
-2. Replace the data with the backup, on the VM. `BACKUP` is the file the report names, and
-   `VOLUME` is the data volume the update recorded (the report names it too: it is `.volume` in
-   `/var/lib/taskto-update/transaction`; it is the server's own volume, whatever its name).
-   For a rollback with no such record, `VOLUME` is the volume the server has at `/data`:
-   `docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}'
-   "$(docker compose ps -aq taskto)"`.
+2. Replace the data with the backup, on the VM. `BACKUP` is the file the report names. The
+   data is the volume the update recorded (`.volume` in `/var/lib/taskto-update/transaction`,
+   and `.subpath` when `/data` is a subdirectory of it; the report names them too), whatever
+   its name. With no such record, the volume (and the subpath, if there is one) is the one the
+   server's container has at `/data`, which the script looks up; if that can't be told either,
+   set `VOLUME` (and `SUBPATH`) yourself. The volume is never removed: it may hold more than
+   the data (a subpath leaves its other directories alone), and Docker can't mount a subpath
+   that isn't there. The data in place is copied to a volume of its own, emptied, and the backup
+   restored into it, where the server mounts it.
 
    ```sh
    . ~/.config/taskto-install.env
    vm <<'EOF'
    BACKUP=/var/backups/taskto/before-update-from-v0.1.0-20260101-030405.tar.gz
    cd /srv/taskto
-   VOLUME=$(jq -r '.volume // empty' /var/lib/taskto-update/transaction)
-   [ -n "$VOLUME" ] || { echo "FAIL: no recorded data volume: set VOLUME to the server's /data volume"; exit 1; }
+   VOLUME= SUBPATH=   # only for a rollback with no record, when the lookup below can't tell
+   TX=/var/lib/taskto-update/transaction
+   RECORDED=$(jq -r '.volume // empty' "$TX" 2>/dev/null || true)
+   if [ -n "$RECORDED" ]; then
+     VOLUME=$RECORDED
+     SUBPATH=$(jq -r '.subpath // empty' "$TX")
+   fi
+   if [ -z "$VOLUME" ]; then
+     server=$(docker compose ps -aq taskto)
+     VOLUME=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$server")
+     SUBPATH=$(docker inspect --format '{{range .HostConfig.Mounts}}{{if eq .Target "/data"}}{{with .VolumeOptions}}{{.Subpath}}{{end}}{{end}}{{end}}' "$server")
+   fi
+   [ -n "$VOLUME" ] || { echo "FAIL: no data volume: set VOLUME (and SUBPATH) to the server's /data"; exit 1; }
    [ -s "$BACKUP" ] || { echo "FAIL: no $BACKUP"; exit 1; }
+   DATA="type=volume,src=$VOLUME,dst=/data${SUBPATH:+,volume-subpath=$SUBPATH}"
+   KEPT="${VOLUME}_rolled_back_$(date +%Y%m%d%H%M%S)"
    docker compose down
-   docker run --rm </dev/null -v "$VOLUME":/from -v "${VOLUME}_rolled_back_$(date +%Y%m%d%H%M%S)":/to alpine cp -a /from/. /to/
-   docker volume rm "$VOLUME"
+   docker run --rm </dev/null --mount "$DATA" -v "$KEPT":/to alpine cp -a /data/. /to/
+   docker run --rm </dev/null --mount "$DATA" alpine find /data -mindepth 1 -maxdepth 1 -exec rm -rf {} +
    docker compose run --rm --no-deps -T taskto restore - < "$BACKUP"
    EOF
    ```

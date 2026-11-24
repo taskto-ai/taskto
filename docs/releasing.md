@@ -25,24 +25,28 @@ GitHub-hosted runner, the inputs reaching shell commands only as environment var
    `actions: write` to start the images, and no other permission;
 4. creates the GitHub Release for that tag (`--verify-tag`) with the notes, and the line
    `manual-upgrade: true` first when **manual_upgrade** is ticked, so the marker is in the
-   release from the moment it is published and no server can see it without; the generated
-   list of pull requests follows the notes;
+   release from the moment it is published and no server can see it without; an ordinary
+   release has the generated list of pull requests after the notes (a **manual_upgrade**
+   release is published with the notes you gave and the marker, and no generated list);
 5. starts the Images workflow on the tag, which publishes `ghcr.io/<owner>/taskto`,
    `taskto-cli-worker` and `taskto-backup` with the tag (`.github/workflows/images.yml`),
    each labelled with the commit it was built from.
 
 Servers don't take the release before step 5 has finished: a release whose images aren't
 there yet doesn't count, and they look again the next night. Everything a server installs is
-taken from that one commit, and it refuses images that aren't labelled with it. A tag is never
-created twice, so a version's images never change; a mistake is fixed with the next version,
-never by moving a tag.
+taken from that one commit, and it refuses images that aren't labelled with it. Git's own
+reference creation stops a second tag of the same name, and the Images workflow skips an
+image the registry already has, so a rerun doesn't push it again. That second check isn't
+atomic: two Images runs for one tag that overlap could both push, so don't start Images by
+hand for a tag whose run is still going. A mistake is fixed with the next version, never by
+moving a tag.
 
 The first time, set each of the three packages to public in its settings
 ([install.md](install.md#prebuilt-images)): a server pulls them without a login.
 
 ## Edit the notes
 
-The generated notes list the pull requests. Add what a person running a server should know,
+An ordinary release's notes end with the generated list of pull requests. Add what a person running a server should know,
 in the **notes** input when you cut it, or by editing the release after. Don't publish a draft
 or tick **pre-release** for a version you want servers to take: drafts and pre-releases are
 never installed automatically (a pre-release is the way to let someone try a candidate with
@@ -67,7 +71,10 @@ The updater doesn't install that release, nor any later one while this install i
 it: it records why in its status and the journal, and waits. It reads every page of the
 release list down to the installed version, so a marker is never missed, and if a page can't
 be read it installs nothing. The operator follows the notes and then runs `taskto-update --to
-<version>`, which installs the version they name, past the marker.
+<version>`, which installs the version they name, past the marker. It goes past every marker
+between the installed version and that one, not only the one the skip message names: when
+several releases in between are marked, the operator reviews and completes the steps of each
+of them (their notes) before running the command.
 
 A change to `deploy/worker-firewall.sh` needs no marker: the updater sees it itself, skips the
 release and tells the operator to update the firewall by hand (runbook step 8) first.

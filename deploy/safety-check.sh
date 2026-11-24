@@ -85,7 +85,7 @@ if [ "$mode" = static ]; then
 	# No development switch and no secret in either environment (names only are shown); the
 	# server's own environment has the CLI workers in container mode.
 	bad=$(jq -r '[.services.taskto, .services["cli-worker"]] | .[] | (.environment // {}) | to_entries[]
-		| select(((.key + "=" + ((.value // "") | tostring)) | test("INSECURE|UNSAFE|TOKEN|SECRET|PASSWORD|API_KEY"; "i")) and .key != "TASKTO_DISABLE_PASSWORD_LOGIN") | .key' <<<"$cfg")
+		| select((.key | test("INSECURE|UNSAFE|TOKEN|SECRET|PASSWORD|API_KEY"; "i")) and .key != "TASKTO_DISABLE_PASSWORD_LOGIN") | .key' <<<"$cfg")
 	[ -z "$bad" ] || fail "a development switch or a secret is in a container's environment: $(tr '\n' ' ' <<<"$bad")"
 	t taskto '.services.taskto.environment.TASKTO_CLI_WORKERS == "container"' || fail "CLI workers aren't in container mode"
 
@@ -143,7 +143,9 @@ suid=$(c exec -T cli-worker find / -xdev -perm /6000 -type f 2>/dev/null || true
 # No development switch and no secret in either environment (names only are shown).
 senv=$(jq -r '.[0].Config.Env[]?' <<<"$si")
 wenv=$(jq -r '.[0].Config.Env[]?' <<<"$wi")
-bad=$(printf '%s\n%s\n' "$senv" "$wenv" | grep -v '^TASKTO_DISABLE_PASSWORD_LOGIN=' | grep -iE 'INSECURE|UNSAFE|TOKEN|SECRET|PASSWORD|API_KEY' | cut -d= -f1 || true)
+# The rule is about names: a value that is a file's path (TASKTO_SSO_PROVIDERS=/run/secrets/sso.json)
+# is not a secret in the environment.
+bad=$(printf '%s\n%s\n' "$senv" "$wenv" | grep -v '^TASKTO_DISABLE_PASSWORD_LOGIN=' | cut -d= -f1 | grep -iE 'INSECURE|UNSAFE|TOKEN|SECRET|PASSWORD|API_KEY' || true)
 [ -z "$bad" ] || fail "a development switch or a secret is in a container's environment: $(tr '\n' ' ' <<<"$bad")"
 # The server's own environment, not the worker's.
 grep -qx 'TASKTO_CLI_WORKERS=container' <<<"$senv" || fail "CLI workers aren't in container mode"
