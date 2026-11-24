@@ -53,14 +53,16 @@ reproduced below with their copyright lines.
   for (const name of FONT_PACKAGES) parts.push(packageNotice(root, name))
   parts.push(`
 The code reader that scans barcodes and QR codes with the camera, where the browser has none of its
-own, is loaded from the files beside this one (zxing_reader-*.wasm and its loader). It is made of:
+own, is loaded from the files beside this one (zxing_reader-*.wasm and its loader), and so is the
+writer that draws the QR code for turning on two-factor login (zxing_writer-*.wasm and its loader).
+They are made of:
 `)
   for (const name of PACKAGES) parts.push(packageNotice(root, name))
   parts.push(`${rule}
 ZXing-C++ (Apache-2.0), https://github.com/zxing-cpp/zxing-cpp
 ${rule}
 
-The decoder's .wasm file is ZXing-C++ compiled to WebAssembly by zxing-wasm. ZXing-C++ is
+The reader's and the writer's .wasm files are ZXing-C++ compiled to WebAssembly by zxing-wasm. ZXing-C++ is
 copyrighted by its authors and licensed under the Apache License, Version 2.0, reproduced below;
 the project's own notices are in its source repository, named above. It is used unmodified.
 

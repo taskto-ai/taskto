@@ -104,6 +104,13 @@ pictures and stored values, and not the hardware. The position and the camera al
 
 ## For agents
 
-The agent has no tool to install a template: it builds apps with `create_app` and `update_app`,
-and the bundled templates' definitions are good examples to ask it for. Whatever it saves is a
-draft; only a person with the publish capability publishes.
+The agent has `list_app_templates`, `install_app_template` and `duplicate_app`
+([agent-tools.md](agent-tools.md#the-tools)), which do what the routes above do for the
+conversation's owner and with exactly their access: a new **draft**, never published, with no
+records, roles or secrets of a source, and effect targets the owner can't write cleared. A
+template's own role assignments go to the owner as the template defines, and the agent has no
+tool to choose or change roles; `show_app_roles` only reads them. Only a person with the publish
+capability publishes. It can also read an app's effects, releases and roles to diagnose it
+(`list_app_effects`, `list_app_releases`, `show_app_roles`), as far as the owner's own roles let
+them. The agent still builds apps of its own with `create_app` and `update_app`, and the bundled
+templates' definitions are good examples to ask it for.

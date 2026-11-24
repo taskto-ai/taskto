@@ -19,6 +19,7 @@ import (
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/notifications"
+	"taskto.ai/taskto/internal/quota"
 )
 
 // The transactional outbox of an app's effects.
@@ -849,6 +850,9 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 		return nil, refuse(apierr.CodeAppEffectInvalid)
 	case errors.Is(err, knowledge.ErrReadOnly):
 		return nil, refuse(apierr.CodeAppEffectTargetAccess)
+	case errors.Is(err, quota.ErrExceeded):
+		// Final, and said as what it is: a retry fits once someone makes room.
+		return nil, refuse(apierr.CodeAppEffectQuota)
 	case errors.Is(err, knowledge.ErrRepoFull):
 		return nil, refuse(apierr.CodeAppEffectInvalid)
 	}

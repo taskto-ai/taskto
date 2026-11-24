@@ -322,7 +322,7 @@
   },
   {
     "name": "list_boards",
-    "description": "List a space's boards: its personal board, or its team boards.",
+    "description": "List a space's boards: its personal board, or its team boards. archived: true includes the archived ones (their archived_at is set), which come last. When there are more boards than fit, truncated is true and next is the after of the next page (send the same archived).",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -331,6 +331,15 @@
           "type": "integer",
           "minimum": 1,
           "description": "the space, from list_spaces"
+        },
+        "archived": {
+          "type": "boolean",
+          "description": "include archived boards (default false)"
+        },
+        "after": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the next of the previous page: list the boards after this one"
         }
       },
       "required": ["space_id"],
@@ -718,7 +727,7 @@
   },
   {
     "name": "comment_card",
-    "description": "Add a comment to a card's thread.",
+    "description": "Add a comment to a card's thread. To tell a person, mention them with @[Name](user:ID), the ID from list_members and Name their name without any [, ] or \\ (leave those out, or the mention doesn't count); the card's assignee is told of every comment too, unless they wrote it or can't read the space.",
     "read_only": false,
     "input_schema": {
       "type": "object",
@@ -795,6 +804,131 @@
         }
       },
       "required": ["space_id", "board_id", "card_id", "version", "reason"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "create_board",
+    "description": "Add a team board to a shared space (a private space has only its personal board). Returns the board, with the id and version the other board tools take.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "a shared space, from list_spaces"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "the board's name"
+        }
+      },
+      "required": ["space_id", "name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "update_board",
+    "description": "Rename a board, or archive or unarchive it (archived: true takes it off list_boards and makes it read-only; archived: false brings it back). A personal board can be renamed but not archived. An archived board takes no change until it is unarchived, except a rename sent together with archived: false.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards (archived: true for archived ones)"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the board you last read; if it changed since, the call fails: read it again first"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": ["space_id", "board_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "archive_card",
+    "description": "Archive a card: it leaves the board's columns, remembering its column, and shows only in list_cards with column \"archived\". Undo it with restore_card.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the card you last read; if it changed since, the call fails: read it again first"
+        }
+      },
+      "required": ["space_id", "board_id", "card_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "restore_card",
+    "description": "Bring an archived card back, last in the column it was archived from, or in column if given. Find archived cards with list_cards and column \"archived\".",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the card you last read; if it changed since, the call fails: read it again first"
+        },
+        "column": {
+          "enum": ["backlog", "todo", "doing", "review", "done"]
+        }
+      },
+      "required": ["space_id", "board_id", "card_id", "version"],
       "additionalProperties": false
     }
   },
@@ -1774,6 +1908,189 @@
         }
       },
       "required": ["space_id", "app_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_app_templates",
+    "description": "List the bundled starter templates for apps: id, name, description, whether installing one needs a board (needs_board: its effects make cards on one), the phone hardware it uses (captures), the role assignments an install makes (roles) and the Home widgets it offers. Install one with install_app_template.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "install_app_template",
+    "description": "Install a starter template as a new app in a space the user may write. It is saved as a DRAFT only: nothing is published and no records come with it; a person who may publish the app launches it, in the Apps page. If the template has roles, the user gets them (and, if it says so, the space's other members its default) as the template defines; the agent cannot choose or change roles. A template with needs_board takes the board its effects make cards on, which the user must be able to write.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space the app is made in, from list_spaces"
+        },
+        "template_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "the template, from list_app_templates"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "the app's name; the template's if left out"
+        },
+        "board": {
+          "type": "object",
+          "properties": {
+            "space_id": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "the space of the board, from list_spaces"
+            },
+            "board_id": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "the board, from list_boards"
+            }
+          },
+          "required": ["space_id", "board_id"],
+          "additionalProperties": false,
+          "description": "required when the template has needs_board, refused when it doesn't: the board its effects make cards on"
+        }
+      },
+      "required": ["space_id", "template_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "duplicate_app",
+    "description": "Copy an app's definition into a new app, saved as a DRAFT: no rows, attachments, releases, role assignments or secrets come with it, nothing is published, and the copy is independent of the original. An effect that aims at a board the user can't write comes with no board chosen, and the copy can't be published until a person chooses one. The user must be able to see the source and write the destination.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space of the app to copy, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app to copy, from list_apps"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "the copy's name; the original's if left out"
+        },
+        "destination_space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space of the copy, in the same workspace; the original's if left out"
+        },
+        "source": {
+          "enum": ["live", "draft"],
+          "description": "which definition to copy: the live release people use, or the draft being edited (for people who may design or publish the app). Left out: the draft for them, the live release for others"
+        }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_app_effects",
+    "description": "List an app's effects (the cards and documents its actions make on boards and in the knowledge base), newest first, for diagnosing: each has its status (pending, running, done, failed), attempts, why it failed (error code) and what it made. Only the effects of records the user may read are listed. active and failed count all that wait or failed. When more is true, pass the last id shown as before for older ones. Retrying a failed effect is for the person who acted, in the web app.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        },
+        "status": {
+          "enum": ["pending", "running", "done", "failed", "active"],
+          "description": "only effects in this state; active is pending and running"
+        },
+        "record": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "only the effects of this row"
+        },
+        "before": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "only effects older than this effect id, to read on past a page"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "at most this many (default 100); a reply too long is cut shorter"
+        }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_app_releases",
+    "description": "List an app's releases, newest first, without their definitions: number, when and by whom it was published, whether it is the live one, and what a client needs to draw it. For people who may design or publish the app. Rolling back is for a person, in the web app.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        },
+        "before": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the release number to page from: only older releases come back; use the next of a truncated reply"
+        }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "show_app_roles",
+    "description": "Show who holds which role in an app: grants, each for one user (user_id, from list_members) or for everyone else in the space (user_id null), and every role there is. Read-only, and for people who manage the app's roles: the agent has no tool to change roles.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        }
+      },
+      "required": ["space_id", "app_id"],
       "additionalProperties": false
     }
   },

@@ -34,7 +34,7 @@
 //   is no longer one): needs attention as a schema problem; the input is kept for repair
 
 import { ApiError, api, forAccount, SESSION_LOST } from '../api'
-import { UploadCancelled, uploadPhoto } from '../apps/photos'
+import { storageFull, UploadCancelled, uploadPhoto } from '../apps/photos'
 import {
   type Attachment,
   type AttentionReason,
@@ -111,6 +111,9 @@ export function classify(e: unknown, kind: ChangeKind = 'insert', restoring = fa
   const { status, code } = e
   if (code === ACCOUNT_CHANGED) return { kind: 'account' }
   if (status === 401) return { kind: 'paused' }
+  // The storage is used up: a retry fails the same way until someone makes room, so it is for the
+  // person to settle (the server's refusal is shown, translated), not tried again on a timer.
+  if (storageFull(e)) return { kind: 'attention', reason: 'refused', error }
   if (status >= 500 || status === 408 || status === 425 || status === 429) return { kind: 'transient', error }
   if (code === 'app_attachment_bad' || code === 'app_upload_state') return { kind: 'attention', reason: 'photo', error }
   if (code === 'app_record_conflict' && status === 409) {

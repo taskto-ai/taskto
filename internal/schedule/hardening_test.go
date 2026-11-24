@@ -660,3 +660,43 @@ func TestTheBackoffStaysAtItsCeilingForManyTries(t *testing.T) {
 		t.Fatalf("job = %+v after %d calls, want failed after 40", got, h.count())
 	}
 }
+
+// A write whose context ends inside its transaction is rolled back before write returns, so no
+// connection is left busy for the next writer or for closing the database.
+func TestWriteCancelledInsideItsTransactionLeavesNoConnectionBusy(t *testing.T) {
+	w := newWorld(t)
+	for range 200 {
+		ctx, cancel := context.WithCancel(context.Background())
+		err := w.s.write(ctx, func(tx *sql.Tx) error {
+			cancel()
+			_, err := tx.ExecContext(ctx, `INSERT INTO workspaces (name) VALUES ('Cancelled')`)
+			return err
+		})
+		if err == nil {
+			t.Fatal("a write cancelled inside its transaction succeeded")
+		}
+		if inUse := w.db.Stats().InUse; inUse != 0 {
+			t.Fatalf("%d connections still busy after write returned", inUse)
+		}
+	}
+}
+
+// A write whose caller gave up after its last statement is rolled back, not committed.
+func TestWriteCancelledAfterItsLastStatementIsRolledBack(t *testing.T) {
+	w := newWorld(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	err := w.s.write(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO workspaces (name) VALUES ('Late')`); err != nil {
+			return err
+		}
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("write = %v, want context.Canceled", err)
+	}
+	var n int
+	if err := w.db.QueryRow(`SELECT count(*) FROM workspaces WHERE name = 'Late'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("workspaces = %d, %v; want the write rolled back", n, err)
+	}
+}

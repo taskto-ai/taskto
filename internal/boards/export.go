@@ -37,7 +37,7 @@ func (s *Service) ExportCards(ctx context.Context, userID, spaceID, boardID int6
 			return err
 		}
 		for _, id := range ids {
-			t, err := s.getThread(ctx, sp, boardID, id)
+			t, err := s.getThread(ctx, sp, Actor{UserID: userID}, boardID, id)
 			if errors.Is(err, ErrNotFound) {
 				continue
 			}

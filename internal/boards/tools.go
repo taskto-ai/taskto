@@ -25,13 +25,61 @@ func (s *Service) space(ctx context.Context, a Actor, spaceID int64) (access.Spa
 }
 
 // ListBoards lists a space's boards that aren't archived: its personal board, or its team
-// boards, by name.
+// boards, by name. ListAllBoards includes the archived ones.
 func (s *Service) ListBoards(ctx context.Context, a Actor, spaceID int64) ([]Board, error) {
 	sp, err := s.space(ctx, a, spaceID)
 	if err != nil {
 		return nil, err
 	}
 	return s.listBoards(ctx, sp, false)
+}
+
+// ListAllBoards lists a space's boards with the archived ones, which come last.
+func (s *Service) ListAllBoards(ctx context.Context, a Actor, spaceID int64) ([]Board, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return s.listBoards(ctx, sp, true)
+}
+
+// CreateBoard adds a team board to a shared space.
+func (s *Service) CreateBoard(ctx context.Context, a Actor, spaceID int64, name string) (Board, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return Board{}, err
+	}
+	return s.createBoard(ctx, sp, a, name)
+}
+
+// UpdateBoard renames, archives or unarchives a board: ch.Version must be its current
+// version, or ErrStale.
+func (s *Service) UpdateBoard(ctx context.Context, a Actor, spaceID, boardID int64, ch BoardChanges) (Board, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return Board{}, err
+	}
+	return s.updateBoard(ctx, sp, a, boardID, ch)
+}
+
+// ArchiveCard moves a card to the archive, remembering its column: version must be the
+// card's current version, or ErrStale.
+func (s *Service) ArchiveCard(ctx context.Context, a Actor, spaceID, boardID, cardID, version int64) (Card, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return Card{}, err
+	}
+	return s.archiveCard(ctx, sp, a, boardID, cardID, version)
+}
+
+// RestoreCard puts an archived card back, last in column, or in the column it was
+// archived from if column is "": version must be the card's current version, or ErrStale.
+func (s *Service) RestoreCard(ctx context.Context, a Actor, spaceID, boardID, cardID, version int64, column Column) (Card, error) {
+	sp, err := s.space(ctx, a, spaceID)
+	if err != nil {
+		return Card{}, err
+	}
+	return s.restoreCard(ctx, sp, a, boardID, cardID, version, column)
 }
 
 // ListCards lists the cards of a board that f selects, in board order.
@@ -49,7 +97,7 @@ func (s *Service) ShowCard(ctx context.Context, a Actor, spaceID, boardID, cardI
 	if err != nil {
 		return Thread{}, err
 	}
-	return s.getThread(ctx, sp, boardID, cardID)
+	return s.getThread(ctx, sp, a, boardID, cardID)
 }
 
 // CreateCard adds a card to a board.

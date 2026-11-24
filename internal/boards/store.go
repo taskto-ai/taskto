@@ -518,7 +518,7 @@ func (s *Service) listCards(ctx context.Context, sp access.Space, boardID int64,
 
 var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
-func (s *Service) getThread(ctx context.Context, sp access.Space, boardID, cardID int64) (Thread, error) {
+func (s *Service) getThread(ctx context.Context, sp access.Space, a Actor, boardID, cardID int64) (Thread, error) {
 	if err := may(sp, access.Read); err != nil {
 		return Thread{}, err
 	}
@@ -539,7 +539,16 @@ func (s *Service) getThread(ctx context.Context, sp access.Space, boardID, cardI
 		}
 		t.Comments = append(t.Comments, cm)
 	}
-	return t, rows.Err()
+	if err := rows.Err(); err != nil {
+		return Thread{}, err
+	}
+	if err := s.mentionedPeople(ctx, sp, a.UserID, t.Comments); err != nil {
+		if errors.Is(err, access.ErrNotFound) {
+			return Thread{}, ErrNotFound // the reader lost the space meanwhile
+		}
+		return Thread{}, err
+	}
+	return t, nil
 }
 
 const commentColumns = `cc.id, cc.card_id, cc.author_id, coalesce(u.name, ''), cc.by_agent, cc.via, cc.body, cc.created_at
@@ -1089,10 +1098,39 @@ func (s *Service) comment(ctx context.Context, sp access.Space, a Actor, boardID
 			return err
 		}
 		id, err = res.LastInsertId()
-		return err
+		if err != nil {
+			return err
+		}
+		// Who is told is worked out here, under the write lock, so the card's assignee and who may
+		// read the space are as they are when the comment lands. The inbox checks again when it
+		// shows the notification.
+		tell, err := commentRecipients(ctx, tx, sp, a, boardID, cardID, body)
+		if err != nil {
+			return err
+		}
+		for _, r := range tell {
+			if err := notifications.Add(ctx, tx, notifications.Notice{
+				UserID: r.user, WorkspaceID: sp.WorkspaceID, Kind: r.kind,
+				Ref:       notifications.Ref{Space: sp.ID, Board: boardID, Card: cardID},
+				DedupeKey: "comment:" + strconv.FormatInt(id, 10),
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return Comment{}, err
 	}
-	return scanComment(s.db.QueryRowContext(ctx, `SELECT `+commentColumns+` WHERE cc.id = ?`, id))
+	cm, err := scanComment(s.db.QueryRowContext(ctx, `SELECT `+commentColumns+` WHERE cc.id = ?`, id))
+	if err != nil {
+		return Comment{}, err
+	}
+	// The comment is written: failing to name whom it mentions doesn't undo it, or make the writer
+	// send it again (and tell everyone twice). The names come with the next read.
+	one := []Comment{cm}
+	if err := s.mentionedPeople(ctx, sp, a.UserID, one); err != nil {
+		one[0].Mentions = []MentionedPerson{}
+	}
+	return one[0], nil
 }
