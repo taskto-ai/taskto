@@ -1852,6 +1852,15 @@
       "more": "More results",
       "inSpace": "{space} · {path}"
     },
+    "cards": {
+      "title": "Cards",
+      "label": "Cards found",
+      "in": "{space} · {board} · {column}",
+      "more": "More cards",
+      "searching": "Searching the boards’ cards…",
+      "failed": "The boards’ cards could not be searched: {error}",
+      "incomplete": "Some cards changed just now and are not in these results. Search again in a moment."
+    },
     "notice": {
       "embeddings_off": "Semantic search is off: no embeddings model is set for this workspace. These are full-text results.",
       "embeddings_failed": "The embeddings model didn't answer, so these are full-text results only.",
