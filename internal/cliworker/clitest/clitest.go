@@ -55,6 +55,9 @@ type Scenario struct {
 	Expired bool `json:"expired,omitempty"`
 	// RateLimits reports usage limits (Claude Code's rate_limit_event, Codex's rollout).
 	RateLimits bool `json:"rate_limits,omitempty"`
+	// Warn makes the fake print this line on stderr when it answers a status check, as a
+	// runtime or a CLI does with a warning: its answer on stdout must still be read.
+	Warn string `json:"warn,omitempty"`
 	// Fail makes the turn fail with this message.
 	Fail string `json:"fail,omitempty"`
 	// Garbage prints lines that aren't JSON among the events.
@@ -101,26 +104,41 @@ var credentials = map[string]string{"claude": ".credentials.json", "codex": "aut
 // otherwise it returns.
 func Main() {
 	if len(os.Args) > 1 && os.Args[1] == cliworker.HelperArg {
-		exit(cliworker.RunHelper())
+		if filepath.Base(os.Args[0]) == noisyHelperName {
+			fmt.Fprintln(os.Stderr, HelperWarning)
+		}
+		os.Exit(cliworker.RunHelper())
 	}
 	if len(os.Args) > 1 && os.Args[1] == cliworker.ApproveArg {
-		exit(cliworker.RunApprove(os.Args[2:]))
+		os.Exit(cliworker.RunApprove(os.Args[2:]))
 	}
 	name := filepath.Base(os.Args[0])
 	if _, ok := names[name]; !ok {
 		return
 	}
-	exit(run(name, os.Args[1:]))
+	os.Exit(run(name, os.Args[1:]))
 }
 
-// exit ends a process that is a fake, the helper or the permission hook. It is not os.Exit:
-// in a test binary built with -cover, os.Exit prints "warning: GOCOVERDIR not set, no
-// coverage data emitted" on stderr, and the worker reads a command's stderr along with its
-// stdout (the helper's JSON answers, a CLI's status), so under `go test -cover` every one of
-// these processes would spoil its own output. These processes have no coverage directory to
-// write to, so nothing is lost by leaving without the coverage exit hook.
-func exit(code int) {
-	syscall.Exit(code)
+// noisyHelperName is the name a helper that warns on stderr is run under (InstallNoisyHelper).
+const noisyHelperName = "taskto-noisy-helper"
+
+// HelperWarning is what a noisy helper prints on stderr before it answers.
+const HelperWarning = "warning: something the helper's runtime says on stderr"
+
+// InstallNoisyHelper puts in dir a helper that prints HelperWarning on stderr before it does
+// what it is asked, as a coverage build's runtime does on exit, and returns its path for
+// cliworker.Config.Helper. The helper's answers are on stdout, and must be read from there.
+func InstallNoisyHelper(t testing.TB, dir string) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, noisyHelperName)
+	if err := os.Symlink(exe, path); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // Install puts the fakes in dir and returns their paths, by CLI name.
@@ -657,6 +675,9 @@ func (f *fake) claudeAuth(cmd string) int {
 		fmt.Println("\nLogin successful.")
 		return 0
 	case "status":
+		if f.scenario.Warn != "" {
+			fmt.Fprintln(os.Stderr, f.scenario.Warn)
+		}
 		_, err := os.Stat(creds)
 		method := "none"
 		if err == nil {
