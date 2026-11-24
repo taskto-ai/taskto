@@ -209,7 +209,7 @@ func (s *Service) handleGetCard(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	t, err := s.getThread(r.Context(), req.space, req.board, req.card)
+	t, err := s.getThread(r.Context(), req.space, req.actor, req.board, req.card)
 	if err != nil {
 		fail(w, r, err)
 		return

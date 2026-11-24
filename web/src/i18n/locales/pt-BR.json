@@ -718,7 +718,10 @@
     "filterLabel": "Etiqueta",
     "allLabels": "Todas as etiquetas",
     "overdueOnly": "Só os atrasados",
-    "noMatches": "Nenhum cartão corresponde."
+    "noMatches": "Nenhum cartão corresponde.",
+    "mention": "Mencionar alguém",
+    "mentionPlaceholder": "Mencionar alguém…",
+    "mentionUnknown": "Alguém"
   },
   "errors": {
     "http": "O servidor respondeu {status}.",
@@ -2105,6 +2108,8 @@
       "card_assigned": "Um cartão foi atribuído a você: {title}",
       "card_due": "Vence em {due}: {title}",
       "card_overdue": "Atrasado desde {due}: {title}",
+      "card_comment": "Um cartão seu tem um novo comentário: {title}",
+      "card_mention": "Você foi mencionado em um comentário em um cartão: {title}",
       "app_effect_failed": "Uma ação em {app} não terminou e precisa que você tente de novo",
       "changed": "Algo mudou. Abra para ver o que você ainda pode ver."
     },
@@ -2112,6 +2117,8 @@
       "card_assigned": "Um cartão foi atribuído a você",
       "card_due": "Um cartão seu vence",
       "card_overdue": "Um cartão seu está atrasado",
+      "card_comment": "Um cartão seu tem um novo comentário",
+      "card_mention": "Você foi mencionado em um comentário",
       "app_effect_failed": "Uma ação de um app precisa da sua atenção",
       "changed": "Algo mudou"
     },
