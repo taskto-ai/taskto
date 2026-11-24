@@ -66,11 +66,11 @@ type Arrays<G, U, P extends string, Loose extends string, D extends unknown[]> =
   ? never
   : [U] extends [never]
     ? `${P}: the server sends an array`
-    : true extends IsTuple<U>
-      ? true extends IsTuple<G>
-        ? Elements<G, U, P, Loose, D>
-        : `${P}: the server sends a list of any length, and the web app's type is a tuple`
-      : Elements<G, U, P, Loose, D>
+    : false extends IsTuple<U> // some alternative of the web app's type is a list
+      ? Elements<G, U, P, Loose, D>
+      : false extends IsTuple<G>
+        ? `${P}: the server sends a list of any length, and the web app's type is a tuple`
+        : Elements<G, U, P, Loose, D>
 
 type Elements<G, U, P extends string, Loose extends string, D extends unknown[]> = [G] extends [readonly (infer GE)[]]
   ? [U] extends [readonly (infer UE)[]]
@@ -203,4 +203,7 @@ export type Selftest = [
   Is<Says<Check<Server, { tags: [string] }>, 'tags: the server sends a list of any length'>>,
   Is<Says<Check<Server, { tags: readonly [string, string] }>, 'tags: the server sends a list of any length'>>,
   Is<Check<{ pair: [string, string] }, { pair: [string, string] }>>,
+  // A list among the alternatives takes what the server sends.
+  Is<Check<Server, { tags: string[] | [number] }>>,
+  Is<Says<Check<Server, { tags: [number] | [string, string] }>, 'tags: the server sends a list of any length'>>,
 ]
