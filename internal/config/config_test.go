@@ -130,6 +130,23 @@ func TestFileStrings(t *testing.T) {
 	}
 }
 
+func TestStorageQuotasAreUnlimitedUntilSet(t *testing.T) {
+	if cfg := load(t, nil, nil); cfg.StorageQuotaWorkspace != 0 || cfg.StorageQuotaUser != 0 {
+		t.Fatalf("quotas by default = %d, %d; want none", cfg.StorageQuotaWorkspace, cfg.StorageQuotaUser)
+	}
+	file := writeConfig(t, "storage_quota_user = \"2 GiB\"")
+	cfg := load(t, []string{"-config", file, "-storage-quota-workspace", "100GiB"}, nil)
+	if cfg.StorageQuotaWorkspace != 100<<30 || cfg.StorageQuotaUser != 2<<30 {
+		t.Fatalf("quotas = %d, %d; want 100 GiB and 2 GiB", cfg.StorageQuotaWorkspace, cfg.StorageQuotaUser)
+	}
+	if cfg := load(t, nil, map[string]string{"TASKTO_STORAGE_QUOTA_USER": "512MiB"}); cfg.StorageQuotaUser != 512<<20 {
+		t.Fatalf("user quota from the environment = %d", cfg.StorageQuotaUser)
+	}
+	if _, err := Load([]string{"-storage-quota-user", "0"}, env(nil), io.Discard); err == nil {
+		t.Error("a quota of 0 is written by leaving it out: want an error")
+	}
+}
+
 func TestSizes(t *testing.T) {
 	file := writeConfig(t, "kb_max_file_size = \"2 MiB\"\nkb_large_file_size = \"1 MiB\"")
 	cfg := load(t, []string{"-config", file, "-kb-max-repo-size", "3GiB"}, map[string]string{"TASKTO_KB_MAX_UNVERSIONED_SIZE": "5GiB"})

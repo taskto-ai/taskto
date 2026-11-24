@@ -771,6 +771,27 @@ export type BackupStatus = {
 
 export const backupPath = (workspace: number) => `${ws(workspace)}/backup`
 
+// Storage quotas and what each space stores (docs/quotas.md), in bytes. A limit of 0 is none.
+export type StorageLimits = { workspace: number; user: number }
+export type SpaceUsage = {
+  id: number
+  kind: 'private' | 'shared'
+  name: string
+  // For a private space: whose it is.
+  owner?: { id: number; name: string; email: string }
+  knowledge_versioned: number
+  knowledge_unversioned: number
+  attachments: number
+  total: number
+  // The quota of the space itself: the private space's, 0 for a shared one.
+  limit: number
+}
+// What admins read: every space of the workspace.
+export type StorageReport = { quota: StorageLimits; total: number; spaces: SpaceUsage[] }
+// What a member reads: their own private space (null if they have none here).
+export type MyStorage = { quota: StorageLimits; space: SpaceUsage | null }
+export const usagePath = (workspace: number) => `${ws(workspace)}/usage`
+
 // Starts an export of what the caller owns in the workspace (docs/api.md#export-my-data): a POST that
 // answers `{download, expires_in}`, the address to go to for the zip, which works once.
 export const exportPath = (workspace: number) => `${ws(workspace)}/export`

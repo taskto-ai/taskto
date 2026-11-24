@@ -226,6 +226,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `doc_delete_folder` | 400 | `path` is a folder: delete its documents. |
 | `file_too_large` | 413 | `path` is over the limit of `max` bytes. |
 | `knowledge_full` | 507 | The space's knowledge base is full. |
+| `quota_workspace` | 507 | The write would take the workspace over its storage quota of `max_mib` MiB. |
+| `quota_user` | 507 | The write would take the private space over its storage quota of `max_mib` MiB. |
+| `quota_unavailable` | 503 | The storage in use couldn't be measured; the write was refused, and trying again may work. |
 | `doc_not_kept` | 410 | Only the current version of an unversioned file is kept. |
 | `search_query_required` | 400 | A search needs something to search for. |
 | `search_query_too_long` | 400 | A search is at most `max` bytes of text. |
@@ -955,6 +958,11 @@ the caller can't read is `404` on every route.
   (`kb_max_unversioned_size`, `507` over it); deleting or replacing one frees its bytes.
   A `.md` file whose bytes aren't UTF-8 (an upload renamed to `.md`) reads back in
   `content_base64`, like an upload.
+- **Storage quotas.** Besides these limits of a space, the operator may set a storage quota
+  for each workspace and for each member's private space ([Storage usage](#storage-usage),
+  [quotas.md](quotas.md)). A write that adds content and wouldn't fit is `507` with
+  `quota_workspace` or `quota_user`; deleting, moving and restoring add none, so they are
+  never refused for it.
 
 A document as listed:
 
@@ -2629,7 +2637,7 @@ close to the write as the data allows: inside the transaction that makes or move
 the write lock), and for a document **while the space's write lock is held**, right before the commit,
 so a right withdrawn while the entry waited for the lock stops it. Other
 failures with a code of their own (`app_effect_target_gone`, `app_effect_board_offline`,
-`app_effect_invalid`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
+`app_effect_invalid`, `app_effect_quota`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
 `app_effect_app_offline`) fail at once too; a failure that may pass (the database was busy, a card
 being changed) is tried again after 5 s, 10 s, 20 s…, at most 5 tries in all (a worker that died on
 the last try doesn't give an entry another: its lease running out fails it), and then is failed
@@ -3436,6 +3444,56 @@ backup host:
 
 ```json
 {"status": "ok", "last_success": "2026-03-10T03:16:40Z", "due_by": "2026-03-11T10:15:00Z"}
+```
+
+## Storage usage
+
+What each space stores, and the operator's storage quotas ([quotas.md](quotas.md)). Sizes
+are in bytes; a quota of `0` is none, which is what a server has until its operator sets
+one (`-storage-quota-workspace`, `-storage-quota-user`). Both routes take a browser session,
+not an access token. The figures are the ones the server keeps as it writes: reading them
+walks nothing in git.
+
+### `GET /api/workspaces/{workspace}/usage`
+
+Admins. Every space of the workspace, and only that workspace's: the shared spaces and each
+member's private space, with its owner.
+
+```json
+{
+  "quota": {"workspace": 107374182400, "user": 10737418240},
+  "total": 123456789,
+  "spaces": [
+    {
+      "id": 4, "kind": "private", "name": "Private",
+      "owner": {"id": 7, "name": "Bob", "email": "bob@example.com"},
+      "knowledge_versioned": 1048576,
+      "knowledge_unversioned": 52428800,
+      "attachments": 3145728,
+      "total": 56623104,
+      "limit": 10737418240
+    },
+    {"id": 2, "kind": "shared", "name": "Team", "knowledge_versioned": 2097152,
+     "knowledge_unversioned": 0, "attachments": 0, "total": 2097152, "limit": 0}
+  ]
+}
+```
+
+`knowledge_versioned` is what git keeps of the space's knowledge base, every version
+included; `knowledge_unversioned` the bytes of its [unversioned files](#unversioned-files);
+`attachments` the apps' photos, thumbnails included, with the uploads on their way at the
+size they declared. `limit` is the quota of the space itself: the private space's, and `0`
+for a shared one, which only the workspace's quota bounds. `total` is the sum over all the
+spaces, the figure the workspace's quota is checked against. A member gets `403 admin_only`;
+someone who isn't in the workspace, `404 workspace_not_found`.
+
+### `GET /api/workspaces/{workspace}/usage/me`
+
+Any member. Their own private space in the workspace, in the same shape (`space` is `null`
+if they have none), and the quotas. It says nothing of any other member's.
+
+```json
+{"quota": {"workspace": 0, "user": 10737418240}, "space": {"id": 4, "kind": "private", "…": "…"}}
 ```
 
 ## Setup checklist

@@ -3667,3 +3667,15 @@ html[data-keyboard="open"] .tt-composer {
 .tt-installed {
   max-inline-size: 42rem;
 }
+
+.tt-storage-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-block-start: 0.25rem;
+}
+
+.tt-storage-meter progress {
+  inline-size: 100%;
+  max-inline-size: 24rem;
+}
