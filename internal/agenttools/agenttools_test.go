@@ -234,7 +234,7 @@ func TestConversationsCannotReachOtherUsersSpaces(t *testing.T) {
 	ctx := context.Background()
 	w.ok(w.bobConv, "write_doc", map[string]any{"space_id": w.bobPrivate, "path": "secret.md", "content": "# Bob's plan\n\nzanzibar"})
 	w.ok(w.aliceConv2, "write_doc", map[string]any{"space_id": w.alicePrivate2, "path": "elsewhere.md", "content": "zanzibar elsewhere"})
-	bobCard, err := w.tools.o.Boards.CreateCard(ctx, boards.Actor{UserID: w.bob}, w.bobPrivate, w.bobPersonal, boards.NewCard{Title: "Bob's card"})
+	bobCard, err := w.tools.o.Boards.CreateCard(ctx, boards.Actor{UserID: w.bob}, w.bobPrivate, w.bobPersonal, boards.NewCard{Title: "Bob's card", Body: "zanzibar card"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,6 +255,7 @@ func TestConversationsCannotReachOtherUsersSpaces(t *testing.T) {
 			"read_doc":     {"path": "secret.md"},
 			"write_doc":    {"path": "x.md", "content": "x"},
 			"search_docs":  {"query": "zanzibar"},
+			"search_cards": {"query": "zanzibar"},
 			"list_boards":  {},
 			"list_cards":   {"board_id": w.bobPersonal, "labels": []string{"x"}, "overdue": true, "sort": "due"},
 			"show_card":    {"board_id": w.bobPersonal, "card_id": bobCard.ID},
@@ -281,6 +282,14 @@ func TestConversationsCannotReachOtherUsersSpaces(t *testing.T) {
 	}
 	if res := w.ok(w.bobConv, "search_docs", map[string]any{"query": "zanzibar"})["results"].([]any); len(res) != 1 {
 		t.Fatalf("bob's search = %v", res)
+	}
+	// So do the cards: bob's card is found for bob only, and by none of alice's searches.
+	if res := w.ok(w.aliceConv, "search_cards", map[string]any{"query": "zanzibar"})["results"].([]any); len(res) != 0 {
+		t.Fatalf("alice's card search found %v", res)
+	}
+	cards := w.ok(w.bobConv, "search_cards", map[string]any{"query": "zanzibar"})["results"].([]any)
+	if len(cards) != 1 || id(cards[0].(map[string]any)["card_id"]) != bobCard.ID || cards[0].(map[string]any)["title"] != "Bob's card" {
+		t.Fatalf("bob's card search = %v", cards)
 	}
 
 	// Nothing was written or changed for alice's calls.

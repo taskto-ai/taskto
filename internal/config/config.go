@@ -122,6 +122,12 @@ type Config struct {
 	// KBMaxUnversionedSize caps the bytes of each space's unversioned files, in bytes.
 	// Zero means the knowledge base's default.
 	KBMaxUnversionedSize int64
+	// StorageQuotaWorkspace caps what all of a workspace's spaces store together, in bytes
+	// (docs/quotas.md). Zero, the default, is unlimited.
+	StorageQuotaWorkspace int64
+	// StorageQuotaUser caps what each member's private space stores, in bytes. Zero, the
+	// default, is unlimited.
+	StorageQuotaUser int64
 	// SearchVectorCache is the most memory semantic search's vector cache may hold, in
 	// bytes. Zero means the search index's default; negative, "off", turns the cache off.
 	SearchVectorCache int64
@@ -434,6 +440,18 @@ var settings = []setting{
 		usage: "cap on the bytes of each space's unversioned knowledge-base files (large files, audio and video), in bytes or with KiB, MiB or GiB (default 20GiB)",
 		get:   func(c Config) string { return formatSize(c.KBMaxUnversionedSize) },
 		set:   setSize(func(c *Config) *int64 { return &c.KBMaxUnversionedSize }),
+	},
+	{
+		flag: "storage-quota-workspace", env: "TASKTO_STORAGE_QUOTA_WORKSPACE", key: "storage_quota_workspace",
+		usage: "most each workspace may store in all its spaces (knowledge base and app photos), in bytes or with KiB, MiB or GiB (default: unlimited)",
+		get:   func(c Config) string { return formatSize(c.StorageQuotaWorkspace) },
+		set:   setSize(func(c *Config) *int64 { return &c.StorageQuotaWorkspace }),
+	},
+	{
+		flag: "storage-quota-user", env: "TASKTO_STORAGE_QUOTA_USER", key: "storage_quota_user",
+		usage: "most each member's private space may store (knowledge base and app photos), in bytes or with KiB, MiB or GiB (default: unlimited)",
+		get:   func(c Config) string { return formatSize(c.StorageQuotaUser) },
+		set:   setSize(func(c *Config) *int64 { return &c.StorageQuotaUser }),
 	},
 	{
 		flag: "search-vector-cache", env: "TASKTO_SEARCH_VECTOR_CACHE", key: "search_vector_cache",

@@ -58,6 +58,18 @@ const (
 	CodeResetOwn                Code = "reset_own"
 	CodeResetElsewhere          Code = "reset_elsewhere"
 
+	// Two-factor login (internal/auth/twofactor.go).
+
+	CodeWrongTwoFactorCode      Code = "wrong_two_factor_code"
+	CodeTooManyTwoFactorCodes   Code = "too_many_two_factor_codes"
+	CodeTwoFactorChallenge      Code = "two_factor_challenge_invalid"
+	CodeTwoFactorAlreadyOn      Code = "two_factor_already_on"
+	CodeTwoFactorNotOn          Code = "two_factor_not_on"
+	CodeTwoFactorNotStarted     Code = "two_factor_not_started"
+	CodeTwoFactorNoPassword     Code = "two_factor_no_password" //nolint:gosec // G101: an error code, not a credential
+	CodeTwoFactorClearOwn       Code = "two_factor_clear_own"
+	CodeTwoFactorClearElsewhere Code = "two_factor_clear_elsewhere"
+
 	// Single sign-on (internal/auth/sso.go). The callback redirects the browser to
 	// /?sso_error=<code>; the same codes name the API's own answers.
 
@@ -143,6 +155,7 @@ const (
 	CodeAppEffectTargetGone   Code = "app_effect_target_gone"   // the target board or card is no longer there
 	CodeAppEffectBoardOffline Code = "app_effect_board_offline" // the target board is archived
 	CodeAppEffectInvalid      Code = "app_effect_invalid"       // what the effect makes isn't accepted (a title, a path)
+	CodeAppEffectQuota        Code = "app_effect_quota"         // a storage quota is used up: what the effect makes doesn't fit
 	CodeAppEffectDocExists    Code = "app_effect_doc_exists"    // a different document is at the path; params: path
 	CodeAppEffectNoCard       Code = "app_effect_no_card"       // the card to change was never made for the record
 	CodeAppEffectCardArchived Code = "app_effect_card_archived" // the card to change is archived
@@ -225,6 +238,13 @@ const (
 	CodeFileTooLarge      Code = "file_too_large"       // 413; params: path, max (bytes)
 	CodeKnowledgeFull     Code = "knowledge_full"       // 507
 	CodeDocNotKept        Code = "doc_not_kept"         // 410
+
+	// Storage quotas (internal/quota): the operator's default for a workspace, and for each
+	// member's private space.
+
+	CodeQuotaWorkspace   Code = "quota_workspace"   // 507: the workspace's storage quota is used up; params: max_mib
+	CodeQuotaUser        Code = "quota_user"        // 507: the private space's storage quota is used up; params: max_mib
+	CodeQuotaUnavailable Code = "quota_unavailable" // 503: the usage could not be measured; try again
 
 	// Search (internal/search): searching, and a space's consent to embeddings.
 

@@ -56,6 +56,7 @@ import (
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/quota"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/serverkey"
 )
@@ -136,6 +137,7 @@ func New(o Options) *Service {
 		"list_spaces":      s.listSpaces,
 		"list_members":     s.listMembers,
 		"search_docs":      s.searchDocs,
+		"search_cards":     s.searchCards,
 		"list_docs":        s.listDocs,
 		"read_doc":         s.readDoc,
 		"write_doc":        s.writeDoc,
@@ -151,6 +153,10 @@ func New(o Options) *Service {
 		"move_card":        s.moveCard,
 		"comment_card":     s.commentCard,
 		"set_blocked":      s.setBlocked,
+		"create_board":     s.createBoard,
+		"update_board":     s.updateBoard,
+		"archive_card":     s.archiveCard,
+		"restore_card":     s.restoreCard,
 		"app_catalog":      s.appCatalog,
 		"list_apps":        s.listApps,
 		"show_app":         s.showApp,
@@ -380,6 +386,10 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 		return &Refusal{http.StatusConflict, err.Error() + ": read the record again (query_app_rows) and decide again"}
 	case errors.Is(err, knowledge.ErrTooLarge), errors.Is(err, knowledge.ErrRepoFull):
 		return &Refusal{http.StatusRequestEntityTooLarge, err.Error()}
+	case errors.Is(err, quota.ErrExceeded):
+		return &Refusal{http.StatusInsufficientStorage, err.Error()}
+	case errors.Is(err, quota.ErrUnavailable):
+		return &Refusal{http.StatusServiceUnavailable, "the storage in use can't be measured right now; try again in a moment"}
 	case errors.Is(err, knowledge.ErrNotKept):
 		return &Refusal{http.StatusGone, err.Error()}
 	default:

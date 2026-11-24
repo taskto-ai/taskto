@@ -42,6 +42,9 @@ type Member struct {
 	User
 	Role     Role   `json:"role"`
 	JoinedAt string `json:"joined_at"`
+	// TwoFactor says whether they have two-factor login on. Only an admin's view of the
+	// list has it.
+	TwoFactor *bool `json:"two_factor,omitempty"`
 }
 
 // Invite is a pending invitation, without its token.
@@ -277,20 +280,6 @@ func (s *Service) userByEmail(ctx context.Context, email string) (User, string, 
 		return User{}, "", errNotFound
 	}
 	return u, hash, err
-}
-
-// newSession logs userID in with a password and returns the session's token.
-func (s *Service) newSession(ctx context.Context, userID int64) (string, error) {
-	var token string
-	err := s.write(ctx, func(tx *sql.Tx) error {
-		var err error
-		if token, err = s.insertSession(ctx, tx, userID); err != nil {
-			return err
-		}
-		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.LoginSucceeded,
-			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"method": "password"}})
-	})
-	return token, err
 }
 
 // insertSession adds a session for userID, and drops the user's expired ones so they
