@@ -245,6 +245,10 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	// The scheduler: timed work that runs for people, later (package schedule). The features that
 	// use it register their handlers here, before it starts; it stops before the database closes.
 	scheduler := schedule.New(sqlDB, spaces, schedule.Options{})
+	// Cards' due-date reminders and overdue notices.
+	if err := boardSvc.EnableReminders(scheduler); err != nil {
+		return err
+	}
 	stopSchedule := scheduler.Start(ctx)
 	defer stopSchedule()
 	tools := agenttools.New(agenttools.Options{

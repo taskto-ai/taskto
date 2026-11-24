@@ -526,6 +526,10 @@ func (s *Service) Find(ctx context.Context, q DBTX, userID int64, kind Kind, key
 	return j, err
 }
 
+// Now is the scheduler's clock: what a feature decides "already past" against, so it agrees with
+// the worker (and with a test's fake clock).
+func (s *Service) Now() time.Time { return s.clock() }
+
 // Wake tells the worker, if it runs in this process, to look for due jobs now. Call it after the
 // transaction that scheduled a job has committed, for a job that is due already; the worker looks
 // by itself every Options.Poll.

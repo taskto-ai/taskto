@@ -44,6 +44,8 @@ import (
 const (
 	KindCardAssigned    = "card_assigned"
 	KindAppEffectFailed = "app_effect_failed"
+	KindCardDue         = "card_due"
+	KindCardOverdue     = "card_overdue"
 	KindChanged         = "changed"
 )
 
@@ -89,7 +91,9 @@ var errUnknownKind = errors.New("notifications: unknown kind")
 // the workspace, and none twice for one DedupeKey. Producers call it; it checks nothing about what
 // the notification is about, which is checked when it is shown.
 func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
-	if n.Kind != KindCardAssigned && n.Kind != KindAppEffectFailed {
+	switch n.Kind {
+	case KindCardAssigned, KindAppEffectFailed, KindCardDue, KindCardOverdue:
+	default:
 		return errUnknownKind
 	}
 	ref, err := json.Marshal(n.Ref)

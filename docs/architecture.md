@@ -178,6 +178,11 @@ no extra process); it has no feature of its own.
   costs nothing (`EXPLAIN QUERY PLAN` is checked in a test). The worker runs bounded batches, so
   cleanup gets a turn however long the queue is, and fails a row whose time can't be read instead
   of stopping on it.
+- **First user: due-date reminders.** A card with a due date and a person as its assignee has two
+  jobs for that person, `card.due-reminder` and `card.overdue`, keyed by the card. They are made,
+  moved and cancelled in the transaction of the card change that needs them, and their handlers
+  make a `card_due` and a `card_overdue` notification with the occurrence's key
+  ([api.md](api.md#due-date-reminders)).
 
 ## Agent safety
 

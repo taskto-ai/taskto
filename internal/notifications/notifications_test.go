@@ -1141,3 +1141,81 @@ func TestThePushContactIsTheVAPIDSubjectAndMustBeValid(t *testing.T) {
 		}
 	}
 }
+
+func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *testing.T) {
+	w := newWorld(t, true)
+	d := w.newDevice("phone")
+	w.subscribe(w.bob, d)
+	card := w.assign("Renew the lease", w.bob)
+	if _, err := w.db.Exec(`UPDATE cards SET due = '2030-01-10' WHERE id = ?`, card); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{notifications.KindCardDue, notifications.KindCardOverdue} {
+		tx, err := w.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		notice := notifications.Notice{UserID: w.bob.id, WorkspaceID: w.ws, Kind: kind,
+			Ref: notifications.Ref{Space: w.space.ID, Board: w.board, Card: card}, DedupeKey: "job:1:r0:" + kind}
+		// A retry makes nothing twice.
+		for range 2 {
+			if err := notifications.Add(context.Background(), tx, notice); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items := w.inbox(w.bob, "").Notifications
+	if len(items) != 3 { // newest first: overdue, due, assigned
+		t.Fatalf("inbox = %+v", items)
+	}
+	wantItem := fmt.Sprintf("%d:%d:%d", w.space.ID, w.board, card)
+	for i, kind := range []string{notifications.KindCardOverdue, notifications.KindCardDue} {
+		it := items[i]
+		if it.Kind != kind || it.Params["title"] != "Renew the lease" || it.Params["due"] != "2030-01-10" ||
+			it.Target.Section != "boards" || it.Target.Item != wantItem {
+			t.Fatalf("item %d = %+v", i, it)
+		}
+	}
+	// Someone else is told nothing of them.
+	if n := len(w.inbox(w.mallory, "").Notifications); n != 0 {
+		t.Fatalf("mallory's inbox has %d items", n)
+	}
+
+	// The date shown is the card's now; a cleared date leaves nothing to say.
+	if _, err := w.db.Exec(`UPDATE cards SET due = '2030-02-01' WHERE id = ?`, card); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.inbox(w.bob, "").Notifications[1].Params["due"]; got != "2030-02-01" {
+		t.Fatalf("due = %q, want the card's current date", got)
+	}
+	if _, err := w.db.Exec(`UPDATE cards SET due = NULL WHERE id = ?`, card); err != nil {
+		t.Fatal(err)
+	}
+	if it := w.inbox(w.bob, "").Notifications[1]; it.Kind != notifications.KindChanged || len(it.Params) != 0 {
+		t.Fatalf("item for a card whose date was cleared = %+v", it)
+	}
+	if _, err := w.db.Exec(`UPDATE cards SET due = '2030-01-10' WHERE id = ?`, card); err != nil {
+		t.Fatal(err)
+	}
+
+	// The push carries the kind and ID only; once access ends it says only that something changed.
+	w.svc.DrainOnce(context.Background())
+	payloads, requests := w.pushed(d)
+	if len(payloads) != 3 || payloads[0]["kind"] != notifications.KindCardDue && payloads[1]["kind"] != notifications.KindCardDue {
+		t.Fatalf("payloads = %v", payloads)
+	}
+	for _, r := range requests {
+		if bytes.Contains(r.body, []byte("Renew")) || bytes.Contains(r.body, []byte("2030")) {
+			t.Fatal("the title or date is on the wire")
+		}
+	}
+	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", w.ws, w.space.ID, w.bob.id), nil), http.StatusNoContent)
+	for _, it := range w.inbox(w.bob, "").Notifications {
+		if it.Kind != notifications.KindChanged || len(it.Params) != 0 {
+			t.Fatalf("an item after access ended = %+v", it)
+		}
+	}
+}

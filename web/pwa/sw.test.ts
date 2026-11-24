@@ -233,6 +233,8 @@ test('offline, an app route opens the cached page; a server route is not answere
 
 const WORDS = {
   card_assigned: 'A card was assigned to you',
+  card_due: 'A card of yours is due',
+  card_overdue: 'A card of yours is overdue',
   app_effect_failed: 'An app action needs your attention',
   changed: 'Something changed',
 }
