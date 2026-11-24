@@ -12,6 +12,10 @@
 // access.Checker.Readable spaces for a workspace-wide search. Indexing reads every space,
 // as the server; searching never reads a space the caller can't.
 //
+// Board cards are searched too (cards.go), by full text only and apart from documents. The
+// boards are their truth, as git is the documents': a search first indexes again the cards
+// of the spaces it looks in that changed, and the same isolation holds.
+//
 // Embeddings come from the workspace's choice of one of its provider accounts (an
 // OpenAI-compatible /embeddings endpoint, such as Ollama's), and are made in the
 // background: a change never waits for them. Vectors are stored as BLOBs and compared in
@@ -141,6 +145,11 @@ func (x *Index) syncLoop(ctx context.Context) {
 	// have left any of them behind.
 	if err := x.syncAll(ctx); err != nil && ctx.Err() == nil {
 		x.log.Error("search: catching up at startup", "err", err)
+	}
+	// And every card: the boards' cards are indexed as a search needs them, and this does
+	// it once for all before anyone searches.
+	if err := x.syncCards(ctx, ""); err != nil && ctx.Err() == nil {
+		x.log.Error("search: indexing cards at startup", "err", err)
 	}
 	tick := time.NewTicker(sweepEvery)
 	defer tick.Stop()

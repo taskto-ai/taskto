@@ -3,11 +3,14 @@
 // a search is full text only (no embeddings model, no consent, the model didn't answer), or
 // what it can't find yet (documents still being embedded, an index catching up). The notice
 // is said from its codes, in the user's language; the server's words are the fallback.
+// The same words also search the cards of the boards, which come apart from the documents,
+// under their own heading, each linking to its card.
 
 import { type FormEvent, useRef, useState } from 'react'
 import { api, errorText, type Space, ws } from '../api'
 import { type Key, type T, useT } from '../i18n'
 import { useLoad } from '../load'
+import { boardItem, Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
 
 export type SearchQuery = { q: string; scope: 'space' | 'workspace' }
@@ -23,6 +26,20 @@ export type SearchResult = {
   version: string
   commit: string
 }
+
+export type CardResult = {
+  space_id: number
+  space_name: string
+  board_id: number
+  board_name: string
+  card_id: number
+  title: string
+  column: 'backlog' | 'todo' | 'doing' | 'review' | 'done' | 'archived'
+  snippet: { text: string; match?: boolean }[]
+  score: number
+}
+
+type CardPage = { results: CardResult[]; next_offset?: number }
 
 type Notice = { code: string; count?: number }
 
@@ -101,38 +118,32 @@ export function SearchResults({
   onOpen: (result: SearchResult) => void
   onClose: () => void
 }) {
-  const url =
-    query.scope === 'space' && space
-      ? `${ws(workspace)}/spaces/${space.id}/search?q=${encodeURIComponent(query.q)}`
-      : `${ws(workspace)}/search?q=${encodeURIComponent(query.q)}`
-  const first = useLoad(() => api<SearchPage>(url), [url])
-  return <ResultPages key={url} url={url} first={first} onOpen={onOpen} onClose={onClose} query={query} />
+  const where = query.scope === 'space' && space ? `${ws(workspace)}/spaces/${space.id}` : ws(workspace)
+  const q = encodeURIComponent(query.q)
+  const url = `${where}/search?q=${q}`
+  const cardsUrl = `${where}/search/cards?q=${q}`
+  return (
+    <ResultPages
+      key={url}
+      workspace={workspace}
+      url={url}
+      cardsUrl={cardsUrl}
+      onOpen={onOpen}
+      onClose={onClose}
+      query={query}
+    />
+  )
 }
 
-function ResultPages({
-  url,
-  first,
-  query,
-  onOpen,
-  onClose,
-}: {
-  url: string
-  first: { data: SearchPage | undefined; error: string | null }
-  query: SearchQuery
-  onOpen: (result: SearchResult) => void
-  onClose: () => void
-}) {
-  const [more, setMore] = useState<SearchPage[]>([])
+// A search's pages: the first, and those "more" loads one at a time, also for two clicks in
+// the same tick (as the history's Older).
+function usePages<P extends { next_offset?: number }>(url: string) {
+  const first = useLoad(() => api<P>(url), [url])
+  const [more, setMore] = useState<P[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const pages = first.data ? [first.data, ...more] : []
-  const results = pages.flatMap((p) => p.results)
   const last = pages.at(-1)
-  const t = useT()
-  // The notice of the latest page: the index may have caught up meanwhile.
-  const notice = last && noticeText(t, last)
-
-  // One page at a time, also for two clicks in the same tick (as the history's Older).
   const loadingMore = useRef(false)
   const loadMore = async () => {
     if (last?.next_offset === undefined || loadingMore.current) return
@@ -140,7 +151,7 @@ function ResultPages({
     setLoading(true)
     setError(null)
     try {
-      const page = await api<SearchPage>(`${url}&offset=${last.next_offset}`)
+      const page = await api<P>(`${url}&offset=${last.next_offset}`)
       setMore((m) => [...m, page])
     } catch (e) {
       setError(errorText(e))
@@ -149,6 +160,35 @@ function ResultPages({
       setLoading(false)
     }
   }
+  return { first, pages, last, loading, error, loadMore }
+}
+
+function ResultPages({
+  workspace,
+  url,
+  cardsUrl,
+  query,
+  onOpen,
+  onClose,
+}: {
+  workspace: number
+  url: string
+  cardsUrl: string
+  query: SearchQuery
+  onOpen: (result: SearchResult) => void
+  onClose: () => void
+}) {
+  const docs = usePages<SearchPage>(url)
+  const cards = usePages<CardPage>(cardsUrl)
+  const { first, pages, last, loading, error } = docs
+  const results = pages.flatMap((p) => p.results)
+  const cardResults = cards.pages.flatMap((p) => p.results)
+  const t = useT()
+  // The notice of the latest page: the index may have caught up meanwhile.
+  const notice = last && noticeText(t, last)
+  // The cards are a search of their own: one that fails or is slow leaves the documents as
+  // they are, and says so beside them.
+  const cardsSettled = cards.first.data !== undefined || cards.first.error !== null
 
   return (
     <section className="tt-search-results" aria-label={t('search.results.label')}>
@@ -176,7 +216,9 @@ function ResultPages({
         </p>
       )}
       {!first.data && !first.error && <p className="tt-muted">{t('search.results.searching')}</p>}
-      {first.data && results.length === 0 && <p className="tt-muted">{t('search.results.none')}</p>}
+      {first.data && results.length === 0 && cardsSettled && cardResults.length === 0 && (
+        <p className="tt-muted">{t('search.results.none')}</p>
+      )}
       {results.length > 0 && (
         <ul className="tt-list">
           {results.map((r) => (
@@ -188,25 +230,78 @@ function ResultPages({
                     ? t('search.results.inSpace', { space: r.space_name, path: r.path })
                     : r.path}
                 </span>
-                {r.snippet.length > 0 && (
-                  <span className="tt-snippet tt-small">
-                    {/* Plain text in pieces, never markup: matches are marked by the element. */}
-                    {r.snippet.map((s, i) =>
-                      // biome-ignore lint/suspicious/noArrayIndexKey: pieces have no identity but their place
-                      s.match ? <mark key={i}>{s.text}</mark> : <span key={i}>{s.text}</span>,
-                    )}
-                  </span>
-                )}
+                <Snippet pieces={r.snippet} />
               </button>
             </li>
           ))}
         </ul>
       )}
       {last?.next_offset !== undefined && (
-        <button type="button" className="tt-button" onClick={loadMore} disabled={loading}>
+        <button type="button" className="tt-button" onClick={docs.loadMore} disabled={loading}>
           {t('search.results.more')}
         </button>
       )}
+      {cards.first.error && (
+        <p role="alert" className="tt-error">
+          {t('search.cards.failed', { error: cards.first.error })}
+        </p>
+      )}
+      {cardResults.length > 0 && (
+        <>
+          <h3>{t('search.cards.title')}</h3>
+          <ul className="tt-list" aria-label={t('search.cards.label')}>
+            {cardResults.map((c) => (
+              <li key={c.card_id}>
+                <Link
+                  href={routePath({
+                    workspace,
+                    section: 'boards',
+                    item: boardItem(c.space_id, c.board_id, c.card_id),
+                  })}
+                >
+                  <span className="tt-list-title">{c.title}</span>
+                  <span className="tt-muted tt-small tt-list-title">
+                    {t('search.cards.in', { space: c.space_name, board: c.board_name, column: t(COLUMNS[c.column]) })}
+                  </span>
+                  <Snippet pieces={c.snippet} />
+                </Link>
+              </li>
+            ))}
+          </ul>
+          {cards.last?.next_offset !== undefined && (
+            <button type="button" className="tt-button" onClick={cards.loadMore} disabled={cards.loading}>
+              {t('search.cards.more')}
+            </button>
+          )}
+          {cards.error && (
+            <p role="alert" className="tt-error">
+              {cards.error}
+            </p>
+          )}
+        </>
+      )}
     </section>
   )
+}
+
+// A snippet: plain text in pieces, never markup: matches are marked by the element.
+function Snippet({ pieces }: { pieces: { text: string; match?: boolean }[] }) {
+  if (pieces.length === 0) return null
+  return (
+    <span className="tt-snippet tt-small">
+      {pieces.map((s, i) =>
+        // biome-ignore lint/suspicious/noArrayIndexKey: pieces have no identity but their place
+        s.match ? <mark key={i}>{s.text}</mark> : <span key={i}>{s.text}</span>,
+      )}
+    </span>
+  )
+}
+
+const COLUMNS: Record<CardResult['column'], Key> = {
+  backlog: 'boards.columns.backlog',
+  todo: 'boards.columns.todo',
+  doing: 'boards.columns.doing',
+  review: 'boards.columns.review',
+  done: 'boards.columns.done',
+  archived: 'boards.columns.archived',
 }

@@ -40,12 +40,16 @@ test('searches the space shown, and shows matches as marked text, never markup',
     'GET /api/workspaces/1/spaces/2/search': {
       body: { results: [result(spaces[0], 'notes/plan.md', 'Quarterly plan')], mode: 'hybrid' },
     },
+    'GET /api/workspaces/1/spaces/2/search/cards': { body: { results: [] } },
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
   search('  orchard plan ')
   const results = await screen.findByRole('region', { name: 'Search results' })
-  expect(calls.at(-1)?.path).toBe('/api/workspaces/1/spaces/2/search?q=orchard%20plan')
+  expect(calls.filter((c) => c.path.includes('/search')).map((c) => c.path)).toEqual([
+    '/api/workspaces/1/spaces/2/search?q=orchard%20plan',
+    '/api/workspaces/1/spaces/2/search/cards?q=orchard%20plan',
+  ])
   const hit = await within(results).findByRole('button', { name: /Quarterly plan/ })
   expect(within(hit).getByText('orchard').tagName).toBe('MARK')
   expect(hit.textContent).toContain('<b>next</b>')
@@ -68,6 +72,7 @@ test.each([
     'GET /api/workspaces/1/spaces': { body: { spaces } },
     'GET /api/workspaces/1/spaces/2/docs': { body: { docs: [] } },
     'GET /api/workspaces/1/search': { body: { results: [], mode: 'fulltext', notice } },
+    'GET /api/workspaces/1/search/cards': { body: { results: [] } },
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
@@ -89,6 +94,7 @@ test('says the notice from its codes, with the count in the plural it needs', as
         notices: [{ code: 'behind' }, { code: 'pending', count: 1 }],
       },
     },
+    'GET /api/workspaces/1/search/cards': { body: { results: [] } },
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
@@ -119,6 +125,7 @@ test('searches every space, pages on, and opens a result in its own space', asyn
     'GET /api/workspaces/1/search?q=orchard&offset=1': {
       body: { results: [result(spaces[1], 'team.md', 'Team notes')], mode: 'hybrid' },
     },
+    'GET /api/workspaces/1/search/cards': { body: { results: [] } },
   })
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
@@ -148,12 +155,93 @@ test('searching the same again asks the server again', async () => {
     'GET /api/workspaces/1/spaces': { body: { spaces } },
     'GET /api/workspaces/1/spaces/2/docs': { body: { docs: [] } },
     'GET /api/workspaces/1/spaces/2/search': { body: { results: [], mode: 'fulltext' } },
+    'GET /api/workspaces/1/spaces/2/search/cards': { body: { results: [] } },
   })
-  const searches = () => calls.filter((c) => c.path.includes('/search')).length
+  const searches = () => calls.filter((c) => c.path.includes('/search?')).length
   render(<KnowledgePage workspace={1} />)
   await screen.findByText('No documents in this space yet.')
   search('orchard')
   await screen.findByText('Nothing found.')
   search('orchard')
   await waitFor(() => expect(searches()).toBe(2))
+})
+
+const card = (id: number, title: string, column = 'doing', board = { id: 7, name: 'Roadmap' }) => ({
+  space_id: 3,
+  space_name: 'Team',
+  board_id: board.id,
+  board_name: board.name,
+  card_id: id,
+  title,
+  column,
+  snippet: [{ text: 'ship the ' }, { text: 'orchard', match: true }, { text: ' <i>release</i>' }],
+  score: 1,
+})
+
+test('shows cards apart from documents, each linking to its card', async () => {
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces } },
+    'GET /api/workspaces/1/spaces/2/docs': { body: { docs: [] } },
+    'GET /api/workspaces/1/search': {
+      body: { results: [result(spaces[1], 'team.md', 'Team notes')], mode: 'fulltext' },
+    },
+    'GET /api/workspaces/1/search/cards?q=orchard': {
+      body: { results: [card(11, 'Orchard rollout'), card(12, 'Orchard audit', 'archived')], next_offset: 2 },
+    },
+    'GET /api/workspaces/1/search/cards?q=orchard&offset=2': { body: { results: [card(13, 'Orchard party', 'done')] } },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByText('No documents in this space yet.')
+  search('orchard', 'In all spaces')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  await within(results).findByRole('button', { name: /Team notes/ })
+  const list = await within(results).findByRole('list', { name: 'Cards found' })
+  expect(within(results).getByRole('heading', { name: 'Cards', level: 3 })).toBeTruthy()
+  const links = within(list).getAllByRole('link')
+  expect(links.map((a) => a.getAttribute('href'))).toEqual(['/w/1/boards/3%3A7%3A11', '/w/1/boards/3%3A7%3A12'])
+  expect(links[0].textContent).toContain('Team · Roadmap · Doing')
+  expect(links[1].textContent).toContain('Team · Roadmap · Archived')
+  // Matches are marked by the element, never as markup.
+  expect(within(links[0]).getByText('orchard').tagName).toBe('MARK')
+  expect(links[0].textContent).toContain('<i>release</i>')
+  expect(links[0].querySelector('i')).toBeNull()
+
+  fireEvent.click(within(results).getByRole('button', { name: 'More cards' }))
+  await within(list).findByRole('link', { name: /Orchard party/ })
+  expect(within(results).queryByRole('button', { name: 'More cards' })).toBeNull()
+  expect(calls.some((c) => c.path === '/api/workspaces/1/search/cards?q=orchard&offset=2')).toBe(true)
+  // Never a card in the documents' list.
+  expect(within(results).queryByText('Nothing found.')).toBeNull()
+})
+
+test('a search that finds only cards is not nothing', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces } },
+    'GET /api/workspaces/1/spaces/2/docs': { body: { docs: [] } },
+    'GET /api/workspaces/1/spaces/2/search': { body: { results: [], mode: 'fulltext' } },
+    'GET /api/workspaces/1/spaces/2/search/cards': { body: { results: [card(11, 'Orchard rollout')] } },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByText('No documents in this space yet.')
+  search('orchard')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  await within(results).findByRole('link', { name: /Orchard rollout/ })
+  expect(within(results).queryByText('Nothing found.')).toBeNull()
+})
+
+test('cards that cannot be searched leave the documents, and say so', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces } },
+    'GET /api/workspaces/1/spaces/2/docs': { body: { docs: [] } },
+    'GET /api/workspaces/1/spaces/2/search': {
+      body: { results: [result(spaces[0], 'notes/plan.md', 'Quarterly plan')], mode: 'fulltext' },
+    },
+    'GET /api/workspaces/1/spaces/2/search/cards': { status: 500, body: { error: 'boom', code: 'internal' } },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByText('No documents in this space yet.')
+  search('orchard')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  await within(results).findByRole('button', { name: /Quarterly plan/ })
+  expect((await within(results).findByRole('alert')).textContent).toContain('The boards’ cards could not be searched')
 })

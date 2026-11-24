@@ -1638,6 +1638,13 @@
       "more": "More results",
       "inSpace": "{space} · {path}"
     },
+    "cards": {
+      "title": "Cards",
+      "label": "Cards found",
+      "in": "{space} · {board} · {column}",
+      "more": "More cards",
+      "failed": "The boards’ cards could not be searched: {error}"
+    },
     "notice": {
       "embeddings_off": "Semantic search is off: no embeddings model is set for this workspace. These are full-text results.",
       "embeddings_failed": "The embeddings model didn't answer, so these are full-text results only.",

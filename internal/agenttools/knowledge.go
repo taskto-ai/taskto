@@ -65,39 +65,86 @@ type searchHit struct {
 	Version   string `json:"version"`
 }
 
-// searchDocs searches the knowledge base: one space, or every space the user can read in
-// the call's workspace.
-func (s *Service) searchDocs(ctx context.Context, c *call, args json.RawMessage) (any, error) {
-	var a struct {
-		Query   string `json:"query"`
-		SpaceID *int64 `json:"space_id"`
-		Limit   int    `json:"limit"`
-		Offset  int    `json:"offset"`
-	}
+// searchArgs are the arguments of search_docs and search_cards.
+type searchArgs struct {
+	Query   string `json:"query"`
+	SpaceID *int64 `json:"space_id"`
+	Limit   int    `json:"limit"`
+	Offset  int    `json:"offset"`
+}
+
+// searchSpaces checks the arguments of a search, and returns the spaces to search: the one
+// asked for, or every space the user can read in the call's workspace.
+func (s *Service) searchSpaces(ctx context.Context, c *call, args json.RawMessage, off string) (searchArgs, []access.Space, error) {
+	var a searchArgs
 	if err := decode(args, &a); err != nil {
-		return nil, err
+		return a, nil, err
 	}
 	if a.Limit < 0 || a.Limit > maxSearchLimit {
-		return nil, invalidf("limit must be 1 to %d", maxSearchLimit)
+		return a, nil, invalidf("limit must be 1 to %d", maxSearchLimit)
 	}
 	if a.Limit == 0 {
 		a.Limit = 10
 	}
 	if s.o.Search == nil {
-		return nil, errInvalid("search is off on this server: use list_docs and read_doc")
+		return a, nil, errInvalid(off)
 	}
-	var spaces []access.Space
 	if a.SpaceID != nil {
 		sp, err := s.space(ctx, c, *a.SpaceID)
 		if err != nil {
-			return nil, err
+			return a, nil, err
 		}
-		spaces = []access.Space{sp}
-	} else {
-		var err error
-		if spaces, err = s.o.Access.Readable(ctx, c.User, c.Workspace); err != nil {
-			return nil, err
+		return a, []access.Space{sp}, nil
+	}
+	spaces, err := s.o.Access.Readable(ctx, c.User, c.Workspace)
+	return a, spaces, err
+}
+
+type cardHit struct {
+	SpaceID   int64  `json:"space_id"`
+	SpaceName string `json:"space_name"`
+	BoardID   int64  `json:"board_id"`
+	BoardName string `json:"board_name"`
+	CardID    int64  `json:"card_id"`
+	Title     string `json:"title"`
+	Column    string `json:"column"`
+	Snippet   string `json:"snippet"`
+}
+
+// searchCards searches the cards of the boards in one space, or in every space the user can
+// read in the call's workspace, by full text.
+func (s *Service) searchCards(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	a, spaces, err := s.searchSpaces(ctx, c, args, "search is off on this server: use list_boards and list_cards")
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.o.Search.SearchCards(ctx, c.Workspace, spaces, search.Query{Text: a.Query, Limit: a.Limit, Offset: a.Offset})
+	if err != nil {
+		return nil, err
+	}
+	hits := []cardHit{}
+	for _, r := range res.Results {
+		var snippet strings.Builder
+		for _, seg := range r.Snippet {
+			snippet.WriteString(seg.Text)
 		}
+		text, _ := cut(snippet.String(), 1000)
+		hits = append(hits, cardHit{SpaceID: r.SpaceID, SpaceName: r.SpaceName, BoardID: r.BoardID, BoardName: r.BoardName,
+			CardID: r.CardID, Title: r.Title, Column: r.Column, Snippet: text})
+	}
+	reply := map[string]any{"results": hits}
+	if res.NextOffset != nil {
+		reply["next_offset"] = *res.NextOffset
+	}
+	return reply, nil
+}
+
+// searchDocs searches the knowledge base: one space, or every space the user can read in
+// the call's workspace.
+func (s *Service) searchDocs(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	a, spaces, err := s.searchSpaces(ctx, c, args, "search is off on this server: use list_docs and read_doc")
+	if err != nil {
+		return nil, err
 	}
 	res, err := s.o.Search.Search(ctx, c.Workspace, spaces, search.Query{Text: a.Query, Limit: a.Limit, Offset: a.Offset})
 	if err != nil {
