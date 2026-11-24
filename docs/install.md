@@ -379,6 +379,70 @@ How it holds:
 
 The policy is read at startup: restart the server to change it.
 
+### Email
+
+The server can send email: the settings page's test message today, and the password resets, email
+invitations and notifications that later features add. It is **off until the operator names an SMTP
+server**, and works the same for one person or a company: there is one SMTP server for the whole
+server, set here, never per workspace, and nothing in the database. Without it nothing changes:
+reset and invite links are still passed on by hand.
+
+| Setting | Flag / environment | |
+|---|---|---|
+| `smtp_host` | `-smtp-host`, `TASKTO_SMTP_HOST` | The SMTP server, a name or address without a port. Empty means no email. |
+| `smtp_port` | `-smtp-port`, `TASKTO_SMTP_PORT` | `587` with `starttls`, `465` with `tls`, `25` with `none`, unless set. |
+| `smtp_security` | `-smtp-security`, `TASKTO_SMTP_SECURITY` | `starttls` (the default: the connection is upgraded to TLS before anything is sent, and a server that doesn't offer it is refused), `tls` (implicit TLS) or `none` (a relay on the same host or network you trust; a password is never sent this way except to `localhost`). The server's certificate is always checked. |
+| `smtp_from` | `-smtp-from`, `TASKTO_SMTP_FROM` | The sender of every message: `taskto@example.com` or `TaskTo <taskto@example.com>`. Required with `smtp_host`; use an address your SMTP server may send as. |
+| `smtp_username` | `-smtp-username`, `TASKTO_SMTP_USERNAME` | The account to sign in as (`PLAIN` or `LOGIN`). Leave out for a relay that lets the server send without signing in. |
+| `smtp_password_file` | `-smtp-password-file`, `TASKTO_SMTP_PASSWORD_FILE` | The absolute path of a file holding the password, which goes with `smtp_username`. |
+| `smtp_egress` | `-smtp-egress`, `TASKTO_SMTP_EGRESS` | Where the connection may go: `any` (the default), `public`, or a comma-separated list of `public`, hosts, addresses and CIDR prefixes, as for [provider accounts](#where-provider-accounts-may-connect). Every connection is checked after name resolution. An internal relay on a private address needs it listed here, or `any`. |
+
+**The password is never a setting.** It is read from its file when the server starts, kept only in
+memory, and is never logged, never returned by the API (the settings page says only whether the
+server signs in) and never in an error. The two variables that name the account
+(`TASKTO_SMTP_USERNAME`, `TASKTO_SMTP_PASSWORD_FILE`) are removed from the server's environment
+once read, so the agent runtime and the CLI workers never inherit them. A file that is missing,
+unreadable or empty stops the server at startup, naming the file. Restart the server after
+changing any of these.
+
+With Compose, put the password in a file next to the project, mount it read-only, and set the
+variables in `.env`. The container runs as `65532`, so the file must be readable by that user:
+
+```sh
+mkdir -p smtp && printf '%s' 'the-smtp-password' > smtp/password
+sudo chown -R 65532:65532 smtp && sudo chmod 700 smtp && sudo chmod 600 smtp/password
+```
+
+```yaml
+# compose.override.yaml
+services:
+  taskto:
+    volumes:
+      - ./smtp:/etc/taskto/smtp:ro
+```
+
+```sh
+# .env
+TASKTO_SMTP_HOST=smtp.example.com
+TASKTO_SMTP_FROM=TaskTo <taskto@example.com>
+TASKTO_SMTP_USERNAME=taskto@example.com
+TASKTO_SMTP_PASSWORD_FILE=/etc/taskto/smtp/password   # as the container sees it
+```
+
+Then `docker compose up -d taskto` (a change to `.env` needs the container recreated). The server's
+log says `outgoing email is on`, with the host, port and security, never the account.
+
+**Check it:** an admin opens Settings → General → Email, which shows the server, the port, how it
+is secured and the sender, and presses **Send a test email**. The message goes to the admin's own
+address, in their language, and nowhere else. If it fails, the page says at which step (the
+connection, the TLS upgrade, the sign-in, or the server refusing the message); the server's own
+reply is in the log (`mail: the test email failed`), since it can name internal hosts.
+
+Messages are plain text with a simple HTML alternative, translated into the recipient's language
+(the one they picked, else their workspace's default, else English), with their texts in the
+binary (`internal/mail/locales`, one file per language). A language without a message uses
+English for it.
+
 ### Single sign-on
 
 People can sign in with Google, Authentik or any other OpenID Connect provider, once the

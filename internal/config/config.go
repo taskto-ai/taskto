@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	netmail "net/mail"
 	"net/netip"
 	"net/url"
 	"os"
@@ -131,6 +132,21 @@ type Config struct {
 	// of RFC 8292): a mailto: or https: URL. Empty means the project's address.
 	PushContact string
 
+	// SMTPHost, SMTPPort, SMTPSecurity, SMTPFrom, SMTPUsername and SMTPPasswordFile are the
+	// operator's outgoing email (docs/install.md#email): the server sends invitations, password
+	// resets and notifications through this SMTP server. SMTPHost empty means no email.
+	// SMTPSecurity is "starttls" (the default), "tls" (implicit TLS) or "none"; SMTPPort 0 is
+	// the security's usual port (587, 465, 25); SMTPFrom is the sender, an address or "Name
+	// <address>". SMTPPasswordFile is the file the password is read from at startup, never the
+	// password itself. SMTPEgress is the egress policy of the connection (see internal/egress).
+	SMTPHost         string
+	SMTPPort         int
+	SMTPSecurity     string
+	SMTPFrom         string
+	SMTPUsername     string
+	SMTPPasswordFile string
+	SMTPEgress       string
+
 	// ConfigFile is the config file that was read, or "" if none was.
 	ConfigFile string
 	// ShowVersion asks the binary to print its version and exit (flag only).
@@ -211,6 +227,86 @@ var settings = []setting{
 		usage: "where members' personal provider accounts may connect: any, public, or a comma-separated list of public, hosts and CIDR prefixes (default any)",
 		get:   func(c Config) string { return c.ProviderEgressPersonal },
 		set:   setEgress(func(c *Config) *string { return &c.ProviderEgressPersonal }),
+	},
+	{
+		flag: "smtp-host", env: "TASKTO_SMTP_HOST", key: "smtp_host",
+		usage: "the SMTP server that sends the server's email (invitations, password resets, notifications); empty means no email",
+		get:   func(c Config) string { return c.SMTPHost },
+		set: func(c *Config, v string) error {
+			if strings.ContainsAny(v, " \t/:@") {
+				return errors.New("want a host name or IP address, with the port in -smtp-port")
+			}
+			c.SMTPHost = v
+			return nil
+		},
+	},
+	{
+		flag: "smtp-port", env: "TASKTO_SMTP_PORT", key: "smtp_port",
+		usage: "the SMTP server's port (default 587 with starttls, 465 with tls, 25 with none)",
+		get: func(c Config) string {
+			if c.SMTPPort == 0 {
+				return ""
+			}
+			return strconv.Itoa(c.SMTPPort)
+		},
+		set: func(c *Config, v string) error {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 65535 {
+				return errors.New("want a port from 1 to 65535")
+			}
+			c.SMTPPort = n
+			return nil
+		},
+	},
+	{
+		flag: "smtp-security", env: "TASKTO_SMTP_SECURITY", key: "smtp_security",
+		usage: "how the SMTP connection is secured: starttls (default), tls (implicit TLS) or none (a trusted local relay)",
+		get:   func(c Config) string { return c.SMTPSecurityMode() },
+		set: func(c *Config, v string) error {
+			switch v {
+			case "starttls", "tls", "none":
+				c.SMTPSecurity = v
+				return nil
+			}
+			return errors.New("must be starttls, tls or none")
+		},
+	},
+	{
+		flag: "smtp-from", env: "TASKTO_SMTP_FROM", key: "smtp_from",
+		usage: "the sender of the server's email: an address, or Name <address>; needed with -smtp-host",
+		get:   func(c Config) string { return c.SMTPFrom },
+		set: func(c *Config, v string) error {
+			a, err := netmail.ParseAddress(v)
+			if err != nil {
+				return errors.New("want an email address, or Name <address>")
+			}
+			c.SMTPFrom = a.String()
+			return nil
+		},
+	},
+	{
+		flag: "smtp-username", env: "TASKTO_SMTP_USERNAME", key: "smtp_username",
+		usage: "the user to sign in to the SMTP server as; needs -smtp-password-file",
+		get:   func(c Config) string { return c.SMTPUsername },
+		set:   func(c *Config, v string) error { c.SMTPUsername = v; return nil },
+	},
+	{
+		flag: "smtp-password-file", env: "TASKTO_SMTP_PASSWORD_FILE", key: "smtp_password_file",
+		usage: "the file the SMTP password is read from at startup (an absolute path); the password itself is never a setting",
+		get:   func(c Config) string { return c.SMTPPasswordFile },
+		set: func(c *Config, v string) error {
+			if !filepath.IsAbs(v) {
+				return errors.New("want an absolute path")
+			}
+			c.SMTPPasswordFile = v
+			return nil
+		},
+	},
+	{
+		flag: "smtp-egress", env: "TASKTO_SMTP_EGRESS", key: "smtp_egress",
+		usage: "where the SMTP connection may go: any, public, or a comma-separated list of public, hosts and CIDR prefixes (default any)",
+		get:   func(c Config) string { return c.SMTPEgress },
+		set:   setEgress(func(c *Config) *string { return &c.SMTPEgress }),
 	},
 	{
 		flag: "agent", env: "TASKTO_AGENT", key: "agent", isBool: true,
@@ -368,6 +464,34 @@ var settings = []setting{
 			return nil
 		},
 	},
+}
+
+// SMTPSecurityMode is how the SMTP connection is secured, "starttls" when unset.
+func (c Config) SMTPSecurityMode() string {
+	if c.SMTPSecurity == "" {
+		return "starttls"
+	}
+	return c.SMTPSecurity
+}
+
+// SMTPPortNumber is the SMTP server's port: the one set, else the security's usual one.
+func (c Config) SMTPPortNumber() int {
+	if c.SMTPPort != 0 {
+		return c.SMTPPort
+	}
+	switch c.SMTPSecurityMode() {
+	case "tls":
+		return 465
+	case "none":
+		return 25
+	}
+	return 587
+}
+
+// SMTPEgressPolicy is the egress policy of the SMTP connection. Load has already checked it.
+func (c Config) SMTPEgressPolicy() egress.Policy {
+	p, _ := egress.Parse(c.SMTPEgress)
+	return p
 }
 
 // LocalDictation is the local speech model, "off" included: parakeet-v3 when unset.
@@ -606,10 +730,45 @@ func Load(args []string, getenv func(string) string, output io.Writer) (Config, 
 	if cfg.DisablePasswordLogin && cfg.SSOProviders == "" {
 		return Config{}, errors.New("config: -disable-password-login needs -sso-providers: nobody could log in")
 	}
+	if err := validateSMTP(cfg); err != nil {
+		return Config{}, err
+	}
 	if cfg.Agent && cfg.AgentNode == "" {
 		return Config{}, errors.New("config: the agent runtime's Node.js executable is empty")
 	}
 	return cfg, nil
+}
+
+// validateSMTP checks that the SMTP settings make sense together: a host needs a sender, a
+// username needs a password and the other way round, and a password is never sent over a
+// connection that isn't encrypted, except to a loopback relay.
+func validateSMTP(cfg Config) error {
+	if cfg.SMTPHost == "" {
+		if cfg.SMTPPort != 0 || cfg.SMTPSecurity != "" || cfg.SMTPFrom != "" || cfg.SMTPUsername != "" ||
+			cfg.SMTPPasswordFile != "" || cfg.SMTPEgress != "" {
+			return errors.New("config: the smtp settings need -smtp-host, the SMTP server")
+		}
+		return nil
+	}
+	if cfg.SMTPFrom == "" {
+		return errors.New("config: -smtp-host needs -smtp-from, the sender of the email")
+	}
+	if (cfg.SMTPUsername == "") != (cfg.SMTPPasswordFile == "") {
+		return errors.New("config: -smtp-username and -smtp-password-file go together")
+	}
+	if cfg.SMTPUsername != "" && cfg.SMTPSecurityMode() == "none" && !isLoopbackHost(cfg.SMTPHost) {
+		return errors.New("config: -smtp-security none would send the password in clear text; use starttls or tls")
+	}
+	return nil
+}
+
+// isLoopbackHost reports whether host is localhost or a loopback address.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	a, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	return err == nil && a.IsLoopback()
 }
 
 func readFile(cfg *Config, path string) error {

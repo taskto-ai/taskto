@@ -274,6 +274,15 @@ const (
 
 	CodeEgressRefused Code = "egress_refused" // params: host
 
+	// Outgoing email (internal/mail, internal/server/mail.go).
+
+	CodeMailNotConfigured Code = "mail_not_configured"
+	CodeMailConnectFailed Code = "mail_connect_failed" // params: host
+	CodeMailTLSFailed     Code = "mail_tls_failed"
+	CodeMailAuthFailed    Code = "mail_auth_failed"
+	CodeMailRejected      Code = "mail_rejected" // params: smtp_code
+	CodeMailFailed        Code = "mail_failed"
+
 	// CLI accounts, shared CLI accounts and automatic switching (internal/cliaccounts).
 
 	CodeCLIWorkersOff          Code = "cli_workers_off"

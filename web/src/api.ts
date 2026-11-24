@@ -740,6 +740,21 @@ export type BackupStatus = {
 
 export const backupPath = (workspace: number) => `${ws(workspace)}/backup`
 
+// The server's outgoing email (docs/install.md#email), for admins: where it sends through, never the
+// account or its password. `password` says whether the server signs in.
+export type MailStatus =
+  | { configured: false }
+  | {
+      configured: true
+      host: string
+      port: number
+      security: 'starttls' | 'tls' | 'none'
+      from: string
+      password: 'set' | 'not set'
+    }
+
+export const mailPath = (workspace: number) => `${ws(workspace)}/mail`
+
 // The agent browser (docs/agent-browser.md): the signed-in user's own.
 export type BrowserKind = 'personal' | 'testing'
 export type BrowserTab = { id: string; title: string; url: string; agent: boolean }

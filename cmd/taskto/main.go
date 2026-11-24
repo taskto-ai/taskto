@@ -141,6 +141,17 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	if err != nil {
 		return err
 	}
+	// The outgoing email's password is read the same way, and the variables that name the SMTP
+	// account are removed from the environment before any child starts.
+	mailer, err := loadMail(cfg, os.Unsetenv)
+	if err != nil {
+		return err
+	}
+	if mailer.Configured() {
+		info := mailer.Info()
+		slog.Info("outgoing email is on", "host", info.Host, "port", info.Port, "security", info.Security,
+			"sign_in", info.PasswordSet, "egress", cfg.SMTPEgressPolicy().String())
+	}
 	// One server per data directory, enforced before anything in it is opened. Deferred
 	// first, so the lock goes last, after the sidecar has stopped and the database closed.
 	lock, err := lockfile.DataDir(cfg.DataDir)
@@ -298,6 +309,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		Browser:       browsers,
 		Dictation:     dictationService(cfg, sqlDB, key, kb),
 		BackupDataDir: cfg.DataDir,
+		Mail:          mailer,
 		// Photos that were never saved in a record are removed after a day, and an app moved to
 		// another space has its files follow it (internal/apps/attachments.go).
 		AppsReady: func(svc *apps.Service) { go svc.Maintain(ctx, 10*time.Minute) },

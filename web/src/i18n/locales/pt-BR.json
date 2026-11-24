@@ -847,6 +847,12 @@
     "endpoint_status": "O endpoint respondeu {status}.",
     "endpoint_no_models": "A resposta do endpoint não é uma lista de modelos.",
     "egress_refused": "A política de saída do servidor não permite {host}.",
+    "mail_not_configured": "O envio de e-mail não está configurado. Quem administra o servidor define o servidor SMTP (docs/install.md, Email).",
+    "mail_connect_failed": "O servidor SMTP em {host} não respondeu. Confira o endereço, a porta e a rede do servidor.",
+    "mail_tls_failed": "Não foi possível proteger a conexão com o servidor SMTP: o certificado dele não é confiável, ou ele não oferece STARTTLS.",
+    "mail_auth_failed": "O servidor SMTP recusou o login. Confira o usuário e o arquivo da senha.",
+    "mail_rejected": "O servidor SMTP recusou a mensagem (resposta {smtp_code}). O log do servidor tem a resposta dele.",
+    "mail_failed": "Não foi possível enviar a mensagem. O log do servidor diz por quê.",
     "cli_workers_off": "Os workers de CLI estão desligados neste servidor.",
     "cli_workers_no_boundary": "Os workers de CLI rodam em modo local neste servidor, sem isolamento entre usuários, então só funcionam enquanto o servidor tiver um único usuário. Um operador pode usar o contêiner do worker de CLI no lugar.",
     "cli_not_installed": "O {cli} não está instalado neste servidor.",
@@ -991,7 +997,28 @@
       "language": "Idioma padrão",
       "languageHelp": "Para membros cujo navegador pede um idioma que o TaskTo.AI não tem. Cada pessoa pode escolher o seu no menu da conta.",
       "save": "Salvar",
-      "saved": "Salvo."
+      "saved": "Salvo.",
+      "mail": {
+        "title": "E-mail",
+        "loading": "Carregando…",
+        "off": "Este servidor ainda não consegue enviar e-mail. Quem o administra define um servidor SMTP, como explica o guia de instalação (docs/install.md, Email); até lá, os links de redefinição e de convite são repassados à mão.",
+        "server": "Servidor SMTP",
+        "serverValue": "{host}, porta {port}",
+        "security": "Conexão",
+        "securities": {
+          "starttls": "STARTTLS (atualizada para TLS)",
+          "tls": "TLS",
+          "none": "Sem criptografia"
+        },
+        "from": "Remetente",
+        "signIn": "Login",
+        "signInSet": "Com usuário e senha",
+        "signInNone": "Nenhum",
+        "test": "Enviar e-mail de teste",
+        "testing": "Enviando…",
+        "testHelp": "O teste vai para o seu próprio endereço, {email}, no seu idioma.",
+        "sent": "E-mail de teste enviado para {email}. Se não chegar, olhe a caixa de spam e o log de e-mail do servidor."
+      }
     },
     "members": {
       "resetLink": "Link de redefinição",

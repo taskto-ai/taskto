@@ -61,7 +61,10 @@ type person struct {
 	private int64  // their private space in one
 }
 
-func newStack(t *testing.T) *stack {
+func newStack(t *testing.T) *stack { return newStackWith(t, nil) }
+
+// newStackWith is newStack with the server's options changed by mod.
+func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -86,14 +89,18 @@ func newStack(t *testing.T) *stack {
 		Knowledge: kb, Search: index,
 	})
 	s := &stack{t: t, db: sqlDB, dir: dir, setupToken: auth.NewSetupToken()}
-	s.h = newHandler(t, sqlDB, Options{
+	opts := Options{
 		Auth:          auth.Options{InsecureCookies: true, SetupToken: s.setupToken, HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}},
 		Search:        index,
 		Providers:     providers.New(store, nil),
 		Conversations: conversations.New(sqlDB, nil),
 		Tools:         tools,
 		BackupDataDir: dir,
-	})
+	}
+	if mod != nil {
+		mod(&opts)
+	}
+	s.h = newHandler(t, sqlDB, opts)
 	srv := httptest.NewServer(s.h)
 	t.Cleanup(srv.Close)
 	s.mcpURL = srv.URL + "/mcp"

@@ -1,0 +1,13 @@
+{
+  "footer": "Sent by TaskTo.AI, the server you work on.",
+  "messages": {
+    "test": {
+      "subject": "TaskTo.AI test email",
+      "title": "Email works",
+      "paragraphs": [
+        "Hello {name}, this is a test message from your TaskTo.AI server, sent at your request.",
+        "If you can read it, the server can send email: invitations, password resets and notifications will reach people."
+      ]
+    }
+  }
+}

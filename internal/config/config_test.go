@@ -442,3 +442,74 @@ func TestSSOValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestSMTPSettings(t *testing.T) {
+	cfg, err := Load(nil, env(map[string]string{ //nolint:gosec // G101: names of settings and a path, not credentials
+		"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "TaskTo <taskto@example.com>",
+		"TASKTO_SMTP_USERNAME": "taskto", "TASKTO_SMTP_PASSWORD_FILE": "/run/secrets/smtp",
+		"TASKTO_SMTP_EGRESS": "public",
+	}), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SMTPHost != "smtp.example.com" || cfg.SMTPSecurityMode() != "starttls" || cfg.SMTPPortNumber() != 587 ||
+		cfg.SMTPUsername != "taskto" || cfg.SMTPPasswordFile != "/run/secrets/smtp" || cfg.SMTPEgressPolicy().IsAny() {
+		t.Fatalf("config = %+v", cfg)
+	}
+	if !strings.Contains(cfg.SMTPFrom, "taskto@example.com") {
+		t.Fatalf("from = %q", cfg.SMTPFrom)
+	}
+
+	for security, port := range map[string]int{"starttls": 587, "tls": 465, "none": 25} {
+		c, err := Load([]string{"-smtp-host", "relay.example.com", "-smtp-from", "a@example.com", "-smtp-security", security}, env(nil), io.Discard)
+		if err != nil || c.SMTPPortNumber() != port {
+			t.Fatalf("%s: port %d, %v", security, c.SMTPPortNumber(), err)
+		}
+	}
+	c, err := Load([]string{"-smtp-host", "relay.example.com", "-smtp-from", "a@example.com", "-smtp-port", "2525"}, env(nil), io.Discard)
+	if err != nil || c.SMTPPortNumber() != 2525 {
+		t.Fatalf("port %d, %v", c.SMTPPortNumber(), err)
+	}
+}
+
+func TestSMTPValidation(t *testing.T) {
+	base := map[string]string{"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "taskto@example.com"}
+	with := func(extra map[string]string) map[string]string {
+		m := map[string]string{}
+		for k, v := range base {
+			m[k] = v
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+	for name, tt := range map[string]struct {
+		env  map[string]string
+		fail string
+	}{
+		"none":                  {nil, ""},
+		"a host and a sender":   {base, ""},
+		"a host without sender": {map[string]string{"TASKTO_SMTP_HOST": "smtp.example.com"}, "needs -smtp-from"},
+		"a sender without host": {map[string]string{"TASKTO_SMTP_FROM": "taskto@example.com"}, "need -smtp-host"},
+		"a bad sender":          {with(map[string]string{"TASKTO_SMTP_FROM": "not an address"}), "TASKTO_SMTP_FROM"},
+		"a host with a port":    {map[string]string{"TASKTO_SMTP_HOST": "smtp.example.com:587", "TASKTO_SMTP_FROM": "a@example.com"}, "-smtp-port"},
+		"a bad port":            {with(map[string]string{"TASKTO_SMTP_PORT": "70000"}), "port"},
+		"a bad security":        {with(map[string]string{"TASKTO_SMTP_SECURITY": "ssl"}), "starttls, tls or none"},
+		"a username alone":      {with(map[string]string{"TASKTO_SMTP_USERNAME": "u"}), "go together"},
+		"a relative password":   {with(map[string]string{"TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "smtp"}), "absolute"},
+		"credentials in clear":  {with(map[string]string{"TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "/p", "TASKTO_SMTP_SECURITY": "none"}), "clear text"},
+		"clear to a loopback":   {map[string]string{"TASKTO_SMTP_HOST": "127.0.0.1", "TASKTO_SMTP_FROM": "a@example.com", "TASKTO_SMTP_USERNAME": "u", "TASKTO_SMTP_PASSWORD_FILE": "/p", "TASKTO_SMTP_SECURITY": "none"}, ""},
+		"a bad egress":          {with(map[string]string{"TASKTO_SMTP_EGRESS": "nonsense!"}), "egress"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(nil, env(tt.env), io.Discard)
+			switch {
+			case tt.fail == "" && err != nil:
+				t.Fatalf("Load: %v", err)
+			case tt.fail != "" && (err == nil || !strings.Contains(err.Error(), tt.fail)):
+				t.Fatalf("Load error = %v, want one with %q", err, tt.fail)
+			}
+		})
+	}
+}

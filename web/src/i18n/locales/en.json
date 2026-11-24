@@ -843,6 +843,12 @@
     "endpoint_status": "The endpoint answered {status}.",
     "endpoint_no_models": "The endpoint's answer isn't a list of models.",
     "egress_refused": "The server's egress policy doesn't allow {host}.",
+    "mail_not_configured": "Outgoing email isn't set up. The person who runs the server sets the SMTP server (docs/install.md, Email).",
+    "mail_connect_failed": "The SMTP server at {host} didn't answer. Check its address, port and the server's network.",
+    "mail_tls_failed": "The connection to the SMTP server couldn't be made secure: its certificate isn't trusted, or it doesn't offer STARTTLS.",
+    "mail_auth_failed": "The SMTP server refused the sign-in. Check the user name and the password file.",
+    "mail_rejected": "The SMTP server refused the message (reply {smtp_code}). The server's log has its answer.",
+    "mail_failed": "The message couldn't be sent. The server's log says why.",
     "cli_workers_off": "CLI workers are off on this server.",
     "cli_workers_no_boundary": "CLI workers run in local mode on this server, with no boundary between users, so they work only while the server has a single user. An operator can run the CLI worker container instead.",
     "cli_not_installed": "{cli} isn't installed on this server.",
@@ -987,7 +993,28 @@
       "language": "Default language",
       "languageHelp": "For members whose browser asks for a language TaskTo.AI doesn't have. Each person can pick their own in the account menu.",
       "save": "Save",
-      "saved": "Saved."
+      "saved": "Saved.",
+      "mail": {
+        "title": "Email",
+        "loading": "Loading…",
+        "off": "This server can't send email yet. The person who runs it sets an SMTP server, as the install guide (docs/install.md, Email) explains; until then, reset and invite links are passed on by hand.",
+        "server": "SMTP server",
+        "serverValue": "{host}, port {port}",
+        "security": "Connection",
+        "securities": {
+          "starttls": "STARTTLS (upgraded to TLS)",
+          "tls": "TLS",
+          "none": "Not encrypted"
+        },
+        "from": "Sender",
+        "signIn": "Sign-in",
+        "signInSet": "With a user name and password",
+        "signInNone": "None",
+        "test": "Send a test email",
+        "testing": "Sending…",
+        "testHelp": "The test goes to your own address, {email}, in your language.",
+        "sent": "Test email sent to {email}. If it doesn't arrive, look in the spam folder, and at the server's mail log."
+      }
     },
     "members": {
       "resetLink": "Reset link",

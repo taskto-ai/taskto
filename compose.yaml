@@ -47,6 +47,15 @@ services:
       TASKTO_SSO_PROVIDERS: ${TASKTO_SSO_PROVIDERS:-}
       TASKTO_PUBLIC_URL: ${TASKTO_PUBLIC_URL:-}
       TASKTO_DISABLE_PASSWORD_LOGIN: ${TASKTO_DISABLE_PASSWORD_LOGIN:-}
+      # Outgoing email (docs/install.md#email): the SMTP server, the sender and where the
+      # password file is as the container sees it. Empty is unset: no email.
+      TASKTO_SMTP_HOST: ${TASKTO_SMTP_HOST:-}
+      TASKTO_SMTP_PORT: ${TASKTO_SMTP_PORT:-}
+      TASKTO_SMTP_SECURITY: ${TASKTO_SMTP_SECURITY:-}
+      TASKTO_SMTP_FROM: ${TASKTO_SMTP_FROM:-}
+      TASKTO_SMTP_USERNAME: ${TASKTO_SMTP_USERNAME:-}
+      TASKTO_SMTP_PASSWORD_FILE: ${TASKTO_SMTP_PASSWORD_FILE:-}
+      TASKTO_SMTP_EGRESS: ${TASKTO_SMTP_EGRESS:-}
     read_only: true
     tmpfs:
       - /tmp
