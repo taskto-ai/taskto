@@ -109,7 +109,7 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprintf(w, `{"sha":%q}`, sha)
+		_ = json.NewEncoder(w).Encode(map[string]string{"sha": sha})
 	case strings.HasPrefix(path, repo+"compare/"):
 		head := path[strings.LastIndex(path, "...")+3:]
 		st, ok := g.compare[head]
