@@ -252,7 +252,7 @@ func TestUpdateChecksTheImagesOfTheContainersBeforeStartingThem(t *testing.T) {
 	if e.count(`^rm id-`) != 1 {
 		t.Errorf("the containers that were made and not started weren't removed\n%s", strings.Join(e.calls(), "\n"))
 	}
-	if made, rm, back := e.index(`^compose create .* @`+updNew+`$`), e.index(`^rm `), e.index(`^compose start .* @`+updOld+`$`); !(made < rm && rm < back) {
+	if made, rm, back := e.index(`^compose create .* @`+updNew+`$`), e.index(`^rm `), e.index(`^compose start .* @`+updOld+`$`); made >= rm || rm >= back {
 		t.Errorf("create at %d, removal at %d, the old version's start at %d", made, rm, back)
 	}
 	e.wantOldFilesBack()
