@@ -54,6 +54,11 @@ const (
 	CodeResetOwn                Code = "reset_own"
 	CodeResetElsewhere          Code = "reset_elsewhere"
 
+	// Your own sessions (internal/auth/sessions.go).
+
+	CodeSessionNotFound Code = "session_not_found"
+	CodeSessionCurrent  Code = "session_current"
+
 	// Single sign-on (internal/auth/sso.go). The callback redirects the browser to
 	// /?sso_error=<code>; the same codes name the API's own answers.
 

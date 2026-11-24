@@ -1,6 +1,6 @@
 // The workspace's settings, a tab each: general (its default language), members and invites,
 // shared spaces, model providers, CLI accounts, search, dictation, notifications (push on this
-// device), your password, access
+// device), your password, your sessions, access
 // tokens and about. Admins see them all; members see model providers (their own accounts, and
 // the workspace's to read), their own CLI accounts, search (their spaces' consent), dictation
 // (what is in use), notifications, their own password and access tokens, and about (the credits; admins also
@@ -18,6 +18,7 @@ import { NotificationsTab } from './NotificationsTab'
 import { PasswordTab } from './PasswordTab'
 import { ProvidersTab } from './ProvidersTab'
 import { SearchTab } from './SearchTab'
+import { SessionsTab } from './SessionsTab'
 import { SpacesTab } from './SpacesTab'
 import { TokensTab } from './TokensTab'
 
@@ -31,6 +32,7 @@ type Tab =
   | 'dictation'
   | 'notifications'
   | 'password'
+  | 'sessions'
   | 'tokens'
   | 'about'
 
@@ -44,6 +46,7 @@ const TABS: { tab: Tab; label: Key; admin: boolean }[] = [
   { tab: 'dictation', label: 'settings.tabs.dictation', admin: false },
   { tab: 'notifications', label: 'settings.tabs.notifications', admin: false },
   { tab: 'password', label: 'settings.tabs.password', admin: false },
+  { tab: 'sessions', label: 'settings.tabs.sessions', admin: false },
   { tab: 'tokens', label: 'settings.tabs.tokens', admin: false },
   { tab: 'about', label: 'settings.tabs.about', admin: false },
 ]
@@ -94,6 +97,8 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
       return <NotificationsTab me={me.user.id} workspace={workspace.id} />
     case 'password':
       return <PasswordTab />
+    case 'sessions':
+      return <SessionsTab />
     case 'tokens':
       return <TokensTab workspace={workspace.id} />
     case 'about':

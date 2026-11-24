@@ -44,6 +44,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/workspaces/{workspace}/tokens/{token}", s.RequireMember(http.HandlerFunc(s.handleDeleteToken)))
 
 	s.passwordRoutes(mux)
+	s.sessionRoutes(mux)
 	s.ssoRoutes(mux)
 }
 

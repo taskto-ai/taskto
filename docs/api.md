@@ -66,6 +66,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `reset_invalid` | 404 | The reset link is unknown, used or expired. |
 | `reset_own` | 400 | An admin changes their own password in Settings, not with a reset link. |
 | `reset_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `session_not_found` | 404 | No such session of the caller's (another user's sessions are never found). |
+| `session_current` | 400 | The session asked to be signed out is the one making the request: log out instead. |
 | `password_login_disabled` | 403 | Passwords are turned off on this server ([sso.md](sso.md#turning-passwords-off)): logging in, a new account with a password, making a reset link and using one answer this. |
 | `sso_unknown_provider` | 404 | No such single sign-on provider. |
 | `sso_failed` | 502 | The provider didn't answer. As `?sso_error=`: the provider or the exchange failed, or the person declined (details are in the server's log). |
@@ -285,6 +287,11 @@ the cookie is called `taskto_session` and isn't `Secure`, since browsers refuse 
 `__Host-` cookie without it.
 
 A route that needs a login answers `401` without a valid session.
+
+Each session keeps what [your sessions](#your-sessions) list: when it was made, when it was last
+used (written at most once a minute) and the names of the browser and system its login was made
+with, read from the `User-Agent` header (for example `Firefox`, `macOS`). The header itself and
+the client's address are not stored.
 
 ### Access tokens
 
@@ -595,6 +602,36 @@ link is for, ends its sessions and reset links, and logs it in here: `200` with 
 is revoked). `400` for a password that is too short or too long, which leaves the link
 usable. `404` if the token is unknown, used, replaced or expired. `403 password_login_disabled`
 when the operator turned passwords off.
+
+## Your sessions
+
+The browsers and devices logged in as you, to see and to sign out. These routes act on the
+caller's own sessions only, take a session and never an access token (`403`), and never return a
+session's token. A session is named by its `id`, which is no way into it; another user's id is
+`session_not_found`.
+
+### `GET /api/me/sessions`
+
+`200` `{"sessions": [...]}` of the sessions that haven't expired, the current one first, then the
+most recently used:
+
+```json
+{"sessions": [{"id": 12, "browser": "Firefox", "os": "macOS", "created_at": "2026-11-20T10:00:00.000Z",
+  "last_seen_at": "2026-11-24T09:30:00.000Z", "expires_at": "2026-12-20T10:00:00.000Z", "current": true}]}
+```
+
+`browser` and `os` are `""` when the `User-Agent` didn't say. `last_seen_at` is `created_at` for a
+session not used since its login.
+
+### `DELETE /api/me/sessions/{session}`
+
+Signs that session out at once, with its push subscriptions. `204`; `404` `session_not_found`; `400`
+`session_current` for the session making the request, which `POST /api/logout` ends.
+
+### `DELETE /api/me/sessions`
+
+Signs out every other session of the caller, keeping the one making the request. `200`
+`{"revoked": n}`, the number ended.
 
 ## Members
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"time"
 
 	"taskto.ai/taskto/internal/audit"
@@ -176,24 +177,41 @@ func (s *Service) insertSession(ctx context.Context, tx *sql.Tx, userID int64) (
 		return "", err
 	}
 	token, hash := newToken()
-	_, err := tx.ExecContext(ctx, `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)`,
-		hash, userID, stamp(now.Add(s.opts.SessionTTL)))
+	browser, os := deviceOf(ctx)
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO sessions (token_hash, user_id, created_at, expires_at, browser, os) VALUES (?, ?, ?, ?, ?, ?)`,
+		hash, userID, stamp(now), stamp(now.Add(s.opts.SessionTTL)), browser, os)
 	return token, err
 }
 
+// sessionTouchEvery is the most often a session's last use is written down.
+const sessionTouchEvery = time.Minute
+
 // sessionUser returns the user a session token belongs to, or errNotFound if the token
-// is unknown or expired.
+// is unknown or expired. It records the use, at most once a minute.
 func (s *Service) sessionUser(ctx context.Context, token string) (User, error) {
 	var u User
+	var id int64
+	var seen string
+	now := s.now()
 	err := s.db.QueryRowContext(ctx, `
-		SELECT u.id, u.email, u.name
+		SELECT u.id, u.email, u.name, s.id, COALESCE(s.last_seen_at, s.created_at)
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > ?`, hashToken(token), stamp(s.now())).
-		Scan(&u.ID, &u.Email, &u.Name)
+		WHERE s.token_hash = ? AND s.expires_at > ?`, hashToken(token), stamp(now)).
+		Scan(&u.ID, &u.Email, &u.Name, &id, &seen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, errNotFound
 	}
-	return u, err
+	if err != nil {
+		return u, err
+	}
+	if seen <= stamp(now.Add(-sessionTouchEvery)) {
+		if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET last_seen_at = ? WHERE id = ?`, stamp(now), id); err != nil {
+			// The request can go ahead: last_seen_at is a hint for the user, not a control.
+			slog.WarnContext(ctx, "auth: recording a session's use", "session_id", id, "err", err)
+		}
+	}
+	return u, nil
 }
 
 func (s *Service) deleteSession(ctx context.Context, token string) error {
