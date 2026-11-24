@@ -259,8 +259,9 @@ test('skipping the last step moves the keyboard to the page and says the list is
   skip.focus()
   fireEvent.click(skip)
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Set up your workspace' })).toBeNull())
+  const done = await screen.findByText('The setup checklist is complete.')
+  expect(done.closest('[role="status"]')).toBeTruthy()
   expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Home', level: 1 }))
-  expect(screen.getByText('The setup checklist is complete.').closest('[role="status"]')).toBeTruthy()
 })
 
 test('a dismissal that fails leaves the checklist, and the keyboard, where they were', async () => {
