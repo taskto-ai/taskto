@@ -1602,7 +1602,11 @@
         "search_embeddings_changed": "Embeddings da busca alterados",
         "search_consent_changed": "Consentimento da busca alterado",
         "dictation_settings_changed": "Configurações de ditado alteradas",
-        "data_export_started": "Exportação de dados iniciada"
+        "data_export_started": "Exportação de dados iniciada",
+        "two_factor_enabled": "Login em duas etapas ativado",
+        "two_factor_disabled": "Login em duas etapas desativado",
+        "two_factor_recovery_codes_replaced": "Códigos de recuperação substituídos",
+        "two_factor_cleared": "Login em duas etapas removido por um administrador"
       },
       "targets": {
         "user": "Membro",
@@ -1659,6 +1663,7 @@
         "unknown_account": "Conta inexistente",
         "no_password": "A conta não tem senha",
         "wrong_password": "Senha errada",
+        "wrong_code": "Código errado",
         "name": "Nome",
         "archived": "Arquivado",
         "offline_downloads": "Downloads off-line",
