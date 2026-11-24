@@ -129,7 +129,19 @@ var ErrNotFound = errors.New("space not found")
 type Checker struct {
 	db   *sql.DB
 	auth *auth.Service
+	// archiveHooks are told when a shared space is archived or brought back (OnArchiveChange).
+	archiveHooks []ArchiveHook
 }
+
+// ArchiveHook is told, in the transaction that archives a shared space or brings it back, that it
+// did, with the space's ID; the space already has its new state there. What the hook writes is
+// committed with the change, and an error it returns undoes the change. It lets a feature that
+// keeps timed work for the space's content (package boards' reminders) follow the space without
+// this package knowing the feature. It may be called for a space whose state did not change.
+type ArchiveHook func(ctx context.Context, tx *sql.Tx, spaceID int64) error
+
+// OnArchiveChange adds a hook. It is for startup, before the checker serves requests.
+func (c *Checker) OnArchiveChange(h ArchiveHook) { c.archiveHooks = append(c.archiveHooks, h) }
 
 // New returns the access layer over sqlDB, which must be migrated. a authenticates the
 // requests of RequireSpace and the space routes; it may be nil for code that only calls
@@ -197,6 +209,12 @@ func checkIn(ctx context.Context, q rowQuerier, userID, spaceID int64) (Space, e
 		return Space{}, ErrNotFound
 	}
 	return s, nil
+}
+
+// CheckTx is Check read inside tx, the transaction of a change that depends on the answer: with
+// the write lock held, the answer is still true when the change commits.
+func (c *Checker) CheckTx(ctx context.Context, tx *sql.Tx, userID, spaceID int64) (Space, error) {
+	return checkIn(ctx, tx, userID, spaceID)
 }
 
 // CanRead reports whether userID may read spaceID's content.
