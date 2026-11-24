@@ -611,9 +611,11 @@ when the operator turned passwords off.
 ## Two-factor login
 
 A user can ask for a code from an authenticator app (TOTP, RFC 6238: HMAC-SHA1, six digits,
-30-second steps) after the right password, on top of it. These routes take a session, never
-an access token (`403`), and act on the caller only: none names a user, and none takes one in
-the body. An admin's clearing a member's is the one exception, below.
+30-second steps) after the right password, on top of it. The routes under `/api/me/two-factor`
+take the caller's session, never an access token (`403`), and act on the caller only: none names a
+user, and none takes one in the body. `POST /api/login/two-factor` is the exception that needs
+no session (the password step gave a challenge, not a session), and an admin's clearing a member's
+is the other, both below.
 
 - **Where it applies.** The password login (`POST /api/login`). **Signing in with a provider
   has no second step**: the identity provider's own sign-in, and its own two-factor login if

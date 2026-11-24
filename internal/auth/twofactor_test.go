@@ -191,10 +191,10 @@ func TestTwoFactorEnrolment(t *testing.T) {
 	}
 
 	// Until it's confirmed, two-factor login is off: the login asks for no code.
-	expect(t, e.client().login("owner@example.com", ownerPassword), http.StatusOK)
+	expectSession(t, e.client(), "owner@example.com", ownerPassword)
 	// A code of the replaced secret, or a wrong one, confirms nothing.
 	oldCode := totpCode([]byte(mustBase32(t, first)), totpStep(e.now.Unix()))
-	for _, code := range []string{"000000", "abcdef", "", oldCode} {
+	for _, code := range []string{wrongCode, "12345", "", oldCode} {
 		rec = owner.do(http.MethodPost, "/api/me/two-factor/confirm", map[string]string{"enrolment": second.Enrolment, "code": code})
 		expect(t, rec, http.StatusForbidden)
 		if got := errCode(t, rec); got != "wrong_two_factor_code" {
@@ -312,7 +312,7 @@ func TestLoginAsksForACodeOnlyWithTwoFactorOn(t *testing.T) {
 	}
 
 	// A wrong code gives no session and the challenge survives for a right one.
-	rec = c.second(got.Challenge, "000000")
+	rec = c.second(got.Challenge, wrongCode)
 	expect(t, rec, http.StatusUnauthorized)
 	if code := errCode(t, rec); code != "wrong_two_factor_code" {
 		t.Fatalf("code = %s", code)
@@ -342,7 +342,7 @@ func TestSecondStepBrowserKeepsItsSessionUntilItPasses(t *testing.T) {
 	before := owner.cookie
 	challenge := owner.challenge("owner@example.com", ownerPassword)
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK) // the old session still works
-	expect(t, owner.second(challenge, "000000"), http.StatusUnauthorized)
+	expect(t, owner.second(challenge, wrongCode), http.StatusUnauthorized)
 	expect(t, owner.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 	expect(t, owner.second(challenge, e.codeNow(two.secret)), http.StatusOK)
 	// Passing replaces the browser's session, as a login does.
@@ -466,8 +466,12 @@ func TestSecondStepChallengeExpiresAndTakesFewAttempts(t *testing.T) {
 
 	// A challenge takes challengeAttempts wrong codes, and then not even a right one.
 	ch = c.challenge("owner@example.com", ownerPassword)
-	for range challengeAttempts {
-		expect(t, c.second(ch, "000000"), http.StatusUnauthorized)
+	for i := range challengeAttempts {
+		rec := c.second(ch, wrongCode)
+		expect(t, rec, http.StatusUnauthorized)
+		if got := errCode(t, rec); got != "wrong_two_factor_code" {
+			t.Fatalf("wrong code %d: %s", i+1, got)
+		}
 	}
 	rec = c.second(ch, e.codeNow(two.secret))
 	expect(t, rec, http.StatusUnauthorized)
@@ -497,7 +501,7 @@ func TestSecondStepRateLimit(t *testing.T) {
 		if i > 0 && i%(challengeAttempts-1) == 0 {
 			ch = c.challenge("owner@example.com", ownerPassword)
 		}
-		expect(t, c.second(ch, "000000"), http.StatusUnauthorized)
+		expect(t, c.second(ch, wrongCode), http.StatusUnauthorized)
 	}
 	ch = c.challenge("owner@example.com", ownerPassword)
 	rec := c.second(ch, e.codeNow(two.secret)) // a right code, too late
@@ -540,11 +544,11 @@ func TestSecondStepRateLimitPerAddressAndAccount(t *testing.T) {
 	for i := range codeAccountAttempts {
 		c := e.client()
 		c.ip = fmt.Sprintf("198.51.100.%d:1", i)
-		expect(t, c.second(c.challenge("owner@example.com", ownerPassword), "000000"), http.StatusUnauthorized)
+		expect(t, c.second(c.challenge("owner@example.com", ownerPassword), wrongCode), http.StatusUnauthorized)
 	}
 	c = e.client()
 	c.ip = "203.0.113.9:1"
-	expect(t, c.second(c.challenge("owner@example.com", ownerPassword), "000000"), http.StatusTooManyRequests)
+	expect(t, c.second(c.challenge("owner@example.com", ownerPassword), wrongCode), http.StatusTooManyRequests)
 }
 
 func TestTurnOffAndNewRecoveryCodesNeedPasswordAndCode(t *testing.T) {
@@ -561,7 +565,7 @@ func TestTurnOffAndNewRecoveryCodesNeedPasswordAndCode(t *testing.T) {
 	for _, f := range []func(string, string) *httptest.ResponseRecorder{disable, regen} {
 		expect(t, f("fake-wrong-password", e.codeNow(two.secret)), http.StatusForbidden)
 		expect(t, f("", e.codeNow(two.secret)), http.StatusBadRequest)
-		rec := f(ownerPassword, "000000")
+		rec := f(ownerPassword, wrongCode)
 		expect(t, rec, http.StatusForbidden)
 		if got := errCode(t, rec); got != "wrong_two_factor_code" {
 			t.Fatalf("code = %s", got)
@@ -596,7 +600,7 @@ func TestTurnOffAndNewRecoveryCodesNeedPasswordAndCode(t *testing.T) {
 			t.Fatalf("%s has %d rows after turning it off", table, n)
 		}
 	}
-	expect(t, e.client().login("owner@example.com", ownerPassword), http.StatusOK)
+	expectSession(t, e.client(), "owner@example.com", ownerPassword)
 	rec = disable(ownerPassword, e.codeNow(two.secret))
 	expect(t, rec, http.StatusConflict)
 	if got := errCode(t, rec); got != "two_factor_not_on" {

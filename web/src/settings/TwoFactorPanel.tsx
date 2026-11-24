@@ -46,6 +46,7 @@ export function TwoFactorPanel() {
         <Confirm
           setup={setup}
           onCancel={() => setSetup(null)}
+          onFailed={status.reload}
           onCodes={(c) => {
             setSetup(null)
             setCodes(c)
@@ -97,10 +98,12 @@ function Start({ onStarted }: { onStarted: (s: Setup) => void }) {
 function Confirm({
   setup,
   onCancel,
+  onFailed,
   onCodes,
 }: {
   setup: Setup
   onCancel: () => void
+  onFailed: () => void
   onCodes: (codes: string[]) => void
 }) {
   const t = useT()
@@ -116,6 +119,9 @@ function Confirm({
       })
     })
     if (ok && got) onCodes(got.recovery_codes)
+    // A confirmation whose answer was lost may have turned it on: the status says, and a panel that
+    // finds it on shows that instead of this form.
+    else onFailed()
   }
   return (
     <form className="tt-form" onSubmit={submit}>

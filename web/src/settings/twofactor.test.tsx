@@ -213,3 +213,29 @@ test('a refused clear says why', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Yes, clear it' }))
   expect((await screen.findByRole('alert')).textContent).toContain("you don't administer")
 })
+
+// A confirmation whose answer was lost may have turned it on: the panel asks the server instead of
+// staying on a form that can only answer "already on".
+test('a confirmation that fails reloads the status, and a panel that finds it on shows that', async () => {
+  let enabled = false
+  const calls = fakeFetch({
+    'GET /api/me/two-factor': () => ({ body: { enabled, recovery_codes_left: enabled ? 10 : 0 } }),
+    'POST /api/me/two-factor/enrol': {
+      body: { enrolment: 'fake-enrolment', secret: 'AAAABBBBCCCCDDDD', otpauth_uri: URI },
+    },
+    'POST /api/me/two-factor/confirm': () => {
+      enabled = true // the first confirmation went through, its answer didn't arrive
+      return { status: 409, body: { error: 'on', code: 'two_factor_already_on' } }
+    },
+  })
+  render(<SettingsPage me={me} workspace={member} tab="password" />)
+  await screen.findByText('Two-factor login is off.')
+  fireEvent.change(screen.getByLabelText('Your password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on two-factor login' }))
+  fireEvent.change(await screen.findByLabelText('Then enter the six-digit code the app shows'), {
+    target: { value: '123456' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and turn on' }))
+  await screen.findByText('Two-factor login is on.')
+  expect(sent(calls, 'GET', '/api/me/two-factor')).toHaveLength(2)
+})

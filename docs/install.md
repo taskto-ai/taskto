@@ -435,6 +435,9 @@ makes on first run. What to know as the operator:
 - **Back up `server.key` with the database.** The secrets are sealed with it. A restore with
   a different key leaves every user's secret unreadable, so their logins fail at the code until
   an admin clears it (Settings → Members → **Clear two-factor**) and they turn it on again.
+  Restore the `server.key` that goes with the database. If it is lost and no admin who may clear
+  the member can sign in (an owner who is the only admin, say), use the stopped-server recovery
+  below.
 - **A lost phone and lost recovery codes** is an admin's job: Settings → Members → *Clear
   two-factor* for that member. It works under the rule for a password reset link: only
   an admin of every workspace the member belongs to may do it, and the member's sessions end.
@@ -444,8 +447,9 @@ makes on first run. What to know as the operator:
 - **Signing in with a provider has no second step**: the provider's own sign-in is trusted
   as it is. Ask the provider for two-factor login if you want it there
   ([sso.md](sso.md#two-factor-login)). Access tokens and the CLI turns have none either.
-- The authenticator's clock must be within about a minute of the server's: codes are
-  accepted for the current 30-second step and the one either side. Keep the server's clock
+- The authenticator's clock must agree with the server's: codes are accepted for the current
+  30-second step and the one either side, so a difference of up to 30 seconds always works, and
+  a larger one only depending on where in a step the two clocks are. Keep the server's clock
   right (NTP).
 
 ## Models

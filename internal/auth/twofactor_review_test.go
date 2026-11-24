@@ -40,7 +40,7 @@ func TestResetLinkAsksForACodeWhenTwoFactorIsOn(t *testing.T) {
 	expect(t, e.client().do(http.MethodPost, "/api/password-reset", map[string]string{"token": link, "password": "fake-third-password"}), http.StatusNotFound)
 
 	// The second step is the login's: a wrong code leaves it for another try, a right one signs in.
-	expect(t, browser.second(got.Challenge, "000000"), http.StatusUnauthorized)
+	expect(t, browser.second(got.Challenge, wrongCode), http.StatusUnauthorized)
 	if browser.cookie != nil {
 		t.Fatal("a wrong code made a session")
 	}
@@ -222,7 +222,7 @@ func TestSecondStepConcurrentWrongCodesAreCappedAtTheAttempts(t *testing.T) {
 			// Each from an address of its own, so the code limits don't decide it.
 			c := e.client()
 			c.ip = fmt.Sprintf("192.0.2.%d:1234", 10+i)
-			rec := c.second(ch, "000000")
+			rec := c.second(ch, wrongCode)
 			codes[i], reasons[i] = rec.Code, errCode(t, rec)
 		}()
 	}
@@ -244,6 +244,24 @@ func TestSecondStepConcurrentWrongCodesAreCappedAtTheAttempts(t *testing.T) {
 	}
 	c := e.client()
 	expect(t, c.second(ch, e.codeNow(two.secret)), http.StatusUnauthorized)
+}
+
+// wrongCode is neither a six-digit code nor a recovery code, so it can't match whatever the
+// random secret of a test makes: it is the wrong code in every test that needs one.
+const wrongCode = "abcdef"
+
+// expectSession logs in with a password alone, which must give a session and no code step.
+func expectSession(t *testing.T, c *client, email, password string) {
+	t.Helper()
+	rec := c.login(email, password)
+	expect(t, rec, http.StatusOK)
+	if got := decode[map[string]any](t, rec); got["two_factor_required"] != nil || got["user"] == nil {
+		t.Fatalf("login reply = %s, want a signed-in user", rec.Body.String())
+	}
+	if c.cookie == nil {
+		t.Fatal("no session cookie")
+	}
+	expect(t, c.do(http.MethodGet, "/api/me", nil), http.StatusOK)
 }
 
 type enrolled struct {
@@ -350,5 +368,72 @@ func TestPasswordChangeAndResetDropAPendingEnrolment(t *testing.T) {
 		map[string]string{"current_password": newPassword, "new_password": renewedPassword}), http.StatusNoContent)
 	if n := e.count(`SELECT count(*) FROM user_totp WHERE user_id = ? AND enabled_at IS NOT NULL`, memberMe.User.ID); n != 1 {
 		t.Fatal("a password change turned two-factor login off")
+	}
+}
+
+// A challenge made before the operator turned passwords off finishes no login.
+func TestSecondStepRefusedWhenPasswordLoginIsOff(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, _ := e.setup()
+	two := e.turnOn(owner, ownerPassword)
+	c := e.client()
+	ch := c.challenge("owner@example.com", ownerPassword)
+	e.svc.opts.DisablePasswordLogin = true
+	rec := c.second(ch, e.codeNow(two.secret))
+	expect(t, rec, http.StatusForbidden)
+	if got := errCode(t, rec); got != "password_login_disabled" {
+		t.Fatalf("code = %s", got)
+	}
+	if c.cookie != nil {
+		t.Fatal("a session from a challenge of the passwords that are off")
+	}
+}
+
+// A second step the account's limit refuses tried no code: it isn't charged to the address,
+// whose budget others behind it share.
+func TestSecondStepAccountLimitDoesNotChargeTheAddress(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, _ := e.setup()
+	e.turnOn(owner, ownerPassword)
+	c := e.client()
+	for range codeAccountAndIPAttempts {
+		expect(t, c.second(c.challenge("owner@example.com", ownerPassword), wrongCode), http.StatusUnauthorized)
+	}
+	used := func() int {
+		e.svc.codePerIP.mu.Lock()
+		defer e.svc.codePerIP.mu.Unlock()
+		n := 0
+		for _, w := range e.svc.codePerIP.hits {
+			n += w.count
+		}
+		return n
+	}
+	before := used()
+	expect(t, c.second(c.challenge("owner@example.com", ownerPassword), wrongCode), http.StatusTooManyRequests)
+	if got := used(); got != before {
+		t.Fatalf("the address was charged %d for a refused attempt", got-before)
+	}
+}
+
+// Enrolling is checked against the password that was verified: one changed meanwhile makes no
+// enrolment, whose secret the old password's holder would otherwise have.
+func TestEnrolDuringPasswordChangeFails(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, _ := e.setup()
+	e.svc.hook = func(point string) {
+		if point != "own-password-verified" {
+			return
+		}
+		e.svc.hook = nil
+		expect(t, owner.do(http.MethodPost, "/api/me/password",
+			map[string]string{"current_password": ownerPassword, "new_password": renewedPassword}), http.StatusNoContent)
+	}
+	rec := owner.do(http.MethodPost, "/api/me/two-factor/enrol", map[string]string{"password": ownerPassword})
+	expect(t, rec, http.StatusConflict)
+	if got := errCode(t, rec); got != "password_changed" {
+		t.Fatalf("code = %s", got)
+	}
+	if n := e.count(`SELECT count(*) FROM user_totp`); n != 0 {
+		t.Fatal("an enrolment was made for a password that changed")
 	}
 }

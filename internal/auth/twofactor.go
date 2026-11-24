@@ -192,29 +192,30 @@ func (s *Service) replaceRecoveryCodes(ctx context.Context, tx *sql.Tx, userID i
 
 // checkOwnPassword checks the password of the caller u, counting a wrong one as a failed
 // login: a session someone else got hold of is no faster a way to guess it than the login
-// form. It answers, and returns false, unless the password is right.
-func (s *Service) checkOwnPassword(w http.ResponseWriter, r *http.Request, u User, password string) bool {
+// form. It answers, and returns false, unless the password is right; when it is, it returns the
+// hash that matched, for a transaction to check it is still the user's.
+func (s *Service) checkOwnPassword(w http.ResponseWriter, r *http.Request, u User, password string) (string, bool) {
 	if password == "" {
 		writeError(w, http.StatusBadRequest, apierr.CodeCurrentPasswordRequired, "the current password is required")
-		return false
+		return "", false
 	}
 	_, hash, err := s.userByEmail(r.Context(), u.Email)
 	if err != nil {
 		serverError(w, r, err)
-		return false
+		return "", false
 	}
 	ip := s.clientIP(r)
 	limits := []limitKey{{s.perIP, ip}, {s.perAccountIP, u.Email + "|" + ip}, {s.perAccount, u.Email}}
 	if ok, wait := takeAll(limits); !ok {
 		limited(w, wait, apierr.CodeTooManyPasswords, "too many wrong passwords: try again later")
-		return false
+		return "", false
 	}
 	// An account made by signing in with a provider has no password, and nothing to protect
 	// with a second factor at the password login.
 	if hash == "" {
 		giveAll(limits)
 		writeError(w, http.StatusForbidden, apierr.CodeTwoFactorNoPassword, "this account has no password to protect with a second factor")
-		return false
+		return "", false
 	}
 	match, err := s.hasher.verify(r.Context(), password, hash)
 	if match || err != nil {
@@ -222,14 +223,15 @@ func (s *Service) checkOwnPassword(w http.ResponseWriter, r *http.Request, u Use
 	}
 	if err != nil {
 		serverError(w, r, err)
-		return false
+		return "", false
 	}
 	if !match {
 		// 403, not 401: the session is fine, and 401 would send the web app to the login.
 		writeError(w, http.StatusForbidden, apierr.CodeWrongPassword, errWrongPassword.Error())
-		return false
+		return "", false
 	}
-	return true
+	s.at("own-password-verified")
+	return hash, true
 }
 
 // failTwoFactor answers for the errors of the routes of one's own two-factor login.
@@ -244,6 +246,8 @@ func failTwoFactor(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusConflict, apierr.CodeTwoFactorNotOn, err.Error())
 	case errors.Is(err, errNotStarted):
 		writeError(w, http.StatusConflict, apierr.CodeTwoFactorNotStarted, err.Error())
+	case errors.Is(err, errPasswordChanged):
+		writeError(w, http.StatusConflict, apierr.CodePasswordChanged, err.Error())
 	default:
 		serverError(w, r, err)
 	}
@@ -289,7 +293,8 @@ func (s *Service) handleTwoFactorEnrol(w http.ResponseWriter, r *http.Request) {
 		passwordLoginDisabled(w)
 		return
 	}
-	if !s.checkOwnPassword(w, r, u, req.Password) {
+	verified, ok := s.checkOwnPassword(w, r, u, req.Password)
+	if !ok {
 		return
 	}
 	secret := newTOTPSecret()
@@ -301,6 +306,15 @@ func (s *Service) handleTwoFactorEnrol(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 	enrolment, enrolmentHash := newToken()
 	err = s.write(r.Context(), func(tx *sql.Tx) error {
+		// The password that was checked must still be the user's: a change or reset meanwhile
+		// ended the sessions it could have used, and dropped the enrolments it could have made.
+		var current string
+		if err := tx.QueryRowContext(r.Context(), `SELECT password_hash FROM users WHERE id = ?`, u.ID).Scan(&current); err != nil {
+			return err
+		}
+		if current != verified {
+			return errPasswordChanged
+		}
 		res, err := tx.ExecContext(r.Context(), `
 			INSERT INTO user_totp (user_id, secret, enrolment_id, enrolment_expires_at, created_at) VALUES (?, ?, ?, ?, ?)
 			ON CONFLICT (user_id) DO UPDATE SET secret = excluded.secret, last_step = 0,
@@ -388,7 +402,10 @@ func (s *Service) handleTwoFactorConfirm(w http.ResponseWriter, r *http.Request)
 // whether act ran.
 func (s *Service) ownFactorAction(w http.ResponseWriter, r *http.Request, password, code string, act func(tx *sql.Tx, userID int64) error) bool {
 	u, _ := UserFrom(r.Context())
-	if !s.needKey(w, r) || !s.checkOwnPassword(w, r, u, password) {
+	if !s.needKey(w, r) {
+		return false
+	}
+	if _, ok := s.checkOwnPassword(w, r, u, password); !ok {
 		return false
 	}
 	limits := append([]limitKey{{s.codePerIP, s.clientIP(r)}}, s.accountLimits(s.clientIP(r), u.ID)...)
@@ -534,6 +551,11 @@ func writeChallenge(w http.ResponseWriter, out signIn) {
 // handleLoginTwoFactor is the second step of a password login that asked for a code: it
 // makes the session, once, for a challenge and a right code.
 func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
+	// A challenge made before the operator turned passwords off finishes no login.
+	if s.opts.DisablePasswordLogin {
+		passwordLoginDisabled(w)
+		return
+	}
 	var req struct {
 		Challenge string `json:"challenge"`
 		Code      string `json:"code"`
@@ -577,11 +599,15 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 	}
 	account := s.accountLimits(ip, userID)
 	if ok, wait := takeAll(account); !ok {
+		// Nothing was tried: the address isn't charged for the account's limit, which would
+		// otherwise block others behind the same address.
+		giveAll(perIP)
 		tooManyCodes(w, wait)
 		return
 	}
 	s.at("challenge-found")
 	var token string
+	var u User
 	var wrong bool
 	err = s.write(r.Context(), func(tx *sql.Tx) error {
 		// The challenge is read, its attempts checked and counted, the code spent and the
@@ -628,6 +654,12 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		token, err = s.insertSession(r.Context(), tx, userID)
+		if err != nil {
+			return err
+		}
+		// Read here, so a failure puts the spent code and challenge back rather than answering
+		// 500 with them gone.
+		u, err = s.userByID(r.Context(), tx, userID)
 		return err
 	})
 	switch {
@@ -646,11 +678,6 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 	giveAll(perIP)
 	giveAll(account)
 
-	u, err := s.userByID(r.Context(), userID)
-	if err != nil {
-		serverError(w, r, err)
-		return
-	}
 	if old := s.sessionToken(r); old != "" {
 		if err := s.deleteSession(r.Context(), old); err != nil {
 			slog.WarnContext(r.Context(), "auth: deleting the replaced session", "err", err)
@@ -660,9 +687,9 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 	s.writeMe(w, r, http.StatusOK, u)
 }
 
-func (s *Service) userByID(ctx context.Context, id int64) (User, error) {
+func (s *Service) userByID(ctx context.Context, q querier, id int64) (User, error) {
 	u := User{ID: id}
-	err := s.db.QueryRowContext(ctx, `SELECT email, name FROM users WHERE id = ?`, id).Scan(&u.Email, &u.Name)
+	err := q.QueryRowContext(ctx, `SELECT email, name FROM users WHERE id = ?`, id).Scan(&u.Email, &u.Name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, errNotFound
 	}
