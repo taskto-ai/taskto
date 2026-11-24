@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"context"
 	"errors"
 	"math/rand/v2"
 	"os"
@@ -73,8 +74,13 @@ func TestUnicodeEquivalentNamesConflict(t *testing.T) {
 	must[Result](t)(s.Put(ctx, sp, nfc+".md", []byte("the cafe"), "", alice, ""))
 	must[Result](t)(s.Put(ctx, sp, "draft.md", []byte("draft"), "", alice, ""))
 	must[Result](t)(s.Put(ctx, sp, "Menu/"+nfc+".md", []byte("menu"), "", alice, ""))
+	// Cherokee: simple case folding and full case folding disagree about these two, so each
+	// test catches a name the other misses, and either one makes them the same file.
+	must[Result](t)(s.Put(ctx, sp, "\u13a0.md", []byte("cherokee"), "", alice, ""))
+	_, err := s.Put(ctx, sp, "\uab70.md", []byte("replacement"), "", alice, "")
+	wantErr(t, err, ErrConflict)
 
-	_, err := s.Move(ctx, sp, "draft.md", nfd+".md", "", alice, "")
+	_, err = s.Move(ctx, sp, "draft.md", nfd+".md", "", alice, "")
 	wantErr(t, err, ErrConflict)
 	_, err = s.Put(ctx, sp, nfd+".md", []byte("replacement"), "", alice, "")
 	wantErr(t, err, ErrConflict)
@@ -115,7 +121,7 @@ func TestCommitsOutsideMainAreNotFound(t *testing.T) {
 	}
 	head := must[*object.Commit](t)(r.head())
 	blob := must[plumbing.Hash](t)(r.storeBlob([]byte("never committed")))
-	tree := must[plumbing.Hash](t)(r.setPath(head.TreeHash, []string{"ghost.md"}, "ghost.md", blob))
+	tree := must[plumbing.Hash](t)(r.setPath(head.TreeHash, []string{"ghost.md"}, "ghost.md", blob, 1))
 	dangling, _, err := r.newCommit(head, tree, alice, "dangling")
 	r.close()
 	if err != nil {
@@ -193,5 +199,149 @@ func TestReadTextChecksSizeBeforeLoading(t *testing.T) {
 	// Read, which loads it first, can't tell: this is what the check avoids.
 	if _, err := s.Read(ctx, sp, "big.txt", ""); err == nil || errors.Is(err, ErrInvalid) {
 		t.Fatalf("Read of the damaged file: %v", err)
+	}
+}
+
+// RestoreKept never discards the current bytes of an unversioned file: a restore would leave
+// them unreferenced, and they would be removed for good. Restore, the route's, is unchanged.
+func TestRestoreKeptKeepsUnversionedBytes(t *testing.T) {
+	s, _ := newStore(t, Options{})
+	sp := writable(1)
+	first := must[Result](t)(s.Put(ctx, sp, "archive.zip", []byte("PK first"), "", alice, ""))
+	// The first version's bytes are kept for another file that is the same: nothing else says
+	// the older version is gone, so a restore of it would go through.
+	must[Result](t)(s.Put(ctx, sp, "copy.zip", []byte("PK first"), "", alice, ""))
+	must[Result](t)(s.Put(ctx, sp, "archive.zip", []byte("PK second, newer"), first.Doc.Version, alice, ""))
+
+	_, err := s.RestoreKept(ctx, sp, "archive.zip", first.Commit, "", alice, "")
+	wantErr(t, err, ErrInvalid)
+	if got, err := openBytes(t, s, sp, "archive.zip", ""); err != nil || string(got) != "PK second, newer" {
+		t.Fatalf("archive.zip after the refused restore: %q, %v", got, err)
+	}
+	// Restoring what is already there is nothing to refuse.
+	cur := must[Result](t)(s.Put(ctx, sp, "same.zip", []byte("PK same"), "", alice, ""))
+	must[Result](t)(s.RestoreKept(ctx, sp, "same.zip", cur.Commit, "", alice, ""))
+	// The route's restore still does it.
+	must[Result](t)(s.Restore(ctx, sp, "archive.zip", first.Commit, "", alice, ""))
+	if got, err := openBytes(t, s, sp, "archive.zip", ""); err != nil || string(got) != "PK first" {
+		t.Fatalf("archive.zip after the route's restore: %q, %v", got, err)
+	}
+}
+
+// RestoreKept doesn't make a document of a pointer: a Markdown name holding a Git LFS pointer
+// (whose bytes exist, for another file) would read as an unversioned file under a versioned name.
+func TestRestoreKeptRefusesAPointerAsADocument(t *testing.T) {
+	s, dataDir := newStore(t, Options{})
+	sp := writable(1)
+	zip := must[Result](t)(s.Put(ctx, sp, "other.zip", []byte("PK bytes"), "", alice, ""))
+
+	r, err := openRepo(dataDir, sp, s.state(sp.ID), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := must[*object.Commit](t)(r.head())
+	ptr := plumbing.NewHash(zip.Doc.Version)
+	asked := must[string](t)(r.change(head, []edit{{name: "note.md", hash: ptr}}, alice, "a pointer under a document's name"))
+	r.close()
+	cur := must[Doc](t)(s.Read(ctx, sp, "note.md", ""))
+	must[Result](t)(s.Put(ctx, sp, "note.md", []byte("text"), cur.Version, alice, "")) // replaced by a later commit
+
+	_, err = s.RestoreKept(ctx, sp, "note.md", asked, "", alice, "")
+	wantErr(t, err, ErrInvalid)
+	if got := readText(t, s, sp, "note.md", ""); got != "text" {
+		t.Fatalf("note.md after the refused restore = %q", got)
+	}
+}
+
+// A folder with two spellings of a name in it, from before the check, moves whole to an unused
+// name, and nothing it holds is lost.
+func TestFolderWithLegacyCollisionsMoves(t *testing.T) {
+	s, dataDir := newStore(t, Options{})
+	sp := writable(1)
+	const nfc, nfd = "caf\u00e9", "cafe\u0301"
+	must[Result](t)(s.Put(ctx, sp, "Menu/other.md", []byte("other"), "", alice, ""))
+	r, err := openRepo(dataDir, sp, s.state(sp.ID), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := must[*object.Commit](t)(r.head())
+	one := must[plumbing.Hash](t)(r.storeBlob([]byte("one")))
+	two := must[plumbing.Hash](t)(r.storeBlob([]byte("two")))
+	// Written as an older version would have, with no check of the names against each other.
+	must[string](t)(r.change(head, []edit{
+		{name: "Menu/" + nfc + ".md", hash: one, checked: 1},
+		{name: "Menu/" + nfd + ".md", hash: two, checked: 1},
+	}, alice, "legacy"))
+	r.close()
+
+	must[Result](t)(s.Move(ctx, sp, "Menu", "Menu2", "", alice, ""))
+	page := must[Page](t)(s.List(ctx, sp, "Menu2", "", 0))
+	if len(page.Docs) != 3 {
+		t.Fatalf("the moved folder holds %+v", page.Docs)
+	}
+	if got := readText(t, s, sp, "Menu2/"+nfc+".md", ""); got != "one" {
+		t.Fatalf("%s = %q", nfc, got)
+	}
+	if got := readText(t, s, sp, "Menu2/"+nfd+".md", ""); got != "two" {
+		t.Fatalf("%s = %q", nfd, got)
+	}
+	// The destination's own name is still checked against its siblings.
+	_, err = s.Move(ctx, sp, "Menu2", "MENU2", "", alice, "")
+	if err != nil {
+		t.Fatalf("a folder renamed in place by case only: %v", err)
+	}
+	must[Result](t)(s.Put(ctx, sp, "Other/x.md", []byte("x"), "", alice, ""))
+	_, err = s.Move(ctx, sp, "Other", "menu2", "", alice, "")
+	wantErr(t, err, ErrConflict)
+}
+
+// Whether a commit is main's is answered from the space's cached ancestry: a cancelled request
+// stops the walk, a moved head is followed, and a rewrite that gives commits new IDs leaves the
+// old IDs unfound.
+func TestRevisionUsesTheAncestryCache(t *testing.T) {
+	s, _ := newStore(t, Options{})
+	sp := writable(1)
+	base := must[Result](t)(s.Put(ctx, sp, "a.md", []byte("one"), "", alice, ""))
+	v1 := must[Result](t)(s.Put(ctx, sp, "draft.md", []byte("one"), "", alice, ""))
+	v2 := must[Result](t)(s.Put(ctx, sp, "draft.md", []byte("two"), v1.Doc.Version, alice, ""))
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err := s.Read(cancelled, sp, "a.md", base.Commit)
+	wantErr(t, err, context.Canceled)
+	if _, err := s.History(cancelled, sp, "", v1.Commit, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("history with a cancelled context: %v", err)
+	}
+	// The aborted walk left nothing half-known.
+	if got := readText(t, s, sp, "a.md", base.Commit); got != "one" {
+		t.Fatalf("a.md at its commit = %q", got)
+	}
+	// A new head extends the chain; every commit is still found.
+	v3 := must[Result](t)(s.Put(ctx, sp, "draft.md", []byte("three"), v2.Doc.Version, alice, ""))
+	for commit, want := range map[string]string{v1.Commit: "one", v2.Commit: "two", v3.Commit: "three"} {
+		if got := readText(t, s, sp, "draft.md", commit); got != want {
+			t.Fatalf("draft.md at %s = %q, want %q", commit[:7], got, want)
+		}
+	}
+	// A rewrite (draft.md becomes an unversioned file) gives the commits that held it new IDs.
+	must[Result](t)(s.Move(ctx, sp, "draft.md", "draft.zip", "", alice, ""))
+	for _, old := range []string{v1.Commit, v2.Commit, v3.Commit} {
+		if _, err := s.Read(ctx, sp, "a.md", old); err == nil {
+			continue // a commit the rewrite kept
+		} else if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("read at the rewritten commit %s: %v", old[:7], err)
+		}
+	}
+	if got := readText(t, s, sp, "a.md", base.Commit); got != "one" {
+		t.Fatalf("a.md at the commit before the rewrite = %q", got)
+	}
+	h := must[History](t)(s.History(ctx, sp, "", "", 0))
+	for _, c := range h.Commits {
+		if got := readText(t, s, sp, "a.md", c.Commit); got != "one" {
+			t.Fatalf("a.md at %s = %q", c.Commit[:7], got)
+		}
+	}
+	if _, err := s.Read(ctx, sp, "a.md", "0123456789012345678901234567890123456789"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a commit the repository doesn't have: %v", err)
 	}
 }

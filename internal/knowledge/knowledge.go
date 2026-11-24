@@ -217,6 +217,8 @@ type spaceState struct {
 	mu sync.RWMutex
 	// size is the bytes in .git, counted at the first write; -1 until then.
 	size int64
+	// anc is main's commits, which tell a read whether a commit is one of them.
+	anc ancestry
 }
 
 // New returns the knowledge base of the spaces under dataDir.
@@ -285,13 +287,13 @@ func (s *Store) ListAt(ctx context.Context, sp access.Space, at, prefix, after s
 }
 
 // Read returns the document name of sp, as it is now, or as it was at the commit at.
-func (s *Store) Read(_ context.Context, sp access.Space, name, at string) (Doc, error) {
+func (s *Store) Read(ctx context.Context, sp access.Space, name, at string) (Doc, error) {
 	if err := checkPath(name); err != nil {
 		return Doc{}, err
 	}
 	var doc Doc
 	err := s.read(sp, func(r *repo) error {
-		c, err := r.revision(at)
+		c, err := r.revision(ctx, at)
 		if err != nil {
 			return err
 		}
@@ -307,13 +309,13 @@ func (s *Store) Read(_ context.Context, sp access.Space, name, at string) (Doc, 
 // unversioned file, and a file other than Markdown over maxSize bytes, are ErrInvalid without
 // their bytes being read. A file with a NUL byte or that isn't valid UTF-8 is ErrInvalid too,
 // whatever its name says, so what is returned is always text that reads back as it was written.
-func (s *Store) ReadText(_ context.Context, sp access.Space, name, at string, maxSize int64) (Doc, error) {
+func (s *Store) ReadText(ctx context.Context, sp access.Space, name, at string, maxSize int64) (Doc, error) {
 	if err := checkPath(name); err != nil {
 		return Doc{}, err
 	}
 	var doc Doc
 	err := s.read(sp, func(r *repo) error {
-		c, err := r.revision(at)
+		c, err := r.revision(ctx, at)
 		if err != nil {
 			return err
 		}
@@ -554,14 +556,14 @@ func (s *Store) putIf(sp access.Space, name string, adding int64, base string, b
 // bytes to read: from git, or from disk for an unversioned file. The caller closes them;
 // they stay readable after a change replaces the file. An unversioned file's older
 // version whose bytes are gone is ErrNotKept.
-func (s *Store) Open(_ context.Context, sp access.Space, name, at string) (Entry, File, error) {
+func (s *Store) Open(ctx context.Context, sp access.Space, name, at string) (Entry, File, error) {
 	if err := checkPath(name); err != nil {
 		return Entry{}, nil, err
 	}
 	var entry Entry
 	var file File
 	err := s.read(sp, func(r *repo) error {
-		c, err := r.revision(at)
+		c, err := r.revision(ctx, at)
 		if err != nil {
 			return err
 		}
@@ -786,7 +788,21 @@ func (s *Store) History(ctx context.Context, sp access.Space, name, before strin
 
 // Restore makes the document name what it was at the commit at, as a new commit; it
 // also brings back a deleted document. base, if not empty, must be its current version.
-func (s *Store) Restore(_ context.Context, sp access.Space, name, at, base string, by Author, message string) (Result, error) {
+func (s *Store) Restore(ctx context.Context, sp access.Space, name, at, base string, by Author, message string) (Result, error) {
+	return s.restore(ctx, sp, name, at, base, by, message, false)
+}
+
+// RestoreKept is Restore for a caller that can't ask a person first (the agent's tools): under the
+// same lock as the restore, it refuses one that would throw bytes away or bring back what
+// shouldn't be. It won't replace an unversioned file with different content, since a restore
+// would leave the current bytes unreferenced and they would be removed for good, nor restore a
+// pointer where the file would be versioned (a Markdown document, or a name of a versioned kind).
+// The error is ErrInvalid; a person restores such a file in the web app.
+func (s *Store) RestoreKept(ctx context.Context, sp access.Space, name, at, base string, by Author, message string) (Result, error) {
+	return s.restore(ctx, sp, name, at, base, by, message, true)
+}
+
+func (s *Store) restore(ctx context.Context, sp access.Space, name, at, base string, by Author, message string, kept bool) (Result, error) {
 	if err := s.checkWrite(sp, name, nil, by, message); err != nil {
 		return Result{}, err
 	}
@@ -799,7 +815,7 @@ func (s *Store) Restore(_ context.Context, sp access.Space, name, at, base strin
 	// The old content's blob is already stored: restoring adds only trees and a commit.
 	var res Result
 	err := s.write(sp, 0, false, func(r *repo) error {
-		c, err := r.revision(at)
+		c, err := r.revision(ctx, at)
 		if err != nil {
 			return err
 		}
@@ -810,10 +826,15 @@ func (s *Store) Restore(_ context.Context, sp access.Space, name, at, base strin
 		if old.Mode == filemode.Dir {
 			return fmt.Errorf("%w: %s was a folder at %s", ErrInvalid, name, at)
 		}
-		if _, p, err := r.describe(name, old.Hash); err != nil {
+		oldEntry, oldPtr, err := r.describe(name, old.Hash)
+		if err != nil {
 			return err
-		} else if p != nil && !r.hasObject(p.oid) {
+		}
+		if oldPtr != nil && !r.hasObject(oldPtr.oid) {
 			return fmt.Errorf("%w: %s at %s", ErrNotKept, name, at)
+		}
+		if kept && oldPtr != nil && !s.unversioned(name, oldEntry.Size) {
+			return fmt.Errorf("%w: %s at %s was an unversioned file, and under this name it would be a versioned one; restoring it would make a document of a pointer", ErrInvalid, name, at)
 		}
 		r.collect = !IsMarkdown(name)
 		head, err := r.head()
@@ -829,6 +850,12 @@ func (s *Store) Restore(_ context.Context, sp access.Space, name, at, base strin
 			return err
 		} else if err := checkBase(cur, name, base); err != nil {
 			return err
+		} else if kept && cur.Hash != old.Hash {
+			if _, curPtr, err := r.describe(name, cur.Hash); err != nil {
+				return err
+			} else if curPtr != nil && (oldPtr == nil || oldPtr.oid != curPtr.oid) {
+				return fmt.Errorf("%w: %s is an unversioned file and restoring %s would replace it with different content, removing its current bytes for good; ask the person to restore it in the web app", ErrInvalid, name, at[:7])
+			}
 		}
 		commit, err := r.change(head, []edit{{name: name, hash: old.Hash}}, by,
 			orDefault(message, "Restore "+name+" from "+at[:7]))

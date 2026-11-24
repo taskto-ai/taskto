@@ -1171,7 +1171,7 @@ read), or one [taken out of history](#taking-a-files-old-versions-out-of-history
 can't be viewed or restored; `agent` is absent when the user made the change, and
 `<name> (access token)` for a change made with an [access token](#access-tokens). `limit`
 is 1 to 200, default 50; `next`, when there are more, is the `before` of the next page
-(`?before=<commit>`).
+(`?before=<commit>`: `404` if the commit isn't in the space's history, as for `?at=`).
 
 ### `GET /api/workspaces/{workspace}/spaces/{space}/history`
 
@@ -1188,7 +1188,8 @@ deleted document.
 ```
 
 `base_version` is optional and checked as above (`409`). `200` with the change's result;
-`404` if the document didn't exist at that commit; `410` for an unversioned file whose
+`404` if the document didn't exist at that commit, or if `commit` isn't in the space's history
+(a commit a failed change left behind is never a source); `410` for an unversioned file whose
 bytes at that commit are gone.
 
 ### `DELETE /api/workspaces/{workspace}/spaces/{space}/history/{path}`

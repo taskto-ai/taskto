@@ -317,7 +317,7 @@ func (s *Service) restoreDoc(ctx context.Context, c *call, args json.RawMessage)
 	if err != nil {
 		return nil, err
 	}
-	return s.o.Knowledge.Restore(ctx, sp, a.Path, a.Commit, a.BaseVersion, by, a.Message)
+	return s.o.Knowledge.RestoreKept(ctx, sp, a.Path, a.Commit, a.BaseVersion, by, a.Message)
 }
 
 // writeDoc creates or replaces a Markdown document, as the user, committed by the agent.

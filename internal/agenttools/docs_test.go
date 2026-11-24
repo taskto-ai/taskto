@@ -2,6 +2,7 @@ package agenttools
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -382,5 +383,28 @@ func TestReadDocNeverReturnsCorruptedText(t *testing.T) {
 	}
 	if code, out := read(5); code != http.StatusBadRequest {
 		t.Errorf("an offset past the end = %d %v, want a refusal", code, out)
+	}
+}
+
+// restore_doc, which the built-in agent calls with no one to ask, refuses to replace an
+// unversioned file with different content: the current bytes would be removed for good.
+func TestRestoreDocKeepsUnversionedBytes(t *testing.T) {
+	w := newWorld(t)
+	sp := w.alicePrivate
+	first := w.seed(sp, w.one, "archive.zip", []byte("PK first"))
+	w.seed(sp, w.one, "copy.zip", []byte("PK first")) // keeps the first version's bytes on disk
+	if _, err := w.kb.Put(context.Background(), w.space(sp, w.one), "archive.zip", []byte("PK second"), first.Doc.Version,
+		knowledge.Author{Name: "Alice", Email: "alice@example.com"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	w.status(http.StatusBadRequest, w.aliceConv, "restore_doc", map[string]any{"space_id": sp, "path": "archive.zip", "commit": first.Commit})
+	_, f, err := w.kb.Open(context.Background(), w.space(sp, w.one), "archive.zip", "")
+	if err != nil {
+		t.Fatalf("archive.zip is gone: %v", err)
+	}
+	b, _ := io.ReadAll(f)
+	_ = f.Close()
+	if string(b) != "PK second" {
+		t.Fatalf("archive.zip = %q", b)
 	}
 }
