@@ -1728,6 +1728,15 @@
       "more": "Mais resultados",
       "inSpace": "{space} · {path}"
     },
+    "cards": {
+      "title": "Cartões",
+      "label": "Cartões encontrados",
+      "in": "{space} · {board} · {column}",
+      "more": "Mais cartões",
+      "searching": "Buscando nos cartões dos quadros…",
+      "failed": "Não foi possível buscar nos cartões dos quadros: {error}",
+      "incomplete": "Alguns cartões mudaram agora há pouco e não estão nestes resultados. Busque de novo em instantes."
+    },
     "notice": {
       "embeddings_off": "A busca semântica está desligada: este espaço de trabalho não tem modelo de embeddings. Estes são resultados da busca por texto.",
       "embeddings_failed": "O modelo de embeddings não respondeu, então estes são só resultados da busca por texto.",
