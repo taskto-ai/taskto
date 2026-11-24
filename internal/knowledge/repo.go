@@ -42,6 +42,9 @@ type repo struct {
 	// collect is set by a change that can leave unversioned files' bytes nothing points
 	// to: the write runs gc after it.
 	collect bool
+	// releases give back what the write reserved of the storage quotas (Store.reserveQuota),
+	// once the usage is published.
+	releases []func()
 }
 
 // openRepo opens sp's repository. Without one, it creates it if create is set, and
@@ -656,8 +659,18 @@ func (r *repo) size() (int64, error) {
 	if r.state.size >= 0 {
 		return r.state.size, nil
 	}
+	n, err := gitSize(r.root.FS())
+	if err != nil {
+		return 0, err
+	}
+	r.state.size = n
+	return n, nil
+}
+
+// gitSize is the bytes under .git in fsys, the unversioned files' (.git/lfs) apart.
+func gitSize(fsys fs.FS) (int64, error) {
 	var n int64
-	err := fs.WalkDir(r.root.FS(), gitDir, func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(fsys, gitDir, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && d.IsDir() && p == lfsDir {
 			return fs.SkipDir
 		}
@@ -671,11 +684,7 @@ func (r *repo) size() (int64, error) {
 		n += fi.Size()
 		return nil
 	})
-	if err != nil {
-		return 0, err
-	}
-	r.state.size = n
-	return n, nil
+	return n, err
 }
 
 // pendingFile lists, one per line, the files a change in progress is writing. It exists
