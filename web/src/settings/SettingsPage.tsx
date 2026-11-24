@@ -1,10 +1,11 @@
 // The workspace's settings, a tab each: general (its default language), members and invites,
-// shared spaces, model providers, CLI accounts, search, dictation, notifications (push on this
-// device), your password, access
-// tokens and about. Admins see them all; members see model providers (their own accounts, and
-// the workspace's to read), their own CLI accounts, search (their spaces' consent), dictation
-// (what is in use), notifications, their own password and access tokens, and about (the credits; admins also
-// see the server's backups there). The tab is the route's item.
+// shared spaces, storage (what each space stores, against the quotas), model providers, CLI
+// accounts, search, dictation, notifications (push on this device), your password, access
+// tokens and about. Admins see them all; members see their own storage, model providers (their
+// own accounts, and the workspace's to read), their own CLI accounts, search (their spaces'
+// consent), dictation (what is in use), notifications, their own password and access tokens,
+// and about (the credits; admins also see the server's backups there). The tab is the route's
+// item.
 
 import type { Me, Workspace } from '../api'
 import { type Key, useT } from '../i18n'
@@ -19,6 +20,7 @@ import { PasswordTab } from './PasswordTab'
 import { ProvidersTab } from './ProvidersTab'
 import { SearchTab } from './SearchTab'
 import { SpacesTab } from './SpacesTab'
+import { StorageTab } from './StorageTab'
 import { TokensTab } from './TokensTab'
 
 type Tab =
@@ -32,6 +34,7 @@ type Tab =
   | 'notifications'
   | 'password'
   | 'tokens'
+  | 'storage'
   | 'about'
 
 const TABS: { tab: Tab; label: Key; admin: boolean }[] = [
@@ -45,6 +48,7 @@ const TABS: { tab: Tab; label: Key; admin: boolean }[] = [
   { tab: 'notifications', label: 'settings.tabs.notifications', admin: false },
   { tab: 'password', label: 'settings.tabs.password', admin: false },
   { tab: 'tokens', label: 'settings.tabs.tokens', admin: false },
+  { tab: 'storage', label: 'settings.tabs.storage', admin: false },
   { tab: 'about', label: 'settings.tabs.about', admin: false },
 ]
 
@@ -82,6 +86,8 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
       return <MembersTab workspace={workspace.id} me={me.user.id} />
     case 'spaces':
       return <SpacesTab workspace={workspace.id} />
+    case 'storage':
+      return <StorageTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'providers':
       return <ProvidersTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'cli-accounts':

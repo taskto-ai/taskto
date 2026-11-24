@@ -26,6 +26,7 @@ import (
 	"taskto.ai/taskto/internal/mcpserver"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/quota"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/webui"
 )
@@ -61,6 +62,10 @@ type Options struct {
 	Browser *agentbrowser.Service
 	// Notifications serves the notification inbox and Web Push subscriptions; nil leaves them out.
 	Notifications *notifications.Service
+	// Quota serves the usage routes and checks the apps' uploads against the storage quotas; the
+	// knowledge base's own check is set on its Store (knowledge.Store.SetQuota). nil leaves the
+	// routes out and the uploads unchecked.
+	Quota *quota.Service
 	// Mail is the server's outgoing email (docs/install.md#email); nil means the operator set up
 	// none. The admins' routes for it are there either way, and say so.
 	Mail *mail.Service
@@ -93,6 +98,10 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	// The apps' routes list and retry their effects and check the targets they name; the
 	// server's own worker, which does them, is the one the command starts (apps.StartOutbox).
 	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(apps.Platform{Boards: boardSvc})
+	if opts.Quota != nil {
+		appsService.WithQuota(opts.Quota)
+		opts.Quota.Routes(mux, accounts)
+	}
 	appsService.Routes(mux)
 	appsService.HomeRoutes(mux, accounts)
 	appsService.TemplateRoutes(mux, accounts)

@@ -66,6 +66,15 @@ func newStack(t *testing.T) *stack { return newStackWith(t, nil) }
 // newStackWith is newStack with the server's options changed by mod.
 func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	t.Helper()
+	if mod == nil {
+		return newStackWithDB(t, nil)
+	}
+	return newStackWithDB(t, func(o *Options, _ *sql.DB) { mod(o) })
+}
+
+// newStackWithDB is newStackWith for a change that needs the database.
+func newStackWithDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	sqlDB, err := db.Open(ctx, filepath.Join(dir, db.FileName))
@@ -98,7 +107,7 @@ func newStackWith(t *testing.T, mod func(*Options)) *stack {
 		BackupDataDir: dir,
 	}
 	if mod != nil {
-		mod(&opts)
+		mod(&opts, sqlDB)
 	}
 	s.h = newHandler(t, sqlDB, opts)
 	srv := httptest.NewServer(s.h)

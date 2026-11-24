@@ -13,6 +13,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/quota"
 )
 
 // Actor is who makes a change: a user, or the agent working for one. The agent has
@@ -207,6 +208,9 @@ type Service struct {
 	dataDir string
 	locks   fileLocks
 	thumbs  chan struct{}
+	// quota refuses an upload that would take its space or workspace over a storage quota
+	// (WithQuota); nil for none.
+	quota *quota.Service
 }
 
 // outboxHooks are for tests to stop the worker where a crash would.

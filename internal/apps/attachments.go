@@ -23,6 +23,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/quota"
 )
 
 // Photo attachments.
@@ -159,6 +160,22 @@ type NewUpload struct {
 func (s *Service) WithFiles(dataDir string) *Service {
 	s.dataDir = dataDir
 	return s
+}
+
+// WithQuota gives the service the storage quotas, which an upload is checked against when it
+// starts, at its declared size, and again when it is finalized, at what is kept.
+func (s *Service) WithQuota(q *quota.Service) *Service {
+	s.quota = q
+	return s
+}
+
+// checkQuota refuses, with the quota's error, adding bytes that would take sp over a storage
+// quota. q is the transaction the caller holds, so the uploads it has reserved count.
+func (s *Service) checkQuota(ctx context.Context, q quota.Queryer, sp access.Space, adding int64) error {
+	if s.quota == nil {
+		return nil
+	}
+	return s.quota.Check(ctx, q, sp, adding)
 }
 
 // lock serializes what is done to one attachment's bytes, in this process (which is the data
@@ -319,6 +336,10 @@ func (s *Service) createUpload(ctx context.Context, sp access.Space, a Actor, ap
 		if total+in.Size > MaxAppFileBytes {
 			return &fullError{msg: fmt.Sprintf("an app's attachments take at most %d MiB", MaxAppFileBytes>>20),
 				code: apierr.CodeAppFilesFull, params: apierr.Params{"max_mib": MaxAppFileBytes >> 20}}
+		}
+		// The file's bytes, and the thumbnail finalizing will add, are the space's from now on.
+		if err := s.checkQuota(ctx, tx, sp, in.Size); err != nil {
+			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO app_attachments (id, app_id, space_id, field, kind, owner, status, size) VALUES (?, ?, ?, ?, ?, ?, 'uploading', ?)`,
@@ -501,6 +522,13 @@ func (s *Service) finalizeUpload(ctx context.Context, sp access.Space, a Actor, 
 	}
 	if err != nil {
 		return Attachment{}, err
+	}
+	// What is kept is the picture and its thumbnail, which can be more than the size the upload
+	// declared (and reserved): the difference must fit.
+	if grow := int64(len(stored)) + int64(len(thumb)) - u.Size; grow > 0 {
+		if err := s.checkQuota(ctx, s.db, sp, grow); err != nil {
+			return Attachment{}, err
+		}
 	}
 	// The order makes it safe to stop at any point. The received file (.part) is removed only once
 	// the store says the attachment is ready, so until then a retry finds it and does all this again;

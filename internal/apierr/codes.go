@@ -222,6 +222,12 @@ const (
 	CodeKnowledgeFull     Code = "knowledge_full"       // 507
 	CodeDocNotKept        Code = "doc_not_kept"         // 410
 
+	// Storage quotas (internal/quota): the operator's default for a workspace, and for each
+	// member's private space.
+
+	CodeQuotaWorkspace Code = "quota_workspace" // 507: the workspace's storage quota is used up; params: max_mib
+	CodeQuotaUser      Code = "quota_user"      // 507: the private space's storage quota is used up; params: max_mib
+
 	// Search (internal/search): searching, and a space's consent to embeddings.
 
 	CodeSearchQueryRequired Code = "search_query_required"

@@ -209,6 +209,9 @@ type Store struct {
 	spaces map[int64]*spaceState
 
 	onChange []func(access.Space) // see OnChange
+
+	// quota is the storage quotas' check (SetQuota); nil for none.
+	quota func(sp access.Space, adding int64) error
 }
 
 // spaceState is what the Store keeps per space while it runs.
@@ -217,6 +220,14 @@ type spaceState struct {
 	mu sync.RWMutex
 	// size is the bytes in .git, counted at the first write; -1 until then.
 	size int64
+	// unv is the bytes of the unversioned files, counted when a write needs them; -1 when
+	// unknown (usage.go). Only a writer, holding mu, reads or sets it.
+	unv int64
+
+	// cache is the usage the last write published, under cacheMu, which no one holds for
+	// long and a writer may take while holding mu.
+	cacheMu sync.Mutex
+	cache   usageCache
 }
 
 // New returns the knowledge base of the spaces under dataDir.
@@ -245,7 +256,7 @@ func (s *Store) state(spaceID int64) *spaceState {
 	defer s.mu.Unlock()
 	st, ok := s.spaces[spaceID]
 	if !ok {
-		st = &spaceState{size: -1}
+		st = &spaceState{size: -1, unv: -1}
 		s.spaces[spaceID] = st
 	}
 	return st
@@ -411,15 +422,22 @@ func (s *Store) putUnversioned(sp access.Space, name string, sg *staged, base st
 				return plumbing.ZeroHash, err
 			}
 			// The bytes of the file it replaces are freed by this change.
+			var freed int64
 			if cur != nil {
 				if _, p, err := r.describe(name, cur.Hash); err != nil {
 					return plumbing.ZeroHash, err
 				} else if p != nil && r.hasObject(p.oid) {
+					freed = p.size
 					used -= p.size
 				}
 			}
 			if used+sg.ptr.size > s.opts.MaxUnversionedSize {
 				return plumbing.ZeroHash, fmt.Errorf("%w: its unversioned files would be over %d bytes", ErrRepoFull, s.opts.MaxUnversionedSize)
+			}
+			// The bytes the change adds to the space, the replaced file's taken off: the write
+			// checked the pointer and the commit, these are the file's own.
+			if err := s.checkQuota(sp, sg.ptr.size-freed); err != nil {
+				return plumbing.ZeroHash, err
 			}
 			if err := r.adopt(sg); err != nil {
 				return plumbing.ZeroHash, err
@@ -809,6 +827,9 @@ func (s *Store) writeLocked(sp access.Space, adding int64, create bool, fn func(
 	if _, err := r.resumeRewrite(sp); err != nil {
 		slog.Warn("knowledge: taking a file's old versions out of history; it is retried at the next change", "space", sp.ID, "err", err)
 	}
+	// Whatever the change does (the repair above may have changed things already), the usage
+	// is published again once the write is over.
+	defer s.publishUsage(r)
 	size, err := r.size()
 	if err != nil {
 		return err
@@ -818,6 +839,15 @@ func (s *Store) writeLocked(sp access.Space, adding int64, create bool, fn func(
 	// those that only free space (adding < 0).
 	if adding >= 0 && size+adding+changeOverhead > s.opts.MaxRepoSize {
 		return fmt.Errorf("%w (limit %d bytes)", ErrRepoFull, s.opts.MaxRepoSize)
+	}
+	// The storage quotas: a change that adds content (not one that deletes or moves, which a
+	// full space must be able to do) must fit. The usage they read is this space's as the
+	// repair above left it.
+	if adding > 0 && s.quota != nil {
+		s.publishUsage(r)
+		if err := s.checkQuota(sp, adding+changeOverhead); err != nil {
+			return err
+		}
 	}
 	err = fn(r)
 	// Whether it succeeded or not: a failed change can leave adopted bytes nothing points

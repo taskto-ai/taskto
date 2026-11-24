@@ -56,6 +56,7 @@ import (
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/quota"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/serverkey"
 )
@@ -362,6 +363,8 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 		return &Refusal{http.StatusConflict, err.Error()}
 	case errors.Is(err, knowledge.ErrTooLarge), errors.Is(err, knowledge.ErrRepoFull):
 		return &Refusal{http.StatusRequestEntityTooLarge, err.Error()}
+	case errors.Is(err, quota.ErrExceeded):
+		return &Refusal{http.StatusInsufficientStorage, err.Error()}
 	default:
 		if ctx.Err() != nil {
 			return ctx.Err() // the caller went away

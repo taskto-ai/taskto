@@ -33,6 +33,7 @@ import (
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/privcheck"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/quota"
 	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/server"
@@ -201,6 +202,10 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		MaxFileSize: cfg.KBMaxFileSize, LargeFileSize: cfg.KBLargeFileSize,
 		MaxRepoSize: cfg.KBMaxRepoSize, MaxUnversionedSize: cfg.KBMaxUnversionedSize,
 	})
+	// The storage quotas: writes that would take a space or its workspace over one are refused.
+	// With none set (the default) the check does nothing.
+	quotas := quota.New(sqlDB, quota.Limits{Workspace: cfg.StorageQuotaWorkspace, User: cfg.StorageQuotaUser}, kb)
+	kb.SetQuota(func(sp access.Space, adding int64) error { return quotas.CheckDB(context.Background(), sp, adding) })
 	// A history rewrite a stopped process left half done is finished before anyone reads.
 	if err := kb.Recover(ctx); err != nil {
 		return err
@@ -329,6 +334,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		Browser:       browsers,
 		Dictation:     dictationService(cfg, sqlDB, key, kb),
 		BackupDataDir: cfg.DataDir,
+		Quota:         quotas,
 		Mail:          mailer,
 		// Photos that were never saved in a record are removed after a day, and an app moved to
 		// another space has its files follow it (internal/apps/attachments.go).

@@ -17,6 +17,7 @@ import (
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/auth"
+	"taskto.ai/taskto/internal/quota"
 )
 
 // RawBodyRoutes are the routes that take a body other than JSON: a file's bytes, as
@@ -386,6 +387,11 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var status int
 	var code apierr.Code
 	msg := err.Error()
+	var over *quota.Error
+	if errors.As(err, &over) {
+		apierr.WriteError(w, over.API())
+		return
+	}
 	switch {
 	case errors.Is(err, ErrInvalid):
 		status, code = http.StatusBadRequest, apierr.CodeBadRequest

@@ -19,6 +19,7 @@ import (
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/notifications"
+	"taskto.ai/taskto/internal/quota"
 )
 
 // The transactional outbox of an app's effects.
@@ -849,7 +850,7 @@ func (s *Service) createDocument(ctx context.Context, e effectRow) (map[string]a
 		return nil, refuse(apierr.CodeAppEffectInvalid)
 	case errors.Is(err, knowledge.ErrReadOnly):
 		return nil, refuse(apierr.CodeAppEffectTargetAccess)
-	case errors.Is(err, knowledge.ErrRepoFull):
+	case errors.Is(err, knowledge.ErrRepoFull), errors.Is(err, quota.ErrExceeded):
 		return nil, refuse(apierr.CodeAppEffectInvalid)
 	}
 	return nil, err
