@@ -659,11 +659,12 @@ func TestAJobInAnotherWorkspacesSpaceIsRefused(t *testing.T) {
 	if _, err := w.s.Schedule(context.Background(), w.db, j); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("schedule with a space of another workspace = %v", err)
 	}
-	// Even a row that got there some other way doesn't run.
+	// Even a row that got there some other way doesn't run. Its owner can read the space (it is
+	// eve's own), so only the comparison of the space's workspace with the job's refuses it.
 	exec(t, w.db, `INSERT INTO scheduled_jobs (kind, user_id, workspace_id, space_id, dedupe_key, run_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 'x', ?, ?, ?)`, string(remind), w.alice, w.ws, w.evePrv, stamp(start), stamp(start), stamp(start))
+		VALUES (?, ?, ?, ?, 'x', ?, ?, ?)`, string(remind), w.eve, w.ws, w.evePrv, stamp(start), stamp(start), stamp(start))
 	w.run()
-	if j := w.find(w.alice, "x"); j.State != StateFailed {
+	if j := w.find(w.eve, "x"); j.State != StateFailed || j.LastError != "access lost" {
 		t.Fatalf("job = %+v", j)
 	}
 }
@@ -992,7 +993,14 @@ func TestStoppingTheWorkerLeavesTheJobToBeTakenAgain(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() { s.RunDue(ctx); close(done) }()
-	<-started
+	t.Cleanup(func() { cancel(); <-done }) // the worker is joined before the database closes
+	select {
+	case <-started:
+	case <-done:
+		t.Fatal("the worker returned without calling the handler")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the handler was never called")
+	}
 	cancel()
 	<-done
 	j, err := s.Find(context.Background(), sqlDB, 1, remind, "k")
