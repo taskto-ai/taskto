@@ -1348,12 +1348,19 @@ embeddings endpoint, whatever a space has consented to. Only the cards of boards
 spaces the caller can read are found: a personal board only by its owner, a team board by
 the members of its space, archived cards and boards, and boards of an archived space, too,
 since those stay readable; never another member's personal board or the board of a shared
-space the caller isn't in, admins included. A title match counts most, then the body, then
-the comments.
+space the caller isn't in, admins included. Results come best first: a card with every word
+in its title, then one with every word in its title and body, then the rest, and the card
+changed last first within each. The order depends only on the cards the caller can read,
+never on others', and no score is returned.
 
-The index follows the boards: a card is indexed again, at the next search, once its title,
-body, column, archived state or thread has changed, and goes with its board or space when
-that is deleted. Every card is indexed when the server starts.
+The index follows the boards: every change to a card's title or body, and every comment
+added, edited or deleted, queues the card in the same transaction, and a search indexes the
+queued cards of the spaces it looks in before it answers, so it never quotes text older than
+the card. A card that changes while the search runs is looked for once more; if the index
+still can't catch up, the reply has `"incomplete": true` and leaves those cards out, and a
+later search finds them. A card goes with its board or space when that is deleted, and every
+card is indexed when the server starts. Who may read a space is checked again after the
+indexing, so a member removed meanwhile gets none of its cards.
 
 ### `GET /api/workspaces/{workspace}/spaces/{space}/search/cards`
 
@@ -1371,8 +1378,7 @@ Read access to the space (`404` for one the caller can't read). Query: `q`, `lim
       "card_id": 42,
       "title": "Orchard rollout",
       "column": "doing",
-      "snippet": [{"text": "ship the "}, {"text": "orchard", "match": true}, {"text": " release"}],
-      "score": 4.2
+      "snippet": [{"text": "ship the "}, {"text": "orchard", "match": true}, {"text": " release"}]
     }
   ],
   "next_offset": 20
@@ -1384,7 +1390,7 @@ Read access to the space (`404` for one the caller can't read). Query: `q`, `lim
   `/w/{workspace}/boards/{space_id}:{board_id}:{card_id}`.
 - `snippet`: the passage of the title, body or comments that matched, as plain text in
   pieces, as for a document: never markup.
-- `score`: higher first; it compares the results of one search only.
+- `incomplete`: `true` when cards that changed during the search were left out.
 - `next_offset`: present when there are more results.
 
 ### `GET /api/workspaces/{workspace}/search/cards`

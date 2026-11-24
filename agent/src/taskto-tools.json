@@ -40,7 +40,8 @@
         "query": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 500
+          "maxLength": 500,
+          "description": "the words to look for; at most 500 bytes of UTF-8 (500 characters if they are ASCII)"
         },
         "space_id": {
           "type": "integer",
@@ -64,7 +65,7 @@
   },
   {
     "name": "search_cards",
-    "description": "Search the cards on boards by their words, in their title, body and comments: every space the user can read, or one space. Returns each card's space, board and id, its title, its column and the passage that matched; read a card with show_card.",
+    "description": "Search the cards on boards by their words, in their title, body and comments: every space the user can read, or one space. Returns each card's space, board and id, its title, its column and the passage that matched, best first; \"incomplete\": true means cards that changed a moment ago were left out, so search again. Read a card with show_card.",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -72,7 +73,8 @@
         "query": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 500
+          "maxLength": 500,
+          "description": "the words to look for; at most 500 bytes of UTF-8 (500 characters if they are ASCII)"
         },
         "space_id": {
           "type": "integer",

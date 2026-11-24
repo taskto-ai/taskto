@@ -1,6 +1,7 @@
 package search
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -27,6 +28,7 @@ type cardHitJSON struct {
 type cardsReply struct {
 	Results    []cardHitJSON `json:"results"`
 	NextOffset *int          `json:"next_offset"`
+	Incomplete bool          `json:"incomplete"`
 }
 
 func boardsURL(sp access.Space) string {
@@ -367,5 +369,259 @@ func TestCardsBacklogLongerThanABatchIsIndexed(t *testing.T) {
 	var n int
 	if err := w.e.idx.db.QueryRow(`SELECT count(*) FROM search_cards`).Scan(&n); err != nil || n != total {
 		t.Fatalf("indexed %d of %d cards: %v", n, total, err)
+	}
+}
+
+// removeMember takes u out of a shared space, as the owner would, straight in the database.
+func (w *world) removeMember(sp access.Space, u *user) {
+	w.e.t.Helper()
+	if _, err := w.e.idx.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, sp.ID, u.id); err != nil {
+		w.e.t.Fatal(err)
+	}
+}
+
+// Who may read a space is asked again after the cards are indexed: a member removed while
+// a search indexes gets none of the space's cards, those indexed meanwhile included.
+func TestCardSearchChecksAccessAgainAfterIndexing(t *testing.T) {
+	w := newWorld(t)
+	board := w.teamBoard(w.alice, w.team, "Work")
+	w.addCard(w.alice, w.team, board, "Okapi plan", "indexed during the search")
+	w.addCard(w.bob, w.private[w.bob], w.firstBoard(w.bob, w.private[w.bob]), "Okapi notes", "bob's own")
+
+	w.e.idx.afterCardSync = func() { w.removeMember(w.team, w.bob) }
+	for name, sp := range map[string]*access.Space{"the workspace": nil, "the space": &w.team} {
+		if sp != nil {
+			// The route's own check is passed before the removal: put bob back for it.
+			if _, err := w.e.idx.db.Exec(`INSERT OR IGNORE INTO space_members (space_id, user_id, role) VALUES (?, ?, 'viewer')`, w.team.ID, w.bob.id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got := w.searchCards(w.bob, sp, "okapi")
+		for _, r := range got.Results {
+			if r.SpaceID == w.team.ID {
+				t.Fatalf("bob, removed from the team while searching %s, was given %+v", name, r)
+			}
+		}
+		if sp == nil {
+			wantTitles(t, "bob in "+name, got, "Okapi notes")
+		} else {
+			wantTitles(t, "bob in "+name, got)
+		}
+	}
+}
+
+// What is found, and in which order, depends on the cards the caller reads only: cards in
+// spaces they can't read change neither, and no score is returned.
+func TestCardSearchOrderIsNotChangedByCardsTheCallerCannotRead(t *testing.T) {
+	w := newWorld(t)
+	board := w.teamBoard(w.alice, w.team, "Work")
+	w.addCard(w.alice, w.team, board, "Heavy on zebras", "zebra zebra zebra gnu")
+	w.addCard(w.alice, w.team, board, "Heavy on gnus", "zebra gnu gnu gnu")
+	w.addCard(w.alice, w.team, board, "Named gnu zebra", "")
+	order := func() []string {
+		r := w.searchCards(w.bob, nil, "zebra gnu")
+		return r.titles()
+	}
+	before := order()
+	if len(before) != 3 || before[0] != "Named gnu zebra" {
+		t.Fatalf("a title with every word goes first: %q", before)
+	}
+
+	// Alice's private board gets cards that make "zebra" common in the whole index.
+	mine := w.firstBoard(w.alice, w.private[w.alice])
+	for i := range 40 {
+		w.addCard(w.alice, w.private[w.alice], mine, fmt.Sprintf("Zebra %d", i), "zebra zebra zebra zebra")
+	}
+	// Indexed, as a search of Alice's or the sync at startup does.
+	if err := w.e.idx.syncCards(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	after := order()
+	if fmt.Sprint(before) != fmt.Sprint(after) {
+		t.Fatalf("bob's order changed with cards he can't read: %q, then %q", before, after)
+	}
+
+	// Nothing of a score is in the API's reply.
+	rec := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/cards?q=zebra", w.ws), nil)
+	expect(t, rec, http.StatusOK)
+	var raw struct{ Results []map[string]any }
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil || len(raw.Results) == 0 {
+		t.Fatalf("reply %s: %v", rec.Body, err)
+	}
+	for _, r := range raw.Results {
+		for k := range r {
+			if strings.Contains(k, "score") || strings.Contains(k, "rank") {
+				t.Fatalf("a result has %q: %v", k, r)
+			}
+		}
+	}
+}
+
+// A card edited after the search indexed it is not quoted from the old text: the search
+// indexes again and looks once more.
+func TestCardSearchDoesNotQuoteAnOldBody(t *testing.T) {
+	w := newWorld(t)
+	board := w.teamBoard(w.alice, w.team, "Work")
+	c := w.addCard(w.alice, w.team, board, "Orchard", "marmoset in the old body")
+	once := false
+	w.e.idx.afterCardSync = func() {
+		if !once {
+			once = true
+			c = w.patchCard(w.alice, w.team, board, c, map[string]any{"body": "tamarin in the new body"})
+		}
+	}
+	got := w.searchCards(w.bob, nil, "marmoset")
+	wantTitles(t, "bob, for the old body", got)
+	if got.Incomplete {
+		t.Fatal("a search that caught up said it was incomplete")
+	}
+	once = false
+	w.e.idx.afterCardSync = nil
+	r := w.searchCards(w.bob, nil, "tamarin")
+	wantTitles(t, "bob, for the new body", r, "Orchard")
+	var text strings.Builder
+	for _, s := range r.Results[0].Snippet {
+		text.WriteString(s.Text)
+	}
+	if !strings.Contains(text.String(), "new body") || strings.Contains(text.String(), "marmoset") {
+		t.Fatalf("snippet %q", text.String())
+	}
+}
+
+// A card that keeps changing under the search is left out, and the reply says so rather
+// than quote old text.
+func TestCardSearchSaysWhenCardsAreBehind(t *testing.T) {
+	w := newWorld(t)
+	board := w.teamBoard(w.alice, w.team, "Work")
+	c := w.addCard(w.alice, w.team, board, "Aardvark", "first")
+	w.addCard(w.alice, w.team, board, "Aardvark quiet", "")
+	n := 0
+	w.e.idx.afterCardSync = func() {
+		n++
+		w.commentOn(w.alice, w.team, board, c, fmt.Sprintf("a comment, number %d", n))
+	}
+	got := w.searchCards(w.bob, nil, "aardvark")
+	if !got.Incomplete {
+		t.Fatalf("a search that could not catch up did not say so: %+v", got)
+	}
+	if n != cardSyncTries {
+		t.Fatalf("tried %d times, want %d", n, cardSyncTries)
+	}
+	wantTitles(t, "bob", got, "Aardvark quiet")
+
+	// And a failed sync is the same: the cards behind are not quoted.
+	w.e.idx.afterCardSync = nil
+	if _, err := w.e.idx.db.Exec(`DROP TRIGGER search_cards_fts_delete`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.e.idx.db.Exec(`CREATE TRIGGER sync_fails BEFORE DELETE ON search_card_queue BEGIN SELECT RAISE(ABORT, 'no'); END`); err != nil {
+		t.Fatal(err)
+	}
+	w.commentOn(w.alice, w.team, board, c, "another comment")
+	got = w.searchCards(w.bob, nil, "aardvark")
+	if !got.Incomplete {
+		t.Fatalf("a failed sync did not make the search incomplete: %+v", got)
+	}
+	wantTitles(t, "bob after a failed sync", got, "Aardvark quiet")
+}
+
+// Any change to a thread is searched: a comment edited or deleted, whatever wrote it.
+func TestCardSearchFollowsEditsAndDeletionsOfComments(t *testing.T) {
+	w := newWorld(t)
+	board := w.teamBoard(w.alice, w.team, "Work")
+	c := w.addCard(w.alice, w.team, board, "Thread", "")
+	w.commentOn(w.alice, w.team, board, c, "first said ibis")
+	w.commentOn(w.alice, w.team, board, c, "second said heron")
+	found := func(q string, want ...string) {
+		t.Helper()
+		wantTitles(t, "bob searching "+q, w.searchCards(w.bob, nil, q), want...)
+	}
+	found("ibis", "Thread")
+	found("heron", "Thread")
+
+	// The newest comment is edited: the newest comment's ID doesn't change.
+	if _, err := w.e.idx.db.Exec(`UPDATE card_comments SET body = 'second said egret' WHERE body LIKE '%heron'`); err != nil {
+		t.Fatal(err)
+	}
+	found("heron")
+	found("egret", "Thread")
+	// An older one is edited, and one is deleted.
+	if _, err := w.e.idx.db.Exec(`UPDATE card_comments SET body = 'first said stork' WHERE body LIKE '%ibis'`); err != nil {
+		t.Fatal(err)
+	}
+	found("ibis")
+	found("stork", "Thread")
+	if _, err := w.e.idx.db.Exec(`DELETE FROM card_comments WHERE body LIKE '%stork'`); err != nil {
+		t.Fatal(err)
+	}
+	found("stork")
+	found("egret", "Thread")
+}
+
+// A search indexes the queued cards of the spaces it looks in, found from the queue and the
+// boards' index by space, never by a walk of every card; cards of other spaces wait.
+func TestCardSyncIsOfTheSpacesSearchedOnly(t *testing.T) {
+	w := newWorld(t)
+	w.addCard(w.alice, w.team, w.teamBoard(w.alice, w.team, "Work"), "Pika", "")
+	mine := w.private[w.alice]
+	w.addCard(w.alice, mine, w.firstBoard(w.alice, mine), "Pika private", "")
+	wantTitles(t, "alice in the team", w.searchCards(w.alice, &w.team, "pika"), "Pika")
+	var queued int
+	if err := w.e.idx.db.QueryRow(`SELECT count(*) FROM search_card_queue`).Scan(&queued); err != nil || queued != 1 {
+		t.Fatalf("%d cards queued after a search of another space, want the 1 of the other space: %v", queued, err)
+	}
+
+	for name, query := range map[string]string{"batch": queuedCardIDsSQL, "behind": `SELECT EXISTS (SELECT 1 ` + queuedCardsSQL + `)`} {
+		args := []any{`[1,2]`}
+		if name == "batch" {
+			args = []any{0, false, `[1,2]`, cardBatch}
+		}
+		rows, err := w.e.idx.db.Query(`EXPLAIN QUERY PLAN `+query, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			for _, table := range []string{"cards", "c", "boards", "b", "card_comments"} {
+				if detail == "SCAN "+table || strings.HasPrefix(detail, "SCAN "+table+" ") {
+					t.Errorf("%s: the plan walks every row of %s: %s", name, table, detail)
+				}
+			}
+		}
+		_ = rows.Close()
+	}
+}
+
+// Cards never indexed, or indexed in an older format, are queued at startup.
+func TestCardsOfAnOldFormatAreQueued(t *testing.T) {
+	w := newWorld(t)
+	w.addCard(w.alice, w.team, w.teamBoard(w.alice, w.team, "Work"), "Dik-dik", "")
+	if err := w.e.idx.syncCards(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.e.idx.queueCards(ctx); err != nil {
+		t.Fatal(err)
+	}
+	count := func() (n int) {
+		if err := w.e.idx.db.QueryRow(`SELECT count(*) FROM search_card_queue`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := count(); n != 0 {
+		t.Fatalf("%d cards queued although all are indexed", n)
+	}
+	if _, err := w.e.idx.db.Exec(`UPDATE search_cards SET text_format = text_format - 1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.e.idx.queueCards(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("%d cards queued, want the 1 of an old format", n)
 	}
 }

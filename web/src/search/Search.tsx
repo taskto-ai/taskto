@@ -36,10 +36,9 @@ export type CardResult = {
   title: string
   column: 'backlog' | 'todo' | 'doing' | 'review' | 'done' | 'archived'
   snippet: { text: string; match?: boolean }[]
-  score: number
 }
 
-type CardPage = { results: CardResult[]; next_offset?: number }
+type CardPage = { results: CardResult[]; next_offset?: number; incomplete?: boolean }
 
 type Notice = { code: string; count?: number }
 
@@ -187,8 +186,8 @@ function ResultPages({
   // The notice of the latest page: the index may have caught up meanwhile.
   const notice = last && noticeText(t, last)
   // The cards are a search of their own: one that fails or is slow leaves the documents as
-  // they are, and says so beside them.
-  const cardsSettled = cards.first.data !== undefined || cards.first.error !== null
+  // they are, and says so beside them. Nothing is "not found" until both searches answered.
+  const cardsSettled = cards.first.data !== undefined
 
   return (
     <section className="tt-search-results" aria-label={t('search.results.label')}>
@@ -244,6 +243,11 @@ function ResultPages({
       {cards.first.error && (
         <p role="alert" className="tt-error">
           {t('search.cards.failed', { error: cards.first.error })}
+        </p>
+      )}
+      {cards.pages.some((p) => p.incomplete) && (
+        <p role="status" className="tt-notice">
+          {t('search.cards.incomplete')}
         </p>
       )}
       {cardResults.length > 0 && (

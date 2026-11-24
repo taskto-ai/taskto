@@ -29,7 +29,7 @@ func (x *Index) Routes(mux *http.ServeMux, a *auth.Service, c *access.Checker) {
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search", auth.AcceptTokens(c.RequireSpace(access.Read, http.HandlerFunc(x.handleSpace))))
 	mux.Handle("GET /api/workspaces/{workspace}/search", auth.AcceptTokens(a.RequireMember(x.handleWorkspace(c))))
 	// The cards of boards, searched apart from the documents.
-	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/cards", auth.AcceptTokens(c.RequireSpace(access.Read, http.HandlerFunc(x.handleSpaceCards))))
+	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/cards", auth.AcceptTokens(c.RequireSpace(access.Read, x.handleSpaceCards(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/search/cards", auth.AcceptTokens(a.RequireMember(x.handleWorkspaceCards(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/search/settings", a.RequireMember(http.HandlerFunc(x.handleSettings)))
 	mux.Handle("PUT /api/workspaces/{workspace}/search/settings", a.RequireAdmin(http.HandlerFunc(x.handleSetSettings)))
@@ -55,9 +55,12 @@ func (x *Index) handleWorkspace(c *access.Checker) http.HandlerFunc {
 	}
 }
 
-func (x *Index) handleSpaceCards(w http.ResponseWriter, r *http.Request) {
-	sp, _ := access.SpaceFrom(r.Context())
-	x.searchCards(w, r, sp.WorkspaceID, []access.Space{sp})
+func (x *Index) handleSpaceCards(c *access.Checker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, _ := auth.UserFrom(r.Context())
+		sp, _ := access.SpaceFrom(r.Context())
+		x.searchCards(w, r, c, u.ID, sp.WorkspaceID, []access.Space{sp})
+	}
 }
 
 func (x *Index) handleWorkspaceCards(c *access.Checker) http.HandlerFunc {
@@ -69,7 +72,7 @@ func (x *Index) handleWorkspaceCards(c *access.Checker) http.HandlerFunc {
 			serverError(w, r, err)
 			return
 		}
-		x.searchCards(w, r, m.WorkspaceID, spaces)
+		x.searchCards(w, r, c, u.ID, m.WorkspaceID, spaces)
 	}
 }
 
@@ -90,7 +93,7 @@ func (x *Index) search(w http.ResponseWriter, r *http.Request, workspaceID int64
 }
 
 // searchCards is search for the cards of spaces' boards.
-func (x *Index) searchCards(w http.ResponseWriter, r *http.Request, workspaceID int64, spaces []access.Space) {
+func (x *Index) searchCards(w http.ResponseWriter, r *http.Request, c *access.Checker, userID, workspaceID int64, spaces []access.Space) {
 	q := Query{Text: r.URL.Query().Get("q")}
 	var ok bool
 	if q.Limit, ok = queryInt(w, r, "limit"); !ok {
@@ -99,7 +102,7 @@ func (x *Index) searchCards(w http.ResponseWriter, r *http.Request, workspaceID 
 	if q.Offset, ok = queryInt(w, r, "offset"); !ok {
 		return
 	}
-	res, err := x.SearchCards(r.Context(), workspaceID, spaces, q)
+	res, err := x.SearchCards(r.Context(), c, userID, workspaceID, spaces, q)
 	if searchFailed(w, r, err) {
 		return
 	}

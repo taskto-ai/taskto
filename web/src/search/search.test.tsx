@@ -175,7 +175,6 @@ const card = (id: number, title: string, column = 'doing', board = { id: 7, name
   title,
   column,
   snippet: [{ text: 'ship the ' }, { text: 'orchard', match: true }, { text: ' <i>release</i>' }],
-  score: 1,
 })
 
 test('shows cards apart from documents, each linking to its card', async () => {
@@ -244,4 +243,33 @@ test('cards that cannot be searched leave the documents, and say so', async () =
   const results = await screen.findByRole('region', { name: 'Search results' })
   await within(results).findByRole('button', { name: /Quarterly plan/ })
   expect((await within(results).findByRole('alert')).textContent).toContain('The boards’ cards could not be searched')
+})
+
+test('a failed card search is not "nothing found" when the documents have none', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces } },
+    'GET /api/workspaces/1/spaces/2/docs': { body: { docs: [] } },
+    'GET /api/workspaces/1/spaces/2/search': { body: { results: [], mode: 'fulltext' } },
+    'GET /api/workspaces/1/spaces/2/search/cards': { status: 500, body: { error: 'boom', code: 'internal' } },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByText('No documents in this space yet.')
+  search('orchard')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  expect((await within(results).findByRole('alert')).textContent).toContain('The boards’ cards could not be searched')
+  expect(within(results).queryByText('Nothing found.')).toBeNull()
+})
+
+test('says when cards that changed just now were left out', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces } },
+    'GET /api/workspaces/1/spaces/2/docs': { body: { docs: [] } },
+    'GET /api/workspaces/1/spaces/2/search': { body: { results: [], mode: 'fulltext' } },
+    'GET /api/workspaces/1/spaces/2/search/cards': { body: { results: [], incomplete: true } },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByText('No documents in this space yet.')
+  search('orchard')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  expect((await within(results).findByRole('status')).textContent).toContain('changed just now')
 })

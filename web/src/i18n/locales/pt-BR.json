@@ -1655,7 +1655,8 @@
       "label": "Cartões encontrados",
       "in": "{space} · {board} · {column}",
       "more": "Mais cartões",
-      "failed": "Não foi possível buscar nos cartões dos quadros: {error}"
+      "failed": "Não foi possível buscar nos cartões dos quadros: {error}",
+      "incomplete": "Alguns cartões mudaram agora há pouco e não estão nestes resultados. Busque de novo em instantes."
     },
     "notice": {
       "embeddings_off": "A busca semântica está desligada: este espaço de trabalho não tem modelo de embeddings. Estes são resultados da busca por texto.",

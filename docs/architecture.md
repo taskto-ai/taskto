@@ -92,8 +92,8 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   elsewhere. A search only ever looks in spaces the caller can read. See
   [api.md](api.md#search). Board cards (title, body, comments) have a full-text index of
   their own, searched apart from documents and never embedded; it follows the boards by
-  comparing each card's version and newest comment, so whatever wrote them, a search is
-  right ([api.md](api.md#searching-cards)).
+  a queue that database triggers fill with every card whose text or thread changed, so
+  whatever wrote them, a search is right ([api.md](api.md#searching-cards)).
 - **Boards:** backlog → todo → doing → review → done. Cards have an assignee (person or
   agent), links to docs and conversations, and a blocked reason.
 - **Personal apps:** saved [A2UI](https://a2ui.org/) screens built from a fixed component

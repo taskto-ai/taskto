@@ -67,37 +67,60 @@ type searchHit struct {
 
 // searchArgs are the arguments of search_docs and search_cards.
 type searchArgs struct {
-	Query   string `json:"query"`
-	SpaceID *int64 `json:"space_id"`
-	Limit   int    `json:"limit"`
-	Offset  int    `json:"offset"`
+	Query string `json:"query"`
+	// SpaceID and Limit are raw to tell "not given" from null and from 0: none of the
+	// latter two is a value (a null space would widen the search to every space).
+	SpaceID json.RawMessage `json:"space_id"`
+	Limit   json.RawMessage `json:"limit"`
+	Offset  int             `json:"offset"`
 }
 
-// searchSpaces checks the arguments of a search, and returns the spaces to search: the one
-// asked for, or every space the user can read in the call's workspace.
-func (s *Service) searchSpaces(ctx context.Context, c *call, args json.RawMessage, off string) (searchArgs, []access.Space, error) {
+// searchSpaces checks the arguments of a search, and returns them with the limit and the
+// spaces to search: the one asked for, or every space the user can read in the call's
+// workspace.
+func (s *Service) searchSpaces(ctx context.Context, c *call, args json.RawMessage, off string) (searchArgs, int, []access.Space, error) {
 	var a searchArgs
 	if err := decode(args, &a); err != nil {
-		return a, nil, err
+		return a, 0, nil, err
 	}
-	if a.Limit < 0 || a.Limit > maxSearchLimit {
-		return a, nil, invalidf("limit must be 1 to %d", maxSearchLimit)
+	// The schema counts characters and the index bytes: a query is at most search.MaxQueryLen
+	// bytes of UTF-8, which is that many characters only if they are ASCII.
+	if len(a.Query) > search.MaxQueryLen {
+		return a, 0, nil, invalidf("query is at most %d bytes of UTF-8", search.MaxQueryLen)
 	}
-	if a.Limit == 0 {
-		a.Limit = 10
+	limit := 10
+	if a.Limit != nil {
+		n, ok := wholeNumber(a.Limit)
+		if !ok || n < 1 || n > maxSearchLimit {
+			return a, 0, nil, invalidf("limit must be 1 to %d", maxSearchLimit)
+		}
+		limit = int(n)
 	}
 	if s.o.Search == nil {
-		return a, nil, errInvalid(off)
+		return a, 0, nil, errInvalid(off)
 	}
 	if a.SpaceID != nil {
-		sp, err := s.space(ctx, c, *a.SpaceID)
-		if err != nil {
-			return a, nil, err
+		id, ok := wholeNumber(a.SpaceID)
+		if !ok || id < 1 {
+			return a, 0, nil, invalidf("space_id must be a space's id, from list_spaces; leave it out to search every space")
 		}
-		return a, []access.Space{sp}, nil
+		sp, err := s.space(ctx, c, id)
+		if err != nil {
+			return a, 0, nil, err
+		}
+		return a, limit, []access.Space{sp}, nil
 	}
 	spaces, err := s.o.Access.Readable(ctx, c.User, c.Workspace)
-	return a, spaces, err
+	return a, limit, spaces, err
+}
+
+// wholeNumber reads a JSON number that is a whole number: not null, not a string.
+func wholeNumber(raw json.RawMessage) (int64, bool) {
+	var n int64
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &n) != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 type cardHit struct {
@@ -114,11 +137,11 @@ type cardHit struct {
 // searchCards searches the cards of the boards in one space, or in every space the user can
 // read in the call's workspace, by full text.
 func (s *Service) searchCards(ctx context.Context, c *call, args json.RawMessage) (any, error) {
-	a, spaces, err := s.searchSpaces(ctx, c, args, "search is off on this server: use list_boards and list_cards")
+	a, limit, spaces, err := s.searchSpaces(ctx, c, args, "search is off on this server: use list_boards and list_cards")
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.o.Search.SearchCards(ctx, c.Workspace, spaces, search.Query{Text: a.Query, Limit: a.Limit, Offset: a.Offset})
+	res, err := s.o.Search.SearchCards(ctx, s.o.Access, c.User, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.Offset})
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +156,9 @@ func (s *Service) searchCards(ctx context.Context, c *call, args json.RawMessage
 			CardID: r.CardID, Title: r.Title, Column: r.Column, Snippet: text})
 	}
 	reply := map[string]any{"results": hits}
+	if res.Incomplete {
+		reply["incomplete"] = true
+	}
 	if res.NextOffset != nil {
 		reply["next_offset"] = *res.NextOffset
 	}
@@ -142,11 +168,11 @@ func (s *Service) searchCards(ctx context.Context, c *call, args json.RawMessage
 // searchDocs searches the knowledge base: one space, or every space the user can read in
 // the call's workspace.
 func (s *Service) searchDocs(ctx context.Context, c *call, args json.RawMessage) (any, error) {
-	a, spaces, err := s.searchSpaces(ctx, c, args, "search is off on this server: use list_docs and read_doc")
+	a, limit, spaces, err := s.searchSpaces(ctx, c, args, "search is off on this server: use list_docs and read_doc")
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.o.Search.Search(ctx, c.Workspace, spaces, search.Query{Text: a.Query, Limit: a.Limit, Offset: a.Offset})
+	res, err := s.o.Search.Search(ctx, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.Offset})
 	if err != nil {
 		return nil, err
 	}
