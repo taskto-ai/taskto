@@ -166,7 +166,10 @@ func (s *Service) showCard(ctx context.Context, c *call, args json.RawMessage) (
 		return threadReply{Thread: shown, cutMarks: m, Omitted: len(all) - n}
 	}
 	// The card is cut first, to what fits with no comment at all...
-	card, marks, err := fitCard(t.Card, func(c boards.Card, m cutMarks) any { return reply(c, m, 0) })
+	card, marks, err := fitCard(t.Card, func(c boards.Card, m cutMarks) any {
+		m.BodyTruncated = m.BodyTruncated || bodyCut // the 16 KiB cut is in the reply too
+		return reply(c, m, 0)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +214,7 @@ func cardResult(c boards.Card, err error) (any, error) {
 }
 
 // fitCard returns c with fewer docs, then a shorter body, until build(c, marks) marshals
-// to at most MaxResult bytes, and what it cut. build gets all the marks it may be given
+// to at most MaxResult bytes, and what it cut (the docs that fit leave room for a body cut to its marker). build gets all the marks it may be given
 // while measuring, so the size it fits includes them.
 func fitCard(c boards.Card, build func(boards.Card, cutMarks) any) (boards.Card, cutMarks, error) {
 	fits := func(c boards.Card, m cutMarks) (bool, error) {
@@ -223,10 +226,10 @@ func fitCard(c boards.Card, build func(boards.Card, cutMarks) any) (boards.Card,
 	}
 	all := cutMarks{BodyTruncated: true, DocsTruncated: true}
 	var marks cutMarks
-	// The docs that fit with no body at all...
+	// The docs that fit with the least body...
 	docs := c.Docs
 	bare := c
-	bare.Body = ""
+	bare.Body = truncatedNotes // the least a cut body is
 	if ok, err := fits(bare, all); err != nil {
 		return c, cutMarks{}, err
 	} else if !ok {

@@ -204,3 +204,73 @@ func TestCardRepliesFitWithManyLongDocs(t *testing.T) {
 		t.Fatalf("stored docs = %d, %v", len(stored.Docs), err)
 	}
 }
+
+// The docs kept leave room for the body's cut marker: with the docs that fit and no body
+// just under the limit, the reply is still within it.
+func TestFitCardLeavesRoomForTheCutMarker(t *testing.T) {
+	var docs []string
+	for i := range 40 {
+		docs = append(docs, fmt.Sprintf("d/%02d-%s.md", i, strings.Repeat("a", 1000)))
+	}
+	card := boards.Card{Title: "t", Body: strings.Repeat("<", 20<<10), Docs: docs}
+	build := func(c boards.Card, m cutMarks) any { return cardReply{c, m} }
+	size := func(c boards.Card) int {
+		out, err := json.Marshal(build(c, cutMarks{true, true}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(out)
+	}
+	// The title pads the card with no body to 3 bytes under the limit: it fits, but no
+	// body, even one cut to its marker, would.
+	bare := card
+	bare.Body = ""
+	card.Title = strings.Repeat("x", MaxResult-3-size(bare)+1)
+	bare.Title = card.Title
+	if got := size(bare); got != MaxResult-3 {
+		t.Fatalf("bare card is %d bytes", got)
+	}
+
+	got, marks, err := fitCard(card, build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(build(got, marks))
+	if err != nil || len(out) > MaxResult {
+		t.Fatalf("reply is %d bytes, %v", len(out), err)
+	}
+	if !marks.DocsTruncated || !marks.BodyTruncated || len(got.Docs) >= len(docs) {
+		t.Fatalf("marks = %+v, %d docs", marks, len(got.Docs))
+	}
+}
+
+// show_card counts the 16 KiB cut's mark in the size it fits, whatever the card's size.
+func TestShowCardFitsWithItsCutMark(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	actor := boards.Actor{UserID: w.alice}
+	var docs []string
+	for i := range 50 {
+		docs = append(docs, fmt.Sprintf("d/%02d-%s.md", i, strings.Repeat("a", 962)))
+	}
+	card, err := w.tools.o.Boards.CreateCard(ctx, actor, w.alicePrivate, w.alicePersonal, boards.NewCard{
+		Title: "x", Body: strings.Repeat("a", 20<<10), Docs: docs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Titles of every length from 1 to 200 characters step the reply a byte at a time
+	// across the limit, past the point where the marks fit exactly.
+	for n := 1; n <= 200; n++ {
+		title := strings.Repeat("x", n)
+		card, err = w.tools.o.Boards.UpdateCard(ctx, actor, w.alicePrivate, w.alicePersonal, card.ID, boards.CardChanges{Version: card.Version, Title: &title})
+		if err != nil {
+			t.Fatal(err)
+		}
+		shown := w.ok(w.aliceConv, "show_card", map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal, "card_id": card.ID})
+		checkFits(t, fmt.Sprintf("show_card with a title of %d", n), shown)
+		if shown["body_truncated"] != true {
+			t.Fatalf("title of %d: body_truncated = %v", n, shown["body_truncated"])
+		}
+	}
+}
