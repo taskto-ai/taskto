@@ -519,3 +519,34 @@ func TestWatchSessionEndsWithTheLogin(t *testing.T) {
 		t.Fatal("a request without a login got a live watch")
 	}
 }
+
+// A login that passes the second step is a session like any other: it names its browser and
+// system (from the second request's User-Agent), is listed, and can be signed out.
+func TestSessionAfterTheSecondStepRecordsItsDevice(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, _ := e.setup()
+	two := e.turnOn(owner, ownerPassword)
+
+	c := e.client()
+	r := c.req(http.MethodPost, "/api/login", map[string]string{"email": "owner@example.com", "password": ownerPassword})
+	r.Header.Set("User-Agent", firefoxMac)
+	rec := c.send(r)
+	expect(t, rec, http.StatusOK)
+	challenge := decode[challengeReply](t, rec).Challenge
+	r = c.req(http.MethodPost, "/api/login/two-factor", map[string]string{"challenge": challenge, "code": e.codeNow(two.secret)})
+	r.Header.Set("User-Agent", safariIOS)
+	expect(t, c.send(r), http.StatusOK)
+
+	var found bool
+	for _, x := range e.sessionsOf(c) {
+		if x.Current {
+			found = true
+			if x.Browser != "Safari" || x.OS != "iOS" || !validSessionPublicID(x.ID) || x.LastSeenAt == "" {
+				t.Fatalf("the session made at the second step: %+v", x)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the session made at the second step is not listed as the current one")
+	}
+}
