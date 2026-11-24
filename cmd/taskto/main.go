@@ -249,8 +249,12 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	defer stopEffects()
 	// The notification inbox, and Web Push for the people who turn it on: the VAPID key pair is made
 	// on first start, and the worker that sends pushes runs until the server stops.
-	notifier, err := notifications.New(ctx, sqlDB, spaces, notifications.Options{Key: key, Contact: cfg.PushContact})
+	notifier, err := notifications.New(ctx, sqlDB, spaces, notifications.Options{Key: key, Contact: cfg.PushContact, Mail: mailer, PublicURL: cfg.PublicURL})
 	if err != nil {
+		return err
+	}
+	// The daily email summary is a scheduled job: its handler is registered before the scheduler starts.
+	if err := notifier.AttachScheduler(scheduler); err != nil {
 		return err
 	}
 	stopPush := notifier.Start(ctx)

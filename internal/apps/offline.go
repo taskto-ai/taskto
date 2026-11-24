@@ -47,11 +47,11 @@ type OfflineAction struct {
 // summaries and the screens. The components are in the download's messages.
 type OfflineDefinition struct {
 	DefinitionVersion int                      `json:"definition_version"`
-	Requires          []string                 `json:"requires"`
+	Requires          []string                 `json:"requires" apitypes:"nonnull"`
 	Collection        Collection               `json:"collection"`
 	Entry             string                   `json:"entry,omitempty"`
 	Screens           []OfflineScreen          `json:"screens,omitempty"`
-	Actions           map[string]OfflineAction `json:"actions"`
+	Actions           map[string]OfflineAction `json:"actions" apitypes:"nonnull"`
 	Summaries         map[string]Summary       `json:"summaries,omitempty"`
 }
 
@@ -66,7 +66,7 @@ type OfflineApp struct {
 	Definition OfflineDefinition `json:"definition"`
 	// Messages draw the app as it is at CapturedAt: the A2UI messages the surface route sends,
 	// with the records downloaded and the summaries over them.
-	Messages []Message `json:"messages"`
+	Messages []Message `json:"messages" apitypes:"json,nonnull"`
 	// Scope is whose records the download holds: "all" of the app's, or only the caller's "own".
 	Scope string `json:"scope"`
 	// Records is how many are downloaded; Total how many the caller reads in all. Truncated is
@@ -83,13 +83,13 @@ type OfflineApp struct {
 	// operation key (the idempotency key of the request that made the record) to the record's
 	// id. A device that sent a record and holds it in its outbox as well as in this download
 	// knows by it that the two are one.
-	Operations map[string]int64 `json:"operations"`
+	Operations map[string]int64 `json:"operations" apitypes:"nonnull"`
 	// Modifiable is which of the downloaded records the caller may change or delete now: the
 	// ones their role's modify scope reaches (all of them, or only those they created), and none
 	// when the space is read-only. A client offers an offline edit or deletion only for these. It
 	// saves a wait and decides nothing: every send is checked again (Service.act), and a record
 	// that stopped being changeable is answered as one the app doesn't have.
-	Modifiable []int64 `json:"modifiable"`
+	Modifiable []int64 `json:"modifiable" apitypes:"nonnull"`
 }
 
 // offlineApp answers a download: the caller's view of the live release and their records.

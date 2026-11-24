@@ -47,7 +47,7 @@ var templatesFS embed.FS
 // installer's own, and the default of every other member of a shared space. A template without
 // roles leaves the app unrestricted, which is what the space's own rules then decide.
 type TemplateRoles struct {
-	Installer []access.AppRole `json:"installer"`
+	Installer []access.AppRole `json:"installer" apitypes:"nonnull"`
 	Members   []access.AppRole `json:"members,omitempty"`
 }
 
@@ -77,11 +77,11 @@ type TemplateInfo struct {
 	NeedsBoard bool `json:"needs_board"`
 	// Captures are the kinds of field that need the phone's own hardware: attachment (camera),
 	// location, signature and barcode.
-	Captures []string `json:"captures"`
+	Captures []string `json:"captures" apitypes:"nonnull"`
 	// Roles are the role assignments an install makes, if any.
 	Roles *TemplateRoles `json:"roles,omitempty"`
 	// Widgets are the titles of the Home widgets it offers.
-	Widgets []string `json:"widgets"`
+	Widgets []string `json:"widgets" apitypes:"nonnull"`
 }
 
 var (

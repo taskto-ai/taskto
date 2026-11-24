@@ -131,15 +131,15 @@ type Card struct {
 	// Blocked is set when the card has a blocked reason or cards it waits for.
 	Blocked       bool    `json:"blocked"`
 	BlockedReason *string `json:"blocked_reason"`
-	BlockedBy     []int64 `json:"blocked_by"`
+	BlockedBy     []int64 `json:"blocked_by" apitypes:"nonnull"`
 	// Docs are knowledge-base paths in the board's space; Conversations are conversation
 	// IDs. Neither is checked to exist.
-	Docs          []string `json:"docs"`
-	Conversations []string `json:"conversations"`
+	Docs          []string `json:"docs" apitypes:"nonnull"`
+	Conversations []string `json:"conversations" apitypes:"nonnull"`
 	// Due is a calendar date, YYYY-MM-DD, with no time or time zone; nil for none.
 	Due *string `json:"due"`
 	// Labels are the card's free-text labels, normalized (NFC, case folded), sorted; never nil.
-	Labels    []string `json:"labels"`
+	Labels    []string `json:"labels" apitypes:"nonnull"`
 	Version   int64    `json:"version"`
 	CreatedAt string   `json:"created_at"`
 	CreatedBy *Author  `json:"created_by"`
@@ -159,7 +159,7 @@ type Comment struct {
 // Thread is a card with its comments, oldest first.
 type Thread struct {
 	Card
-	Comments []Comment `json:"comments"`
+	Comments []Comment `json:"comments" apitypes:"nonnull"`
 }
 
 var (

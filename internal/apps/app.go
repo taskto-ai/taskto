@@ -95,10 +95,10 @@ type Definition struct {
 	// it draws is component.<Name>, a function it calls function.<name>. Check works the list
 	// out from the screen, replacing whatever was sent, so it can't claim less than it uses.
 	// A client whose catalog lacks one of them can't draw the app.
-	Requires []string `json:"requires"`
+	Requires []string `json:"requires" apitypes:"nonnull"`
 	// Components is the screen of an app with one: the A2UI component list, sent as is in
 	// updateComponents. The root component has the ID "root". An app with Screens has none.
-	Components []json.RawMessage `json:"components,omitempty"`
+	Components []json.RawMessage `json:"components,omitempty" apitypes:"json"`
 	// Screens are the screens of an app with several (screens.go), and Entry the one it opens
 	// on. An app has Components or Screens, never both.
 	Screens    []Screen   `json:"screens,omitempty"`
@@ -106,7 +106,7 @@ type Definition struct {
 	Collection Collection `json:"collection"`
 	// Actions maps an A2UI event name to what it does. A button can only send an event
 	// named here.
-	Actions map[string]Action `json:"actions"`
+	Actions map[string]Action `json:"actions" apitypes:"nonnull"`
 	// Summaries are values computed from the rows and shown in the data model.
 	Summaries map[string]Summary `json:"summaries,omitempty"`
 	// Contributions are what the app offers the platform's Home page and navigation
@@ -116,7 +116,7 @@ type Definition struct {
 
 // Collection is the schema of the app's rows, shown in the data model at /items.
 type Collection struct {
-	Fields []Field `json:"fields"`
+	Fields []Field `json:"fields" apitypes:"nonnull"`
 }
 
 // The types of field.
@@ -652,6 +652,12 @@ type ClientAction struct {
 	// as the first one was; a different request under it is refused. An action that has
 	// effects and no operation is given one by the server (outbox.go).
 	Operation string `json:"operation,omitempty"`
+	// Exact is for a caller that decided from one release (the agent, from list_app_actions): a
+	// new request runs only if Release is the live release at the moment it runs, and is
+	// ErrReleaseOutdated otherwise, never taken as the live release defines it (liveTakes). A
+	// request made before under its operation is still answered as the first one was. Never
+	// read from a client's JSON.
+	Exact bool `json:"-"`
 }
 
 // Message is one A2UI server-to-client message.
