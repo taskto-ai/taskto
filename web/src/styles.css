@@ -648,6 +648,20 @@ textarea {
   gap: 0.6rem;
 }
 
+/* "New workspace" sits at the switcher's side, near the start of the bar: its form opens from the
+   start edge, so it never runs off the screen on a phone. */
+.tt-new-workspace .tt-menu {
+  inset-inline-end: auto;
+  inset-inline-start: 0;
+  min-width: min(16rem, calc(100vw - 2rem));
+}
+
+.tt-new-workspace summary {
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--tt-radius);
+}
+
 .tt-menu p {
   margin: 0;
   overflow-wrap: anywhere;

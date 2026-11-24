@@ -262,7 +262,11 @@ export function App() {
       if (foreign) return foreignGuard(me)
       return (
         <>
-          <Shell me={me} onLogout={() => void logOut({ user: me.user.id, next: { state: 'login' } })} />
+          <Shell
+            me={me}
+            onLogout={() => void logOut({ user: me.user.id, next: { state: 'login' } })}
+            onMe={(next) => setSession({ state: 'in', me: next })}
+          />
           {leavingGuard}
         </>
       )

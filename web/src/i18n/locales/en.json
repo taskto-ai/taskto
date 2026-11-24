@@ -733,6 +733,7 @@
     "setup_token": "The setup token is missing or wrong: the server prints it to its log at startup.",
     "email_invalid": "Enter a valid email address.",
     "name_length": "A name needs 1 to {max} characters.",
+    "workspace_creation_refused": "This server doesn't let you create a workspace. Ask the person who runs it.",
     "workspace_name_length": "A workspace name needs 1 to {max} characters.",
     "password_too_short": "The password needs at least {min} characters.",
     "password_too_long": "The password can have at most {max} bytes.",
@@ -1475,6 +1476,9 @@
     "openMenu": "Open the menu",
     "closeMenu": "Close the menu",
     "workspace": "Workspace",
+    "newWorkspace": "New workspace",
+    "newWorkspaceName": "Name of the new workspace",
+    "createWorkspace": "Create workspace",
     "sectionsNav": "Sections",
     "theme": {
       "label": "Theme",

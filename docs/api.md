@@ -42,6 +42,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `setup_token` | 403 | The setup token is missing or wrong. |
 | `email_invalid` | 400 | Not a valid email address. |
 | `name_length` | 400 | A name must have 1 to `max` characters. |
+| `workspace_creation_refused` | 403 | This server doesn't let the caller create a workspace (`-workspace-creation`). |
 | `workspace_name_length` | 400 | A workspace's name must have 1 to `max` characters. |
 | `password_too_short` | 400 | The password has fewer than `min` characters. |
 | `password_too_long` | 400 | The password has more than `max` bytes. |
@@ -350,7 +351,10 @@ requests the same way.
 A user belongs to one or more workspaces, each with a role: `admin` or `member`. Admins
 manage members and invites. A solo install is a workspace with one admin; a team is the
 same workspace with more members. "Switching workspace" is using another workspace ID
-from `GET /api/me`.
+from `GET /api/me`. The first workspace is made by [setup](#post-apisetup); later ones by
+[`POST /api/workspaces`](#post-apiworkspaces), if the operator's `-workspace-creation`
+setting lets the caller ([install.md](install.md#who-may-create-a-workspace)). Workspaces
+share nothing: members, spaces, boards, apps, documents, tokens and settings belong to one.
 
 Workspace routes are `/api/workspaces/{workspace}/…`. A caller who isn't a member gets
 `404`, the same as for a workspace that doesn't exist, so outsiders can't tell which IDs
@@ -524,11 +528,14 @@ Revokes the session and clears the cookie. `204`, also without a session.
 ```json
 {
   "user": {"id": 1, "email": "owner@example.com", "name": "Owner", "locale": "pt-BR"},
-  "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}]
+  "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}],
+  "can_create_workspace": true
 }
 ```
 
-Workspaces are listed oldest first. Requires a login.
+Workspaces are listed oldest first. Requires a login. `can_create_workspace` is whether
+[`POST /api/workspaces`](#post-apiworkspaces) would let this user in now, which the web
+app uses to offer "New workspace".
 
 `user.locale` is the language the user picked, a BCP 47 tag, or `""` for none (the web app
 then follows the browser). A workspace's `locale` is its default language, or `""` for
@@ -542,6 +549,22 @@ left out stays as it is. `locale` is a BCP 47 tag of a language, optionally with
 and a region, in canonical case (`pt-BR`, `zh-Hant-TW`, `sr-Latn`, `es-419`), or `""` for
 none; anything else, variants and extensions included (`de-CH-1901`), is a `400`. Such a
 tag is stored also when the web app has no translation for it. Requires a login (a session, not an access token).
+
+### `POST /api/workspaces`
+
+`{"name": "Side project"}` → `201` with `GET /api/me`'s reply for the caller, now with the
+new workspace in it, and the new one's membership as `workspace`:
+`{"workspace": {"id", "name", "role": "admin", "locale": ""}, "user", "workspaces", "can_create_workspace"}`.
+
+Creates a workspace with the caller as its first admin, and nothing else in it but their
+own private space (with its personal board), as setup does for the first one, in one
+transaction. Who may is the operator's `-workspace-creation` setting: `admins` (the
+default: someone who is an admin of at least one workspace), `anyone` (every logged-in
+person) or `off` (nobody, so the server keeps the workspace setup made). Otherwise `403`
+`workspace_creation_refused`, which `can_create_workspace` told in advance. The name is 1
+to 100 characters (`400` `workspace_name_length`), after trimming; names needn't be
+unique. Requires a login (a session, not an access token: `403` `token_refused`).
+Recorded as `workspace_created` in the [audit log](audit.md).
 
 ### `PATCH /api/workspaces/{workspace}`
 

@@ -31,6 +31,7 @@ import { SettingsPage } from '../settings/SettingsPage'
 import { type Theme, useTheme } from '../theme'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Icon } from './Icon'
+import { NewWorkspace } from './NewWorkspace'
 
 // The A2UI renderer is most of the app's code: loaded when Apps is opened.
 const AppsPage = lazy(() => import('../apps/AppsPage').then((m) => ({ default: m.AppsPage })))
@@ -69,15 +70,16 @@ function rememberWorkspace(id: number) {
 
 // A push opens /notification/{id}: read as the signed-in person and followed to where it leads,
 // outside the shell, which would take that address for an unknown route.
-export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
+// `onMe` takes the account's new state when the shell changed it (a workspace was created).
+export function Shell({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   const opening = parseNotificationPath(usePath())
   if (opening !== null) {
     return <OpenNotification id={opening} fallbackWorkspace={me.workspaces[0]?.id ?? null} />
   }
-  return <Frame me={me} onLogout={onLogout} />
+  return <Frame me={me} onLogout={onLogout} onMe={onMe} />
 }
 
-function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
+function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   const path = usePath()
   usePushSync(me.user.id, me.workspaces.length > 0)
   const parsed = parseRoute(path)
@@ -190,6 +192,15 @@ function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
             ))}
           </select>
         </label>
+        {me.can_create_workspace && onMe && (
+          <NewWorkspace
+            onCreated={(next, created) => {
+              // The account first, so the new workspace is one the shell knows when the address names it.
+              onMe(next)
+              navigate(routePath({ workspace: created.id, section: 'conversations' }))
+            }}
+          />
+        )}
         <span className="tt-topbar-section">
           {section ? t(section.label) : route.section === 'notifications' ? t('notifications.title') : ''}
         </span>

@@ -56,7 +56,18 @@ type Options struct {
 	// DisablePasswordLogin turns off logging in, setting up an account on an invite, and
 	// using a reset link with a password. Needs SSO, or nobody could log in.
 	DisablePasswordLogin bool
+	// WorkspaceCreation says who may create a workspace with POST /api/workspaces: "admins"
+	// (the default, and what any value other than the next two means: an admin of any existing
+	// workspace), "anyone" (every signed-in person) or "off" (nobody).
+	WorkspaceCreation string
 }
+
+// The values of Options.WorkspaceCreation.
+const (
+	CreateByAdmins = "admins"
+	CreateByAnyone = "anyone"
+	CreateByNobody = "off"
+)
 
 // Login limits, in failed attempts per window; a successful login counts against none.
 //

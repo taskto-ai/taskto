@@ -122,9 +122,8 @@ func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	s.team = s.sharedSpace("Team", s.bob)
 	s.alicePersonalBoard = s.scalar(`SELECT id FROM boards WHERE space_id = ?`, s.alice.private)
 
-	// A second workspace for alice: there is no API to make one yet.
-	s.two = s.scalar(`INSERT INTO workspaces (name) VALUES ('Two') RETURNING id`)
-	s.exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'admin')`, s.two, s.alice.id)
+	// A second workspace for alice, made as anyone who administers one may.
+	s.two = s.createWorkspace(s.alice.cookie, "Two")
 	s.alicePrivate2 = s.scalar(`SELECT id FROM spaces WHERE workspace_id = ? AND owner_id = ?`, s.two, s.alice.id)
 	return s
 }
@@ -165,6 +164,17 @@ func (s *stack) sharedSpace(name string, editor person) int64 {
 		}
 	}
 	return spaceID
+}
+
+// createWorkspace makes a workspace for the browser with cookie, which must be allowed to,
+// and returns its ID.
+func (s *stack) createWorkspace(cookie, name string) int64 {
+	s.t.Helper()
+	code, body := s.browser(cookie, http.MethodPost, "/api/workspaces", map[string]any{"name": name})
+	if code != http.StatusCreated {
+		s.t.Fatalf("create workspace %q = %d %v", name, code, body)
+	}
+	return id(body["workspace"].(map[string]any)["id"])
 }
 
 func (s *stack) exec(q string, args ...any) {

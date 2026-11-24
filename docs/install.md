@@ -492,6 +492,34 @@ override), which is why `{"file": …}`, read from the mounted directory, is pre
 after changing the file (`docker compose up -d taskto` after a change to `.env` or the override, which recreates the container; `restart` keeps the old environment). Turning passwords off leaves the owner signing in through the provider
 with the email they set up with ([sso.md](sso.md#turning-passwords-off)).
 
+### Who may create a workspace
+
+Setup makes the first workspace. People make more with "New workspace" in the workspace
+switcher, as far as the operator lets them (`-workspace-creation`, `TASKTO_WORKSPACE_CREATION`,
+`workspace_creation` in the config file):
+
+| Value | Who may |
+|---|---|
+| `admins` (the default) | anyone who is an admin of at least one workspace, so the owner, and whoever they make an admin |
+| `anyone` | every signed-in person, members of other workspaces included |
+| `off` | nobody: the server keeps the workspace setup made |
+
+Whoever creates a workspace is its first admin and the only person in it; they invite the
+others. A workspace shares nothing with the others: its members, spaces, boards, apps,
+documents and tokens belong to it, and the person who made it is no admin of any other
+because of it. `anyone` suits a server that is a small community of people each with
+workspaces of their own; on a company's server, leave `admins` or turn it `off`, so no
+one outside the admins adds workspaces to your storage. A person who is a member of
+workspaces only, or of none (they were removed from theirs), can't create one under `admins`.
+Changing the setting needs a restart (`docker compose up -d taskto` after editing `.env`),
+and workspaces already made stay as they are. Each creation is in the audit log
+(`workspace_created`).
+
+```sh
+# .env
+TASKTO_WORKSPACE_CREATION=anyone   # admins (default), anyone or off
+```
+
 ## Models
 
 Users and workspaces add their own model providers through the API, with their keys

@@ -99,6 +99,7 @@ the default.
 | `-sso-providers` | `TASKTO_SSO_PROVIDERS` | `sso_providers` | | the single sign-on providers file, JSON ([docs/sso.md](docs/sso.md)); needs `-public-url` |
 | `-public-url` | `TASKTO_PUBLIC_URL` | `public_url` | | the server's external `https` origin, such as `https://taskto.example.com`, which single sign-on's redirect URIs are built on |
 | `-disable-password-login` | `TASKTO_DISABLE_PASSWORD_LOGIN` | `disable_password_login` | `false` | turn password logins off, so everyone signs in with a provider; needs `-sso-providers` |
+| `-workspace-creation` | `TASKTO_WORKSPACE_CREATION` | `workspace_creation` | `admins` | who may create more workspaces than setup's: `admins` (an admin of any workspace), `anyone` (everyone signed in) or `off` ([docs/install.md](docs/install.md#who-may-create-a-workspace)) |
 | `-provider-egress-workspace` | `TASKTO_PROVIDER_EGRESS_WORKSPACE` | `provider_egress_workspace` | `any` | where workspaces' provider accounts may connect: `any`, `public`, or a comma-separated list of `public`, hosts, IP addresses and CIDR prefixes ([docs/install.md](docs/install.md#where-provider-accounts-may-connect)) |
 | `-provider-egress-personal` | `TASKTO_PROVIDER_EGRESS_PERSONAL` | `provider_egress_personal` | `any` | the same for members' personal provider accounts |
 | `-smtp-host` | `TASKTO_SMTP_HOST` | `smtp_host` | | the SMTP server that sends the server's email; empty means no email ([docs/install.md](docs/install.md#email)) |

@@ -22,6 +22,7 @@ const (
 	// Workspaces, accounts and invites (internal/auth).
 
 	CodeWorkspaceNotFound   Code = "workspace_not_found"
+	CodeWorkspaceCreation   Code = "workspace_creation_refused" // 403: this server doesn't let the caller create a workspace
 	CodeSetupDone           Code = "setup_done"
 	CodeSetupToken          Code = "setup_token"
 	CodeEmailInvalid        Code = "email_invalid"
