@@ -30,7 +30,7 @@ func startAgent(t *testing.T, e *env, feed *Feed) *agentrt.Client {
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
 	}
-	entry, err := filepath.Abs("../../agent/dist/index.js")
+	entry, err := filepath.Abs("../../agent/dist/test-entry.js") // with the pause tool the test's model calls
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,6 @@ func startAgent(t *testing.T, e *env, feed *Feed) *agentrt.Client {
 		"TASKTO_AGENT_SOCKET="+socket,
 		"TASKTO_AGENT_DB="+filepath.Join(dir, "agent.db"),
 		"TASKTO_AGENT_PROVIDERS="+feed.Path(),
-		"TASKTO_AGENT_SPIKE_TOOLS=1", // the pause tool the test's model calls
 	)
 	cmd.Stderr = e.logs
 	if err := cmd.Start(); err != nil {

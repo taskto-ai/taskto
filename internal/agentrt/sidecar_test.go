@@ -21,8 +21,16 @@ import (
 	"time"
 )
 
-// spikeToolsEnv turns on the sidecar's pause_safe and pause_once tools, which the scripted
-// model calls; the production sidecar doesn't install them (agent/src/tools.ts).
+// The sidecar's entry points. The tests use test-entry.js: the production sidecar with the pause
+// tools (pause_safe, pause_once), which the scripted model calls, and a few fixture tools
+// (agent/src/test-entry.ts). index.js is what the server runs, and it can't be given any of them.
+const (
+	testEntry       = "../../agent/dist/test-entry.js"
+	productionEntry = "../../agent/dist/index.js"
+)
+
+// spikeToolsEnv is the variable an earlier version of the sidecar read to install the pause tools.
+// Nothing reads it now; tests set it to prove that.
 const spikeToolsEnv = "TASKTO_AGENT_SPIKE_TOOLS"
 
 type sidecar struct {
@@ -31,12 +39,19 @@ type sidecar struct {
 	socket string
 	cmd    *exec.Cmd
 	client *Client
+	entry  string       // the entry point's path
 	env    []string     // extra environment, such as TASKTO_AGENT_PROVIDERS
 	output lockedBuffer // everything the sidecar wrote to stderr, across restarts
 }
 
-// startSidecar starts the sidecar with env added to its environment.
+// startSidecar starts the sidecar for tests (test-entry.js) with env added to its environment.
 func startSidecar(t *testing.T, env ...string) *sidecar {
+	t.Helper()
+	return startSidecarAt(t, testEntry, env...)
+}
+
+// startSidecarAt starts the sidecar at the entry point, a path relative to this package.
+func startSidecarAt(t *testing.T, entry string, env ...string) *sidecar {
 	t.Helper()
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
@@ -47,7 +62,11 @@ func startSidecar(t *testing.T, env ...string) *sidecar {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	s := &sidecar{t: t, dir: dir, socket: filepath.Join(dir, "agent.sock"), env: env}
+	abs, err := filepath.Abs(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &sidecar{t: t, dir: dir, socket: filepath.Join(dir, "agent.sock"), entry: abs, env: env}
 	t.Cleanup(s.stop) // before start: a start that fails the test still reaps the process
 	s.start()
 	return s
@@ -55,15 +74,10 @@ func startSidecar(t *testing.T, env ...string) *sidecar {
 
 func (s *sidecar) start() {
 	s.t.Helper()
-	entry, err := filepath.Abs("../../agent/dist/index.js")
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	s.cmd = exec.Command("node", entry)
+	s.cmd = exec.Command("node", s.entry)
 	s.cmd.Env = append(os.Environ(),
 		"TASKTO_AGENT_SOCKET="+s.socket,
 		"TASKTO_AGENT_DB="+filepath.Join(s.dir, "agent.db"),
-		spikeToolsEnv+"=1", // the pause tools the scripted model calls
 	)
 	s.cmd.Env = append(s.cmd.Env, s.env...)
 	s.cmd.Stderr = io.MultiWriter(testWriter{s.t}, &s.output)

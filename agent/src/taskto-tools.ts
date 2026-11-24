@@ -13,6 +13,7 @@ import { request } from 'node:http'
 import { defineDoc, defineExtension, defineTool, type ToolExecutionApi } from '@earendil-works/pi-durable'
 import type { Schema } from '@earendil-works/pi-schema'
 import definitions from './taskto-tools.json' with { type: 'json' }
+import { testHooks } from './test-hooks.js'
 
 /** The conversation's capability for the tools socket; '' until the server sends one. */
 export const ToolAccess = defineDoc({
@@ -113,7 +114,7 @@ function refusal(reply: Reply): string {
 }
 
 /** A tool as the server defines it (internal/agenttools/tools.json, copied here by go generate). */
-type ToolSpec = {
+export type ToolSpec = {
   name: string
   description: string
   /** Reads are safe to run again after a crash; writes are not, so a crash never repeats one. */
@@ -162,7 +163,8 @@ const specs = definitions as ToolSpec[]
 export function tasktoTools(socketPath: string, options: { browser?: boolean } = {}) {
   return defineExtension({
     name: 'taskto-tools',
-    tools: specs
+    // The integration tests' fixture tools (test-hooks.ts) come after the server's; none otherwise.
+    tools: [...specs, ...testHooks.extraToolSpecs]
       .filter((spec) => options.browser || !spec.conversation_only)
       .map((spec) => serverTool(socketPath, spec)),
   })
