@@ -489,6 +489,10 @@ test('"New workspace" is offered only when the server lets the person, and switc
   expect(calls.filter((c) => c.path === '/api/workspaces' && c.method === 'POST').map((c) => c.body)).toEqual([
     { name: 'Side project' },
   ])
+  // The request says which account the form was opened for, so a session that became another's is refused.
+  expect(calls.find((c) => c.path === '/api/workspaces' && c.method === 'POST')?.headers).toMatchObject({
+    'x-taskto-expected-user': String(me.user.id),
+  })
   // The switcher lists it and shows it.
   await waitFor(() => expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe('9'))
   expect(localStorage.getItem('taskto.workspace')).toBe('9')

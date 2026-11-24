@@ -158,6 +158,7 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
         <p>{t('shell.noWorkspace')}</p>
         {me.can_create_workspace && onMe && (
           <NewWorkspace
+            user={me.user.id}
             onCreated={(next, created) => {
               onMe(next)
               navigate(routePath({ workspace: created.id, section: 'conversations' }))
@@ -211,6 +212,7 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
         </label>
         {me.can_create_workspace && onMe && (
           <NewWorkspace
+            user={me.user.id}
             onCreated={(next, created) => {
               // The account first, so the new workspace is one the shell knows when the address names it.
               onMe(next)

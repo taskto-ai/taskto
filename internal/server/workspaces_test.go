@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/backup"
 	"taskto.ai/taskto/internal/mail"
@@ -213,5 +214,28 @@ func TestServerWideViewsAreForOperatorsNotForAdminsOfCreatedWorkspaces(t *testin
 		if _, body := s.browser(cookie, http.MethodGet, "/api/me", nil); body["is_operator"] != want {
 			t.Errorf("%s: is_operator = %v, want %v", who, body["is_operator"], want)
 		}
+	}
+}
+
+// A form opened for one account and submitted after the browser's session became another's
+// (the web app names the account it is for) makes no workspace: 409, and the other account
+// ends up with nothing.
+func TestCreatingAWorkspaceNamingAnotherAccountMakesNone(t *testing.T) {
+	s := newStackWith(t, func(o *Options) { o.Auth.WorkspaceCreation = "anyone" })
+	before := s.scalar(`SELECT count(*) FROM workspaces`)
+	rec := s.request(http.MethodPost, "/api/workspaces", map[string]any{"name": "Not for bob"}, sameOrigin(s.bob.cookie), func(r *http.Request) {
+		r.Header.Set(access.ExpectedUserHeader, fmt.Sprint(s.alice.id))
+	})
+	if rec.Code != http.StatusConflict || decode(rec)["code"] != "session_account_changed" {
+		t.Fatalf("creating as bob for alice = %d %s, want 409 session_account_changed", rec.Code, rec.Body)
+	}
+	if got := s.scalar(`SELECT count(*) FROM workspaces`); got != before {
+		t.Fatalf("a refused creation made %d workspaces", got-before)
+	}
+	rec = s.request(http.MethodPost, "/api/workspaces", map[string]any{"name": "For bob"}, sameOrigin(s.bob.cookie), func(r *http.Request) {
+		r.Header.Set(access.ExpectedUserHeader, fmt.Sprint(s.bob.id))
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("creating as bob for bob = %d %s", rec.Code, rec.Body)
 	}
 }

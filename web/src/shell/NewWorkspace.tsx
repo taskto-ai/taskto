@@ -3,7 +3,7 @@
 // /api/me, the operator's -workspace-creation); the shell only offers it to those it says yes to.
 
 import { type FormEvent, useRef, useState } from 'react'
-import { api, errorText, type Me, type Workspace } from '../api'
+import { api, errorText, forAccount, type Me, type Workspace } from '../api'
 import { useT } from '../i18n'
 import { Icon } from './Icon'
 
@@ -12,7 +12,9 @@ type Created = Me & { workspace: Workspace }
 
 const MAX_NAME = 100
 
-export function NewWorkspace({ onCreated }: { onCreated: (me: Me, workspace: Workspace) => void }) {
+// `user`: the account the form was opened for; the server refuses the request (409) if the browser's session
+// became another account's since, so a workspace is never made for someone the person didn't mean.
+export function NewWorkspace({ user, onCreated }: { user: number; onCreated: (me: Me, workspace: Workspace) => void }) {
   const t = useT()
   const details = useRef<HTMLDetailsElement>(null)
   const [name, setName] = useState('')
@@ -27,6 +29,7 @@ export function NewWorkspace({ onCreated }: { onCreated: (me: Me, workspace: Wor
     try {
       const { workspace, ...me } = await api<Created>('/api/workspaces', {
         method: 'POST',
+        headers: forAccount(user),
         body: { name: name.trim() },
       })
       setName('')
