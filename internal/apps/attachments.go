@@ -995,6 +995,9 @@ func (s *Service) relocate(ctx context.Context, appID int64) error {
 	}
 	var errs []error
 	for _, m := range moves {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		errs = append(errs, s.relocateOne(ctx, appID, m.id, m.space, home))
 	}
 	return errors.Join(errs...)
@@ -1082,6 +1085,9 @@ func (s *Service) Sweep(ctx context.Context, cutoff time.Time) error {
 	}
 	errs = append(errs, rows.Err(), rows.Close())
 	for _, id := range moved {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		errs = append(errs, s.relocate(ctx, id))
 	}
 	errs = append(errs, s.sweepStrays(ctx, cutoff))
@@ -1113,6 +1119,9 @@ func (s *Service) sweep(ctx context.Context, cutoff time.Time, appID int64) erro
 	}
 	var errs []error
 	for _, o := range olds {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		errs = append(errs, s.deleteExpired(ctx, o.id, o.app, cutoff))
 	}
 	return errors.Join(errs...)
@@ -1160,6 +1169,9 @@ func (s *Service) sweepStrays(ctx context.Context, cutoff time.Time) error {
 	}
 	var errs []error
 	for _, sp := range spaces {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		if _, err := os.Stat(filepath.Join(access.SpaceDir(s.dataDir, sp.workspace, sp.id), filesDir)); err != nil {
 			continue // no files, or nothing to see
 		}
@@ -1180,6 +1192,9 @@ func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.T
 	}
 	var errs []error
 	for _, dir := range apps {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		appID, err := strconv.ParseInt(dir.Name(), 10, 64)
 		if err != nil || !dir.IsDir() {
 			continue
@@ -1202,6 +1217,9 @@ func (s *Service) sweepSpace(ctx context.Context, sp access.Space, cutoff time.T
 			continue
 		}
 		for _, f := range files {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(errs, err)...)
+			}
 			id, suffix, _ := strings.Cut(f.Name(), ".")
 			// The received file of an attachment that is ready is a leftover of finalizing (it was
 			// stopped, or couldn't remove it): it holds the original, metadata included, and nothing
