@@ -4,7 +4,11 @@ PNPM ?= pnpm
 # golangci-lint is pinned in tools/go.mod, apart from the app's dependencies.
 GOLANGCI_LINT = go tool -modfile=tools/go.mod golangci-lint
 
-# Everything CI checks, except the secret scan and the agent integration tests.
+# What CI checks in its lint, Go and web + agent jobs. It leaves out the jobs that need more
+# than a checkout: the secret scan (gitleaks), the agent runtime integration tests
+# (`make agent-it`), the CLI isolation tests (root, in a container), the worker network
+# test (privileged Docker), the backup integration tests, and the agent browser's tests
+# against a real Chromium (.github/workflows/browser.yml).
 check: lint
 	go test ./...
 	$(PNPM) --filter @taskto/web run i18n

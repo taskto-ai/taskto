@@ -1,5 +1,16 @@
 # Spike: Claude Code and Codex as Pi Durable tasks
 
+> **Since then:** CLI workers are built: the server's `internal/cliworker` runs the CLIs,
+> and the sidecar's side is `agent/src/cli.ts`; Grok Build is a third CLI beside Claude Code
+> and Codex; in container mode a worker of its own runs each user's CLIs as a Unix user of
+> their own, which is the OS boundary this spike asked for; every CLI starts through a
+> helper that refuses root and sets `no_new_privs`; a user can have several accounts per
+> CLI, and workspaces share accounts through a per-turn proxy; and CLI turns call TaskTo's
+> own tools. See [cli-workers.md](../cli-workers.md),
+> [account-switching.md](../account-switching.md) and [cli-tools.md](../cli-tools.md). The
+> spike's `run_cli` code is still only a spike, and the rest of this page is the spike as it
+> was.
+
 **Verdict: go for CLI workers, with an OS boundary per user.** Both official CLIs run without a terminal, stream JSON
 events, keep their sessions on disk and resume them after a sidecar crash, and a conversation can move from one to
 the other through the Pi Durable transcript. What does not hold on its own is isolation: a CLI runs as the server's
