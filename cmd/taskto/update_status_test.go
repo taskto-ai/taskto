@@ -233,3 +233,86 @@ func TestServerReadsTheUpdaterStatusOnly(t *testing.T) {
 		}
 	}
 }
+
+// A pending manual upgrade stays while runs can't look at the releases (a hold, the channel
+// off): the steps weren't done. A run that looks and finds nothing in the way clears it.
+func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
+	e := newUpdEnv(t)
+	e.release(updNew, "Needs a new disk.\n\nmanual-upgrade: true\n", false, false)
+	if code, _ := e.run(); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if s := e.public(); s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindManualUpgrade {
+		t.Fatalf("pending: %+v", s.NeedsPerson)
+	}
+	// On hold, the run exits before it looks at the releases.
+	e.write("etc/update.hold", "")
+	if code, _ := e.run(); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if s := e.public(); s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindManualUpgrade ||
+		!strings.Contains(s.NeedsPerson.Reason, updNew+" needs manual steps") || !s.Hold || s.LastRun.Result != "skipped" {
+		t.Fatalf("on hold: %+v, %+v", s.NeedsPerson, s.LastRun)
+	}
+	// The same with the channel off.
+	if err := os.Remove(e.hold); err != nil {
+		t.Fatal(err)
+	}
+	e.write("etc/install.env", e.read("etc/install.env")+"TASKTO_UPDATE_CHANNEL='off'\n")
+	if code, _ := e.run(); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if s := e.public(); s.NeedsPerson == nil || s.Channel != "off" {
+		t.Fatalf("off: %+v", s.NeedsPerson)
+	}
+	// Back on, and nothing newer than what is installed (the person updated by hand, outside the
+	// updater's own log): a run that looks clears it.
+	e.write("etc/install.env", strings.Replace(e.read("etc/install.env"), "TASKTO_UPDATE_CHANNEL='off'\n", "", 1))
+	e.gh.releases = []map[string]any{}
+	if code, _ := e.run(); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if s := e.public(); s.NeedsPerson != nil || s.LastRun.Result != "up-to-date" {
+		t.Fatalf("after looking: %+v, %+v", s.NeedsPerson, s.LastRun)
+	}
+}
+
+// A run that couldn't read the releases doesn't clear it either.
+func TestUpdateStatusForTheServerKeepsAManualUpgradeWhenTheReleasesCantBeRead(t *testing.T) {
+	e := newUpdEnv(t)
+	e.release(updNew, "manual-upgrade: true\n", false, false)
+	if code, _ := e.run(); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	e.gh.releases = nil // the fake answers `null`, which isn't a release list
+	if code, _ := e.run(); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if s := e.public(); s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindManualUpgrade || s.LastRun.Result != "skipped" {
+		t.Fatalf("status = %+v, %+v", s.NeedsPerson, s.LastRun)
+	}
+}
+
+// The stop's own instructions, from the transaction, come before what an older run said, when
+// the blocked marker can't be read.
+func TestUpdateStatusForTheServerGivesTheCurrentReasonForAStop(t *testing.T) {
+	e := newUpdEnv(t)
+	e.release(updNew, "", false, false)
+	e.write("fake/health-bad", updNew+"\n")
+	if code, _ := e.run(); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if err := os.Remove(filepath.Join(e.state, "blocked")); err != nil {
+		t.Fatal(err)
+	}
+	// An older, unrelated run is what the private status says.
+	e.write("state/status.json", `{"at":"2020-01-01T00:00:00Z","result":"up-to-date","reason":"an older run"}`)
+	if code, _ := e.run(); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	s := e.public()
+	if s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindBlocked || strings.Contains(s.NeedsPerson.Reason, "an older run") ||
+		!strings.Contains(s.NeedsPerson.Reason, "--clear-block") {
+		t.Fatalf("status = %+v", s.NeedsPerson)
+	}
+}

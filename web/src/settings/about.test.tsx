@@ -159,6 +159,22 @@ test('a stop that needs a person is an alert with the command that clears it', a
   expect(screen.getByText(/Failed, and the server was stopped/)).toBeTruthy()
 })
 
+test('a fresh failed run is not reported as working, even when nothing waits for a person', async () => {
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates(
+        {},
+        { last_run: { finished: ago(1), result: 'failed', from: 'v0.3.0', reason: 'the disk is nearly full' } },
+      ),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/The last update run failed/)).toBeTruthy()
+  expect(screen.queryByText('Updates are working.')).toBeNull()
+  expect(screen.getByText('the disk is nearly full').tagName).toBe('CODE')
+})
+
 test('a release that needs manual steps says so, and a version that is not on record is called out', async () => {
   fakeFetch({
     ...noBackups,

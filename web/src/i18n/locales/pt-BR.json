@@ -1182,7 +1182,8 @@
           "off": "As atualizações automáticas estão desligadas neste servidor (o canal é off).",
           "stale": "O atualizador não informa nada há dias. Veja o timer dele no host (systemctl status taskto-update.timer).",
           "blocked": "Uma atualização precisa de uma pessoa. Nada é atualizado até isso ser resolvido.",
-          "manualUpgrade": "Uma nova versão precisa de passos manuais, então não é instalada automaticamente."
+          "manualUpgrade": "Uma nova versão precisa de passos manuais, então não é instalada automaticamente.",
+          "failed": "A última execução da atualização falhou, então o servidor pode estar desatualizado. O que o atualizador disse está abaixo; o guia de instalação (docs/install.md, When an update fails) explica cada resultado."
         },
         "needs": {
           "blocked": "Veja o que está abaixo, acerte a instalação no host e rode {command} lá. A seção Rollback do guia de instalação tem os passos.",

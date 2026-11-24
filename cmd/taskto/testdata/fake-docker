@@ -22,7 +22,7 @@
 #   mutate    lines "VERSION KIND": that version's running containers break a safety rule (KIND
 #             is root, insecure, nomode, netadmin, suid, workerdata, updaterstate (the server
 #             mounts the updater's whole state, read-write) or updaterwrite (its public status
-#             directory, read-write))
+#             directory, read-write) or updatervolume (a named volume binding the state))
 #   upfail-after-start  a version whose `compose start` starts it and then fails
 #   config-edit         a jq filter applied to the rendered settings of the staged project
 #   config-edit-backup  the same, applied only when a backup profile is on (a render with
@@ -148,6 +148,7 @@ container() {
 		# The updater's status for admins, read-only, as compose.yaml mounts it.
 		mounts=$(jq -c --arg src "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}/public" '. + [{Type: "bind", Source: $src, Destination: "/update-status", RW: false}]' <<<"$mounts")
 		mutated updaterwrite && mounts=$(jq -c '(.[] | select(.Destination == "/update-status") | .RW) = true' <<<"$mounts")
+		mutated updatervolume && mounts=$(jq -c '. + [{Type: "volume", Name: "taskto_statevol", Destination: "/state", RW: false}]' <<<"$mounts")
 		mutated updaterstate && mounts=$(jq -c --arg src "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}" '. + [{Type: "bind", Source: $src, Destination: "/state", RW: false}]' <<<"$mounts")
 		nets='{"taskto_default":{}}'
 		[ ! -s "$d/server-env" ] || env=$(jq -c --rawfile x "$d/server-env" '. + ($x | split("\n") | map(select(. != "")))' <<<"$env")
@@ -222,6 +223,13 @@ info) echo "$d/root" ;;
 volume)
 	case "$2" in
 	inspect)
+		case "$*" in
+		*json*Options*)
+			# `volume inspect --format '{{json .Options}}' NAME`: null for a plain volume.
+			if [ "$last" = taskto_statevol ]; then jq -cn --arg dev "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}" '{device: $dev, o: "bind", type: "none"}'; else echo null; fi
+			exit 0
+			;;
+		esac
 		if [ -s "$d/missing-volumes" ] && grep -qxF "$3" "$d/missing-volumes"; then exit 1; fi
 		echo "$d/volume"
 		;;

@@ -56,6 +56,11 @@ fail() {
 d() { "$DOCKER" "$@" </dev/null; }
 # docker compose, on the project's explicit inputs.
 c() { d compose "${cargs[@]}" "$@"; }
+# jq: holds(PATH; READ_ONLY): a mount of host path PATH lets the server see what is in the updater's
+# state directory $state, other than its `public` directory read-only: the state itself, a directory
+# above it, or anything under it.
+HOLDS='def holds($p; $ro): ($p | rtrimstr("/")) as $p | ($state == $p or ($state | startswith($p + "/")) or
+	(($p | startswith($state + "/")) and ($p != $state + "/public" or $ro != true))); '
 
 if [ "$mode" = static ]; then
 	cfg=$(c config --format json) || fail "can't render the Compose settings"
@@ -115,10 +120,12 @@ if [ "$mode" = static ]; then
 	done
 	# The server reads one thing of the host's updater, its status for admins: the directory
 	# $state/public, read-only. Nothing that holds the updater's own state (the transaction, the
-	# old files and .env, the backups), and no directory above it, which would hold it.
-	jq -e --arg state "$state" 'def bad: (.source // "" | rtrimstr("/")) as $p | ($state == $p or $p == "" or ($state | startswith($p + "/")) or
-			(($p | startswith($state + "/")) and ($p != $state + "/public" or .read_only != true)));
-		[.services.taskto.volumes[]? | select(.type == "bind" and bad)] | length == 0' <<<"$cfg" >/dev/null ||
+	# old files and .env, the backups), and no directory above it, which would hold it. A host
+	# path comes as a bind mount, or as a named volume whose driver options bind one (`device`).
+	jq -e --arg state "$state" "$HOLDS"'. as $c | [.services.taskto.volumes[]?
+			| (if .type == "bind" then {p: (.source // ""), ro: (.read_only == true)}
+			   elif .type == "volume" then {p: ($c.volumes[.source // ""].driver_opts.device // ""), ro: (.read_only == true)} else empty end)
+			| select(.p != "") | select(holds(.p; .ro))] | length == 0' <<<"$cfg" >/dev/null ||
 		fail "the server has a host path that holds the updater's state (only $state/public, read-only, may be mounted)"
 
 	# The worker is on one network, its own, which the server isn't on, and the firewall's bridge.
@@ -178,10 +185,15 @@ for i in "$si" "$wi"; do
 	q '[.[0].Mounts[]? | select(((.Source // "") + (.Destination // "")) | contains("docker.sock"))] | length == 0' <<<"$i" ||
 		fail "a container has the Docker socket"
 done
-# The same for the updater's state as in the static check: the server may mount $state/public, read-only.
-jq -e --arg state "$state" 'def bad: (.Source // "" | rtrimstr("/")) as $p | ($state == $p or $p == "" or ($state | startswith($p + "/")) or
-		(($p | startswith($state + "/")) and ($p != $state + "/public" or .RW != false)));
-	[.[0].Mounts[]? | select(.Type == "bind" and bad)] | length == 0' <<<"$si" >/dev/null ||
+# The same for the updater's state as in the static check: the server may mount $state/public,
+# read-only. A named volume that binds a host path shows in the volume's options, not the mount's.
+hostpaths=$(jq -c '[.[0].Mounts[]? | select(.Type == "bind") | {p: (.Source // ""), ro: (.RW == false)}]' <<<"$si")
+for vn in $(jq -r '.[0].Mounts[]? | select(.Type == "volume") | .Name' <<<"$si"); do
+	vo=$(d volume inspect --format '{{json .Options}}' "$vn") || fail "can't inspect the server's volume $vn"
+	hostpaths=$(jq -c --arg n "$vn" --argjson o "$vo" --argjson s "$si" '. + [{p: ($o.device // ""), ro: (([$s[0].Mounts[]? | select(.Name == $n)][0].RW) == false)}]' <<<"$hostpaths") ||
+		fail "can't read the options of the server's volume $vn"
+done
+jq -e --arg state "$state" "$HOLDS"'[.[] | select(.p != "") | select(holds(.p; .ro))] | length == 0' <<<"$hostpaths" >/dev/null ||
 	fail "the server has a host path that holds the updater's state (only $state/public, read-only, may be mounted)"
 
 # The worker is on one network, its own, which the server isn't on, and the firewall's bridge.

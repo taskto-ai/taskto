@@ -1177,7 +1177,8 @@
           "off": "Automatic updates are off on this server (the channel is off).",
           "stale": "The updater hasn't reported for days. Check its timer on the host (systemctl status taskto-update.timer).",
           "blocked": "An update needs a person. Nothing updates until it is put right.",
-          "manualUpgrade": "A new release needs steps by hand, so it isn't installed automatically."
+          "manualUpgrade": "A new release needs steps by hand, so it isn't installed automatically.",
+          "failed": "The last update run failed, so the server may be behind. What the updater said is below; the install guide (docs/install.md, When an update fails) says what each result means."
         },
         "needs": {
           "blocked": "Look at what is below, put the install right on the host, then run {command} there. The install guide's Rollback section has the steps.",

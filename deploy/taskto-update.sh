@@ -210,9 +210,22 @@ write_public() {
 	if [ -e "$STATE/blocked" ] || [ -e "$TX" ]; then
 		kind=blocked
 		why=$(head -c 4000 "$STATE/blocked" 2>/dev/null | tr -d '\000' || true)
+		# A run that was refused for a stop it found in the transaction says why in $reason; the
+		# private status is only what an earlier run said.
+		case $result in blocked | interrupted) [ -n "$why" ] || why=$reason ;; esac
 		[ -n "$why" ] || why=$(jq -r '.reason // ""' <<<"$priv")
 	elif [ -n "$needs" ]; then
 		kind=$needs why=$reason
+	else
+		# A run that couldn't tell (a hold, the channel off, a failed check, an unreadable release
+		# list) can't say the steps were done: what was pending stays, until a run looks and finds
+		# nothing newer, or an update is made.
+		case $result in updated | cleared | up-to-date) ;; *)
+			if [ -s "$f" ] && [ "$(jq -r '.needs_person.kind // ""' "$f" 2>/dev/null)" = manual-upgrade ]; then
+				kind=manual-upgrade why=$(jq -r '.needs_person.reason // ""' "$f" | head -c 4000)
+			fi
+			;;
+		esac
 	fi
 	[ ! -e "$HOLD" ] || hold=true
 	install -d -m 755 "$PUBLIC" || return 1

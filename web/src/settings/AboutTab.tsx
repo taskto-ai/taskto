@@ -75,16 +75,20 @@ const RESULTS = [
 ] as const
 const CHANNELS = ['release', 'main', 'off'] as const
 // What the updater wrote may be a word this version doesn't know: it is shown as it is.
+// Runs that ended with something wrong, which a person should look at, whether or not the updater
+// also blocked itself.
+const FAILURES = ['failed', 'rolled-back', 'rollback-failed', 'stopped', 'stop-failed', 'interrupted']
 const isResult = (r: string): r is (typeof RESULTS)[number] => (RESULTS as readonly string[]).includes(r)
 const isChannel = (c: string): c is (typeof CHANNELS)[number] => (CHANNELS as readonly string[]).includes(c)
 
-type UpdateHealth = 'ok' | 'hold' | 'off' | 'stale' | 'blocked' | 'manualUpgrade'
+type UpdateHealth = 'ok' | 'hold' | 'off' | 'stale' | 'failed' | 'blocked' | 'manualUpgrade'
 
 const UPDATE_CLASS: Record<UpdateHealth, string | undefined> = {
   ok: 'tt-ok',
   hold: 'tt-warning',
   off: 'tt-muted',
   stale: 'tt-warning',
+  failed: 'tt-warning',
   blocked: 'tt-error',
   manualUpgrade: 'tt-warning',
 }
@@ -103,6 +107,7 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
     if (needs?.kind === 'blocked') health = 'blocked'
     else if (needs?.kind === 'manual-upgrade') health = 'manualUpgrade'
     else if (u?.stale) health = 'stale'
+    else if (st.last_run && FAILURES.includes(st.last_run.result)) health = 'failed'
     else if (st.channel === 'off') health = 'off'
     else if (st.hold) health = 'hold'
     else health = 'ok'
