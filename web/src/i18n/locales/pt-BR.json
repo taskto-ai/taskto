@@ -2037,11 +2037,15 @@
     "openInbox": "Abrir suas notificações",
     "kind": {
       "card_assigned": "Um cartão foi atribuído a você: {title}",
+      "card_due": "Vence em {due}: {title}",
+      "card_overdue": "Atrasado desde {due}: {title}",
       "app_effect_failed": "Uma ação em {app} não terminou e precisa que você tente de novo",
       "changed": "Algo mudou. Abra para ver o que você ainda pode ver."
     },
     "push": {
       "card_assigned": "Um cartão foi atribuído a você",
+      "card_due": "Um cartão seu vence",
+      "card_overdue": "Um cartão seu está atrasado",
       "app_effect_failed": "Uma ação de um app precisa da sua atenção",
       "changed": "Algo mudou"
     },

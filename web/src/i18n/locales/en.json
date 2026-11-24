@@ -2017,11 +2017,15 @@
     "openInbox": "Open your notifications",
     "kind": {
       "card_assigned": "A card was assigned to you: {title}",
+      "card_due": "Due {due}: {title}",
+      "card_overdue": "Overdue since {due}: {title}",
       "app_effect_failed": "An action in {app} didn't finish and needs you to retry it",
       "changed": "Something changed. Open it to see what you can still see."
     },
     "push": {
       "card_assigned": "A card was assigned to you",
+      "card_due": "A card of yours is due",
+      "card_overdue": "A card of yours is overdue",
       "app_effect_failed": "An app action needs your attention",
       "changed": "Something changed"
     },

@@ -1141,3 +1141,92 @@ func TestThePushContactIsTheVAPIDSubjectAndMustBeValid(t *testing.T) {
 		}
 	}
 }
+
+func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *testing.T) {
+	w := newWorld(t, true)
+	d := w.newDevice("phone")
+	w.subscribe(w.bob, d)
+	card := w.assign("Renew the lease", w.bob)
+	if _, err := w.db.Exec(`UPDATE cards SET due = '2030-01-10' WHERE id = ?`, card); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{notifications.KindCardDue, notifications.KindCardOverdue} {
+		tx, err := w.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		notice := notifications.Notice{UserID: w.bob.id, WorkspaceID: w.ws, Kind: kind,
+			Ref: notifications.Ref{Space: w.space.ID, Board: w.board, Card: card, Due: "2030-01-10"}, DedupeKey: "job:1:r0:" + kind}
+		// A retry makes nothing twice.
+		for range 2 {
+			if err := notifications.Add(context.Background(), tx, notice); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items := w.inbox(w.bob, "").Notifications
+	if len(items) != 3 { // newest first: overdue, due, assigned
+		t.Fatalf("inbox = %+v", items)
+	}
+	wantItem := fmt.Sprintf("%d:%d:%d", w.space.ID, w.board, card)
+	for i, kind := range []string{notifications.KindCardOverdue, notifications.KindCardDue} {
+		it := items[i]
+		if it.Kind != kind || it.Params["title"] != "Renew the lease" || it.Params["due"] != "2030-01-10" ||
+			it.Target.Section != "boards" || it.Target.Item != wantItem {
+			t.Fatalf("item %d = %+v", i, it)
+		}
+	}
+	// Someone else is told nothing of them.
+	if n := len(w.inbox(w.mallory, "").Notifications); n != 0 {
+		t.Fatalf("mallory's inbox has %d items", n)
+	}
+
+	// A notice says its date only while the card is still due then: once the date moved or was cleared,
+	// "overdue since" a day that may be ahead would be false, and it is a plain mention of the card.
+	for _, due := range []string{"2030-02-01", ""} {
+		if due == "" {
+			if _, err := w.db.Exec(`UPDATE cards SET due = NULL WHERE id = ?`, card); err != nil {
+				t.Fatal(err)
+			}
+		} else if _, err := w.db.Exec(`UPDATE cards SET due = ? WHERE id = ?`, due, card); err != nil {
+			t.Fatal(err)
+		}
+		for _, i := range []int{0, 1} {
+			if it := w.inbox(w.bob, "").Notifications[i]; it.Kind != notifications.KindChanged || len(it.Params) != 0 {
+				t.Fatalf("item %d for a card whose date is %q now = %+v", i, due, it)
+			}
+		}
+	}
+	if _, err := w.db.Exec(`UPDATE cards SET due = '2030-01-10' WHERE id = ?`, card); err != nil {
+		t.Fatal(err)
+	}
+
+	// The push carries the kind and ID only; once access ends it says only that something changed.
+	w.svc.DrainOnce(context.Background())
+	payloads, _ := w.pushed(d)
+	if len(payloads) != 3 {
+		t.Fatalf("payloads = %v", payloads)
+	}
+	kinds := map[string]bool{}
+	for _, p := range payloads {
+		// What the device is sent, decrypted: the ID and the kind, and nothing of the record.
+		if len(p) != 2 || p["id"] == nil || p["kind"] == nil {
+			t.Fatalf("a push carries more than its ID and kind: %v", p)
+		}
+		kinds[p["kind"].(string)] = true
+	}
+	for _, kind := range []string{notifications.KindCardAssigned, notifications.KindCardDue, notifications.KindCardOverdue} {
+		if !kinds[kind] {
+			t.Fatalf("no push of kind %s: %v", kind, payloads)
+		}
+	}
+	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", w.ws, w.space.ID, w.bob.id), nil), http.StatusNoContent)
+	for _, it := range w.inbox(w.bob, "").Notifications {
+		if it.Kind != notifications.KindChanged || len(it.Params) != 0 {
+			t.Fatalf("an item after access ended = %+v", it)
+		}
+	}
+}

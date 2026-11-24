@@ -93,7 +93,7 @@
   },
   {
     "name": "read_doc",
-    "description": "Read a Markdown document (.md). Long documents come in pieces of 32 KiB: pass \"next_offset\" as \"offset\" for the next piece. \"version\" is what write_doc needs to change it.",
+    "description": "Read a Markdown document (.md) or a plain-text file of up to 1 MiB (code, data, notes: not binaries, and not large files, audio, video or archives), as it is now or, with \"at\", as it was at an older commit (from doc_history). Long files come in pieces of 32 KiB: pass \"next_offset\" as \"offset\" for the next piece. \"version\" is what write_doc needs to change a document (only when read as it is now).",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -110,6 +110,10 @@
         "offset": {
           "type": "integer",
           "minimum": 0
+        },
+        "at": {
+          "type": "string",
+          "description": "a commit from doc_history, to read the file as it was then; leave out for now"
         }
       },
       "required": ["space_id", "path"],
@@ -147,6 +151,138 @@
         }
       },
       "required": ["space_id", "path", "content"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "move_doc",
+    "description": "Rename or move a document, a file or a whole folder in a space the user may write; the destination must not exist. To move a document, pass the version you read as base_version (not for a folder). The change is the user's, made by their agent, and kept in the history.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the path now, like notes/plan.md, or a folder"
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the new path, like archive/plan.md"
+        },
+        "base_version": {
+          "type": "string",
+          "description": "the version from read_doc, to move the document only if it hasn't changed"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "what changed, for the history"
+        }
+      },
+      "required": ["space_id", "from", "to"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "delete_doc",
+    "description": "Delete a document or file (not a folder: delete what is in it) in a space the user may write. A document's history stays: doc_history finds it and restore_doc brings it back. An unversioned file (a large file, audio, video, an archive) is gone for good: its bytes are not kept. Ask the user first unless they asked for it.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "base_version": {
+          "type": "string",
+          "description": "the version from read_doc, to delete the document only if it hasn't changed"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "why, for the history"
+        }
+      },
+      "required": ["space_id", "path"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "doc_history",
+    "description": "List the commits that changed a document, newest first, with who made each (and the agent, if one did), when, its message, what happened to the document (create, update or delete) and its version after. Without a path, the whole space's commits. A commit goes to read_doc as \"at\" and to restore_doc as \"commit\". \"next\" is the \"before\" of the next page. It doesn't follow renames: look for the old path too.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "path": {
+          "type": "string",
+          "description": "the document; leave out for every change in the space"
+        },
+        "before": {
+          "type": "string",
+          "description": "the commit to list the ones before (a page's \"next\")"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "default 20"
+        }
+      },
+      "required": ["space_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "restore_doc",
+    "description": "Make a document what it was at an older commit (from doc_history), as a new commit, in a space the user may write; it also brings back a deleted document. It can't bring back an unversioned file's older versions (large files, audio, video, archives). To restore only if the document hasn't changed, pass the version you read as base_version.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the commit to restore the document from, from doc_history"
+        },
+        "base_version": {
+          "type": "string",
+          "description": "the version from read_doc, to restore only if the document hasn't changed"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "why, for the history"
+        }
+      },
+      "required": ["space_id", "path", "commit"],
       "additionalProperties": false
     }
   },
@@ -1604,6 +1740,65 @@
         }
       },
       "required": ["space_id", "app_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_app_actions",
+    "description": "List what an app's LIVE release lets you do to its records: the actions that insert, update or delete a row (each with its name, kind, whether the user's roles allow it, and the kinds of effects it sets going on boards and documents), the collection's fields an action may set, and the user's access in the app. Read this before run_app_action: the user's roles decide, an insert needs the right to submit records and an update or a delete the right to modify them (all of them, or only the ones the user created: see access.modify_records). The agent has no more access than the user.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": { "type": "integer", "minimum": 1, "description": "the space, from list_spaces" },
+        "app_id": { "type": "integer", "minimum": 1, "description": "the app, from list_apps" }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "run_app_action",
+    "description": "Add, change or delete a row of an app by running one of its actions (list_app_actions) exactly as the app's own button would for the user: the user's roles in the app, the rows they may modify, the collection's rules (required fields, limits, required_when), the locks on captured values, the row's history (the change is the user's, marked as made by their agent) and the action's effects (cards, documents) all apply, and the call is refused (403) where the user's role doesn't allow it. Each call changes data that people use: only run what the user asked for. insert: give context with the row's fields. update: give id and context with only the fields to change. delete: give id (a person can restore the row; you can't). Pass expected_revision, the _revision you read of the row, so a row someone changed meanwhile is refused (409) instead of overwritten. An action that has effects queues them, to be done by the server afterwards as the user, once each (effects_queued says how many). The reply names the row (id, revision), not its data: read it back with query_app_rows if the user may read it. You can't set a photo, a signature or a location: only a person can capture one (leave them out; an update keeps what is stored). Pass expected_release, the release list_app_actions gave: the action runs only if that is still the app's live release when it runs, else nothing is done (409) and you list again, so what it does and sets going is what you were told. A retry with the same operation (8 to 64 letters, digits, - or _) and the same arguments, expected_release included, changes nothing again, even if the app has been published since.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": { "type": "integer", "minimum": 1, "description": "the space, from list_spaces" },
+        "app_id": { "type": "integer", "minimum": 1, "description": "the app, from list_apps" },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the name of an insert, update or delete action of the live release, from list_app_actions"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the row's id, from list_app_rows or query_app_rows: for an update or a delete, never for an insert"
+        },
+        "context": {
+          "type": "object",
+          "description": "the fields to set, by name, each of the type the collection declares (text, a number, true or false, a date YYYY-MM-DD, a time HH:MM, a choice's option): all the required ones for an insert, only the changed ones for an update, none for a delete; the row's id goes in id, never here",
+          "not": { "required": ["id"] },
+          "additionalProperties": true
+        },
+        "expected_release": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the release number list_app_actions returned: the action runs only if it is still the live release; if the app was published since, nothing is done (409)"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "for an update or a delete: the row's _revision as you read it; if it has changed, nothing is done and the call fails (409)"
+        },
+        "operation": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,64}$",
+          "description": "an idempotency key you make up for this one change: sent again after a lost reply, it changes nothing twice"
+        }
+      },
+      "required": ["space_id", "app_id", "action", "expected_release"],
       "additionalProperties": false
     }
   },
