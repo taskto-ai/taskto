@@ -556,6 +556,60 @@ func TestSafetyRulesLookAtEnvironmentNamesNotValues(t *testing.T) {
 	}
 }
 
+// The server's outgoing email (docs/install.md#email) gives its container the variable
+// TASKTO_SMTP_PASSWORD_FILE, which Compose renders as an empty string when email is off. The
+// environment rule lets exactly that name through, on the server and with a path or nothing as
+// its value: an update with email off or on isn't refused, and the worker's, or a value that
+// isn't a path, still are.
+func TestSafetyRulesAllowTheSMTPPasswordFilePathOnTheServerOnly(t *testing.T) {
+	const name = "TASKTO_SMTP_PASSWORD_FILE"
+	for _, tc := range []struct {
+		desc, value string
+	}{
+		{"email off (unset renders empty)", ""},
+		{"email on (a file's path)", "/etc/taskto/smtp/password"},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			e := newUpdEnv(t)
+			e.release(updNew, "", false, false)
+			e.write("fake/server-env", name+"="+tc.value+"\n")
+			e.write("fake/config-edit", `.services.taskto.environment.TASKTO_SMTP_HOST = "" | .services.taskto.environment.`+name+` = "`+tc.value+`"`)
+			if code, out := e.run(); code != 0 {
+				t.Fatalf("exit %d, want 0\n%s", code, out)
+			}
+			e.wantStatus("updated", "")
+		})
+	}
+
+	refused := map[string]struct{ edit, env string }{
+		"the worker's environment":         {`.services["cli-worker"].environment.` + name + ` = ""`, ""},
+		"a value that is not a path":       {`.services.taskto.environment.` + name + ` = "hunter2"`, ""},
+		"a path with a space and more":     {`.services.taskto.environment.` + name + ` = "/etc/a b"`, ""},
+		"a password's name of its own":     {`.services.taskto.environment.TASKTO_SMTP_PASSWORD = "/etc/taskto/smtp/password"`, ""},
+		"a value that is not a path, live": {"", name + "=hunter2\n"},
+		"a name of its own, live":          {"", "TASKTO_SMTP_PASSWORD=/etc/taskto/smtp/password\n"},
+	}
+	for desc, tc := range refused {
+		t.Run(desc, func(t *testing.T) {
+			e := newUpdEnv(t)
+			e.release(updNew, "", false, false)
+			wantCode := 1
+			if tc.edit != "" {
+				e.write("fake/config-edit", tc.edit)
+			} else {
+				e.write("fake/server-env", tc.env)
+				wantCode = 2
+			}
+			if code, out := e.run(); code != wantCode {
+				t.Fatalf("exit %d, want %d\n%s", code, wantCode, out)
+			}
+			if b := e.read("state/status.json"); strings.Contains(b, "hunter2") {
+				t.Error("the report has a value of the environment")
+			}
+		})
+	}
+}
+
 // A status that can't be written whole leaves the last one as it was (a full disk is /dev/full).
 func TestStatusSurvivesAWriteThatFails(t *testing.T) {
 	if _, err := os.Stat("/dev/full"); err != nil {

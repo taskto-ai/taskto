@@ -83,9 +83,14 @@ if [ "$mode" = static ]; then
 		fail "a container's command has a development switch"
 
 	# No development switch and no secret in either environment (names only are shown); the
-	# server's own environment has the CLI workers in container mode.
-	bad=$(jq -r '[.services.taskto, .services["cli-worker"]] | .[] | (.environment // {}) | to_entries[]
-		| select((.key | test("INSECURE|UNSAFE|TOKEN|SECRET|PASSWORD|API_KEY"; "i")) and .key != "TASKTO_DISABLE_PASSWORD_LOGIN") | .key' <<<"$cfg")
+	# server's own environment has the CLI workers in container mode. The one name that says
+	# PASSWORD and is allowed is the server's TASKTO_SMTP_PASSWORD_FILE, whose value is the path of
+	# a file (empty when email is off, as Compose renders an unset variable): never the worker's,
+	# and never a value that isn't a path.
+	bad=$(jq -r 'def risky: (.key | test("INSECURE|UNSAFE|TOKEN|SECRET|PASSWORD|API_KEY"; "i")) and .key != "TASKTO_DISABLE_PASSWORD_LOGIN";
+		def smtpfile: .key == "TASKTO_SMTP_PASSWORD_FILE" and ((.value // "" | tostring) | test("^(/[^\\s]*)?$"));
+		((.services.taskto.environment // {}) | to_entries[] | select(risky and (smtpfile | not)) | .key),
+		((.services["cli-worker"].environment // {}) | to_entries[] | select(risky) | .key)' <<<"$cfg")
 	[ -z "$bad" ] || fail "a development switch or a secret is in a container's environment: $(tr '\n' ' ' <<<"$bad")"
 	t taskto '.services.taskto.environment.TASKTO_CLI_WORKERS == "container"' || fail "CLI workers aren't in container mode"
 
@@ -144,8 +149,11 @@ suid=$(c exec -T cli-worker find / -xdev -perm /6000 -type f 2>/dev/null || true
 senv=$(jq -r '.[0].Config.Env[]?' <<<"$si")
 wenv=$(jq -r '.[0].Config.Env[]?' <<<"$wi")
 # The rule is about names: a value that is a file's path (TASKTO_SSO_PROVIDERS=/run/secrets/sso.json)
-# is not a secret in the environment.
-bad=$(printf '%s\n%s\n' "$senv" "$wenv" | grep -v '^TASKTO_DISABLE_PASSWORD_LOGIN=' | cut -d= -f1 | grep -iE 'INSECURE|UNSAFE|TOKEN|SECRET|PASSWORD|API_KEY' || true)
+# is not a secret in the environment. The one name that says PASSWORD and is allowed is the
+# server's TASKTO_SMTP_PASSWORD_FILE, set to a path or to nothing (Compose's unset variable):
+# never the worker's, and never a value that isn't a path.
+senv_checked=$(grep -vE '^TASKTO_SMTP_PASSWORD_FILE=(/[^[:space:]]*)?$' <<<"$senv" || true)
+bad=$(printf '%s\n%s\n' "$senv_checked" "$wenv" | grep -v '^TASKTO_DISABLE_PASSWORD_LOGIN=' | cut -d= -f1 | grep -iE 'INSECURE|UNSAFE|TOKEN|SECRET|PASSWORD|API_KEY' || true)
 [ -z "$bad" ] || fail "a development switch or a secret is in a container's environment: $(tr '\n' ' ' <<<"$bad")"
 # The server's own environment, not the worker's.
 grep -qx 'TASKTO_CLI_WORKERS=container' <<<"$senv" || fail "CLI workers aren't in container mode"
