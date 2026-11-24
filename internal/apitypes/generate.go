@@ -29,14 +29,16 @@ type generator struct {
 	names      map[reflect.Type]string // every struct type met, by TypeScript name
 	bodies     map[string]string       // TypeScript name → its type
 	todo       []reflect.Type
-	nonNull    []string // the fields tagged apitypes:"nonnull", as Type.Field
-	where      string   // the field being read, for errors
-	errs       []error  // every problem found, so one run lists them all
+	nonNull    []string              // the fields tagged apitypes:"nonnull", as Type.Field
+	where      string                // the field being read, for errors
+	expanding  map[reflect.Type]bool // slice and map types being written in place, to stop a type that holds itself
+	errs       []error               // every problem found, so one run lists them all
 }
 
 var (
 	timeType      = reflect.TypeFor[time.Time]()
 	rawType       = reflect.TypeFor[json.RawMessage]()
+	numberType    = reflect.TypeFor[json.Number]()
 	jsonMarshaler = reflect.TypeFor[json.Marshaler]()
 	textMarshaler = reflect.TypeFor[encoding.TextMarshaler]()
 	identifier    = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
@@ -142,6 +144,9 @@ func (g *generator) name(t reflect.Type) string {
 		if name == n && other != t {
 			g.fail("%s and %s are both called %s: list one of them under another name", other, t, n)
 		}
+	}
+	if !identifier.MatchString(n) {
+		g.fail("%s would be called %q, which is not a TypeScript name: list the type under another name", t, n)
 	}
 	g.names[t] = n
 	g.todo = append(g.todo, t)
@@ -403,8 +408,15 @@ func derefAll(t reflect.Type) reflect.Type {
 // pointer, slice or map is written as, and whether it may be null. free is whether the field
 // has apitypes:"json".
 func (g *generator) tsType(t reflect.Type, free bool) (string, bool) {
+	return g.tsTypeVia(t, free, false)
+}
+
+// tsTypeVia is tsType, told whether the value is reached through a pointer: encoding/json uses
+// a marshaler that is on the pointer only for a value it can address, which a map's values
+// and a struct written by value are not.
+func (g *generator) tsTypeVia(t reflect.Type, free, viaPtr bool) (string, bool) {
 	if t.Kind() == reflect.Pointer {
-		inner, _ := g.tsType(t.Elem(), free)
+		inner, _ := g.tsTypeVia(t.Elem(), free, true)
 		return inner, true
 	}
 	// A marshaler of its own comes before the kind: the struct says nothing of what it writes.
@@ -415,6 +427,13 @@ func (g *generator) tsType(t reflect.Type, free bool) (string, bool) {
 		if !free {
 			g.fail("a json.RawMessage is any JSON: tag its field apitypes:\"json\"")
 		}
+		return "unknown", false
+	}
+	if t == numberType {
+		return "number", false
+	}
+	if !viaPtr && hasMarshaler(t) && !(t.Implements(jsonMarshaler) || t.Implements(textMarshaler)) {
+		g.fail("%s has a marshaler on its pointer only, which encoding/json uses when it can address the value: make it a value method or reach it through a pointer", t)
 		return "unknown", false
 	}
 	switch {
@@ -438,6 +457,18 @@ func (g *generator) tsType(t reflect.Type, free bool) (string, bool) {
 			g.fail("%s is any JSON: tag its field apitypes:\"json\", or give it a type", t)
 		}
 		return "unknown", false
+	case reflect.Slice, reflect.Array, reflect.Map:
+		if g.expanding[t] {
+			g.fail("%s holds itself, which has no TypeScript type written in place: make it a struct", t)
+			return "unknown", false
+		}
+		if g.expanding == nil {
+			g.expanding = map[reflect.Type]bool{}
+		}
+		g.expanding[t] = true
+		defer delete(g.expanding, t)
+	}
+	switch t.Kind() {
 	case reflect.Slice, reflect.Array:
 		// encoding/json writes a byte slice as base64 unless its elements have marshalers.
 		if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 && !hasMarshaler(t.Elem()) {

@@ -141,6 +141,16 @@ type pointerKey struct{ N int }
 
 func (*pointerKey) MarshalText() ([]byte, error) { return []byte("k"), nil }
 
+// code is written as text only when encoding/json can address it, which a map's values are not.
+type code int
+
+func (*code) MarshalText() ([]byte, error) { return []byte("c"), nil }
+
+// tree holds itself: it has no type to write in place.
+type tree []tree
+
+type page[T any] struct{ Items []T }
+
 func TestGenerateRejects(t *testing.T) {
 	type a struct{ X int }
 	type b struct{ Y int }
@@ -161,6 +171,12 @@ func TestGenerateRejects(t *testing.T) {
 			L level `json:"l,string"`
 		}]()}},
 		"a root a time promotes to": {{Name: "T", Type: reflect.TypeFor[time.Time]()}},
+
+		// What encoding/json decides by the value, or by where it is.
+		"a marshaler on a pointer, in a map": {{Name: "F", Type: reflect.TypeFor[struct{ M map[string]code }]()}},
+		"a marshaler on a pointer, by value": {{Name: "F", Type: reflect.TypeFor[struct{ C code }]()}},
+		"a type that holds itself":           {{Name: "F", Type: reflect.TypeFor[struct{ T tree }]()}},
+		"a name that is not TypeScript's":    {{Name: "F", Type: reflect.TypeFor[struct{ P page[int] }]()}},
 
 		// Free-form JSON is said to be so.
 		"an any":                  {{Name: "F", Type: reflect.TypeFor[struct{ V any }]()}},
@@ -189,9 +205,21 @@ func TestGenerateRejects(t *testing.T) {
 		Ptrs  map[*textKey]int `json:"ptrs"`
 		Wide  map[uintptr]int  `json:"wide"`
 		Free  []any            `json:"free" apitypes:"json"`
+		Ptr   *code            `json:"ptr"`
+		Num   json.Number      `json:"num"`
+		Quote json.Number      `json:"quote,string"`
+		Deep  **int            `json:"deep,string"`
 	}
-	if _, err := Generate([]Root{{Name: "Okay", Type: reflect.TypeFor[okay]()}}); err != nil {
-		t.Errorf("allowed fields were refused: %v", err)
+	out, err := Generate([]Root{{Name: "Okay", Type: reflect.TypeFor[okay]()}})
+	if err != nil {
+		t.Fatalf("allowed fields were refused: %v", err)
+	}
+	// A json.Number is a number, and a string with the option; the option looks through one
+	// pointer, so it leaves a pointer to a pointer to a number a number.
+	for _, want := range []string{"  num: number\n", "  quote: string\n", "  deep: number | null\n", "  ptr: string | null\n"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("the output lacks %q:\n%s", want, out)
+		}
 	}
 }
 
