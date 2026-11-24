@@ -53,7 +53,7 @@ type Release struct {
 	Number int64 `json:"number"`
 	// DefinitionVersion and Requires are those of its definition: what a client needs to draw it.
 	DefinitionVersion int      `json:"definition_version"`
-	Requires          []string `json:"requires"`
+	Requires          []string `json:"requires" apitypes:"nonnull"`
 	PublishedAt       string   `json:"published_at"`
 	PublishedBy       *Author  `json:"published_by"`
 	// Live is whether the app serves it now; LiveSince is since when (publishing it, or rolling

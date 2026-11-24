@@ -30,3 +30,23 @@ export function parseNotificationPath(path: string): number | null {
 
 // Raised after the inbox changed in this page (something was read), so the badge asks again.
 export const INBOX_CHANGED = 'taskto:inbox-changed'
+
+// The email choices of the caller in a workspace (docs/api.md#notification-email): per kind, off,
+// instant (a mail soon after) or digest (counted in a daily summary). `available` is false when the
+// server can't send mail, and then nothing can be turned on.
+export type EmailMode = 'off' | 'instant' | 'digest'
+export type EmailKind = 'card_assigned' | 'app_effect_failed'
+export const EMAIL_KINDS: EmailKind[] = ['card_assigned', 'app_effect_failed']
+export type EmailAddress = { email: string; state: 'unverified' | 'pending' | 'verified' }
+export type EmailChoices = {
+  available: boolean
+  address: EmailAddress
+  kinds: Record<EmailKind, EmailMode>
+  digest: { hour: number; timezone: string; chosen: boolean }
+}
+export const emailPath = (workspace: number) => `${ws(workspace)}/notification-email`
+export const emailVerificationPath = (workspace: number) => `${emailPath(workspace)}/verification`
+export const EMAIL_CONFIRM_API = '/api/me/notification-email/confirm'
+
+/** The address in a confirmation mail's link: the token follows it, after `#`, so no log has it. */
+export const EMAIL_CONFIRM_PATH = '/confirm-notification-email'

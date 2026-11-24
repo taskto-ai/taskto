@@ -53,10 +53,10 @@ const (
 	maxEmail   = 254
 )
 
-// me is the reply of GET /api/me, and of the calls that log someone in.
-type me struct {
-	User       meUser       `json:"user"`
-	Workspaces []Membership `json:"workspaces"`
+// Me is the reply of GET /api/me, and of the calls that log someone in.
+type Me struct {
+	User       MeUser       `json:"user"`
+	Workspaces []Membership `json:"workspaces" apitypes:"nonnull"`
 }
 
 func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u User) {
@@ -70,7 +70,7 @@ func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u 
 		serverError(w, r, err)
 		return
 	}
-	writeJSON(w, status, me{User: meUser{User: u, Locale: locale}, Workspaces: ws})
+	writeJSON(w, status, Me{User: MeUser{User: u, Locale: locale}, Workspaces: ws})
 }
 
 func (s *Service) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
@@ -352,10 +352,13 @@ func (s *Service) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The only time the token is shown: the database keeps its hash.
-	writeJSON(w, http.StatusCreated, struct {
-		Invite
-		Token string `json:"token"`
-	}{inv, token})
+	writeJSON(w, http.StatusCreated, InviteCreated{Invite: inv, Token: token})
+}
+
+// InviteCreated is the reply that makes an invite: the invite and its token, shown only now.
+type InviteCreated struct {
+	Invite
+	Token string `json:"token"`
 }
 
 func (s *Service) handleDeleteInvite(w http.ResponseWriter, r *http.Request) {

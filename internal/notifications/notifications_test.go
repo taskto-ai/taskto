@@ -25,6 +25,7 @@ import (
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/notifications"
+	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/serverkey"
 )
 
@@ -93,11 +94,17 @@ type env struct {
 	push  *pushServer
 	// skew moves the service's clock forward, to reach the wait before a retry.
 	skew time.Duration
+	// sched runs the daily summary's jobs (email_test.go); box holds the mail the server "sent".
+	sched *schedule.Service
+	box   *mailbox
 	// bodies is every API answer, which must never show the VAPID private key.
 	bodies [][]byte
 }
 
-func newEnv(t *testing.T, tls bool) *env {
+func newEnv(t *testing.T, tls bool) *env { return newEnvWith(t, tls, nil) }
+
+// newEnvWith is newEnv with the service's options changed by change.
+func newEnvWith(t *testing.T, tls bool, change func(*env, *notifications.Options)) *env {
 	t.Helper()
 	ctx := context.Background()
 	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))
@@ -121,7 +128,14 @@ func newEnv(t *testing.T, tls bool) *env {
 		anywhere := egress.MustParse("any")
 		opts.HTTPClient, opts.Egress = e.push.Client(), &anywhere
 	}
+	if change != nil {
+		change(e, &opts)
+	}
 	if e.svc, err = notifications.New(ctx, sqlDB, spaces, opts); err != nil {
+		t.Fatal(err)
+	}
+	e.sched = schedule.New(sqlDB, spaces, schedule.Options{Clock: opts.Now})
+	if err := e.svc.AttachScheduler(e.sched); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
@@ -197,9 +211,11 @@ type world struct {
 	board               int64
 }
 
-func newWorld(t *testing.T, tls bool) *world {
+func newWorld(t *testing.T, tls bool) *world { return worldOn(t, newEnv(t, tls)) }
+
+// worldOn makes the world in e.
+func worldOn(t *testing.T, e *env) *world {
 	t.Helper()
-	e := newEnv(t, tls)
 	w := &world{env: e, owner: &user{e: e}}
 	rec := w.owner.do(http.MethodPost, "/api/setup", map[string]string{
 		"email": "owner@example.com", "name": "Owner", "password": fakePassword, "workspace_name": "Home", "setup_token": setupToken,
