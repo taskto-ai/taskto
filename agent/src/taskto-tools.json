@@ -209,7 +209,7 @@
             "maxLength": 30
           },
           "maxItems": 10,
-          "description": "only cards that have all of these labels (not case-sensitive)"
+          "description": "only cards that have all of these labels (normalized like card labels)"
         },
         "due_before": {
           "type": "string",
@@ -379,7 +379,7 @@
             "maxLength": 30
           },
           "maxItems": 10,
-          "description": "free-text labels, kept in lower case; a short list of what the card is about"
+          "description": "free-text labels, kept case folded (as 'bug' for 'Bug'); a short list of what the card is about"
         }
       },
       "required": ["space_id", "board_id", "title"],
@@ -500,7 +500,7 @@
             "maxLength": 30
           },
           "maxItems": 10,
-          "description": "free-text labels, kept in lower case; replaces all the card's labels; [] clears them"
+          "description": "free-text labels, kept case folded (as 'bug' for 'Bug'); replaces all the card's labels; [] clears them"
         }
       },
       "required": ["space_id", "board_id", "card_id", "version"],

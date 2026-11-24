@@ -3,6 +3,7 @@ package boards
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -247,7 +248,9 @@ func (s *Service) updateBoard(ctx context.Context, sp access.Space, a Actor, boa
 
 const cardColumns = `c.id, c.board_id, c.title, c.body, c.col, c.rank, c.archived_from,
 	c.assignee_id, coalesce(au.name, ''), c.assignee_agent, c.blocked_reason,
-	EXISTS (SELECT 1 FROM card_blockers cb WHERE cb.card_id = c.id), c.due, c.version,
+	EXISTS (SELECT 1 FROM card_blockers cb WHERE cb.card_id = c.id), c.due,
+	(SELECT json_group_array(label) FROM (SELECT label FROM card_labels cl WHERE cl.card_id = c.id ORDER BY label)),
+	c.version,
 	c.created_at, c.created_by, coalesce(cu.name, ''), c.created_by_agent, c.created_via,
 	c.updated_at, c.updated_by, coalesce(uu.name, ''), c.updated_by_agent, c.updated_via
 	FROM cards c
@@ -266,8 +269,9 @@ func scanCard(row scanner) (Card, error) {
 	var assigneeName, createdName, updatedName string
 	var createdVia, updatedVia sql.NullString
 	var agent, hasBlockers, createdAgent, updatedAgent bool
+	var labels string
 	if err := row.Scan(&c.ID, &c.BoardID, &c.Title, &c.Body, &c.Column, &c.Rank, &c.ArchivedFrom,
-		&assigneeID, &assigneeName, &agent, &c.BlockedReason, &hasBlockers, &c.Due, &c.Version,
+		&assigneeID, &assigneeName, &agent, &c.BlockedReason, &hasBlockers, &c.Due, &labels, &c.Version,
 		&c.CreatedAt, &createdBy, &createdName, &createdAgent, &createdVia,
 		&c.UpdatedAt, &updatedBy, &updatedName, &updatedAgent, &updatedVia); err != nil {
 		return Card{}, err
@@ -281,7 +285,12 @@ func scanCard(row scanner) (Card, error) {
 	c.Blocked = c.BlockedReason != nil || hasBlockers
 	c.CreatedBy = author(createdBy, createdName, createdAgent, createdVia)
 	c.UpdatedBy = author(updatedBy, updatedName, updatedAgent, updatedVia)
-	c.BlockedBy, c.Docs, c.Conversations, c.Labels = []int64{}, []string{}, []string{}, []string{}
+	c.BlockedBy, c.Docs, c.Conversations = []int64{}, []string{}, []string{}
+	// The labels come with the card in one statement, so a filtered list never shows labels
+	// from a later snapshot than the cards its filter selected.
+	if err := json.Unmarshal([]byte(labels), &c.Labels); err != nil {
+		return Card{}, fmt.Errorf("card %d's labels: %w", c.ID, err)
+	}
 	return c, nil
 }
 
@@ -323,25 +332,6 @@ func addRelations(ctx context.Context, q queryer, cards []Card, cond string, arg
 		}
 		if c := byID[id]; c != nil {
 			c.BlockedBy = append(c.BlockedBy, blocker)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	rows, err = q.QueryContext(ctx, `SELECT card_id, label FROM card_labels WHERE card_id `+cond+`
-		ORDER BY card_id, label`, args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var l string
-		if err := rows.Scan(&id, &l); err != nil {
-			return err
-		}
-		if c := byID[id]; c != nil {
-			c.Labels = append(c.Labels, l)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -450,6 +440,12 @@ func (s *Service) listCards(ctx context.Context, sp access.Space, boardID int64,
 		pattern := "%" + likeEscaper.Replace(f.Text) + "%"
 		where = append(where, `(c.title LIKE ? ESCAPE '\' OR c.body LIKE ? ESCAPE '\')`)
 		args = append(args, pattern, pattern)
+	}
+	// Every caller (the HTTP API, the agent's tools) is held to the same limit, since each
+	// label is a predicate of the query.
+	if len(f.Labels) > maxLabels {
+		return nil, invalidAs(apierr.CodeTooManyLabels, apierr.Params{"max": maxLabels},
+			fmt.Sprintf("a list filters by at most %d labels", maxLabels))
 	}
 	for _, l := range f.Labels {
 		n, err := normalizeLabel(l)

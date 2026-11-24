@@ -702,6 +702,7 @@
     "dueOn": "Due {date}",
     "overdueOn": "Overdue: {date}",
     "noDue": "No due date.",
+    "saveDue": "Save the due date",
     "clearDue": "Clear the due date",
     "labels": "Labels",
     "noLabels": "No labels.",

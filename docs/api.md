@@ -95,7 +95,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `card_blocker_not_found` | 400 | Card `id`, which the card would wait for, isn't on the board (any more). |
 | `card_due_invalid` | 400 | A due date (or `due_before`, `due_after`, `today`) isn't a calendar date like `2026-03-31`. |
 | `card_label_invalid` | 400 | A label must be 1 to `max` characters, on one line. |
-| `too_many_labels` | 400 | A card has more than `max` labels. |
+| `too_many_labels` | 400 | A card has more than `max` labels, or a list filters by more than `max`. |
 | `app_offline` | 409 | The app is offline: restore it to launch it or run its actions. |
 | `app_changed` | 409 | The app changed since the client read it; `current` is the app as it is now. |
 | `app_name_length` | 400 | An app's name must have 1 to `max` characters. |
@@ -1370,8 +1370,9 @@ A card:
   is for their person. A card is *overdue* when its `due` is before today and it isn't in
   `done` or `archived`; the card doesn't say so, since that changes with the day.
 - `labels`: up to 10 free-text labels per card, each 1–30 characters on one line. The server
-  normalizes them (inner whitespace collapsed, lower case), drops repeats and returns them
-  sorted, so `"Bug "` and `"bug"` are one label. Labels belong to the card, not to a board:
+  normalizes them (Unicode NFC, inner whitespace collapsed, case folded), drops repeats and
+  returns them sorted, so `"Bug "` and `"bug"` are one label, as are a composed and a
+  decomposed `é`, and `ΟΣ` and `ος`. Clients send what people typed and show what comes back. Labels belong to the card, not to a board:
   there is no list of labels to manage, and a label is in use as long as a card has it.
 
 ### `GET …/boards/{board}/cards`
@@ -1386,7 +1387,7 @@ combined with AND:
 | `assignee` | `me`, `agent`, `none` (unassigned), or a user ID |
 | `blocked` | `true` or `false` |
 | `q` | cards whose title or body contains the text, ignoring ASCII case (up to 200 characters) |
-| `label` | cards that have this label (not case-sensitive); repeat it to require several |
+| `label` | cards that have this label (normalized like a card's labels); repeat it, up to 10 times, to require several (`too_many_labels` past that, for the agent's `list_cards` too) |
 | `due_before` | cards due on or before this date (`YYYY-MM-DD`); cards without a due date are never kept |
 | `due_after` | cards due on or after this date |
 | `overdue` | `true`: cards due before today that aren't `done` or `archived` |

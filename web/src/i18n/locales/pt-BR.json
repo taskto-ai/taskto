@@ -706,6 +706,7 @@
     "dueOn": "Prazo: {date}",
     "overdueOn": "Atrasado: {date}",
     "noDue": "Sem prazo.",
+    "saveDue": "Salvar o prazo",
     "clearDue": "Remover o prazo",
     "labels": "Etiquetas",
     "noLabels": "Sem etiquetas.",

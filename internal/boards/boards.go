@@ -137,7 +137,7 @@ type Card struct {
 	Conversations []string `json:"conversations"`
 	// Due is a calendar date, YYYY-MM-DD, with no time or time zone; nil for none.
 	Due *string `json:"due"`
-	// Labels are the card's free-text labels, lower case, sorted; never nil.
+	// Labels are the card's free-text labels, normalized (NFC, case folded), sorted; never nil.
 	Labels    []string `json:"labels"`
 	Version   int64    `json:"version"`
 	CreatedAt string   `json:"created_at"`

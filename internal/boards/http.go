@@ -179,10 +179,6 @@ func (s *Service) handleListCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.Overdue = overdue != nil && *overdue
-	if len(f.Labels) > maxLabels {
-		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "label is given too many times")
-		return
-	}
 	cards, err := s.listCards(r.Context(), req.space, req.board, f)
 	if err != nil {
 		fail(w, r, err)

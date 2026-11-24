@@ -1,11 +1,17 @@
 package boards
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"taskto.ai/taskto/internal/apierr"
 )
 
 func strp(s string) *string { return &s }
@@ -286,5 +292,97 @@ func TestDueMigrationKeepsTheShape(t *testing.T) {
 	var n int
 	if err := w.e.db.QueryRow(`SELECT count(*) FROM card_labels`).Scan(&n); err != nil || n != 0 {
 		t.Errorf("labels left after their card: %d, %v", n, err)
+	}
+}
+
+// A filtered list never returns a card that fails its filter: the cards and their labels are
+// read in one statement, so a concurrent edit can't show a card selected for a label it had
+// with the labels it has since.
+func TestFilteredListIsOneSnapshot(t *testing.T) {
+	w := newWorld(t)
+	c := w.createCard(w.alice, w.shared, w.team, map[string]any{"title": "flip", "labels": []string{"bug"}})
+	path := cardPath(w.shared, w.team.ID, c.ID, "")
+
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	var stopped bool
+	finish := func() error {
+		if !stopped {
+			stopped = true
+			close(stop)
+		}
+		return <-done
+	}
+	defer func() { _ = finish() }()
+	go func() {
+		defer close(done)
+		version, label := c.Version, "docs"
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			rec := w.alice.do(http.MethodPatch, path, map[string]any{"version": version, "labels": []string{label}})
+			if rec.Code != http.StatusOK {
+				done <- fmt.Errorf("edit: %d %s", rec.Code, rec.Body)
+				return
+			}
+			version = decode[Card](t, rec).Version
+			label = map[string]string{"docs": "bug", "bug": "docs"}[label]
+		}
+	}()
+	for i := 0; i < 400; i++ {
+		for _, card := range w.cards(w.alice, w.shared, w.team, "?label=bug") {
+			if !slices.Contains(card.Labels, "bug") {
+				t.Fatalf("label=bug returned %q with labels %v", card.Title, card.Labels)
+			}
+		}
+	}
+	if err := finish(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The limit on filter labels is the store's, so the HTTP API and the agent's tools share it.
+func TestTooManyFilterLabels(t *testing.T) {
+	w := newWorld(t)
+	many := make([]string, maxLabels+1)
+	for i := range many {
+		many[i] = fmt.Sprint("l", i)
+	}
+	_, err := w.e.s.ListCards(context.Background(), agentFor(w.alice), w.shared.ID, w.team.ID, Filter{Labels: many})
+	var ie *invalidError
+	if !errors.As(err, &ie) || ie.code != apierr.CodeTooManyLabels {
+		t.Fatalf("ListCards with %d labels = %v, want too_many_labels", len(many), err)
+	}
+	if _, err := w.e.s.ListCards(context.Background(), agentFor(w.alice), w.shared.ID, w.team.ID, Filter{Labels: many[:maxLabels]}); err != nil {
+		t.Fatalf("ListCards with %d labels: %v", maxLabels, err)
+	}
+	q := ""
+	for _, l := range many {
+		q += "&label=" + l
+	}
+	rec := w.alice.do(http.MethodGet, boardPath(w.shared, w.team.ID, "/cards?"+q[1:]), nil)
+	expect(t, rec, http.StatusBadRequest)
+	if got := decode[struct{ Code string }](t, rec).Code; got != "too_many_labels" {
+		t.Errorf("HTTP code = %q", got)
+	}
+}
+
+// Labels are normalized once, on the server: composed and decomposed é are one label, and
+// "ΟΣ", "οσ" and "ος" are one, in a card's labels and in a filter.
+func TestLabelsNormalizeUnicode(t *testing.T) {
+	w := newWorld(t)
+	c := w.createCard(w.alice, w.shared, w.team, map[string]any{
+		"title": "unicode", "labels": []string{"café", "café", "ΟΣ", "οσ", "ος", "STRASSE", "straße"},
+	})
+	if want := []string{"café", "strasse", "οσ"}; !reflect.DeepEqual(c.Labels, want) {
+		t.Fatalf("labels = %q, want %q", c.Labels, want)
+	}
+	for _, f := range []string{"café", "CAFÉ", "ος", "ΟΣ", "STRASSE"} {
+		if got := titles(w.cards(w.alice, w.shared, w.team, "?label="+url.QueryEscape(f))); !reflect.DeepEqual(got, []string{"unicode"}) {
+			t.Errorf("label=%q = %v", f, got)
+		}
 	}
 }

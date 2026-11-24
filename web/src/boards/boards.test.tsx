@@ -136,6 +136,9 @@ function server(access: 'write' | 'read', tweak?: (cards: TestCard[]) => void) {
     routes[`PATCH ${C}/${id}`] = (call) => {
       const { version, ...fields } = call.body as { version: number } & Partial<TestCard>
       return update(id, version, (c) => {
+        // The server's normalization of labels: trimmed, one space, lower case, no repeats.
+        if (fields.labels)
+          fields.labels = [...new Set(fields.labels.map((l) => l.trim().replace(/\s+/g, ' ').toLowerCase()))].sort()
         Object.assign(c, fields)
         c.blocked = Boolean(c.blocked_reason) || c.blocked_by.length > 0
       })
@@ -664,6 +667,30 @@ test('filters the board by label, and to the overdue cards', async () => {
   expect(screen.getByRole('button', { name: /Write the post/ })).toBeTruthy()
 })
 
+test('a label filter stays, with no cards, when its last card loses the label', async () => {
+  server('write', (cards) => {
+    withPlanning(cards)
+    cards[2].labels = []
+  })
+  render(<BoardsPage workspace={1} />)
+  await screen.findByRole('region', { name: 'To do' })
+  const label = screen.getByLabelText('Label') as HTMLSelectElement
+  fireEvent.change(label, { target: { value: 'design' } })
+  expect(screen.getByRole('button', { name: /Write the post/ })).toBeTruthy()
+
+  // The card loses its only 'design' label, and the board reloads.
+  const view = await openCard('Write the post')
+  fireEvent.click(within(view).getByRole('button', { name: 'Remove the label design' }))
+  await waitFor(() => expect(within(view).queryByText('design')).toBeNull())
+  await waitFor(() => expect(screen.queryByRole('button', { name: /Write the post/ })).toBeNull())
+  // Still chosen, still listed, nothing shown, until it is cleared.
+  expect(label.value).toBe('design')
+  expect([...label.options].map((o) => o.textContent)).toContain('design')
+  expect(screen.queryByRole('button', { name: /Get approval/ })).toBeNull()
+  fireEvent.change(label, { target: { value: '' } })
+  expect(screen.getByRole('button', { name: /Get approval/ })).toBeTruthy()
+})
+
 test('a board with no due dates or labels has no filters', async () => {
   server('write')
   render(<BoardsPage workspace={1} />)
@@ -679,35 +706,88 @@ test('a writer sets and clears the due date, and adds and removes labels, each o
   expect(due.value).toBe(LATE)
   expect(due.getAttribute('data-overdue')).toBe('true')
 
-  // Emptying the field is not clearing the date; the button is.
+  // Typing a date a part at a time saves nothing, disables nothing and keeps the same field;
+  // emptying it isn't clearing the date (the button is), and only Save sends it.
+  const save = within(view).getByRole('button', { name: 'Save the due date' }) as HTMLButtonElement
+  expect(save.disabled).toBe(true)
   fireEvent.change(due, { target: { value: '' } })
-  expect(sent('PATCH', `${C}/1`)).toEqual([])
+  fireEvent.change(due, { target: { value: '0002-01-02' } })
   fireEvent.change(due, { target: { value: '2999-01-02' } })
+  expect(sent('PATCH', `${C}/1`)).toEqual([])
+  expect(within(view).getByLabelText('Due date')).toBe(due)
+  expect(due.disabled).toBe(false)
+  expect(due.value).toBe('2999-01-02')
+  expect(save.disabled).toBe(false)
+  fireEvent.click(save)
   await waitFor(() => expect(sent('PATCH', `${C}/1`)).toEqual([{ version: 1, due: '2999-01-02' }]))
   await waitFor(() => expect((within(view).getByLabelText('Due date') as HTMLInputElement).value).toBe('2999-01-02'))
+  await waitFor(() => expect(save.disabled).toBe(true))
 
   fireEvent.click(within(view).getByRole('button', { name: 'Clear the due date' }))
   await waitFor(() => expect(sent('PATCH', `${C}/1`)[1]).toEqual({ version: 2, due: null }))
   await waitFor(() => expect(within(view).queryByRole('button', { name: 'Clear the due date' })).toBeNull())
 
-  // Labels: normalized as typed, a repeat is no new label, and the whole list is sent.
+  // Labels: sent as typed (the server normalizes them), and the card shows what it returns.
   const add = async (text: string) => {
     fireEvent.change(within(view).getByLabelText('New label'), { target: { value: text } })
     fireEvent.click(within(view).getByRole('button', { name: 'Add label' }))
   }
   await add('  Needs   REVIEW ')
   await waitFor(() =>
-    expect(sent('PATCH', `${C}/1`)[2]).toEqual({ version: 3, labels: ['design', 'launch', 'needs review'] }),
+    expect(sent('PATCH', `${C}/1`)[2]).toEqual({ version: 3, labels: ['design', 'launch', 'Needs   REVIEW'] }),
   )
   await within(view).findByText('needs review')
-  await add('design')
+  await add('DESIGN')
   await waitFor(() => expect(sent('PATCH', `${C}/1`)).toHaveLength(4))
-  expect(sent('PATCH', `${C}/1`)[3]).toEqual({ version: 4, labels: ['design', 'launch', 'needs review'] })
+  expect(sent('PATCH', `${C}/1`)[3]).toEqual({
+    version: 4,
+    labels: ['design', 'launch', 'needs review', 'DESIGN'],
+  })
 
   fireEvent.click(within(view).getByRole('button', { name: 'Remove the label launch' }))
   await waitFor(() => expect(sent('PATCH', `${C}/1`)).toHaveLength(5))
   expect(sent('PATCH', `${C}/1`)[4]).toEqual({ version: 5, labels: ['design', 'needs review'] })
   await waitFor(() => expect(within(view).queryByText('launch')).toBeNull())
+})
+
+test('saving the due date keeps an unsaved title and description draft', async () => {
+  const { sent } = server('write', withPlanning)
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  fireEvent.click(within(view).getByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(view).getByLabelText('Description'), { target: { value: 'Half-written' } })
+  fireEvent.change(within(view).getByLabelText('Due date'), { target: { value: '2999-01-02' } })
+  fireEvent.click(within(view).getByRole('button', { name: 'Save the due date' }))
+  await waitFor(() => expect(sent('PATCH', `${C}/1`)).toEqual([{ version: 1, due: '2999-01-02' }]))
+  await waitFor(() => expect(sent('PATCH', `${C}/1`)).toHaveLength(1))
+  expect((within(view).getByLabelText('Description') as HTMLTextAreaElement).value).toBe('Half-written')
+})
+
+test('a failed due date save leaves the draft to save again', async () => {
+  const { sent } = server('write', withPlanning)
+  const answered = globalThis.fetch
+  let failing = true
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (failing && init?.method === 'PATCH') {
+      failing = false
+      return new Response(JSON.stringify({ error: 'no' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return answered(input, init)
+  })
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  fireEvent.change(within(view).getByLabelText('Due date'), { target: { value: '2999-01-02' } })
+  fireEvent.click(within(view).getByRole('button', { name: 'Save the due date' }))
+  await within(view).findByRole('alert')
+  expect((within(view).getByLabelText('Due date') as HTMLInputElement).value).toBe('2999-01-02')
+  await waitFor(() =>
+    expect((within(view).getByRole('button', { name: 'Save the due date' }) as HTMLButtonElement).disabled).toBe(false),
+  )
+  fireEvent.click(within(view).getByRole('button', { name: 'Save the due date' }))
+  await waitFor(() => expect(sent('PATCH', `${C}/1`)).toEqual([{ version: 1, due: '2999-01-02' }]))
 })
 
 test('a viewer sees the due date and labels but cannot change them', async () => {

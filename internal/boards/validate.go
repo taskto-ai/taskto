@@ -12,6 +12,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
+
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 )
@@ -40,13 +43,22 @@ func checkDate(s string) (string, bool) {
 	return s, true
 }
 
-// normalizeLabel normalizes a label: trimmed, inner whitespace collapsed to single spaces, lower
-// case. It fails for an empty one, a long one, or one with control characters.
+// normalizeLabel normalizes a label, the one place that does: Unicode NFC (so a composed and
+// a decomposed "é" are one label), trimmed, inner whitespace collapsed to single spaces, and
+// case folded (Unicode's full case folding, so "ΟΣ" and "οσ" and "ος" are one label),
+// then NFC again, since folding can denormalize. Clients send what people typed. It fails for
+// an empty label, a long one, or one with control characters.
 func normalizeLabel(s string) (string, error) {
-	l := strings.ToLower(strings.Join(strings.Fields(s), " "))
-	if n := utf8.RuneCountInString(l); n < 1 || n > maxLabelLen || hasControl(l) || !utf8.ValidString(l) {
-		return "", invalidAs(apierr.CodeCardLabelInvalid, apierr.Params{"max": maxLabelLen},
+	bad := func() error {
+		return invalidAs(apierr.CodeCardLabelInvalid, apierr.Params{"max": maxLabelLen},
 			fmt.Sprintf("a label has 1 to %d characters, on one line", maxLabelLen))
+	}
+	if !utf8.ValidString(s) {
+		return "", bad()
+	}
+	l := norm.NFC.String(cases.Fold().String(norm.NFC.String(strings.Join(strings.Fields(s), " "))))
+	if n := utf8.RuneCountInString(l); n < 1 || n > maxLabelLen || hasControl(l) {
+		return "", bad()
 	}
 	return l, nil
 }

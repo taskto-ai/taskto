@@ -5,7 +5,7 @@
 -- server also checks that it is a real date).
 --
 -- Labels are free text, per card, not a set kept by the board: the server normalizes each to
--- lower case with single spaces, so "Bug" and "bug " are one label. They are filtered by
+-- Unicode NFC, case folded, with single spaces, so "Bug" and "bug " are one label. They are filtered by
 -- exact match, which the index on (label, card_id) serves.
 
 ALTER TABLE cards ADD COLUMN due TEXT

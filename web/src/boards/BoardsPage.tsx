@@ -30,7 +30,7 @@ import { Markdown } from '../markdown'
 import { Link, parseBoardItem, routePath } from '../router'
 import { Icon } from '../shell/Icon'
 import { SpacePicker, useSpaces } from '../spaces'
-import { isOverdue, localToday } from './due'
+import { isOverdue, useToday } from './due'
 import { usePoll } from './poll'
 
 // Every column's name, the archived one included.
@@ -348,6 +348,7 @@ function BoardView({
   // The board's filters, applied to the cards already loaded: a label, and only the overdue.
   const [label, setLabel] = useState('')
   const [overdueOnly, setOverdueOnly] = useState(false)
+  const today = useToday()
   const t = useT()
   const f = useFormat()
   if (cards.error && !cards.data)
@@ -392,10 +393,10 @@ function BoardView({
     setOver(column)
   }
 
-  const today = localToday()
-  const allLabels = [...new Set(cards.data.flatMap((c) => c.labels))].sort()
-  // A label no card has any more filters nothing.
-  const shownLabel = allLabels.includes(label) ? label : ''
+  // The chosen label stays chosen, and listed, when no card has it any more (a reload took
+  // its last card): the board shows no cards until the person clears the filter.
+  const allLabels = [...new Set([...cards.data.flatMap((c) => c.labels), ...(label ? [label] : [])])].sort()
+  const shownLabel = label
   const filtering = shownLabel !== '' || overdueOnly
   const shown = (c: Card) => (!shownLabel || c.labels.includes(shownLabel)) && (!overdueOnly || isOverdue(c, today))
   const filterable = allLabels.length > 0 || cards.data.some((c) => c.due !== null) || filtering
@@ -689,7 +690,9 @@ function CardView({
     })
   }, [moved, editing, first])
 
-  const change = async (send: Send, base: Card | undefined = card): Promise<boolean> => {
+  // keepEditor: a change from elsewhere on the card (its due date, labels) doesn't close the
+  // editor of the title and description, whose unsaved draft would be lost.
+  const change = async (send: Send, base: Card | undefined = card, keepEditor = false): Promise<boolean> => {
     if (!card || !base) return false
     setBusy(true)
     setError(null)
@@ -698,7 +701,7 @@ function CardView({
       // Onto the latest card: a comment added while this was in flight stays.
       setLocal((latest) => ({ ...updated, comments: (latest ?? card).comments }))
       setConflict(null)
-      setEditing(false)
+      if (!keepEditor) setEditing(false)
       onChanged()
       return true
     } catch (err) {
@@ -826,7 +829,8 @@ function CardView({
           </div>
           {editing ? (
             <EditCard
-              key={card.version}
+              // Per card, not per version: a due date or label saved meanwhile keeps the draft.
+              key={card.id}
               card={card}
               busy={busy || conflict !== null}
               onSave={(fields) => change(patch(fields))}
@@ -857,11 +861,10 @@ function CardView({
             onSet={(reason, by) => change(patch({ blocked_reason: reason, blocked_by: by }))}
           />
           <Planning
-            key={`planning-${card.version}`}
             card={card}
             canWrite={canWrite}
             busy={busy || conflict !== null}
-            onChange={(fields) => change(patch(fields))}
+            onChange={(fields) => change(patch(fields), card, true)}
           />
           <Links
             workspace={workspace}
@@ -1037,8 +1040,10 @@ function Blocked({
 
 // The card's due date and labels. A due date is a calendar day, so it reads the same wherever
 // it is seen; it is late from the day after, for a card that isn't done. Labels are free text
-// the server normalizes (lower case, one space between words). A label is added or removed
-// over the latest card's, so redoing the change keeps the labels others set.
+// the server normalizes (Unicode form, case, spaces), so what people type is sent as it is and
+// the card shown is the server's. A label is added or removed over the latest card's, so
+// redoing the change keeps the labels others set. The due date is a draft until it is saved
+// (with Enter or the button), so typing a date a part at a time never saves the part.
 function Planning({
   card,
   canWrite,
@@ -1048,45 +1053,52 @@ function Planning({
   card: Card
   canWrite: boolean
   busy: boolean
-  onChange: (fields: Fields) => void
+  onChange: (fields: Fields) => Promise<boolean>
 }) {
   const [due, setDue] = useState(card.due ?? '')
   const [label, setLabel] = useState('')
+  // The draft follows the card's date when that changes (a save, or someone else's edit).
+  useEffect(() => setDue(card.due ?? ''), [card.due])
   const t = useT()
   const f = useFormat()
   const editable = canWrite && card.column !== 'archived'
-  const overdue = isOverdue(card, localToday())
-  const normalized = label.trim().replace(/\s+/g, ' ').toLowerCase()
-  const add = (e: FormEvent) => {
+  const today = useToday()
+  const overdue = isOverdue(card, today)
+  const typed = label.trim()
+  const add = async (e: FormEvent) => {
     e.preventDefault()
-    if (normalized)
-      onChange((base) => ({ labels: base.labels.includes(normalized) ? base.labels : [...base.labels, normalized] }))
+    if (!typed) return
+    // The server normalizes and removes repeats; the field empties once it has saved.
+    if (await onChange((base) => ({ labels: [...base.labels, typed] }))) setLabel('')
+  }
+  const saveDue = (e: FormEvent) => {
+    e.preventDefault()
+    // Emptying a part of the field gives '': clearing is the button's.
+    if (due && due !== card.due) void onChange({ due })
   }
   return (
     <>
       <div className="tt-planning">
         {editable ? (
-          <div className="tt-actions">
+          <form className="tt-actions" onSubmit={saveDue}>
             <label className="tt-inline-field">
               {t('boards.dueDate')}
               <input
                 type="date"
                 value={due}
-                disabled={busy}
                 data-overdue={overdue || undefined}
-                onChange={(e) => {
-                  // Emptying a part of the field gives '': clearing is the button's.
-                  setDue(e.target.value)
-                  if (e.target.value && e.target.value !== card.due) onChange({ due: e.target.value })
-                }}
+                onChange={(e) => setDue(e.target.value)}
               />
             </label>
+            <button type="submit" className="tt-button" disabled={busy || !due || due === card.due}>
+              {t('boards.saveDue')}
+            </button>
             {card.due && (
               <button type="button" className="tt-button" disabled={busy} onClick={() => onChange({ due: null })}>
                 {t('boards.clearDue')}
               </button>
             )}
-          </div>
+          </form>
         ) : card.due ? (
           <p className="tt-due" data-overdue={overdue || undefined}>
             {t(overdue ? 'boards.overdueOn' : 'boards.dueOn', { date: f.calendarDate(card.due) })}
@@ -1127,7 +1139,7 @@ function Planning({
               placeholder={t('boards.labelPlaceholder')}
               onChange={(e) => setLabel(e.target.value)}
             />
-            <button type="submit" className="tt-button" disabled={busy || !normalized}>
+            <button type="submit" className="tt-button" disabled={busy || !typed}>
               {t('boards.addLabel')}
             </button>
           </form>

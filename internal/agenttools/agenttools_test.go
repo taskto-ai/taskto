@@ -396,6 +396,13 @@ func TestCardDueDateAndLabels(t *testing.T) {
 	}
 	w.status(http.StatusBadRequest, w.aliceConv, "list_cards", with(map[string]any{"due_before": "soon"}))
 	w.status(http.StatusBadRequest, w.aliceConv, "list_cards", with(map[string]any{"sort": "rank"}))
+	// The store's limit on filter labels holds for the agent as for the API.
+	many := []string{}
+	for i := 0; i < 11; i++ {
+		many = append(many, fmt.Sprint("l", i))
+	}
+	w.status(http.StatusBadRequest, w.aliceConv, "list_cards", with(map[string]any{"labels": many}))
+	w.ok(w.aliceConv, "list_cards", with(map[string]any{"labels": many[:10]}))
 	w.status(http.StatusBadRequest, w.aliceConv, "create_card", with(map[string]any{"title": "x", "due": "2026-02-30"}))
 	w.status(http.StatusBadRequest, w.aliceConv, "create_card", with(map[string]any{"title": "x", "labels": []string{""}}))
 
