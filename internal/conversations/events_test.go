@@ -227,6 +227,31 @@ func TestEventsEndWhenAccessEnds(t *testing.T) {
 	waitFor(t, "the watch to close", w.isClosed)
 }
 
+// A member disabled while a stream is open loses it at the next heartbeat, as one removed does.
+func TestEventsEndWhenOwnerDisabled(t *testing.T) {
+	e, srv, owner, ws, _ := newStreamEnv(t)
+	member := e.invite(owner, ws, "member@example.com")
+	conv := member.create(ws, nil)
+	e.svc.heartbeat = 20 * time.Millisecond
+	s := member.openEvents(srv, ws, conv.ID)
+	w := e.rt.watch(t, 0)
+	if got := s.next(); got.comment != "heartbeat" {
+		t.Fatalf("event = %+v, want a heartbeat", got)
+	}
+	owner.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/disable", ws, member.id), nil)
+	for {
+		got := s.next()
+		if got.comment == "heartbeat" {
+			continue
+		}
+		if got.data != interruptedLine {
+			t.Fatalf("event = %+v, want the end", got)
+		}
+		break
+	}
+	waitFor(t, "the watch to close", w.isClosed)
+}
+
 // blockingWriter is a ResponseWriter whose writes wait until the test lets them through, like
 // a client that has stopped reading.
 type blockingWriter struct {

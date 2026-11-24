@@ -142,13 +142,14 @@ func scan(row interface{ Scan(...any) error }) (Conversation, error) {
 	return c, err
 }
 
-// find returns conversation id if user owns it in workspace and is a member there now, or
-// errNotFound. Membership is checked here too, not only by the middleware, so a long event
+// find returns conversation id if user owns it in workspace and is a member there now and
+// their account isn't disabled, or errNotFound. Membership is checked here too, not only by the middleware, so a long event
 // stream can ask again.
 func (s *Service) find(ctx context.Context, workspace, user, id int64) (Conversation, error) {
 	c, err := scan(s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM conversations c
 		WHERE id = ? AND workspace_id = ? AND owner_id = ?
-		AND EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = c.workspace_id AND m.user_id = c.owner_id)`,
+		AND EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = c.workspace_id AND m.user_id = c.owner_id)
+		AND EXISTS (SELECT 1 FROM users u WHERE u.id = c.owner_id AND u.disabled_at IS NULL)`,
 		id, workspace, user))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Conversation{}, errNotFound
@@ -194,6 +195,7 @@ func (s *Service) update(ctx context.Context, workspace, user, id int64, title *
 		updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 		WHERE id = ?3 AND workspace_id = ?4 AND owner_id = ?5
 		AND EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = ?4 AND m.user_id = ?5)
+		AND EXISTS (SELECT 1 FROM users u WHERE u.id = ?5 AND u.disabled_at IS NULL)
 		RETURNING `+columns, title, archived, id, workspace, user, cliPermissions))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Conversation{}, errNotFound

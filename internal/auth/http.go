@@ -486,6 +486,10 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, err error) {
 			"an account with this email exists: log in, then accept the invite"
 	case errors.Is(err, errInviteInvalid):
 		status, code, msg = http.StatusNotFound, apierr.CodeInviteInvalid, errInviteInvalid.Error()
+	case errors.Is(err, errAccountDisabled):
+		// The admin was disabled after the request was authenticated.
+		accountDisabled(w)
+		return
 	default:
 		serverError(w, r, err)
 		return

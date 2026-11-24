@@ -218,7 +218,8 @@ func (s *Service) deleteSession(ctx context.Context, token string) error {
 // endSession logs out the session token belongs to, and records it. A token that is no
 // session, such as one that expired, ends nothing and records nothing.
 func (s *Service) endSession(ctx context.Context, token string) error {
-	return s.write(ctx, func(tx *sql.Tx) error {
+	var ended int64
+	err := s.write(ctx, func(tx *sql.Tx) error {
 		var userID int64
 		// The same test as sessionUser: a session that has expired is no longer a login to
 		// end, even while its row is still there to be swept.
@@ -232,9 +233,14 @@ func (s *Service) endSession(ctx context.Context, token string) error {
 		if err != nil {
 			return err
 		}
+		ended = userID
 		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.Logout,
 			TargetType: audit.TargetUser, Target: userID})
 	})
+	if err == nil && ended != 0 {
+		s.endLive(ended, token) // this login's live connections go with it
+	}
+	return err
 }
 
 // workspacesOf lists the workspaces userID belongs to, oldest first.
@@ -372,6 +378,9 @@ func checkNotLastAdmin(ctx context.Context, tx *sql.Tx, workspaceID, userID int6
 // setRole changes a member's role. The last admin can't be demoted.
 func (s *Service) setRole(ctx context.Context, workspaceID, userID int64, role Role) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
+		if err := EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		current, err := roleIn(ctx, tx, workspaceID, userID)
 		if err != nil || current == role {
 			return err
@@ -393,6 +402,9 @@ func (s *Service) setRole(ctx context.Context, workspaceID, userID int64, role R
 // removeMember takes a user out of a workspace. The last admin can't be removed.
 func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
+		if err := EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		current, err := roleIn(ctx, tx, workspaceID, userID)
 		if err != nil {
 			return err
@@ -482,6 +494,9 @@ func (s *Service) createInvite(ctx context.Context, workspaceID, by int64, email
 	inv := Invite{Email: email, Role: role, CreatedAt: stamp(now), ExpiresAt: stamp(now.Add(s.opts.InviteTTL))}
 	token, hash := newToken()
 	err := s.write(ctx, func(tx *sql.Tx) error {
+		if err := EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		var member bool
 		if err := tx.QueryRowContext(ctx, `
 			SELECT EXISTS (SELECT 1 FROM memberships m JOIN users u ON u.id = m.user_id
@@ -534,6 +549,9 @@ func (s *Service) pendingInvites(ctx context.Context, workspaceID int64) ([]Invi
 // deleteInvite withdraws an invite of workspaceID, or fails with errNotFound.
 func (s *Service) deleteInvite(ctx context.Context, workspaceID, inviteID int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
+		if err := EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		var email, created string
 		var role Role
 		err := tx.QueryRowContext(ctx, `DELETE FROM invites WHERE id = ? AND workspace_id = ? AND accepted_at IS NULL RETURNING email, role, created_at`,

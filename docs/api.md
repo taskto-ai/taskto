@@ -643,6 +643,14 @@ While an account is disabled:
 - its conversations' agents and CLI turns are refused at their next call: no new turn starts, a
   turn running loses TaskTo's tools and its workspace account's proxy, and what a person's
   agent or a scheduled job would do for it is refused as for someone with no space;
+- what is open when it is disabled is cut: an open [agent browser live
+  view](agent-browser.md) ends at once (it also ends, within seconds, whenever its login does:
+  signed out, revoked, or replaced by a password change or reset), and an open conversation's event
+  stream ends at its next heartbeat;
+- what was queued for it waits instead of failing: an app's effects and a scheduled
+  job of its person (reminders, recurring jobs) are neither done nor failed while it is off, with
+  no failure notification and no try used up, and are looked at again every minute; enabling the
+  account lets them run as it was, with the access it has then;
 - and what it owns stays: its memberships, spaces and their files, boards, apps, conversations,
   access tokens and CLI logins. Enabling it restores its access as it was, except for the
   sessions, which stay signed out: the person logs in again.
@@ -666,6 +674,10 @@ account_disabled` for an admin disabled by another at the same moment).
 The same rules and answers; enabling an account that isn't disabled changes nothing. Recorded in
 the [audit log](audit.md) as `member_disabled` (with how many logins it ended) and
 `member_enabled`.
+
+A request an admin sent just before being disabled changes nothing either: the writes of an admin
+(inviting, changing a role, removing a member, the workspace's settings, shared CLI accounts)
+read the admin's account again in their transaction and answer `403 account_disabled`.
 
 ## Invites
 

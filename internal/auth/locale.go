@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -83,12 +84,19 @@ func (s *Service) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		err := s.write(r.Context(), func(tx *sql.Tx) error {
+			if err := EnsureActorEnabled(r.Context(), tx); err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(r.Context(), `UPDATE workspaces SET locale = ? WHERE id = ?`, *req.Locale, m.WorkspaceID); err != nil {
 				return err
 			}
 			return audit.Record(r.Context(), tx, audit.Event{Workspace: m.WorkspaceID, Action: audit.WorkspaceUpdated,
 				TargetType: audit.TargetWorkspace, Target: m.WorkspaceID, Details: localeDetails(*req.Locale)})
 		})
+		if errors.Is(err, errAccountDisabled) {
+			accountDisabled(w)
+			return
+		}
 		if err != nil {
 			serverError(w, r, err)
 			return

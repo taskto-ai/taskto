@@ -74,6 +74,39 @@ func (s *Service) disableHandler(disable bool) http.Handler {
 	})
 }
 
+// ErrAccountDisabled is EnsureActorEnabled's answer for an actor who was disabled.
+var ErrAccountDisabled = errAccountDisabled
+
+// EnsureActorEnabled fails with ErrAccountDisabled if the account that is acting (the request's
+// user, see audit.ActorFrom) has been disabled since the request was authenticated. An admin's write
+// calls it first thing in its transaction, which holds the write lock, so a request that passed
+// RequireAdmin just before the admin was disabled changes nothing: the middleware checks the
+// session once, and a disable that lands after it would otherwise let the write through. Without
+// an actor on ctx it does nothing.
+func EnsureActorEnabled(ctx context.Context, q interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}) error {
+	actor := audit.ActorFrom(ctx)
+	if actor == 0 {
+		return nil
+	}
+	var off bool
+	err := q.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM users WHERE id = ?`, actor).Scan(&off)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil // the membership check says what's left to say
+	case err != nil:
+		return err
+	case off:
+		return errAccountDisabled
+	}
+	return nil
+}
+
+// WriteAccountDisabled answers 403 with the disabled-account code, for a caller of
+// EnsureActorEnabled in another package.
+func WriteAccountDisabled(w http.ResponseWriter) { accountDisabled(w) }
+
 // isDisabled reports whether userID's account is disabled, reading through q.
 func (s *Service) isDisabled(ctx context.Context, q querier, userID int64) (bool, error) {
 	var disabled bool
@@ -88,7 +121,7 @@ func (s *Service) isDisabled(ctx context.Context, q querier, userID int64) (bool
 // sessions, which takes their push subscriptions, and its reset links; one that is disabled
 // already, or enabled, is left as it is and records nothing.
 func (s *Service) setDisabled(ctx context.Context, workspaceID, by, userID int64, disable bool) error {
-	return s.write(ctx, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(tx *sql.Tx) error {
 		if _, err := roleIn(ctx, tx, workspaceID, userID); err != nil {
 			return err
 		}
@@ -141,4 +174,10 @@ func (s *Service) setDisabled(ctx context.Context, workspaceID, by, userID int64
 		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: by, Action: audit.MemberDisabled,
 			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"logins_ended": sessions}})
 	})
+	if err == nil && disable {
+		// Open connections made with the account's logins (a live view) end now; the ones the
+		// signal misses end at their next look at the session (WatchSession).
+		s.endLive(userID, "")
+	}
+	return err
 }

@@ -28,6 +28,12 @@ The design in short:
 Both stop after a few idle minutes (default 5) and start again on the next request. An open
 live view counts as use.
 
+A live view lasts as long as the login that opened it. The session is checked when the
+WebSocket opens, and again every few seconds while it is open (`auth.Service.WatchSession`), and
+the auth service also ends the views of an account at once when it is disabled and of a login when
+it is signed out or replaced by a password change or reset: a closed login can't go on typing into
+the user's browser.
+
 ## Processes and the OS boundary
 
 ```

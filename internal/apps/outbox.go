@@ -46,6 +46,12 @@ import (
 // Failures that may pass (the database was busy, the card was being changed) are tried again with
 // growing waits, up to maxAttempts; the others fail at once. A failed entry stays, listed with its
 // code, until its user retries it; nothing else makes it run again.
+//
+// An entry of a user whose account is disabled (docs/api.md#disabling-a-member) is neither done nor
+// failed: the account has lost nothing for good, and its access comes back as it was when it is
+// enabled. The worker holds the entry (errHeld): it goes back to pending to be looked at again
+// after holdDelay, without using up the try and without a failure's notification, and it does what
+// it was queued for once the account is enabled, with the access the user has then.
 
 // The states of an entry, and "simulated", which is of an effect a preview reports and never
 // stores.
@@ -75,6 +81,8 @@ const (
 	// backoffBase is the wait after the first failed try, doubled for each next.
 	backoffBase = 5 * time.Second
 	backoffMax  = 5 * time.Minute
+	// holdDelay is how long an entry of a disabled user waits before the worker looks again.
+	holdDelay = time.Minute
 	// listLimit is the most entries a listing returns.
 	maxListed     = 200
 	defaultListed = 100
@@ -424,6 +432,9 @@ func (s *Service) claim(ctx context.Context) (effectRow, bool, error) {
 	return e, found, err
 }
 
+// errHeld is why an entry is not done now, and not failed either: its user's account is disabled.
+var errHeld = errors.New("the user's account is disabled")
+
 // runOne does the next entry that is due, if there is one.
 func (s *Service) runOne(ctx context.Context) (bool, error) {
 	e, found, err := s.claim(ctx)
@@ -432,7 +443,14 @@ func (s *Service) runOne(ctx context.Context) (bool, error) {
 	}
 	try, cancel := context.WithTimeout(ctx, entryTimeout)
 	defer cancel()
-	result, err := s.perform(try, e)
+	var result map[string]any
+	if off, derr := s.access.Disabled(try, e.userID); derr != nil {
+		err = derr
+	} else if off {
+		err = errHeld
+	} else {
+		result, err = s.perform(try, e)
+	}
 	if err == nil && s.hooks.afterWork != nil {
 		err = s.hooks.afterWork(e)
 	}
@@ -442,10 +460,24 @@ func (s *Service) runOne(ctx context.Context) (bool, error) {
 	if ctx.Err() != nil {
 		return false, ctx.Err() // stopping: the lease runs out and the entry is taken again
 	}
+	if errors.Is(err, errHeld) || errors.Is(err, access.ErrDisabled) {
+		return true, s.hold(ctx, e)
+	}
 	if err != nil {
 		return true, s.fail(ctx, e, err)
 	}
 	return true, s.succeed(ctx, e, result)
+}
+
+// hold puts an entry whose user's account is disabled back to pending, to be looked at again after
+// holdDelay, with the try it took given back. It is not a failure: no code is kept and nobody is
+// notified. A worker that no longer owns the entry changes nothing.
+func (s *Service) hold(ctx context.Context, e effectRow) error {
+	t := s.clock()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE app_effects SET state = 'pending', attempts = max(attempts - 1, 0), next_attempt_at = ?, lease_until = NULL, updated_at = ?
+		WHERE id = ? AND state = 'running' AND lease = ?`, s.stamp(t.Add(holdDelay)), s.stamp(t), e.id, e.lease)
+	return err
 }
 
 // succeed notes an entry as done, if its worker still owns it.

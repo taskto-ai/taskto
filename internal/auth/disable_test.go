@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"taskto.ai/taskto/internal/apierr"
@@ -442,5 +444,62 @@ func TestDisabledAdminCantMakeAResetLink(t *testing.T) {
 	// An enabled admin still can.
 	if _, _, err := e.svc.createReset(context.Background(), ws, ownerID, memberID); err != nil {
 		t.Fatalf("createReset by the owner: %v", err)
+	}
+}
+
+// The writes of an admin who is disabled after the middleware let their request through change
+// nothing: inviting, withdrawing an invite, changing a role, removing a member and the workspace's
+// settings.
+func TestDisabledAdminChangesNothingInFlight(t *testing.T) {
+	e := newEnv(t, Options{})
+	owner, ws := e.setup()
+	second, _ := e.join(e.invite(owner, ws, "admin2@example.com", RoleAdmin), "Admin Two")
+	secondID := e.userID(second)
+	member, _ := e.join(e.invite(owner, ws, "member@example.com", RoleMember), "Member")
+	memberID := e.userID(member)
+	e.invite(owner, ws, "pending@example.com", RoleMember)
+	var inviteID int64
+	if err := e.db.QueryRow(`SELECT id FROM invites WHERE email = 'pending@example.com'`).Scan(&inviteID); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, owner.do(http.MethodPost, e.disablePath(ws, secondID, "disable"), nil), http.StatusNoContent)
+	ctx := audit.WithActor(context.Background(), secondID)
+
+	if _, _, err := e.svc.createInvite(ctx, ws, secondID, "new@example.com", RoleMember); !errors.Is(err, errAccountDisabled) {
+		t.Errorf("createInvite = %v, want errAccountDisabled", err)
+	}
+	if err := e.svc.deleteInvite(ctx, ws, inviteID); !errors.Is(err, errAccountDisabled) {
+		t.Errorf("deleteInvite = %v, want errAccountDisabled", err)
+	}
+	if err := e.svc.setRole(ctx, ws, memberID, RoleAdmin); !errors.Is(err, errAccountDisabled) {
+		t.Errorf("setRole = %v, want errAccountDisabled", err)
+	}
+	if err := e.svc.removeMember(ctx, ws, memberID); !errors.Is(err, errAccountDisabled) {
+		t.Errorf("removeMember = %v, want errAccountDisabled", err)
+	}
+	req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"locale":"pt-BR"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(ctx, membershipKey{}, Membership{WorkspaceID: ws, Role: RoleAdmin}))
+	rec := httptest.NewRecorder()
+	e.svc.handleUpdateWorkspace(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), string(apierr.CodeAccountDisabled)) {
+		t.Errorf("workspace settings: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if n := e.count(`SELECT count(*) FROM invites WHERE email = 'new@example.com'`); n != 0 {
+		t.Errorf("%d invites were made", n)
+	}
+	if n := e.count(`SELECT count(*) FROM invites WHERE id = ?`, inviteID); n != 1 {
+		t.Error("the invite was withdrawn")
+	}
+	if n := e.count(`SELECT count(*) FROM memberships WHERE workspace_id = ? AND user_id = ? AND role = 'member'`, ws, memberID); n != 1 {
+		t.Error("the member's role changed or the member was removed")
+	}
+	if n := e.count(`SELECT count(*) FROM workspaces WHERE id = ? AND locale = 'pt-BR'`, ws); n != 0 {
+		t.Error("the workspace's locale changed")
+	}
+	// An admin in use still can.
+	if err := e.svc.setRole(audit.WithActor(context.Background(), e.userID(owner)), ws, memberID, RoleAdmin); err != nil {
+		t.Fatalf("setRole by the owner: %v", err)
 	}
 }

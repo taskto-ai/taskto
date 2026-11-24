@@ -37,6 +37,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -125,6 +126,28 @@ func (s Space) access() Access {
 // callers must not tell the two apart.
 var ErrNotFound = errors.New("space not found")
 
+// ErrDisabled is the answer, in place of ErrNotFound, when the user's account is disabled
+// (docs/api.md#disabling-a-member): it has no access to anything while it is off, and gets it
+// back, as it was, when it is enabled. It wraps ErrNotFound, so every caller that treats the
+// space as not found stays closed to a disabled account; the work that acts for a person later
+// (a scheduled job, an app's outbox) tells it from a real loss of access, and holds its item for
+// when the account is enabled again, instead of failing it for good.
+var ErrDisabled = fmt.Errorf("%w: the account is disabled", ErrNotFound)
+
+// Disabled reports whether userID's account is disabled.
+func (c *Checker) Disabled(ctx context.Context, userID int64) (bool, error) {
+	return disabledIn(ctx, c.db, userID)
+}
+
+func disabledIn(ctx context.Context, q rowQuerier, userID int64) (bool, error) {
+	var off bool
+	err := q.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM users WHERE id = ?`, userID).Scan(&off)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return off, err
+}
+
 // Checker answers access questions from the database.
 type Checker struct {
 	db   *sql.DB
@@ -191,13 +214,17 @@ func lookupIn(ctx context.Context, q rowQuerier, userID, spaceID int64) (Space, 
 	s, err := scanSpace(q.QueryRowContext(ctx,
 		`SELECT `+spaceColumns+fromSpaceFor+` WHERE s.id = ?`, userID, spaceID))
 	if errors.Is(err, sql.ErrNoRows) {
+		// A disabled account sees no space at all; say so, so that what acts for it later can wait.
+		if off, derr := disabledIn(ctx, q, userID); derr == nil && off {
+			return Space{}, ErrDisabled
+		}
 		return Space{}, ErrNotFound
 	}
 	return s, err
 }
 
 // Check returns spaceID as userID sees it, if they may at least read it, and ErrNotFound
-// otherwise.
+// otherwise (ErrDisabled, which is one, for a disabled account).
 func (c *Checker) Check(ctx context.Context, userID, spaceID int64) (Space, error) {
 	return checkIn(ctx, c.db, userID, spaceID)
 }

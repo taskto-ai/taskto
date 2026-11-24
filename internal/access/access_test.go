@@ -606,6 +606,15 @@ func TestDisabledAccountHasNoAccess(t *testing.T) {
 	expect(t, w.owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/disable", w.ws, w.alice.id), nil), http.StatusNoContent)
 	if _, err := w.e.c.Check(ctx, w.alice.id, w.shared.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Check while disabled = %v, want ErrNotFound", err)
+	} else if _, err := w.e.c.Check(ctx, w.alice.id, w.shared.ID); !errors.Is(err, ErrDisabled) {
+		t.Fatalf("Check while disabled = %v, want ErrDisabled, so that queued work can wait", err)
+	}
+	// Someone who simply can't open the space is not disabled.
+	if _, err := w.e.c.Check(ctx, w.mallory.id, w.shared.ID); !errors.Is(err, ErrNotFound) || errors.Is(err, ErrDisabled) {
+		t.Fatalf("Check by an outsider = %v, want ErrNotFound and not ErrDisabled", err)
+	}
+	if off, err := w.e.c.Disabled(ctx, w.alice.id); err != nil || !off {
+		t.Fatalf("Disabled = %v, %v", off, err)
 	}
 	if ok, _ := read(); ok {
 		t.Fatal("a disabled account can read a space")

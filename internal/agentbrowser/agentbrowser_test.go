@@ -3,6 +3,7 @@ package agentbrowser
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/net/websocket"
 
@@ -125,6 +127,8 @@ var setupToken = auth.NewSetupToken()
 const password = "fake-password-for-tests"
 
 type env struct {
+	ws  int64 // the workspace setup made
+	db  *sql.DB
 	t   *testing.T
 	b   *fakeBrowsers
 	svc *Service
@@ -142,7 +146,7 @@ func newEnv(t *testing.T, b browser.Browsers, usable func(context.Context) error
 	if _, err := db.Migrate(ctx, sqlDB); err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, svc: New(b, usable)}
+	e := &env{t: t, db: sqlDB, svc: New(b, usable)}
 	if f, ok := b.(*fakeBrowsers); ok {
 		e.b = f
 	}
@@ -219,6 +223,7 @@ func (e *env) setup() (owner, member *client) {
 	expect(e.t, rec, http.StatusCreated)
 	m := decode[me](e.t, rec)
 	owner.id = m.User.ID
+	e.ws = m.Workspaces[0].ID
 	rec = owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", m.Workspaces[0].ID), map[string]string{"email": "member@example.com", "role": "member"})
 	expect(e.t, rec, http.StatusCreated)
 	token := decode[struct {
@@ -413,6 +418,99 @@ func TestLiveView(t *testing.T) {
 	}
 	if len(e.b.lives) != 2 {
 		t.Errorf("live views opened: %v", e.b.lives)
+	}
+}
+
+// liveEnds says whether ws is closed from the server's side within a few seconds: a read
+// returns an error that isn't the test's own deadline.
+func liveEnds(t *testing.T, ws *websocket.Conn) bool {
+	t.Helper()
+	_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 64)
+	for {
+		if _, err := ws.Read(buf); err != nil {
+			var ne net.Error
+			return !errors.As(err, &ne) || !ne.Timeout()
+		}
+	}
+}
+
+// openLive opens a live view of c's browser, past its banner lines.
+func openLive(t *testing.T, srv *httptest.Server, c *client) *websocket.Conn {
+	t.Helper()
+	expect(t, c.do(http.MethodPost, base+"/start", map[string]string{}), http.StatusOK)
+	ws, err := liveView(t, srv, c, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readLine(t, ws)
+	readLine(t, ws)
+	return ws
+}
+
+// An open live view ends with its login, not only when it opens: when the account is disabled
+// (with the look at the session so slow it can't be the cause), and when the login is signed
+// out, revoked or replaced by a password change.
+func TestLiveViewEndsWithTheLogin(t *testing.T) {
+	old := liveRecheck
+	liveRecheck = time.Hour
+	t.Cleanup(func() { liveRecheck = old })
+	e := newEnv(t, newFake(), nil)
+	owner, member := e.setup()
+	srv := httptest.NewServer(e.h)
+	defer srv.Close()
+	ws := openLive(t, srv, member)
+	defer ws.Close()
+	other := openLive(t, srv, owner)
+	defer other.Close()
+
+	expect(t, owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/disable", e.ws, member.id), nil), http.StatusNoContent)
+	if !liveEnds(t, ws) {
+		t.Fatal("a disabled member's live view kept running")
+	}
+	// Another person's view is untouched, and the disabled one can't open a new one.
+	if _, err := other.Write([]byte("ping\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := readLine(t, other); got != "ping" {
+		t.Fatalf("the owner's view: %q", got)
+	}
+	if _, err := liveView(t, srv, member, srv.URL, nil); err == nil {
+		t.Fatal("a disabled member opened a live view")
+	}
+
+	// A password change ends the views of the logins it replaces.
+	expect(t, owner.do(http.MethodPost, "/api/me/password", map[string]string{"current_password": password, "new_password": password + "-new"}), http.StatusNoContent)
+	if !liveEnds(t, other) {
+		t.Fatal("a live view outlived a password change")
+	}
+
+	// Signing out ends this login's view.
+	owner2 := openLive(t, srv, owner)
+	defer owner2.Close()
+	expect(t, owner.do(http.MethodPost, "/api/logout", nil), http.StatusNoContent)
+	if !liveEnds(t, owner2) {
+		t.Fatal("a live view outlived its sign-out")
+	}
+}
+
+// A login ended without the signal (by another server process, say) still ends its live view
+// at the next look at the session.
+func TestLiveViewEndsAtTheNextLook(t *testing.T) {
+	old := liveRecheck
+	liveRecheck = 20 * time.Millisecond
+	t.Cleanup(func() { liveRecheck = old })
+	e := newEnv(t, newFake(), nil)
+	owner, _ := e.setup()
+	srv := httptest.NewServer(e.h)
+	defer srv.Close()
+	ws := openLive(t, srv, owner)
+	defer ws.Close()
+	if _, err := e.db.Exec(`DELETE FROM sessions`); err != nil {
+		t.Fatal(err)
+	}
+	if !liveEnds(t, ws) {
+		t.Fatal("a live view of a revoked session kept running")
 	}
 }
 
