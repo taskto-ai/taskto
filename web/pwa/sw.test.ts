@@ -306,6 +306,15 @@ test('a push of a kind that a cache made before it existed has no words for says
   expect(bodies).toEqual(['Something changed', 'Something changed', 'A card was assigned to you'])
 })
 
+test('a kind the saved words lack (kept from before an update) says the generic line', async () => {
+  // WORDS are the lines of the version before the comment and mention kinds.
+  await sw.emit('message', { data: { type: 'PUSH_STRINGS', strings: WORDS } })
+  await sw.emit('push', pushOf({ id: 1, kind: 'card_comment' }))
+  await sw.emit('push', pushOf({ id: 2, kind: 'card_mention' }))
+  const bodies = (shown(sw) as [string, { body: string }][]).map((c) => c[1].body)
+  expect(bodies).toEqual(['Something changed', 'Something changed'])
+})
+
 test('a push tells the open pages, which ask the inbox again', async () => {
   const page = { url: 'https://tasks.example.com/w/1/home', postMessage: vi.fn() }
   sw.self.clients.matchAll.mockResolvedValue([page])
