@@ -26,14 +26,14 @@ var streamMemory int64 = 1 << 20
 //
 // The file is as it was at the commit at (the head if empty). The caller closes the reader, which
 // removes any temporary file.
-func (s *Store) Stream(_ context.Context, sp access.Space, name, at string) (Entry, io.ReadCloser, error) {
+func (s *Store) Stream(ctx context.Context, sp access.Space, name, at string) (Entry, io.ReadCloser, error) {
 	if err := checkPath(name); err != nil {
 		return Entry{}, nil, err
 	}
 	var entry Entry
 	var rc io.ReadCloser
 	err := s.read(sp, func(r *repo) error {
-		c, err := r.revision(at)
+		c, err := r.revision(ctx, at)
 		if err != nil {
 			return err
 		}
