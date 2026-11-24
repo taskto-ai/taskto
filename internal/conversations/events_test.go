@@ -32,7 +32,9 @@ type eventStream struct {
 // openEvents starts streaming c's conversation id from the server srv.
 func (c *client) openEvents(srv *httptest.Server, ws, id int64) *eventStream {
 	c.e.t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	// Bounded, so a stream that should have ended and didn't fails a read instead of hanging the
+	// test until the binary's timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	c.e.t.Cleanup(cancel)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+path(ws, fmt.Sprintf("/%d/events", id)), nil)
 	if err != nil {
