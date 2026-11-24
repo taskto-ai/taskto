@@ -212,6 +212,9 @@ type Store struct {
 
 	// quota is the storage quotas' check (SetQuota); nil for none.
 	quota func(sp access.Space, adding int64) (release func(), err error)
+
+	// afterMeasure is for tests: it runs once a space's first measurement is made, before it is stored.
+	afterMeasure func(sp access.Space)
 }
 
 // spaceState is what the Store keeps per space while it runs.

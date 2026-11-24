@@ -90,6 +90,9 @@ func (s *Store) Usage(sp access.Space) (versioned, unversioned int64, err error)
 	if err != nil {
 		return 0, 0, err
 	}
+	if s.afterMeasure != nil {
+		s.afterMeasure(sp)
+	}
 	u = st.fill(gen, u)
 	return u.versioned, u.unversioned, nil
 }
