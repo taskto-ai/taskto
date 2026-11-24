@@ -3,7 +3,7 @@
 import { ws } from '../api'
 import type { Section } from '../router'
 
-export type NotificationKind = 'card_assigned' | 'app_effect_failed' | 'changed'
+export type NotificationKind = 'card_assigned' | 'card_due' | 'card_overdue' | 'app_effect_failed' | 'changed'
 
 // An item as the person may read it now: `changed` says nothing of what it was about.
 export type NotificationItem = {

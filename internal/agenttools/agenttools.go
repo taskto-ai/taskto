@@ -139,6 +139,10 @@ func New(o Options) *Service {
 		"list_docs":      s.listDocs,
 		"read_doc":       s.readDoc,
 		"write_doc":      s.writeDoc,
+		"move_doc":       s.moveDoc,
+		"delete_doc":     s.deleteDoc,
+		"doc_history":    s.docHistory,
+		"restore_doc":    s.restoreDoc,
 		"list_boards":    s.listBoards,
 		"list_cards":     s.listCards,
 		"show_card":      s.showCard,
@@ -362,6 +366,8 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 		return &Refusal{http.StatusConflict, err.Error()}
 	case errors.Is(err, knowledge.ErrTooLarge), errors.Is(err, knowledge.ErrRepoFull):
 		return &Refusal{http.StatusRequestEntityTooLarge, err.Error()}
+	case errors.Is(err, knowledge.ErrNotKept):
+		return &Refusal{http.StatusGone, err.Error()}
 	default:
 		if ctx.Err() != nil {
 			return ctx.Err() // the caller went away

@@ -96,6 +96,13 @@ func (c *Checker) updateShared(ctx context.Context, workspaceID, spaceID int64, 
 		if err := mustAffect(res, ErrNotFound); err != nil {
 			return err
 		}
+		if archived != nil {
+			for _, h := range c.archiveHooks {
+				if err := h(ctx, tx, spaceID); err != nil {
+					return err
+				}
+			}
+		}
 		// What changed, and the two switches' new values; the new name isn't recorded, it is
 		// text a person typed.
 		details := audit.Details{}

@@ -67,7 +67,7 @@ tools again after a crash (`replay: 'safe'`), and never a write. Change a tool i
 
 Refusals are `4xx {"error": "…"}` with a message for the model: `400` invalid arguments,
 `403` read-only (a viewer, an archived space or board), `404` not found, `409` a stale
-version, a changed document or a full app, `413` too large. The sidecar turns them into error
+version, a changed document or a full app, `410` an older version of an unversioned file, whose bytes are gone, `413` too large. The sidecar turns them into error
 results, `error: <message>`.
 
 ## The tools
@@ -78,8 +78,12 @@ results, `error: <message>`.
 | `list_members` | `space_id`?, `cursor`? | The people who can be assigned a card, with the `id` that `create_card` and `update_card` take as `assignee.id`: `id`, `name`, `email` and `role`. Without `space_id`, the workspace's members (`admin`/`member`), whom every member sees; with it, one space the user can read: a shared space's members (`editor`/`viewer`) or a private space's owner alone. A space the user can't read, of another workspace or that doesn't exist is `404 not found` alike, so a workspace admin who isn't in a shared space doesn't see its members either. Assign in a card's space with that space's `space_id`: the assignee must be able to see it. `space_id` must be a whole number of 1 or more when given (`null` is refused, not read as the whole workspace). People come by `id`, at most 500 and 64 KiB a page; when there are more, `next_cursor` is the `cursor` of the next page. The check of who may ask and the list are of one database snapshot. |
 | `search_docs` | `query`, `space_id`?, `limit`? (1–20, default 10), `offset`? | Search one space, or every space the user can read ([api.md](api.md#search)); semantic search only where its space consented. |
 | `list_docs` | `space_id`, `folder`?, `after`?, `limit`? (1–200, default 100) | A space's documents and files, by path; `next` is the `after` of the next page. |
-| `read_doc` | `space_id`, `path`, `offset`? | A Markdown document, 32 KiB at a time from `offset` (bytes); `next_offset` while there is more. `version` is what `write_doc` needs. |
+| `read_doc` | `space_id`, `path`, `offset`?, `at`? | A Markdown document or a plain-text file (up to 1 MiB: code, data, notes), 32 KiB at a time from `offset` (bytes); `next_offset` while there is more. `at` is a commit from `doc_history`: the file as it was then (`at` is echoed back). A binary (a NUL byte or invalid UTF-8), a text file over 1 MiB and an unversioned file are `400`. `version` is what `write_doc` needs. |
 | `write_doc` | `space_id`, `path`, `content`, `base_version`?, `message`? | Creates (no `base_version`) or replaces (the version read) a Markdown document. |
+| `move_doc` | `space_id`, `from`, `to`, `base_version`?, `message`? | Renames or moves a document, a file or a whole folder (`base_version` only for a document); `to` must not exist (`409`), and a document doesn't move into itself. In CLI turns it asks the owner first, like `write_doc` ([cli-tools.md](cli-tools.md#permissions)); the built-in agent asks for none of its tools. |
+| `delete_doc` | `space_id`, `path`, `base_version`?, `message`? | Deletes a document or file, not a folder. A document's history stays, so `restore_doc` brings it back; an unversioned file's bytes don't (it is gone for good); the permanent removal of old versions is an admin's, in the web app ([api.md](api.md#taking-a-files-old-versions-out-of-history)), and no tool does it. In CLI turns it asks the owner first (not read-only); the built-in agent asks for none of its tools, so an unversioned file it deletes is gone. |
+| `doc_history` | `space_id`, `path`?, `before`?, `limit`? (1–50, default 20) | The commits that changed a document, newest first (the whole space's without `path`): `commit`, `author` (the user) and `agent` (when one made the change), `time`, `message`, and for a document `change` (`create`, `update`, `delete`), its `version` after and whether git keeps its `versioned` bytes. `next` is the `before` of the next page. It doesn't follow renames. Read-only. |
+| `restore_doc` | `space_id`, `path`, `commit`, `base_version`?, `message`? | Makes a document what it was at `commit` (from `doc_history`), as a new commit; it also brings back a deleted one. An unversioned file's older version whose bytes are gone is `410`. In CLI turns it asks the owner first. |
 | `list_boards` … `set_blocked` | | The board tools of [boards-agent-tools.md](boards-agent-tools.md). |
 | `app_catalog` | | What an app may be made of: the components and their props, the functions, the field types (time and choice included), screens and navigation, the rules, and the bundled example apps. |
 | `list_apps` | `space_id`, `archived`? | A space's apps, without definitions; `archived: true` includes the offline ones. |
@@ -89,9 +93,11 @@ results, `error: <message>`.
 | `create_app` | `space_id`, `name`, `definition` | Saves a new app, as a draft, in a space the user may write, checked strictly against the catalog ([api.md](api.md#personal-apps)); it is launched once a person publishes it. |
 | `update_app` | `space_id`, `app_id`, `version`, `name`?, `definition`?, `archived`? | Renames an app, replaces its **draft** definition (the user must hold the design right; the live release, which people use, is untouched until a person publishes the draft, [api.md](api.md#drafts-and-releases)), or takes it offline and back (the publish right). The agent has no tool to publish or roll back. |
 
-Only Markdown documents (`.md`) are read or written; other files are uploads, which only
-`list_docs` shows, with `versioned: false` for the unversioned ones (large files, audio
-and video, archives and other heavy binaries: [api.md](api.md#unversioned-files)). Unknown arguments are refused, by the sidecar's schemas and again by
+Only Markdown documents (`.md`) are written; `read_doc` also reads plain-text files. Other files
+are uploads, which only `list_docs` shows, with `versioned: false` for the unversioned ones (large files, audio
+and video, archives and other heavy binaries: [api.md](api.md#unversioned-files)). The four document tools
+check the space as `write_doc` does (the user's access, the conversation's workspace, a read-only or archived space is
+`403`), and change the knowledge base only through `internal/knowledge`. Unknown arguments are refused, by the sidecar's schemas and again by
 the server.
 
 ### The browser tools
