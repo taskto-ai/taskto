@@ -206,6 +206,7 @@ test('a person who says no is shown the blocked explanation, and nothing is regi
 test('when the server refuses the subscription, the browser keeps none and the person sees why', async () => {
   const browser = pushBrowser()
   fakeFetch({
+    'GET /api/workspaces/1/notification-email': { body: emailChoices({ available: false }) },
     'GET /api/me/push/key': { body: { public_key: SERVER_KEY } },
     'PUT /api/me/push/subscription': {
       status: 409,
@@ -562,7 +563,10 @@ test("when the browser won't end its subscription, push stays on and the person 
   sub.unsubscribe.mockResolvedValueOnce(false)
   pushBrowser({ permission: 'granted', subscription: sub })
   localStorage.setItem('taskto.push', '1')
-  fakeFetch({ 'DELETE /api/me/push/subscription': { status: 204 } })
+  fakeFetch({
+    'GET /api/workspaces/1/notification-email': { body: emailChoices({ available: false }) },
+    'DELETE /api/me/push/subscription': { status: 204 },
+  })
   render(<NotificationsTab me={1} workspace={1} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Turn off push on this device' }))
   expect((await screen.findByRole('alert')).textContent).toMatch(/wouldn't end its push subscription/)
@@ -583,4 +587,57 @@ test('opening the app signed in with no workspace registers nothing', async () =
   await waitFor(() => expect(calls.some((c) => c.path === '/api/me')).toBe(true))
   await act(async () => {})
   expect(pushCalls(calls)).toEqual([])
+})
+
+const emailChoices = (over: Record<string, unknown> = {}) => ({
+  available: true,
+  kinds: { card_assigned: 'off', app_effect_failed: 'off' },
+  digest: { hour: 8, timezone: 'UTC' },
+  ...over,
+})
+
+test('email is chosen per kind, as it happens or in a daily summary, and is off until then', async () => {
+  pushBrowser({ permission: 'denied' })
+  let saved = emailChoices()
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
+    'PUT /api/workspaces/1/notification-email': (call) => {
+      const body = call.body as { kinds?: Record<string, string>; digest?: { hour: number; timezone: string } }
+      saved = {
+        ...saved,
+        kinds: { ...saved.kinds, ...body.kinds },
+        digest: body.digest ?? saved.digest,
+      } as typeof saved
+      return { body: saved }
+    },
+  })
+  render(<NotificationsTab me={1} workspace={1} />)
+  const assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
+  expect(assigned.value).toBe('off')
+  expect(screen.queryByLabelText('Send the daily summary at')).toBeNull()
+
+  fireEvent.change(assigned, { target: { value: 'instant' } })
+  await waitFor(() => expect(assigned.value).toBe('instant'))
+  fireEvent.change(screen.getByLabelText('An app action needs your attention'), { target: { value: 'digest' } })
+  await screen.findByLabelText('Send the daily summary at')
+  fireEvent.change(screen.getByLabelText('Send the daily summary at'), { target: { value: '18' } })
+  await waitFor(() =>
+    expect((screen.getByLabelText('Send the daily summary at') as HTMLSelectElement).value).toBe('18'),
+  )
+
+  const puts = calls.filter((c) => c.method === 'PUT').map((c) => c.body as Record<string, unknown>)
+  expect(puts[0]).toEqual({ kinds: { card_assigned: 'instant' } })
+  // The first summary takes the person's own time zone along.
+  expect(puts[1]?.kinds).toEqual({ app_effect_failed: 'digest' })
+  const first = puts[1]?.digest as { hour: number; timezone: string } | undefined
+  expect(first?.hour).toBe(8)
+  expect(puts[2]).toEqual({ digest: { hour: 18, timezone: first?.timezone } })
+})
+
+test('where the server can not send mail, email says so and offers nothing', async () => {
+  pushBrowser({ permission: 'denied' })
+  fakeFetch({ 'GET /api/workspaces/1/notification-email': { body: emailChoices({ available: false }) } })
+  render(<NotificationsTab me={1} workspace={1} />)
+  await screen.findByText(/Email isn't set up on this server/)
+  expect(screen.queryByLabelText('A card was assigned to you')).toBeNull()
 })

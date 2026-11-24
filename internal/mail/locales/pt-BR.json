@@ -8,6 +8,33 @@
         "Olá, {name}, esta é uma mensagem de teste do seu servidor TaskTo.AI, enviada a seu pedido.",
         "Se você consegue ler isto, o servidor consegue enviar e-mail: convites, redefinições de senha e notificações chegarão às pessoas."
       ]
+    },
+    "digest": {
+      "subject": "Suas notificações do TaskTo.AI",
+      "title": "Você tem notificações esperando",
+      "paragraphs": [
+        "{count} das suas notificações não foram lidas desde o último resumo.",
+        "Você recebe este resumo porque o ativou em Configurações, Notificações. Ele diz apenas quantas são."
+      ],
+      "action": "Abrir suas notificações"
+    },
+    "notification_card_assigned": {
+      "subject": "Um cartão foi atribuído a você",
+      "title": "Um cartão foi atribuído a você",
+      "paragraphs": [
+        "Abra o TaskTo.AI para vê-lo.",
+        "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
+      ],
+      "action": "Abrir a notificação"
+    },
+    "notification_app_effect_failed": {
+      "subject": "Uma ação de app precisa da sua atenção",
+      "title": "Uma ação de app precisa da sua atenção",
+      "paragraphs": [
+        "Uma ação em um dos seus apps não terminou e espera que você tente de novo.",
+        "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
+      ],
+      "action": "Abrir a notificação"
     }
   }
 }

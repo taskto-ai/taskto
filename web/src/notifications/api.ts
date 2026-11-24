@@ -30,3 +30,16 @@ export function parseNotificationPath(path: string): number | null {
 
 // Raised after the inbox changed in this page (something was read), so the badge asks again.
 export const INBOX_CHANGED = 'taskto:inbox-changed'
+
+// The email choices of the caller in a workspace (docs/api.md#notification-email): per kind, off,
+// instant (a mail soon after) or digest (counted in a daily summary). `available` is false when the
+// server can't send mail, and then nothing can be turned on.
+export type EmailMode = 'off' | 'instant' | 'digest'
+export type EmailKind = 'card_assigned' | 'app_effect_failed'
+export const EMAIL_KINDS: EmailKind[] = ['card_assigned', 'app_effect_failed']
+export type EmailChoices = {
+  available: boolean
+  kinds: Record<EmailKind, EmailMode>
+  digest: { hour: number; timezone: string }
+}
+export const emailPath = (workspace: number) => `${ws(workspace)}/notification-email`

@@ -348,4 +348,5 @@ const (
 	CodePushKeysInvalid          Code = "push_keys_invalid"           // 400: a subscription's keys aren't a P-256 key and a 16-byte secret
 	CodePushTooManySubscriptions Code = "push_too_many_subscriptions" // 409: the person has the most devices subscribed; params: max
 	CodePushNoWorkspace          Code = "push_no_workspace"           // 403: push is for people in a workspace, and the caller is in none
+	CodeNotificationEmailInvalid Code = "notification_email_invalid"  // 400: an unknown kind or mode, an hour outside 0 to 23, or a time zone that isn't an IANA name
 )

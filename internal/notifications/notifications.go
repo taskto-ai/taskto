@@ -1,4 +1,5 @@
-// Package notifications is the notification inbox and, for the people who opt in, Web Push.
+// Package notifications is the notification inbox and, for the people who opt in, Web Push and
+// email (email.go).
 //
 // A notification says that something happened that a person may want to see: a card was assigned
 // to them, an effect of an app they used failed and needs them. The inbox is the one place they are
@@ -29,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"net/http"
@@ -36,6 +38,8 @@ import (
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/config"
 	"taskto.ai/taskto/internal/egress"
+	"taskto.ai/taskto/internal/mail"
+	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/serverkey"
 )
 
@@ -120,9 +124,17 @@ func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO push_deliveries (notification_id, subscription_id, next_attempt_at, updated_at)
-		SELECT ?, id, ?, ? FROM push_subscriptions WHERE user_id = ?`, id, at, at, n.UserID)
+		SELECT ?, id, ?, ? FROM push_subscriptions WHERE user_id = ?`, id, at, at, n.UserID); err != nil {
+		return err
+	}
+	// And a mail, if the person chose to have this kind mailed as it happens.
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO email_deliveries (notification_id, next_attempt_at, updated_at)
+		SELECT ?, ?, ? WHERE EXISTS (
+			SELECT 1 FROM notification_email_prefs
+			WHERE user_id = ? AND workspace_id = ? AND kind = ? AND mode = 'instant')`, id, at, at, n.UserID, n.WorkspaceID, n.Kind)
 	return err
 }
 
@@ -140,6 +152,12 @@ type Options struct {
 	// Contact says to the push services who runs the server (the VAPID subject): a mailto: or
 	// https: URL. Empty is the project's address.
 	Contact string
+	// Mail sends the notification emails people opted in to; nil, or one with no SMTP server,
+	// sends none (email.go).
+	Mail *mail.Service
+	// PublicURL is the server's external origin, https://taskto.example.com, which the links in an
+	// email go to. Empty: no email is sent, as the links would have nowhere to lead.
+	PublicURL string
 	// Now is the clock, for tests.
 	Now func() time.Time
 }
@@ -157,6 +175,10 @@ type Service struct {
 	contact string
 	egress  egress.Policy
 	clock   func() time.Time
+	// mail, publicURL and sched are the email channel's (email.go); sched is set by AttachScheduler.
+	mail      *mail.Service
+	publicURL string
+	sched     *schedule.Service
 	// tidyEvery is how often the worker tidies; a field for tests.
 	tidyEvery time.Duration
 }
@@ -174,7 +196,7 @@ func New(ctx context.Context, sqlDB *sql.DB, spaces *access.Checker, opts Option
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{db: sqlDB, access: spaces, key: opts.Key, vapid: vapid, client: opts.HTTPClient, contact: opts.Contact, clock: opts.Now, tidyEvery: tidyEvery, egress: egress.MustParse("public")}
+	s := &Service{db: sqlDB, access: spaces, key: opts.Key, vapid: vapid, client: opts.HTTPClient, contact: opts.Contact, clock: opts.Now, tidyEvery: tidyEvery, egress: egress.MustParse("public"), mail: opts.Mail, publicURL: strings.TrimRight(opts.PublicURL, "/")}
 	if opts.Egress != nil {
 		s.egress = *opts.Egress
 	}

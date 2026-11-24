@@ -977,6 +977,7 @@
     "session_account_changed": "Este navegador está conectado como uma conta diferente daquela a que estes registros pertencem.",
     "offline_unsupported": "Isto exige conexão. Offline, você pode adicionar registros, alterar ou excluir os baixados e navegar pela cópia baixada.",
     "notification_not_found": "Essa notificação não está disponível.",
+    "notification_email_invalid": "As escolhas de e-mail não são válidas: espera-se um tipo, um modo, uma hora de 0 a 23 e um fuso horário como Europe/Lisbon.",
     "push_endpoint_invalid": "O endereço de push deste navegador não é válido.",
     "push_keys_invalid": "As chaves de push deste navegador não são válidas.",
     "push_too_many_subscriptions": "Você já ativou o push em {max} dispositivos. Desative em um deles primeiro.",
@@ -2060,7 +2061,20 @@
       "turnOn": "Ativar o push neste dispositivo",
       "turnOff": "Desativar o push neste dispositivo",
       "turnOffFailed": "O navegador deste dispositivo não encerrou a inscrição de push, então o push continua ativado. Tente de novo.",
-      "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo."
+      "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo.",
+      "emailTitle": "E-mail",
+      "emailIntro": "Opcional. Escolha quais notificações também são enviadas ao seu e-mail, neste espaço de trabalho. Nada é enviado até você escolher.",
+      "emailUnavailable": "O e-mail não está configurado neste servidor, então as notificações não podem ser enviadas por e-mail. Quem administra o servidor pode ativá-lo.",
+      "email": {
+        "card_assigned": "Um cartão foi atribuído a você",
+        "app_effect_failed": "Uma ação de app precisa da sua atenção"
+      },
+      "emailOff": "Não me enviar e-mail",
+      "emailInstant": "Enviar e-mail logo depois",
+      "emailDigest": "Incluir em um resumo diário",
+      "emailHour": "Enviar o resumo diário às",
+      "emailZone": "Fuso horário",
+      "emailCaveat": "Um e-mail diz apenas que algo aconteceu, nunca o que um cartão ou um app contém, e leva de volta ao TaskTo.AI, que verifica o que você pode ver. No máximo 20 são enviados a você por hora, e a caixa de entrada é sempre o registro."
     }
   }
 }

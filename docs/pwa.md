@@ -162,6 +162,25 @@ gone, is "not available". Signed out, the address is kept through the login. The
   (and the pushes queued for them) and no more. A person in no workspace can't register a device,
   and the app doesn't try when it opens.
 
+### Email
+
+Email is the third way to be told, after the inbox and push, and is **off for everyone** until a
+person chooses, in Settings → Notifications, for each kind of notification and each workspace:
+*email me soon after*, *include in a daily summary*, or neither. It needs a server that can send mail
+and knows its own address ([install.md](install.md#email): `smtp_host` and `public_url`); without
+them the choices can't be turned on and nothing is sent.
+
+A mail says what a push says and no more: that a card was assigned to you, or that an app action
+needs you, in the person's language, and a link back to the notification (`/notification/{id}`), which
+the app opens only for the signed-in person and checks again. It never holds a title, a name, a
+comment or the ID of a card or an app. The summary says only how many notifications are unread and
+links to the inbox; it counts none the person may no longer read, and so does an instant mail:
+access is checked when the mail is made, not when the notification was. One is counted in one summary
+only. At most 20 instant mails go to a person in an hour (the rest are in the inbox), a failed send
+is tried again a few times and then dropped, and a notification that was read, or is older than a
+day, is not mailed. The summary is sent at the hour (and in the time zone) the person chose, once a
+day, by the [general scheduler](api.md#notification-email); leaving the workspace ends it.
+
 The server side is `internal/notifications` ([api.md](api.md#notifications)); what a self-hosted
 server must reach is in [install.md](install.md#web-push-notifications).
 

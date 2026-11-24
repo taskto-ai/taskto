@@ -32,6 +32,8 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("GET "+inbox+"/count", member(s.handleCount))
 	mux.Handle("POST "+inbox+"/read", member(s.handleReadAll))
 	mux.Handle("POST "+inbox+"/{notification}/read", member(s.handleRead))
+	mux.Handle("GET /api/workspaces/{workspace}/notification-email", member(s.handleEmailGet))
+	mux.Handle("PUT /api/workspaces/{workspace}/notification-email", member(s.handleEmailPut))
 	mux.Handle("GET /api/me/notifications/{notification}", user(s.handleGet))
 	mux.Handle("GET /api/me/push/key", user(s.handleKey))
 	mux.Handle("PUT /api/me/push/subscription", user(func(w http.ResponseWriter, r *http.Request) { s.handleSubscribe(w, r, a) }))
@@ -415,4 +417,37 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_, _ = w.Write(append(body, '\n'))
+}
+
+// handleEmailGet answers the caller's own email choices in the workspace.
+func (s *Service) handleEmailGet(w http.ResponseWriter, r *http.Request) {
+	userID, workspaceID := callerAndWorkspace(r)
+	c, err := s.EmailChoices(r.Context(), userID, workspaceID)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// handleEmailPut changes the caller's own email choices in the workspace and answers the result.
+func (s *Service) handleEmailPut(w http.ResponseWriter, r *http.Request) {
+	userID, workspaceID := callerAndWorkspace(r)
+	var req EmailUpdate
+	if !readJSON(w, r, &req) {
+		return
+	}
+	switch err := s.SetEmailChoices(r.Context(), userID, workspaceID, req); {
+	case errors.Is(err, ErrEmailInvalid):
+		apierr.Write(w, http.StatusBadRequest, apierr.CodeNotificationEmailInvalid, err.Error())
+		return
+	case errors.Is(err, ErrEmailUnavailable):
+		apierr.Write(w, http.StatusConflict, apierr.CodeMailNotConfigured,
+			"outgoing email isn't set up: the server's operator sets the SMTP server and the public URL (docs/install.md#email)")
+		return
+	case err != nil:
+		s.serverError(w, r, err)
+		return
+	}
+	s.handleEmailGet(w, r)
 }

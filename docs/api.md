@@ -274,6 +274,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `push_keys_invalid` | 400 | A push subscription's `keys` aren't a P-256 public key (`p256dh`) and a 16-byte `auth` secret, base64url. |
 | `push_too_many_subscriptions` | 409 | The caller already has push turned on for `max` devices (a device that changes hands counts for its new person). |
 | `push_no_workspace` | 403 | The caller is in no workspace: push is for people who are in one. |
+| `notification_email_invalid` | 400 | An email choice that isn't one: another kind or mode, an hour outside 0 to 23, or a time zone that isn't an IANA name. |
 
 ### Sessions
 
@@ -1551,6 +1552,31 @@ Marks all the caller's notifications of the workspace read. `204`.
 One notification of the caller's, whatever its workspace, as above: the address a push opens,
 `/notification/{id}`, which holds nothing but this ID. `404` (`notification_not_found`) for
 someone else's.
+
+### Notification email
+
+Email is optional, per person and workspace, and off until chosen ([pwa.md](pwa.md#email)). A mail
+carries no record data, only the kind of thing that happened and a link back; the daily summary only
+a count. These routes are for the workspace's members, about the caller only.
+
+#### `GET /api/workspaces/{workspace}/notification-email`
+
+`{"available": true, "kinds": {"card_assigned": "off", "app_effect_failed": "digest"},
+"digest": {"hour": 8, "timezone": "UTC"}}`. `available` is false when the server has no SMTP server
+or no public URL (nothing can be turned on then). Each kind is `off`, `instant` (a mail soon after,
+one for each notification) or `digest` (counted in the daily summary, sent at `hour` o'clock, 0 to
+23, of the IANA `timezone`; the default is 8 o'clock UTC).
+
+#### `PUT /api/workspaces/{workspace}/notification-email`
+
+`{"kinds": {"card_assigned": "instant"}, "digest": {"hour": 18, "timezone": "Europe/Lisbon"}}`; both
+fields are optional and what is left out stays. Answers with the new choices, as the GET does. `400
+notification_email_invalid` for another kind or mode, an hour outside 0 to 23 or a time zone that
+isn't an IANA name; `409 mail_not_configured` for turning anything on where `available` is false
+(turning things off always works). Choosing `digest` for a kind schedules the person's summary on the
+[general scheduler](../internal/schedule/schedule.go) (job kind `notifications.digest`, one per person and
+workspace, every 24 hours, so it moves an hour with daylight saving time until the choices are
+saved again); having none ends it, and so does leaving the workspace.
 
 ### Web Push
 

@@ -61,6 +61,7 @@ func (s *Service) Start(ctx context.Context) (stop func()) {
 		defer poll.Stop()
 		for {
 			s.drain(ctx)
+			s.drainEmail(ctx)
 			select {
 			case <-ctx.Done():
 				return
@@ -319,6 +320,10 @@ func (s *Service) send(ctx context.Context, d delivery) (out outcome, status int
 func (s *Service) purge(ctx context.Context) error {
 	t := s.clock()
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM push_deliveries WHERE state <> 'pending' AND updated_at < ?`, s.stamp(t.Add(-keepDeliveries))); err != nil {
+		return err
+	}
+	// A mail still queued after that was never sendable (the server has no mail): it goes too.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM email_deliveries WHERE updated_at < ?`, s.stamp(t.Add(-keepDeliveries))); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `
