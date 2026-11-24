@@ -314,6 +314,10 @@ workspace, and acts with exactly that user's access there, checked again on ever
   | `GET …/search`, `GET …/spaces/{space}/search` | [searching](#search) |
   | `…/spaces/{space}/boards…` | the [boards](#boards), all of it |
 
+  Personal apps are not here: a personal access token reaches them only through the
+  [MCP tools](mcp.md) at `/mcp` (such as `list_apps` and `create_app`). The apps' REST routes
+  need a session and answer `403` to a token.
+
   Every other route answers `403` to a request carrying a token, whatever else it carries
   (a session cookie too): logging in and out, setup, `GET /api/me`, invites, managing
   members and spaces, removing a file's old versions from history, provider accounts,
