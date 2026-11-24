@@ -716,3 +716,37 @@ test('a confirmation link that does not work says why', async () => {
   render(<Shell me={me} onLogout={() => {}} />)
   await screen.findByText(/That confirmation link doesn't work/)
 })
+
+test("a time zone the person picked is not replaced by the browser's when a summary is turned on again", async () => {
+  pushBrowser({ permission: 'denied' })
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+    timeZone: 'America/New_York',
+  } as Intl.ResolvedDateTimeFormatOptions)
+  let saved = emailChoices()
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
+    'PUT /api/workspaces/1/notification-email': (call) => {
+      const body = call.body as { kinds?: Record<string, string>; digest?: { hour: number; timezone: string } }
+      saved = {
+        ...saved,
+        kinds: { ...saved.kinds, ...body.kinds },
+        digest: body.digest ?? saved.digest,
+      } as typeof saved
+      return { body: saved }
+    },
+  })
+  render(<NotificationsTab me={1} workspace={1} />)
+  const assigned = (await screen.findByLabelText('A card was assigned to you')) as HTMLSelectElement
+  fireEvent.change(assigned, { target: { value: 'digest' } })
+  const zone = (await screen.findByLabelText('Time zone')) as HTMLSelectElement
+  await waitFor(() => expect(zone.value).toBe('America/New_York'))
+  fireEvent.change(zone, { target: { value: 'UTC' } })
+  await waitFor(() => expect(saved.digest.timezone).toBe('UTC'))
+  fireEvent.change(assigned, { target: { value: 'off' } })
+  await waitFor(() => expect(saved.kinds.card_assigned).toBe('off'))
+  fireEvent.change(assigned, { target: { value: 'digest' } })
+  await waitFor(() => expect(saved.kinds.card_assigned).toBe('digest'))
+  const puts = calls.filter((c) => c.method === 'PUT').map((c) => c.body as { digest?: unknown })
+  expect(puts[puts.length - 1]).toEqual({ kinds: { card_assigned: 'digest' } })
+  expect(saved.digest.timezone).toBe('UTC')
+})

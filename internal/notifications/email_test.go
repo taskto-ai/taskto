@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -30,6 +32,8 @@ type mailbox struct {
 	hold chan struct{}
 	// pause is how long each send takes.
 	pause time.Duration
+	// onSend runs as a send begins, before it answers.
+	onSend func()
 	// entered counts the sends begun.
 	entered int
 	// last is the newest message handed to the relay, whether it took it or not.
@@ -40,7 +44,11 @@ func (m *mailbox) Send(ctx context.Context, msg mail.Message) error {
 	m.mu.Lock()
 	hold, pause := m.hold, m.pause
 	m.entered++
+	onSend := m.onSend
 	m.mu.Unlock()
+	if onSend != nil {
+		onSend()
+	}
 	if hold != nil {
 		select {
 		case <-hold:
@@ -584,6 +592,7 @@ func TestASlowMailServerDoesNotDelayPush(t *testing.T) {
 	hold := make(chan struct{})
 	w.box.mu.Lock()
 	w.box.hold = hold
+	base := w.box.entered // the confirmation mail was a send too
 	w.box.mu.Unlock()
 	w.assign("First", w.bob)
 
@@ -603,16 +612,11 @@ func TestASlowMailServerDoesNotDelayPush(t *testing.T) {
 	wait("the mail server was never asked", func() bool {
 		w.box.mu.Lock()
 		defer w.box.mu.Unlock()
-		return w.box.entered > 0
+		return w.box.entered > base
 	})
 	w.assign("Second", w.bob)
 	wait("the push waited for the mail server", func() bool { p, _ := w.pushed(d); return len(p) == 2 })
-	// And one more, after the second mail is waiting for the server too.
-	wait("the second mail was never taken", func() bool {
-		w.box.mu.Lock()
-		defer w.box.mu.Unlock()
-		return w.box.entered > 1
-	})
+	// And one more, while the first mail is still held and the second waits behind it.
 	w.assign("Third", w.bob)
 	wait("a later push waited for the mail server", func() bool { p, _ := w.pushed(d); return len(p) == 3 })
 	if n := len(w.box.messages()); n != 0 {
@@ -1004,5 +1008,130 @@ func TestWhereMailCannotBeSentTheChoicesCanStillBeTurnedOff(t *testing.T) {
 	got = w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "off"}})
 	if got.Kinds[notifications.KindCardAssigned] != "off" {
 		t.Fatalf("choices = %+v", got)
+	}
+}
+
+// ---- Review fixes ----
+
+func TestSavingAnotherChoiceLeavesADueSummaryWhereItWas(t *testing.T) {
+	w := newMailWorld(t)
+	ctx := context.Background()
+	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
+	w.assign("Today", w.bob)
+	var before int64
+	if err := w.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	// It is due, and another kind is chosen (and an empty save) before the worker comes to it.
+	w.later(26 * time.Hour)
+	w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindAppEffectFailed: "instant"}})
+	w.put(w.bob, map[string]any{})
+	var after int64
+	if err := w.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&after); err != nil || after != before {
+		t.Fatalf("revision %d, was %d (%v)", after, before, err)
+	}
+	w.sched.RunDue(ctx)
+	if n := len(w.box.messages()); n != 1 {
+		t.Fatalf("%d summaries", n)
+	}
+	// A change of the hour does move it.
+	w.put(w.bob, map[string]any{"digest": map[string]any{"hour": 9, "timezone": "UTC"}})
+	if err := w.db.QueryRow(`SELECT revision FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&after); err != nil || after == before {
+		t.Fatalf("revision %d after a new hour (%v)", after, err)
+	}
+}
+
+func TestAnHourThatTheClocksSkipIsTheFirstMomentAfterTheGap(t *testing.T) {
+	w := newMailWorld(t)
+	// The US clocks skip 02:00 on 14 March 2027 (02:00 EST is 03:00 EDT).
+	w.skew = time.Until(time.Date(2027, 3, 13, 12, 0, 0, 0, time.UTC))
+	w.choose(w.bob, map[string]any{
+		"kinds":  map[string]string{notifications.KindCardAssigned: "digest"},
+		"digest": map[string]any{"hour": 2, "timezone": "America/New_York"},
+	})
+	var at string
+	if err := w.db.QueryRow(`SELECT run_at FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&at); err != nil || at != "2027-03-14T07:00:00.000Z" {
+		t.Fatalf("run_at %s (%v), want 03:00 EDT", at, err)
+	}
+	// An ordinary hour keeps its wall-clock hour across the change: today's 08:00 is EST, tomorrow's EDT.
+	w.skew = time.Until(time.Date(2027, 3, 13, 14, 0, 0, 0, time.UTC))
+	w.put(w.bob, map[string]any{"digest": map[string]any{"hour": 8, "timezone": "America/New_York"}})
+	if err := w.db.QueryRow(`SELECT run_at FROM scheduled_jobs WHERE user_id = ?`, w.bob.id).Scan(&at); err != nil || at != "2027-03-14T12:00:00.000Z" {
+		t.Fatalf("run_at %s (%v), want 08:00 EDT", at, err)
+	}
+}
+
+func TestAnExpiredHandlerStillSchedulesTheNextSummary(t *testing.T) {
+	w := newMailWorld(t)
+	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
+	job, err := w.sched.Find(context.Background(), w.db, w.bob.id, notifications.KindDigest, fmt.Sprintf("workspace:%d", w.ws))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := w.svc.DigestNext(ended, job); err != nil {
+		t.Fatal(err)
+	}
+	next, err := w.sched.Find(context.Background(), w.db, w.bob.id, notifications.KindDigest, fmt.Sprintf("workspace:%d", w.ws))
+	if err != nil || next.Revision != job.Revision+1 {
+		t.Fatalf("revision %d, was %d (%v)", next.Revision, job.Revision, err)
+	}
+}
+
+func TestASummaryRecordsWhatItCoversBeforeItIsSubmitted(t *testing.T) {
+	w := newMailWorld(t)
+	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
+	w.assign("One", w.bob)
+	// One more arrives between the plan that reserved the attempt and the last check.
+	w.svc.AfterReserve(func() { w.assign("Two", w.bob) })
+	var upto, covered int64
+	w.box.mu.Lock()
+	w.box.onSend = func() {
+		_ = w.db.QueryRow(`SELECT upto FROM notification_email_ledger WHERE kind = 'digest'`).Scan(&upto)
+		covered = w.maxNotification()
+	}
+	w.box.mu.Unlock()
+	w.later(26 * time.Hour)
+	w.sched.RunDue(context.Background())
+	if len(w.box.messages()) != 1 || upto == 0 || upto != covered {
+		t.Fatalf("the ledger said %d at the send, the message covers up to %d", upto, covered)
+	}
+}
+
+func TestAnAmbiguousConfirmationSendKeepsTheLink(t *testing.T) {
+	w := newMailWorld(t)
+	w.box.fail = &mail.SendError{Stage: mail.StageRejected, Ambiguous: true, Err: fmt.Errorf("connection reset")}
+	// The relay took it and lost its answer: the link it holds must work, and the wait stands.
+	got := w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "instant"}})
+	if got.Address.State != notifications.AddressPending {
+		t.Fatalf("address = %+v", got.Address)
+	}
+	w.box.mu.Lock()
+	tried := w.box.last
+	w.box.mu.Unlock()
+	_, rest, ok := strings.Cut(tried.Text, "/confirm-notification-email#")
+	if !ok {
+		t.Fatal("no link was tried")
+	}
+	expect(t, w.bob.do(http.MethodPost, "/api/me/notification-email/confirm", map[string]string{"token": strings.Fields(rest)[0]}), http.StatusNoContent)
+}
+
+func TestAChoiceIsNotStoredForSomeoneWhoLeftMeanwhileOrFromNull(t *testing.T) {
+	w := newMailWorld(t)
+	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", w.ws, w.bob.id), nil), http.StatusNoContent)
+	// The route's check passed before the removal; the write is the last word.
+	err := w.svc.SetEmailChoices(context.Background(), w.bob.id, w.ws, notifications.EmailUpdate{Kinds: map[string]string{notifications.KindCardAssigned: "instant"}})
+	if !errors.Is(err, notifications.ErrNotMember) {
+		t.Fatalf("err = %v", err)
+	}
+	if n := w.count("notification_email_prefs", "user_id = ?", w.bob.id) + w.count("notification_email_settings", "user_id = ?", w.bob.id); n != 0 {
+		t.Fatalf("%d rows for someone who left", n)
+	}
+	// And a JSON null is not an update.
+	rec := w.mallory.do(http.MethodPut, w.emailPath(), json.RawMessage("null"))
+	expect(t, rec, http.StatusBadRequest)
+	if !strings.Contains(rec.Body.String(), `"invalid_json"`) || w.count("notification_email_settings", "user_id = ?", w.mallory.id) != 0 {
+		t.Fatal(rec.Body.String())
 	}
 }

@@ -187,7 +187,7 @@ after the kind was turned to it, and one notification in one summary only. At mo
 go to a person in an hour (the rest are in the inbox); a notification that was read, or is older than
 a day, is not mailed. The summary is sent at the hour (and in the time zone) the person chose, once a
 day, by the [general scheduler](api.md#notification-email); each run schedules the next from the
-person's own date, so daylight saving time doesn't move it. Leaving the workspace ends it.
+person's own date, so daylight saving time doesn't move it (an hour the clocks skip is the first moment after the gap). Saving another choice leaves a waiting summary as it is. Leaving the workspace ends it.
 
 **At most once.** A mail that arrives twice is worse than one that doesn't (the inbox has it either
 way), so before a message is handed to the SMTP server the attempt is written to a ledger, under a

@@ -2,7 +2,7 @@
 // in one summary a day, in this workspace. Off until chosen, and only where the server can send mail.
 // A mail says what happened and links back, never what a card or an app holds (docs/pwa.md#notifications).
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -35,6 +35,8 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
   const loaded = useLoad(() => api<EmailChoices>(emailPath(workspace)), [workspace])
   const [saved, setSaved] = useState<EmailChoices | null>(null)
   const action = useAction()
+  // Set once the person picks a time zone: from then on the browser's is never put in its place.
+  const zonePicked = useRef(false)
   const choices = saved ?? loaded.data
   const zoneList = useMemo(() => zones(choices?.digest.timezone ?? 'UTC'), [choices?.digest.timezone])
 
@@ -54,7 +56,7 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
     const hadDigest = EMAIL_KINDS.some((k) => choices.kinds[k] === 'digest')
     // The first summary is set to the person's own time zone, unless they have chosen one.
     const digest =
-      mode === 'digest' && !hadDigest && choices.digest.timezone === 'UTC'
+      mode === 'digest' && !hadDigest && !zonePicked.current && choices.digest.timezone === 'UTC'
         ? { hour: choices.digest.hour, timezone: browserZone() }
         : undefined
     void save({ kinds: { [kind]: mode }, digest })
@@ -148,7 +150,10 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
                 <select
                   value={choices.digest.timezone}
                   disabled={action.busy}
-                  onChange={(e) => void save({ digest: { ...choices.digest, timezone: e.target.value } })}
+                  onChange={(e) => {
+                    zonePicked.current = true
+                    void save({ digest: { ...choices.digest, timezone: e.target.value } })
+                  }}
                 >
                   {zoneList.map((z) => (
                     <option key={z} value={z}>

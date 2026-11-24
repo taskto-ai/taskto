@@ -165,10 +165,17 @@ func (s *Service) SendVerification(ctx context.Context, userID, workspaceID int6
 	})
 	if err != nil {
 		var se *mail.SendError
-		if errors.As(err, &se) {
+		if !errors.As(err, &se) {
+			se = nil
+		}
+		if se != nil {
 			slog.Warn("notifications: a confirmation email wasn't sent", "stage", se.Stage, "smtp_code", se.Code)
 		} else {
 			slog.Warn("notifications: a confirmation email couldn't be made", "err", err)
+		}
+		if se != nil && se.Ambiguous {
+			// The relay may have taken it: the link stays valid, and the wait stands.
+			return nil
 		}
 		// The link was not sent: it is withdrawn, and another may be asked for now.
 		_, _ = s.db.ExecContext(context.WithoutCancel(ctx), `

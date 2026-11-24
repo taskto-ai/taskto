@@ -436,11 +436,18 @@ func (s *Service) handleEmailGet(w http.ResponseWriter, r *http.Request) {
 // handleEmailPut changes the caller's own email choices in the workspace and answers the result.
 func (s *Service) handleEmailPut(w http.ResponseWriter, r *http.Request) {
 	userID, workspaceID := callerAndWorkspace(r)
-	var req EmailUpdate
+	var req *EmailUpdate
 	if !readJSON(w, r, &req) {
 		return
 	}
-	switch err := s.SetEmailChoices(r.Context(), userID, workspaceID, req); {
+	if req == nil { // a JSON null is not the object of the route's fields
+		apierr.Write(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: one object expected")
+		return
+	}
+	switch err := s.SetEmailChoices(r.Context(), userID, workspaceID, *req); {
+	case errors.Is(err, ErrNotMember):
+		apierr.Write(w, http.StatusNotFound, apierr.CodeWorkspaceNotFound, "workspace not found")
+		return
 	case errors.Is(err, ErrEmailInvalid):
 		apierr.Write(w, http.StatusBadRequest, apierr.CodeNotificationEmailInvalid, err.Error())
 		return

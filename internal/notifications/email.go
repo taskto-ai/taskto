@@ -128,6 +128,9 @@ type EmailUpdate struct {
 // ErrEmailInvalid is a choice the server refuses.
 var ErrEmailInvalid = errors.New("notifications: invalid email choice")
 
+// ErrNotMember is a change for someone who left the workspace meanwhile.
+var ErrNotMember = errors.New("notifications: not a member of the workspace")
+
 // ErrEmailUnavailable is turning email on where the server can't send it.
 var ErrEmailUnavailable = errors.New("notifications: the server can't send email")
 
@@ -208,6 +211,24 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 		}
 	}
 	err := s.write(ctx, func(tx *sql.Tx) error {
+		// Membership is checked again here: leaving deletes the person's choices in the same
+		// write lock, so a choice can't be stored for someone who has just left.
+		var member bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = ? AND workspace_id = ?)`,
+			userID, workspaceID).Scan(&member); err != nil {
+			return err
+		}
+		if !member {
+			return ErrNotMember
+		}
+		var prevHour int
+		var prevZone string
+		err := tx.QueryRowContext(ctx, `SELECT digest_hour, timezone FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
+			userID, workspaceID).Scan(&prevHour, &prevZone)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		known := err == nil
 		for kind, mode := range u.Kinds {
 			var err error
 			if mode == ModeOff {
@@ -254,6 +275,14 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 			if errors.Is(err, schedule.ErrNotFound) {
 				err = nil
 			}
+			return err
+		}
+		// A change that leaves the time as it was leaves the waiting occurrence alone: saving
+		// another choice must not push today's summary to tomorrow.
+		moved := u.Digest != nil && known && (u.Digest.Hour != prevHour || u.Digest.Timezone != prevZone)
+		if job, err := s.sched.Find(ctx, tx, userID, KindDigest, digestKey(workspaceID)); err == nil && job.State == schedule.StatePending && !moved {
+			return nil
+		} else if err != nil && !errors.Is(err, schedule.ErrNotFound) {
 			return err
 		}
 		return s.scheduleDigest(ctx, tx, userID, workspaceID)
@@ -307,13 +336,38 @@ func loadZone(name string) (*time.Location, error) {
 
 // nextDigest is the next time after now that it is hour o'clock in loc, from the local date: the
 // day after today is the date plus one, however long that day is.
+//
+// An hour that doesn't exist on a day (the clocks skip it) is the first moment after the gap, and one
+// that happens twice (they go back) is its first time.
 func nextDigest(now time.Time, hour int, loc *time.Location) time.Time {
 	local := now.In(loc)
-	at := time.Date(local.Year(), local.Month(), local.Day(), hour, 0, 0, 0, loc)
+	at := localHour(local.Year(), local.Month(), local.Day(), hour, loc)
 	if !at.After(now) {
-		at = time.Date(local.Year(), local.Month(), local.Day()+1, hour, 0, 0, 0, loc)
+		at = localHour(local.Year(), local.Month(), local.Day()+1, hour, loc)
 	}
 	return at.UTC()
+}
+
+// localHour is hour o'clock of a date in loc. time.Date says an hour inside a gap is one of two
+// moments around it, whichever it picks; this is always the later: the first moment the wall clock
+// shows the hour or more.
+func localHour(year int, month time.Month, day, hour int, loc *time.Location) time.Time {
+	at := time.Date(year, month, day, hour, 0, 0, 0, loc)
+	want := time.Date(year, month, day, hour, 0, 0, 0, time.UTC)
+	wall := func(t time.Time) time.Time {
+		y, m, d := t.In(loc).Date()
+		h, mi, sec := t.In(loc).Clock()
+		return time.Date(y, m, d, h, mi, sec, 0, time.UTC)
+	}
+	// Back to before the gap if the pick was after it (so the walk below finds its start), then
+	// forward until the wall clock has reached the hour.
+	for i := 0; i < 8 && wall(at.Add(-15*time.Minute)).Compare(want) >= 0; i++ {
+		at = at.Add(-15 * time.Minute)
+	}
+	for i := 0; i < 4*48 && wall(at).Before(want); i++ {
+		at = at.Add(15 * time.Minute)
+	}
+	return at
 }
 
 func (s *Service) usesDigest(ctx context.Context, q queryer, userID, workspaceID int64) (bool, error) {
@@ -559,7 +613,10 @@ func (s *Service) sendDigest(ctx context.Context, job schedule.Job) error {
 
 // digestNext schedules the person's next summary, unless this occurrence has been replaced.
 func (s *Service) digestNext(ctx context.Context, job schedule.Job) error {
-	return s.write(context.WithoutCancel(ctx), func(tx *sql.Tx) error {
+	// On a context of its own: the handler's may have ended, and the chain of summaries must not.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), emailSendTimeout)
+	defer cancel()
+	return s.write(ctx, func(tx *sql.Tx) error {
 		if ok, err := s.current(ctx, tx, job); err != nil || !ok {
 			return err
 		}
@@ -596,6 +653,12 @@ func (s *Service) digestOnce(ctx context.Context, job schedule.Job) error {
 	plan, ok, err = s.digestPlanFor(ctx, job)
 	if err != nil || !ok {
 		return errors.Join(err, s.settleLedger(ctx, key, ledgerCancelled, plan.upto))
+	}
+	// What the message covers is on the ledger before it is submitted, so an attempt that stops
+	// after the relay took it advances the cursor over everything it counted.
+	if _, err := s.db.ExecContext(ctx, `UPDATE notification_email_ledger SET upto = ?, updated_at = ? WHERE key = ? AND state = 'sending'`,
+		plan.upto, s.now(), key); err != nil {
+		return errors.Join(err, s.settleLedger(ctx, key, ledgerRefused, plan.upto))
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, emailSendTimeout)
 	defer cancel()
