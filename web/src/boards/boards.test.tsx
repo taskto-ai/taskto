@@ -51,6 +51,8 @@ const card = (id: number, title: string, column: string, extra: Record<string, u
   blocked_by: [] as number[],
   docs: [] as string[],
   conversations: [] as string[],
+  due: null as string | null,
+  labels: [] as string[],
   version: 1,
   updated_at: '2026-01-01T00:00:00Z',
   updated_by: by,
@@ -59,7 +61,7 @@ const card = (id: number, title: string, column: string, extra: Record<string, u
 
 // A board with two cards, kept on the server side of the fake: changes check and bump the
 // version as the server does, and answer 409 with the current card for a stale one.
-function server(access: 'write' | 'read') {
+function server(access: 'write' | 'read', tweak?: (cards: TestCard[]) => void) {
   const cards: TestCard[] = [
     card(1, 'Write the post', 'todo', {
       body: 'Some **notes**',
@@ -69,6 +71,7 @@ function server(access: 'write' | 'read') {
     }),
     card(2, 'Get approval', 'doing'),
   ]
+  tweak?.(cards)
   const boards = [{ ...board }]
   const comments: Record<number, unknown[]> = {
     1: [
@@ -81,6 +84,8 @@ function server(access: 'write' | 'read') {
       },
     ],
     2: [],
+    3: [],
+    4: [],
   }
   const update = (id: number, version: number, apply: (c: TestCard) => void) => {
     const c = cards.find((x) => x.id === id) as TestCard
@@ -126,7 +131,7 @@ function server(access: 'write' | 'read') {
       return { status: 201, body: c }
     },
   }
-  for (const id of [1, 2, 3]) {
+  for (const id of [1, 2, 3, 4]) {
     routes[`GET ${C}/${id}`] = () => ({ body: { ...cards.find((c) => c.id === id), comments: comments[id] } })
     routes[`PATCH ${C}/${id}`] = (call) => {
       const { version, ...fields } = call.body as { version: number } & Partial<TestCard>
@@ -594,4 +599,128 @@ test('a link to a board that is gone says so even among the archived', async () 
   fireEvent.click(screen.getByLabelText('Show archived boards'))
   await screen.findByText('The board this link points to is no longer available.')
   expect(screen.queryByText('Launch', { selector: 'strong' })).toBeNull()
+})
+
+// Dates far enough from any test run's today: 2001 is always late, 2999 never.
+const LATE = '2001-02-03'
+const FAR = '2999-12-31'
+
+const withPlanning = (cards: TestCard[]) => {
+  Object.assign(cards[0], { due: LATE, labels: ['design', 'launch'] })
+  Object.assign(cards[1], { due: FAR, labels: ['launch'] })
+  cards.push(card(3, 'Ship it', 'done', { due: LATE, labels: ['design'] }), card(4, 'Plain card', 'backlog'))
+}
+
+test('the board shows due dates, late ones marked, and labels', async () => {
+  server('read', withPlanning)
+  render(<BoardsPage workspace={1} />)
+  const todo = await screen.findByRole('region', { name: 'To do' })
+  // Late: marked, and says so. The date is that calendar day, not shifted by a time zone.
+  const late = within(todo).getByText('Overdue: Feb 3, 2001')
+  expect(late.getAttribute('data-overdue')).toBe('true')
+  expect(within(todo).getByText('design')).toBeTruthy()
+  const doing = screen.getByRole('region', { name: 'Doing' })
+  const far = within(doing).getByText('Due Dec 31, 2999')
+  expect(far.getAttribute('data-overdue')).toBeNull()
+  // A finished card isn't late, however old its date.
+  const done = screen.getByRole('region', { name: 'Done' })
+  expect(within(done).getByText('Due Feb 3, 2001').getAttribute('data-overdue')).toBeNull()
+  expect(within(screen.getByRole('region', { name: 'Backlog' })).queryByText(/Due|Overdue/)).toBeNull()
+})
+
+test('filters the board by label, and to the overdue cards', async () => {
+  server('read', withPlanning)
+  render(<BoardsPage workspace={1} />)
+  await screen.findByRole('region', { name: 'To do' })
+  const filters = screen.getByRole('group', { name: 'Filter the cards' })
+  const titlesShown = () =>
+    screen
+      .getAllByRole('button', { name: /Write the post|Get approval|Ship it|Plain card/ })
+      .map((b) => b.textContent?.slice(0, 8))
+  expect(titlesShown()).toHaveLength(4)
+
+  const label = within(filters).getByLabelText('Label')
+  expect([...(label as HTMLSelectElement).options].map((o) => o.textContent)).toEqual([
+    'All labels',
+    'design',
+    'launch',
+  ])
+  fireEvent.change(label, { target: { value: 'design' } })
+  expect(screen.getByRole('button', { name: /Write the post/ })).toBeTruthy()
+  expect(screen.getByRole('button', { name: /Ship it/ })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /Get approval/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: /Plain card/ })).toBeNull()
+  // The count of a column is of the cards shown.
+  expect(within(screen.getByRole('region', { name: 'Doing' })).getByText('0')).toBeTruthy()
+  expect(within(screen.getByRole('region', { name: 'Doing' })).getByText('No cards match.')).toBeTruthy()
+
+  // Together with "overdue only": the done card isn't late, so one card is left.
+  fireEvent.click(within(filters).getByLabelText('Overdue only'))
+  expect(screen.getByRole('button', { name: /Write the post/ })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /Ship it/ })).toBeNull()
+
+  fireEvent.change(label, { target: { value: '' } })
+  expect(screen.queryByRole('button', { name: /Get approval/ })).toBeNull()
+  expect(screen.getByRole('button', { name: /Write the post/ })).toBeTruthy()
+})
+
+test('a board with no due dates or labels has no filters', async () => {
+  server('write')
+  render(<BoardsPage workspace={1} />)
+  await screen.findByRole('region', { name: 'To do' })
+  expect(screen.queryByRole('group', { name: 'Filter the cards' })).toBeNull()
+})
+
+test('a writer sets and clears the due date, and adds and removes labels, each over the latest card', async () => {
+  const { sent } = server('write', withPlanning)
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  const due = within(view).getByLabelText('Due date') as HTMLInputElement
+  expect(due.value).toBe(LATE)
+  expect(due.getAttribute('data-overdue')).toBe('true')
+
+  // Emptying the field is not clearing the date; the button is.
+  fireEvent.change(due, { target: { value: '' } })
+  expect(sent('PATCH', `${C}/1`)).toEqual([])
+  fireEvent.change(due, { target: { value: '2999-01-02' } })
+  await waitFor(() => expect(sent('PATCH', `${C}/1`)).toEqual([{ version: 1, due: '2999-01-02' }]))
+  await waitFor(() => expect((within(view).getByLabelText('Due date') as HTMLInputElement).value).toBe('2999-01-02'))
+
+  fireEvent.click(within(view).getByRole('button', { name: 'Clear the due date' }))
+  await waitFor(() => expect(sent('PATCH', `${C}/1`)[1]).toEqual({ version: 2, due: null }))
+  await waitFor(() => expect(within(view).queryByRole('button', { name: 'Clear the due date' })).toBeNull())
+
+  // Labels: normalized as typed, a repeat is no new label, and the whole list is sent.
+  const add = async (text: string) => {
+    fireEvent.change(within(view).getByLabelText('New label'), { target: { value: text } })
+    fireEvent.click(within(view).getByRole('button', { name: 'Add label' }))
+  }
+  await add('  Needs   REVIEW ')
+  await waitFor(() =>
+    expect(sent('PATCH', `${C}/1`)[2]).toEqual({ version: 3, labels: ['design', 'launch', 'needs review'] }),
+  )
+  await within(view).findByText('needs review')
+  await add('design')
+  await waitFor(() => expect(sent('PATCH', `${C}/1`)).toHaveLength(4))
+  expect(sent('PATCH', `${C}/1`)[3]).toEqual({ version: 4, labels: ['design', 'launch', 'needs review'] })
+
+  fireEvent.click(within(view).getByRole('button', { name: 'Remove the label launch' }))
+  await waitFor(() => expect(sent('PATCH', `${C}/1`)).toHaveLength(5))
+  expect(sent('PATCH', `${C}/1`)[4]).toEqual({ version: 5, labels: ['design', 'needs review'] })
+  await waitFor(() => expect(within(view).queryByText('launch')).toBeNull())
+})
+
+test('a viewer sees the due date and labels but cannot change them', async () => {
+  server('read', withPlanning)
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  const due = within(view).getByText('Overdue: Feb 3, 2001')
+  expect(due.getAttribute('data-overdue')).toBe('true')
+  expect(within(view).getByText('design')).toBeTruthy()
+  expect(within(view).queryByLabelText('Due date')).toBeNull()
+  expect(within(view).queryByLabelText('New label')).toBeNull()
+  expect(within(view).queryByRole('button', { name: /Remove the label/ })).toBeNull()
+  const plain = await openCard('Plain card')
+  expect(within(plain).getByText('No due date.')).toBeTruthy()
+  expect(within(plain).getByText('No labels.')).toBeTruthy()
 })

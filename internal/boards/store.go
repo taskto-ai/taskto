@@ -247,7 +247,7 @@ func (s *Service) updateBoard(ctx context.Context, sp access.Space, a Actor, boa
 
 const cardColumns = `c.id, c.board_id, c.title, c.body, c.col, c.rank, c.archived_from,
 	c.assignee_id, coalesce(au.name, ''), c.assignee_agent, c.blocked_reason,
-	EXISTS (SELECT 1 FROM card_blockers cb WHERE cb.card_id = c.id), c.version,
+	EXISTS (SELECT 1 FROM card_blockers cb WHERE cb.card_id = c.id), c.due, c.version,
 	c.created_at, c.created_by, coalesce(cu.name, ''), c.created_by_agent, c.created_via,
 	c.updated_at, c.updated_by, coalesce(uu.name, ''), c.updated_by_agent, c.updated_via
 	FROM cards c
@@ -267,7 +267,7 @@ func scanCard(row scanner) (Card, error) {
 	var createdVia, updatedVia sql.NullString
 	var agent, hasBlockers, createdAgent, updatedAgent bool
 	if err := row.Scan(&c.ID, &c.BoardID, &c.Title, &c.Body, &c.Column, &c.Rank, &c.ArchivedFrom,
-		&assigneeID, &assigneeName, &agent, &c.BlockedReason, &hasBlockers, &c.Version,
+		&assigneeID, &assigneeName, &agent, &c.BlockedReason, &hasBlockers, &c.Due, &c.Version,
 		&c.CreatedAt, &createdBy, &createdName, &createdAgent, &createdVia,
 		&c.UpdatedAt, &updatedBy, &updatedName, &updatedAgent, &updatedVia); err != nil {
 		return Card{}, err
@@ -281,7 +281,7 @@ func scanCard(row scanner) (Card, error) {
 	c.Blocked = c.BlockedReason != nil || hasBlockers
 	c.CreatedBy = author(createdBy, createdName, createdAgent, createdVia)
 	c.UpdatedBy = author(updatedBy, updatedName, updatedAgent, updatedVia)
-	c.BlockedBy, c.Docs, c.Conversations = []int64{}, []string{}, []string{}
+	c.BlockedBy, c.Docs, c.Conversations, c.Labels = []int64{}, []string{}, []string{}, []string{}
 	return c, nil
 }
 
@@ -328,6 +328,25 @@ func addRelations(ctx context.Context, q queryer, cards []Card, cond string, arg
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	rows, err = q.QueryContext(ctx, `SELECT card_id, label FROM card_labels WHERE card_id `+cond+`
+		ORDER BY card_id, label`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var l string
+		if err := rows.Scan(&id, &l); err != nil {
+			return err
+		}
+		if c := byID[id]; c != nil {
+			c.Labels = append(c.Labels, l)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	rows, err = q.QueryContext(ctx, `SELECT card_id, kind, target FROM card_links WHERE card_id `+cond+`
 		ORDER BY card_id, rowid`, args...)
 	if err != nil {
@@ -365,7 +384,29 @@ type Filter struct {
 	Blocked *bool
 	// Text keeps cards whose title or body contains it, regardless of ASCII case.
 	Text string
+	// Labels keeps cards that have every one of them (compared as normalized, so "Bug" is
+	// "bug").
+	Labels []string
+	// DueBefore and DueAfter, calendar dates (YYYY-MM-DD), keep cards due on or before, or on
+	// or after, that day; a card with no due date is never kept by either.
+	DueBefore, DueAfter string
+	// Overdue keeps cards due before Today (a date, default today in UTC) that aren't done or
+	// archived. Only the clients know their people's time zone, so they can send theirs.
+	Overdue bool
+	Today   string
+	// Sort is SortBoard (the default, "") or SortDue.
+	Sort Sort
 }
+
+// Sort orders the cards a list returns.
+type Sort string
+
+// The orders of a list: board order (by column, then rank), or by due date, soonest first
+// with the cards that have none last, each group in board order.
+const (
+	SortBoard Sort = "board"
+	SortDue   Sort = "due"
+)
 
 // Unassigned is the Filter.Assignee for cards nobody is assigned to.
 const Unassigned AssigneeKind = "none"
@@ -410,10 +451,47 @@ func (s *Service) listCards(ctx context.Context, sp access.Space, boardID int64,
 		where = append(where, `(c.title LIKE ? ESCAPE '\' OR c.body LIKE ? ESCAPE '\')`)
 		args = append(args, pattern, pattern)
 	}
+	for _, l := range f.Labels {
+		n, err := normalizeLabel(l)
+		if err != nil {
+			return nil, err
+		}
+		where = append(where, `EXISTS (SELECT 1 FROM card_labels cl WHERE cl.card_id = c.id AND cl.label = ?)`)
+		args = append(args, n)
+	}
+	for _, d := range []struct{ name, value, cond string }{
+		{"due_before", f.DueBefore, `c.due <= ?`},
+		{"due_after", f.DueAfter, `c.due >= ?`},
+	} {
+		if d.value == "" {
+			continue
+		}
+		if _, ok := checkDate(d.value); !ok {
+			return nil, invalidAs(apierr.CodeCardDueInvalid, nil, d.name+` must be a calendar date like "2026-03-31"`)
+		}
+		where, args = append(where, d.cond), append(args, d.value)
+	}
+	if f.Overdue {
+		today := f.Today
+		if today == "" {
+			today = time.Now().UTC().Format(dateLayout)
+		} else if _, ok := checkDate(today); !ok {
+			return nil, invalidAs(apierr.CodeCardDueInvalid, nil, `today must be a calendar date like "2026-03-31"`)
+		}
+		where, args = append(where, `c.due < ? AND c.col NOT IN ('done', 'archived')`), append(args, today)
+	}
+	order := columnOrder + `, c.rank, c.id`
+	switch f.Sort {
+	case "", SortBoard:
+	case SortDue:
+		order = `c.due IS NULL, c.due, ` + order
+	default:
+		return nil, invalid(`sort must be "board" or "due"`)
+	}
 	// #nosec G202 -- the conditions joined are constants above; values go in args.
 	rows, err := s.db.QueryContext(ctx, `SELECT `+cardColumns+`
 		WHERE `+strings.Join(where, ` AND `)+`
-		ORDER BY `+columnOrder+`, c.rank, c.id`, args...)
+		ORDER BY `+order, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -492,6 +570,9 @@ type NewCard struct {
 	BlockedBy     []int64   `json:"blocked_by"`
 	Docs          []string  `json:"docs"`
 	Conversations []string  `json:"conversations"`
+	// Due is a calendar date, YYYY-MM-DD; Labels are free text (normalized).
+	Due    *string  `json:"due"`
+	Labels []string `json:"labels"`
 	// Origin makes creating the card idempotent: if the board already has a card made with
 	// this origin, that card is returned and nothing is created. It is the server's own
 	// (package apps' outbox uses it), never read from a request.
@@ -516,6 +597,8 @@ func (s *Service) createCard(ctx context.Context, sp access.Space, a Actor, boar
 		Assignee:      Optional[Assignee]{Set: true, Value: nc.Assignee},
 		BlockedReason: Optional[string]{Set: true, Value: nc.BlockedReason},
 		BlockedBy:     &nc.BlockedBy, Docs: &nc.Docs, Conversations: &nc.Conversations,
+		Due:    Optional[string]{Set: true, Value: nc.Due},
+		Labels: &nc.Labels,
 	}
 	if err := s.validate(ctx, sp, &ch); err != nil {
 		return Card{}, err
@@ -596,11 +679,15 @@ type CardChanges struct {
 	BlockedBy     *[]int64  `json:"blocked_by"`
 	Docs          *[]string `json:"docs"`
 	Conversations *[]string `json:"conversations"`
+	// Due is a calendar date, YYYY-MM-DD; null clears it.
+	Due Optional[string] `json:"due"`
+	// Labels replaces the card's labels; [] clears them.
+	Labels *[]string `json:"labels"`
 }
 
 func (ch CardChanges) empty() bool {
 	return ch.Title == nil && ch.Body == nil && !ch.Assignee.Set && !ch.BlockedReason.Set &&
-		ch.BlockedBy == nil && ch.Docs == nil && ch.Conversations == nil
+		ch.BlockedBy == nil && ch.Docs == nil && ch.Conversations == nil && !ch.Due.Set && ch.Labels == nil
 }
 
 func (s *Service) updateCard(ctx context.Context, sp access.Space, a Actor, boardID, cardID int64, ch CardChanges) (Card, error) {
@@ -858,6 +945,21 @@ func applyChanges(ctx context.Context, tx *sql.Tx, sp access.Space, a Actor, boa
 	if ch.BlockedReason.Set {
 		if _, err := tx.ExecContext(ctx, `UPDATE cards SET blocked_reason = ? WHERE id = ?`, ch.BlockedReason.Value, cardID); err != nil {
 			return err
+		}
+	}
+	if ch.Due.Set {
+		if _, err := tx.ExecContext(ctx, `UPDATE cards SET due = ? WHERE id = ?`, ch.Due.Value, cardID); err != nil {
+			return err
+		}
+	}
+	if ch.Labels != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM card_labels WHERE card_id = ?`, cardID); err != nil {
+			return err
+		}
+		for _, l := range *ch.Labels {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO card_labels (card_id, label) VALUES (?, ?)`, cardID, l); err != nil {
+				return err
+			}
 		}
 	}
 	if ch.BlockedBy != nil {

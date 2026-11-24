@@ -365,6 +365,12 @@ function formats(locale: string) {
     number: (n: number, options?: Intl.NumberFormatOptions) =>
       options ? new Intl.NumberFormat(locale, options).format(n) : number.format(n),
     date: (d: Date | string | number) => date.format(toDate(d)),
+    // A calendar date written YYYY-MM-DD (a card's due date), as that day wherever it is read:
+    // not a moment, so no time zone moves it.
+    calendarDate: (ymd: string) => {
+      const [y, m, d] = ymd.split('-').map(Number)
+      return date.format(new Date(y, m - 1, d))
+    },
     time: (d: Date | string | number) => time.format(toDate(d)),
     dateTime: (d: Date | string | number) => dateTime.format(toDate(d)),
     // "5 minutes ago", "yesterday", "in 2 hours": the largest unit that fits.

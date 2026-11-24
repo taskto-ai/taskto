@@ -169,7 +169,7 @@
   },
   {
     "name": "list_cards",
-    "description": "List a board's cards in board order (bodies shortened). Filter by column, assignee (\"user\" with assignee_id, \"agent\" or \"none\"), blocked, or text in the title or body.",
+    "description": "List a board's cards in board order (bodies shortened). Filter by column, assignee (\"user\" with assignee_id, \"agent\" or \"none\"), blocked, labels, due dates, overdue, or text in the title or body; sort by due date. Each card shows its due date (YYYY-MM-DD or null) and labels.",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -200,6 +200,39 @@
         "text": {
           "type": "string",
           "maxLength": 200
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          },
+          "maxItems": 10,
+          "description": "only cards that have all of these labels (not case-sensitive)"
+        },
+        "due_before": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "only cards due on or before this date, YYYY-MM-DD"
+        },
+        "due_after": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "only cards due on or after this date, YYYY-MM-DD"
+        },
+        "overdue": {
+          "type": "boolean",
+          "description": "true: only cards due before today that aren't done or archived"
+        },
+        "today": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "the user's date today, for overdue; default today in UTC"
+        },
+        "sort": {
+          "enum": ["board", "due"],
+          "description": "board (default): by column, then position; due: soonest due date first, cards without one last"
         }
       },
       "required": ["space_id", "board_id"],
@@ -325,6 +358,28 @@
           },
           "maxItems": 50,
           "description": "conversation IDs; only the user's own conversations can be added"
+        },
+        "due": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the due date, a calendar date YYYY-MM-DD with no time; null for none"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          },
+          "maxItems": 10,
+          "description": "free-text labels, kept in lower case; a short list of what the card is about"
         }
       },
       "required": ["space_id", "board_id", "title"],
@@ -333,7 +388,7 @@
   },
   {
     "name": "update_card",
-    "description": "Change a card: only the fields given change; lists (blocked_by, docs, conversations) replace the whole list, null clears a field.",
+    "description": "Change a card: only the fields given change; lists (blocked_by, docs, conversations, labels) replace the whole list, null clears a field (due too).",
     "read_only": false,
     "input_schema": {
       "type": "object",
@@ -424,6 +479,28 @@
           },
           "maxItems": 50,
           "description": "conversation IDs; only the user's own conversations can be added"
+        },
+        "due": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the due date, a calendar date YYYY-MM-DD with no time; null for none"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          },
+          "maxItems": 10,
+          "description": "free-text labels, kept in lower case; replaces all the card's labels; [] clears them"
         }
       },
       "required": ["space_id", "board_id", "card_id", "version"],

@@ -171,6 +171,18 @@ func (s *Service) handleListCards(w http.ResponseWriter, r *http.Request) {
 	if f.Blocked, ok = boolParam(w, r, "blocked"); !ok {
 		return
 	}
+	f.Labels = q["label"]
+	f.DueBefore, f.DueAfter, f.Today = q.Get("due_before"), q.Get("due_after"), q.Get("today")
+	f.Sort = Sort(q.Get("sort"))
+	overdue, ok := boolParam(w, r, "overdue")
+	if !ok {
+		return
+	}
+	f.Overdue = overdue != nil && *overdue
+	if len(f.Labels) > maxLabels {
+		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "label is given too many times")
+		return
+	}
 	cards, err := s.listCards(r.Context(), req.space, req.board, f)
 	if err != nil {
 		fail(w, r, err)
