@@ -233,6 +233,16 @@ func TestInviteEmailIsInTheRightLanguage(t *testing.T) {
 	if m := send("d@example.com"); !strings.Contains(m.Subject, "convidou você para Home") {
 		t.Fatalf("invitee's: %q", m.Subject)
 	}
+	// A person who picked none isn't given the default of another workspace they belong to: the
+	// inviting workspace's default (English, here) applies.
+	e.join(e.invite(owner, ws, "f@example.com", RoleMember), "Fay")
+	other := e.addWorkspace(e.userID(owner), "Elsewhere")
+	e.exec(t, `UPDATE workspaces SET locale = 'pt-BR' WHERE id = ?`, other)
+	e.exec(t, `INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, (SELECT id FROM users WHERE email = 'f@example.com'), 'member')`, other)
+	e.exec(t, `DELETE FROM memberships WHERE workspace_id = ? AND user_id = (SELECT id FROM users WHERE email = 'f@example.com')`, ws)
+	if m := send("f@example.com"); !strings.Contains(m.Subject, "invited you to Home") {
+		t.Fatalf("an unrelated workspace's default: %q", m.Subject)
+	}
 }
 
 func (e *env) exec(t *testing.T, query string, args ...any) {

@@ -329,7 +329,9 @@ func (s *Service) emailInvite(ctx context.Context, m Membership, by User, inv In
 // account that picked one, else the workspace's default, else the inviting admin's own.
 func (s *Service) inviteLocale(ctx context.Context, email string, m Membership, admin int64) string {
 	if u, _, err := s.userByEmail(ctx, email); err == nil {
-		if locale, err := s.recipientLocale(ctx, u.ID); err == nil && locale != "" {
+		// Only the language the person picked: another workspace's default is not theirs, and
+		// shouldn't outrank the default of the workspace that invites them.
+		if locale, err := s.UserLocale(ctx, u.ID); err == nil && locale != "" {
 			return locale
 		}
 	}
