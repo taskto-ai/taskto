@@ -49,7 +49,7 @@ func (s *Service) ShowCard(ctx context.Context, a Actor, spaceID, boardID, cardI
 	if err != nil {
 		return Thread{}, err
 	}
-	return s.getThread(ctx, sp, boardID, cardID)
+	return s.getThread(ctx, sp, a, boardID, cardID)
 }
 
 // CreateCard adds a card to a board.
