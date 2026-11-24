@@ -684,7 +684,7 @@
   },
   {
     "name": "comment_card",
-    "description": "Add a comment to a card's thread.",
+    "description": "Add a comment to a card's thread. To tell a person, mention them with @[Name](user:ID), the ID from list_members and Name their name without any [, ] or \\ (leave those out, or the mention doesn't count); the card's assignee is told of every comment too, unless they wrote it or can't read the space.",
     "read_only": false,
     "input_schema": {
       "type": "object",

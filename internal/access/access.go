@@ -127,8 +127,11 @@ var ErrNotFound = errors.New("space not found")
 
 // Checker answers access questions from the database.
 type Checker struct {
-	db   *sql.DB
-	auth *auth.Service
+	db *sql.DB
+	// reads is where the checks read from: db, or inside one read transaction for the checks that
+	// need one snapshot (AppNamed).
+	reads reader
+	auth  *auth.Service
 	// archiveHooks are told when a shared space is archived or brought back (OnArchiveChange).
 	archiveHooks []ArchiveHook
 }
@@ -147,7 +150,7 @@ func (c *Checker) OnArchiveChange(h ArchiveHook) { c.archiveHooks = append(c.arc
 // requests of RequireSpace and the space routes; it may be nil for code that only calls
 // Check, CanRead, CanWrite and Readable, such as the agent's tools.
 func New(sqlDB *sql.DB, a *auth.Service) *Checker {
-	return &Checker{db: sqlDB, auth: a}
+	return &Checker{db: sqlDB, reads: sqlDB, auth: a}
 }
 
 // spaceColumns are the columns scanSpace reads, from spaces s, memberships m (the user's
@@ -177,15 +180,20 @@ func scanSpace(row scanner) (Space, error) {
 // lookup returns spaceID as userID sees it, Access None included, or ErrNotFound if the
 // space doesn't exist or isn't in one of the user's workspaces.
 func (c *Checker) lookup(ctx context.Context, userID, spaceID int64) (Space, error) {
-	return lookupIn(ctx, c.db, userID, spaceID)
+	return lookupIn(ctx, c.reads, userID, spaceID)
 }
 
-// rowQuerier is a *sql.DB or a *sql.Tx: where a check reads from.
-type rowQuerier interface {
+// Querier is a *sql.DB or a *sql.Tx: where a check reads from.
+type reader interface {
+	Querier
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+type Querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func lookupIn(ctx context.Context, q rowQuerier, userID, spaceID int64) (Space, error) {
+func lookupIn(ctx context.Context, q Querier, userID, spaceID int64) (Space, error) {
 	s, err := scanSpace(q.QueryRowContext(ctx,
 		`SELECT `+spaceColumns+fromSpaceFor+` WHERE s.id = ?`, userID, spaceID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -197,10 +205,10 @@ func lookupIn(ctx context.Context, q rowQuerier, userID, spaceID int64) (Space, 
 // Check returns spaceID as userID sees it, if they may at least read it, and ErrNotFound
 // otherwise.
 func (c *Checker) Check(ctx context.Context, userID, spaceID int64) (Space, error) {
-	return checkIn(ctx, c.db, userID, spaceID)
+	return checkIn(ctx, c.reads, userID, spaceID)
 }
 
-func checkIn(ctx context.Context, q rowQuerier, userID, spaceID int64) (Space, error) {
+func checkIn(ctx context.Context, q Querier, userID, spaceID int64) (Space, error) {
 	s, err := lookupIn(ctx, q, userID, spaceID)
 	if err != nil {
 		return Space{}, err
@@ -220,6 +228,45 @@ func (c *Checker) CheckTx(ctx context.Context, tx *sql.Tx, userID, spaceID int64
 // CanRead reports whether userID may read spaceID's content.
 func (c *Checker) CanRead(ctx context.Context, userID, spaceID int64) (bool, error) {
 	return c.can(ctx, userID, spaceID, Read)
+}
+
+// CanReadIn is CanRead on q, a transaction's reads or the database's: a caller that holds a write
+// transaction asks inside it, so the answer is the state that transaction writes into.
+func CanReadIn(ctx context.Context, q Querier, userID, spaceID int64) (bool, error) {
+	s, err := lookupIn(ctx, q, userID, spaceID)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return s.Access.Allows(Read), nil
+}
+
+// CheckWith is Check that reads more in the same statement: columns are extra select-list
+// expressions scanned into dest, and joins the (LEFT) joins they come from, which may use spaces
+// as s; args are the joins' parameters in order. A card's title or an app's name read this way
+// and the right to read them come from one snapshot, which two reads can't give: access could
+// end, and the name change, between them. columns and joins are the caller's constants, never
+// anything a person sent. A LEFT JOIN that finds nothing leaves NULLs, so scan them into
+// sql.Null* types. ErrNotFound, as for Check, if the space can't be read; dest is then unset.
+func (c *Checker) CheckWith(ctx context.Context, userID, spaceID int64, columns, joins string, args []any, dest ...any) (Space, error) {
+	var s Space
+	all := append([]any{&s.ID, &s.WorkspaceID, &s.Kind, &s.Name, &s.ArchivedAt, &s.CreatedAt, &s.OfflineDownloads, &s.Role}, dest...)
+	query := `SELECT ` + spaceColumns + `, ` + columns + fromSpaceFor + ` ` + joins + ` WHERE s.id = ?`
+	params := append(append([]any{userID}, args...), spaceID)
+	err := c.reads.QueryRowContext(ctx, query, params...).Scan(all...)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Space{}, ErrNotFound
+	}
+	if err != nil {
+		return Space{}, err
+	}
+	s.Access = s.access()
+	if !s.Access.Allows(Read) {
+		return Space{}, ErrNotFound
+	}
+	return s, nil
 }
 
 // CanWrite reports whether userID may change spaceID's content.
@@ -248,7 +295,7 @@ func (c *Checker) Readable(ctx context.Context, userID, workspaceID int64) ([]Sp
 // list is Readable, plus, with everyShared, the workspace's shared spaces userID isn't a
 // member of (for admins managing them).
 func (c *Checker) list(ctx context.Context, userID, workspaceID int64, everyShared bool) ([]Space, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT `+spaceColumns+fromSpaceFor+`
+	rows, err := c.reads.QueryContext(ctx, `SELECT `+spaceColumns+fromSpaceFor+`
 		WHERE s.workspace_id = ?
 		  AND ((s.kind = 'private' AND s.owner_id = m.user_id) OR sm.role IS NOT NULL OR (? AND s.kind = 'shared'))
 		ORDER BY s.kind = 'shared', s.name, s.id`, userID, workspaceID, everyShared)
