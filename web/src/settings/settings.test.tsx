@@ -11,6 +11,8 @@ import { SettingsPage } from './SettingsPage'
 const me: Me = {
   user: { id: 1, email: 'owner@example.com', name: 'Owner' },
   workspaces: [{ id: 1, name: 'Home', role: 'admin' }],
+  can_create_workspace: false,
+  is_operator: false,
 }
 const admin: Workspace = { id: 1, name: 'Home', role: 'admin' }
 const member: Workspace = { id: 1, name: 'Home', role: 'member' }
@@ -68,6 +70,8 @@ test('an invite for an address with an account logs in, then joins', async () =>
       { id: 1, name: 'Home', role: 'member' },
       { id: 7, name: 'Team', role: 'member' },
     ],
+    can_create_workspace: false,
+    is_operator: false,
   }
   const calls = fakeFetch({
     'GET /api/setup': { body: { needed: false } },

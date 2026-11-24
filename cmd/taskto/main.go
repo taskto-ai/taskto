@@ -306,7 +306,8 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		slog.Warn("the session cookie is sent over plain http (insecure_cookies): use this only on localhost")
 	}
 	authOpts := auth.Options{InsecureCookies: cfg.InsecureCookies, TrustedProxies: cfg.TrustedProxyPrefixes(), Key: key,
-		PublicURL: cfg.PublicURL, DisablePasswordLogin: cfg.DisablePasswordLogin}
+		PublicURL: cfg.PublicURL, DisablePasswordLogin: cfg.DisablePasswordLogin,
+		WorkspaceCreation: cfg.WorkspaceCreationMode()}
 	authOpts.SSO = ssoProviders
 	if len(ssoProviders) > 0 {
 		slog.Info("single sign-on is on", "providers", len(ssoProviders), "public_url", cfg.PublicURL,

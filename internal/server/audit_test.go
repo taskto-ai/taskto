@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -61,8 +62,15 @@ func TestAuditLogIsTheAdminsOwnWorkspacesOnly(t *testing.T) {
 	}
 
 	code, body = s.browser(s.alice.cookie, http.MethodGet, auditPath(s.two, ""), nil)
-	if got := eventIDs(t, body); code != http.StatusOK || len(got) != 1 || got[0] != secondOnly {
+	// Its own log: the event of its creation (the stack makes it through the API, and the event
+	// belongs to the new workspace) and the one added above, and nothing of workspace one.
+	if got := eventIDs(t, body); code != http.StatusOK || len(got) != 2 || !slices.Contains(got, secondOnly) {
 		t.Fatalf("workspace two: %d %v", code, body)
+	}
+	for _, e := range body["events"].([]any) {
+		if e.(map[string]any)["workspace_id"] != float64(s.two) {
+			t.Fatalf("an event of another workspace in the log of two: %v", e)
+		}
 	}
 
 	// No parameter widens it: the workspace is the one the caller administers, whatever else the

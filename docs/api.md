@@ -88,6 +88,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `setup_token` | 403 | The setup token is missing or wrong. |
 | `email_invalid` | 400 | Not a valid email address. |
 | `name_length` | 400 | A name must have 1 to `max` characters. |
+| `workspace_creation_refused` | 403 | This server doesn't let the caller create a workspace (`-workspace-creation`). |
+| `workspace_limit` | 403 | The caller has already created `max` workspaces, the most one account may. |
+| `too_many_workspaces` | 429 | The caller created 5 workspaces within the last hour; `Retry-After` says when to try again. |
+| `operator_only` | 403 | Only the server's operator (an admin of the workspace setup made) may do this. |
 | `workspace_name_length` | 400 | A workspace's name must have 1 to `max` characters. |
 | `password_too_short` | 400 | The password has fewer than `min` characters. |
 | `password_too_long` | 400 | The password has more than `max` bytes. |
@@ -415,7 +419,10 @@ requests the same way.
 A user belongs to one or more workspaces, each with a role: `admin` or `member`. Admins
 manage members and invites. A solo install is a workspace with one admin; a team is the
 same workspace with more members. "Switching workspace" is using another workspace ID
-from `GET /api/me`.
+from `GET /api/me`. The first workspace is made by [setup](#post-apisetup); later ones by
+[`POST /api/workspaces`](#post-apiworkspaces), if the operator's `-workspace-creation`
+setting lets the caller ([install.md](install.md#who-may-create-a-workspace)). Workspaces
+share nothing: members, spaces, boards, apps, documents, tokens and settings belong to one.
 
 Workspace routes are `/api/workspaces/{workspace}/…`. A caller who isn't a member gets
 `404`, the same as for a workspace that doesn't exist, so outsiders can't tell which IDs
@@ -597,11 +604,32 @@ Revokes the session and clears the cookie. `204`, also without a session.
 ```json
 {
   "user": {"id": 1, "email": "owner@example.com", "name": "Owner", "locale": "pt-BR"},
-  "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}]
+  "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}],
+  "can_create_workspace": true,
+  "is_operator": true
 }
 ```
 
-Workspaces are listed oldest first. Requires a login.
+Workspaces are listed oldest first. Requires a login. `can_create_workspace` is whether
+[`POST /api/workspaces`](#post-apiworkspaces) would let this user in now, which the web
+app uses to offer "New workspace". `is_operator` is whether the user is an
+[operator](#operators), which the web app uses to show Settings' server-wide panels (the backups'
+status, outgoing email).
+
+#### Operators
+
+Some routes show or use what belongs to the whole server, not to one workspace: the backups'
+status (which can name the backup host) and the outgoing email (the SMTP server, and test
+messages sent through the operator's relay). Their callers must be admins of the workspace in the
+URL **and operators**: admins of the workspace the server's [setup](#post-apisetup) made. That
+workspace carries a stored marker (`workspaces.is_setup`, set by setup, or by the migration on a
+server that already ran it, for its oldest workspace); it is not "the lowest id", and no route
+can set it on another. Admins of workspaces created later with
+[`POST /api/workspaces`](#post-apiworkspaces) are not operators, so they get `403`
+`operator_only` there, and `is_operator` is `false` for them. The [setup checklist](#setup-checklist)
+lists its two server-wide steps (`email`, `backups`) to operators only. Other admin routes act only on
+their own workspace (its members, providers, search settings, dictation settings, shared CLI
+accounts), so any of its admins may use them.
 
 `user.locale` is the language the user picked, a BCP 47 tag, or `""` for none (the web app
 then follows the browser). A workspace's `locale` is its default language, or `""` for
@@ -615,6 +643,27 @@ left out stays as it is. `locale` is a BCP 47 tag of a language, optionally with
 and a region, in canonical case (`pt-BR`, `zh-Hant-TW`, `sr-Latn`, `es-419`), or `""` for
 none; anything else, variants and extensions included (`de-CH-1901`), is a `400`. Such a
 tag is stored also when the web app has no translation for it. Requires a login (a session, not an access token).
+
+### `POST /api/workspaces`
+
+`{"name": "Side project"}` → `201` with `GET /api/me`'s reply for the caller, now with the
+new workspace in it, and the new one's membership as `workspace`:
+`{"workspace": {"id", "name", "role": "admin", "locale": ""}, "user", "workspaces", "can_create_workspace"}`.
+
+Creates a workspace with the caller as its first admin, and nothing else in it but their
+own private space (with its personal board), as setup does for the first one, in one
+transaction. Who may is the operator's `-workspace-creation` setting: `admins` (the
+default: someone who is an admin of at least one workspace), `anyone` (every logged-in
+person) or `off` (nobody, so the server keeps the workspace setup made). Otherwise `403`
+`workspace_creation_refused`, which `can_create_workspace` told in advance. The name is 1
+to 100 characters (`400` `workspace_name_length`), after trimming, with no control
+character (NUL, a newline), line or paragraph separator, or bidirectional override or isolate
+(setup's names follow the same rule); names needn't be unique. Whatever the setting, one account
+can create at most 10 workspaces, ever (`403` `workspace_limit`), and 5 within an hour (`429`
+`too_many_workspaces`, with `Retry-After`; the check is in the database, so it holds across
+restarts and concurrent requests). Requires a login (a session, not an access token: `403` `token_refused`).
+Recorded as `workspace_created` in the [audit log](audit.md), on the new workspace (so
+it is in that workspace's log, which the person who made it admins, and not in the first's).
 
 ### `PATCH /api/workspaces/{workspace}`
 
@@ -3605,8 +3654,10 @@ over 5 minutes.
 ## Outgoing email
 
 The server's outgoing email ([install.md](install.md#email)) is one SMTP server for the whole
-server, set by its operator, so any workspace's admins see it, as they see the backups. Both routes
-are for admins, with a browser session (not an access token).
+server, set by its operator, so only [operators](#operators) see it, as they see the backups: not
+the admins of a workspace someone created later. Both routes are for operators who are admins of
+the workspace in the URL, with a browser session (not an access token); other admins get `403`
+`operator_only`.
 
 ### `GET /api/workspaces/{workspace}/mail`
 
@@ -3656,7 +3707,8 @@ backups are the whole server's, not a workspace's. `health` sums it up:
 
 ### `GET /api/workspaces/{workspace}/backup`
 
-Admins, with a browser session (not an access token). The status, error included:
+[Operators](#operators) who are admins of the workspace in the URL, with a browser session (not
+an access token); other admins get `403` `operator_only`. The status, error included:
 
 ```json
 {
@@ -3783,6 +3835,9 @@ workspace_not_found` for someone outside the workspace.
 `state` is `done`, `todo` or `skipped`; a step that is done is `done` even if it was skipped.
 `complete` is true when every step that isn't `optional` is `done` or `skipped`. The web app shows
 the checklist while it isn't `dismissed` and isn't `complete`.
+
+`email` and `backups` belong to the whole server, so only [operators](#operators) get them in `items`:
+for the admin of a workspace someone else created, the list is the first four.
 
 ### `PUT /api/workspaces/{workspace}/checklist/dismissed`, `DELETE …`
 

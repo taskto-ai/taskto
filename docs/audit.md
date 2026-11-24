@@ -58,6 +58,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `sso_login_succeeded` | a single sign-on login | | user | `provider` |
 | `sso_login_failed` | a refused single sign-on login | | | `provider`, `reason` |
 | `sso_identity_linked` | an identity is linked to an account | | user | `provider`, `created_account` |
+| `workspace_created` | a person creates a workspace (`POST /api/workspaces`) | the new one (in its own log, not the first workspace's) | workspace | `allowed_by` (`admins` or `anyone`: the setting that let them) |
 | `workspace_updated` | an admin changes the workspace | the workspace | workspace | `fields`, `locale` |
 | `invite_created`, `invite_revoked` | an admin invites someone, or withdraws it | the invite's | invite | `email` (the full address), `role` |
 | `invite_accepted` | an invite is used, by a new account or an existing one | the invite's | invite | `role`, `already_member` |

@@ -25,6 +25,7 @@ const (
 	SSOIdentityLinked = "sso_identity_linked"
 
 	// Workspaces, members and invites.
+	WorkspaceCreated  = "workspace_created"
 	WorkspaceUpdated  = "workspace_updated"
 	InviteCreated     = "invite_created"
 	InviteRevoked     = "invite_revoked"

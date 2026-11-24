@@ -592,3 +592,26 @@ func TestAuditRetentionMustBeDaysOrOff(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceCreationSetting(t *testing.T) {
+	if got := load(t, nil, nil).WorkspaceCreationMode(); got != "admins" {
+		t.Fatalf("default = %q, want admins", got)
+	}
+	file := writeConfig(t, `workspace_creation = "off"`)
+	if got := load(t, nil, map[string]string{"TASKTO_CONFIG": file}).WorkspaceCreationMode(); got != "off" {
+		t.Fatalf("from the file: %q", got)
+	}
+	if got := load(t, nil, map[string]string{"TASKTO_CONFIG": file, "TASKTO_WORKSPACE_CREATION": "anyone"}).WorkspaceCreationMode(); got != "anyone" {
+		t.Fatalf("from the environment: %q", got)
+	}
+	got := load(t, []string{"-workspace-creation", "admins"}, map[string]string{"TASKTO_CONFIG": file, "TASKTO_WORKSPACE_CREATION": "anyone"})
+	if got.WorkspaceCreationMode() != "admins" {
+		t.Fatalf("from a flag: %q", got.WorkspaceCreationMode())
+	}
+	for _, bad := range []string{"everyone", "Admins", "true"} {
+		if _, err := Load(nil, env(map[string]string{"TASKTO_WORKSPACE_CREATION": bad}), io.Discard); err == nil ||
+			!strings.Contains(err.Error(), "must be admins, anyone or off") {
+			t.Errorf("%q: err = %v", bad, err)
+		}
+	}
+}

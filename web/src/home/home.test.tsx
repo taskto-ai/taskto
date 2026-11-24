@@ -11,6 +11,8 @@ import { homeChanged } from './store'
 const me: Me = {
   user: { id: 1, email: 'ann@example.com', name: 'Ann' },
   workspaces: [{ id: 1, name: 'Home', role: 'admin' }],
+  can_create_workspace: false,
+  is_operator: false,
 }
 
 const CATALOG = 'https://taskto.ai/catalogs/apps/v1.json'

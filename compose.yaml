@@ -47,6 +47,9 @@ services:
       TASKTO_SSO_PROVIDERS: ${TASKTO_SSO_PROVIDERS:-}
       TASKTO_PUBLIC_URL: ${TASKTO_PUBLIC_URL:-}
       TASKTO_DISABLE_PASSWORD_LOGIN: ${TASKTO_DISABLE_PASSWORD_LOGIN:-}
+      # Who may create more workspaces (docs/install.md#who-may-create-a-workspace): admins,
+      # anyone or off. Empty is the default, admins.
+      TASKTO_WORKSPACE_CREATION: ${TASKTO_WORKSPACE_CREATION:-}
       # Outgoing email (docs/install.md#email): the SMTP server, the sender and where the
       # password file is as the container sees it. Empty is unset: no email.
       TASKTO_SMTP_HOST: ${TASKTO_SMTP_HOST:-}
