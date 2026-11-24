@@ -1,4 +1,4 @@
-.PHONY: check lint fmt build dev-server dev-web install agent-it dictation-e2e browser-handover-e2e
+.PHONY: check lint fmt build dev-server dev-web install agent-it dictation-e2e browser-handover-e2e web-e2e
 
 PNPM ?= pnpm
 # golangci-lint is pinned in tools/go.mod, apart from the app's dependencies.
@@ -33,6 +33,15 @@ fmt:
 agent-it:
 	$(PNPM) --filter @taskto/agent build
 	TASKTO_AGENT_IT=1 go test -count=1 ./internal/agentrt/ ./internal/providers/ ./cmd/taskto/
+
+# The web app's end to end tests (web/e2e/app/, docs/web-e2e.md): Playwright's Chromium against
+# the built server on a fresh data directory, for each scenario. No agent, no model, no network
+# beyond the browser's download. CI runs them on every pull request. A failing scenario leaves
+# its trace and a screenshot in web/e2e-results/ (`pnpm --filter @taskto/web exec playwright
+# show-trace <trace.zip>`); TASKTO_WEB_E2E_BIN runs another binary than bin/taskto.
+web-e2e: build
+	$(PNPM) --filter @taskto/web exec playwright install chromium
+	$(PNPM) --filter @taskto/web run e2e
 
 # Dictation end to end (web/e2e/dictation.e2e.mjs): the server with the web app and the real
 # local model (about 700 MB, downloaded on first use; TASKTO_DICTATION_IT_CACHE keeps it), and

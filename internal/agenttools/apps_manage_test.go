@@ -266,3 +266,64 @@ func jsonInt(n int64) string {
 	b, _ := json.Marshal(n)
 	return string(b)
 }
+
+// A long list of releases comes in pages that each fit the bound, whatever their size: the
+// keys that say a page is cut short count toward it, and next is the before of the next page.
+func TestListAppReleasesPages(t *testing.T) {
+	w := newWorld(t)
+	const total = 400
+	var app int64
+	var ref map[string]any
+	// Every release is a little longer than the last variant, so some page ends within the
+	// few bytes the "truncated" and "next" keys take, which a size measured without them
+	// would let through.
+	for pad := range 30 {
+		// A release stays as long as its app does, so each variant is an app of its own.
+		created := w.ok(w.aliceConv, "create_app", map[string]any{"space_id": w.shared, "name": "Many releases", "definition": expenses(t)})
+		app = id(created["id"])
+		ref = map[string]any{"space_id": w.shared, "app_id": app}
+		w.exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+			INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
+			SELECT ?, i, '{}', 1, json_array('component.'||printf('%.*c', ?, 'x')) FROM n`, total, app, 40+pad)
+		w.exec(`UPDATE apps SET live_release = ? WHERE id = ?`, total, app)
+
+		var seen []int
+		args := ref
+		for pages := 0; ; pages++ {
+			if pages > total {
+				t.Fatalf("pad %d: paging never ends", pad)
+			}
+			page := w.ok(w.aliceConv, "list_app_releases", args)
+			rel := page["releases"].([]any)
+			raw, _ := json.Marshal(page)
+			if len(raw) > MaxResult || len(rel) == 0 {
+				t.Fatalf("pad %d: page of %d releases is %d bytes", pad, len(rel), len(raw))
+			}
+			for _, r := range rel {
+				seen = append(seen, int(r.(map[string]any)["number"].(float64)))
+			}
+			next, more := page["next"]
+			if (page["truncated"] == true) != more || (more && next != float64(seen[len(seen)-1])) {
+				t.Fatalf("pad %d: truncated %v, next %v after %d", pad, page["truncated"], next, seen[len(seen)-1])
+			}
+			if !more {
+				break
+			}
+			args = map[string]any{"space_id": w.shared, "app_id": app, "before": next}
+		}
+		if len(seen) != total {
+			t.Fatalf("pad %d: %d releases seen, want %d", pad, len(seen), total)
+		}
+		for i, n := range seen {
+			if n != total-i {
+				t.Fatalf("pad %d: release %d is number %d, want %d", pad, i, n, total-i)
+			}
+		}
+	}
+	// A cursor past the oldest is an empty list, and a negative one is refused.
+	if rel := w.ok(w.aliceConv, "list_app_releases", map[string]any{"space_id": w.shared, "app_id": app, "before": 1})["releases"].([]any); len(rel) != 0 {
+		t.Fatalf("before 1 = %v", rel)
+	}
+	w.status(http.StatusBadRequest, w.aliceConv, "list_app_releases", map[string]any{"space_id": w.shared, "app_id": app, "before": -1})
+	w.status(http.StatusForbidden, w.bobConv, "list_app_releases", map[string]any{"space_id": w.shared, "app_id": app, "before": 5})
+}

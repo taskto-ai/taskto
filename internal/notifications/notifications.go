@@ -44,6 +44,8 @@ import (
 const (
 	KindCardAssigned    = "card_assigned"
 	KindAppEffectFailed = "app_effect_failed"
+	KindCardDue         = "card_due"
+	KindCardOverdue     = "card_overdue"
 	KindChanged         = "changed"
 )
 
@@ -70,6 +72,9 @@ type Ref struct {
 	Card   int64 `json:"card,omitempty"`
 	App    int64 `json:"app,omitempty"`
 	Effect int64 `json:"effect,omitempty"`
+	// Due is the date a card's reminder or overdue notice was made for, a calendar date: the
+	// notice says it only while the card is still due then.
+	Due string `json:"due,omitempty"`
 }
 
 // Notice is a notification to add.
@@ -89,7 +94,9 @@ var errUnknownKind = errors.New("notifications: unknown kind")
 // the workspace, and none twice for one DedupeKey. Producers call it; it checks nothing about what
 // the notification is about, which is checked when it is shown.
 func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
-	if n.Kind != KindCardAssigned && n.Kind != KindAppEffectFailed {
+	switch n.Kind {
+	case KindCardAssigned, KindAppEffectFailed, KindCardDue, KindCardOverdue:
+	default:
 		return errUnknownKind
 	}
 	ref, err := json.Marshal(n.Ref)

@@ -127,6 +127,41 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  web-e2e:
+    name: Web end to end (Playwright)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install pnpm
+        run: npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1].split('+')[0]")"
+      - run: pnpm install --frozen-lockfile
+      # The server with the web app built in, as the image has it (docs/web-e2e.md).
+      - name: Build the server with the web app
+        run: make build
+      # The only download: Chromium, at the version of the pinned Playwright, and the system
+      # libraries it needs. The tests start the server themselves, on a fresh data directory
+      # each, with no agent runtime and no model.
+      - name: Install Chromium
+        run: pnpm --filter @taskto/web exec playwright install --with-deps chromium
+      - name: Web end to end tests
+        run: pnpm --filter @taskto/web run e2e
+      # A failing scenario leaves its trace (a zip for `playwright show-trace`) and a screenshot.
+      - name: Keep the traces and screenshots
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-e2e-results
+          path: web/e2e-results
+          if-no-files-found: ignore
+          retention-days: 14
+
   agent-it:
     name: Agent runtime integration
     runs-on: ubuntu-24.04

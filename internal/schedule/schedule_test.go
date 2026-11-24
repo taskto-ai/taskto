@@ -589,6 +589,10 @@ func TestACrashOnTheLastTryIsTheEnd(t *testing.T) {
 func TestAJobWhoseOwnerLostAccessDoesNotRun(t *testing.T) {
 	w := newWorld(t)
 	h := w.register(remind)
+	// The schema drops the jobs of a person who leaves (TestAJobGoesWithItsOwnersAccess); this is the
+	// floor under it, for access that is lost by any other way, so the triggers are left out here.
+	exec(t, w.db, `DROP TRIGGER space_members_drop_jobs`)
+	exec(t, w.db, `DROP TRIGGER memberships_drop_jobs`)
 
 	inTeam := w.job("team", 0)
 	inTeam.SpaceID = w.team
@@ -633,6 +637,32 @@ func TestAJobWhoseOwnerLostAccessDoesNotRun(t *testing.T) {
 		if j := w.find(w.alice, key); j.State != StateFailed || j.LastError != "access lost" {
 			t.Fatalf("%s = %+v", key, j)
 		}
+	}
+}
+
+func TestAJobGoesWithItsOwnersAccess(t *testing.T) {
+	w := newWorld(t)
+	w.register(remind)
+	inTeam := w.job("team", time.Hour)
+	inTeam.SpaceID = w.team
+	bobs := w.job("bobs", time.Hour)
+	bobs.UserID, bobs.SpaceID = w.bob, w.team
+	private := w.job("private", time.Hour)
+	for _, j := range []Job{inTeam, bobs, private} {
+		w.schedule(j)
+	}
+	gone := func(u int64, key string) bool {
+		_, err := w.s.Find(context.Background(), w.db, u, "test.remind", key)
+		return errors.Is(err, ErrNotFound)
+	}
+
+	exec(t, w.db, `DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.team, w.alice)
+	if !gone(w.alice, "team") || gone(w.bob, "bobs") || gone(w.alice, "private") {
+		t.Fatal("leaving a space must end that person's jobs of it, and no one else's, nor their other jobs")
+	}
+	exec(t, w.db, `DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`, w.ws, w.alice)
+	if !gone(w.alice, "private") || gone(w.bob, "bobs") {
+		t.Fatal("leaving the workspace must end all that person's jobs in it, and no one else's")
 	}
 }
 

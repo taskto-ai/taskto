@@ -3,6 +3,7 @@ package agenttools
 import (
 	"context"
 	"encoding/json"
+	"sort"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apps"
@@ -97,9 +98,16 @@ func (s *Service) listAppEffects(ctx context.Context, c *call, args json.RawMess
 }
 
 func (s *Service) listAppReleases(ctx context.Context, c *call, args json.RawMessage) (any, error) {
-	var a appRef
+	var a struct {
+		appRef
+		// Before is the release number to page from: the releases older than it.
+		Before int64 `json:"before"`
+	}
 	if err := decode(args, &a); err != nil {
 		return nil, err
+	}
+	if a.Before < 0 {
+		return nil, invalidf("before must be 0 or more")
 	}
 	if err := s.appSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
@@ -108,10 +116,18 @@ func (s *Service) listAppReleases(ctx context.Context, c *call, args json.RawMes
 	if err != nil {
 		return nil, err
 	}
-	n, res, err := fitting(len(list), func(n int) any { return map[string]any{"releases": list[:n]} })
-	if err == nil && n < len(list) {
-		res = map[string]any{"releases": list[:n], "truncated": true}
+	// Newest first, so the older ones are the tail from the first number below before.
+	if a.Before > 0 {
+		list = list[sort.Search(len(list), func(i int) bool { return list[i].Number < a.Before }):]
 	}
+	// The size measured is that of the reply sent, the keys that say it is cut short
+	// included; next is the last number shown, the next call's before.
+	_, res, err := fitting(len(list), func(n int) any {
+		if n < len(list) {
+			return map[string]any{"releases": list[:n], "truncated": true, "next": list[max(n-1, 0)].Number}
+		}
+		return map[string]any{"releases": list[:n]}
+	})
 	return res, err
 }
 
