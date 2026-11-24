@@ -81,6 +81,7 @@ function server(access: 'write' | 'read', tweak?: (cards: TestCard[]) => void) {
         author: { ...by, agent: true, via: 'laptop' },
         body: 'Started *it*',
         created_at: '2026-01-01T00:00:00Z',
+        mentions: [],
       },
     ],
     2: [],
@@ -102,6 +103,7 @@ function server(access: 'write' | 'read', tweak?: (cards: TestCard[]) => void) {
         members: [
           { id: 2, email: 'ann@example.com', name: 'Ann', role: 'editor', added_at: '2026-01-01T00:00:00Z' },
           { id: 5, email: 'bo@example.com', name: 'Bo', role: 'viewer', added_at: '2026-01-01T00:00:00Z' },
+          { id: 6, email: 'cy@example.com', name: 'Cy\\', role: 'viewer', added_at: '2026-01-01T00:00:00Z' },
         ],
       },
     },
@@ -156,6 +158,10 @@ function server(access: 'write' | 'read', tweak?: (cards: TestCard[]) => void) {
         author: by,
         body: (call.body as { body: string }).body,
         created_at: '2026-01-02T00:00:00Z',
+        // As the server answers: the names it has for the people the body mentions that the reader sees.
+        mentions: [...(call.body as { body: string }).body.matchAll(/\(user:5\)/g)]
+          .slice(0, 1)
+          .map(() => ({ id: 5, name: 'Bo' })),
       }
       comments[id].push(comment)
       return { status: 201, body: comment }
@@ -245,6 +251,75 @@ test('edits a card, moves it to another column, and comments', async () => {
   expect((await within(view).findByText('review')).tagName).toBe('STRONG')
   expect(sent('POST', `${C}/1/comments`)).toEqual([{ body: 'Ready for **review**' }])
   expect((within(view).getByLabelText('Comment') as HTMLTextAreaElement).value).toBe('')
+})
+
+test('mentions a person from the comment box, where the cursor is, by their ID', async () => {
+  const { sent } = server('write')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  const field = (await within(view).findByLabelText('Comment')) as HTMLTextAreaElement
+  const picker = (await within(view).findByLabelText('Mention someone')) as HTMLSelectElement
+  await within(picker).findByRole('option', { name: 'Bo' })
+  fireEvent.change(field, { target: { value: 'Thanks, please look' } })
+  field.setSelectionRange(7, 7)
+  fireEvent.change(picker, { target: { value: '5' } })
+  await waitFor(() => expect(field.value).toBe('Thanks, @[Bo](user:5)  please look'))
+  expect(picker.value).toBe('')
+  fireEvent.click(within(view).getByRole('button', { name: 'Comment' }))
+  await waitFor(() => expect(sent('POST', `${C}/1/comments`)).toEqual([{ body: 'Thanks, @[Bo](user:5)  please look' }]))
+  // The posted comment shows the name, not the token.
+  const posted = await within(view).findByText('@Bo', { selector: 'span.tt-mention' })
+  expect(posted.parentElement?.textContent).toContain('Thanks, @Bo')
+  expect(view.textContent).not.toContain('user:5')
+})
+
+test('shows a mention by the name the server gives for its ID, never by the label in the text', async () => {
+  const { sent } = server('write')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  const field = (await within(view).findByLabelText('Comment')) as HTMLTextAreaElement
+  // The label says Bo, the ID is someone this reader can't see, and the second is in code.
+  fireEvent.change(field, {
+    target: { value: '@[Bo](user:77) hi @[Bo](user:5), `@[Mal](user:5)` and \\@[Esc](user:5)' },
+  })
+  fireEvent.click(within(view).getByRole('button', { name: 'Comment' }))
+  await waitFor(() => expect(sent('POST', `${C}/1/comments`)).toHaveLength(1))
+  await waitFor(() => expect(view.querySelectorAll('.tt-comment')).toHaveLength(2))
+  const text = view.querySelectorAll('.tt-comment')[1].textContent ?? ''
+  expect(text).toContain('@Someone hi @Bo,')
+  expect(text).toContain('@[Mal](user:5)') // in code, as typed
+  // Escaped, it is no mention: only the first two are drawn as ones.
+  expect(view.querySelectorAll('.tt-mention')).toHaveLength(2)
+  expect(text).not.toContain('@Bo @Bo')
+  expect(view.querySelector('.tt-markdown a')).toBeNull()
+})
+
+test('a poll replaces the names a held comment shows, and a leading zero in an ID finds the name', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  const { comments } = server('read')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  await within(view).findByText(/Ann \(agent, laptop\)/)
+  comments[1].push({ ...comment(20, 'Hi @[Bo](user:05)'), mentions: [{ id: 5, name: 'Bo' }] })
+  await act(() => vi.advanceTimersByTimeAsync(10_000))
+  await within(view).findByText('@Bo', { selector: 'span.tt-mention' })
+  // Bo is renamed: the next read's name replaces the held one.
+  comments[1][1] = { ...comment(20, 'Hi @[Bo](user:05)'), mentions: [{ id: 5, name: 'Beatrice' }] }
+  await act(() => vi.advanceTimersByTimeAsync(10_000))
+  await within(view).findByText('@Beatrice', { selector: 'span.tt-mention' })
+  expect(within(view).queryByText('@Bo')).toBeNull()
+})
+
+test('a name ending in a backslash is written into the mention without it', async () => {
+  const { sent } = server('write')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  const picker = (await within(view).findByLabelText('Mention someone')) as HTMLSelectElement
+  await within(picker).findByRole('option', { name: 'Cy\\' })
+  fireEvent.change(picker, { target: { value: '6' } })
+  fireEvent.click(within(view).getByRole('button', { name: 'Comment' }))
+  await waitFor(() => expect(sent('POST', `${C}/1/comments`)).toHaveLength(1))
+  expect(sent('POST', `${C}/1/comments`)[0]).toEqual({ body: '@[Cy](user:6) ' })
 })
 
 test('a comment and a change in flight together both stay', async () => {
@@ -494,6 +569,7 @@ const comment = (id: number, body: string) => ({
   author: { id: 5, name: 'Bo', agent: false },
   body,
   created_at: '2026-01-03T00:00:00Z',
+  mentions: [],
 })
 
 test("the open card shows others' comments, read again only while the page is visible", async () => {

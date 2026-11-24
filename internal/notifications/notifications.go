@@ -2,7 +2,8 @@
 // email (email.go).
 //
 // A notification says that something happened that a person may want to see: a card was assigned
-// to them, an effect of an app they used failed and needs them. The inbox is the one place they are
+// to them, someone commented on a card of theirs or mentioned them in a comment, an effect of an app
+// they used failed and needs them. The inbox is the one place they are
 // all found, in the web app, whether or not the browser can push; push is an extra that tells a
 // device about one when the app isn't open, and nothing relies on it: a push may arrive late,
 // twice or never (the service of the browser's maker carries it, once, with a lifetime), and the
@@ -47,6 +48,8 @@ import (
 // recipient can no longer read what it was about.
 const (
 	KindCardAssigned    = "card_assigned"
+	KindCardComment     = "card_comment"
+	KindCardMention     = "card_mention"
 	KindAppEffectFailed = "app_effect_failed"
 	KindCardDue         = "card_due"
 	KindCardOverdue     = "card_overdue"
@@ -99,7 +102,7 @@ var errUnknownKind = errors.New("notifications: unknown kind")
 // the notification is about, which is checked when it is shown.
 func Add(ctx context.Context, tx *sql.Tx, n Notice) error {
 	switch n.Kind {
-	case KindCardAssigned, KindAppEffectFailed, KindCardDue, KindCardOverdue:
+	case KindCardAssigned, KindCardComment, KindCardMention, KindAppEffectFailed, KindCardDue, KindCardOverdue:
 	default:
 		return errUnknownKind
 	}
