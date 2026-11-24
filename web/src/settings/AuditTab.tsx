@@ -47,6 +47,7 @@ export const AUDIT_ACTIONS = [
   'search_embeddings_changed',
   'search_consent_changed',
   'dictation_settings_changed',
+  'data_export_started',
 ] as const
 
 export const AUDIT_TARGETS = [

@@ -1537,7 +1537,8 @@
         "cli_account_modes_changed": "CLI account modes changed",
         "search_embeddings_changed": "Search embeddings changed",
         "search_consent_changed": "Search consent changed",
-        "dictation_settings_changed": "Dictation settings changed"
+        "dictation_settings_changed": "Dictation settings changed",
+        "data_export_started": "Data export started"
       },
       "targets": {
         "user": "Member",

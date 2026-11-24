@@ -1548,7 +1548,8 @@
         "cli_account_modes_changed": "Modos das contas de CLI alterados",
         "search_embeddings_changed": "Embeddings da busca alterados",
         "search_consent_changed": "Consentimento da busca alterado",
-        "dictation_settings_changed": "Configurações de ditado alteradas"
+        "dictation_settings_changed": "Configurações de ditado alteradas",
+        "data_export_started": "Exportação de dados iniciada"
       },
       "targets": {
         "user": "Membro",
