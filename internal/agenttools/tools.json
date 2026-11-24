@@ -40,7 +40,41 @@
         "query": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 500
+          "maxLength": 500,
+          "description": "the words to look for; at most 500 bytes of UTF-8 (500 characters if they are ASCII)"
+        },
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_cards",
+    "description": "Search the cards on boards by their words, in their title, body and comments: every space the user can read, or one space. Returns each card's space, board and id, its title, its column and the passage that matched, best first; \"incomplete\": true means cards that changed a moment ago were left out, so search again. Only a card's newest comments (up to 256 KiB) are searched, so a word only in an older comment is not found, and zero results do not prove a word is absent. Read a card with show_card.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "the words to look for; at most 500 bytes of UTF-8 (500 characters if they are ASCII)"
         },
         "space_id": {
           "type": "integer",
