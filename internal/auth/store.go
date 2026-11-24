@@ -206,7 +206,12 @@ func (s *Service) sessionUser(ctx context.Context, token string) (User, error) {
 		return u, err
 	}
 	if seen <= stamp(now.Add(-sessionTouchEvery)) {
-		if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET last_seen_at = ? WHERE id = ?`, stamp(now), id); err != nil {
+		// The cutoff is in the statement too: of two requests that both read the old time, only the
+		// first finds the row still stale, so a session is written once a minute under concurrency.
+		if _, err := s.db.ExecContext(ctx, `
+			UPDATE sessions SET last_seen_at = ?
+			WHERE id = ? AND COALESCE(last_seen_at, created_at) <= ?`,
+			stamp(now), id, stamp(now.Add(-sessionTouchEvery))); err != nil {
 			// The request can go ahead: last_seen_at is a hint for the user, not a control.
 			slog.WarnContext(ctx, "auth: recording a session's use", "session_id", id, "err", err)
 		}
