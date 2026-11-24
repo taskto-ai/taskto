@@ -513,7 +513,8 @@ export type Token = {
 // One of your own sessions (a browser or device logged in as you), without its token, which the
 // server never sends. browser and os are the products' names, or "" when it couldn't tell.
 export type Session = {
-  id: number
+  // The session's public ID: random, never reused, and no way into the session.
+  id: string
   browser: string
   os: string
   created_at: string

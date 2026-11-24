@@ -14,13 +14,19 @@ import (
 // Your own sessions (docs/api.md#your-sessions): the browsers and devices logged in as you, to
 // see and to sign out. The routes act on the caller only, as a session of the browser's own, and
 // take no access token. Nothing here returns a session's token, which the database doesn't keep
-// either, only its hash; a session is named by its ID, which is no way into it.
+// either, only its hash; a session is named by its public ID, which is no way into it and is
+// never reused (the row's integer ID is, once its row is deleted).
 
-var errSessionCurrent = errors.New("this is the session you are using: sign out instead")
+var (
+	errSessionCurrent = errors.New("this is the session you are using: sign out instead")
+	// errSessionGone is for a request whose own login has ended since the middleware let it
+	// through: it acts for nobody now.
+	errSessionGone = errors.New("the session making the request has ended")
+)
 
 // Session is one of a user's logins, without its token.
 type Session struct {
-	ID int64 `json:"id"`
+	ID string `json:"id"`
 	// Browser and OS name the product the login was made with ("Firefox", "macOS"), or are ""
 	// when the User-Agent didn't say. The web app puts them in a sentence of the user's language.
 	Browser    string `json:"browser"`
@@ -41,12 +47,7 @@ func (s *Service) sessionRoutes(mux *http.ServeMux) {
 
 func (s *Service) handleSessions(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
-	current, _, err := s.SessionID(r)
-	if err != nil {
-		serverError(w, r, err)
-		return
-	}
-	sessions, err := s.sessionsOf(r.Context(), u.ID, current)
+	sessions, err := s.sessionsOf(r.Context(), u.ID, hashToken(s.sessionToken(r)))
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -56,17 +57,17 @@ func (s *Service) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
-	id, ok := pathID(w, r, "session", apierr.CodeSessionNotFound, "session not found")
-	if !ok {
+	id := r.PathValue("session")
+	if !validSessionPublicID(id) {
+		writeError(w, http.StatusNotFound, apierr.CodeSessionNotFound, "session not found")
 		return
 	}
-	current, _, err := s.SessionID(r)
-	if err != nil {
-		serverError(w, r, err)
-		return
-	}
-	err = s.revokeSession(r.Context(), u.ID, id, current)
+	err := s.revokeSession(r.Context(), u.ID, id, s.sessionToken(r))
 	switch {
+	case errors.Is(err, errSessionGone):
+		s.clearSessionCookie(w)
+		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
+		return
 	case errors.Is(err, errNotFound):
 		writeError(w, http.StatusNotFound, apierr.CodeSessionNotFound, "session not found")
 		return
@@ -77,19 +78,19 @@ func (s *Service) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	slog.InfoContext(r.Context(), "a session was signed out", "user_id", u.ID, "session_id", id)
+	slog.InfoContext(r.Context(), "a session was signed out", "user_id", u.ID, "session", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Service) handleRevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
-	current, _, err := s.SessionID(r)
-	if err != nil {
-		serverError(w, r, err)
+	n, err := s.revokeOtherSessions(r.Context(), u.ID, s.sessionToken(r))
+	switch {
+	case errors.Is(err, errSessionGone):
+		s.clearSessionCookie(w)
+		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
 		return
-	}
-	n, err := s.revokeOtherSessions(r.Context(), u.ID, current)
-	if err != nil {
+	case err != nil:
 		serverError(w, r, err)
 		return
 	}
@@ -97,15 +98,16 @@ func (s *Service) handleRevokeOtherSessions(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]int64{"revoked": n})
 }
 
-// sessionsOf lists userID's sessions that haven't expired, the current one first and then the
-// most recently used. Only userID's own are ever read.
-func (s *Service) sessionsOf(ctx context.Context, userID, current int64) ([]Session, error) {
+// sessionsOf lists userID's sessions that haven't expired, the current one (whose token hashes
+// to currentHash) first and then the most recently used. Only userID's own are ever read.
+func (s *Service) sessionsOf(ctx context.Context, userID int64, currentHash string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, browser, os, created_at, COALESCE(last_seen_at, created_at), expires_at
+		SELECT public_id, browser, os, created_at, COALESCE(last_seen_at, created_at), expires_at,
+			token_hash = ?
 		FROM sessions
 		WHERE user_id = ? AND expires_at > ?
-		ORDER BY (id = ?) DESC, COALESCE(last_seen_at, created_at) DESC, id DESC`,
-		userID, stamp(s.now()), current)
+		ORDER BY token_hash = ? DESC, COALESCE(last_seen_at, created_at) DESC, id DESC`,
+		currentHash, userID, stamp(s.now()), currentHash)
 	if err != nil {
 		return nil, err
 	}
@@ -113,60 +115,100 @@ func (s *Service) sessionsOf(ctx context.Context, userID, current int64) ([]Sess
 	all := []Session{}
 	for rows.Next() {
 		var x Session
-		if err := rows.Scan(&x.ID, &x.Browser, &x.OS, &x.CreatedAt, &x.LastSeenAt, &x.ExpiresAt); err != nil {
+		if err := rows.Scan(&x.ID, &x.Browser, &x.OS, &x.CreatedAt, &x.LastSeenAt, &x.ExpiresAt, &x.Current); err != nil {
 			return nil, err
 		}
-		x.Current = x.ID == current
 		all = append(all, x)
 	}
 	return all, rows.Err()
 }
 
-// revokeSession ends userID's session id: errNotFound if it isn't theirs (or is gone), and
-// errSessionCurrent for the one asking, which logging out is for.
-func (s *Service) revokeSession(ctx context.Context, userID, id, current int64) error {
-	if id == current {
-		// Checked against the caller's own sessions too, so another user's ID never gets this
-		// answer.
-		var own bool
-		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sessions WHERE id = ? AND user_id = ?)`,
-			id, userID).Scan(&own); err != nil {
-			return err
-		}
-		if own {
-			return errSessionCurrent
-		}
+// callerSession finds, in tx, the live session the request's token names, and errSessionGone if
+// it has expired or been ended since the middleware looked: whoever asks to end sessions must
+// still be logged in at the time they are ended, or a login made since (after a password reset,
+// say) would go with the rest. The check is in the transaction that deletes, which holds the
+// write lock.
+func (s *Service) callerSession(ctx context.Context, tx *sql.Tx, userID int64, token string) (publicID string, err error) {
+	if token == "" {
+		return "", errSessionGone
 	}
-	return s.write(ctx, func(tx *sql.Tx) error {
-		// The same test as sessionUser: one that has expired is no login to end, whether or not its
-		// row has been swept yet.
-		res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ? AND user_id = ? AND expires_at > ?`,
-			id, userID, stamp(s.now()))
+	err = tx.QueryRowContext(ctx, `SELECT public_id FROM sessions WHERE token_hash = ? AND user_id = ? AND expires_at > ?`,
+		hashToken(token), userID, stamp(s.now())).Scan(&publicID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errSessionGone
+	}
+	return publicID, err
+}
+
+// revokeSession ends userID's session publicID, for the caller whose session token is token:
+// errNotFound if it isn't theirs (or is gone), errSessionCurrent for the one asking, which
+// logging out is for, and errSessionGone if the caller's own login has ended.
+func (s *Service) revokeSession(ctx context.Context, userID int64, publicID, token string) error {
+	var endedHash string
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		current, err := s.callerSession(ctx, tx, userID, token)
 		if err != nil {
 			return err
 		}
-		if err := mustAffect(res, errNotFound); err != nil {
+		if publicID == current {
+			return errSessionCurrent
+		}
+		// The same test as sessionUser: one that has expired is no login to end, whether or not its
+		// row has been swept yet.
+		err = tx.QueryRowContext(ctx, `DELETE FROM sessions WHERE public_id = ? AND user_id = ? AND expires_at > ? RETURNING token_hash`,
+			publicID, userID, stamp(s.now())).Scan(&endedHash)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errNotFound
+		}
+		if err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.SessionRevoked,
 			TargetType: audit.TargetUser, Target: userID})
 	})
+	if err == nil {
+		s.endLiveHashes(userID, endedHash) // its open connections go with it
+	}
+	return err
 }
 
-// revokeOtherSessions ends every session of userID but current, returning how many it ended.
-func (s *Service) revokeOtherSessions(ctx context.Context, userID, current int64) (int64, error) {
-	var n int64
+// revokeOtherSessions ends every session of userID but the caller's, whose token is token,
+// returning how many it ended, or errSessionGone, ending nothing, if the caller's own login has
+// ended.
+func (s *Service) revokeOtherSessions(ctx context.Context, userID int64, token string) (int64, error) {
+	var ended []string
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND id <> ? AND expires_at > ?`,
-			userID, current, stamp(s.now()))
+		if _, err := s.callerSession(ctx, tx, userID, token); err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND token_hash <> ? AND expires_at > ? RETURNING token_hash`,
+			userID, hashToken(token), stamp(s.now()))
 		if err != nil {
 			return err
 		}
-		if n, err = res.RowsAffected(); err != nil || n == 0 {
-			return err // none ended, nothing to record
+		defer rows.Close()
+		for rows.Next() {
+			var h string
+			if err := rows.Scan(&h); err != nil {
+				return err
+			}
+			ended = append(ended, h)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if len(ended) == 0 {
+			return nil // none ended, nothing to record
 		}
 		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.OtherSessionsRevoked,
-			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"logins_ended": n}})
+			TargetType: audit.TargetUser, Target: userID, Details: audit.Details{"logins_ended": len(ended)}})
 	})
-	return n, err
+	if err != nil {
+		return 0, err
+	}
+	s.endLiveHashes(userID, ended...)
+	return int64(len(ended)), nil
 }

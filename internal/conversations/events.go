@@ -39,6 +39,14 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, workspace := caller(r)
+	// The stream lasts as long as the login that opened it: signing the login out, from anywhere,
+	// ends it at once, and at the latest at the heartbeat's next look at the session.
+	sessionCtx, stopWatch := s.watchSession(r, s.heartbeat)
+	defer stopWatch()
+	if sessionCtx.Err() != nil {
+		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
+		return
+	}
 	closeStream, ok := s.openStream(user)
 	if !ok {
 		writeError(w, http.StatusTooManyRequests, apierr.CodeTooManyStreams,
@@ -46,7 +54,7 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer closeStream()
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithCancel(sessionCtx)
 	defer cancel()
 	defer context.AfterFunc(s.closing, cancel)()
 	watch, err := rt.Watch(ctx, c.agentID)

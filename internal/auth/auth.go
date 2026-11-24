@@ -93,6 +93,9 @@ type Service struct {
 	perAccount   *limiter
 
 	sso *sso
+
+	// live is the connections that end with their login (WatchSession).
+	live liveWatches
 }
 
 // New returns the account system backed by sqlDB, which must be migrated.

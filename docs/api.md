@@ -607,8 +607,12 @@ when the operator turned passwords off.
 
 The browsers and devices logged in as you, to see and to sign out. These routes act on the
 caller's own sessions only, take a session and never an access token (`403`), and never return a
-session's token. A session is named by its `id`, which is no way into it; another user's id is
-`session_not_found`.
+session's token. A session is named by its `id`, a random 128-bit value in hex that is never reused (so a page that listed a session
+since signed out can't end a later login by it) and is no way into the session; another user's
+id, and anything that isn't an `id`, is `session_not_found`. A request whose own session has
+ended since it was authenticated is `401` `not_logged_in` and ends nothing. Connections that
+stay open with a session (an event stream of a conversation, the agent browser's live view) end
+with it, at once or at the latest within seconds.
 
 ### `GET /api/me/sessions`
 
@@ -616,7 +620,7 @@ session's token. A session is named by its `id`, which is no way into it; anothe
 most recently used:
 
 ```json
-{"sessions": [{"id": 12, "browser": "Firefox", "os": "macOS", "created_at": "2026-11-20T10:00:00.000Z",
+{"sessions": [{"id": "9f2c4e6a8b0d1f3a5c7e9b1d3f5a7c9e", "browser": "Firefox", "os": "macOS", "created_at": "2026-11-20T10:00:00.000Z",
   "last_seen_at": "2026-11-24T09:30:00.000Z", "expires_at": "2026-12-20T10:00:00.000Z", "current": true}]}
 ```
 
@@ -3640,8 +3644,9 @@ from the agent runtime unchanged:
    server doesn't read them.
 3. `{"type": "end", "kind": "…"}`: the stream is over. `stopped`, `aborted`, `ended`,
    `listener_error` and `failed` come from the agent runtime; `interrupted` is the server's,
-   when the agent runtime restarted or broke the stream, the caller lost access, or the server
-   is shutting down.
+   when the agent runtime restarted or broke the stream, the caller lost access, the login that
+   opened the stream was signed out or revoked (a reconnect is then `401`), or the server is
+   shutting down.
 
 After an end, or any dropped connection, connect again: a new stream starts from the current
 view, so nothing is missed. The stream starts with `retry: 2000`, so `EventSource`

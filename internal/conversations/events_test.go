@@ -227,6 +227,45 @@ func TestEventsEndWhenAccessEnds(t *testing.T) {
 	waitFor(t, "the watch to close", w.isClosed)
 }
 
+// An open stream ends with the login that opened it: at once when the login is signed out
+// (the heartbeat is too slow to be the cause), and at the next heartbeat when it ended some
+// other way.
+func TestEventsEndWhenTheLoginEnds(t *testing.T) {
+	expectEnd := func(t *testing.T, s *eventStream) {
+		t.Helper()
+		for {
+			got := s.next()
+			if got.comment == "heartbeat" {
+				continue
+			}
+			if got.data != interruptedLine {
+				t.Fatalf("event = %+v, want the end", got)
+			}
+			return
+		}
+	}
+	t.Run("signed out", func(t *testing.T) {
+		e, srv, owner, ws, conv := newStreamEnv(t)
+		e.svc.heartbeat = time.Hour
+		s := owner.openEvents(srv, ws, conv.ID)
+		w := e.rt.watch(t, 0)
+		owner.expect(http.StatusNoContent, http.MethodPost, "/api/logout", nil)
+		expectEnd(t, s)
+		waitFor(t, "the watch to close", w.isClosed)
+	})
+	t.Run("revoked behind the signal", func(t *testing.T) {
+		e, srv, owner, ws, conv := newStreamEnv(t)
+		e.svc.heartbeat = 20 * time.Millisecond
+		s := owner.openEvents(srv, ws, conv.ID)
+		w := e.rt.watch(t, 0)
+		if _, err := e.db.Exec(`DELETE FROM sessions WHERE user_id = ?`, owner.id); err != nil {
+			t.Fatal(err)
+		}
+		expectEnd(t, s)
+		waitFor(t, "the watch to close", w.isClosed)
+	})
+}
+
 // blockingWriter is a ResponseWriter whose writes wait until the test lets them through, like
 // a client that has stopped reading.
 type blockingWriter struct {

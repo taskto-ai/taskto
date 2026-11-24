@@ -179,8 +179,8 @@ func (s *Service) insertSession(ctx context.Context, tx *sql.Tx, userID int64) (
 	token, hash := newToken()
 	browser, os := deviceOf(ctx)
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO sessions (token_hash, user_id, created_at, expires_at, browser, os) VALUES (?, ?, ?, ?, ?, ?)`,
-		hash, userID, stamp(now), stamp(now.Add(s.opts.SessionTTL)), browser, os)
+		INSERT INTO sessions (public_id, token_hash, user_id, created_at, expires_at, browser, os) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		newSessionPublicID(), hash, userID, stamp(now), stamp(now.Add(s.opts.SessionTTL)), browser, os)
 	return token, err
 }
 
@@ -227,7 +227,8 @@ func (s *Service) deleteSession(ctx context.Context, token string) error {
 // endSession logs out the session token belongs to, and records it. A token that is no
 // session, such as one that expired, ends nothing and records nothing.
 func (s *Service) endSession(ctx context.Context, token string) error {
-	return s.write(ctx, func(tx *sql.Tx) error {
+	var ended int64
+	err := s.write(ctx, func(tx *sql.Tx) error {
 		var userID int64
 		// The same test as sessionUser: a session that has expired is no longer a login to
 		// end, even while its row is still there to be swept.
@@ -241,9 +242,14 @@ func (s *Service) endSession(ctx context.Context, token string) error {
 		if err != nil {
 			return err
 		}
+		ended = userID
 		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.Logout,
 			TargetType: audit.TargetUser, Target: userID})
 	})
+	if err == nil && ended != 0 {
+		s.endLive(ended, token) // this login's open connections go with it
+	}
+	return err
 }
 
 // workspacesOf lists the workspaces userID belongs to, oldest first.

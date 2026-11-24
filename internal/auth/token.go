@@ -23,3 +23,24 @@ func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
+
+// newSessionPublicID names a session to the API and the web app: 128 random bits in hex, never
+// reused, unlike the row's integer ID. It is no way into the session, which only its token is.
+func newSessionPublicID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// validSessionPublicID reports whether s has the shape of newSessionPublicID's answers.
+func validSessionPublicID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}

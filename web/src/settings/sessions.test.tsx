@@ -13,7 +13,7 @@ const me: Me = {
 const member: Workspace = { id: 1, name: 'Home', role: 'member' }
 
 const session = (over: Partial<Session>): Session => ({
-  id: 1,
+  id: 'session-1',
   browser: 'Firefox',
   os: 'macOS',
   created_at: '2026-11-20T10:00:00.000Z',
@@ -40,9 +40,9 @@ test('sessions list the device, the dates and which one is this device', async (
     'GET /api/me/sessions': {
       body: {
         sessions: [
-          session({ id: 3, current: true }),
-          session({ id: 2, browser: 'Safari', os: 'iOS' }),
-          session({ id: 1, browser: '', os: '' }),
+          session({ id: 'session-3', current: true }),
+          session({ id: 'session-2', browser: 'Safari', os: 'iOS' }),
+          session({ id: 'session-1', browser: '', os: '' }),
         ],
       },
     },
@@ -63,11 +63,11 @@ test('sessions list the device, the dates and which one is this device', async (
 })
 
 test('signing out one session asks first, sends the request and shows the list as it is then', async () => {
-  let sessions = [session({ id: 3, current: true }), session({ id: 2, browser: 'Safari', os: 'iOS' })]
+  let sessions = [session({ id: 'session-3', current: true }), session({ id: 'session-2', browser: 'Safari', os: 'iOS' })]
   const calls = fakeFetch({
     'GET /api/me/sessions': () => ({ body: { sessions } }),
-    'DELETE /api/me/sessions/2': () => {
-      sessions = sessions.filter((s) => s.id !== 2)
+    'DELETE /api/me/sessions/session-2': () => {
+      sessions = sessions.filter((s) => s.id !== 'session-2')
       return { status: 204 }
     },
   })
@@ -75,15 +75,15 @@ test('signing out one session asks first, sends the request and shows the list a
   await screen.findByText('Safari on iOS')
   fireEvent.click(screen.getByRole('button', { name: 'Sign out Safari on iOS' }))
   // Nothing is sent before the answer.
-  expect(sent(calls, 'DELETE', '/api/me/sessions/2')).toBe(0)
+  expect(sent(calls, 'DELETE', '/api/me/sessions/session-2')).toBe(0)
   fireEvent.click(screen.getByRole('button', { name: 'Yes, sign out' }))
   await waitFor(() => expect(screen.queryByText('Safari on iOS')).toBeNull())
-  expect(sent(calls, 'DELETE', '/api/me/sessions/2')).toBe(1)
+  expect(sent(calls, 'DELETE', '/api/me/sessions/session-2')).toBe(1)
   await screen.findByText('No other sessions.')
 })
 
 test('signing out all the others is offered only with others, and asks first', async () => {
-  let sessions = [session({ id: 3, current: true }), session({ id: 2 }), session({ id: 1, os: 'Linux' })]
+  let sessions = [session({ id: 'session-3', current: true }), session({ id: 'session-2' }), session({ id: 'session-1', os: 'Linux' })]
   const calls = fakeFetch({
     'GET /api/me/sessions': () => ({ body: { sessions } }),
     'DELETE /api/me/sessions': () => {
@@ -103,8 +103,8 @@ test('signing out all the others is offered only with others, and asks first', a
 
 test('a failed sign-out shows the translated error', async () => {
   fakeFetch({
-    'GET /api/me/sessions': { body: { sessions: [session({ id: 3, current: true }), session({ id: 2 })] } },
-    'DELETE /api/me/sessions/2': { status: 404, body: { error: 'session not found', code: 'session_not_found' } },
+    'GET /api/me/sessions': { body: { sessions: [session({ id: 'session-3', current: true }), session({ id: 'session-2' })] } },
+    'DELETE /api/me/sessions/session-2': { status: 404, body: { error: 'session not found', code: 'session_not_found' } },
   })
   render(<SettingsPage me={me} workspace={member} tab="sessions" />)
   await screen.findByRole('list', { name: 'Your sessions' })
