@@ -107,13 +107,20 @@ prompts or sampling.
 
 ## What your agent can do
 
-The 31 tools of [agent-tools.md](agent-tools.md#the-tools): `list_spaces`, `list_members` (who a card can be assigned to), `search_docs`,
+The 33 tools of [agent-tools.md](agent-tools.md#the-tools): `list_spaces`, `list_members` (who a card can be assigned to), `search_docs`,
 `list_docs`, `read_doc` (also plain-text files, and a document as of an older commit), `write_doc`, `move_doc`, `delete_doc`,
 `doc_history` and `restore_doc` (a document's history and what brings it back), the board tools of
 [boards-agent-tools.md](boards-agent-tools.md), and the app tools: `app_catalog`,
-`list_apps`, `show_app`, `list_app_rows` (an app's data) and `query_app_rows` (filtered, sorted pages of it, with totals), `create_app` and `update_app`, and the template, copy and diagnostic tools:
+`list_apps`, `show_app`, `list_app_rows` (an app's data) and `query_app_rows` (filtered, sorted pages of it, with totals), `list_app_actions` (what the live release lets
+you do to its records, and what your roles allow), `run_app_action` (add, change or delete a record by running one of those
+actions), `create_app` and `update_app`, and the template, copy and diagnostic tools:
 `list_app_templates`, `install_app_template`, `duplicate_app`, `list_app_effects`, `list_app_releases` and `show_app_roles`.
-An app's actions are for the people using it, in the web app: no tool runs one. `create_app` and
+`run_app_action` runs the app's own action as you, through the code behind the web app's: your roles in the
+app, the records you may modify, the collection's rules, the locks of captured values, the record's history and the
+action's effects all apply, and it is refused (`403`) where your role doesn't allow it. It changes data, so the
+server lists it with `readOnlyHint: false`; whether your MCP client asks you before calling it is up to the client (the protocol doesn't require it, so set your client to confirm tools that change records), separate from the permission prompt of TaskTo's CLI conversations ([cli-tools.md](cli-tools.md)), which
+the server doesn't control here. It takes the `expected_release` that `list_app_actions` returned and runs only if that
+is still the live release. `create_app` and
 `update_app` save the app's draft; publishing it, and rolling back, are for a person who may publish
 the app, in the web app ([drafts and releases](api.md#drafts-and-releases)): no tool does either. Read-only tools say so
 (`readOnlyHint`), so a client can call them without asking you each time. Results and

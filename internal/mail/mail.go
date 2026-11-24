@@ -62,6 +62,11 @@ type SendError struct {
 	// Code is the server's SMTP reply code (such as 550), or 0.
 	Code int
 	Err  error
+	// Ambiguous is set when the whole message was sent and the server's answer to it never came
+	// (the connection was lost, or the time ran out, after the end of the data): the server may
+	// have accepted it. Every other failure is a definite "not accepted", so sending again can't
+	// make a second copy; after an ambiguous one it can.
+	Ambiguous bool
 }
 
 func (e *SendError) Error() string {

@@ -15,6 +15,7 @@ import {
   api,
   type Board,
   type Card,
+  type CardWithThread,
   type Comment,
   type Conversation,
   errorText,
@@ -57,8 +58,6 @@ function blockedText(t: T, reason: string | null, cards: string): string {
   if (cards) return t('boards.blockedWaiting', { cards })
   return t('boards.blocked')
 }
-
-type CardWithThread = Card & { comments: Comment[] }
 
 // open is a link's item (boardItem): the space, board and card to open on.
 export function BoardsPage({ workspace, open }: { workspace: number; open?: string }) {

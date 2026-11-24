@@ -77,10 +77,11 @@ type Service struct {
 	streams map[int64]int
 
 	// Tunables; tests shorten them.
-	readyWait    time.Duration // how long a request waits for a starting agent runtime
-	heartbeat    time.Duration // between comments on an idle event stream
-	writeTimeout time.Duration // for the client to take one event before it is dropped
-	maxStreams   int           // open event streams per user, across their conversations
+	readyWait     time.Duration // how long a request waits for a starting agent runtime
+	exportTimeout time.Duration // how long the data export waits for one page of a history
+	heartbeat     time.Duration // between comments on an idle event stream
+	writeTimeout  time.Duration // for the client to take one event before it is dropped
+	maxStreams    int           // open event streams per user, across their conversations
 }
 
 // New returns the API over the database sqlDB, which must be migrated. agent is nil when the
@@ -89,7 +90,7 @@ func New(sqlDB *sql.DB, agent Agent) *Service {
 	closing, end := context.WithCancel(context.Background())
 	return &Service{
 		db: sqlDB, agent: agent, closing: closing, endStreams: end, streams: map[int64]int{},
-		readyWait: 5 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
+		readyWait: 5 * time.Second, exportTimeout: 30 * time.Second, heartbeat: 15 * time.Second, writeTimeout: time.Minute,
 		// Enough for a handful of tabs; each stream pins a sidecar watch.
 		maxStreams: 16,
 	}
