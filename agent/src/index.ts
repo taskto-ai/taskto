@@ -57,6 +57,7 @@ import { cliTools } from './cli.js'
 import { Language, LanguageSection, validLanguage } from './language.js'
 import { ConfigError, hasModel, installProviders, loadProviders, type ModelRef, redact } from './providers.js'
 import { ToolAccess, tasktoTools, validCapability } from './taskto-tools.js'
+import { testHooks } from './test-hooks.js'
 import { SpikeTools } from './tools.js'
 
 // Everything this process logs passes redact(), so an API key never reaches its output.
@@ -101,7 +102,9 @@ try {
   process.exit(2)
 }
 const registry = createRegistry()
-registry.install(SpikeTools)
+// The pause tools exist for the integration tests, which start the sidecar through test-entry.ts;
+// nothing in the environment turns them on.
+if (testHooks.spikeTools) registry.install(SpikeTools)
 // The language the agent replies in (language.ts), from the language each message carries.
 registry.install(LanguageSection)
 const toolsSocket = process.env.TASKTO_AGENT_TOOLS_SOCKET

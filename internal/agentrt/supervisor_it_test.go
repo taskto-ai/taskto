@@ -18,7 +18,7 @@ func TestSupervisorRestartsTheRealSidecar(t *testing.T) {
 	if os.Getenv("TASKTO_AGENT_IT") != "1" {
 		t.Skip("set TASKTO_AGENT_IT=1 to run the agent sidecar integration tests")
 	}
-	entry, err := filepath.Abs("../../agent/dist/index.js")
+	entry, err := filepath.Abs(testEntry) // with the pause tools the scripted model calls
 	if err != nil {
 		t.Fatal(err)
 	}
