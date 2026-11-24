@@ -229,7 +229,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `doc_changed` | 409 | `path` has changed since the version the change was based on. |
 | `doc_deleted` | 409 | `path` was deleted since the version the change was based on. |
 | `doc_exists` | 409 | `path` already exists: to replace it, send the version you edited as `base_version`. |
-| `doc_case_conflict` | 409 | `name` differs only by case from `other`, which exists. |
+| `doc_case_conflict` | 409 | `name` differs only by case, or by how an accent is written, from `other`, which exists. |
 | `doc_path_taken` | 409 | A folder is at `path`, or a file is where one of its folders would be. |
 | `doc_move_into_itself` | 400 | A folder can't be moved into itself (`path`). |
 | `doc_move_kind` | 400 | The unversioned file `path` can't become a Markdown document, or the other way round. |
@@ -1121,7 +1121,7 @@ the caller can't read is `404` on every route.
   backslash or a control character, or has a `.git` element in any spelling (`.GIT`,
   `.git.`, `git~1`, with ignorable Unicode): nothing in `.git` can be read or written
   through the API. A path has at most 16 levels and 1024 bytes, each name at most 255
-  bytes. Two names in a folder can't differ only by case (`409`).
+  bytes. Two names in a folder can't differ only by case, or by how an accent is written (é as one character or as e and a combining accent: the same file on macOS and Windows) (`409`).
 - **Versions.** A document's `version` is the git blob ID of its content (40 hex
   digits), or of its pointer for an unversioned file. A change to an existing document says which version it was based on, in
   `base_version`; if the document has changed since, the answer is `409` and nothing is
@@ -1284,7 +1284,7 @@ files, neither for an unversioned file.
 {"path": "notes/plan.md", "version": "…", "size": 7, "versioned": true, "content": "# Plan\n"}
 ```
 
-- `?at=<commit>`: the document as it was at that commit (`404` if it didn't exist then).
+- `?at=<commit>`: the document as it was at that commit (`404` if it didn't exist then, or if the commit isn't in the space's history: one a failed change left behind is never read).
 - `?raw=true`: the bytes themselves, as a download: `application/octet-stream` (audio
   and video: their media type, such as `video/mp4`, so the web app can play them),
   `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff` and
@@ -1367,7 +1367,7 @@ read), or one [taken out of history](#taking-a-files-old-versions-out-of-history
 can't be viewed or restored; `agent` is absent when the user made the change, and
 `<name> (access token)` for a change made with an [access token](#access-tokens). `limit`
 is 1 to 200, default 50; `next`, when there are more, is the `before` of the next page
-(`?before=<commit>`).
+(`?before=<commit>`: `404` if the commit isn't in the space's history, as for `?at=`).
 
 ### `GET /api/workspaces/{workspace}/spaces/{space}/history`
 
@@ -1384,7 +1384,8 @@ deleted document.
 ```
 
 `base_version` is optional and checked as above (`409`). `200` with the change's result;
-`404` if the document didn't exist at that commit; `410` for an unversioned file whose
+`404` if the document didn't exist at that commit, or if `commit` isn't in the space's history
+(a commit a failed change left behind is never a source); `410` for an unversioned file whose
 bytes at that commit are gone.
 
 ### `DELETE /api/workspaces/{workspace}/spaces/{space}/history/{path}`

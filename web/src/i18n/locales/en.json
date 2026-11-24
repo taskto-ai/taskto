@@ -842,7 +842,7 @@
     "doc_changed": "{path} has changed since you opened it.",
     "doc_deleted": "{path} was deleted since you opened it.",
     "doc_exists": "{path} already exists.",
-    "doc_case_conflict": "“{name}” differs only in case from “{other}”, which already exists.",
+    "doc_case_conflict": "“{name}” differs from “{other}”, which already exists, only in case or in how an accent is written.",
     "doc_path_taken": "{path} can't be saved there: a folder has that name, or a file is in the way.",
     "doc_move_into_itself": "{path} can't be moved into itself.",
     "doc_move_kind": "{path} can't change between a Markdown document and an unversioned file.",

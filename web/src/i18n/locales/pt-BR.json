@@ -846,7 +846,7 @@
     "doc_changed": "{path} foi alterado desde que você o abriu.",
     "doc_deleted": "{path} foi excluído desde que você o abriu.",
     "doc_exists": "{path} já existe.",
-    "doc_case_conflict": "“{name}” só difere de “{other}”, que já existe, em maiúsculas e minúsculas.",
+    "doc_case_conflict": "“{name}” só difere de “{other}”, que já existe, em maiúsculas e minúsculas ou na forma de escrever um acento.",
     "doc_path_taken": "Não dá para salvar {path} aí: uma pasta tem esse nome, ou há um arquivo no caminho.",
     "doc_move_into_itself": "{path} não pode ser movido para dentro de si mesmo.",
     "doc_move_kind": "{path} não pode virar documento Markdown se for um arquivo sem versões, nem o contrário.",

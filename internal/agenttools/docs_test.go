@@ -2,6 +2,7 @@ package agenttools
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -298,5 +299,112 @@ func TestReadDocEscapedChunkFits(t *testing.T) {
 	}
 	if got.String() != text {
 		t.Fatalf("read %d bytes, want %d", got.Len(), len(text))
+	}
+}
+
+// The built-in agent asks no one before it deletes, so delete_doc refuses what history can't bring
+// back: an unversioned file's bytes. A document it deletes is kept by its history.
+func TestDeleteDocRefusesUnversionedFiles(t *testing.T) {
+	w := newWorld(t)
+	sp := w.alicePrivate
+	w.seed(sp, w.one, "song.mp3", []byte("ID3 audio"))
+	w.seed(sp, w.one, "backup.zip", []byte("PK archive"))
+	w.seed(sp, w.one, "plan.md", []byte("plan"))
+
+	for _, name := range []string{"song.mp3", "backup.zip"} {
+		out := w.status(http.StatusBadRequest, w.aliceConv, "delete_doc", map[string]any{"space_id": sp, "path": name})
+		if msg, _ := out["error"].(string); !strings.Contains(msg, "web app") {
+			t.Errorf("%s: the refusal doesn't say who deletes it: %v", name, out)
+		}
+		_, f, err := w.kb.Open(context.Background(), w.space(sp, w.one), name, "")
+		if err != nil {
+			t.Fatalf("%s is gone: %v", name, err)
+		}
+		_ = f.Close()
+	}
+	w.ok(w.aliceConv, "delete_doc", map[string]any{"space_id": sp, "path": "plan.md"})
+}
+
+// A rename that would turn a versioned file into an unversioned one is refused: it would take the
+// file's older versions out of history.
+func TestMoveDocRefusesAStorageChange(t *testing.T) {
+	w := newWorld(t)
+	sp := w.alicePrivate
+	first := w.seed(sp, w.one, "draft.md", []byte("one"))
+	if _, err := w.kb.Put(context.Background(), w.space(sp, w.one), "draft.md", []byte("two"), first.Doc.Version,
+		knowledge.Author{Name: "Alice", Email: "alice@example.com"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	w.status(http.StatusBadRequest, w.aliceConv, "move_doc", map[string]any{"space_id": sp, "from": "draft.md", "to": "draft.zip"})
+	if got := w.ok(w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "draft.md", "at": first.Commit}); got["content"] != "one" {
+		t.Fatalf("the first version = %v", got)
+	}
+	h := w.ok(w.aliceConv, "doc_history", map[string]any{"space_id": sp, "path": "draft.md"})
+	if len(h["commits"].([]any)) != 2 {
+		t.Fatalf("history = %v", h)
+	}
+	w.ok(w.aliceConv, "move_doc", map[string]any{"space_id": sp, "from": "draft.md", "to": "draft.txt"})
+}
+
+// A destination that is an existing file's name in another Unicode form is a conflict: the
+// move would overwrite it.
+func TestMoveDocUnicodeEquivalentDestination(t *testing.T) {
+	w := newWorld(t)
+	sp := w.alicePrivate
+	w.seed(sp, w.one, "café.md", []byte("the cafe"))
+	w.seed(sp, w.one, "draft.md", []byte("draft"))
+	w.status(http.StatusConflict, w.aliceConv, "move_doc", map[string]any{"space_id": sp, "from": "draft.md", "to": "café.md"})
+	if got := w.ok(w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "café.md"}); got["content"] != "the cafe" {
+		t.Fatalf("the existing document = %v", got)
+	}
+}
+
+// read_doc returns the text or refuses: a binary under a Markdown name, and an offset inside a
+// character, would otherwise come back as replacement characters.
+func TestReadDocNeverReturnsCorruptedText(t *testing.T) {
+	w := newWorld(t)
+	sp := w.alicePrivate
+	w.seed(sp, w.one, "blob.bin", []byte("\x89PNG\r\n\x1a\n\x00\xff"))
+	w.status(http.StatusBadRequest, w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "blob.bin"})
+	w.ok(w.aliceConv, "move_doc", map[string]any{"space_id": sp, "from": "blob.bin", "to": "blob.md"}) // both are versioned
+	w.status(http.StatusBadRequest, w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "blob.md"})
+
+	w.seed(sp, w.one, "word.txt", []byte("aéb"))
+	read := func(offset int) (int, map[string]any) {
+		return w.call(w.aliceConv, "read_doc", map[string]any{"space_id": sp, "path": "word.txt", "offset": offset})
+	}
+	for offset, want := range map[int]string{0: "aéb", 1: "éb", 3: "b", 4: ""} {
+		if code, out := read(offset); code != http.StatusOK || out["content"] != want {
+			t.Errorf("offset %d = %d %v, want %q", offset, code, out, want)
+		}
+	}
+	if code, out := read(2); code != http.StatusBadRequest {
+		t.Errorf("an offset inside é = %d %v, want a refusal", code, out)
+	}
+	if code, out := read(5); code != http.StatusBadRequest {
+		t.Errorf("an offset past the end = %d %v, want a refusal", code, out)
+	}
+}
+
+// restore_doc, which the built-in agent calls with no one to ask, refuses to replace an
+// unversioned file with different content: the current bytes would be removed for good.
+func TestRestoreDocKeepsUnversionedBytes(t *testing.T) {
+	w := newWorld(t)
+	sp := w.alicePrivate
+	first := w.seed(sp, w.one, "archive.zip", []byte("PK first"))
+	w.seed(sp, w.one, "copy.zip", []byte("PK first")) // keeps the first version's bytes on disk
+	if _, err := w.kb.Put(context.Background(), w.space(sp, w.one), "archive.zip", []byte("PK second"), first.Doc.Version,
+		knowledge.Author{Name: "Alice", Email: "alice@example.com"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	w.status(http.StatusBadRequest, w.aliceConv, "restore_doc", map[string]any{"space_id": sp, "path": "archive.zip", "commit": first.Commit})
+	_, f, err := w.kb.Open(context.Background(), w.space(sp, w.one), "archive.zip", "")
+	if err != nil {
+		t.Fatalf("archive.zip is gone: %v", err)
+	}
+	b, _ := io.ReadAll(f)
+	_ = f.Close()
+	if string(b) != "PK second" {
+		t.Fatalf("archive.zip = %q", b)
 	}
 }
