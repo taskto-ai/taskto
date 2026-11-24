@@ -569,7 +569,7 @@ func (s *Service) useInvite(ctx context.Context, tx *sql.Tx, inv pendingInvite) 
 	return mustAffect(res, errInviteInvalid)
 }
 
-func join(ctx context.Context, tx *sql.Tx, inv pendingInvite, userID int64) error {
+func (s *Service) join(ctx context.Context, tx *sql.Tx, inv pendingInvite, userID int64) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE invites SET accepted_by = ? WHERE id = ?`, userID, inv.id); err != nil {
 		return err
 	}
@@ -589,6 +589,13 @@ func join(ctx context.Context, tx *sql.Tx, inv pendingInvite, userID int64) erro
 		TargetType: audit.TargetInvite, Target: inv.id, Details: audit.Details{"role": string(inv.role), "already_member": n == 0}}); err != nil {
 		return err
 	}
+	if n > 0 {
+		for _, h := range s.memberHooks {
+			if err := h(ctx, tx, inv.workspaceID, userID); err != nil {
+				return err
+			}
+		}
+	}
 	return mustAffect(res, errAlreadyMember)
 }
 
@@ -598,7 +605,7 @@ func (s *Service) acceptAsUser(ctx context.Context, inv pendingInvite, userID in
 		if err := s.useInvite(ctx, tx, inv); err != nil {
 			return err
 		}
-		return join(ctx, tx, inv, userID)
+		return s.join(ctx, tx, inv, userID)
 	})
 }
 
@@ -622,7 +629,7 @@ func (s *Service) acceptAsNew(ctx context.Context, inv pendingInvite, name, pass
 		if u, err = insertUser(ctx, tx, inv.email, name, passwordHash); err != nil {
 			return err
 		}
-		if err := join(ctx, tx, inv, u.ID); err != nil {
+		if err := s.join(ctx, tx, inv, u.ID); err != nil {
 			return err
 		}
 		token, err = s.insertSession(ctx, tx, u.ID)

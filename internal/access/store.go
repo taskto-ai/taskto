@@ -180,6 +180,11 @@ func (c *Checker) addMember(ctx context.Context, workspaceID, spaceID, userID in
 		if err := mustAffect(res, errAlreadyMember); err != nil {
 			return err
 		}
+		for _, h := range c.memberHooks {
+			if err := h(ctx, tx, spaceID, userID); err != nil {
+				return err
+			}
+		}
 		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.SpaceMemberAdded,
 			TargetType: audit.TargetSpace, Target: spaceID, Details: audit.Details{"user_id": userID, "role": string(role)}})
 	})
