@@ -42,7 +42,8 @@ func (s *Service) boardSpace(ctx context.Context, c *call, spaceID int64) error 
 
 func (s *Service) listBoards(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
-		SpaceID int64 `json:"space_id"`
+		SpaceID  int64 `json:"space_id"`
+		Archived bool  `json:"archived"`
 	}
 	if err := decode(args, &a); err != nil {
 		return nil, err
@@ -50,7 +51,13 @@ func (s *Service) listBoards(ctx context.Context, c *call, args json.RawMessage)
 	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
 		return nil, err
 	}
-	list, err := s.o.Boards.ListBoards(ctx, actor(c), a.SpaceID)
+	var list []boards.Board
+	var err error
+	if a.Archived {
+		list, err = s.o.Boards.ListAllBoards(ctx, actor(c), a.SpaceID)
+	} else {
+		list, err = s.o.Boards.ListBoards(ctx, actor(c), a.SpaceID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +221,63 @@ func (s *Service) setBlocked(ctx context.Context, c *call, args json.RawMessage)
 		return nil, err
 	}
 	return s.o.Boards.SetBlocked(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Version, a.Reason, a.BlockedBy)
+}
+
+func (s *Service) createBoard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		SpaceID int64  `json:"space_id"`
+		Name    string `json:"name"`
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
+		return nil, err
+	}
+	return s.o.Boards.CreateBoard(ctx, actor(c), a.SpaceID, a.Name)
+}
+
+func (s *Service) updateBoard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		ref
+		boards.BoardChanges
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
+		return nil, err
+	}
+	return s.o.Boards.UpdateBoard(ctx, actor(c), a.SpaceID, a.BoardID, a.BoardChanges)
+}
+
+func (s *Service) archiveCard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		cardRef
+		Version int64 `json:"version"`
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
+		return nil, err
+	}
+	return s.o.Boards.ArchiveCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Version)
+}
+
+func (s *Service) restoreCard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		cardRef
+		Version int64         `json:"version"`
+		Column  boards.Column `json:"column"`
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	if err := s.boardSpace(ctx, c, a.SpaceID); err != nil {
+		return nil, err
+	}
+	return s.o.Boards.RestoreCard(ctx, actor(c), a.SpaceID, a.BoardID, a.CardID, a.Version, a.Column)
 }
 
 // cutText shortens s to n bytes, marking the cut.

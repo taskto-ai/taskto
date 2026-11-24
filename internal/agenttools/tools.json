@@ -288,7 +288,7 @@
   },
   {
     "name": "list_boards",
-    "description": "List a space's boards: its personal board, or its team boards.",
+    "description": "List a space's boards: its personal board, or its team boards. archived: true includes the archived ones (their archived_at is set), which come last.",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -297,6 +297,10 @@
           "type": "integer",
           "minimum": 1,
           "description": "the space, from list_spaces"
+        },
+        "archived": {
+          "type": "boolean",
+          "description": "include archived boards (default false)"
         }
       },
       "required": ["space_id"],
@@ -761,6 +765,131 @@
         }
       },
       "required": ["space_id", "board_id", "card_id", "version", "reason"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "create_board",
+    "description": "Add a team board to a shared space (a private space has only its personal board). Returns the board, with the id and version the other board tools take.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "a shared space, from list_spaces"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "the board's name"
+        }
+      },
+      "required": ["space_id", "name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "update_board",
+    "description": "Rename a board, or archive or unarchive it (archived: true takes it off list_boards and makes it read-only; archived: false brings it back). A personal board can be renamed but not archived. An archived board takes no other change until it is unarchived.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards (archived: true for archived ones)"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the board you last read; if it changed since, the call fails: read it again first"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": ["space_id", "board_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "archive_card",
+    "description": "Archive a card: it leaves the board's columns, remembering its column, and shows only in list_cards with column \"archived\". Undo it with restore_card.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the card you last read; if it changed since, the call fails: read it again first"
+        }
+      },
+      "required": ["space_id", "board_id", "card_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "restore_card",
+    "description": "Bring an archived card back, last in the column it was archived from, or in column if given. Find archived cards with list_cards and column \"archived\".",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the card you last read; if it changed since, the call fails: read it again first"
+        },
+        "column": {
+          "enum": ["backlog", "todo", "doing", "review", "done"]
+        }
+      },
+      "required": ["space_id", "board_id", "card_id", "version"],
       "additionalProperties": false
     }
   },
