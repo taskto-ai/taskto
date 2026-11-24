@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { cleanSnippet, type SnippetPiece } from './snippet'
+import { cleanSnippet, isMarkdownPath, type SnippetPiece } from './snippet'
 
 const plain = (pieces: SnippetPiece[]) => pieces.map((p) => p.text).join('')
 const marked = (pieces: SnippetPiece[]) => pieces.filter((p) => p.match).map((p) => p.text)
@@ -47,4 +47,91 @@ test('a # inside a line, and HTML, stay as written; nothing becomes markup', () 
 test('a snippet with nothing left shows nothing', () => {
   expect(cleanSnippet([{ text: '#  \n' }])).toEqual([])
   expect(cleanSnippet([])).toEqual([])
+})
+
+test("a match inside a link's destination is never removed: the destination stays, after the link's words", () => {
+  const pieces = cleanSnippet([{ text: 'see [the guide](docs/' }, { text: 'setup', match: true }, { text: '.md) now' }])
+  expect(marked(pieces)).toEqual(['setup'])
+  expect(plain(pieces)).toBe('see the guide (docs/setup.md) now')
+  // The same for an image, and for a match in the words, which always stay.
+  expect(marked(cleanSnippet([{ text: '![a ' }, { text: 'map', match: true }, { text: '](m.png)' }]))).toEqual(['map'])
+})
+
+test('a highlight that spans a formatting mark is kept whole, and a mark whose partner would stay stays too', () => {
+  // A phrase match covers the bold run's opening mark.
+  const spans = cleanSnippet([{ text: 'a ' }, { text: 'red **apple', match: true }, { text: '** pie' }])
+  expect(marked(spans)).toEqual(['red **apple'])
+  expect(plain(spans)).toBe('a red **apple** pie')
+  // A match across the words of bold text: the marks around go.
+  const across = cleanSnippet([{ text: 'a **' }, { text: 'red apple', match: true }, { text: '** pie' }])
+  expect(plain(across)).toBe('a red apple pie')
+  expect(marked(across)).toEqual(['red apple'])
+  // A match across a link's closing bracket.
+  const link = cleanSnippet([{ text: 'see [the ' }, { text: 'plan](notes/pl', match: true }, { text: 'an.md) now' }])
+  expect(marked(link)).toEqual(['plan](notes/pl'])
+})
+
+test("a file that is not Markdown is shown literally: an upload's name keeps its underscores", () => {
+  const pieces = [{ text: 'my__file__name' }, { text: '.pdf', match: true }]
+  expect(cleanSnippet(pieces, { markdown: false })).toEqual(pieces)
+  expect(plain(cleanSnippet([{ text: '# not a heading **x** `y` [a](b)' }], { markdown: false }))).toBe(
+    '# not a heading **x** `y` [a](b)',
+  )
+  // And Markdown's own rule for words: marks inside a word are text.
+  expect(plain(cleanSnippet([{ text: 'my__file__name.pdf and a*b*c and snake_case_' }]))).toBe(
+    'my__file__name.pdf and a*b*c and snake_case_',
+  )
+  expect(isMarkdownPath('notes/Plan.MD')).toBe(true)
+  expect(isMarkdownPath('scan.pdf')).toBe(false)
+  expect(isMarkdownPath('notes.md.txt')).toBe(false)
+})
+
+test('nothing inside inline code or a code block is formatting', () => {
+  expect(plain(cleanSnippet([{ text: 'use `a ** b` and `*x*` or ``[l](u)`` here' }]))).toBe(
+    'use a ** b and *x* or [l](u) here',
+  )
+  const block = ['```md', '# not a heading', '**bold** and [l](u)', '- item', '```', 'after'].join('\n')
+  expect(plain(cleanSnippet([{ text: block }]))).toBe('# not a heading **bold** and [l](u) - item after')
+  // Backticks that are never closed are text.
+  expect(plain(cleanSnippet([{ text: 'one ` tick and ``two' }]))).toBe('one ` tick and ``two')
+})
+
+test('a snippet is cut to a window around its first match, which survives the cut', () => {
+  const filler = 'lorem ipsum '.repeat(400)
+  const pieces = cleanSnippet([{ text: filler }, { text: 'orchard', match: true }, { text: filler }])
+  expect(marked(pieces)).toEqual(['orchard'])
+  const shown = plain(pieces)
+  expect(shown.length).toBeLessThanOrEqual(1202)
+  expect(shown.startsWith('…') && shown.endsWith('…')).toBe(true)
+  // A match longer than the window is cut, and is still the highlight.
+  const long = cleanSnippet([{ text: 'x'.repeat(5000), match: true }])
+  expect(marked(long)).toHaveLength(1)
+  expect(marked(long)[0].length).toBeGreaterThan(1000)
+  // The window doesn't split a character made of two units.
+  const wide = cleanSnippet([{ text: '😀'.repeat(2000) }])
+  expect(plain(wide)).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/)
+})
+
+// SQLite's FTS5 limits a snippet by tokens, not characters: brackets are no tokens, so a snippet
+// can be as long as the document. None of these may take long, with the bound or without it.
+const NASTY = ['[', '(', '*', '_', '`', '~', '](', '[](', '*a', '_a_', '`a', '![', '>', '- ']
+test.each(NASTY)('a snippet of 300,000 × %j between two words is cleaned in linear time', (unit) => {
+  const body = unit.repeat(300_000)
+  const pieces = [
+    { text: 'first ' },
+    { text: body },
+    { text: ' ' },
+    { text: 'orchard', match: true },
+    { text: ` ${body} last` },
+  ]
+  const started = performance.now()
+  const bounded = cleanSnippet(pieces)
+  expect(performance.now() - started).toBeLessThan(2000)
+  expect(marked(bounded)).toEqual(['orchard'])
+
+  // The scanner itself, on all of it (no window): a quadratic one would take minutes here.
+  const unbounded = performance.now()
+  const all = cleanSnippet(pieces, { limit: Number.POSITIVE_INFINITY })
+  expect(performance.now() - unbounded).toBeLessThan(5000)
+  expect(marked(all)).toEqual(['orchard'])
 })

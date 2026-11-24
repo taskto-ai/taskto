@@ -9,7 +9,7 @@ import { api, errorText, type Space, ws } from '../api'
 import { type Key, type T, useT } from '../i18n'
 import { useLoad } from '../load'
 import { spaceLabel } from '../spaces'
-import { cleanSnippet } from './snippet'
+import { cleanSnippet, isMarkdownPath } from './snippet'
 
 export type SearchQuery = { q: string; scope: 'space' | 'workspace' }
 
@@ -189,7 +189,7 @@ function ResultPages({
                     ? t('search.results.inSpace', { space: r.space_name, path: r.path })
                     : r.path}
                 </span>
-                <Snippet pieces={r.snippet} />
+                <Snippet pieces={r.snippet} path={r.path} />
               </button>
             </li>
           ))}
@@ -207,8 +207,9 @@ function ResultPages({
 // What the document says around the match, as running text: its Markdown marks are left out for
 // display (the server's result is unchanged). Plain text in pieces, never markup; the matches are
 // marked by the element.
-function Snippet({ pieces }: { pieces: SearchResult['snippet'] }) {
-  const shown = cleanSnippet(pieces)
+function Snippet({ pieces, path }: { pieces: SearchResult['snippet']; path: string }) {
+  // Only a Markdown document has Markdown marks; an upload's path or title is shown as it is.
+  const shown = cleanSnippet(pieces, { markdown: isMarkdownPath(path) })
   if (shown.length === 0) return null
   return (
     <span className="tt-snippet tt-small">

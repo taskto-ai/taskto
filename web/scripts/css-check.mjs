@@ -11,6 +11,17 @@
 // Dependency-free: the stylesheet is read by a small scanner (comments and strings skipped), the
 // components by looking at what each className holds.
 //
+// What it sees, and what it doesn't:
+// - In the stylesheet, a class is a `.tt-name` selector. An attribute selector's value
+//   (`[data-state="tt-name"]`), a string, a comment and an `@keyframes` name are not classes.
+// - In a component, a class is a `tt-` name inside a className: a string, or an expression (a
+//   template, a conditional, a join), and the strings of a lookup table that a constant holds:
+//   `const NAME = { ok: 'tt-ok' }` or `const NAME = ['tt-a', 'tt-b']`, with the name in capitals,
+//   in the same file (a map imported from another file is read there). A string that is only a
+//   class name, in a constant whose name is not in capitals, or in a function's body, or built
+//   from pieces (`'tt-' + kind`), is not seen: such a class has to be written out in the
+//   stylesheet's component anyway, and the check can't tell it is missing.
+//
 // --root <dir> checks another web directory (its src/ and src/styles.css), for the script's tests.
 
 import { readdirSync, readFileSync } from 'node:fs'
@@ -25,6 +36,15 @@ export const UNSTYLED = new Map([
 ])
 
 const CLASS = /tt-[a-z0-9]+(?:-[a-z0-9]+)*/g
+// A class selector: the name after a dot.
+const CLASS_SELECTOR = /\.(tt-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g
+
+// The class selectors of a rule's prelude, without what is inside an attribute selector's
+// brackets or a string.
+export function classSelectors(prelude) {
+  const bare = prelude.replace(/\[[^\]]*\]/g, '').replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
+  return [...bare.matchAll(CLASS_SELECTOR)].map((m) => m[1])
+}
 
 // The stylesheet's rules at depth 0: each with its selector list and the classes it names.
 // At-rules (@media, @keyframes, @font-face, @layer …) are not rules here, but the classes inside
@@ -56,7 +76,7 @@ export function scan(css) {
     if (c === '{') {
       const text = prelude.trim()
       const isAt = text.startsWith('@')
-      for (const m of text.matchAll(CLASS)) mentioned.add(m[0])
+      for (const name of classSelectors(text)) mentioned.add(name)
       if (!isAt && depth === 0) {
         for (const sel of splitSelectors(text)) top.push({ selector: sel, line: preludeLine })
       }
@@ -109,7 +129,38 @@ export function classesUsed(source) {
       if (!used.has(c[0])) used.set(c[0], start + c.index)
     }
   }
+  tableClasses(source, used)
   return used
+}
+
+// The strings of the lookup tables a component declares (`const NAME = { ok: 'tt-ok' }`,
+// `const NAME = ['tt-a']`; a name in capitals) that are class names only.
+function tableClasses(source, used) {
+  for (const m of source.matchAll(/\bconst\s+[A-Z][A-Z0-9_]*\b[^=\n]*=\s*(?=[{[])/g)) {
+    const start = m.index + m[0].length
+    const end = tableEnd(source, start)
+    for (const lit of source
+      .slice(start, end)
+      .matchAll(/(["'])(tt-[a-z0-9]+(?:-[a-z0-9]+)*(?: tt-[a-z0-9]+(?:-[a-z0-9]+)*)*)\1/g)) {
+      for (const c of lit[2].matchAll(CLASS)) {
+        const at = start + lit.index + 1 + c.index
+        if (!used.has(c[0])) used.set(c[0], at)
+      }
+    }
+  }
+}
+
+// The end of the {…} or […] that begins at start.
+function tableEnd(s, start) {
+  let depth = 0
+  for (let i = start; i < s.length; i++) {
+    const c = s[i]
+    if (c === '"' || c === "'") i = skipString(s, i, c)
+    else if (c === '`') i = skipTemplate(s, i)
+    else if (c === '{' || c === '[') depth++
+    else if ((c === '}' || c === ']') && --depth === 0) return i + 1
+  }
+  return s.length
 }
 
 function expressionEnd(s, start) {

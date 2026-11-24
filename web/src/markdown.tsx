@@ -472,7 +472,7 @@ function block(b: Block, onLink: LinkHandler | undefined, tight: boolean): React
                 own words are the label. */}
             <label>
               <input type="checkbox" checked={task.checked} disabled />
-              <span>{inline(task.text, onLink)}</span>
+              <Paragraph text={task.text} onLink={onLink} tight />
             </label>
             {render(task.rest, onLink, tight)}
           </li>

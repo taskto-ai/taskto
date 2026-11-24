@@ -342,17 +342,33 @@ function ThemeSelect({ theme, onChange, t }: { theme: Theme; onChange: (theme: T
   )
 }
 
+// Whether a form control's list is open (the `:open` state: a <select>'s picker). A browser
+// without it never says so, and the control behaves as it did.
+function isOpen(el: Element): boolean {
+  try {
+    return el.matches(':open')
+  } catch {
+    return false
+  }
+}
+
 function AccountMenu({ me, workspace, onLogout, t }: { me: Me; workspace: number; onLogout: () => void; t: T }) {
   const { name, email } = me.user
   const { installed } = useInstall()
   const menu = useRef<HTMLDetailsElement>(null)
   const summary = useRef<HTMLElement>(null)
   // A <details> only closes on its summary: Escape, and a press or focus outside it, close it
-  // too, and Escape gives focus back to the summary, which the menu's items had.
+  // too, and Escape gives focus back to the summary, which the menu's items had. The listeners
+  // are on the document only while the menu is open.
+  const [open, setOpen] = useState(false)
   useEffect(() => {
+    if (!open) return
     const close = () => menu.current?.removeAttribute('open')
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !menu.current?.open) return
+      if (e.key !== 'Escape' || e.defaultPrevented || !menu.current?.open) return
+      // A language list that is open takes this Escape to close itself: the menu stays, and the
+      // next Escape closes it.
+      if (e.target instanceof HTMLSelectElement && isOpen(e.target)) return
       close()
       summary.current?.focus()
     }
@@ -367,9 +383,9 @@ function AccountMenu({ me, workspace, onLogout, t }: { me: Me; workspace: number
       document.removeEventListener('pointerdown', onOutside)
       document.removeEventListener('focusin', onOutside)
     }
-  }, [])
+  }, [open])
   return (
-    <details className="tt-account" ref={menu}>
+    <details className="tt-account" ref={menu} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary ref={summary} aria-label={t('shell.account', { name })}>
         <span className="tt-avatar" aria-hidden>
           {name.trim().charAt(0).toUpperCase() || '?'}

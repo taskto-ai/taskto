@@ -1322,6 +1322,14 @@ input[data-overdue] {
   border-top: 1px solid var(--tt-line);
 }
 
+/* A person mentioned in a comment: their name, set apart from the words around it. */
+.tt-mention {
+  padding: 0 0.2em;
+  border-radius: 0.25em;
+  background: var(--tt-accent-soft);
+  font-weight: 600;
+}
+
 .tt-checks {
   display: grid;
   gap: 0.3rem;
@@ -2176,6 +2184,10 @@ fieldset {
   display: grid;
   gap: 0.4rem;
   min-width: 0;
+  /* As it was when this and the search result's snippet shared one class: the headings and the
+     commands are muted, and a long line wraps. */
+  color: var(--tt-muted);
+  overflow-wrap: anywhere;
 }
 
 .tt-setup-snippet pre {

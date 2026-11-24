@@ -472,8 +472,21 @@ async function openAccountMenu() {
   await screen.findByText('Pick a conversation, or start a new one.')
   const menu = container.querySelector('details.tt-account') as HTMLDetailsElement
   const summary = menu.querySelector('summary') as HTMLElement
-  menu.open = true
+  await openMenu(menu)
   return { menu, summary, container }
+}
+
+// Opens the menu as a person does, with the toggle event that follows (jsdom sends it a task
+// later), which is when the menu starts listening.
+async function openMenu(menu: HTMLDetailsElement) {
+  const toggled = new Promise((done) => menu.addEventListener('toggle', done, { once: true }))
+  menu.open = true
+  await toggled
+}
+async function closeMenu(menu: HTMLDetailsElement) {
+  const toggled = new Promise((done) => menu.addEventListener('toggle', done, { once: true }))
+  menu.open = false
+  await toggled
 }
 
 test('Escape closes the account menu and gives focus back to its summary', async () => {
@@ -487,6 +500,80 @@ test('Escape closes the account menu and gives focus back to its summary', async
   expect(document.activeElement).toBe(summary)
 })
 
+test('the language list takes its own Escape while it is open: the menu stays, and the next Escape closes it', async () => {
+  const { menu, summary } = await openAccountMenu()
+  const language = within(menu).getByRole('combobox', { name: 'Language' }) as HTMLSelectElement
+  language.focus()
+  // jsdom can't open a native <select>: its :open state is what a browser says while the list
+  // is shown, and it is the one thing the handler asks.
+  const matches = language.matches.bind(language)
+  const opened = vi.spyOn(language, 'matches').mockImplementation((s) => s === ':open' || matches(s))
+  fireEvent.keyDown(language, { key: 'Escape' })
+  expect(menu.open).toBe(true)
+  expect(document.activeElement).toBe(language)
+
+  // The list closed (the browser took the Escape): the next one is the menu's.
+  opened.mockImplementation((s) => (s === ':open' ? false : matches(s)))
+  fireEvent.keyDown(language, { key: 'Escape' })
+  expect(menu.open).toBe(false)
+  expect(document.activeElement).toBe(summary)
+
+  // A browser that doesn't know :open throws on it: the control is taken as closed.
+  await openMenu(menu)
+  language.focus()
+  opened.mockImplementation((s) => {
+    if (s === ':open') throw new SyntaxError('not a selector')
+    return matches(s)
+  })
+  fireEvent.keyDown(language, { key: 'Escape' })
+  expect(menu.open).toBe(false)
+})
+
+test('an Escape another handler has taken does not close the account menu', async () => {
+  const { menu } = await openAccountMenu()
+  const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+  event.preventDefault()
+  document.dispatchEvent(event)
+  expect(menu.open).toBe(true)
+})
+
+test('the account menu listens on the document only while it is open', async () => {
+  const added: string[] = []
+  const removed: string[] = []
+  const add = vi.spyOn(document, 'addEventListener').mockImplementation(function (this: Document, type, ...rest) {
+    added.push(type)
+    return EventTarget.prototype.addEventListener.call(this, type, ...(rest as [EventListener]))
+  })
+  const remove = vi.spyOn(document, 'removeEventListener').mockImplementation(function (this: Document, type, ...rest) {
+    removed.push(type)
+    return EventTarget.prototype.removeEventListener.call(this, type, ...(rest as [EventListener]))
+  })
+  try {
+    const { menu } = await openAccountMenu()
+    // What it has attached: a press and a focus outside, and Escape.
+    for (const type of ['keydown', 'pointerdown', 'focusin']) {
+      expect(added.filter((a) => a === type).length - removed.filter((r) => r === type).length, type).toBeGreaterThan(0)
+    }
+    const live = (type: string) => added.filter((a) => a === type).length - removed.filter((r) => r === type).length
+    const open = { pointerdown: live('pointerdown'), focusin: live('focusin') }
+    await closeMenu(menu)
+    expect(live('pointerdown')).toBe(open.pointerdown - 1)
+    expect(live('focusin')).toBe(open.focusin - 1)
+    // Closed, a press elsewhere or Escape reaches no handler of the menu.
+    const before = added.length
+    fireEvent.pointerDown(document.body)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(menu.open).toBe(false)
+    expect(added.length).toBe(before)
+    // And it comes back with the menu.
+    await openMenu(menu)
+    expect(live('pointerdown')).toBe(open.pointerdown)
+  } finally {
+    add.mockRestore()
+    remove.mockRestore()
+  }
+})
+
 test('a press or focus outside the account menu closes it; inside it does not', async () => {
   const { menu, container } = await openAccountMenu()
   const inside = within(menu).getByRole('button', { name: 'Log out' })
@@ -497,14 +584,15 @@ test('a press or focus outside the account menu closes it; inside it does not', 
   fireEvent.pointerDown(container.querySelector('main') as HTMLElement)
   expect(menu.open).toBe(false)
 
-  menu.open = true
+  await act(() => new Promise((done) => setTimeout(done, 0))) // its toggle event, and the listeners going
+  await openMenu(menu)
   fireEvent.focusIn(screen.getByRole('button', { name: 'Skip to the content' }))
   expect(menu.open).toBe(false)
 })
 
 test('Escape with the account menu closed leaves focus where it is', async () => {
   const { menu, summary } = await openAccountMenu()
-  menu.open = false
+  await closeMenu(menu)
   const skip = screen.getByRole('button', { name: 'Skip to the content' })
   skip.focus()
   fireEvent.keyDown(document, { key: 'Escape' })

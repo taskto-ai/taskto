@@ -379,3 +379,19 @@ test('a task item makes no HTML either', () => {
   expect(container.querySelector('img')).toBeNull()
   expect(container.querySelector('label')?.textContent).toBe('<img src=x onerror=alert(1)> done')
 })
+
+test('a task item keeps its line breaks in a reply, as an ordinary list item does', () => {
+  const { container } = render(
+    <Markdown text={['- [ ] First line', '  Second line', '- Plain first', '  plain second'].join('\n')} lineBreaks />,
+  )
+  const task = container.querySelector('li.tt-task-item label span') as HTMLElement
+  expect(task.querySelectorAll('br')).toHaveLength(1)
+  expect(task.textContent).toBe('First lineSecond line')
+  const plain = [...container.querySelectorAll('li')].find(
+    (li) => !li.classList.contains('tt-task-item'),
+  ) as HTMLElement
+  expect(plain.querySelectorAll('br')).toHaveLength(1)
+  // Without line breaks (a document), a task item's lines are one line, as a paragraph's are.
+  const doc = render(<Markdown text={['- [ ] First line', '  Second line'].join('\n')} />)
+  expect(doc.container.querySelector('li.tt-task-item br')).toBeNull()
+})

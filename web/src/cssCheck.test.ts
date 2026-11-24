@@ -98,3 +98,30 @@ test('the search result snippet and the settings code sample have a class each',
   expect(rules[0][2]).not.toMatch(/display:\s*grid/)
   expect(css).toMatch(/\n\.tt-setup-snippet \{[^}]*display:\s*grid/)
 })
+
+test('the settings code sample keeps the colour and the wrapping the shared snippet class once gave it', () => {
+  const css = readFileSync(join(web, 'src/styles.css'), 'utf8')
+  const rule = css.match(/(^|\n)\.tt-setup-snippet \{([^}]*)\}/)?.[2] ?? ''
+  // The headings and commands there were muted and wrapped anywhere, before the class was renamed.
+  expect(rule).toMatch(/color:\s*var\(--tt-muted\)/)
+  expect(rule).toMatch(/overflow-wrap:\s*anywhere/)
+})
+
+test('a class a lookup table holds counts as used; an attribute selector is not a rule for a class', () => {
+  const css =
+    '.tt-known { color: red; }\n[data-state="tt-missing"] { color: blue; }\n.tt-other[data-x=\'tt-also\'] { color: red; }\n'
+  const table = `const HEALTH: Record<string, string | undefined> = { none: 'tt-known', bad: 'tt-missing' }
+export const A = ({ h }: { h: string }) => <p className={HEALTH[h]}>x</p>
+`
+  const r = run(css, { 'A.tsx': table })
+  expect(r.code).toBe(1)
+  expect(r.err).toContain('src/A.tsx:1: tt-missing is used but no rule')
+  expect(r.err).not.toContain('tt-known is used')
+
+  // An id in the same file, and a table not in capitals, are not classes it reads.
+  const quiet = run('.tt-known { color: red; }\n', {
+    'A.tsx': `const lower = { a: 'tt-nothing' }\nexport const A = () => <p id="tt-anchor" className="tt-known">{lower.a}</p>\n`,
+  })
+  expect(quiet.err).toBe('')
+  expect(quiet.code).toBe(0)
+})
