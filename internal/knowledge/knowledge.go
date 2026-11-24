@@ -301,6 +301,53 @@ func (s *Store) Read(_ context.Context, sp access.Space, name, at string) (Doc, 
 	return doc, err
 }
 
+// ReadText returns the text file name of sp, as it is now or as it was at the commit at, for a
+// reader that wants text and nothing else (the agent's read_doc). What the file is is decided
+// from its metadata, under the same read lock as the read, before any content is loaded: an
+// unversioned file, and a file other than Markdown over maxSize bytes, are ErrInvalid without
+// their bytes being read. A file with a NUL byte or that isn't valid UTF-8 is ErrInvalid too,
+// whatever its name says, so what is returned is always text that reads back as it was written.
+func (s *Store) ReadText(_ context.Context, sp access.Space, name, at string, maxSize int64) (Doc, error) {
+	if err := checkPath(name); err != nil {
+		return Doc{}, err
+	}
+	var doc Doc
+	err := s.read(sp, func(r *repo) error {
+		c, err := r.revision(at)
+		if err != nil {
+			return err
+		}
+		e, err := r.entryAt(c, name)
+		if err != nil {
+			return err
+		}
+		if e.Mode == filemode.Dir {
+			return fmt.Errorf("%w: %s is a folder", ErrNotFound, name)
+		}
+		entry, p, err := r.describe(name, e.Hash) // reads a blob only if it is small enough to be a pointer
+		if err != nil {
+			return err
+		}
+		switch {
+		case p != nil:
+			// Its bytes are on disk, not in git, and can be any size: only list_docs shows it.
+			return fmt.Errorf("%w: %s is an unversioned file (a large file, audio, video or an archive): it can't be read as text", ErrInvalid, name)
+		case !IsMarkdown(name) && entry.Size > maxSize:
+			return fmt.Errorf("%w: %s is %d bytes: only text files up to %d KiB can be read", ErrInvalid, name, entry.Size, maxSize>>10)
+		}
+		content, err := r.blobBytes(e.Hash)
+		if err != nil {
+			return err
+		}
+		if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
+			return fmt.Errorf("%w: %s isn't a text file: only Markdown documents and plain-text files can be read", ErrInvalid, name)
+		}
+		doc = Doc{Entry: entry, Content: content}
+		return nil
+	})
+	return doc, err
+}
+
 // Put creates or replaces the document name of sp with content. To create it, base must
 // be empty; to replace it, base must be its current version, or the result is
 // ErrConflict. message is the commit message; empty means one saying what changed. A
@@ -556,7 +603,19 @@ func (bytesFile) Close() error { return nil }
 
 // Move renames the document or folder from to to, which mustn't exist. base, if not
 // empty, must be the document's current version; it can't be given for a folder.
-func (s *Store) Move(_ context.Context, sp access.Space, from, to, base string, by Author, message string) (Result, error) {
+func (s *Store) Move(ctx context.Context, sp access.Space, from, to, base string, by Author, message string) (Result, error) {
+	return s.move(ctx, sp, from, to, base, by, message, false)
+}
+
+// MoveKept is Move for a caller that can't ask a person first (the agent's tools): it refuses,
+// under the same lock as the move, one that would change a file between versioned and
+// unversioned storage, as renaming draft.md to draft.zip would: the file's older versions leave
+// history. The error is ErrInvalid; a person does such a move in the web app.
+func (s *Store) MoveKept(ctx context.Context, sp access.Space, from, to, base string, by Author, message string) (Result, error) {
+	return s.move(ctx, sp, from, to, base, by, message, true)
+}
+
+func (s *Store) move(_ context.Context, sp access.Space, from, to, base string, by Author, message string, kept bool) (Result, error) {
 	if err := s.checkWrite(sp, from, nil, by, message); err != nil {
 		return Result{}, err
 	}
@@ -614,6 +673,10 @@ func (s *Store) Move(_ context.Context, sp access.Space, from, to, base string, 
 				return err
 			}
 			if p == nil && s.unversioned(to, entry.Size) {
+				if kept {
+					return fmt.Errorf("%w: moving %s to %s would make it an unversioned file, kept outside git, and take its older versions out of history for good; keep a name of the same kind (the same kind of extension), or ask the person to rename it in the web app",
+						ErrInvalid, from, to)
+				}
 				r.collect = true // the bytes it adopts, if the change fails
 				ptr, err := r.toLFS(cur.Hash, s.opts.MaxUnversionedSize)
 				if err != nil {
@@ -645,7 +708,18 @@ func (s *Store) Move(_ context.Context, sp access.Space, from, to, base string, 
 
 // Delete removes the document name. base, if not empty, must be its current version.
 // Its history stays.
-func (s *Store) Delete(_ context.Context, sp access.Space, name, base string, by Author, message string) (Result, error) {
+func (s *Store) Delete(ctx context.Context, sp access.Space, name, base string, by Author, message string) (Result, error) {
+	return s.delete(ctx, sp, name, base, by, message, false)
+}
+
+// DeleteKept is Delete for a caller that can't ask a person first (the agent's tools): it
+// refuses an unversioned file, whose bytes a delete removes for good, under the same lock as
+// the delete. A versioned document's history keeps it. The error is ErrInvalid.
+func (s *Store) DeleteKept(ctx context.Context, sp access.Space, name, base string, by Author, message string) (Result, error) {
+	return s.delete(ctx, sp, name, base, by, message, true)
+}
+
+func (s *Store) delete(_ context.Context, sp access.Space, name, base string, by Author, message string, kept bool) (Result, error) {
 	if err := s.checkWrite(sp, name, nil, by, message); err != nil {
 		return Result{}, err
 	}
@@ -667,6 +741,13 @@ func (s *Store) Delete(_ context.Context, sp access.Space, name, base string, by
 		}
 		if err := checkBase(cur, name, base); err != nil {
 			return err
+		}
+		if kept {
+			if _, p, err := r.describe(name, cur.Hash); err != nil {
+				return err
+			} else if p != nil {
+				return fmt.Errorf("%w: %s is an unversioned file (a large file, audio, video or an archive): deleting it removes its bytes for good and no tool can bring them back; ask the person to delete it in the web app", ErrInvalid, name)
+			}
 		}
 		r.collect = !IsMarkdown(name)
 		commit, err := r.change(head, []edit{{name: name}}, by, orDefault(message, "Delete "+name))

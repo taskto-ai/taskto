@@ -93,7 +93,7 @@
   },
   {
     "name": "read_doc",
-    "description": "Read a Markdown document (.md) or a plain-text file of up to 1 MiB (code, data, notes: not binaries, and not large files, audio, video or archives), as it is now or, with \"at\", as it was at an older commit (from doc_history). Long files come in pieces of 32 KiB: pass \"next_offset\" as \"offset\" for the next piece. \"version\" is what write_doc needs to change a document (only when read as it is now).",
+    "description": "Read a Markdown document (.md) or a plain-text file of up to 1 MiB (code, data, notes: not binaries, and not large files, audio, video or archives), as it is now or, with \"at\", as it was at an older commit (from doc_history). A file that isn't UTF-8 text (a binary, even under a .md name) is refused. Long files come in pieces of 32 KiB: pass \"next_offset\" as \"offset\" for the next piece (an offset inside a character is refused). \"version\" is what write_doc needs to change a document (only when read as it is now).",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -156,7 +156,7 @@
   },
   {
     "name": "move_doc",
-    "description": "Rename or move a document, a file or a whole folder in a space the user may write; the destination must not exist. To move a document, pass the version you read as base_version (not for a folder). The change is the user's, made by their agent, and kept in the history.",
+    "description": "Rename or move a document, a file or a whole folder in a space the user may write; the destination must not exist (nor a name that differs only in case or in how an accent is written). A move that would change a file between versioned storage and unversioned storage (draft.md to draft.zip, say) is refused, since it takes the file's older versions out of history: ask the user to rename it in the web app. To move a document, pass the version you read as base_version (not for a folder). The change is the user's, made by their agent, and kept in the history.",
     "read_only": false,
     "input_schema": {
       "type": "object",
@@ -192,7 +192,7 @@
   },
   {
     "name": "delete_doc",
-    "description": "Delete a document or file (not a folder: delete what is in it) in a space the user may write. A document's history stays: doc_history finds it and restore_doc brings it back. An unversioned file (a large file, audio, video, an archive) is gone for good: its bytes are not kept. Ask the user first unless they asked for it.",
+    "description": "Delete a document or file (not a folder: delete what is in it) in a space the user may write. A document's history stays: doc_history finds it and restore_doc brings it back. An unversioned file (a large file, audio, video, an archive) is refused, since its bytes would be gone for good: ask the user to delete it in the web app. Ask the user first unless they asked for it.",
     "read_only": false,
     "input_schema": {
       "type": "object",
@@ -222,7 +222,7 @@
   },
   {
     "name": "doc_history",
-    "description": "List the commits that changed a document, newest first, with who made each (and the agent, if one did), when, its message, what happened to the document (create, update or delete) and its version after. Without a path, the whole space's commits. A commit goes to read_doc as \"at\" and to restore_doc as \"commit\". \"next\" is the \"before\" of the next page. It doesn't follow renames: look for the old path too.",
+    "description": "List the commits that changed a document, newest first, with who made each (and the agent, if one did), when, its message, what happened to the document (create, update or delete) and its version after. Without a path, the whole space's commits. Only commits of the space's own history count. A commit goes to read_doc as \"at\" and to restore_doc as \"commit\". \"next\" is the \"before\" of the next page. It doesn't follow renames: look for the old path too.",
     "read_only": true,
     "input_schema": {
       "type": "object",

@@ -18,6 +18,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/filesystem"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
@@ -109,19 +111,32 @@ func (r *repo) head() (*object.Commit, error) {
 	return object.GetCommit(r.st, ref.Hash())
 }
 
-// revision returns the commit at, or the head if at is empty.
+// revision returns the commit at, or the head if at is empty. A commit that isn't in main's
+// history (one a failed change stored and left behind, say) is ErrNotFound, as if the
+// repository didn't have it: nothing a person could have seen is read from it.
 func (r *repo) revision(at string) (*object.Commit, error) {
-	if at == "" {
-		return r.head()
+	head, err := r.head()
+	if at == "" || err != nil {
+		return head, err
 	}
 	if !isHash(at) {
 		return nil, fmt.Errorf("%w: %q isn't a commit ID", ErrInvalid, at)
 	}
-	c, err := object.GetCommit(r.st, plumbing.NewHash(at))
-	if errors.Is(err, plumbing.ErrObjectNotFound) {
-		return nil, fmt.Errorf("%w: commit %s", ErrNotFound, at)
+	want := plumbing.NewHash(at)
+	notFound := fmt.Errorf("%w: commit %s", ErrNotFound, at)
+	// History is one line, so the commit is main's if the head's parents lead to it.
+	for c := head; c != nil; {
+		if c.Hash == want {
+			return c, nil
+		}
+		if c, err = r.parent(c); err != nil {
+			if errors.Is(err, plumbing.ErrObjectNotFound) {
+				return nil, notFound
+			}
+			return nil, err
+		}
 	}
-	return c, err
+	return nil, notFound
 }
 
 // entryAt finds name in c's tree, walking it one element at a time. A nil c is the empty
@@ -152,6 +167,10 @@ func (r *repo) entryAt(c *object.Commit, name string) (*object.TreeEntry, error)
 	}
 	panic("unreachable")
 }
+
+// foldKey is what two names are the same by, for a file system that treats them so: macOS and
+// Windows unpack é written as one character or as two to the same name, and ignore case.
+func foldKey(s string) string { return cases.Fold().String(norm.NFC.String(s)) }
 
 func findEntry(entries []object.TreeEntry, name string) *object.TreeEntry {
 	for i := range entries {
@@ -318,10 +337,13 @@ func (r *repo) setPath(treeHash plumbing.Hash, elems []string, name string, blob
 		if blob.IsZero() {
 			return plumbing.ZeroHash, fmt.Errorf("%w: %s", ErrNotFound, name)
 		}
-		// Two names that differ only by case are one file on macOS and Windows.
-		if j := slices.IndexFunc(entries, func(e object.TreeEntry) bool { return strings.EqualFold(e.Name, elems[0]) }); j >= 0 {
+		// Two names that differ only by case, or by how an accent is encoded (é as one
+		// character or as e and a combining accent), are one file on macOS and Windows: the
+		// second would overwrite the first in the checkout.
+		key := foldKey(elems[0])
+		if j := slices.IndexFunc(entries, func(e object.TreeEntry) bool { return foldKey(e.Name) == key }); j >= 0 {
 			return plumbing.ZeroHash, errorf(apierr.CodeDocCaseConflict, apierr.Params{"name": elems[0], "other": entries[j].Name},
-				"%w: %q differs only by case from %q, which exists", ErrConflict, elems[0], entries[j].Name)
+				"%w: %q differs only by case or Unicode form from %q, which exists", ErrConflict, elems[0], entries[j].Name)
 		}
 	}
 

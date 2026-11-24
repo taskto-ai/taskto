@@ -1,7 +1,6 @@
 package agenttools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -177,24 +176,19 @@ func (s *Service) readDoc(ctx context.Context, c *call, args json.RawMessage) (a
 	if err != nil {
 		return nil, err
 	}
-	doc, err := s.o.Knowledge.Read(ctx, sp, a.Path, a.At)
+	// The store decides what the file is before it loads it: unversioned, too large for text, not
+	// UTF-8 or with a NUL byte are refused there, whatever the file's name.
+	doc, err := s.o.Knowledge.ReadText(ctx, sp, a.Path, a.At, maxTextFile)
 	if err != nil {
 		return nil, err
 	}
-	if !doc.Versioned {
-		// Its bytes are on disk, not in git, and can be any size: only list_docs shows it.
-		return nil, invalidf("%s is an unversioned file (a large file, audio, video or an archive): it can't be read as text", doc.Path)
-	}
-	if !knowledge.IsMarkdown(doc.Path) {
-		switch {
-		case doc.Size > maxTextFile:
-			return nil, invalidf("%s is %d bytes: only text files up to %d KiB can be read", doc.Path, doc.Size, maxTextFile>>10)
-		case bytes.IndexByte(doc.Content, 0) >= 0 || !utf8.Valid(doc.Content):
-			return nil, invalidf("%s isn't a text file: only Markdown documents and plain-text files can be read", doc.Path)
-		}
-	}
 	if a.Offset < 0 || a.Offset > len(doc.Content) {
 		return nil, invalidf("offset must be 0 to %d, the document's size", len(doc.Content))
+	}
+	// next_offset is always at a character's start, so one that isn't is a made-up number: a read
+	// from inside a character would return replacement characters, not the text.
+	if a.Offset < len(doc.Content) && !utf8.RuneStart(doc.Content[a.Offset]) {
+		return nil, invalidf("offset %d is inside a character: use 0 or a next_offset from an earlier read", a.Offset)
 	}
 	rest := string(doc.Content[a.Offset:])
 	content, more := cut(rest, readChunk)
@@ -255,7 +249,9 @@ func (s *Service) docHistory(ctx context.Context, c *call, args json.RawMessage)
 	return res, err
 }
 
-// moveDoc renames a document or folder, as the user, committed by the agent.
+// moveDoc renames a document or folder, as the user, committed by the agent. A rename that
+// would change a file between versioned and unversioned storage is refused: it takes the file's
+// older versions out of history.
 func (s *Service) moveDoc(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
 		SpaceID     int64  `json:"space_id"`
@@ -275,10 +271,11 @@ func (s *Service) moveDoc(ctx context.Context, c *call, args json.RawMessage) (a
 	if err != nil {
 		return nil, err
 	}
-	return s.o.Knowledge.Move(ctx, sp, a.From, a.To, a.BaseVersion, by, a.Message)
+	return s.o.Knowledge.MoveKept(ctx, sp, a.From, a.To, a.BaseVersion, by, a.Message)
 }
 
-// deleteDoc deletes a document or file; its history stays, so restore_doc brings it back.
+// deleteDoc deletes a document; its history stays, so restore_doc brings it back. An unversioned
+// file is refused: its bytes would be gone for good, and the built-in agent has no one to ask.
 func (s *Service) deleteDoc(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
 		SpaceID     int64  `json:"space_id"`
@@ -297,7 +294,7 @@ func (s *Service) deleteDoc(ctx context.Context, c *call, args json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
-	return s.o.Knowledge.Delete(ctx, sp, a.Path, a.BaseVersion, by, a.Message)
+	return s.o.Knowledge.DeleteKept(ctx, sp, a.Path, a.BaseVersion, by, a.Message)
 }
 
 // restoreDoc makes a document what it was at an older commit, as a new commit.
