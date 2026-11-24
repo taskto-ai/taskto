@@ -113,7 +113,7 @@ const (
 type AppAccess struct {
 	// Roles are the roles the user holds in the app: every role they could hold if the app
 	// is unrestricted, or the ones assigned to them (their own, or else the default's).
-	Roles []AppRole `json:"roles"`
+	Roles []AppRole `json:"roles" apitypes:"nonnull"`
 	// Restricted is whether roles were assigned for the app at all.
 	Restricted bool `json:"restricted"`
 

@@ -18,6 +18,7 @@ import {
 import { pushStrings } from '../notifications/strings'
 import { useInstall } from '../pwa/install'
 import { Link, routePath } from '../router'
+import { EmailNotifications } from './EmailNotifications'
 import { Alert, useAction } from './parts'
 
 export function NotificationsTab({ me, workspace }: { me: number; workspace: number }) {
@@ -98,6 +99,7 @@ export function NotificationsTab({ me, workspace }: { me: number; workspace: num
         <Alert error={action.error} />
         <p className="tt-muted tt-small">{t('notifications.settings.caveat')}</p>
       </section>
+      <EmailNotifications workspace={workspace} />
     </div>
   )
 }

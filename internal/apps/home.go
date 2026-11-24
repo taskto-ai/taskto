@@ -94,17 +94,17 @@ type HomeItem struct {
 type HomeRelease struct {
 	Number            int64    `json:"number"`
 	DefinitionVersion int      `json:"definition_version"`
-	Requires          []string `json:"requires"`
+	Requires          []string `json:"requires" apitypes:"nonnull"`
 }
 
 // HomeView is a person's Home in one workspace.
 type HomeView struct {
 	// Widgets and Pins are in order: the defaults of the person's shared spaces first, then
 	// their own, in the order they chose.
-	Widgets []HomeItem `json:"widgets"`
-	Pins    []HomeItem `json:"pins"`
+	Widgets []HomeItem `json:"widgets" apitypes:"nonnull"`
+	Pins    []HomeItem `json:"pins" apitypes:"nonnull"`
 	// Hidden are the defaults the person hid.
-	Hidden []HomeItem `json:"hidden"`
+	Hidden []HomeItem `json:"hidden" apitypes:"nonnull"`
 	Limits struct {
 		Widgets int `json:"widgets"`
 		Pins    int `json:"pins"`
@@ -127,12 +127,12 @@ type AvailableApp struct {
 	SpaceKind string   `json:"space_kind"`
 	AppID     int64    `json:"app_id"`
 	Name      string   `json:"name"`
-	Widgets   []Widget `json:"widgets"`
+	Widgets   []Widget `json:"widgets" apitypes:"nonnull"`
 	Pin       *Pin     `json:"pin"`
 	// CanSetDefaults is whether the caller may set this app's widgets and pin as defaults of its
 	// shared space; Defaults are the ones set, which they may remove.
 	CanSetDefaults bool               `json:"can_set_defaults"`
-	Defaults       []AvailableDefault `json:"defaults"`
+	Defaults       []AvailableDefault `json:"defaults" apitypes:"nonnull"`
 }
 
 // AvailableDefault is a default that is set for an app.

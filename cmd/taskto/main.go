@@ -229,6 +229,18 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	// access.
 	spaces := access.New(sqlDB, nil)
 	boardSvc := boards.New(sqlDB, spaces)
+	// The scheduler: timed work that runs for people, later (package schedule). The features that
+	// use it register their handlers here, before anything that changes cards runs and before it
+	// starts; it stops before the database closes. Cards' due-date reminders and overdue notices
+	// are scheduled by every path that changes a card: the tools, the apps' effects (below) and the
+	// HTTP routes (server.Options.Scheduler); the cards dated before there were reminders get theirs.
+	scheduler := schedule.New(sqlDB, spaces, schedule.Options{})
+	if err := boardSvc.EnableReminders(scheduler); err != nil {
+		return err
+	}
+	if err := boardSvc.ReconcileReminders(ctx); err != nil {
+		return err
+	}
 	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb})
 	// The apps' effects (cards, documents) are done in the background, as the users who acted,
 	// so they go on when nobody has the app open. Stopped before the database closes.
@@ -236,15 +248,16 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	defer stopEffects()
 	// The notification inbox, and Web Push for the people who turn it on: the VAPID key pair is made
 	// on first start, and the worker that sends pushes runs until the server stops.
-	notifier, err := notifications.New(ctx, sqlDB, spaces, notifications.Options{Key: key, Contact: cfg.PushContact})
+	notifier, err := notifications.New(ctx, sqlDB, spaces, notifications.Options{Key: key, Contact: cfg.PushContact, Mail: mailer, PublicURL: cfg.PublicURL})
 	if err != nil {
+		return err
+	}
+	// The daily email summary is a scheduled job: its handler is registered before the scheduler starts.
+	if err := notifier.AttachScheduler(scheduler); err != nil {
 		return err
 	}
 	stopPush := notifier.Start(ctx)
 	defer stopPush()
-	// The scheduler: timed work that runs for people, later (package schedule). The features that
-	// use it register their handlers here, before it starts; it stops before the database closes.
-	scheduler := schedule.New(sqlDB, spaces, schedule.Options{})
 	stopSchedule := scheduler.Start(ctx)
 	defer stopSchedule()
 	tools := agenttools.New(agenttools.Options{
@@ -318,6 +331,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	}
 	handler, err := server.New(version, sqlDB, server.Options{
 		Notifications: notifier,
+		Scheduler:     scheduler,
 		Auth:          authOpts,
 		DataDir:       cfg.DataDir,
 		AgentState:    agent.state,

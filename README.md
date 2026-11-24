@@ -53,6 +53,7 @@ step-by-step install on a fresh Ubuntu VM.
 | [docs/releasing.md](docs/releasing.md) | cutting a release, and what makes servers take it |
 | [docs/pwa.md](docs/pwa.md) | the installable app: manifest, offline shell, service worker, updates, phones |
 | [docs/templates.md](docs/templates.md) | the bundled app templates (expense tracker, equipment checkout, inspection), installing them and duplicating apps |
+| [docs/web-e2e.md](docs/web-e2e.md) | the web app's end to end tests: what they cover, how to run them, and the traces a failure leaves |
 | [docs/offline.md](docs/offline.md) | apps offline: downloads, the durable outbox for records made offline, sync, sign-out and revocation |
 | [docs/sso.md](docs/sso.md) | single sign-on with Google, Authentik or any OpenID Connect provider |
 | [docs/audit.md](docs/audit.md) | the audit log of security and admin actions: what is recorded, never recorded, and for how long |
@@ -112,18 +113,25 @@ the default.
 | `-agent-node` | `TASKTO_AGENT_NODE` | `agent_node` | `node` | Node.js executable for the agent runtime, looked up in `PATH` unless it is a path |
 | `-agent-entry` | `TASKTO_AGENT_ENTRY` | `agent_entry` | see below | the agent runtime's entry point |
 | `-agent-providers` | `TASKTO_AGENT_PROVIDERS` | `agent_providers` | | the operator's model providers file ([docs/agent-providers.md](docs/agent-providers.md)), offered to everyone before the providers users and workspaces add; without it, the scripted offline model |
+| `-cli-workers` | `TASKTO_CLI_WORKERS` | `cli_workers` | `off` | run conversations on the users' own Claude Code, Codex and Grok Build logins: `off`, `container` (a worker of its own, see `-cli-worker-socket`), `local` (one-user instances only) or `local-unsafe` (development) ([docs/cli-workers.md](docs/cli-workers.md)) |
+| `-cli-worker-socket` | `TASKTO_CLI_WORKER_SOCKET` | `cli_worker_socket` | | the CLI worker's socket; needed with `-cli-workers container` |
+| `-cli-proxy-listen` | `TASKTO_CLI_PROXY_LISTEN` | `cli_proxy_listen` | `127.0.0.1` on a free port with `local` and `local-unsafe`; none with `container` | where the per-turn proxy listens (workspaces' shared CLI accounts, and TaskTo's tools for CLI turns), apart from the public address: `host:port`, or `unix:/path` in container mode, for the worker to relay ([docs/account-switching.md](docs/account-switching.md)) |
+| `-cli-proxy-url` | `TASKTO_CLI_PROXY_URL` | `cli_proxy_url` | its listen address with `local` and `local-unsafe` | the per-turn proxy as the CLIs reach it, such as `http://127.0.0.1:8081`; needs `-cli-proxy-listen`; in container mode it is required whenever `-cli-proxy-listen` is set, TCP or `unix:`, and with a `unix:` listener it is the worker's relay's URL |
+| `-browser` | `TASKTO_BROWSER` | `browser` | `false` | give the agent a browser per user, with a live view and hand-over for logins; needs `-cli-workers` ([docs/agent-browser.md](docs/agent-browser.md)) |
+| `-browser-chromium` | `TASKTO_BROWSER_CHROMIUM` | `browser_chromium` | `chromium` | the agent browser's Chromium in local mode, looked up in `PATH`; by default `chromium`, then `chromium-browser` |
 | `-unsafe-privileged-agents` | `TASKTO_UNSAFE_PRIVILEGED_AGENTS` | `unsafe_privileged_agents` | `false` | development only: start the agent runtime and `local` CLI workers even when the server runs as root or has a passwordless `sudo` ([docs/agent-safety.md](docs/agent-safety.md)) |
 | `-kb-max-file-size` | `TASKTO_KB_MAX_FILE_SIZE` | `kb_max_file_size` | `2GiB` | largest file of any kind in the knowledge base (bytes, or with `KiB`, `MiB`, `GiB`) |
 | `-kb-large-file-size` | `TASKTO_KB_LARGE_FILE_SIZE` | `kb_large_file_size` | `50MiB` | files other than Markdown over this size are kept out of git, unversioned, as audio, video and heavy binaries such as archives always are; also the largest Markdown document ([docs/api.md](docs/api.md#unversioned-files)) |
 | `-kb-max-repo-size` | `TASKTO_KB_MAX_REPO_SIZE` | `kb_max_repo_size` | `1GiB` | cap on each space's knowledge-base repository, history included (unversioned files' bytes aside) |
 | `-kb-max-unversioned-size` | `TASKTO_KB_MAX_UNVERSIONED_SIZE` | `kb_max_unversioned_size` | `20GiB` | cap on the bytes of each space's unversioned files together |
 | `-search-vector-cache` | `TASKTO_SEARCH_VECTOR_CACHE` | `search_vector_cache` | `1GiB` | most memory semantic search keeps vectors in, or `off`; a passage of 768 dimensions takes about 3 KiB, so 200,000 take about 600 MiB. Spaces that don't fit are read from the database at each search, about 25 times slower |
-| `-dictation-local` | `TASKTO_DICTATION_LOCAL` | `dictation_local` | `parakeet-v3` | the local speech model, every workspace's default dictation engine unless an admin picks the hosted API: `parakeet-v3`, `whistle` or `off`; downloaded on first use ([docs/install.md](docs/install.md#dictation)) |
+| `-dictation-local` | `TASKTO_DICTATION_LOCAL` | `dictation_local` | `parakeet-v3` | the server's speech model for workspaces using the `local` engine (the workspace default; an admin can also choose the hosted API or an installed add-on): `parakeet-v3`, `whistle` or `off`; downloaded on first use ([docs/install.md](docs/install.md#dictation)) |
 | `-dictation-cache` | `TASKTO_DICTATION_CACHE` | `dictation_cache` | `<data-dir>/cache/dictation` | where the local speech model's files are kept |
 | `-addons-dir` | `TASKTO_ADDONS_DIR` | `addons_dir` | `<data-dir>/addons` | where the operator installs add-ons such as Desert Ant Voz ([docs/install.md](docs/install.md#dictation)) |
 | `-audit-retention` | `TASKTO_AUDIT_RETENTION` | `audit_retention` | `365` | days the audit log keeps its events, or `off` to stop deleting them by age (a workspace's events still go when it is deleted; [docs/audit.md](docs/audit.md)) |
 | `-push-contact` | `TASKTO_PUSH_CONTACT` | `push_contact` | `https://taskto.ai` | how browsers' push services can reach whoever runs the server (the VAPID contact): a `mailto:` or `https:` URL ([docs/install.md](docs/install.md#web-push-notifications)) |
 | `-config` | `TASKTO_CONFIG` | | | config file to read |
+| `-version` | | | `false` | Print the version and exit |
 
 The config file is a small subset of TOML: `key = value` lines, strings in double
 quotes, `true`/`false`, and `#` comments.

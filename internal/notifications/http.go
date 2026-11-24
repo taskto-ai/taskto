@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -32,6 +33,10 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("GET "+inbox+"/count", member(s.handleCount))
 	mux.Handle("POST "+inbox+"/read", member(s.handleReadAll))
 	mux.Handle("POST "+inbox+"/{notification}/read", member(s.handleRead))
+	mux.Handle("GET /api/workspaces/{workspace}/notification-email", member(s.handleEmailGet))
+	mux.Handle("PUT /api/workspaces/{workspace}/notification-email", member(s.handleEmailPut))
+	mux.Handle("POST /api/workspaces/{workspace}/notification-email/verification", member(s.handleVerificationSend))
+	mux.Handle("POST /api/me/notification-email/confirm", user(s.handleVerificationConfirm))
 	mux.Handle("GET /api/me/notifications/{notification}", user(s.handleGet))
 	mux.Handle("GET /api/me/push/key", user(s.handleKey))
 	mux.Handle("PUT /api/me/push/subscription", user(func(w http.ResponseWriter, r *http.Request) { s.handleSubscribe(w, r, a) }))
@@ -58,7 +63,7 @@ func (s *Service) serverError(w http.ResponseWriter, r *http.Request, err error)
 
 // List is a page of the inbox, newest first.
 type List struct {
-	Notifications []Item `json:"notifications"`
+	Notifications []Item `json:"notifications" apitypes:"nonnull"`
 	// More says whether older ones than the page's last exist (ask again with before).
 	More bool `json:"more"`
 	// Unread counts all the person's unread ones in the workspace, not only the page's.
@@ -415,4 +420,86 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_, _ = w.Write(append(body, '\n'))
+}
+
+// handleEmailGet answers the caller's own email choices in the workspace.
+func (s *Service) handleEmailGet(w http.ResponseWriter, r *http.Request) {
+	userID, workspaceID := callerAndWorkspace(r)
+	c, err := s.EmailChoices(r.Context(), userID, workspaceID)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// handleEmailPut changes the caller's own email choices in the workspace and answers the result.
+func (s *Service) handleEmailPut(w http.ResponseWriter, r *http.Request) {
+	userID, workspaceID := callerAndWorkspace(r)
+	var req *EmailUpdate
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req == nil { // a JSON null is not the object of the route's fields
+		apierr.Write(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: one object expected")
+		return
+	}
+	switch err := s.SetEmailChoices(r.Context(), userID, workspaceID, *req); {
+	case errors.Is(err, ErrNotMember):
+		apierr.Write(w, http.StatusNotFound, apierr.CodeWorkspaceNotFound, "workspace not found")
+		return
+	case errors.Is(err, ErrEmailInvalid):
+		apierr.Write(w, http.StatusBadRequest, apierr.CodeNotificationEmailInvalid, err.Error())
+		return
+	case errors.Is(err, ErrEmailUnavailable):
+		apierr.Write(w, http.StatusConflict, apierr.CodeMailNotConfigured,
+			"outgoing email isn't set up: the server's operator sets the SMTP server and the public URL (docs/install.md#email)")
+		return
+	case err != nil:
+		s.serverError(w, r, err)
+		return
+	}
+	s.handleEmailGet(w, r)
+}
+
+// handleVerificationSend mails the caller a link that confirms their address, unless it is
+// confirmed already. It asks for no body.
+func (s *Service) handleVerificationSend(w http.ResponseWriter, r *http.Request) {
+	userID, workspaceID := callerAndWorkspace(r)
+	var soon *TooSoonError
+	switch err := s.SendVerification(r.Context(), userID, workspaceID); {
+	case errors.As(err, &soon):
+		wait := int(math.Ceil(soon.Wait.Seconds()))
+		w.Header().Set("Retry-After", strconv.Itoa(wait))
+		apierr.Write(w, http.StatusTooManyRequests, apierr.CodeEmailVerifyTooSoon, "a confirmation link was sent a moment ago: try again later",
+			apierr.Params{"seconds": wait})
+	case errors.Is(err, ErrEmailUnavailable):
+		apierr.Write(w, http.StatusConflict, apierr.CodeMailNotConfigured,
+			"outgoing email isn't set up: the server's operator sets the SMTP server and the public URL (docs/install.md#email)")
+	case errors.Is(err, ErrVerifyNotSent):
+		apierr.Write(w, http.StatusBadGateway, apierr.CodeEmailVerifyUnavailable, "the confirmation email couldn't be sent")
+	case err != nil:
+		s.serverError(w, r, err)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleVerificationConfirm confirms the caller's own address with the token of a link sent to it.
+func (s *Service) handleVerificationConfirm(w http.ResponseWriter, r *http.Request) {
+	u, _ := auth.UserFrom(r.Context())
+	var req struct {
+		Token string `json:"token"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	switch err := s.ConfirmAddress(r.Context(), u.ID, req.Token); {
+	case errors.Is(err, ErrVerifyInvalid):
+		apierr.Write(w, http.StatusBadRequest, apierr.CodeEmailVerifyInvalid, "the confirmation link is unknown, used or expired: ask for a new one in Settings, Notifications")
+	case err != nil:
+		s.serverError(w, r, err)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

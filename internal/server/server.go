@@ -18,14 +18,17 @@ import (
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/checklist"
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/dictation"
+	"taskto.ai/taskto/internal/export"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/mail"
 	"taskto.ai/taskto/internal/mcpserver"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/webui"
 )
@@ -61,6 +64,10 @@ type Options struct {
 	Browser *agentbrowser.Service
 	// Notifications serves the notification inbox and Web Push subscriptions; nil leaves them out.
 	Notifications *notifications.Service
+	// Scheduler is the general scheduler, whose reminders' handlers the command registered (boards'
+	// EnableReminders): the HTTP routes of cards schedule on it too, so a card dated on the web
+	// keeps its reminders like one dated by the agent. nil makes none.
+	Scheduler *schedule.Service
 	// Mail is the server's outgoing email (docs/install.md#email); nil means the operator set up
 	// none. The admins' routes for it are there either way, and say so.
 	Mail *mail.Service
@@ -71,6 +78,9 @@ type Options struct {
 	// in DataDir (none if that is empty), so its caller can run its maintenance
 	// (apps.Service.Maintain) for as long as it serves.
 	AppsReady func(*apps.Service)
+	// Export sets the limits of a person's export of their own data (docs/api.md#export-my-data);
+	// the zero value is the defaults. Tests shorten them.
+	Export export.Options
 	// BackupDataDir is the data directory whose scheduled backups /healthz/backup and the
 	// admins' backup route report (internal/backup.Status). Empty reports none.
 	BackupDataDir string
@@ -86,9 +96,22 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	accounts.Routes(mux)
 	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireAdmin(backupStatus(opts.BackupDataDir)))
 	mailRoutes(mux, accounts, opts.Mail, newMailTestGate(opts.MailTestCooldown, time.Now))
+	checklist.New(sqlDB, checklist.Options{
+		Email: opts.Mail.Configured,
+		Backups: func() (bool, error) {
+			_, ok, err := readBackupStatus(opts.BackupDataDir)
+			return ok, err
+		},
+	}).Routes(mux, accounts)
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
 	boardSvc := boards.New(sqlDB, spaces)
+	if opts.Scheduler != nil {
+		// The handlers are the command's; this service only schedules, and follows spaces that are
+		// archived or brought back.
+		boardSvc.WithScheduler(opts.Scheduler)
+		spaces.OnArchiveChange(boardSvc.SyncSpace)
+	}
 	boardSvc.Routes(mux)
 	// The apps' routes list and retry their effects and check the targets they name; the
 	// server's own worker, which does them, is the one the command starts (apps.StartOutbox).
@@ -102,12 +125,18 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	if opts.Notifications != nil {
 		opts.Notifications.Routes(mux, accounts)
 	}
+	var kb *knowledge.Store
 	if opts.Search != nil {
-		opts.Search.Knowledge().Routes(mux, spaces)
+		kb = opts.Search.Knowledge()
+		kb.Routes(mux, spaces)
 		opts.Search.Routes(mux, accounts, spaces)
 	} else if opts.DataDir != "" {
-		knowledge.New(opts.DataDir, opts.Knowledge).Routes(mux, spaces)
+		kb = knowledge.New(opts.DataDir, opts.Knowledge)
+		kb.Routes(mux, spaces)
 	}
+	// A person's export of their own data reads through the same knowledge base, boards, apps and
+	// conversations the rest of the server uses, and writes nothing.
+	export.New(sqlDB, spaces, kb, boardSvc, appsService, opts.Conversations, opts.Export).Routes(mux, accounts)
 	if opts.Providers != nil {
 		opts.Providers.Routes(mux, accounts)
 	}
