@@ -3349,6 +3349,58 @@ backup host:
 {"status": "ok", "last_success": "2026-03-10T03:16:40Z", "due_by": "2026-03-11T10:15:00Z"}
 ```
 
+## Setup checklist
+
+The first-run checklist on an admin's Home (`internal/checklist`): the steps that make a new
+workspace useful to a team. Whether a step is done is never stored. It is worked out from what
+exists when the checklist is asked for, so a step done anywhere (the settings pages, the agent) is
+done here, and a step undone is open again. What is stored, per workspace and shared by its admins,
+is whether the checklist was dismissed and which steps were skipped as not applying.
+
+| `id` | Done when |
+|---|---|
+| `invite` | the workspace has a member besides one, an invite that hasn't expired and wasn't used yet, or an accepted invite (an expired, unused invite doesn't count) |
+| `provider` | the workspace has a model provider account |
+| `space` | the workspace has a shared space that isn't archived |
+| `app` | an app that isn't archived is in a shared space of the workspace that the caller is a member of, or in the caller's own private space (apps in spaces the caller can't read, and other people's private apps, are never counted) |
+| `email` | the server can send email ([Outgoing email](#outgoing-email)); optional |
+| `backups` | the server's scheduled backups have a status ([Backups](#backups)); optional |
+
+The answer says whether things exist, never what they are. Every route is for the workspace's
+admins, with a browser session (not an access token): `403 admin_only` for a member, `404
+workspace_not_found` for someone outside the workspace.
+
+### `GET /api/workspaces/{workspace}/checklist`
+
+```json
+{
+  "dismissed": false,
+  "complete": false,
+  "items": [
+    {"id": "invite", "state": "todo", "optional": false},
+    {"id": "provider", "state": "done", "optional": false},
+    {"id": "space", "state": "skipped", "optional": false},
+    {"id": "app", "state": "todo", "optional": false},
+    {"id": "email", "state": "todo", "optional": true},
+    {"id": "backups", "state": "done", "optional": true}
+  ]
+}
+```
+
+`state` is `done`, `todo` or `skipped`; a step that is done is `done` even if it was skipped.
+`complete` is true when every step that isn't `optional` is `done` or `skipped`. The web app shows
+the checklist while it isn't `dismissed` and isn't `complete`.
+
+### `PUT /api/workspaces/{workspace}/checklist/dismissed`, `DELETE …`
+
+Puts the checklist away for the whole workspace, or brings it back. `204`, and the same again is
+`204`.
+
+### `PUT /api/workspaces/{workspace}/checklist/skipped/{item}`, `DELETE …`
+
+Marks a step (an `id` above) as not applying, or takes the mark off. `204`; `404 not_found` for a
+step that doesn't exist.
+
 ## CLI accounts
 
 Each user's logins to the official coding-agent CLIs, Claude Code, Codex and Grok Build

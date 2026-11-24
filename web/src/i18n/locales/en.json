@@ -1821,6 +1821,57 @@
     },
     "removePinNamed": "Remove {name} from the menu"
   },
+  "checklist": {
+    "title": "Set up your workspace",
+    "intro": "A few steps that make this workspace useful to a team. Each is done when it is true on the server; skip any that doesn’t apply to you.",
+    "progress": "{done} of {total} steps handled",
+    "dismiss": "Dismiss checklist",
+    "optional": "Optional",
+    "state": {
+      "done": "Done",
+      "todo": "To do",
+      "skipped": "Skipped"
+    },
+    "skip": "Skip",
+    "unskip": "Undo skip",
+    "skipNamed": "Skip: {name}",
+    "unskipNamed": "Undo skip: {name}",
+    "dismissedNote": "You put the setup checklist away. The change applies to all of this workspace’s admins.",
+    "show": "Show the setup checklist",
+    "completed": "The setup checklist is complete.",
+    "steps": {
+      "invite": {
+        "title": "Invite your team",
+        "text": "Add the people you work with. Working alone? Skip this one.",
+        "action": "Invite people"
+      },
+      "provider": {
+        "title": "Add a model provider",
+        "text": "Connect the AI service the agent will use, so everyone in the workspace can talk to it.",
+        "action": "Add a provider"
+      },
+      "space": {
+        "title": "Create a shared space",
+        "text": "A place for the documents, boards and apps your team works on together.",
+        "action": "Create a space"
+      },
+      "app": {
+        "title": "Install an app template",
+        "text": "Start from a ready-made app, such as an expense tracker, and make it yours.",
+        "action": "Browse templates"
+      },
+      "email": {
+        "title": "Set up email",
+        "text": "Lets the server send invites and password resets. Whoever runs the server sets it up; see the install guide.",
+        "action": "See the server’s status"
+      },
+      "backups": {
+        "title": "Set up backups",
+        "text": "A nightly copy of everything, kept off this server. Whoever runs the server sets it up; see the install guide.",
+        "action": "See the backups"
+      }
+    }
+  },
   "offline": {
     "writer": {
       "elsewhere": "Changes are being made in another tab. Records and the queue are shown here, and changed there.",
