@@ -11,7 +11,7 @@
   },
   {
     "name": "list_members",
-    "description": "List the people who can be assigned a card: the members of the workspace, or, with space_id, the people who have access to that space (a shared space's members, or a private space's owner). Returns each person's id, name and email, and their role. create_card and update_card take the id as assignee.id; use space_id with the card's space, since the assignee must be able to see it. Only what the user can read is listed.",
+    "description": "List the people who can be assigned a card: the members of the workspace, or, with space_id, the people who have access to that space (a shared space's members, or a private space's owner). Returns each person's id, name and email, and their role. create_card and update_card take the id as assignee.id; use space_id with the card's space, since the assignee must be able to see it. Only what the user can read is listed. People come by id; when the reply has next_cursor there are more: call again with it as cursor.",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -19,7 +19,12 @@
         "space_id": {
           "type": "integer",
           "minimum": 1,
-          "description": "the space, from list_spaces; without it, the whole workspace's members"
+          "description": "the space, from list_spaces; leave it out for the whole workspace's members"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the next_cursor of the previous reply, for the people after it; leave it out for the first page"
         }
       },
       "additionalProperties": false

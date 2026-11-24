@@ -165,7 +165,16 @@ func scanSpace(row scanner) (Space, error) {
 // lookup returns spaceID as userID sees it, Access None included, or ErrNotFound if the
 // space doesn't exist or isn't in one of the user's workspaces.
 func (c *Checker) lookup(ctx context.Context, userID, spaceID int64) (Space, error) {
-	s, err := scanSpace(c.db.QueryRowContext(ctx,
+	return lookupIn(ctx, c.db, userID, spaceID)
+}
+
+// rowQuerier is a *sql.DB or a *sql.Tx: where a check reads from.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func lookupIn(ctx context.Context, q rowQuerier, userID, spaceID int64) (Space, error) {
+	s, err := scanSpace(q.QueryRowContext(ctx,
 		`SELECT `+spaceColumns+fromSpaceFor+` WHERE s.id = ?`, userID, spaceID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Space{}, ErrNotFound
@@ -176,7 +185,11 @@ func (c *Checker) lookup(ctx context.Context, userID, spaceID int64) (Space, err
 // Check returns spaceID as userID sees it, if they may at least read it, and ErrNotFound
 // otherwise.
 func (c *Checker) Check(ctx context.Context, userID, spaceID int64) (Space, error) {
-	s, err := c.lookup(ctx, userID, spaceID)
+	return checkIn(ctx, c.db, userID, spaceID)
+}
+
+func checkIn(ctx context.Context, q rowQuerier, userID, spaceID int64) (Space, error) {
+	s, err := lookupIn(ctx, q, userID, spaceID)
 	if err != nil {
 		return Space{}, err
 	}

@@ -230,11 +230,45 @@ func (s *Service) membership(ctx context.Context, workspaceID, userID int64) (Me
 }
 
 func (s *Service) members(ctx context.Context, workspaceID int64) ([]Member, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return Roster(ctx, s.db, workspaceID, RosterPage{})
+}
+
+// Queryer is what Roster reads through: a *sql.DB, or a transaction a caller keeps its other
+// reads consistent with.
+type Queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// RosterPage selects part of a roster. The zero value is all of it, by name.
+type RosterPage struct {
+	// ByID orders by user ID, a stable order to page through, instead of by name.
+	ByID bool
+	// AfterID, when above 0, leaves out the members whose user ID is not above it, and orders
+	// by user ID whatever ByID says.
+	AfterID int64
+	// Limit, when above 0, is the most members to return.
+	Limit int
+}
+
+// Roster lists the members of workspaceID, as the one definition of who is a member of a
+// workspace: the workspace's own page and the agent's list_members both read through it. It
+// checks nothing about the caller.
+func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) ([]Member, error) {
+	order := "u.name, u.id"
+	if page.ByID || page.AfterID > 0 {
+		order = "u.id"
+	}
+	query := `
 		SELECT u.id, u.email, u.name, m.role, m.created_at
 		FROM memberships m JOIN users u ON u.id = m.user_id
-		WHERE m.workspace_id = ?
-		ORDER BY u.name, u.id`, workspaceID)
+		WHERE m.workspace_id = ? AND u.id > ?
+		ORDER BY ` + order
+	args := []any{workspaceID, max(page.AfterID, 0)}
+	if page.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, page.Limit)
+	}
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -248,6 +282,19 @@ func (s *Service) members(ctx context.Context, workspaceID int64) ([]Member, err
 		all = append(all, m)
 	}
 	return all, rows.Err()
+}
+
+// IsMember reports whether userID is a member of workspaceID, reading through q.
+func IsMember(ctx context.Context, q interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}, workspaceID, userID int64) (bool, error) {
+	var one int
+	err := q.QueryRowContext(ctx, `SELECT 1 FROM memberships WHERE workspace_id = ? AND user_id = ?`,
+		workspaceID, userID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // roleIn returns userID's role in workspaceID within tx, or errNotFound.

@@ -119,7 +119,7 @@ refusals are the conversation agent's: a refusal is a tool error (`isError`) say
 (`not found`, read-only, a stale version), for the model to act on. Their bounds are the
 same too: results of at most 64 KiB, documents read 32 KiB at a time.
 
-Start with `list_spaces`: every other tool takes a `space_id` from it. A card is assigned to a person by the `id` `list_members` returns.
+Start with `list_spaces`, for the tools that take a `space_id`. A card is assigned to a person by the `id` `list_members` returns.
 
 ## Who did what
 
