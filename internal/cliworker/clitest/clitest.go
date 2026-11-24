@@ -279,7 +279,11 @@ func (f *fake) work() {
 			bg.Stdout = os.Stdout
 		}
 		_ = bg.Start()
-		_ = os.WriteFile(filepath.Join(f.config, "background.pid"), []byte(fmt.Sprint(bg.Process.Pid)), 0o600)
+		// Written whole or not at all: a test that sees the file may stop the turn at once,
+		// and a file created but not yet written would then stay empty for good.
+		pidFile := filepath.Join(f.config, "background.pid")
+		_ = os.WriteFile(pidFile+".tmp", []byte(fmt.Sprint(bg.Process.Pid)), 0o600)
+		_ = os.Rename(pidFile+".tmp", pidFile)
 	}
 	if f.scenario.SleepMS > 0 {
 		_ = exec.Command("sleep", fmt.Sprintf("%.3f", float64(f.scenario.SleepMS)/1000)).Run()
