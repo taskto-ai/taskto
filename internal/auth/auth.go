@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Options are the account system's settings. Zero values take the defaults.
@@ -241,7 +242,8 @@ func (s *Service) RequireUser(next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, u)))
+		ctx := audit.WithActor(context.WithValue(r.Context(), userKey{}, u), u.ID)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -284,7 +286,7 @@ func (s *Service) requireRole(next http.Handler, admin bool) http.Handler {
 			writeError(w, http.StatusForbidden, apierr.CodeAdminOnly, "only a workspace admin can do this")
 			return
 		}
-		ctx := context.WithValue(r.Context(), userKey{}, u)
+		ctx := audit.WithActor(context.WithValue(r.Context(), userKey{}, u), u.ID)
 		ctx = context.WithValue(ctx, membershipKey{}, m)
 		if t != nil {
 			ctx = context.WithValue(ctx, tokenKey{}, *t)

@@ -14,6 +14,7 @@ apps built by asking the agent. See [docs/architecture.md](docs/architecture.md)
 | `internal/config/` | flags, `TASKTO_*` variables and the config file, in that order of precedence | Go |
 | `internal/db/` | SQLite (modernc.org/sqlite, no cgo) and the embedded migrations in `migrations/` | Go |
 | `internal/auth/` | users, workspaces, members, invites, sessions, passwords and their reset links (`passwords.go`), single sign-on through OpenID Connect for invitees only (`sso.go`; the operator's providers file, `ssoconfig.go`; [docs/sso.md](docs/sso.md)), the auth middleware and the CSRF guard | Go |
+| `internal/audit/` | the audit log of security and admin actions: `Record` writes an event in the caller's transaction (actor and client address from the request's context, each action's details fixed and typed, so no free text is recorded; the target's creation time with its id), `Log` for an event with no transaction, `Prune` and `Retain` the retention sweep; `audittest/` checks that no known secret is in any row ([docs/audit.md](docs/audit.md)) | Go |
 | `internal/access/` | spaces (private and shared), who may read and write them, their data directories and safe paths | Go |
 | `internal/knowledge/` | the knowledge base: each space's documents and uploads in a git repository (go-git, through the space's `os.Root`); large files, audio and video, and heavy binaries (archives, disk images, design files) unversioned, a Git LFS pointer in git and their bytes in the space's `.git/lfs/objects/` (`large.go`); a versioned file that becomes unversioned leaves history, by a crash-safe rewrite of the space's commits (`rewrite.go`) | Go |
 | `internal/search/` | the knowledge base's search index: full text (SQLite FTS5) and optional semantic search, kept in step with git | Go |
@@ -85,6 +86,12 @@ apps built by asking the agent. See [docs/architecture.md](docs/architecture.md)
   `knowledge.RawBodyRoutes` and `apps.RawBodyRoutes`; `GET` routes are left alone. The API is described in [docs/api.md](docs/api.md); keep it current.
 - **One binary works for one person or a company.** Don't add code paths that only work in
   one of the two modes.
+- **Security and admin actions are audited.** A new action that changes who can do what or
+  reach what (accounts, sessions, members, invites, spaces and their members, tokens, provider
+  or CLI accounts, search and dictation settings, single sign-on) records an event with
+  `audit.Record` in the same transaction as the change, and a test checks the row and that a
+  refused request records none. An event never holds a secret: a password, token, key, reset
+  link or request body ([docs/audit.md](docs/audit.md)).
 - **Agents never run as root or with sudo.** The server refuses to start the agent sidecar
   or `local` CLI workers as root or with passwordless `sudo`/`doas`. The container worker
   refuses an image with a setuid or setgid program. The CLI helper refuses to start a CLI as

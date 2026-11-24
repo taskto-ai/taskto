@@ -55,6 +55,7 @@ step-by-step install on a fresh Ubuntu VM.
 | [docs/templates.md](docs/templates.md) | the bundled app templates (expense tracker, equipment checkout, inspection), installing them and duplicating apps |
 | [docs/offline.md](docs/offline.md) | apps offline: downloads, the durable outbox for records made offline, sync, sign-out and revocation |
 | [docs/sso.md](docs/sso.md) | single sign-on with Google, Authentik or any OpenID Connect provider |
+| [docs/audit.md](docs/audit.md) | the audit log of security and admin actions: what is recorded, never recorded, and for how long |
 | [docs/api.md](docs/api.md) | the HTTP API |
 | [docs/mcp.md](docs/mcp.md) | using it from your own agents (Claude Code, Codex, any MCP client) with an access token |
 | [docs/cli-workers.md](docs/cli-workers.md), [docs/account-switching.md](docs/account-switching.md), [docs/cli-tools.md](docs/cli-tools.md) | the official CLIs on users' own accounts, with TaskTo's tools |
@@ -120,6 +121,7 @@ the default.
 | `-dictation-local` | `TASKTO_DICTATION_LOCAL` | `dictation_local` | `parakeet-v3` | the local speech model, every workspace's default dictation engine unless an admin picks the hosted API: `parakeet-v3`, `whistle` or `off`; downloaded on first use ([docs/install.md](docs/install.md#dictation)) |
 | `-dictation-cache` | `TASKTO_DICTATION_CACHE` | `dictation_cache` | `<data-dir>/cache/dictation` | where the local speech model's files are kept |
 | `-addons-dir` | `TASKTO_ADDONS_DIR` | `addons_dir` | `<data-dir>/addons` | where the operator installs add-ons such as Desert Ant Voz ([docs/install.md](docs/install.md#dictation)) |
+| `-audit-retention` | `TASKTO_AUDIT_RETENTION` | `audit_retention` | `365` | days the audit log keeps its events, or `off` to stop deleting them by age (a workspace's events still go when it is deleted; [docs/audit.md](docs/audit.md)) |
 | `-push-contact` | `TASKTO_PUSH_CONTACT` | `push_contact` | `https://taskto.ai` | how browsers' push services can reach whoever runs the server (the VAPID contact): a `mailto:` or `https:` URL ([docs/install.md](docs/install.md#web-push-notifications)) |
 | `-config` | `TASKTO_CONFIG` | | | config file to read |
 
