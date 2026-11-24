@@ -20,6 +20,7 @@ import (
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/agenttools"
 	"taskto.ai/taskto/internal/apps"
+	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/cliworker"
@@ -180,6 +181,19 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		return err
 	}
 	store := providers.NewStore(sqlDB, key)
+
+	// The audit log's old events are removed in the background, for as long as the server runs;
+	// it stops before the database closes.
+	auditCtx, stopAudit := context.WithCancel(ctx)
+	auditDone := make(chan struct{})
+	go func() {
+		defer close(auditDone)
+		audit.Retain(auditCtx, sqlDB, cfg.AuditRetention(), time.Hour)
+	}()
+	defer func() {
+		stopAudit()
+		<-auditDone
+	}()
 
 	// The search index catches up with the knowledge base in the background; it stops
 	// before the database closes.

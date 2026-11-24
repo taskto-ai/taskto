@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/serverkey"
 )
 
@@ -216,7 +218,15 @@ func (s *Store) create(ctx context.Context, o owner, d draft, user int64) (recor
 			}
 		}
 		rec, err = get(ctx, tx, o, id)
-		return err
+		if err != nil {
+			return err
+		}
+		// A personal account belongs to no workspace: its event has none either. The key is only
+		// said to be set; the address is kept as its host, which a URL's credentials never are.
+		return audit.Record(ctx, tx, audit.Event{Workspace: o.workspace, Actor: user, Action: audit.ProviderAccountCreated,
+			TargetType: audit.TargetProvider, Target: id, Details: audit.Details{
+				"name": d.name, "kind": d.kind, "scope": string(o.scope()), "base_host": audit.Host(d.baseURL), "api_key_set": d.apiKey != nil,
+			}})
 	})
 	return rec, err
 }
@@ -258,7 +268,26 @@ func (s *Store) update(ctx context.Context, o owner, id int64, change func(*draf
 			return err
 		}
 		rec, err = get(ctx, tx, o, id)
-		return err
+		if err != nil {
+			return err
+		}
+		oldModels, err := json.Marshal(old.Models)
+		if err != nil {
+			return err
+		}
+		keyChanged := d.apiKey != nil || (!d.keepKey && old.sealed != nil)
+		fields := audit.Changed(map[string]bool{
+			"display_name": old.DisplayName != d.displayName,
+			"base_url":     old.BaseURL != d.baseURL,
+			"api_key":      keyChanged,
+			"compat":       !bytes.Equal(old.Compat, d.compat),
+			"models":       string(oldModels) != string(models),
+		})
+		return audit.Record(ctx, tx, audit.Event{Workspace: o.workspace, Action: audit.ProviderAccountUpdated,
+			TargetType: audit.TargetProvider, Target: id, Details: audit.Details{
+				"name": old.Name, "kind": old.Kind, "scope": string(o.scope()), "fields": fields,
+				"base_host": audit.Host(d.baseURL), "api_key_changed": keyChanged,
+			}})
 	})
 	return rec, err
 }
@@ -266,16 +295,17 @@ func (s *Store) update(ctx context.Context, o owner, id int64, change func(*draf
 // remove deletes o's account id.
 func (s *Store) remove(ctx context.Context, o owner, id int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM provider_accounts WHERE id = ? AND `+ownerCond, append([]any{id}, o.args()...)...)
+		var name, kind string
+		err := tx.QueryRowContext(ctx, `DELETE FROM provider_accounts WHERE id = ? AND `+ownerCond+` RETURNING name, kind`,
+			append([]any{id}, o.args()...)...).Scan(&name, &kind)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errNotFound
+		}
 		if err != nil {
 			return err
 		}
-		if n, err := res.RowsAffected(); err != nil {
-			return err
-		} else if n == 0 {
-			return errNotFound
-		}
-		return nil
+		return audit.Record(ctx, tx, audit.Event{Workspace: o.workspace, Action: audit.ProviderAccountRemoved,
+			TargetType: audit.TargetProvider, Target: id, Details: audit.Details{"name": name, "kind": kind, "scope": string(o.scope())}})
 	})
 }
 

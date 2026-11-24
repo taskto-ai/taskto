@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func env(vars map[string]string) func(string) string {
@@ -541,6 +542,36 @@ func TestSMTPHostTakesIPv6Literals(t *testing.T) {
 	for _, in := range []string{"[::1]:25", "::1]", "[::1", "1.2.3.4:25", "smtp.example.com:587"} {
 		if _, err := Load([]string{"-smtp-host", in, "-smtp-from", "a@example.com"}, env(nil), io.Discard); err == nil {
 			t.Errorf("%q accepted", in)
+		}
+	}
+}
+
+func TestAuditRetention(t *testing.T) {
+	if got := load(t, nil, nil).AuditRetention(); got != 365*24*time.Hour {
+		t.Fatalf("by default %v, want a year", got)
+	}
+	file := writeConfig(t, `audit_retention = "90"`)
+	// The file, then the environment over it, then the flag over both.
+	if got := load(t, []string{"-config", file}, nil).AuditRetention(); got != 90*24*time.Hour {
+		t.Fatalf("from the file: %v", got)
+	}
+	env := map[string]string{"TASKTO_AUDIT_RETENTION": "30"}
+	if got := load(t, []string{"-config", file}, env).AuditRetention(); got != 30*24*time.Hour {
+		t.Fatalf("env over file: %v", got)
+	}
+	if got := load(t, []string{"-config", file, "-audit-retention", "7"}, env).AuditRetention(); got != 7*24*time.Hour {
+		t.Fatalf("flag over env: %v", got)
+	}
+	// Off keeps everything: a retention of zero, which the sweep reads as no limit.
+	if got := load(t, []string{"-audit-retention", "off"}, nil).AuditRetention(); got != 0 {
+		t.Fatalf("off: %v, want 0", got)
+	}
+}
+
+func TestAuditRetentionMustBeDaysOrOff(t *testing.T) {
+	for _, bad := range []string{"0", "-5", "abc", "1.5", "40000", "1y", ""} {
+		if _, err := Load([]string{"-audit-retention", bad}, env(nil), io.Discard); err == nil {
+			t.Errorf("-audit-retention %q accepted", bad)
 		}
 	}
 }

@@ -65,7 +65,7 @@ func newEnv(t *testing.T, opts Options) *env {
 	}
 	mux := http.NewServeMux()
 	e.svc.Routes(mux)
-	e.h = CSRF(mux)
+	e.h = e.svc.ClientAddr(CSRF(mux))
 	return e
 }
 

@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/providers"
 )
@@ -78,8 +79,20 @@ func (x *Index) setEmbeddings(ctx context.Context, workspaceID, userID int64, e 
 					updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
 				workspaceID, e.Account, e.Model, userID)
 		}
-		if err != nil || (e != nil && e.key() == old) {
+		if err != nil {
 			return err
+		}
+		// Which account and model the workspace's text goes to, or that it goes nowhere now.
+		details := audit.Details{"enabled": e != nil}
+		if e != nil {
+			details["account"], details["provider"], details["model"] = e.Account, e.Provider, e.Model
+		}
+		if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: userID, Action: audit.SearchEmbeddingsChanged,
+			TargetType: audit.TargetWorkspace, Target: workspaceID, Details: details}); err != nil {
+			return err
+		}
+		if e != nil && e.key() == old {
+			return nil
 		}
 		const docs = `SELECT d.id FROM search_docs d JOIN spaces sp ON sp.id = d.space_id WHERE sp.workspace_id = ?`
 		if _, err := tx.ExecContext(ctx, `DELETE FROM search_chunks WHERE doc_id IN (`+docs+`)`, workspaceID); err != nil {
@@ -171,7 +184,7 @@ func (x *Index) setConsent(ctx context.Context, workspaceID, spaceID, userID int
 	}
 	const endpointSQL = `SELECT coalesce((SELECT account_id || ' ' || model || ' ' || base_url
 		FROM search_embedding_consent WHERE space_id = ?), '')`
-	err := x.write(ctx, func(tx *sql.Tx) error {
+	apply := func(tx *sql.Tx) error {
 		if on {
 			var before, after string
 			if err := tx.QueryRowContext(ctx, endpointSQL, spaceID).Scan(&before); err != nil {
@@ -221,6 +234,13 @@ func (x *Index) setConsent(ctx context.Context, workspaceID, spaceID, userID int
 			return err
 		}
 		return dropVectors(tx)
+	}
+	err := x.write(ctx, func(tx *sql.Tx) error {
+		if err := apply(tx); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: userID, Action: audit.SearchConsentChanged,
+			TargetType: audit.TargetSpace, Target: spaceID, Details: audit.Details{"enabled": on}})
 	})
 	x.vectors.changedSpace(spaceID)
 	if err == nil && on {

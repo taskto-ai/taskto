@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Personal access tokens are how a person's own agents (Claude Code, Codex, a script) reach
@@ -229,11 +230,19 @@ func (s *Service) handleDeleteToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, err := s.db.ExecContext(r.Context(), `DELETE FROM access_tokens WHERE id = ? AND workspace_id = ? AND user_id = ?`,
-		id, m.WorkspaceID, u.ID)
-	if err == nil {
-		err = mustAffect(res, errNotFound)
-	}
+	err := s.write(r.Context(), func(tx *sql.Tx) error {
+		var name string
+		err := tx.QueryRowContext(r.Context(), `DELETE FROM access_tokens WHERE id = ? AND workspace_id = ? AND user_id = ? RETURNING name`,
+			id, m.WorkspaceID, u.ID).Scan(&name)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return audit.Record(r.Context(), tx, audit.Event{Workspace: m.WorkspaceID, Action: audit.AccessTokenRevoked,
+			TargetType: audit.TargetAccessToken, Target: id, Details: audit.Details{"name": name}})
+	})
 	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, apierr.CodeTokenNotFound, "token not found")
 		return
@@ -266,8 +275,13 @@ func (s *Service) createToken(ctx context.Context, workspaceID, userID int64, na
 		if err != nil {
 			return err
 		}
-		t.ID, err = res.LastInsertId()
-		return err
+		if t.ID, err = res.LastInsertId(); err != nil {
+			return err
+		}
+		// The token's name is the label its owner gave it; the token itself is never recorded.
+		details := audit.Details{"name": name, "expires": expires != nil}
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: userID, Action: audit.AccessTokenCreated,
+			TargetType: audit.TargetAccessToken, Target: t.ID, Details: details})
 	})
 	if err != nil {
 		return Token{}, "", err

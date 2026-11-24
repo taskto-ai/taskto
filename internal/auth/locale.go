@@ -2,11 +2,13 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"net/http"
 	"regexp"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Languages (docs/i18n.md). The server stores which language each user picked, and each
@@ -80,7 +82,14 @@ func (s *Service) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadRequest, apierr.CodeLocaleInvalid, errBadLocale)
 			return
 		}
-		if _, err := s.db.ExecContext(r.Context(), `UPDATE workspaces SET locale = ? WHERE id = ?`, *req.Locale, m.WorkspaceID); err != nil {
+		err := s.write(r.Context(), func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(r.Context(), `UPDATE workspaces SET locale = ? WHERE id = ?`, *req.Locale, m.WorkspaceID); err != nil {
+				return err
+			}
+			return audit.Record(r.Context(), tx, audit.Event{Workspace: m.WorkspaceID, Action: audit.WorkspaceUpdated,
+				TargetType: audit.TargetWorkspace, Target: m.WorkspaceID, Details: audit.Details{"fields": []string{"locale"}, "locale": *req.Locale}})
+		})
+		if err != nil {
 			serverError(w, r, err)
 			return
 		}

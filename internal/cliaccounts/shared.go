@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/egress"
@@ -444,8 +445,14 @@ func (s *Service) handleSharedCreate(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(r.Context(), `UPDATE cli_shared_accounts SET api_key = ? WHERE id = ?`, sealed, id)
-		return err
+		if _, err = tx.ExecContext(r.Context(), `UPDATE cli_shared_accounts SET api_key = ? WHERE id = ?`, sealed, id); err != nil {
+			return err
+		}
+		// The key is only said to be set; the address is kept as its host.
+		return audit.Record(r.Context(), tx, audit.Event{Workspace: ws, Action: audit.SharedCLIAccountCreated,
+			TargetType: audit.TargetSharedAccount, Target: id, Details: audit.Details{
+				"cli": string(*d.CLI), "label": *d.Label, "model": *d.Model, "base_host": audit.Host(*d.BaseURL), "api_key_set": true,
+			}})
 	})
 	if errors.Is(err, errTooMany) {
 		writeError(w, http.StatusConflict, apierr.CodeTooManySharedAccounts, fmt.Sprintf("a workspace has at most %d shared CLI accounts", maxShared),
@@ -541,8 +548,19 @@ func (s *Service) handleSharedUpdate(w http.ResponseWriter, r *http.Request, a s
 			return
 		}
 	}
-	_, err := s.db.ExecContext(r.Context(), `UPDATE cli_shared_accounts SET label = ?, base_url = ?, model = ?, api_key = ?,
-		updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, label, baseURL, model, sealed, a.ID)
+	err := s.inTx(r.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(r.Context(), `UPDATE cli_shared_accounts SET label = ?, base_url = ?, model = ?, api_key = ?,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, label, baseURL, model, sealed, a.ID); err != nil {
+			return err
+		}
+		fields := audit.Changed(map[string]bool{
+			"label": label != a.Label, "base_url": baseURL != a.BaseURL, "model": model != a.Model, "api_key": d.APIKey != nil,
+		})
+		return audit.Record(r.Context(), tx, audit.Event{Workspace: a.workspace, Action: audit.SharedCLIAccountUpdated,
+			TargetType: audit.TargetSharedAccount, Target: a.ID, Details: audit.Details{
+				"cli": string(a.CLI), "label": label, "fields": fields, "base_host": audit.Host(baseURL), "api_key_changed": d.APIKey != nil,
+			}})
+	})
 	if err != nil {
 		serverError(w, r, err)
 		return
@@ -579,7 +597,16 @@ func (s *Service) handleSharedDelete(w http.ResponseWriter, r *http.Request, a s
 		serverError(w, r, err)
 		return
 	}
-	if _, err := s.db.ExecContext(r.Context(), `DELETE FROM cli_shared_accounts WHERE id = ?`, a.ID); err != nil {
+	err = s.inTx(r.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(r.Context(), `DELETE FROM cli_shared_accounts WHERE id = ?`, a.ID); err != nil {
+			return err
+		}
+		return audit.Record(r.Context(), tx, audit.Event{Workspace: a.workspace, Action: audit.SharedCLIAccountRemoved,
+			TargetType: audit.TargetSharedAccount, Target: a.ID, Details: audit.Details{
+				"cli": string(a.CLI), "label": a.Label, "members_signed_out": len(users),
+			}})
+	})
+	if err != nil {
 		serverError(w, r, err)
 		return
 	}
@@ -756,7 +783,12 @@ func (s *Service) handleSetModes(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		return nil
+		details := audit.Details{"members_changed": len(req.Members)}
+		if req.DefaultMode != nil {
+			details["default_mode"] = string(*req.DefaultMode)
+		}
+		return audit.Record(r.Context(), tx, audit.Event{Workspace: ws, Action: audit.CLIModesChanged,
+			TargetType: audit.TargetWorkspace, Target: ws, Details: details})
 	})
 	switch {
 	case errors.Is(err, errBadMode):

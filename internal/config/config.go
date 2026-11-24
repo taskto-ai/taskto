@@ -20,7 +20,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/mail"
 )
@@ -147,6 +149,10 @@ type Config struct {
 	SMTPUsername     string
 	SMTPPasswordFile string
 	SMTPEgress       string
+
+	// AuditRetentionDays is how many days the audit log's events are kept (docs/audit.md). Zero
+	// means the default, 365; -1, "off" in the settings, keeps them for ever.
+	AuditRetentionDays int
 
 	// ConfigFile is the config file that was read, or "" if none was.
 	ConfigFile string
@@ -455,6 +461,31 @@ var settings = []setting{
 		set:   func(c *Config, v string) error { c.AddonsDir = v; return nil },
 	},
 	{
+		flag: "audit-retention", env: "TASKTO_AUDIT_RETENTION", key: "audit_retention",
+		usage: "days the audit log's events are kept before they are removed, or off to keep them for ever (default 365)",
+		get: func(c Config) string {
+			switch {
+			case c.AuditRetentionDays < 0:
+				return "off"
+			case c.AuditRetentionDays == 0:
+				return ""
+			}
+			return strconv.Itoa(c.AuditRetentionDays)
+		},
+		set: func(c *Config, v string) error {
+			if v == "off" {
+				c.AuditRetentionDays = -1
+				return nil
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 36500 {
+				return fmt.Errorf("want a number of days from 1 to 36500, or off, got %q", v)
+			}
+			c.AuditRetentionDays = n
+			return nil
+		},
+	},
+	{
 		flag: "push-contact", env: "TASKTO_PUSH_CONTACT", key: "push_contact",
 		usage: "how browsers' push services can reach you, a mailto: or https: URL (default https://taskto.ai)",
 		get:   func(c Config) string { return c.PushContact },
@@ -494,6 +525,18 @@ func (c Config) SMTPPortNumber() int {
 func (c Config) SMTPEgressPolicy() egress.Policy {
 	p, _ := egress.Parse(c.SMTPEgress)
 	return p
+}
+
+// AuditRetention is how long the audit log's events are kept: a year when unset, and zero, for
+// ever, when turned off.
+func (c Config) AuditRetention() time.Duration {
+	switch {
+	case c.AuditRetentionDays < 0:
+		return 0
+	case c.AuditRetentionDays == 0:
+		return audit.DefaultRetention
+	}
+	return time.Duration(c.AuditRetentionDays) * 24 * time.Hour
 }
 
 // LocalDictation is the local speech model, "off" included: parakeet-v3 when unset.

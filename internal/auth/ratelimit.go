@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"taskto.ai/taskto/internal/audit"
 )
 
 // limiter counts attempts per key in fixed windows, in memory. A restart forgets the
@@ -78,23 +80,45 @@ func (l *limiter) sweep(now time.Time) {
 // ignored, so a client can't pick its own key. An IPv6 client usually controls a whole
 // /64, so that is the unit.
 func (s *Service) clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
+	addr, host := s.client(r)
+	if !addr.IsValid() {
 		return host
-	}
-	addr = addr.WithZone("").Unmap()
-	if s.trustedProxy(addr) {
-		addr = s.forwardedClient(r.Header.Values("X-Forwarded-For"), addr)
 	}
 	if addr.Is6() {
 		prefix, _ := addr.Prefix(64)
 		return prefix.String()
 	}
 	return addr.String()
+}
+
+// client is the request's client address as clientIP finds it, in full; it is invalid for a peer
+// that isn't an IP address, and host is then what the peer is.
+func (s *Service) client(r *http.Request) (addr netip.Addr, host string) {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	addr, err = netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, host
+	}
+	addr = addr.WithZone("").Unmap()
+	if s.trustedProxy(addr) {
+		addr = s.forwardedClient(r.Header.Values("X-Forwarded-For"), addr)
+	}
+	return addr, host
+}
+
+// ClientAddr puts the request's client address on its context, found as the login limits find it,
+// for the audit log's events (internal/audit).
+func (s *Service) ClientAddr(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		addr, host := s.client(r)
+		if addr.IsValid() {
+			host = addr.String()
+		}
+		next.ServeHTTP(w, r.WithContext(audit.WithClient(r.Context(), host)))
+	})
 }
 
 func (s *Service) trustedProxy(addr netip.Addr) bool {

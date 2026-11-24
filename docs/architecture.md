@@ -55,6 +55,11 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   the agent acting for a user. Admins don't get into private spaces. Each space has its
   own directory, `<data>/workspaces/<id>/spaces/<id>/`, reached only through paths that
   can't lead out of it. See [api.md](api.md#spaces-and-access).
+- **Audit log:** security and admin actions (logins, password resets, members, invites, spaces,
+  provider accounts, tokens, single sign-on, search and dictation settings) are recorded in
+  `audit_events` by the code that makes the change, in its transaction, with the actor, the
+  workspace, the target and the client's address, and never a secret
+  ([audit.md](audit.md)).
 - **Model providers:** workspaces and users add their own provider accounts (any
   OpenAI-compatible endpoint, local or hosted). The server stores them with their API keys
   encrypted under its own key, writes them into the sidecar's providers file and has it

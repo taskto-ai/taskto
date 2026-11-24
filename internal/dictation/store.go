@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+
+	"taskto.ai/taskto/internal/audit"
 )
 
 // The values of Settings.Engine besides add-on IDs. Local is the default: the hosted API is
@@ -78,7 +80,12 @@ func (s *Service) save(ctx context.Context, workspaceID, userID int64, st settin
 	if st.notice != "" {
 		notice = st.notice
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO dictation_settings
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // after a commit, a no-op
+	if _, err := tx.ExecContext(ctx, `INSERT INTO dictation_settings
 			(workspace_id, engine, language, api_base_url, api_model, api_key, addon_notice, notice_by, notice_at, updated_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN ? END, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') END, ?)
 		ON CONFLICT (workspace_id) DO UPDATE SET
@@ -90,6 +97,16 @@ func (s *Service) save(ctx context.Context, workspaceID, userID int64, st settin
 			updated_by = excluded.updated_by,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
 		workspaceID, st.engine, st.language, st.baseURL, st.model, sealed, notice,
-		noticeBy, userID, noticeBy, userID, noticeBy, noticeBy)
-	return err
+		noticeBy, userID, noticeBy, userID, noticeBy, noticeBy); err != nil {
+		return err
+	}
+	// The key is only said to have changed, and to be set; the address is kept as its host.
+	if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: userID, Action: audit.DictationSettingsChanged,
+		TargetType: audit.TargetWorkspace, Target: workspaceID, Details: audit.Details{
+			"engine": st.engine, "language": st.language, "api_model": st.model, "base_host": audit.Host(st.baseURL),
+			"api_key_changed": newKey != nil, "api_key_set": sealed != nil, "notice_confirmed": noticeBy,
+		}}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

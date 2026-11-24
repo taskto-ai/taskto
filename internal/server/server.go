@@ -146,7 +146,8 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	// Every state-changing /api request, of any route, goes through the CSRF checks, and every
 	// /api request that names the account it is for (the offline code does, on every request:
 	// downloads, revalidation, the queue) is refused for any other session.
-	return auth.CSRF(expectAccount(spaces, mux), append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...), nil
+	// The audit log's events carry the client's address, found as the login limits find it.
+	return accounts.ClientAddr(auth.CSRF(expectAccount(spaces, mux), append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...)), nil
 }
 
 // expectAccount applies access.Checker.ExpectUser to every /api request, so a client that names
