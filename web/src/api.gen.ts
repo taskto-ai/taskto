@@ -437,6 +437,7 @@ export type Member = {
   name: string
   role: string
   joined_at: string
+  disabled: boolean
 }
 
 export type NotificationItem = {
