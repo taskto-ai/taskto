@@ -139,7 +139,7 @@ func (c *Checker) Disabled(ctx context.Context, userID int64) (bool, error) {
 	return disabledIn(ctx, c.db, userID)
 }
 
-func disabledIn(ctx context.Context, q rowQuerier, userID int64) (bool, error) {
+func disabledIn(ctx context.Context, q Querier, userID int64) (bool, error) {
 	var off bool
 	err := q.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM users WHERE id = ?`, userID).Scan(&off)
 	if errors.Is(err, sql.ErrNoRows) {
