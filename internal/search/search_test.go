@@ -1131,3 +1131,23 @@ func TestWriteCancelledInsideItsTransactionLeavesNoConnectionBusy(t *testing.T) 
 		}
 	}
 }
+
+// A write whose caller gave up after its last statement is rolled back, not committed.
+func TestWriteCancelledAfterItsLastStatementIsRolledBack(t *testing.T) {
+	e := newEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	err := e.idx.write(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO workspaces (name) VALUES ('Late')`); err != nil {
+			return err
+		}
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("write = %v, want context.Canceled", err)
+	}
+	var n int
+	if err := e.idx.db.QueryRow(`SELECT count(*) FROM workspaces WHERE name = 'Late'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("workspaces = %d, %v; want the write rolled back", n, err)
+	}
+}

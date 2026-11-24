@@ -253,6 +253,11 @@ func (x *Index) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	if err := fn(tx); err != nil {
 		return err
 	}
+	// Commit no longer sees the caller's cancellation (the transaction's context is detached): a
+	// caller that gave up is told so, and its writes are rolled back, not committed behind it.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
