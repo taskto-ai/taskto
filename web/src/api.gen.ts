@@ -306,6 +306,8 @@ export type Card = {
   blocked_by: number[]
   docs: string[]
   conversations: string[]
+  due: string | null
+  labels: string[]
   version: number
   created_at: string
   created_by: BoardsAuthor | null
