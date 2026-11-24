@@ -790,6 +790,53 @@ test('a failed due date save leaves the draft to save again', async () => {
   await waitFor(() => expect(sent('PATCH', `${C}/1`)).toEqual([{ version: 1, due: '2999-01-02' }]))
 })
 
+test('a date or label typed while a save is pending is kept', async () => {
+  const { sent } = server('write', withPlanning)
+  const answered = globalThis.fetch
+  let release = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'PATCH') await held
+    return answered(input, init)
+  })
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  fireEvent.change(within(view).getByLabelText('Due date'), { target: { value: '2999-01-02' } })
+  fireEvent.click(within(view).getByRole('button', { name: 'Save the due date' }))
+  fireEvent.change(within(view).getByLabelText('Due date'), { target: { value: '2999-03-04' } })
+  release()
+  await waitFor(() => expect(sent('PATCH', `${C}/1`)).toHaveLength(1))
+  await within(view).findByRole('button', { name: 'Clear the due date' })
+  await act(async () => {})
+  expect((within(view).getByLabelText('Due date') as HTMLInputElement).value).toBe('2999-03-04')
+  expect((within(view).getByRole('button', { name: 'Save the due date' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+test('a label typed while a label is being added is kept', async () => {
+  const { sent } = server('write', withPlanning)
+  const answered = globalThis.fetch
+  let release = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'PATCH') await held
+    return answered(input, init)
+  })
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  const field = within(view).getByLabelText('New label') as HTMLInputElement
+  fireEvent.change(field, { target: { value: 'first' } })
+  fireEvent.click(within(view).getByRole('button', { name: 'Add label' }))
+  fireEvent.change(field, { target: { value: 'second' } })
+  release()
+  await within(view).findByText('first')
+  expect(sent('PATCH', `${C}/1`)).toHaveLength(1)
+  expect((within(view).getByLabelText('New label') as HTMLInputElement).value).toBe('second')
+})
+
 test('a viewer sees the due date and labels but cannot change them', async () => {
   server('read', withPlanning)
   render(<BoardsPage workspace={1} />)

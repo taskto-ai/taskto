@@ -8,7 +8,7 @@
 // card's thread is polled, so others' comments appear. On a phone it is the board or the
 // open card.
 
-import { type DragEvent, type FormEvent, useEffect, useState } from 'react'
+import { type DragEvent, type FormEvent, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   type Author,
@@ -1057,8 +1057,14 @@ function Planning({
 }) {
   const [due, setDue] = useState(card.due ?? '')
   const [label, setLabel] = useState('')
-  // The draft follows the card's date when that changes (a save, or someone else's edit).
-  useEffect(() => setDue(card.due ?? ''), [card.due])
+  // The draft follows the card's date when that changes (a save, or someone else's edit),
+  // unless it has been edited since: a date typed while a save was pending stays to be saved.
+  const synced = useRef(card.due ?? '')
+  useEffect(() => {
+    const next = card.due ?? ''
+    setDue((draft) => (draft === synced.current ? next : draft))
+    synced.current = next
+  }, [card.due])
   const t = useT()
   const f = useFormat()
   const editable = canWrite && card.column !== 'archived'
@@ -1069,7 +1075,9 @@ function Planning({
     e.preventDefault()
     if (!typed) return
     // The server normalizes and removes repeats; the field empties once it has saved.
-    if (await onChange((base) => ({ labels: [...base.labels, typed] }))) setLabel('')
+    // Only if it still holds what was sent: a label typed meanwhile stays.
+    const sent = label
+    if (await onChange((base) => ({ labels: [...base.labels, typed] }))) setLabel((now) => (now === sent ? '' : now))
   }
   const saveDue = (e: FormEvent) => {
     e.preventDefault()
