@@ -93,6 +93,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `doc_path_invalid` | 400 | `path` isn't a document path within the space, like `notes/plan.md`. |
 | `assignee_no_access` | 400 | The assignee isn't a member of the workspace who can read the space. |
 | `card_blocker_not_found` | 400 | Card `id`, which the card would wait for, isn't on the board (any more). |
+| `card_due_invalid` | 400 | A due date (or `due_before`, `due_after`, `today`) isn't a calendar date like `2026-03-31`. |
+| `card_label_invalid` | 400 | A label must be 1 to `max` characters, on one line. |
+| `too_many_labels` | 400 | A card has more than `max` labels, or a list filters by more than `max`. |
 | `app_offline` | 409 | The app is offline: restore it to launch it or run its actions. |
 | `app_changed` | 409 | The app changed since the client read it; `current` is the app as it is now. |
 | `app_name_length` | 400 | An app's name must have 1 to `max` characters. |
@@ -301,6 +304,10 @@ workspace, and acts with exactly that user's access there, checked again on ever
   | `…/spaces/{space}/docs…`, `GET …/history…`, `…/restore/…` | the [knowledge base](#knowledge-base), all of it but removing old versions from history |
   | `GET …/search`, `GET …/spaces/{space}/search` | [searching](#search) |
   | `…/spaces/{space}/boards…` | the [boards](#boards), all of it |
+
+  Personal apps are not here: a personal access token reaches them only through the
+  [MCP tools](mcp.md) at `/mcp` (such as `list_apps` and `create_app`). The apps' REST routes
+  need a session and answer `403` to a token.
 
   Every other route answers `403` to a request carrying a token, whatever else it carries
   (a session cookie too): logging in and out, setup, `GET /api/me`, invites, managing
@@ -1377,6 +1384,7 @@ A card:
   "assignee": {"kind": "user", "id": 5, "name": "Member"},
   "blocked": true, "blocked_reason": "waiting for legal", "blocked_by": [9],
   "docs": ["launch/post.md"], "conversations": ["7"],
+  "due": "2026-03-31", "labels": ["launch", "writing"],
   "version": 4,
   "created_at": "…", "created_by": {"id": 2, "name": "Member", "agent": false},
   "updated_at": "…", "updated_by": {"id": 2, "name": "Member", "agent": true, "via": "laptop"}
@@ -1408,6 +1416,16 @@ A card:
   owner can open the conversation (`404` for anyone else). Up to 50 of each, and of
   `blocked_by`; repeats are dropped.
 - `title`: one line, 1–200 characters. `body`: Markdown, up to 32 KiB.
+- `due`: a calendar date, `YYYY-MM-DD`, or `null`. It has no time and no time zone: a card
+  due on the 31st is due on the 31st wherever it is read, and clients decide what "today"
+  is for their person. A card is *overdue* when its `due` is before today and it isn't in
+  `done` or `archived`; the card doesn't say so, since that changes with the day. Its assignee
+  is reminded as described under [due-date reminders](#due-date-reminders).
+- `labels`: up to 10 free-text labels per card, each 1–30 characters on one line. The server
+  normalizes them (Unicode NFC, inner whitespace collapsed, case folded), drops repeats and
+  returns them sorted, so `"Bug "` and `"bug"` are one label, as are a composed and a
+  decomposed `é`, and `ΟΣ` and `ος`. Clients send what people typed and show what comes back. Labels belong to the card, not to a board:
+  there is no list of labels to manage, and a label is in use as long as a card has it.
 
 ### `GET …/boards/{board}/cards`
 
@@ -1421,6 +1439,12 @@ combined with AND:
 | `assignee` | `me`, `agent`, `none` (unassigned), or a user ID |
 | `blocked` | `true` or `false` |
 | `q` | cards whose title or body contains the text, ignoring ASCII case (up to 200 characters) |
+| `label` | cards that have this label (normalized like a card's labels); repeat it, up to 10 times, to require several (`too_many_labels` past that, for the agent's `list_cards` too) |
+| `due_before` | cards due on or before this date (`YYYY-MM-DD`); cards without a due date are never kept |
+| `due_after` | cards due on or after this date |
+| `overdue` | `true`: cards due before today that aren't `done` or `archived` |
+| `today` | the date `overdue` counts from, `YYYY-MM-DD`; default today in UTC. Send your own, since the server doesn't know the reader's time zone |
+| `sort` | `board` (default: by column, then rank) or `due` (soonest due date first, cards without one last, each group in board order) |
 
 ### `POST …/boards/{board}/cards`
 
@@ -1430,7 +1454,8 @@ Writers. `title` is required; everything else is optional:
 {
   "title": "Write the launch post", "body": "…", "column": "todo", "position": 0,
   "assignee": {"kind": "user", "id": 5}, "blocked_reason": "…", "blocked_by": [9],
-  "docs": ["launch/post.md"], "conversations": ["7"]
+  "docs": ["launch/post.md"], "conversations": ["7"],
+  "due": "2026-03-31", "labels": ["launch", "writing"]
 }
 ```
 
@@ -1448,8 +1473,9 @@ The card with its thread, oldest first:
 ### `PATCH …/boards/{board}/cards/{card}`
 
 Writers. Edits the fields it names, with the `version`: `title`, `body`, `assignee`,
-`blocked_reason`, `blocked_by`, `docs`, `conversations`. `null` clears `assignee` and
-`blocked_reason`; the lists replace the whole list (`[]` clears it). Setting the blocked
+`blocked_reason`, `blocked_by`, `docs`, `conversations`, `due`, `labels`. `null` clears
+`assignee`, `blocked_reason` and `due`; the lists, `labels` included, replace the whole list
+(`[]` clears it). Setting the blocked
 state is this route: `{"version": 4, "blocked_reason": "…", "blocked_by": [9]}`, and
 `{"version": 5, "blocked_reason": null, "blocked_by": []}` to unblock. `200` with the
 card; `400` with nothing to change.
@@ -1493,6 +1519,9 @@ gone, the app's roles changed), the item is `{"kind": "changed"}` with no `param
 workspace's home as its target, and a push for it says the same. Notifications are made for:
 
 - `card_assigned`: a card was assigned to you by someone else (`params.title`; target: the card);
+- `card_due`: a card assigned to you is due today (`params.title`, `params.due`; target: the
+  card), and `card_overdue`: it was due yesterday and isn't done
+  ([due-date reminders](#due-date-reminders));
 - `app_effect_failed`: an effect of an app you acted in failed for good and waits for you to retry
   it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one.
 
@@ -1510,6 +1539,39 @@ An item:
 
 `target` is an address of the web app under `/w/{workspace_id}/`: its section and item, as the
 app's router reads them. The page it opens checks access again.
+
+### Due-date reminders
+
+A card with a `due` date that is assigned to a person (not the agent, not nobody) is reminded to
+that person by two notifications: `card_due` on the morning of the due day and `card_overdue` on
+the morning after. They are made by jobs on the general scheduler ([architecture.md](architecture.md)),
+kept in step with the card by the change that touches it:
+
+- **When.** The morning is 08:00 UTC. A due date is a calendar date and TaskTo doesn't know a
+  person's time zone, so one instant is used for everyone (the morning of the day in the Americas
+  and Europe, the afternoon in east Asia). A job whose time has already passed when the date or
+  assignee is set is not made: setting a card due today after 08:00 gets no reminder but still the
+  overdue notice, and a date in the past gets none. A reminder that is delivered after its day (a
+  server that was off) is dropped, since the overdue notice says what is true then.
+- **Who.** Only the assignee. A card assigned to the agent, or to nobody, has none. Changing the
+  assignee cancels the previous person's and makes the new person's; changing or clearing `due`
+  moves or cancels them; moving the card to `done` or archiving it cancels them, and moving it
+  back (or restoring it) makes them again if their time is still ahead.
+- **Once.** A person is told once per card, kind and due date, however many times a job runs (a
+  retry, a clock that stepped back, a card given to someone else and back). Edits that change
+  neither `due`, the assignee nor the card's column leave the jobs alone, a reminder that is ready
+  but hasn't run yet included. A new date is a new reminder. An old notice whose card has a
+  different date now (or none) is shown as a plain "something changed" mention of the card.
+- **Where.** Every way of changing a card keeps the jobs: the web app's routes, the agent's tools,
+  the MCP tools and the apps' effects. Archiving a board or a shared space cancels its cards' jobs
+  and restoring it makes them again; a person who leaves a space or the workspace loses theirs; a
+  server that starts with dated cards that have none (made before reminders existed) schedules them.
+  A date the scheduler can't hold (the overdue notice of `8999-12-31` would be in the year 9000)
+  has no notice for that part, and the card is saved all the same.
+- **Access.** When a job runs, in the transaction that makes the notification, it checks that it is
+  still the job that was claimed, that the assignee may read the card's space (a person who left it,
+  or the workspace, gets nothing), that the space and board aren't archived and that the card still
+  has the date, assignee and an open column the job was made for.
 
 ### `GET /api/workspaces/{workspace}/notifications`
 

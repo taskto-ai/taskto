@@ -171,6 +171,8 @@ test('nothing is asked or subscribed until the person turns push on, and then on
     type: 'PUSH_STRINGS',
     strings: {
       card_assigned: 'A card was assigned to you',
+      card_due: 'A card of yours is due',
+      card_overdue: 'A card of yours is overdue',
       app_effect_failed: 'An app action needs your attention',
       changed: 'Something changed',
     },
@@ -343,6 +345,29 @@ test('the inbox lists notifications, marks one read when it is opened, and all r
   fireEvent.click(screen.getByRole('button', { name: 'Mark all as read' }))
   await waitFor(() => expect(screen.queryByText(/Unread:/)).toBeNull())
   expect((screen.getByRole('button', { name: 'Mark all as read' }) as HTMLButtonElement).disabled).toBe(true)
+})
+
+test("a due and an overdue card say the date in the reader's format, and lead to the card", async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/notifications': {
+      body: {
+        notifications: [
+          item(2, { kind: 'card_overdue', params: { title: 'Pay rent', due: '2026-03-31' } }),
+          item(1, { kind: 'card_due', params: { title: 'Pay rent', due: '2026-03-31' } }),
+        ],
+        more: false,
+        unread: 2,
+      },
+    },
+  })
+  render(<NotificationsPage workspace={1} />)
+  const list = await screen.findByRole('list', { name: 'Notifications' })
+  const links = within(list).getAllByRole('link')
+  expect(links.map((a) => a.textContent)).toEqual([
+    'Unread: Overdue since Mar 31, 2026: Pay rent',
+    'Unread: Due Mar 31, 2026: Pay rent',
+  ])
+  expect(links.map((a) => a.getAttribute('href'))).toEqual(['/w/1/boards/3%3A4%3A2', '/w/1/boards/3%3A4%3A1'])
 })
 
 test('the inbox pages older notifications in, and says when there are none', async () => {

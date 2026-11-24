@@ -697,7 +697,24 @@
     "comments": "Comments",
     "noComments": "No comments yet.",
     "commentField": "Comment",
-    "commentSubmit": "Comment"
+    "commentSubmit": "Comment",
+    "dueDate": "Due date",
+    "dueOn": "Due {date}",
+    "overdueOn": "Overdue: {date}",
+    "noDue": "No due date.",
+    "saveDue": "Save the due date",
+    "clearDue": "Clear the due date",
+    "labels": "Labels",
+    "noLabels": "No labels.",
+    "labelField": "New label",
+    "labelPlaceholder": "design",
+    "addLabel": "Add label",
+    "removeLabel": "Remove the label {label}",
+    "filters": "Filter the cards",
+    "filterLabel": "Label",
+    "allLabels": "All labels",
+    "overdueOnly": "Overdue only",
+    "noMatches": "No cards match."
   },
   "errors": {
     "http": "The server answered {status}.",
@@ -766,6 +783,9 @@
     "too_many_links": "A card can link to at most {max} of each: documents, conversations and cards it waits for.",
     "doc_path_invalid": "“{path}” isn't a path within the space, like notes/plan.md.",
     "assignee_no_access": "The card can only be assigned to a member of the workspace who can see this space.",
+    "card_due_invalid": "The due date isn’t a valid date.",
+    "card_label_invalid": "A label needs 1 to {max} characters, on one line.",
+    "too_many_labels": "A card can have at most {max} labels.",
     "card_blocker_not_found": "Card {id} isn’t on this board any more: reload, then pick the cards it waits for again.",
     "app_offline": "This app is offline: restore it to launch it.",
     "app_changed": "Someone changed this app meanwhile: reload and try again.",
@@ -2123,11 +2143,15 @@
     "openInbox": "Open your notifications",
     "kind": {
       "card_assigned": "A card was assigned to you: {title}",
+      "card_due": "Due {due}: {title}",
+      "card_overdue": "Overdue since {due}: {title}",
       "app_effect_failed": "An action in {app} didn't finish and needs you to retry it",
       "changed": "Something changed. Open it to see what you can still see."
     },
     "push": {
       "card_assigned": "A card was assigned to you",
+      "card_due": "A card of yours is due",
+      "card_overdue": "A card of yours is overdue",
       "app_effect_failed": "An app action needs your attention",
       "changed": "Something changed"
     },

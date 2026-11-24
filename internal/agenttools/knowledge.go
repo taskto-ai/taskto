@@ -1,9 +1,11 @@
 package agenttools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/auth"
@@ -19,6 +21,10 @@ const (
 	maxSearchLimit = 20
 	// maxListLimit is the most documents list_docs returns at once.
 	maxListLimit = 200
+	// maxHistoryLimit is the most commits doc_history returns at once.
+	maxHistoryLimit = 50
+	// maxTextFile is the largest plain-text file (not Markdown) read_doc reads, in bytes.
+	maxTextFile = 1 << 20
 )
 
 type spaceReply struct {
@@ -155,37 +161,166 @@ func (s *Service) listDocs(ctx context.Context, c *call, args json.RawMessage) (
 	return res, err
 }
 
-// readDoc reads a Markdown document, readChunk bytes at a time from offset.
+// readDoc reads a Markdown document, or a plain-text file of at most maxTextFile bytes,
+// readChunk bytes at a time from offset: as it is now, or as it was at the commit at.
 func (s *Service) readDoc(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
 		SpaceID int64  `json:"space_id"`
 		Path    string `json:"path"`
 		Offset  int    `json:"offset"`
+		At      string `json:"at"`
 	}
 	if err := decode(args, &a); err != nil {
 		return nil, err
-	}
-	if !knowledge.IsMarkdown(a.Path) {
-		return nil, errInvalid("only Markdown documents (.md) can be read; other files are uploads")
 	}
 	sp, err := s.space(ctx, c, a.SpaceID)
 	if err != nil {
 		return nil, err
 	}
-	doc, err := s.o.Knowledge.Read(ctx, sp, a.Path, "")
+	doc, err := s.o.Knowledge.Read(ctx, sp, a.Path, a.At)
 	if err != nil {
 		return nil, err
+	}
+	if !doc.Versioned {
+		// Its bytes are on disk, not in git, and can be any size: only list_docs shows it.
+		return nil, invalidf("%s is an unversioned file (a large file, audio, video or an archive): it can't be read as text", doc.Path)
+	}
+	if !knowledge.IsMarkdown(doc.Path) {
+		switch {
+		case doc.Size > maxTextFile:
+			return nil, invalidf("%s is %d bytes: only text files up to %d KiB can be read", doc.Path, doc.Size, maxTextFile>>10)
+		case bytes.IndexByte(doc.Content, 0) >= 0 || !utf8.Valid(doc.Content):
+			return nil, invalidf("%s isn't a text file: only Markdown documents and plain-text files can be read", doc.Path)
+		}
 	}
 	if a.Offset < 0 || a.Offset > len(doc.Content) {
 		return nil, invalidf("offset must be 0 to %d, the document's size", len(doc.Content))
 	}
 	rest := string(doc.Content[a.Offset:])
 	content, more := cut(rest, readChunk)
-	reply := map[string]any{"path": doc.Path, "version": doc.Version, "size": doc.Size, "offset": a.Offset, "content": content}
-	if more {
-		reply["next_offset"] = a.Offset + len(content)
+	for {
+		reply := map[string]any{"path": doc.Path, "version": doc.Version, "size": doc.Size, "offset": a.Offset, "content": content}
+		if a.At != "" {
+			reply["at"] = a.At
+		}
+		if more {
+			reply["next_offset"] = a.Offset + len(content)
+		}
+		// JSON escapes characters like < to six bytes: a chunk that fills its 32 KiB of text can
+		// make a reply over MaxResult, so it is shortened, and the next piece starts after it.
+		if out, err := json.Marshal(reply); err != nil || len(out) <= MaxResult || len(content) == 0 {
+			return reply, err
+		}
+		content, _ = cut(content, len(content)/2)
+		more = true
 	}
-	return reply, nil
+}
+
+// docHistory lists the commits that changed a document, or the whole space's, newest first.
+func (s *Service) docHistory(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		SpaceID int64  `json:"space_id"`
+		Path    string `json:"path"`
+		Before  string `json:"before"`
+		Limit   int    `json:"limit"`
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	if a.Limit < 0 || a.Limit > maxHistoryLimit {
+		return nil, invalidf("limit must be 1 to %d", maxHistoryLimit)
+	}
+	if a.Limit == 0 {
+		a.Limit = 20
+	}
+	sp, err := s.space(ctx, c, a.SpaceID)
+	if err != nil {
+		return nil, err
+	}
+	h, err := s.o.Knowledge.History(ctx, sp, a.Path, a.Before, a.Limit)
+	if err != nil {
+		return nil, err
+	}
+	// A page can be too long with long messages: return fewer, and the next page from there.
+	_, res, err := fitting(len(h.Commits), func(n int) any {
+		if n == len(h.Commits) {
+			return h
+		}
+		next := a.Before
+		if n > 0 {
+			next = h.Commits[n-1].Commit
+		}
+		return knowledge.History{Commits: h.Commits[:n], Next: next}
+	})
+	return res, err
+}
+
+// moveDoc renames a document or folder, as the user, committed by the agent.
+func (s *Service) moveDoc(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		SpaceID     int64  `json:"space_id"`
+		From        string `json:"from"`
+		To          string `json:"to"`
+		BaseVersion string `json:"base_version"`
+		Message     string `json:"message"`
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	sp, err := s.space(ctx, c, a.SpaceID)
+	if err != nil {
+		return nil, err
+	}
+	by, err := s.author(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	return s.o.Knowledge.Move(ctx, sp, a.From, a.To, a.BaseVersion, by, a.Message)
+}
+
+// deleteDoc deletes a document or file; its history stays, so restore_doc brings it back.
+func (s *Service) deleteDoc(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		SpaceID     int64  `json:"space_id"`
+		Path        string `json:"path"`
+		BaseVersion string `json:"base_version"`
+		Message     string `json:"message"`
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	sp, err := s.space(ctx, c, a.SpaceID)
+	if err != nil {
+		return nil, err
+	}
+	by, err := s.author(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	return s.o.Knowledge.Delete(ctx, sp, a.Path, a.BaseVersion, by, a.Message)
+}
+
+// restoreDoc makes a document what it was at an older commit, as a new commit.
+func (s *Service) restoreDoc(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	var a struct {
+		SpaceID     int64  `json:"space_id"`
+		Path        string `json:"path"`
+		Commit      string `json:"commit"`
+		BaseVersion string `json:"base_version"`
+		Message     string `json:"message"`
+	}
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	sp, err := s.space(ctx, c, a.SpaceID)
+	if err != nil {
+		return nil, err
+	}
+	by, err := s.author(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	return s.o.Knowledge.Restore(ctx, sp, a.Path, a.Commit, a.BaseVersion, by, a.Message)
 }
 
 // writeDoc creates or replaces a Markdown document, as the user, committed by the agent.

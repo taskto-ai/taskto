@@ -112,11 +112,12 @@ func (r *reader) describe(ctx context.Context, n stored) (params map[string]stri
 		return nil, Target{}, false, err
 	}
 	switch n.kind {
-	case KindCardAssigned:
+	case KindCardAssigned, KindCardDue, KindCardOverdue:
 		var title string
+		var due sql.NullString
 		err := r.s.db.QueryRowContext(ctx, `
-			SELECT c.title FROM cards c JOIN boards b ON b.id = c.board_id
-			WHERE c.id = ? AND b.id = ? AND b.space_id = ?`, n.ref.Card, n.ref.Board, sp.ID).Scan(&title)
+			SELECT c.title, c.due FROM cards c JOIN boards b ON b.id = c.board_id
+			WHERE c.id = ? AND b.id = ? AND b.space_id = ?`, n.ref.Card, n.ref.Board, sp.ID).Scan(&title, &due)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, Target{}, false, nil
 		}
@@ -124,7 +125,17 @@ func (r *reader) describe(ctx context.Context, n stored) (params map[string]stri
 			return nil, Target{}, false, err
 		}
 		item := strconv.FormatInt(sp.ID, 10) + ":" + strconv.FormatInt(n.ref.Board, 10) + ":" + strconv.FormatInt(n.ref.Card, 10)
-		return map[string]string{"title": title}, Target{Section: "boards", Item: item}, true, nil
+		params := map[string]string{"title": title}
+		if n.kind != KindCardAssigned {
+			// The date the card is due, a calendar date: the web app formats it for the reader. A card
+			// whose date was cleared or moved since the notice was made says nothing of it (the notice
+			// would read "overdue since" a day that may be ahead): it is a plain mention of the card.
+			if !due.Valid || due.String != n.ref.Due {
+				return nil, Target{}, false, nil
+			}
+			params["due"] = due.String
+		}
+		return params, Target{Section: "boards", Item: item}, true, nil
 	case KindAppEffectFailed:
 		acc, err := r.s.access.App(ctx, r.userID, sp.ID, n.ref.App)
 		if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {
