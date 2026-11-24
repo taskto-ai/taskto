@@ -652,6 +652,12 @@ type ClientAction struct {
 	// as the first one was; a different request under it is refused. An action that has
 	// effects and no operation is given one by the server (outbox.go).
 	Operation string `json:"operation,omitempty"`
+	// Exact is for a caller that decided from one release (the agent, from list_app_actions): a
+	// new request runs only if Release is the live release at the moment it runs, and is
+	// ErrReleaseOutdated otherwise, never taken as the live release defines it (liveTakes). A
+	// request made before under its operation is still answered as the first one was. Never
+	// read from a client's JSON.
+	Exact bool `json:"-"`
 }
 
 // Message is one A2UI server-to-client message.
