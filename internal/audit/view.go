@@ -91,9 +91,21 @@ func KnownTarget(t string) bool {
 // upToMs is t as the log writes times, rounded up to the millisecond it stores: events are at
 // whole milliseconds, so "at >= from" and "at < to" mean the same with a bound that has finer
 // digits as with the first whole millisecond at or after it.
+//
+// A bound within the last millisecond of the year 9999 rounds up into the year 10000, whose text
+// would sort before every stored time; it becomes afterEnd instead, which sorts after all of
+// them: "at >= afterEnd" finds nothing, and "at < afterEnd" leaves nothing out.
 func upToMs(t time.Time) string {
-	return t.UTC().Add(time.Millisecond - 1).Truncate(time.Millisecond).Format(timeLayout)
+	r := t.UTC().Add(time.Millisecond - 1).Truncate(time.Millisecond)
+	if r.Year() > 9999 {
+		return afterEnd
+	}
+	return r.Format(timeLayout)
 }
+
+// afterEnd is text that sorts after every time the log can store (the last is
+// 9999-12-31T23:59:59.999Z).
+const afterEnd = "9999-12-31T23:59:59.999Z~"
 
 func cursorFor(r Row) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(r.At + "|" + strconv.FormatInt(r.ID, 10)))

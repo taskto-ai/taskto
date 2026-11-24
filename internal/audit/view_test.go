@@ -320,3 +320,30 @@ func TestListWorkspaceCursorBreaksTiesById(t *testing.T) {
 		t.Fatalf("paged %v, want %v", got, want)
 	}
 }
+
+// A bound in the last millisecond of the year 9999 rounds up past the text the log can sort:
+// "from" it finds nothing and "to" it leaves nothing out.
+func TestListWorkspaceBoundsRoundingPastTheLastYear(t *testing.T) {
+	d := open(t)
+	ws := exec(t, d, `INSERT INTO workspaces (name) VALUES ('Home')`)
+	event(t, d, ws, 0, "2026-01-01T00:00:00.000Z", audit.SpaceCreated)
+	event(t, d, ws, 0, "9999-12-31T23:59:59.999Z", audit.SpaceCreated)
+	bound, err := time.Parse(time.RFC3339Nano, "9999-12-31T23:59:59.999000001Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func(q audit.Query) int {
+		t.Helper()
+		page, err := audit.ListWorkspace(context.Background(), d, ws, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(page.Events)
+	}
+	if n := count(audit.Query{From: bound}); n != 0 {
+		t.Errorf("from past the last millisecond finds %d events", n)
+	}
+	if n := count(audit.Query{To: bound}); n != 2 {
+		t.Errorf("to past the last millisecond finds %d events, want 2", n)
+	}
+}
