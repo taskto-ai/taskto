@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { useT } from '../i18n'
 import { Button } from './Button'
 import { Specimen } from './GalleryParts'
@@ -10,6 +11,8 @@ export const title = 'PageHeader'
 export default function PageHeaderGallery() {
   const t = useT()
   const full = { inlineSize: '100%' }
+  // A title the keyboard is sent to when what had it goes away.
+  const titleRef = useRef<HTMLHeadingElement>(null)
   return (
     <>
       <Specimen caption={t('gallery.layout.headerBasic')}>
@@ -69,6 +72,20 @@ export default function PageHeaderGallery() {
             level={2}
             title={t('gallery.layout.longTitle')}
             actions={<Button>{t('gallery.sample.edit')}</Button>}
+          />
+        </div>
+      </Specimen>
+      <Specimen caption={t('gallery.layout.focusTarget')}>
+        <div style={full}>
+          <PageHeader
+            level={2}
+            title={t('gallery.layout.personal')}
+            titleRef={titleRef}
+            actions={
+              <Button size="sm" onClick={() => titleRef.current?.focus()}>
+                {t('gallery.layout.focusIt')}
+              </Button>
+            }
           />
         </div>
       </Specimen>
