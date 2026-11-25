@@ -92,6 +92,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `workspace_limit` | 403 | The caller has already created `max` workspaces, the most one account may. |
 | `too_many_workspaces` | 429 | The caller created 5 workspaces within the last hour; `Retry-After` says when to try again. |
 | `operator_only` | 403 | Only the server's operator (an admin of the workspace setup made) may do this. |
+| `update_request_unsupported` | 409 | "Update now" can't be taken: the server has no request directory, or the host's updater, its request directory or its path unit isn't in place (deploy/INSTALL.md step 16). |
+| `update_channel_off` | 409 | The updater's channel is off (`TASKTO_UPDATE_CHANNEL=off`): nothing runs by itself, and "Update now" is refused. |
+| `update_request_pending` | 409 | An update was requested and the host hasn't taken the request yet. |
+| `update_running` | 409 | The updater is changing the install now. |
 | `workspace_name_length` | 400 | A workspace's name must have 1 to `max` characters. |
 | `password_too_short` | 400 | The password has fewer than `min` characters. |
 | `password_too_long` | 400 | The password has more than `max` bytes. |
@@ -1845,6 +1849,115 @@ Read access to the space (`404` for one the caller can't read). Query: `q`, `lim
 
 Any member. The same, across the boards of every space of the workspace the caller can read.
 Both routes also take an access token.
+
+### Searching app records
+
+The records of personal apps are searched apart from documents and cards, by full text only,
+with the same words, phrases, scripts and limits. What is searched is the **values** of a
+record's text fields (strings, choices, with their labels as people read them, and barcodes)
+as the app's **live release** declares them: never a field's name, never a field the live
+release doesn't declare or a value of another type than its field's (no read of the record
+shows those), and nothing of a draft, so an app that was never published has no searched
+records, and one that is published has them from that moment. Deleted records, and the records of an archived app, are not
+searched. Records are never sent to an embeddings endpoint.
+
+Only the records the caller may read, in the apps they may open, are found, by the same rule
+every list of records goes by: the roles of the app decide whether they read every record or
+only the ones they made (a `user` role reads only its own; no role that reads records, none),
+inside the spaces they can read. Another member's private space, a shared space the caller isn't
+in, another workspace and an app whose roles leave the caller out are never searched, admins
+included. Results are newest change first, with no score: the order depends on the records the
+caller can read only, never on others'.
+
+The index follows the apps' rows: a record added, changed, deleted or restored, and every record
+of an app whose live release changes (a publish, a rollback), is queued in the same transaction, and
+a search indexes the queued records of the apps it looks in before it answers, so it never
+quotes text older than the record. As for cards, a search that still finds some behind says
+`"incomplete": true`, leaves them out, and has no `next_offset`; only the records the caller
+may read can make it so; so can a search that is over its allowance (2,000 records and 20 seconds in
+all, however often it looks again), and a change of the caller's own access while it runs makes it look
+again with the new access, so it never says anything of records the caller no longer reads (a later
+page, whose `offset` counted records under the old access, is then `"incomplete": true` with no results and no
+`next_offset`: start again from the first page). An app that moves to another space is searched under the access to
+the space it is in then, and who may read what is checked again, through the same checks, after the
+records are found.
+
+### `GET /api/workspaces/{workspace}/spaces/{space}/search/records`
+
+Read access to the space (`404` for one the caller can't read). Query: `q`, `limit` and
+`offset`, as for a document search, with the same errors.
+
+```json
+{
+  "results": [
+    {
+      "space_id": 3,
+      "space_name": "Team",
+      "app_id": 9,
+      "app_name": "Expenses",
+      "record_id": 118,
+      "snippet": [{"text": "lunch at the "}, {"text": "orchard", "match": true}]
+    }
+  ],
+  "next_offset": 20
+}
+```
+
+- `snippet`: the passage of the record's values that matched, as plain text in pieces: never
+  markup.
+- `incomplete`, `next_offset`: as for cards.
+- The web app links a result to its app, `/w/{workspace}/apps/{space_id}-{app_id}`.
+
+### `GET /api/workspaces/{workspace}/search/records`
+
+Any member. The same, across the apps of every space of the workspace the caller can read.
+Both routes also take an access token.
+
+### Searching conversations
+
+A person's own conversations with the agent are searched apart too, by full text only: a
+conversation's title, and what was said in it (the person's messages and the agent's, as the
+agent runtime's transcript has them; not the system's instructions and not what a tool returned,
+and only the newest 256 KiB of a long conversation). Conversations are private to their owner:
+only the caller's own, in this workspace, as a member of it whose account isn't disabled, are found, archived ones too, whoever
+else is in the workspace, and an administrator's included. They are never sent to an embeddings
+endpoint. A conversation whose title has every word of the query comes first, then the others, the
+conversation updated last first within each; no score is returned.
+
+The index follows the transcript, which the server doesn't see change as the agent writes. A
+conversation is marked updated, and so queued, when it is created, renamed or archived, when a
+message is sent to it, and when the agent runtime has dealt with that message (the end of the
+agent's reply); a search first reads again the transcripts of the caller's queued conversations,
+newest first, up to 60 transcripts and for at most 20 seconds in all (however often it looks again), and never quotes a conversation that is
+queued. One that can't be read (the agent runtime is off or still starting, or the search ran out of
+time) is left out and the reply says `"incomplete": true`, with no `next_offset`; a later search finds
+it. A conversation the agent runtime has lost leaves the index, and one that is removed takes its
+index with it. The server also indexes them in the background, and at start the ones marked in the
+last day. What the agent said while a turn runs is found once the turn ends.
+
+### `GET /api/workspaces/{workspace}/search/conversations`
+
+Any member, with a session (an access token is not accepted: conversations are the person's, in
+their own browser). Query: `q`, `limit` and `offset`, as for a document search.
+
+```json
+{
+  "results": [
+    {
+      "conversation_id": 12,
+      "title": "Planning the trip",
+      "archived": false,
+      "updated_at": "2026-11-24T18:00:00.000Z",
+      "snippet": [{"text": "…a flight to "}, {"text": "Zanzibar", "match": true}]
+    }
+  ]
+}
+```
+
+- `snippet`: the passage of what was said that matched; empty if only the title matched.
+- `archived` and `title` are the conversation's now, not as it was indexed.
+- `incomplete`, `next_offset`: as for cards.
+- The web app links a result to `/w/{workspace}/conversations/{conversation_id}`.
 
 ### `GET /api/workspaces/{workspace}/search/settings`
 
@@ -4005,6 +4118,45 @@ someone: `blocked` (an update stopped or was interrupted, or the server isn't th
 record; a person looks, puts it right and runs `taskto-update --clear-block` on the host) or
 `manual-upgrade` (a release's notes say so, or it changes the worker's firewall; follow them,
 then `taskto-update --to VERSION`). A file that can't be read is a `500`.
+
+`request` says whether "Update now" can be pressed (below): `available`, and when it can't,
+`reason`, one of `not_configured` (the server has no request directory), `unsupported` (the
+host's updater predates the button, its request directory or path unit isn't in place, it has
+written no status yet or the status is stale), `off` (the channel is off), `pending` (a request
+waits, since `pending_since`) or `running` (a run is changing the install). `status.running`
+is set while a run is in progress (`since`, `to` once chosen, `requested`: it was asked for in the
+app); a note older than three hours is not believed. `status.requests` is the updater's side of
+the button: `supported`, and `last`, the outcome of the last requested run (`at`, `finished`,
+`result`, `code`), which also covers a request the updater turned away before it ran (`result`
+`ignored`, `code` `rate-limited` or `bad-request`). A run the operator asked for has
+`requested: true` in `last_run` and `last_change`.
+
+### `POST /api/workspaces/{workspace}/updates/request`
+
+"Update now". [Operators](#operators) only, with a browser session, and no body. It asks the
+host's updater to do what its nightly run would: install the newest version on its configured
+channel, with its usual checks, its backup and its way back. **The request carries no version,
+repository or argument, and the server runs nothing:** it writes one small file into a directory
+of its own (`TASKTO_UPDATE_REQUEST_DIR`), which a systemd path unit on the host watches and
+`taskto-update --requested` takes, removes and acts on. Every gate of the nightly run holds: an
+update hold, a release that needs steps by hand (`manual-upgrade: true`), a worker firewall that
+changed, an interrupted or stopped update, and a channel that is off. The outcome is in the
+status (`last_run`, `status.requests.last`), with the reason as a code; a person does what the
+gate asks, then `taskto-update --to` on the host.
+
+```json
+{"requested_at": "2026-03-10T03:10:00Z"}
+```
+
+`202` with `requested_at`. `409`: `update_request_unsupported`, `update_channel_off`,
+`update_request_pending` (one request waits at a time; one nobody took for three hours doesn't
+count) or `update_running`; `403` `operator_only` and the usual `404`, `401` and `403` for a
+non-member, no login and an access token. The request is an event on the
+[audit log](audit.md), `server_update_requested` (with the channel), committed before the file
+is made visible to the host: a refused request records none, and no update happens without one. The server also doesn't know whether the host
+accepts it: the host ignores a second request within ten minutes of the last (`rate-limited`) and
+anything in the directory that isn't a small regular file holding the one fixed line the server
+writes (`bad-request`).
 
 ### `GET /healthz/backup`
 

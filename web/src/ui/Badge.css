@@ -1,0 +1,49 @@
+@layer components {
+  .ui-badge {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    vertical-align: middle;
+    block-size: calc(var(--space-5) + var(--space-1) / 2);
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-pill);
+    font: var(--type-caption);
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .ui-badge-dot {
+    flex: none;
+    inline-size: var(--mark-dot);
+    block-size: var(--mark-dot);
+    border-radius: var(--radius-pill);
+    background: currentColor;
+  }
+
+  .ui-badge-success {
+    background: var(--color-success-soft);
+    color: var(--color-success);
+  }
+
+  .ui-badge-warning {
+    background: var(--color-warning-soft);
+    color: var(--color-warning);
+  }
+
+  .ui-badge-danger {
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+
+  .ui-badge-info {
+    background: var(--color-info-soft);
+    color: var(--color-info);
+  }
+
+  .ui-badge-neutral {
+    background: var(--color-neutral-soft);
+    color: var(--color-neutral);
+  }
+}
