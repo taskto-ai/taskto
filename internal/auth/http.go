@@ -432,6 +432,8 @@ func (s *Service) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email string `json:"email"`
 		Role  Role   `json:"role"`
+		// SendEmail also emails the invite link to the invited address (mailer.go).
+		SendEmail bool `json:"send_email"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -448,19 +450,43 @@ func (s *Service) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, `role must be "admin" or "member"`)
 		return
 	}
+	var release func()
+	if req.SendEmail {
+		if !s.EmailLinks() {
+			writeError(w, http.StatusConflict, apierr.CodeMailNotConfigured,
+				"emailing links isn't set up: send the invite link yourself")
+			return
+		}
+		var wait time.Duration
+		if release, wait = s.takeInviteMail(u.ID, email); release == nil {
+			limited(w, wait, apierr.CodeTooManyInviteEmails, "too many invitations emailed: try again later")
+			return
+		}
+	}
 	inv, token, err := s.createInvite(r.Context(), m.WorkspaceID, u.ID, email, req.Role)
 	if err != nil {
+		if release != nil {
+			release() // nothing was sent
+		}
 		s.fail(w, r, err)
 		return
 	}
+	reply := InviteCreated{Invite: inv, Token: token}
+	if req.SendEmail {
+		sent := s.emailInvite(r.Context(), m, u, inv, token)
+		reply.EmailSent = &sent
+	}
 	// The only time the token is shown: the database keeps its hash.
-	writeJSON(w, http.StatusCreated, InviteCreated{Invite: inv, Token: token})
+	writeJSON(w, http.StatusCreated, reply)
 }
 
-// InviteCreated is the reply that makes an invite: the invite and its token, shown only now.
+// InviteCreated is the reply that makes an invite: the invite and its token, shown only now, and,
+// if the email was asked for, whether it went to the relay. The invite exists either way, and its
+// link is here, to copy.
 type InviteCreated struct {
 	Invite
-	Token string `json:"token"`
+	Token     string `json:"token"`
+	EmailSent *bool  `json:"email_sent,omitempty"`
 }
 
 func (s *Service) handleDeleteInvite(w http.ResponseWriter, r *http.Request) {

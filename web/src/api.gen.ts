@@ -430,6 +430,7 @@ export type InviteCreated = {
   created_at: string
   expires_at: string
   token: string
+  email_sent?: boolean
 }
 
 export type Me = {

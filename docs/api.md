@@ -131,6 +131,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `two_factor_clear_own` | 400 | An admin turns off their own two-factor login in Settings, not by clearing it. |
 | `two_factor_clear_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
 | `too_many_resets` | 429 | Too many reset emails asked for from this address or for this email, or the server is busy taking in requests for them; `Retry-After` says when to try again. |
+| `too_many_invite_emails` | 429 | Too many invitations emailed by the admin, or to the address, lately; `Retry-After` says when to try again. |
 | `password_login_disabled` | 403 | Passwords are turned off on this server ([sso.md](sso.md#turning-passwords-off)): logging in, a new account with a password, making a reset link and using one answer this. |
 | `sso_unknown_provider` | 404 | No such single sign-on provider. |
 | `sso_failed` | 502 | The provider didn't answer. As `?sso_error=`: the provider or the exchange failed, or the person declined (details are in the server's log). |
@@ -999,14 +1000,27 @@ browsers don't send to servers or in `Referer`.
 
 ### `POST /api/workspaces/{workspace}/invites`
 
-Admin only. `{"email": "new@example.com", "role": "member"}`; `role` defaults to
-`member`.
+Admin only. `{"email": "new@example.com", "role": "member", "send_email": true}`; `role` defaults
+to `member`, and `send_email` (optional) also emails the invite link to the address.
 
 ```json
-{"id": 3, "email": "new@example.com", "role": "member", "created_at": "…", "expires_at": "…", "token": "…"}
+{"id": 3, "email": "new@example.com", "role": "member", "created_at": "…", "expires_at": "…", "token": "…", "email_sent": true}
 ```
 
-`201`; `409` if the address already belongs to a member.
+`201`; `409` if the address already belongs to a member. The token is always returned, so the
+link can be copied and passed on by hand whether or not an email was asked for.
+
+`email_sent` is there only when `send_email` was: `true` if the SMTP server took the message,
+`false` if it didn't (the invite exists anyway, and the failure is logged by its step and the
+SMTP reply's number, never in the answer). The message goes only to the invite's address, with
+the link `/invite#<token>` built on the server's `public_url` ([install.md](install.md#email)),
+in the language of the invited person's account if they have one that picked one, else the
+workspace's default, else the admin's own, else English; it names the workspace and the admin.
+The link isn't logged. `409 mail_not_configured` for `send_email` where the server can't email
+links (nothing is made); `GET /api/workspaces/{workspace}/mail` says so (`sends_links`).
+`429 too_many_invite_emails` with `Retry-After` for `send_email` past 30 an hour for the admin
+(across workspaces) or 3 an hour for the address (nothing is made); invites without `send_email`
+have no such limit.
 
 ### `GET /api/workspaces/{workspace}/invites`
 
