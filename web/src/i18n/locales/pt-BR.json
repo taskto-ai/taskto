@@ -911,6 +911,19 @@
     "provider_models_count": "Liste de 1 a {max} modelos.",
     "provider_model_invalid": "Cada ID de modelo precisa ter de 1 a {max} caracteres imprimíveis.",
     "too_many_providers": "Você pode ter no máximo {max} contas de provedor aqui: remova uma antes.",
+    "integration_not_found": "Integração não encontrada.",
+    "integration_name_invalid": "O nome precisa ter de 1 a {max} caracteres: letras minúsculas, dígitos, '.', '_' ou '-', começando com letra ou dígito.",
+    "integration_name_taken": "Já existe uma integração com esse nome.",
+    "integration_display_name_invalid": "O nome de exibição pode ter até {max} caracteres imprimíveis.",
+    "integration_provider_unknown": "Este provedor não é compatível.",
+    "integration_secret_required": "Informe o campo {secret}.",
+    "integration_secret_invalid": "O campo {secret} não parece ser deste provedor: confira se copiou o correto.",
+    "integration_secret_unreadable": "O campo {secret} salvo não pode ser lido, porque a chave do servidor mudou. Informe-o de novo.",
+    "integration_setting_invalid": "A configuração {setting} está faltando ou não é válida.",
+    "integration_limit_invalid": "O teto do valor deve ser um número inteiro de 1 a {max}.",
+    "integration_currency_invalid": "Escolha de 1 a {max} moedas da lista.",
+    "too_many_integrations": "Você pode ter no máximo {max} integrações em um espaço de trabalho: remova uma antes.",
+    "integration_in_use": "Um app ainda usa esta integração: desative-a em vez de removê-la.",
     "base_url_invalid": "Informe uma URL http ou https de até {max} caracteres, sem query nem fragmento.",
     "base_url_credentials": "A URL não pode conter usuário nem senha: coloque a chave no campo da chave de API.",
     "base_url_insecure": "Use https: uma chave só é enviada por http simples para esta máquina.",
@@ -1070,6 +1083,7 @@
       "audit": "Auditoria",
       "storage": "Armazenamento",
       "providers": "Provedores de modelos",
+      "integrations": "Integrações",
       "cliAccounts": "Contas de CLI",
       "search": "Busca",
       "dictation": "Ditado",
@@ -1525,6 +1539,70 @@
       "none": "Nenhuma conta ainda.",
       "noneHelp": "Adicione uma para usar os modelos dela nas conversas."
     },
+    "integrations": {
+      "title": "Integrações",
+      "intro": "Conecte uma conta de um provedor de pagamentos. As credenciais ficam criptografadas no servidor e nunca são mostradas de novo, e nenhum app, agente ou membro consegue lê-las. Você escolhe quais espaços podem usar a conta, o maior valor e as moedas de um pagamento.",
+      "backupHint": "Um backup guarda a chave do servidor junto das credenciais, então é tão sensível quanto elas. Depois de restaurar um backup em outra máquina, troque cada credencial no provedor e aqui.",
+      "webhooksUnavailable": "Webhooks indisponíveis: defina a URL pública do servidor (-public-url). A conferência de pagamentos sem webhooks ainda não foi construída.",
+      "add": "Conectar uma conta",
+      "none": "Nenhuma conta conectada ainda.",
+      "newIntegration": "Nova integração",
+      "providerLabel": "Provedor",
+      "provider": {
+        "stripe": "Stripe",
+        "square": "Square"
+      },
+      "kind": {
+        "payments": "Pagamentos"
+      },
+      "mode": {
+        "test": "Modo de teste",
+        "live": "Modo real: dinheiro de verdade"
+      },
+      "secret": {
+        "api_key": "Chave secreta",
+        "webhook_secret": "Segredo de assinatura do webhook"
+      },
+      "setting": {
+        "environment": "Ambiente",
+        "location_id": "ID do local"
+      },
+      "settingOption": {
+        "sandbox": "Sandbox",
+        "production": "Produção"
+      },
+      "secretSet": "{name} definido",
+      "secretNotSet": "{name} não definido",
+      "newSecret": "Novo valor de {name}",
+      "keepSecret": "Deixe vazio para manter o guardado",
+      "secretHint": "Guardado criptografado no servidor e nunca mostrado de novo.",
+      "secretHintStored": "Guardado criptografado no servidor e nunca mostrado de novo: há um guardado agora.",
+      "ceiling": "Maior valor de um pagamento",
+      "ceilingHint": "Na menor unidade da moeda: centavos para o euro, ienes inteiros para o iene.",
+      "ceilingPreview": "Isso dá {amounts}.",
+      "currencies": "Moedas que um pagamento pode pedir",
+      "limits": "Até {amounts} por pagamento",
+      "allowedIn": "Permitida em: {spaces}",
+      "allowedNowhere": "Ainda não permitida em nenhum espaço, então nenhum app pode usá-la.",
+      "webhookAddress": "Registre este endereço no provedor:",
+      "polling": "Sem URL pública: os webhooks ficam indisponíveis, e a conferência de pagamentos sem eles ainda não foi construída.",
+      "switchedOff": "desligada",
+      "switchOff": "Desligar",
+      "switchOn": "Ligar",
+      "switchOffNamed": "Desligar {name}",
+      "switchOnNamed": "Ligar {name}",
+      "checking": "Verificando…",
+      "checkOk": "As credenciais guardadas abrem e as configurações estão certas. O provedor não foi consultado.",
+      "spaces": "Espaços",
+      "spacesNamed": "Espaços de {name}",
+      "spacesHint": "Os apps dos espaços que você escolher podem usar esta conta, depois que você os aprovar. O espaço privado de outra pessoa não pode ser escolhido.",
+      "privateSpace": "{name} (privado)",
+      "archivedSpace": "{name} (arquivado)",
+      "otherSpaces_one": "E {count} espaço privado de outro membro, que você não pode ver.",
+      "otherSpaces_many": "E {count} de espaços privados de outros membros, que você não pode ver.",
+      "otherSpaces_other": "E {count} espaços privados de outros membros, que você não pode ver.",
+      "removeQuestion": "Remover {name}? As credenciais são apagadas junto."
+    },
     "cliAccounts": {
       "title": "Suas contas de CLI",
       "intro": "As conversas podem rodar no Claude Code, no Codex ou no Grok Build, com login na sua própria assinatura. Só você usa esses logins, nas suas próprias conversas, em qualquer um dos seus espaços de trabalho.",
@@ -1813,6 +1891,12 @@
         "search_embeddings_changed": "Embeddings da busca alterados",
         "search_consent_changed": "Consentimento da busca alterado",
         "dictation_settings_changed": "Configurações de ditado alteradas",
+        "integration_created": "Integração conectada",
+        "integration_updated": "Integração alterada",
+        "integration_removed": "Integração removida",
+        "integration_disabled": "Integração desligada",
+        "integration_enabled": "Integração ligada",
+        "integration_spaces_changed": "Espaços da integração alterados",
         "data_export_started": "Exportação de dados iniciada",
         "workspace_export_started": "Exportação do espaço de trabalho iniciada",
         "server_update_requested": "Atualização pedida",
@@ -1828,7 +1912,8 @@
         "space": "Espaço compartilhado",
         "access_token": "Token de acesso",
         "provider_account": "Conta de provedor de modelos",
-        "shared_cli_account": "Conta de CLI compartilhada"
+        "shared_cli_account": "Conta de CLI compartilhada",
+        "integration": "Integração"
       },
       "details": {
         "account": "Conta",
@@ -1865,7 +1950,12 @@
         "scope": "Escopo",
         "spaces": "Espaços compartilhados",
         "to": "Para",
-        "user_id": "Número do membro"
+        "user_id": "Número do membro",
+        "added": "Espaços adicionados",
+        "removed": "Espaços removidos",
+        "mode": "Modo",
+        "webhook_secret_set": "Segredo do webhook definido",
+        "webhook_secret_changed": "Segredo do webhook alterado"
       },
       "values": {
         "admin": "Administrador",
@@ -1895,7 +1985,13 @@
         "compat": "Compatibilidade",
         "models": "Modelos",
         "label": "Rótulo",
-        "model": "Modelo"
+        "model": "Modelo",
+        "settings": "Configurações",
+        "max_amount": "Valor máximo",
+        "currencies": "Moedas",
+        "webhook_secret": "Segredo do webhook",
+        "test": "Teste",
+        "live": "Real"
       },
       "event": "Evento",
       "when": "Quando"
