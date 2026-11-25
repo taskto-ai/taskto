@@ -822,6 +822,56 @@ export type BackupStatus = {
 
 export const backupPath = (workspace: number) => `${ws(workspace)}/backup`
 
+// The host's automatic updates (docs/install.md#automatic-updates), for the server's operators:
+// the version this server runs, and what the updater (which runs on the host, never in the
+// server) last wrote: results, reason codes and versions only, never a path or a host.
+// `status` is null while it hasn't written one (`expects_status` says this server is a release
+// that should have one, so the host's updater is too old), `stale` says it stopped writing, and
+// `needs_person` is set while the install waits for someone: a stop or an interrupted update
+// (cleared with `taskto-update --clear-block`) or a release that needs steps by hand.
+export type UpdateRun = {
+  at?: string
+  finished?: string
+  result: string
+  from?: string
+  to?: string
+  code?: string
+  backed_up?: boolean
+  // The run was asked for with "Update now", not the nightly one.
+  requested?: boolean
+}
+// A run that is changing the install now (the server restarts during it).
+export type UpdateRunning = { since: string; to?: string; requested?: boolean }
+// What became of the last "Update now", also when the updater turned it away before a run.
+export type UpdateRequestRun = { at?: string; finished?: string; result: string; code?: string }
+// Whether "Update now" can be pressed, and if not why: not_configured, unsupported, off, pending or running.
+export type UpdateRequestState = { available: boolean; reason?: string; pending_since?: string }
+export type UpdateStatus = {
+  configured: boolean
+  running_version: string
+  expects_status?: boolean
+  stale?: boolean
+  status: {
+    version: number
+    checked?: string
+    channel: string
+    hold?: boolean
+    recorded_version?: string
+    last_run: UpdateRun | null
+    last_change: UpdateRun | null
+    needs_person: { kind: string; code?: string } | null
+    running: UpdateRunning | null
+    // Null from an updater that predates the button.
+    requests: { supported: boolean; last: UpdateRequestRun | null } | null
+  } | null
+  request: UpdateRequestState
+}
+// "Update now": POST with no body. The host installs what its nightly run would, under its gates.
+export type UpdateRequested = { requested_at: string }
+
+export const updatesPath = (workspace: number) => `${ws(workspace)}/updates`
+export const updateRequestPath = (workspace: number) => `${ws(workspace)}/updates/request`
+
 // Storage quotas and what each space stores (docs/quotas.md), in bytes. A limit of 0 is none.
 export type StorageLimits = { workspace: number; user: number }
 export type SpaceUsage = {
@@ -846,6 +896,10 @@ export const usagePath = (workspace: number) => `${ws(workspace)}/usage`
 // Starts an export of what the caller owns in the workspace (docs/api.md#export-my-data): a POST that
 // answers `{download, expires_in}`, the address to go to for the zip, which works once.
 export const exportPath = (workspace: number) => `${ws(workspace)}/export`
+
+// The same for an admin's export of the workspace's shared spaces they are a member of, and its
+// member list (docs/api.md#export-a-workspace).
+export const workspaceExportPath = (workspace: number) => `${ws(workspace)}/export/workspace`
 
 // The server's outgoing email (docs/install.md#email), for admins: where it sends through, never the
 // account or its password. `password` says whether the server signs in. `sends_links` says whether it

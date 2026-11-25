@@ -1,0 +1,94 @@
+@layer components {
+  /* The stack: a popover in the top layer, at the window's bottom inline end. It lets clicks
+     through where there is no toast. */
+  .ui-toaster {
+    position: fixed;
+    inset: auto;
+    inset-block-end: calc(var(--space-4) + env(safe-area-inset-bottom));
+    inset-inline-end: var(--space-4);
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    overflow: visible;
+    inline-size: min(var(--width-toast), calc(100vw - var(--space-8)));
+    pointer-events: none;
+  }
+
+  .ui-toaster:popover-open {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  /* What holds the stack in the page (<body>, or the topmost modal dialog), and the root the first
+     toast() draws one in: no box of their own. */
+  .ui-toaster-host,
+  .ui-toaster-root {
+    display: contents;
+  }
+
+  /* The live regions a screen reader hears: out of sight (with ui-visually-hidden). */
+  .ui-toaster-announcer {
+    pointer-events: none;
+  }
+
+  .ui-toaster-said {
+    margin: 0;
+  }
+
+  .ui-toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    padding-block: var(--space-2);
+    padding-inline: var(--space-4) var(--space-2);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: var(--shadow-pop);
+    font: var(--type-ui);
+    animation: ui-toast-in var(--duration-base) var(--ease-out);
+  }
+
+  @keyframes ui-toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(var(--space-2));
+    }
+  }
+
+  .ui-toast-icon {
+    flex: none;
+    display: inline-flex;
+    color: var(--color-text-muted);
+  }
+
+  .ui-toast[data-tone="success"] .ui-toast-icon {
+    color: var(--color-success);
+  }
+
+  .ui-toast[data-tone="danger"] .ui-toast-icon {
+    color: var(--color-danger);
+  }
+
+  .ui-toast-message {
+    flex: 1;
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 40rem) {
+    .ui-toaster {
+      inset-inline: var(--space-4);
+      inline-size: auto;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-toast {
+      animation: none;
+    }
+  }
+}

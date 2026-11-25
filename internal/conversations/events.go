@@ -40,7 +40,9 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	user, workspace := caller(r)
 	// The stream lasts as long as the login that opened it: signing the login out, from anywhere,
-	// ends it at once, and at the latest at the heartbeat's next look at the session.
+	// ends it at once, and at the latest at the heartbeat's next look at the session. That also
+	// holds for an account disabled and enabled again between two heartbeats, which has no
+	// session left. One watch is enough: each one looks the session up on every heartbeat.
 	sessionCtx, stopWatch := s.watchSession(r, s.heartbeat)
 	defer stopWatch()
 	if sessionCtx.Err() != nil {
@@ -57,14 +59,6 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(sessionCtx)
 	defer cancel()
 	defer context.AfterFunc(s.closing, cancel)()
-	if s.watchSession != nil {
-		// The stream lasts as long as the login that opened it, not only as long as its owner
-		// has access now: an account disabled and enabled again between two heartbeats has no
-		// session left, and its stream goes with it.
-		session, stop := s.watchSession(r, s.heartbeat)
-		defer stop()
-		defer context.AfterFunc(session, cancel)()
-	}
 	watch, err := rt.Watch(ctx, c.agentID)
 	if err != nil {
 		conversationError(w, r, c, err)
@@ -103,8 +97,8 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	heartbeat := time.NewTicker(s.heartbeat)
-	defer heartbeat.Stop()
+	heartbeat, stopHeartbeat := s.heartbeatClock()
+	defer stopHeartbeat()
 	// A brief database error doesn't end the stream; losing access, or the check failing
 	// several heartbeats in a row, does.
 	const maxFailedChecks = 3
@@ -131,7 +125,7 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 				_ = out.event(interrupted)
 			}
 			return
-		case <-heartbeat.C:
+		case <-heartbeat:
 			// Access is checked again, so someone removed from the workspace doesn't keep a stream.
 			switch _, err := s.find(ctx, workspace, user, c.ID); {
 			case errors.Is(err, errNotFound):
@@ -166,6 +160,16 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// heartbeatClock says when an event stream's next heartbeat is due; call the func when the
+// stream ends.
+func (s *Service) heartbeatClock() (<-chan time.Time, func()) {
+	if s.heartbeatTicks != nil {
+		return s.heartbeatTicks()
+	}
+	t := time.NewTicker(s.heartbeat)
+	return t.C, t.Stop
 }
 
 // eventWriter writes Server-Sent Events, each flushed at once.

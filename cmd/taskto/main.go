@@ -331,6 +331,11 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	}
 	convs := conversations.New(sqlDB, convAgent)
 	convs.SetCapabilities(tools.Capability)
+	// The search index reads each conversation's text from the agent runtime, through them: with
+	// no agent runtime there is none to read, and no conversation is searched.
+	if cfg.Agent {
+		index.SetConversations(convs)
+	}
 	convs.SetCLIQuestions(cliAccounts)
 
 	if cfg.InsecureCookies {
@@ -392,8 +397,12 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		Browser:       browsers,
 		Dictation:     dictationService(cfg, sqlDB, key, kb),
 		BackupDataDir: cfg.DataDir,
-		Quota:         quotas,
-		Mail:          mailer,
+		// The host updater's status, read-only (docs/install.md#automatic-updates).
+		UpdateStatusDir: cfg.UpdateStatusDir,
+		// Update now's request, for the same updater to take; the one place of its the server writes.
+		UpdateRequestDir: cfg.UpdateRequestDir,
+		Quota:            quotas,
+		Mail:             mailer,
 		// Photos that were never saved in a record are removed after a day, and an app moved to
 		// another space has its files follow it (internal/apps/attachments.go).
 		AppsReady: func(svc *apps.Service) {

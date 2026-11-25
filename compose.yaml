@@ -31,7 +31,25 @@ services:
       - data:/data
       # The CLI worker's socket (the cli profile): only this container's user can open it.
       - cli-run:/run/taskto-cli
+      # What the host's updater says about the automatic updates (docs/install.md#automatic-updates),
+      # for admins to see (Settings > About): one directory it writes a copy of its status into,
+      # read-only here. The server gets nothing else of the updater: not its state, its backups or
+      # Docker (deploy/safety-check.sh checks it).
+      - type: bind
+        source: ${TASKTO_UPDATE_STATUS_SOURCE:-/var/lib/taskto-update/public}
+        target: /update-status
+        read_only: true
+      # An operator's Update now (Settings > About): the one place of the updater's the server
+      # writes, a directory it puts one small request file in, which a systemd path unit on the host
+      # turns into `taskto-update --requested` (docs/install.md#update-now). It holds no version and
+      # no argument, and the host treats whatever is in it as hostile. Created by deploy/INSTALL.md
+      # step 16, owned by the server's uid; mounted here and nowhere else (deploy/safety-check.sh).
+      - type: bind
+        source: ${TASKTO_UPDATE_REQUEST_SOURCE:-/var/lib/taskto-update/request}
+        target: /update-request
     environment:
+      TASKTO_UPDATE_STATUS_DIR: /update-status
+      TASKTO_UPDATE_REQUEST_DIR: /update-request
       # Caddy's address on this project's network (below): the only proxy whose
       # X-Forwarded-For the server believes, for the login limits.
       TASKTO_TRUSTED_PROXIES: 172.29.80.10

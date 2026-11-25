@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -269,6 +270,44 @@ func TestEventsEndWithTheirLogin(t *testing.T) {
 	waitFor(t, "the watch to close", w.isClosed)
 }
 
+// A stream watches its login once: each watch looks the session up on every heartbeat, so a
+// second one would double the lookups of every open stream. It releases its watch when it ends.
+func TestEventsWatchTheirSessionOnce(t *testing.T) {
+	e, srv, owner, ws, conv := newStreamEnv(t)
+	var started, stopped atomic.Int32
+	watch := e.svc.watchSession
+	e.svc.watchSession = func(r *http.Request, every time.Duration) (context.Context, context.CancelFunc) {
+		started.Add(1)
+		ctx, stop := watch(r, every)
+		return ctx, func() {
+			stopped.Add(1)
+			stop()
+		}
+	}
+	e.svc.heartbeat = 10 * time.Millisecond
+	s := owner.openEvents(srv, ws, conv.ID)
+	e.rt.watch(t, 0)
+	// Several heartbeats in, the stream has still started one watch.
+	for range 3 {
+		if got := s.next(); got.comment != "heartbeat" {
+			t.Fatalf("event = %+v, want a heartbeat", got)
+		}
+	}
+	if n := started.Load(); n != 1 {
+		t.Fatalf("the stream started %d session watches, want 1", n)
+	}
+	if n := stopped.Load(); n != 0 {
+		t.Fatalf("%d session watches released while the stream is open", n)
+	}
+	owner.expect(http.StatusNoContent, http.MethodPost, "/api/logout", nil)
+	for {
+		if got := s.next(); got.data == interruptedLine {
+			break
+		}
+	}
+	waitFor(t, "the watch to be released", func() bool { return stopped.Load() == 1 })
+}
+
 // An open stream ends with the login that opened it: at once when the login is signed out
 // (the heartbeat is too slow to be the cause), and at the next heartbeat when it ended some
 // other way.
@@ -433,44 +472,58 @@ func TestEventsStreamsPerUserAreCapped(t *testing.T) {
 // for several heartbeats does.
 func TestEventsSurviveABriefDatabaseError(t *testing.T) {
 	e, srv, owner, ws, conv := newStreamEnv(t)
-	// Each check is followed by a heartbeat comment, failed or not, so counting comments
-	// counts checks; the interval leaves room to restore the table between two of them.
-	e.svc.heartbeat = 100 * time.Millisecond
+	// The test is the stream's heartbeat clock: each tick runs one access check, and the
+	// heartbeat comment that follows it, failed or not, says the check is done. Nothing
+	// depends on how long anything takes. The interval is only the session watch's.
+	e.svc.heartbeat = time.Hour
+	ticks := make(chan time.Time)
+	e.svc.heartbeatTicks = func() (<-chan time.Time, func()) { return ticks, func() {} }
 	s := owner.openEvents(srv, ws, conv.ID)
 	e.rt.watch(t, 0)
-	if got := s.next(); got.comment != "heartbeat" {
+	check := func() sse {
+		t.Helper()
+		// A handler that returned without an end line has nobody left to take the tick: fail
+		// instead of waiting for the test binary's timeout.
+		select {
+		case ticks <- time.Time{}:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the stream took no heartbeat: it ended without an end event")
+		}
+		return s.next()
+	}
+	rename := func(from, to string) {
+		t.Helper()
+		if _, err := e.db.Exec(`ALTER TABLE ` + from + ` RENAME TO ` + to); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := check(); got.comment != "heartbeat" {
 		t.Fatalf("event = %+v, want a heartbeat", got)
 	}
 
-	// A real database error for one check: the table the check reads is gone.
-	if _, err := e.db.Exec(`ALTER TABLE conversations RENAME TO conversations_away`); err != nil {
-		t.Fatal(err)
+	// A real database error for each of two checks, not enough to end the stream: the table
+	// the check reads is gone.
+	rename("conversations", "conversations_away")
+	for range 2 {
+		if got := check(); got.comment != "heartbeat" {
+			t.Fatalf("event = %+v, want the stream to go on after a failed check", got)
+		}
 	}
-	if got := s.next(); got.comment != "heartbeat" {
-		t.Fatalf("event = %+v, want the stream to go on after one failed check", got)
+	// A check that works again starts the count over: two more failures still don't end it.
+	rename("conversations_away", "conversations")
+	if got := check(); got.comment != "heartbeat" {
+		t.Fatalf("event = %+v, want the stream to go on", got)
 	}
-	if _, err := e.db.Exec(`ALTER TABLE conversations_away RENAME TO conversations`); err != nil {
-		t.Fatal(err)
-	}
-	for range 3 {
-		if got := s.next(); got.comment != "heartbeat" {
-			t.Fatalf("event = %+v, want the stream to go on", got)
+	rename("conversations", "conversations_away")
+	for range 2 {
+		if got := check(); got.comment != "heartbeat" {
+			t.Fatalf("event = %+v, want the stream to go on after the count started over", got)
 		}
 	}
 
-	// For good: the stream ends after a few failed checks.
-	if _, err := e.db.Exec(`ALTER TABLE conversations RENAME TO conversations_away`); err != nil {
-		t.Fatal(err)
-	}
-	for {
-		got := s.next()
-		if got.comment == "heartbeat" {
-			continue
-		}
-		if got.data != interruptedLine {
-			t.Fatalf("event = %+v, want the end", got)
-		}
-		break
+	// For good: the third failed check in a row ends the stream.
+	if got := check(); got.data != interruptedLine {
+		t.Fatalf("event = %+v, want the end after the third failed check in a row", got)
 	}
 }
 

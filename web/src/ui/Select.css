@@ -1,0 +1,45 @@
+/* The box is Input's (Input.css); here, the room for the chevron and the chevron itself, which
+   doesn't take the pointer: a click on it opens the select underneath. */
+
+@layer components {
+  .ui-select {
+    position: relative;
+    display: inline-flex;
+    vertical-align: middle;
+    min-inline-size: 0;
+  }
+
+  .ui-select-native {
+    appearance: none;
+    padding-inline-end: calc(var(--space-3) + var(--space-6));
+    cursor: pointer;
+    text-overflow: ellipsis;
+  }
+
+  .ui-select-sm .ui-textbox-sm {
+    padding-inline-end: calc(var(--space-2) + var(--space-5));
+  }
+
+  .ui-select-chevron {
+    position: absolute;
+    inset-block-start: 50%;
+    inset-inline-end: var(--space-3);
+    translate: 0 -50%;
+    color: var(--color-text-muted);
+    pointer-events: none;
+  }
+
+  .ui-select-sm .ui-select-chevron {
+    inset-inline-end: var(--space-2);
+  }
+
+  .ui-select-native:disabled + .ui-select-chevron {
+    color: var(--color-text-muted);
+  }
+
+  /* The list the browser draws follows the page's colours. */
+  .ui-select-native option {
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+}

@@ -138,7 +138,10 @@ var schemas = map[string]map[string]kind{
 	SpaceMemberRoleChanged: {"user_id": number, "from": spaceRoles, "to": spaceRoles},
 	SpaceMemberRemoved:     {"user_id": number, "role": spaceRoles, "cascade": cascadeFlag},
 
-	DataExportStarted: {},
+	ServerUpdateRequested: {"channel": oneOf("release", "main")},
+
+	DataExportStarted:      {},
+	WorkspaceExportStarted: {"spaces": number},
 
 	ProviderAccountCreated: {"kind": oneOf("openai-compatible"), "scope": oneOf("workspace", "user"), "base_host": host, "api_key_set": boolean},
 	ProviderAccountUpdated: {

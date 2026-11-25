@@ -24,6 +24,7 @@ import (
 type Runtime interface {
 	CreateConversationOn(ctx context.Context, model agentrt.ModelRef) (int64, error)
 	Submit(ctx context.Context, conversation int64, in agentrt.Input) (int64, error)
+	Wait(ctx context.Context, submission int64) (agentrt.Settled, error)
 	Messages(ctx context.Context, conversation int64) ([]agentrt.Message, error)
 	Model(ctx context.Context, conversation int64) (agentrt.ModelRef, error)
 	SetModel(ctx context.Context, conversation int64, model agentrt.ModelRef) error
@@ -84,6 +85,11 @@ type Service struct {
 	heartbeat     time.Duration // between comments on an idle event stream
 	writeTimeout  time.Duration // for the client to take one event before it is dropped
 	maxStreams    int           // open event streams per user, across their conversations
+
+	// heartbeatTicks is the clock of an event stream's heartbeats: the channel that says when
+	// one is due, and the func that releases it. nil: a ticker every heartbeat. Tests set it
+	// to make each heartbeat, and the access check it carries, happen exactly when they say.
+	heartbeatTicks func() (<-chan time.Time, func())
 }
 
 // New returns the API over the database sqlDB, which must be migrated. agent is nil when the
@@ -206,8 +212,11 @@ func (s *Service) update(ctx context.Context, workspace, user, id int64, title *
 	return c, err
 }
 
-// touch marks conversation id updated, after a message.
-func (s *Service) touch(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, id)
+// touch marks conversation id updated, after a message. agentID is the agent runtime's ID of
+// the conversation the message was for: a conversation's ID can be taken by another once it is
+// removed, so a mark made late (markWhenSettled) is only ever made on the conversation it was
+// for, and never bumps, or queues for indexing, a newer one that has the ID now.
+func (s *Service) touch(ctx context.Context, id, agentID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND agent_id = ?`, id, agentID)
 	return err
 }

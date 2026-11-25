@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,15 @@ type fakeRuntime struct {
 	err     error // returned by every call, when set
 	// onAbort, when set, runs inside Abort with its context, before it returns.
 	onAbort func(ctx context.Context)
+	// replies are what the agent answered in each conversation, after the inputs. A tool's
+	// result and the system's own text are in the transcript too, which Transcript leaves out.
+	replies map[int64][]agentrt.Message
+	// settle, when set, holds Wait until it is closed or its context ends.
+	settle chan struct{}
+	// waited counts the submissions Wait was called for.
+	waited atomic.Int64
+	// waitErr, when set, is what Wait returns, whatever else works.
+	waitErr error
 }
 
 // setupToken is the first-run setup token the tests' server is given.
@@ -83,7 +93,25 @@ func (f *fakeRuntime) Messages(_ context.Context, conv int64) ([]agentrt.Message
 	for _, in := range f.inputs[conv] {
 		out = append(out, agentrt.Message{Role: "user", Text: in.Content})
 	}
-	return out, nil
+	return append(out, f.replies[conv]...), nil
+}
+
+func (f *fakeRuntime) Wait(ctx context.Context, _ int64) (agentrt.Settled, error) {
+	f.waited.Add(1)
+	f.mu.Lock()
+	hold, err := f.settle, f.err
+	if f.waitErr != nil {
+		err = f.waitErr
+	}
+	f.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return agentrt.Settled{}, ctx.Err()
+		}
+	}
+	return agentrt.Settled{Status: "done"}, err
 }
 
 func (f *fakeRuntime) Model(_ context.Context, conv int64) (agentrt.ModelRef, error) {
