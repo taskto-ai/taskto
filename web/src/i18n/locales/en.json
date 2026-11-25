@@ -2222,7 +2222,6 @@
   },
   "home": {
     "intro": "Widgets from your apps, and the apps you pinned to the menu. Each shows only what you may see in its app.",
-    "empty": "Nothing on your Home yet. Choose Customize to put a widget from one of your apps here, or to pin an app to the menu.",
     "widgets": "Widgets",
     "customize": "Customize",
     "done": "Done",
@@ -2235,12 +2234,6 @@
       "unpublished": "{name} isn’t published yet, so this widget is unavailable.",
       "removed": "{name} no longer offers this widget."
     },
-    "unavailableShort": {
-      "offline": "· app offline",
-      "unpublished": "· app not published",
-      "removed": "· no longer offered"
-    },
-    "default": "· set for the space",
     "moveEarlier": "Move {name} earlier",
     "moveLater": "Move {name} later",
     "removeNamed": "Remove {name}",
@@ -2265,7 +2258,37 @@
       "shortcut": "shortcut",
       "pin": "pin"
     },
-    "removePinNamed": "Remove {name} from the menu"
+    "removePinNamed": "Remove {name} from the menu",
+    "emptyTitle": "Nothing on your Home yet",
+    "emptyHelp": "Home holds widgets from your apps, each showing only what you may see in its app. Add one to see its numbers here, or pin an app to the menu.",
+    "emptyNoApps": "Home holds widgets from your apps, each showing only what you may see in its app. Build or install an app first, then come back to put it here.",
+    "emptyAdd": "Add widgets",
+    "emptyApps": "Open Apps",
+    "addShort": "Add",
+    "added": "Added",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "pinned": "Pinned",
+    "show": "Show",
+    "defaultBadge": "Space default",
+    "pinState": {
+      "offline": "App offline",
+      "unpublished": "App not published",
+      "removed": "No longer offered"
+    },
+    "moreForWidget": "More actions for the {name} widget",
+    "moreForPin": "More actions for the {name} pin",
+    "announce": {
+      "moved": "{name} moved to position {position} of {total}",
+      "removed": "{name} removed from Home",
+      "added": "{name} added to Home",
+      "hidden": "{name} hidden",
+      "shown": "{name} shown again",
+      "pinned": "{name} pinned to the menu",
+      "unpinned": "{name} removed from the menu",
+      "defaultSet": "{name} is now a default for the space",
+      "defaultUnset": "{name} is no longer a default for the space"
+    }
   },
   "checklist": {
     "title": "Set up your workspace",
@@ -2588,7 +2611,9 @@
       "working": "Confirming your address…",
       "done": "Your address is confirmed. Notifications you chose can now be emailed to you.",
       "settings": "Open notification settings"
-    }
+    },
+    "noneHelp": "When a card is assigned to you, a comment mentions you or an app needs you, it shows here.",
+    "in": "{where} ·"
   },
   "ui": {
     "loading": "Loading",
@@ -2821,7 +2846,11 @@
       "addColumn": "Add a column",
       "headings": "Sizes from the type roles: the display face from 20px up, Inter below",
       "busyAsk": "Delete, then fail…",
-      "busyFailed": "The app could not be deleted. Nothing was changed; try again."
+      "busyFailed": "The app could not be deleted. Nothing was changed; try again.",
+      "inPlaceRow": "A search result",
+      "inPlaceDetail": "Opens on this page, in place",
+      "focusTarget": "Moved to by a script (a ref, and tabIndex -1)",
+      "focusIt": "Send the keyboard to the title"
     }
   }
 }
