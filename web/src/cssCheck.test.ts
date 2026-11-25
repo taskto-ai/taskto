@@ -674,6 +674,20 @@ describe('nested rules in an old stylesheet', () => {
       properties: ['margin'],
       refused: true,
     })
+    // A leading combinator keeps the parent in front, even with an & later on.
+    expect(allRules('.tt-card { + .x + & { margin: 0; } }').map((r) => r.selector)).toEqual([
+      '.tt-card',
+      '.tt-card + .x + .tt-card',
+    ])
+    // Each & is the whole parent list, chosen on its own.
+    expect(allRules('.tt-a, .tt-b { & + & { margin: 0; } }').map((r) => r.selector)).toEqual([
+      '.tt-a',
+      '.tt-b',
+      '.tt-a + .tt-a',
+      '.tt-a + .tt-b',
+      '.tt-b + .tt-a',
+      '.tt-b + .tt-b',
+    ])
     // Each of several parents.
     expect(allRules('.tt-a, .tt-b { & p { margin: 0; } }').map((r) => r.selector)).toEqual([
       '.tt-a',

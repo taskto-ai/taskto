@@ -880,33 +880,47 @@ export const EVERYWHERE = new Map([
   ],
 ])
 
-// A nested rule's selector as the one it stands for: `&` is the parent (`.tt-card { &:hover }` is
-// `.tt-card:hover`), and a selector without `&` is inside it (`.tt-card { h2 }` is `.tt-card h2`).
-// `&` is the parent selector: at the start of a compound it is the parent's text, which ends in
-// the compound the rest is added to; after the start of one it is `:is(parent)`. Only a bare `&`
-// is the nesting selector: one in a string (`a[href*="&"]`) or escaped (`\\&`)
-// is a character.
-export function nestedSelector(parent, child) {
-  let out = ''
-  let nested = false
+// A nested rule's selectors as the ones they stand for, one for each way of choosing a parent for
+// each `&`: `&` is the parent (`.tt-card { &:hover }` is `.tt-card:hover`), and a selector without
+// `&`, or one that starts with a combinator, has the parent in front (`.tt-card { h2 }` is
+// `.tt-card h2`, `.tt-card { + .x + & }` is `.tt-card + .x + .tt-card`). Each `&` is the whole
+// parent list, so `.a, .b { & + & }` is four selectors. At the start of a compound, `&` is the
+// parent's text, which ends in the compound the rest is added to; after the start of one it is
+// `:is(parent)` (`.tt-page&` is not `.tt-pagebody`). Only a bare `&` is the nesting selector: one
+// in a string (`a[href*="&"]`) or escaped (`\\&`) is a character.
+export function nestedSelectors(parents, child) {
+  // The child as text between its `&`s, and for each `&` whether it follows a compound's start.
+  const texts = ['']
+  const glued = []
   for (let i = 0; i < child.length; i++) {
     const c = child[i]
     if (c === '\\') {
-      out += child.slice(i, i + 2)
+      texts[texts.length - 1] += child.slice(i, i + 2)
       i++
     } else if (c === '"' || c === "'") {
       let j = i + 1
       while (j < child.length && child[j] !== c) j += child[j] === '\\' ? 2 : 1
-      out += child.slice(i, j + 1)
+      texts[texts.length - 1] += child.slice(i, j + 1)
       i = j
     } else if (c === '&') {
-      // After a compound's start (`.tt-page&`), the parent is a condition on that same element:
-      // `:is(parent)`, not its text glued on (`.tt-pagebody`). At a compound's start, its text.
-      out += /[^\s>+~(]$/.test(out) ? `:is(${parent})` : parent
-      nested = true
-    } else out += c
+      glued.push(/[^\s>+~(]$/.test(texts.at(-1)))
+      texts.push('')
+    } else texts[texts.length - 1] += c
   }
-  return nested ? out : `${parent} ${child}`
+  if (glued.length === 0 || /^\s*[>+~]/.test(child)) {
+    texts.unshift('')
+    texts[1] = ` ${texts[1].trimStart()}`
+    glued.unshift(false)
+  }
+  let out = [texts[0]]
+  glued.forEach((isGlued, k) => {
+    out = out.flatMap((sofar) => parents.map((p) => sofar + (isGlued ? `:is(${p})` : p) + texts[k + 1]))
+  })
+  return out
+}
+
+export function nestedSelector(parent, child) {
+  return nestedSelectors([parent], child)[0]
 }
 
 // The style rule a nested block is in, through the conditional rules between them (`input {
@@ -921,7 +935,7 @@ function enclosingRule(blocks) {
 
 // Every rule's selectors at any depth (inside @media and @layer too, not inside @keyframes,
 // whose `from` and `to` are not elements), each with its line and the properties its block sets.
-// A nested rule is recorded as the selector it stands for (nestedSelector), and the declarations
+// A nested rule is recorded as the selectors it stands for (nestedSelectors), and the declarations
 // in a conditional rule nested in a style rule are that style rule's.
 export function allRules(css) {
   const out = []
@@ -963,7 +977,7 @@ export function allRules(css) {
         if (!blocks.some((b) => b.kind === 'keyframes')) {
           const parents = enclosingRule(blocks)?.rules.map((r) => r.selector)
           for (const own of splitSelectors(text)) {
-            for (const selector of parents ? parents.map((p) => nestedSelector(p, own)) : [own]) {
+            for (const selector of parents ? nestedSelectors(parents, own) : [own]) {
               const r = { selector, line: preludeLine, properties: [] }
               rules.push(r)
               out.push(r)
