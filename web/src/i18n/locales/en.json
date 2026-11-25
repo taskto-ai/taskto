@@ -1096,7 +1096,6 @@
       "saved": "Saved.",
       "mail": {
         "title": "Email",
-        "loading": "Loading…",
         "off": "This server can't send email yet. The person who runs it sets an SMTP server, as the install guide (docs/install.md, Email) explains; until then, reset and invite links are passed on by hand.",
         "noLinks": "The server doesn't email reset or invite links yet: its operator also has to set public_url, the server's external address, which the links are built on (docs/install.md, Email). Until then, links are passed on by hand.",
         "server": "SMTP server",
@@ -1112,9 +1111,10 @@
         "signInSet": "With a user name and password",
         "signInNone": "None",
         "test": "Send a test email",
-        "testing": "Sending…",
         "testHelp": "The test goes to your own address, {email}, in your language.",
-        "sent": "Test email sent to {email}. If it doesn't arrive, look in the spam folder, and at the server's mail log."
+        "sent": "Test email sent to {email}. If it doesn't arrive, look in the spam folder, and at the server's mail log.",
+        "on": "Set up",
+        "offBadge": "Off"
       }
     },
     "twoFactor": {
@@ -1143,7 +1143,10 @@
       "code": "Code from your app, or a recovery code",
       "newCodes": "Make new recovery codes",
       "turnOff": "Turn off…",
-      "turnOffConfirm": "Yes, turn off"
+      "turnOffConfirm": "Yes, turn off",
+      "onBadge": "On",
+      "offBadge": "Off",
+      "turnOffQuestion": "Turn off two-factor login?"
     },
     "members": {
       "clearTwoFactor": "Clear two-factor",
@@ -1156,7 +1159,6 @@
       "resetLinkName": "the password reset link",
       "help": "Removing someone ends their access to the workspace and its shared spaces at their next request. Their private space is kept, closed to everyone. Disabling someone signs them out everywhere and stops their logins, tokens and agents without removing anything: enable them to give it all back; like a reset link, it needs you to administer all of their workspaces. Another admin can change your own role. A reset link lets a member who lost their password set a new one; you can make one for a member whose every workspace you administer.",
       "title": "Members",
-      "you": "(you)",
       "roleOf": "Role of {name}",
       "role": "Role",
       "roles": {
@@ -1179,13 +1181,18 @@
       "inviteFor": "the invite for {email}",
       "withdrawQuestion": "Withdraw the invite for {email}?",
       "withdrawConfirm": "Yes, withdraw",
-      "inviting": "Inviting…",
       "invite": "Invite",
       "inviteMade": "Send this link to {email}. It is shown only now, works once, and expires {date}.",
       "inviteSendEmail": "Email the invite link to this address",
       "inviteEmailed": "The invite was emailed to {email}. You can also send them this link yourself. It is shown only now, works once, and expires {date}.",
       "inviteEmailFailed": "The invite was made, but the email to {email} couldn't be sent: the server's log says why. Send them this link yourself. It is shown only now, works once, and expires {date}.",
-      "inviteLink": "Invite link"
+      "inviteLink": "Invite link",
+      "person": "Person",
+      "youBadge": "You",
+      "pending": "Pending",
+      "invitesHelp": "An invite is a link that works once, until it expires.",
+      "emailPlaceholder": "name@company.com",
+      "noEmail": "This server doesn't email invites, so an invite is a link you copy and send yourself."
     },
     "password": {
       "intro": "Changing your password signs you out everywhere else. This browser stays signed in. Your access tokens keep working: revoke them under Access tokens.",
@@ -1194,9 +1201,9 @@
       "hint": "At least 12 characters.",
       "again": "New password again",
       "mismatch": "The new passwords don't match.",
-      "changing": "Changing…",
       "change": "Change the password",
-      "changed": "Your password is changed, and your other sessions are signed out."
+      "changed": "Your password is changed, and your other sessions are signed out.",
+      "title": "Change your password"
     },
     "data": {
       "title": "Export your data",
@@ -1253,7 +1260,9 @@
       "add": "Add",
       "rolesHelp": "Editors read and write; viewers read. A change takes effect at the member's next request.",
       "offlineDownloads": "Allow offline downloads",
-      "offlineHelp": "Members can keep this space’s apps and records on their devices to use without a connection. Turn it off for sensitive data: new downloads are refused, and a device removes its copy the next time it connects."
+      "offlineHelp": "Members can keep this space’s apps and records on their devices to use without a connection. Turn it off for sensitive data: new downloads are refused, and a device removes its copy the next time it connects.",
+      "noneHelp": "Make one above for a team or a project, then add its members.",
+      "manage": "Manage"
     },
     "sessions": {
       "title": "Active sessions",
@@ -1284,10 +1293,11 @@
       "privateOf": "{name}'s private space",
       "privateYours": "Your private space",
       "breakdown": "Documents {documents} · Files {files} · Photos {photos}",
-      "yours": "Your storage",
       "yoursIntro": "What your private space stores. The documents and photos you add count here.",
       "noPrivate": "You have no private space in this workspace.",
-      "workspaceQuota": "All the spaces of this workspace together may store up to {limit}."
+      "workspaceQuota": "All the spaces of this workspace together may store up to {limit}.",
+      "full": "Full",
+      "nearlyFull": "Nearly full"
     },
     "tokens": {
       "title": "Access tokens",
@@ -1313,7 +1323,6 @@
         "year": "In a year",
         "never": "Never"
       },
-      "creating": "Creating…",
       "create": "Create token",
       "held": "Copy the new token and choose Done first.",
       "made": "Your new token {name}. Copy it now: <b>it won't be shown again</b>, since the server keeps only its hash. Keep it where you keep other secrets, and give it to your agent in an environment variable, not in a file you commit. The setup below has it filled in until you leave this page.",
@@ -1329,7 +1338,10 @@
         "endpoint": "The MCP endpoint is {url}, authenticated with <code>Authorization: Bearer</code> and a token. More in the server's docs/mcp.md.",
         "named": "{name} setup",
         "theNamed": "the {name} setup"
-      }
+      },
+      "noneHelp": "Make one for each agent or machine that should act as you here.",
+      "expiredBadge": "Expired",
+      "newTitle": "New access token"
     },
     "about": {
       "title": "About TaskTo.AI",
@@ -1356,7 +1368,14 @@
         "scheduleAt": "Every night at {at} UTC.",
         "retries_one": "A failed night is tried again once, {every} later.",
         "retries_other": "A failed night is tried again up to {count} times, every {every}.",
-        "noRetries": "A failed night isn't tried again."
+        "noRetries": "A failed night isn't tried again.",
+        "badge": {
+          "none": "Not set up",
+          "pending": "Waiting",
+          "ok": "On time",
+          "failing": "Failing",
+          "late": "Late"
+        }
       },
       "updates": {
         "title": "Updates",
@@ -1375,7 +1394,8 @@
             "not_configured": "This server isn't set up to take an update request (it has no request directory). The install guide (docs/install.md, Update now) says how.",
             "unsupported": "The host can't take an update request yet: its updater, its request directory or its path unit is from before this button. Reinstall it as step 16 of the install runbook (deploy/INSTALL.md) says.",
             "off": "Update now is off while automatic updates are off (the channel is off)."
-          }
+          },
+          "title": "Update the server now?"
         },
         "notConfigured": "This server isn't set up to show the updater's status. The install guide (docs/install.md, Automatic updates) says how.",
         "noStatus": "The updater hasn't reported yet. It reports after each run, which is every night on the host; until it has run once there is nothing to show.",
@@ -1454,7 +1474,17 @@
           "unrecorded-failure": "An update was rolled back, but the release couldn't be recorded as failed.",
           "rate-limited": "A requested update ran a few minutes ago, so this request was turned away. Try again later.",
           "bad-request": "The request wasn't a small regular file, so the host removed it and did nothing."
-        }
+        },
+        "badge": {
+          "ok": "Working",
+          "hold": "On hold",
+          "off": "Off",
+          "stale": "Not reporting",
+          "failed": "Failed",
+          "blocked": "Needs a person",
+          "manualUpgrade": "Manual upgrade"
+        },
+        "mismatchBadge": "Not the recorded version"
       }
     },
     "actions": {
@@ -1466,7 +1496,6 @@
       "removeConfirm": "Yes, remove",
       "test": "Test",
       "testNamed": "Test {name}",
-      "none": "None yet.",
       "optional": "Optional",
       "keepKey": "Leave empty to keep the stored key",
       "apiKey": "API key",
@@ -1497,7 +1526,11 @@
       "keyHintStored": "Stored encrypted on the server and never shown again: a key is stored now.",
       "removeKey": "Remove the stored key",
       "models": "Models",
-      "modelsHint": "One model ID per line, as the server calls it."
+      "modelsHint": "One model ID per line, as the server calls it.",
+      "answered": "Answered",
+      "failing": "Failing",
+      "none": "No accounts yet.",
+      "noneHelp": "Add one to use its models in conversations."
     },
     "integrations": {
       "title": "Integrations",
@@ -1666,7 +1699,11 @@
       "modesTitle": "Which accounts members' turns use",
       "defaultMode": "Default",
       "accountsFor": "Accounts for {name}",
-      "theDefault": "The default"
+      "theDefault": "The default",
+      "accepted": "Key accepted",
+      "refused": "Key refused",
+      "none": "No shared accounts yet.",
+      "noneHelp": "Add an API key the workspace pays for, for members' turns."
     },
     "switching": {
       "title": "Automatic switching",
@@ -1686,7 +1723,8 @@
       "choose": "Choose an account…",
       "ownLabelled": "{name} ({label})",
       "ownNumbered": "{name} (account {number})",
-      "shared": "{name} ({label}, {workspace})"
+      "shared": "{name} ({label}, {workspace})",
+      "limitedBadge": "At its limit"
     },
     "dictation": {
       "intro": "The microphone in the chat box turns speech into text, which you edit before sending. Terms in a space's {file} (one per list item) are spelled the way you wrote them.",
@@ -1727,7 +1765,9 @@
       "keySetPlaceholder": "set: type to replace it",
       "keyNotSetPlaceholder": "not set",
       "hostedNote": "Speech goes to this endpoint only when the engine above is the hosted API; setting a key doesn't switch to it. The glossary never does: it is applied on this server.",
-      "removeKey": "Remove the API key"
+      "removeKey": "Remove the API key",
+      "onBadge": "On",
+      "offBadge": "Off"
     },
     "search": {
       "title": "Semantic search",
@@ -1747,7 +1787,6 @@
       "provider": "Provider",
       "servedAt": "Served at {url}. The server asks it for one embedding before saving.",
       "changeWarning": "Changing the account, the model, or that account's base URL stops semantic search in every space until a member of each space consents to the new endpoint. Nothing is sent to it before then. Choose an endpoint the workspace trusts, such as a local Ollama.",
-      "checking": "Checking the endpoint…",
       "turnOff": "Turn semantic search off",
       "formerMember": "a former member",
       "fullTextOnly": "Full text only: the workspace has no embeddings model. Nothing leaves this server.",
@@ -1763,7 +1802,12 @@
       "consentFor": "Consent for {name}",
       "askPrivate": "Send your private space's Markdown documents, now and as they change, and every search of it, to {url} for the model {model}? Uploads other than Markdown aren't sent. If an admin changes this endpoint, sending stops until someone consents again.",
       "askShared": "Send the {name} space's Markdown documents, now and as they change, and every search of it, to {url} for the model {model}? Uploads other than Markdown aren't sent. If an admin changes this endpoint, sending stops until someone consents again.",
-      "yes": "Yes, send them there"
+      "yes": "Yes, send them there",
+      "onBadge": "On",
+      "offBadge": "Off on this server",
+      "consentOn": "Consented",
+      "consentPaused": "Paused",
+      "consentOff": "Full text only"
     },
     "audit": {
       "title": "Audit log",
@@ -1780,7 +1824,8 @@
         "to": "Until",
         "any": "Any",
         "anyone": "Anyone",
-        "clear": "Clear filters"
+        "clear": "Clear filters",
+        "title": "Filters"
       },
       "by": "By {name}",
       "byFormer": "By a former member (number {id})",
@@ -1933,8 +1978,30 @@
         "webhook_secret": "Webhook secret",
         "test": "Test",
         "live": "Live"
-      }
-    }
+      },
+      "event": "Event",
+      "when": "When"
+    },
+    "groups": {
+      "workspace": "Workspace",
+      "you": "You",
+      "server": "Server"
+    },
+    "choose": "Settings page",
+    "moreFor": "More actions for {name}",
+    "help": {
+      "general": "The workspace's language, and the server's email.",
+      "members": "Who is in this workspace, and what they may do.",
+      "spaces": "Spaces the whole team can share, and who is in each.",
+      "audit": "Who did what in this workspace, and when.",
+      "data": "Download what you keep in this workspace.",
+      "tokens": "Tokens for your own agents and scripts.",
+      "password": "Your password and two-factor login.",
+      "cliAccounts": "The Claude Code, Codex and Grok Build logins your conversations run on.",
+      "providers": "The model endpoints conversations can use.",
+      "search": "How search finds documents, and which spaces consent to semantic search."
+    },
+    "actionsColumn": "Actions"
   },
   "pwa": {
     "update": {
@@ -2645,7 +2712,6 @@
       "changed": "Something changed"
     },
     "settings": {
-      "title": "Your notifications",
       "inbox": "Notifications always appear in your inbox, whether or not this browser can show push notifications.",
       "openInbox": "Open the inbox",
       "pushTitle": "Push notifications on this device",
@@ -2684,7 +2750,12 @@
       "emailAddressUnverified": "This address isn't confirmed, so nothing is emailed to you yet. Send yourself a link to confirm it.",
       "emailSendLink": "Send the confirmation link",
       "emailResendLink": "Send the link again",
-      "emailLinkSent": "A link was sent. It works once and expires in 24 hours."
+      "emailLinkSent": "A link was sent. It works once and expires in 24 hours.",
+      "onBadge": "On",
+      "offBadge": "Off",
+      "blockedBadge": "Blocked",
+      "emailConfirmedBadge": "Confirmed",
+      "emailUnconfirmedBadge": "Not confirmed"
     },
     "confirmEmail": {
       "title": "Confirm your email address",

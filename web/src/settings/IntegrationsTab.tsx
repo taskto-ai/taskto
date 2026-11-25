@@ -17,7 +17,8 @@ import {
 } from '../api'
 import { type Format, has, type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, ConfirmButton, CopyButton, useAction } from './parts'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Alert, CopyButton, useAction } from './parts'
 
 type Translate = ReturnType<typeof useT>
 
@@ -139,6 +140,7 @@ function IntegrationRow({
   const t = useT()
   const f = useFormat()
   const action = useAction()
+  const [confirmDialog, confirm] = useConfirm()
   const [check, setCheck] = useState<IntegrationCheck | null>(null)
   const [checking, setChecking] = useState(false)
   const [choosing, setChoosing] = useState(false)
@@ -157,7 +159,14 @@ function IntegrationRow({
   }
   const toggle = () =>
     action.run(() => api(url, { method: 'PATCH', body: { disabled: !i.disabled } })).then((ok) => ok && onChanged())
-  const remove = () => action.run(() => api(url, { method: 'DELETE' })).then((ok) => ok && onChanged())
+  const remove = async () => {
+    const yes = await confirm({
+      title: t('settings.integrations.removeQuestion', { name: i.display_name }),
+      confirmLabel: t('settings.actions.removeConfirm'),
+      tone: 'danger',
+    })
+    if (yes) action.run(() => api(url, { method: 'DELETE' })).then((ok) => ok && onChanged())
+  }
 
   return (
     <li className="tt-row" aria-label={i.display_name}>
@@ -263,15 +272,17 @@ function IntegrationRow({
         >
           {i.disabled ? t('settings.integrations.switchOn') : t('settings.integrations.switchOff')}
         </button>
-        <ConfirmButton
-          label={t('settings.actions.remove')}
-          name={i.display_name}
-          question={t('settings.integrations.removeQuestion', { name: i.display_name })}
-          confirm={t('settings.actions.removeConfirm')}
+        <button
+          type="button"
+          className="tt-button"
+          aria-label={t('common.labelFor', { label: t('settings.actions.remove'), name: i.display_name })}
           disabled={action.busy}
-          onConfirm={remove}
-        />
+          onClick={remove}
+        >
+          {t('settings.actions.remove')}
+        </button>
       </div>
+      {confirmDialog}
     </li>
   )
 }
