@@ -8,7 +8,6 @@ import { useT } from '../i18n'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { NewWorkspaceDialog } from './NewWorkspace'
-import './NoWorkspace.css'
 
 export function NoWorkspace({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   const t = useT()
