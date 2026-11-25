@@ -548,6 +548,11 @@ test('a reload started before a move finishes doesn’t settle the keyboard; the
   act(() => {
     for (const go of held.splice(0)) go()
   })
+  // That answer says nothing of the move, which hasn't finished: the keyboard stays where it is. (A
+  // reload started before the move finishes is dropped once the move's own reload starts, so this
+  // is the window where an early answer could land.)
+  await screen.findByRole('article', { name: 'First' })
+  expect(document.activeElement).toBe(later)
   // Then the move finishes, and Home loads what it did.
   hold = false
   act(() => finishMove?.())
