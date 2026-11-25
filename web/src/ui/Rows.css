@@ -1,0 +1,102 @@
+@layer components {
+  .ui-rows {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ui-row {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3) var(--space-4);
+    min-block-size: var(--control-touch);
+    padding: var(--space-3) var(--space-4);
+    border-block-end: var(--line-thin) solid var(--color-border);
+    transition: background-color var(--duration-fast) var(--ease-out);
+  }
+
+  .ui-row:last-child {
+    border-block-end: 0;
+  }
+
+  .ui-row-leading {
+    flex: none;
+    display: inline-flex;
+    color: var(--color-text-muted);
+  }
+
+  /* The title takes the room; when there is too little (a phone), the status and the actions
+     wrap under it, at the end. */
+  .ui-row-main {
+    flex: 1 1 12rem;
+    min-inline-size: 0;
+    display: grid;
+    gap: calc(var(--space-1) / 2);
+  }
+
+  .ui-row-title {
+    font: var(--type-ui-strong);
+    color: var(--color-text);
+    overflow-wrap: anywhere;
+  }
+
+  a.ui-row-title {
+    text-decoration: none;
+  }
+
+  /* A row that is a link answers a click anywhere on it: the link's box covers the row, and the
+     status and the actions sit above it. */
+  a.ui-row-title::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+
+  a.ui-row-title:focus-visible {
+    outline: none;
+  }
+
+  .ui-row[data-link]:has(a.ui-row-title:focus-visible) {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: calc(-1 * var(--line-focus));
+  }
+
+  .ui-row-detail {
+    font: var(--type-small);
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-row-status,
+  .ui-row-actions {
+    position: relative;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .ui-row-main + .ui-row-actions,
+  .ui-row-main + .ui-row-status {
+    margin-inline-start: auto;
+  }
+
+  .ui-row[data-current] {
+    background: var(--color-selected);
+  }
+
+  @media (hover: hover) {
+    .ui-row[data-link]:hover {
+      background: var(--color-hover);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-row {
+      transition: none;
+    }
+  }
+}
