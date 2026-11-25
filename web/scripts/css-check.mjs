@@ -172,14 +172,17 @@ const IDENTIFIER_PROPERTIES = new Set([
   'will-change',
 ])
 
-// What is inside the parentheses of a value's functions, outermost first; the rest is blanked.
+// What is inside the parentheses of a value's functions; the rest is blanked. A var()'s fallback
+// is blanked too: it stands where the var() is, so it is an identifier there as well.
 function functionArguments(value) {
-  let depth = 0
+  const stack = [] // for each open parenthesis: is it a var()'s?
   let out = ''
-  for (const c of value) {
-    if (c === ')') depth--
-    out += depth > 0 ? c : ' '
-    if (c === '(') depth++
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i]
+    if (c === ')') stack.pop()
+    const inside = stack.length > 0 && !stack.includes(true)
+    out += inside && c !== '(' ? c : ' '
+    if (c === '(') stack.push(/(?<![\w-])var$/i.test(value.slice(0, i)))
   }
   return out
 }

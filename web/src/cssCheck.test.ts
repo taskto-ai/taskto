@@ -240,7 +240,9 @@ test("a colour's name is an identifier where the author names things, but a hex 
 })
 
 test("a colour's name inside a function's arguments is a colour, even where names are identifiers", () => {
-  const ok = runFiles({ 'ui/list.css': '.tt-a { list-style: upper-roman inside; }\n' })
+  const ok = runFiles({
+    'ui/list.css': '.tt-a { list-style: upper-roman inside; animation-name: var(--motion, red); }\n',
+  })
   expect(ok.err).toBe('')
   expect(ok.code).toBe(0)
   const gradient = runFiles({ 'ui/list.css': '.tt-a { list-style: linear-gradient(red, blue); }\n' })
