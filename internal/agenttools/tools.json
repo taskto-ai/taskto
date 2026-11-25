@@ -1195,7 +1195,7 @@
             "definition_version": {
               "type": "integer",
               "minimum": 1,
-              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time, choice, attachment, location, signature or barcode fields, rules or navigation"
+              "description": "the version of the definition's format; leave it out for the current one, 3. A definition that says 1 can't use screens, time, choice, attachment, location, signature or barcode fields, rules or navigation; one that says 1 or 2 can't use integrations or the create_payment_link effect"
             },
             "requires": {
               "type": "array",
@@ -1392,8 +1392,14 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["create_card", "update_card", "create_document", "open_route"],
-                          "description": "create_card: a card on a board; update_card: moves the card a create_card effect made for this record; create_document: a Markdown document in a space; open_route: a place in TaskTo.AI to open (route board, card or document)"
+                          "enum": [
+                            "create_card",
+                            "update_card",
+                            "create_document",
+                            "open_route",
+                            "create_payment_link"
+                          ],
+                          "description": "create_card: a card on a board; update_card: moves the card a create_card effect made for this record; create_document: a Markdown document in a space; open_route: a place in TaskTo.AI to open (route board, card or document); create_payment_link: asks the integration slot named in integration (kind payments, declared in the definition's integrations) for a link to pay an amount of the record (version 3 of the format; an admin has to approve the app's contract before it can be published)"
                         },
                         "name": {
                           "type": "string",
@@ -1446,6 +1452,34 @@
                           "type": "string",
                           "enum": ["board", "card", "document"],
                           "description": "open_route: which place to open"
+                        },
+                        "integration": {
+                          "type": "string",
+                          "description": "create_payment_link: the name of a slot of kind payments in the definition's integrations. Never a provider, an id or an address"
+                        },
+                        "amount_field": {
+                          "type": "string",
+                          "description": "create_payment_link: the number field with the amount to pay, in the currency's usual units (12.50)"
+                        },
+                        "currency": {
+                          "type": "string",
+                          "description": "create_payment_link: an ISO 4217 code from the server's closed list, like EUR; give this or currency_field"
+                        },
+                        "currency_field": {
+                          "type": "string",
+                          "description": "create_payment_link: a choice field whose options are all currency codes, instead of currency"
+                        },
+                        "description": {
+                          "type": "string",
+                          "description": "create_payment_link: a template of at most 400 characters of the text the payer reads, like Invoice {{number}}"
+                        },
+                        "url_field": {
+                          "type": "string",
+                          "description": "create_payment_link: a string field with max_length of at least 2048 that the link is written to"
+                        },
+                        "id_field": {
+                          "type": "string",
+                          "description": "create_payment_link: a different string field with max_length of at least 255 that the payment's id is written to"
                         }
                       },
                       "required": ["kind"],
@@ -1474,6 +1508,55 @@
                   "where": {
                     "type": "object",
                     "description": "count or sum only the rows this rule holds of (the same rule as required_when)"
+                  }
+                },
+                "required": ["kind"],
+                "additionalProperties": false
+              }
+            },
+            "integrations": {
+              "type": "object",
+              "description": "the outside services the app uses (version 3 of the format), by slot name (a lowercase letter, then lowercase letters, digits or _; at most 4 slots). A slot names a KIND of service, never a provider, an address, a key or an integration: an admin binds it to an account when approving the app. The server works out the slot's contract (what the app sends out and which fields the service may write back) and an admin approves its hash; a draft with an unapproved contract can't be published, and any change to what is sent or written is a new contract. You can't ask for approval, approve or read anything about accounts",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["payments"],
+                    "description": "payments: create_payment_link effects, and the events payment.succeeded, payment.expired, payment.failed and payment.refunded"
+                  },
+                  "on": {
+                    "type": "object",
+                    "description": "what each event may do to the record it is about, by event name",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "only_if": {
+                          "type": "object",
+                          "description": "the event is applied only if this rule (the same as required_when) holds of the record before it"
+                        },
+                        "set": {
+                          "type": "object",
+                          "description": "1 to 10 fields to set, by name: a plain field (text, number, yes/no, date, time or choice, never a photo, location, signature or barcode)",
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "description": "a literal of the field's type (a choice's is one of its options)"
+                              },
+                              "from": {
+                                "type": "string",
+                                "enum": ["occurred_at", "paid_at", "amount", "currency", "receipt_url", "payment_id"],
+                                "description": "a value the server takes from the verified event instead of a literal: a date or a string field of at least 40 characters for occurred_at and paid_at (the last two for payment.succeeded and payment.refunded), a number field for amount, a string or a choice of currency codes for currency, a string field of at least 2048 for receipt_url and of at least 255 for payment_id. Give value or from, one of them"
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": ["set"],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": ["kind"],
@@ -1602,7 +1685,7 @@
             "definition_version": {
               "type": "integer",
               "minimum": 1,
-              "description": "the version of the definition's format; leave it out for the current one, 2. A definition that says 1 can't use screens, time, choice, attachment, location, signature or barcode fields, rules or navigation"
+              "description": "the version of the definition's format; leave it out for the current one, 3. A definition that says 1 can't use screens, time, choice, attachment, location, signature or barcode fields, rules or navigation; one that says 1 or 2 can't use integrations or the create_payment_link effect"
             },
             "requires": {
               "type": "array",
@@ -1799,8 +1882,14 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["create_card", "update_card", "create_document", "open_route"],
-                          "description": "create_card: a card on a board; update_card: moves the card a create_card effect made for this record; create_document: a Markdown document in a space; open_route: a place in TaskTo.AI to open (route board, card or document)"
+                          "enum": [
+                            "create_card",
+                            "update_card",
+                            "create_document",
+                            "open_route",
+                            "create_payment_link"
+                          ],
+                          "description": "create_card: a card on a board; update_card: moves the card a create_card effect made for this record; create_document: a Markdown document in a space; open_route: a place in TaskTo.AI to open (route board, card or document); create_payment_link: asks the integration slot named in integration (kind payments, declared in the definition's integrations) for a link to pay an amount of the record (version 3 of the format; an admin has to approve the app's contract before it can be published)"
                         },
                         "name": {
                           "type": "string",
@@ -1853,6 +1942,34 @@
                           "type": "string",
                           "enum": ["board", "card", "document"],
                           "description": "open_route: which place to open"
+                        },
+                        "integration": {
+                          "type": "string",
+                          "description": "create_payment_link: the name of a slot of kind payments in the definition's integrations. Never a provider, an id or an address"
+                        },
+                        "amount_field": {
+                          "type": "string",
+                          "description": "create_payment_link: the number field with the amount to pay, in the currency's usual units (12.50)"
+                        },
+                        "currency": {
+                          "type": "string",
+                          "description": "create_payment_link: an ISO 4217 code from the server's closed list, like EUR; give this or currency_field"
+                        },
+                        "currency_field": {
+                          "type": "string",
+                          "description": "create_payment_link: a choice field whose options are all currency codes, instead of currency"
+                        },
+                        "description": {
+                          "type": "string",
+                          "description": "create_payment_link: a template of at most 400 characters of the text the payer reads, like Invoice {{number}}"
+                        },
+                        "url_field": {
+                          "type": "string",
+                          "description": "create_payment_link: a string field with max_length of at least 2048 that the link is written to"
+                        },
+                        "id_field": {
+                          "type": "string",
+                          "description": "create_payment_link: a different string field with max_length of at least 255 that the payment's id is written to"
                         }
                       },
                       "required": ["kind"],
@@ -1881,6 +1998,55 @@
                   "where": {
                     "type": "object",
                     "description": "count or sum only the rows this rule holds of (the same rule as required_when)"
+                  }
+                },
+                "required": ["kind"],
+                "additionalProperties": false
+              }
+            },
+            "integrations": {
+              "type": "object",
+              "description": "the outside services the app uses (version 3 of the format), by slot name (a lowercase letter, then lowercase letters, digits or _; at most 4 slots). A slot names a KIND of service, never a provider, an address, a key or an integration: an admin binds it to an account when approving the app. The server works out the slot's contract (what the app sends out and which fields the service may write back) and an admin approves its hash; a draft with an unapproved contract can't be published, and any change to what is sent or written is a new contract. You can't ask for approval, approve or read anything about accounts",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["payments"],
+                    "description": "payments: create_payment_link effects, and the events payment.succeeded, payment.expired, payment.failed and payment.refunded"
+                  },
+                  "on": {
+                    "type": "object",
+                    "description": "what each event may do to the record it is about, by event name",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "only_if": {
+                          "type": "object",
+                          "description": "the event is applied only if this rule (the same as required_when) holds of the record before it"
+                        },
+                        "set": {
+                          "type": "object",
+                          "description": "1 to 10 fields to set, by name: a plain field (text, number, yes/no, date, time or choice, never a photo, location, signature or barcode)",
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "description": "a literal of the field's type (a choice's is one of its options)"
+                              },
+                              "from": {
+                                "type": "string",
+                                "enum": ["occurred_at", "paid_at", "amount", "currency", "receipt_url", "payment_id"],
+                                "description": "a value the server takes from the verified event instead of a literal: a date or a string field of at least 40 characters for occurred_at and paid_at (the last two for payment.succeeded and payment.refunded), a number field for amount, a string or a choice of currency codes for currency, a string field of at least 2048 for receipt_url and of at least 255 for payment_id. Give value or from, one of them"
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": ["set"],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": ["kind"],

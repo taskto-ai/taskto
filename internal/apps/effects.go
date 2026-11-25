@@ -38,10 +38,14 @@ const (
 	EffectUpdateCard     = "update_card"
 	EffectCreateDocument = "create_document"
 	EffectOpenRoute      = "open_route"
+	// EffectCreatePaymentLink asks an integration of the payments kind, which the app declares as a
+	// slot (integrations.go), for a link to pay an amount of the record. It names the slot, never a
+	// provider, an address or a key. Version 3 of the format.
+	EffectCreatePaymentLink = "create_payment_link"
 )
 
 // EffectKinds lists the kinds of effect, which are what the server supports.
-var EffectKinds = []string{EffectCreateCard, EffectUpdateCard, EffectCreateDocument, EffectOpenRoute}
+var EffectKinds = []string{EffectCreateCard, EffectUpdateCard, EffectCreateDocument, EffectOpenRoute, EffectCreatePaymentLink}
 
 // The routes an open_route effect may open.
 const (
@@ -103,6 +107,16 @@ type Effect struct {
 	Content string `json:"content,omitempty"`
 	// Route is the route open_route opens, one of effectRoutes.
 	Route string `json:"route,omitempty"`
+	// What create_payment_link takes (integrations.go): the slot of the app's integrations it asks, the
+	// number field with the amount, the currency (a code, or a choice field of codes), a template of
+	// the text the payer reads, and the two string fields that the link and its id are written to.
+	Integration   string `json:"integration,omitempty"`
+	AmountField   string `json:"amount_field,omitempty"`
+	Currency      string `json:"currency,omitempty"`
+	CurrencyField string `json:"currency_field,omitempty"`
+	Description   string `json:"description,omitempty"`
+	URLField      string `json:"url_field,omitempty"`
+	IDField       string `json:"id_field,omitempty"`
 }
 
 // UnmarshalJSON reads an effect strictly, so a key that isn't one of an effect's (a url, a tool
@@ -142,6 +156,13 @@ func (e Effect) given() []string {
 	add(e.Path != "", "path")
 	add(e.Content != "", "content")
 	add(e.Route != "", "route")
+	add(e.Integration != "", "integration")
+	add(e.AmountField != "", "amount_field")
+	add(e.Currency != "", "currency")
+	add(e.CurrencyField != "", "currency_field")
+	add(e.Description != "", "description")
+	add(e.URLField != "", "url_field")
+	add(e.IDField != "", "id_field")
 	return out
 }
 
@@ -208,6 +229,10 @@ var effectSpecs = map[string]effectSpec{
 	EffectUpdateCard:     {allowed: []string{"when", "card", "column"}, required: []string{"card", "column"}},
 	EffectCreateDocument: {allowed: []string{"when", "space_id", "path", "content"}, required: []string{"space_id", "path"}},
 	EffectOpenRoute:      {allowed: []string{"when", "route", "space_id", "board_id", "card", "path"}, required: []string{"route"}},
+	EffectCreatePaymentLink: {
+		allowed:  []string{"when", "integration", "amount_field", "currency", "currency_field", "description", "url_field", "id_field"},
+		required: []string{"integration", "amount_field", "url_field", "id_field"},
+	},
 }
 
 // routeFields are the fields each route of open_route takes besides route and when.
@@ -360,6 +385,8 @@ func (e Effect) check(c Collection, creators map[string]bool) error {
 		if err := checkTemplate("content", e.Content, c, maxTemplateContent); err != nil {
 			return err
 		}
+	case EffectCreatePaymentLink:
+		return e.checkPaymentLink(c)
 	case EffectOpenRoute:
 		if e.Route == RouteCard && !creators[e.Card] {
 			return fmt.Errorf("card names %q, which is not a create_card effect of this app (name one with \"name\")", e.Card)

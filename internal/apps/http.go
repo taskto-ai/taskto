@@ -65,6 +65,11 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("POST "+apps+"/{app}/records/{record}/restore", write(s.handleRestore))
 	// The live release and the caller's records, to keep on a device (offline.go).
 	mux.Handle("GET "+apps+"/{app}/offline", read(s.handleOffline))
+	// The integrations the app declares and the approval of each (integration_approvals.go): its
+	// designers and publishers read them, and a publisher asks for a contract to be approved. The
+	// admin's side is ApprovalRoutes.
+	mux.Handle("GET "+apps+"/{app}/integrations", read(s.handleIntegrationStatus))
+	mux.Handle("POST "+apps+"/{app}/integrations/{slot}/request", write(s.handleRequestApproval))
 	mux.Handle("GET "+apps+"/{app}/roles", read(s.handleRoles))
 	mux.Handle("PUT "+apps+"/{app}/roles", write(s.handleSetRoles))
 	// Attachments (attachments.go): the uploads, and the photos kept for records.

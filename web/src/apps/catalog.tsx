@@ -240,11 +240,18 @@ export const appsCatalog = new Catalog(
 
 // The version of the definition format this client reads (internal/apps DefinitionVersion), which
 // is TaskTo.AI's and has nothing to do with the A2UI protocol's.
-export const DEFINITION_VERSION = 2
+export const DEFINITION_VERSION = 3
 
 // The kinds of effect an action may set going (internal/apps EffectKinds), which this client shows
-// the progress of (AppEffects).
-export const EFFECT_KINDS = ['create_card', 'update_card', 'create_document', 'open_route'] as const
+// the progress of (AppEffects). A payment link is asked of an integration, and its progress is the
+// integrations' to show.
+export const EFFECT_KINDS = [
+  'create_card',
+  'update_card',
+  'create_document',
+  'open_route',
+  'create_payment_link',
+] as const
 
 // What this client can draw, named as the server names the capabilities a release needs
 // (apps.Capabilities): component.<Name>, function.<name> and effect.<kind>.

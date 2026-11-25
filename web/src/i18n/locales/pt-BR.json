@@ -82,7 +82,8 @@
         "create_card": "Criar um cartão",
         "update_card": "Mover um cartão",
         "create_document": "Criar um documento",
-        "open_route": "Abrir um lugar"
+        "open_route": "Abrir um lugar",
+        "create_payment_link": "Criar um link de pagamento"
       },
       "status": {
         "pending": "Aguardando",
@@ -923,6 +924,15 @@
     "integration_currency_invalid": "Escolha de 1 a {max} moedas da lista.",
     "too_many_integrations": "Você pode ter no máximo {max} integrações em um espaço de trabalho: remova uma antes.",
     "integration_in_use": "Um app ainda usa esta integração: desative-a em vez de removê-la.",
+    "app_integration_unapproved": "Um admin ainda não aprovou o que este app pede à integração \"{slot}\" na forma atual, ou a integração a que ela estava ligada foi desativada ou não é mais permitida neste espaço. Peça a um admin que aprove.",
+    "app_integration_slot_unknown": "Este rascunho não declara uma integração chamada \"{slot}\".",
+    "app_integration_contract_changed": "O app mudou desde que você leu o que ele pede à integração. Leia de novo e peça a aprovação disso.",
+    "app_integration_not_pending": "Este pedido já foi decidido.",
+    "app_integration_not_approved": "Só uma aprovação pode ser revogada.",
+    "app_integration_approval_not_found": "Pedido de aprovação não encontrado.",
+    "app_integration_kind_mismatch": "Esta integração não pode ser usada para {kind}.",
+    "app_integration_disabled": "Esta integração está desativada.",
+    "app_integration_space_not_allowed": "Esta integração ainda não é permitida no espaço do app.",
     "base_url_invalid": "Informe uma URL http ou https de até {max} caracteres, sem query nem fragmento.",
     "base_url_credentials": "A URL não pode conter usuário nem senha: coloque a chave no campo da chave de API.",
     "base_url_insecure": "Use https: uma chave só é enviada por http simples para esta máquina.",
@@ -1896,6 +1906,10 @@
         "integration_disabled": "Integração desligada",
         "integration_enabled": "Integração ligada",
         "integration_spaces_changed": "Espaços da integração alterados",
+        "app_integration_requested": "Uso de uma integração por um app solicitado",
+        "app_integration_approved": "Uso de uma integração por um app aprovado",
+        "app_integration_rejected": "Uso de uma integração por um app recusado",
+        "app_integration_revoked": "Uso de uma integração por um app revogado",
         "data_export_started": "Exportação de dados iniciada",
         "workspace_export_started": "Exportação do espaço de trabalho iniciada",
         "server_update_requested": "Atualização pedida",
@@ -1912,7 +1926,8 @@
         "access_token": "Token de acesso",
         "provider_account": "Conta de provedor de modelos",
         "shared_cli_account": "Conta de CLI compartilhada",
-        "integration": "Integração"
+        "integration": "Integração",
+        "app_integration_approval": "Aprovação de integração de app"
       },
       "details": {
         "account": "Conta",
@@ -1954,7 +1969,10 @@
         "removed": "Espaços removidos",
         "mode": "Modo",
         "webhook_secret_set": "Segredo do webhook definido",
-        "webhook_secret_changed": "Segredo do webhook alterado"
+        "webhook_secret_changed": "Segredo do webhook alterado",
+        "app_id": "Número do app",
+        "integration_id": "Número da integração",
+        "space_allowed": "Espaço também permitido"
       },
       "values": {
         "admin": "Administrador",

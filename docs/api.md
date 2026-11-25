@@ -197,6 +197,15 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_operation_reused` | 409 | The `operation` was used before for a different request. |
 | `app_effects_backlog` | 409 | The app has `max` effects waiting: the action changed nothing. |
 | `app_effect_not_failed` | 409 | Only a failed effect is retried. |
+| `app_integration_unapproved` | 409 | The release has no approved contract for the slot `slot`, or the integration it was approved with is switched off or no longer allowed in the app's space. |
+| `app_integration_slot_unknown` | 404 | The draft declares no slot `slot`. |
+| `app_integration_contract_changed` | 409 | The draft's contract is no longer the one the request named: read it again. |
+| `app_integration_not_pending` | 409 | The request was already decided. |
+| `app_integration_not_approved` | 409 | Only an approval can be revoked. |
+| `app_integration_approval_not_found` | 404 | No such request in the workspace. |
+| `app_integration_kind_mismatch` | 422 | The integration's provider doesn't do the kind `kind`. |
+| `app_integration_disabled` | 409 | The integration is switched off. |
+| `app_integration_space_not_allowed` | 409 | The integration isn't allowed in the app's space (approve with `allow_space`, or allow it first). |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
@@ -2736,13 +2745,15 @@ The server checks every definition when it is saved, strictly, and refuses it (`
 saying what is wrong) unless:
 
 - **definition_version** is the version of the definition's own format, TaskTo.AI's,
-  independent of the A2UI protocol's version: `2` today (left out, it is the server's
+  independent of the A2UI protocol's version: `3` today (left out, it is the server's
   current). A higher one is refused (`app_definition_version`), and a client that finds a
   release in a version it doesn't read asks to be updated instead of drawing it. **Version 1**
   (one screen; `string`, `number`, `boolean` and `date` fields; `insert`, `update` and
   `delete`) is still read, checked and drawn exactly as it was; a definition that says `1` can't
   use anything of version 2 (`400`), which is everything in [Screens](#screens-and-navigation),
-  [time and choice fields](#fields-and-rules) and [rules](#fields-and-rules).
+  [time and choice fields](#fields-and-rules) and [rules](#fields-and-rules). **Version 3** adds
+  [integrations](#integrations-of-an-app): a definition that says `1` or `2` can't declare them or use
+  the `create_payment_link` effect (`400`).
 - **requires** lists the catalog **capabilities** the screen needs: `component.<Name>` for
   each component it draws and `function.<name>` for each function it calls. The server works
   it out from the screen and replaces whatever was sent, so a definition can't claim less than
@@ -2994,6 +3005,127 @@ draft that has no board chosen the board, which the caller must be able to write
 app_effect_target`; `400` if no effect waits for one). `200` with the app, as a change of the
 draft is (`409 app_changed` with the current app if it moved).
 
+### Integrations of an app
+
+An app may use an outside service, starting with payments, without ever naming one. It declares a
+**slot** of a **kind** in the top-level `integrations` block of its definition (version 3, strictly
+checked when saved), and an effect and the slot's handlers refer to it by name. A definition holds
+no provider, no URL, no redirect, no header, no secret, no integration id and no limit: a key that
+isn't one of the format's refuses the definition (`400`). Which account stands behind the slot is a
+workspace admin's choice, made when they approve the app's contract. See
+[integrations.md](integrations.md).
+
+```json
+"integrations": {"payments": {"kind": "payments", "on": {
+  "payment.succeeded": {"only_if": {"field": "status", "op": "eq", "value": "sent"},
+                        "set": {"status": {"value": "paid"}, "paid_at": {"from": "occurred_at"}}},
+  "payment.expired":   {"set": {"status": {"value": "sent"}}}}}},
+"actions": {"send": {"kind": "update", "effects": [{"kind": "create_payment_link", "integration": "payments",
+  "amount_field": "total", "currency": "EUR", "description": "Invoice {{number}}",
+  "url_field": "pay_url", "id_field": "payment_id"}]}}
+```
+
+- A slot's name is a lowercase letter, then up to 39 lowercase letters, digits or `_`; at most 4
+  slots. `kind` is `payments`. Every slot is used: by an effect, or by a handler.
+- `on` maps an event of the kind (`payment.succeeded`, `payment.expired`, `payment.failed`,
+  `payment.refunded`) to a handler: `set`, 1 to 10 fields, and `only_if`, a rule over the record
+  before the event applies. A field is set to `{"value": …}`, a literal of its type (a choice's is
+  one of its options), or `{"from": …}`, one of `occurred_at`, `paid_at`, `amount`, `currency`,
+  `receipt_url` and `payment_id`, which the server takes from the verified event; a source must be
+  one the event has and the field must be able to hold it (a date, a number, a string long enough:
+  2048 characters for a link, 255 for an id). Only plain fields are written: never an attachment,
+  location, signature or barcode field.
+- `create_payment_link` takes `integration` (a slot of kind `payments`), `amount_field` (a number
+  field), `currency` (a code from the server's closed list) or `currency_field` (a choice field whose
+  options are all codes), `description` (a template, at most 400 characters), and two different string
+  fields, `url_field` and `id_field`, that the link and its id are written to. The release needs the
+  capability `effect.create_payment_link`. Nothing calls a provider yet: the effect is declared,
+  checked and approved, and does nothing when an action runs.
+
+**The contract.** From the draft the server works out, for each slot, a **contract**: the kind, the
+operations the app asks for, the record fields it sends out (names only), the currencies, the events
+it handles, for each field the integration may write the literals and the sources it may write, and
+the `only_if` rules. It holds no wording (a change to a `description` needs no new approval) and is
+never sent by a client. Its **hash** (SHA-256, hex, of the contract's JSON, whose lists are sorted)
+names it. Changing what is sent out, what may be written or when, changes the hash.
+
+#### `GET …/apps/{app}/integrations`
+
+Callers who may design or publish the app (`403 app_forbidden` otherwise; `404` for a space or app
+they can't read). The draft's slots:
+
+```json
+{"slots": [{"slot": "payments", "kind": "payments", "contract": {…}, "contract_hash": "…",
+  "status": "none", "approval_id": null, "integration": null,
+  "live": {"contract_hash": "…", "status": "approved", "usable": true}}]}
+```
+
+`status` is that of the approval of the draft's contract: `none`, `requested`, `approved`,
+`rejected` or `revoked`. `integration` (`id`, `name`, `display_name`, `usable`) is what an approved slot
+is bound to. `live` is how the live release's contract stands (it is `null` if the live release
+doesn't declare the slot) and `usable` is whether it may use the integration now: approved, the
+integration switched on, the space allowed.
+
+#### `POST …/apps/{app}/integrations/{slot}/request`
+
+Callers who may publish the app. `{"contract_hash"}`: asks for the approval of the draft's contract
+for the slot, naming the hash they read. `404 app_integration_slot_unknown` if the draft doesn't
+declare the slot; `409 app_integration_contract_changed` if the draft's contract is no longer that
+hash. Asking again for a contract that is waiting or approved changes nothing; for one that was
+turned down or revoked, it asks anew. `200` with the approval (below).
+
+#### `GET /api/workspaces/{workspace}/integration-approvals`
+
+Admin only, session only (an access token is refused). The workspace's queue, newest first, at most
+200: `{"approvals": [approval, …]}`. `?status=` is `requested` (the default), `approved`, `rejected`,
+`revoked` or `all`. An approval is
+
+```json
+{"id": 4, "app_id": 9, "app_name": "Invoices", "space_id": 3, "space_name": "Team", "space_kind": "shared",
+ "slot": "payments", "kind": "payments", "contract": {…}, "contract_hash": "…", "status": "requested",
+ "live": false, "integration": null, "requested_by": {…}, "requested_at": "…", "decided_by": null, "decided_at": null}
+```
+
+It holds what the requester submitted and the names of the app and its space: **no part of the app
+and none of its records**, so an app in a private space, which an admin can't open, is approved the
+same way. `live` says the contract is the live release's.
+
+#### `POST /api/workspaces/{workspace}/integration-approvals/{approval}/approve`
+
+Admin only. `{"integration_id", "allow_space"?}`: binds the slot to an integration of the workspace
+for this contract. The integration must not be another workspace's or unknown (`404
+integration_not_found`), its provider must do the slot's kind (`422 app_integration_kind_mismatch`),
+be switched on (`409 app_integration_disabled`) and be allowed in the app's space
+(`409 app_integration_space_not_allowed`), unless `allow_space` is `true`, which also allows it there:
+an admin can't open another person's private space to allow it, and approving that app's request is
+how they consent to its use there (the space is the one the request is in, never another). `409
+app_integration_not_pending` unless the request is waiting. `200` with the approval.
+
+#### `POST /api/workspaces/{workspace}/integration-approvals/{approval}/reject`
+
+Admin only, body `{}`. Turns a waiting request down (`409 app_integration_not_pending` otherwise). The
+publisher can ask again. `200` with the approval.
+
+#### `POST /api/workspaces/{workspace}/integration-approvals/{approval}/revoke`
+
+Admin only, body `{}`. Withdraws an approval (`409 app_integration_not_approved` unless it is one):
+the app stops using the integration at once, and can't be published or rolled back to with that
+contract until it is approved again. `200` with the approval. An approval of another workspace is
+`404 app_integration_approval_not_found` whoever asks.
+
+**The gate.** Publishing and rolling back are refused (`409 app_integration_unapproved`, `slot`) unless
+every slot of the release that would become live has an approval of its contract's hash whose
+integration is switched on and allowed in the app's space. A rollback is checked for the contract of
+the release it returns to, which may never have been approved or may have been revoked since. The
+code that uses an integration for the app asks again each time it acts, so revoking, switching the
+integration off and taking the space away stop the app at once.
+
+**Copies, templates and moves.** Approvals belong to an app, not to a definition: a duplicate and an
+installed template carry the slots and no approval, so they can't be published until their own
+contract is approved. Moving an app to another space deletes its approvals. All changes are in
+the [audit log](audit.md): `app_integration_requested`, `_approved`, `_rejected` and `_revoked`, which
+name the app and the integration, never the slot's name or any record.
+
 ### `GET …/apps/{app}/surface`
 
 Launches the app: the A2UI messages that draw it with its rows, `createSurface`,
@@ -3197,6 +3329,7 @@ its release needs the capability `effect.<kind>` of each kind it uses (`requires
 | `update_card` | `card`, `column` | moves the card the `create_card` effect called `card` made for the record |
 | `create_document` | `space_id`, `path`, `content`? | a Markdown document, never over another |
 | `open_route` | `route`: `board` (`space_id`, `board_id`), `card` (`card`) or `document` (`space_id`, `path`) | a place to open in the web app, as a kind and IDs; never an address |
+| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount; a version 3 effect that holds no provider, address or key. An action has at most one |
 
 Every kind may have `when`, a rule ([Fields and rules](#fields-and-rules)) over the record as the change leaves it: the
 effect applies only then. `title`, `body`, `content`, `path` and `docs` are **templates**: text

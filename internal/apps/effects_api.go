@@ -449,7 +449,8 @@ func (s *Service) simulatedEffects(ctx context.Context, userID int64, def Defini
 		return out
 	}
 	for i, e := range def.Actions[ch.Name].Effects {
-		if !e.applies(def.Collection, rec.Data) {
+		// A payment link is an integration's to simulate (the preview never calls one).
+		if e.Kind == EffectCreatePaymentLink || !e.applies(def.Collection, rec.Data) {
 			continue
 		}
 		// A new record has no number yet: its details say "new".

@@ -144,12 +144,13 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	boardSvc.Routes(mux)
 	// The apps' routes list and retry their effects and check the targets they name; the
 	// server's own worker, which does them, is the one the command starts (apps.StartOutbox).
-	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(apps.Platform{Boards: boardSvc})
+	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(apps.Platform{Boards: boardSvc, ProviderKinds: providerKinds})
 	if opts.Quota != nil {
 		appsService.WithQuota(opts.Quota)
 		opts.Quota.Routes(mux, accounts)
 	}
 	appsService.Routes(mux)
+	appsService.ApprovalRoutes(mux, accounts)
 	appsService.HomeRoutes(mux, accounts)
 	appsService.TemplateRoutes(mux, accounts)
 	if opts.AppsReady != nil {
@@ -255,4 +256,13 @@ func healthz(version string, sqlDB *sql.DB, agentState func() string) http.Handl
 		w.WriteHeader(code)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": status, "version": version, "database": database, "agent": agent})
 	})
+}
+
+// providerKinds is what the apps service asks to know which kinds of integration a provider of the
+// integrations' registry does.
+func providerKinds(provider string) []string {
+	if p := integrations.Lookup(provider); p != nil {
+		return p.Kinds()
+	}
+	return nil
 }
