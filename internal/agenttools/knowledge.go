@@ -1,6 +1,7 @@
 package agenttools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"math"
