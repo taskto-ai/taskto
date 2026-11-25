@@ -77,6 +77,10 @@
     cursor: pointer;
   }
 
+  a.ui-menu-item {
+    text-decoration: none;
+  }
+
   .ui-menu-item > svg {
     flex: none;
     color: var(--color-text-muted);
