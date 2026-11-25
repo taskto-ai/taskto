@@ -234,7 +234,16 @@ test("a colour's name is an identifier where the author names things, but a hex 
   })
   expect(ok.err).toBe('')
   expect(ok.code).toBe(0)
-  const hex = runFiles({ 'ui/anim.css': '.tt-a { transition: color 1s, outline-color 1s #000; }\n' })
+  const hex = runFiles({ 'ui/anim.css': '.tt-a { transition: color 1s, outline-color 1s #abc; }\n' })
   expect(hex.code).toBe(1)
-  expect(hex.err).toContain('transition has the colour literal #000')
+  expect(hex.err).toContain('transition has the colour literal #abc')
+})
+
+test("a colour's name inside a function's arguments is a colour, even where names are identifiers", () => {
+  const ok = runFiles({ 'ui/list.css': '.tt-a { list-style: upper-roman inside; }\n' })
+  expect(ok.err).toBe('')
+  expect(ok.code).toBe(0)
+  const gradient = runFiles({ 'ui/list.css': '.tt-a { list-style: linear-gradient(red, blue); }\n' })
+  expect(gradient.code).toBe(1)
+  expect(gradient.err).toContain('list-style has the colour literal red')
 })

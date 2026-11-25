@@ -172,6 +172,18 @@ const IDENTIFIER_PROPERTIES = new Set([
   'will-change',
 ])
 
+// What is inside the parentheses of a value's functions, outermost first; the rest is blanked.
+function functionArguments(value) {
+  let depth = 0
+  let out = ''
+  for (const c of value) {
+    if (c === ')') depth--
+    out += depth > 0 ? c : ' '
+    if (c === '(') depth++
+  }
+  return out
+}
+
 // The colour literal a declaration's value holds, if any: not in a string, a url() or a custom
 // property's name, and a colour's name not where a name is an identifier.
 export function colorLiteral(value, property = '') {
@@ -183,8 +195,10 @@ export function colorLiteral(value, property = '') {
   if (hex) return hex[0]
   const fn = COLOR_FUNCTION.exec(bare)
   if (fn) return `${fn[0]})`
-  if (IDENTIFIER_PROPERTIES.has(property.toLowerCase())) return undefined
-  for (const word of bare.matchAll(/(?<![\w-])[a-zA-Z]+(?![\w-])/g)) {
+  // Where words are names the author picks, only a function's arguments can hold a colour's name
+  // (`list-style: linear-gradient(red, blue)`); a bare `red` there is an identifier.
+  const words = IDENTIFIER_PROPERTIES.has(property.toLowerCase()) ? functionArguments(bare) : bare
+  for (const word of words.matchAll(/(?<![\w-])[a-zA-Z]+(?![\w-])/g)) {
     if (NAMED_COLORS.has(word[0].toLowerCase())) return word[0]
   }
   return undefined
