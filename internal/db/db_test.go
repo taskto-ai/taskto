@@ -887,6 +887,10 @@ func TestRecordSystemActorMigration(t *testing.T) {
 		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor, actor_system) VALUES (5, 7, 4, 'update', '{}', 1, 'integration:4')`,
 		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor_system) VALUES (5, 7, 4, 'update', '{}', 'someone')`,
 		`UPDATE app_rows SET updated_system = 'a person' WHERE id = 7`,
+		// The id is only digits: a suffix after them is not an integration's.
+		`UPDATE app_rows SET updated_system = 'integration:7x' WHERE id = 7`,
+		`UPDATE app_rows SET updated_system = 'integration:7:8' WHERE id = 7`,
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor_system) VALUES (5, 7, 4, 'update', '{}', 'integration:7invalid')`,
 	} {
 		if _, err := sqlDB.ExecContext(ctx, bad); err == nil {
 			t.Fatalf("%s was accepted", bad)

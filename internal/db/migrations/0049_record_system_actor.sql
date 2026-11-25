@@ -9,10 +9,12 @@
 -- doesn't change.
 
 ALTER TABLE app_rows ADD COLUMN updated_system TEXT
-    CHECK (updated_system IS NULL OR updated_system GLOB 'integration:[0-9]*');
+    CHECK (updated_system IS NULL OR
+        (updated_system GLOB 'integration:[0-9]*' AND updated_system NOT GLOB 'integration:*[^0-9]*'));
 
 ALTER TABLE app_row_history ADD COLUMN actor_system TEXT
-    CHECK (actor_system IS NULL OR (actor_system GLOB 'integration:[0-9]*' AND actor IS NULL));
+    CHECK (actor_system IS NULL OR
+        (actor_system GLOB 'integration:[0-9]*' AND actor_system NOT GLOB 'integration:*[^0-9]*' AND actor IS NULL));
 
 -- The immutability trigger names the columns it protects, so a column added later is
 -- unprotected until the trigger lists it: recreated, with actor_system.
