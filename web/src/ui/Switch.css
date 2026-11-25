@@ -1,0 +1,107 @@
+/* A switch: a pill track with a round thumb. Off, the thumb is muted at the start on the neutral
+   ground; on, the track is mint with its ink edge and the thumb ink at the end, as the primary
+   button is mint with ink on it. */
+
+@layer components {
+  .ui-switch {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    min-block-size: var(--control-sm);
+    font: var(--type-ui);
+    color: var(--color-text);
+    cursor: pointer;
+  }
+
+  .ui-switch-track {
+    appearance: none;
+    position: relative;
+    box-sizing: border-box;
+    flex: none;
+    inline-size: var(--mark-switch);
+    block-size: var(--mark-check);
+    margin: 0;
+    padding: 0;
+    border: var(--line-strong) solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    background: var(--color-neutral-soft);
+    cursor: pointer;
+    transition:
+      background-color var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out);
+  }
+
+  .ui-switch-track::after {
+    content: "";
+    position: absolute;
+    inset-block: var(--line-thin);
+    inset-inline-start: var(--line-thin);
+    aspect-ratio: 1;
+    border-radius: var(--radius-pill);
+    background: var(--color-text-muted);
+    /* Unseen here; in forced colours the browser paints it in the system's colour and drops the
+       grounds, so the thumb, and so where it is (off at the start, on at the end), stays seen. */
+    outline: var(--line-strong) solid transparent;
+    outline-offset: calc(var(--line-strong) * -1);
+    transition:
+      translate var(--duration-fast) var(--ease-out),
+      background-color var(--duration-fast) var(--ease-out);
+  }
+
+  .ui-switch:hover .ui-switch-track:not(:disabled) {
+    border-color: var(--color-text);
+  }
+
+  .ui-switch-track:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  .ui-switch-track:checked {
+    border-color: var(--color-accent-edge);
+    background: var(--color-accent);
+  }
+
+  .ui-switch-track:checked::after {
+    background: var(--color-on-accent);
+    translate: calc(var(--mark-switch) - var(--mark-check)) 0;
+  }
+
+  .ui-switch-track:checked:dir(rtl)::after {
+    translate: calc(var(--mark-check) - var(--mark-switch)) 0;
+  }
+
+  /* Disabled: no edge to press, a faint thumb, a muted label; on keeps a soft mint. */
+  .ui-switch:has(.ui-switch-track:disabled) {
+    color: var(--color-text-muted);
+    cursor: not-allowed;
+  }
+
+  .ui-switch-track:disabled {
+    border-color: var(--color-border);
+    background: var(--color-neutral-soft);
+    cursor: not-allowed;
+  }
+
+  .ui-switch-track:disabled::after {
+    background: var(--color-border-strong);
+  }
+
+  .ui-switch-track:disabled:checked {
+    background: var(--color-accent-soft);
+  }
+
+  @media (pointer: coarse) {
+    .ui-switch {
+      min-block-size: var(--control-touch);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-switch-track,
+    .ui-switch-track::after {
+      transition: none;
+    }
+  }
+}
