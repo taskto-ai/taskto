@@ -153,8 +153,14 @@ function CreateToken({
   const action = useAction()
   const t = useT()
   const formId = useId()
+  // While the token is being made the dialog stays: closed, it would forget the request, whose
+  // answer (the token, shown only once) could then be replaced by another before it was seen.
+  const close = () => {
+    if (!action.busy) onClose()
+  }
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (action.busy) return
     const expires_at = days ? new Date(Date.now() + Number(days) * 86_400_000).toISOString() : undefined
     let made: Made | undefined
     const ok = await action.run(async () => {
@@ -168,11 +174,13 @@ function CreateToken({
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={t('settings.tokens.newTitle')}
       actions={
         <>
-          <Button onClick={onClose}>{t('common.cancel')}</Button>
+          <Button onClick={close} disabled={action.busy}>
+            {t('common.cancel')}
+          </Button>
           <Button type="submit" form={formId} variant="primary" loading={action.busy}>
             {t('settings.tokens.create')}
           </Button>

@@ -1218,3 +1218,33 @@ test('a cancelled new-token dialog forgets what was typed and what failed', asyn
   expect((within(again).getByLabelText('Token name') as HTMLInputElement).value).toBe('')
   expect(within(again).queryByRole('alert')).toBeNull()
 })
+
+test('the new-token dialog stays open while the token is being made, so its one showing is not lost', async () => {
+  let reply: (v: { status: number; body: unknown }) => void = () => {}
+  const pending = new Promise<{ status: number; body: unknown }>((resolve) => {
+    reply = resolve
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/tokens': { body: { tokens: [] } },
+    'POST /api/workspaces/1/tokens': () => pending,
+  })
+  render(<SettingsPage me={me} workspace={member} tab="tokens" />)
+  await screen.findByText('No tokens yet.')
+  const dialog = await createToken('laptop')
+  // On its way: Cancel is off, and Escape (the browser's cancel) doesn't close it.
+  await waitFor(() =>
+    expect((within(dialog).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true),
+  )
+  fireEvent.keyDown(dialog, { key: 'Escape' })
+  fireEvent(dialog, new Event('cancel'))
+  expect(screen.getByRole('dialog', { name: 'New access token' })).toBeTruthy()
+  // A second press of Enter sends nothing more.
+  fireEvent.submit(within(dialog).getByLabelText('Token name').closest('form') as HTMLFormElement)
+  expect(sent(calls, 'POST', '/api/workspaces/1/tokens')).toHaveLength(1)
+  await act(async () =>
+    reply({ status: 201, body: { ...token({ id: 7, name: 'laptop' }), token: 'ttp_fake-test-token-pending' } }),
+  )
+  // The answer is shown, once.
+  expect(((await screen.findByLabelText('New token')) as HTMLInputElement).value).toBe('ttp_fake-test-token-pending')
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
