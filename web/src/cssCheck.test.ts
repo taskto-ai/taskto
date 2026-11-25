@@ -372,6 +372,18 @@ describe('in the design system, a size, a space, a radius, a shadow and a durati
     expect(allowed.code).toBe(0)
   })
 
+  test("a registered property's initial value is held to the rule as a custom property's is", () => {
+    const r = runFiles({
+      'ui/Box.css': '@property --ui-gap {\n  syntax: "<length>";\n  inherits: false;\n  initial-value: 6px;\n}\n',
+    })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('src/ui/Box.css:4: initial-value has the literal 6px')
+    const zero = runFiles({
+      'ui/Box.css': '@property --ui-gap {\n  syntax: "<length>";\n  inherits: false;\n  initial-value: 0px;\n}\n',
+    })
+    expect(zero.err).toBe('')
+  })
+
   test('the vendor-prefixed and older names of a scale property are checked too', () => {
     for (const [property, literal] of [
       ['-webkit-box-shadow', '2px'],
@@ -397,6 +409,7 @@ function app(changes: Record<string, string | null> = {}) {
     'main.tsx': "import './ui/index.css'\nimport { App } from './App'\nimport './styles.css'\n",
     'ui/index.css': '@layer tokens, themes, base, components, screens;\n',
     'styles.css': `/* the list */\n${OLD_STYLESHEETS.map((f) => `@import "./${f}";`).join('\n')}\n`,
+    'App.tsx': 'export const App = () => null\n',
     ...Object.fromEntries(OLD_STYLESHEETS.map((f) => [f, ''])),
     'ui/base.css': GOOD_BASE,
     ...changes,
@@ -415,6 +428,8 @@ function app(changes: Record<string, string | null> = {}) {
 describe('how the app loads its stylesheets', () => {
   test('an app that loads each one once, the list in its order, passes', () => {
     const r = app({
+      'App.tsx':
+        "import './home/Widget'\nimport { I } from './ui/Input'\nconst S = import('./ui/Select')\nexport const App = () => [I, S]\n",
       'home/Widget.tsx': "import './Widget.css'\nexport const W = () => null\n",
       'home/Widget.css': '@layer screens { .tt-widget-x { color: inherit; } }\n',
       'ui/Input.tsx': "import './Input.css'\n",
@@ -460,6 +475,7 @@ describe('how the app loads its stylesheets', () => {
   test('a stylesheet ui/index.css imports and a module imports too is loaded twice', () => {
     const r = app({
       'ui/index.css': '@layer tokens, themes, base, components, screens;\n@import "./Box.css";\n',
+      'App.tsx': "import './ui/Box'\n",
       'ui/Box.tsx': "import './Box.css'\n",
       'ui/Box.css': '@layer components { .ui-box { color: inherit; } }\n',
     })
@@ -467,8 +483,48 @@ describe('how the app loads its stylesheets', () => {
     expect(r.err).toContain('src/ui/Box.css: loaded more than one way')
   })
 
+  test('only a module the app reaches from its entry loads a stylesheet, a glob of the gallery included', () => {
+    const files = {
+      'home/Widget.tsx': "import './Widget.css'\n",
+      'home/Widget.css': '@layer screens { .tt-widget-x { color: inherit; } }\n',
+    }
+    const dead = app(files)
+    expect(dead.code).toBe(1)
+    expect(dead.err).toContain('src/home/Widget.css: nothing loads it')
+    const glob = app({
+      ...files,
+      'App.tsx': "const G = import.meta.glob('./home/*.tsx')\nexport const App = () => G\n",
+    })
+    expect(glob.err).toBe('')
+    expect(glob.code).toBe(0)
+  })
+
+  test('the list may write a url() with or without quotes', () => {
+    const r = app({
+      'styles.css': OLD_STYLESHEETS.map((f, i) => (i % 2 ? `@import url(./${f});` : `@import url("./${f}");`)).join(
+        '\n',
+      ),
+    })
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
+  })
+
+  test('ui/index.css begins with the layers in their order and imports its files with no condition', () => {
+    const order = app({ 'ui/index.css': '@layer tokens, themes, components, base, screens;\n' })
+    expect(order.code).toBe(1)
+    expect(order.err).toContain(
+      'src/ui/index.css: its first statement is `@layer tokens, themes, base, components, screens;`',
+    )
+    const printed = app({
+      'ui/index.css': '@layer tokens, themes, base, components, screens;\n@import "./Box.css" print;\n',
+      'ui/Box.css': '@layer components { .ui-box { color: inherit; } }\n',
+    })
+    expect(printed.code).toBe(1)
+    expect(printed.err).toContain('src/ui/index.css:2: imports ./Box.css with `print`')
+  })
+
   test('a stylesheet both listed and imported by a module is loaded twice', () => {
-    const r = app({ 'boards/Board.tsx': "import './boards.legacy.css'\n" })
+    const r = app({ 'App.tsx': "import './boards/Board'\n", 'boards/Board.tsx': "import './boards.legacy.css'\n" })
     expect(r.code).toBe(1)
     expect(r.err).toContain('src/boards/boards.legacy.css: loaded more than one way')
   })
@@ -494,10 +550,19 @@ describe('how the app loads its stylesheets', () => {
     expect(rule.err).toContain('holds only @imports of the old stylesheets, not `.tt-late`')
   })
 
-  test("an old screen's file declares no layer", () => {
-    const r = app({ 'apps/apps.legacy.css': '@layer screens {\n  .tt-app { color: inherit; }\n}\n' })
+  test("an old screen's file declares no layer, nested in @media either", () => {
+    const file = 'apps/apps.legacy.css'
+    const r = app({ [file]: '@layer screens {\n  .tt-app { color: inherit; }\n}\n' })
     expect(r.code).toBe(1)
-    expect(r.err).toContain('src/apps/apps.legacy.css:1: declares `@layer screens`')
+    expect(r.err).toContain(`src/${file}:1: declares \`@layer screens\``)
+    const nested = app({
+      [file]:
+        '/* @layer in a comment */\n.tt-a::before { content: "@layer x"; }\n@media (min-width: 1px) {\n  @layer screens { .tt-app { color: inherit; } }\n}\n',
+    })
+    expect(nested.code).toBe(1)
+    expect(nested.err).toContain(`src/${file}:4: declares \`@layer screens\``)
+    expect(nested.err).not.toContain('@layer x')
+    expect(nested.err).not.toContain(`${file}:1:`)
   })
 
   test('ui/base.css is one @layer base block, then what reaches everything on purpose, then the touch block', () => {
@@ -536,6 +601,27 @@ describe('how the app loads its stylesheets', () => {
       expect(r.code, rule).toBe(1)
       expect(r.err, rule).toContain('is in no layer: only what reaches every element on purpose (EVERYWHERE) is')
     }
+  })
+
+  test("ui/base.css's first part is a @layer base block, not a statement", () => {
+    const r = app({
+      'ui/base.css': `@layer base;\n\n@media (pointer: coarse) {\n  label${OPT} { min-height: var(--tt-touch); }\n}\n`,
+    })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('src/ui/base.css: is one `@layer base` block')
+  })
+
+  test('a comment marker inside a string is not a comment', () => {
+    const base = GOOD_BASE.replace(
+      `  a${OPT} { color: inherit; }\n`,
+      `  a${OPT} { color: inherit; }\n  .tt-a::before { content: "/*"; }\n`,
+    ).replace(
+      `  label${OPT} { min-height: var(--tt-touch); }\n`,
+      `  label${OPT} { min-height: var(--tt-touch); }\n  label${OPT}::after { content: "*/"; }\n`,
+    )
+    const r = app({ 'ui/base.css': base })
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
   })
 
   test('a brace inside a string or escaped is not the end of a block of ui/base.css', () => {

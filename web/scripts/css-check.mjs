@@ -428,14 +428,40 @@ export const OLD_STYLESHEETS = [
   'notifications/notifications.legacy.css',
 ]
 const LIST = 'src/styles.css'
+// The cascade layers, in order, as ui/index.css and index.html declare them.
+export const LAYERS = ['tokens', 'themes', 'base', 'components', 'screens']
 const ENTRY = 'src/main.tsx'
 const DESIGN_ENTRY = 'src/ui/index.css'
 const BASE = 'src/ui/base.css'
 
 // A stylesheet's top-level statements: `@import`s with their url and what follows it, and blocks
 // with their prelude, comments left out.
+// The stylesheet with its comments blanked (newlines kept, so offsets and lines stay); a `/*`
+// inside a string is not a comment.
+export function blankCssComments(css) {
+  let out = ''
+  for (let i = 0; i < css.length; ) {
+    const c = css[i]
+    if (c === '"' || c === "'") {
+      let j = i + 1
+      while (j < css.length && css[j] !== c) j += css[j] === '\\' ? 2 : 1
+      out += css.slice(i, j + 1)
+      i = j + 1
+    } else if (c === '/' && css[i + 1] === '*') {
+      const close = css.indexOf('*/', i + 2)
+      const end = close < 0 ? css.length : close + 2
+      out += css.slice(i, end).replace(/[^\n]/g, ' ')
+      i = end
+    } else {
+      out += c
+      i++
+    }
+  }
+  return out
+}
+
 export function topLevel(css) {
-  const text = css.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' '))
+  const text = blankCssComments(css)
   const out = []
   let i = 0
   while (i < text.length) {
@@ -468,10 +494,10 @@ export function topLevel(css) {
       }
       out.push({ kind: 'block', prelude, line, start: i, end: j + 1 })
     } else {
-      const m = /^@import\s+(?:url\()?\s*["']([^"']+)["']\s*\)?\s*(.*)$/.exec(prelude)
+      const m = /^@import\s+(?:url\(\s*(?:["']([^"']+)["']|([^)\s"']+))\s*\)|["']([^"']+)["'])\s*(.*)$/i.exec(prelude)
       out.push(
         m
-          ? { kind: 'import', url: m[1], rest: m[2], line, start: i, end: j + 1 }
+          ? { kind: 'import', url: m[1] ?? m[2] ?? m[3], rest: m[4], line, start: i, end: j + 1 }
           : { kind: 'statement', prelude, line, start: i, end: j + 1 },
       )
     }
@@ -482,9 +508,45 @@ export function topLevel(css) {
 
 // The .css files a module imports for their styles (`import './x.css'`), resolved under the root:
 // not `?raw` or `?url`, which load no style.
+// The modules the app reaches from its entry: static imports, re-exports and dynamic import(),
+// by relative path (with or without the extension, or a folder's index).
+function reachable(web) {
+  const seen = new Set()
+  const todo = [join(web, ENTRY)]
+  const resolveModule = (from, spec) => {
+    const base = join(dirname(from), spec)
+    for (const p of [base, `${base}.tsx`, `${base}.ts`, join(base, 'index.tsx'), join(base, 'index.ts')]) {
+      if (/\.tsx?$/.test(p) && existsSync(p)) return p
+    }
+    return undefined
+  }
+  while (todo.length > 0) {
+    const path = todo.pop()
+    if (seen.has(path)) continue
+    seen.add(path)
+    const source = blankComments(readFileSync(path, 'utf8'))
+    for (const m of source.matchAll(/(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)["'](\.{1,2}\/[^"']+)["']/g)) {
+      if (m[1].endsWith('.css')) continue
+      const next = resolveModule(path, m[1].replace(/\?.*$/, ''))
+      if (next && !seen.has(next)) todo.push(next)
+    }
+    // import.meta.glob('./*.gallery.tsx'): every file in that folder its pattern matches.
+    for (const m of source.matchAll(/\bimport\.meta\.glob(?:<[^>]*>)?\(\s*["'](\.{1,2}\/[^"']*)["']/g)) {
+      const dir = join(dirname(path), dirname(m[1]))
+      const name = m[1].split('/').pop()
+      const pattern = new RegExp(`^${name.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}$`)
+      if (!existsSync(dir)) continue
+      for (const f of readdirSync(dir)) if (pattern.test(f) && /\.tsx?$/.test(f)) todo.push(join(dir, f))
+    }
+  }
+  return seen
+}
+
 function moduleImports(web) {
   const out = new Map() // file → the modules that import it
+  const live = reachable(web)
   for (const path of components(join(web, 'src'))) {
+    if (!live.has(path)) continue
     const source = blankComments(readFileSync(path, 'utf8'))
     for (const m of source.matchAll(/\bimport\s+["'](\.{1,2}\/[^"'?]+\.css)["']/g)) {
       const file = relative(web, join(dirname(path), m[1]))
@@ -528,6 +590,21 @@ function loadingErrors(web, sheets) {
     errors.push(
       `${ENTRY}: its first import is ${first ? `'${first[1]}'` : 'missing'}, not './ui/index.css': the build emits CSS in import order, so a component's @layer block would come before the layers' order is declared, and @layer base would beat @layer components`,
     )
+  }
+
+  // ui/index.css: the layers' order first, then its files, each imported with no condition.
+  const design = existsSync(join(web, DESIGN_ENTRY)) ? topLevel(readFileSync(join(web, DESIGN_ENTRY), 'utf8')) : []
+  if (design[0]?.kind !== 'statement' || design[0].prelude !== `@layer ${LAYERS.join(', ')}`) {
+    errors.push(
+      `${DESIGN_ENTRY}: its first statement is \`@layer ${LAYERS.join(', ')};\` (the order index.html declares too), not \`${design[0]?.prelude ?? design[0]?.url ?? 'nothing'}\``,
+    )
+  }
+  for (const s of design) {
+    if (s.kind === 'import' && s.rest) {
+      errors.push(
+        `${DESIGN_ENTRY}:${s.line}: imports ${s.url} with \`${s.rest}\`: the design system's files load on every page, unconditionally`,
+      )
+    }
   }
 
   // The list: plain @imports of OLD_STYLESHEETS, in order, and nothing else.
@@ -584,12 +661,15 @@ function loadingErrors(web, sheets) {
   // one block in no layer.
   for (const f of listed) {
     if (f === BASE || !existsSync(join(web, f))) continue
-    for (const s of topLevel(readFileSync(join(web, f), 'utf8'))) {
-      if (/^@layer\b/.test(s.prelude ?? '')) {
-        errors.push(
-          `${f}:${s.line}: declares \`${s.prelude}\`: the old screens' rules are in no layer until the screen is rebuilt, and the move is checked rule by rule`,
-        )
-      }
+    const text = blankCssComments(readFileSync(join(web, f), 'utf8')).replace(
+      /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g,
+      (q) => q.replace(/[^\n]/g, ' '),
+    )
+    for (const m of text.matchAll(/@layer\b[^{;]*/g)) {
+      const line = text.slice(0, m.index).split('\n').length
+      errors.push(
+        `${f}:${line}: declares \`${m[0].trim()}\`: the old screens' rules are in no layer until the screen is rebuilt, and the move is checked rule by rule`,
+      )
     }
   }
   if (existsSync(join(web, BASE))) errors.push(...baseErrors(readFileSync(join(web, BASE), 'utf8')))
@@ -607,6 +687,8 @@ function baseErrors(css) {
   const last = parts.at(-1)
   if (
     shape[0] !== '@layer base' ||
+    parts[0]?.kind !== 'block' ||
+    last?.kind !== 'block' ||
     shape.filter((p) => /^@layer\b/.test(p)).length !== 1 ||
     shape.at(-1) !== '@media (pointer: coarse)' ||
     parts.length < 2
@@ -678,6 +760,8 @@ export const LOCAL_LITERALS = new Map([
 // device's, but its fallback is looked in too; a unitless number (a line height, a weight, a factor
 // in calc()) is no length.
 export function scaleLiteral(value, property) {
+  // A registered property's initial value (@property) is a custom property's value.
+  if (property.toLowerCase() === 'initial-value') property = '--registered'
   if (!property.startsWith('--') && !SCALE_PROPERTY.test(property)) return undefined
   if (property.startsWith('--') && LOCAL_LITERALS.has(property)) return undefined
   let bare = value
@@ -969,7 +1053,8 @@ export function check(web) {
     const tokensOnly = file.startsWith(TOKENS_ONLY)
     const definesTokens = DEFINE_TOKENS.some((d) => file === d || (d.endsWith('/') && file.startsWith(d)))
     for (const { property, value, line } of sheet.declarations) {
-      const scale = tokensOnly && !(definesTokens && property.startsWith('--')) && scaleLiteral(value, property)
+      const definition = property.startsWith('--') || property.toLowerCase() === 'initial-value'
+      const scale = tokensOnly && !(definesTokens && definition) && scaleLiteral(value, property)
       if (scale) {
         errors.push(
           `${file}:${line}: ${property} has the literal ${scale}: use a token from src/ui/tokens.css (var(--space-…), var(--text-…), var(--radius-…), var(--shadow-…), var(--duration-…)), or add one`,
