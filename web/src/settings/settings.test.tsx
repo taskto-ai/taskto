@@ -217,7 +217,7 @@ test("admins set the workspace's default language, which members without a pick 
   await act(() => setPreferences({ workspace: null }))
 })
 
-test("a default language saved after the tab went (the session ended) changes nothing and says nothing", async () => {
+test('a default language saved after the tab went (the session ended) changes nothing and says nothing', async () => {
   let answer: () => void = () => {}
   fakeFetch({
     'PATCH /api/workspaces/1': () =>

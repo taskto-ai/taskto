@@ -194,7 +194,7 @@ describe('Menu', () => {
     expect(outer).not.toHaveBeenCalled()
   })
 
-  test('an Escape a tooltip took is not the menu\'s too: the next one closes it', () => {
+  test("an Escape a tooltip took is not the menu's too: the next one closes it", () => {
     const { button } = setup()
     fireEvent.click(button)
     // What a tooltip that can be seen does (Tooltip.tsx): it hears the key first and takes it.
