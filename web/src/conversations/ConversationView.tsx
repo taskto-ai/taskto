@@ -21,10 +21,13 @@ import { BrowserPanel } from '../browser/BrowserPanel'
 import { HelpCard } from '../browser/HelpCard'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
+import { Notice } from '../ui/Notice'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { ChatTranscript } from './ChatTranscript'
 import { CliPermissionsSwitch, CliQuestions } from './CliPermissions'
 import { Composer } from './Composer'
 import { ConversationHead } from './ConversationHead'
+import './Conversations.css'
 import { type History, useHistory } from './history'
 import { ModelPicker, type ModelProvider, type ModelRef } from './ModelPicker'
 import { ReconnectBanner, reconnectAccount } from './ReconnectBanner'
@@ -124,7 +127,7 @@ export function ConversationView({
   const last = messages.at(-1)
 
   return (
-    <section className="tt-chat" aria-label={t('conversations.conversation')}>
+    <section className="ui-chat" aria-label={t('conversations.conversation')}>
       <ConversationHead
         backHref={backHref}
         conversation={meta.data}
@@ -141,52 +144,52 @@ export function ConversationView({
         }}
         status={status}
       />
-      {meta.error && (
-        <p role="alert" className="tt-error">
-          {meta.error}
-        </p>
-      )}
-      {reconnect && <ReconnectBanner account={reconnect} onConnected={cli.reload} />}
-      {cliName && <CliQuestions url={base} cli={cliName} trigger={`${questionLines}-${running}`} running={running} />}
-      {cliName && meta.data && !archived && (
-        <CliPermissionsSwitch conversation={meta.data} url={base} cli={cliName} onChanged={meta.reload} />
-      )}
-      {help && !archived && (
-        <HelpCard
-          help={help}
-          conversation={base}
-          canTakeOver={Boolean(browser.data?.enabled)}
-          onTakeOver={() => {
-            setBrowserOpen(true)
-            setTakeOver(true)
-            browser.reload()
-          }}
-          onAnswered={() => {
-            setTakeOver(false)
-            onChanged()
-          }}
-        />
-      )}
-      {browserOpen && (
-        <BrowserPanel
-          status={browser}
-          interactive={takeOver}
-          onInteractive={setTakeOver}
-          onClose={() => {
-            setBrowserOpen(false)
-            setTakeOver(false)
-          }}
-        />
-      )}
+      <div className="ui-chat-notices">
+        {meta.error && <Notice tone="danger">{meta.error}</Notice>}
+        {reconnect && <ReconnectBanner account={reconnect} onConnected={cli.reload} />}
+        {cliName && <CliQuestions url={base} cli={cliName} trigger={`${questionLines}-${running}`} running={running} />}
+        {cliName && meta.data && !archived && (
+          <CliPermissionsSwitch conversation={meta.data} url={base} cli={cliName} onChanged={meta.reload} />
+        )}
+        {help && !archived && (
+          <HelpCard
+            help={help}
+            conversation={base}
+            canTakeOver={Boolean(browser.data?.enabled)}
+            onTakeOver={() => {
+              setBrowserOpen(true)
+              setTakeOver(true)
+              browser.reload()
+            }}
+            onAnswered={() => {
+              setTakeOver(false)
+              onChanged()
+            }}
+          />
+        )}
+        {browserOpen && (
+          <BrowserPanel
+            status={browser}
+            interactive={takeOver}
+            onInteractive={setTakeOver}
+            onClose={() => {
+              setBrowserOpen(false)
+              setTakeOver(false)
+            }}
+          />
+        )}
+      </div>
       {/* Screen readers hear when the agent starts and when it has replied, not each word of a
           reply as it streams in. */}
-      <p className="tt-sr-only" role="status">
-        {running
-          ? t('conversations.agentWorking')
-          : last?.role === 'assistant' && !last.pending
-            ? t('conversations.agentReplied')
-            : ''}
-      </p>
+      <VisuallyHidden>
+        <span role="status">
+          {running
+            ? t('conversations.agentWorking')
+            : last?.role === 'assistant' && !last.pending
+              ? t('conversations.agentReplied')
+              : ''}
+        </span>
+      </VisuallyHidden>
       <ChatTranscript
         workspace={workspace}
         messages={messages}
@@ -198,7 +201,14 @@ export function ConversationView({
         loadingEarlier={older.loading}
         earlierError={older.error}
       />
-      <Composer workspace={workspace} base={base} archived={archived} running={running} onSent={onChanged}>
+      <Composer
+        workspace={workspace}
+        base={base}
+        archived={archived}
+        unreadable={Boolean(meta.error)}
+        running={running}
+        onSent={onChanged}
+      >
         {providers.data && model && (
           <ModelPicker
             workspace={workspace}
@@ -207,7 +217,7 @@ export function ConversationView({
             current={model}
             cli={cli.data}
             onChosen={setPicked}
-            disabled={archived}
+            disabled={archived || Boolean(meta.error)}
           />
         )}
       </Composer>

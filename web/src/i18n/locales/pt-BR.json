@@ -2040,9 +2040,7 @@
   },
   "conversations": {
     "archived": "Arquivadas",
-    "showArchived": "Mostrar arquivadas",
     "showArchivedTitle": "Mostrar as conversas arquivadas",
-    "showActiveTitle": "Mostrar as conversas ativas",
     "new": "Nova",
     "nothingArchived": "Nenhuma conversa arquivada.",
     "none": "Nenhuma conversa ainda. Comece uma em Nova.",
@@ -2083,12 +2081,14 @@
     },
     "question": {
       "label": "{cli} pede para usar {tool}",
-      "asks": "{cli} pede para usar <tool>{tool}</tool>:",
+      "asks": "{cli} pede para usar <b>{tool}</b>:",
       "allow": "Permitir",
       "deny": "Negar"
     },
     "allowAll": {
       "confirm": "{cli} vai executar comandos, editar arquivos e abrir páginas nesta conversa sem perguntar antes. Uma página ou arquivo que ele ler pode então levá-lo a fazer algo que você não pediu. Permitir tudo nesta conversa?",
+      "title": "Deixar {cli} agir sem perguntar?",
+      "confirmButton": "Permitir tudo",
       "label": "Deixar {cli} agir sem perguntar nesta conversa",
       "on": "Ele executa comandos, edita arquivos e abre páginas sem perguntar. Uma mudança vale a partir da próxima mensagem."
     },
@@ -2108,6 +2108,7 @@
     },
     "composer": {
       "archived": "Esta conversa está arquivada.",
+      "unreadable": "Esta conversa não pode ser lida, então nada pode ser enviado a ela.",
       "workingHint": "O agente está trabalhando. Enviar redireciona o agente no próximo passo; Enfileirar espera até ele terminar.",
       "message": "Mensagem",
       "placeholder": "Escreva para o agente",
@@ -2132,7 +2133,6 @@
       "stop": "Parar o ditado",
       "stopTitle": "Parar e transformar a fala em texto",
       "dictate": "Ditar",
-      "dictateTitle": "Ditar: fale e depois edite o texto antes de enviar",
       "transcribing": "Transformando a fala em texto…",
       "cantRecord": "Este navegador não consegue gravar aqui: é preciso HTTPS ou localhost."
     }

@@ -149,9 +149,11 @@ test("a CLI's turn shows as that CLI's work, its output as plain text", async ()
   )
   expect(screen.getByText('Claude Code is working')).toBeTruthy()
   expect(screen.queryByText(/Used cli_turn/)).toBeNull()
-  const pre = document.querySelector('pre.tt-cli-output')
+  const pre = document.querySelector('pre')
   expect(pre?.textContent).toBe(output)
   expect(pre?.querySelector('img, strong')).toBeNull()
+  // Open while the CLI works.
+  expect(pre?.closest('details')?.open).toBe(true)
   expect(document.querySelector('img')).toBeNull()
   expect(screen.queryByRole('region', { name: /Reconnect/ })).toBeNull()
 })
@@ -400,23 +402,29 @@ test('allowing everything in a conversation asks first, and only for that conver
   const box = (await screen.findByLabelText('Let Codex act without asking in this conversation')) as HTMLInputElement
   expect(box.checked).toBe(false)
 
-  // Declined: nothing changes.
-  const confirm = vi.fn(() => false)
-  vi.stubGlobal('confirm', confirm)
+  // It asks first, in the app's own dialog, saying what it means. Declined: nothing changes.
+  const ask = () => screen.findByRole('alertdialog', { name: 'Let Codex act without asking?' })
   fireEvent.click(box)
-  expect(confirm).toHaveBeenCalledOnce()
+  const question = await ask()
+  expect(question.textContent).toContain('without asking you first')
+  fireEvent.click(within(question).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(box.checked).toBe(false)
   expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(0)
 
-  confirm.mockReturnValue(true)
   fireEvent.click(box)
+  fireEvent.click(within(await ask()).getByRole('button', { name: 'Allow everything' }))
   await waitFor(() => expect(box.checked).toBe(true))
   expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ cli_permissions: 'allow_all' }])
 
   // Turning the questions back on needs no confirmation.
-  confirm.mockClear()
   fireEvent.click(box)
   await waitFor(() => expect(box.checked).toBe(false))
-  expect(confirm).not.toHaveBeenCalled()
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+  expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([
+    { cli_permissions: 'allow_all' },
+    { cli_permissions: 'ask' },
+  ])
 })
 
 test('while a CLI works, its questions are read again now and then, even without a line saying so', async () => {

@@ -7,6 +7,7 @@ import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { SESSION_LOST } from '../api'
 import { parseRoute, usePath } from '../router'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
+import { wholeText } from '../test/text'
 import { ConversationsPage } from './ConversationsPage'
 import stream from './testdata/stream.json'
 import { RETRY_MAX_MS, RETRY_MS, useConversationStream } from './useConversationStream'
@@ -234,7 +235,7 @@ test('the transcript follows new text only while the reader is at the bottom', a
   const { sources, factory } = fakeStreams()
   render(<Page streams={factory} />)
   await waitFor(() => expect(sources).toHaveLength(1))
-  const el = screen.getByLabelText('Conversation').querySelector('.tt-transcript') as HTMLDivElement
+  const el = screen.getByLabelText('Conversation').querySelector('.ui-chat-transcript') as HTMLDivElement
   // jsdom has no layout: a transcript 1000 px tall in a 200 px window.
   Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 1000 })
   Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 200 })
@@ -297,7 +298,7 @@ test('screen readers hear the agent start and reply, not each streamed word', as
   const { sources, factory } = fakeStreams()
   render(<Page streams={factory} />)
   await waitFor(() => expect(sources).toHaveLength(1))
-  const transcript = screen.getByLabelText('Conversation').querySelector('.tt-transcript') as HTMLElement
+  const transcript = screen.getByLabelText('Conversation').querySelector('.ui-chat-transcript') as HTMLElement
   expect(transcript.getAttribute('aria-live')).toBeNull()
   act(() => {
     for (const event of stream) sources[0].send(event)
@@ -382,10 +383,20 @@ test('renames and archives the conversation', async () => {
   await waitFor(() => expect(pane.querySelector('h2')?.textContent).toBe('Launch plan'))
   expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ title: 'Launch plan' }])
 
-  // Escape leaves the title as it was.
+  // Escape leaves the title as it was. While the title is edited, the other actions stay, and
+  // when the edit ends the focus goes back to Rename.
   fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+  expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy()
   fireEvent.keyDown(screen.getByLabelText('Title'), { key: 'Escape' })
   expect(screen.queryByLabelText('Title')).toBeNull()
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Rename' })))
+  // And so does Cancel.
+  fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+  screen.getByRole('button', { name: 'Archive' }).focus()
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.queryByLabelText('Title')).toBeNull()
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Rename' })))
+  expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1)
 
   fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
   expect(await screen.findByText('This conversation is archived.')).toBeTruthy()
@@ -406,8 +417,11 @@ test('the list shows the archived conversations on request', async () => {
   })
   render(<Page streams={fakeStreams().factory} />)
   expect(await screen.findByRole('link', { name: /Plans/ })).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Show archived' }))
+  const toggle = screen.getByRole('button', { name: 'Show archived conversations' })
+  expect(toggle.getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(toggle)
   expect(await screen.findByRole('link', { name: /Old plans/ })).toBeTruthy()
+  expect(toggle.getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Archived')
   expect(calls.at(-1)?.path).toBe('/api/workspaces/1/conversations?archived=true')
 })
@@ -526,7 +540,8 @@ test('a page that fails to load says so, and can be tried again', async () => {
     viewOf([entry(8, 'user', 'Newer question')], { before: 7 }),
   )
   fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
-  expect(await screen.findByText('the agent runtime is off')).toBeTruthy()
+  // Said at once, as an alert.
+  expect((await screen.findByRole('alert')).textContent).toContain('the agent runtime is off')
   expect((screen.getByRole('button', { name: 'Load earlier messages' }) as HTMLButtonElement).disabled).toBe(false)
 })
 
@@ -623,7 +638,7 @@ test("a saved app's screen shows in the conversation, as the server has it", asy
   const app = await screen.findByRole('region', { name: 'Expenses' })
   await within(app).findByText('Expense tracker')
   expect(within(app).getByText('Coffee')).toBeTruthy()
-  expect(screen.getByText('Used create_app')).toBeTruthy()
+  expect(screen.getByText(wholeText('Used create_app'))).toBeTruthy()
   expect(screen.queryByText('From the arguments')).toBeNull()
   expect(appCalls(calls).map((c) => c.path)).toEqual([
     '/api/workspaces/1/spaces/2/apps/1',
@@ -705,8 +720,8 @@ test('a refused or failed app tool call shows no app', async () => {
     ],
     {},
   )
-  await screen.findByText('Used update_app')
-  expect(screen.getAllByText('Used create_app')).toHaveLength(2)
+  await screen.findByText(wholeText('Used update_app'))
+  expect(screen.getAllByText(wholeText('Used create_app'))).toHaveLength(2)
   expect(screen.queryByRole('link', { name: /Open/ })).toBeNull()
   expect(screen.queryByText('Loading…')).toBeNull()
   expect(appCalls(calls)).toEqual([])
