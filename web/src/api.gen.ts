@@ -430,6 +430,7 @@ export type InviteCreated = {
   created_at: string
   expires_at: string
   token: string
+  email_sent?: boolean
 }
 
 export type Me = {
@@ -445,6 +446,7 @@ export type Member = {
   name: string
   role: string
   joined_at: string
+  disabled: boolean
   two_factor?: boolean
 }
 

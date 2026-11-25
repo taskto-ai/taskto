@@ -21,11 +21,13 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/mail"
 	"taskto.ai/taskto/internal/serverkey"
 )
 
@@ -64,6 +66,10 @@ type Options struct {
 	// Key seals the secrets of two-factor login (internal/serverkey). Without one nobody can
 	// turn it on, and the routes that need it answer 500.
 	Key *serverkey.Key
+	// Mail is the server's outgoing email (docs/install.md#email); nil, or one that isn't
+	// configured, leaves every flow as it is without email. The links accounts email are built on
+	// PublicURL, never on a request's Host, so they are on only when both are set (EmailLinks).
+	Mail *mail.Service
 }
 
 // The values of Options.WorkspaceCreation.
@@ -114,6 +120,24 @@ type Service struct {
 	codePerAccount   *limiter
 
 	key *serverkey.Key
+	// The limits of the emailed reset link (mailer.go).
+	resetPerIP    *limiter
+	resetPerEmail *limiter
+	// resetStarts is the server's own limit on reset emails: how many it starts, never how many
+	// are running, so a refusal can't depend on how long the mail server takes for the accounts
+	// that exist.
+	resetStarts *bucket
+	// mailSlots bounds the emails being made at once, after the request was answered; mailWork
+	// waits for them. workCtx ends when the server stops (Shutdown), and so ends their sends.
+	mailSlots chan struct{}
+	mailWork  sync.WaitGroup
+	workCtx   context.Context
+	stopWork  context.CancelFunc
+
+	// The limits of invitations sent by email (mailer.go): per admin, and per invited address.
+	invitePerAdmin     *limiter
+	invitePerRecipient *limiter
+
 	sso *sso
 
 	// live is the connections that end with their login (WatchSession).
@@ -169,6 +193,13 @@ func New(sqlDB *sql.DB, opts Options) *Service {
 	s.codePerAccountIP = newLimiter(codeAccountAndIPAttempts, attemptWindow, now)
 	s.codePerAccount = newLimiter(codeAccountAttempts, attemptWindow, now)
 	s.key = opts.Key
+	s.resetPerIP = newLimiter(resetIPAttempts, resetWindow, now)
+	s.resetPerEmail = newLimiter(resetEmailAttempts, resetWindow, now)
+	s.resetStarts = newBucket(resetStartBurst, resetStartEvery, now)
+	s.mailSlots = make(chan struct{}, mailConcurrency)
+	s.workCtx, s.stopWork = context.WithCancel(context.Background())
+	s.invitePerAdmin = newLimiter(inviteAdminAttempts, inviteWindow, now)
+	s.invitePerRecipient = newLimiter(inviteRecipientAttempts, inviteWindow, now)
 	s.sso = newSSO(opts.SSO, now)
 	return s
 }

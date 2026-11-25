@@ -64,7 +64,7 @@ func TestMailStatusIsForAdminsAndNeverHoldsASecret(t *testing.T) {
 	}
 	for k := range body {
 		switch k {
-		case "configured", "host", "port", "security", "from", "password":
+		case "configured", "sends_links", "host", "port", "security", "from", "password":
 		default:
 			t.Fatalf("the status has an unexpected field %q: %v", k, body)
 		}

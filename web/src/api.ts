@@ -529,13 +529,15 @@ export type CardWithThread = Card & { comments: Comment[] }
 
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
 
-// two_factor is the admins' view only: whether the member has two-factor login on.
+// two_factor is the admins' view only: whether the member has two-factor login on. disabled is
+// an admin having switched the account off: signed out, refused at login, everything kept.
 export type Member = {
   id: number
   email: string
   name: string
   role: 'admin' | 'member'
   joined_at: string
+  disabled?: boolean
   two_factor?: boolean
 }
 // One event of a workspace's audit log, with the names read when the log was (docs/audit.md).
@@ -558,7 +560,8 @@ export type AuditPage = { events: AuditEntry[]; next: string }
 
 export type Invite = { id: number; email: string; role: 'admin' | 'member'; created_at: string; expires_at: string }
 // The reply that makes an invite or an access token: the record, with its secret, shown only now.
-export type InviteCreated = Invite & { token: string }
+// `email_sent` is there when the email was asked for: whether it went to the relay.
+export type InviteCreated = Invite & { token: string; email_sent?: boolean }
 export type TokenCreated = Token & { token: string }
 export type SpaceMember = { id: number; email: string; name: string; role: 'editor' | 'viewer'; added_at: string }
 
@@ -879,11 +882,13 @@ export const usagePath = (workspace: number) => `${ws(workspace)}/usage`
 export const exportPath = (workspace: number) => `${ws(workspace)}/export`
 
 // The server's outgoing email (docs/install.md#email), for admins: where it sends through, never the
-// account or its password. `password` says whether the server signs in.
+// account or its password. `password` says whether the server signs in. `sends_links` says whether it
+// emails reset and invite links, which also needs its public address (a server from before it has none).
 export type MailStatus =
-  | { configured: false }
+  | { configured: false; sends_links?: boolean }
   | {
       configured: true
+      sends_links?: boolean
       host: string
       port: number
       security: 'starttls' | 'tls' | 'none'

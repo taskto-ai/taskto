@@ -57,6 +57,15 @@ func TestPrincipalOf(t *testing.T) {
 		t.Fatalf("unarchived: %v", err)
 	}
 
+	// A disabled owner's conversation can't use tools, as at once as one who left; enabling brings
+	// it back.
+	owner.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/disable", ws, member.id), nil)
+	inactive("the owner was disabled")
+	owner.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/enable", ws, member.id), nil)
+	if _, err := PrincipalOf(ctx, e.db, c.ID); err != nil {
+		t.Fatalf("the owner enabled again: %v", err)
+	}
+
 	owner.expect(http.StatusNoContent, http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/members/%d", ws, member.id), nil)
 	inactive("the owner left the workspace")
 }
