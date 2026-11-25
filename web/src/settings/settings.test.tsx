@@ -6,6 +6,8 @@ import { App } from '../App'
 import type { Consent, Me, ProviderAccount, SearchSettings, Space, SpaceMember, Token, Workspace } from '../api'
 import { setPreferences } from '../i18n'
 import { type Call, fakeFetch } from '../test/fakes'
+import { answer, chooseFromMenu } from '../test/ui'
+import { resetToasts } from '../ui/Toast'
 import { SettingsPage } from './SettingsPage'
 
 const me: Me = {
@@ -32,6 +34,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  act(() => resetToasts())
   vi.unstubAllGlobals()
 })
 
@@ -132,14 +135,24 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     'CLI accounts',
     'Search',
     'Dictation',
+    'Storage',
     'Notifications',
     'Password',
     'Sessions',
     'Your data',
     'Access tokens',
-    'Storage',
     'About',
   ])
+  // In three groups: the workspace's, yours and the server's.
+  expect(
+    within(tabs)
+      .getAllByRole('list')
+      .map(
+        (l) =>
+          l.getAttribute('aria-labelledby') &&
+          document.getElementById(l.getAttribute('aria-labelledby') ?? '')?.textContent,
+      ),
+  ).toEqual(['Workspace', 'You', 'Server'])
   // A member asking for an admin's tab gets the first of theirs.
   expect(within(tabs).getByRole('link', { name: 'Model providers' }).getAttribute('aria-current')).toBe('page')
   await screen.findByRole('region', { name: 'Your own accounts' })
@@ -162,12 +175,12 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     ['CLI accounts', '/w/1/settings/cli-accounts'],
     ['Search', '/w/1/settings/search'],
     ['Dictation', '/w/1/settings/dictation'],
+    ['Storage', '/w/1/settings/storage'],
     ['Notifications', '/w/1/settings/notifications'],
     ['Password', '/w/1/settings/password'],
     ['Sessions', '/w/1/settings/sessions'],
     ['Your data', '/w/1/settings/data'],
     ['Access tokens', '/w/1/settings/tokens'],
-    ['Storage', '/w/1/settings/storage'],
     ['About', '/w/1/settings/about'],
   ])
   await screen.findByText('alice@example.com')
@@ -234,19 +247,16 @@ test('admins invite, change roles, remove members and withdraw invites', async (
 
   // Your own role isn't yours to change here, and you can't remove yourself.
   expect((await screen.findByLabelText('Role of Owner')).hasAttribute('disabled')).toBe(true)
-  expect(screen.queryByRole('button', { name: 'Remove Owner' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'More actions for Owner' })).toBeNull()
 
   fireEvent.change(screen.getByLabelText('Role of Alice'), { target: { value: 'admin' } })
   await waitFor(() => expect(sent(calls, 'PATCH', '/api/workspaces/1/members/2')).toEqual([{ role: 'admin' }]))
 
   // Removing asks first.
-  fireEvent.click(screen.getByRole('button', { name: 'Remove Bob' }))
+  chooseFromMenu('More actions for Bob', 'Remove')
   expect(sent(calls, 'DELETE', '/api/workspaces/1/members/3')).toEqual([])
-  fireEvent.click(
-    within(screen.getByRole('group', { name: 'Remove Bob from the workspace?' })).getByRole('button', {
-      name: 'Yes, remove',
-    }),
-  )
+  expect(within(await screen.findByRole('alertdialog')).getByText('Remove Bob from the workspace?')).toBeTruthy()
+  await answer('Yes, remove')
   await waitFor(() => expect(sent(calls, 'DELETE', '/api/workspaces/1/members/3')).toHaveLength(1))
 
   // An invite's link is shown once, the token in its fragment.
@@ -259,7 +269,7 @@ test('admins invite, change roles, remove members and withdraw invites', async (
   await within(screen.getByRole('list', { name: 'Pending invites' })).findByText('new@example.com')
 
   fireEvent.click(screen.getByRole('button', { name: 'Withdraw the invite for pending@example.com' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Yes, withdraw' }))
+  await answer('Yes, withdraw')
   await waitFor(() => expect(sent(calls, 'DELETE', '/api/workspaces/1/invites/4')).toHaveLength(1))
 })
 
@@ -274,8 +284,8 @@ test('admins make a password reset link for a member, shown once, never for them
   })
   render(<SettingsPage me={me} workspace={admin} tab="members" />)
   await screen.findByText('alice@example.com')
-  expect(screen.queryByRole('button', { name: 'Password reset link for Owner' })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Password reset link for Alice' }))
+  expect(screen.queryByRole('button', { name: 'More actions for Owner' })).toBeNull()
+  chooseFromMenu('More actions for Alice', 'Reset link')
   const link = (await screen.findByLabelText('Password reset link')) as HTMLInputElement
   expect(link.value).toBe(`${window.location.origin}/reset-password#fake-reset-token`)
   expect(sent(calls, 'POST', '/api/workspaces/1/members/2/password-reset')).toEqual([null])
@@ -291,13 +301,15 @@ test('with password login off, a member has no reset link action', async () => {
   render(<SettingsPage me={me} workspace={admin} tab="members" />)
   await screen.findByText('alice@example.com')
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Password reset link for Alice' })).toBeNull())
-  expect(screen.getByRole('button', { name: 'Remove Alice' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'More actions for Alice' }))
+  expect(screen.queryByRole('menuitem', { name: 'Reset link' })).toBeNull()
+  expect(screen.getByRole('menuitem', { name: 'Remove' })).toBeTruthy()
 })
 
 test('no reset link action until password login is confirmed, nor when the check fails', async () => {
-  let answer: (v: { status: number; body: unknown }) => void = () => {}
+  let reply: (v: { status: number; body: unknown }) => void = () => {}
   const pending = new Promise<{ status: number; body: unknown }>((resolve) => {
-    answer = resolve
+    reply = resolve
   })
   fakeFetch({
     'GET /api/workspaces/1/members': { body: { members: people } },
@@ -306,10 +318,13 @@ test('no reset link action until password login is confirmed, nor when the check
   })
   render(<SettingsPage me={me} workspace={admin} tab="members" />)
   await screen.findByText('alice@example.com')
-  expect(screen.queryByRole('button', { name: 'Password reset link for Alice' })).toBeNull()
-  await act(async () => answer({ status: 503, body: { error: 'down' } }))
-  expect(screen.queryByRole('button', { name: 'Password reset link for Alice' })).toBeNull()
-  expect(screen.getByRole('button', { name: 'Remove Alice' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'More actions for Alice' }))
+  expect(screen.queryByRole('menuitem', { name: 'Reset link' })).toBeNull()
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+  await act(async () => reply({ status: 503, body: { error: 'down' } }))
+  fireEvent.click(screen.getByRole('button', { name: 'More actions for Alice' }))
+  expect(screen.queryByRole('menuitem', { name: 'Reset link' })).toBeNull()
+  expect(screen.getByRole('menuitem', { name: 'Remove' })).toBeTruthy()
 })
 
 test("an admin's refused reset link says why", async () => {
@@ -322,7 +337,8 @@ test("an admin's refused reset link says why", async () => {
     },
   })
   render(<SettingsPage me={me} workspace={admin} tab="members" />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Password reset link for Bob' }))
+  await screen.findByText('bob@example.com')
+  chooseFromMenu('More actions for Bob', 'Reset link')
   expect((await screen.findByRole('alert')).textContent).toContain("you aren't an admin of")
   expect(screen.queryByLabelText('Password reset link')).toBeNull()
 })
@@ -345,7 +361,12 @@ test('everyone changes their own password with the current one; a wrong one is s
   }
   // Two new passwords that differ: said, and nothing is sent.
   fill('fake-current-password', 'fake-new-password', 'fake-other-password')
-  expect(screen.getByRole('alert').textContent).toBe("The new passwords don't match.")
+  // The field says so, and is described by it.
+  const again = screen.getByLabelText('New password again')
+  expect(again.getAttribute('aria-invalid')).toBe('true')
+  expect(document.getElementById(again.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+    "The new passwords don't match.",
+  )
   expect((screen.getByRole('button', { name: 'Change the password' }) as HTMLButtonElement).disabled).toBe(true)
 
   fill('not-the-password', 'fake-new-password', 'fake-new-password')
@@ -355,7 +376,7 @@ test('everyone changes their own password with the current one; a wrong one is s
 
   fill('fake-current-password', 'fake-new-password', 'fake-new-password')
   fireEvent.click(screen.getByRole('button', { name: 'Change the password' }))
-  expect((await screen.findByRole('status')).textContent).toContain('your other sessions are signed out')
+  expect(await screen.findByText(/your other sessions are signed out/)).toBeTruthy()
   expect(sent(calls, 'POST', '/api/me/password')).toEqual([
     { current_password: 'not-the-password', new_password: 'fake-new-password' },
     { current_password: 'fake-current-password', new_password: 'fake-new-password' },
@@ -409,7 +430,8 @@ test('the password tab, a reset link and the reset screen follow the language', 
   cleanup()
 
   render(<SettingsPage me={me} workspace={admin} tab="members" />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Link de redefinição de senha para Alice' }))
+  await screen.findByText('alice@example.com')
+  chooseFromMenu('Mais ações para Alice', 'Link de redefinição')
   const notice = await screen.findByText(/Envie este link para/)
   expect(notice.querySelector('strong')?.textContent).toBe('Alice')
   expect(notice.textContent).toContain('(alice@example.com)')
@@ -498,8 +520,9 @@ test('admins create, rename and archive shared spaces, and manage who is in them
   expect(within(list).queryByText('Private')).toBeNull()
   expect(within(list).getByText('You are not a member')).toBeTruthy()
 
-  fireEvent.click(within(list).getByRole('button', { name: /Team/ }))
-  const panel = await screen.findByRole('region', { name: 'Team' })
+  // A space is managed in a dialog of its own.
+  fireEvent.click(within(list).getByRole('button', { name: 'Manage Team' }))
+  const panel = await screen.findByRole('dialog', { name: 'Team' })
   await within(panel).findByText('alice@example.com')
 
   fireEvent.change(within(panel).getByLabelText('Space role of Alice'), { target: { value: 'viewer' } })
@@ -523,20 +546,23 @@ test('admins create, rename and archive shared spaces, and manage who is in them
   await within(panel).findByText('owner@example.com')
 
   fireEvent.click(within(panel).getByRole('button', { name: 'Remove Alice' }))
-  fireEvent.click(within(panel).getByRole('button', { name: 'Yes, remove' }))
+  await answer('Yes, remove')
   await waitFor(() => expect(within(panel).queryByText('alice@example.com')).toBeNull())
 
   fireEvent.change(within(panel).getByLabelText('Name'), { target: { value: 'Crew' } })
   fireEvent.click(within(panel).getByRole('button', { name: 'Rename' }))
-  await screen.findByRole('region', { name: 'Crew' })
-  fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Yes, archive' }))
-  await screen.findByRole('button', { name: 'Unarchive' })
+  const crew = await screen.findByRole('dialog', { name: 'Crew' })
+  fireEvent.click(within(crew).getByRole('button', { name: 'Archive' }))
+  await answer('Yes, archive')
+  await within(crew).findByRole('button', { name: 'Unarchive' })
   expect(sent(calls, 'PATCH', '/api/workspaces/1/spaces/4')).toEqual([{ name: 'Crew' }, { archived: true }])
+  fireEvent.click(within(crew).getByRole('button', { name: 'Close' }))
+  expect(await within(await screen.findByRole('list', { name: 'Shared spaces' })).findByText('Archived')).toBeTruthy()
 
   fireEvent.change(screen.getByLabelText('New space'), { target: { value: 'Garden' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create' }))
-  await screen.findByRole('region', { name: 'Garden' })
+  // A new space opens to add its members.
+  await screen.findByRole('dialog', { name: 'Garden' })
   expect(sent(calls, 'POST', '/api/workspaces/1/spaces')).toEqual([{ name: 'Garden' }])
 })
 
@@ -595,9 +621,9 @@ test('members read the workspace accounts; everyone adds, edits, tests and remov
   expect(within(shared).queryByRole('button')).toBeNull()
 
   const own = screen.getByRole('region', { name: 'Your own accounts' })
-  await within(own).findByText('None yet.')
+  await within(own).findByText('No accounts yet.')
   fireEvent.click(within(own).getByRole('button', { name: 'Add an account' }))
-  const form = within(own).getByRole('form', { name: 'New account' })
+  const form = screen.getByRole('dialog', { name: 'New account' })
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'home' } })
   fireEvent.change(within(form).getByLabelText('Base URL'), { target: { value: 'http://localhost:11434/v1' } })
   fireEvent.change(within(form).getByLabelText('API key'), { target: { value: 'fake-key-not-real-123' } })
@@ -622,12 +648,12 @@ test('members read the workspace accounts; everyone adds, edits, tests and remov
   )
 
   // Editing: the key field starts empty, and leaving it so keeps the stored key.
-  fireEvent.click(within(own).getByRole('button', { name: 'Edit home' }))
-  let edit = within(own).getByRole('form', { name: 'Edit home' })
+  chooseFromMenu('More actions for home', 'Edit')
+  let edit = screen.getByRole('dialog', { name: 'Edit home' })
   expect((within(edit).getByLabelText('New API key') as HTMLInputElement).value).toBe('')
   fireEvent.change(within(edit).getByLabelText('Models'), { target: { value: 'chat-model' } })
   fireEvent.click(within(edit).getByRole('button', { name: 'Save' }))
-  await waitFor(() => expect(within(own).queryByRole('form')).toBeNull())
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   expect(sent(calls, 'PATCH', '/api/me/providers/9')[0]).toEqual({
     display_name: 'home',
     base_url: 'http://localhost:11434/v1',
@@ -635,16 +661,16 @@ test('members read the workspace accounts; everyone adds, edits, tests and remov
   })
 
   // Removing the key is a choice of its own.
-  fireEvent.click(within(own).getByRole('button', { name: 'Edit home' }))
-  edit = within(own).getByRole('form', { name: 'Edit home' })
+  chooseFromMenu('More actions for home', 'Edit')
+  edit = screen.getByRole('dialog', { name: 'Edit home' })
   fireEvent.click(within(edit).getByLabelText('Remove the stored key'))
   fireEvent.click(within(edit).getByRole('button', { name: 'Save' }))
   await within(own).findByText(/Key not set/)
   expect((sent(calls, 'PATCH', '/api/me/providers/9')[1] as { api_key: unknown }).api_key).toBeNull()
 
-  fireEvent.click(within(own).getByRole('button', { name: 'Remove home' }))
-  fireEvent.click(within(own).getByRole('button', { name: 'Yes, remove' }))
-  await within(own).findByText('None yet.')
+  chooseFromMenu('More actions for home', 'Remove')
+  await answer('Yes, remove')
+  await within(own).findByText('No accounts yet.')
 })
 
 test('editing a workspace account keeps its models settings, and a failed test says why', async () => {
@@ -662,8 +688,8 @@ test('editing a workspace account keeps its models settings, and a failed test s
   // In the user's language, from the code.
   expect((await within(shared).findByRole('alert')).textContent).toBe('The endpoint answered 401: check the API key.')
 
-  fireEvent.click(within(shared).getByRole('button', { name: 'Edit Team gateway' }))
-  const edit = within(shared).getByRole('form', { name: 'Edit Team gateway' })
+  chooseFromMenu('More actions for Team gateway', 'Edit')
+  const edit = screen.getByRole('dialog', { name: 'Edit Team gateway' })
   fireEvent.change(within(edit).getByLabelText('Models'), { target: { value: 'chat-model\nnew-model' } })
   fireEvent.change(within(edit).getByLabelText('New API key'), { target: { value: 'fake-rotated-key-123' } })
   fireEvent.click(within(edit).getByRole('button', { name: 'Save' }))
@@ -776,14 +802,14 @@ test('consent shows the exact endpoint, names it back, and a changed endpoint mu
   })
   render(<SettingsPage me={me} workspace={admin} tab="search" />)
 
-  const mine = await screen.findByRole('article', { name: 'Private' })
+  const mine = await screen.findByRole('region', { name: 'Private' })
   await within(mine).findByText(/Off\./)
   for (const value of ['Team gateway', 'ws1-gateway', 'embed-model', 'https://llm.example.com/v1']) {
     expect(within(mine).getAllByText(value, { exact: false }).length).toBeGreaterThan(0)
   }
 
   // The team space is on, by Alice; a viewer can't change it.
-  const shared = screen.getByRole('article', { name: 'Team' })
+  const shared = screen.getByRole('region', { name: 'Team' })
   await within(shared).findByText(/with the consent of Alice/)
   expect(within(shared).queryByRole('button')).toBeNull()
   expect(within(shared).getByText("Only this space's editors can change this.")).toBeTruthy()
@@ -838,11 +864,21 @@ test('consent given for an earlier endpoint says that sending stopped', async ()
     },
   })
   render(<SettingsPage me={me} workspace={member} tab="search" />)
-  const mine = await screen.findByRole('article', { name: 'Private' })
+  const mine = await screen.findByRole('region', { name: 'Private' })
   expect((await within(mine).findByText(/Paused\./)).parentElement?.textContent).toMatch(/nothing is sent until/)
   // Members don't choose the model.
   expect(screen.queryByRole('form', { name: 'Embeddings model' })).toBeNull()
 })
+
+// Makes a token in the dialog that the page's Create token button opens.
+async function createToken(name: string, expires?: string) {
+  fireEvent.click(screen.getByRole('button', { name: 'Create token' }))
+  const dialog = await screen.findByRole('dialog', { name: 'New access token' })
+  fireEvent.change(within(dialog).getByLabelText('Token name'), { target: { value: name } })
+  if (expires !== undefined) fireEvent.change(within(dialog).getByLabelText('Expires'), { target: { value: expires } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create token' }))
+  return dialog
+}
 
 // A setup's text, as shown.
 const snippet = (name: string) => screen.getByRole('region', { name }).querySelector('pre')?.textContent
@@ -907,10 +943,10 @@ test('a new token is shown once, filled into the setup, and gone after leaving t
   const { rerender } = render(<SettingsPage me={me} workspace={member} tab="tokens" />)
   await screen.findByText('No tokens yet.')
 
-  fireEvent.change(screen.getByLabelText('Token name'), { target: { value: 'laptop: Claude Code' } })
-  fireEvent.change(screen.getByLabelText('Expires'), { target: { value: '' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Create token' }))
+  await createToken('laptop: Claude Code', '')
   expect(((await screen.findByLabelText('New token')) as HTMLInputElement).value).toBe(secret)
+  // The dialog closed: the token is on the page.
+  expect(screen.queryByRole('dialog')).toBeNull()
   expect(screen.getByRole('status').textContent).toMatch(/won't be shown again/)
   expect(sent(calls, 'POST', '/api/workspaces/1/tokens')).toEqual([{ name: 'laptop: Claude Code' }])
   await within(await screen.findByRole('list', { name: 'Your tokens' })).findByText('laptop: Claude Code')
@@ -944,10 +980,8 @@ test('a new token expires when chosen, and Done hides it', async () => {
   })
   render(<SettingsPage me={me} workspace={member} tab="tokens" />)
   await screen.findByText('No tokens yet.')
-  fireEvent.change(screen.getByLabelText('Token name'), { target: { value: 'ci script' } })
-  fireEvent.change(screen.getByLabelText('Expires'), { target: { value: '30' } })
   const before = Date.now()
-  fireEvent.click(screen.getByRole('button', { name: 'Create token' }))
+  await createToken('ci script', '30')
   await screen.findByLabelText('New token')
   const [body] = sent(calls, 'POST', '/api/workspaces/1/tokens') as { name: string; expires_at: string }[]
   expect(body.name).toBe('ci script')
@@ -973,15 +1007,15 @@ test('revoking a token asks first', async () => {
   fireEvent.click(within(list).getByRole('button', { name: 'Revoke ci script' }))
   expect(sent(calls, 'DELETE', '/api/workspaces/1/tokens/4')).toEqual([])
   // Cancel leaves it be.
-  fireEvent.click(within(list).getByRole('button', { name: 'Cancel' }))
+  await answer('Cancel')
+  expect(screen.queryByRole('alertdialog')).toBeNull()
   expect(sent(calls, 'DELETE', '/api/workspaces/1/tokens/4')).toEqual([])
   fireEvent.click(within(list).getByRole('button', { name: 'Revoke ci script' }))
-  fireEvent.click(
-    within(screen.getByRole('group', { name: 'Revoke ci script? Agents using it lose access at once.' })).getByRole(
-      'button',
-      { name: 'Yes, revoke' },
-    ),
-  )
+  expect(
+    (await screen.findByRole('alertdialog', { name: 'Revoke ci script? Agents using it lose access at once.' }))
+      .textContent,
+  ).toBeTruthy()
+  await answer('Yes, revoke')
   await waitFor(() => expect(within(list).queryByText('ci script')).toBeNull())
   expect(sent(calls, 'DELETE', '/api/workspaces/1/tokens/4')).toHaveLength(1)
   expect(within(list).getByText('laptop: Claude Code')).toBeTruthy()
@@ -1000,13 +1034,13 @@ test("the server's refusals are shown: listing, creating and revoking", async ()
   })
   render(<SettingsPage me={me} workspace={member} tab="tokens" />)
   await screen.findByRole('list', { name: 'Your tokens' })
-  fireEvent.change(screen.getByLabelText('Token name'), { target: { value: 'one more' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Create token' }))
-  expect((await screen.findByRole('alert')).textContent).toBe('too many tokens: at most 50 per member')
+  const dialog = await createToken('one more')
+  expect((await within(dialog).findByRole('alert')).textContent).toBe('too many tokens: at most 50 per member')
   expect(screen.queryByLabelText('New token')).toBeNull()
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
 
   fireEvent.click(screen.getByRole('button', { name: 'Revoke laptop: Claude Code' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Yes, revoke' }))
+  await answer('Yes, revoke')
   await screen.findByText('token not found')
 })
 
@@ -1024,11 +1058,10 @@ test('a failed revoke of the new token keeps it on screen, since it still works'
   })
   render(<SettingsPage me={me} workspace={member} tab="tokens" />)
   await screen.findByText('No tokens yet.')
-  fireEvent.change(screen.getByLabelText('Token name'), { target: { value: 'ci' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Create token' }))
+  await createToken('ci')
   expect(((await screen.findByLabelText('New token')) as HTMLInputElement).value).toBe(secret)
   fireEvent.click(await screen.findByRole('button', { name: 'Revoke ci' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Yes, revoke' }))
+  await answer('Yes, revoke')
   await screen.findByText('database is locked')
   expect((screen.getByLabelText('New token') as HTMLInputElement).value).toBe(secret)
 })
@@ -1045,13 +1078,13 @@ test('a second token waits until the first new one is done with', async () => {
   })
   render(<SettingsPage me={me} workspace={member} tab="tokens" />)
   await screen.findByText('No tokens yet.')
-  fireEvent.change(screen.getByLabelText('Token name'), { target: { value: 'first' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Create token' }))
+  await createToken('first')
   expect(((await screen.findByLabelText('New token')) as HTMLInputElement).value).toBe('ttp_fake-7')
-  // While it is on show, another can't replace it.
-  const create = screen.getByRole('button', { name: 'Create token' }) as HTMLButtonElement
+  // While it is on show, another can't replace it: the button that opens the form is off.
+  const create = (await screen.findByRole('button', { name: 'Create token' })) as HTMLButtonElement
   expect(create.disabled).toBe(true)
-  fireEvent.submit(create.closest('form') as HTMLFormElement)
+  fireEvent.click(create)
+  expect(screen.queryByRole('dialog')).toBeNull()
   expect(sent(calls, 'POST', '/api/workspaces/1/tokens')).toHaveLength(1)
   expect((screen.getByLabelText('New token') as HTMLInputElement).value).toBe('ttp_fake-7')
   fireEvent.click(screen.getByRole('button', { name: 'Done' }))
@@ -1129,4 +1162,89 @@ test('a member has no workspace export on their data tab', () => {
   render(<SettingsPage me={me} workspace={member} tab="data" />)
   expect(screen.queryByRole('heading', { name: 'Export the workspace' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Download the workspace' })).toBeNull()
+})
+
+test('on a phone, a choice at the top of the page goes to a tab, in the same groups', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/providers': { body: { providers: [] } },
+    'GET /api/me/providers': { body: { providers: [] } },
+  })
+  render(<SettingsPage me={me} workspace={member} tab="providers" />)
+  const picker = screen.getByRole('combobox', { name: 'Settings page' }) as HTMLSelectElement
+  expect(picker.value).toBe('providers')
+  expect([...picker.querySelectorAll('optgroup')].map((g) => g.label)).toEqual(['Workspace', 'You', 'Server'])
+  // A member is offered only their own tabs.
+  expect([...picker.options].map((o) => o.value)).not.toContain('members')
+  fireEvent.change(picker, { target: { value: 'tokens' } })
+  expect(window.location.pathname).toBe('/w/1/settings/tokens')
+})
+
+test("a member's actions are reached by keyboard, and Escape leaves the question unanswered", async () => {
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/members': { body: { members: people } },
+    'GET /api/workspaces/1/invites': { body: { invites: [] } },
+    'GET /api/login/methods': { body: { password: true } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="members" />)
+  await screen.findByText('bob@example.com')
+  const more = screen.getByRole('button', { name: 'More actions for Bob' })
+  // ArrowUp opens the menu on its last item: removing, the dangerous one, after a separator.
+  fireEvent.keyDown(more, { key: 'ArrowUp' })
+  const remove = await screen.findByRole('menuitem', { name: 'Remove' })
+  await waitFor(() => expect(document.activeElement).toBe(remove))
+  fireEvent.click(remove)
+  const ask = await screen.findByRole('alertdialog', { name: 'Remove Bob from the workspace?' })
+  // Cancel has the focus, so Enter by habit doesn't remove anyone.
+  expect(document.activeElement?.textContent).toBe('Cancel')
+  fireEvent.keyDown(ask, { key: 'Escape' })
+  fireEvent(ask, new Event('cancel'))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(sent(calls, 'DELETE', '/api/workspaces/1/members/3')).toEqual([])
+})
+
+test('a cancelled new-token dialog forgets what was typed and what failed', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/tokens': { body: { tokens: [token({})] } },
+    'POST /api/workspaces/1/tokens': { status: 409, body: { error: 'too many tokens: at most 50 per member' } },
+  })
+  render(<SettingsPage me={me} workspace={member} tab="tokens" />)
+  await screen.findByRole('list', { name: 'Your tokens' })
+  const dialog = await createToken('half typed')
+  await within(dialog).findByRole('alert')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  fireEvent.click(screen.getByRole('button', { name: 'Create token' }))
+  const again = await screen.findByRole('dialog', { name: 'New access token' })
+  expect((within(again).getByLabelText('Token name') as HTMLInputElement).value).toBe('')
+  expect(within(again).queryByRole('alert')).toBeNull()
+})
+
+test('the new-token dialog stays open while the token is being made, so its one showing is not lost', async () => {
+  let reply: (v: { status: number; body: unknown }) => void = () => {}
+  const pending = new Promise<{ status: number; body: unknown }>((resolve) => {
+    reply = resolve
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/tokens': { body: { tokens: [] } },
+    'POST /api/workspaces/1/tokens': () => pending,
+  })
+  render(<SettingsPage me={me} workspace={member} tab="tokens" />)
+  await screen.findByText('No tokens yet.')
+  const dialog = await createToken('laptop')
+  // On its way: Cancel is off, and Escape (the browser's cancel) doesn't close it.
+  await waitFor(() =>
+    expect((within(dialog).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true),
+  )
+  fireEvent.keyDown(dialog, { key: 'Escape' })
+  fireEvent(dialog, new Event('cancel'))
+  expect(screen.getByRole('dialog', { name: 'New access token' })).toBeTruthy()
+  // A second press of Enter sends nothing more.
+  fireEvent.submit(within(dialog).getByLabelText('Token name').closest('form') as HTMLFormElement)
+  expect(sent(calls, 'POST', '/api/workspaces/1/tokens')).toHaveLength(1)
+  await act(async () =>
+    reply({ status: 201, body: { ...token({ id: 7, name: 'laptop' }), token: 'ttp_fake-test-token-pending' } }),
+  )
+  // The answer is shown, once.
+  expect(((await screen.findByLabelText('New token')) as HTMLInputElement).value).toBe('ttp_fake-test-token-pending')
+  expect(screen.queryByRole('dialog')).toBeNull()
 })

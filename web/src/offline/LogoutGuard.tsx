@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
-import { ConfirmButton } from '../settings/parts'
+import { ConfirmButton } from './ConfirmButton'
 import type { Runtime } from './runtime'
 import { NotWriter } from './store'
 
