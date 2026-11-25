@@ -1950,6 +1950,8 @@
       "save": "Save",
       "discardLabel": "Discard your changes",
       "discardQuestion": "You have changes that aren't saved. Discard them?",
+      "discardDeleted": "This document was deleted. You have changes that aren't saved. Discard them?",
+      "discardMoved": "This document was moved. You have changes that aren't saved. Discard them?",
       "discard": "Discard my changes",
       "keepEditing": "Keep editing"
     },

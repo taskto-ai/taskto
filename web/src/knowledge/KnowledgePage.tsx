@@ -61,10 +61,13 @@ export function KnowledgePage({
     setAdding(null)
     setDeleted(null)
   }
+  // The list of a space is read again when something changed in it, if it is the one shown.
+  const listChanged = (changed: string) => {
+    if (now.current.base === changed) docs.reload()
+  }
   // A form or the notice has done its work: it closes, and its document opens unless the person
   // chooses to keep the draft they are writing.
   const finished = (path: string, editing = false) => {
-    docs.reload()
     setAdding(null)
     setDeleted(null)
     ask(() => show(path, editing))
@@ -110,10 +113,20 @@ export function KnowledgePage({
       )}
       {spaces.data?.length === 0 && <p className="tt-muted">{t('knowledge.noSpaces')}</p>}
       {base && adding === 'new' && (
-        <NewDoc base={base} onCreated={(path) => finished(path, true)} onCancel={() => setAdding(null)} />
+        <NewDoc
+          base={base}
+          onCreated={(path) => finished(path, true)}
+          onChanged={() => listChanged(base)}
+          onCancel={() => setAdding(null)}
+        />
       )}
       {base && adding === 'upload' && (
-        <Upload base={base} onDone={(path) => finished(path)} onCancel={() => setAdding(null)} />
+        <Upload
+          base={base}
+          onDone={(path) => finished(path)}
+          onChanged={() => listChanged(base)}
+          onCancel={() => setAdding(null)}
+        />
       )}
       {base && deleted && deleted.base === base && (
         <Deleted
@@ -122,6 +135,7 @@ export function KnowledgePage({
           path={deleted.path}
           versioned={deleted.versioned}
           canWrite={canWrite}
+          onChanged={() => listChanged(deleted.base)}
           onRestored={(path) => {
             if (now.current.base === deleted.base) finished(path)
           }}
@@ -174,7 +188,7 @@ export function KnowledgePage({
                 if (now.current.path === doc.path) {
                   ask(() => {
                     if (now.current.base === base && now.current.path === doc.path) setOpen(null)
-                  })
+                  }, 'deleted')
                 }
                 setDeleted({ base, path: doc.path, versioned: doc.versioned !== false })
               }}

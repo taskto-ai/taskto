@@ -7,7 +7,7 @@ import { useT } from '../i18n'
 import { Icon } from '../shell/Icon'
 import { Content } from './Content'
 import { ConfirmDelete } from './Delete'
-import { encodePath, resolveDocLink, useDoc, useLatest } from './docs'
+import { encodePath, resolveDocLink, useDoc, useLatest, useMounted } from './docs'
 import { Editor } from './Editor'
 import { GuardContext } from './guard'
 import { History } from './History'
@@ -47,6 +47,7 @@ export function DocView({
   }
   const { ask } = useContext(GuardContext)
   const shown = useLatest(mode)
+  const mounted = useMounted()
   const changed = () => {
     doc.reload()
     onChanged()
@@ -117,7 +118,9 @@ export function DocView({
           doc={doc.data}
           onMoved={(to) => {
             onChanged()
-            onOpen(to)
+            // The person may have gone elsewhere, or on to edit, while it was moving: the moved
+            // document opens for someone who is still here, and asks before it replaces a draft.
+            if (mounted.current) ask(() => onOpen(to), 'moved')
           }}
           onReload={doc.reload}
           onCancel={() => setMode('view')}

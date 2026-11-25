@@ -1,10 +1,10 @@
 // Uploading a file into the space: any file, at any path, created unless the person chooses to
 // replace one already there.
 
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { ApiError, api, type Doc, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
-import { type Change, encodePath, isConflict, isMarkdown } from './docs'
+import { type Change, encodePath, isConflict, isMarkdown, useMounted } from './docs'
 
 // A Markdown file is sent as its text, checked here to be UTF-8; any other file as its bytes,
 // streamed by the browser whatever its size.
@@ -19,10 +19,14 @@ async function markdownText(file: File, notUtf8: string): Promise<string> {
 export function Upload({
   base,
   onDone,
+  onChanged,
   onCancel,
 }: {
   base: string
+  // The file is in the space: its document opens, if the form is still there.
   onDone: (path: string) => void
+  // The space's list of documents may have changed, whatever became of the form.
+  onChanged: () => void
   onCancel: () => void
 }) {
   const [file, setFile] = useState<File | null>(null)
@@ -34,9 +38,12 @@ export function Upload({
   const t = useT()
   const f = useFormat()
 
-  // The upload in flight: Cancel, or the form going away, stops it, and then nothing opens.
+  // The upload in flight: only Cancel stops it, and then nothing opens. When the form goes away
+  // for another reason (the person went to a document, or another space) the upload goes on
+  // and finishes, since a large one takes minutes; it just doesn't open the file over what they
+  // are doing.
   const sending = useRef<AbortController | null>(null)
-  useEffect(() => () => sending.current?.abort(), [])
+  const mounted = useMounted()
   const cancel = () => {
     sending.current?.abort()
     onCancel()
@@ -72,9 +79,11 @@ export function Upload({
         const query = current ? `?base_version=${current.version}` : ''
         await api<Change>(`${url}${query}`, { method: 'PUT', bytes: file, signal })
       }
-      if (!signal.aborted) onDone(target)
+      onChanged()
+      if (mounted.current && !signal.aborted) onDone(target)
     } catch (err) {
-      if (signal.aborted) return
+      // Cancelled: the server may have finished all the same, so the list is read again.
+      if (signal.aborted) return onChanged()
       setExists(isConflict(err) && !replace)
       setError(
         isConflict(err)

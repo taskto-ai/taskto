@@ -4,7 +4,7 @@ import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import type { LinkHandler } from '../markdown'
 import { Content } from './Content'
-import { type Change, type Commit, encodePath, useDoc, useLatest } from './docs'
+import { type Change, type Commit, encodePath, isStale, useDoc, useLatest } from './docs'
 import { Problem } from './Problem'
 
 const CHANGE_LABEL = {
@@ -48,7 +48,7 @@ export function History({
   const [busy, setBusy] = useState(false)
   // What failed, and what its Reload brings back: the older page's reloads the history, a
   // restore's reloads the document and the history.
-  const [error, setError] = useState<{ error: unknown; reload: () => void } | null>(null)
+  const [error, setError] = useState<{ error: unknown; reload: () => void; reloadable?: boolean } | null>(null)
   const unversioned = current.versioned === false
   const pages = first.data ? [first.data, ...older] : []
   const commits = pages.flatMap((p) => p.commits)
@@ -77,11 +77,13 @@ export function History({
       const page = await api<{ commits: Commit[]; next?: string }>(`${historyUrl}?before=${encodeURIComponent(next)}`, {
         signal: request.signal,
       })
-      if (now.current === made) setOlder((o) => [...o, page])
+      if (!request.signal.aborted && now.current === made) setOlder((o) => [...o, page])
     } catch (err) {
-      if (now.current === made) setError({ error: err, reload: reloadHistory })
+      // A request this list ended itself (it was made again, or went away) is not an error.
+      if (request.signal.aborted || now.current !== made) return
+      setError({ error: err, reload: reloadHistory, reloadable: isStale(err) })
     } finally {
-      if (now.current === made) {
+      if (loadingOlder.current === request) {
         loadingOlder.current = null
         setLoadingMore(false)
       }
@@ -94,6 +96,7 @@ export function History({
     setLoadingMore(false)
     setViewing(null)
     setOlder([])
+    setError(null)
     setGeneration((g) => g + 1)
   }
   const restore = async (c: Commit) => {
@@ -129,6 +132,7 @@ export function History({
       {error !== null && (
         <Problem
           error={error.error}
+          reloadable={error.reloadable}
           onReload={() => {
             setError(null)
             error.reload()

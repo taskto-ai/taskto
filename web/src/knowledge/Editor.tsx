@@ -1,12 +1,19 @@
 // Editing a Markdown document: the text and its preview, what changed, and the choice a
 // conflict asks for (useDraft has the saving).
 
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import type { Doc } from '../api'
 import { useT } from '../i18n'
 import { Markdown } from '../markdown'
 import { GuardContext } from './guard'
 import { useDraft } from './useDraft'
+
+// What the question says, by why it is asked.
+const DISCARD_QUESTION = {
+  leave: 'knowledge.editor.discardQuestion',
+  deleted: 'knowledge.editor.discardDeleted',
+  moved: 'knowledge.editor.discardMoved',
+} as const
 
 export function Editor({
   url,
@@ -28,11 +35,44 @@ export function Editor({
   const t = useT()
   // Whatever would close the editor asks first while the draft differs from what was loaded.
   const guard = useContext(GuardContext)
-  const { report } = guard
+  const { report, asking, keep } = guard
   useEffect(() => {
-    report(dirty)
-    return () => report(false)
-  }, [dirty, report])
+    report(dirty, busy)
+  }, [dirty, busy, report])
+  useEffect(() => () => report(false, false), [report])
+
+  // The question comes into view and takes the focus; "Keep editing", by button or Escape,
+  // gives the focus back to the text, with the cursor where it was.
+  const question = useRef<HTMLFieldSetElement>(null)
+  const keepButton = useRef<HTMLButtonElement>(null)
+  const textarea = useRef<HTMLTextAreaElement>(null)
+  const previewTab = useRef<HTMLButtonElement>(null)
+  const cursor = useRef<[number, number]>([0, 0])
+  useEffect(() => {
+    if (!asking) return
+    const ta = textarea.current
+    if (ta) cursor.current = [ta.selectionStart, ta.selectionEnd]
+    question.current?.scrollIntoView?.({ block: 'nearest' })
+    keepButton.current?.focus()
+  }, [asking])
+  const keepEditing = () => {
+    keep()
+    const ta = textarea.current
+    if (ta) {
+      ta.focus()
+      ta.setSelectionRange(cursor.current[0], cursor.current[1])
+    } else previewTab.current?.focus()
+  }
+  useEffect(() => {
+    if (!asking) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      keepEditing()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  })
 
   return (
     <form
@@ -47,12 +87,13 @@ export function Editor({
         <button type="button" aria-pressed={tab === 'write'} onClick={() => setTab('write')}>
           {t('knowledge.editor.write')}
         </button>
-        <button type="button" aria-pressed={tab === 'preview'} onClick={() => setTab('preview')}>
+        <button ref={previewTab} type="button" aria-pressed={tab === 'preview'} onClick={() => setTab('preview')}>
           {t('knowledge.editor.preview')}
         </button>
       </fieldset>
       {tab === 'write' ? (
         <textarea
+          ref={textarea}
           aria-label={t('knowledge.editor.text')}
           value={text}
           rows={18}
@@ -97,15 +138,20 @@ export function Editor({
           {error}
         </p>
       )}
-      {guard.asking && (
+      {asking && (
         // The same question-and-two-buttons panel as deleting a document.
-        <fieldset className="tt-panel" aria-label={t('knowledge.editor.discardLabel')}>
-          <p>{t('knowledge.editor.discardQuestion')}</p>
+        <fieldset
+          ref={question}
+          className="tt-panel"
+          role="alertdialog"
+          aria-label={t('knowledge.editor.discardLabel')}
+        >
+          <p>{t(DISCARD_QUESTION[asking])}</p>
           <div className="tt-actions">
             <button type="button" className="tt-button tt-danger" onClick={guard.discard}>
               {t('knowledge.editor.discard')}
             </button>
-            <button type="button" className="tt-button" onClick={guard.keep}>
+            <button ref={keepButton} type="button" className="tt-button" onClick={keepEditing}>
               {t('knowledge.editor.keepEditing')}
             </button>
           </div>

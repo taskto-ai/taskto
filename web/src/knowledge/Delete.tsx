@@ -1,10 +1,10 @@
 // Deleting a document, after a question, and the notice after it, with the way to bring it
 // back from its history.
 
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { api, type Doc, errorText } from '../api'
 import { useT } from '../i18n'
-import { type Change, type Commit, encodePath } from './docs'
+import { type Change, type Commit, encodePath, useMounted } from './docs'
 import { Problem } from './Problem'
 
 export function ConfirmDelete({
@@ -69,24 +69,26 @@ export function Deleted({
   versioned,
   canWrite,
   onRestored,
+  onChanged,
 }: {
   base: string
   path: string
   versioned: boolean
   canWrite: boolean
+  // The document is back: it opens, if the notice is still there.
   onRestored: (path: string) => void
+  // The space's list of documents changed, whatever became of the notice.
+  onChanged: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const t = useT()
-  // The search of the history stops when the notice goes away.
-  const search = useRef<AbortController | null>(null)
-  useEffect(() => () => search.current?.abort(), [])
+  // A restore the person asked for is finished even if they have moved on (opened another
+  // document, say); only opening the document afterwards is for someone still here.
+  const mounted = useMounted()
   const restore = async () => {
     setBusy(true)
     setError(null)
-    search.current = new AbortController()
-    const { signal } = search.current
     try {
       // The newest version still kept, however far back the history goes: a page at a time.
       const history = `${base}/history/${encodePath(path)}`
@@ -94,23 +96,24 @@ export function Deleted({
       for (let page = '', first = true; !before; first = false) {
         const res = await api<{ commits: Commit[]; next?: string }>(
           page ? `${history}?before=${encodeURIComponent(page)}` : history,
-          { signal },
         )
         // Someone made it again since: nothing to bring back, it is there.
-        if (first && res.commits[0] && res.commits[0].change !== 'delete') return onRestored(path)
+        if (first && res.commits[0] && res.commits[0].change !== 'delete') {
+          onChanged()
+          if (mounted.current) onRestored(path)
+          return
+        }
         before = res.commits.find((c) => c.change !== 'delete' && c.versioned !== false)
         if (!before && !res.next) throw new Error(t('knowledge.deleted.noEarlier', { path }))
         page = res.next ?? ''
       }
-      // The notice went away while the history was searched, or the restore was on its way: the
-      // person is elsewhere by now, and it is not opened over what they are reading.
-      if (signal.aborted) return
       await api<Change>(`${base}/restore/${encodePath(path)}`, { method: 'POST', body: { commit: before.commit } })
-      if (!signal.aborted) onRestored(path)
+      onChanged()
+      if (mounted.current) onRestored(path)
     } catch (err) {
-      if (!signal.aborted) setError(errorText(err))
+      setError(errorText(err))
     } finally {
-      if (!signal.aborted) setBusy(false)
+      setBusy(false)
     }
   }
   if (!versioned) {

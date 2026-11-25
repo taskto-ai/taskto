@@ -1962,6 +1962,8 @@
       "save": "Salvar",
       "discardLabel": "Descartar as alterações",
       "discardQuestion": "Você tem alterações que não foram salvas. Descartá-las?",
+      "discardDeleted": "Este documento foi excluído. Você tem alterações que não foram salvas. Descartá-las?",
+      "discardMoved": "Este documento foi movido. Você tem alterações que não foram salvas. Descartá-las?",
       "discard": "Descartar minhas alterações",
       "keepEditing": "Continuar editando"
     },
