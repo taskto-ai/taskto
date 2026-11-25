@@ -69,3 +69,12 @@ test('a confirmation with no answer from the server says so in the app’s words
   expect(alert.textContent).toContain("Your address couldn't be confirmed: the server didn't answer.")
   expect(screen.queryByText(/Failed to fetch/)).toBeNull()
 })
+
+test('a failure of the server’s own is not a notification that is gone: it can be tried again', async () => {
+  fakeFetch({ 'GET /api/me/notifications/9': { status: 503, body: { error: 'unavailable', code: 'unavailable' } } })
+  render(<OpenNotification id={9} fallbackWorkspace={1} />)
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain("The notification couldn't be opened")
+  expect(screen.queryByText(/isn't available any more/)).toBeNull()
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+})

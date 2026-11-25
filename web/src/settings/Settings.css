@@ -386,9 +386,15 @@
 }
 
 @layer screens {
-  /* A check's outcome, always in the row so a screen reader hears it arrive; empty, it takes no room. */
+  /* A check's outcome, always in the row and in the accessibility tree, so a screen reader hears
+     it arrive; empty, it is out of sight and takes no room, but still there. */
   .settings-check-status:empty {
-    display: none;
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .settings-error-text {

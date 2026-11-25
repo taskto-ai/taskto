@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { Integration, IntegrationRegistry, Me, Space, Workspace } from '../api'
@@ -481,4 +483,11 @@ test('a check’s outcome is said in a live region that is there before it arriv
   release()
   await waitFor(() => expect(live.textContent).toMatch(/The stored credentials open/))
   expect(row.querySelector('.settings-check-status')).toBe(live)
+})
+
+test('the empty live region stays in the accessibility tree: out of sight, never display: none', () => {
+  const css = readFileSync(join(__dirname, 'Settings.css'), 'utf8')
+  const rule = css.match(/\.settings-check-status:empty\s*\{([^}]*)\}/)?.[1] ?? ''
+  expect(rule).toMatch(/clip-path:\s*inset\(50%\)/)
+  expect(rule).not.toMatch(/display:\s*none|visibility:\s*hidden/)
 })

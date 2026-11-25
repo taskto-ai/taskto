@@ -219,8 +219,8 @@ function InboxSkeleton() {
  */
 export function OpenNotification({ id, fallbackWorkspace }: { id: number; fallbackWorkspace: number | null }) {
   const t = useT()
-  // Gone: the server answered that there is no such notification for this person. Failed: no
-  // answer came (the connection, the server), which says nothing about the notification.
+  // Gone: the server answered that there is no such notification for this person (404, or 403).
+  // Failed: anything else (no answer, the server's own failure), which says nothing about it.
   const [outcome, setOutcome] = useState<'waiting' | 'gone' | 'failed'>('waiting')
   useEffect(() => {
     let live = true
@@ -233,7 +233,7 @@ export function OpenNotification({ id, fallbackWorkspace }: { id: number; fallba
         )
         navigate(routePath({ workspace: item.workspace_id, ...item.target }), { replace: true })
       },
-      (e) => live && setOutcome(e instanceof ApiError ? 'gone' : 'failed'),
+      (e) => live && setOutcome(e instanceof ApiError && (e.status === 404 || e.status === 403) ? 'gone' : 'failed'),
     )
     return () => {
       live = false
