@@ -116,7 +116,7 @@ test('signed in, an invite joins the new workspace and goes to it', async () => 
   expect(window.location.pathname).toBe('/w/9/conversations')
 })
 
-test('members see the providers, CLI accounts, search, dictation, notifications, password, data, tokens, storage and about tabs only; admins see them all', async () => {
+test('members see the providers, CLI accounts, search, dictation, notifications, password, sessions, data, tokens, storage and about tabs only; admins see them all', async () => {
   fakeFetch({
     'GET /api/workspaces/1/providers': { body: { providers: [] } },
     'GET /api/me/providers': { body: { providers: [] } },
@@ -134,6 +134,7 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     'Dictation',
     'Notifications',
     'Password',
+    'Sessions',
     'Your data',
     'Access tokens',
     'Storage',
@@ -163,6 +164,7 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     ['Dictation', '/w/1/settings/dictation'],
     ['Notifications', '/w/1/settings/notifications'],
     ['Password', '/w/1/settings/password'],
+    ['Sessions', '/w/1/settings/sessions'],
     ['Your data', '/w/1/settings/data'],
     ['Access tokens', '/w/1/settings/tokens'],
     ['Storage', '/w/1/settings/storage'],

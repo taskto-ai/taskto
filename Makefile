@@ -1,4 +1,4 @@
-.PHONY: check lint fmt build dev-server dev-web install agent-it dictation-e2e browser-handover-e2e web-e2e
+.PHONY: check lint fmt build dev-server dev-web install agent-it dictation-e2e browser-handover-e2e web-e2e screens
 
 PNPM ?= pnpm
 # golangci-lint is pinned in tools/go.mod, apart from the app's dependencies.
@@ -50,6 +50,15 @@ web-e2e: build
 dictation-e2e: build
 	$(PNPM) --filter @taskto/web exec playwright install chromium
 	TASKTO_DICTATION_E2E=1 node --test --test-reporter=spec web/e2e/dictation.e2e.mjs
+
+# Captures of every screen, for reviews of UI changes (web/e2e/screens.mjs, docs/design.md): the
+# built server on an empty temporary data directory, sample data seeded through the API, and
+# Playwright's Chromium at three sizes in a light and a dark theme, into web/screens/ (git ignores
+# it). Never run by CI. About a minute. SCREENS_ARGS passes the script's flags, for example
+# `make screens SCREENS_ARGS="--only desktop-light/boards"`; see the script's top for the rest.
+screens: build
+	$(PNPM) --filter @taskto/web exec playwright install chromium
+	node web/e2e/screens.mjs $(SCREENS_ARGS)
 
 # The agent browser's hand-over with a real model (docs/agent-browser.md): builds and runs the
 # Compose stack in Docker, and needs TASKTO_HANDOVER_E2E_BASE_URL and _KEY_FILE. Never in CI.

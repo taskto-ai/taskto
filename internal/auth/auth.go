@@ -116,6 +116,9 @@ type Service struct {
 	key *serverkey.Key
 	sso *sso
 
+	// live is the connections that end with their login (WatchSession).
+	live liveWatches
+
 	// hook is nil outside tests, which set it to make another request land at a named point
 	// of a login route, where a race would.
 	hook func(point string)
