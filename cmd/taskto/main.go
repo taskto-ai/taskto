@@ -17,6 +17,10 @@ import (
 	"syscall"
 	"time"
 
+	// The time zone database, in the binary: a person's time zone (internal/auth, timezone.go) is
+	// found whatever the host or the image has. The standard library's, not a dependency.
+	_ "time/tzdata"
+
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/agenttools"

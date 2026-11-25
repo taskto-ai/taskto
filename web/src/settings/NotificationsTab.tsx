@@ -24,9 +24,21 @@ import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { EmailNotifications } from './EmailNotifications'
 import { Alert, FormActions, Loading, Section, SettingsTab, useAction } from './parts'
+import { TimeZonePanel } from './TimeZonePanel'
 
-export function NotificationsTab({ me, workspace }: { me: number; workspace: number }) {
+// `timeZone`: the person's own, "" for none yet.
+export function NotificationsTab({
+  me,
+  workspace,
+  timeZone = '',
+}: {
+  me: number
+  workspace: number
+  timeZone?: string
+}) {
   const t = useT()
+  // Counts the zone's saves, to load the summary's choices again.
+  const [zoneSaves, setZoneSaves] = useState(0)
   const install = useInstall()
   const [state, setState] = useState<PushState | null>(null)
   // The person closed the browser's prompt without answering: push stays off, and they are told so.
@@ -123,7 +135,10 @@ export function NotificationsTab({ me, workspace }: { me: number; workspace: num
           <p className="settings-muted">{t('notifications.settings.caveat')}</p>
         </Panel>
       </Section>
-      <EmailNotifications workspace={workspace} />
+      {/* The summary follows the time zone until a zone is chosen for it: it loads its choices again
+          when the zone changes, so what it shows (and sends back with a new hour) is the server's. */}
+      <TimeZonePanel initial={timeZone} onSaved={() => setZoneSaves((n) => n + 1)} />
+      <EmailNotifications key={zoneSaves} workspace={workspace} />
     </SettingsTab>
   )
 }
