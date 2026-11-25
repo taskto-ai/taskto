@@ -17,8 +17,9 @@ export function TimeZonePanel({ initial, onSaved }: { initial: string; onSaved?:
   const [zone, setZone] = useState(initial)
   const [saved, setSaved] = useState(false)
   const action = useAction()
-  // A pick that was saved is newer than what the account said before it: that answer is ignored. One
-  // that failed is nothing, and the account's answer is the zone again.
+  // The zone shown is the last one the account confirmed: its answer to a save, else what it said when this
+  // page opened. A save that succeeded is newer than that first answer, which may come after it and is then
+  // ignored; one that failed changes nothing.
   const [picked, setPicked] = useState(false)
   const account = useLoad(() => api<Me>('/api/me'), [])
   useEffect(() => {
@@ -29,14 +30,13 @@ export function TimeZonePanel({ initial, onSaved }: { initial: string; onSaved?:
 
   const save = async (next: string) => {
     setSaved(false)
-    setPicked(true)
     const ok = await action.run(async () => {
       const me = await api<Me>('/api/me', { method: 'PATCH', body: { time_zone: next } })
       setZone(me.user.time_zone ?? next)
+      setPicked(true)
       onSaved?.()
     })
     setSaved(ok)
-    if (!ok) setPicked(false)
   }
 
   return (

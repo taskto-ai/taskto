@@ -141,3 +141,27 @@ test("a pick that fails to save, made before the account answered, leaves the ac
   answer()
   await waitFor(() => expect(select.value).toBe('Asia/Tokyo'))
 })
+
+test('a save that fails leaves the last zone the account confirmed, and a late first answer does not replace a saved one', async () => {
+  browserIn('Europe/Lisbon')
+  let answer: () => void = () => {}
+  let saves = 0
+  fakeFetch({
+    'GET /api/me': () => new Promise((done) => (answer = () => done({ body: me('Asia/Tokyo') }))),
+    'PATCH /api/me': (call) =>
+      ++saves === 1
+        ? { body: me((call.body as { time_zone: string }).time_zone) }
+        : { status: 500, body: { error: 'internal error', code: 'internal' } },
+  })
+  render(<TimeZonePanel initial="UTC" />)
+  const select = screen.getByLabelText('Your time zone') as HTMLSelectElement
+  fireEvent.change(select, { target: { value: 'Europe/Lisbon' } })
+  await waitFor(() => expect(select.value).toBe('Europe/Lisbon'))
+  // The account's first answer comes late, from before the save.
+  answer()
+  await new Promise((r) => setTimeout(r, 20))
+  expect(select.value).toBe('Europe/Lisbon')
+  fireEvent.change(select, { target: { value: 'America/Sao_Paulo' } })
+  await screen.findByRole('alert')
+  expect(select.value).toBe('Europe/Lisbon')
+})
