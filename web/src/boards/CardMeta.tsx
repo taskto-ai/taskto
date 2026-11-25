@@ -1,65 +1,63 @@
+import type { ReactNode } from 'react'
 import type { Card } from '../api'
 import { useT } from '../i18n'
-import { Assignee } from './Assignee'
+import { Menu, MenuButton, MenuItem, MenuList } from '../ui/Menu'
 import { COLUMN_LABELS, COLUMNS } from './columns'
-import type { Person } from './people'
-import { assigneeLabel } from './text'
+import { StatusDot } from './StatusDot'
 
-// The card's column, its assignee, and archiving or restoring it. The Column field moves the
-// card from the keyboard, as dragging it does on the board.
-export function CardMeta({
+// A row of the open card's properties: its name, and its value with the control that changes it.
+// The row is a focus group: when a control in it goes, the focus stays in the row (focus.ts).
+export function Prop({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="ui-board-prop" data-focus-group>
+      <dt>{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  )
+}
+
+// The card's status, its column: a writer moves it with the menu, as a drag does on the board.
+// An archived card is restored from the card's menu, not moved.
+export function Status({
   card,
   canWrite,
-  people,
   busy,
   onMove,
-  onAssign,
-  onArchive,
-  onRestore,
 }: {
   card: Card
   canWrite: boolean
-  people: Person[] | undefined
   busy: boolean
-  onMove: (column: string) => void
-  onAssign: (assignee: Card['assignee']) => void
-  onArchive: () => void
-  onRestore: () => void
+  onMove: (column: Card['column']) => void
 }) {
   const t = useT()
+  const name = t(COLUMN_LABELS[card.column])
+  if (!canWrite || card.column === 'archived')
+    return (
+      <span className="ui-board-value">
+        <StatusDot column={card.column} />
+        {name}
+      </span>
+    )
   return (
-    <div className="tt-card-meta">
-      {canWrite && card.column !== 'archived' ? (
-        <label className="tt-inline-field">
-          {t('boards.column')}
-          <select value={card.column} disabled={busy} onChange={(e) => onMove(e.target.value)}>
-            {COLUMNS.map((c) => (
-              <option key={c.id} value={c.id}>
-                {t(c.label)}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : (
-        <span className="tt-muted">{t(COLUMN_LABELS[card.column])}</span>
-      )}
-      {canWrite ? (
-        <Assignee card={card} people={people} busy={busy} onSet={onAssign} />
-      ) : (
-        card.assignee && (
-          <span className="tt-muted">{t('boards.assignedTo', { name: assigneeLabel(t, card.assignee) })}</span>
-        )
-      )}
-      {canWrite &&
-        (card.column === 'archived' ? (
-          <button type="button" className="tt-button" disabled={busy} onClick={onRestore}>
-            {t('boards.restore')}
-          </button>
-        ) : (
-          <button type="button" className="tt-button" disabled={busy} onClick={onArchive}>
-            {t('boards.archive')}
-          </button>
+    <Menu align="start">
+      <MenuButton size="sm" label={t('boards.status')} disabled={busy} className="ui-board-value-button">
+        <StatusDot column={card.column} />
+        {name}
+      </MenuButton>
+      <MenuList>
+        {COLUMNS.map((c) => (
+          <MenuItem
+            key={c.id}
+            icon={c.id === card.column ? 'check' : undefined}
+            onSelect={() => c.id !== card.column && onMove(c.id)}
+          >
+            <span className="ui-board-value">
+              <StatusDot column={c.id} />
+              {t(c.label)}
+            </span>
+          </MenuItem>
         ))}
-    </div>
+      </MenuList>
+    </Menu>
   )
 }

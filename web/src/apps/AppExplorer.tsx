@@ -66,6 +66,7 @@ export function AppExplorer({
   canChange,
   canRestore,
   onChanged,
+  leaveRef,
 }: {
   // …/spaces/{space}/apps/{app}
   base: string
@@ -78,6 +79,9 @@ export function AppExplorer({
   canRestore: boolean
   // A record was changed, deleted or restored: the app's screen is loaded again.
   onChanged: () => void
+  // Given the explorer's way out (ask first while the open record holds unsaved changes, then go),
+  // for what closes the explorer from outside it: the records panel's close and the header's toggle.
+  leaveRef?: { current: ((go: () => void) => void) | null }
 }) {
   const t = useT()
   const f = useFormat()
@@ -127,6 +131,7 @@ export function AppExplorer({
       go()
     })
   }
+  if (leaveRef) leaveRef.current = leaving
   // After a record left the list (deleted, restored), the keyboard goes to the list's count, which
   // says what the list holds now: the row it came from is gone.
   const count = useRef<HTMLParagraphElement>(null)

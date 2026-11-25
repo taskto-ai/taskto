@@ -49,6 +49,14 @@ describe('Page and PageHeader', () => {
     expect(screen.getByRole('button', { name: 'New card' })).toBeTruthy()
   })
 
+  test('a control after the title is beside the heading, not in its name', () => {
+    render(<PageHeader title="Personal" titleAction={<Button>Switch board</Button>} />)
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Personal' })
+    const button = screen.getByRole('button', { name: 'Switch board' })
+    expect(h1.contains(button)).toBe(false)
+    expect(h1.nextElementSibling).toBe(button)
+  })
+
   test('a header inside another page is a level 2 heading', () => {
     render(<PageHeader title="Members" level={2} />)
     expect(screen.getByRole('heading', { level: 2, name: 'Members' })).toBeTruthy()
