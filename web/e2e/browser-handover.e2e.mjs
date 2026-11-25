@@ -217,7 +217,7 @@ test('a real model asks for help, the user signs in in the live view, and the ag
     await page.goto(`${base}/w/${ws}/conversations/${conversation.id}`)
 
     // The user's request, in the chat box. The model is told nothing about the hand-over.
-    const box = page.locator('#tt-message')
+    const box = page.getByRole('textbox', { name: 'Message', exact: true })
     await box.fill(`Open ${siteURL} in my personal browser and tell me the access code on its dashboard.`)
     await box.press('Enter')
 
@@ -247,11 +247,15 @@ test('a real model asks for help, the user signs in in the live view, and the ag
 
     // Take over: the live view, under the user's control.
     await card.getByRole('button', { name: 'Take over' }).click()
-    const live = page.locator('.tt-live[data-interactive]')
+    // The live view under the user's control is named so; its status line goes once it shows.
+    const live = page.getByRole('img', { name: 'The browser, under your control' })
     await live.waitFor({ timeout: minute })
     const canvas = live.locator('canvas')
     await canvas.waitFor({ timeout: minute })
-    await page.waitForFunction(() => !document.querySelector('.tt-live [role=status]'), null, { timeout: minute })
+    await page
+      .getByRole('region', { name: 'Your browser' })
+      .getByRole('status')
+      .waitFor({ state: 'detached', timeout: minute })
     // The first frames.
     await page.waitForTimeout(2000)
     await shot('2-live')
@@ -348,7 +352,7 @@ async function transcript() {
 
 // providerErrors is the model calls' errors the conversation shows, such as a gateway's 429.
 async function providerErrors() {
-  return page && !page.isClosed() ? page.locator('.tt-message .tt-error').allTextContents() : []
+  return page && !page.isClosed() ? page.getByRole('article').getByRole('alert').allTextContents() : []
 }
 
 // until waits for check. A model call that failed and wasn't followed by anything for a minute
