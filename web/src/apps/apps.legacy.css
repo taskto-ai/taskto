@@ -1,0 +1,1047 @@
+/* Personal apps: the renderer's screens and the overrides of its own styles, the list, the
+   records and their explorer, drafts and releases, the builder, photos and capture fields,
+   effects, and the templates.
+
+   The rules that override the renderer (`.tt-app .a2ui-…`) must stay in no layer: the renderer's
+   own styles are in none, and a layered rule loses to them whatever its specificity.
+
+   Its rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
+   and their order with the other files is styles.css's (docs/design.md, "Where styles live").
+   Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
+
+/* A personal app's screen. */
+
+.tt-app {
+  padding: 1rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+/* The inputs and buttons of an app's screens: fingers can use them, and a 360px phone fits them
+   (the form's inputs take the width they have, rows of buttons wrap instead of overflowing). */
+.tt-app .tt-screen {
+  min-inline-size: 0;
+}
+
+.tt-app input,
+.tt-app textarea,
+.tt-app select {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  min-block-size: var(--tt-touch);
+}
+
+.tt-app input[type="text"],
+.tt-app input[type="number"],
+.tt-app input[type="password"] {
+  inline-size: 100%;
+}
+
+.tt-app button {
+  min-block-size: var(--tt-touch);
+  min-inline-size: var(--tt-touch);
+}
+
+/* The renderer's primary button and a picked choice are mint with ink on them, outlined in ink, as
+   the app's own primary buttons are; its stylesheet gives them no outline, so it is drawn here. */
+.tt-app .a2ui-button.a2ui-button-primary {
+  border: 1.5px solid var(--tt-accent-edge);
+  box-shadow: var(--tt-shadow-lift);
+  font-weight: 650;
+}
+
+/* The renderer colours a borderless button's text with its primary, which is the mint: too faint to
+   read on the page, so the deeper green stands in. A button's label is a Text component, which
+   takes its colour from --_a2ui-text-color (and, as a caption, from its own muted colour), not
+   from the button's: so the token is set there too, and a label of any variant (a caption is the
+   one that was grey on mint) takes the ink of the button it is in. */
+.tt-app .a2ui-button.a2ui-button-borderless {
+  --_a2ui-text-color: var(--tt-link);
+  color: var(--tt-link);
+}
+
+.tt-app .a2ui-button .a2ui-text,
+.tt-app .a2ui-button .a2ui-text.a2ui-text-caption {
+  color: inherit;
+}
+
+/* The renderer takes a field's outline away and shows focus as a change of border colour, which an
+   invalid field (its border is the error's) doesn't have: every field gets the app's focus ring. */
+.tt-app .a2ui-textfield:focus-visible {
+  outline: 2.5px solid var(--tt-focus);
+  outline-offset: 2px;
+}
+
+.tt-app .a2ui-tab-button.a2ui-tab-button-active {
+  border-bottom-color: var(--tt-focus);
+}
+
+.tt-app .a2ui-chip.a2ui-chip-selected {
+  border-color: var(--tt-accent-edge);
+  font-weight: 600;
+}
+
+.tt-app .a2ui-chips-group,
+.tt-app .a2ui-date-time-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tt-app a2ui-basic-row {
+  flex-wrap: wrap;
+}
+
+/* An app the agent saved, launched in the conversation: compact, scrolling within itself. */
+.tt-app-preview {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+}
+
+.tt-app-preview .tt-app {
+  max-height: 28rem;
+  overflow: auto;
+}
+
+.tt-app-space {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-app-space h2 {
+  font-size: 1rem;
+  margin: 0.5rem 0 0;
+}
+
+.tt-app-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-app-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-app-row[data-offline] .tt-list-title {
+  color: var(--tt-muted);
+}
+
+.tt-app-name {
+  display: grid;
+  flex: 1;
+  min-width: 10rem;
+}
+
+.tt-app-actions,
+.tt-app-move {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tt-app-rename {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  flex: 1;
+}
+
+.tt-app-roles {
+  flex-basis: 100%;
+  display: grid;
+  gap: 0.5rem;
+  overflow-x: auto;
+}
+
+.tt-app-roles th,
+.tt-app-roles td {
+  padding-block: 0.15rem;
+  padding-inline: 0.4rem;
+  text-align: start;
+}
+
+/* The records of a launched app, their history and the deleted ones. */
+
+.tt-records {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.tt-records > .tt-button {
+  justify-self: start;
+}
+
+.tt-records-panel {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-records-tabs,
+.tt-record-actions,
+.tt-record-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tt-record-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-record {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-record-data {
+  overflow-wrap: anywhere;
+}
+
+/* The records explorer: a table on a wide screen, cards on a phone, and one record's editor. */
+
+.tt-explorer,
+.tt-record-detail,
+.tt-explorer-foot,
+.tt-explorer-filters,
+.tt-explorer-totals {
+  display: grid;
+  gap: 0.6rem;
+  min-inline-size: 0;
+}
+
+.tt-explorer-search,
+.tt-explorer-filter-form,
+.tt-explorer-sort {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tt-explorer-search input[type="search"] {
+  flex: 1 1 12rem;
+  min-inline-size: 0;
+}
+
+.tt-explorer-filter-form > * {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.tt-explorer-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tt-explorer-chips li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline-start: 0.6rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 999px;
+  overflow-wrap: anywhere;
+}
+
+.tt-table-scroll {
+  overflow-x: auto;
+  max-inline-size: 100%;
+}
+
+.tt-explorer-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+}
+
+.tt-explorer-table th,
+.tt-explorer-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: start;
+  border-block-end: 1px solid var(--tt-line);
+  vertical-align: baseline;
+}
+
+.tt-explorer-table td.tt-num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.tt-sort {
+  all: unset;
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tt-sort:focus-visible {
+  outline: 2px solid var(--tt-focus);
+  outline-offset: 2px;
+}
+
+.tt-explorer-aggregates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0;
+}
+
+.tt-explorer-aggregates dt {
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.tt-explorer-aggregates dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.tt-record-open {
+  all: unset;
+  cursor: pointer;
+  display: block;
+  padding-block: 0.2rem;
+  min-block-size: 2.75rem;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
+.tt-record-open:focus-visible {
+  outline: 2px solid var(--tt-focus);
+  outline-offset: 2px;
+}
+
+.tt-record-fields {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+}
+
+.tt-record-fields > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: baseline;
+}
+
+.tt-record-fields dt {
+  opacity: 0.75;
+}
+
+.tt-record-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-record-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tt-record-field {
+  display: grid;
+  gap: 0.2rem;
+  align-items: baseline;
+}
+
+.tt-record-field input,
+.tt-record-field select {
+  inline-size: 100%;
+  box-sizing: border-box;
+  min-block-size: 2.5rem;
+}
+
+.tt-record-field-label {
+  display: flex;
+  gap: 0.25rem;
+  align-items: baseline;
+}
+
+.tt-record-field-name {
+  font-weight: 600;
+}
+
+.tt-conflict-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+}
+
+.tt-conflict-table th,
+.tt-conflict-table td {
+  text-align: start;
+  padding: 0.25rem 0.4rem;
+  border-block-end: 1px solid var(--tt-line);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 48rem) {
+  .tt-records-panel {
+    padding: 0.5rem;
+  }
+
+  .tt-explorer-filter-form select,
+  .tt-explorer-filter-form input {
+    flex: 1 1 8rem;
+  }
+}
+
+.tt-app-offline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* Drafts and releases: what an app shows says whether it is the live release or a draft. */
+
+.tt-app-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-block-start: 0.2rem;
+}
+
+.tt-stage-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tt-app-update {
+  display: grid;
+  justify-items: start;
+  gap: 0.4rem;
+}
+
+.tt-app-releases {
+  flex-basis: 100%;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-app-migration {
+  flex-basis: 100%;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  margin: 0;
+  min-inline-size: 0;
+}
+
+.tt-app-migration ul {
+  margin: 0;
+  padding-inline-start: 1.2rem;
+}
+
+.tt-app-releases h3 {
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.tt-release-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-release {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+}
+
+.tt-release-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* A headline number in an app (the Stat component): a small muted label over a larger value, with
+   no indent from the browser's list defaults. */
+.tt-stat {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+  padding: 0;
+}
+
+.tt-stat-label {
+  margin: 0;
+  color: var(--tt-muted);
+  font-size: 0.85rem;
+}
+
+.tt-stat-value {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+/* The app builder: the conversation beside a live preview of the draft; on a phone, Build and
+   Preview are tabs, and both panes stay drawn (the hidden one is only out of sight and out of
+   reach) so neither loses its scroll or its form when you switch. */
+
+.tt-builder {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.tt-builder-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 1.25rem;
+  border-block-end: 1px solid var(--tt-line);
+}
+
+.tt-builder-bar h1 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.tt-builder-tabs {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.tt-builder-tabs [role="tab"] {
+  min-height: var(--tt-touch);
+  position: relative;
+}
+
+.tt-builder-tabs [role="tab"][aria-selected="true"] {
+  border-color: var(--tt-focus);
+  font-weight: 600;
+}
+
+.tt-builder-dot {
+  display: inline-block;
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  margin-inline-start: 0.4rem;
+  border-radius: 50%;
+  background: var(--tt-accent);
+  box-shadow: inset 0 0 0 1.5px var(--tt-accent-edge);
+}
+
+.tt-builder-panes {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(18rem, 1fr) minmax(0, 1fr);
+}
+
+.tt-builder-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.tt-builder-pane:focus {
+  outline: none;
+}
+
+.tt-builder-pane:focus-visible {
+  outline: 2px solid var(--tt-focus);
+  outline-offset: -2px;
+}
+
+.tt-builder-pane[data-pane="build"] {
+  border-inline-end: 1px solid var(--tt-line);
+}
+
+.tt-builder-pane[data-pane="build"] > .tt-chat {
+  height: 100%;
+}
+
+.tt-builder-preview {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+  padding: 0.75rem 1.25rem calc(1rem + env(safe-area-inset-bottom));
+}
+
+.tt-builder-preview .tt-app {
+  overflow: auto;
+}
+
+.tt-builder-app {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.tt-publish {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-publish h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.tt-publish-summary {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+}
+
+.tt-publish-summary dt {
+  font-weight: 600;
+}
+
+.tt-publish-summary dd {
+  margin: 0 0 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+.tt-publish-summary p,
+.tt-publish-summary ul {
+  margin: 0 0 0.25rem;
+}
+
+.tt-published {
+  margin: 0;
+  color: var(--tt-success);
+}
+
+.tt-builder-start {
+  max-inline-size: 42rem;
+}
+
+.tt-builder-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tt-builder-where {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-builder-where p {
+  margin: 0;
+}
+
+/* A phone: one pane at a time. The one that isn't shown is still laid out and keeps its scroll,
+   only out of sight and out of reach (it is also `inert`, so it can't be tabbed to or heard). */
+.tt-builder[data-narrow] .tt-builder-bar {
+  padding-inline: 0.75rem;
+}
+
+.tt-builder[data-narrow] .tt-builder-panes {
+  position: relative;
+  display: block;
+}
+
+.tt-builder[data-narrow] .tt-builder-pane {
+  position: absolute;
+  inset: 0;
+}
+
+.tt-builder[data-narrow] .tt-builder-pane[data-active="false"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.tt-builder[data-narrow] .tt-builder-pane[data-pane="build"] {
+  border-inline-end: 0;
+}
+
+.tt-builder[data-narrow] .tt-builder-preview {
+  padding-inline: 0.75rem;
+}
+
+/* Photos of an app: the input (camera and library), the uploads on their way, and the thumbnails. */
+
+.tt-photos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.tt-photos-label {
+  font-weight: 600;
+}
+
+.tt-photo-uploads {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-photo-grid {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr));
+}
+
+.tt-photo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+
+.tt-photo img {
+  display: block;
+  inline-size: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  background: var(--tt-hover);
+}
+
+.tt-photo a {
+  display: block;
+}
+
+.tt-photo a:focus-visible,
+.tt-photo-add label:focus-within {
+  outline: 2px solid var(--tt-focus);
+  outline-offset: 2px;
+}
+
+.tt-photo-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-photo-name {
+  flex: 1 1 8rem;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-photo-upload progress {
+  flex: 2 1 8rem;
+  min-inline-size: 0;
+}
+
+.tt-photo-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tt-photo-add .tt-button {
+  position: relative;
+  flex: 1 1 10rem;
+  min-height: var(--tt-touch, 2.75rem);
+}
+
+.tt-photo-add .tt-disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The file input is the control, kept for the keyboard and screen readers; its label is what is seen. */
+.tt-file-input {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.tt-file-input:disabled {
+  cursor: default;
+}
+
+/* Capture fields of an app (location, signature, barcode) and the dictation beside text fields. At
+   360px everything stacks and every control keeps the touch size. */
+
+.tt-capture {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.tt-capture-label {
+  font-weight: 600;
+}
+
+.tt-capture-actions,
+.tt-dictate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-capture-actions .tt-button {
+  flex: 1 1 8rem;
+  min-block-size: var(--tt-touch, 2.75rem);
+}
+
+.tt-capture-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tt-capture-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.tt-capture-check {
+  flex-direction: row;
+  align-items: center;
+}
+
+.tt-capture-input {
+  min-block-size: var(--tt-touch, 2.75rem);
+  inline-size: 100%;
+  box-sizing: border-box;
+}
+
+.tt-capture-value {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The pad: touch-action is none here, on the canvas alone, so a touch that starts on it draws and
+   everything else on the page scrolls as usual (it is also set inline, where the element is made).
+   Three times as wide as high, as the picture is; the pad never takes the whole screen. */
+.tt-signature-canvas {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  inline-size: 100%;
+  max-inline-size: 30rem;
+  aspect-ratio: 3 / 1;
+  box-sizing: border-box;
+  border: 1px solid var(--tt-border, currentColor);
+  border-radius: 0.5rem;
+  background: var(--color-paper);
+  cursor: crosshair;
+}
+
+.tt-signature-image {
+  display: block;
+  max-inline-size: 100%;
+  inline-size: 20rem;
+  border: 1px solid var(--tt-border, currentColor);
+  border-radius: 0.5rem;
+  background: var(--color-paper);
+}
+
+.tt-barcode-camera video {
+  display: block;
+  inline-size: 100%;
+  max-inline-size: 30rem;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 0.5rem;
+  background: var(--color-media);
+}
+
+.tt-dictate-slot {
+  margin-block-start: 0.25rem;
+}
+
+.tt-dictate-slot:empty {
+  display: none;
+}
+
+/* Effects of an app's actions: what they set going, and the ones that failed. */
+
+.tt-effects {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.tt-effects > .tt-button {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tt-effects-panel,
+.tt-effects-preview {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-effects-badge {
+  font-size: 0.8em;
+  color: var(--tt-muted);
+}
+
+.tt-effects-badge[data-failed="true"] {
+  color: var(--tt-danger, inherit);
+  font-weight: 600;
+}
+
+.tt-effect-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-effect {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  min-inline-size: 0;
+}
+
+.tt-effect[data-status="failed"] {
+  border-color: var(--tt-danger, var(--tt-line));
+}
+
+.tt-effect-head,
+.tt-effect-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tt-effect-detail {
+  overflow-wrap: anywhere;
+}
+
+.tt-effect-status {
+  font-size: 0.8em;
+  padding-inline: 0.45rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 999px;
+}
+
+/* Templates: a card each, one column on a phone and as many as fit on a wide screen. */
+.tt-template-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  gap: 0.75rem;
+}
+
+.tt-template-card {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  min-inline-size: 0;
+}
+
+.tt-template-card h2,
+.tt-template-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-template-facts {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  padding-inline-start: 1.1rem;
+}
+
+.tt-template-form {
+  display: grid;
+  gap: 0.6rem;
+  min-inline-size: 0;
+}
+
+.tt-template-form select,
+.tt-template-form input:not([type="radio"]) {
+  max-inline-size: 100%;
+}
+
+.tt-app-row > .tt-template-form {
+  flex-basis: 100%;
+}
+
+.tt-installed {
+  max-inline-size: 42rem;
+}
