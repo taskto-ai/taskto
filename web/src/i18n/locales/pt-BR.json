@@ -1386,7 +1386,8 @@
             "not_configured": "Este servidor não está configurado para receber um pedido de atualização (não tem diretório de pedidos). O guia de instalação (docs/install.md, Atualizar agora) explica como.",
             "unsupported": "O host ainda não pode receber um pedido de atualização: o atualizador, o diretório de pedidos ou a unidade de caminho dele é de antes deste botão. Reinstale como o passo 16 do roteiro de instalação (deploy/INSTALL.md) diz.",
             "off": "Atualizar agora fica desligado enquanto as atualizações automáticas estiverem desligadas (o canal está desligado)."
-          }
+          },
+          "title": "Atualizar o servidor agora?"
         },
         "notConfigured": "Este servidor não está configurado para mostrar o estado do atualizador. O guia de instalação (docs/install.md, Atualizações automáticas) explica como.",
         "noStatus": "O atualizador ainda não informou nada. Ele informa depois de cada execução, que é toda noite no host; até rodar uma vez, não há o que mostrar.",

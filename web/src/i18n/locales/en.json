@@ -1380,7 +1380,8 @@
             "not_configured": "This server isn't set up to take an update request (it has no request directory). The install guide (docs/install.md, Update now) says how.",
             "unsupported": "The host can't take an update request yet: its updater, its request directory or its path unit is from before this button. Reinstall it as step 16 of the install runbook (deploy/INSTALL.md) says.",
             "off": "Update now is off while automatic updates are off (the channel is off)."
-          }
+          },
+          "title": "Update the server now?"
         },
         "notConfigured": "This server isn't set up to show the updater's status. The install guide (docs/install.md, Automatic updates) says how.",
         "noStatus": "The updater hasn't reported yet. It reports after each run, which is every night on the host; until it has run once there is nothing to show.",

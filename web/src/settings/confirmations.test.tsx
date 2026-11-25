@@ -121,6 +121,8 @@ const session = (id: string, current: boolean, browser: string, os: string) => (
 
 interface Case {
   name: string
+  // Who looks: an admin who doesn't run the server, unless the case says.
+  me?: Me
   workspace: Workspace
   tab: string
   routes: Parameters<typeof fakeFetch>[0]
@@ -353,6 +355,42 @@ const CASES: Case[] = [
   },
 ]
 
+const operator: Me = { ...me, is_operator: true }
+const updaterStatus = {
+  configured: true,
+  running_version: 'v0.3.0',
+  request: { available: true },
+  status: {
+    version: 1,
+    checked: '2026-11-24T08:00:00.000Z',
+    channel: 'release',
+    recorded_version: 'v0.3.0',
+    last_run: { at: '2026-11-24T03:00:00.000Z', result: 'up-to-date', from: 'v0.3.0' },
+    last_change: null,
+    needs_person: null,
+    running: null,
+    requests: { supported: true, last: null },
+  },
+}
+CASES.push({
+  name: "asking the host's updater for an update",
+  me: operator,
+  workspace: admin,
+  tab: 'about',
+  routes: {
+    'GET /api/workspaces/1/backup': { body: { health: 'none' } },
+    'GET /api/workspaces/1/updates': { body: updaterStatus },
+    'POST /api/workspaces/1/updates/request': { status: 202, body: { requested_at: '2026-11-24T09:00:00.000Z' } },
+  },
+  ask: async () => {
+    fireEvent.click(await screen.findByRole('button', { name: 'Update now' }))
+  },
+  confirm: 'Yes, update now',
+  method: 'POST',
+  path: '/api/workspaces/1/updates/request',
+  body: {},
+})
+
 const matching = (calls: Call[], c: Case) => calls.filter((x) => x.method === c.method && x.path === c.path)
 
 // Long enough for a request that an answer would have started to be made and recorded.
@@ -371,7 +409,7 @@ afterEach(() => {
 describe.each(CASES)('$name', (c) => {
   test('Cancel sends nothing', async () => {
     const calls = fakeFetch(c.routes)
-    render(<SettingsPage me={me} workspace={c.workspace} tab={c.tab} />)
+    render(<SettingsPage me={c.me ?? me} workspace={c.workspace} tab={c.tab} />)
     await c.ask()
     await screen.findByRole('alertdialog')
     await answer('Cancel')
@@ -382,7 +420,7 @@ describe.each(CASES)('$name', (c) => {
 
   test('Escape sends nothing', async () => {
     const calls = fakeFetch(c.routes)
-    render(<SettingsPage me={me} workspace={c.workspace} tab={c.tab} />)
+    render(<SettingsPage me={c.me ?? me} workspace={c.workspace} tab={c.tab} />)
     await c.ask()
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.keyDown(dialog, { key: 'Escape' })
@@ -394,7 +432,7 @@ describe.each(CASES)('$name', (c) => {
 
   test('the named action sends exactly its request, once', async () => {
     const calls = fakeFetch(c.routes)
-    render(<SettingsPage me={me} workspace={c.workspace} tab={c.tab} />)
+    render(<SettingsPage me={c.me ?? me} workspace={c.workspace} tab={c.tab} />)
     await c.ask()
     await answer(c.confirm)
     await waitFor(() => expect(matching(calls, c)).toHaveLength(1))
@@ -404,7 +442,7 @@ describe.each(CASES)('$name', (c) => {
 
   test('cancelled once, then confirmed: only the confirmed one is sent', async () => {
     const calls = fakeFetch(c.routes)
-    render(<SettingsPage me={me} workspace={c.workspace} tab={c.tab} />)
+    render(<SettingsPage me={c.me ?? me} workspace={c.workspace} tab={c.tab} />)
     await c.ask()
     await answer('Cancel')
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())

@@ -358,7 +358,8 @@ function UpdateNow({
   }, [busy, loading, settled, reload])
   const press = async () => {
     const yes = await confirm({
-      title: t('settings.about.updates.now.question'),
+      title: t('settings.about.updates.now.title'),
+      body: t('settings.about.updates.now.question'),
       confirmLabel: t('settings.about.updates.now.confirm'),
     })
     if (!yes) return false
@@ -382,9 +383,7 @@ function UpdateNow({
       {gaveUp && <Notice tone="warning">{t('settings.about.updates.now.gaveUp')}</Notice>}
       {outcome && (
         <Notice tone={outcome.result === 'updated' ? 'success' : 'neutral'}>
-          <p className="settings-text">
-            {t('settings.about.updates.now.outcome', { result: label(outcome.result) })}
-          </p>
+          <p className="settings-text">{t('settings.about.updates.now.outcome', { result: label(outcome.result) })}</p>
           {outcome.code && (
             <p className="settings-text">{t('settings.about.updates.why', { reason: reasonText(outcome.code) })}</p>
           )}
