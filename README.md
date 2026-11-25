@@ -111,6 +111,7 @@ the default.
 | `-smtp-password-file` | `TASKTO_SMTP_PASSWORD_FILE` | `smtp_password_file` | | the file the SMTP password is read from at startup (an absolute path); the password is never a setting |
 | `-smtp-egress` | `TASKTO_SMTP_EGRESS` | `smtp_egress` | `any` | where the SMTP connection may go, as the provider accounts' policy above |
 | `-update-status-dir` | `TASKTO_UPDATE_STATUS_DIR` | `update_status_dir` | | where the host's updater writes the status operators see in Settings → About (read-only; an absolute path; [docs/install.md](docs/install.md#automatic-updates)) |
+| `-update-request-dir` | `TASKTO_UPDATE_REQUEST_DIR` | `update_request_dir` | | where Update now (Settings → About) puts its request for the host's updater to take (writable; an absolute path; [docs/install.md](docs/install.md#update-now)) |
 | `-agent` | `TASKTO_AGENT` | `agent` | `false` | run the agent runtime (see below) |
 | `-agent-node` | `TASKTO_AGENT_NODE` | `agent_node` | `node` | Node.js executable for the agent runtime, looked up in `PATH` unless it is a path |
 | `-agent-entry` | `TASKTO_AGENT_ENTRY` | `agent_entry` | see below | the agent runtime's entry point |

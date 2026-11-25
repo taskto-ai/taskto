@@ -4,7 +4,7 @@
 import { useState } from 'react'
 import { api, type Doc, errorText } from '../api'
 import { useT } from '../i18n'
-import { type Change, type Commit, encodePath } from './docs'
+import { type Change, type Commit, encodePath, useMounted } from './docs'
 import { Problem } from './Problem'
 
 export function ConfirmDelete({
@@ -69,27 +69,47 @@ export function Deleted({
   versioned,
   canWrite,
   onRestored,
+  onChanged,
 }: {
   base: string
   path: string
   versioned: boolean
   canWrite: boolean
+  // The document is back: it opens, if the notice is still there.
   onRestored: (path: string) => void
+  // The space's list of documents changed, whatever became of the notice.
+  onChanged: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const t = useT()
+  // A restore the person asked for is finished even if they have moved on (opened another
+  // document, say); only opening the document afterwards is for someone still here.
+  const mounted = useMounted()
   const restore = async () => {
     setBusy(true)
     setError(null)
     try {
-      const { commits } = await api<{ commits: Commit[] }>(`${base}/history/${encodePath(path)}?limit=10`)
-      // Someone made it again since: nothing to bring back, it is there.
-      if (commits[0] && commits[0].change !== 'delete') return onRestored(path)
-      const before = commits.find((c) => c.change !== 'delete')
-      if (!before) throw new Error(t('knowledge.deleted.noEarlier', { path }))
+      // The newest version still kept, however far back the history goes: a page at a time.
+      const history = `${base}/history/${encodePath(path)}`
+      let before: Commit | undefined
+      for (let page = '', first = true; !before; first = false) {
+        const res = await api<{ commits: Commit[]; next?: string }>(
+          page ? `${history}?before=${encodeURIComponent(page)}` : history,
+        )
+        // Someone made it again since: nothing to bring back, it is there.
+        if (first && res.commits[0] && res.commits[0].change !== 'delete') {
+          onChanged()
+          if (mounted.current) onRestored(path)
+          return
+        }
+        before = res.commits.find((c) => c.change !== 'delete' && c.versioned !== false)
+        if (!before && !res.next) throw new Error(t('knowledge.deleted.noEarlier', { path }))
+        page = res.next ?? ''
+      }
       await api<Change>(`${base}/restore/${encodePath(path)}`, { method: 'POST', body: { commit: before.commit } })
-      onRestored(path)
+      onChanged()
+      if (mounted.current) onRestored(path)
     } catch (err) {
       setError(errorText(err))
     } finally {
