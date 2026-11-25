@@ -8,7 +8,15 @@ import { type FormEvent, useState } from 'react'
 import { api, codeText, type DictationAddon, type DictationStatus, dictationPath } from '../api'
 import { type Key, t as translate, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { Checkbox } from '../ui/Checkbox'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Select } from '../ui/Select'
+import { Alert, FormActions, Loading, Section, SettingsTab, useAction } from './parts'
 
 const LOCAL_MODELS: Record<string, Key> = {
   'parakeet-v3': 'settings.dictation.models.parakeet',
@@ -35,25 +43,22 @@ export function DictationTab({ workspace, admin }: { workspace: number; admin: b
   const status = useLoad(() => api<DictationStatus>(dictationPath(workspace)), [workspace])
   const t = useT()
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-dictation">
-        <h2 id="tt-dictation">{t('settings.tabs.dictation')}</h2>
-        <p className="tt-muted tt-small">
-          {t.rich('settings.dictation.intro', { file: <code>{'glossary.md'}</code> })}
-        </p>
-        <Alert error={status.error} />
-        {!status.data && !status.error && <p className="tt-muted">{t('app.loading')}</p>}
-        {status.data && <Current status={status.data} workspace={workspace} admin={admin} onChange={status.reload} />}
-        {admin && status.data && (
-          <DictationForm
-            key={status.data.settings.updated_at ?? 'defaults'}
-            workspace={workspace}
-            status={status.data}
-            onSaved={status.reload}
-          />
-        )}
-      </section>
-    </div>
+    <SettingsTab
+      title={t('settings.tabs.dictation')}
+      help={t.rich('settings.dictation.intro', { file: <code>{'glossary.md'}</code> })}
+    >
+      <Alert error={status.error} />
+      {!status.data && !status.error && <Loading />}
+      {status.data && <Current status={status.data} workspace={workspace} admin={admin} onChange={status.reload} />}
+      {admin && status.data && (
+        <DictationForm
+          key={status.data.settings.updated_at ?? 'defaults'}
+          workspace={workspace}
+          status={status.data}
+          onSaved={status.reload}
+        />
+      )}
+    </SettingsTab>
   )
 }
 
@@ -88,41 +93,56 @@ function Current({
       : LOCAL_STATES[local.state]
         ? t(LOCAL_STATES[local.state])
         : local.state
+  const showDownload =
+    admin && status.engine === 'local' && local && (local.state === 'not_downloaded' || local.state === 'failed')
   return (
-    <>
-      <p>
-        {status.engine
-          ? t('settings.dictation.uses', { engine: engineName(status, status.engine) })
-          : t('settings.dictation.off')}
-      </p>
-      {status.reason && (
-        <p className="tt-muted tt-small">{codeText(status.reason_code, status.reason_params, status.reason)}</p>
-      )}
+    <Panel padded className="settings-panel-body">
+      <header className="settings-section-head">
+        <div className="settings-section-titles">
+          <p className="settings-text">
+            {status.engine
+              ? t('settings.dictation.uses', { engine: engineName(status, status.engine) })
+              : t('settings.dictation.off')}
+          </p>
+          {status.reason && (
+            <p className="settings-muted">{codeText(status.reason_code, status.reason_params, status.reason)}</p>
+          )}
+        </div>
+        {status.engine ? (
+          <Badge tone="success" dot>
+            {t('settings.dictation.onBadge')}
+          </Badge>
+        ) : (
+          <Badge tone="neutral">{t('settings.dictation.offBadge')}</Badge>
+        )}
+      </header>
       {local && (
-        <p className="tt-small">
-          {t('settings.dictation.localLine', { model: localModel(local.model), state })}
-          {local.error ? ` ${codeText(local.error_code, local.error_params, local.error)}` : ''}{' '}
-          {admin && status.engine === 'local' && (local.state === 'not_downloaded' || local.state === 'failed') && (
-            <button
-              type="button"
-              className="tt-button"
-              disabled={action.busy}
+        <div className="settings-actions">
+          <span className="settings-muted">
+            {t('settings.dictation.localLine', { model: localModel(local.model), state })}
+            {local.error ? ` ${codeText(local.error_code, local.error_params, local.error)}` : ''}
+          </span>
+          {showDownload && (
+            <Button
+              size="sm"
+              icon="down"
+              loading={action.busy}
               onClick={() =>
                 action.run(() => api(`${dictationPath(workspace)}/warm`, { method: 'POST', body: {} })).then(onChange)
               }
             >
               {t('settings.dictation.download')}
-            </button>
+            </Button>
           )}
           {local.state === 'downloading' && (
-            <button type="button" className="tt-button" onClick={onChange}>
+            <Button size="sm" variant="ghost" onClick={onChange}>
               {t('settings.dictation.refresh')}
-            </button>
+            </Button>
           )}
-        </p>
+        </div>
       )}
       <Alert error={action.error} />
-    </>
+    </Panel>
   )
 }
 
@@ -172,103 +192,100 @@ function DictationForm({
   }
 
   return (
-    <form className="tt-form" onSubmit={submit} aria-label={t('settings.dictation.settings')}>
-      <label>
-        {t('settings.dictation.engine')}
-        <select
-          value={engine}
-          onChange={(e) => {
-            setEngine(e.target.value)
-            setAccepted(false) // a confirmation is for one add-on's notice
-          }}
-        >
-          {/* Local is the default, so it is listed even where the operator turned it off. */}
-          <option value="local" disabled={!status.local && s.engine !== 'local'}>
-            {status.local ? t('settings.dictation.localOption') : t('settings.dictation.localOffOption')}
-          </option>
-          <option value="api">{t('settings.dictation.apiOption')}</option>
-          {installed.map((a) => (
-            <option key={a.id} value={a.id}>
-              {t('settings.dictation.engines.addon', { name: a.name, vendor: a.vendor })}
-            </option>
-          ))}
-        </select>
-      </label>
-      {addon && (
-        <div className="tt-panel" role="note" aria-label={t('settings.dictation.notice', { name: addon.name })}>
-          {/* The add-on's own notice, as its vendor wrote it. */}
-          <p>{addon.notice}</p>
-          <p className="tt-small">
-            {t.rich('settings.dictation.licence', {
-              name: addon.licence_name,
-              link: (text) => (
-                <a href={addon.licence_url} target="_blank" rel="noreferrer noopener">
-                  {text}
-                </a>
-              ),
-            })}
-          </p>
-          {needsNotice && (
-            <label className="tt-check">
-              <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />{' '}
-              {t('settings.dictation.accept', { name: addon.name })}
-            </label>
+    <Section title={t('settings.dictation.settings')}>
+      <Panel padded>
+        <form className="settings-form" onSubmit={submit} aria-label={t('settings.dictation.settings')}>
+          <Field label={t('settings.dictation.engine')}>
+            <Select
+              value={engine}
+              onChange={(e) => {
+                setEngine(e.target.value)
+                setAccepted(false) // a confirmation is for one add-on's notice
+              }}
+            >
+              {/* Local is the default, so it is listed even where the operator turned it off. */}
+              <option value="local" disabled={!status.local && s.engine !== 'local'}>
+                {status.local ? t('settings.dictation.localOption') : t('settings.dictation.localOffOption')}
+              </option>
+              <option value="api">{t('settings.dictation.apiOption')}</option>
+              {installed.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {t('settings.dictation.engines.addon', { name: a.name, vendor: a.vendor })}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {addon && (
+            <div role="note" aria-label={t('settings.dictation.notice', { name: addon.name })}>
+              <Notice tone="warning" title={t('settings.dictation.notice', { name: addon.name })}>
+                {/* The add-on's own notice, as its vendor wrote it. */}
+                <p className="settings-text">{addon.notice}</p>
+                <p className="settings-muted">
+                  {t.rich('settings.dictation.licence', {
+                    name: addon.licence_name,
+                    link: (text) => (
+                      <a href={addon.licence_url} target="_blank" rel="noreferrer noopener">
+                        {text}
+                      </a>
+                    ),
+                  })}
+                </p>
+                {needsNotice && (
+                  <Checkbox
+                    label={t('settings.dictation.accept', { name: addon.name })}
+                    checked={accepted}
+                    onChange={(e) => setAccepted(e.target.checked)}
+                  />
+                )}
+              </Notice>
+            </div>
           )}
-        </div>
-      )}
-      <label>
-        {t('settings.dictation.language')}
-        <input
-          value={language}
-          onChange={(e) => setLanguage(e.target.value)}
-          placeholder={t('settings.dictation.languagePlaceholder')}
-          maxLength={3}
-          aria-describedby="tt-dictation-language"
-        />
-      </label>
-      <span id="tt-dictation-language" className="tt-muted tt-small">
-        {t('settings.dictation.languageHint')}
-      </span>
-      <fieldset className="tt-fieldset">
-        <legend>{t('settings.dictation.hosted')}</legend>
-        <label>
-          {t('settings.actions.baseUrl')}
-          <input value={baseURL} onChange={(e) => setBaseURL(e.target.value)} />
-        </label>
-        <label>
-          {t('settings.actions.model')}
-          <input value={model} onChange={(e) => setModel(e.target.value)} />
-        </label>
-        <label>
-          {t('settings.actions.apiKey')}
-          <input
-            type="password"
-            autoComplete="off"
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            placeholder={
-              s.api.api_key === 'set'
-                ? t('settings.dictation.keySetPlaceholder')
-                : t('settings.dictation.keyNotSetPlaceholder')
-            }
-          />
-        </label>
-        <p className="tt-muted tt-small">{t('settings.dictation.hostedNote')}</p>
-        {s.api.api_key === 'set' && (
-          <button
-            type="button"
-            className="tt-button"
-            disabled={action.busy}
-            onClick={() => save({ api: { api_key: null } })}
-          >
-            {t('settings.dictation.removeKey')}
-          </button>
-        )}
-      </fieldset>
-      <Alert error={action.error} />
-      <button type="submit" className="tt-button tt-primary" disabled={action.busy || (needsNotice && !accepted)}>
-        {t('settings.actions.save')}
-      </button>
-    </form>
+          <Field label={t('settings.dictation.language')} hint={t('settings.dictation.languageHint')}>
+            <Input
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              placeholder={t('settings.dictation.languagePlaceholder')}
+              maxLength={3}
+            />
+          </Field>
+          <fieldset className="settings-fieldset">
+            <legend>{t('settings.dictation.hosted')}</legend>
+            <p className="settings-muted">{t('settings.dictation.hostedNote')}</p>
+            <Field label={t('settings.actions.baseUrl')}>
+              <Input value={baseURL} onChange={(e) => setBaseURL(e.target.value)} />
+            </Field>
+            <Field label={t('settings.actions.model')}>
+              <Input value={model} onChange={(e) => setModel(e.target.value)} />
+            </Field>
+            <Field label={t('settings.actions.apiKey')}>
+              <Input
+                type="password"
+                autoComplete="off"
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                placeholder={
+                  s.api.api_key === 'set'
+                    ? t('settings.dictation.keySetPlaceholder')
+                    : t('settings.dictation.keyNotSetPlaceholder')
+                }
+              />
+            </Field>
+            {s.api.api_key === 'set' && (
+              <FormActions>
+                <Button variant="ghost" disabled={action.busy} onClick={() => save({ api: { api_key: null } })}>
+                  {t('settings.dictation.removeKey')}
+                </Button>
+              </FormActions>
+            )}
+          </fieldset>
+          <Alert error={action.error} />
+          <FormActions>
+            <Button type="submit" variant="primary" loading={action.busy} disabled={needsNotice && !accepted}>
+              {t('settings.actions.save')}
+            </Button>
+          </FormActions>
+        </form>
+      </Panel>
+    </Section>
   )
 }

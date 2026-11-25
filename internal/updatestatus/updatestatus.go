@@ -41,7 +41,7 @@ const maxSize = 1 << 20
 const Unknown = "unknown"
 
 var results = setOf("updated", "up-to-date", "skipped", "failed", "rolled-back", "rollback-failed",
-	"stopped", "stop-failed", "blocked", "interrupted", "cleared", "refused")
+	"stopped", "stop-failed", "blocked", "interrupted", "cleared", "refused", "ignored")
 
 // CodeOther is the reason code of a reason the updater couldn't put in any other word.
 const CodeOther = "other"
@@ -51,7 +51,7 @@ const CodeOther = "other"
 var codes = setOf(CodeOther, "off", "hold", "manual-upgrade", "github", "not-published", "not-newer",
 	"version-mismatch", "server-down", "unsafe-settings", "disk", "registry", "backup", "bad-setting",
 	"firewall", "settings", "blocked", "stopped", "stop-failed", "rollback-failed", "interrupted",
-	"rolled-back", "unrecorded-failure")
+	"rolled-back", "unrecorded-failure", "rate-limited", "bad-request")
 
 var channels = setOf("release", "main", "off")
 
@@ -85,6 +85,42 @@ type Run struct {
 	// the run made a backup before it changed anything. Where it is stays on the host.
 	Code     string `json:"code,omitempty"`
 	BackedUp bool   `json:"backed_up,omitempty"`
+	// Requested is set for a run an operator asked for in Settings → About (request.go), as
+	// opposed to the nightly one.
+	Requested bool `json:"requested,omitempty"`
+}
+
+// Running says that the updater is in the middle of a run: it has taken a request or is about to
+// change the install, and the server is about to restart. It is written when the run starts and
+// gone from the status the run ends with; one older than RunningMaxAge is not believed (a run
+// that was killed leaves it).
+type Running struct {
+	Since time.Time `json:"since"`
+	// To is the version it is installing, once it has chosen one.
+	To        string `json:"to,omitempty"`
+	Requested bool   `json:"requested,omitempty"`
+}
+
+// RunningMaxAge is how long a Running note is believed. An update has no time limit of its own,
+// but one that takes this long is not an update that is still going.
+const RunningMaxAge = 3 * time.Hour
+
+// RequestRun is what became of the last run an operator requested, kept apart from the last run
+// so that a request the updater refused before it ran (a rate limit, a hostile file) is still
+// answered.
+type RequestRun struct {
+	At       time.Time `json:"at,omitzero"`
+	Finished time.Time `json:"finished,omitzero"`
+	Result   string    `json:"result"`
+	Code     string    `json:"code,omitempty"`
+}
+
+// Requests is the updater's side of the operator's "Update now": whether this host can take a
+// request at all (its request directory is in place and its systemd path unit is on), and what
+// the last one came to.
+type Requests struct {
+	Supported bool        `json:"supported"`
+	Last      *RequestRun `json:"last"`
 }
 
 // NeedsPerson kinds.
@@ -121,6 +157,10 @@ type Status struct {
 	LastChange *Run `json:"last_change"`
 	// NeedsPerson is set while the install waits for a person.
 	NeedsPerson *NeedsPerson `json:"needs_person"`
+	// Running is set while a run is changing the install.
+	Running *Running `json:"running"`
+	// Requests is absent from an updater that predates "Update now".
+	Requests *Requests `json:"requests"`
 }
 
 // Stale reports whether s was last written too long before now.
@@ -175,6 +215,20 @@ func (s *Status) sanitize() {
 		r.From, r.To = version(r.From), version(r.To)
 		if r.Code != "" && !codes[r.Code] {
 			r.Code = CodeOther
+		}
+	}
+	if r := s.Running; r != nil {
+		r.To = version(r.To)
+		if r.Since.IsZero() {
+			s.Running = nil
+		}
+	}
+	if q := s.Requests; q != nil && q.Last != nil {
+		if !results[q.Last.Result] {
+			q.Last.Result = Unknown
+		}
+		if q.Last.Code != "" && !codes[q.Last.Code] {
+			q.Last.Code = CodeOther
 		}
 	}
 	if n := s.NeedsPerson; n != nil {

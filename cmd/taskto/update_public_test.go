@@ -303,8 +303,8 @@ func TestUpdatePublishesThroughANewTemporaryFileOnly(t *testing.T) {
 // is) is never in it, whatever went wrong.
 func TestUpdateStatusForTheServerHasNoPathHostOrVolumeName(t *testing.T) {
 	allowed := map[string]bool{"version": true, "checked": true, "channel": true, "hold": true, "recorded_version": true,
-		"last_run": true, "last_change": true, "needs_person": true}
-	runKeys := map[string]bool{"at": true, "finished": true, "result": true, "from": true, "to": true, "code": true, "backed_up": true}
+		"last_run": true, "last_change": true, "needs_person": true, "running": true, "requests": true}
+	runKeys := map[string]bool{"at": true, "finished": true, "result": true, "from": true, "to": true, "code": true, "backed_up": true, "requested": true}
 	for name, setup := range map[string]func(e *updEnv){
 		"an update":        func(e *updEnv) {},
 		"a stop":           func(e *updEnv) { e.write("fake/health-bad", updNew+"\n") },
