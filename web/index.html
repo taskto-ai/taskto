@@ -10,6 +10,13 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="color-scheme" content="light dark" />
+    <!-- The cascade layers' order, before any stylesheet: the first @layer the browser meets fixes
+         that layer's place, and a production build links the stylesheets of shared chunks (a
+         component's `@layer components`) before the entry's, which holds src/ui/index.css. The same
+         statement opens src/ui/index.css; src/ui/tokens.test.ts keeps the two equal. -->
+    <style>
+      @layer tokens, themes, base, components, screens;
+    </style>
     <meta name="theme-color" content="#faf8f4" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#111110" media="(prefers-color-scheme: dark)" />
     <link rel="manifest" href="/manifest.webmanifest" />
