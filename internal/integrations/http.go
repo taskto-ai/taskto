@@ -15,7 +15,9 @@
 package integrations
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -125,13 +127,11 @@ func visibleTo(ids []int64) map[int64]bool {
 	return set
 }
 
-// respondOne writes rec as the caller sees it.
-func (s *Service) respondOne(w http.ResponseWriter, r *http.Request, status int, rec record) {
-	ids, ok := s.manageable(w, r)
-	if !ok {
-		return
-	}
-	writeJSON(w, status, s.view(rec, visibleTo(ids)))
+// respondOne writes rec as the caller sees it, with the spaces (visible) the caller managed when
+// the request began. A mutation reads them before it commits, so a failed lookup can't answer an
+// error for a change that was made.
+func (s *Service) respondOne(w http.ResponseWriter, status int, rec record, visible map[int64]bool) {
+	writeJSON(w, status, s.view(rec, visible))
 }
 
 func workspaceOf(r *http.Request) int64 {
@@ -205,12 +205,16 @@ func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	ids, ok := s.manageable(w, r)
+	if !ok {
+		return
+	}
 	rec, err := s.store.getSnapshot(r.Context(), workspaceOf(r), id)
 	if err != nil {
 		fail(w, r, err)
 		return
 	}
-	s.respondOne(w, r, http.StatusOK, rec)
+	s.respondOne(w, http.StatusOK, rec, visibleTo(ids))
 }
 
 // createRequest is the body of a create. Secrets are the clear values, which only live here,
@@ -235,13 +239,17 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
+	ids, ok := s.manageable(w, r)
+	if !ok {
+		return
+	}
 	rec, err := s.store.create(r.Context(), workspaceOf(r), actorOf(r), d)
 	if err != nil {
 		fail(w, r, err)
 		return
 	}
 	slog.InfoContext(r.Context(), "integration created", "integration", rec.ID, "provider", rec.Provider, "by", actorOf(r))
-	s.respondOne(w, r, http.StatusCreated, rec)
+	s.respondOne(w, http.StatusCreated, rec, visibleTo(ids))
 }
 
 // updateRequest is the body of a PATCH. An absent or null field stays as it is. settings and
@@ -265,6 +273,10 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	ids, ok := s.manageable(w, r)
+	if !ok {
+		return
+	}
 	rec, err := s.store.update(r.Context(), workspaceOf(r), actorOf(r), id, change{
 		displayName: req.DisplayName, settings: req.Settings, secrets: req.Secrets,
 		maxAmount: req.MaxAmountMinor, currencies: req.Currencies, disabled: req.Disabled,
@@ -274,7 +286,7 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.InfoContext(r.Context(), "integration changed", "integration", rec.ID, "provider", rec.Provider, "by", actorOf(r))
-	s.respondOne(w, r, http.StatusOK, rec)
+	s.respondOne(w, http.StatusOK, rec, visibleTo(ids))
 }
 
 func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
@@ -330,7 +342,7 @@ func (s *Service) handleSpaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.InfoContext(r.Context(), "integration spaces changed", "integration", id, "spaces", len(rec.Spaces), "by", actorOf(r))
-	s.respondOne(w, r, http.StatusOK, rec)
+	s.respondOne(w, http.StatusOK, rec, visibleTo(manageable))
 }
 
 // CheckResult is the answer of a check. Remote says whether the provider was asked: this version
@@ -348,39 +360,49 @@ func (s *Service) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws := workspaceOf(r)
-	rec, err := s.store.getSnapshot(r.Context(), ws, id)
+	var res CheckResult
+	// One snapshot: the integration, which secrets are set and their opening are of one state, so
+	// a removal that commits meanwhile is "not found" or a finished check, never an "internal".
+	err := s.store.read(r.Context(), func(tx *sql.Tx) error {
+		rec, err := s.store.get(r.Context(), tx, ws, id)
+		if err != nil {
+			return err
+		}
+		res, err = s.check(r.Context(), tx, ws, rec)
+		return err
+	})
 	if err != nil {
 		fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.check(r.Context(), ws, rec))
+	writeJSON(w, http.StatusOK, res)
 }
 
 // check looks at what the server holds of an integration: every required secret is set and opens
 // with the server's key, and the settings are the provider's. A secret that doesn't open is what
-// restoring a backup on another machine leaves, so it is the one thing worth saying aloud.
-func (s *Service) check(ctx context.Context, workspace int64, rec record) CheckResult {
+// restoring a backup on another machine leaves, so it is the one thing worth saying aloud. An
+// error is a failure to read, not an answer.
+func (s *Service) check(ctx context.Context, tx *sql.Tx, workspace int64, rec record) (CheckResult, error) {
 	p := Lookup(rec.Provider)
 	if p == nil {
-		return CheckResult{Code: apierr.CodeIntegrationProviderUnknown}
+		return CheckResult{Code: apierr.CodeIntegrationProviderUnknown}, nil
 	}
 	if err := checkSettings(p, rec.Settings); err != nil {
-		return CheckResult{Code: err.Code, Params: err.Params}
+		return CheckResult{Code: err.Code, Params: err.Params}, nil //nolint:nilerr // a bad setting is the check's answer, not a failure
 	}
 	for _, spec := range p.Secrets() {
 		if spec.Required && rec.Secrets[spec.Name] != secretSet {
-			return CheckResult{Code: apierr.CodeIntegrationSecretRequired, Params: apierr.Params{"secret": spec.Name}}
+			return CheckResult{Code: apierr.CodeIntegrationSecretRequired, Params: apierr.Params{"secret": spec.Name}}, nil
 		}
 	}
-	if _, err := s.store.credentials(ctx, workspace, rec.ID); err != nil {
+	if _, err := s.store.openCredentials(ctx, tx, workspace, rec.ID); err != nil {
 		var bad unreadableError
 		if errors.As(err, &bad) {
-			return CheckResult{Code: apierr.CodeIntegrationSecretUnreadable, Params: apierr.Params{"secret": bad.secret}}
+			return CheckResult{Code: apierr.CodeIntegrationSecretUnreadable, Params: apierr.Params{"secret": bad.secret}}, nil
 		}
-		slog.ErrorContext(ctx, "integrations: check failed", "integration", rec.ID, "err", err)
-		return CheckResult{Code: apierr.CodeInternal}
+		return CheckResult{}, err
 	}
-	return CheckResult{OK: true}
+	return CheckResult{OK: true}, nil
 }
 
 func (s *Service) handleForSpace(w http.ResponseWriter, r *http.Request) {
@@ -399,6 +421,8 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.As(err, &bad):
 		apierr.WriteError(w, bad)
+	case errors.Is(err, auth.ErrAccountDisabled):
+		auth.WriteAccountDisabled(w) // the admin was disabled after the request was let in
 	case errors.Is(err, errNotFound):
 		writeError(w, http.StatusNotFound, apierr.CodeIntegrationNotFound, errNotFound.Error())
 	case errors.Is(err, errTaken):
@@ -427,14 +451,27 @@ const maxBody = 64 << 10
 // readJSON decodes the request body into v, strictly: unknown fields and trailing data are
 // errors. The decoder's message isn't passed on: it can quote the body, which holds secrets.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
+	body := http.MaxBytesReader(w, r.Body, maxBody)
+	var raw json.RawMessage
+	dec := json.NewDecoder(body)
+	if err := dec.Decode(&raw); err != nil {
 		writeError(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body")
 		return false
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: one object expected")
+		return false
+	}
+	// A top-level null decodes into a struct as "nothing set", which would answer 200 for a change
+	// that wasn't made: the body is an object.
+	if !bytes.HasPrefix(bytes.TrimSpace(raw), []byte("{")) {
+		writeError(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body: an object expected")
+		return false
+	}
+	strict := json.NewDecoder(bytes.NewReader(raw))
+	strict.DisallowUnknownFields()
+	if err := strict.Decode(v); err != nil {
+		writeError(w, http.StatusBadRequest, apierr.CodeInvalidJSON, "invalid JSON body")
 		return false
 	}
 	return true

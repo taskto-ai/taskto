@@ -87,11 +87,21 @@ BEGIN
     SELECT RAISE(ABORT, 'an integration is used only in its own workspace''s spaces');
 END;
 
--- An integration never moves to another workspace, and its public id and name never change.
+-- What a sealed secret is bound to never changes: an integration's row id, workspace, public id,
+-- name and provider, and when it was created. Whatever updates one (a bug, a hand-written
+-- statement) is refused, so a sealed value can't end up under another identity.
 CREATE TRIGGER integrations_fixed
-BEFORE UPDATE OF workspace_id, public_id, name, provider ON integrations
-WHEN NEW.workspace_id IS NOT OLD.workspace_id OR NEW.public_id IS NOT OLD.public_id
-  OR NEW.name IS NOT OLD.name OR NEW.provider IS NOT OLD.provider
+BEFORE UPDATE OF id, workspace_id, public_id, name, provider, created_at ON integrations
+WHEN NEW.id IS NOT OLD.id OR NEW.workspace_id IS NOT OLD.workspace_id OR NEW.public_id IS NOT OLD.public_id
+  OR NEW.name IS NOT OLD.name OR NEW.provider IS NOT OLD.provider OR NEW.created_at IS NOT OLD.created_at
 BEGIN
-    SELECT RAISE(ABORT, 'an integration''s workspace, public id, name and provider never change');
+    SELECT RAISE(ABORT, 'an integration''s id, workspace, public id, name, provider and creation time never change');
+END;
+
+-- A secret stays the integration's and keeps its name: the name is part of what it is sealed under.
+CREATE TRIGGER integration_secrets_fixed
+BEFORE UPDATE OF integration_id, name ON integration_secrets
+WHEN NEW.integration_id IS NOT OLD.integration_id OR NEW.name IS NOT OLD.name
+BEGIN
+    SELECT RAISE(ABORT, 'a secret never moves to another integration or changes its name');
 END;

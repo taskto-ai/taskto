@@ -101,7 +101,7 @@ test('an integration is listed by what it is, with its secrets only said to be s
   // The same number of smallest units is not the same sum in euros and in yen.
   expect(within(row).getByText(/€5,000\.00 and ¥500,000 per payment/)).toBeTruthy()
   expect(within(row).getByText('Allowed in: Shop floor')).toBeTruthy()
-  expect(within(row).getByText(/No public URL: payments are reconciled by polling/)).toBeTruthy()
+  expect(within(row).getByText(/No public URL: webhooks are unavailable/)).toBeTruthy()
   expect(screen.getByRole('status').textContent).toContain('Webhooks unavailable')
 })
 

@@ -142,6 +142,38 @@ func (c *client) do(method, path string, body any) *httptest.ResponseRecorder {
 	return rec
 }
 
+// raw sends body as it is, which do can't: it always marshals.
+func (c *client) raw(method, path, body string) *httptest.ResponseRecorder {
+	c.e.t.Helper()
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	if c.cookie != nil {
+		r.AddCookie(c.cookie)
+	}
+	rec := httptest.NewRecorder()
+	c.e.h.ServeHTTP(rec, r)
+	return rec
+}
+
+// mustDraft is the validated draft of a create body.
+func mustDraft(t *testing.T, body map[string]any) draft {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req createRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		t.Fatal(err)
+	}
+	d, err := newDraft(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 func expect(t *testing.T, rec *httptest.ResponseRecorder, status int) {
 	t.Helper()
 	if rec.Code != status {
@@ -830,6 +862,10 @@ func TestIsolation(t *testing.T) {
 			t.Fatalf("refused requests recorded %s: %+v", action, got)
 		}
 	}
+	// And no creation beyond the one that set the workspace up: a refused create records none.
+	if got := e.events(ws, audit.IntegrationCreated); len(got) != 1 {
+		t.Fatalf("refused creates recorded events: %+v", got)
+	}
 }
 
 // An admin of a workspace that setup didn't make is not an operator, and manages their own
@@ -930,15 +966,31 @@ func TestAuditShowsTheIntegrationByName(t *testing.T) {
 	}
 }
 
-func TestMigrationHasNoLeftoverDefaults(t *testing.T) {
+// What a sealed secret is bound to can't be changed by any statement, so a row can't be given
+// another identity: the checks name an existing second workspace, so a refusal is the trigger's
+// and not a foreign key's.
+func TestImmutableColumnsCannotBeUpdated(t *testing.T) {
 	e := newEnv(t, "")
 	owner, ws := e.setup()
 	in := e.create(owner, ws, stripeBody("main"))
-	// The name, provider, public id and workspace never change, whatever updates them.
-	for _, col := range []string{"name = 'x'", "provider = 'square'", "public_id = '" + strings.Repeat("a", 32) + "'", "workspace_id = workspace_id + 1"} {
-		if _, err := e.db.Exec(`UPDATE integrations SET `+col+` WHERE id = ?`, in.ID); err == nil { //nolint:gosec // G202: col is from the list above
-			t.Errorf("UPDATE integrations SET %s succeeded", col)
+	_, ws2 := e.otherWorkspace(owner)
+	other := e.create(owner, ws, stripeBody("second"))
+	for _, set := range []string{
+		"name = 'x'", "provider = 'square'", "public_id = '" + strings.Repeat("a", 32) + "'",
+		fmt.Sprintf("workspace_id = %d", ws2), fmt.Sprintf("id = %d", in.ID+1000), "created_at = '2000-01-01T00:00:00.000Z'",
+	} {
+		if _, err := e.db.Exec(`UPDATE integrations SET `+set+` WHERE id = ?`, in.ID); err == nil { //nolint:gosec // G202: set is from the list above
+			t.Errorf("UPDATE integrations SET %s succeeded", set)
 		}
+	}
+	for _, set := range []string{"name = 'webhook_secret_previous'", fmt.Sprintf("integration_id = %d", other.ID)} {
+		if _, err := e.db.Exec(`UPDATE integration_secrets SET `+set+` WHERE integration_id = ? AND name = 'api_key'`, in.ID); err == nil { //nolint:gosec // G202: set is from the list above
+			t.Errorf("UPDATE integration_secrets SET %s succeeded", set)
+		}
+	}
+	// What may change still does.
+	if _, err := e.db.Exec(`UPDATE integrations SET display_name = 'Renamed', updated_at = updated_at WHERE id = ?`, in.ID); err != nil {
+		t.Errorf("a display name update was refused: %v", err)
 	}
 }
 
@@ -1232,4 +1284,62 @@ func TestWebhookSecretRetryKeepsThePrevious(t *testing.T) {
 	if creds.WebhookSecret.Reveal() != stripeHook || creds.WebhookSecretPrevious.Reveal() != stripeHookNew {
 		t.Fatal("a new secret didn't rotate")
 	}
+}
+
+// A body that isn't an object is refused: a top-level null decodes into a request as "nothing
+// set", which would answer 200 for a change that wasn't made.
+func TestBodyMustBeAnObject(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+	for _, body := range []string{"null", "[]", `"x"`, "1", "true"} {
+		for _, r := range []struct{ method, path string }{
+			{http.MethodPatch, one}, {http.MethodPost, wsPath(ws, "integrations")}, {http.MethodPut, one + "/spaces"},
+		} {
+			rec := owner.raw(r.method, r.path, body)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s %s with %s = %d, want 400", r.method, r.path, body, rec.Code)
+			}
+		}
+	}
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{}), http.StatusOK) // {} is still an empty change
+}
+
+// An admin disabled after RequireAdmin let their request in changes nothing, and answers
+// account_disabled: the write reads their account again.
+func TestWritesOfAnAdminDisabledMeanwhile(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	admin := e.invite(owner, ws, "admin2@example.com", "admin")
+	in := e.create(owner, ws, stripeBody("main"))
+	if _, err := e.db.Exec(`UPDATE users SET disabled_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, admin.id); err != nil {
+		t.Fatal(err)
+	}
+	ctx := audit.WithActor(context.Background(), admin.id)
+	if err := e.store.remove(ctx, ws, in.ID); !errors.Is(err, auth.ErrAccountDisabled) {
+		t.Fatalf("remove by a disabled admin = %v", err)
+	}
+	if _, err := e.store.create(ctx, ws, admin.id, mustDraft(t, stripeBody("second"))); !errors.Is(err, auth.ErrAccountDisabled) {
+		t.Fatalf("create by a disabled admin = %v", err)
+	}
+	if _, err := e.store.getSnapshot(context.Background(), ws, in.ID); err != nil {
+		t.Fatalf("the integration is gone: %v", err)
+	}
+	if got := e.events(ws, audit.IntegrationRemoved); len(got) != 0 {
+		t.Fatalf("recorded %+v", got)
+	}
+	rec := httptest.NewRecorder()
+	fail(rec, httptest.NewRequest(http.MethodDelete, "/", nil), auth.ErrAccountDisabled)
+	expectCode(t, rec, http.StatusForbidden, "account_disabled")
+}
+
+// A check of an integration that was removed is "not found", like any other call on it.
+func TestCheckOfARemovedIntegrationIsNotFound(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+	expect(t, owner.do(http.MethodDelete, one, nil), http.StatusNoContent)
+	expectCode(t, owner.do(http.MethodPost, one+"/check", nil), http.StatusNotFound, "integration_not_found")
 }

@@ -7,16 +7,27 @@ import (
 )
 
 // exponents are the currencies an integration's limits may name, with the number of decimals
-// each has (the exponent of its smallest unit: 2 for euros, 0 for yen). It is a closed list: a
+// each has in the provider's API (the exponent of the unit its amounts are written in: 2 for
+// euros, 0 for yen). This is the unit the payment providers use, which is not always ISO 4217's:
+// COP, HUF and IDR have two decimals, and Stripe writes the króna (ISK) as two as well, the
+// decimals always "00" (see wholeUnitsOnly). It is a closed list: a
 // code outside it is refused, and the code that opens a payment (a later card) reads its
 // amounts from the same table, so a limit and a payment mean the same unit.
 var exponents = map[string]int{
 	"AED": 2, "ARS": 2, "AUD": 2, "BGN": 2, "BRL": 2, "CAD": 2, "CHF": 2, "CLP": 0, "CNY": 2,
 	"COP": 2, "CZK": 2, "DKK": 2, "EUR": 2, "GBP": 2, "HKD": 2, "HUF": 2, "IDR": 2, "ILS": 2,
-	"INR": 2, "ISK": 0, "JPY": 0, "KRW": 0, "MXN": 2, "MYR": 2, "NOK": 2, "NZD": 2, "PEN": 2,
+	"INR": 2, "ISK": 2, "JPY": 0, "KRW": 0, "MXN": 2, "MYR": 2, "NOK": 2, "NZD": 2, "PEN": 2,
 	"PHP": 2, "PLN": 2, "RON": 2, "SAR": 2, "SEK": 2, "SGD": 2, "THB": 2, "TRY": 2, "TWD": 2,
 	"UAH": 2, "USD": 2, "UYU": 2, "VND": 0, "ZAR": 2,
 }
+
+// wholeUnitsOnly are the currencies written with decimals whose amounts must be whole: the
+// provider takes 500 for 5 ISK and refuses 550.
+var wholeUnitsOnly = map[string]bool{"ISK": true}
+
+// WholeUnitsOnly says whether amounts in the currency must be a multiple of 10^Exponent: its
+// decimals are written, but are always zero.
+func WholeUnitsOnly(code string) bool { return wholeUnitsOnly[code] }
 
 // Exponent returns the number of decimals of a currency, and whether the currency is on the
 // closed list.

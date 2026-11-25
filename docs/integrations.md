@@ -50,7 +50,7 @@ The registry is the list in `internal/integrations/registry.go`. Each provider s
 - its **kinds**: `payments` for both;
 - its **secrets**: Stripe takes an `api_key` (required) and a `webhook_secret`; Square takes
   an `api_key` (required) and a `webhook_secret`. The webhook secret is optional because an
-  install without a public URL never receives a webhook and finds payments by polling;
+  install without a public URL never receives a webhook (reconciling payments without webhooks is a later change, not built yet);
 - its **settings**, which are short identifiers or choices, never a URL or free text: Stripe
   has none; Square has `environment` (`sandbox` or `production`) and `location_id`;
 - how to **recognise its credentials**: a Stripe secret key starts with `sk_` or `rk_` (a
@@ -114,8 +114,10 @@ validated in Go.
 
 The admin sets, on the integration, the largest amount of one payment (a whole number of the
 currency's smallest unit, up to a trillion) and 1 to 20 currencies from the server's closed list.
-The list has each currency's number of decimals, which is how a payment's amount is converted
-exactly, never rounded. These limits are not in a definition and no app can raise them.
+The list has each currency's number of decimals in the provider's API, which is how a payment's
+amount is converted exactly, never rounded. That is Stripe's unit, which isn't always ISO 4217's:
+COP, HUF and IDR have two decimals, and ISK is written with two that are always `00` (5 ISK is
+500), so an ISK amount must be whole (`WholeUnitsOnly`). These limits are not in a definition and no app can raise them.
 
 ## Gates
 
@@ -157,17 +159,20 @@ ignores the environment's proxy.
 
 Each integration has a random 128-bit `public_id`, and its webhook address is
 `<public URL>/hooks/<public_id>`. The settings page shows it when the server has
-`-public-url`; without one it says that webhooks are unavailable and that payments are
-reconciled by polling. The id is the only thing in the path, and it holds no secret: the
+`-public-url`; without one it says that webhooks are unavailable and that reconciling payments
+without them isn't built yet. The id is the only thing in the path, and it holds no secret: the
 signature will be the authentication. The reverse proxy must forward `POST /hooks/*` (and
 nothing more has to be exposed for payments). Receiving, verifying and applying events is to come.
 
-## Testing against a real provider
+## Trying an integration by hand
 
-CI never calls a real provider. To try an integration by hand, use the provider's **test
-mode**, with test keys of your own that you create at the provider: connect them in Settings
-→ Integrations, allow a space, and run a check. Never use live keys to try the software, and
-never paste a key into an issue, a chat or a commit.
+CI never calls a real provider, and nothing here does yet: **check** only looks at what the
+server holds (the secrets are set and open, the settings are valid) and says nothing about
+whether the provider accepts the credentials. Real-provider testing arrives with the payment
+link. Meanwhile, use the provider's **test mode**, with test keys of your own that you create at
+the provider: connect them in Settings → Integrations, allow a space, and run the local check.
+Never use live keys to try the software, and never paste a key into an issue, a chat or a
+commit.
 
 ## Not here, on purpose
 

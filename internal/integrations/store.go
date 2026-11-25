@@ -17,6 +17,7 @@ import (
 	"modernc.org/sqlite"
 
 	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/serverkey"
 )
 
@@ -256,7 +257,9 @@ func (s *Store) get(ctx context.Context, q querier, workspace, id int64) (record
 	return recs[0], nil
 }
 
-// write runs fn in a transaction, which takes the write lock when it begins (see package db).
+// write runs fn in a transaction, which takes the write lock when it begins (see package db). The
+// admin who is acting is read again first: one disabled after RequireAdmin let the request in
+// changes nothing (auth.ErrAccountDisabled).
 func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -269,6 +272,9 @@ func (s *Store) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 			}
 		}
 	}()
+	if err := auth.EnsureActorEnabled(ctx, tx); err != nil {
+		return err
+	}
 	if err := fn(tx); err != nil {
 		return err
 	}

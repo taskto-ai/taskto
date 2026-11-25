@@ -75,7 +75,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 |---|---|---|
 | `internal` | 500 | Something failed on the server; the log has the details. |
 | `bad_request` | 400 | A request the web app never sends (a wrong enum, a missing field); `error` says what. |
-| `invalid_json` | 400 | The body isn't one JSON object of the route's fields, or is over its size. |
+| `invalid_json` | 400 | The body isn't one JSON object of the route's fields (`null`, an array or a scalar is refused), or is over its size. |
 | `not_found` | 404 | What the path names doesn't exist, or isn't the caller's to see. |
 | `cross_origin` | 403 | The CSRF guard refused a cross-origin request. |
 | `content_type` | 415 | The body's `Content-Type` isn't `application/json` (or `application/octet-stream` where a route takes bytes). |
@@ -1005,7 +1005,8 @@ the [audit log](audit.md) as `member_disabled` (with how many logins it ended) a
 `member_enabled`.
 
 A request an admin sent just before being disabled changes nothing either: the writes of an admin
-(inviting, changing a role, removing a member, the workspace's settings, shared CLI accounts)
+(inviting, changing a role, removing a member, the workspace's settings, shared CLI accounts, the
+integrations)
 read the admin's account again in their transaction and answer `403 account_disabled`.
 
 ## Invites
@@ -3794,7 +3795,7 @@ An integration looks like this:
   an account, disable the integration or delete it. A replaced webhook secret keeps verifying
   events for a day (for the provider's own rotation overlap).
 - **`webhook_url`**: the address to register at the provider, `null` when the server has no
-  `-public-url`: payments are then found by polling. It holds a random 128-bit id and no
+  `-public-url`: webhooks are then unavailable. It holds a random 128-bit id and no
   secret. It is made from the current `-public-url` each time, so it follows a change of it.
 - **`spaces`**: ids of the spaces whose apps may use the integration **that the caller may
   manage**: their own private space and the workspace's shared spaces (archived ones too, so
@@ -3809,7 +3810,8 @@ Admin only. What a form needs to connect one: `{"providers": [{"id", "kinds", "s
 "exponents": {"EUR": 2, "JPY": 0, …}, "max_amount_minor": …, "webhooks_available": bool}`.
 `exponents` is the server's number of decimals for each of `currencies`, the unit
 `max_amount_minor` is in; show an amount with it, not with the browser's own table (which
-differs for a few currencies).
+differs for a few currencies). It is the provider's unit: COP, HUF and IDR have two decimals, and
+ISK too, its decimals always `00`.
 
 ### `GET /api/workspaces/{workspace}/integrations`
 
