@@ -27,11 +27,11 @@ import (
 //     outbox's own purge ages out by request (keepDone), so a device that replays an old request
 //     is answered with its receipt as ever. Only the link of a download's records to their
 //     operations is lost, and a purged record isn't in a download.
-//   - The newest row of the table is kept even when it is past the window, until a newer one
-//     exists. A row's id is a SQLite rowid, which a new row takes as the largest id plus one, so
-//     purging the largest would let the next insert take its id, and a stale change that names
-//     the purged record (an offline edit, without an expected revision) would land on a different
-//     one. Kept, no id the sweep has removed is ever given again.
+//   - A removed record's id is never given to another: a record's id is a SQLite rowid, which a
+//     new row would take as the largest id plus one, so the sweep first raises a mark that is kept
+//     apart from the rows (app_row_ids) to the largest id, and new records take an id above it.
+//     A stale change that names a removed record (an offline edit, which sends no expected
+//     revision) finds nothing, whatever was inserted or cascaded away since.
 //   - A record with effects that wait or run is kept, so no effect is lost with its record. Its
 //     done entries, and the link to the card made for it, go with it.
 //   - Attachments are rows that refer to the record, so they go with it, and their files, which
@@ -100,7 +100,6 @@ func (s *Service) purgeBatch(ctx context.Context, cutoff string) (int, error) {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT r.id FROM app_rows r
 			WHERE r.deleted_at IS NOT NULL AND r.deleted_at < ?
-			  AND r.id < (SELECT max(id) FROM app_rows)
 			  AND NOT EXISTS (SELECT 1 FROM app_effects e WHERE e.record_id = r.id AND e.state IN ('pending', 'running'))
 			LIMIT ?`, cutoff, retentionBatch)
 		if err != nil {
@@ -124,6 +123,10 @@ func (s *Service) purgeBatch(ctx context.Context, cutoff string) (int, error) {
 		}
 		if len(ids) == 0 {
 			return nil
+		}
+		// No id of a record that is removed may be allocated again (the migration says why).
+		if _, err := tx.ExecContext(ctx, `UPDATE app_row_ids SET high = max(high, coalesce((SELECT max(id) FROM app_rows), 0))`); err != nil {
+			return err
 		}
 		list, err := json.Marshal(ids)
 		if err != nil {

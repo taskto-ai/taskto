@@ -1341,10 +1341,11 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		}
 		var id int64
 		if err := tx.QueryRowContext(ctx, `
-			INSERT INTO app_rows (app_id, data, revision,
+			INSERT INTO app_rows (id, app_id, data, revision,
 				created_at, created_by, created_by_agent, created_via, created_action,
 				updated_at, updated_by, updated_by_agent, updated_via, updated_action)
-			VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			VALUES (max(coalesce((SELECT max(id) FROM app_rows), 0), (SELECT high FROM app_row_ids)) + 1,
+				?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			appID, string(raw), at, actor.UserID, actor.Agent, via(actor), actionColumn(ch),
 			at, actor.UserID, actor.Agent, via(actor), actionColumn(ch)).Scan(&id); err != nil {
 			return applied{}, err

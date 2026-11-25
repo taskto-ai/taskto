@@ -295,8 +295,9 @@ func TestAHistoryKeepsItsNewestRevisions(t *testing.T) {
 	}
 }
 
-// The newest row is kept past the window until a newer one exists, so the id of a purged record is
-// never taken by another: a stale change that names it finds nothing.
+// The id of a purged record is never given to another, not even when the table is emptied of
+// records after it (as a cascade of an app's deletion does): a stale change that names it finds
+// nothing, and the new record is untouched.
 func TestAPurgedRecordsIDIsNeverGivenAgain(t *testing.T) {
 	w := newWorld(t)
 	s := w.shared
@@ -306,20 +307,27 @@ func TestAPurgedRecordsIDIsNeverGivenAgain(t *testing.T) {
 	expect(t, w.act(w.alice, s, a, "delete_expense", map[string]any{"id": first}, nil), http.StatusOK)
 
 	w.at(day(91))
-	if n := w.purge(); n != 0 {
-		t.Fatalf("purged %d, the newest row of the table stays", n)
+	if n := w.purge(); n != 1 {
+		t.Fatalf("purged %d", n)
 	}
 	w.add(w.alice, s, a, "second", "2")
 	second, _ := w.idOf(w.alice, s, a, "second")
 	if second <= first {
 		t.Fatalf("the new record has id %d, not after %d", second, first)
 	}
-	if n := w.purge(); n != 1 {
-		t.Fatalf("purged %d once a newer row exists", n)
+	// Whatever is left of the table goes (the cascade of an app's deletion): the next record is
+	// still above the one the sweep removed.
+	if _, err := w.e.db.Exec(`DELETE FROM app_rows`); err != nil {
+		t.Fatal(err)
+	}
+	w.add(w.alice, s, a, "third", "3")
+	third, rev := w.idOf(w.alice, s, a, "third")
+	if third <= first {
+		t.Fatalf("the record after the table emptied has id %d, not after %d", third, first)
 	}
 	// A change that names the purged record is refused, and the new one is as it was.
 	expect(t, w.act(w.alice, s, a, "edit_expense", map[string]any{"id": first, "amount": "9"}, nil), http.StatusUnprocessableEntity)
-	if _, rev := w.idOf(w.alice, s, a, "second"); rev != 1 {
-		t.Fatalf("the new record is at revision %d", rev)
+	if _, now := w.idOf(w.alice, s, a, "third"); now != rev {
+		t.Fatalf("the new record is at revision %d, was %d", now, rev)
 	}
 }
