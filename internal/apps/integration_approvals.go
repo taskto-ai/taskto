@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -108,9 +109,11 @@ type IntegrationApproval struct {
 	DecidedAt   *string           `json:"decided_at"`
 }
 
-// ApprovalList is the admin's queue.
+// ApprovalList is a page of the admin's queue, newest first.
 type ApprovalList struct {
 	Approvals []IntegrationApproval `json:"approvals" apitypes:"nonnull"`
+	// NextCursor, when there are older requests, is the cursor of the next page.
+	NextCursor *string `json:"next_cursor"`
 }
 
 // Decision is what an admin answers a request with.
@@ -471,17 +474,26 @@ func isLive(ctx context.Context, q queryer, r approvalRow) (bool, error) {
 // maxApprovals bounds the queue's page.
 const maxApprovals = 200
 
-// listApprovals is the admin's queue of the workspace's requests, newest first: status is one
-// of the states, or "" for those still waiting. It reads only what the requesters submitted.
-func (s *Service) listApprovals(ctx context.Context, workspace int64, status string) (ApprovalList, error) {
+// listApprovals is a page of the admin's queue of the workspace's requests, newest first: status
+// is one of the states, or "" for those still waiting; cursor, from the last page's next_cursor,
+// goes on after it. It reads only what the requesters submitted.
+func (s *Service) listApprovals(ctx context.Context, workspace int64, status, cursor string) (ApprovalList, error) {
 	if status == "" {
 		status = ApprovalRequested
 	}
 	if status != "all" && !slices.Contains(approvalStates, status) {
 		return ApprovalList{}, invalidf("status is one of %v, or all", approvalStates)
 	}
-	rows, err := s.db.QueryContext(ctx, approvalSelect+` WHERE sp.workspace_id = ? AND (? = 'all' OR a.status = ?) ORDER BY a.id DESC LIMIT ?`,
-		workspace, status, status, maxApprovals)
+	before := int64(math.MaxInt64)
+	if cursor != "" {
+		n, err := strconv.ParseInt(cursor, 10, 64)
+		if err != nil || n < 1 {
+			return ApprovalList{}, invalidf("cursor is the next_cursor of a page")
+		}
+		before = n
+	}
+	rows, err := s.db.QueryContext(ctx, approvalSelect+` WHERE sp.workspace_id = ? AND (? = 'all' OR a.status = ?) AND a.id < ? ORDER BY a.id DESC LIMIT ?`,
+		workspace, status, status, before, maxApprovals+1)
 	if err != nil {
 		return ApprovalList{}, err
 	}
@@ -500,6 +512,11 @@ func (s *Service) listApprovals(ctx context.Context, workspace int64, status str
 	}
 	_ = rows.Close()
 	out := ApprovalList{Approvals: make([]IntegrationApproval, 0, len(all))}
+	if len(all) > maxApprovals { // one more than a page: there are older ones
+		all = all[:maxApprovals]
+		next := strconv.FormatInt(all[len(all)-1].id, 10)
+		out.NextCursor = &next
+	}
 	for _, r := range all {
 		if r.live, err = isLive(ctx, s.db, r); err != nil {
 			return ApprovalList{}, err
@@ -522,12 +539,30 @@ func notPending() error {
 	return apierr.New(http.StatusConflict, apierr.CodeAppIntegrationNotPending, "this request was already decided")
 }
 
+// ensureDecider is what a decision asks first in its transaction, which holds the write lock: that
+// the admin is still enabled and still an admin of the workspace. RequireAdmin checks once, before
+// the transaction; a demotion or a removal that lands after it must change nothing.
+func ensureDecider(ctx context.Context, tx *sql.Tx, workspace, admin int64) error {
+	if err := auth.EnsureActorEnabled(ctx, tx); err != nil {
+		return err
+	}
+	var isAdmin bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE workspace_id = ? AND user_id = ? AND role = 'admin')`,
+		workspace, admin).Scan(&isAdmin); err != nil {
+		return err
+	}
+	if !isAdmin {
+		return apierr.New(http.StatusForbidden, apierr.CodeAdminOnly, "only a workspace admin can do this")
+	}
+	return nil
+}
+
 // approve connects the slot to an integration of the workspace, for the contract of the request.
 func (s *Service) approve(ctx context.Context, workspace, admin, id int64, d Decision) (IntegrationApproval, error) {
 	var out IntegrationApproval
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		// An admin disabled after RequireAdmin let the request in decides nothing.
-		if err := auth.EnsureActorEnabled(ctx, tx); err != nil {
+		// An admin disabled or demoted after RequireAdmin let the request in decides nothing.
+		if err := ensureDecider(ctx, tx, workspace, admin); err != nil {
 			return err
 		}
 		r, err := decide(ctx, tx, workspace, id)
@@ -591,8 +626,8 @@ func (s *Service) approve(ctx context.Context, workspace, admin, id int64, d Dec
 func (s *Service) reject(ctx context.Context, workspace, admin, id int64) (IntegrationApproval, error) {
 	var out IntegrationApproval
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		// An admin disabled after RequireAdmin let the request in decides nothing.
-		if err := auth.EnsureActorEnabled(ctx, tx); err != nil {
+		// An admin disabled or demoted after RequireAdmin let the request in decides nothing.
+		if err := ensureDecider(ctx, tx, workspace, admin); err != nil {
 			return err
 		}
 		r, err := decide(ctx, tx, workspace, id)
@@ -621,8 +656,8 @@ func (s *Service) reject(ctx context.Context, workspace, admin, id int64) (Integ
 func (s *Service) revoke(ctx context.Context, workspace, admin, id int64) (IntegrationApproval, error) {
 	var out IntegrationApproval
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		// An admin disabled after RequireAdmin let the request in decides nothing.
-		if err := auth.EnsureActorEnabled(ctx, tx); err != nil {
+		// An admin disabled or demoted after RequireAdmin let the request in decides nothing.
+		if err := ensureDecider(ctx, tx, workspace, admin); err != nil {
 			return err
 		}
 		r, err := decide(ctx, tx, workspace, id)
@@ -678,7 +713,8 @@ func approvalID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 
 func (s *Service) handleApprovals(w http.ResponseWriter, r *http.Request) {
 	workspace, _ := approvalCaller(r)
-	out, err := s.listApprovals(r.Context(), workspace, r.URL.Query().Get("status"))
+	q := r.URL.Query()
+	out, err := s.listApprovals(r.Context(), workspace, q.Get("status"), q.Get("cursor"))
 	if err != nil {
 		fail(w, r, err)
 		return

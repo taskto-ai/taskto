@@ -199,25 +199,33 @@ func (h *IntegrationHandler) UnmarshalJSON(b []byte) error {
 
 // UnmarshalJSON reads what a field is set to strictly: it is exactly one of a value and a source.
 func (s *IntegrationSet) UnmarshalJSON(b []byte) error {
+	// Both are pointers or raw: a key that is present is told from one that is absent, whatever it
+	// holds, so {"value": null, "from": …} and {"value": "x", "from": ""} are two keys, refused.
 	var p struct {
 		Value json.RawMessage `json:"value"`
-		From  string          `json:"from"`
+		From  *string         `json:"from"`
 	}
 	if err := strictObject(b, &p, "a set"); err != nil {
 		return err
 	}
-	hasValue := len(p.Value) > 0 && string(p.Value) != "null"
+	hasValue, hasFrom := p.Value != nil, p.From != nil
 	switch {
-	case hasValue == (p.From != ""):
+	case hasValue == hasFrom:
 		return fmt.Errorf(`a set is {"value": …} or {"from": …}, one of them`)
-	case hasValue:
+	case hasFrom:
+		if *p.From == "" {
+			return fmt.Errorf(`a set's from names a source`)
+		}
+		*s = IntegrationSet{From: *p.From}
+	default:
 		var v any
 		if err := json.Unmarshal(p.Value, &v); err != nil {
 			return err
 		}
+		if v == nil {
+			return fmt.Errorf(`a set's value is not null`)
+		}
 		*s = IntegrationSet{Value: v}
-	default:
-		*s = IntegrationSet{From: p.From}
 	}
 	return nil
 }
@@ -282,7 +290,7 @@ func (d Definition) checkIntegrations(c Collection) (bool, error) {
 			return true, invalidf("integrations: %q: kind must be one of %s", name, strings.Join(IntegrationKinds, ", "))
 		}
 		for _, event := range sortedKeys(slot.On) {
-			if err := slot.On[event].check(c, slot.Kind, event); err != nil {
+			if err := slot.On[event].check(c, slot.Kind, event, d.slotCurrencies(name)); err != nil {
 				return true, invalidf("integrations: %q: on %q: %v", name, event, err)
 			}
 		}
@@ -296,8 +304,32 @@ func (d Definition) checkIntegrations(c Collection) (bool, error) {
 	return true, nil
 }
 
+// slotCurrencies are the currencies the app's payment links ask in through the slot, sorted:
+// none when no effect uses it.
+func (d Definition) slotCurrencies(slot string) []string {
+	set := map[string]bool{}
+	for _, a := range d.Actions {
+		for _, e := range a.Effects {
+			if e.Kind != EffectCreatePaymentLink || e.Integration != slot {
+				continue
+			}
+			if e.CurrencyField == "" {
+				set[e.Currency] = true
+			} else if f, ok := d.Collection.field(e.CurrencyField); ok {
+				for _, o := range f.Options {
+					set[o] = true
+				}
+			}
+		}
+	}
+	return sortedKeys(set)
+}
+
 // check validates one handler of a slot of kind, for event.
-func (h IntegrationHandler) check(c Collection, kind, event string) error {
+//
+// currencies are the ones the slot asks in (see slotCurrencies): a choice that receives the
+// currency must offer each of them, or a write for one the choice lacks would be refused.
+func (h IntegrationHandler) check(c Collection, kind, event string, currencies []string) error {
 	if !slices.Contains(kindEvents[kind], event) {
 		return fmt.Errorf("an event of kind %s is one of %s", kind, strings.Join(kindEvents[kind], ", "))
 	}
@@ -329,13 +361,22 @@ func (h IntegrationHandler) check(c Collection, kind, event string) error {
 			if why := spec.fits(f); why != "" {
 				return fmt.Errorf("set: %q: %s goes in %s", name, s.From, why)
 			}
+			if s.From == SourceCurrency && f.Type == TypeChoice {
+				for _, cur := range currencies {
+					if !slices.Contains(f.Options, cur) {
+						return fmt.Errorf("set: %q: the app asks in %s, which the choice's options lack", name, cur)
+					}
+				}
+			}
 			continue
 		}
 		if _, err := f.literal(s.Value); err != nil {
 			return fmt.Errorf("set: %q: the value %w", name, err)
 		}
-		if _, _, err := f.parse(s.Value); err != nil {
+		if _, present, err := f.parse(s.Value); err != nil {
 			return fmt.Errorf("set: %q: the value is outside the field's limits", name)
+		} else if !present {
+			return fmt.Errorf("set: %q: the value is blank, which is no value: clear a field with an action, not an integration", name)
 		}
 	}
 	return nil
@@ -408,6 +449,23 @@ type Contract struct {
 	Writes []ContractWrite `json:"writes" apitypes:"nonnull"`
 	// OnlyIf are the rules that gate each event's writes.
 	OnlyIf []ContractRule `json:"only_if" apitypes:"nonnull"`
+	// Handlers are each event's writes, field by field. Writes above says what may be written to a
+	// field whatever the event; this binds each write to its event, so moving a value from one
+	// event to another is another contract.
+	Handlers []ContractHandler `json:"handlers" apitypes:"nonnull"`
+}
+
+// ContractHandler is what one event writes.
+type ContractHandler struct {
+	Event string        `json:"event"`
+	Sets  []ContractSet `json:"sets" apitypes:"nonnull"`
+}
+
+// ContractSet is one field an event writes: a literal, as JSON, or a source.
+type ContractSet struct {
+	Field string          `json:"field"`
+	Value json.RawMessage `json:"value,omitempty" apitypes:"json"`
+	From  string          `json:"from,omitempty"`
 }
 
 // ContractWrite is what the integration may write to one field.
@@ -436,7 +494,7 @@ const (
 func (d Definition) contract(slot string) Contract {
 	s := d.Integrations[slot]
 	c := Contract{Version: contractVersion, Kind: s.Kind,
-		Operations: []string{}, Sends: []string{}, Currencies: []string{}, Events: []string{}, Writes: []ContractWrite{}, OnlyIf: []ContractRule{}}
+		Operations: []string{}, Sends: []string{}, Currencies: []string{}, Events: []string{}, Writes: []ContractWrite{}, OnlyIf: []ContractRule{}, Handlers: []ContractHandler{}}
 	sends, currencies := map[string]bool{}, map[string]bool{}
 	writes := map[string]*ContractWrite{}
 	write := func(field string) *ContractWrite {
@@ -482,21 +540,25 @@ func (d Definition) contract(slot string) Contract {
 		if h.OnlyIf != nil {
 			c.OnlyIf = append(c.OnlyIf, ContractRule{Event: event, Rule: *h.OnlyIf})
 		}
+		handler := ContractHandler{Event: event, Sets: []ContractSet{}}
 		for _, field := range sortedKeys(h.Set) {
 			set := h.Set[field]
 			w := write(field)
 			if set.From != "" {
 				w.From = mergeSorted(w.From, []string{set.From})
+				handler.Sets = append(handler.Sets, ContractSet{Field: field, From: set.From})
 				continue
 			}
 			raw, err := json.Marshal(set.Value)
 			if err != nil {
 				continue // a checked literal always encodes
 			}
+			handler.Sets = append(handler.Sets, ContractSet{Field: field, Value: raw})
 			if !slices.ContainsFunc(w.Values, func(v json.RawMessage) bool { return bytes.Equal(v, raw) }) {
 				w.Values = append(w.Values, raw)
 			}
 		}
+		c.Handlers = append(c.Handlers, handler)
 	}
 	c.Sends = sortedKeys(sends)
 	c.Currencies = sortedKeys(currencies)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -113,7 +114,12 @@ func TestTheDeclarationIsStrict(t *testing.T) {
 		"both currencies":           {`"currency": "EUR",`, `"currency": "EUR", "currency_field": "currency",`},
 		"a link field too small":    {`"max_length": 2048`, `"max_length": 100`},
 		"the same field twice":      {`"id_field": "payment_id"`, `"id_field": "pay_url"`},
-		"a slot with a bad name":    {`"integrations": {"payments"`, `"integrations": {"Pay Ments"`},
+		"a slot with a bad name":    {`"integrations": {"payments"`, `"integrations": {"Pay Ments": {"kind": "payments", "on": {"payment.failed": {"set": {"status": {"value": "overdue"}}}}}, "payments"`},
+		"a null value and a source": {`{"from": "occurred_at"}`, `{"from": "occurred_at", "value": null}`},
+		"a value and an empty from": {`{"value": "paid"}`, `{"value": "paid", "from": ""}`},
+		"an empty from":             {`{"from": "occurred_at"}`, `{"from": ""}`},
+		"a null value":              {`{"value": "paid"}`, `{"value": null}`},
+		"a blank literal":           {`"payment.expired": {"set": {"status": {"value": "sent"}}}`, `"payment.expired": {"set": {"customer": {"value": "   "}}}`},
 		"a field of another kind":   {`"paid_at": {"from": "occurred_at"}`, `"total": {"from": "currency"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -840,9 +846,23 @@ func TestAnAppWithNoIntegrationsPublishesAsAlways(t *testing.T) {
 func TestEveryDecisionIsAudited(t *testing.T) {
 	i := newInv(t)
 	i.allow(i.stripe, i.shared)
-	req := i.mustRequest(i.alice, i.shared, i.app)
+	// A slot named unlike its kind, so the details can be checked for the name on its own.
+	till := strings.NewReplacer(`"integration": "payments"`, `"integration": "till"`, `"integrations": {"payments"`, `"integrations": {"till"`).Replace(invoiceJSON)
+	rec := i.alice.do(http.MethodPost, appsPath(i.shared, ""), map[string]any{"name": "Till", "definition": json.RawMessage(till)})
+	expect(t, rec, http.StatusCreated)
+	app := decode[App](t, rec)
+	ask := func() IntegrationApproval {
+		st := i.status(i.alice, i.shared, app)
+		if len(st.Slots) != 1 || st.Slots[0].Slot != "till" {
+			t.Fatalf("slots = %+v", st.Slots)
+		}
+		rec := i.request(i.alice, i.shared, app, "till", st.Slots[0].ContractHash)
+		expect(t, rec, http.StatusOK)
+		return decode[IntegrationApproval](t, rec)
+	}
+	req := ask()
 	expect(t, i.decide(i.owner, i.ws, req.ID, "reject", nil), http.StatusOK)
-	i.mustRequest(i.alice, i.shared, i.app)
+	ask()
 	expect(t, i.approve(i.owner, req.ID, i.stripe), http.StatusOK)
 	expect(t, i.decide(i.owner, i.ws, req.ID, "revoke", nil), http.StatusOK)
 
@@ -870,12 +890,213 @@ func TestEveryDecisionIsAudited(t *testing.T) {
 			t.Errorf("%s by %d, want %d", action, actor, want)
 		}
 		// The slot's name is the builder's text and a secret is nobody's here.
-		if strings.Contains(details, "payments") && !strings.Contains(details, `"kind":"payments"`) {
+		if strings.Contains(details, "till") {
 			t.Errorf("%s details name the slot: %s", action, details)
 		}
 	}
 	want := []string{"app_integration_requested", "app_integration_rejected", "app_integration_requested", "app_integration_approved", "app_integration_revoked"}
 	if !slices.Equal(actions, want) {
 		t.Fatalf("audited %v, want %v", actions, want)
+	}
+}
+
+// ----- review follow-ups -----
+
+// variant decodes the invoices' JSON with the pairs (old, new, old, new, …) replaced and checks it.
+func variant(t *testing.T, pairs ...string) (Definition, error) {
+	t.Helper()
+	raw := invoiceJSON
+	for rest := pairs; len(rest) >= 2; rest = rest[2:] {
+		from, to := rest[0], rest[1]
+		if !strings.Contains(raw, from) {
+			t.Fatalf("the invoice definition has no %q", from)
+		}
+		raw = strings.Replace(raw, from, to, 1)
+	}
+	var d Definition
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		return Definition{}, err
+	}
+	return d.Check()
+}
+
+func TestASetIsExactlyOneKey(t *testing.T) {
+	for name, set := range map[string]string{
+		"a literal false":  `{"value": false}`,
+		"a literal number": `{"value": 0}`,
+		"a source":         `{"from": "occurred_at"}`,
+	} {
+		var s IntegrationSet
+		if err := json.Unmarshal([]byte(set), &s); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, set := range map[string]string{
+		"a null value and a source": `{"value": null, "from": "occurred_at"}`,
+		"a value and an empty from": `{"value": "paid", "from": ""}`,
+		"an empty from":             `{"from": ""}`,
+		"a null value":              `{"value": null}`,
+		"nothing":                   `{}`,
+	} {
+		var s IntegrationSet
+		if err := json.Unmarshal([]byte(set), &s); err == nil {
+			t.Errorf("%s was accepted: %+v", name, s)
+		}
+	}
+}
+
+func TestABlankLiteralIsRefusedAndAZeroIsNot(t *testing.T) {
+	_, err := variant(t, `"payment.expired": {"set": {"status": {"value": "sent"}}}`, `"payment.expired": {"set": {"customer": {"value": "  "}}}`)
+	if err == nil || !strings.Contains(err.Error(), `"customer"`) || !strings.Contains(err.Error(), "blank") {
+		t.Errorf("a blank literal: %v", err)
+	}
+	for name, set := range map[string]string{"zero": `{"total": {"value": 0}}`, "text": `{"customer": {"value": "x"}}`} {
+		if _, err := variant(t, `"payment.expired": {"set": {"status": {"value": "sent"}}}`, `"payment.expired": {"set": `+set+`}`); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestACurrencyIsWrittenOnlyWhereTheChoiceOffersWhatTheAppAsksIn(t *testing.T) {
+	field := `{"name": "paid_at", "type": "date"},`
+	handler := `"payment.expired": {"set": {"status": {"value": "sent"}}}`
+	write := `"payment.expired": {"set": {"settled_in": {"from": "currency"}}}`
+	with := func(options, currency string) []string {
+		return []string{field, field + `{"name": "settled_in", "type": "choice", "options": ` + options + `},`, handler, write,
+			`"currency": "EUR"`, `"currency": "` + currency + `"`}
+	}
+	if _, err := variant(t, with(`["EUR", "USD"]`, "USD")...); err != nil {
+		t.Errorf("a choice with both: %v", err)
+	}
+	if _, err := variant(t, with(`["EUR"]`, "EUR")...); err != nil {
+		t.Errorf("a choice with the one asked in: %v", err)
+	}
+	if _, err := variant(t, with(`["EUR"]`, "USD")...); err == nil || !strings.Contains(err.Error(), "USD") {
+		t.Errorf("a choice without USD for a slot asking in USD: %v", err)
+	}
+}
+
+func TestMovingAWriteToAnotherEventIsAnotherContract(t *testing.T) {
+	hash := func(d Definition) string { return d.contract("payments").Hash() }
+	base, err := variant(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The values swap events: what each field may hold overall is the same, what each event does is not.
+	raw := strings.NewReplacer(`{"value": "paid"}`, `{"value": "sent"}`, `{"value": "sent"}`, `{"value": "paid"}`).Replace(invoiceJSON)
+	var d Definition
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		t.Fatal(err)
+	}
+	swapped, err := d.Check()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, b := base.contract("payments"), swapped.contract("payments"); !reflect.DeepEqual(a.Writes, b.Writes) {
+		t.Fatalf("the writes differ, so the test proves nothing: %+v %+v", a.Writes, b.Writes)
+	}
+	if hash(base) == hash(swapped) {
+		t.Error("swapping the values of two events left the contract's hash as it was")
+	}
+}
+
+func TestTheQueueIsPagedAndReachesTheOldest(t *testing.T) {
+	i := newInv(t)
+	const total = maxApprovals + 5
+	tx, err := i.e.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := range total {
+		if _, err := tx.Exec(`INSERT INTO app_integration_approvals (app_id, slot, kind, contract_hash, contract, status, requested_by, decided_at)
+			VALUES (?, 'payments', 'payments', printf('%064d', ?), '{}', 'rejected', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`, i.app.ID, n, i.alice.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := map[int64]bool{}
+	cursor, pages := "", 0
+	for {
+		rec := i.queue(i.owner, i.ws, "?status=all&cursor="+cursor)
+		expect(t, rec, http.StatusOK)
+		page := decode[ApprovalList](t, rec)
+		pages++
+		if pages == 1 && len(page.Approvals) != maxApprovals {
+			t.Fatalf("the first page has %d", len(page.Approvals))
+		}
+		for _, a := range page.Approvals {
+			if seen[a.ID] {
+				t.Fatalf("approval %d is on two pages", a.ID)
+			}
+			seen[a.ID] = true
+		}
+		if page.NextCursor == nil {
+			break
+		}
+		cursor = *page.NextCursor
+		if pages > 5 {
+			t.Fatal("the queue doesn't end")
+		}
+	}
+	if len(seen) != total || pages != 2 {
+		t.Errorf("reached %d approvals in %d pages, want %d in 2", len(seen), pages, total)
+	}
+	// The same cursor on the other statuses: all of these are rejected, none requested.
+	rec := i.queue(i.owner, i.ws, "?status=rejected&cursor=1")
+	if got := decode[ApprovalList](t, rec); len(got.Approvals) != 0 {
+		t.Errorf("a cursor of the oldest id: %d approvals", len(got.Approvals))
+	}
+	if rec := i.queue(i.owner, i.ws, "?cursor=abc"); rec.Code != http.StatusBadRequest {
+		t.Errorf("a bad cursor: %d", rec.Code)
+	}
+}
+
+func TestDecisionsOfAnAdminDemotedMeanwhile(t *testing.T) {
+	i := newInv(t)
+	i.allow(i.stripe, i.shared)
+	req := i.mustRequest(i.alice, i.shared, i.app)
+	// A second admin, so the demotion of the first is allowed.
+	if _, err := i.e.db.Exec(`UPDATE memberships SET role = 'admin' WHERE user_id = ? AND workspace_id = ?`, i.bob.id, i.ws); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := i.e.db.Exec(`UPDATE memberships SET role = 'member' WHERE user_id = ? AND workspace_id = ?`, i.owner.id, i.ws); err != nil {
+		t.Fatal(err)
+	}
+	ctx := audit.WithActor(context.Background(), i.owner.id)
+	for name, do := range map[string]func() error{
+		"approve": func() error {
+			_, err := i.e.s.approve(ctx, i.ws, i.owner.id, req.ID, Decision{IntegrationID: i.stripe, AllowSpace: true})
+			return err
+		},
+		"reject": func() error { _, err := i.e.s.reject(ctx, i.ws, i.owner.id, req.ID); return err },
+		"revoke": func() error { _, err := i.e.s.revoke(ctx, i.ws, i.owner.id, req.ID); return err },
+	} {
+		var ae *apierr.Error
+		if err := do(); !errors.As(err, &ae) || ae.Code != apierr.CodeAdminOnly {
+			t.Errorf("%s by a demoted admin = %v", name, err)
+		}
+	}
+	if st := i.status(i.alice, i.shared, i.app); st.Slots[0].Status != ApprovalRequested {
+		t.Fatalf("a demoted admin changed the request: %+v", st.Slots[0])
+	}
+}
+
+func TestAnApprovalIdIsNeverGivenAgain(t *testing.T) {
+	i := newInv(t)
+	first := i.mustRequest(i.alice, i.shared, i.app)
+	if _, err := i.e.db.Exec(`DELETE FROM app_integration_approvals WHERE id = ?`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	second := i.mustRequest(i.alice, i.shared, i.app)
+	if second.ID == first.ID {
+		t.Errorf("the request after the deleted one got its id, %d", first.ID)
+	}
+	// A decision still on its way for the old id finds nothing.
+	rec := i.approve(i.owner, first.ID, i.stripe)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("approving the deleted request's id: %d %s", rec.Code, rec.Body.String())
 	}
 }

@@ -3039,9 +3039,12 @@ workspace admin's choice, made when they approve the app's contract. See
   `payment.refunded`) to a handler: `set`, 1 to 10 fields, and `only_if`, a rule over the record
   before the event applies. A field is set to `{"value": …}`, a literal of its type (a choice's is
   one of its options), or `{"from": …}`, one of `occurred_at`, `paid_at`, `amount`, `currency`,
-  `receipt_url` and `payment_id`, which the server takes from the verified event; a source must be
-  one the event has and the field must be able to hold it (a date, a number, a string long enough:
-  2048 characters for a link, 255 for an id). Only plain fields are written: never an attachment,
+  `receipt_url` and `payment_id`, which the server takes from the verified event; a set has exactly
+  one of the two keys (never both, never a `null` value or an empty `from`), and a literal is never
+  blank; a source must be one the event has (`paid_at` and `receipt_url` only for `payment.succeeded`
+  and `payment.refunded`) and the field must be able to hold it (a date, a number, a string long
+  enough: 2048 characters for a link, 255 for an id; a choice for `currency` must offer every
+  currency the slot's payment links ask in). Only plain fields are written: never an attachment,
   location, signature or barcode field.
 - `create_payment_link` takes `integration` (a slot of kind `payments`), `amount_field` (a number
   field), `currency` (a code from the server's closed list) or `currency_field` (a choice field whose
@@ -3052,8 +3055,9 @@ workspace admin's choice, made when they approve the app's contract. See
 
 **The contract.** From the draft the server works out, for each slot, a **contract**: the kind, the
 operations the app asks for, the record fields it sends out (names only), the currencies, the events
-it handles, for each field the integration may write the literals and the sources it may write, and
-the `only_if` rules. It holds no wording (a change to a `description` needs no new approval) and is
+it handles, for each field the integration may write the literals and the sources it may write, the
+`only_if` rules, and `handlers`, each event's writes field by field, which bind a write to its event
+(moving a value from one event to another is another contract). It holds no wording (a change to a `description` needs no new approval) and is
 never sent by a client. Its **hash** (SHA-256, hex, of the contract's JSON, whose lists are sorted)
 names it. Changing what is sent out, what may be written or when, changes the hash.
 
@@ -3084,9 +3088,11 @@ turned down or revoked, it asks anew. `200` with the approval (below).
 
 #### `GET /api/workspaces/{workspace}/integration-approvals`
 
-Admin only, session only (an access token is refused). The workspace's queue, newest first, at most
-200: `{"approvals": [approval, …]}`. `?status=` is `requested` (the default), `approved`, `rejected`,
-`revoked` or `all`. An approval is
+Admin only, session only (an access token is refused). A page of the workspace's queue, newest first,
+at most 200: `{"approvals": [approval, …], "next_cursor": null}`. `?status=` is `requested` (the
+default), `approved`, `rejected`, `revoked` or `all`. When there are older requests, `next_cursor` is
+a string and `?cursor=` with it asks for the next page (a `cursor` that isn't one is `400`). An
+approval is
 
 ```json
 {"id": 4, "app_id": 9, "app_name": "Invoices", "space_id": 3, "space_name": "Team", "space_kind": "shared",

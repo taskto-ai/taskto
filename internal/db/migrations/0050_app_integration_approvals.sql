@@ -13,7 +13,10 @@
 -- One row per app, slot and contract hash: the live release's contract stays approved while an
 -- admin decides on the next draft's.
 CREATE TABLE app_integration_approvals (
-    id            INTEGER PRIMARY KEY,
+    -- AUTOINCREMENT: an id is never given to another request after its row is deleted (an app that
+    -- moves drops its approvals), so a decision on a stale id finds nothing, and never a request
+    -- that came later and that the admin hasn't read.
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
     app_id        INTEGER NOT NULL REFERENCES apps (id) ON DELETE CASCADE,
     -- The slot's name in the app's definition.
     slot          TEXT NOT NULL CHECK (length(slot) BETWEEN 1 AND 40),

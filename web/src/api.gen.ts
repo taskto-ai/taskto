@@ -85,6 +85,7 @@ export type AppIntegrationApproval = {
 
 export type AppIntegrationApprovalList = {
   approvals: AppIntegrationApproval[]
+  next_cursor: string | null
 }
 
 export type AppIntegrationStatus = {
@@ -169,11 +170,23 @@ export type AppsContract = {
   events: string[]
   writes: AppsContractWrite[]
   only_if: AppsContractRule[]
+  handlers: AppsContractHandler[]
+}
+
+export type AppsContractHandler = {
+  event: string
+  sets: AppsContractSet[]
 }
 
 export type AppsContractRule = {
   event: string
   rule: AppsRule
+}
+
+export type AppsContractSet = {
+  field: string
+  value?: unknown
+  from?: string
 }
 
 export type AppsContractWrite = {
