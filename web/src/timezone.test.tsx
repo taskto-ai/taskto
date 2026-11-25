@@ -94,7 +94,7 @@ test('the time zone is chosen in settings and saved to the account', async () =>
   // And none can be picked again.
   fireEvent.change(select, { target: { value: '' } })
   await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(3))
-  expect(calls.map((c) => c.body)).toEqual([
+  expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([
     { time_zone: 'America/Sao_Paulo' },
     { time_zone: 'Europe/Lisbon' },
     { time_zone: '' },
@@ -116,4 +116,13 @@ test('a time zone the server refuses is said so, in the language, and the choice
   expect(screen.getByRole('alert').textContent).toContain('time zone')
   expect(select.value).toBe('Asia/Tokyo')
   expect(screen.queryByText('Your time zone is saved.')).toBeNull()
+})
+
+test("coming back to the page shows the account's zone, not the one the app had at sign-in", async () => {
+  browserIn('Europe/Lisbon')
+  fakeFetch({ 'GET /api/me': { body: me('Asia/Tokyo') } })
+  // The app was given 'UTC' when the person signed in, and has not heard of the zone saved since.
+  render(<TimeZonePanel initial="UTC" />)
+  const select = screen.getByLabelText('Your time zone') as HTMLSelectElement
+  await waitFor(() => expect(select.value).toBe('Asia/Tokyo'))
 })
