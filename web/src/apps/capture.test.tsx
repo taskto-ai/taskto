@@ -334,11 +334,15 @@ test('touch-action: none is set on the signature pad and nowhere else in the app
     }
   }
   walk(join(import.meta.dirname, '..'))
-  // The stylesheet rule for the pad's class, and the pad's own inline style.
-  expect(found.sort()).toEqual(['apps/SignaturePad.tsx', 'styles.css'])
-  const css = readFileSync(join(import.meta.dirname, '../styles.css'), 'utf8')
-  const rule = /([^{}]+)\{[^}]*touch-action:\s*none[^}]*\}/.exec(css.replace(/\/\*[\s\S]*?\*\//g, ''))
-  expect(rule?.[1].trim()).toBe('.tt-signature-canvas')
+  // The stylesheet rule for the pad's class, and the pad's own inline style. (styles.css still holds
+  // the pad's old rule, for its old class, until the old stylesheet's unused rules are removed.)
+  expect(found.filter((f) => f !== 'styles.css').sort()).toEqual(['apps/SignaturePad.tsx', 'apps/capture.css'])
+  for (const file of found.filter((f) => f.endsWith('.css'))) {
+    const css = readFileSync(join(import.meta.dirname, '..', file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const selectors = [...css.matchAll(/([^{}]+)\{[^}]*touch-action:\s*none[^}]*\}/g)].map((m) => m[1].trim())
+    expect(selectors.length, file).toBeGreaterThan(0)
+    for (const sel of selectors) expect(['.tt-signature-canvas', '.ui-signature-canvas'], file).toContain(sel)
+  }
 })
 
 test('drawing keeps the strokes, undo and clear take them back, and saving uploads a PNG', async () => {
@@ -403,7 +407,7 @@ test('a name typed and confirmed is a signature too, for the keyboard', async ()
   fakeFetch(uploadRoutes())
   const changed = vi.fn()
   render(<Sign onValue={changed} />)
-  fireEvent.click(screen.getByRole('button', { name: 'Type your name' }))
+  fireEvent.click(screen.getByRole('radio', { name: 'Type your name' }))
   const save = screen.getByRole('button', { name: 'Save signature' }) as HTMLButtonElement
   expect(save.disabled).toBe(true)
   fireEvent.change(screen.getByLabelText('Your full name'), { target: { value: 'Ada Lovelace' } })

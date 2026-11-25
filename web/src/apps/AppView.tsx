@@ -180,7 +180,7 @@ export function AppView({
   useEffect(() => {
     if (!busy || !section) return
     const off = [...section.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')].filter(
-      (b) => !b.closest('.tt-capture'),
+      (b) => !b.closest('.ui-capture'),
     )
     for (const b of off) b.disabled = true
     return () => {

@@ -10,8 +10,15 @@
 
 import { useContext, useEffect, useId, useRef, useState } from 'react'
 import { useFormat, useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Field } from '../ui/Field'
+import { Icon } from '../ui/Icon'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Spinner } from '../ui/Spinner'
 import { type CaptureInfo, coordinates, currentPosition, type Location, manualLocation, PositionError } from './capture'
 import { SubmitCapturesContext } from './submit'
+import './capture.css'
 
 export function LocationField({
   label,
@@ -91,92 +98,80 @@ export function LocationField({
 
   const heading = label ?? t('apps.location.label')
   return (
-    <fieldset className="tt-capture" aria-describedby={readOnly ? undefined : `${ids}-note`}>
-      <legend className="tt-capture-label">{heading}</legend>
+    <fieldset className="ui-capture" aria-describedby={readOnly ? undefined : `${ids}-note`}>
+      <legend className="ui-capture-label">{heading}</legend>
       {value ? (
-        <p className="tt-capture-value" role="status">
-          <strong>{coordinates(value, f)}</strong>
-          <span className="tt-muted tt-small">
-            {' '}
-            {value.accuracy_m !== undefined
-              ? t('apps.location.accuracy', { meters: f.number(Math.round(value.accuracy_m)) })
-              : t('apps.location.noAccuracy')}
-            {' · '}
-            {f.dateTime(value.captured_at)}
-            {' · '}
-            {t(value.source === 'device' ? 'apps.location.fromDevice' : 'apps.location.byHand')}
+        <p className="ui-capture-value" role="status">
+          <Icon name="pin" size={16} />
+          <span className="ui-capture-value-text">
+            <strong>{coordinates(value, f)}</strong>
+            <span className="ui-capture-detail">
+              {value.accuracy_m !== undefined
+                ? t('apps.location.accuracy', { meters: f.number(Math.round(value.accuracy_m)) })
+                : t('apps.location.noAccuracy')}
+              {' · '}
+              {f.dateTime(value.captured_at)}
+              {' · '}
+              {t(value.source === 'device' ? 'apps.location.fromDevice' : 'apps.location.byHand')}
+            </span>
           </span>
         </p>
       ) : (
-        readOnly && <p className="tt-muted">{t('apps.location.none')}</p>
+        readOnly && <p className="ui-capture-empty">{t('apps.location.none')}</p>
       )}
       {!readOnly && (
-        <div className="tt-capture-actions">
-          <button type="button" className="tt-button" disabled={busy} onClick={() => void capture()}>
+        <div className="ui-capture-actions">
+          <Button icon="pin" loading={busy} disabled={busy} onClick={() => void capture()}>
             {t(value ? 'apps.location.captureAgain' : 'apps.location.capture')}
-          </button>
-          <button
-            type="button"
-            className="tt-button"
+          </Button>
+          <Button
+            variant="ghost"
             aria-expanded={manual}
             aria-controls={`${ids}-manual`}
             onClick={() => setManual((open) => !open)}
           >
             {t(manual ? 'apps.location.hideManual' : 'apps.location.enterByHand')}
-          </button>
+          </Button>
           {value && (
-            <button type="button" className="tt-button" onClick={() => onChange(undefined)}>
+            <Button variant="ghost" onClick={() => onChange(undefined)}>
               {t('apps.location.remove')}
-            </button>
+            </Button>
           )}
         </div>
       )}
       {busy && (
-        <p role="status" className="tt-muted tt-small">
+        <p role="status" className="ui-capture-progress">
+          <Spinner size="sm" />
           {t('apps.location.capturing')}
         </p>
       )}
-      {failure && (
-        <p role="alert" className="tt-error tt-small">
-          {failure}
-        </p>
-      )}
+      {failure && <Notice tone="danger">{failure}</Notice>}
       {!readOnly && manual && (
-        <div id={`${ids}-manual`} className="tt-capture-manual">
-          <label className="tt-capture-field">
-            {t('apps.location.latitude')}
-            <input
-              className="tt-capture-input"
+        <div id={`${ids}-manual`} className="ui-capture-manual">
+          <Field label={t('apps.location.latitude')}>
+            <Input
               inputMode="decimal"
               autoComplete="off"
               value={lat}
-              aria-invalid={invalid || undefined}
+              invalid={invalid}
               onChange={(e) => setLat(e.target.value)}
             />
-          </label>
-          <label className="tt-capture-field">
-            {t('apps.location.longitude')}
-            <input
-              className="tt-capture-input"
+          </Field>
+          <Field label={t('apps.location.longitude')}>
+            <Input
               inputMode="decimal"
               autoComplete="off"
               value={lon}
-              aria-invalid={invalid || undefined}
+              invalid={invalid}
               onChange={(e) => setLon(e.target.value)}
             />
-          </label>
-          <button type="button" className="tt-button" onClick={applyManual}>
-            {t('apps.location.useManual')}
-          </button>
-          {invalid && (
-            <p role="alert" className="tt-error tt-small">
-              {t('apps.location.manualInvalid')}
-            </p>
-          )}
+          </Field>
+          <Button onClick={applyManual}>{t('apps.location.useManual')}</Button>
+          {invalid && <Notice tone="danger">{t('apps.location.manualInvalid')}</Notice>}
         </div>
       )}
       {!readOnly && (
-        <p id={`${ids}-note`} className="tt-muted tt-small">
+        <p id={`${ids}-note`} className="ui-capture-note">
           {t(at === 'submit' ? 'apps.location.submitNote' : 'apps.location.buttonNote')}
           {info?.editable === false && ` ${t('apps.location.locked')}`}
         </p>

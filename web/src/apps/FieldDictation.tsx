@@ -14,7 +14,8 @@
 import { useSyncExternalStore } from 'react'
 import { useDictation } from '../conversations/Dictation'
 import { useT } from '../i18n'
-import { Icon } from '../shell/Icon'
+import { IconButton } from '../ui/IconButton'
+import './capture.css'
 
 function subscribe(onChange: () => void) {
   window.addEventListener('online', onChange)
@@ -58,17 +59,9 @@ export function FieldDictation({
   })
   if (!online) {
     return (
-      <div className="tt-dictate">
-        <button
-          type="button"
-          className="tt-button"
-          disabled
-          aria-label={t('apps.dictation.dictate', { field })}
-          title={t('apps.dictation.offline')}
-        >
-          <Icon name="mic" />
-        </button>
-        <span role="status" className="tt-muted tt-small">
+      <div className="ui-dictate">
+        <IconButton icon="mic" disabled label={t('apps.dictation.dictate', { field })} />
+        <span role="status" className="ui-dictate-note">
           {t('apps.dictation.offline')}
         </span>
       </div>
@@ -77,10 +70,10 @@ export function FieldDictation({
   // A server without dictation, or that can't say: nothing to offer.
   if (!dictation.controls) return null
   return (
-    <div className="tt-dictate">
+    <div className="ui-dictate">
       {dictation.controls}
       {dictation.unavailable !== undefined && (
-        <span role="status" className="tt-muted tt-small">
+        <span role="status" className="ui-dictate-note">
           {t('apps.dictation.unavailable', { reason: dictation.unavailable })}
         </span>
       )}

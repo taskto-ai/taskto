@@ -8,8 +8,15 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Field } from '../ui/Field'
+import { Icon } from '../ui/Icon'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Spinner } from '../ui/Spinner'
 import type { CaptureInfo } from './capture'
 import { canUseCamera, createDetector, DecoderError, scan } from './scanner'
+import './capture.css'
 
 export function BarcodeField({
   label,
@@ -96,27 +103,24 @@ export function BarcodeField({
 
   const heading = label ?? t('apps.barcode.label')
   return (
-    <fieldset className="tt-capture" aria-describedby={`${ids}-note`}>
-      <legend className="tt-capture-label">{heading}</legend>
-      <label className="tt-capture-field">
-        {t('apps.barcode.typed')}
-        <input
-          className="tt-capture-input"
-          value={value}
-          autoComplete="off"
-          autoCapitalize="off"
-          spellCheck={false}
-          onChange={(e) => {
-            setScanned(null)
-            onChange(e.target.value)
-          }}
-        />
-      </label>
-      <div className="tt-capture-actions">
+    <fieldset className="ui-capture" aria-describedby={`${ids}-note`}>
+      <legend className="ui-capture-label">{heading}</legend>
+      <div className="ui-capture-row">
+        <Field label={t('apps.barcode.typed')}>
+          <Input
+            value={value}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            onChange={(e) => {
+              setScanned(null)
+              onChange(e.target.value)
+            }}
+          />
+        </Field>
         {camera && (
-          <button
-            type="button"
-            className="tt-button"
+          <Button
+            icon={scanning ? 'stop' : 'search'}
             aria-pressed={scanning}
             onClick={() => {
               setProblem(null)
@@ -125,28 +129,26 @@ export function BarcodeField({
             }}
           >
             {t(scanning ? 'apps.barcode.stop' : 'apps.barcode.scan')}
-          </button>
+          </Button>
         )}
       </div>
       {scanning && (
-        <div className="tt-barcode-camera">
+        <div className="ui-capture-camera">
           <video ref={video} playsInline muted aria-label={t('apps.barcode.view')} />
-          <p role="status" className="tt-muted tt-small">
+          <p role="status" className="ui-capture-progress">
+            <Spinner size="sm" />
             {t('apps.barcode.scanning')}
           </p>
         </div>
       )}
       {scanned && (
-        <p role="status" className="tt-small">
+        <p role="status" className="ui-capture-done">
+          <Icon name="check" size={16} />
           {t('apps.barcode.scanned', { code: scanned })}
         </p>
       )}
-      {problem && (
-        <p role="alert" className="tt-error tt-small">
-          {problem}
-        </p>
-      )}
-      <p id={`${ids}-note`} className="tt-muted tt-small">
+      {problem && <Notice tone="danger">{problem}</Notice>}
+      <p id={`${ids}-note`} className="ui-capture-note">
         {camera ? t('apps.barcode.note') : t('apps.barcode.noCamera')}
         {format &&
           ` ${t('apps.barcode.format', { format: t(`apps.barcode.formats.${format}` as 'apps.barcode.formats.qr_code') })}`}

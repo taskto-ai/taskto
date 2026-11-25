@@ -526,7 +526,11 @@ test('a record opens in a drawer beside the list; deleting it asks first, and a 
     }),
   )
   await waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
-  const sent = calls.find((c) => c.method === 'POST')?.body as { name: string; context: unknown; expectedRevision: number }
+  const sent = calls.find((c) => c.method === 'POST')?.body as {
+    name: string
+    context: unknown
+    expectedRevision: number
+  }
   expect(sent.name).toBe('remove')
   expect(sent.context).toEqual({ id: 4 })
   expect(sent.expectedRevision).toBe(2)

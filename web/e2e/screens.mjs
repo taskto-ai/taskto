@@ -166,7 +166,12 @@ const COMPONENTS_APP = {
       { name: 'hours', type: 'number' },
     ],
   },
-  actions: { add: { kind: 'insert' }, noop: { kind: 'navigate', screen: 'main' } },
+  actions: {
+    add: { kind: 'insert' },
+    edit: { kind: 'update' },
+    remove: { kind: 'delete' },
+    noop: { kind: 'navigate', screen: 'main' },
+  },
   summaries: { count: { kind: 'count' }, total_hours: { kind: 'sum', field: 'hours' } },
 }
 
@@ -395,6 +400,31 @@ export const SCREENS = [
       await text(s, 'Submit', true).scrollIntoViewIfNeeded()
     },
     ready: (s) => [text(s, 'Submit', true), text(s, 'Safety notes', true)],
+  },
+  {
+    // Its records, opened from the app's header: the explorer (a table, or rows on a phone).
+    name: 'app-records',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`))
+      await s.page.getByRole('button', { name: 'Records and history' }).click()
+      await text(s, 'Riverside depot', true).first().waitFor()
+    },
+    ready: (s) => [text(s, 'Riverside depot', true).first(), text(s, /matching records/)],
+  },
+  {
+    // One record open, with its fields and its history.
+    name: 'app-record',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`))
+      await s.page.getByRole('button', { name: 'Records and history' }).click()
+      await s.page
+        .getByRole('button', { name: /^Open record \d+$/ })
+        .first()
+        .click()
+    },
+    ready: (s) => [heading(s, /^Record \d+$/), text(s, /^History$/)],
   },
   {
     name: 'app-builder',
@@ -978,11 +1008,26 @@ async function seed({ api, base, workspace, agent, say }) {
     apps.push(app)
   }
   // An app that uses every component of the renderer an app may (docs/design.md, "The apps
-  // renderer").
+  // renderer"), with a few records through its own action, for its records and their history.
   {
     const app = await api('POST', `${P}/apps`, { name: COMPONENTS_APP_NAME, definition: COMPONENTS_APP })
     await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
     apps.componentsApp = app.id
+    const visits = [
+      ['North pumping station', 3.5],
+      ['Riverside depot', 1.25],
+      ['Old mill substation', 6],
+    ]
+    for (const [i, [site, hours]] of visits.entries()) {
+      await api('POST', `${P}/apps/${app.id}/actions`, {
+        name: 'add',
+        surfaceId: `app-${app.id}`,
+        sourceComponentId: 'a-save',
+        timestamp: new Date().toISOString(),
+        context: { site, hours },
+        operation: `screens-visit-${i}`,
+      })
+    }
   }
   const available = (await api('GET', `${W}/home/available`)).apps ?? []
   let homeApp

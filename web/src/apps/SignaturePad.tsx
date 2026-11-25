@@ -17,8 +17,17 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Checkbox } from '../ui/Checkbox'
+import { Field } from '../ui/Field'
+import { Icon } from '../ui/Icon'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { SegmentedControl } from '../ui/SegmentedControl'
+import { Spinner } from '../ui/Spinner'
 import type { AppFiles } from './PhotoInput'
 import { discardPhoto, photoUrl, thumbnailUrl, uploadPhoto } from './photos'
+import './capture.css'
 
 // A point of a stroke as fractions of the pad's width and height.
 type Point = { x: number; y: number }
@@ -251,21 +260,26 @@ export function SignatureField({
 
   if (value && files) {
     return (
-      <fieldset className="tt-capture">
-        <legend className="tt-capture-label">{heading}</legend>
+      <fieldset className="ui-capture">
+        <legend className="ui-capture-label">{heading}</legend>
         {files.local ? (
           // Still on this device: nothing of it is on the server to link to.
-          <img className="tt-signature-image" src={files.local.url(value)} alt={t('apps.signature.alt')} />
+          <img className="ui-signature-image" src={files.local.url(value)} alt={t('apps.signature.alt')} />
         ) : (
-          <a href={photoUrl(files.base, value)} target="_blank" rel="noopener noreferrer">
-            <img className="tt-signature-image" src={thumbnailUrl(files.base, value)} alt={t('apps.signature.alt')} />
+          <a className="ui-capture-link" href={photoUrl(files.base, value)} target="_blank" rel="noopener noreferrer">
+            <img className="ui-signature-image" src={thumbnailUrl(files.base, value)} alt={t('apps.signature.alt')} />
           </a>
         )}
-        {!readOnly && (
-          <div className="tt-capture-actions">
-            <button type="button" className="tt-button" onClick={signAgain}>
+        {readOnly ? (
+          <p className="ui-capture-done">
+            <Icon name="check" size={16} />
+            {t('apps.signature.signed')}
+          </p>
+        ) : (
+          <div className="ui-capture-actions">
+            <Button variant="ghost" onClick={signAgain}>
               {t('apps.signature.again')}
-            </button>
+            </Button>
           </div>
         )}
       </fieldset>
@@ -273,31 +287,32 @@ export function SignatureField({
   }
   if (readOnly) {
     return (
-      <fieldset className="tt-capture">
-        <legend className="tt-capture-label">{heading}</legend>
-        <p className="tt-muted">{t('apps.signature.none')}</p>
+      <fieldset className="ui-capture">
+        <legend className="ui-capture-label">{heading}</legend>
+        <p className="ui-capture-empty">{t('apps.signature.none')}</p>
       </fieldset>
     )
   }
 
   const typedReady = name.trim() !== '' && confirmed
   return (
-    <fieldset className="tt-capture" aria-describedby={`${ids}-note`}>
-      <legend className="tt-capture-label">{heading}</legend>
-      <fieldset className="tt-capture tt-capture-actions" aria-label={t('apps.signature.how')}>
-        <button type="button" className="tt-button" aria-pressed={mode === 'draw'} onClick={() => setMode('draw')}>
-          {t('apps.signature.draw')}
-        </button>
-        <button type="button" className="tt-button" aria-pressed={mode === 'type'} onClick={() => setMode('type')}>
-          {t('apps.signature.type')}
-        </button>
-      </fieldset>
+    <fieldset className="ui-capture" aria-describedby={`${ids}-note`}>
+      <legend className="ui-capture-label">{heading}</legend>
+      <SegmentedControl
+        label={t('apps.signature.how')}
+        options={[
+          { value: 'draw', label: t('apps.signature.draw'), icon: 'edit' },
+          { value: 'type', label: t('apps.signature.type') },
+        ]}
+        value={mode}
+        onChange={setMode}
+      />
       {mode === 'draw' ? (
         <>
           {/* touch-action: none is on the pad and nowhere else: the page scrolls around it. */}
           <canvas
             ref={canvas}
-            className="tt-signature-canvas"
+            className="ui-signature-canvas"
             style={{ touchAction: 'none' }}
             role="img"
             aria-label={t('apps.signature.pad')}
@@ -306,59 +321,51 @@ export function SignatureField({
             onPointerUp={up}
             onPointerCancel={up}
           />
-          <div className="tt-capture-actions">
-            <button type="button" className="tt-button" disabled={count === 0 || saving} onClick={undo}>
+          <div className="ui-capture-actions">
+            <Button variant="ghost" disabled={count === 0 || saving} onClick={undo}>
               {t('apps.signature.undo')}
-            </button>
-            <button type="button" className="tt-button" disabled={count === 0 || saving} onClick={clear}>
+            </Button>
+            <Button variant="ghost" disabled={count === 0 || saving} onClick={clear}>
               {t('apps.signature.clear')}
-            </button>
-            <button
-              type="button"
-              className="tt-button tt-primary"
+            </Button>
+            <Button
+              icon="check"
+              loading={saving}
               disabled={count === 0 || saving || !uploads}
               onClick={() => void save(strokesToCanvas(strokes.current))}
             >
               {t('apps.signature.save')}
-            </button>
+            </Button>
           </div>
         </>
       ) : (
-        <div className="tt-capture-manual">
-          <label className="tt-capture-field">
-            {t('apps.signature.name')}
-            <input
-              className="tt-capture-input"
-              value={name}
-              autoComplete="name"
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
-          <label className="tt-capture-field tt-capture-check">
-            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
-            {t('apps.signature.confirm')}
-          </label>
-          <button
-            type="button"
-            className="tt-button tt-primary"
+        <div className="ui-capture-manual">
+          <Field label={t('apps.signature.name')}>
+            <Input value={name} autoComplete="name" onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Checkbox
+            label={t('apps.signature.confirm')}
+            checked={confirmed}
+            onChange={(e) => setConfirmed(e.target.checked)}
+          />
+          <Button
+            icon="check"
+            loading={saving}
             disabled={!typedReady || saving || !uploads}
             onClick={() => void save(nameToCanvas(name.trim()))}
           >
             {t('apps.signature.saveTyped')}
-          </button>
+          </Button>
         </div>
       )}
       {saving && (
-        <p role="status" className="tt-muted tt-small">
+        <p role="status" className="ui-capture-progress">
+          <Spinner size="sm" />
           {t('apps.signature.saving')}
         </p>
       )}
-      {problem && (
-        <p role="alert" className="tt-error tt-small">
-          {problem}
-        </p>
-      )}
-      <p id={`${ids}-note`} className="tt-muted tt-small">
+      {problem && <Notice tone="danger">{problem}</Notice>}
+      <p id={`${ids}-note`} className="ui-capture-note">
         {!uploads
           ? t(files ? 'apps.signature.previewOnly' : 'apps.signature.notHere')
           : t(files?.local ? 'apps.signature.noteOffline' : 'apps.signature.note')}

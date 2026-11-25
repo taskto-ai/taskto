@@ -1,0 +1,314 @@
+/* An app's capture fields (photo, location, signature, barcode) and the dictation beside its text
+   fields. Each is a group with Field's label as its legend, its value or state, its actions as
+   buttons a finger can use (44px, whatever the pointer), and a note on how it works. The pad and the
+   camera keep their fixed grounds: paper and media, the same in every theme. */
+
+@layer screens {
+  .ui-capture {
+    display: grid;
+    gap: var(--space-3);
+    min-inline-size: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .ui-capture-label {
+    padding: 0;
+    margin-block-end: var(--space-1);
+    font: var(--type-small);
+    font-weight: 500;
+    color: var(--color-text);
+  }
+
+  .ui-capture .ui-button {
+    min-block-size: var(--control-touch);
+  }
+
+  .ui-capture .ui-icon-button {
+    min-block-size: var(--control-touch);
+    min-inline-size: var(--control-touch);
+  }
+
+  .ui-capture-actions,
+  .ui-photo-add {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  /* A typed field and its button side by side, the button under it on a phone. */
+  .ui-capture-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-2);
+  }
+
+  .ui-capture-row > .ui-field {
+    flex: 1 1 calc(var(--space-16) * 3);
+  }
+
+  .ui-capture-manual {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-sunken);
+  }
+
+  .ui-capture-manual > .ui-field {
+    justify-self: stretch;
+  }
+
+  /* What was captured: a mark, the value, and how and when it was taken. */
+  .ui-capture-value {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin: 0;
+    padding: var(--space-3);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-capture-value > .ui-icon {
+    flex: none;
+    margin-block-start: var(--space-1);
+    color: var(--color-success);
+  }
+
+  .ui-capture-value-text {
+    display: grid;
+    gap: var(--space-1);
+    min-inline-size: 0;
+  }
+
+  .ui-capture-detail,
+  .ui-capture-note,
+  .ui-capture-empty,
+  .ui-dictate-note {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  /* In progress (muted, with a spinner), and done (the success colour, with a check). */
+  .ui-capture-progress {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-capture-done {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    font: var(--type-small);
+    font-weight: 500;
+    color: var(--color-success);
+  }
+
+  .ui-capture-link {
+    display: block;
+    justify-self: start;
+    border-radius: var(--radius-md);
+  }
+
+  .ui-capture-link:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  /* The pad: touch-action is none here, on the canvas alone, so a touch that starts on it draws and
+     everything else on the page scrolls as usual (it is also set inline, where the element is made).
+     Three times as wide as high, as the picture is; the pad never takes the whole screen. Paper in
+     every theme, as the picture saved is. */
+  .ui-signature-canvas {
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    box-sizing: border-box;
+    inline-size: 100%;
+    max-inline-size: calc(var(--space-16) * 8);
+    aspect-ratio: 3 / 1;
+    border: var(--line-thin) solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-paper);
+    cursor: crosshair;
+  }
+
+  .ui-signature-canvas:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  .ui-signature-image {
+    display: block;
+    box-sizing: border-box;
+    max-inline-size: 100%;
+    inline-size: calc(var(--space-16) * 5);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-paper);
+  }
+
+  /* The camera's view, on the media ground. */
+  .ui-capture-camera {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .ui-capture-camera video {
+    display: block;
+    inline-size: 100%;
+    max-inline-size: calc(var(--space-16) * 8);
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    border-radius: var(--radius-md);
+    background: var(--color-media);
+  }
+
+  /* Photos: thumbnails in a grid, each with its remove button in a corner; uploads on their way
+     with their progress, a failure in the danger colour with its retry. */
+  .ui-photos {
+    margin: 0;
+    min-inline-size: 0;
+  }
+
+  .ui-photo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(calc(var(--space-16) + var(--space-8)), 1fr));
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ui-photo {
+    position: relative;
+    min-inline-size: 0;
+  }
+
+  .ui-photo img {
+    display: block;
+    box-sizing: border-box;
+    inline-size: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-media);
+  }
+
+  .ui-photo-remove {
+    position: absolute;
+    inset-block-start: var(--space-1);
+    inset-inline-end: var(--space-1);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-pop);
+  }
+
+  .ui-photo-uploads {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ui-photo-upload {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+  }
+
+  .ui-photo-upload[data-failed] {
+    border-color: var(--color-danger);
+  }
+
+  .ui-photo-name {
+    flex: 1 1 calc(var(--space-16) * 2);
+    min-inline-size: 0;
+    font: var(--type-small);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-photo-failed {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex: 1 1 100%;
+    order: 3;
+    font: var(--type-caption);
+    font-weight: 500;
+    color: var(--color-danger);
+  }
+
+  .ui-photo-progress {
+    flex: 2 1 calc(var(--space-16) * 2);
+    min-inline-size: 0;
+    block-size: var(--space-2);
+    accent-color: var(--color-focus);
+  }
+
+  /* The add buttons are labels drawn as buttons, with the file input unseen over each. */
+  .ui-photo-add > label {
+    position: relative;
+    flex: 1 1 calc(var(--space-16) * 2 + var(--space-8));
+    min-block-size: var(--control-touch);
+  }
+
+  .ui-photo-add > label:focus-within {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  .ui-photo-add > label[data-disabled] {
+    border-color: transparent;
+    background: var(--color-neutral-soft);
+    color: var(--color-text-muted);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+
+  .ui-photo-file {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .ui-photo-file:disabled {
+    cursor: not-allowed;
+  }
+
+  /* Dictation beside a text field of the app. */
+  .ui-dictate-slot {
+    margin-block-start: var(--space-1);
+  }
+
+  .ui-dictate {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+}
