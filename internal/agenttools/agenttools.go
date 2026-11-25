@@ -384,6 +384,8 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 		return &Refusal{http.StatusConflict, "the app's live release is not expected_release: nothing was done; call list_app_actions again and decide again"}
 	case errors.Is(err, apps.ErrConflict):
 		return &Refusal{http.StatusConflict, err.Error() + ": read the record again (query_app_rows) and decide again"}
+	case apps.IsRateLimited(err):
+		return &Refusal{http.StatusTooManyRequests, err.Error()}
 	case errors.Is(err, knowledge.ErrTooLarge), errors.Is(err, knowledge.ErrRepoFull):
 		return &Refusal{http.StatusRequestEntityTooLarge, err.Error()}
 	case errors.Is(err, quota.ErrExceeded):

@@ -184,6 +184,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_template_board` | 400 | The template needs a board and none was given, or takes none and one was. |
 | `app_operation_invalid` | 422 | An action's `operation` isn't 8 to 64 letters, digits, `-` or `_`. |
 | `app_operation_reused` | 409 | The `operation` was used before for a different request. |
+| `app_token_rate_limited` | 429 | The caller's access tokens ran their budget of actions in this workspace (60 a minute); `Retry-After` says when to try again (params: `max`, `seconds`). |
 | `app_effects_backlog` | 409 | The app has `max` effects waiting: the action changed nothing. |
 | `app_effect_not_failed` | 409 | Only a failed effect is retried. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
@@ -2806,6 +2807,21 @@ with, for an update or a delete, the optional `"expectedRevision"` (see
 [Records](#records-revisions-history-and-deleting); `422` if it isn't a revision, or the
 action inserts, `409` `app_record_conflict` if the record has another one). A delete marks
 the record deleted: it can be restored.
+
+With an [access token](#access-tokens) the action runs as the token's user, the changes are marked
+with the token's name, and the user's tokens together (with `run_app_action` over MCP) have a
+**budget of 60 actions a minute** in a workspace, with a burst of 60: over it the answer is
+`429 app_token_rate_limited` with `Retry-After`, in seconds, and nothing is done. A session is never
+limited. A token's `operation` keys are in the same scope as the browser's: **the key belongs to the
+user and the app, not to the credential**, so a token and a session (or two tokens) of one user who
+send the same key meet. A client should make a random key for each change (8 to 64 letters, digits,
+`-`, `_`) and never reuse one for another: the same key with the same request replays it, and the
+same key with a different request is `409 app_operation_reused`. The effects such an action sets going
+(a card, a document) are done by the server's worker, as the user and not through the token: a
+document's commit says it was made by "TaskTo app" for the user, whichever credential asked (the
+commit is found again by that name after a crash, so it doesn't carry the token's name), while a
+card made by an effect is marked with the token's name, like the record.
+
 The server checks it against the app (`422` for an event the app doesn't declare,
 another surface, a context field the collection doesn't have, a value that doesn't fit
 its field, or a row the app doesn't have), applies it, and answers with the
@@ -2992,6 +3008,8 @@ complete or fail, so one slow after its lease ran out can't end a retry made sin
 right to change that record, in the scope their roles give now); `409 app_effect_not_failed` for one
 that didn't fail; `409 app_effects_backlog` when the app already has 500 effects waiting (a retry is
 waiting work like any other); `404` for an effect of a record the caller can't read. The worker checks access again when it runs, so a retry never widens what anyone may do.
+A session only: an effect read with an [access token](#access-tokens) says `"can_retry": false`,
+since the route is not one a token reaches.
 
 #### `POST …/apps/{app}/actions/preview`
 

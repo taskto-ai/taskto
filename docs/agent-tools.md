@@ -64,6 +64,12 @@ tools again after a crash (`replay: 'safe'`), and never a write. Change a tool i
   user who may only submit records can't have it change the app (`403`), and one who reads
   only their own records gets only those from `list_app_rows` and `query_app_rows`, and totals of those alone. It has no tool to set roles,
   and nothing in a definition grants any.
+- **Actions run with a token are limited.** The actions a user's access tokens run in a workspace,
+  over MCP (`run_app_action`) and over REST (`POST …/apps/{app}/actions`) together, are a budget of
+  60 a minute (a token bucket, in memory, with a burst of 60: `apps.TokenActionsPerMinute`): over it
+  is `429 app_token_rate_limited` with `Retry-After`, a tool error for the model. A person's session
+  and a conversation's own agent are not limited. Deleted records and their history are kept until a
+  retention rule removes them, so the budget is what bounds how fast they grow.
 - **An app's action runs as the web app's does.** `run_app_action` calls the code behind
   `POST …/apps/{app}/actions` (`apps.Service.RunAction`, which shares `runChange` with the route), not a
   copy of it: the live release's action is planned from its context, the user's right to submit (an insert)

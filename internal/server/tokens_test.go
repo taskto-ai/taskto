@@ -42,10 +42,12 @@ const fakePassword = "fake-test-password"
 //     in; team is one alice and bob edit.
 //   - workspace two: alice, alone.
 type stack struct {
-	t   *testing.T
-	db  *sql.DB
-	h   http.Handler
-	dir string // the data directory
+	// frozen, if set, is the time the apps go by; the real time otherwise.
+	frozen *time.Time
+	t      *testing.T
+	db     *sql.DB
+	h      http.Handler
+	dir    string // the data directory
 	// sched is the scheduler the boards' reminders are on; its worker isn't started.
 	sched *schedule.Service
 	one   int64
@@ -103,11 +105,14 @@ func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
 	if err := boardSvc.EnableReminders(sched); err != nil {
 		t.Fatal(err)
 	}
+	// The apps' clock, which a test may freeze (stack.frozen) to run the budget of tokens' actions.
+	var s *stack
+	clock := func() time.Time { return s.clockNow() }
 	tools := agenttools.New(agenttools.Options{
-		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: apps.New(sqlDB, spaces),
+		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: apps.New(sqlDB, spaces).WithClock(clock),
 		Knowledge: kb, Search: index,
 	})
-	s := &stack{t: t, db: sqlDB, dir: dir, sched: sched, setupToken: auth.NewSetupToken()}
+	s = &stack{t: t, db: sqlDB, dir: dir, sched: sched, setupToken: auth.NewSetupToken()}
 	opts := Options{
 		Scheduler:     sched,
 		Auth:          auth.Options{InsecureCookies: true, SetupToken: s.setupToken, HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}},
@@ -116,6 +121,7 @@ func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
 		Conversations: conversations.New(sqlDB, nil),
 		Tools:         tools,
 		BackupDataDir: dir,
+		AppsReady:     func(a *apps.Service) { a.WithClock(clock) },
 	}
 	if mod != nil {
 		mod(&opts, sqlDB)
@@ -891,4 +897,11 @@ func TestMCPWithoutAToken(t *testing.T) {
 			t.Errorf("token %q = %d %s, want 401", token, code, text)
 		}
 	}
+}
+
+func (s *stack) clockNow() time.Time {
+	if s.frozen != nil {
+		return *s.frozen
+	}
+	return time.Now()
 }

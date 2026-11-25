@@ -3,8 +3,10 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apps"
@@ -228,5 +230,92 @@ func TestAppsTokensRefuseTheExpectedUserHeader(t *testing.T) {
 	})
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("a token naming its account = %d %s, want 403", rec.Code, rec.Body)
+	}
+}
+
+// A user's tokens have a budget of actions in a workspace, whichever route they run them on:
+// over it the answer is a 429 with Retry-After and a code the web app translates. The budget is
+// the user's own: a session, another user's token and the same user's other workspace are
+// untouched by it.
+func TestAppsTokensHaveAnActionBudget(t *testing.T) {
+	s := newStack(t)
+	appID := s.app(s.alice.cookie, s.alice.private, "coffee")
+	bobApp := s.app(s.bob.cookie, s.bob.private, "tea")
+	first, _ := s.newToken(s.alice.cookie, s.one, "laptop")
+	second, _ := s.newToken(s.alice.cookie, s.one, "phone")
+	bob, _ := s.newToken(s.bob.cookie, s.one, "bob's agent")
+	base := fmt.Sprintf("%s/%d", s.apps(s.one, s.alice.private), appID)
+
+	frozen := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	s.frozen = &frozen
+
+	// The burst is spent by two tokens of the same user between them.
+	for i := range apps.TokenActionBurst {
+		token := first
+		if i%2 == 1 {
+			token = second
+		}
+		if rec := s.request(http.MethodPost, base+"/actions", addExpense(appID, fmt.Sprintf("row %d", i)), bearer(token)); rec.Code != http.StatusOK {
+			t.Fatalf("action %d = %d %s", i+1, rec.Code, rec.Body)
+		}
+	}
+	for _, token := range []string{first, second} {
+		rec := s.request(http.MethodPost, base+"/actions", addExpense(appID, "one too many"), bearer(token))
+		retry, err := strconv.Atoi(rec.Header().Get("Retry-After"))
+		if rec.Code != http.StatusTooManyRequests || err != nil || retry < 1 || !strings.Contains(rec.Body.String(), `"code":"app_token_rate_limited"`) {
+			t.Fatalf("over the budget = %d %s, Retry-After %q", rec.Code, rec.Body, rec.Header().Get("Retry-After"))
+		}
+	}
+	// Over MCP the same budget refuses, as a tool error.
+	release := s.toolOK(first, "list_app_actions", map[string]any{"space_id": s.alice.private, "app_id": appID})["release"]
+	if code, refused, text := s.tool(first, "run_app_action", map[string]any{"space_id": s.alice.private, "app_id": appID, "expected_release": release, "action": "add_expense", "context": map[string]any{"description": "x", "amount": 4}}); code != http.StatusOK || !refused || !strings.Contains(text, "too many actions") {
+		t.Errorf("run_app_action over the budget = %d %v %s, want a refusal", code, refused, text)
+	}
+	if n := s.scalar(`SELECT count(*) FROM app_rows WHERE app_id = ?`, appID); n != apps.TokenActionBurst+1 {
+		t.Errorf("%d rows, want the coffee and the %d the budget allowed", n, apps.TokenActionBurst)
+	}
+
+	// Reading is not an action: it is not limited.
+	if code, _ := s.api(first, http.MethodGet, base+"/records", nil); code != http.StatusOK {
+		t.Errorf("a token reads over its action budget = %d", code)
+	}
+	// A second later one action is back; no more.
+	frozen = frozen.Add(time.Second)
+	if rec := s.request(http.MethodPost, base+"/actions", addExpense(appID, "later"), bearer(first)); rec.Code != http.StatusOK {
+		t.Errorf("an action a second later = %d %s", rec.Code, rec.Body)
+	}
+	if rec := s.request(http.MethodPost, base+"/actions", addExpense(appID, "too soon"), bearer(second)); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("a second action in that second = %d %s, want 429", rec.Code, rec.Body)
+	}
+	// The user's session, who is a person, still acts.
+	if code, body := s.browser(s.alice.cookie, http.MethodPost, base+"/actions", addExpense(appID, "by hand")); code != http.StatusOK {
+		t.Errorf("a session acts after its user's tokens ran out = %d %v", code, body)
+	}
+	// Another user's token has a budget of its own.
+	if rec := s.request(http.MethodPost, fmt.Sprintf("%s/%d/actions", s.apps(s.one, s.bob.private), bobApp), addExpense(bobApp, "bob's"), bearer(bob)); rec.Code != http.StatusOK {
+		t.Errorf("bob's token after alice's ran out = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// An app restricted to roles holds a token to them too: a reader's token reads the rows in a
+// space that lets her write, and can't insert.
+func TestAppsTokensKeepTheAppsRoles(t *testing.T) {
+	s := newStack(t)
+	bob, _ := s.newToken(s.bob.cookie, s.one, "bob's agent")
+
+	// Alice shares a space with bob as an editor, then restricts an app in it to a reader role.
+	space := s.sharedSpace("Cafe", s.bob)
+	shared := s.app(s.alice.cookie, space, "shared")
+	sharedBase := fmt.Sprintf("%s/%d", s.apps(s.one, space), shared)
+	grants := map[string]any{"grants": []map[string]any{{"user_id": s.bob.id, "roles": []string{"reader"}}}}
+	if code, body := s.browser(s.alice.cookie, http.MethodPut, sharedBase+"/roles", grants); code != http.StatusOK {
+		t.Fatalf("restrict the app = %d %v", code, body)
+	}
+	if code, body := s.api(bob, http.MethodGet, sharedBase+"/records", nil); code != http.StatusOK || len(body["records"].([]any)) != 1 {
+		t.Errorf("a reader's token reads = %d %v, want the row", code, body)
+	}
+	rec := s.request(http.MethodPost, sharedBase+"/actions", addExpense(shared, "no"), bearer(bob))
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":"app_forbidden"`) {
+		t.Errorf("a reader's token inserts = %d %s, want 403 app_forbidden", rec.Code, rec.Body)
 	}
 }

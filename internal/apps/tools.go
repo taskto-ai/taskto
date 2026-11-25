@@ -392,6 +392,9 @@ func (s *Service) runAction(ctx context.Context, a Actor, spaceID, appID int64, 
 	if err := may(sp, access.Write); err != nil {
 		return ActionResult{}, err
 	}
+	if err := s.spendTokenAction(a, sp.WorkspaceID); err != nil {
+		return ActionResult{}, err
+	}
 	done, err := s.runChange(ctx, sp, a, appID, action)
 	if err != nil {
 		return ActionResult{}, err
