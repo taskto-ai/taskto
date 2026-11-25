@@ -718,3 +718,64 @@ test('an error about a field goes once that field is edited, and stays while ano
   expect(token.getAttribute('aria-invalid')).toBeNull()
   expect(screen.queryByRole('alert')).toBeNull()
 })
+
+// --- One request at a time, whatever submits the form (not only its button).
+
+const formOf = (label: string) => {
+  const form = screen.getByLabelText(label).closest('form')
+  if (!form) throw new Error(`no form around ${label}`)
+  return form
+}
+
+test('a login submitted twice while the first is on its way sends one request', async () => {
+  let answer: (v: { body: unknown }) => void = () => {}
+  const calls = fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': () => new Promise((resolve) => (answer = resolve)),
+  })
+  const onDone = vi.fn()
+  render(<LoginScreen onDone={onDone} />)
+  fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'owner@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.submit(formOf('Password'))
+  fireEvent.submit(formOf('Password'))
+  await vi.waitFor(() => expect(calls.filter((c) => c.path === '/api/login')).toHaveLength(1))
+  answer({ body: owner })
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce())
+  expect(calls.filter((c) => c.path === '/api/login')).toHaveLength(1)
+})
+
+test('setup submitted twice while the first is on its way sends one request, and a later try is let through', async () => {
+  let answer: (v: { status?: number; body: unknown }) => void = () => {}
+  const calls = fakeFetch({ 'POST /api/setup': () => new Promise((resolve) => (answer = resolve)) })
+  render(<SetupScreen onDone={() => {}} />)
+  fireEvent.change(screen.getByLabelText('Setup token'), { target: { value: 'wrong-token' } })
+  fireEvent.change(screen.getByLabelText('Your name'), { target: { value: 'Owner' } })
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.submit(formOf('Setup token'))
+  fireEvent.submit(formOf('Setup token'))
+  await vi.waitFor(() => expect(calls.filter((c) => c.path === '/api/setup')).toHaveLength(1))
+  answer({ status: 403, body: { error: 'wrong token', code: 'setup_token' } })
+  await screen.findByRole('alert')
+  // Settled: the next submit goes.
+  fireEvent.submit(formOf('Setup token'))
+  await vi.waitFor(() => expect(calls.filter((c) => c.path === '/api/setup')).toHaveLength(2))
+})
+
+test('a reset link asked for twice while the first is on its way is asked for once', async () => {
+  let answer: (v: { status?: number; body: unknown }) => void = () => {}
+  const calls = fakeFetch({
+    'GET /api/login/methods': { body: { ...both, reset_by_email: true } },
+    'POST /api/password-reset/request': () => new Promise((resolve) => (answer = resolve)),
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Forgot your password?' }))
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ana@example.com' } })
+  fireEvent.submit(formOf('Email'))
+  fireEvent.submit(formOf('Email'))
+  await vi.waitFor(() => expect(calls.filter((c) => c.path === '/api/password-reset/request')).toHaveLength(1))
+  answer({ status: 202, body: {} })
+  await screen.findByText('Check your email')
+  expect(calls.filter((c) => c.path === '/api/password-reset/request')).toHaveLength(1)
+})

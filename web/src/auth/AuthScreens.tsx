@@ -91,8 +91,14 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
   const edited = useEdited(failure, setFailure)
+  // One request at a time, whatever submits the form: the button ignores a press while it works,
+  // but a form can be submitted another way (requestSubmit, a browser or an extension). A ref, not
+  // `busy`: the state this function closed over is the one from before the first submit.
+  const inFlight = useRef(false)
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(true)
     setFailure(null)
     try {
@@ -102,6 +108,8 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
     } catch (err) {
       setFailure(failureOf(err))
       setBusy(false)
+    } finally {
+      inFlight.current = false
     }
   }
   return { busy, failure, submit, edited }
@@ -193,8 +201,12 @@ function SsoButtons({ providers, next }: { providers: LoginMethods['sso']; next:
   const t = useT()
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // One start at a time, whatever presses: the state this function closed over can be stale.
+  const inFlight = useRef(false)
   if (providers.length === 0) return null
   const go = async (id: string) => {
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(id)
     setError(null)
     try {
@@ -202,10 +214,12 @@ function SsoButtons({ providers, next }: { providers: LoginMethods['sso']; next:
         method: 'POST',
         body: { next },
       })
+      // The page is leaving for the provider: it stays started.
       window.location.assign(url)
     } catch (err) {
       setError(errorText(err))
       setBusy(null)
+      inFlight.current = false
     }
   }
   return (
@@ -501,8 +515,12 @@ function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; 
   const [failure, setFailure] = useState<Failure | null>(null)
   const edited = useEdited(failure, setFailure)
   const [sentTo, setSentTo] = useState<string | null>(null)
+  // One request at a time, as useSubmit.
+  const inFlight = useRef(false)
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(true)
     setFailure(null)
     try {
@@ -511,6 +529,7 @@ function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; 
     } catch (err) {
       setFailure(failureOf(err))
     } finally {
+      inFlight.current = false
       setBusy(false)
     }
   }
