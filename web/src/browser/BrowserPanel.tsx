@@ -77,7 +77,8 @@ export function BrowserPanel({
       )}
       {personal?.running && (
         <>
-          {interactive && <Notice tone="info">{t('browser.youHaveIt')}</Notice>}
+          {/* Part of the panel, not news: the live view's own status line is the one that comes and goes. */}
+          {interactive && <Notice tone="neutral">{t('browser.youHaveIt')}</Notice>}
           <LiveView interactive={interactive} load={load} onClosed={status.reload} />
         </>
       )}

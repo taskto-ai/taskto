@@ -3,8 +3,10 @@
 // capture.mjs). Development only: the Vite dev server serves it at /e2e/conversation/, and no
 // build includes it. Sample data only.
 //
-// ?s= picks the scenario: chat (default), running, cli, list, empty, failed. ?lang=pt-BR or
-// ?dir=rtl to check another language or the right-to-left layout.
+// ?s= picks the scenario: chat (default), running, cli, cli-allow (a question with "allow all"
+// on), browser (the agent asks to take over a running browser), long (many messages), flaky (the
+// first read of the conversation fails with a 502), list, empty, failed. ?lang=pt-BR or ?dir=rtl
+// to check another language or the right-to-left layout.
 
 import '@fontsource-variable/bricolage-grotesque/wght.css'
 import '@fontsource-variable/inter/wght.css'
@@ -36,7 +38,10 @@ const conv = (id: number, title: string, minutes: number) => ({
   cli_permissions: 'ask',
 })
 const list = [
-  conv(7, scenario === 'cli' ? 'Fix the failing tests' : 'Plan the launch week', 2),
+  {
+    ...conv(7, scenario.startsWith('cli') ? 'Fix the failing tests' : 'Plan the launch week', 2),
+    cli_permissions: scenario === 'cli-allow' ? 'allow_all' : 'ask',
+  },
   conv(6, 'Summarise the weekly notes', 60 * 26),
   conv(5, 'Expense tracker with receipts', 60 * 24 * 3),
   conv(4, 'Onboarding checklist copy', 60 * 24 * 5),
@@ -141,8 +146,51 @@ function chatEntries() {
 const cliCall = said('', [{ name: 'cli_turn', args: { cli: 'claude', model: 'default' } }])
 const cliCallId = (cliCall.model[0].content[0] as { id: string }).id
 
+const cliView = {
+  entries: [user('Fix the failing tests in the importer.'), cliCall],
+  docs: {
+    'pi.live': {
+      run: { taskId: 4 },
+      tools: [
+        {
+          callId: cliCallId,
+          name: 'cli_turn',
+          status: 'running',
+          output: '$ go test ./internal/importer/...\n--- FAIL: TestDates (0.01s)\n? Claude Code asks to use Bash',
+        },
+      ],
+    },
+  },
+}
+
+// Sixteen messages, for a transcript longer than the window.
+function longEntries() {
+  const out: unknown[] = []
+  for (let i = 1; i <= 8; i++) {
+    out.push(user(`Question ${i}: what is left on the launch plan?`))
+    out.push(
+      said(`Answer ${i}. Three steps are left:\n\n- Finish onboarding\n- Write the launch post\n- Record the demo`),
+    )
+  }
+  return out
+}
+
 type View = { entries: unknown[]; before?: number; docs?: Record<string, unknown> }
 const views: Record<string, View | undefined> = {
+  'cli-allow': cliView,
+  long: { entries: longEntries() },
+  flaky: { entries: chatEntries().slice(0, 4) },
+  browser: {
+    entries: [
+      user('Download my statements from the bank.'),
+      said('', [
+        {
+          name: 'browser_help',
+          args: { tab: 'T1', reason: 'login', message: 'Sign in to the bank, then press Done.' },
+        },
+      ]),
+    ],
+  },
   chat: { entries: chatEntries(), before: 99 },
   running: {
     entries: [
@@ -164,22 +212,7 @@ const views: Record<string, View | undefined> = {
       },
     },
   },
-  cli: {
-    entries: [user('Fix the failing tests in the importer.'), cliCall],
-    docs: {
-      'pi.live': {
-        run: { taskId: 4 },
-        tools: [
-          {
-            callId: cliCallId,
-            name: 'cli_turn',
-            status: 'running',
-            output: '$ go test ./internal/importer/...\n--- FAIL: TestDates (0.01s)\n? Claude Code asks to use Bash',
-          },
-        ],
-      },
-    },
-  },
+  cli: cliView,
 }
 
 const providers = [
@@ -201,10 +234,9 @@ const routes: Record<string, { status?: number; body?: unknown }> = {
     scenario === 'failed' ? { status: 404, body: { error: 'not found', code: 'not_found' } } : { body: list[0] },
   'GET /api/workspaces/1/models': { body: { providers } },
   'GET /api/workspaces/1/conversations/7/model': {
-    body:
-      scenario === 'cli'
-        ? { provider: 'cli-claude', model_id: 'default' }
-        : { provider: 'script', model_id: 'script-1' },
+    body: scenario.startsWith('cli')
+      ? { provider: 'cli-claude', model_id: 'default' }
+      : { provider: 'script', model_id: 'script-1' },
   },
   'GET /api/me/cli-accounts': {
     body: {
@@ -218,7 +250,7 @@ const routes: Record<string, { status?: number; body?: unknown }> = {
           label: '',
           name: 'Claude Code',
           available: true,
-          state: scenario === 'cli' ? 'reconnect' : 'connected',
+          state: scenario.startsWith('cli') ? 'reconnect' : 'connected',
           auth_method: '',
           limits: [],
           limits_at: null,
@@ -242,7 +274,10 @@ const routes: Record<string, { status?: number; body?: unknown }> = {
     },
   },
   'GET /api/me/browser': {
-    body: { enabled: true, browsers: { personal: { available: true, running: false, live: false } } },
+    body: {
+      enabled: true,
+      browsers: { personal: { available: true, running: scenario === 'browser', live: scenario === 'browser' } },
+    },
   },
   'GET /api/workspaces/1/dictation': {
     body: {
@@ -262,9 +297,18 @@ const routes: Record<string, { status?: number; body?: unknown }> = {
   },
 }
 
+let failedOnce = false
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), window.location.origin)
   const method = init?.method ?? 'GET'
+  // The flaky scenario's first read of the conversation fails, as a restarting server's would.
+  if (scenario === 'flaky' && method === 'GET' && url.pathname === '/api/workspaces/1/conversations/7' && !failedOnce) {
+    failedOnce = true
+    return new Response(JSON.stringify({ error: 'bad gateway' }), {
+      status: 502,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
   const route = routes[`${method} ${url.pathname}${url.search}`] ?? routes[`${method} ${url.pathname}`]
   const reply = route ?? (method === 'GET' ? { status: 404, body: { error: 'not found' } } : { body: {} })
   return new Response(JSON.stringify(reply.body ?? {}), {
@@ -286,11 +330,14 @@ const streams: EventSourceFactory = () => {
   }
   const view = views[scenario] ?? { entries: [] }
   if (scenario !== 'failed')
-    setTimeout(() => {
-      es.readyState = 1
-      es.onopen?.(new Event('open'))
-      es.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'value', value: view }) }))
-    }, 50)
+    setTimeout(
+      () => {
+        es.readyState = 1
+        es.onopen?.(new Event('open'))
+        es.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'value', value: view }) }))
+      },
+      scenario === 'flaky' ? 800 : 50,
+    )
   return es as unknown as ReturnType<EventSourceFactory>
 }
 

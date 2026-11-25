@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import {
+  ApiError,
   api,
   BROWSER,
   type BrowserStatus,
@@ -21,6 +22,7 @@ import { BrowserPanel } from '../browser/BrowserPanel'
 import { HelpCard } from '../browser/HelpCard'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
+import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { ChatTranscript } from './ChatTranscript'
@@ -34,6 +36,9 @@ import { ReconnectBanner, reconnectAccount } from './ReconnectBanner'
 import { lastSavedApp, liveApps } from './savedApps'
 import { type AppRef, pendingHelp, type ToolUse, transcript } from './transcript'
 import { type EventSourceFactory, useConversationStream } from './useConversationStream'
+
+// The answers that say the caller can't read this conversation.
+const REFUSED = new Set([403, 404, 410])
 
 export function ConversationView({
   workspace,
@@ -65,8 +70,34 @@ export function ConversationView({
 }) {
   const t = useT()
   const base = `${ws(workspace)}/conversations/${id}`
-  const meta = useLoad(() => api<Conversation>(base), [base])
+  // Whether the server refused the conversation (403, 404 or 410) on its last answer: then it
+  // can't be read. Any other failure (a server restarting, the network) is shown with a way to try
+  // again, and the composer stays usable.
+  const [refused, setRefused] = useState(false)
+  const meta = useLoad(
+    () =>
+      api<Conversation>(base).then(
+        (c) => {
+          setRefused(false)
+          return c
+        },
+        (e: unknown) => {
+          setRefused(e instanceof ApiError && REFUSED.has(e.status))
+          throw e
+        },
+      ),
+    [base],
+  )
   const { view, status } = useConversationStream(`${base}/events`, streams)
+  // Nothing can be sent: the server refused it and nothing of it is shown, or the stream found it gone.
+  const unreadable = (refused && !meta.data) || status === 'gone'
+  // When the stream connects again after a failed read, the conversation is read again too.
+  const reloadMeta = meta.reload
+  const metaFailed = Boolean(meta.error)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read again when the stream comes back
+  useEffect(() => {
+    if (status === 'live' && metaFailed) reloadMeta()
+  }, [status])
   const loadPage = useCallback((before: number) => api<History>(`${base}/entries?before=${before}`), [base])
   const older = useHistory(view, loadPage)
   const { messages, running, truncated } = transcript(
@@ -131,7 +162,7 @@ export function ConversationView({
       <ConversationHead
         backHref={backHref}
         conversation={meta.data}
-        failed={Boolean(meta.error)}
+        failed={Boolean(meta.error) && !meta.data}
         url={base}
         onChanged={changed}
         buildHref={buildHref}
@@ -145,7 +176,20 @@ export function ConversationView({
         status={status}
       />
       <div className="ui-chat-notices">
-        {meta.error && <Notice tone="danger">{meta.error}</Notice>}
+        {meta.error && (
+          <Notice
+            tone="danger"
+            action={
+              !refused && (
+                <Button size="sm" onClick={meta.reload}>
+                  {t('app.tryAgain')}
+                </Button>
+              )
+            }
+          >
+            {meta.error}
+          </Notice>
+        )}
         {reconnect && <ReconnectBanner account={reconnect} onConnected={cli.reload} />}
         {cliName && <CliQuestions url={base} cli={cliName} trigger={`${questionLines}-${running}`} running={running} />}
         {cliName && meta.data && !archived && (
@@ -205,7 +249,7 @@ export function ConversationView({
         workspace={workspace}
         base={base}
         archived={archived}
-        unreadable={Boolean(meta.error)}
+        unreadable={unreadable}
         running={running}
         onSent={onChanged}
       >
@@ -217,7 +261,7 @@ export function ConversationView({
             current={model}
             cli={cli.data}
             onChosen={setPicked}
-            disabled={archived || Boolean(meta.error)}
+            disabled={archived || unreadable}
           />
         )}
       </Composer>

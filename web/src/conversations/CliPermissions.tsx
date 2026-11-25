@@ -37,10 +37,11 @@ export function CliQuestions({
     const timer = window.setInterval(reload, QUESTIONS_POLL_MS)
     return () => window.clearInterval(timer)
   }, [running, reload])
-  const [busy, setBusy] = useState<string | null>(null)
+  // The answer on its way, so its own button shows it and both wait.
+  const [busy, setBusy] = useState<{ id: string; allow: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const answer = async (q: CliQuestion, allow: boolean) => {
-    setBusy(q.id)
+    setBusy({ id: q.id, allow })
     setError(null)
     try {
       await api(`${url}/cli-permissions/${encodeURIComponent(q.id)}`, { method: 'POST', body: { allow } })
@@ -71,10 +72,21 @@ export function CliQuestions({
             })}
             action={
               <span className="ui-chat-question-actions">
-                <Button size="sm" loading={busy === q.id} onClick={() => answer(q, true)}>
+                <Button
+                  size="sm"
+                  loading={busy?.id === q.id && busy.allow}
+                  disabled={busy?.id === q.id && !busy.allow}
+                  onClick={() => answer(q, true)}
+                >
                   {t('conversations.question.allow')}
                 </Button>
-                <Button size="sm" variant="ghost" disabled={busy === q.id} onClick={() => answer(q, false)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={busy?.id === q.id && !busy.allow}
+                  disabled={busy?.id === q.id && busy.allow}
+                  onClick={() => answer(q, false)}
+                >
                   {t('conversations.question.deny')}
                 </Button>
               </span>

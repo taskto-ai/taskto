@@ -2151,7 +2151,6 @@
       "recorded": "Gravado",
       "elapsed": "{elapsed} / {max}",
       "stop": "Parar o ditado",
-      "stopTitle": "Parar e transformar a fala em texto",
       "dictate": "Ditar",
       "transcribing": "Transformando a fala em texto…",
       "cantRecord": "Este navegador não consegue gravar aqui: é preciso HTTPS ou localhost."
@@ -2796,7 +2795,8 @@
       "addColumn": "Adicionar uma coluna",
       "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo",
       "busyAsk": "Excluir e falhar…",
-      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo."
+      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo.",
+      "openPage": "Abrir uma página (um link)"
     }
   }
 }

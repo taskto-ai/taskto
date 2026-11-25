@@ -184,7 +184,6 @@ export function useDictation({
           className="ui-dictation-stop"
           label={t('conversations.dictation.stop')}
           onClick={stop}
-          title={t('conversations.dictation.stopTitle')}
         />
       </span>
     ) : (

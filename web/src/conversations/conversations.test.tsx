@@ -497,6 +497,30 @@ test('while the agent works, a message steers it and Stop stops it', async () =>
   expect(calls.filter((c) => c.path.endsWith('/messages'))[1].body).not.toHaveProperty('when_busy')
 })
 
+test('earlier messages go in above what the reader is looking at, which stays where it is', async () => {
+  await openWith(
+    {
+      'GET /api/workspaces/1/conversations/7/entries?before=8': {
+        body: { entries: [entry(5, 'user', 'Older question'), entry(6, 'assistant', 'Older answer')] },
+      },
+    },
+    viewOf([entry(8, 'user', 'Newer question'), entry(9, 'assistant', 'Newer answer')], { before: 7 }),
+  )
+  const el = screen.getByLabelText('Conversation').querySelector('.ui-chat-transcript') as HTMLDivElement
+  // jsdom has no layout: 1000 px of messages, the reader 150 px from the top of them.
+  let height = 1000
+  Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => height })
+  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 200 })
+  el.scrollTop = 150
+  fireEvent.scroll(el)
+  fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
+  // The earlier messages add 600 px above.
+  height = 1600
+  await screen.findByText('Older question')
+  // What the reader was looking at is 600 px further down, and so is the view.
+  expect(el.scrollTop).toBe(750)
+})
+
 test('earlier messages load from before the stream, and stay as the stream moves on', async () => {
   const { calls, es } = await openWith(
     {

@@ -1,9 +1,9 @@
 // A tool the agent used, as one compact line: a check (or a spinner while it runs), what it did,
 // and the tool's name in the mono face. A CLI's turn has its output as plain text under the line,
-// open while the CLI works and folded once it is done; an app the agent saved is launched inline
-// or linked to.
+// open while the CLI works and folded once it is done, unless the person opened, closed or
+// scrolled it; an app the agent saved is launched inline or linked to.
 
-import { lazy, type ReactNode, Suspense } from 'react'
+import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react'
 import { CLI_PRODUCTS } from '../api'
 import { appPath } from '../apps/route'
 import { type T, useT } from '../i18n'
@@ -38,13 +38,7 @@ export function ToolLine({
     <div className="ui-chat-tool">
       {/* A CLI's work is plain text lines, shown as such: never Markdown, never HTML. */}
       {tool.output ? (
-        <details className="ui-chat-tool-output" open={tool.running || undefined}>
-          <summary className="ui-chat-tool-line">
-            {line}
-            <Icon name="chevron-down" size={14} className="ui-chat-tool-chevron" />
-          </summary>
-          <pre className="ui-chat-output">{tool.output}</pre>
-        </details>
+        <CliOutput running={Boolean(tool.running)} output={tool.output} line={line} />
       ) : (
         <p className="ui-chat-tool-line">
           {line}
@@ -60,6 +54,47 @@ export function ToolLine({
       )}
       {tool.app && launched && <InlineApp workspace={workspace} app={tool.app} />}
     </div>
+  )
+}
+
+// A CLI's output under its line: open while it works, folded once it is done, but only if the
+// person never touched it: what they opened, closed or scrolled stays as they left it.
+function CliOutput({ running, output, line }: { running: boolean; output: string; line: ReactNode }) {
+  const [open, setOpen] = useState(running)
+  const touched = useRef(false)
+  useEffect(() => {
+    if (!touched.current) setOpen(running)
+  }, [running])
+  return (
+    <details
+      className="ui-chat-tool-output"
+      open={open}
+      onToggle={(e) => {
+        // The browser says so when it follows `open` too: only a change the page didn't ask for is
+        // the person's.
+        const now = e.currentTarget.open
+        if (now !== open) {
+          touched.current = true
+          setOpen(now)
+        }
+      }}
+    >
+      <summary className="ui-chat-tool-line">
+        {line}
+        <Icon name="chevron-down" size={14} className="ui-chat-tool-chevron" />
+      </summary>
+      <pre
+        className="ui-chat-output"
+        onScroll={() => {
+          touched.current = true
+        }}
+        onPointerDown={() => {
+          touched.current = true
+        }}
+      >
+        {output}
+      </pre>
+    </details>
   )
 }
 
@@ -85,7 +120,13 @@ function InlineApp({ workspace, app }: { workspace: number; app: AppRef }) {
 function toolLabel(t: T, tool: ToolUse): ReactNode {
   if (tool.name === HELP_TOOL) return t('conversations.tool.help')
   if (tool.name !== CLI_TOOL)
-    return t.rich('conversations.tool.used', { name: <code className="ui-chat-tool-name">{tool.name}</code> })
+    return t.rich('conversations.tool.used', {
+      name: (
+        <code key="name" className="ui-chat-tool-name">
+          {tool.name}
+        </code>
+      ),
+    })
   if (!tool.cli) return tool.running ? t('conversations.tool.someCliWorking') : t('conversations.tool.someCliWorked')
   const cli = CLI_PRODUCTS[tool.cli]
   return tool.running ? t('conversations.tool.cliWorking', { cli }) : t('conversations.tool.cliWorked', { cli })

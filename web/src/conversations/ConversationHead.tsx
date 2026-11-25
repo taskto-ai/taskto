@@ -5,13 +5,12 @@
 import { type FormEvent, useRef, useState } from 'react'
 import { api, type Conversation, errorText } from '../api'
 import { useT } from '../i18n'
-import { navigate } from '../router'
 import { Badge, type BadgeTone } from '../ui/Badge'
 import { Button, ButtonLink } from '../ui/Button'
 import { Heading } from '../ui/Heading'
 import { IconButton } from '../ui/IconButton'
 import { Input } from '../ui/Input'
-import { MenuItem, MoreMenu } from '../ui/Menu'
+import { MenuItem, MenuLink, MoreMenu } from '../ui/Menu'
 import { Notice } from '../ui/Notice'
 import { Skeleton } from '../ui/Skeleton'
 import { conversationTitle } from './title'
@@ -166,9 +165,9 @@ export function ConversationHead({
         {(showBuild || browserEnabled) && (
           <MoreMenu>
             {showBuild && buildHref && (
-              <MenuItem icon="apps" onSelect={() => navigate(buildHref)}>
+              <MenuLink icon="apps" href={buildHref}>
                 {t('apps.builder.buildHere')}
-              </MenuItem>
+              </MenuLink>
             )}
             {browserEnabled && (
               <MenuItem icon="browser" onSelect={onToggleBrowser}>

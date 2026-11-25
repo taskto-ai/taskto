@@ -60,14 +60,86 @@ test("the menu holds the builder's link, which opens the builder", async () => {
   expect(window.location.pathname).toBe('/w/1/apps/build/conversation/7')
 })
 
-test("a conversation that can't be read can't be sent to, and the composer says why", async () => {
-  fakeFetch({ 'GET /api/workspaces/1/conversations/7': { status: 404, body: { error: 'not found' } } })
+const MODELS = {
+  'GET /api/workspaces/1/models': {
+    body: {
+      providers: [{ provider: 'script', name: 'Scripted', scope: 'instance', models: [{ id: 's', name: 'S' }] }],
+    },
+  },
+  'GET /api/workspaces/1/conversations/7/model': { body: { provider: 'script', model_id: 's' } },
+}
+
+const box = () => screen.getByLabelText('Message') as HTMLTextAreaElement
+
+for (const status of [403, 404]) {
+  test(`a conversation the server refuses (${status}) can't be sent to, and the composer says why`, async () => {
+    fakeFetch({ ...MODELS, 'GET /api/workspaces/1/conversations/7': { status, body: { error: 'no' } } })
+    render(view(7, fakeStreams().factory))
+    await screen.findByLabelText('Message')
+    await waitFor(() => expect(box().disabled).toBe(true))
+    const why = document.getElementById(box().getAttribute('aria-describedby') ?? '')
+    expect(why?.textContent).toBe("This conversation can't be read, so nothing can be sent to it.")
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
+    // Nor can its model be changed; and there is nothing to try again.
+    expect(((await screen.findByLabelText('Model')) as HTMLSelectElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+  })
+}
+
+test('a first read that fails for another reason leaves the composer usable, and is tried again', async () => {
+  let fail = true
+  fakeFetch({
+    ...MODELS,
+    'GET /api/workspaces/1/conversations/7': () =>
+      fail ? { status: 502, body: { error: 'bad gateway' } } : { body: conversation(7) },
+  })
+  const { sources, factory } = fakeStreams()
+  render(view(7, factory))
+  const retry = await screen.findByRole('button', { name: 'Try again' })
+  expect(box().disabled).toBe(false)
+  expect(box().getAttribute('aria-describedby')).toBeNull()
+  expect(((await screen.findByLabelText('Model')) as HTMLSelectElement).disabled).toBe(false)
+
+  // The server is back: the stream connects, and the conversation is read again by itself.
+  fail = false
+  await waitFor(() => expect(sources).toHaveLength(1))
+  act(() => sources[0].open())
+  expect(await screen.findByRole('heading', { name: 'Talk 7' })).toBeTruthy()
+  await waitFor(() => expect(retry.isConnected).toBe(false))
+})
+
+test('Try again reads the conversation again', async () => {
+  let fail = true
+  fakeFetch({
+    'GET /api/workspaces/1/conversations/7': () =>
+      fail ? { status: 503, body: { error: 'unavailable' } } : { body: conversation(7) },
+  })
   render(view(7, fakeStreams().factory))
-  const box = (await screen.findByLabelText('Message')) as HTMLTextAreaElement
-  await waitFor(() => expect(box.disabled).toBe(true))
-  const why = document.getElementById(box.getAttribute('aria-describedby') ?? '')
-  expect(why?.textContent).toBe("This conversation can't be read, so nothing can be sent to it.")
-  expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
+  const retry = await screen.findByRole('button', { name: 'Try again' })
+  fail = false
+  fireEvent.click(retry)
+  expect(await screen.findByRole('heading', { name: 'Talk 7' })).toBeTruthy()
+})
+
+test('a failed read again keeps the conversation shown and the composer usable', async () => {
+  let fail = false
+  fakeFetch({
+    'GET /api/workspaces/1/conversations/7': () =>
+      fail ? { status: 502, body: { error: 'bad gateway' } } : { body: conversation(7) },
+    'PATCH /api/workspaces/1/conversations/7': () => {
+      fail = true
+      return { body: conversation(7) }
+    },
+  })
+  render(view(7, fakeStreams().factory))
+  await screen.findByRole('heading', { name: 'Talk 7' })
+  // A rename, then its read again fails.
+  fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(await screen.findByRole('button', { name: 'Try again' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Talk 7' })).toBeTruthy()
+  expect(box().disabled).toBe(false)
+  expect(box().getAttribute('aria-describedby')).toBeNull()
 })
 
 test('two views on one page each have their own fields', async () => {

@@ -7,12 +7,13 @@
   .ui-chat-layout {
     block-size: 100%;
     display: grid;
-    grid-template-columns: minmax(14rem, 19rem) minmax(0, 1fr);
+    grid-template-columns: minmax(15rem, 19rem) minmax(0, 1fr);
   }
 
   /* The list. */
 
   .ui-chat-list {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
@@ -24,14 +25,16 @@
 
   .ui-chat-list-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
     padding: var(--space-1) var(--space-2) var(--space-2);
   }
 
+  /* Never broken inside a word: with too little room, the buttons go under it. */
   .ui-chat-list-title {
-    flex: 1;
-    min-inline-size: 0;
+    flex: 1 0 auto;
+    overflow-wrap: normal;
   }
 
   .ui-chat-list-loading {
@@ -66,7 +69,10 @@
 
   /* A conversation. */
 
+  /* Positioned, as are the transcript and the list: what is placed absolutely inside them (the
+     screen reader's labels) stays inside, and never makes the window itself scroll. */
   .ui-chat {
+    position: relative;
     display: flex;
     flex-direction: column;
     block-size: 100%;
@@ -139,11 +145,14 @@
   }
 
   /* What asks for the person: a CLI's question, a sign-in, the browser. */
+  /* At most a part of the pane, scrolling inside, so the transcript and the composer stay in view. */
   .ui-chat-notices {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-3);
-    padding: var(--space-3) var(--space-6) 0;
+    max-block-size: 45%;
+    overflow-y: auto;
+    padding: var(--space-3) var(--space-6) var(--space-1);
   }
 
   .ui-chat-notices:empty {
@@ -176,6 +185,7 @@
   /* The transcript. */
 
   .ui-chat-transcript {
+    position: relative;
     flex: 1 1 0;
     min-block-size: 0;
     overflow-y: auto;
@@ -448,6 +458,7 @@
 
   .ui-chat-model-select {
     flex: 0 1 auto;
+    overflow: hidden;
     inline-size: auto;
     min-inline-size: 0;
     max-inline-size: 100%;
@@ -523,6 +534,38 @@
 
     .ui-chat-msg[data-role="user"] {
       max-inline-size: 90%;
+    }
+
+    /* Short, with the screen keyboard up: the notices take less, and the composer is compact
+       (one line of text that grows as it fills, the controls on one row), so Send stays in view. */
+    .ui-chat-notices {
+      max-block-size: 30%;
+      padding-block: var(--space-2);
+      border-block-end: var(--line-thin) solid var(--color-border);
+    }
+
+    .ui-chat-composer-hint {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .ui-chat-box {
+      gap: 0;
+      padding: var(--space-1);
+    }
+
+    .ui-chat-box .ui-chat-input,
+    .ui-chat-box .ui-chat-input:hover,
+    .ui-chat-box .ui-chat-input:focus-visible,
+    .ui-chat-box .ui-chat-input:disabled {
+      field-sizing: content;
+      min-block-size: var(--control-touch);
+      max-block-size: 7.5rem;
+    }
+
+    .ui-chat-model-select {
+      flex: 0 1 40%;
     }
   }
 }

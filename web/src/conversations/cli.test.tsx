@@ -375,7 +375,11 @@ test("a CLI's question shows with Allow and Deny; the answer goes to the server 
   // The CLI asks: its output says so, and the question is read again.
   act(() => es.send(running('Looking at the tests\n? Claude Code asks to use Bash: rm -rf build\n')))
   const question = await screen.findByRole('region', { name: 'Claude Code asks to use Bash' })
-  // What it would run shows as plain text, never as HTML.
+  // It names the tool it asks for (not its placeholder), and what it would run shows as plain
+  // text, never as HTML.
+  expect(question.textContent).toContain('Claude Code asks to use Bash:')
+  expect(question.textContent).not.toContain('{tool}')
+  expect(within(question).getByText('Bash').tagName).toBe('STRONG')
   expect(within(question).getByText('rm -rf build <b>x</b>').tagName).toBe('PRE')
   fireEvent.click(within(question).getByRole('button', { name: 'Deny' }))
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Claude Code asks to use Bash' })).toBeNull())
@@ -487,4 +491,76 @@ test("a CLI's request to take over the browser is shown as the built-in agent's"
   const answered = result({ help }).messages
   answered.push({ key: '5.0', role: 'user', text: 'Done', tools: [] })
   expect(pendingHelp(answered)).toBeNull()
+})
+
+// The turn's entries once it is done: its result keeps what the CLI did.
+const done = (kept: string) => ({
+  type: 'value',
+  value: {
+    entries: [
+      ...cliEntries,
+      {
+        id: 3,
+        kind: 'pi.toolResult',
+        model: [
+          {
+            role: 'toolResult',
+            toolCallId: 'call-1',
+            toolName: 'cli_turn',
+            content: [{ type: 'text', text: 'Done' }],
+            details: { transcript: kept },
+          },
+        ],
+      },
+    ],
+    docs: { 'pi.live': {} },
+  },
+})
+
+const cliRoutes = {
+  'GET /api/workspaces/1/models': MODELS,
+  'GET /api/workspaces/1/conversations/7/model': { body: { provider: 'cli-claude', model_id: 'default' } },
+  'GET /api/me/cli-accounts': { body: accounts(account('claude', 'Claude Code', 'connected')) },
+}
+
+test("a CLI's output is open while it works and folds once it is done", async () => {
+  const { es } = await open(cliRoutes, running('$ go test\n'))
+  const details = () => document.querySelector('pre')?.closest('details') as HTMLDetailsElement
+  expect(details().open).toBe(true)
+  act(() => es.send(done('$ go test\nok')))
+  await waitFor(() => expect(screen.getByText('Claude Code worked')).toBeTruthy())
+  expect(details().open).toBe(false)
+  // Still there, to open.
+  expect(document.querySelector('pre')?.textContent).toBe('$ go test\nok')
+})
+
+test('output the person scrolled in stays open when the CLI is done', async () => {
+  const { es } = await open(cliRoutes, running('$ go test\n'))
+  const pre = document.querySelector('pre') as HTMLElement
+  fireEvent.scroll(pre)
+  act(() => es.send(done('$ go test\nok')))
+  await waitFor(() => expect(screen.getByText('Claude Code worked')).toBeTruthy())
+  expect(pre.closest('details')?.open).toBe(true)
+})
+
+test('the answer on its way shows on its own button', async () => {
+  await open(
+    {
+      ...cliRoutes,
+      'GET /api/workspaces/1/conversations/7/cli-permissions': {
+        body: { requests: [{ id: 'q1', turn: 't1', cli: 'claude', tool: 'Bash', asked_at: '2026-11-19T15:10:00Z' }] },
+      },
+      // Held open: the answer is on its way.
+      'POST /api/workspaces/1/conversations/7/cli-permissions/q1': () => new Promise(() => {}),
+    },
+    running(''),
+  )
+  const question = await screen.findByRole('region', { name: 'Claude Code asks to use Bash' })
+  fireEvent.click(within(question).getByRole('button', { name: 'Deny' }))
+  await waitFor(() =>
+    expect(within(question).getByRole('button', { name: /^Deny/ }).getAttribute('aria-busy')).toBe('true'),
+  )
+  const allow = within(question).getByRole('button', { name: 'Allow' }) as HTMLButtonElement
+  expect(allow.getAttribute('aria-busy')).toBeNull()
+  expect(allow.disabled).toBe(true)
 })

@@ -2137,7 +2137,6 @@
       "recorded": "Recorded",
       "elapsed": "{elapsed} / {max}",
       "stop": "Stop dictation",
-      "stopTitle": "Stop, and turn the speech into text",
       "dictate": "Dictate",
       "transcribing": "Turning speech into text…",
       "cantRecord": "This browser can’t record here: it needs HTTPS, or localhost."
@@ -2775,7 +2774,8 @@
       "addColumn": "Add a column",
       "headings": "Sizes from the type roles: the display face from 20px up, Inter below",
       "busyAsk": "Delete, then fail…",
-      "busyFailed": "The app could not be deleted. Nothing was changed; try again."
+      "busyFailed": "The app could not be deleted. Nothing was changed; try again.",
+      "openPage": "Open a page (a link)"
     }
   }
 }
