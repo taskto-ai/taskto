@@ -982,6 +982,34 @@ func TestTooManyWaitingEffectsAreRefused(t *testing.T) {
 	}
 }
 
+// The retry route is the web app's: what a token reads of a failed effect doesn't say it may be
+// retried, though the same user's session is told it may.
+func TestAFailedEffectReadWithATokenIsNotRetryable(t *testing.T) {
+	f := newFX(t)
+	f.mustSubmit(f.alice, "op-token-retry", "East gate", "fail")
+	f.e.s.hooks.afterWork = func(e effectRow) error {
+		if e.kind == EffectCreateCard {
+			return errors.New("the disk is full")
+		}
+		return nil
+	}
+	for range maxAttempts + 2 {
+		f.work()
+		f.later(backoffMax + time.Second)
+	}
+	if card := only(t, f.effects(f.alice, ""), EffectCreateCard); card.Status != StateFailed || !card.CanRetry {
+		t.Fatalf("a session reads %+v, want a failed effect it may retry", card)
+	}
+	asToken := Actor{UserID: f.alice.id, Agent: true, Via: "laptop"}
+	l, err := f.e.s.listEffects(context.Background(), f.shared, asToken, f.app.ID, EffectFilter{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if card := only(t, l, EffectCreateCard); card.Status != StateFailed || card.CanRetry {
+		t.Errorf("a token reads %+v, want the failed effect without can_retry", card)
+	}
+}
+
 // The entries of a user whose account is disabled wait: they neither run nor fail (no code, no
 // notification, no try used up), however many times the worker looks, and they are done, once,
 // when the account is enabled again.

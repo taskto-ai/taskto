@@ -546,11 +546,16 @@ func TestStoppingDoesNotWaitForeverForAHandlerThatIgnoresItsContext(t *testing.T
 	stop := s.Start(context.Background())
 	<-started
 	returned := make(chan struct{})
-	go func() { stop(); close(returned) }()
+	var joined atomic.Bool
+	joined.Store(true)
+	go func() { joined.Store(stop()); close(returned) }()
 	select {
 	case <-returned:
 	case <-time.After(5 * time.Second):
 		t.Fatal("stopping waited for a handler that ignores its context")
+	}
+	if joined.Load() {
+		t.Fatal("stopping said the worker returned, with a handler still running: the caller would close the database under it")
 	}
 	j, err := s.Find(context.Background(), sqlDB, 1, remind, "k")
 	if err != nil || j.State != StateRunning {

@@ -61,6 +61,12 @@ export const AUDIT_ACTIONS = [
   'search_embeddings_changed',
   'search_consent_changed',
   'dictation_settings_changed',
+  'integration_created',
+  'integration_updated',
+  'integration_removed',
+  'integration_disabled',
+  'integration_enabled',
+  'integration_spaces_changed',
   'data_export_started',
   'workspace_export_started',
   'server_update_requested',
@@ -78,11 +84,13 @@ export const AUDIT_TARGETS = [
   'access_token',
   'provider_account',
   'shared_cli_account',
+  'integration',
 ] as const
 
 // The names of the facts an event may carry (internal/audit/schema.go).
 export const AUDIT_DETAILS = [
   'account',
+  'added',
   'allowed_by',
   'already_member',
   'api_key_changed',
@@ -108,15 +116,19 @@ export const AUDIT_DETAILS = [
   'members_changed',
   'members_signed_out',
   'method',
+  'mode',
   'notice_confirmed',
   'offline_downloads',
   'provider',
   'reason',
+  'removed',
   'role',
   'scope',
   'spaces',
   'to',
   'user_id',
+  'webhook_secret_changed',
+  'webhook_secret_set',
 ] as const
 
 const PAGE = 50
@@ -287,7 +299,18 @@ const valueKey = (v: string) => `settings.audit.values.${v}` as Key
 
 // The details whose values are codes with a translation (roles, modes, the names of fields); the
 // rest are names and addresses, shown as they are.
-const CODED = new Set(['allowed_by', 'role', 'from', 'to', 'default_mode', 'method', 'scope', 'reason', 'fields'])
+const CODED = new Set([
+  'allowed_by',
+  'role',
+  'from',
+  'to',
+  'default_mode',
+  'method',
+  'scope',
+  'reason',
+  'fields',
+  'mode',
+])
 
 function Event({ e }: { e: AuditEntry }) {
   const t = useT()

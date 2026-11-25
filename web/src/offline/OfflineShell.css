@@ -1,7 +1,7 @@
 @layer screens {
   /* The offline shell's frame: the whole window, its page scrolling inside, clear of an installed
      app's status and home bars. */
-  .ui-offline {
+  .ui-offline-shell {
     block-size: 100%;
     display: grid;
     padding-block: env(safe-area-inset-top) env(safe-area-inset-bottom);

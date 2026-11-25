@@ -39,7 +39,7 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
 
   const apps = Object.fromEntries(data.downloads.map((d) => [d.key, d.name]))
   return (
-    <main className="ui-offline" id="main">
+    <main className="ui-offline-shell" id="main">
       <Page width="list">
         <PageHeader
           path={

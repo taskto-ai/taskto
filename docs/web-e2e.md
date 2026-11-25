@@ -21,6 +21,7 @@ share nothing and can run in any order and in parallel.
 | `boards.e2e.mjs` | On the private space's personal board: add a card, move it from *To do* to *Doing* to *Done*, comment on it, and see it in place after a reload |
 | `apps.e2e.mjs` | Install the Expense tracker template as a draft, publish it, add a record to the live app, and check the server stored it as the owner's |
 | `offline.e2e.mjs` | Download that app for offline use, load the page with no connection (the service worker serves the app, which opens the offline view), add a record there, see it kept on the device, then go back online and check that it reached the server |
+| `app-rings.e2e.mjs` | A sample app with a control of each kind the renderer draws, launched and as a Home widget, at 1440 and 390px: Tab through every control and check that its focus ring (and the primary button's lift) is whole, never cut by a box around it that clips or scrolls |
 
 `web/e2e/support.mjs` has what they share: starting the server, a scenario wrapper, first-run
 setup through the screen, the template's install and its expense form. The other files in

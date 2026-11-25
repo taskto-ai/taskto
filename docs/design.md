@@ -79,7 +79,7 @@ what is positioned on the page.
 | Level | Value | What belongs there |
 |---|---|---|
 | `--z-sticky` | 10 | a header or a bar that sticks while its page scrolls |
-| `--z-sidebar` | 20 | the sidebar on a wide screen |
+| `--z-sidebar` | 20 | the sidebar on a wide screen or a tablet |
 | `--z-scrim` | 25 | the shade behind the drawer on a phone: over the page, under the drawer |
 | `--z-drawer` | 30 | the sidebar as a drawer on a phone |
 | `--z-overlay` | 40 | what floats over the page without the top layer: a menu or a popup placed by hand |
@@ -152,7 +152,7 @@ kind, the primary action and the agent. It is not decoration.
 ### Light, dark and the brand
 
 **Light or dark** is the page's `color-scheme`: the system's (`light dark`, with no script) unless
-the person picked one in the top bar, which sets `data-theme="light"` or `"dark"` on `<html>`
+the person picked one in the account menu, which sets `data-theme="light"` or `"dark"` on `<html>`
 (`web/src/theme.ts`, which keeps the choice in this browser only). Every role is written once as
 `light-dark()`, so the same block serves both.
 
@@ -361,51 +361,109 @@ offline too.
 The fonts' licence text and copyright lines go with the build, in `/assets/THIRD_PARTY_NOTICES.txt`
 (`web/pwa/notices.ts`, which a test covers), as the OFL asks.
 
+## The shell
+
+The frame around every page is led by the sidebar (`web/src/shell/`), with no top bar on a wide
+screen. From top to bottom: the logo; the workspace switcher (a menu: the current workspace with a
+square avatar, the person's workspaces, and "New workspace" when the server lets them); the
+sections (Home, Conversations, Knowledge base, Boards, Apps), the current one marked; the inbox with
+its unread count; the pinned apps, in a group of their own, each with a small avatar; then, at the
+foot, Settings and the account (avatar, name and email), whose menu has the theme, the language,
+"Install the app" while it isn't installed, and log out. The page owns its title: the shell never
+repeats the section's name over it, except in the phone's bar, where the page's own heading may be
+scrolled away.
+
+- **Wide** (over 56.25rem, 900px): the whole sidebar, `--width-sidebar` wide.
+- **Tablet** (48rem to 56.25rem): a rail of icons, about 60px, every target 44px. Each link's
+  label is hidden from sight only, so it stays the link's name, and its tooltip, shown beside the
+  rail (at its end; at its start right to left) and only here (wider, it would repeat what is
+  written), says the same. The switcher is its avatar and the account its avatar, both named by
+  their own labels, and the inbox's count sits on the bell's corner. A pinned app is its avatar,
+  with letters of its own (`initialsAmong`: "Equipment" and "Expenses" are EQ and EX), since a
+  touch screen shows no tooltip and two hues alone mustn't be the difference. At 820px the rail
+  gives a page with its own list and detail (conversations, the knowledge base, settings) the
+  room for both; the labels would take a fifth of the width. The end to end suite
+  (`web/e2e/app/shell.e2e.mjs`) checks in Chromium that every link of the rail has a name.
+- **Phone** (48rem and narrower): a slim bar with the menu button, the logo's mark and the current
+  section's name. The sidebar is a drawer from the start edge, over a scrim: focus moves into it,
+  the page behind it is inert, Escape (one no menu or dialog took) closes it, a press on the scrim
+  closes it, and focus goes back to the button, or to the page when a link in it was followed.
+
 ## The logo
 
-The top bar and the login screens show the website's logo (`web/src/BrandLogo.tsx`, drawn from its
-`/logo.svg`): an arrow handing off to a dot, then "taskto.ai". The website's rule is that the logo
-stands in for the name, so the app shows it too, with its own name as the image's label. The arrow
-and the name take the page's text colour (ink on cream, cream on night, as the website's
-`logo-dark.svg`); the dot and ".ai" are the logo's green. On a phone (48rem and narrower) the top
-bar shows the mark alone, the drawing cropped to its first 64 units.
+The sidebar, the phone's bar and the login screens show the website's logo
+(`web/src/BrandLogo.tsx`, drawn from its `/logo.svg`): an arrow handing off to a dot, then
+"taskto.ai". The website's rule is that the logo stands in for the name, so the app shows it too,
+with its own name as the image's label. The arrow and the name take the page's text colour (ink on
+cream, cream on night, as the website's `logo-dark.svg`); the dot and ".ai" are the logo's green.
+The rail and the phone's bar show the mark alone: a square box crops the drawing to its first 64
+units.
 
-**The top bar never overflows**, from 320px up, whatever the workspace is called. The menu, the
-mark, the bell, the theme and the account keep their size; the workspace's select is the part
-that gives way (`min-width: 0`, an ellipsis, the whole name as its tooltip). Under 30rem the theme
-picker is its icon alone, with the select laid over it unseen, so a name such as "Operations and
-Field Services" still leaves room for itself. Checked in a real browser at 320, 360 and 390px
-(and 768 and 1024) with "Acme", "Operations" and that name, in both themes.
+**The shell never overflows**, from 320px up, whatever the workspace is called. In the phone's bar
+the menu button and the mark keep their size and the section's name gives way (`min-inline-size:
+0`, an ellipsis). In the sidebar, and so in the drawer, the switcher's avatar and chevron keep
+theirs and the workspace's name gives way the same way, with the whole name as the switcher's
+tooltip and in its accessible name; a long account name or email is cut the same way. Names
+people write (a workspace's, a person's, a pin's) keep their own direction (`dir="auto"`), so a
+Latin name in a right-to-left page loses its end, not its start, to the ellipsis. A pinned
+app's label is cut too, its whole name its tooltip in the rail. `web/src/shell/shell.test.tsx`
+keeps the parts and the tooltip; check the look in a real browser at 320, 390, 820 and 1440px
+with a name such as "Operations and Field Services", in both themes.
 
 ## The apps renderer
 
-The A2UI renderer styles itself from `--a2ui-*` custom properties with defaults of its own (a blue
-primary button, grey borders). `:root` sets them from the tokens above, so an app's buttons, fields,
-choices and captions follow the theme without any change to the renderer or to what an app can say:
-pill buttons and choices, a mint primary button outlined in ink (the renderer draws it with no
-border, so `styles.css` adds one), the display face for titles, and the deep green for a borderless
-button's text. The renderer colours several things with its primary, which is the mint: a borderless
-button's text, a focused field's border, the picked tab and a slider's thumb. Each is pointed at a
+An app's own screens are drawn by the A2UI renderer from what the agent wrote; the app can't change
+the renderer or what an app's definition may say. The renderer styles itself from `--a2ui-*` custom
+properties with defaults of its own (a blue primary button, grey borders, 16px text).
+`web/src/ui/a2ui.css` sets them on `:root` from the tokens and the roles: the interface's type sizes
+(14px), its spaces, edges and radii, pill buttons and choices, Input's text box for fields and dates,
+Field's label, a card as a panel, the display face for titles. What a variable can't say is the
+rules under `.ui-app` at the end of the same file, the element `AppView` draws an app in: the
+control heights (36px, 44px on a touch screen, a field's text 16px there), the library's focus ring
+on every control instead of the renderer's change of border colour, the primary button's ink edge
+and lift (the renderer draws it with no border), a disabled button as Button's flat grey pill rather
+than half opacity, and the error text as Field's. So an app's controls are drawn as the component
+library's in light, dark and every brand. `web/src/apps/theme.test.ts` checks that every renderer
+component the server's catalog allows is themed, that each control gets the ring and the touch
+height, and that every colour variable is a role; `web/e2e/app/app-rings.e2e.mjs` checks in
+Chromium that no ring is cut, in a launched app and in a Home widget. A box that clips (one that
+scrolls) cuts what reaches past it: so the row of tabs scrolls sideways only and draws a tab's ring
+inside the tab, the launched app's panel scrolls inside its padding, and a screen in a Home widget
+doesn't scroll itself (the widget's body does) and keeps 8px of room for a ring and the primary's
+lift.
+
+The file is in no layer on purpose. The renderer adopts its defaults (`:where(:root) { … }`) and each
+component's rules (`a2ui-basic-button .a2ui-button { … }`) at run time, in no layer and after the
+page's own stylesheets; a rule in no layer beats every rule in one. So the overrides are in none
+either, and each takes one more class than the renderer's rule it overrides.
+
+The renderer colours several things with its primary, which is the mint: a borderless button's text,
+a focused field's border, the picked tab, a slider's thumb, a check box's mark. Each is pointed at a
 token that can be seen on the page instead (the deep green, or the focus colour), because mint there
 would be 1.4:1 on cream. When the renderer gains another use of its primary, check it the same way.
 
 A button's label is a Text component, and the renderer colours Text from `--_a2ui-text-color` (a
-caption, from its own muted colour, over that). So `styles.css` points the label at the button's
-ink: the borderless button sets that variable to the deep green as well as its own `color`, and a
-label in a button inherits it in every variant, so a caption on a mint button is ink on mint
-(12.8:1) and not muted grey (1.6:1).
+caption, from its own muted colour, over that). So the label is pointed at the button's ink: the
+borderless button sets that variable to the deep green as well as its own `color`, a disabled one to
+the muted text, and a label in a button inherits it in every variant, so a caption on a mint button
+is ink on mint (12.8:1) and not muted grey (1.6:1).
+
+TaskTo.AI's own components in an app (`web/src/apps/catalog.tsx`) are styled with the screens
+(`web/src/apps/AppView.css`): a number (`Stat`) is a tile, its label small and muted over a large
+value with tabular figures, and tiles in one of the app's rows wrap onto the next line when there
+isn't room.
 
 ## Installed app
 
 `web/public/manifest.webmanifest` (`theme_color` and `background_color` cream `#faf8f4`) and the
-`theme-color` metas in `web/index.html` (cream; night `#111110` in the dark) match the top bar and
-the page. The metas follow the OS through their media queries, which is right for the System theme;
-when the person picks Light or Dark in the top bar, `web/src/theme.ts` sets both metas to that
+`theme-color` metas in `web/index.html` (cream; night `#111110` in the dark) match the phone's bar
+and the page. The metas follow the OS through their media queries, which is right for the System theme;
+when the person picks Light or Dark in the account menu, `web/src/theme.ts` sets both metas to that
 theme's colour (and System puts back each one's own), so the browser's address bar and status bar
 follow the app's choice, not the OS's. The two colours are `THEME_COLOR` there, which a test keeps
 equal to the default brand's `--color-bg`, the metas and the manifest. The icons are the website's app tile (its `favicon.svg` and apple touch icon): a logo-green
 (`#00a86b`) square with the logo's arrow and dot in ink, drawn by `web/scripts/make-icons.mjs` from
-the same geometry as `icon.svg`. The top bar is light, so the iOS status bar is the default one (dark
+the same geometry as `icon.svg`. The phone's bar is light, so the iOS status bar is the default one (dark
 text), not `black-translucent`, whose white text it would hide.
 
 ## Capturing the screens
@@ -424,20 +482,21 @@ client (the session cookie stays in memory), and a failed call is reported as it
 and status only, never a header or a body.
 
 The PNGs go to `web/screens/`, which git ignores, as `<size>-<theme>/<screen>.png`: `desktop`
-(1440x900), `tablet` (820x1100) and `phone` (390x844), each `light` and `dark` (the browser's
-colour scheme, as a person's system sets it). The names are the same on every run, so a run on the
-base branch and one on the change can be compared file by file, for instance
-`desktop-dark/boards.png`. The screens are the first-run setup and the sign-in, every section
-empty, then with the sample data: Home and its customise mode, the conversations (the list, and
-one with messages), the knowledge base (the list, a document, the editor, search results), the
-boards (a board, a card open, adding a card), the apps (the list, the templates, an app open, the
-builder), the inbox, every tab of Settings, the account menu, and on the phone the menu drawer.
-Each is the browser's window, not the whole page, so what scrolls out of view is not in it. A
-picture is saved only once the screen's own ready check is on the page (a heading, a control or a
-seeded item that only that screen shows, in English): a screen that shows something else, such as
-an error page or another server's, is a failed capture and the run exits non-zero. The
-sample dates are relative to the day it runs, so "overdue" and "soon" read the same every day; the
-times of conversations are the time of the run, so those differ between two runs.
+(1440x900), `tablet` (820x1100) and `phone` (390x844), each `light` and `dark` (the browser's colour
+scheme, as a person's system sets it). The names are the same on every run, so a run on the base
+branch and one on the change can be compared file by file, for instance `desktop-dark/boards.png`.
+The screens are the first-run setup and the sign-in, every section empty, then with the sample data:
+Home and its customise mode, the conversations (the list, and one with messages), the knowledge base
+(the list, a document, the editor, search results), the boards (a board, a card open, adding a
+card), the apps (the list, the templates, an app open, an app that uses every component of the
+renderer, at its top and at its end, the builder), the inbox, every tab of Settings, the account
+menu, and on the phone the menu drawer. Each is the browser's window, not the whole page, so what
+scrolls out of view is not in it. A picture is saved only once the screen's own ready check is on
+the page (a heading, a control or a seeded item that only that screen shows, in English): a screen
+that shows something else, such as an error page or another server's, is a failed capture and the
+run exits non-zero. The sample dates are relative to the day it runs, so "overdue" and "soon" read
+the same every day; the times of conversations are the time of the run, so those differ between two
+runs.
 
 When the browser logs an error or a request fails, the script lists it with the capture it
 happened in, and it exits non-zero when a screen could not be captured or the list of pictures (the manifest) could not be written (`--strict` also fails on

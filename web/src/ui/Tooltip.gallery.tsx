@@ -8,10 +8,17 @@ export const title = 'Tooltip'
 export default function TooltipGallery() {
   const t = useT()
   return (
-    <Specimen caption={t('gallery.state.default')}>
-      <Tooltip content={t('gallery.sample.tooltipText')}>
-        <Button icon="copy">{t('gallery.sample.tooltipButton')}</Button>
-      </Tooltip>
-    </Specimen>
+    <>
+      <Specimen caption={t('gallery.state.default')}>
+        <Tooltip content={t('gallery.sample.tooltipText')}>
+          <Button icon="copy">{t('gallery.sample.tooltipButton')}</Button>
+        </Tooltip>
+      </Specimen>
+      <Specimen caption={t('gallery.sample.tooltipEmpty')}>
+        <Tooltip content={null}>
+          <Button icon="copy">{t('gallery.sample.tooltipButton')}</Button>
+        </Tooltip>
+      </Specimen>
+    </>
   )
 }

@@ -33,6 +33,7 @@ type world struct {
 	db                         *sql.DB
 	kb                         *knowledge.Store
 	tools                      *Service
+	apps                       *apps.Service // the one the tools use, for a test to set its clock
 	alice, bob, carol          int64
 	one, two                   int64
 	alicePrivate, bobPrivate   int64
@@ -61,8 +62,9 @@ func newWorld(t *testing.T) *world {
 	kb := knowledge.New(dir, knowledge.Options{})
 	index := search.New(sqlDB, kb, providers.NewStore(sqlDB, key), search.Options{})
 	checker := access.New(sqlDB, nil)
-	w := &world{t: t, db: sqlDB, kb: kb, tools: New(Options{
-		DB: sqlDB, Key: key, Access: checker, Boards: boards.New(sqlDB, checker), Apps: apps.New(sqlDB, checker),
+	appSvc := apps.New(sqlDB, checker)
+	w := &world{t: t, db: sqlDB, kb: kb, apps: appSvc, tools: New(Options{
+		DB: sqlDB, Key: key, Access: checker, Boards: boards.New(sqlDB, checker), Apps: appSvc,
 		Knowledge: kb, Search: index,
 	})}
 	w.alice = w.insert(`INSERT INTO users (email, name, password_hash) VALUES ('alice@example.com', 'Alice', 'x') RETURNING id`)

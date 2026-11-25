@@ -11,8 +11,8 @@ scenario('a document is created, edited, shown in its history and restored', asy
   await page.getByRole('link', { name: 'Knowledge base' }).click()
   await page.getByText('No documents in this space yet.').waitFor()
 
-  // A new document opens in the editor.
-  await page.getByRole('button', { name: 'New', exact: true }).click()
+  // A new document opens in the editor (the page's New; the empty space offers one too).
+  await page.getByRole('button', { name: 'New', exact: true }).first().click()
   await page.getByLabel('Name', { exact: true }).fill('notes/plan.md')
   await page.getByRole('button', { name: 'Create', exact: true }).click()
   const text = page.getByLabel('Edit the document').getByLabel('Text')
@@ -21,13 +21,12 @@ scenario('a document is created, edited, shown in its history and restored', asy
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await page.getByText('First version of the plan.').waitFor()
 
-  // The list has it, and a reload shows the same text.
-  await page.getByRole('list', { name: 'Documents' }).getByText('notes/plan.md').waitFor()
+  // The tree has it in its folder, and a reload shows the same text.
+  const tree = page.getByRole('list', { name: 'Documents' })
+  await tree.getByRole('button', { name: /^plan\.md/ }).waitFor()
   await page.reload()
-  await page
-    .getByRole('list', { name: 'Documents' })
-    .getByRole('button', { name: /notes\/plan\.md/ })
-    .click()
+  await tree.getByRole('button', { name: /^notes/ }).click()
+  await tree.getByRole('button', { name: /^plan\.md/ }).click()
   await page.getByText('First version of the plan.').waitFor()
 
   // Edit it.
@@ -43,15 +42,22 @@ scenario('a document is created, edited, shown in its history and restored', asy
   await history.getByText('second draft').waitFor()
   await history.getByText('first draft').waitFor()
   // Creating the document is a change of its own, before the two saves.
-  assert.equal(await history.locator('li.tt-history-entry').count(), 3)
-  assert.match(await history.locator('li.tt-history-entry').first().textContent(), /Owner/)
+  const versions = history.getByRole('list', { name: 'History' }).getByRole('listitem')
+  assert.equal(await versions.count(), 3)
+  assert.match(await versions.first().textContent(), /Owner/)
 
-  // Restoring the first version brings its text back, as a new change.
-  await history
-    .locator('li.tt-history-entry', { hasText: 'first draft' })
+  // Restoring the first version (after its question) brings its text back, as a new change.
+  await versions.filter({ hasText: 'first draft' }).getByRole('button', { name: 'Restore this version' }).click()
+  await page
+    .getByRole('alertdialog', { name: 'Restore this version?' })
     .getByRole('button', { name: 'Restore this version' })
     .click()
   await page.getByText('First version of the plan.').waitFor()
   await page.getByRole('button', { name: 'History', exact: true }).click()
-  await page.getByRole('region', { name: 'History' }).locator('li.tt-history-entry').nth(3).waitFor()
+  await page
+    .getByRole('region', { name: 'History' })
+    .getByRole('list', { name: 'History' })
+    .getByRole('listitem')
+    .nth(3)
+    .waitFor()
 })

@@ -1,7 +1,0 @@
-@layer screens {
-  .ui-page-failed {
-    padding: var(--space-6) var(--space-4);
-    max-inline-size: var(--width-reading);
-    margin-inline: auto;
-  }
-}

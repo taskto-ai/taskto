@@ -30,7 +30,7 @@ export function NoWorkspace({ me, onLogout, onMe }: { me: Me; onLogout: () => vo
           </>
         }
       >
-        <p>{t('shell.noWorkspaceHelp')}</p>
+        <p>{t('shell.noWorkspace')}</p>
       </EmptyState>
       {canCreate && onMe && (
         <NewWorkspaceDialog open={creating} onClose={() => setCreating(false)} user={me.user.id} onMe={onMe} />
