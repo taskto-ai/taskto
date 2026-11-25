@@ -64,6 +64,16 @@ func NewClient(p Provider, settings map[string]string, policy egress.Policy, opt
 	return c
 }
 
+// BaseURL is where an adapter's requests to host (one of its own) go: https://host, or, in a test
+// that gave the client a fake provider's address (WithTestEndpoint), that address over plain http.
+// An adapter builds every address from it, so a test needs no change in the adapter.
+func (c *Client) BaseURL(host string) string {
+	if c.testHost != "" {
+		return "http://" + c.testHost
+	}
+	return "https://" + host
+}
+
 // asciiLower lower-cases an ASCII host. A host with any other byte is refused (ok is false)
 // before any case mapping: Unicode's lower-casing and folding turn "İ" into "i", the Kelvin sign
 // into "k" and "ſ" into "s", so "api.strİpe.com" would equal "api.stripe.com" here while the

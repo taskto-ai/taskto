@@ -12,6 +12,7 @@ import (
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/currency"
 )
 
 // Seeing the effects of an app, retrying the ones that failed, and trying an action out without
@@ -68,10 +69,24 @@ type EffectDetail struct {
 	Column string `json:"column,omitempty"`
 	Path   string `json:"path,omitempty"`
 	Route  string `json:"route,omitempty"`
+	// Amount and Currency are what a payment link asks: the amount as decimal text with the
+	// currency's decimals ("120.00"), never the provider's, and shown only while the live release
+	// still declares the fields they were read from.
+	Amount   string `json:"amount,omitempty"`
+	Currency string `json:"currency,omitempty"`
 }
 
 func detailOf(p payload) EffectDetail {
-	return EffectDetail{Title: p.Title, Column: p.Column, Path: p.Path, Route: p.Route}
+	d := EffectDetail{Title: p.Title, Column: p.Column, Path: p.Path, Route: p.Route}
+	if p.Slot != "" {
+		d.Title, d.Currency = p.Description, p.Currency
+		if minor, err := currency.Minor(p.Amount, p.Currency); err == nil {
+			d.Amount = currency.Format(minor, p.Currency)
+		} else {
+			d.Amount = p.Amount // what the record held: the entry fails with why when it runs
+		}
+	}
+	return d
 }
 
 // EffectList is a page of effects, newest first, with how many of the app's wait and failed.
@@ -119,7 +134,7 @@ func (s *Service) view(e effectRow, caller Actor, canRead func(int64) bool, live
 	if targetReadable {
 		v.Detail = detailOf(e.payload)
 		if !fieldsHold {
-			v.Detail.Title, v.Detail.Path = "", ""
+			v.Detail.Title, v.Detail.Path, v.Detail.Amount, v.Detail.Currency = "", "", "", ""
 		}
 	}
 	if e.doneAt.Valid {
@@ -450,8 +465,7 @@ func (s *Service) simulatedEffects(ctx context.Context, userID int64, def Defini
 		return out
 	}
 	for i, e := range def.Actions[ch.Name].Effects {
-		// A payment link is an integration's to simulate (the preview never calls one).
-		if e.Kind == EffectCreatePaymentLink || !e.applies(def.Collection, rec.Data) {
+		if !e.applies(def.Collection, rec.Data) {
 			continue
 		}
 		// A new record has no number yet: its details say "new".
@@ -464,7 +478,17 @@ func (s *Service) simulatedEffects(ctx context.Context, userID int64, def Defini
 			Position: i, Kind: e.Kind, Name: e.Name, Action: ch.Name, Record: id, Status: StateSimulated,
 			Detail: detailOf(p), NextAttemptAt: nil, DoneAt: nil,
 		}
-		if code := s.previewTarget(ctx, userID, e, p); code != "" {
+		if e.Kind == EffectCreatePaymentLink {
+			// A payment link is only simulated: the amount and currency it would ask, and why it
+			// would be refused if the amount can't be asked in that currency. Nothing is called, no
+			// integration or key is read, and no reference is made.
+			var code apierr.Code
+			v.Detail, code = previewPaymentLink(p)
+			v.Detail.Title = p.Description
+			if code != "" {
+				v.Error = &EffectError{Code: code}
+			}
+		} else if code := s.previewTarget(ctx, userID, e, p); code != "" {
 			v.Error = &EffectError{Code: code}
 		}
 		out = append(out, v)

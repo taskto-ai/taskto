@@ -24,6 +24,19 @@ function AuthFrame({ title, intro, children }: { title: string; intro?: ReactNod
   )
 }
 
+// Where the provider's hosted payment page sends the payer back to: the server's own pages, which
+// never come from an app's definition. The payer is a customer of whoever sent the link, often with
+// no account here, so these pages call nothing and show nothing of the payment: the provider told
+// them already, and what happened to the record is the business's to say.
+export function PaymentReturnScreen({ outcome }: { outcome: 'done' | 'cancelled' }) {
+  const t = useT()
+  return (
+    <AuthFrame title={outcome === 'done' ? t('payment.done.title') : t('payment.cancelled.title')}>
+      <p>{outcome === 'done' ? t('payment.done.body') : t('payment.cancelled.body')}</p>
+    </AuthFrame>
+  )
+}
+
 // Until the server says how people sign in, nothing is shown that it might take back: no heading
 // or form yet, so a screen is never drawn twice.
 function AuthLoading() {

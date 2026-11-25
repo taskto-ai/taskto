@@ -277,6 +277,8 @@
           "createCard": "Creates a card on {board}",
           "updateCard": "Moves the card this record made to {column}",
           "createDocument": "Creates a document at {path} in {space}",
+          "createPaymentLink": "Asks the “{slot}” integration for a link to pay {amount} in {currency}, and puts the link in {url} and its id in {id}",
+          "createPaymentLinkField": "Asks the “{slot}” integration for a link to pay {amount} in the currency of {currencyField}, and puts the link in {url} and its id in {id}",
           "openBoard": "Offers a link to {board}",
           "openCard": "Offers a link to the card this record made",
           "openDocument": "Offers a link to the document {path} in {space}"
@@ -1066,6 +1068,14 @@
     "app_effect_app_offline": "The app is offline or its space is archived.",
     "app_effect_record_gone": "The record this came from was deleted. Restore it and retry.",
     "app_effect_gave_up": "It kept failing for a reason that may pass: retry it.",
+    "integration_unavailable": "This app’s payments integration can’t be used right now: an admin may have revoked it, switched it off or taken this space away. Ask an admin, then retry.",
+    "integration_amount_refused": "The amount can’t be asked for: it must be more than zero and have no more decimals than the currency. Fix the record, then retry.",
+    "integration_amount_above_max": "The amount is above the {max} {currency} that an admin allows for one payment.",
+    "integration_currency_refused": "{currency} isn’t a currency this payments integration allows.",
+    "integration_public_url_missing": "Payment links need the server’s public address, which isn’t set. Ask whoever runs the server to set it, then retry.",
+    "integration_credentials_refused": "The payment provider didn’t accept this integration’s key. An admin needs to enter a valid one, then you can retry.",
+    "integration_provider_refused": "The payment provider refused to make the payment link. Check the amount and currency, then retry.",
+    "integration_provider_unreachable": "The payment provider didn’t answer. Try again in a few minutes.",
     "app_definition_version": "This app uses a definition format (version {version}) this server doesn’t read; it reads up to {supported}.",
     "app_not_published": "This app isn’t published yet: it can be launched once someone who may publish it does.",
     "app_release_not_found": "That release of the app doesn’t exist.",
@@ -1126,6 +1136,16 @@
     "notification_email_verification_unavailable": "The confirmation email couldn't be sent. Try again.",
     "too_many_resets": "Too many reset requests: try again later.",
     "too_many_invite_emails": "Too many invitations emailed: try again later."
+  },
+  "payment": {
+    "done": {
+      "title": "Thank you",
+      "body": "Your payment was sent to the payment provider. You can close this page: the provider will confirm it to you."
+    },
+    "cancelled": {
+      "title": "Payment cancelled",
+      "body": "Nothing was charged. You can close this page, or open the payment link again to pay."
+    }
   },
   "language": {
     "label": "Language",

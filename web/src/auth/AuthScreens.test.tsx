@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
-import { InviteScreen, LoginScreen, ResetPasswordScreen } from './AuthScreens'
+import { InviteScreen, LoginScreen, PaymentReturnScreen, ResetPasswordScreen } from './AuthScreens'
 
 afterEach(async () => {
   cleanup()
@@ -439,4 +439,16 @@ test('forgotten password: too many requests is said in words', async () => {
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ana@example.com' } })
   fireEvent.click(screen.getByRole('button', { name: 'Email me a link' }))
   expect((await screen.findByRole('alert')).textContent).toBe('Too many reset requests: try again later.')
+})
+
+test('the pages a payer returns to say so, call nothing and show nothing of the payment', () => {
+  const calls = fakeFetch({})
+  const done = render(<PaymentReturnScreen outcome="done" />)
+  screen.getByRole('heading', { name: 'Thank you' })
+  expect(done.container.textContent).toContain('the provider will confirm it')
+  done.unmount()
+  render(<PaymentReturnScreen outcome="cancelled" />)
+  screen.getByRole('heading', { name: 'Payment cancelled' })
+  expect(screen.getByText(/Nothing was charged/)).toBeTruthy()
+  expect(calls).toHaveLength(0)
 })

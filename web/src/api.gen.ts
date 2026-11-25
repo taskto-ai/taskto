@@ -274,6 +274,8 @@ export type AppsEffectDetail = {
   column?: string
   path?: string
   route?: string
+  amount?: string
+  currency?: string
 }
 
 export type AppsEffectError = {

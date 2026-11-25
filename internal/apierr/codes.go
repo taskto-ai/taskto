@@ -446,4 +446,16 @@ const (
 	CodeAppIntegrationKindMismatch    Code = "app_integration_kind_mismatch"     // 422: the integration's provider doesn't do the slot's kind; params: kind
 	CodeAppIntegrationDisabled        Code = "app_integration_disabled"          // 409: the integration is switched off
 	CodeAppIntegrationSpaceNotAllowed Code = "app_integration_space_not_allowed" // 409: the integration is not allowed in the app's space
+
+	// Why a create_payment_link effect failed (internal/apps, internal/integrations): the codes of
+	// an entry's failure, which the web app tells the person who acted.
+
+	CodeIntegrationUnavailable         Code = "integration_unavailable"          // the app's approved integration can't be used now: unapproved, switched off, not allowed in the space, or its key can't be read
+	CodeIntegrationAmountRefused       Code = "integration_amount_refused"       // the amount isn't more than zero, isn't a number, or has more decimals than the currency
+	CodeIntegrationAmountAboveMax      Code = "integration_amount_above_max"     // the amount is above the admin's ceiling; params: max, currency
+	CodeIntegrationCurrencyRefused     Code = "integration_currency_refused"     // the currency isn't one the integration allows; params: currency
+	CodeIntegrationPublicURLMissing    Code = "integration_public_url_missing"   // the server has no -public-url for the pages the payer returns to
+	CodeIntegrationCredentialsRefused  Code = "integration_credentials_refused"  // the provider didn't accept the integration's key
+	CodeIntegrationProviderRefused     Code = "integration_provider_refused"     // the provider refused the request, for good
+	CodeIntegrationProviderUnreachable Code = "integration_provider_unreachable" // the provider didn't answer, or answered with an error that may pass: tried again, then waits for a retry
 )

@@ -298,6 +298,16 @@ export type DraftEffect = {
   card?: string
   path?: string
   route?: 'board' | 'card' | 'document'
+  // A payment link (create_payment_link): the slot of the app's integrations it asks, the number
+  // field with the amount, the currency (a code, or a choice field of codes), and the two fields the
+  // link and its id are written to. Never a provider, an address or a key.
+  integration?: string
+  amount_field?: string
+  currency?: string
+  currency_field?: string
+  description?: string
+  url_field?: string
+  id_field?: string
 }
 
 // The space, and board, an effect of the draft acts on, with the names the caller may be told (none
@@ -471,7 +481,7 @@ export type AppRecord = {
 // An effect an action of an app set going, as the server's outbox lists it: what it makes, how it is
 // getting on, why it failed, and what it made if the caller may read where. `simulated` is of a
 // preview only.
-export type EffectKind = 'create_card' | 'update_card' | 'create_document' | 'open_route'
+export type EffectKind = 'create_card' | 'update_card' | 'create_document' | 'open_route' | 'create_payment_link'
 export type EffectStatus = 'pending' | 'running' | 'done' | 'failed' | 'simulated'
 export type AppEffect = {
   // 0 for a simulated one.
@@ -487,7 +497,8 @@ export type AppEffect = {
   attempts: number
   next_attempt_at: string | null
   error: { code: string; params?: Params } | null
-  detail: { title?: string; column?: string; path?: string; route?: string }
+  // A payment link's amount (decimal text with the currency's decimals) and currency code.
+  detail: { title?: string; column?: string; path?: string; route?: string; amount?: string; currency?: string }
   result?: Record<string, unknown>
   created_at?: string
   updated_at?: string

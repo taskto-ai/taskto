@@ -27,11 +27,12 @@ as such, what is still to come. The routes are in [api.md](api.md#integrations).
   **approval** by an admin of that contract's hash, which a publish and a rollback need
   ([Apps and approval](#apps-and-approval)).
 
-Nothing calls a provider yet: no payment link is made, no event is received, and a
-`create_payment_link` effect that an app declares does nothing when an action runs. Those arrive
-as separate changes, in this order: the payment link; the webhook and its verification; applying a
-payment to a record; polling the provider for payments the webhook missed. The rules below are the
-ones those changes have to keep.
+- **Payment links**: the `create_payment_link` effect makes a hosted payment page at Stripe and
+  writes its address to the record ([Payment links](#payment-links)).
+
+No event is received yet. Those arrive as separate changes, in this order: the webhook and its
+verification; applying a payment to a record; polling the provider for payments the webhook missed.
+The rules below are the ones those changes have to keep.
 
 ## Concepts
 
@@ -224,6 +225,45 @@ would switch the address check off. `any` is there for a trusted network, and a 
 reaches the internet only through a mandatory proxy needs it, since a restricted policy
 ignores the environment's proxy.
 
+## Payment links
+
+An app's action may declare a `create_payment_link` effect that names a slot of kind `payments`
+([Apps and approval](#apps-and-approval)). When the action runs, the effect is queued in the app's
+outbox in the same transaction as the record's change, and the outbox worker does it as the user who
+acted, with that user's access then (`docs/api.md`, [Payment links](api.md#payment-links)). It
+re-checks that the live release still asks for exactly this link and has an approved contract for it,
+that the integration is switched on and allowed in the app's space, and the admin's limits; it makes
+the link at the provider with the integration's key, which is opened only for the call; and it writes
+the link and its id to the two fields the effect names through the system writer, in no way a user's
+write.
+
+- **Stripe's Checkout, in payment mode.** The link is a Checkout Session (`POST /v1/checkout/sessions`):
+  one line item with the exact amount, the description as the product's name,
+  `client_reference_id` set to the reference's token, and the server's own `success_url` and
+  `cancel_url`. The API version is pinned in code (`integrations.StripeAPIVersion`, sent in the
+  `Stripe-Version` header; the version Stripe's documentation lists as current when the adapter was
+  written) and is raised by a change of code with its tests, never by configuration. A session
+  expires by itself after Stripe's default of 24 hours (its limit), so a payer who comes later
+  finds an expired page, and sending the invoice again makes a new link.
+- **Exact money.** Minor units from a closed currency table, never a rounded number: more decimals
+  than the currency has, zero or less, above the integration's ceiling, or a currency the integration
+  doesn't list are each refused, with a code that says which, before anything is made.
+- **Once, through crashes.** The entry's reference (`integration_refs`) has a random token that is
+  Stripe's `Idempotency-Key` and the `client_reference_id` its events echo back, and is unique by the
+  outbox entry. A retry finds the reference and either the object Stripe made (not asked again) or,
+  with none noted, asks again under the same key, which Stripe answers with the object it made. Stripe
+  keeps idempotency keys for at least 24 hours, so a crash and then a wait of more than a day with
+  no object noted is the one case that can leave two payable links for one reference. A failure that
+  Stripe keeps under a key (a `5xx`) would be answered to the same key for ever, so the next try has
+  a key of its own.
+- **The server's own pages.** The payer comes back to `<public URL>/payment/done` or
+  `/payment/cancelled`, web app pages that show a short message and call nothing. A definition
+  can't name a URL, so no app can send a payer elsewhere. Without `-public-url` no link is made.
+- **A preview never calls the network**: it says what the link would ask and refuses an amount the
+  currency can't hold, with no integration, key or reference.
+- **The key stays in the call.** It is not in a reply, a record, an entry's result, the reference,
+  the audit log or a log line; a failure is a code, never the provider's words.
+
 ## Webhooks and the public URL
 
 Each integration has a random 128-bit `public_id`, and its webhook address is
@@ -264,13 +304,13 @@ against, so none of them needs a network:
 
 ## Trying an integration by hand
 
-CI never calls a real provider, and nothing here does yet: **check** only looks at what the
+CI never calls a real provider: tests run against the fake. **Check** only looks at what the
 server holds (the secrets are set and open, the settings are valid) and says nothing about
-whether the provider accepts the credentials. Real-provider testing arrives with the payment
-link. Meanwhile, use the provider's **test mode**, with test keys of your own that you create at
-the provider: connect them in Settings → Integrations, allow a space, and run the local check.
-Never use live keys to try the software, and never paste a key into an issue, a chat or a
-commit.
+whether the provider accepts the credentials. To try a payment link against the real Stripe, by
+hand and never in CI, use its **test mode** with test keys of your own that you create at Stripe:
+connect them in Settings → Integrations, set a public URL, allow a space, approve an invoicing app
+and send an invoice; the link opens a hosted page that takes Stripe's test cards. Never use live
+keys to try the software, and never paste a key into an issue, a chat or a commit.
 
 ## Not here, on purpose
 

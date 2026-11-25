@@ -279,7 +279,10 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	if err := boardSvc.ReconcileReminders(ctx); err != nil {
 		return err
 	}
-	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb}).WithDeletedRetention(cfg.AppDeletedRetention())
+	// The integrations are one service for the server's routes and for the apps' payment links, which
+	// the outbox worker makes through it (the key of an integration is opened only there).
+	integrationSvc := integrations.New(integrations.NewStore(sqlDB, key), integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)})
+	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb, Payments: integrationSvc}).WithDeletedRetention(cfg.AppDeletedRetention())
 	// The apps' effects (cards, documents) are done in the background, as the users who acted,
 	// so they go on when nobody has the app open. Stopped before the database closes.
 	stopEffects := appSvc.StartOutbox(ctx)
@@ -402,7 +405,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		CLIAccounts:   cliAccounts,
 		Browser:       browsers,
 		Dictation:     dictationService(cfg, sqlDB, key, kb),
-		Integrations:  integrations.New(integrations.NewStore(sqlDB, key), integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)}),
+		Integrations:  integrationSvc,
 		BackupDataDir: cfg.DataDir,
 		// The host updater's status, read-only (docs/install.md#automatic-updates).
 		UpdateStatusDir: cfg.UpdateStatusDir,

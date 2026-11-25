@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { type AppEffect, type AppEffectList, api, codeText, errorText } from '../api'
-import { type Key, useFormat, useT } from '../i18n'
+import { type Format, type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { boardItem, documentItem, Link, routePath } from '../router'
 import { Badge, type BadgeTone } from '../ui/Badge'
@@ -198,7 +198,7 @@ export function EffectItems({
       {notice && <Notice tone="success">{notice}</Notice>}
       <Rows label={label}>
         {effects.map((e) => {
-          const what = detail(e, t)
+          const what = detail(e, t, f)
           const meta = [
             e.id > 0 ? t('apps.effects.recordAction', { id: e.record, action: e.action }) : e.action,
             e.attempts > 0 ? t('apps.effects.tries', { count: e.attempts }) : '',
@@ -277,9 +277,19 @@ const STATUS_TONE: Record<string, BadgeTone> = {
 }
 
 // What an effect makes, in a line: a card's title, a document's path, where a card goes.
-function detail(e: AppEffect, t: ReturnType<typeof useT>): string {
+function detail(e: AppEffect, t: ReturnType<typeof useT>, f: Pick<Format, 'number'>): string {
   const d = e.detail
   switch (e.kind) {
+    case 'create_payment_link': {
+      // The amount is exact decimal text; only its showing is the locale's.
+      const n = Number(d.amount)
+      if (!d.amount || !d.currency) return d.title ?? ''
+      try {
+        return f.number(n, { style: 'currency', currency: d.currency })
+      } catch {
+        return `${d.amount} ${d.currency}`
+      }
+    }
     case 'create_card':
       return d.title ?? ''
     case 'update_card':

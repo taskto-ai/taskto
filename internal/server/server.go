@@ -151,7 +151,11 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	boardSvc.Routes(mux)
 	// The apps' routes list and retry their effects and check the targets they name; the
 	// server's own worker, which does them, is the one the command starts (apps.StartOutbox).
-	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(apps.Platform{Boards: boardSvc, ProviderKinds: providerKinds})
+	platform := apps.Platform{Boards: boardSvc, ProviderKinds: providerKinds}
+	if opts.Integrations != nil {
+		platform.Payments = opts.Integrations // not a nil *Service in an interface
+	}
+	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(platform)
 	if opts.Quota != nil {
 		appsService.WithQuota(opts.Quota)
 		opts.Quota.Routes(mux, accounts)

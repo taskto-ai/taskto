@@ -39,7 +39,11 @@ import (
 //     after a crash between making the card and noting it finds the card and makes no second one;
 //   - a document is made only where none is, and one that is already there with the very content
 //     the entry would write is the entry's own;
-//   - moving a card to a column it is in already is nothing to do.
+//   - moving a card to a column it is in already is nothing to do;
+//   - a payment link is asked of the provider once for the entry: the entry has one reference
+//     (integration_refs.effect_id is unique) whose random token is the provider's idempotency key,
+//     so doing the entry again after a crash finds the reference, and the link it made if the
+//     answer had been noted, and writing the link to the record again changes nothing.
 //
 // An entry runs as the user who acted, with that user's access at that time. Both the app (the
 // right the action needed) and the target are checked every time; if either was taken away the
@@ -98,6 +102,9 @@ type Platform struct {
 	// registry does, so an admin can't bind a slot to one that doesn't. It is a function, not the
 	// registry, because package integrations is built on this one. Without it no slot can be bound.
 	ProviderKinds func(provider string) []string
+	// Payments makes the payment links of create_payment_link effects (paymentlink.go). Without it
+	// such an entry can't be done (it is tried again, then fails for a retry).
+	Payments PaymentLinks
 }
 
 // WithPlatform gives the service what its effects act on, and returns it.
@@ -208,9 +215,7 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 	}
 	var queued []int
 	for i, e := range action.Effects {
-		// A payment link is asked of an integration, not done to boards and documents: the entries
-		// for it are the integrations' (their table admits the kind), so none is queued here.
-		if e.Kind != EffectCreatePaymentLink && e.applies(def.Collection, ap.data) {
+		if e.applies(def.Collection, ap.data) {
 			queued = append(queued, i)
 		}
 	}
@@ -228,6 +233,12 @@ func enqueueEffects(ctx context.Context, tx *sql.Tx, actor Actor, appID, opID in
 	for _, i := range queued {
 		e := action.Effects[i]
 		p := e.payload(def.Collection, ap.data, ap.id)
+		if e.Kind == EffectCreatePaymentLink {
+			// Its target is the app's own space: who may read the record may be told what it asks.
+			if err := tx.QueryRowContext(ctx, `SELECT space_id FROM apps WHERE id = ?`, appID).Scan(&p.SpaceID); err != nil {
+				return 0, err
+			}
+		}
 		if e.Card != "" {
 			// An update_card or a route to a card has no target of its own: it is the one of the
 			// effect that makes the card, kept here so who may be told about it is known.
@@ -603,6 +614,8 @@ func (s *Service) perform(ctx context.Context, e effectRow) (map[string]any, err
 		return s.createDocument(ctx, e)
 	case EffectOpenRoute:
 		return s.openRoute(ctx, e)
+	case EffectCreatePaymentLink:
+		return s.createPaymentLink(ctx, e)
 	}
 	return nil, refuse(apierr.CodeAppEffectInvalid)
 }

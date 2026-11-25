@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"taskto.ai/taskto/internal/currency"
 )
 
 // Platform effects.
@@ -23,6 +25,15 @@ import (
 //	create_document  a Markdown document under a path in a space, from templates
 //	open_route       a route of the web app to open (a board, a card or a document of the
 //	                 app's own effects), from a fixed list, never an address
+//	create_payment_link  a link to pay an amount of the record, asked of the integration a slot of
+//	                 the app is connected to (integrations.go, paymentlink.go), never a provider,
+//	                 an address or a key
+//
+// The first three act on boards and documents as the user who acted. create_payment_link is the one
+// effect that writes the record it came from, and it does so through the system writer
+// (system.go), not as the user: the link and its id go only to the two fields the effect names and
+// the approved contract declares, checked against the live release when the entry runs. Its other
+// work is outside TaskTo.AI, and is done once per entry (paymentlink.go).
 //
 // An effect may name a rule (When, the language of rules.go) that decides whether it applies to
 // the record as the change leaves it. Templates are text with {{field}} holes and nothing else:
@@ -603,6 +614,17 @@ type payload struct {
 	Path    string   `json:"path,omitempty"`
 	Content string   `json:"content,omitempty"`
 	Route   string   `json:"route,omitempty"`
+	// What create_payment_link asks for, as the record filled it in: the slot, the amount as the
+	// shortest decimal text of the number field's value (never a float, never rounded: converting
+	// it to the currency's smallest unit is the integration's, and refuses what doesn't fit), the
+	// currency, the text the payer reads, and the two fields the link and its id are written to.
+	Slot        string `json:"slot,omitempty"`
+	AmountField string `json:"amount_field,omitempty"`
+	Amount      string `json:"amount,omitempty"`
+	Currency    string `json:"currency,omitempty"`
+	Description string `json:"description,omitempty"`
+	URLField    string `json:"url_field,omitempty"`
+	IDField     string `json:"id_field,omitempty"`
 	// Uses names the fields of the record whose values the templates were filled with, and their
 	// types then: what is shown of the entry is shown only while the live release still declares
 	// them so (usesHold), as a field the release removed or retyped is not for people to read.
@@ -620,6 +642,8 @@ func (e Effect) templatesOf() []string {
 		if e.Route == RouteDocument {
 			return []string{e.Path}
 		}
+	case EffectCreatePaymentLink:
+		return []string{e.Description}
 	}
 	return nil
 }
@@ -640,6 +664,17 @@ func (e Effect) usedFields(c Collection) map[string]string {
 			}
 			return nil
 		})
+	}
+	if e.Kind == EffectCreatePaymentLink {
+		// The amount and the currency are read from fields, not from a template.
+		for _, name := range []string{e.AmountField, e.CurrencyField} {
+			if f, ok := c.field(name); ok && name != "" {
+				if uses == nil {
+					uses = map[string]string{}
+				}
+				uses[name] = f.Type
+			}
+		}
 	}
 	return uses
 }
@@ -683,6 +718,33 @@ func (e Effect) payload(c Collection, data map[string]any, id int64) payload {
 		if e.Route == RouteDocument {
 			p.Path = render(e.Path, c, data, id, modeSlug)
 		}
+	case EffectCreatePaymentLink:
+		p.Slot, p.AmountField, p.URLField, p.IDField = e.Integration, e.AmountField, e.URLField, e.IDField
+		p.Description = render(e.Description, c, data, id, modeLine)
+		p.Amount, p.Currency = e.moneyOf(c, data)
 	}
 	return p
+}
+
+// moneyOf is the amount and the currency a payment link of the record asks for: the amount as
+// decimal text ("" when the record has no number there), the currency as the effect's own code or
+// the record's choice (what the field holds, upper case; "" when it holds none). Neither is checked
+// here: what is wrong with them is the integration's to refuse, when the entry runs.
+func (e Effect) moneyOf(c Collection, data map[string]any) (amount, code string) {
+	if f, ok := c.field(e.AmountField); ok {
+		if v, set := data[e.AmountField]; set && ofType(f, v) {
+			if n, ok := v.(float64); ok {
+				amount, _ = currency.Decimal(n)
+			}
+		}
+	}
+	code = e.Currency
+	if e.CurrencyField != "" {
+		if f, ok := c.field(e.CurrencyField); ok {
+			if v, set := data[e.CurrencyField]; set && ofType(f, v) {
+				code, _ = v.(string)
+			}
+		}
+	}
+	return amount, strings.ToUpper(code)
 }

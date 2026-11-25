@@ -347,3 +347,37 @@ test('retrying an effect on an older page shows it retried there, not still fail
   expect(old?.textContent).toContain('Waiting')
   expect(old?.textContent).not.toContain('Failed')
 })
+
+test('a payment link says its amount in the person’s format, and what failed about it', async () => {
+  fakeFetch({
+    [`GET ${base}/effects?limit=50`]: {
+      body: {
+        effects: [
+          effect(2, {
+            kind: 'create_payment_link',
+            status: 'failed',
+            error: { code: 'integration_amount_above_max', params: { max: '5000.00', currency: 'EUR' } },
+            detail: { title: 'Invoice A-1', amount: '12010.50', currency: 'EUR' },
+            can_retry: false,
+          }),
+          effect(1, {
+            kind: 'create_payment_link',
+            status: 'done',
+            detail: { title: 'Invoice A-2', amount: '120.10', currency: 'EUR' },
+            result: { workspace_id: 1, space_id: 2, amount: '120.10', currency: 'EUR' },
+            done_at: '2026-11-02T10:00:00.000Z',
+          }),
+        ],
+        active: 0,
+        failed: 1,
+      },
+    },
+  })
+  render(<AppEffects workspace={1} base={base} writable />)
+  fireEvent.click(await screen.findByRole('button', { name: /Effects/ }))
+  const items = within(await screen.findByRole('list', { name: 'The app’s effects' })).getAllByRole('listitem')
+  expect(items[0].textContent).toContain('Create a payment link')
+  expect(items[0].textContent).toContain('€12,010.50')
+  expect(items[0].textContent).toContain('above the 5000.00 EUR that an admin allows')
+  expect(items[1].textContent).toContain('€120.10')
+})

@@ -40,14 +40,19 @@ type Options struct {
 	// Egress is where calls to providers may go (-integration-egress). Nil is "public": every
 	// connection's address is checked, so a call never reaches a private or loopback address.
 	Egress *egress.Policy
+	// ClientOptions are for tests: they change how the clients of calls to providers are built
+	// (WithTestEndpoint points them at a fake). The server's command leaves them empty, and nothing
+	// in its configuration, a definition or a request can set them.
+	ClientOptions []ClientOption
 }
 
 // Service serves the integrations API (docs/api.md#integrations).
 type Service struct {
-	store     *Store
-	spaces    *access.Checker
-	publicURL string
-	egress    egress.Policy
+	store      *Store
+	spaces     *access.Checker
+	publicURL  string
+	egress     egress.Policy
+	clientOpts []ClientOption
 }
 
 // New returns the API over store.
@@ -56,7 +61,7 @@ func New(store *Store, opts Options) *Service {
 	if opts.Egress != nil {
 		policy = *opts.Egress
 	}
-	return &Service{store: store, publicURL: opts.PublicURL, egress: policy}
+	return &Service{store: store, publicURL: opts.PublicURL, egress: policy, clientOpts: opts.ClientOptions}
 }
 
 // Client returns the client for calls to provider p of an integration with these settings, under

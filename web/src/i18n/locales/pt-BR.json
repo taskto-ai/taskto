@@ -281,6 +281,8 @@
           "createCard": "Cria um cartão em {board}",
           "updateCard": "Move para {column} o cartão que este registro criou",
           "createDocument": "Cria um documento em {path} no espaço {space}",
+          "createPaymentLink": "Pede à integração “{slot}” um link para pagar {amount} em {currency} e põe o link em {url} e o seu id em {id}",
+          "createPaymentLinkField": "Pede à integração “{slot}” um link para pagar {amount} na moeda de {currencyField} e põe o link em {url} e o seu id em {id}",
           "openBoard": "Oferece um link para {board}",
           "openCard": "Oferece um link para o cartão que este registro criou",
           "openDocument": "Oferece um link para o documento {path} no espaço {space}"
@@ -1071,6 +1073,14 @@
     "app_effect_app_offline": "O app está offline ou o seu espaço está arquivado.",
     "app_effect_record_gone": "O registro de onde isto veio foi excluído. Restaure-o e tente de novo.",
     "app_effect_gave_up": "Continuou falhando por um motivo que pode passar: tente de novo.",
+    "integration_unavailable": "A integração de pagamentos deste app não pode ser usada agora: um administrador pode tê-la revogado, desativado ou retirado este espaço. Fale com um administrador e tente de novo.",
+    "integration_amount_refused": "Não dá para pedir esse valor: ele precisa ser maior que zero e ter no máximo as casas decimais da moeda. Corrija o registro e tente de novo.",
+    "integration_amount_above_max": "O valor está acima dos {max} {currency} que um administrador permite por pagamento.",
+    "integration_currency_refused": "{currency} não é uma moeda que esta integração de pagamentos aceita.",
+    "integration_public_url_missing": "Links de pagamento precisam do endereço público do servidor, que não está definido. Peça a quem administra o servidor para defini-lo e tente de novo.",
+    "integration_credentials_refused": "O provedor de pagamentos não aceitou a chave desta integração. Um administrador precisa informar uma chave válida; depois você pode tentar de novo.",
+    "integration_provider_refused": "O provedor de pagamentos recusou criar o link de pagamento. Confira o valor e a moeda e tente de novo.",
+    "integration_provider_unreachable": "O provedor de pagamentos não respondeu. Tente de novo em alguns minutos.",
     "app_definition_version": "Este app usa um formato de definição (versão {version}) que o servidor não lê; ele lê até a {supported}.",
     "app_not_published": "Este app ainda não foi publicado: ele poderá ser aberto quando alguém com permissão para publicá-lo o fizer.",
     "app_release_not_found": "Essa versão do app não existe.",
@@ -1131,6 +1141,16 @@
     "notification_email_verification_unavailable": "Não foi possível enviar o e-mail de confirmação. Tente de novo.",
     "too_many_resets": "Muitos pedidos de redefinição: tente de novo mais tarde.",
     "too_many_invite_emails": "Muitos convites enviados por e-mail: tente de novo mais tarde."
+  },
+  "payment": {
+    "done": {
+      "title": "Obrigado",
+      "body": "Seu pagamento foi enviado ao provedor de pagamentos. Você pode fechar esta página: o provedor vai confirmá-lo para você."
+    },
+    "cancelled": {
+      "title": "Pagamento cancelado",
+      "body": "Nada foi cobrado. Você pode fechar esta página ou abrir o link de pagamento de novo para pagar."
+    }
   },
   "language": {
     "label": "Idioma",

@@ -208,6 +208,14 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_integration_kind_mismatch` | 422 | The integration's provider doesn't do the kind `kind`. |
 | `app_integration_disabled` | 409 | The integration is switched off. |
 | `app_integration_space_not_allowed` | 409 | The integration isn't allowed in the app's space (approve with `allow_space`, or allow it first). |
+| `integration_unavailable` | — | A failed `create_payment_link` entry: the live release's approved contract no longer covers it, the integration is switched off or not allowed in the app's space, or its key can't be read. |
+| `integration_amount_refused` | — | A failed `create_payment_link` entry: the amount is zero or less, not a number, or has more decimals than the currency. |
+| `integration_amount_above_max` | — | A failed `create_payment_link` entry: the amount is above the admin's ceiling (params: `max`, `currency`). |
+| `integration_currency_refused` | — | A failed `create_payment_link` entry: the currency isn't one the integration allows (params: `currency`). |
+| `integration_public_url_missing` | — | A failed `create_payment_link` entry: the server has no `-public-url`. |
+| `integration_credentials_refused` | — | A failed `create_payment_link` entry: the provider didn't accept the integration's key. |
+| `integration_provider_refused` | — | A failed `create_payment_link` entry: the provider refused the request, for good. |
+| `integration_provider_unreachable` | — | A `create_payment_link` entry the provider didn't answer: tried again, then failed. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
 | `app_roles_not_member` | 400 | A role is for someone who can't read the space. |
 | `app_roles_lockout` | 400 | The assignments would take the caller's own right to manage the app's roles. |
@@ -3111,8 +3119,8 @@ workspace admin's choice, made when they approve the app's contract. See
   field), `currency` (a code from the server's closed list) or `currency_field` (a choice field whose
   options are all codes), `description` (a template, at most 400 characters), and two different string
   fields, `url_field` and `id_field`, that the link and its id are written to. The release needs the
-  capability `effect.create_payment_link`. Nothing calls a provider yet: the effect is declared,
-  checked and approved, and does nothing when an action runs.
+  capability `effect.create_payment_link`. When an action runs the effect makes a payment link
+  through the approved integration ([Payment links](#payment-links)).
 
 **The contract.** From the draft the server works out, for each slot, a **contract**: the kind, the
 operations the app asks for, the record fields it sends out (names only), the currencies, the events
@@ -3429,7 +3437,7 @@ its release needs the capability `effect.<kind>` of each kind it uses (`requires
 | `update_card` | `card`, `column` | moves the card the `create_card` effect called `card` made for the record |
 | `create_document` | `space_id`, `path`, `content`? | a Markdown document, never over another |
 | `open_route` | `route`: `board` (`space_id`, `board_id`), `card` (`card`) or `document` (`space_id`, `path`) | a place to open in the web app, as a kind and IDs; never an address |
-| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | **declared only, for now**: asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount; a version 3 effect that holds no provider, address or key. It is checked, put in the contract and gates publishing, but it makes no outbox entry and does nothing when the action runs. An action has at most one |
+| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount of the record, and writes the link to `url_field` and its id to `id_field` (see [Payment links](#payment-links)); a version 3 effect that holds no provider, address or key. It is checked, put in the contract and gates publishing, and it needs the capability `effect.create_payment_link`. An action has at most one |
 
 Every kind may have `when`, a rule ([Fields and rules](#fields-and-rules)) over the record as the change leaves it: the
 effect applies only then. `title`, `body`, `content`, `path` and `docs` are **templates**: text
@@ -3446,7 +3454,7 @@ the moment of the write, with the write lock held. Every effect runs as the user
 their access **when it runs**.
 
 **The outbox.** When the action changes a record, the change and one entry per effect that applies
-(a `create_payment_link` is declared only, and makes none) are committed **in the same transaction**. The request answers then; the server's worker does the
+are committed **in the same transaction**. The request answers then; the server's worker does the
 entries afterwards, so they go on when nobody has the app open, and a crash loses none. An action
 may carry an `operation`, its **idempotency key** (8 to 64 letters, digits, `-`, `_`), which a
 client makes once for a press of a button and sends again with every retry of it (the web app keeps
@@ -3532,6 +3540,50 @@ record's fields (`detail.title`, `detail.path`, a result's `title` and `path`, a
 error's `params`) is shown only while the live release still declares every field the entry was filled
 from, with the type it had: after a release removes or retypes one, those are left out.
 
+#### Payment links
+
+A `create_payment_link` effect is an entry of the outbox like the others, run as the user who acted
+(`app_effect_app_access`, `app_effect_app_offline` and `app_effect_record_gone` are as above). Its
+`detail` has the `title` (the description filled in), the `amount` and the `currency`; a done entry's
+`result` is `{"workspace_id", "space_id", "amount", "currency"}`, never the link, which is in the
+record. When the entry runs the worker also checks, as of now, that the app's **live** release still
+asks for exactly this link (the same action, amount field, currency and fields to write to) and has an
+approved contract for the slot, that the integration the approval named is switched on and allowed in
+the app's space, and the admin's limits. Anything less fails the entry with
+`integration_unavailable`, and nothing is sent: revoking the approval, switching the integration off
+or taking the space away stops entries that are waiting.
+
+**Money is exact.** The amount is the number field's value written as the shortest decimal text that
+reads back as the same number, read digit by digit into the currency's smallest unit (2 decimals for
+euros, none for yen: a closed table, [`internal/currency`](../internal/currency)). It is **never
+rounded**: an amount with more decimals than the currency has (`0.1 + 0.2` is
+`0.30000000000000004`), zero or less, or not a number fails with `integration_amount_refused`; one
+above the integration's ceiling fails with `integration_amount_above_max` (`params`: `max`,
+`currency`); a currency the integration doesn't list (or one that isn't on the closed list) fails with
+`integration_currency_refused` (`params`: `currency`). Nothing is asked of the provider, and no
+reference made, for a refused amount.
+
+**The link is made once.** Each entry has one **reference** (`integration_refs`, unique by the
+entry's number) with a random 128-bit token, the provider's idempotency key and the reference the
+provider echoes back with the payment, and it keeps the provider's answer. An entry done again after
+a crash finds its reference: with the provider's object noted, the provider is not asked again; with
+none, it is asked again under the same key, which the provider answers with the object it already
+made. A failure the provider keeps under a key gets a key of its own on the next try. The link and its
+id are written to the record's `url_field` and `id_field` by the integration, not by a person: the
+record's history says so (`actor_system`), the revision goes up once, and writing the same link
+again changes nothing. A hosted page expires by itself within the provider's default of 24 hours; an
+admin's key is never in a reply, a record, an entry or a log.
+
+**The pages the payer returns to** are the server's own, never a definition's: the web app's
+`/payment/done` and `/payment/cancelled` on the server's [public URL](install.md), which show a short
+message, call nothing and show nothing of the payment. Without a public URL no link is made
+(`integration_public_url_missing`).
+
+**Other failures**: `integration_credentials_refused` (the provider didn't accept the key),
+`integration_provider_refused` (it refused the request, for good) and
+`integration_provider_unreachable` (no answer, or one that may pass: tried again after 5 s, 10 s, 20 s…,
+at most 5 tries in all, then failed). A failed entry is retried by the person who acted.
+
 #### `GET …/apps/{app}/effects`
 
 Readers of the app: the effects of the records the caller may read (all, or only their own: the
@@ -3562,9 +3614,14 @@ since the route is not one a token reaches.
 Those who may design or publish the app (`403 app_forbidden` otherwise). The same body as an action;
 it is worked out against the **draft** and **does nothing**: no record changes, no operation is
 kept, no entry is queued, no card or document is made. It answers `{"effects": […]}`, the effects
-that would apply (not a `create_payment_link`, which is declared only), with `status: "simulated"`, what they would make in `detail` (a new record's `id`
+that would apply, with `status: "simulated"`, what they would make in `detail` (a new record's `id`
 is `new`), and an `error` with the code an effect would fail with if the caller couldn't write its
-target.
+target. A `create_payment_link` is simulated without any integration: its `detail` has the `title` (the
+description filled in), the `amount` (decimal text with the currency's decimals, such as `"120.10"`) and
+the `currency`, and its `error` is `integration_amount_refused` or `integration_currency_refused` when
+the record's amount can't be asked in that currency. The admin's ceiling and list of currencies are
+checked when the entry runs, since a draft has no integration yet. Nothing is called, no key is opened
+and no reference is made.
 
 Like the preview below, it never reads the app's records: the action is tried on the `rows` of the
 body (the preview's own, as below) or, without them, on sample rows made from the draft's
@@ -3597,8 +3654,8 @@ draft doesn't declare, a value that doesn't fit its field, or a row the sample r
 `updateComponents`, `updateDataModel` for a start, as `…/surface` answers) or update it (as `…/actions`
 does), and the rows as the action left them, to send with the next step. For an insert or an update
 with effects, `effects` are the ones that would apply to the record, simulated on those rows (a
-`create_payment_link` is declared only and is never simulated; as
-[`…/actions/preview`](#post-appsappactionspreview) answers; nothing is made). In a preview a
+`create_payment_link` is only simulated, as
+[`…/actions/preview`](#post-appsappactionspreview) answers: nothing is made, and no provider is called). In a preview a
 **signature** or a **photo** is never required, since none is held, so an action whose record would
 carry one is not refused for the lack of it. The answer is the same
 for the draft of an app that was never published, which is how it is tried first. The web

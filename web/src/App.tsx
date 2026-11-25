@@ -6,7 +6,7 @@
 
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { ApiError, api, errorText, forAccount, type Me, SESSION_LOST } from './api'
-import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
+import { InviteScreen, LoginScreen, PaymentReturnScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
 import { setPreferences, useT } from './i18n'
 import { leavePush } from './notifications/push'
 import { useOpenFromWorker } from './notifications/usePushSync'
@@ -31,12 +31,20 @@ type Session =
   | { state: 'in'; me: Me }
   | { state: 'invite'; me: Me | null }
   | { state: 'reset' }
+  // A payer back from the provider's hosted payment page (/payment/done, /payment/cancelled): no session.
+  | { state: 'payment'; outcome: 'done' | 'cancelled' }
   // The server can't be reached and someone signed in here before: the apps they downloaded.
   | { state: 'offline'; name: string }
   | { state: 'error'; error: string }
 
 const INVITE_PATH = '/invite'
 const RESET_PATH = '/reset-password'
+// The pages the server sends a payer to after the provider's payment page (internal/integrations
+// PaymentDonePath, PaymentCancelledPath).
+const PAYMENT_PATHS: Record<string, 'done' | 'cancelled'> = {
+  '/payment/done': 'done',
+  '/payment/cancelled': 'cancelled',
+}
 
 // Signing out is the same from wherever it is asked: who, and where it leaves to.
 type Leaving = { user: number; next: Session }
@@ -67,6 +75,9 @@ export function App() {
   const [leaving, setLeaving] = useState<Asked | null>(null)
 
   const load = useCallback(async () => {
+    // A payer needs no session and nothing of the server's: the page is drawn before anything is asked.
+    const payment = PAYMENT_PATHS[window.location.pathname]
+    if (payment) return setSession({ state: 'payment', outcome: payment })
     try {
       const setup = await api<{ needed: boolean }>('/api/setup')
       if (setup.needed) return setSession({ state: 'setup' })
@@ -240,6 +251,8 @@ export function App() {
         </>
       )
     }
+    case 'payment':
+      return <PaymentReturnScreen outcome={session.outcome} />
     case 'reset':
       return <ResetPasswordScreen token={window.location.hash.slice(1)} onDone={resetDone} />
     case 'error':
