@@ -3,7 +3,7 @@
 // which holds the renderer itself: the offline download and its panel only ask whether a release
 // can be drawn, and importing the catalog for that would load the renderer (A2UI and its schema
 // library, most of a megabyte of code) on every page instead of only when an app is opened.
-// apps.test.tsx keeps these names equal to the catalog's and to the server's.
+// capabilities.test.ts keeps these names equal to the catalog's, and apps.test.tsx to the server's.
 
 // The version of the definition format this client reads (internal/apps DefinitionVersion), which
 // is TaskTo.AI's and has nothing to do with the A2UI protocol's.
