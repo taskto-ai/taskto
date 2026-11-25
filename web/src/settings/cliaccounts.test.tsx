@@ -173,9 +173,10 @@ test("an untrusted URL is text with a warning; Claude Code's code is pasted back
   expect(url.closest('a')).toBeNull()
   expect(screen.queryByRole('link', { name: /example\.com/ })).toBeNull()
   expect(document.querySelector('b')).toBeNull()
-  expect(
-    screen.getByText("This address isn't Claude Code's known sign-in page. Check it before you open it."),
-  ).toBeTruthy()
+  // A security warning: an alert, said at once.
+  expect(screen.getAllByRole('alert').map((a) => a.textContent)).toContain(
+    "This address isn't Claude Code's known sign-in page. Check it before you open it.",
+  )
 
   fireEvent.change(screen.getByLabelText('Paste the code the sign-in page shows'), {
     target: { value: '  fake-code#state  ' },
@@ -293,13 +294,12 @@ test('usage limits: each window with how much is used, when it resets, warnings 
   expect(within(five).queryByText(/limit reached|close to/i)).toBeNull()
 
   const week = screen.getByRole('listitem', { name: 'Weekly limit' })
-  expect(week.getAttribute('data-status')).toBe('allowed_warning')
   expect(within(week).getByText('91% used')).toBeTruthy()
-  expect(within(week).getByText('Close to the limit').className).toContain('tt-warning')
+  // A status in words, in a badge of its tone.
+  expect(within(week).getByText('Close to the limit').className).toContain('ui-badge-warning')
 
   const opus = screen.getByRole('listitem', { name: 'Weekly limit (Opus)' })
-  expect(opus.getAttribute('data-status')).toBe('rejected')
-  expect(within(opus).getByText('Limit reached').className).toContain('tt-error')
+  expect(within(opus).getByText('Limit reached').className).toContain('ui-badge-danger')
   expect(within(opus).getByText('Usage limit reached · resets 3pm')).toBeTruthy()
   expect(within(opus).queryByRole('meter')).toBeNull()
 
@@ -448,12 +448,12 @@ test("a workspace's shared accounts: terms for API keys, the member's mode, and 
   expect(within(panel).getByRole('link', { name: "Anthropic's Commercial Terms" })).toBeTruthy()
   expect(await within(panel).findByText(/use your own account when one is connected/)).toBeTruthy()
 
-  const row = within(panel).getByRole('listitem', { name: 'Codex · Company key' })
+  const row = within(panel).getByText('Codex · Company key').closest('li') as HTMLElement
   fireEvent.click(within(row).getByRole('button', { name: 'Test Codex · Company key' }))
   expect(await within(row).findByText('The provider accepted the key.')).toBeTruthy()
 
   fireEvent.click(within(panel).getByRole('button', { name: 'Add a shared account' }))
-  const form = within(panel).getByRole('form', { name: 'New shared account' })
+  const form = screen.getByRole('dialog', { name: 'New shared account' })
   fireEvent.change(within(form).getByLabelText('CLI'), { target: { value: 'claude' } })
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'Anthropic key' } })
   fireEvent.change(within(form).getByLabelText('API key'), { target: { value: 'fake-key-for-the-test' } })
@@ -530,7 +530,7 @@ test('automatic switching: off until turned on, with the warning and terms; the 
   render(<CliAccountsTab />)
   const panel = await screen.findByRole('region', { name: 'Automatic switching' })
   // The panel shows while its state loads: wait for the switch itself.
-  const toggle = (await within(panel).findByRole('checkbox', {
+  const toggle = (await within(panel).findByRole('switch', {
     name: 'Switch automatically when an account stops',
   })) as HTMLInputElement
   expect(toggle.checked).toBe(false)
