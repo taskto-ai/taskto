@@ -31,6 +31,11 @@ func (x *Index) Routes(mux *http.ServeMux, a *auth.Service, c *access.Checker) {
 	// The cards of boards, searched apart from the documents.
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/cards", auth.AcceptTokens(c.RequireSpace(access.Read, x.handleSpaceCards(c))))
 	mux.Handle("GET /api/workspaces/{workspace}/search/cards", auth.AcceptTokens(a.RequireMember(x.handleWorkspaceCards(c))))
+	// The records of apps, and the caller's own conversations, searched apart too.
+	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/records", auth.AcceptTokens(c.RequireSpace(access.Read, x.handleSpaceRecords(c))))
+	mux.Handle("GET /api/workspaces/{workspace}/search/records", auth.AcceptTokens(a.RequireMember(x.handleWorkspaceRecords(c))))
+	// A conversation is private to its owner and its routes take a session: so does this.
+	mux.Handle("GET /api/workspaces/{workspace}/search/conversations", a.RequireMember(http.HandlerFunc(x.handleConversations)))
 	mux.Handle("GET /api/workspaces/{workspace}/search/settings", a.RequireMember(http.HandlerFunc(x.handleSettings)))
 	mux.Handle("PUT /api/workspaces/{workspace}/search/settings", a.RequireAdmin(http.HandlerFunc(x.handleSetSettings)))
 	mux.Handle("GET /api/workspaces/{workspace}/spaces/{space}/search/embedding", c.RequireSpace(access.Read, http.HandlerFunc(x.handleConsent)))
@@ -76,6 +81,41 @@ func (x *Index) handleWorkspaceCards(c *access.Checker) http.HandlerFunc {
 	}
 }
 
+func (x *Index) handleSpaceRecords(c *access.Checker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, _ := auth.UserFrom(r.Context())
+		sp, _ := access.SpaceFrom(r.Context())
+		x.searchRecords(w, r, c, u.ID, sp.WorkspaceID, []access.Space{sp})
+	}
+}
+
+func (x *Index) handleWorkspaceRecords(c *access.Checker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, _ := auth.UserFrom(r.Context())
+		m, _ := auth.MembershipFrom(r.Context())
+		spaces, err := c.Readable(r.Context(), u.ID, m.WorkspaceID)
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		x.searchRecords(w, r, c, u.ID, m.WorkspaceID, spaces)
+	}
+}
+
+func (x *Index) handleConversations(w http.ResponseWriter, r *http.Request) {
+	u, _ := auth.UserFrom(r.Context())
+	m, _ := auth.MembershipFrom(r.Context())
+	q, ok := queryOf(w, r)
+	if !ok {
+		return
+	}
+	res, err := x.SearchConversations(r.Context(), u.ID, m.WorkspaceID, q)
+	if searchFailed(w, r, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (x *Index) search(w http.ResponseWriter, r *http.Request, workspaceID int64, spaces []access.Space) {
 	q := Query{Text: r.URL.Query().Get("q")}
 	var ok bool
@@ -107,6 +147,33 @@ func (x *Index) searchCards(w http.ResponseWriter, r *http.Request, c *access.Ch
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// searchRecords is search for the records of the apps in spaces.
+func (x *Index) searchRecords(w http.ResponseWriter, r *http.Request, c *access.Checker, userID, workspaceID int64, spaces []access.Space) {
+	q, ok := queryOf(w, r)
+	if !ok {
+		return
+	}
+	res, err := x.SearchRecords(r.Context(), c, userID, workspaceID, spaces, q)
+	if searchFailed(w, r, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// queryOf reads a search from a request's parameters q, limit and offset, answering 400 and
+// returning false if one is not valid.
+func queryOf(w http.ResponseWriter, r *http.Request) (Query, bool) {
+	q := Query{Text: r.URL.Query().Get("q")}
+	var ok bool
+	if q.Limit, ok = queryInt(w, r, "limit"); !ok {
+		return Query{}, false
+	}
+	if q.Offset, ok = queryInt(w, r, "offset"); !ok {
+		return Query{}, false
+	}
+	return q, true
 }
 
 // searchFailed answers a failed search, and reports whether it was one.
