@@ -84,9 +84,9 @@ export function MigrationDialog({
   return (
     <Dialog
       open
-      onClose={() => {
-        if (!busy) onCancel()
-      }}
+      onClose={onCancel}
+      // While it saves, Escape and the close button do nothing (the library's guard).
+      dismissible={!busy}
       title={t('apps.migration.title')}
       description={t('apps.migration.intro')}
       actions={

@@ -313,9 +313,9 @@ function RenameDialog({
   return (
     <Dialog
       open
-      onClose={() => {
-        if (!busy) onClose()
-      }}
+      onClose={onClose}
+      // While it saves, Escape and the close button do nothing (the library's guard).
+      dismissible={!busy}
       title={t('apps.renameNamed', { name: app.name })}
       size="sm"
       actions={
@@ -368,9 +368,9 @@ function MoveDialog({
   return (
     <Dialog
       open
-      onClose={() => {
-        if (!busy) onClose()
-      }}
+      onClose={onClose}
+      // While it saves, Escape and the close button do nothing (the library's guard).
+      dismissible={!busy}
       title={t('apps.moveTitle', { name: app.name })}
       description={t('apps.moveNote')}
       size="sm"

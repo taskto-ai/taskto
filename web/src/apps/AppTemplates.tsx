@@ -234,9 +234,9 @@ function InstallDialog({
   return (
     <Dialog
       open
-      onClose={() => {
-        if (!busy) onClose()
-      }}
+      onClose={onClose}
+      // While it saves, Escape and the close button do nothing (the library's guard).
+      dismissible={!busy}
       title={t('apps.templates.useNamed', { name: templateText(template, 'name', t) })}
       description={t('apps.templates.draftNote')}
       actions={
@@ -442,9 +442,9 @@ export function DuplicateDialog({
   return (
     <Dialog
       open
-      onClose={() => {
-        if (!busy) onClose()
-      }}
+      onClose={onClose}
+      // While it saves, Escape and the close button do nothing (the library's guard).
+      dismissible={!busy}
       title={t('apps.duplicate.title', { name: app.name })}
       description={t('apps.duplicate.note')}
       actions={

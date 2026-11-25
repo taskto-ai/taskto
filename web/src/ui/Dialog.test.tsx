@@ -319,3 +319,56 @@ describe('useConfirm', () => {
     expect(answers).toEqual([false, true])
   })
 })
+
+// A screen that asks one question, then another before the first is answered.
+function TwoQuestions({ answers }: { answers: boolean[] }) {
+  const [confirmDialog, confirm] = useConfirm()
+  return (
+    <>
+      <button
+        type="button"
+        onClick={async () => answers.push(await confirm({ title: 'Delete Equipment?', confirmLabel: 'Delete' }))}
+      >
+        First
+      </button>
+      <button
+        type="button"
+        onClick={async () => answers.push(await confirm({ title: 'Remove Carla?', confirmLabel: 'Remove' }))}
+      >
+        Second
+      </button>
+      {confirmDialog}
+    </>
+  )
+}
+
+describe('the focus when a dialog opens', () => {
+  test('passes over what can’t take it (hidden, or a disabled marked one) to the next', () => {
+    render(
+      <Dialog open onClose={() => {}} title="Rename">
+        <button type="button" data-autofocus disabled>
+          Busy
+        </button>
+        <input hidden aria-label="Old name" />
+        <div hidden>
+          <input aria-label="Older name" />
+        </div>
+        <input aria-label="Name" />
+      </Dialog>,
+    )
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Name' }))
+  })
+
+  test('a question that replaces another starts again on Cancel', async () => {
+    const answers: boolean[] = []
+    render(<TwoQuestions answers={answers} />)
+    fireEvent.click(screen.getByRole('button', { name: 'First' }))
+    screen.getByRole('button', { name: 'Delete' }).focus()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Second' }))
+    })
+    expect(answers).toEqual([false])
+    expect(screen.getByRole('alertdialog', { name: 'Remove Carla?' })).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }))
+  })
+})

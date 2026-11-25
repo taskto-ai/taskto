@@ -292,6 +292,9 @@ test('an old rule that can match anywhere leaves the design system’s elements 
     '@media (pointer: coarse) {\n  label:has(> input[type="checkbox"]) { min-height: 44px; }\n}\n',
     'main > section h3 { margin: 0; }\n',
     'h2:not(:where(.ui-control)) { margin: 0; }\n',
+    // The opt-out inside another function, which turns it round.
+    'h2:not(:not(:where([class^="ui-"], [class*=" ui-"]))) { margin: 0; }\n',
+    ':is(p, :not(:where([class^="ui-"], [class*=" ui-"]))) { margin: 0; }\n',
     // Not by an element name, and still everywhere.
     ':is(h1, h2) { margin: 0; }\n',
     ':focus-visible { outline: 2px solid; }\n',
