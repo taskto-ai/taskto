@@ -2523,5 +2523,8 @@
       "done": "Your address is confirmed. Notifications you chose can now be emailed to you.",
       "settings": "Open notification settings"
     }
+  },
+  "ui": {
+    "loading": "Loading"
   }
 }

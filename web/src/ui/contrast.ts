@@ -63,6 +63,19 @@ export const TEXT_PAIRS: readonly PairSet[] = [
   { fg: ['on-danger'], on: ['danger'], min: 4.5 },
   // A QR code or a signature: ink on paper whatever the theme.
   { fg: ['on-accent'], on: ['paper'], min: 4.5 },
+  // A disabled control: muted text on the neutral ground (Button, the fields).
+  { fg: ['text-muted'], on: onSoft('neutral-soft'), min: 4.5 },
+  // A tooltip: the page's colour on the text colour (Tooltip).
+  { fg: ['bg'], on: ['text'], min: 4.5 },
+  // A secondary or ghost button pressed: text on the pressed tint over the hover ground.
+  {
+    fg: ['text'],
+    on: [
+      ['selected', 'bg-sunken'],
+      ['selected', 'hover', 'bg'],
+    ],
+    min: 4.5,
+  },
 ]
 
 export const NON_TEXT_PAIRS: readonly PairSet[] = [

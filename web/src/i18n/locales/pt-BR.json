@@ -2544,5 +2544,8 @@
       "done": "Seu endereço está confirmado. As notificações que você escolheu agora podem ser enviadas por e-mail.",
       "settings": "Abrir as configurações de notificações"
     }
+  },
+  "ui": {
+    "loading": "Carregando"
   }
 }
