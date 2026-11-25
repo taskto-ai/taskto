@@ -15,6 +15,23 @@ export function isOverdue(card: Pick<Card, 'due' | 'column'>, today: string): bo
   return card.due !== null && card.due < today && card.column !== 'done' && card.column !== 'archived'
 }
 
+// The day after a date (YYYY-MM-DD), as YYYY-MM-DD.
+function nextDay(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return localToday(new Date(y, m - 1, d + 1))
+}
+
+// How a card's due date reads on the board: overdue, due soon (today or tomorrow) or later; null
+// for no date, or a finished card's (a done or archived card is neither late nor soon).
+export type DueState = 'overdue' | 'soon' | 'later'
+
+export function dueState(card: Pick<Card, 'due' | 'column'>, today: string): DueState | null {
+  if (card.due === null) return null
+  if (isOverdue(card, today)) return 'overdue'
+  const finished = card.column === 'done' || card.column === 'archived'
+  return !finished && card.due <= nextDay(today) ? 'soon' : 'later'
+}
+
 // Today's date where the reader is, kept current: it changes at the next local midnight, and
 // again when the page becomes visible (a timer may not have fired while it slept).
 export function useToday(): string {

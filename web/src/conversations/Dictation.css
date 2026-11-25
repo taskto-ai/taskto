@@ -1,0 +1,30 @@
+/* Dictation's controls, in the chat box and beside an app's text fields: while it records, the
+   clock and the stop button are in the danger tone, so it's plain the microphone is on. */
+
+@layer screens {
+  .ui-dictation {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .ui-dictation-clock {
+    padding-inline: var(--space-1);
+    font: var(--type-small);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--color-danger);
+  }
+
+  .ui-dictation-stop,
+  .ui-dictation-stop:hover {
+    color: var(--color-danger);
+    border: var(--line-thin) solid var(--color-danger);
+  }
+
+  .ui-dictation-progress {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+}

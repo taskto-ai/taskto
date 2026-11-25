@@ -45,9 +45,22 @@ function spaceToken(name: string): number {
 type Describable = ReactElement<{ 'aria-describedby'?: string }>
 
 export interface TooltipProps {
+  // Nothing (null, false, '') is no tooltip: it never opens and describes nothing. For a tooltip
+  // that is only sometimes needed (a name only when it is cut), so the control isn't drawn again.
   content: ReactNode
   children: Describable
   describes?: boolean
+  // Where it goes: above the control (or below when there's no room), or beside it, after its end
+  // in the writing direction (before its start when there's no room), for a control in a column
+  // such as a sidebar's rail, where above would cover the control before it.
+  side?: 'block' | 'inline-end'
+}
+
+// Whether the tooltip can be seen: a stylesheet may hide one that is open (a sidebar's labels are
+// written out where it is wide). A browser without checkVisibility goes by the computed display.
+function visible(el: HTMLElement): boolean {
+  if (typeof el.checkVisibility === 'function') return el.checkVisibility()
+  return getComputedStyle(el).display !== 'none'
 }
 
 const canPopover = () => typeof HTMLElement !== 'undefined' && 'showPopover' in HTMLElement.prototype
@@ -74,7 +87,7 @@ function focusVisible(el: Element): boolean {
   }
 }
 
-export function Tooltip({ content, children, describes = true }: TooltipProps) {
+export function Tooltip({ content, children, describes = true, side = 'block' }: TooltipProps) {
   const id = useId()
   const anchor = useRef<HTMLSpanElement>(null)
   const tip = useRef<HTMLSpanElement>(null)
@@ -84,9 +97,13 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
   const hovered = useRef(false)
   const focused = useRef(false)
   const [open, setOpen] = useState(false)
+  const empty = content === null || content === undefined || content === false || content === ''
+  const isEmpty = useRef(empty)
+  isEmpty.current = empty
 
   const show = useCallback((delay: number) => {
     clearTimeout(timer.current)
+    if (isEmpty.current) return
     if (delay === 0) setOpen(true)
     else timer.current = setTimeout(() => setOpen(true), delay)
   }, [])
@@ -109,18 +126,29 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
     return () => clearTimeout(timer.current)
   }, [])
 
-  // Escape closes it, wherever the focus is, until the control is entered or focused again.
+  // Its words went away while it was open: so does it.
+  useEffect(() => {
+    if (empty) hide(0)
+  }, [empty, hide])
+
+  // Escape closes it, wherever the focus is, until the control is entered or focused again. One
+  // that can be seen takes that Escape (WCAG 1.4.13: dismissed without moving), so a drawer or a
+  // dialog under it stays open; the next Escape is theirs.
   useEffect(() => {
     if (!open) return
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') hide(0)
+      if (e.key !== 'Escape') return
+      if (tip.current && visible(tip.current)) e.preventDefault()
+      hide(0)
     }
     document.addEventListener('keydown', key, true)
     return () => document.removeEventListener('keydown', key, true)
   }, [open, hide])
 
   // Into the top layer and next to the control, and kept there while the page or any box around
-  // the control scrolls, or the window changes size.
+  // the control scrolls, or the window changes size, or its words change while it is open (a new
+  // size, placed again).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `content` isn't read here, but new words give the tooltip a new size, which must be placed again.
   useLayoutEffect(() => {
     const el = tip.current
     const target = anchor.current?.firstElementChild
@@ -142,11 +170,23 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
       const h = el.offsetHeight
       const vw = document.documentElement.clientWidth || window.innerWidth
       const vh = document.documentElement.clientHeight || window.innerHeight
+      const clamp = (v: number, size: number, room: number) =>
+        Math.min(Math.max(margin, v), Math.max(margin, room - margin - size))
+      if (side === 'inline-end') {
+        const rtl = getComputedStyle(target).direction === 'rtl'
+        const after = rtl ? r.left - gap - w : r.right + gap
+        const before = rtl ? r.right + gap : r.left - gap - w
+        const fits = (x: number) => x >= margin && x + w <= vw - margin
+        el.style.top = `${clamp(r.top + r.height / 2 - h / 2, h, vh)}px`
+        el.style.left = `${clamp(fits(after) || !fits(before) ? after : before, w, vw)}px`
+        el.dataset.side = 'inline-end'
+        return
+      }
       const above = r.top - gap - h
       const top = above >= margin || r.bottom + gap + h > vh - margin ? Math.max(margin, above) : r.bottom + gap
-      const left = Math.min(Math.max(margin, r.left + r.width / 2 - w / 2), Math.max(margin, vw - margin - w))
       el.style.top = `${top}px`
-      el.style.left = `${left}px`
+      el.style.left = `${clamp(r.left + r.width / 2 - w / 2, w, vw)}px`
+      delete el.dataset.side
     }
     place()
     // Scroll events don't bubble, but a listener capturing on the window hears every box's.
@@ -156,7 +196,7 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
       window.removeEventListener('scroll', place, { capture: true })
       window.removeEventListener('resize', place)
     }
-  }, [open])
+  }, [open, side, content])
 
   const pointerIn = (e: ReactPointerEvent) => {
     if (e.pointerType === 'touch') return
@@ -189,7 +229,9 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
     hide(0)
   }
 
-  const describedBy = [children.props['aria-describedby'], describes ? id : undefined].filter(Boolean).join(' ')
+  const describedBy = [children.props['aria-describedby'], describes && !empty ? id : undefined]
+    .filter(Boolean)
+    .join(' ')
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: a box-less wrapper that hears its control's pointer and focus events; the control is what is interactive.

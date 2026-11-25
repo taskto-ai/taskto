@@ -2,10 +2,13 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, describe, expect, test } from 'vitest'
+import { OLD_STYLESHEETS } from '../scripts/css-check.mjs'
 
-// scripts/css-check.mjs: the stylesheet is one global file, so a selector declared twice, or a
-// class a component uses that no rule has, are caught here, not on a screen.
+// scripts/css-check.mjs: the stylesheets are global (one list of files, every rule in force on every
+// page), so a selector declared twice, in one file or two, a class a component uses that no rule
+// has, a colour outside the themes and a literal size in the design system are caught here, not on
+// a screen.
 const web = resolve(__dirname, '..')
 const script = join(web, 'scripts/css-check.mjs')
 
@@ -91,16 +94,17 @@ test("the app's own stylesheet and components pass", () => {
 })
 
 test('the search result snippet and the settings code sample have a class each', () => {
-  const css = readFileSync(join(web, 'src/styles.css'), 'utf8')
-  const rules = [...css.matchAll(/(^|\n)\.tt-snippet \{([^}]*)\}/g)]
+  const search = readFileSync(join(web, 'src/search/search.legacy.css'), 'utf8')
+  const rules = [...search.matchAll(/(^|\n)\.tt-snippet \{([^}]*)\}/g)]
   // A search snippet is running text: a grid would make each highlighted word a row of its own.
   expect(rules).toHaveLength(1)
   expect(rules[0][2]).not.toMatch(/display:\s*grid/)
-  expect(css).toMatch(/\n\.tt-setup-snippet \{[^}]*display:\s*grid/)
+  const settings = readFileSync(join(web, 'src/settings/settings.legacy.css'), 'utf8')
+  expect(settings).toMatch(/\n\.tt-setup-snippet \{[^}]*display:\s*grid/)
 })
 
 test('the settings code sample keeps the colour and the wrapping the shared snippet class once gave it', () => {
-  const css = readFileSync(join(web, 'src/styles.css'), 'utf8')
+  const css = readFileSync(join(web, 'src/settings/settings.legacy.css'), 'utf8')
   const rule = css.match(/(^|\n)\.tt-setup-snippet \{([^}]*)\}/)?.[2] ?? ''
   // The headings and commands there were muted and wrapped anywhere, before the class was renamed.
   expect(rule).toMatch(/color:\s*var\(--tt-muted\)/)
@@ -230,7 +234,7 @@ test('a colour in an at-rule that holds declarations is looked for too', () => {
 test("a colour's name is an identifier where the author names things, but a hex colour is not", () => {
   const ok = runFiles({
     'ui/anim.css':
-      '@keyframes red { to { opacity: 1; } }\n.tt-a { animation: red 1s; animation-name: red; grid-area: teal; }\n',
+      '@keyframes red { to { opacity: 1; } }\n.tt-a { animation: red var(--duration-base); animation-name: red; grid-area: teal; }\n',
   })
   expect(ok.err).toBe('')
   expect(ok.code).toBe(0)
@@ -284,72 +288,357 @@ test('a system colour is a colour literal too, outside a theme', () => {
   expect(theme.code).toBe(0)
 })
 
-test('an old rule that can match anywhere leaves the design system’s elements out, or fails', () => {
-  const OPT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
-  for (const css of [
-    'h2 { margin: 0; }\n',
-    'p, .tt-a { text-wrap: pretty; }\n.tt-a { color: inherit; }\n',
-    '@media (pointer: coarse) {\n  label:has(> input[type="checkbox"]) { min-height: 44px; }\n}\n',
-    'main > section h3 { margin: 0; }\n',
-    'h2:not(:where(.ui-control)) { margin: 0; }\n',
-    // The opt-out inside another function, which turns it round.
-    'h2:not(:not(:where([class^="ui-"], [class*=" ui-"]))) { margin: 0; }\n',
-    ':is(p, :not(:where([class^="ui-"], [class*=" ui-"]))) { margin: 0; }\n',
-    // Not by an element name, and still everywhere.
-    ':is(h1, h2) { margin: 0; }\n',
-    ':focus-visible { outline: 2px solid; }\n',
-    '::placeholder { opacity: 1; }\n',
-    '[data-busy] { cursor: wait; }\n',
-    '* { color: inherit; }\n',
-    // A wrapper of every page scopes nothing.
-    '.tt-page h2 { margin: 0; }\n#root p { margin: 0; }\n',
-    // Allowed by its selector, but for other properties only.
-    'input, select, textarea { font: inherit; border: 1px solid; }\n',
-    'input { caret-color: auto; padding: 0; }\n',
-  ]) {
-    const r = run(css)
-    expect(r.code, css).toBe(1)
-    expect(r.err).toMatch(/reaches (into the design system|every element)/)
-  }
-  for (const css of [
-    `h2${OPT} { margin: 0; }\n`,
-    `label:has(> input[type="checkbox"])${OPT} { min-height: 44px; }\n`,
-    `:focus-visible${OPT} { outline: 2px solid; }\n${OPT}::placeholder { opacity: 1; }\n`,
-    '.tt-markdown h2 { margin: 0; }\n.tt-page .tt-card p { margin: 0; }\n',
-    '@keyframes spin { from { rotate: 0; } to { rotate: 1turn; } }\n',
-    'html { height: 100%; }\nbody { margin: 0; }\n*, *::before { box-sizing: border-box; }\n::selection { color: inherit; }\n',
-    'input, textarea { caret-color: auto; }\n@media (max-width: 48rem) { input, select, textarea { font-size: 16px; } }\n',
-  ]) {
-    const r = run(css)
-    expect(r.err, css).toBe('')
-    expect(r.code).toBe(0)
-  }
-  // The design system's own stylesheets are layered and style their own classes: not looked at.
-  const own = runFiles({ 'ui/x.css': '@layer components { h2 { margin: 0; } }\n' })
-  expect(own.code).toBe(0)
+test("a selector one screen declares, declared again in another screen's stylesheet, is declared twice", () => {
+  const r = runFiles({
+    'boards/boards.legacy.css': '.tt-card { margin: 0; }\n',
+    'apps/apps.legacy.css': '\n\n.tt-card { padding: 0; }\n',
+  })
+  expect(r.code).toBe(1)
+  expect(r.err).toContain(
+    'src/boards/boards.legacy.css:1: .tt-card is declared again (first at src/apps/apps.legacy.css:3)',
+  )
 })
 
-test('sees the classes of an array a component builds its className from, whatever its name', () => {
-  const source = `export function A({ big }: { big: boolean }) {
-  const cls = ['ui-a', big ? 'ui-a-big' : '', 'ui-missing'].filter(Boolean).join(' ')
-  return <p className={cls}>x</p>
+describe('in the design system, a size, a space, a radius, a shadow and a duration are tokens', () => {
+  test('a literal one fails, wherever it is in the value', () => {
+    for (const [property, value, literal] of [
+      ['font-size', '15px', '15px'],
+      ['font', '600 0.9rem / 1.4 var(--font-sans)', '0.9rem'],
+      ['margin-block-start', 'var(--space-2) 0.5rem', '0.5rem'],
+      ['padding', 'max(1rem, env(safe-area-inset-top))', '1rem'],
+      ['gap', 'var(--space-gap, 6px)', '6px'],
+      ['padding-block-start', 'env(safe-area-inset-top, 0.5rem)', '0.5rem'],
+      ['padding-inline', 'max(var(--space-2), env(safe-area-inset-left, var(--x, 3px)))', '3px'],
+      ['border-start-start-radius', '8px', '8px'],
+      ['box-shadow', '0 2px 0 var(--color-accent-edge)', '2px'],
+      ['transition', 'transform 0.14s ease', '0.14s'],
+      ['animation-duration', '200ms', '200ms'],
+    ]) {
+      const r = runFiles({ 'ui/Box.css': `@layer components {\n  .ui-box {\n    ${property}: ${value};\n  }\n}\n` })
+      expect(r.code, `${property}: ${value}`).toBe(1)
+      expect(r.err, `${property}: ${value}`).toContain(`src/ui/Box.css:3: ${property} has the literal ${literal}`)
+    }
+  })
+
+  test('tokens, the literals with a reason, unitless numbers and the safe areas pass', () => {
+    const r = runFiles({
+      'ui/Box.css': `@layer components {
+  .ui-box {
+    font: var(--type-ui);
+    font-size: var(--text-md);
+    padding: var(--space-2) 0;
+    margin: 0px calc(var(--space-4) * 2) 1px;
+    padding-block-end: max(var(--space-4), env(safe-area-inset-bottom));
+    border-radius: 50%;
+    inline-size: 37px;
+    box-shadow: var(--shadow-pop);
+    transition: transform var(--duration-fast) var(--ease-out);
+    gap: 100%;
+  }
 }
-`
-  const r = run('.ui-a { color: inherit; }\n.ui-a-big { margin: 0; }\n', { 'A.tsx': source })
-  expect(r.code).toBe(1)
-  expect(r.err).toContain('ui-missing is used but no rule')
-  expect(r.err).not.toContain('ui-a is used')
-  expect(r.err).not.toContain('ui-a-big is used')
-  // With a type on the constant too.
-  const typed = run('.ui-a { color: inherit; }\n', {
-    'C.tsx':
-      "export function C() {\n  const cls: string[] = ['ui-a', 'ui-untyped']\n  return <p className={cls.join(' ')}>x</p>\n}\n",
+`,
+    })
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
   })
-  expect(typed.code).toBe(1)
-  expect(typed.err).toContain('ui-untyped is used but no rule')
-  // An array of words that are not classes is not a problem.
-  const words = run('.ui-a { color: inherit; }\n', {
-    'B.tsx': "const names = ['launch', 'design']\nexport const B = () => <p className=\"ui-a\">{names[0]}</p>\n",
+
+  test('the files that define the tokens define them with literals, and the screens not yet rebuilt may write them', () => {
+    const r = runFiles({
+      'ui/tokens.css': '@layer tokens { :root { --space-1: 4px; --duration-fast: 120ms; } }\n',
+      'ui/legacy.css': '@layer tokens { :root { --tt-radius: 8px; } }\n',
+      'ui/themes/brand.css': '@layer themes { :root { --color-x: Canvas; } }\n',
+      'boards/boards.legacy.css': '.tt-card { padding: 0.6rem; border-radius: 8px; font-size: 0.85rem; }\n',
+    })
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
   })
-  expect(words.code).toBe(0)
+
+  test("a rule in the files that define the tokens is held to them too; only the definitions aren't", () => {
+    // (A theme is held to colour roles alone by its own test, ui/tokens.test.ts.)
+    for (const file of ['ui/tokens.css', 'ui/legacy.css']) {
+      const r = runFiles({ [file]: '@layer tokens {\n  :root { --space-1: 4px; }\n  .ui-x { padding: 4px; }\n}\n' })
+      expect(r.code, file).toBe(1)
+      expect(r.err, file).toContain(`src/${file}:3: padding has the literal 4px`)
+    }
+  })
+
+  test('a custom property of a component holds a token, unless LOCAL_LITERALS gives the reason', () => {
+    const r = runFiles({ 'ui/Box.css': '.ui-box {\n  --ui-box-gap: 6px;\n  --ui-box-in: -100%;\n}\n' })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('src/ui/Box.css:2: --ui-box-gap has the literal 6px')
+    expect(r.err).not.toContain('-100%')
+    const allowed = runFiles({ 'ui/a2ui.css': ':root {\n  --a2ui-button-padding: 0.4rem 1rem;\n}\n' })
+    expect(allowed.err).toBe('')
+    expect(allowed.code).toBe(0)
+  })
+
+  test("a registered property's initial value is held to the rule as a custom property's is", () => {
+    const r = runFiles({
+      'ui/Box.css': '@property --ui-gap {\n  syntax: "<length>";\n  inherits: false;\n  initial-value: 6px;\n}\n',
+    })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('src/ui/Box.css:4: initial-value has the literal 6px')
+    const zero = runFiles({
+      'ui/Box.css': '@property --ui-gap {\n  syntax: "<length>";\n  inherits: false;\n  initial-value: 0px;\n}\n',
+    })
+    expect(zero.err).toBe('')
+  })
+
+  test('the vendor-prefixed and older names of a scale property are checked too', () => {
+    for (const [property, literal] of [
+      ['-webkit-box-shadow', '2px'],
+      ['grid-gap', '6px'],
+      ['scroll-margin-block-start', '6px'],
+      ['scroll-padding', '6px'],
+    ]) {
+      const r = runFiles({ 'ui/Box.css': `.ui-box {\n  ${property}: 0 ${literal};\n}\n` })
+      expect(r.code, property).toBe(1)
+      expect(r.err, property).toContain(`${property} has the literal ${literal}`)
+    }
+    const hairline = runFiles({ 'ui/Box.css': '.ui-box {\n  margin: -1px;\n}\n' })
+    expect(hairline.err).toBe('')
+  })
+})
+
+// A whole app's stylesheets, as main.tsx loads them: the entry, ui/index.css, the list of the old
+// stylesheets with each of them, and what `changes` adds, replaces or (with null) removes.
+const OPT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
+const GOOD_BASE = `@layer base {\n  a${OPT} { color: inherit; }\n}\n\n@media (pointer: coarse) {\n  label${OPT} { min-height: var(--tt-touch); }\n}\n`
+function app(changes: Record<string, string | null> = {}) {
+  const files: Record<string, string | null> = {
+    'main.tsx': "import './ui/index.css'\nimport { App } from './App'\nimport './styles.css'\n",
+    'ui/index.css': '@layer tokens, themes, base, components, screens;\n',
+    'styles.css': `/* the list */\n${OLD_STYLESHEETS.map((f) => `@import "./${f}";`).join('\n')}\n`,
+    'App.tsx': 'export const App = () => null\n',
+    ...Object.fromEntries(OLD_STYLESHEETS.map((f) => [f, ''])),
+    'ui/base.css': GOOD_BASE,
+    ...changes,
+  }
+  const root = mkdtempSync(join(tmpdir(), 'css-check-'))
+  dirs.push(root)
+  for (const [name, text] of Object.entries(files)) {
+    if (text === null) continue
+    mkdirSync(join(root, 'src', name, '..'), { recursive: true })
+    writeFileSync(join(root, 'src', name), text)
+  }
+  const r = spawnSync(process.execPath, [script, '--root', root], { encoding: 'utf8' })
+  return { code: r.status, out: r.stdout, err: r.stderr }
+}
+
+describe('how the app loads its stylesheets', () => {
+  test('an app that loads each one once, the list in its order, passes', () => {
+    const r = app({
+      'App.tsx':
+        "import './home/Widget'\nimport { I } from './ui/Input'\nconst S = import('./ui/Select')\nexport const App = () => [I, S]\n",
+      'home/Widget.tsx': "import './Widget.css'\nexport const W = () => null\n",
+      'home/Widget.css': '@layer screens { .tt-widget-x { color: inherit; } }\n',
+      'ui/Input.tsx': "import './Input.css'\n",
+      'ui/Select.tsx': "import './Input.css'\nimport './Select.css'\n",
+      'ui/Input.css': '@layer components { .ui-input { color: inherit; } }\n',
+      'ui/Select.css': '@layer components { .ui-select { color: inherit; } }\n',
+    })
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
+  })
+
+  test('the entry imports ui/index.css before anything else', () => {
+    const r = app({ 'main.tsx': "import { App } from './App'\nimport './ui/index.css'\nimport './styles.css'\n" })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain("src/main.tsx: its first import is './App', not './ui/index.css'")
+  })
+
+  test('a stylesheet nothing loads, or one the list names that is not there, fails', () => {
+    const stray = app({ 'search/extra.css': '.tt-extra { color: inherit; }\n' })
+    expect(stray.code).toBe(1)
+    expect(stray.err).toContain('src/search/extra.css: nothing loads it')
+
+    const dropped = app({
+      'styles.css': OLD_STYLESHEETS.filter((f) => f !== 'search/search.legacy.css')
+        .map((f) => `@import "./${f}";`)
+        .join('\n'),
+    })
+    expect(dropped.code).toBe(1)
+    expect(dropped.err).toContain('src/search/search.legacy.css: nothing loads it')
+    expect(dropped.err).toContain('src/styles.css: lists ')
+
+    const gone = app({ 'pwa/pwa.legacy.css': null })
+    expect(gone.code).toBe(1)
+    expect(gone.err).toContain('src/styles.css: lists src/pwa/pwa.legacy.css, which is not there')
+  })
+
+  test('the list counts only if the entry imports it', () => {
+    const r = app({ 'main.tsx': "import './ui/index.css'\nimport { App } from './App'\n" })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain("src/main.tsx: doesn't import './styles.css'")
+  })
+
+  test('a stylesheet ui/index.css imports and a module imports too is loaded twice', () => {
+    const r = app({
+      'ui/index.css': '@layer tokens, themes, base, components, screens;\n@import "./Box.css";\n',
+      'App.tsx': "import './ui/Box'\n",
+      'ui/Box.tsx': "import './Box.css'\n",
+      'ui/Box.css': '@layer components { .ui-box { color: inherit; } }\n',
+    })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('src/ui/Box.css: loaded more than one way')
+  })
+
+  test('only a module the app reaches from its entry loads a stylesheet, a glob of the gallery included', () => {
+    const files = {
+      'home/Widget.tsx': "import './Widget.css'\n",
+      'home/Widget.css': '@layer screens { .tt-widget-x { color: inherit; } }\n',
+    }
+    const dead = app(files)
+    expect(dead.code).toBe(1)
+    expect(dead.err).toContain('src/home/Widget.css: nothing loads it')
+    const glob = app({
+      ...files,
+      'App.tsx': "const G = import.meta.glob('./home/*.tsx')\nexport const App = () => G\n",
+    })
+    expect(glob.err).toBe('')
+    expect(glob.code).toBe(0)
+  })
+
+  test('the list may write a url() with or without quotes', () => {
+    const r = app({
+      'styles.css': OLD_STYLESHEETS.map((f, i) => (i % 2 ? `@import url(./${f});` : `@import url("./${f}");`)).join(
+        '\n',
+      ),
+    })
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
+  })
+
+  test('ui/index.css begins with the layers in their order and imports its files with no condition', () => {
+    const order = app({ 'ui/index.css': '@layer tokens, themes, components, base, screens;\n' })
+    expect(order.code).toBe(1)
+    expect(order.err).toContain(
+      'src/ui/index.css: its first statement is `@layer tokens, themes, base, components, screens;`',
+    )
+    const printed = app({
+      'ui/index.css': '@layer tokens, themes, base, components, screens;\n@import "./Box.css" print;\n',
+      'ui/Box.css': '@layer components { .ui-box { color: inherit; } }\n',
+    })
+    expect(printed.code).toBe(1)
+    expect(printed.err).toContain('src/ui/index.css:2: imports ./Box.css with `print`')
+  })
+
+  test('a stylesheet both listed and imported by a module is loaded twice', () => {
+    const r = app({ 'App.tsx': "import './boards/Board'\n", 'boards/Board.tsx': "import './boards.legacy.css'\n" })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('src/boards/boards.legacy.css: loaded more than one way')
+  })
+
+  test('the list is in its order, plain, and nothing else', () => {
+    const moved = [...OLD_STYLESHEETS.filter((f) => f !== 'shell/shell.legacy.css'), 'shell/shell.legacy.css']
+    const order = app({ 'styles.css': moved.map((f) => `@import "./${f}";`).join('\n') })
+    expect(order.code).toBe(1)
+    expect(order.err).toContain('the old stylesheets are, in this order')
+
+    const layered = app({
+      'styles.css': OLD_STYLESHEETS.map(
+        (f) => `@import "./${f}"${f === 'legacy-shared.css' ? ' layer(screens)' : ''};`,
+      ).join('\n'),
+    })
+    expect(layered.code).toBe(1)
+    expect(layered.err).toContain('imports ./legacy-shared.css with `layer(screens)`')
+
+    const rule = app({
+      'styles.css': `${OLD_STYLESHEETS.map((f) => `@import "./${f}";`).join('\n')}\n.tt-late { color: inherit; }\n`,
+    })
+    expect(rule.code).toBe(1)
+    expect(rule.err).toContain('holds only @imports of the old stylesheets, not `.tt-late`')
+  })
+
+  test("an old screen's file declares no layer, nested in @media either", () => {
+    const file = 'apps/apps.legacy.css'
+    const r = app({ [file]: '@layer screens {\n  .tt-app { color: inherit; }\n}\n' })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain(`src/${file}:1: declares \`@layer screens\``)
+    const nested = app({
+      [file]:
+        '/* @layer in a comment */\n.tt-a::before { content: "@layer x"; }\n@media (min-width: 1px) {\n  @layer screens { .tt-app { color: inherit; } }\n}\n',
+    })
+    expect(nested.code).toBe(1)
+    expect(nested.err).toContain(`src/${file}:4: declares \`@layer screens\``)
+    expect(nested.err).not.toContain('@layer x')
+    expect(nested.err).not.toContain(`${file}:1:`)
+  })
+
+  test('ui/base.css is one @layer base block, then what reaches everything on purpose, then the touch block', () => {
+    for (const base of [
+      // The touch screen's block moved into the layer.
+      `@layer base {\n  a${OPT} { color: inherit; }\n  @media (pointer: coarse) { label${OPT} { min-height: 0; } }\n}\n`,
+      // The base in another layer.
+      GOOD_BASE.replace('@layer base', '@layer screens'),
+      // A rule after the blocks, in no layer.
+      `${GOOD_BASE}\nfieldset${OPT} { margin: 0; }\n`,
+    ]) {
+      const r = app({ 'ui/base.css': base })
+      expect(r.code, base).toBe(1)
+      expect(r.err, base).toContain(
+        'src/ui/base.css: is one `@layer base` block, then in no layer the rules that reach every element on purpose',
+      )
+    }
+  })
+
+  test('in no layer, ui/base.css holds only what reaches every element on purpose', () => {
+    const middle = (rule: string) =>
+      GOOD_BASE.replace('\n\n@media (pointer: coarse)', `\n\n${rule}\n\n@media (pointer: coarse)`)
+    const everywhere = app({
+      'ui/base.css': middle(
+        '::selection { background: var(--tt-accent); }\n@media (max-width: 48rem) { input { font-size: var(--tt-text-no-zoom); } }',
+      ),
+    })
+    expect(everywhere.err).toBe('')
+    expect(everywhere.code).toBe(0)
+    for (const rule of [
+      `p${OPT} { text-wrap: pretty; }`,
+      '::selection { margin: 0; }',
+      '.tt-muted { color: inherit; }',
+    ]) {
+      const r = app({ 'ui/base.css': middle(rule) })
+      expect(r.code, rule).toBe(1)
+      expect(r.err, rule).toContain('is in no layer: only what reaches every element on purpose (EVERYWHERE) is')
+    }
+  })
+
+  test("ui/base.css's first part is a @layer base block, not a statement", () => {
+    const r = app({
+      'ui/base.css': `@layer base;\n\n@media (pointer: coarse) {\n  label${OPT} { min-height: var(--tt-touch); }\n}\n`,
+    })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('src/ui/base.css: is one `@layer base` block')
+  })
+
+  test('a comment marker inside a string is not a comment', () => {
+    const base = GOOD_BASE.replace(
+      `  a${OPT} { color: inherit; }\n`,
+      `  a${OPT} { color: inherit; }\n  .tt-a::before { content: "/*"; }\n`,
+    ).replace(
+      `  label${OPT} { min-height: var(--tt-touch); }\n`,
+      `  label${OPT} { min-height: var(--tt-touch); }\n  label${OPT}::after { content: "*/"; }\n`,
+    )
+    const r = app({ 'ui/base.css': base })
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
+  })
+
+  test('a brace inside a string or escaped is not the end of a block of ui/base.css', () => {
+    const base = GOOD_BASE.replace(
+      `  a${OPT} { color: inherit; }\n`,
+      `  a${OPT} { color: inherit; }\n  .tt-mark::before { content: "}"; }\n  .tt-open::after { content: '{'; }\n  .tt-esc::before { content: "\\\\}"; }\n`,
+    )
+    const r = app({ 'ui/base.css': base })
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
+  })
+
+  test("ui/base.css's element rules leave the components' elements out, in the layer and outside it", () => {
+    for (const base of [GOOD_BASE.replace(`a${OPT}`, 'a'), GOOD_BASE.replace(`label${OPT}`, 'label')]) {
+      const r = app({ 'ui/base.css': base })
+      expect(r.code, base).toBe(1)
+      expect(r.err, base).toContain("reaches into the design system's components")
+    }
+  })
 })

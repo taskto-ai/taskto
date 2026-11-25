@@ -10,7 +10,10 @@
 import { useMemo, useState } from 'react'
 import type { App } from '../api'
 import { useT } from '../i18n'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
 import { AppView, httpTransport } from './AppView'
+import './Apps.css'
 
 // reloadKey is changed by the page when the app's data changed behind the screen (a record was restored);
 // screen is the one an app with screens opens on instead of its entry (a pin's); onAction is called
@@ -52,29 +55,29 @@ export function AppStage({
   const draftTransport = useMemo(() => httpTransport(base, 'draft', { screen }), [base, version, screen])
 
   if (!live && !draft) {
-    return <p className="tt-muted tt-small">{t('apps.stage.notPublished')}</p>
+    return <p className="apps-note">{t('apps.stage.notPublished')}</p>
   }
   const toggle = live && reviewer && app.unpublished_changes
   return (
-    <div className="tt-stage" data-stage={draft ? 'draft' : 'live'}>
-      <div className="tt-stage-head">
-        <span className="tt-stage-label" data-stage={draft ? 'draft' : 'live'}>
+    <div className="apps-stage" data-stage={draft ? 'draft' : 'live'}>
+      <div className="apps-stage-head">
+        <Badge tone={draft ? 'warning' : 'success'} dot>
           {draft ? t('apps.stage.draft') : t('apps.stage.live', { number: live?.number ?? 0 })}
-        </span>
+        </Badge>
         {toggle && (
-          <button type="button" className="tt-button tt-small" onClick={() => setWantsDraft((d) => !d)}>
+          <Button size="sm" onClick={() => setWantsDraft((d) => !d)}>
             {draft ? t('apps.stage.showLive') : t('apps.stage.showDraft')}
-          </button>
+          </Button>
         )}
       </div>
-      {draft && <p className="tt-muted tt-small">{t('apps.stage.draftNote')}</p>}
+      {draft && <p className="apps-note">{t('apps.stage.draftNote')}</p>}
       {!draft && live && reviewer && app.unpublished_changes && (
-        <p className="tt-muted tt-small" role={builder ? 'status' : undefined}>
+        <p className="apps-note" role={builder ? 'status' : undefined}>
           {t(builder ? 'apps.stage.newDraft' : 'apps.stage.unpublishedNote')}
         </p>
       )}
       {!draft && live && builder && (
-        <p className="tt-muted tt-small">
+        <p className="apps-note">
           {t(reviewer && !app.unpublished_changes ? 'apps.stage.nothingUnpublished' : 'apps.stage.liveNote')}
         </p>
       )}

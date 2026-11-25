@@ -7,22 +7,16 @@
   "apps": {
     "intro": "Apps pessoais são telas que o agente cria para você: peça uma em uma conversa, como “um controle de despesas no meu espaço privado”. Os apps de um espaço compartilhado são de todos os membros: mova um app para lá para compartilhá-lo.",
     "noSpaces": "Você não tem espaços neste espaço de trabalho.",
-    "readOnly": "· somente leitura",
-    "none": "Ainda não há apps aqui.",
     "rows_one": "{count} linha",
     "rows_other": "{count} linhas",
     "rows_many": "{count} de linhas",
-    "offline": "fora do ar",
     "changed": "Alguém alterou {name} depois que a lista foi carregada. Ele aparece como está agora: tente de novo.",
     "name": "Nome",
     "save": "Salvar",
-    "launch": "Abrir",
-    "launchNamed": "Abrir {name}",
     "rename": "Renomear",
     "restore": "Restaurar",
     "restoreNamed": "Restaurar {name}",
     "takeOffline": "Tirar do ar",
-    "takeOfflineNamed": "Tirar do ar {name}",
     "moveNamed": "Mover {name} para",
     "moveTo": "Mover para…",
     "move": "Mover",
@@ -120,7 +114,6 @@
     "roles": {
       "open": "Papéis",
       "openNamed": "Papéis de {name}",
-      "close": "Fechar",
       "saved": "Salvo.",
       "intro": "Os papéis restringem o que o papel do membro no espaço permite, nunca ampliam. Depois que algum papel é definido, quem não tem papéis aqui (e não há linha “Todos os demais”) não vê nem usa o app. Remova todos os papéis para devolver o app a todo o espaço.",
       "member": "Membro",
@@ -136,13 +129,11 @@
       "data_managerHelp": "adiciona, vê e altera os registros de todos",
       "reader": "Leitor",
       "readerHelp": "vê os registros de todos",
-      "line": "{role}: {help}"
+      "line": "{role}: {help}",
+      "caption": "Papéis de cada membro neste app"
     },
     "notPublished": "Não publicado",
     "unpublishedChanges": "Alterações não publicadas",
-    "publish": "Publicar",
-    "closeReview": "Fechar revisão",
-    "closeReviewNamed": "Fechar a revisão de {name}",
     "publishNamed": "Publicar {name}",
     "previewDraft": "Ver o rascunho",
     "previewDraftNamed": "Ver o rascunho de {name}",
@@ -546,12 +537,37 @@
     },
     "duplicate": {
       "open": "Duplicar como modelo",
-      "openNamed": "Duplicar {name} como modelo",
       "title": "Duplicar {name}",
       "note": "Isto copia só a definição do app, em um app novo, só seu: nenhum registro, foto, histórico ou papel vem junto, e os quadros em que você não pode escrever são limpos e escolhidos de novo antes de publicar.",
       "defaultName": "Cópia de {name}",
       "space": "Colocar a cópia em",
       "make": "Fazer a cópia"
+    },
+    "noSpacesHelp": "Os apps ficam em espaços. Assim que você tiver um, os apps que você criar aparecem aqui, agrupados por espaço.",
+    "count_one": "{count} app",
+    "count_other": "{count} apps",
+    "count_many": "{count} de apps",
+    "sharedSpace": "Espaço compartilhado",
+    "readOnlyShort": "somente leitura",
+    "empty": {
+      "title": "Ainda não há apps em {space}",
+      "private": "Os apps daqui são só seus: controles, checklists, formulários. Crie um com o agente ou comece por um modelo.",
+      "shared": "Os apps daqui são de todos neste espaço. Crie um com o agente, comece por um modelo ou mova um dos seus para cá para compartilhá-lo.",
+      "sharedReadOnly": "Os apps daqui são de todos neste espaço. Os editores dele podem criar um."
+    },
+    "offlineBadge": "Offline",
+    "publishedOn": "publicado em {date}",
+    "open": "Abrir",
+    "openNamed": "Abrir {name}",
+    "moreNamed": "Mais ações para {name}",
+    "publishItem": "Publicar…",
+    "moveItem": "Mover para um espaço…",
+    "moveTitle": "Mover {name} para um espaço",
+    "moveNote": "O app é movido com os registros. Quem pode usá-lo passa a ser definido pelo espaço de destino.",
+    "renameNamed": "Renomear {name}",
+    "takeOfflineConfirm": {
+      "title": "Tirar {name} do ar?",
+      "body": "Ninguém poderá abri-lo até que alguém que possa publicá-lo o restaure. Os registros são mantidos."
     }
   },
   "auth": {
@@ -674,14 +690,10 @@
     "add": "Adicionar",
     "card": "Cartão",
     "cardNumber": "Cartão {id}",
-    "back": "Voltar ao quadro",
-    "close": "Fechar",
     "cardChanged": "Alguém alterou este cartão depois que você o abriu.",
     "takeTheirs": "Carregar a versão da outra pessoa",
     "redoMine": "Refazer minha alteração sobre ela",
     "pollStopped": "Os comentários deste cartão pararam de atualizar: {error}",
-    "column": "Coluna",
-    "assignedTo": "Atribuído a {name}",
     "restore": "Restaurar",
     "archive": "Arquivar",
     "noDescriptionYet": "Ainda sem descrição.",
@@ -700,7 +712,6 @@
     "setBlocked": "Marcar como bloqueado",
     "unblock": "Desbloquear",
     "reason": "Motivo",
-    "reasonPlaceholder": "Aguardando o jurídico",
     "waitingFor": "Aguardando",
     "assignee": "Responsável",
     "nobody": "Ninguém",
@@ -734,7 +745,6 @@
     "labels": "Etiquetas",
     "noLabels": "Sem etiquetas.",
     "labelField": "Nova etiqueta",
-    "labelPlaceholder": "Adicionar uma etiqueta",
     "addLabel": "Adicionar etiqueta",
     "removeLabel": "Remover a etiqueta {label}",
     "filters": "Filtrar os cartões",
@@ -743,8 +753,35 @@
     "overdueOnly": "Só os atrasados",
     "noMatches": "Nenhum cartão corresponde.",
     "mention": "Mencionar alguém",
-    "mentionPlaceholder": "Mencionar alguém…",
-    "mentionUnknown": "Alguém"
+    "mentionUnknown": "Alguém",
+    "switchBoard": "Trocar de quadro",
+    "boardActions": "Ações do quadro",
+    "hideArchived": "Ocultar quadros arquivados",
+    "archiveBoardTitle": "Arquivar “{name}”?",
+    "archiveBoardBody": "Ele sai da lista de quadros e fica somente leitura para todos no espaço. Você o encontra entre os quadros arquivados e pode desarquivá-lo.",
+    "noBoardsWriter": "Um quadro reúne os cartões do espaço por coluna. Crie o primeiro.",
+    "moveCard": "Mover “{title}”",
+    "moveTop": "Para o topo de {column}",
+    "moveBottom": "Para o fim de {column}",
+    "moveTo": "Para {column}",
+    "cardActions": "Ações do cartão",
+    "status": "Status",
+    "newLabel": "Adicionar etiqueta",
+    "newComment": "Novo comentário",
+    "discardTitle": "Descartar o que você não salvou?",
+    "discardBody": "Este cartão tem algo que você ainda não salvou nem enviou: uma descrição, um comentário, uma etiqueta, um motivo, uma data ou um caminho. Fechá-lo descarta isso.",
+    "discard": "Descartar",
+    "movedTop": "“{title}” movido para o topo de {column}.",
+    "movedBefore": "“{title}” movido para antes de “{before}” em {column}.",
+    "movedBottom": "“{title}” movido para o fim de {column}.",
+    "dueToday": "Prazo: hoje",
+    "dueTomorrow": "Prazo: amanhã",
+    "cardName": "{title}: {details}",
+    "nameBlocked": "bloqueado",
+    "nameOverdue": "atrasado desde {date}",
+    "nameDueToday": "prazo hoje",
+    "nameDueTomorrow": "prazo amanhã",
+    "nameDue": "prazo {date}"
   },
   "errors": {
     "http": "O servidor respondeu {status}.",
@@ -844,6 +881,7 @@
     "app_changed": "Alguém alterou este app enquanto isso: recarregue e tente de novo.",
     "app_name_length": "O nome do app precisa ter de 1 a {max} caracteres.",
     "too_many_apps": "Um espaço pode ter no máximo {max} apps.",
+    "app_token_rate_limited": "Seus tokens de acesso executaram {max} ações em um minuto aqui, o máximo permitido. Tente de novo em {seconds} segundos.",
     "app_full": "Este app está cheio: ele comporta no máximo {max_rows} linhas e {max_mib} MiB de dados.",
     "app_preview_full": "A prévia está cheia: ela comporta no máximo {max_rows} linhas de exemplo. Comece de novo.",
     "app_preview_too_large": "Os dados de exemplo da prévia são grandes demais (no máximo {max_mib} MiB). Comece de novo.",
@@ -910,6 +948,19 @@
     "provider_models_count": "Liste de 1 a {max} modelos.",
     "provider_model_invalid": "Cada ID de modelo precisa ter de 1 a {max} caracteres imprimíveis.",
     "too_many_providers": "Você pode ter no máximo {max} contas de provedor aqui: remova uma antes.",
+    "integration_not_found": "Integração não encontrada.",
+    "integration_name_invalid": "O nome precisa ter de 1 a {max} caracteres: letras minúsculas, dígitos, '.', '_' ou '-', começando com letra ou dígito.",
+    "integration_name_taken": "Já existe uma integração com esse nome.",
+    "integration_display_name_invalid": "O nome de exibição pode ter até {max} caracteres imprimíveis.",
+    "integration_provider_unknown": "Este provedor não é compatível.",
+    "integration_secret_required": "Informe o campo {secret}.",
+    "integration_secret_invalid": "O campo {secret} não parece ser deste provedor: confira se copiou o correto.",
+    "integration_secret_unreadable": "O campo {secret} salvo não pode ser lido, porque a chave do servidor mudou. Informe-o de novo.",
+    "integration_setting_invalid": "A configuração {setting} está faltando ou não é válida.",
+    "integration_limit_invalid": "O teto do valor deve ser um número inteiro de 1 a {max}.",
+    "integration_currency_invalid": "Escolha de 1 a {max} moedas da lista.",
+    "too_many_integrations": "Você pode ter no máximo {max} integrações em um espaço de trabalho: remova uma antes.",
+    "integration_in_use": "Um app ainda usa esta integração: desative-a em vez de removê-la.",
     "base_url_invalid": "Informe uma URL http ou https de até {max} caracteres, sem query nem fragmento.",
     "base_url_credentials": "A URL não pode conter usuário nem senha: coloque a chave no campo da chave de API.",
     "base_url_insecure": "Use https: uma chave só é enviada por http simples para esta máquina.",
@@ -1069,6 +1120,7 @@
       "audit": "Auditoria",
       "storage": "Armazenamento",
       "providers": "Provedores de modelos",
+      "integrations": "Integrações",
       "cliAccounts": "Contas de CLI",
       "search": "Busca",
       "dictation": "Ditado",
@@ -1524,6 +1576,70 @@
       "none": "Nenhuma conta ainda.",
       "noneHelp": "Adicione uma para usar os modelos dela nas conversas."
     },
+    "integrations": {
+      "title": "Integrações",
+      "intro": "Conecte uma conta de um provedor de pagamentos. As credenciais ficam criptografadas no servidor e nunca são mostradas de novo, e nenhum app, agente ou membro consegue lê-las. Você escolhe quais espaços podem usar a conta, o maior valor e as moedas de um pagamento.",
+      "backupHint": "Um backup guarda a chave do servidor junto das credenciais, então é tão sensível quanto elas. Depois de restaurar um backup em outra máquina, troque cada credencial no provedor e aqui.",
+      "webhooksUnavailable": "Webhooks indisponíveis: defina a URL pública do servidor (-public-url). A conferência de pagamentos sem webhooks ainda não foi construída.",
+      "add": "Conectar uma conta",
+      "none": "Nenhuma conta conectada ainda.",
+      "newIntegration": "Nova integração",
+      "providerLabel": "Provedor",
+      "provider": {
+        "stripe": "Stripe",
+        "square": "Square"
+      },
+      "kind": {
+        "payments": "Pagamentos"
+      },
+      "mode": {
+        "test": "Modo de teste",
+        "live": "Modo real: dinheiro de verdade"
+      },
+      "secret": {
+        "api_key": "Chave secreta",
+        "webhook_secret": "Segredo de assinatura do webhook"
+      },
+      "setting": {
+        "environment": "Ambiente",
+        "location_id": "ID do local"
+      },
+      "settingOption": {
+        "sandbox": "Sandbox",
+        "production": "Produção"
+      },
+      "secretSet": "{name} definido",
+      "secretNotSet": "{name} não definido",
+      "newSecret": "Novo valor de {name}",
+      "keepSecret": "Deixe vazio para manter o guardado",
+      "secretHint": "Guardado criptografado no servidor e nunca mostrado de novo.",
+      "secretHintStored": "Guardado criptografado no servidor e nunca mostrado de novo: há um guardado agora.",
+      "ceiling": "Maior valor de um pagamento",
+      "ceilingHint": "Na menor unidade da moeda: centavos para o euro, ienes inteiros para o iene.",
+      "ceilingPreview": "Isso dá {amounts}.",
+      "currencies": "Moedas que um pagamento pode pedir",
+      "limits": "Até {amounts} por pagamento",
+      "allowedIn": "Permitida em: {spaces}",
+      "allowedNowhere": "Ainda não permitida em nenhum espaço, então nenhum app pode usá-la.",
+      "webhookAddress": "Registre este endereço no provedor:",
+      "polling": "Sem URL pública: os webhooks ficam indisponíveis, e a conferência de pagamentos sem eles ainda não foi construída.",
+      "switchedOff": "desligada",
+      "switchOff": "Desligar",
+      "switchOn": "Ligar",
+      "switchOffNamed": "Desligar {name}",
+      "switchOnNamed": "Ligar {name}",
+      "checking": "Verificando…",
+      "checkOk": "As credenciais guardadas abrem e as configurações estão certas. O provedor não foi consultado.",
+      "spaces": "Espaços",
+      "spacesNamed": "Espaços de {name}",
+      "spacesHint": "Os apps dos espaços que você escolher podem usar esta conta, depois que você os aprovar. O espaço privado de outra pessoa não pode ser escolhido.",
+      "privateSpace": "{name} (privado)",
+      "archivedSpace": "{name} (arquivado)",
+      "otherSpaces_one": "E {count} espaço privado de outro membro, que você não pode ver.",
+      "otherSpaces_many": "E {count} de espaços privados de outros membros, que você não pode ver.",
+      "otherSpaces_other": "E {count} espaços privados de outros membros, que você não pode ver.",
+      "removeQuestion": "Remover {name}? As credenciais são apagadas junto."
+    },
     "cliAccounts": {
       "title": "Suas contas de CLI",
       "intro": "As conversas podem rodar no Claude Code, no Codex ou no Grok Build, com login na sua própria assinatura. Só você usa esses logins, nas suas próprias conversas, em qualquer um dos seus espaços de trabalho.",
@@ -1812,6 +1928,12 @@
         "search_embeddings_changed": "Embeddings da busca alterados",
         "search_consent_changed": "Consentimento da busca alterado",
         "dictation_settings_changed": "Configurações de ditado alteradas",
+        "integration_created": "Integração conectada",
+        "integration_updated": "Integração alterada",
+        "integration_removed": "Integração removida",
+        "integration_disabled": "Integração desligada",
+        "integration_enabled": "Integração ligada",
+        "integration_spaces_changed": "Espaços da integração alterados",
         "data_export_started": "Exportação de dados iniciada",
         "workspace_export_started": "Exportação do espaço de trabalho iniciada",
         "server_update_requested": "Atualização pedida",
@@ -1827,7 +1949,8 @@
         "space": "Espaço compartilhado",
         "access_token": "Token de acesso",
         "provider_account": "Conta de provedor de modelos",
-        "shared_cli_account": "Conta de CLI compartilhada"
+        "shared_cli_account": "Conta de CLI compartilhada",
+        "integration": "Integração"
       },
       "details": {
         "account": "Conta",
@@ -1864,7 +1987,12 @@
         "scope": "Escopo",
         "spaces": "Espaços compartilhados",
         "to": "Para",
-        "user_id": "Número do membro"
+        "user_id": "Número do membro",
+        "added": "Espaços adicionados",
+        "removed": "Espaços removidos",
+        "mode": "Modo",
+        "webhook_secret_set": "Segredo do webhook definido",
+        "webhook_secret_changed": "Segredo do webhook alterado"
       },
       "values": {
         "admin": "Administrador",
@@ -1894,7 +2022,13 @@
         "compat": "Compatibilidade",
         "models": "Modelos",
         "label": "Rótulo",
-        "model": "Modelo"
+        "model": "Modelo",
+        "settings": "Configurações",
+        "max_amount": "Valor máximo",
+        "currencies": "Moedas",
+        "webhook_secret": "Segredo do webhook",
+        "test": "Teste",
+        "live": "Real"
       },
       "event": "Evento",
       "when": "Quando"
@@ -1972,12 +2106,16 @@
       "light": "Claro",
       "dark": "Escuro"
     },
-    "account": "Conta: {name}",
     "skipToContent": "Pular para o conteúdo",
     "installApp": "Instalar o app",
     "pinned": "Apps fixados",
     "pageFailed": "Não foi possível mostrar esta página. O menu e as suas configurações continuam funcionando.",
-    "reload": "Recarregar"
+    "reload": "Recarregar",
+    "noWorkspaceTitle": "Nenhum espaço de trabalho ainda",
+    "workspaces": "Seus espaços de trabalho",
+    "workspaceCreated": "“{name}” foi criado.",
+    "openWorkspace": "Abrir",
+    "accountLabel": "Conta"
   },
   "common": {
     "cancel": "Cancelar",
@@ -2036,7 +2174,9 @@
       "move": "Mover",
       "delete": "Excluir",
       "empty": "Este documento está vazio.",
-      "download": "Baixar"
+      "download": "Baixar",
+      "backToResults": "Voltar aos resultados",
+      "separator": "/"
     },
     "editor": {
       "label": "Editar o documento",
@@ -2094,7 +2234,23 @@
       "removedCount_one": "{count} versão antiga removida do histórico.",
       "removedCount_other": "{count} versões antigas removidas do histórico.",
       "removedCount_many": "{count} de versões antigas removidas do histórico.",
-      "removedNone": "Não havia versões antigas para remover."
+      "removedNone": "Não havia versões antigas para remover.",
+      "restoreTitle": "Restaurar esta versão?",
+      "restoreQuestion": "{path} volta a ser o que era em {time}. A versão que tem agora fica no histórico.",
+      "changeBy": "{change} · {by}"
+    },
+    "emptyHelp": "Escreva um novo documento ou envie um arquivo.",
+    "pick": "Escolha um documento para lê-lo.",
+    "errors": {
+      "spaces": "Não foi possível carregar os espaços.",
+      "documents": "Não foi possível carregar os documentos.",
+      "document": "Não foi possível carregar este documento.",
+      "history": "Não foi possível carregar o histórico."
+    },
+    "tree": {
+      "count_one": "{count} documento",
+      "count_other": "{count} documentos",
+      "count_many": "{count} de documentos"
     }
   },
   "search": {
@@ -2158,9 +2314,7 @@
   },
   "conversations": {
     "archived": "Arquivadas",
-    "showArchived": "Mostrar arquivadas",
     "showArchivedTitle": "Mostrar as conversas arquivadas",
-    "showActiveTitle": "Mostrar as conversas ativas",
     "new": "Nova",
     "nothingArchived": "Nenhuma conversa arquivada.",
     "none": "Nenhuma conversa ainda. Comece uma em Nova.",
@@ -2201,12 +2355,14 @@
     },
     "question": {
       "label": "{cli} pede para usar {tool}",
-      "asks": "{cli} pede para usar <tool>{tool}</tool>:",
+      "asks": "{cli} pede para usar <b>{tool}</b>:",
       "allow": "Permitir",
       "deny": "Negar"
     },
     "allowAll": {
       "confirm": "{cli} vai executar comandos, editar arquivos e abrir páginas nesta conversa sem perguntar antes. Uma página ou arquivo que ele ler pode então levá-lo a fazer algo que você não pediu. Permitir tudo nesta conversa?",
+      "title": "Deixar {cli} agir sem perguntar?",
+      "confirmButton": "Permitir tudo",
       "label": "Deixar {cli} agir sem perguntar nesta conversa",
       "on": "Ele executa comandos, edita arquivos e abre páginas sem perguntar. Uma mudança vale a partir da próxima mensagem."
     },
@@ -2226,6 +2382,7 @@
     },
     "composer": {
       "archived": "Esta conversa está arquivada.",
+      "unreadable": "Esta conversa não pode ser lida, então nada pode ser enviado a ela.",
       "workingHint": "O agente está trabalhando. Enviar redireciona o agente no próximo passo; Enfileirar espera até ele terminar.",
       "message": "Mensagem",
       "placeholder": "Escreva para o agente",
@@ -2248,9 +2405,7 @@
       "recorded": "Gravado",
       "elapsed": "{elapsed} / {max}",
       "stop": "Parar o ditado",
-      "stopTitle": "Parar e transformar a fala em texto",
       "dictate": "Ditar",
-      "dictateTitle": "Ditar: fale e depois edite o texto antes de enviar",
       "transcribing": "Transformando a fala em texto…",
       "cantRecord": "Este navegador não consegue gravar aqui: é preciso HTTPS ou localhost."
     }
@@ -2354,7 +2509,14 @@
       "unpinned": "{name} removido do menu",
       "defaultSet": "{name} agora é um padrão do espaço",
       "defaultUnset": "{name} não é mais um padrão do espaço"
-    }
+    },
+    "empty": "Nada no seu Início ainda. Escolha Personalizar para colocar aqui um widget de um dos seus apps ou para fixar um app no menu.",
+    "unavailableShort": {
+      "offline": "· app fora do ar",
+      "unpublished": "· app não publicado",
+      "removed": "· não é mais oferecido"
+    },
+    "default": "· definido para o espaço"
   },
   "checklist": {
     "title": "Configure seu workspace",
@@ -2609,7 +2771,6 @@
   },
   "notifications": {
     "title": "Notificações",
-    "bell": "Notificações",
     "bellUnread": "Notificações, {count} não lidas",
     "intro": "O que aconteceu e que você pode querer ver. As notificações push são opcionais e servem só para avisar que há algo aqui.",
     "pushSettings": "Configurações de notificações",
@@ -2741,7 +2902,8 @@
       "sizes": "Tamanhos",
       "shapes": "Formas",
       "tones": "Tons",
-      "hues": "Matizes"
+      "hues": "Matizes",
+      "distinctInitials": "Vários lado a lado, cada um com as suas letras"
     },
     "sample": {
       "primary": "Principal",
@@ -2795,7 +2957,8 @@
       "personB": "Tomás Oliveira",
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
-      "workspaceName": "Acme Studio"
+      "workspaceName": "Acme Studio",
+      "tooltipEmpty": "Sem conteúdo: nenhuma dica"
     },
     "labels": {
       "onboarding": "integração",
@@ -2927,7 +3090,10 @@
       "inPlaceRow": "Um resultado de busca",
       "inPlaceDetail": "Abre nesta página, no lugar",
       "focusTarget": "Recebe o foco por script (uma ref e tabIndex -1)",
-      "focusIt": "Levar o teclado ao título"
+      "focusIt": "Levar o teclado ao título",
+      "openPage": "Abrir uma página (um link)",
+      "menuChoices": "Uma escolha entre várias, num grupo com nome",
+      "switchBoard": "Trocar de quadro"
     }
   }
 }

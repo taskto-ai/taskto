@@ -828,7 +828,10 @@ test('the panel downloads, shows readiness and storage, and says what stays onli
   const panel = await screen.findByRole('region', { name: 'Offline use' })
   expect(within(panel).getByText(/Not downloaded yet/)).toBeTruthy()
   expect(within(panel).getByText(/Building with AI, publishing and sharing need a connection/)).toBeTruthy()
-  fireEvent.click(within(panel).getByRole('button', { name: 'Download Expenses for offline use' }))
+  const download = within(panel).getByRole('button', { name: 'Download Expenses for offline use' })
+  // A secondary action: the app's own primary button is the one its page is about.
+  expect(download.className).toContain('ui-button-secondary')
+  fireEvent.click(download)
   expect(await within(panel).findByText('Ready for offline use')).toBeTruthy()
   expect(panel.textContent).toMatch(/Release 3, downloaded/)
   expect(panel.textContent).toMatch(/1 of 1 records are on this device/)

@@ -1,0 +1,274 @@
+/* The Apps screens' own layout: the list of apps by space, the templates, the builder and
+   publishing. Every part is a component from web/src/ui; this only places them. */
+
+@layer screens {
+  /* A quiet line of help or state, under or beside what it is about. */
+  .apps-note {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  /* A column whose width is the box's, never its content's: a wide table or a long word wraps or
+     scrolls in its own box instead of pushing a dialog's text past its edge. */
+  .apps-stack,
+  .apps-form,
+  .apps-where,
+  .apps-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .apps-stack,
+  .apps-form {
+    display: grid;
+    gap: var(--space-4);
+    align-content: start;
+  }
+
+  .apps-stack > p,
+  .apps-form > p {
+    margin: 0;
+  }
+
+  .apps-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .apps-list {
+    margin: 0;
+    padding-inline-start: var(--space-5);
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  /* The list: one group per space, its name and a count, then its apps. */
+  .apps-group {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .apps-group-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-2);
+  }
+
+  .apps-detail-line {
+    display: block;
+  }
+
+  /* A template's facts: what it is made for and what it needs. */
+  .apps-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+    margin: var(--space-1) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .apps-loading {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .apps-loading-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .apps-loading-lines {
+    flex: 1;
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  /* Where a new app lives: the choice, its label, and what it means. */
+  .apps-where {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+  }
+
+  .apps-where > .ui-field {
+    justify-self: stretch;
+  }
+
+  .apps-where-label {
+    font: var(--type-ui-strong);
+  }
+
+  /* The summary a publish shows first: who will use the app, and what it can do. */
+  .apps-summary {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+  }
+
+  .apps-summary dt {
+    font: var(--type-ui-strong);
+  }
+
+  .apps-summary dd {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0 0 var(--space-3);
+    overflow-wrap: anywhere;
+  }
+
+  .apps-summary dd p,
+  .apps-summary dd ul {
+    margin: 0;
+  }
+
+  /* A launched app's stage: which release is on screen, and the switch to the other one. */
+  .apps-stage {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .apps-stage[data-stage="draft"] {
+    padding: var(--space-3);
+    border: var(--line-thin) dashed var(--color-warning);
+    border-radius: var(--radius-md);
+  }
+
+  .apps-stage-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  /* The builder: the conversation beside the preview, across the whole width the shell gives it.
+     On a phone one pane shows; the other stays drawn (out of sight and out of reach, and inert), so
+     neither loses its scroll or its form. */
+  .apps-builder {
+    block-size: 100%;
+    min-block-size: 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    background: var(--color-bg);
+  }
+
+  .apps-builder-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+    padding: var(--space-3) var(--space-6);
+    border-block-end: var(--line-thin) solid var(--color-border);
+  }
+
+  .apps-builder-switch {
+    margin-inline-start: auto;
+  }
+
+  .apps-builder-dot {
+    display: inline-block;
+    inline-size: var(--mark-dot);
+    block-size: var(--mark-dot);
+    margin-inline-start: var(--space-1);
+    border-radius: var(--radius-pill);
+    background: var(--color-accent);
+    box-shadow: inset 0 0 0 var(--line-thin) var(--color-accent-edge);
+  }
+
+  .apps-builder-panes {
+    min-block-size: 0;
+    display: grid;
+    grid-template-columns: minmax(min(var(--width-sidebar), 100%), 1fr) minmax(0, 1fr);
+  }
+
+  .apps-builder-pane {
+    min-inline-size: 0;
+    min-block-size: 0;
+    overflow: auto;
+  }
+
+  .apps-builder-pane[data-pane="build"] {
+    border-inline-end: var(--line-thin) solid var(--color-border);
+  }
+
+  .apps-builder-pane[data-pane="build"] > * {
+    block-size: 100%;
+  }
+
+  .apps-builder-preview {
+    display: grid;
+    gap: var(--space-4);
+    align-content: start;
+    padding: var(--space-4) var(--space-6) calc(var(--space-6) + env(safe-area-inset-bottom));
+  }
+
+  /* A launched app wider than the pane scrolls in its own frame, not the pane (the frame's old
+     class, and the library's). */
+  .apps-builder-preview .tt-app,
+  .apps-builder-preview .ui-app {
+    min-inline-size: 0;
+    overflow: auto;
+  }
+
+  .apps-builder-preview-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  /* On a phone the bar is two rows, laid out rather than wrapped: the way back and the switch,
+     then the title and where the draft stands. */
+  .apps-builder[data-narrow] .apps-builder-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "back switch"
+      "title state";
+    padding-inline: var(--space-4);
+  }
+
+  .apps-builder[data-narrow] .apps-builder-back {
+    grid-area: back;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-switch {
+    grid-area: switch;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-title {
+    grid-area: title;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-state {
+    grid-area: state;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-panes {
+    position: relative;
+    display: block;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-pane {
+    position: absolute;
+    inset: 0;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-pane[data-active="false"] {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-pane[data-pane="build"] {
+    border-inline-end: 0;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-preview {
+    padding-inline: var(--space-4);
+  }
+}

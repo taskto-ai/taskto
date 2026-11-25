@@ -214,6 +214,8 @@ type Service struct {
 	// deletedRetention is how long a deleted record is kept before PurgeDeleted removes it; zero
 	// keeps them for ever (retention.go).
 	deletedRetention time.Duration
+	// budget limits the actions run with access tokens (tokenbudget.go).
+	budget *tokenBudget
 }
 
 // outboxHooks are for tests to stop the worker where a crash would.
@@ -230,7 +232,7 @@ type outboxHooks struct {
 
 // New returns the apps service over sqlDB, which must be migrated.
 func New(sqlDB *sql.DB, c *access.Checker) *Service {
-	return &Service{db: sqlDB, access: c, clock: time.Now, wake: make(chan struct{}, 1), thumbs: make(chan struct{}, maxThumbnails),
+	return &Service{db: sqlDB, access: c, clock: time.Now, budget: sharedBudget(sqlDB), wake: make(chan struct{}, 1), thumbs: make(chan struct{}, maxThumbnails),
 		deletedRetention: DefaultDeletedRetention}
 }
 
@@ -968,6 +970,15 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 // sent back is drawn by the release the action came from, limited to the fields the live
 // release declares (shownBy): nothing the live app leaves unseen is returned.
 func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
+	if err := s.spendTokenAction(actor, sp.WorkspaceID); err != nil {
+		// A request that committed before is answered with its receipt even over the budget: a
+		// client that lost the answer must be able to learn that it is in, and the receipt
+		// costs nothing but one lookup. Only a new operation is refused.
+		if IsRateLimited(err) && s.committed(ctx, sp.ID, actor, appID, action) {
+			return []Message{}, nil
+		}
+		return nil, err
+	}
 	msgs, err := s.actOnce(ctx, sp, actor, appID, action)
 	// A request this caller made before, under the same operation and release, and that committed,
 	// is answered with its receipt even when what they may do has changed since: a client that

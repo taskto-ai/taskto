@@ -18,17 +18,29 @@ export interface PageHeaderProps {
   // The title, to move the keyboard to when what had it goes away (a panel dismissed, a list
   // emptied). Given one, the title can take the focus from a script, though not from Tab.
   titleRef?: Ref<HTMLHeadingElement>
+  // A control right after the title, outside the heading: a menu that switches what the title
+  // names (another board, another space).
+  titleAction?: ReactNode
 }
 
-export function PageHeader({ title, help, actions, path, level = 1, titleRef }: PageHeaderProps) {
+export function PageHeader({ title, help, actions, path, level = 1, titleRef, titleAction }: PageHeaderProps) {
   const Heading = level === 1 ? 'h1' : 'h2'
   return (
     <header className="ui-page-header">
       <div className="ui-page-header-titles">
         {path && <div className="ui-page-header-path">{path}</div>}
-        <Heading ref={titleRef} tabIndex={titleRef ? -1 : undefined} className="ui-page-header-title">
-          {title}
-        </Heading>
+        {titleAction ? (
+          <div className="ui-page-header-title-row">
+            <Heading ref={titleRef} tabIndex={titleRef ? -1 : undefined} className="ui-page-header-title">
+              {title}
+            </Heading>
+            {titleAction}
+          </div>
+        ) : (
+          <Heading ref={titleRef} tabIndex={titleRef ? -1 : undefined} className="ui-page-header-title">
+            {title}
+          </Heading>
+        )}
         {help && <p className="ui-page-header-help">{help}</p>}
       </div>
       {actions && <div className="ui-page-header-actions">{actions}</div>}

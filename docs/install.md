@@ -267,7 +267,7 @@ The page is never reloaded for anyone: they update when they have saved their wo
 
 ### Web Push notifications
 
-Notifications always appear in each person's **inbox** (the bell in the top bar). **Web Push**
+Notifications always appear in each person's **inbox** (in the sidebar, with its unread count). **Web Push**
 is an optional extra on top: a person turns it on, per device, in **Settings → Notifications**,
 and only then does that device get a prompt when something new arrives while TaskTo.AI is closed.
 Nothing about it is required: with push off, unavailable or blocked, every workflow works, and a
@@ -404,6 +404,7 @@ your password?**, and the invite dialog doesn't offer to email.
 | `smtp_username` | `-smtp-username`, `TASKTO_SMTP_USERNAME` | The account to sign in as (`PLAIN` or `LOGIN`). Leave out for a relay that lets the server send without signing in. |
 | `smtp_password_file` | `-smtp-password-file`, `TASKTO_SMTP_PASSWORD_FILE` | The absolute path of a file holding the password, which goes with `smtp_username`. |
 | `smtp_egress` | `-smtp-egress`, `TASKTO_SMTP_EGRESS` | Where the connection may go: `any` (the default), `public`, or a comma-separated list of `public`, hosts, addresses and CIDR prefixes, as for [provider accounts](#where-provider-accounts-may-connect). Every connection is checked after name resolution. An internal relay on a private address needs it listed here, or `any`. |
+| `integration_egress` | `-integration-egress`, `TASKTO_INTEGRATION_EGRESS` | Where calls to [integrations](integrations.md)' providers may go: `public` (the default, and what an empty value means: every connection's address is checked after name resolution, so loopback, private, link-local and metadata addresses are refused), `any`, or a list as for [provider accounts](#where-provider-accounts-may-connect). Don't list a provider's name: a listed name is trusted wherever it resolves, which switches the address check off, and each adapter already pins its own hosts. A restricted policy ignores the environment's proxy, so a server that reaches the internet only through a mandatory proxy needs `any`. |
 | `update_status_dir` | `-update-status-dir`, `TASKTO_UPDATE_STATUS_DIR` | The directory where the host's updater writes the status admins see in Settings → About, an absolute path. The server only reads it. The Compose install sets it to the read-only mount of the updater's `public` directory ([automatic updates](#automatic-updates)); empty, the page says no updater is shown. |
 | `update_request_dir` | `-update-request-dir`, `TASKTO_UPDATE_REQUEST_DIR` | The directory where Update now (Settings → About) puts its request for the host's updater to take, an absolute path. The one place of the updater's that the server writes: the Compose install mounts the updater's `request` directory there, read-write ([Update now](#update-now)); empty, the button says it is unavailable. |
 
@@ -1187,6 +1188,35 @@ docker compose exec taskto taskto conversations -lost -orphans clean
 ```
 
 Outside Docker, add `-data-dir` (or `-config`) as for `taskto backup`.
+
+## Stopping the server
+
+On SIGTERM or SIGINT (what `docker compose stop`, `down` and a restart send) the server stops
+taking requests and shuts down in bounded steps, so that nothing writes the data directory
+after it lets go of it:
+
+| Step | At most |
+|---|---|
+| Requests finish on their own, then are ended | 10 s |
+| The handlers that ignored that are waited for | 5 s |
+| The emails the server accepted | 10 s |
+| The CLI workers' proxy | 10 s |
+| The scheduler's running jobs | 10 s |
+| The agent runtime: SIGTERM, then SIGKILL after 15 s, and its tools calls | 20 s |
+
+The bounded steps add up to 65 s at most, and a quiet server stops in well under a second. The
+server also waits, with no time limit, for the audit cleanup and the attachment sweep to return
+after they are cancelled; both return as soon as they are, but if either one did not, the stop
+would take longer than 65 s. Docker kills a
+container that is still running when its stop grace period ends, and its default is 10 s, so
+`compose.yaml` sets `stop_grace_period: 90s` for the server. Keep it at least that long if you
+override it in `compose.override.yaml`; the update script takes the setting as it is.
+
+If something still runs when its time is up (a handler that doesn't stop), the server logs it,
+leaves the database open for it and exits with an error. The data directory's lock stays held
+until the process is gone, so a second server or `taskto restore` is refused until then.
+SQLite recovers its write-ahead log on the next start. The same shutdown follows when the
+listener fails: the server drains, then exits with the listener's error.
 
 ## Upgrade and rollback
 

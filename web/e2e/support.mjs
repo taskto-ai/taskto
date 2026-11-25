@@ -171,7 +171,7 @@ export async function installExpenseTracker({ page, context }) {
   await page.getByRole('button', { name: 'Publish', exact: true }).click()
   await page.getByText('Published as release 1.').waitFor()
   await page.getByRole('link', { name: 'All apps' }).click()
-  await page.getByRole('link', { name: 'Launch' }).click()
+  await page.getByRole('link', { name: 'Open Expense tracker' }).click()
   await page.getByRole('button', { name: 'New expense' }).waitFor()
 
   const { spaces } = await api(context, 'GET', '/api/workspaces/1/spaces')

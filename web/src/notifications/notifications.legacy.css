@@ -1,0 +1,32 @@
+/* The notification inbox.
+
+   Its rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
+   and their order with the other files is styles.css's (docs/design.md, "Where styles live").
+   Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
+
+/* An unread item of the inbox is set in bold with a mark before it, which a screen reader gets as
+   text (the link says "Unread"). */
+.tt-inbox [data-unread] .tt-inbox-link {
+  font-weight: 600;
+}
+
+.tt-inbox [data-unread] .tt-row-main::before {
+  content: "";
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  border-radius: 50%;
+  background: var(--tt-accent);
+  /* Mint is faint on cream, so the dot is ringed in ink (a darker mint in the dark). */
+  box-shadow: inset 0 0 0 1.5px var(--tt-accent-edge);
+  position: absolute;
+  inset-inline-start: -0.9rem;
+  inset-block-start: 1rem;
+}
+
+.tt-inbox {
+  padding-inline-start: 1rem;
+}
+
+.tt-inbox .tt-row {
+  position: relative;
+}

@@ -29,6 +29,9 @@ import (
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/dictation"
+	"taskto.ai/taskto/internal/drain"
+	"taskto.ai/taskto/internal/egress"
+	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/lockfile"
 	"taskto.ai/taskto/internal/notifications"
@@ -85,6 +88,8 @@ func main() {
 	if err := run(ctx, cfg, nil); err != nil {
 		stop()
 		slog.Error("taskto stopped", "err", err)
+		// Exits at once: a data directory lock that run kept for work still running goes with
+		// the process, and nothing else is waited for here.
 		os.Exit(1)
 	}
 }
@@ -120,12 +125,16 @@ type agentRuntime struct {
 	state func() string                                  // for /healthz
 	ready func(context.Context) (*agentrt.Client, error) // waits until the sidecar answers
 	feed  *providers.Feed                                // keeps its providers in step with the accounts
-	stop  func()
+	stop  func() error                                   // stops the runtime; the error says a tools handler was still running
 }
 
 // run serves until ctx is done. If listening isn't nil, it is called with the
 // address once the server accepts connections.
-func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error {
+func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (result error) {
+	// What could not be stopped cleanly is told to stuck by the deferred stops below, and
+	// returned once they are all done (this defer runs last), after the database's close.
+	stuck := &shutdownReport{}
+	defer func() { result = errors.Join(result, stuck.err()) }()
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return fmt.Errorf("data directory: %w", err)
 	}
@@ -165,13 +174,29 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer func() {
+		if stuck.busy {
+			// Work that uses the data directory is still running, and the database is left open for
+			// it: whoever takes the lock now (a second server, `taskto restore`) would write beside
+			// it. The lock goes with the process, which is exiting.
+			keepLock(lock)
+			slog.Error("shutdown: keeping the data directory's lock until the process exits")
+			return
+		}
+		_ = lock.Close()
+	}()
 	dbPath := filepath.Join(cfg.DataDir, db.FileName)
 	sqlDB, err := db.Open(ctx, dbPath)
 	if err != nil {
 		return err
 	}
-	defer sqlDB.Close()
+	defer func() {
+		if stuck.busy {
+			slog.Error("shutdown: not closing the database, work that uses it is still running; the process is exiting")
+			return
+		}
+		_ = sqlDB.Close()
+	}()
 	applied, err := db.Migrate(ctx, sqlDB)
 	if err != nil {
 		return err
@@ -228,7 +253,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	if err != nil {
 		return err
 	}
-	defer stopCLI()
+	defer func() { stuck.note("the CLI workers' proxy", stopCLI()) }()
 	// The agent browser, in the CLI worker (or with it, in local mode).
 	browsers, stopBrowsers := startBrowsers(cfg, cliAccounts)
 	defer stopBrowsers()
@@ -268,7 +293,12 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	stopPush := notifier.Start(ctx)
 	defer stopPush()
 	stopSchedule := scheduler.Start(ctx)
-	defer stopSchedule()
+	defer func() {
+		if !stopSchedule() {
+			// Its handler has to be told apart from a handler of a listener, which has its own error.
+			stuck.note("the scheduler", fmt.Errorf("%w: a job's handler did not return", drain.ErrBusy))
+		}
+	}()
 	tools := agenttools.New(agenttools.Options{
 		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: appSvc,
 		Knowledge: kb, Search: index, Browser: browsers,
@@ -284,7 +314,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		if err != nil {
 			return err
 		}
-		defer agent.stop()
+		defer func() { stuck.note("the agent runtime's tools socket", agent.stop()) }()
 		// A turn that switches to another CLI shows it in the conversation's model.
 		cliAccounts.SetModelSetter(func(ctx context.Context, conversation int64, cli cliworker.CLI) error {
 			c, err := agent.ready(ctx)
@@ -368,6 +398,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		CLIAccounts:   cliAccounts,
 		Browser:       browsers,
 		Dictation:     dictationService(cfg, sqlDB, key, kb),
+		Integrations:  integrations.New(integrations.NewStore(sqlDB, key), integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)}),
 		BackupDataDir: cfg.DataDir,
 		// The host updater's status, read-only (docs/install.md#automatic-updates).
 		UpdateStatusDir: cfg.UpdateStatusDir,
@@ -391,14 +422,15 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 
 	// No server-wide ReadTimeout or WriteTimeout: agent replies stream for minutes and
 	// knowledge-base uploads can be large, so those limits belong on individual handlers.
+	inflight := drain.New()
 	srv := &http.Server{
-		Handler:           handler,
+		Handler:           inflight.Handler(wrapHandler(handler, sqlDB)),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
 	// Event streams last until their client leaves: end them, so they don't hold up a shutdown.
 	srv.RegisterOnShutdown(convs.EndStreams)
-	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.Addr)
+	ln, err := listen(ctx, cfg.Addr)
 	if err != nil {
 		return err
 	}
@@ -413,34 +445,59 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		listening(ln.Addr())
 	}
 
+	// Whether a signal ends the server or its listener fails, the same shutdown follows: every
+	// handler is done, or given up on and reported, before the deferred stops run and the
+	// database closes. A request still running then would find it closed.
+	var listenErr error
 	select {
-	case err := <-errc:
-		return err
+	case listenErr = <-errc:
+		slog.Error("the listener failed; shutting down", "err", listenErr)
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		shutdownErr := srv.Shutdown(shutdownCtx)
-		if shutdownErr != nil {
-			// Graceful shutdown timed out: drop the connections that are still open.
-			shutdownErr = errors.Join(shutdownErr, srv.Close())
-		}
-		// The emails the server accepted are made after its answer: end their sends and wait for
-		// them, with a deadline of its own so a slow shutdown above doesn't leave none, and
-		// whether or not that went well. The database closes (the deferred Close) only after this.
-		idleCtx, stopIdle := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stopIdle()
-		if err := accounts.Shutdown(idleCtx); err != nil {
-			slog.Warn("shutting down with emails still being made")
-		}
-		if shutdownErr != nil {
-			return shutdownErr
-		}
-		if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return nil
 	}
+	err = inflight.Shutdown(srv, shutdownGrace, handlerWait)
+	if listenErr == nil {
+		if serveErr := <-errc; !errors.Is(serveErr, http.ErrServerClosed) {
+			listenErr = serveErr
+		}
+	}
+	stuck.note("the server's requests", err)
+	// The emails the server accepted are made after its answer: end their sends and wait for
+	// them, with a deadline of its own so a slow shutdown above doesn't leave none, and
+	// whether or not that went well. The database closes (the deferred Close) only after this,
+	// and not at all if they are still running, as with a request.
+	idleCtx, stopIdle := context.WithTimeout(context.Background(), emailWait)
+	defer stopIdle()
+	if err := accounts.Shutdown(idleCtx); err != nil {
+		slog.Warn("shutting down with emails still being made")
+		stuck.note("the emails being made", fmt.Errorf("%w: %w", drain.ErrBusy, err))
+	}
+	// The listener's own error is the result, ahead of whatever the shutdown adds to it.
+	return listenErr
 }
+
+// heldLocks are the data-directory locks run kept open when it returned with work still running.
+// They are referenced from here so the garbage collector never closes one (an *os.File closes
+// itself when it is collected); the process's exit releases them.
+var (
+	heldLocksMu sync.Mutex
+	heldLocks   []*os.File
+)
+
+func keepLock(f *os.File) {
+	heldLocksMu.Lock()
+	defer heldLocksMu.Unlock()
+	heldLocks = append(heldLocks, f)
+}
+
+// shutdownGrace is how long a shutdown lets requests finish before it ends their contexts, and
+// wrapHandler lets a test put a handler of its own beside the server's. Both are for tests.
+var (
+	shutdownGrace = defaultShutdownGrace
+	wrapHandler   = func(h http.Handler, _ *sql.DB) http.Handler { return h }
+	listen        = func(ctx context.Context, addr string) (net.Listener, error) {
+		return new(net.ListenConfig).Listen(ctx, "tcp", addr)
+	}
+)
 
 // egressOf is the provider accounts' egress policies of cfg.
 func egressOf(cfg config.Config) providers.Egress {
@@ -475,4 +532,11 @@ func dictationService(cfg config.Config, sqlDB *sql.DB, key *serverkey.Key, kb *
 		slog.Info("dictation: add-on installed", "addon", a.ID, "path", a.Path)
 	}
 	return dictation.New(c)
+}
+
+// integrationEgress is the policy of calls to integrations' providers: what -integration-egress
+// says, which is "public" when it isn't set.
+func integrationEgress(cfg config.Config) *egress.Policy {
+	p := cfg.IntegrationEgressPolicy()
+	return &p
 }

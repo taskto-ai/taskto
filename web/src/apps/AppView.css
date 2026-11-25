@@ -1,0 +1,85 @@
+/* An app's screen (AppView) and what the app's own catalog draws in it (catalog.tsx). The renderer's
+   components are themed in ui/a2ui.css, outside the layers; what is here is TaskTo.AI's own. */
+
+@layer screens {
+  /* On a panel of its own: the surface, its edge and room around the form; a screen wider than a
+     phone scrolls sideways inside it, and its padding leaves room for a control's focus ring and
+     the primary button's lift, which the scroll box would otherwise cut. */
+  .ui-app[data-frame="panel"] {
+    padding: var(--space-4);
+    background: var(--color-surface);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-lg);
+    overflow-x: auto;
+  }
+
+  /* Bare inside something that already is a panel (a Home widget, whose body does the scrolling):
+     no edge of its own, no scrolling of its own, and the room a control's focus ring and the
+     primary's lift reach outside it, so the widget's scrolling never cuts them. */
+  .ui-app[data-frame="bare"] {
+    padding: var(--space-2);
+  }
+
+  .ui-app[data-frame] {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  /* The host of an app's screens (catalog.tsx): no wider than the app. */
+  .ui-app-screen {
+    min-inline-size: 0;
+  }
+
+  .ui-app-needs {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-app-loading {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  /* A number (the Stat component): a tile with its label small and muted over the value, large with
+     figures that line up. Tiles side by side in a row share it and wrap onto the next line when
+     there isn't room; one alone takes the width it needs. */
+  .ui-stat {
+    box-sizing: border-box;
+    display: grid;
+    align-content: start;
+    gap: var(--space-1);
+    min-inline-size: 0;
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-bg-sunken);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+
+  /* In one of the app's rows (the element the catalog draws it in is no box of its own), tiles share
+     the row and wrap; in a column a tile is only as tall as what it says. */
+  a2ui-basic-row > * > .ui-stat {
+    flex: 1 1 calc(var(--space-16) * 2);
+  }
+
+  .ui-stat-label {
+    margin: 0;
+    font: var(--type-small);
+    font-weight: 500;
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-stat-value {
+    margin: 0;
+    font: var(--type-display);
+    font-family: var(--font-sans);
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: var(--tracking-display);
+    color: var(--color-text);
+    overflow-wrap: anywhere;
+  }
+}

@@ -47,6 +47,14 @@ describe('Page and PageHeader', () => {
     expect(screen.getByRole('button', { name: 'New card' })).toBeTruthy()
   })
 
+  test('a control after the title is beside the heading, not in its name', () => {
+    render(<PageHeader title="Personal" titleAction={<Button>Switch board</Button>} />)
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Personal' })
+    const button = screen.getByRole('button', { name: 'Switch board' })
+    expect(h1.contains(button)).toBe(false)
+    expect(h1.nextElementSibling).toBe(button)
+  })
+
   test('a header inside another page is a level 2 heading', () => {
     render(<PageHeader title="Members" level={2} />)
     expect(screen.getByRole('heading', { level: 2, name: 'Members' })).toBeTruthy()
@@ -225,6 +233,30 @@ describe('Heading', () => {
     expect(section.className).toBe('ui-heading')
     expect(section.dataset.size).toBe('section')
     expect(screen.getByRole('heading', { level: 3, name: 'Plans' }).dataset.size).toBe('title')
+  })
+})
+
+describe('Table with a column of row headers', () => {
+  test('that column names each row: its cells are row headers, the rest plain cells', () => {
+    const rows = [
+      { plan: 'Solo', seats: 1 },
+      { plan: 'Team', seats: 10 },
+    ]
+    render(
+      <Table
+        caption="Plans"
+        rowKey={(r) => r.plan}
+        rows={rows}
+        columns={[
+          { key: 'plan', header: 'Plan', rowHeader: true, cell: (r) => r.plan },
+          { key: 'seats', header: 'Seats', numeric: true, cell: (r) => r.seats },
+        ]}
+      />,
+    )
+    expect(screen.getAllByRole('rowheader').map((h) => h.textContent)).toEqual(['Solo', 'Team'])
+    expect(screen.getByRole('rowheader', { name: 'Team' }).getAttribute('scope')).toBe('row')
+    expect(screen.queryByRole('cell', { name: 'Team' })).toBeNull()
+    expect(screen.getByRole('cell', { name: '10' })).toBeTruthy()
   })
 })
 

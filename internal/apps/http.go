@@ -18,20 +18,34 @@ import (
 // Routes mounts the app endpoints on mux, each behind access.Checker.RequireSpace, so
 // they need a session, and the CSRF guard (auth.CSRF) checks every one that isn't a GET.
 // docs/api.md describes them.
+//
+// An access token (auth.AcceptTokens) is taken on the routes that read an app or its rows and
+// on the one that runs an action: the routes people's own agents and scripts use as the user,
+// the way the app tools do over MCP. A token never reaches the rest, which are the web app's
+// own: building, publishing, roles, moving and copying an app, templates, retrying an effect,
+// a device's offline download and the uploads of photos (their bytes aren't JSON). They stay
+// behind a session, as docs/api.md lists. Whatever a token reaches does the checks a session
+// does, as the token's user in the token's workspace (RequireSpace), and what it changes is
+// marked with the token's name (parse).
 func (s *Service) Routes(mux *http.ServeMux) {
 	// Each route first checks the account the request says it is for, if it says (a queued
 	// offline record is sent later, and the browser's session may be someone else's by then).
+	// A token has no such queue: with the header, a request carrying one is refused (403).
 	read := func(h http.HandlerFunc) http.Handler {
 		return s.access.ExpectUser(s.access.RequireSpace(access.Read, h))
 	}
 	write := func(h http.HandlerFunc) http.Handler {
 		return s.access.ExpectUser(s.access.RequireSpace(access.Write, h))
 	}
+	// tokenRead is read for the routes a token may use too.
+	tokenRead := func(h http.HandlerFunc) http.Handler {
+		return s.access.ExpectUser(auth.AcceptTokens(s.access.RequireSpace(access.Read, h)))
+	}
 	const apps = "/api/workspaces/{workspace}/spaces/{space}/apps"
 
-	mux.Handle("GET "+apps, read(s.handleList))
+	mux.Handle("GET "+apps, tokenRead(s.handleList))
 	mux.Handle("POST "+apps, write(s.handleCreate))
-	mux.Handle("GET "+apps+"/{app}", read(s.handleGet))
+	mux.Handle("GET "+apps+"/{app}", tokenRead(s.handleGet))
 	mux.Handle("PATCH "+apps+"/{app}", write(s.handleUpdate))
 	mux.Handle("POST "+apps+"/{app}/move", write(s.handleMove))
 	// A copy of the app's definition and nothing else, and a board for its effects (templates.go).
@@ -40,28 +54,28 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("POST "+apps+"/{app}/duplicate", read(s.handleDuplicate))
 	mux.Handle("POST "+apps+"/{app}/effect-board", write(s.handleChooseBoard))
 	mux.Handle("POST "+"/api/workspaces/{workspace}/spaces/{space}/app-templates/{template}/install", write(s.handleInstall))
-	mux.Handle("GET "+apps+"/{app}/surface", read(s.handleSurface))
+	mux.Handle("GET "+apps+"/{app}/surface", tokenRead(s.handleSurface))
 	// Actions are the readers' route too: navigating changes nothing, and act asks for the
 	// right to write the space itself for every other kind of action.
-	mux.Handle("POST "+apps+"/{app}/actions", read(s.handleAction))
+	mux.Handle("POST "+apps+"/{app}/actions", tokenRead(s.handleAction))
 	// A preview of what an action of the draft would set going: it changes nothing.
 	mux.Handle("POST "+apps+"/{app}/actions/preview", read(s.handlePreviewAction))
 	// The effects of actions (effects_api.go): listed to whoever reads the records, retried by
 	// the user who acted.
-	mux.Handle("GET "+apps+"/{app}/effects", read(s.handleEffects))
-	mux.Handle("GET "+apps+"/{app}/records/{record}/effects", read(s.handleRecordEffects))
+	mux.Handle("GET "+apps+"/{app}/effects", tokenRead(s.handleEffects))
+	mux.Handle("GET "+apps+"/{app}/records/{record}/effects", tokenRead(s.handleRecordEffects))
 	mux.Handle("POST "+apps+"/{app}/effects/{effect}/retry", write(s.handleRetryEffect))
 	// The draft's preview runs on sample rows the caller holds and writes nothing, so it is the
 	// readers' route as far as the space goes; the app's roles say who may see a draft.
 	mux.Handle("POST "+apps+"/{app}/preview", read(s.handlePreview))
 	mux.Handle("POST "+apps+"/{app}/publish", write(s.handlePublish))
 	mux.Handle("POST "+apps+"/{app}/rollback", write(s.handleRollback))
-	mux.Handle("GET "+apps+"/{app}/releases", read(s.handleReleases))
-	mux.Handle("GET "+apps+"/{app}/releases/{release}", read(s.handleRelease))
-	mux.Handle("GET "+apps+"/{app}/records", read(s.handleRecords))
-	mux.Handle("GET "+apps+"/{app}/records/deleted", read(s.handleDeleted))
-	mux.Handle("GET "+apps+"/{app}/records/query", read(s.handleQuery))
-	mux.Handle("GET "+apps+"/{app}/records/{record}/history", read(s.handleHistory))
+	mux.Handle("GET "+apps+"/{app}/releases", tokenRead(s.handleReleases))
+	mux.Handle("GET "+apps+"/{app}/releases/{release}", tokenRead(s.handleRelease))
+	mux.Handle("GET "+apps+"/{app}/records", tokenRead(s.handleRecords))
+	mux.Handle("GET "+apps+"/{app}/records/deleted", tokenRead(s.handleDeleted))
+	mux.Handle("GET "+apps+"/{app}/records/query", tokenRead(s.handleQuery))
+	mux.Handle("GET "+apps+"/{app}/records/{record}/history", tokenRead(s.handleHistory))
 	mux.Handle("POST "+apps+"/{app}/records/{record}/restore", write(s.handleRestore))
 	// The live release and the caller's records, to keep on a device (offline.go).
 	mux.Handle("GET "+apps+"/{app}/offline", read(s.handleOffline))
@@ -89,6 +103,10 @@ func parse(w http.ResponseWriter, r *http.Request, withApp bool) (request, bool)
 	sp, _ := access.SpaceFrom(r.Context())
 	u, _ := auth.UserFrom(r.Context())
 	req := request{space: sp, actor: Actor{UserID: u.ID}}
+	if t, ok := auth.TokenFrom(r.Context()); ok {
+		// Changes made with an access token are marked like the agent's, with its name.
+		req.actor.Agent, req.actor.Via = true, t.Name
+	}
 	if withApp {
 		id, err := strconv.ParseInt(r.PathValue("app"), 10, 64)
 		if err != nil {
@@ -487,8 +505,12 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var conflict *conflictError
 	var status *statusError
 	var apiErr *apierr.Error
+	var limited *rateLimitedError
 	refusal, quotaRefusal := quota.AsAPI(err)
 	switch {
+	case errors.As(err, &limited):
+		w.Header().Set("Retry-After", strconv.Itoa(limited.retryAfter()))
+		apierr.WriteError(w, limited.api)
 	case quotaRefusal:
 		apierr.WriteError(w, refusal)
 	case errors.As(err, &status):

@@ -14,6 +14,9 @@ export interface Column<T> {
   numeric?: boolean
   // The header is read by a screen reader but not shown (a column of actions).
   hiddenHeader?: boolean
+  // The column that names each row (a person, a plan): its cells are the rows' headers, so a screen
+  // reader says which row a cell further along is in.
+  rowHeader?: boolean
   cell: (row: T) => ReactNode
 }
 
@@ -51,11 +54,22 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
         <tbody className="ui-table-body">
           {rows.map((row) => (
             <tr key={rowKey(row)} className="ui-table-row">
-              {columns.map((c) => (
-                <td key={c.key} className="ui-table-cell" data-numeric={c.numeric || undefined}>
-                  {c.cell(row)}
-                </td>
-              ))}
+              {columns.map((c) =>
+                c.rowHeader ? (
+                  <th
+                    key={c.key}
+                    scope="row"
+                    className="ui-table-cell ui-table-rowhead"
+                    data-numeric={c.numeric || undefined}
+                  >
+                    {c.cell(row)}
+                  </th>
+                ) : (
+                  <td key={c.key} className="ui-table-cell" data-numeric={c.numeric || undefined}>
+                    {c.cell(row)}
+                  </td>
+                ),
+              )}
             </tr>
           ))}
         </tbody>

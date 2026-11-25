@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { SESSION_LOST } from '../api'
 import { parseRoute, usePath } from '../router'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
+import { wholeText } from '../test/text'
 import { ConversationsPage } from './ConversationsPage'
 import stream from './testdata/stream.json'
 import { RETRY_MAX_MS, RETRY_MS, useConversationStream } from './useConversationStream'
@@ -19,6 +20,14 @@ const conversation = (id: number, title: string) => ({
   created_at: '2026-11-18T10:00:00.000Z',
   updated_at: '2026-11-18T10:00:00.000Z',
 })
+
+// A saved app's screen is a lazily loaded component, which the first test that shows one loads
+// (and vite compiles) on the spot: on a machine with more work than cores that took longer than
+// any wait for what the page shows. Load it once here, where the hook has a time of its own, so
+// the tests wait only for the page to draw it.
+beforeAll(async () => {
+  await import('../apps/AppPreview')
+}, 60_000)
 
 beforeEach(() => window.history.replaceState(null, '', '/w/1/conversations'))
 afterEach(() => {
@@ -234,7 +243,7 @@ test('the transcript follows new text only while the reader is at the bottom', a
   const { sources, factory } = fakeStreams()
   render(<Page streams={factory} />)
   await waitFor(() => expect(sources).toHaveLength(1))
-  const el = screen.getByLabelText('Conversation').querySelector('.tt-transcript') as HTMLDivElement
+  const el = screen.getByLabelText('Conversation').querySelector('.ui-chat-transcript') as HTMLDivElement
   // jsdom has no layout: a transcript 1000 px tall in a 200 px window.
   Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 1000 })
   Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 200 })
@@ -297,7 +306,7 @@ test('screen readers hear the agent start and reply, not each streamed word', as
   const { sources, factory } = fakeStreams()
   render(<Page streams={factory} />)
   await waitFor(() => expect(sources).toHaveLength(1))
-  const transcript = screen.getByLabelText('Conversation').querySelector('.tt-transcript') as HTMLElement
+  const transcript = screen.getByLabelText('Conversation').querySelector('.ui-chat-transcript') as HTMLElement
   expect(transcript.getAttribute('aria-live')).toBeNull()
   act(() => {
     for (const event of stream) sources[0].send(event)
@@ -382,10 +391,20 @@ test('renames and archives the conversation', async () => {
   await waitFor(() => expect(pane.querySelector('h2')?.textContent).toBe('Launch plan'))
   expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ title: 'Launch plan' }])
 
-  // Escape leaves the title as it was.
+  // Escape leaves the title as it was. While the title is edited, the other actions stay, and
+  // when the edit ends the focus goes back to Rename.
   fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+  expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy()
   fireEvent.keyDown(screen.getByLabelText('Title'), { key: 'Escape' })
   expect(screen.queryByLabelText('Title')).toBeNull()
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Rename' })))
+  // And so does Cancel.
+  fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+  screen.getByRole('button', { name: 'Archive' }).focus()
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.queryByLabelText('Title')).toBeNull()
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Rename' })))
+  expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1)
 
   fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
   expect(await screen.findByText('This conversation is archived.')).toBeTruthy()
@@ -406,8 +425,11 @@ test('the list shows the archived conversations on request', async () => {
   })
   render(<Page streams={fakeStreams().factory} />)
   expect(await screen.findByRole('link', { name: /Plans/ })).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Show archived' }))
+  const toggle = screen.getByRole('button', { name: 'Show archived conversations' })
+  expect(toggle.getAttribute('aria-pressed')).toBe('false')
+  fireEvent.click(toggle)
   expect(await screen.findByRole('link', { name: /Old plans/ })).toBeTruthy()
+  expect(toggle.getAttribute('aria-pressed')).toBe('true')
   expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Archived')
   expect(calls.at(-1)?.path).toBe('/api/workspaces/1/conversations?archived=true')
 })
@@ -483,6 +505,30 @@ test('while the agent works, a message steers it and Stop stops it', async () =>
   expect(calls.filter((c) => c.path.endsWith('/messages'))[1].body).not.toHaveProperty('when_busy')
 })
 
+test('earlier messages go in above what the reader is looking at, which stays where it is', async () => {
+  await openWith(
+    {
+      'GET /api/workspaces/1/conversations/7/entries?before=8': {
+        body: { entries: [entry(5, 'user', 'Older question'), entry(6, 'assistant', 'Older answer')] },
+      },
+    },
+    viewOf([entry(8, 'user', 'Newer question'), entry(9, 'assistant', 'Newer answer')], { before: 7 }),
+  )
+  const el = screen.getByLabelText('Conversation').querySelector('.ui-chat-transcript') as HTMLDivElement
+  // jsdom has no layout: 1000 px of messages, the reader 150 px from the top of them.
+  let height = 1000
+  Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => height })
+  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 200 })
+  el.scrollTop = 150
+  fireEvent.scroll(el)
+  fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
+  // The earlier messages add 600 px above.
+  height = 1600
+  await screen.findByText('Older question')
+  // What the reader was looking at is 600 px further down, and so is the view.
+  expect(el.scrollTop).toBe(750)
+})
+
 test('earlier messages load from before the stream, and stay as the stream moves on', async () => {
   const { calls, es } = await openWith(
     {
@@ -526,7 +572,8 @@ test('a page that fails to load says so, and can be tried again', async () => {
     viewOf([entry(8, 'user', 'Newer question')], { before: 7 }),
   )
   fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
-  expect(await screen.findByText('the agent runtime is off')).toBeTruthy()
+  // Said at once, as an alert.
+  expect((await screen.findByRole('alert')).textContent).toContain('the agent runtime is off')
   expect((screen.getByRole('button', { name: 'Load earlier messages' }) as HTMLButtonElement).disabled).toBe(false)
 })
 
@@ -620,17 +667,19 @@ test("a saved app's screen shows in the conversation, as the server has it", asy
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
   })
 
+  // The preview is a lazily loaded component that fetches the app and then its screen: wait for
+  // each thing it shows (findBy… waits as long as src/test/setup.ts says), never for a time.
   const app = await screen.findByRole('region', { name: 'Expenses' })
   await within(app).findByText('Expense tracker')
-  expect(within(app).getByText('Coffee')).toBeTruthy()
-  expect(screen.getByText('Used create_app')).toBeTruthy()
+  await within(app).findByText('Coffee')
+  // What it shows is labelled: the live release, which everyone uses.
+  await screen.findByText('Live · release 1')
+  expect(screen.getByText(wholeText('Used create_app'))).toBeTruthy()
   expect(screen.queryByText('From the arguments')).toBeNull()
   expect(appCalls(calls).map((c) => c.path)).toEqual([
     '/api/workspaces/1/spaces/2/apps/1',
     '/api/workspaces/1/spaces/2/apps/1/surface?release=1',
   ])
-  // What it shows is labelled: the live release, which everyone uses.
-  expect(screen.getByText('Live · release 1')).toBeTruthy()
 })
 
 test("a live embed stays labelled Live and its buttons still act on the app's real rows", async () => {
@@ -641,7 +690,7 @@ test("a live embed stays labelled Live and its buttons still act on the app's re
   })
   await screen.findByText('Live · release 1')
   await screen.findByText('Coffee')
-  fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
   await waitFor(() => expect(appCalls(calls).some((c) => c.method === 'POST')).toBe(true))
   const posted = appCalls(calls).filter((c) => c.method === 'POST')
   // The live app's own actions, naming the release the screen was drawn from; never a preview.
@@ -668,9 +717,9 @@ test('the agent changed the app: the conversation shows the live release, and th
   })
   // The live release is what people use, and it is said so; the agent's changes aren't in it.
   await screen.findByText('Live · release 1')
-  expect(screen.getByText(/It has changes that aren’t published yet/)).toBeTruthy()
+  await screen.findByText(/It has changes that aren’t published yet/)
   expect(appCalls(calls).some((c) => c.path.endsWith('/preview'))).toBe(false)
-  fireEvent.click(screen.getByRole('button', { name: 'Preview the draft' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Preview the draft' }))
   await screen.findByText('Preview · sample data')
   await waitFor(() => expect(appCalls(calls).some((c) => c.path.endsWith('/preview'))).toBe(true))
 })
@@ -705,8 +754,8 @@ test('a refused or failed app tool call shows no app', async () => {
     ],
     {},
   )
-  await screen.findByText('Used update_app')
-  expect(screen.getAllByText('Used create_app')).toHaveLength(2)
+  await screen.findByText(wholeText('Used update_app'))
+  expect(screen.getAllByText(wholeText('Used create_app'))).toHaveLength(2)
   expect(screen.queryByRole('link', { name: /Open/ })).toBeNull()
   expect(screen.queryByText('Loading…')).toBeNull()
   expect(appCalls(calls)).toEqual([])
@@ -729,9 +778,9 @@ test('an app the user cannot read, or that was taken offline, is a note', async 
   expect(await screen.findByText(/This app isn’t available/)).toBeTruthy()
   expect(await screen.findByText('Old is offline: it can’t be launched.')).toBeTruthy()
   // Nothing is launched; the offline app can still be opened, to be restored there.
+  expect(await screen.findByRole('link', { name: 'Open Old in Apps' })).toBeTruthy()
   expect(appCalls(calls).filter((c) => c.path.includes('/surface'))).toEqual([])
   expect(screen.queryByRole('link', { name: 'Open the app in Apps' })).toBeNull()
-  expect(screen.getByRole('link', { name: 'Open Old in Apps' })).toBeTruthy()
 })
 
 test('each app shows once, at its latest save, and older apps only link', async () => {
