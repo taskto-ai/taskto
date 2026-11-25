@@ -33,24 +33,22 @@ var (
 
 	sessionParamRes = compileAll(append([]string{
 		`mode`, `success_url`, `cancel_url`, `client_reference_id`, `customer_email`, `expires_at`,
-		`locale`, `submit_type`, `ui_mode`, `customer_creation`, `billing_address_collection`,
+		`locale`, `submit_type`, `ui_mode`,
 		`allow_promotion_codes`,
 		`metadata\[` + metaKey + `\]`,
-		`payment_intent_data\[(description|statement_descriptor|receipt_email)\]`,
+		`payment_intent_data\[description\]`,
 		`payment_intent_data\[metadata\]\[` + metaKey + `\]`,
 	}, lineItemParams...))
 
 	linkParamRes = compileAll(append([]string{
-		`currency`, `allow_promotion_codes`, `submit_type`, `inactive_message`,
+		`currency`, `allow_promotion_codes`, `submit_type`,
 		`after_completion\[type\]`, `after_completion\[redirect\]\[url\]`,
 		`after_completion\[hosted_confirmation\]\[custom_message\]`,
 		`metadata\[` + metaKey + `\]`,
-		`payment_intent_data\[(description|statement_descriptor)\]`,
-		`payment_intent_data\[metadata\]\[` + metaKey + `\]`,
 	}, lineItemParams...))
 
 	// `metadata` on its own, with an empty value, clears all of a link's metadata.
-	linkUpdateParamRes = compileAll([]string{`active`, `inactive_message`, `metadata`, `metadata\[` + metaKey + `\]`})
+	linkUpdateParamRes = compileAll([]string{`active`, `metadata`, `metadata\[` + metaKey + `\]`})
 
 	lineItemIndex = regexp.MustCompile(`^line_items\[(` + idx + `)\]`)
 )

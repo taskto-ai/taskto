@@ -77,6 +77,9 @@ type Signing struct {
 	Tamper func([]byte) []byte
 	// Delay passes time before the delivery is signed, as when Stripe retries later.
 	Delay time.Duration
+	// Age makes the signature's timestamp older than the clock's now when it is signed (after
+	// Delay has passed), without moving the clock.
+	Age time.Duration
 }
 
 // A SignOption changes how a delivery is signed.
@@ -94,7 +97,7 @@ func SignedAt(t time.Time) SignOption { return func(s *Signing) { s.At = t } }
 // OldBy signs with a timestamp that is age older than the clock's now. Older than Tolerance is
 // one a handler must reject.
 func OldBy(age time.Duration) SignOption {
-	return func(s *Signing) { s.At = time.Time{}; s.Delay = -age }
+	return func(s *Signing) { s.At = time.Time{}; s.Age = age }
 }
 
 // AlsoSignedWith adds a signature made with another secret, as during a secret's rotation.
@@ -251,9 +254,7 @@ func (s *Sender) SendBody(ctx context.Context, id, typ string, body []byte, opts
 	at := sg.At
 	if at.IsZero() {
 		at = s.clock.Now()
-		if sg.Delay < 0 { // OldBy: the clock doesn't move, the signature is older
-			at = at.Add(sg.Delay)
-		}
+		at = at.Add(-sg.Age) // OldBy: the clock doesn't move, the signature is older
 	}
 	secret := sg.Secret
 	if secret == "" {

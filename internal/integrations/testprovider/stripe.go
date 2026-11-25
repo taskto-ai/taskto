@@ -24,7 +24,10 @@
 //
 // Not modelled: prices, products and customers (a line's amount comes inline, in price_data),
 // subscriptions and setup mode, expanding objects, Connect, thin events, the delivery state of
-// events (a list's delivery_success is refused), and concurrent requests
+// events (a list's delivery_success is refused), the parameters nothing here would act on
+// (customer_creation, billing_address_collection, a link's inactive_message and
+// payment_intent_data, a session's statement_descriptor and receipt_email: refused, so a test that
+// sends one finds out), and concurrent requests
 // with one idempotency key (requests are served one at a time, so the second finds the first's
 // answer). The money rules are Stripe's common cases: amounts in whole minor units with a
 // minimum of 50 and a maximum of 99999999 for every currency.

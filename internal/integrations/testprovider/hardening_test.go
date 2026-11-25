@@ -622,3 +622,52 @@ func TestAnAnswerAtTheCapIsKeptAndOneOverIsAnError(t *testing.T) {
 		t.Errorf("an answer over the cap: %v, status %d", err, d.Status)
 	}
 }
+
+func TestParametersThatNothingActsOnAreRefused(t *testing.T) {
+	_, _, a := newFake(t)
+	for name, tc := range map[string]struct {
+		path  string
+		form  func() url.Values
+		param string
+	}{
+		"customer_creation":      {"/v1/checkout/sessions", func() url.Values { return sessionForm(5000, "usd", "r") }, "customer_creation"},
+		"billing address":        {"/v1/checkout/sessions", func() url.Values { return sessionForm(5000, "usd", "r") }, "billing_address_collection"},
+		"a session's descriptor": {"/v1/checkout/sessions", func() url.Values { return sessionForm(5000, "usd", "r") }, "payment_intent_data[statement_descriptor]"},
+		"a link's inactive text": {"/v1/payment_links", func() url.Values { return linkForm(1) }, "inactive_message"},
+		"a link's intent data":   {"/v1/payment_links", func() url.Values { return linkForm(1) }, "payment_intent_data[description]"},
+	} {
+		form := tc.form()
+		form.Set(tc.param, "x")
+		if ans := a.post(tc.path, form, ""); ans.status != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", name, ans.status, ans.raw)
+		}
+	}
+	var l testprovider.PaymentLink
+	a.post("/v1/payment_links", linkForm(1), "").into(t, &l)
+	if ans := a.post("/v1/payment_links/"+l.ID, url.Values{"inactive_message": {"closed"}}, ""); ans.status != http.StatusBadRequest {
+		t.Errorf("a link update's inactive_message: %d", ans.status)
+	}
+}
+
+func TestASignaturesAgeAndAFreshDeliveryDelayAreIndependent(t *testing.T) {
+	clock := testprovider.NewManualClock(time.Time{})
+	h := newHook(clock)
+	s := testprovider.NewHandlerSender(h, "/h", testprovider.WithSenderClock(clock))
+	start := clock.Now()
+	for name, opts := range map[string][]testprovider.SignOption{
+		"old then delayed": {testprovider.OldBy(6 * time.Minute), testprovider.Delayed(time.Second)},
+		"delayed then old": {testprovider.Delayed(time.Second), testprovider.OldBy(6 * time.Minute)},
+	} {
+		clock.Set(start)
+		d, err := s.Send(context.Background(), someEvent(clock), opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := start.Add(time.Second - 6*time.Minute); !d.SignedAt.Equal(want) || !clock.Now().Equal(start.Add(time.Second)) {
+			t.Errorf("%s: signed at %v (want %v), clock at %v", name, d.SignedAt, want, clock.Now())
+		}
+		if d.OK() {
+			t.Errorf("%s: a six-minute-old signature was accepted", name)
+		}
+	}
+}
