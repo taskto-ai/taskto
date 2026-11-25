@@ -372,8 +372,12 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
 `IconButton`, `Tooltip`, `Field` with `Input`, `Textarea` and `Select`, `Checkbox`, `Switch`,
 `SegmentedControl`, `Badge`, `Label` (and `labelHue`, the hue a label's name picks), `Avatar`,
 `AgentDot`, `Skeleton`, `Spinner` and `VisuallyHidden`. A screen imports each file directly
-(`../ui/Button`); there is no index file. A screen doesn't write a `<button>`, an `<input>` or a
-`<select>` of its own.
+(`../ui/Button`); there is no index file. A screen doesn't write a `<button>`, an `<input>`, a
+`<select>` or a `<textarea>` of its own: `web/scripts/controls-check.mjs`, run with css-check
+(`pnpm --filter @taskto/web run css`), fails on one written outside `web/src/ui/`. Its `ALLOWED`
+list names the few files that may keep one, how many and why: a file picker, which only
+`<input type="file">` opens; a read-only checkbox in a rendered document; a board's card, whose whole
+surface is the button that opens it; and the screens outside the shell until they are rebuilt.
 
 - **One height per size.** Buttons, fields, selects and segmented controls of one size are one
   height (36px regular, 28px small), so they line up in a row; on a touch screen every one of
