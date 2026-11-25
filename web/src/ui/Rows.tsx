@@ -11,14 +11,17 @@ import './Rows.css'
 export interface RowsProps {
   // What the list is, for a screen reader, when no heading says it.
   label?: string
+  // Rows whose order means something (the steps of a checklist): an ordered list.
+  ordered?: boolean
   children: ReactNode
 }
 
-export function Rows({ label, children }: RowsProps) {
+export function Rows({ label, ordered = false, children }: RowsProps) {
+  const List = ordered ? 'ol' : 'ul'
   return (
-    <ul className="ui-rows" aria-label={label}>
+    <List className="ui-rows" aria-label={label}>
       {children}
-    </ul>
+    </List>
   )
 }
 
