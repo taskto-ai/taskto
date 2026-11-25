@@ -1,0 +1,399 @@
+/* The knowledge base: with room, two panes, each scrolling on its own (the documents as a tree
+   on the start side, the open document or the search results on the rest); without, one at a
+   time, with a way back. The room is the page's own (a container query), not the window's: the
+   shell's sidebar takes a share of the window that changes with its width. */
+@layer screens {
+  .kb-frame {
+    container: kb / inline-size;
+    block-size: 100%;
+    min-block-size: 0;
+  }
+
+  .kb {
+    display: grid;
+    grid-template-columns: calc(var(--width-sidebar) + var(--space-16) + var(--space-2)) minmax(0, 1fr);
+    block-size: 100%;
+    min-block-size: 0;
+  }
+
+  .kb-side {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-block-size: 0;
+    padding: var(--space-5) var(--space-3) var(--space-8);
+    border-inline-end: var(--line-thin) solid var(--color-border);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .kb-side-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding-inline: var(--space-1) 0;
+    min-block-size: var(--control-md);
+  }
+
+  .kb-side-head > .ui-heading {
+    flex: 1;
+    min-inline-size: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* The headings the page moves the keyboard to (the page's title, the document's path, a
+     version): no ring for a pointer's focus, the focus ring for the keyboard's. */
+  .kb-side-head > .ui-heading:focus,
+  .kb-doc-path:focus,
+  .kb-version > .ui-heading:focus {
+    outline: none;
+  }
+
+  .kb-side-head > .ui-heading:focus-visible,
+  .kb-doc-path:focus-visible,
+  .kb-version > .ui-heading:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+    border-radius: var(--radius-sm);
+  }
+
+  .kb-side > * {
+    min-inline-size: 0;
+  }
+
+  /* The notice of a delete above whichever pane is in front, and that pane scrolling below it. */
+  .kb-main {
+    display: flex;
+    flex-direction: column;
+    min-inline-size: 0;
+    min-block-size: 0;
+  }
+
+  .kb-main > .ui-page {
+    flex: 1;
+    min-block-size: 0;
+  }
+
+  .kb-main > .kb-deleted {
+    flex: none;
+    inline-size: 100%;
+    max-inline-size: calc(var(--width-list) + 2 * var(--space-8));
+    margin-inline: auto;
+    padding: var(--space-5) var(--space-8) 0;
+  }
+
+  .kb-deleted:focus {
+    outline: none;
+  }
+
+  /* The tree. Its one column is never wider than the side: a long name is cut (with an
+     ellipsis), never the reason the column grows. */
+  .kb-tree,
+  .kb-tree ul {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .kb-tree li {
+    min-inline-size: 0;
+  }
+
+  .kb-tree .ui-tooltip-anchor {
+    display: block;
+    min-inline-size: 0;
+  }
+
+  .kb-tree-item.ui-button {
+    inline-size: 100%;
+    min-inline-size: 0;
+    justify-content: flex-start;
+    padding-inline: calc(var(--space-2) + var(--kb-depth, 0) * var(--space-4)) var(--space-2);
+    border-radius: var(--radius-md);
+    color: var(--color-text-soft);
+    font: var(--type-ui);
+  }
+
+  .kb-tree-item .ui-button-content {
+    flex: 1;
+    min-inline-size: 0;
+  }
+
+  .kb-tree-item .ui-button-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 1;
+    min-inline-size: 0;
+  }
+
+  .kb-tree-item .ui-icon {
+    flex: none;
+    color: var(--color-text-muted);
+  }
+
+  .kb-tree-spacer {
+    flex: none;
+    inline-size: var(--space-4);
+  }
+
+  .kb-tree-name {
+    flex: 1;
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: start;
+  }
+
+  .kb-tree-count,
+  .kb-tree-size {
+    flex: none;
+    font: var(--type-caption);
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .kb-tree-item[aria-current] {
+    background: var(--color-selected);
+    color: var(--color-text);
+    font: var(--type-ui-strong);
+  }
+
+  .kb-tree-loading,
+  .kb-doc-loading,
+  .kb-history-loading {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-2);
+  }
+
+  /* The document. */
+  .kb-doc {
+    display: grid;
+    gap: var(--space-6);
+    min-inline-size: 0;
+  }
+
+  .kb-doc-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    min-block-size: var(--control-md);
+  }
+
+  .kb-doc-where {
+    flex: 1 1 14rem;
+    min-inline-size: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .kb-doc-path {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+    min-inline-size: 0;
+  }
+
+  .kb-doc-crumbs {
+    display: contents;
+  }
+
+  /* A long name with no break in it wraps rather than leaving the pane. */
+  .kb-doc-crumb {
+    min-inline-size: 0;
+    font: var(--type-ui);
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+
+  .kb-doc-separator {
+    color: var(--color-text-muted);
+  }
+
+  .kb-doc-name {
+    overflow-wrap: anywhere;
+  }
+
+  .kb-doc-meta {
+    font: var(--type-small);
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .kb-doc-actions,
+  .kb-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .kb-push-end {
+    margin-inline-start: auto;
+  }
+
+  /* The back button: on a phone, and wherever the document was opened from search results. */
+  .kb-back[data-back="list"] {
+    display: none;
+  }
+
+  .kb-note {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .kb-error {
+    display: block;
+    margin-block-start: var(--space-1);
+    color: var(--color-danger);
+  }
+
+  .kb-file {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .kb-file-download {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .kb-media {
+    inline-size: 100%;
+    border-radius: var(--radius-md);
+    background: var(--color-media);
+  }
+
+  /* The editor. */
+  .kb-editor {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .kb-editor > .ui-segmented {
+    justify-self: start;
+  }
+
+  .kb-editor-text {
+    min-block-size: calc(var(--space-16) * 6);
+    font: var(--type-code);
+    font-size: var(--text-md);
+    line-height: var(--space-6);
+  }
+
+  .kb-editor-preview {
+    min-block-size: calc(var(--space-16) * 6);
+    padding: var(--space-5);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+  }
+
+  /* History. */
+  /* The history takes the keyboard while it loads again after Try again: the ring for the
+     keyboard's focus only. */
+  .kb-history:focus {
+    outline: none;
+  }
+
+  .kb-history:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+    border-radius: var(--radius-sm);
+  }
+
+  .kb-history {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .kb-version {
+    display: grid;
+    gap: var(--space-4);
+    padding-block-start: var(--space-4);
+    border-block-start: var(--line-thin) solid var(--color-border);
+  }
+
+  /* The dialogs. */
+  .kb-form,
+  .kb-dialog-text {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .kb-dialog-text p {
+    margin: 0;
+  }
+
+  .kb-file-input {
+    padding-block: var(--space-1);
+  }
+
+  .kb-sending {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  /* Less room: a narrower column, and its title a size down. */
+  @container kb (max-width: 62rem) {
+    .kb {
+      grid-template-columns: calc(var(--width-sidebar) + var(--space-12)) minmax(0, 1fr);
+    }
+
+    .kb-side-head > .ui-heading {
+      font-size: var(--text-lg);
+    }
+  }
+
+  /* Too little room for the tree and a document of 28rem beside it (the column, the page's
+     padding and 28rem): one pane at a time. The list, with what the space is empty of or the
+     notice of a delete under it; or the document or the results, with the way back. The page
+     scrolls as one. */
+  @container kb (max-width: 50rem) {
+    .kb {
+      grid-template-columns: minmax(0, 1fr);
+      block-size: auto;
+    }
+
+    .kb-side {
+      padding-inline: var(--space-2);
+      border-inline-end: 0;
+      overflow: visible;
+    }
+
+    .kb-main > .kb-deleted {
+      padding: var(--space-4) var(--space-4) 0;
+    }
+
+    .kb .ui-page {
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .kb[data-open="main"] > .kb-side,
+    .kb[data-open="list"] > .kb-main:not(:has(.kb-empty, .kb-deleted)) {
+      display: none;
+    }
+
+    .kb-back[data-back="list"] {
+      display: inline-flex;
+    }
+  }
+}
