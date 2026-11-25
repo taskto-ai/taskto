@@ -203,7 +203,7 @@ func (s *IntegrationSet) UnmarshalJSON(b []byte) error {
 	// holds, so {"value": null, "from": …} and {"value": "x", "from": ""} are two keys, refused.
 	var p struct {
 		Value json.RawMessage `json:"value"`
-		From  *string         `json:"from"`
+		From  json.RawMessage `json:"from"`
 	}
 	if err := strictObject(b, &p, "a set"); err != nil {
 		return err
@@ -213,10 +213,11 @@ func (s *IntegrationSet) UnmarshalJSON(b []byte) error {
 	case hasValue == hasFrom:
 		return fmt.Errorf(`a set is {"value": …} or {"from": …}, one of them`)
 	case hasFrom:
-		if *p.From == "" {
+		var from string
+		if err := json.Unmarshal(p.From, &from); err != nil || from == "" {
 			return fmt.Errorf(`a set's from names a source`)
 		}
-		*s = IntegrationSet{From: *p.From}
+		*s = IntegrationSet{From: from}
 	default:
 		var v any
 		if err := json.Unmarshal(p.Value, &v); err != nil {
@@ -428,7 +429,7 @@ func (e Effect) checkPaymentLink(c Collection) error {
 // ----- the contract -----
 
 // contractVersion is the format of Contract, in its hash, so a change of format is a new hash.
-const contractVersion = 2
+const contractVersion = 3
 
 // Contract is what the server derives from a draft for one slot: what the app may send out and
 // what the integration may write back, in field names and literals, never in the app's wording.
@@ -458,18 +459,42 @@ type Contract struct {
 	// field whatever the event; this binds each write to its event, so moving a value from one
 	// event to another is another contract.
 	Handlers []ContractHandler `json:"handlers" apitypes:"nonnull"`
+	// Fields are the constraints of every field the integration reads, writes or is gated by, by
+	// name and sorted: what each may hold. Raising a maximum, adding an option or dropping a
+	// requirement changes what the integration may write or send, so it is another contract.
+	Fields []ContractField `json:"fields" apitypes:"nonnull"`
+}
+
+// ContractField is the constraints of one field the integration reads or writes. It holds no
+// wording: labels of options are left out.
+type ContractField struct {
+	Name         string   `json:"name"`
+	Type         string   `json:"type"`
+	Required     bool     `json:"required,omitempty"`
+	RequiredWhen *Rule    `json:"required_when,omitempty"`
+	MaxLength    int      `json:"max_length,omitempty"`
+	Min          *float64 `json:"min,omitempty"`
+	Max          *float64 `json:"max,omitempty"`
+	// Options are the values a choice field may hold, sorted.
+	Options []string `json:"options,omitempty"`
 }
 
 // ContractLink is one kind of payment link request an app makes. It holds no wording.
 type ContractLink struct {
 	// Action is the action whose effect asks. It is an identifier (a client runs an action by it),
 	// not wording: moving a request to another action is another contract.
-	Action      string `json:"action"`
+	Action string `json:"action"`
+	// ActionKind is what the action does (insert, update, delete): it decides who may trigger the
+	// request, so changing it is another contract.
+	ActionKind  string `json:"action_kind"`
 	AmountField string `json:"amount_field"`
 	// Describes are the fields the link's description names, sorted: the fields it sends out as
 	// text. The wording itself is not in the contract.
 	Describes []string `json:"describes" apitypes:"nonnull"`
-	Currency  string   `json:"currency,omitempty"`
+	// DescribesID is whether the description names the record's id ({{id}}): it sends the id out
+	// as text too.
+	DescribesID bool   `json:"describes_id"`
+	Currency    string `json:"currency,omitempty"`
 	// CurrencyField and CurrencyOptions are the choice field the currency is read from, and the
 	// currencies it offers, sorted.
 	CurrencyField   string   `json:"currency_field,omitempty"`
@@ -519,7 +544,7 @@ const (
 func (d Definition) contract(slot string) Contract {
 	s := d.Integrations[slot]
 	c := Contract{Version: contractVersion, Kind: s.Kind,
-		Operations: []string{}, Sends: []string{}, Currencies: []string{}, Events: []string{}, Writes: []ContractWrite{}, OnlyIf: []ContractRule{}, Links: []ContractLink{}, Handlers: []ContractHandler{}}
+		Operations: []string{}, Sends: []string{}, Currencies: []string{}, Events: []string{}, Writes: []ContractWrite{}, Fields: []ContractField{}, OnlyIf: []ContractRule{}, Links: []ContractLink{}, Handlers: []ContractHandler{}}
 	sends, currencies := map[string]bool{}, map[string]bool{}
 	writes := map[string]*ContractWrite{}
 	var links []json.RawMessage // the encoded links already in c.Links
@@ -537,10 +562,13 @@ func (d Definition) contract(slot string) Contract {
 				continue
 			}
 			c.Operations = mergeSorted(c.Operations, []string{e.Kind})
-			link := ContractLink{Action: name, AmountField: e.AmountField, Describes: []string{}, Currency: e.Currency, CurrencyField: e.CurrencyField,
+			link := ContractLink{Action: name, ActionKind: d.Actions[name].Kind, AmountField: e.AmountField, Describes: []string{}, Currency: e.Currency, CurrencyField: e.CurrencyField,
 				URLField: e.URLField, IDField: e.IDField, When: e.When}
 			_ = holes(e.Description, func(text string, isHole bool) error {
-				if isHole && text != "id" {
+				switch {
+				case isHole && text == "id":
+					link.DescribesID = true
+				case isHole:
 					link.Describes = mergeSorted(link.Describes, []string{text})
 				}
 				return nil
@@ -611,6 +639,39 @@ func (d Definition) contract(slot string) Contract {
 		w := writes[field]
 		slices.SortFunc(w.Values, func(a, b json.RawMessage) int { return bytes.Compare(a, b) })
 		c.Writes = append(c.Writes, *w)
+	}
+	// The constraints of every field the integration reads, writes or is gated by.
+	named := map[string]bool{}
+	for f := range sends {
+		named[f] = true
+	}
+	for f := range writes {
+		named[f] = true
+	}
+	for _, l := range c.Links {
+		for _, f := range []string{l.AmountField, l.CurrencyField, l.URLField, l.IDField} {
+			if f != "" {
+				named[f] = true
+			}
+		}
+		if l.When != nil {
+			for _, f := range ruleFields(*l.When) {
+				named[f] = true
+			}
+		}
+	}
+	for _, r := range c.OnlyIf {
+		for _, f := range ruleFields(r.Rule) {
+			named[f] = true
+		}
+	}
+	for _, name := range sortedKeys(named) {
+		f, ok := d.Collection.field(name)
+		if !ok {
+			continue
+		}
+		c.Fields = append(c.Fields, ContractField{Name: f.Name, Type: f.Type, Required: f.Required, RequiredWhen: f.RequiredWhen,
+			MaxLength: f.MaxLength, Min: f.Min, Max: f.Max, Options: sortedCopy(f.Options)})
 	}
 	return c
 }

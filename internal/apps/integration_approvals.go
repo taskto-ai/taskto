@@ -227,6 +227,9 @@ func (c *Contract) normalize() {
 	if c.Handlers == nil {
 		c.Handlers = []ContractHandler{}
 	}
+	if c.Fields == nil {
+		c.Fields = []ContractField{}
+	}
 }
 
 // approvalsOf loads the approvals of an app, newest first.
@@ -247,14 +250,23 @@ func approvalsOf(ctx context.Context, q queryer, appID int64) ([]approvalRow, er
 	return out, rows.Err()
 }
 
-// find returns the approval of the slot's contract hash.
+// findApproval returns the approval of the slot's contract hash that counts: the one waiting or
+// approved, or else the latest one decided. rows are newest first.
 func findApproval(rows []approvalRow, slot, hash string) (approvalRow, bool) {
+	var latest approvalRow
+	found := false
 	for _, r := range rows {
-		if r.slot == slot && r.hash == hash {
+		if r.slot != slot || r.hash != hash {
+			continue
+		}
+		if r.status == ApprovalRequested || r.status == ApprovalApproved {
 			return r, true
 		}
+		if !found {
+			latest, found = r, true
+		}
 	}
-	return approvalRow{}, false
+	return latest, found
 }
 
 // ----- the gate -----
@@ -400,7 +412,7 @@ func (s *Service) integrationStatus(ctx context.Context, sp access.Space, a Acto
 // requestApproval asks for the approval of the draft's contract for a slot, which the caller names
 // by the hash they saw: a draft that changed since is refused, so what an admin approves is what
 // the requester read. Asking again for a contract already asked for, or approved, changes nothing;
-// asking again for one that was turned down or revoked asks anew.
+// asking again for one that was turned down or revoked asks anew, as a new request.
 func (s *Service) requestApproval(ctx context.Context, sp access.Space, a Actor, appID int64, slot, hash string) (IntegrationApproval, error) {
 	if err := may(sp, access.Write); err != nil {
 		return IntegrationApproval{}, err
@@ -435,25 +447,18 @@ func (s *Service) requestApproval(ctx context.Context, sp access.Space, a Actor,
 		if err != nil {
 			return err
 		}
+		// A request still waiting, or already approved, is the one asked for again. After a rejection
+		// or a revocation the contract is asked for anew: a new row, with its own id and its own place
+		// in the queue, so a decision on the old id never reaches it. The old row keeps its decision.
 		existing, found := findApproval(rows, slot, hash)
 		var id int64
-		switch {
-		case found && (existing.status == ApprovalRequested || existing.status == ApprovalApproved):
+		if found && (existing.status == ApprovalRequested || existing.status == ApprovalApproved) {
 			id = existing.id
-		case found:
-			if _, err := tx.ExecContext(ctx, `UPDATE app_integration_approvals
-				SET status = 'requested', integration_id = NULL, requested_by = ?, requested_at = ?, decided_by = NULL, decided_at = NULL
-				WHERE id = ?`, a.UserID, now(), existing.id); err != nil {
-				return err
-			}
-			id = existing.id
-		default:
+		} else {
 			if err := tx.QueryRowContext(ctx, `INSERT INTO app_integration_approvals (app_id, slot, kind, contract_hash, contract, status, requested_by, requested_at)
 				VALUES (?, ?, ?, ?, ?, 'requested', ?, ?) RETURNING id`, appID, slot, contract.Kind, hash, string(raw), a.UserID, now()).Scan(&id); err != nil {
 				return err
 			}
-		}
-		if !found || (existing.status != ApprovalRequested && existing.status != ApprovalApproved) {
 			if err := audit.Record(ctx, tx, audit.Event{Workspace: sp.WorkspaceID, Actor: a.UserID, Action: audit.AppIntegrationRequested,
 				TargetType: audit.TargetAppIntegration, Target: id,
 				Details: audit.Details{"kind": contract.Kind, "app_id": appID}}); err != nil {
@@ -637,7 +642,7 @@ func (s *Service) approve(ctx context.Context, workspace, admin, id int64, d Dec
 			if !d.AllowSpace {
 				return apierr.New(http.StatusConflict, apierr.CodeAppIntegrationSpaceNotAllowed, "this integration isn't allowed in the app's space")
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO integration_spaces (integration_id, space_id, allowed_by, allowed_at) VALUES (?, ?, ?, ?)`,
+			if _, err := tx.ExecContext(ctx, `INSERT INTO integration_spaces (integration_id, space_id, allowed_by, allowed_at, from_approval) VALUES (?, ?, ?, ?, 1)`,
 				d.IntegrationID, r.spaceID, admin, now()); err != nil {
 				return err
 			}
@@ -708,9 +713,29 @@ func (s *Service) revoke(ctx context.Context, workspace, admin, id int64) (Integ
 		if r.status != ApprovalApproved {
 			return apierr.New(http.StatusConflict, apierr.CodeAppIntegrationNotApproved, "only an approval can be revoked")
 		}
+		grant := func() (bool, error) {
+			var ok bool
+			err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM integration_spaces WHERE integration_id = ? AND space_id = ?)`,
+				r.integrationID.Int64, r.spaceID).Scan(&ok)
+			return ok, err
+		}
+		had, err := grant()
+		if err != nil {
+			return err
+		}
+		// A trigger takes back the space an approval allowed, when no other approval needs it.
 		if _, err := tx.ExecContext(ctx, `UPDATE app_integration_approvals
 			SET status = 'revoked', integration_id = NULL, decided_by = ?, decided_at = ? WHERE id = ?`, admin, now(), id); err != nil {
 			return err
+		}
+		if has, err := grant(); err != nil {
+			return err
+		} else if had && !has {
+			if err := audit.Record(ctx, tx, audit.Event{Workspace: workspace, Actor: admin, Action: audit.IntegrationSpacesChanged,
+				TargetType: audit.TargetIntegration, Target: r.integrationID.Int64,
+				Details: audit.Details{"added": 0, "removed": 1}}); err != nil {
+				return err
+			}
 		}
 		if err := audit.Record(ctx, tx, audit.Event{Workspace: workspace, Actor: admin, Action: audit.AppIntegrationRevoked,
 			TargetType: audit.TargetAppIntegration, Target: id,

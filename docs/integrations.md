@@ -143,10 +143,14 @@ those are the admin's, on the integration.
 **The contract** is computed by the server from the draft, never sent by a client: the kind, the
 operations the app asks for, the record fields it sends out (names only), the currencies, the events
 it handles, for each field the integration may write the literals and sources it may write, and the
-rules that gate them, and for each payment link the action that asks, its amount, its currency and
-its `when`. It has no wording, so a changed description that names the same fields needs no new
-approval; sending another field, writing another field or value, writing a value in another event,
-asking in another currency or from another action, dropping a `when`, or loosening a rule does. Its
+rules that gate them, for each payment link the action that asks and what it does (insert, update
+or delete: it decides who may trigger it), its amount, its currency, its `when` and whether its
+description names the record's id, and the constraints of every field the integration reads, writes
+or is gated by (type, whether it is required, length, bounds and options). It has no wording, so a
+changed description that names the same fields needs no new approval; sending another field or the
+record's id, writing another field or value, writing a value in another event, asking in another
+currency or from another action, changing what the action does, loosening a field's constraints
+(a higher maximum, another option), dropping a `when`, or loosening a rule does. Its
 SHA-256 is the contract's **hash**.
 
 **Approval is by hash, through a queue.**
@@ -160,7 +164,11 @@ SHA-256 is the contract's **hash**.
    on, or **rejects**. Approving may also allow the app's space for the integration when the admin
    says so: the space is the one the request is in, which an admin can't otherwise allow when it is
    another person's private space. Approving a request is how they consent to that app using the
-   integration there.
+   integration there. The space stays allowed while an approval needs it: revoking the last approval
+   that allowed it takes it back (as does the app's moving or deletion), while a space an admin
+   allowed in the integration's settings stays.
+   A contract asked for again after a rejection or a revocation is a new request, with its own id and
+   its own place in the queue; the old one keeps its decision.
 4. **Publish and rollback refuse** (`app_integration_unapproved`) a release with a slot whose contract
    has no approval whose integration is still switched on and allowed in the space. The check runs
    under the write lock, next to the check of the effects' targets. A rollback is checked for the

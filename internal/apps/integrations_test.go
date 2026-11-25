@@ -396,19 +396,24 @@ func TestRequestsAreRepeatableAndDecisionsFinal(t *testing.T) {
 	if st := i.status(i.alice, i.shared, i.app); st.Slots[0].Status != ApprovalRejected {
 		t.Fatalf("status = %s", st.Slots[0].Status)
 	}
-	if again := i.mustRequest(i.alice, i.shared, i.app); again.ID != first.ID || again.Status != ApprovalRequested || again.DecidedBy != nil {
+	// Asking again after a rejection is a new request: the old one keeps its decision.
+	again := i.mustRequest(i.alice, i.shared, i.app)
+	if again.ID == first.ID || again.Status != ApprovalRequested || again.DecidedBy != nil {
 		t.Fatalf("asking again after a rejection: %+v", again)
+	}
+	if retry := i.mustRequest(i.alice, i.shared, i.app); retry.ID != again.ID {
+		t.Fatalf("a retry of the pending renewal made another request: %d and %d", again.ID, retry.ID)
 	}
 
 	// Only an approval can be revoked.
-	rec = i.decide(i.owner, i.ws, first.ID, "revoke", nil)
+	rec = i.decide(i.owner, i.ws, again.ID, "revoke", nil)
 	expect(t, rec, http.StatusConflict)
 	if code(t, rec) != string(apierr.CodeAppIntegrationNotApproved) {
 		t.Fatalf("revoking a request: %s", rec.Body.String())
 	}
-	expect(t, i.approve(i.owner, first.ID, i.stripe), http.StatusOK)
-	expect(t, i.approve(i.owner, first.ID, i.stripe), http.StatusConflict)
-	expect(t, i.decide(i.owner, i.ws, first.ID, "revoke", nil), http.StatusOK)
+	expect(t, i.approve(i.owner, again.ID, i.stripe), http.StatusOK)
+	expect(t, i.approve(i.owner, again.ID, i.stripe), http.StatusConflict)
+	expect(t, i.decide(i.owner, i.ws, again.ID, "revoke", nil), http.StatusOK)
 	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusConflict)
 }
 
@@ -862,9 +867,9 @@ func TestEveryDecisionIsAudited(t *testing.T) {
 	}
 	req := ask()
 	expect(t, i.decide(i.owner, i.ws, req.ID, "reject", nil), http.StatusOK)
-	ask()
-	expect(t, i.approve(i.owner, req.ID, i.stripe), http.StatusOK)
-	expect(t, i.decide(i.owner, i.ws, req.ID, "revoke", nil), http.StatusOK)
+	renewed := ask()
+	expect(t, i.approve(i.owner, renewed.ID, i.stripe), http.StatusOK)
+	expect(t, i.decide(i.owner, i.ws, renewed.ID, "revoke", nil), http.StatusOK)
 
 	rows, err := i.e.db.Query(`SELECT action, actor_id, target_type, target_id, details FROM audit_events WHERE action LIKE 'app_integration_%' ORDER BY id`)
 	if err != nil {
@@ -872,6 +877,7 @@ func TestEveryDecisionIsAudited(t *testing.T) {
 	}
 	defer rows.Close()
 	var actions []string
+	targets := []int64{req.ID, req.ID, renewed.ID, renewed.ID, renewed.ID}
 	for rows.Next() {
 		var action, targetType, details string
 		var actor, target int64
@@ -879,7 +885,7 @@ func TestEveryDecisionIsAudited(t *testing.T) {
 			t.Fatal(err)
 		}
 		actions = append(actions, action)
-		if targetType != "app_integration_approval" || target != req.ID {
+		if targetType != "app_integration_approval" || len(actions) > len(targets) || target != targets[len(actions)-1] {
 			t.Errorf("%s targets %s %d", action, targetType, target)
 		}
 		want := i.owner.id
@@ -936,6 +942,8 @@ func TestASetIsExactlyOneKey(t *testing.T) {
 		"a value and an empty from": `{"value": "paid", "from": ""}`,
 		"an empty from":             `{"from": ""}`,
 		"a null value":              `{"value": null}`,
+		"a value and a null from":   `{"value": "paid", "from": null}`,
+		"a null from":               `{"from": null}`,
 		"nothing":                   `{}`,
 	} {
 		var s IntegrationSet
@@ -1167,5 +1175,240 @@ func TestTheQueueSurvivesAnAppDeletedBetweenReads(t *testing.T) {
 	expect(t, rec, http.StatusOK)
 	if got := decode[ApprovalList](t, rec); len(got.Approvals) != 1 || got.Approvals[0].ID != req.ID {
 		t.Errorf("queue = %+v", got)
+	}
+}
+
+// ----- review fixes: the contract covers what an edit can change -----
+
+// received is the invoices with a number field the payment's verified amount is written to.
+var received = []string{
+	`{"name": "total", "type": "number", "required": true},`, `{"name": "total", "type": "number", "required": true},
+    {"name": "received", "type": "number", "max": 1000},`,
+	`"paid_at": {"from": "occurred_at"}`, `"paid_at": {"from": "occurred_at"}, "received": {"from": "amount"}`,
+}
+
+// Each of these edits changes what the integration may do or who can trigger it, so its approval
+// must not carry over.
+func TestAnEditThatChangesWhatTheIntegrationMayDoNeedsAFreshApproval(t *testing.T) {
+	for name, tc := range map[string]struct{ base, edit []string }{
+		"the record's id in the description":  {nil, []string{"Invoice {{number}} for {{customer}}", "Invoice {{number}} for {{customer}} {{id}}"}},
+		"an action that inserts, not updates": {nil, []string{`"send": {"kind": "update"`, `"send": {"kind": "insert"`}},
+		"a higher maximum of a field written": {received, []string{`"max": 1000`, `"max": 100000`}},
+		"a longer text field sent out":        {nil, []string{`{"name": "customer", "type": "string"}`, `{"name": "customer", "type": "string", "max_length": 5000}`}},
+		"another option of a choice written":  {nil, []string{`"options": ["draft", "sent", "overdue", "paid"]`, `"options": ["draft", "sent", "overdue", "paid", "void"]`}},
+		"a field no longer required":          {nil, []string{`{"name": "total", "type": "number", "required": true}`, `{"name": "total", "type": "number"}`}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			i := newInv(t)
+			i.allow(i.stripe, i.shared)
+			patch := func(d Definition) {
+				t.Helper()
+				app := i.fresh(i.alice, i.shared, i.app)
+				expect(t, i.alice.do(http.MethodPatch, appPath(i.shared, app.ID, ""), map[string]any{"version": app.Version, "definition": d}), http.StatusOK)
+			}
+			base, err := variant(t, tc.base...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			patch(base)
+			expect(t, i.approve(i.owner, i.mustRequest(i.alice, i.shared, i.app).ID, i.stripe), http.StatusOK)
+			expect(t, i.tryPublish(i.alice, i.shared, i.fresh(i.alice, i.shared, i.app)), http.StatusOK)
+
+			edited, err := variant(t, append(slices.Clone(tc.base), tc.edit...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if base.contract("payments").Hash() == edited.contract("payments").Hash() {
+				t.Fatal("the edit left the contract's hash as it was")
+			}
+			patch(edited)
+			if st := i.status(i.alice, i.shared, i.app); st.Slots[0].Status != ApprovalNone {
+				t.Fatalf("the edit kept the approval: %+v", st.Slots[0])
+			}
+			expect(t, i.tryPublish(i.alice, i.shared, i.fresh(i.alice, i.shared, i.app)), http.StatusConflict)
+		})
+	}
+}
+
+// What is not an integration's business stays free: the wording of a field's options and of the
+// description, and the constraints of a field it never touches.
+func TestWordingAndOtherFieldsDoNotChangeTheContract(t *testing.T) {
+	hash := func(d Definition, err error) string {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.contract("payments").Hash()
+	}
+	h := hash(variant(t))
+	for name, pairs := range map[string][]string{
+		"an option's label":  {`"options": ["draft", "sent", "overdue", "paid"]}`, `"options": ["draft", "sent", "overdue", "paid"], "option_labels": {"paid": "Settled"}}`},
+		"the description":    {"Invoice {{number}} for {{customer}}", "Pay {{number}}, {{customer}}"},
+		"a field never used": {`{"name": "payment_id"`, `{"name": "notes", "type": "string", "max_length": 10}, {"name": "payment_id"`},
+	} {
+		if got := hash(variant(t, pairs...)); got != h {
+			t.Errorf("%s changed the contract", name)
+		}
+	}
+}
+
+// ----- review fixes: renewing a request -----
+
+func TestARenewedRequestIsANewOneAndAStaleDecisionNeverReachesIt(t *testing.T) {
+	i := newInv(t)
+	i.allow(i.stripe, i.shared)
+	first := i.mustRequest(i.alice, i.shared, i.app)
+	expect(t, i.approve(i.owner, first.ID, i.stripe), http.StatusOK)
+	expect(t, i.decide(i.owner, i.ws, first.ID, "revoke", nil), http.StatusOK)
+
+	renewed := i.mustRequest(i.alice, i.shared, i.app)
+	if renewed.ID == first.ID {
+		t.Fatalf("the renewal reused id %d", first.ID)
+	}
+	expect(t, i.approve(i.owner, renewed.ID, i.stripe), http.StatusOK)
+
+	// A revoke still on its way for the first id is refused and leaves the new approval.
+	rec := i.decide(i.owner, i.ws, first.ID, "revoke", nil)
+	expect(t, rec, http.StatusConflict)
+	if code(t, rec) != string(apierr.CodeAppIntegrationNotApproved) {
+		t.Fatalf("a stale revoke: %s", rec.Body.String())
+	}
+	expect(t, i.approve(i.owner, first.ID, i.stripe), http.StatusConflict)
+	if st := i.status(i.alice, i.shared, i.app); st.Slots[0].Status != ApprovalApproved {
+		t.Fatalf("the stale revoke reached the new approval: %+v", st.Slots[0])
+	}
+	if _, err := i.e.s.Binding(i.ctx(), i.app.ID, "payments"); err == nil {
+		t.Log("(not live yet: the draft isn't published)")
+	}
+	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusOK)
+
+	// The old row keeps its decision.
+	list := decode[ApprovalList](t, i.queue(i.owner, i.ws, "?status=revoked"))
+	if len(list.Approvals) != 1 || list.Approvals[0].ID != first.ID {
+		t.Fatalf("the revoked ones: %+v", list.Approvals)
+	}
+}
+
+func TestARenewedRequestQueuesByWhenItWasMade(t *testing.T) {
+	i := newInv(t)
+	first := i.mustRequest(i.alice, i.shared, i.app)
+	expect(t, i.decide(i.owner, i.ws, first.ID, "reject", nil), http.StatusOK)
+
+	// Another app asks while the first's request is turned down.
+	rec := i.alice.do(http.MethodPost, appsPath(i.shared, ""), map[string]any{"name": "Other", "definition": invoices(t)})
+	expect(t, rec, http.StatusCreated)
+	other := i.mustRequest(i.alice, i.shared, decode[App](t, rec))
+
+	renewed := i.mustRequest(i.alice, i.shared, i.app)
+	list := decode[ApprovalList](t, i.queue(i.owner, i.ws, ""))
+	if len(list.Approvals) != 2 || list.Approvals[0].ID != renewed.ID || list.Approvals[1].ID != other.ID || renewed.ID < other.ID {
+		t.Fatalf("the queue, newest first: %+v (renewed %d, other %d)", list.Approvals, renewed.ID, other.ID)
+	}
+}
+
+// ----- review fixes: the space an approval allowed goes with it -----
+
+func (i *inv) grants(integration int64) []int64 {
+	i.e.t.Helper()
+	rows, err := i.e.db.Query(`SELECT space_id FROM integration_spaces WHERE integration_id = ? ORDER BY space_id`, integration)
+	if err != nil {
+		i.e.t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			i.e.t.Fatal(err)
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func (i *inv) privateApp() App {
+	i.e.t.Helper()
+	rec := i.alice.do(http.MethodPost, appsPath(i.alicePrivate, ""), map[string]any{"name": "My invoices", "definition": invoices(i.e.t)})
+	expect(i.e.t, rec, http.StatusCreated)
+	return decode[App](i.e.t, rec)
+}
+
+func TestRevokingAnApprovalTakesBackTheSpaceItAllowed(t *testing.T) {
+	i := newInv(t)
+	app := i.privateApp()
+	req := i.mustRequest(i.alice, i.alicePrivate, app)
+	expect(t, i.decide(i.owner, i.ws, req.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
+	expect(t, i.tryPublish(i.alice, i.alicePrivate, app), http.StatusOK)
+	if got := i.grants(i.stripe); !slices.Equal(got, []int64{i.alicePrivate.ID}) {
+		t.Fatalf("grants after approving = %v", got)
+	}
+	if _, err := i.e.s.Binding(i.ctx(), app.ID, "payments"); err != nil {
+		t.Fatalf("the approved app has no binding: %v", err)
+	}
+
+	expect(t, i.decide(i.owner, i.ws, req.ID, "revoke", nil), http.StatusOK)
+	if got := i.grants(i.stripe); len(got) != 0 {
+		t.Fatalf("a grant is left after the revoke: %v", got)
+	}
+	if _, err := i.e.s.Binding(i.ctx(), app.ID, "payments"); !errors.Is(err, ErrIntegrationUnapproved) {
+		t.Fatalf("the app still has its binding: %v", err)
+	}
+	// Approving again, without allow_space, can't use the space: the admin has to say so again.
+	renewed := i.mustRequest(i.alice, i.alicePrivate, i.fresh(i.alice, i.alicePrivate, app))
+	rec := i.approve(i.owner, renewed.ID, i.stripe)
+	expect(t, rec, http.StatusConflict)
+	if code(t, rec) != string(apierr.CodeAppIntegrationSpaceNotAllowed) {
+		t.Fatalf("approving into a space that is no longer allowed: %s", rec.Body.String())
+	}
+}
+
+func TestRevokingAnApprovalLeavesASpaceAnAdminAllowed(t *testing.T) {
+	i := newInv(t)
+	i.allow(i.stripe, i.shared) // the admin's own grant, made in the integration's settings
+	req := i.mustRequest(i.alice, i.shared, i.app)
+	expect(t, i.decide(i.owner, i.ws, req.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
+	expect(t, i.decide(i.owner, i.ws, req.ID, "revoke", nil), http.StatusOK)
+	if got := i.grants(i.stripe); !slices.Equal(got, []int64{i.shared.ID}) {
+		t.Fatalf("the admin's grant after the revoke = %v", got)
+	}
+}
+
+func TestASpaceTwoApprovalsNeedIsKeptUntilTheLastIsRevoked(t *testing.T) {
+	i := newInv(t)
+	one := i.privateApp()
+	two := i.privateApp()
+	a := i.mustRequest(i.alice, i.alicePrivate, one)
+	expect(t, i.decide(i.owner, i.ws, a.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
+	b := i.mustRequest(i.alice, i.alicePrivate, two)
+	expect(t, i.approve(i.owner, b.ID, i.stripe), http.StatusOK)
+
+	expect(t, i.decide(i.owner, i.ws, a.ID, "revoke", nil), http.StatusOK)
+	if got := i.grants(i.stripe); !slices.Equal(got, []int64{i.alicePrivate.ID}) {
+		t.Fatalf("the other app's approval lost its space: %v", got)
+	}
+	expect(t, i.decide(i.owner, i.ws, b.ID, "revoke", nil), http.StatusOK)
+	if got := i.grants(i.stripe); len(got) != 0 {
+		t.Fatalf("a grant is left after the last revoke: %v", got)
+	}
+}
+
+func TestMovingOrDeletingAnAppTakesBackTheSpaceItsApprovalAllowed(t *testing.T) {
+	i := newInv(t)
+	app := i.privateApp()
+	req := i.mustRequest(i.alice, i.alicePrivate, app)
+	expect(t, i.decide(i.owner, i.ws, req.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
+	expect(t, i.alice.do(http.MethodPost, appPath(i.alicePrivate, app.ID, "/move"), map[string]any{"version": app.Version, "space_id": i.shared.ID}), http.StatusOK)
+	if got := i.grants(i.stripe); len(got) != 0 {
+		t.Fatalf("a grant is left after the app moved: %v", got)
+	}
+
+	other := i.privateApp()
+	req = i.mustRequest(i.alice, i.alicePrivate, other)
+	expect(t, i.decide(i.owner, i.ws, req.ID, "approve", map[string]any{"integration_id": i.stripe, "allow_space": true}), http.StatusOK)
+	if _, err := i.e.db.Exec(`DELETE FROM apps WHERE id = ?`, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := i.grants(i.stripe); len(got) != 0 {
+		t.Fatalf("a grant is left after the app was deleted: %v", got)
 	}
 }

@@ -3101,7 +3101,7 @@ workspace admin's choice, made when they approve the app's contract. See
   before the event applies. A field is set to `{"value": …}`, a literal of its type (a choice's is
   one of its options), or `{"from": …}`, one of `occurred_at`, `paid_at`, `amount`, `currency`,
   `receipt_url` and `payment_id`, which the server takes from the verified event; a set has exactly
-  one of the two keys (never both, never a `null` value or an empty `from`), and a literal is never
+  one of the two keys (never both, never a `null` value or `from`, never an empty `from`), and a literal is never
   blank; a source must be one the event has (`paid_at` and `receipt_url` only for `payment.succeeded`
   and `payment.refunded`) and the field must be able to hold it (a date, a number, a string long
   enough: 2048 characters for a link, 255 for an id; a choice for `currency` must offer every
@@ -3148,7 +3148,9 @@ Callers who may publish the app. `{"contract_hash"}`: asks for the approval of t
 for the slot, naming the hash they read. `404 app_integration_slot_unknown` if the draft doesn't
 declare the slot; `409 app_integration_contract_changed` if the draft's contract is no longer that
 hash. Asking again for a contract that is waiting or approved changes nothing; for one that was
-turned down or revoked, it asks anew. `200` with the approval (below).
+turned down or revoked, it asks anew: a new request, with a new `id` and its own place in the queue
+(the old one keeps its decision, and a decision on its id never reaches the new one). `200` with the
+approval (below).
 
 #### `GET /api/workspaces/{workspace}/integration-approvals`
 
@@ -3176,7 +3178,11 @@ integration_not_found`), its provider must do the slot's kind (`422 app_integrat
 be switched on (`409 app_integration_disabled`) and be allowed in the app's space
 (`409 app_integration_space_not_allowed`), unless `allow_space` is `true`, which also allows it there:
 an admin can't open another person's private space to allow it, and approving that app's request is
-how they consent to its use there (the space is the one the request is in, never another). `409
+how they consent to its use there (the space is the one the request is in, never another). The
+space stays allowed only while an approval needs it: when the last approval of an integration in that
+space is revoked (or its app moves or is deleted), the space it allowed goes with it, which an admin
+who can't see the space couldn't do themselves. A space an admin allowed in the integration's settings
+is never taken away by an approval. `409
 app_integration_not_pending` unless the request is waiting. `200` with the approval.
 
 #### `POST /api/workspaces/{workspace}/integration-approvals/{approval}/reject`

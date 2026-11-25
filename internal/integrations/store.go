@@ -599,7 +599,12 @@ func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces
 		}
 		var added, removed int64
 		for _, sp := range spaces {
-			if !slices.Contains(old.Spaces, sp) {
+			if slices.Contains(old.Spaces, sp) {
+				// Kept by the admin who sees it: it is theirs now, and no approval takes it away.
+				if _, err := tx.ExecContext(ctx, `UPDATE integration_spaces SET from_approval = 0 WHERE integration_id = ? AND space_id = ?`, id, sp); err != nil {
+					return err
+				}
+			} else {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO integration_spaces (integration_id, space_id, allowed_by, allowed_at)
 					VALUES (?, ?, ?, ?)`, id, sp, user, s.stamp(s.now())); err != nil {
 					return err

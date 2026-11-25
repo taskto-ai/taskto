@@ -173,6 +173,18 @@ export type AppsContract = {
   only_if: AppsContractRule[]
   links: AppsContractLink[]
   handlers: AppsContractHandler[]
+  fields: AppsContractField[]
+}
+
+export type AppsContractField = {
+  name: string
+  type: string
+  required?: boolean
+  required_when?: AppsRule
+  max_length?: number
+  min?: number
+  max?: number
+  options?: string[]
 }
 
 export type AppsContractHandler = {
@@ -182,8 +194,10 @@ export type AppsContractHandler = {
 
 export type AppsContractLink = {
   action: string
+  action_kind: string
   amount_field: string
   describes: string[]
+  describes_id: boolean
   currency?: string
   currency_field?: string
   currency_options?: string[]

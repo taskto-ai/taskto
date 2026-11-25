@@ -1361,3 +1361,37 @@ func TestCheckOfARemovedIntegrationIsNotFound(t *testing.T) {
 	expect(t, owner.do(http.MethodDelete, one, nil), http.StatusNoContent)
 	expectCode(t, owner.do(http.MethodPost, one+"/check", nil), http.StatusNotFound, "integration_not_found")
 }
+
+// A space an approval allowed is the approval's until an admin who sees it keeps it in the
+// integration's settings; another person's private space, which they can't see, is left as it is.
+func TestAnAdminWhoKeepsAnApprovedSpaceMakesItTheirs(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	member := e.invite(owner, ws, "member@example.com", "member")
+	in := e.create(owner, ws, stripeBody("main"))
+	shared := e.sharedSpace(owner, ws, "Shop")
+	theirs := e.privateSpace(member, ws)
+	for _, sp := range []int64{shared, theirs} {
+		if _, err := e.db.Exec(`INSERT INTO integration_spaces (integration_id, space_id, from_approval) VALUES (?, ?, 1)`, in.ID, sp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spaces := wsPath(ws, fmt.Sprintf("integrations/%d/spaces", in.ID))
+	expect(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared}}), http.StatusOK)
+	var owned []int64
+	rows, err := e.db.Query(`SELECT space_id FROM integration_spaces WHERE integration_id = ? AND from_approval = 1`, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		owned = append(owned, id)
+	}
+	if len(owned) != 1 || owned[0] != theirs {
+		t.Fatalf("spaces still an approval's = %v, want only %d", owned, theirs)
+	}
+}
