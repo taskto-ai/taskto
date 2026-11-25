@@ -526,6 +526,10 @@ func (s *Service) Find(ctx context.Context, q DBTX, userID int64, kind Kind, key
 	return j, err
 }
 
+// Now is the scheduler's clock: what a feature decides "already past" against, so it agrees with
+// the worker (and with a test's fake clock).
+func (s *Service) Now() time.Time { return s.clock() }
+
 // Wake tells the worker, if it runs in this process, to look for due jobs now. Call it after the
 // transaction that scheduled a job has committed, for a job that is due already; the worker looks
 // by itself every Options.Poll.
@@ -672,7 +676,16 @@ func (s *Service) purge(ctx context.Context) error {
 
 // write runs fn in a transaction, which takes the write lock when it begins (package db).
 func (s *Service) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The transaction's own context is never cancelled. database/sql rolls a transaction back on a
+	// goroutine of its own when its context ends, and the connection stays busy until that has
+	// finished: the deferred Rollback below then answers sql.ErrTxDone at once, and a caller that
+	// closes the database or begins another write (a worker at shutdown) can't tell. Cancelling
+	// ctx still stops fn's statements, which take ctx themselves, and fn's error is rolled back here,
+	// before write returns. A BEGIN waiting for the write lock gives up after busy_timeout.
+	tx, err := s.db.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return err
 	}
@@ -684,6 +697,11 @@ func (s *Service) write(ctx context.Context, fn func(*sql.Tx) error) (err error)
 		}
 	}()
 	if err := fn(tx); err != nil {
+		return err
+	}
+	// Commit no longer sees the caller's cancellation (the transaction's context is detached): a
+	// caller that gave up is told so, and its writes are rolled back, not committed behind it.
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -919,6 +937,22 @@ func (s *Service) call(ctx context.Context, h Handler, j Job) (err error) {
 	return err
 }
 
+// Holds reports whether j, the job as a handler was given it, is still the claim that runs: the
+// job exists and is running under the same lease token, and the lease has not ended. A handler
+// that makes something other than a note of its own outcome asks it in the transaction that makes
+// it, which holds the write lock, and makes nothing if it does not: the job may have been
+// cancelled or rescheduled, or taken again by another claim, since the handler was called.
+func (s *Service) Holds(ctx context.Context, q DBTX, j Job) (bool, error) {
+	return s.holds(ctx, q, j, s.clock())
+}
+
+func (s *Service) holds(ctx context.Context, q DBTX, j Job, t time.Time) (holds bool, err error) {
+	err = q.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM scheduled_jobs WHERE id = ? AND state = 'running' AND lease = ? AND lease_until > ?)`,
+		j.ID, j.lease, stamp(t)).Scan(&holds)
+	return holds, err
+}
+
 // settle runs fn, the outcome of j's try, in a transaction, if j's claim still holds: the job is
 // running, under the same lease token, and the lease has not ended. Those are checked under the
 // write lock, together, so a try that ran past its lease changes nothing, whether or not another
@@ -927,10 +961,8 @@ func (s *Service) call(ctx context.Context, h Handler, j Job) (err error) {
 func (s *Service) settle(ctx context.Context, j Job, fn func(tx *sql.Tx, t time.Time) error) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
 		t := s.clock()
-		var holds bool
-		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS (SELECT 1 FROM scheduled_jobs WHERE id = ? AND state = 'running' AND lease = ? AND lease_until > ?)`,
-			j.ID, j.lease, stamp(t)).Scan(&holds); err != nil {
+		holds, err := s.holds(ctx, tx, j, t)
+		if err != nil {
 			return err
 		}
 		if !holds {

@@ -44,7 +44,7 @@ const Path = "/mcp"
 const maxBody = agenttools.MaxArgs + 64<<10
 
 // instructions are what a client tells its model about the server.
-const instructions = `TaskTo.AI: the knowledge base (Markdown documents in spaces) and the boards (cards in columns) of one workspace, as the user whose access token this is, with exactly their access. Start with list_spaces, for the tools that take a space_id. Documents are read with read_doc and changed with write_doc, passing the version read; cards are changed with the version last read.`
+const instructions = `TaskTo.AI: the knowledge base (Markdown documents in spaces) and the boards (cards in columns) of one workspace, as the user whose access token this is, with exactly their access. Start with list_spaces, for the tools that take a space_id. Documents are read with read_doc and changed with write_doc, move_doc, delete_doc and restore_doc (doc_history lists a document's commits), passing the version read; cards are changed with the version last read.`
 
 type callerKey struct{}
 
@@ -56,7 +56,7 @@ func New(version string, accounts *auth.Service, tools *agenttools.Service) http
 }
 
 // turnInstructions are what a turn's CLI tells its model about the server.
-const turnInstructions = `TaskTo.AI: the knowledge base (Markdown documents in spaces), the boards (cards in columns) and the personal apps of the workspace this conversation is in, as the user whose conversation it is, with exactly their access; and, when the server has it on, the user's own browser. Start with list_spaces: every other knowledge-base, board and app tool takes a space_id from it. Documents are read with read_doc and changed with write_doc, passing the version read; cards are changed with the version last read. After browser_help, end your turn: the user answers in the conversation.`
+const turnInstructions = `TaskTo.AI: the knowledge base (Markdown documents in spaces), the boards (cards in columns) and the personal apps of the workspace this conversation is in, as the user whose conversation it is, with exactly their access; and, when the server has it on, the user's own browser. Start with list_spaces: every other knowledge-base, board and app tool takes a space_id from it. Documents are read with read_doc and changed with write_doc, move_doc, delete_doc and restore_doc (doc_history lists a document's commits), passing the version read; cards are changed with the version last read. After browser_help, end your turn: the user answers in the conversation.`
 
 // Authorize returns whom a request is for, or refuses it with an *agenttools.Refusal.
 type Authorize func(*http.Request) (agenttools.Caller, error)

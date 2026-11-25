@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Personal access tokens are how a person's own agents (Claude Code, Codex, a script) reach
@@ -137,15 +138,47 @@ func (s *Service) TokenUser(ctx context.Context, raw string) (User, Token, error
 		return User{}, Token{}, err
 	}
 	if t.LastUsedAt == nil || *t.LastUsedAt <= stamp(now.Add(-tokenTouchEvery)) {
-		used := stamp(now)
-		if _, err := s.db.ExecContext(ctx, `UPDATE access_tokens SET last_used_at = ? WHERE id = ?`, used, t.ID); err != nil {
+		used, err := s.touchToken(ctx, u.ID, t, hashToken(raw), now)
+		if err != nil {
 			// The request can go ahead: last_used_at is a hint for the user, not a control.
 			slog.WarnContext(ctx, "auth: recording an access token's use", "token_id", t.ID, "err", err)
-		} else {
+		} else if used != "" {
 			t.LastUsedAt = &used
 		}
 	}
 	return u, t, nil
+}
+
+// touchToken advances t's last_used_at and records the use, in one transaction, and only when the
+// advance happens: at most once a minute for a token, whoever asks first, so the log has a row
+// per minute of use and not one per request. It returns the new time, or "" when another
+// request advanced it first, or when the row is no longer the token that was authenticated: an
+// id can be reused after a revocation, so the update also matches the token's hash, user and
+// workspace.
+func (s *Service) touchToken(ctx context.Context, user int64, t Token, hash string, now time.Time) (string, error) {
+	used := stamp(now)
+	var advanced bool
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE access_tokens SET last_used_at = ?
+			WHERE id = ? AND token_hash = ? AND user_id = ? AND workspace_id = ?
+			  AND (last_used_at IS NULL OR last_used_at <= ?)`,
+			used, t.ID, hash, user, t.WorkspaceID, stamp(now.Add(-tokenTouchEvery)))
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n == 0 {
+			return err
+		}
+		advanced = true
+		return audit.Record(ctx, tx, audit.Event{Workspace: t.WorkspaceID, Actor: user, Action: audit.AccessTokenUsed,
+			TargetType: audit.TargetAccessToken, Target: t.ID, TargetCreated: t.CreatedAt})
+	})
+	if err != nil || !advanced {
+		return "", err
+	}
+	return used, nil
 }
 
 // tokenRequest authenticates a request carrying an access token, for routes that accept
@@ -216,10 +249,14 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The only time the token is shown: the database keeps its hash.
-	writeJSON(w, http.StatusCreated, struct {
-		Token
-		Secret string `json:"token"`
-	}{t, token})
+	writeJSON(w, http.StatusCreated, TokenCreated{Token: t, Secret: token})
+}
+
+// TokenCreated is the reply that makes an access token: the token's record and its secret,
+// shown only now.
+type TokenCreated struct {
+	Token
+	Secret string `json:"token"`
 }
 
 func (s *Service) handleDeleteToken(w http.ResponseWriter, r *http.Request) {
@@ -229,11 +266,19 @@ func (s *Service) handleDeleteToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, err := s.db.ExecContext(r.Context(), `DELETE FROM access_tokens WHERE id = ? AND workspace_id = ? AND user_id = ?`,
-		id, m.WorkspaceID, u.ID)
-	if err == nil {
-		err = mustAffect(res, errNotFound)
-	}
+	err := s.write(r.Context(), func(tx *sql.Tx) error {
+		var created string
+		err := tx.QueryRowContext(r.Context(), `DELETE FROM access_tokens WHERE id = ? AND workspace_id = ? AND user_id = ? RETURNING created_at`,
+			id, m.WorkspaceID, u.ID).Scan(&created)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return audit.Record(r.Context(), tx, audit.Event{Workspace: m.WorkspaceID, Action: audit.AccessTokenRevoked,
+			TargetType: audit.TargetAccessToken, Target: id, TargetCreated: created})
+	})
 	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, apierr.CodeTokenNotFound, "token not found")
 		return
@@ -266,8 +311,13 @@ func (s *Service) createToken(ctx context.Context, workspaceID, userID int64, na
 		if err != nil {
 			return err
 		}
-		t.ID, err = res.LastInsertId()
-		return err
+		if t.ID, err = res.LastInsertId(); err != nil {
+			return err
+		}
+		// Neither the token nor its name: the name is typed by a person, and people paste
+		// tokens into such boxes. The id says which token it was.
+		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Actor: userID, Action: audit.AccessTokenCreated,
+			TargetType: audit.TargetAccessToken, Target: t.ID, TargetCreated: t.CreatedAt, Details: audit.Details{"expires": expires != nil}})
 	})
 	if err != nil {
 		return Token{}, "", err

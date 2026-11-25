@@ -146,7 +146,7 @@ func (c *Checker) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Name = &name
 	}
-	if err := c.updateShared(r.Context(), s.ID, req.Name, req.Archived, req.OfflineDownloads); err != nil {
+	if err := c.updateShared(r.Context(), s.WorkspaceID, s.ID, req.Name, req.Archived, req.OfflineDownloads); err != nil {
 		c.fail(w, r, err)
 		return
 	}
@@ -211,7 +211,7 @@ func (c *Checker) handleSetMemberRole(w http.ResponseWriter, r *http.Request) {
 	if !validRole(w, req.Role) {
 		return
 	}
-	if err := c.setMemberRole(r.Context(), s.ID, userID, req.Role); err != nil {
+	if err := c.setMemberRole(r.Context(), s.WorkspaceID, s.ID, userID, req.Role); err != nil {
 		c.fail(w, r, err)
 		return
 	}
@@ -227,7 +227,7 @@ func (c *Checker) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := c.removeMember(r.Context(), s.ID, userID); err != nil {
+	if err := c.removeMember(r.Context(), s.WorkspaceID, s.ID, userID); err != nil {
 		c.fail(w, r, err)
 		return
 	}

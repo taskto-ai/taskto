@@ -66,6 +66,9 @@
   --tt-success: var(--tt-link);
   --tt-warning: light-dark(#9a4700, #ffb04d);
 
+  /* A QR code is dark on light whatever the theme: a scanner reads it that way. */
+  --tt-qr-ground: light-dark(#ffffff, #ffffff);
+
   --tt-scrim: light-dark(rgba(17, 17, 16, 0.42), rgba(0, 0, 0, 0.6));
   /* Only what you are meant to press, and what floats, has a shadow: the buttons' short hard lift
      (the website's), and the soft one under a menu or a dialog. light-dark() takes colours only,
@@ -524,6 +527,7 @@ textarea {
 }
 
 .tt-topbar {
+  position: relative; /* the new-workspace form hangs from the bar */
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -646,6 +650,36 @@ textarea {
   box-shadow: var(--tt-shadow-pop);
   display: grid;
   gap: 0.6rem;
+}
+
+/* "New workspace" sits at the switcher's side, near the start of the bar, so its form is anchored
+   to the bar and not to its own button: from the bar's start edge, never wider than the screen,
+   in either text direction. On the screen for someone with no workspace, where there is no bar,
+   it hangs from the button, centred. */
+.tt-topbar .tt-new-workspace {
+  position: static;
+}
+
+.tt-new-workspace .tt-menu {
+  inset-inline-end: auto;
+  inset-inline-start: 0.5rem;
+  width: min(16rem, calc(100vw - 1rem));
+  box-sizing: border-box;
+}
+
+.tt-center .tt-new-workspace .tt-menu {
+  inset-inline-start: 50%;
+  translate: -50% 0;
+}
+
+[dir="rtl"] .tt-center .tt-new-workspace .tt-menu {
+  translate: 50% 0;
+}
+
+.tt-new-workspace summary {
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--tt-radius);
 }
 
 .tt-menu p {
@@ -1203,6 +1237,64 @@ button.tt-card[aria-current] {
 .tt-blocked {
   margin: 0;
   color: var(--tt-danger);
+}
+
+/* A card's due date (late ones in the danger colour) and labels, on the board and in the card. */
+.tt-due {
+  margin: 0;
+  color: var(--tt-muted);
+}
+
+.tt-due[data-overdue],
+input[data-overdue] {
+  color: var(--tt-danger);
+  font-weight: 600;
+}
+
+.tt-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding-inline: 0.5rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 999px;
+  background: var(--tt-accent-soft);
+  overflow-wrap: anywhere;
+}
+
+.tt-label .tt-icon-button {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.tt-label .tt-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.tt-planning {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-board-filters {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .tt-card-view {
@@ -2045,6 +2137,32 @@ fieldset {
   gap: 0.5rem;
 }
 
+.tt-qr {
+  display: grid;
+  place-items: center;
+  inline-size: 12.5rem;
+  block-size: 12.5rem;
+  max-inline-size: 100%;
+  border-radius: var(--tt-radius);
+  background: var(--tt-qr-ground);
+  color: var(--tt-muted);
+}
+
+.tt-qr img {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.tt-recovery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.35rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--tt-mono);
+}
+
 .tt-copy input {
   flex: 1;
   min-width: 0;
@@ -2525,7 +2643,8 @@ fieldset {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .tt-board[data-open="card"] > .tt-columns {
+  .tt-board[data-open="card"] > .tt-columns,
+  .tt-board[data-open="card"] > .tt-board-filters {
     display: none;
   }
 
@@ -3130,6 +3249,132 @@ html[data-keyboard="open"] .tt-composer {
   white-space: nowrap;
 }
 
+/* The first-run checklist on an admin's Home: a panel of steps, each a row that wraps its actions
+   under its text on a phone. The check is drawn, and the state is also said in words. */
+.tt-checklist {
+  display: grid;
+  gap: 0.75rem;
+  min-inline-size: 0;
+  padding: 1rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-checklist p {
+  margin: 0;
+}
+
+.tt-checklist-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.tt-checklist-head > div {
+  flex: 1 1 16rem;
+  min-inline-size: 0;
+}
+
+.tt-checklist-head h2 {
+  margin: 0 0 0.25rem;
+}
+
+.tt-checklist-steps {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-checklist-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem 0.75rem;
+  padding-block: 0.75rem;
+  border-block-start: 1px solid var(--tt-line);
+}
+
+.tt-checklist-mark {
+  flex: none;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  margin-block-start: 0.1rem;
+  border: 1.5px solid var(--tt-line-strong);
+  border-radius: 50%;
+}
+
+.tt-checklist-mark[data-state="done"] {
+  background: var(--tt-accent);
+  border-color: var(--tt-accent-edge);
+}
+
+.tt-checklist-mark[data-state="done"]::after {
+  content: "";
+  display: block;
+  inline-size: 0.3rem;
+  block-size: 0.6rem;
+  margin-block: 0.1rem 0;
+  margin-inline: auto;
+  border: solid var(--tt-on-accent);
+  border-block-start-width: 0;
+  border-inline-start-width: 0;
+  border-block-end-width: 2px;
+  border-inline-end-width: 2px;
+  transform: rotate(45deg);
+}
+
+/* The check's long stroke is on the inline-end side, so it turns the other way when that is left. */
+.tt-checklist-mark[data-state="done"]:dir(rtl)::after {
+  transform: rotate(-45deg);
+}
+
+.tt-checklist-mark[data-state="skipped"] {
+  border-style: dashed;
+}
+
+.tt-checklist-text {
+  flex: 1 1 14rem;
+  min-inline-size: 0;
+}
+
+.tt-checklist-text h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+  font-size: 1rem;
+}
+
+.tt-checklist-state {
+  font-family: var(--tt-font);
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--tt-muted);
+}
+
+.tt-checklist-state[data-state="done"] {
+  color: var(--tt-link);
+}
+
+.tt-checklist-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  /* Under the text on a phone, in line with it from there up: the check's width and its gap. */
+  margin-inline-start: 2rem;
+}
+
+@media (min-width: 40rem) {
+  .tt-checklist-actions {
+    margin-inline-start: 0;
+  }
+}
+
 /* Home: widgets in a grid that is one column on a phone, and wider widgets take more of a row on
    larger screens. Each widget is a card; its body is bounded and scrolls, so one can't take the page. */
 .tt-widgets {
@@ -3481,4 +3726,47 @@ html[data-keyboard="open"] .tt-composer {
 
 .tt-installed {
   max-inline-size: 42rem;
+}
+
+.tt-audit-filters {
+  margin-block-end: 0.75rem;
+}
+
+.tt-audit-when {
+  display: grid;
+  justify-items: end;
+  gap: 0.1rem;
+  text-align: end;
+}
+
+.tt-audit-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem 0.9rem;
+  margin: 0;
+}
+
+.tt-audit-details div {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.tt-audit-details dt::after {
+  content: ":";
+}
+
+.tt-audit-details dd {
+  margin: 0;
+}
+
+.tt-storage-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-block-start: 0.25rem;
+}
+
+.tt-storage-meter progress {
+  inline-size: 100%;
+  max-inline-size: 24rem;
 }

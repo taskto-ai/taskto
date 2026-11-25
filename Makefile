@@ -1,10 +1,16 @@
-.PHONY: check lint fmt build dev-server dev-web install agent-it dictation-e2e browser-handover-e2e
+.PHONY: check lint fmt build dev-server dev-web install agent-it dictation-e2e browser-handover-e2e web-e2e
 
 PNPM ?= pnpm
 # golangci-lint is pinned in tools/go.mod, apart from the app's dependencies.
 GOLANGCI_LINT = go tool -modfile=tools/go.mod golangci-lint
 
-# Everything CI checks, except the secret scan and the agent integration tests.
+# Runs Go and TypeScript lint, the Go tests, the translation check, and the web and agent
+# builds and tests. CI also runs the reference scan, ShellCheck and a standalone Go build.
+# It leaves out the separate CI jobs that need more than a checkout: the secret scan
+# (gitleaks), the agent runtime integration tests (`make agent-it`), the CLI isolation tests
+# (root, in a container), the worker network test (privileged Docker), the backup
+# integration tests, and the agent browser's tests against a real Chromium
+# (.github/workflows/browser.yml).
 check: lint
 	go test ./...
 	$(PNPM) --filter @taskto/web run i18n
@@ -27,6 +33,15 @@ fmt:
 agent-it:
 	$(PNPM) --filter @taskto/agent build
 	TASKTO_AGENT_IT=1 go test -count=1 ./internal/agentrt/ ./internal/providers/ ./cmd/taskto/
+
+# The web app's end to end tests (web/e2e/app/, docs/web-e2e.md): Playwright's Chromium against
+# the built server on a fresh data directory, for each scenario. No agent, no model, no network
+# beyond the browser's download. CI runs them on every pull request. A failing scenario leaves
+# its trace and a screenshot in web/e2e-results/ (`pnpm --filter @taskto/web exec playwright
+# show-trace <trace.zip>`); TASKTO_WEB_E2E_BIN runs another binary than bin/taskto.
+web-e2e: build
+	$(PNPM) --filter @taskto/web exec playwright install chromium
+	$(PNPM) --filter @taskto/web run e2e
 
 # Dictation end to end (web/e2e/dictation.e2e.mjs): the server with the web app and the real
 # local model (about 700 MB, downloaded on first use; TASKTO_DICTATION_IT_CACHE keeps it), and

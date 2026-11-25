@@ -278,7 +278,8 @@ func TestAppToolsKeepToTheirUsersRoles(t *testing.T) {
 func TestAgentEditsOnlyTheDraft(t *testing.T) {
 	w := newWorld(t)
 	for _, d := range Definitions() {
-		if strings.Contains(d.Name, "publish") || strings.Contains(d.Name, "rollback") || strings.Contains(d.Name, "release") {
+		// Reading the releases is for diagnosis; nothing that publishes or rolls back is.
+		if strings.Contains(d.Name, "publish") || strings.Contains(d.Name, "rollback") || (strings.Contains(d.Name, "release") && !d.ReadOnly) {
 			t.Fatalf("the agent has a tool to %s", d.Name)
 		}
 	}

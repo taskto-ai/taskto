@@ -3,12 +3,12 @@
 // this tab's state and nowhere else (no storage, no log), so leaving the tab forgets it.
 
 import { type FormEvent, useState } from 'react'
-import { api, type Token, ws } from '../api'
+import { api, type Token, type TokenCreated, ws } from '../api'
 import { type Key, type T, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Alert, ConfirmButton, CopyButton, day, useAction } from './parts'
 
-type Made = Token & { token: string }
+type Made = TokenCreated
 
 // What "Expires" offers, in days; null never expires.
 const EXPIRY: { days: number | null; label: Key }[] = [

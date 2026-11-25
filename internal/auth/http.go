@@ -12,9 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Routes mounts the account endpoints on mux. docs/api.md describes them.
@@ -26,6 +28,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/logout", refuseTokens(s.handleLogout))
 	mux.Handle("GET /api/me", s.RequireUser(http.HandlerFunc(s.handleMe)))
 	mux.Handle("PATCH /api/me", s.RequireUser(http.HandlerFunc(s.handleUpdateMe)))
+	mux.Handle("POST /api/workspaces", s.RequireUser(http.HandlerFunc(s.handleCreateWorkspace)))
 	mux.Handle("PATCH /api/workspaces/{workspace}", s.RequireAdmin(http.HandlerFunc(s.handleUpdateWorkspace)))
 
 	// An access token may read who the workspace's members are, to assign cards; the rest
@@ -43,6 +46,8 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/workspaces/{workspace}/tokens/{token}", s.RequireMember(http.HandlerFunc(s.handleDeleteToken)))
 
 	s.passwordRoutes(mux)
+	s.sessionRoutes(mux)
+	s.twoFactorRoutes(mux)
 	s.ssoRoutes(mux)
 }
 
@@ -52,24 +57,45 @@ const (
 	maxEmail   = 254
 )
 
-// me is the reply of GET /api/me, and of the calls that log someone in.
-type me struct {
-	User       meUser       `json:"user"`
-	Workspaces []Membership `json:"workspaces"`
+// Me is the reply of GET /api/me, and of the calls that log someone in.
+type Me struct {
+	User       MeUser       `json:"user"`
+	Workspaces []Membership `json:"workspaces" apitypes:"nonnull"`
+	// CanCreateWorkspace is whether POST /api/workspaces would let this user in, under the
+	// operator's setting: the web app offers "New workspace" only then.
+	CanCreateWorkspace bool `json:"can_create_workspace"`
+	// IsOperator is whether the user is an admin of the workspace the server's setup made: only
+	// then does the web app show what belongs to the whole server (backups, email).
+	IsOperator bool `json:"is_operator"`
 }
 
 func (s *Service) writeMe(w http.ResponseWriter, r *http.Request, status int, u User) {
-	ws, err := s.workspacesOf(r.Context(), u.ID)
+	reply, err := s.meOf(r, u)
 	if err != nil {
 		serverError(w, r, err)
 		return
+	}
+	writeJSON(w, status, reply)
+}
+
+func (s *Service) meOf(r *http.Request, u User) (Me, error) {
+	ws, err := s.workspacesOf(r.Context(), u.ID)
+	if err != nil {
+		return Me{}, err
 	}
 	locale, err := s.UserLocale(r.Context(), u.ID)
 	if err != nil {
-		serverError(w, r, err)
-		return
+		return Me{}, err
 	}
-	writeJSON(w, status, me{User: meUser{User: u, Locale: locale}, Workspaces: ws})
+	can, err := s.mayCreateWorkspace(r.Context(), s.db, u.ID)
+	if err != nil {
+		return Me{}, err
+	}
+	operator, err := s.IsOperator(r.Context(), u.ID)
+	if err != nil {
+		return Me{}, err
+	}
+	return Me{User: MeUser{User: u, Locale: locale}, Workspaces: ws, CanCreateWorkspace: can, IsOperator: operator}, nil
 }
 
 func (s *Service) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +172,40 @@ func (s *Service) handleSetup(w http.ResponseWriter, r *http.Request) {
 	s.writeMe(w, r, http.StatusCreated, u)
 }
 
+// handleCreateWorkspace creates a workspace with the caller as its first admin, if the
+// operator's setting lets them, and answers like GET /api/me with the new one added, and
+// its membership as "workspace".
+func (s *Service) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
+	u, _ := UserFrom(r.Context())
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if !validName(name) {
+		writeError(w, http.StatusBadRequest, apierr.CodeWorkspaceNameLength,
+			fmt.Sprintf("a workspace name of 1 to %d characters is required", maxNameLen), apierr.Params{"max": maxNameLen})
+		return
+	}
+	m, err := s.createWorkspace(r.Context(), u.ID, name)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	slog.Info("workspace created", "workspace_id", m.WorkspaceID, "user_id", u.ID)
+	reply, err := s.meOf(r, u)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, struct {
+		Workspace Membership `json:"workspace"`
+		Me
+	}{m, reply})
+}
+
 func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if s.opts.DisablePasswordLogin {
 		passwordLoginDisabled(w)
@@ -194,6 +254,12 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// An account made by signing in with a provider has no password: it fails like a wrong one.
 	if !known || hash == "" {
 		s.hasher.burn(r.Context(), req.Password)
+		// The address typed is never recorded: it may be a password typed in the wrong box.
+		reason := "unknown_account"
+		if known {
+			reason = "no_password"
+		}
+		s.loginFailed(r, u.ID, reason)
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
 		return
 	}
@@ -210,18 +276,35 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !match {
+		s.loginFailed(r, u.ID, "wrong_password")
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
 		return
 	}
 	refund()
+	s.at("password-verified")
 
-	// The new session first, then drop the one the browser had: a failure in between
-	// leaves the user signed in rather than signed out.
-	token, err := s.newSession(r.Context(), u.ID)
+	// What the password earns is decided in one transaction that checks the hash is still the
+	// one that matched (a change or reset meanwhile ended the sessions and challenges the old
+	// password could make) and reads the two-factor state: a user with it on gets no session
+	// yet, but a challenge, which only the second step (twofactor.go) accepts, and the
+	// browser's own session is left as it is.
+	out, err := s.passwordSignIn(r.Context(), u.ID, hash)
+	if errors.Is(err, errPasswordChanged) {
+		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
+		return
+	}
 	if err != nil {
 		serverError(w, r, err)
 		return
 	}
+	if out.challenge != "" {
+		writeChallenge(w, out)
+		return
+	}
+
+	// The new session first, then drop the one the browser had: a failure in between
+	// leaves the user signed in rather than signed out.
+	token := out.session
 	if old := s.sessionToken(r); old != "" {
 		if err := s.deleteSession(r.Context(), old); err != nil {
 			// The new session works; the old one just lives until it expires.
@@ -232,9 +315,21 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.writeMe(w, r, http.StatusOK, u)
 }
 
+// loginFailed records a refused password login: of the user, or of no one when the account
+// doesn't exist. Attempts the limiters turn away aren't recorded: the log would fill at the rate
+// an attacker chooses.
+func (s *Service) loginFailed(r *http.Request, userID int64, reason string) {
+	// No actor: the person at the keyboard isn't known to be the account's owner, who is the target.
+	e := audit.Event{Action: audit.LoginFailed, Details: audit.Details{"method": "password", "reason": reason}}
+	if userID != 0 {
+		e.TargetType, e.Target = audit.TargetUser, userID
+	}
+	audit.Log(r.Context(), s.db, e)
+}
+
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if token := s.sessionToken(r); token != "" {
-		if err := s.deleteSession(r.Context(), token); err != nil {
+		if err := s.endSession(r.Context(), token); err != nil {
 			serverError(w, r, err)
 			return
 		}
@@ -254,6 +349,13 @@ func (s *Service) handleMembers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		serverError(w, r, err)
 		return
+	}
+	// Who has two-factor login on is for the admins, who can clear it, to see.
+	if m.Role == RoleAdmin {
+		if err := s.markTwoFactor(r.Context(), m.WorkspaceID, members); err != nil {
+			serverError(w, r, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string][]Member{"members": members})
 }
@@ -332,10 +434,13 @@ func (s *Service) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The only time the token is shown: the database keeps its hash.
-	writeJSON(w, http.StatusCreated, struct {
-		Invite
-		Token string `json:"token"`
-	}{inv, token})
+	writeJSON(w, http.StatusCreated, InviteCreated{Invite: inv, Token: token})
+}
+
+// InviteCreated is the reply that makes an invite: the invite and its token, shown only now.
+type InviteCreated struct {
+	Invite
+	Token string `json:"token"`
 }
 
 func (s *Service) handleDeleteInvite(w http.ResponseWriter, r *http.Request) {
@@ -432,9 +537,18 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var status int
 	var code apierr.Code
 	var msg string
+	var rate *workspaceRateError
 	switch {
 	case errors.Is(err, errSetupDone):
 		status, code, msg = http.StatusConflict, apierr.CodeSetupDone, errSetupDone.Error()
+	case errors.Is(err, errCreationRefused):
+		status, code, msg = http.StatusForbidden, apierr.CodeWorkspaceCreation, errCreationRefused.Error()
+	case errors.Is(err, errWorkspaceLimit):
+		writeError(w, http.StatusForbidden, apierr.CodeWorkspaceLimit, err.Error(), apierr.Params{"max": maxWorkspacesPerUser})
+		return
+	case errors.As(err, &rate):
+		limited(w, rate.wait, apierr.CodeTooManyWorkspaces, rate.Error())
+		return
 	case errors.Is(err, errNotFound):
 		status, code, msg = http.StatusNotFound, apierr.CodeNotFound, "not found"
 	case errors.Is(err, errLastAdmin):
@@ -486,9 +600,18 @@ func normalizeEmail(s string) (string, bool) {
 	return s, err == nil && addr.Address == s
 }
 
+// validName reports whether s is 1 to maxNameLen characters with none that could hide or
+// reorder what a reader sees: no control character (NUL, a newline), no line or paragraph
+// separator and no bidirectional override or isolate.
 func validName(s string) bool {
 	n := utf8.RuneCountInString(s)
-	return n >= 1 && n <= maxNameLen
+	if n < 1 || n > maxNameLen {
+		return false
+	}
+	return !strings.ContainsFunc(s, func(r rune) bool {
+		return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' ||
+			(r >= '\u202a' && r <= '\u202e') || (r >= '\u2066' && r <= '\u2069')
+	})
 }
 
 // readJSON decodes the request body into v, strictly: unknown fields and trailing data

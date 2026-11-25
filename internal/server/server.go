@@ -18,14 +18,18 @@ import (
 	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
+	"taskto.ai/taskto/internal/checklist"
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/dictation"
+	"taskto.ai/taskto/internal/export"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/mail"
 	"taskto.ai/taskto/internal/mcpserver"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/quota"
+	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/webui"
 )
@@ -61,6 +65,14 @@ type Options struct {
 	Browser *agentbrowser.Service
 	// Notifications serves the notification inbox and Web Push subscriptions; nil leaves them out.
 	Notifications *notifications.Service
+	// Quota serves the usage routes and checks the apps' uploads against the storage quotas; the
+	// knowledge base's own check is set on its Store (knowledge.Store.SetQuota). nil leaves the
+	// routes out and the uploads unchecked.
+	Quota *quota.Service
+	// Scheduler is the general scheduler, whose reminders' handlers the command registered (boards'
+	// EnableReminders): the HTTP routes of cards schedule on it too, so a card dated on the web
+	// keeps its reminders like one dated by the agent. nil makes none.
+	Scheduler *schedule.Service
 	// Mail is the server's outgoing email (docs/install.md#email); nil means the operator set up
 	// none. The admins' routes for it are there either way, and say so.
 	Mail *mail.Service
@@ -71,6 +83,9 @@ type Options struct {
 	// in DataDir (none if that is empty), so its caller can run its maintenance
 	// (apps.Service.Maintain) for as long as it serves.
 	AppsReady func(*apps.Service)
+	// Export sets the limits of a person's export of their own data (docs/api.md#export-my-data);
+	// the zero value is the defaults. Tests shorten them.
+	Export export.Options
 	// BackupDataDir is the data directory whose scheduled backups /healthz/backup and the
 	// admins' backup route report (internal/backup.Status). Empty reports none.
 	BackupDataDir string
@@ -88,16 +103,37 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	mux.Handle("GET /healthz/backup", backupHealth(opts.BackupDataDir))
 	accounts := auth.New(sqlDB, opts.Auth)
 	accounts.Routes(mux)
-	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireAdmin(backupStatus(opts.BackupDataDir)))
-	mux.Handle("GET /api/workspaces/{workspace}/updates", accounts.RequireAdmin(updateStatus(version, opts.UpdateStatusDir)))
+	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireOperator(backupStatus(opts.BackupDataDir)))
+	mux.Handle("GET /api/workspaces/{workspace}/updates", accounts.RequireOperator(updateStatus(version, opts.UpdateStatusDir)))
+	auditRoutes(mux, accounts, sqlDB)
 	mailRoutes(mux, accounts, opts.Mail, newMailTestGate(opts.MailTestCooldown, time.Now))
+	checklist.New(sqlDB, checklist.Options{
+		Email: opts.Mail.Configured,
+		Backups: func() (bool, error) {
+			_, ok, err := readBackupStatus(opts.BackupDataDir)
+			return ok, err
+		},
+	}).Routes(mux, accounts)
 	spaces := access.New(sqlDB, accounts)
 	spaces.Routes(mux)
 	boardSvc := boards.New(sqlDB, spaces)
+	if opts.Scheduler != nil {
+		// The handlers are the command's; this service only schedules, and follows spaces that are
+		// archived or brought back, and people who are added to a space or a workspace (whose
+		// reminders the schema dropped when they left).
+		boardSvc.WithScheduler(opts.Scheduler)
+		spaces.OnArchiveChange(boardSvc.SyncSpace)
+		spaces.OnMemberAdded(boardSvc.SyncSpaceMember)
+		accounts.OnMemberAdded(boardSvc.SyncWorkspaceMember)
+	}
 	boardSvc.Routes(mux)
 	// The apps' routes list and retry their effects and check the targets they name; the
 	// server's own worker, which does them, is the one the command starts (apps.StartOutbox).
 	appsService := apps.New(sqlDB, spaces).WithFiles(opts.DataDir).WithPlatform(apps.Platform{Boards: boardSvc})
+	if opts.Quota != nil {
+		appsService.WithQuota(opts.Quota)
+		opts.Quota.Routes(mux, accounts)
+	}
 	appsService.Routes(mux)
 	appsService.HomeRoutes(mux, accounts)
 	appsService.TemplateRoutes(mux, accounts)
@@ -107,12 +143,18 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	if opts.Notifications != nil {
 		opts.Notifications.Routes(mux, accounts)
 	}
+	var kb *knowledge.Store
 	if opts.Search != nil {
-		opts.Search.Knowledge().Routes(mux, spaces)
+		kb = opts.Search.Knowledge()
+		kb.Routes(mux, spaces)
 		opts.Search.Routes(mux, accounts, spaces)
 	} else if opts.DataDir != "" {
-		knowledge.New(opts.DataDir, opts.Knowledge).Routes(mux, spaces)
+		kb = knowledge.New(opts.DataDir, opts.Knowledge)
+		kb.Routes(mux, spaces)
 	}
+	// A person's export of their own data reads through the same knowledge base, boards, apps and
+	// conversations the rest of the server uses, and writes nothing.
+	export.New(sqlDB, spaces, kb, boardSvc, appsService, opts.Conversations, opts.Export).Routes(mux, accounts)
 	if opts.Providers != nil {
 		opts.Providers.Routes(mux, accounts)
 	}
@@ -151,7 +193,8 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	// Every state-changing /api request, of any route, goes through the CSRF checks, and every
 	// /api request that names the account it is for (the offline code does, on every request:
 	// downloads, revalidation, the queue) is refused for any other session.
-	return auth.CSRF(expectAccount(spaces, mux), append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...), nil
+	// The audit log's events carry the client's address, found as the login limits find it.
+	return accounts.ClientAddr(auth.CSRF(expectAccount(spaces, mux), append(slices.Clone(knowledge.RawBodyRoutes), apps.RawBodyRoutes...)...)), nil
 }
 
 // expectAccount applies access.Checker.ExpectUser to every /api request, so a client that names

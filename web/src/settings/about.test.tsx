@@ -7,7 +7,13 @@ import { setPreferences } from '../i18n'
 import { type Call, fakeFetch } from '../test/fakes'
 import { SettingsPage } from './SettingsPage'
 
-const me: Me = { user: { id: 1, email: 'owner@example.com', name: 'Owner' }, workspaces: [] }
+const me: Me = {
+  user: { id: 1, email: 'owner@example.com', name: 'Owner' },
+  workspaces: [],
+  can_create_workspace: false,
+  is_operator: true,
+}
+const notOperator: Me = { ...me, is_operator: false }
 const admin: Workspace = { id: 1, name: 'Home', role: 'admin' }
 const member: Workspace = { id: 1, name: 'Home', role: 'member' }
 
@@ -223,4 +229,12 @@ test("members don't see updates, and don't ask for them", async () => {
   await screen.findByText(/Nothing this workspace uses now asks for a credit/)
   expect(screen.queryByRole('heading', { name: 'Updates' })).toBeNull()
   expect(calls.filter((c) => c.path === '/api/workspaces/1/updates')).toEqual([])
+})
+
+test("an admin of a workspace they made, who doesn't run the server, doesn't see backups or ask for them", async () => {
+  const calls = fakeFetch({})
+  render(<SettingsPage me={notOperator} workspace={admin} tab="about" />)
+  await screen.findByText(/Nothing this workspace uses now asks for a credit/)
+  expect(screen.queryByRole('heading', { name: 'Backups' })).toBeNull()
+  expect(asked(calls)).toEqual([])
 })

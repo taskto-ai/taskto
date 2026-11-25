@@ -1,6 +1,6 @@
 // Package boards is the to-do side of TaskTo.AI: boards of cards in columns, each card
-// with an assignee (a person or the agent), a blocked state, links to docs and
-// conversations, and a comment thread.
+// with an assignee (a person or the agent), a blocked state, a due date, labels, links to
+// docs and conversations, and a comment thread.
 //
 // A board lives in a space, and access to it is access to the space, as package access
 // answers it:
@@ -27,6 +27,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/schedule"
 )
 
 // Column is where a card is on its board.
@@ -130,16 +131,20 @@ type Card struct {
 	// Blocked is set when the card has a blocked reason or cards it waits for.
 	Blocked       bool    `json:"blocked"`
 	BlockedReason *string `json:"blocked_reason"`
-	BlockedBy     []int64 `json:"blocked_by"`
+	BlockedBy     []int64 `json:"blocked_by" apitypes:"nonnull"`
 	// Docs are knowledge-base paths in the board's space; Conversations are conversation
 	// IDs. Neither is checked to exist.
-	Docs          []string `json:"docs"`
-	Conversations []string `json:"conversations"`
-	Version       int64    `json:"version"`
-	CreatedAt     string   `json:"created_at"`
-	CreatedBy     *Author  `json:"created_by"`
-	UpdatedAt     string   `json:"updated_at"`
-	UpdatedBy     *Author  `json:"updated_by"`
+	Docs          []string `json:"docs" apitypes:"nonnull"`
+	Conversations []string `json:"conversations" apitypes:"nonnull"`
+	// Due is a calendar date, YYYY-MM-DD, with no time or time zone; nil for none.
+	Due *string `json:"due"`
+	// Labels are the card's free-text labels, normalized (NFC, case folded), sorted; never nil.
+	Labels    []string `json:"labels" apitypes:"nonnull"`
+	Version   int64    `json:"version"`
+	CreatedAt string   `json:"created_at"`
+	CreatedBy *Author  `json:"created_by"`
+	UpdatedAt string   `json:"updated_at"`
+	UpdatedBy *Author  `json:"updated_by"`
 }
 
 // Comment is a message in a card's thread.
@@ -149,12 +154,22 @@ type Comment struct {
 	Author    *Author `json:"author"`
 	Body      string  `json:"body"`
 	CreatedAt string  `json:"created_at"`
+	// Mentions are the people the body mentions (`@[label](user:ID)`) whom the reader may see in
+	// the space, by ID, with the name the server has for them: the name to show, since the label
+	// in the text is whatever its writer typed. Never nil.
+	Mentions []MentionedPerson `json:"mentions" apitypes:"nonnull"`
+}
+
+// MentionedPerson is a person a comment mentions, as the server names them.
+type MentionedPerson struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
 
 // Thread is a card with its comments, oldest first.
 type Thread struct {
 	Card
-	Comments []Comment `json:"comments"`
+	Comments []Comment `json:"comments" apitypes:"nonnull"`
 }
 
 var (
@@ -198,6 +213,8 @@ func invalidAs(code apierr.Code, params apierr.Params, msg string) error {
 type Service struct {
 	db     *sql.DB
 	access *access.Checker
+	// sched schedules the due-date reminders (reminders.go); nil makes none.
+	sched *schedule.Service
 }
 
 // New returns the boards service over sqlDB, which must be migrated.

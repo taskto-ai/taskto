@@ -8,7 +8,9 @@ import { DEFAULT_LOCALE, LOCALES, localeName, setPreferences, useT } from '../i1
 import { useLoad } from '../load'
 import { Alert, useAction } from './parts'
 
-export function GeneralTab({ workspace, email }: { workspace: Workspace; email: string }) {
+// `operator`: they run the server, so the server's own email is theirs to see; other admins' routes for it
+// answer 403.
+export function GeneralTab({ workspace, email, operator }: { workspace: Workspace; email: string; operator: boolean }) {
   const t = useT()
   const [locale, setLocale] = useState(workspace.locale || DEFAULT_LOCALE)
   // The workspace's value from the server, when it comes again.
@@ -65,7 +67,7 @@ export function GeneralTab({ workspace, email }: { workspace: Workspace; email: 
           </div>
         </form>
       </section>
-      <MailPanel workspace={workspace.id} email={email} />
+      {operator && <MailPanel workspace={workspace.id} email={email} />}
     </div>
   )
 }

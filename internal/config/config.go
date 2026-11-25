@@ -20,7 +20,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"taskto.ai/taskto/internal/audit"
 	"taskto.ai/taskto/internal/egress"
 	"taskto.ai/taskto/internal/mail"
 )
@@ -53,6 +55,10 @@ type Config struct {
 	// DisablePasswordLogin turns passwords off, for instances where everyone signs in with a
 	// provider. Needs SSOProviders.
 	DisablePasswordLogin bool
+	// WorkspaceCreation says who may create a workspace besides first-run setup: "admins"
+	// (the default; an admin of any existing workspace), "anyone" (every signed-in person) or
+	// "off" (nobody: the one workspace setup made, and no others). See WorkspaceCreationMode.
+	WorkspaceCreation string
 	// ProviderEgressWorkspace and ProviderEgressPersonal are the egress policies of the
 	// provider accounts workspaces' admins add and those any member adds for themselves: which
 	// addresses the server, and the agent runtime, may connect to when they call the
@@ -120,6 +126,12 @@ type Config struct {
 	// KBMaxUnversionedSize caps the bytes of each space's unversioned files, in bytes.
 	// Zero means the knowledge base's default.
 	KBMaxUnversionedSize int64
+	// StorageQuotaWorkspace caps what all of a workspace's spaces store together, in bytes
+	// (docs/quotas.md). Zero, the default, is unlimited.
+	StorageQuotaWorkspace int64
+	// StorageQuotaUser caps what each member's private space stores, in bytes. Zero, the
+	// default, is unlimited.
+	StorageQuotaUser int64
 	// SearchVectorCache is the most memory semantic search's vector cache may hold, in
 	// bytes. Zero means the search index's default; negative, "off", turns the cache off.
 	SearchVectorCache int64
@@ -151,6 +163,10 @@ type Config struct {
 	SMTPUsername     string
 	SMTPPasswordFile string
 	SMTPEgress       string
+
+	// AuditRetentionDays is how many days the audit log's events are kept (docs/audit.md). Zero
+	// means the default, 365; -1, "off" in the settings, keeps them for ever.
+	AuditRetentionDays int
 
 	// ConfigFile is the config file that was read, or "" if none was.
 	ConfigFile string
@@ -232,6 +248,19 @@ var settings = []setting{
 		usage: "turn password logins off, so everyone signs in with a single sign-on provider (needs -sso-providers)",
 		get:   func(c Config) string { return strconv.FormatBool(c.DisablePasswordLogin) },
 		set:   setBool(func(c *Config) *bool { return &c.DisablePasswordLogin }),
+	},
+	{
+		flag: "workspace-creation", env: "TASKTO_WORKSPACE_CREATION", key: "workspace_creation",
+		usage: "who may create a workspace: admins (default; an admin of any workspace), anyone (everyone signed in) or off",
+		get:   func(c Config) string { return c.WorkspaceCreationMode() },
+		set: func(c *Config, v string) error {
+			switch v {
+			case "admins", "anyone", "off":
+				c.WorkspaceCreation = v
+				return nil
+			}
+			return errors.New("must be admins, anyone or off")
+		},
 	},
 	{
 		flag: "provider-egress-workspace", env: "TASKTO_PROVIDER_EGRESS_WORKSPACE", key: "provider_egress_workspace",
@@ -382,7 +411,7 @@ var settings = []setting{
 	},
 	{
 		flag: "cli-proxy-listen", env: "TASKTO_CLI_PROXY_LISTEN", key: "cli_proxy_listen",
-		usage: "where the per-turn proxy listens (workspaces' shared CLI accounts, and TaskTo's tools for CLI turns), apart from the public address: host:port, or unix:/path for the CLI worker to relay (default: 127.0.0.1 on a free port with -cli-workers local; none with container)",
+		usage: "where the per-turn proxy listens (workspaces' shared CLI accounts, and TaskTo's tools for CLI turns), apart from the public address: host:port, or unix:/path for the CLI worker to relay (default: 127.0.0.1 on a free port with -cli-workers local or local-unsafe; none with container)",
 		get:   func(c Config) string { return c.CLIProxyListen },
 		set:   func(c *Config, v string) error { c.CLIProxyListen = v; return nil },
 	},
@@ -429,6 +458,18 @@ var settings = []setting{
 		set:   setSize(func(c *Config) *int64 { return &c.KBMaxUnversionedSize }),
 	},
 	{
+		flag: "storage-quota-workspace", env: "TASKTO_STORAGE_QUOTA_WORKSPACE", key: "storage_quota_workspace",
+		usage: "most each workspace may store in all its spaces (knowledge base and app photos), in bytes or with KiB, MiB or GiB (default: unlimited)",
+		get:   func(c Config) string { return formatSize(c.StorageQuotaWorkspace) },
+		set:   setSize(func(c *Config) *int64 { return &c.StorageQuotaWorkspace }),
+	},
+	{
+		flag: "storage-quota-user", env: "TASKTO_STORAGE_QUOTA_USER", key: "storage_quota_user",
+		usage: "most each member's private space may store (knowledge base and app photos), in bytes or with KiB, MiB or GiB (default: unlimited)",
+		get:   func(c Config) string { return formatSize(c.StorageQuotaUser) },
+		set:   setSize(func(c *Config) *int64 { return &c.StorageQuotaUser }),
+	},
+	{
 		flag: "search-vector-cache", env: "TASKTO_SEARCH_VECTOR_CACHE", key: "search_vector_cache",
 		usage: "most memory semantic search keeps vectors in, in bytes or with KiB, MiB or GiB, or off (default 1GiB)",
 		get: func(c Config) string {
@@ -471,6 +512,31 @@ var settings = []setting{
 		set:   func(c *Config, v string) error { c.AddonsDir = v; return nil },
 	},
 	{
+		flag: "audit-retention", env: "TASKTO_AUDIT_RETENTION", key: "audit_retention",
+		usage: "days the audit log's events are kept before they are removed, or off to keep them for ever (default 365)",
+		get: func(c Config) string {
+			switch {
+			case c.AuditRetentionDays < 0:
+				return "off"
+			case c.AuditRetentionDays == 0:
+				return ""
+			}
+			return strconv.Itoa(c.AuditRetentionDays)
+		},
+		set: func(c *Config, v string) error {
+			if v == "off" {
+				c.AuditRetentionDays = -1
+				return nil
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 36500 {
+				return fmt.Errorf("want a number of days from 1 to 36500, or off, got %q", v)
+			}
+			c.AuditRetentionDays = n
+			return nil
+		},
+	},
+	{
 		flag: "push-contact", env: "TASKTO_PUSH_CONTACT", key: "push_contact",
 		usage: "how browsers' push services can reach you, a mailto: or https: URL (default https://taskto.ai)",
 		get:   func(c Config) string { return c.PushContact },
@@ -482,6 +548,14 @@ var settings = []setting{
 			return nil
 		},
 	},
+}
+
+// WorkspaceCreationMode is who may create a workspace: "admins" when unset.
+func (c Config) WorkspaceCreationMode() string {
+	if c.WorkspaceCreation == "" {
+		return "admins"
+	}
+	return c.WorkspaceCreation
 }
 
 // SMTPSecurityMode is how the SMTP connection is secured, "starttls" when unset.
@@ -510,6 +584,18 @@ func (c Config) SMTPPortNumber() int {
 func (c Config) SMTPEgressPolicy() egress.Policy {
 	p, _ := egress.Parse(c.SMTPEgress)
 	return p
+}
+
+// AuditRetention is how long the audit log's events are kept: a year when unset, and zero, for
+// ever, when turned off.
+func (c Config) AuditRetention() time.Duration {
+	switch {
+	case c.AuditRetentionDays < 0:
+		return 0
+	case c.AuditRetentionDays == 0:
+		return audit.DefaultRetention
+	}
+	return time.Duration(c.AuditRetentionDays) * 24 * time.Hour
 }
 
 // LocalDictation is the local speech model, "off" included: parakeet-v3 when unset.

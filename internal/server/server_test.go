@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -11,6 +12,9 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/audit/audittest"
+	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/providers"
@@ -204,4 +208,42 @@ func TestSearchServesItsKnowledgeBase(t *testing.T) {
 			t.Errorf("GET %s = %d, want 401", p, rec.Code)
 		}
 	}
+}
+
+// TestAuditEventsCarryTheClientAddress runs a login through the whole server: the event holds the
+// address the request came from, and no one's password.
+func TestAuditEventsCarryTheClientAddress(t *testing.T) {
+	sqlDB := openDB(t)
+	if _, err := db.Migrate(context.Background(), sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	const token = "fake-setup-token-for-the-audit-test"
+	h := newHandler(t, sqlDB, Options{Auth: auth.Options{SetupToken: token, HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}}})
+	post := func(path string, body map[string]string) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+		r.RemoteAddr = "198.51.100.23:4444"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec
+	}
+	if rec := post("/api/setup", map[string]string{"email": "owner@example.com", "name": "Owner", "password": fakePassword,
+		"workspace_name": "Home", "setup_token": token}); rec.Code != http.StatusCreated {
+		t.Fatalf("setup = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post("/api/login", map[string]string{"email": "owner@example.com", "password": "fake-wrong-password"}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("login = %d", rec.Code)
+	}
+	rows, err := audit.List(context.Background(), sqlDB, audit.Filter{})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("events = %+v, %v", rows, err)
+	}
+	for _, r := range rows {
+		if r.ClientAddr == nil || *r.ClientAddr != "198.51.100.23" {
+			t.Errorf("%s: client address %v, want 198.51.100.23", r.Action, r.ClientAddr)
+		}
+	}
+	audittest.NoSecrets(t, sqlDB, map[string]string{"setup token": token, "password": fakePassword, "wrong password": "fake-wrong-password"})
 }

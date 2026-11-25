@@ -20,7 +20,8 @@ import { useLoad } from '../load'
 import { InstallPanel } from '../pwa/InstallPanel'
 import { Alert } from './parts'
 
-export function AboutTab({ workspace, admin }: { workspace: number; admin: boolean }) {
+// `operator`: an admin who runs the server, the only one who sees its backups.
+export function AboutTab({ workspace, operator }: { workspace: number; operator: boolean }) {
   // A server without dictation has nothing to credit for it: no error, no credits.
   const dictation = useLoad(
     () =>
@@ -54,8 +55,8 @@ export function AboutTab({ workspace, admin }: { workspace: number; admin: boole
           </ul>
         )}
       </section>
-      {admin && <UpdatesPanel workspace={workspace} />}
-      {admin && <BackupsPanel workspace={workspace} />}
+      {operator && <UpdatesPanel workspace={workspace} />}
+      {operator && <BackupsPanel workspace={workspace} />}
     </div>
   )
 }

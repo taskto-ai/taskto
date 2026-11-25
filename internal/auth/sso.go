@@ -24,6 +24,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
 )
 
 // Single sign-on through OpenID Connect (docs/sso.md).
@@ -554,12 +555,14 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		// The provider refused or the person declined. Its error and error_description are the
 		// provider's words, not ours: only a standard code is logged.
 		slog.InfoContext(r.Context(), "sso: the provider returned an error", "provider", c.cfg.ID, "error", oauthCode(e))
+		s.ssoFailed(r, c, "provider_error")
 		ssoFailure(w, apierr.CodeSSOFailed)
 		return
 	}
 	id, err := s.ssoExchange(r.Context(), c, pend, q.Get("code"))
 	if err != nil {
 		slog.WarnContext(r.Context(), "sso: the sign-in failed", "provider", c.cfg.ID, "failure", err.Error())
+		s.ssoFailed(r, c, "exchange_failed")
 		ssoFailure(w, apierr.CodeSSOFailed)
 		return
 	}
@@ -581,6 +584,7 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		} else {
 			slog.InfoContext(r.Context(), "sso: the login was refused", "provider", c.cfg.ID, "reason", string(code))
 		}
+		s.ssoFailed(r, c, string(code))
 		ssoFailure(w, code)
 		return
 	}
@@ -600,6 +604,13 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		next = "/w/" + strconv.FormatInt(s.ssoLanding(r.Context(), next, res.joined, res.accepted), 10) + "/conversations"
 	}
 	redirectSeeOther(w, next)
+}
+
+// ssoFailed records a refused single sign-on login. No one is known to be the actor: the
+// provider's identity isn't an account of ours until a login succeeds.
+func (s *Service) ssoFailed(r *http.Request, c *ssoClient, reason string) {
+	audit.Log(r.Context(), s.db, audit.Event{Action: audit.SSOLoginFailed,
+		Details: audit.Details{"provider": c.cfg.ID, "reason": reason}})
 }
 
 // ssoLanding is the workspace to open for a new account that joined joined (in the invites'
@@ -829,8 +840,12 @@ func (s *Service) ssoLogin(ctx context.Context, c *ssoClient, id ssoIdentity) (s
 			return err
 		}
 		token, err := s.insertSession(ctx, tx, u.ID)
+		if err != nil {
+			return err
+		}
 		res = ssoLoggedIn{user: u, token: token, joined: joined.workspaces, accepted: joined.invites}
-		return err
+		return audit.Record(ctx, tx, audit.Event{Actor: u.ID, Action: audit.SSOLoginSucceeded,
+			TargetType: audit.TargetUser, Target: u.ID, Details: audit.Details{"provider": c.cfg.ID}})
 	})
 	return res, err
 }
@@ -847,6 +862,7 @@ func (s *Service) ssoNewIdentity(ctx context.Context, tx *sql.Tx, c *ssoClient, 
 	}
 	u := User{Email: email}
 	var joined ssoJoined
+	created := false
 	err := tx.QueryRowContext(ctx, `SELECT id, name FROM users WHERE email = ?`, email).Scan(&u.ID, &u.Name)
 	switch {
 	case err == nil:
@@ -862,11 +878,16 @@ func (s *Service) ssoNewIdentity(ctx context.Context, tx *sql.Tx, c *ssoClient, 
 		if u, joined, err = s.ssoInvitedUser(ctx, tx, email, id.name); err != nil {
 			return User{}, ssoJoined{}, err
 		}
+		created = true
 	default:
 		return User{}, ssoJoined{}, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)`,
-		c.cfg.Issuer, id.subject, u.ID)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO user_identities (issuer, subject, user_id) VALUES (?, ?, ?)`,
+		c.cfg.Issuer, id.subject, u.ID); err != nil {
+		return User{}, ssoJoined{}, err
+	}
+	err = audit.Record(ctx, tx, audit.Event{Actor: u.ID, Action: audit.SSOIdentityLinked,
+		TargetType: audit.TargetUser, Target: u.ID, Details: audit.Details{"provider": c.cfg.ID, "created_account": created}})
 	return u, joined, err
 }
 
@@ -905,7 +926,7 @@ func (s *Service) ssoInvitedUser(ctx context.Context, tx *sql.Tx, email, name st
 			return User{}, ssoJoined{}, err
 		}
 		// Two invites to one workspace: the first one's role stands.
-		if err := join(ctx, tx, inv, u.ID); err != nil && !errors.Is(err, errAlreadyMember) {
+		if err := s.join(ctx, tx, inv, u.ID); err != nil && !errors.Is(err, errAlreadyMember) {
 			return User{}, ssoJoined{}, err
 		}
 		joined.invites = append(joined.invites, inv.id)

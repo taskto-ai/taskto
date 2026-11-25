@@ -170,8 +170,11 @@ func (s *SMTP) Send(ctx context.Context, m Message) error {
 		return failed(ctx, StageSend, err)
 	}
 	if err := w.Close(); err != nil {
-		// The server's answer to the message: the last word on whether it was taken.
-		return failed(ctx, StageRejected, err)
+		// The server's answer to the message: the last word on whether it was taken. Without a
+		// reply (the connection dropped, the time ran out) there is no word, and it may have been.
+		e := failed(ctx, StageRejected, err)
+		e.Ambiguous = e.Code == 0
+		return e
 	}
 	// The message is accepted; a server that drops the connection on QUIT hasn't undone it.
 	_ = c.Quit()

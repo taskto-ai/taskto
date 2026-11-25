@@ -56,37 +56,20 @@ func scanStored(row interface{ Scan(...any) error }) (stored, error) {
 	return n, nil
 }
 
-// reader answers, for one request or one push, what a person may read, asking access.Checker once
-// for each space.
+// reader answers, for one request or one push, what a person may read.
+//
+// Whether the person may read a space, and the name of what the notification is about, come from
+// one statement each (access.Checker.CheckWith), never from one read for the access and another
+// for the name: access could end and the card be renamed between two, and the old recipient
+// would see the new title. Nothing is kept from one notification to the next for the same
+// reason.
 type reader struct {
 	s      *Service
 	userID int64
-	spaces map[int64]*access.Space
 }
 
 func (s *Service) readerFor(userID int64) *reader {
-	return &reader{s: s, userID: userID, spaces: map[int64]*access.Space{}}
-}
-
-// space returns the space as the person sees it, nil if they can't read it, or if it isn't in the
-// workspace the notification was made in.
-func (r *reader) space(ctx context.Context, workspaceID, spaceID int64) (*access.Space, error) {
-	sp, seen := r.spaces[spaceID]
-	if !seen {
-		got, err := r.s.access.Check(ctx, r.userID, spaceID)
-		switch {
-		case errors.Is(err, access.ErrNotFound):
-		case err != nil:
-			return nil, err
-		case got.Access.Allows(access.Read):
-			sp = &got
-		}
-		r.spaces[spaceID] = sp
-	}
-	if sp == nil || sp.WorkspaceID != workspaceID {
-		return nil, nil
-	}
-	return sp, nil
+	return &reader{s: s, userID: userID}
 }
 
 // item renders n for its recipient as they may read things now.
@@ -107,40 +90,44 @@ func (r *reader) item(ctx context.Context, n stored) (Item, error) {
 
 // describe says what a notification is about and where it leads, if its recipient may read that.
 func (r *reader) describe(ctx context.Context, n stored) (params map[string]string, target Target, ok bool, err error) {
-	sp, err := r.space(ctx, n.workspaceID, n.ref.Space)
-	if err != nil || sp == nil {
-		return nil, Target{}, false, err
-	}
 	switch n.kind {
-	case KindCardAssigned:
-		var title string
-		err := r.s.db.QueryRowContext(ctx, `
-			SELECT c.title FROM cards c JOIN boards b ON b.id = c.board_id
-			WHERE c.id = ? AND b.id = ? AND b.space_id = ?`, n.ref.Card, n.ref.Board, sp.ID).Scan(&title)
-		if errors.Is(err, sql.ErrNoRows) {
+	case KindCardAssigned, KindCardComment, KindCardMention, KindCardDue, KindCardOverdue:
+		var title, due sql.NullString
+		sp, err := r.s.access.CheckWith(ctx, r.userID, n.ref.Space, `c.title, c.due`, `
+			LEFT JOIN boards b ON b.id = ? AND b.space_id = s.id
+			LEFT JOIN cards c ON c.id = ? AND c.board_id = b.id`,
+			[]any{n.ref.Board, n.ref.Card}, &title, &due)
+		if errors.Is(err, access.ErrNotFound) || err == nil && (sp.WorkspaceID != n.workspaceID || !title.Valid) {
 			return nil, Target{}, false, nil
 		}
 		if err != nil {
 			return nil, Target{}, false, err
 		}
 		item := strconv.FormatInt(sp.ID, 10) + ":" + strconv.FormatInt(n.ref.Board, 10) + ":" + strconv.FormatInt(n.ref.Card, 10)
-		return map[string]string{"title": title}, Target{Section: "boards", Item: item}, true, nil
+		params := map[string]string{"title": title.String}
+		if n.kind == KindCardDue || n.kind == KindCardOverdue {
+			// The date the card is due, a calendar date: the web app formats it for the reader. A card
+			// whose date was cleared or moved since the notice was made says nothing of it (the notice
+			// would read "overdue since" a day that may be ahead): it is a plain mention of the card.
+			if !due.Valid || due.String != n.ref.Due {
+				return nil, Target{}, false, nil
+			}
+			params["due"] = due.String
+		}
+		return params, Target{Section: "boards", Item: item}, true, nil
 	case KindAppEffectFailed:
-		acc, err := r.s.access.App(ctx, r.userID, sp.ID, n.ref.App)
+		// The right to view the app and its name come from one snapshot (access.Checker.AppNamed).
+		sp, acc, name, err := r.s.access.AppNamed(ctx, r.userID, n.ref.Space, n.ref.App)
 		if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {
 			return nil, Target{}, false, nil
 		}
 		if err != nil {
 			return nil, Target{}, false, err
 		}
-		if !acc.View {
+		if !acc.View || sp.WorkspaceID != n.workspaceID {
 			return nil, Target{}, false, nil
 		}
-		var name string
-		if err := r.s.db.QueryRowContext(ctx, `SELECT name FROM apps WHERE id = ? AND space_id = ?`, n.ref.App, sp.ID).Scan(&name); err != nil {
-			return nil, Target{}, false, err
-		}
-		return map[string]string{"app": name}, Target{Section: "apps", Item: strconv.FormatInt(sp.ID, 10) + "-" + strconv.FormatInt(n.ref.App, 10)}, true, nil
+		return map[string]string{"app": name}, Target{Section: "apps", Item: strconv.FormatInt(n.ref.Space, 10) + "-" + strconv.FormatInt(n.ref.App, 10)}, true, nil
 	}
 	return nil, Target{}, false, nil
 }

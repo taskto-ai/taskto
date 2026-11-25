@@ -22,6 +22,10 @@ const (
 	// Workspaces, accounts and invites (internal/auth).
 
 	CodeWorkspaceNotFound   Code = "workspace_not_found"
+	CodeWorkspaceCreation   Code = "workspace_creation_refused" // 403: this server doesn't let the caller create a workspace
+	CodeWorkspaceLimit      Code = "workspace_limit"            // 403: the caller made as many workspaces as an account may; params: max
+	CodeTooManyWorkspaces   Code = "too_many_workspaces"        // 429, with Retry-After: too many made lately
+	CodeOperatorOnly        Code = "operator_only"              // 403: only the server's operator, an admin of its first workspace
 	CodeSetupDone           Code = "setup_done"
 	CodeSetupToken          Code = "setup_token"
 	CodeEmailInvalid        Code = "email_invalid"
@@ -53,6 +57,23 @@ const (
 	CodeResetInvalid            Code = "reset_invalid"
 	CodeResetOwn                Code = "reset_own"
 	CodeResetElsewhere          Code = "reset_elsewhere"
+
+	// Your own sessions (internal/auth/sessions.go).
+
+	CodeSessionNotFound Code = "session_not_found"
+	CodeSessionCurrent  Code = "session_current"
+
+	// Two-factor login (internal/auth/twofactor.go).
+
+	CodeWrongTwoFactorCode      Code = "wrong_two_factor_code"
+	CodeTooManyTwoFactorCodes   Code = "too_many_two_factor_codes"
+	CodeTwoFactorChallenge      Code = "two_factor_challenge_invalid"
+	CodeTwoFactorAlreadyOn      Code = "two_factor_already_on"
+	CodeTwoFactorNotOn          Code = "two_factor_not_on"
+	CodeTwoFactorNotStarted     Code = "two_factor_not_started"
+	CodeTwoFactorNoPassword     Code = "two_factor_no_password" //nolint:gosec // G101: an error code, not a credential
+	CodeTwoFactorClearOwn       Code = "two_factor_clear_own"
+	CodeTwoFactorClearElsewhere Code = "two_factor_clear_elsewhere"
 
 	// Single sign-on (internal/auth/sso.go). The callback redirects the browser to
 	// /?sso_error=<code>; the same codes name the API's own answers.
@@ -90,6 +111,9 @@ const (
 	CodeDocPathInvalid      Code = "doc_path_invalid"      // params: path
 	CodeAssigneeNoAccess    Code = "assignee_no_access"
 	CodeCardBlockerNotFound Code = "card_blocker_not_found" // params: id
+	CodeCardDueInvalid      Code = "card_due_invalid"
+	CodeCardLabelInvalid    Code = "card_label_invalid" // params: max
+	CodeTooManyLabels       Code = "too_many_labels"    // params: max
 
 	// Personal apps (internal/apps).
 
@@ -136,6 +160,7 @@ const (
 	CodeAppEffectTargetGone   Code = "app_effect_target_gone"   // the target board or card is no longer there
 	CodeAppEffectBoardOffline Code = "app_effect_board_offline" // the target board is archived
 	CodeAppEffectInvalid      Code = "app_effect_invalid"       // what the effect makes isn't accepted (a title, a path)
+	CodeAppEffectQuota        Code = "app_effect_quota"         // a storage quota is used up: what the effect makes doesn't fit
 	CodeAppEffectDocExists    Code = "app_effect_doc_exists"    // a different document is at the path; params: path
 	CodeAppEffectNoCard       Code = "app_effect_no_card"       // the card to change was never made for the record
 	CodeAppEffectCardArchived Code = "app_effect_card_archived" // the card to change is archived
@@ -196,6 +221,10 @@ const (
 	CodeHomeOrderInvalid   Code = "home_order_invalid"    // 400: the ids aren't the caller's of that kind
 	CodeHomeDefaultsShared Code = "home_defaults_shared"  // 409: defaults are for the apps of shared spaces
 
+	// The audit log's admin view (internal/server/audit.go).
+
+	CodeAuditTimeInvalid Code = "audit_time_invalid" // 400: from or to isn't a time in RFC 3339 in the years 1000 to 9999
+
 	// The knowledge base (internal/knowledge).
 
 	CodeRequestTooLarge   Code = "request_too_large"    // 413; params: max (bytes)
@@ -218,6 +247,13 @@ const (
 	CodeFileTooLarge      Code = "file_too_large"       // 413; params: path, max (bytes)
 	CodeKnowledgeFull     Code = "knowledge_full"       // 507
 	CodeDocNotKept        Code = "doc_not_kept"         // 410
+
+	// Storage quotas (internal/quota): the operator's default for a workspace, and for each
+	// member's private space.
+
+	CodeQuotaWorkspace   Code = "quota_workspace"   // 507: the workspace's storage quota is used up; params: max_mib
+	CodeQuotaUser        Code = "quota_user"        // 507: the private space's storage quota is used up; params: max_mib
+	CodeQuotaUnavailable Code = "quota_unavailable" // 503: the usage could not be measured; try again
 
 	// Search (internal/search): searching, and a space's consent to embeddings.
 
@@ -286,6 +322,15 @@ const (
 	// test sends are all busy. Retry-After says how long.
 	CodeMailTestRateLimited Code = "mail_test_rate_limited"
 
+	// The export of a person's own data (internal/export).
+
+	// CodeExportRunning is a 409: the person has an export running already. Retry-After says
+	// when to look again.
+	CodeExportRunning Code = "export_running"
+	// CodeExportRateLimited is a 429: the person started their share of exports this hour, or the
+	// server's exports are all busy. Retry-After says how long.
+	CodeExportRateLimited Code = "export_rate_limited"
+
 	// CLI accounts, shared CLI accounts and automatic switching (internal/cliaccounts).
 
 	CodeCLIWorkersOff          Code = "cli_workers_off"
@@ -340,9 +385,13 @@ const (
 
 	// Notifications and Web Push (internal/notifications).
 
-	CodeNotificationNotFound     Code = "notification_not_found"      // 404: not the caller's, or gone
-	CodePushEndpointInvalid      Code = "push_endpoint_invalid"       // 400: a subscription's endpoint isn't an https address of at most 2048 characters
-	CodePushKeysInvalid          Code = "push_keys_invalid"           // 400: a subscription's keys aren't a P-256 key and a 16-byte secret
-	CodePushTooManySubscriptions Code = "push_too_many_subscriptions" // 409: the person has the most devices subscribed; params: max
-	CodePushNoWorkspace          Code = "push_no_workspace"           // 403: push is for people in a workspace, and the caller is in none
+	CodeNotificationNotFound     Code = "notification_not_found"                      // 404: not the caller's, or gone
+	CodePushEndpointInvalid      Code = "push_endpoint_invalid"                       // 400: a subscription's endpoint isn't an https address of at most 2048 characters
+	CodePushKeysInvalid          Code = "push_keys_invalid"                           // 400: a subscription's keys aren't a P-256 key and a 16-byte secret
+	CodePushTooManySubscriptions Code = "push_too_many_subscriptions"                 // 409: the person has the most devices subscribed; params: max
+	CodePushNoWorkspace          Code = "push_no_workspace"                           // 403: push is for people in a workspace, and the caller is in none
+	CodeNotificationEmailInvalid Code = "notification_email_invalid"                  // 400: an unknown kind or mode, an hour outside 0 to 23, or a time zone that isn't an IANA name
+	CodeEmailVerifyInvalid       Code = "notification_email_verification_invalid"     // 400: the confirmation link is unknown, used, expired or for an address the person no longer has
+	CodeEmailVerifyTooSoon       Code = "notification_email_verification_too_soon"    // 429: a link was sent a moment ago; params: seconds to wait
+	CodeEmailVerifyUnavailable   Code = "notification_email_verification_unavailable" // 502: the confirmation mail couldn't be sent
 )

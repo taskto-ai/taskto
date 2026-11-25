@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func env(vars map[string]string) func(string) string {
@@ -126,6 +127,23 @@ func TestFileStrings(t *testing.T) {
 	file := writeConfig(t, `data_dir = "/srv/task#to \"data\""`)
 	if got := load(t, []string{"-config", file}, nil).DataDir; got != `/srv/task#to "data"` {
 		t.Fatalf("DataDir = %q", got)
+	}
+}
+
+func TestStorageQuotasAreUnlimitedUntilSet(t *testing.T) {
+	if cfg := load(t, nil, nil); cfg.StorageQuotaWorkspace != 0 || cfg.StorageQuotaUser != 0 {
+		t.Fatalf("quotas by default = %d, %d; want none", cfg.StorageQuotaWorkspace, cfg.StorageQuotaUser)
+	}
+	file := writeConfig(t, "storage_quota_user = \"2 GiB\"")
+	cfg := load(t, []string{"-config", file, "-storage-quota-workspace", "100GiB"}, nil)
+	if cfg.StorageQuotaWorkspace != 100<<30 || cfg.StorageQuotaUser != 2<<30 {
+		t.Fatalf("quotas = %d, %d; want 100 GiB and 2 GiB", cfg.StorageQuotaWorkspace, cfg.StorageQuotaUser)
+	}
+	if cfg := load(t, nil, map[string]string{"TASKTO_STORAGE_QUOTA_USER": "512MiB"}); cfg.StorageQuotaUser != 512<<20 {
+		t.Fatalf("user quota from the environment = %d", cfg.StorageQuotaUser)
+	}
+	if _, err := Load([]string{"-storage-quota-user", "0"}, env(nil), io.Discard); err == nil {
+		t.Error("a quota of 0 is written by leaving it out: want an error")
 	}
 }
 
@@ -554,6 +572,59 @@ func TestSMTPHostTakesIPv6Literals(t *testing.T) {
 	for _, in := range []string{"[::1]:25", "::1]", "[::1", "1.2.3.4:25", "smtp.example.com:587"} {
 		if _, err := Load([]string{"-smtp-host", in, "-smtp-from", "a@example.com"}, env(nil), io.Discard); err == nil {
 			t.Errorf("%q accepted", in)
+		}
+	}
+}
+
+func TestAuditRetention(t *testing.T) {
+	if got := load(t, nil, nil).AuditRetention(); got != 365*24*time.Hour {
+		t.Fatalf("by default %v, want a year", got)
+	}
+	file := writeConfig(t, `audit_retention = "90"`)
+	// The file, then the environment over it, then the flag over both.
+	if got := load(t, []string{"-config", file}, nil).AuditRetention(); got != 90*24*time.Hour {
+		t.Fatalf("from the file: %v", got)
+	}
+	env := map[string]string{"TASKTO_AUDIT_RETENTION": "30"}
+	if got := load(t, []string{"-config", file}, env).AuditRetention(); got != 30*24*time.Hour {
+		t.Fatalf("env over file: %v", got)
+	}
+	if got := load(t, []string{"-config", file, "-audit-retention", "7"}, env).AuditRetention(); got != 7*24*time.Hour {
+		t.Fatalf("flag over env: %v", got)
+	}
+	// Off keeps everything: a retention of zero, which the sweep reads as no limit.
+	if got := load(t, []string{"-audit-retention", "off"}, nil).AuditRetention(); got != 0 {
+		t.Fatalf("off: %v, want 0", got)
+	}
+}
+
+func TestAuditRetentionMustBeDaysOrOff(t *testing.T) {
+	for _, bad := range []string{"0", "-5", "abc", "1.5", "40000", "1y", ""} {
+		if _, err := Load([]string{"-audit-retention", bad}, env(nil), io.Discard); err == nil {
+			t.Errorf("-audit-retention %q accepted", bad)
+		}
+	}
+}
+
+func TestWorkspaceCreationSetting(t *testing.T) {
+	if got := load(t, nil, nil).WorkspaceCreationMode(); got != "admins" {
+		t.Fatalf("default = %q, want admins", got)
+	}
+	file := writeConfig(t, `workspace_creation = "off"`)
+	if got := load(t, nil, map[string]string{"TASKTO_CONFIG": file}).WorkspaceCreationMode(); got != "off" {
+		t.Fatalf("from the file: %q", got)
+	}
+	if got := load(t, nil, map[string]string{"TASKTO_CONFIG": file, "TASKTO_WORKSPACE_CREATION": "anyone"}).WorkspaceCreationMode(); got != "anyone" {
+		t.Fatalf("from the environment: %q", got)
+	}
+	got := load(t, []string{"-workspace-creation", "admins"}, map[string]string{"TASKTO_CONFIG": file, "TASKTO_WORKSPACE_CREATION": "anyone"})
+	if got.WorkspaceCreationMode() != "admins" {
+		t.Fatalf("from a flag: %q", got.WorkspaceCreationMode())
+	}
+	for _, bad := range []string{"everyone", "Admins", "true"} {
+		if _, err := Load(nil, env(map[string]string{"TASKTO_WORKSPACE_CREATION": bad}), io.Discard); err == nil ||
+			!strings.Contains(err.Error(), "must be admins, anyone or off") {
+			t.Errorf("%q: err = %v", bad, err)
 		}
 	}
 }

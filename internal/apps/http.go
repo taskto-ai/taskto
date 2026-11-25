@@ -12,6 +12,7 @@ import (
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/auth"
+	"taskto.ai/taskto/internal/quota"
 )
 
 // Routes mounts the app endpoints on mux, each behind access.Checker.RequireSpace, so
@@ -486,7 +487,10 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var conflict *conflictError
 	var status *statusError
 	var apiErr *apierr.Error
+	refusal, quotaRefusal := quota.AsAPI(err)
 	switch {
+	case quotaRefusal:
+		apierr.WriteError(w, refusal)
 	case errors.As(err, &status):
 		writeError(w, status.status, status.code, status.msg, status.params)
 	case errors.As(err, &apiErr):
@@ -511,7 +515,7 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 			params["capability"] = f.capability
 		}
 		writeError(w, http.StatusForbidden, apierr.CodeAppForbidden, err.Error(), params)
-	case errors.Is(err, errOperationReused):
+	case errors.Is(err, ErrOperationReused):
 		writeError(w, http.StatusConflict, apierr.CodeAppOperationReused, err.Error())
 	case errors.Is(err, errEffectNotFailed):
 		writeError(w, http.StatusConflict, apierr.CodeAppEffectNotFailed, err.Error())

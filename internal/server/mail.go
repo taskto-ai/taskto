@@ -80,11 +80,12 @@ func (g *mailTestGate) enter(user int64) (leave func(), ok bool, wait time.Durat
 }
 
 // mailRoutes mounts the admins' outgoing email routes (docs/api.md#outgoing-email). The
-// SMTP server is the whole server's, set by its operator (docs/install.md#email), so any
-// workspace's admins see it, as they see the backups. svc may be nil: not configured.
+// SMTP server is the whole server's, set by its operator (docs/install.md#email), so only
+// operators see it (auth.Service.RequireOperator), as they see the backups, and not the admins
+// of a workspace someone else made. svc may be nil: not configured.
 func mailRoutes(mux *http.ServeMux, accounts *auth.Service, svc *mail.Service, gate *mailTestGate) {
-	mux.Handle("GET /api/workspaces/{workspace}/mail", accounts.RequireAdmin(mailStatus(svc)))
-	mux.Handle("POST /api/workspaces/{workspace}/mail/test", accounts.RequireAdmin(mailTest(svc, accounts, gate)))
+	mux.Handle("GET /api/workspaces/{workspace}/mail", accounts.RequireOperator(mailStatus(svc)))
+	mux.Handle("POST /api/workspaces/{workspace}/mail/test", accounts.RequireOperator(mailTest(svc, accounts, gate)))
 }
 
 // mailStatus is GET /api/workspaces/{workspace}/mail: whether the server can send email, and

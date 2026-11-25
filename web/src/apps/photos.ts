@@ -75,8 +75,14 @@ export class UploadCancelled extends Error {}
 
 const OFFSET = 'app_upload_offset'
 
-// An error worth trying again: no answer at all, or the server's own trouble.
-const transient = (e: unknown) => !(e instanceof ApiError) || e.status >= 500
+// The server's codes for a write refused because the storage is used up (a 507). Trying again
+// changes nothing until someone makes room, so none of the retries below, nor the outbox's, is for
+// these: the person is told, translated, and decides.
+const STORAGE_FULL = new Set(['quota_workspace', 'quota_user', 'knowledge_full'])
+export const storageFull = (e: unknown) => e instanceof ApiError && !!e.code && STORAGE_FULL.has(e.code)
+
+// An error worth trying again: no answer at all, or the server's own trouble (not its being full).
+const transient = (e: unknown) => !(e instanceof ApiError) || (e.status >= 500 && !storageFull(e))
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 

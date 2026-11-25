@@ -233,6 +233,8 @@ test('offline, an app route opens the cached page; a server route is not answere
 
 const WORDS = {
   card_assigned: 'A card was assigned to you',
+  card_due: 'A card of yours is due',
+  card_overdue: 'A card of yours is overdue',
   app_effect_failed: 'An app action needs your attention',
   changed: 'Something changed',
 }
@@ -292,6 +294,25 @@ test('the words a page gives are kept only for the kinds the server sends, and s
   expect(bodies).toEqual(['', '', 'An app action needs your attention'])
   // They live apart from the app's caches, so an update of the app keeps them and a cleanup drops nothing of theirs.
   expect(await sw.caches.keys()).toEqual(['taskto-push-strings'])
+})
+
+test('a push of a kind that a cache made before it existed has no words for says the generic line', async () => {
+  const { card_due: _due, card_overdue: _overdue, ...old } = WORDS
+  await sw.emit('message', { data: { type: 'PUSH_STRINGS', strings: old } })
+  await sw.emit('push', pushOf({ id: 1, kind: 'card_due' }))
+  await sw.emit('push', pushOf({ id: 2, kind: 'card_overdue' }))
+  await sw.emit('push', pushOf({ id: 3, kind: 'card_assigned' }))
+  const bodies = (shown(sw) as [string, { body: string }][]).map((c) => c[1].body)
+  expect(bodies).toEqual(['Something changed', 'Something changed', 'A card was assigned to you'])
+})
+
+test('a kind the saved words lack (kept from before an update) says the generic line', async () => {
+  // WORDS are the lines of the version before the comment and mention kinds.
+  await sw.emit('message', { data: { type: 'PUSH_STRINGS', strings: WORDS } })
+  await sw.emit('push', pushOf({ id: 1, kind: 'card_comment' }))
+  await sw.emit('push', pushOf({ id: 2, kind: 'card_mention' }))
+  const bodies = (shown(sw) as [string, { body: string }][]).map((c) => c[1].body)
+  expect(bodies).toEqual(['Something changed', 'Something changed'])
 })
 
 test('a push tells the open pages, which ask the inbox again', async () => {

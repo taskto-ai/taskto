@@ -21,7 +21,8 @@ import {
   useT,
 } from '../i18n'
 import { KnowledgePage } from '../knowledge/KnowledgePage'
-import { parseNotificationPath } from '../notifications/api'
+import { EMAIL_CONFIRM_PATH, parseNotificationPath } from '../notifications/api'
+import { ConfirmEmail } from '../notifications/ConfirmEmail'
 import { NotificationsPage, OpenNotification } from '../notifications/NotificationsPage'
 import { usePushSync } from '../notifications/usePushSync'
 import { useUnread } from '../notifications/useUnread'
@@ -31,6 +32,7 @@ import { SettingsPage } from '../settings/SettingsPage'
 import { type Theme, useTheme } from '../theme'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Icon } from './Icon'
+import { NewWorkspace } from './NewWorkspace'
 
 // The A2UI renderer is most of the app's code: loaded when Apps is opened.
 const AppsPage = lazy(() => import('../apps/AppsPage').then((m) => ({ default: m.AppsPage })))
@@ -69,15 +71,20 @@ function rememberWorkspace(id: number) {
 
 // A push opens /notification/{id}: read as the signed-in person and followed to where it leads,
 // outside the shell, which would take that address for an unknown route.
-export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
-  const opening = parseNotificationPath(usePath())
+// `onMe` takes the account's new state when the shell changed it (a workspace was created).
+export function Shell({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
+  const path = usePath()
+  const opening = parseNotificationPath(path)
+  if (path === EMAIL_CONFIRM_PATH) {
+    return <ConfirmEmail token={window.location.hash.slice(1)} workspace={me.workspaces[0]?.id ?? null} />
+  }
   if (opening !== null) {
     return <OpenNotification id={opening} fallbackWorkspace={me.workspaces[0]?.id ?? null} />
   }
-  return <Frame me={me} onLogout={onLogout} />
+  return <Frame me={me} onLogout={onLogout} onMe={onMe} />
 }
 
-function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
+function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   const path = usePath()
   usePushSync(me.user.id, me.workspaces.length > 0)
   const parsed = parseRoute(path)
@@ -115,8 +122,12 @@ function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
   // had it is hidden with the drawer. The page is inert while the drawer is open, and an inert
   // element can't take focus: it is focused once the drawer has closed (the effect below).
   const focusPage = useRef(false)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: closes on every path change
+  // Only a change of page closes it, not the first draw: that effect runs after the draw, and a
+  // click on the menu button before it would be undone.
+  const drawnAt = useRef(path)
   useEffect(() => {
+    if (drawnAt.current === path) return
+    drawnAt.current = path
     if (drawerOpen.current) focusPage.current = true
     setDrawer(false)
   }, [path])
@@ -145,6 +156,15 @@ function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
     return (
       <div className="tt-center">
         <p>{t('shell.noWorkspace')}</p>
+        {me.can_create_workspace && onMe && (
+          <NewWorkspace
+            user={me.user.id}
+            onCreated={(next, created) => {
+              onMe(next)
+              navigate(routePath({ workspace: created.id, section: 'conversations' }))
+            }}
+          />
+        )}
         <button type="button" className="tt-button" onClick={onLogout}>
           {t('shell.logOut')}
         </button>
@@ -190,6 +210,16 @@ function Frame({ me, onLogout }: { me: Me; onLogout: () => void }) {
             ))}
           </select>
         </label>
+        {me.can_create_workspace && onMe && (
+          <NewWorkspace
+            user={me.user.id}
+            onCreated={(next, created) => {
+              // The account first, so the new workspace is one the shell knows when the address names it.
+              onMe(next)
+              navigate(routePath({ workspace: created.id, section: 'conversations' }))
+            }}
+          />
+        )}
         <span className="tt-topbar-section">
           {section ? t(section.label) : route.section === 'notifications' ? t('notifications.title') : ''}
         </span>
@@ -249,7 +279,7 @@ function Page({ route, me, workspace }: { route: Route; me: Me; workspace: Works
     case 'home':
       return (
         <Suspense fallback={<Loading />}>
-          <HomePage workspace={route.workspace} />
+          <HomePage workspace={route.workspace} admin={workspace.role === 'admin'} />
         </Suspense>
       )
     case 'conversations':
