@@ -345,21 +345,41 @@ Field Services" still leaves room for itself. Checked in a real browser at 320, 
 
 ## The apps renderer
 
-The A2UI renderer styles itself from `--a2ui-*` custom properties with defaults of its own (a blue
-primary button, grey borders). `:root` sets them from the tokens above, so an app's buttons, fields,
-choices and captions follow the theme without any change to the renderer or to what an app can say:
-pill buttons and choices, a mint primary button outlined in ink (the renderer draws it with no
-border, so `styles.css` adds one), the display face for titles, and the deep green for a borderless
-button's text. The renderer colours several things with its primary, which is the mint: a borderless
-button's text, a focused field's border, the picked tab and a slider's thumb. Each is pointed at a
+An app's own screens are drawn by the A2UI renderer from what the agent wrote; the app can't change
+the renderer or what an app's definition may say. The renderer styles itself from `--a2ui-*` custom
+properties with defaults of its own (a blue primary button, grey borders, 16px text).
+`web/src/ui/a2ui.css` sets them on `:root` from the tokens and the roles: the interface's type sizes
+(14px), its spaces, edges and radii, pill buttons and choices, Input's text box for fields and dates,
+Field's label, a card as a panel, the display face for titles. What a variable can't say is the
+rules under `.ui-app` at the end of the same file, the element `AppView` draws an app in: the
+control heights (36px, 44px on a touch screen, a field's text 16px there), the library's focus ring
+on every control instead of the renderer's change of border colour, the primary button's ink edge
+and lift (the renderer draws it with no border), a disabled button as Button's flat grey pill rather
+than half opacity, and the error text as Field's. So an app's controls are drawn as the component
+library's in light, dark and every brand. `web/src/apps/theme.test.ts` checks that every renderer
+component the server's catalog allows is themed, that each control gets the ring and the touch
+height, and that every colour variable is a role.
+
+The file is in no layer on purpose. The renderer adopts its defaults (`:where(:root) { … }`) and each
+component's rules (`a2ui-basic-button .a2ui-button { … }`) at run time, in no layer and after the
+page's own stylesheets; a rule in no layer beats every rule in one. So the overrides are in none
+either, and each takes one more class than the renderer's rule it overrides.
+
+The renderer colours several things with its primary, which is the mint: a borderless button's text,
+a focused field's border, the picked tab, a slider's thumb, a check box's mark. Each is pointed at a
 token that can be seen on the page instead (the deep green, or the focus colour), because mint there
 would be 1.4:1 on cream. When the renderer gains another use of its primary, check it the same way.
 
 A button's label is a Text component, and the renderer colours Text from `--_a2ui-text-color` (a
-caption, from its own muted colour, over that). So `styles.css` points the label at the button's
-ink: the borderless button sets that variable to the deep green as well as its own `color`, and a
-label in a button inherits it in every variant, so a caption on a mint button is ink on mint
-(12.8:1) and not muted grey (1.6:1).
+caption, from its own muted colour, over that). So the label is pointed at the button's ink: the
+borderless button sets that variable to the deep green as well as its own `color`, a disabled one to
+the muted text, and a label in a button inherits it in every variant, so a caption on a mint button
+is ink on mint (12.8:1) and not muted grey (1.6:1).
+
+TaskTo.AI's own components in an app (`web/src/apps/catalog.tsx`) are styled with the screens
+(`web/src/apps/AppView.css`): a number (`Stat`) is a tile, its label small and muted over a large
+value with tabular figures, and tiles in one of the app's rows wrap onto the next line when there
+isn't room.
 
 ## Installed app
 
@@ -390,20 +410,21 @@ client (the session cookie stays in memory), and a failed call is reported as it
 and status only, never a header or a body.
 
 The PNGs go to `web/screens/`, which git ignores, as `<size>-<theme>/<screen>.png`: `desktop`
-(1440x900), `tablet` (820x1100) and `phone` (390x844), each `light` and `dark` (the browser's
-colour scheme, as a person's system sets it). The names are the same on every run, so a run on the
-base branch and one on the change can be compared file by file, for instance
-`desktop-dark/boards.png`. The screens are the first-run setup and the sign-in, every section
-empty, then with the sample data: Home and its customise mode, the conversations (the list, and
-one with messages), the knowledge base (the list, a document, the editor, search results), the
-boards (a board, a card open, adding a card), the apps (the list, the templates, an app open, the
-builder), the inbox, every tab of Settings, the account menu, and on the phone the menu drawer.
-Each is the browser's window, not the whole page, so what scrolls out of view is not in it. A
-picture is saved only once the screen's own ready check is on the page (a heading, a control or a
-seeded item that only that screen shows, in English): a screen that shows something else, such as
-an error page or another server's, is a failed capture and the run exits non-zero. The
-sample dates are relative to the day it runs, so "overdue" and "soon" read the same every day; the
-times of conversations are the time of the run, so those differ between two runs.
+(1440x900), `tablet` (820x1100) and `phone` (390x844), each `light` and `dark` (the browser's colour
+scheme, as a person's system sets it). The names are the same on every run, so a run on the base
+branch and one on the change can be compared file by file, for instance `desktop-dark/boards.png`.
+The screens are the first-run setup and the sign-in, every section empty, then with the sample data:
+Home and its customise mode, the conversations (the list, and one with messages), the knowledge base
+(the list, a document, the editor, search results), the boards (a board, a card open, adding a
+card), the apps (the list, the templates, an app open, an app that uses every component of the
+renderer, at its top and at its end, the builder), the inbox, every tab of Settings, the account
+menu, and on the phone the menu drawer. Each is the browser's window, not the whole page, so what
+scrolls out of view is not in it. A picture is saved only once the screen's own ready check is on
+the page (a heading, a control or a seeded item that only that screen shows, in English): a screen
+that shows something else, such as an error page or another server's, is a failed capture and the
+run exits non-zero. The sample dates are relative to the day it runs, so "overdue" and "soon" read
+the same every day; the times of conversations are the time of the run, so those differ between two
+runs.
 
 When the browser logs an error or a request fails, the script lists it with the capture it
 happened in, and it exits non-zero when a screen could not be captured or the list of pictures (the manifest) could not be written (`--strict` also fails on

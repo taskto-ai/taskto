@@ -247,6 +247,7 @@ function WidgetCard({
                 label={title}
                 release={item.release}
                 transport={transport}
+                frame="bare"
               />
             </div>
           )}

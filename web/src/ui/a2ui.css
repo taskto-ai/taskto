@@ -1,17 +1,26 @@
-/* The apps renderer (A2UI) reads variables of its own; these hand it the roles, so an app's
-   buttons, fields and choices look like the rest of the page in every theme and brand.
+/* The apps renderer (A2UI): an app's own screens, drawn from what the agent wrote. It reads variables
+   of its own; these hand it the roles and the scales, so an app's buttons, fields, choices, tabs,
+   sliders, dates and captions look like the component library's (Button, Input, Field) in every
+   theme and brand. What a variable can't say (a fixed height, the focus ring, the primary button's
+   edge, a disabled state that isn't half opacity) is the rules under `.ui-app`, the element AppView
+   draws an app in, at the end of this file: the least CSS that closes the gap.
 
-   Not in a layer, on purpose: the renderer injects its defaults as `:where(:root) { … }` with no
-   layer, and a rule with no layer beats every rule in one, whatever its specificity. */
+   Not in a layer, on purpose: the renderer injects its defaults as `:where(:root) { … }` and each
+   component's rules as `<tag> .a2ui-… { … }`, all in no layer and adopted after the page's own
+   stylesheets. A rule with no layer beats every rule in one, whatever its specificity; so the
+   rules here are in none either, and each takes one more class than the renderer's rule it
+   overrides (`.ui-app .a2ui-button` over `a2ui-basic-button .a2ui-button`). */
 
 :root {
   --a2ui-color-primary: var(--color-accent);
   --a2ui-color-primary-hover: var(--color-accent-hover);
   --a2ui-color-on-primary: var(--color-on-accent);
-  --a2ui-color-secondary-hover: var(--color-hover);
+  --a2ui-color-secondary: var(--color-neutral-soft);
+  --a2ui-color-secondary-hover: var(--color-bg-sunken);
   --a2ui-color-on-secondary: var(--color-text);
   --a2ui-color-border: var(--color-border-strong);
   --a2ui-color-surface: var(--color-surface);
+  --a2ui-color-background: var(--color-bg);
   --a2ui-color-input: var(--color-surface);
   --a2ui-color-on-input: var(--color-text);
   --a2ui-color-on-surface: var(--color-text);
@@ -20,18 +29,400 @@
   --a2ui-textfield-color-error: var(--color-danger);
   --a2ui-choicepicker-color-error: var(--color-danger);
   --a2ui-datetimeinput-color-error: var(--color-danger);
-  /* Its buttons and choices are pills, as the app's are; its titles are the display face. */
-  --a2ui-button-border-radius: var(--radius-pill);
-  --a2ui-button-padding: 0.4rem 1rem;
-  --a2ui-button-font-weight: 600;
-  --a2ui-choicepicker-chip-font-size: 0.875rem;
-  --a2ui-choicepicker-chip-padding: 0.3rem 0.85rem;
-  --a2ui-choicepicker-chip-background-selected: var(--color-accent);
+  --a2ui-checkbox-color-error: var(--color-danger);
+  --a2ui-slider-color-error: var(--color-danger);
+
+  /* The scales: the interface's type sizes (14px for its text), its spaces, its edges and radii. */
+  --a2ui-font-size-xs: var(--text-xs);
+  --a2ui-font-size-s: var(--text-sm);
+  --a2ui-font-size-m: var(--text-md);
+  --a2ui-font-size-l: var(--text-lg);
+  --a2ui-font-size-xl: var(--text-xl);
+  --a2ui-font-size-2xl: var(--text-2xl);
+  --a2ui-spacing-xs: var(--space-1);
+  --a2ui-spacing-s: var(--space-2);
+  --a2ui-spacing-m: var(--space-3);
+  --a2ui-spacing-l: var(--space-4);
+  --a2ui-spacing-xl: var(--space-6);
+  --a2ui-border-width: var(--line-thin);
+  --a2ui-border-radius: var(--radius-md);
+  --a2ui-border: var(--line-thin) solid var(--color-border-strong);
   --a2ui-font-family-title: var(--font-display);
+  --a2ui-font-family-monospace: var(--font-mono);
+
+  /* A field's label is Field's: small, medium weight, the text's colour. */
+  --a2ui-label-font-size: var(--text-sm);
+  --a2ui-label-font-weight: 500;
+
+  /* Buttons are the library's pills, with no margin of their own: a row or a column spaces them. */
+  --a2ui-button-border-radius: var(--radius-pill);
+  --a2ui-button-padding: 0 var(--space-4);
+  --a2ui-button-margin: 0;
+  --a2ui-button-font-weight: 500;
+
+  /* Text fields, dates and a choice's filter are the library's text box. */
+  --a2ui-textfield-border: var(--line-thin) solid var(--color-border-strong);
+  --a2ui-textfield-border-radius: var(--radius-md);
+  --a2ui-textfield-padding: 0 var(--space-3);
+  --a2ui-datetimeinput-border: var(--line-thin) solid var(--color-border-strong);
+  --a2ui-datetimeinput-border-radius: var(--radius-md);
+  --a2ui-datetimeinput-padding: 0 var(--space-3);
+  --a2ui-choicepicker-filter-padding: 0 var(--space-3);
+
+  /* Choices are pills, the picked one mint with ink on it. */
+  --a2ui-choicepicker-chip-font-size: var(--text-sm);
+  --a2ui-choicepicker-chip-font-weight: 500;
+  --a2ui-choicepicker-chip-padding: 0 var(--space-3);
+  --a2ui-choicepicker-chip-border: var(--line-thin) solid var(--color-border-strong);
+  --a2ui-choicepicker-chip-background-selected: var(--color-accent);
+  --a2ui-choicepicker-gap: var(--space-2);
+  --a2ui-choicepicker-checkbox-size: var(--mark-check);
+  --a2ui-checkbox-size: var(--mark-check);
+  --a2ui-checkbox-margin: 0;
+  --a2ui-checkbox-gap: var(--space-2);
+  --a2ui-checkbox-label-font-weight: 400;
+
+  /* Containers: a card is a panel (an edge, no shadow), the screen's own rows and columns space
+     their children as a form does. */
+  --a2ui-card-background: var(--color-surface);
+  --a2ui-card-border: var(--line-thin) solid var(--color-border);
+  --a2ui-card-border-radius: var(--radius-lg);
+  --a2ui-card-box-shadow: none;
+  --a2ui-card-padding: var(--space-4);
+  --a2ui-card-margin: 0;
+  --a2ui-row-gap: var(--space-3);
+  --a2ui-column-gap: var(--space-3);
+  --a2ui-list-gap: var(--space-2);
+  --a2ui-divider-border: var(--line-thin) solid var(--color-border);
+  --a2ui-divider-spacing: var(--space-2);
+
+  /* Tabs are the library's: muted until picked, an underline on the rule. */
+  --a2ui-tabs-border: var(--line-thin) solid var(--color-border);
+  --a2ui-tabs-header-color: var(--color-text-muted);
+  --a2ui-tabs-content-padding: var(--space-4) 0;
+
+  --a2ui-slider-margin: 0;
+  --a2ui-slider-track-color: var(--color-neutral-soft);
+  --a2ui-slider-label-font-weight: 500;
+
+  /* A modal is a dialog's box over the scrim. */
+  --a2ui-modal-backdrop-bg: var(--color-scrim);
+  --a2ui-modal-background: var(--color-surface);
+  --a2ui-modal-border-radius: var(--radius-lg);
+  --a2ui-modal-box-shadow: var(--shadow-dialog);
+  --a2ui-modal-padding: var(--space-6);
+
   --a2ui-text-a-color: var(--color-link);
+  --a2ui-icon-size: var(--text-xl);
+  --a2ui-icon-color: currentColor;
+
   /* Whatever the renderer colours with its primary must still be seen when that is the mint:
      a focused field, the picked tab, a slider's thumb take the focus colour (ink; mint on night). */
   --a2ui-textfield-color-border-focus: var(--color-focus);
   --a2ui-tabs-header-color-active: var(--color-text);
   --a2ui-slider-thumb-color: var(--color-focus);
+}
+
+/* The app's screen: the interface's type, and nothing wider than the space it has (a 390px phone
+   fits every form; a row of buttons wraps instead of overflowing). */
+.ui-app {
+  font: var(--type-ui);
+  color: var(--color-text);
+  min-inline-size: 0;
+}
+
+.ui-app a2ui-basic-row,
+.ui-app .a2ui-chips-group,
+.ui-app .a2ui-date-time-inputs {
+  flex-wrap: wrap;
+}
+
+/* A caption is small and muted (a caption that is a button's label takes the button's type, below). */
+.ui-app .a2ui-text.a2ui-text-caption {
+  font: var(--type-caption);
+}
+
+/* Buttons: Button's box. One height, the label centred, the type of the interface. */
+.ui-app .a2ui-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-block-size: var(--control-md);
+  min-inline-size: var(--control-md);
+  font: var(--type-ui);
+  font-weight: 500;
+  border: var(--line-thin) solid var(--color-border-strong);
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+/* The primary button is mint with ink on it, an ink edge and a hard lift, as Button's primary is;
+   the renderer draws it with no edge, so it is drawn here. */
+.ui-app .a2ui-button.a2ui-button-primary {
+  border: var(--line-strong) solid var(--color-accent-edge);
+  box-shadow: var(--shadow-lift);
+  font-weight: 650;
+}
+
+.ui-app .a2ui-button.a2ui-button-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lift-hover);
+}
+
+.ui-app .a2ui-button.a2ui-button-primary:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: none;
+}
+
+/* The renderer colours a borderless button's text with its primary, which is the mint: too faint to
+   read on the page, so the link's deeper green stands in. A button's label is a Text component,
+   which takes its colour from --_a2ui-text-color (and, as a caption, from its own muted colour),
+   not from the button's: so the variable is set too, and a label of any variant (a caption is the
+   one that was grey on mint) takes the ink of the button it is in. */
+.ui-app .a2ui-button.a2ui-button-borderless {
+  --_a2ui-text-color: var(--color-link);
+  color: var(--color-link);
+  padding-inline: var(--space-2);
+  border-color: transparent;
+}
+
+.ui-app .a2ui-button .a2ui-text,
+.ui-app .a2ui-button .a2ui-text.a2ui-text-caption {
+  color: inherit;
+  font: inherit;
+}
+
+/* Disabled: Button's one look for every variant, a flat grey pill with muted text, not a faded copy. */
+.ui-app .a2ui-button:disabled,
+.ui-app .a2ui-button.a2ui-button-primary:disabled {
+  --_a2ui-text-color: var(--color-text-muted);
+  opacity: 1;
+  border-color: transparent;
+  background: var(--color-neutral-soft);
+  color: var(--color-text-muted);
+  box-shadow: none;
+  transform: none;
+  cursor: not-allowed;
+}
+
+/* Text fields, dates and a choice's filter: Input's box. */
+.ui-app .a2ui-textfield,
+.ui-app .a2ui-date-time-input,
+.ui-app .a2ui-filter-input {
+  box-sizing: border-box;
+  max-inline-size: 100%;
+  block-size: var(--control-md);
+  margin: 0;
+  font: var(--type-ui);
+  caret-color: var(--color-text);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+/* A long text is a textarea: it grows from the same edge instead of holding one line's height. */
+.ui-app textarea.a2ui-textfield {
+  block-size: auto;
+  min-block-size: calc(var(--control-md) * 2);
+  padding-block: var(--space-2);
+  resize: vertical;
+}
+
+.ui-app .a2ui-textfield:hover,
+.ui-app .a2ui-date-time-input:hover,
+.ui-app .a2ui-filter-input:hover {
+  border-color: var(--color-text-muted);
+}
+
+.ui-app .a2ui-textfield.a2ui-invalid {
+  border-color: var(--color-danger);
+}
+
+.ui-app .a2ui-textfield:disabled,
+.ui-app .a2ui-date-time-input:disabled {
+  border-color: transparent;
+  background: var(--color-neutral-soft);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/* The renderer takes a control's outline away and shows focus as a change of border colour, which an
+   invalid field (its border is the error's) doesn't have: every control gets the library's ring. */
+.ui-app .a2ui-button:focus-visible,
+.ui-app .a2ui-textfield:focus-visible,
+.ui-app .a2ui-date-time-input:focus-visible,
+.ui-app .a2ui-filter-input:focus-visible,
+.ui-app .a2ui-chip:focus-visible,
+.ui-app .a2ui-tab-button:focus-visible,
+.ui-app .a2ui-slider:focus-visible,
+.ui-app .a2ui-modal-close:focus-visible,
+.ui-app a2ui-checkbox input:focus-visible,
+.ui-app .a2ui-option-input:focus-visible {
+  outline: var(--line-focus) solid var(--color-focus);
+  outline-offset: var(--line-focus-offset);
+}
+
+/* A field's label and its error read as Field's. */
+.ui-app a2ui-basic-textfield > label,
+.ui-app .a2ui-date-time-label,
+.ui-app a2ui-choicepicker > label,
+.ui-app .a2ui-slider-header {
+  font: var(--type-small);
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.ui-app .a2ui-error-message {
+  margin: 0;
+  font: var(--type-caption);
+  font-weight: 500;
+  color: var(--color-danger);
+}
+
+/* Choices: the pills are a small control's height, the picked one outlined in ink as the primary is. */
+.ui-app .a2ui-chip {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--control-sm);
+  line-height: 1;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.ui-app .a2ui-chip:hover:not(.a2ui-chip-selected) {
+  background-color: var(--color-bg-sunken);
+}
+
+.ui-app .a2ui-chip.a2ui-chip-selected {
+  border-color: var(--color-accent-edge);
+  font-weight: 600;
+}
+
+/* A check box or a list of choices: the mark is the focus colour (ink; mint on night), which is
+   seen on the page in both themes as the mint isn't. */
+.ui-app a2ui-checkbox input,
+.ui-app .a2ui-option-input {
+  margin: 0;
+  accent-color: var(--color-focus);
+}
+
+.ui-app label.a2ui-checkbox,
+.ui-app .a2ui-option-label {
+  min-block-size: var(--control-sm);
+  font: var(--type-ui);
+  color: var(--color-text);
+}
+
+.ui-app label.a2ui-checkbox.a2ui-invalid {
+  color: var(--color-danger);
+}
+
+/* Tabs: Tabs's look. The picked one in the text's colour on an underline of the focus colour (the
+   renderer would draw that underline mint). */
+.ui-app .a2ui-tab-bar {
+  gap: var(--space-1);
+  overflow-x: auto;
+}
+
+.ui-app .a2ui-tab-button {
+  min-block-size: var(--control-md);
+  padding-inline: var(--space-3);
+  font: var(--type-ui);
+  font-weight: 500;
+  border-block-end-width: var(--line-strong);
+  margin-block-end: calc(var(--line-strong) * -1);
+  white-space: nowrap;
+}
+
+.ui-app .a2ui-tab-button:hover {
+  color: var(--color-text);
+}
+
+.ui-app .a2ui-tab-button.a2ui-tab-button-active {
+  border-block-end-color: var(--color-focus);
+  font-weight: 600;
+}
+
+/* A slider's value is a number: its figures line up as it moves. */
+.ui-app .a2ui-slider-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+
+.ui-app .a2ui-slider {
+  min-block-size: var(--control-sm);
+  margin: 0;
+}
+
+/* Text: the renderer's headings are the display face; a caption is small and muted. */
+.ui-app .a2ui-text h1,
+.ui-app .a2ui-text h2,
+.ui-app .a2ui-text h3 {
+  letter-spacing: var(--tracking-display);
+}
+
+.ui-app .a2ui-text.a2ui-text-caption em {
+  font-style: normal;
+}
+
+.ui-app .a2ui-text a:focus-visible {
+  outline: var(--line-focus) solid var(--color-focus);
+  outline-offset: var(--line-focus-offset);
+  border-radius: var(--radius-sm);
+}
+
+/* A modal's close button is a target a finger can use. */
+.ui-app .a2ui-modal-close {
+  min-block-size: var(--control-touch);
+  min-inline-size: var(--control-touch);
+  border-radius: var(--radius-pill);
+  color: var(--color-text-muted);
+}
+
+.ui-app .a2ui-modal-content {
+  color: var(--color-text);
+}
+
+/* Fingers: every control is the touch target's height (a choice too, so a row of them lines up),
+   and a field's text is 16px so a phone doesn't zoom in on focus. */
+@media (pointer: coarse) {
+  .ui-app .a2ui-button,
+  .ui-app .a2ui-chip,
+  .ui-app .a2ui-tab-button,
+  .ui-app .a2ui-slider,
+  .ui-app label.a2ui-checkbox,
+  .ui-app .a2ui-option-label {
+    min-block-size: var(--control-touch);
+  }
+
+  .ui-app .a2ui-textfield,
+  .ui-app .a2ui-date-time-input,
+  .ui-app .a2ui-filter-input {
+    block-size: var(--control-touch);
+    font-size: var(--text-lg);
+  }
+
+  .ui-app textarea.a2ui-textfield {
+    block-size: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-app .a2ui-button,
+  .ui-app .a2ui-chip,
+  .ui-app .a2ui-textfield,
+  .ui-app .a2ui-date-time-input,
+  .ui-app .a2ui-filter-input {
+    transition: none;
+  }
+
+  .ui-app .a2ui-button.a2ui-button-primary:hover:not(:disabled),
+  .ui-app .a2ui-button.a2ui-button-primary:active:not(:disabled) {
+    transform: none;
+  }
 }

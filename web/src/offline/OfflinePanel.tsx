@@ -6,12 +6,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, type App, errorText, type Space } from '../api'
 import { unsupportedBy } from '../apps/catalog'
 import { useFormat, useT } from '../i18n'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { Icon } from '../ui/Icon'
+import { Notice } from '../ui/Notice'
 import { downloadApp, type StorageStatus, storageStatus, UnsupportedRelease } from './download'
 import { useOfflineData, useRuntime } from './hooks'
 import { OutboxList } from './OutboxList'
 import { NotSaved, StaleDownload, scopeKey } from './store'
 import { notSavedText } from './transport'
 import { WriterNotice } from './WriterNotice'
+import './OfflinePanel.css'
 
 export function OfflinePanel({
   workspace,
@@ -78,74 +83,75 @@ export function OfflinePanel({
   const stale = copy && live && live.number > copy.release
 
   return (
-    <section className="tt-panel tt-offline" aria-label={t('offline.title')}>
-      <h2>{t('offline.title')}</h2>
-      {problem === 'schema' && (
-        <p role="alert" className="tt-error">
-          {t('offline.schemaNewer')}
-        </p>
-      )}
-      {problem === 'unavailable' && <p className="tt-muted">{t('offline.unavailable')}</p>}
-      {disabled && <p className="tt-muted">{t('offline.disabled')}</p>}
+    <section className="ui-offline" aria-label={t('offline.title')}>
+      <h2 className="ui-offline-title">
+        <Icon name="offline" size={16} />
+        {t('offline.title')}
+      </h2>
+      {problem === 'schema' && <Notice tone="danger">{t('offline.schemaNewer')}</Notice>}
+      {problem === 'unavailable' && <p className="ui-offline-note">{t('offline.unavailable')}</p>}
+      {disabled && <p className="ui-offline-note">{t('offline.disabled')}</p>}
       {runtime && !disabled && (
         <>
-          {copy ? (
-            <div className="tt-offline-ready">
-              <p role="status">
-                <strong>{t('offline.ready')}</strong>
-              </p>
-              <p className="tt-muted tt-small">
-                {t('offline.readyDetail', {
-                  release: copy.release,
-                  when: f.dateTime(copy.capturedAt),
-                  records: f.number(copy.records),
-                  total: f.number(copy.total),
-                })}
-              </p>
-              {copy.truncated && (
-                <p className="tt-muted tt-small">
-                  {t('offline.truncated', { records: f.number(copy.records), total: f.number(copy.total) })}
+          <div className="ui-offline-state">
+            {copy ? (
+              <div className="ui-offline-ready">
+                <p role="status" className="ui-offline-status">
+                  <Badge tone="success" icon="check">
+                    {t('offline.ready')}
+                  </Badge>
                 </p>
-              )}
-              {copy.scopeOf === 'own' && <p className="tt-muted tt-small">{t('offline.ownOnly')}</p>}
-              {!copy.canInsert && <p className="tt-muted tt-small">{t('offline.cantInsert')}</p>}
-              {stale && live && <p className="tt-muted tt-small">{t('offline.newerRelease', { live: live.number })}</p>}
-            </div>
-          ) : (
-            <p className="tt-muted">{t('offline.notDownloaded')}</p>
-          )}
-          {unsupported.length > 0 && <p className="tt-muted tt-small">{t('apps.updateRequired.message')}</p>}
-          <div className="tt-row-actions">
-            <button
-              type="button"
-              className="tt-button tt-primary"
-              disabled={busy || !live || unsupported.length > 0}
-              aria-label={
-                copy
-                  ? t('offline.downloadAgainNamed', { name: app.name })
-                  : t('offline.downloadNamed', { name: app.name })
-              }
-              onClick={() => void download()}
-            >
-              {busy ? t('offline.downloading') : copy ? t('offline.downloadAgain') : t('offline.download')}
-            </button>
-            {copy && (
-              <button
-                type="button"
-                className="tt-button"
-                aria-label={t('offline.removeNamed', { name: app.name })}
-                onClick={() => void remove()}
-              >
-                {t('offline.remove')}
-              </button>
+                <p className="ui-offline-note">
+                  {t('offline.readyDetail', {
+                    release: copy.release,
+                    when: f.dateTime(copy.capturedAt),
+                    records: f.number(copy.records),
+                    total: f.number(copy.total),
+                  })}
+                </p>
+                {copy.truncated && (
+                  <p className="ui-offline-note">
+                    {t('offline.truncated', { records: f.number(copy.records), total: f.number(copy.total) })}
+                  </p>
+                )}
+                {copy.scopeOf === 'own' && <p className="ui-offline-note">{t('offline.ownOnly')}</p>}
+                {!copy.canInsert && <p className="ui-offline-note">{t('offline.cantInsert')}</p>}
+                {stale && live && <p className="ui-offline-note">{t('offline.newerRelease', { live: live.number })}</p>}
+              </div>
+            ) : (
+              <p className="ui-offline-note">{t('offline.notDownloaded')}</p>
             )}
+            {/* A secondary action: the app's own primary button is the one the page is about. */}
+            <div className="ui-offline-actions">
+              <Button
+                size="sm"
+                icon="down"
+                loading={busy}
+                disabled={busy || !live || unsupported.length > 0}
+                aria-label={
+                  copy
+                    ? t('offline.downloadAgainNamed', { name: app.name })
+                    : t('offline.downloadNamed', { name: app.name })
+                }
+                onClick={() => void download()}
+              >
+                {busy ? t('offline.downloading') : copy ? t('offline.downloadAgain') : t('offline.download')}
+              </Button>
+              {copy && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={t('offline.removeNamed', { name: app.name })}
+                  onClick={() => void remove()}
+                >
+                  {t('offline.remove')}
+                </Button>
+              )}
+            </div>
           </div>
-          {error && (
-            <p role="alert" className="tt-error">
-              {error}
-            </p>
-          )}
-          <p className="tt-muted tt-small">
+          {unsupported.length > 0 && <p className="ui-offline-note">{t('apps.updateRequired.message')}</p>}
+          {error && <Notice tone="danger">{error}</Notice>}
+          <p className="ui-offline-note">
             {storage.usage !== undefined && storage.quota !== undefined
               ? t('offline.storage', { usage: f.bytes(storage.usage), quota: f.bytes(storage.quota) })
               : t('offline.storageUnknown')}{' '}
@@ -157,7 +163,7 @@ export function OfflinePanel({
           </p>
         </>
       )}
-      <p className="tt-muted tt-small">{t('offline.onlineOnly')}</p>
+      <p className="ui-offline-note">{t('offline.onlineOnly')}</p>
       {runtime && data.items.length > 0 && (
         <>
           <WriterNotice runtime={runtime} />
