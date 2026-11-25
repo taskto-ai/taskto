@@ -3,6 +3,7 @@ package search
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -20,6 +21,7 @@ import (
 	"unicode"
 
 	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/apps"
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/db"
@@ -42,6 +44,8 @@ var setupToken = auth.NewSetupToken()
 type env struct {
 	t       testing.TB
 	h       http.Handler
+	db      *sql.DB
+	spaces  *access.Checker
 	idx     *Index
 	kb      *knowledge.Store
 	dataDir string
@@ -77,9 +81,10 @@ func newEnv(t testing.TB) *env {
 	idx := New(sqlDB, kb, store, Options{})
 	kb.Routes(mux, spaces)
 	boards.New(sqlDB, spaces).Routes(mux)
+	apps.New(sqlDB, spaces).WithFiles(dir).Routes(mux)
 	idx.Routes(mux, accounts, spaces)
 	fake := newFakeEmbeddings(t)
-	return &env{t: t, h: auth.CSRF(mux, knowledge.RawBodyRoutes...), idx: idx, kb: kb, dataDir: dir, embed: fake}
+	return &env{t: t, h: auth.CSRF(mux, knowledge.RawBodyRoutes...), db: sqlDB, spaces: spaces, idx: idx, kb: kb, dataDir: dir, embed: fake}
 }
 
 // user is a logged-in browser.

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api, type Card, type Space } from '../api'
-import { useT } from '../i18n'
+import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { BoardColumn } from './BoardColumn'
 import { BoardFilters } from './BoardFilters'
@@ -45,6 +45,7 @@ export function BoardView({
   const [overdueOnly, setOverdueOnly] = useState(false)
   const today = useToday()
   const t = useT()
+  const f = useFormat()
   if (cards.error && !cards.data)
     return (
       <p role="alert" className="tt-error">
@@ -82,6 +83,7 @@ export function BoardView({
             open={open}
             filtering={filtering}
             today={today}
+            f={f}
             drag={drag}
             onOpen={setOpen}
             onAdded={(c) => {

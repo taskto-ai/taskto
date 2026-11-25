@@ -1,6 +1,6 @@
 import type { DragEvent } from 'react'
 import type { Card } from '../api'
-import { useFormat, useT } from '../i18n'
+import { type Format, useT } from '../i18n'
 import { isOverdue } from './due'
 import { assigneeLabel } from './text'
 
@@ -12,6 +12,7 @@ export function BoardCard({
   current,
   dragged,
   today,
+  f,
   onDragStart,
   onDragEnd,
   onDrop,
@@ -23,13 +24,14 @@ export function BoardCard({
   current: boolean
   dragged: boolean
   today: string
+  // The board's formats, made once for all its cards.
+  f: Format
   onDragStart: (e: DragEvent) => void
   onDragEnd: () => void
   onDrop: (e: DragEvent) => void
   onOpen: () => void
 }) {
   const t = useT()
-  const f = useFormat()
   return (
     <li
       draggable={canWrite}

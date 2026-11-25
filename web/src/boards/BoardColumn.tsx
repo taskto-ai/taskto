@@ -1,5 +1,5 @@
 import type { Card } from '../api'
-import { useFormat, useT } from '../i18n'
+import { type Format, useT } from '../i18n'
 import { AddCard } from './AddCard'
 import { BoardCard } from './BoardCard'
 import type { Column } from './columns'
@@ -15,6 +15,7 @@ export function BoardColumn({
   open,
   filtering,
   today,
+  f,
   drag,
   onOpen,
   onAdded,
@@ -26,12 +27,12 @@ export function BoardColumn({
   open: number | null
   filtering: boolean
   today: string
+  f: Format
   drag: CardDrag
   onOpen: (id: number) => void
   onAdded: (c: Card) => void
 }) {
   const t = useT()
-  const f = useFormat()
   return (
     <section
       className="tt-column"
@@ -52,6 +53,7 @@ export function BoardColumn({
             current={c.id === open}
             dragged={drag.dragged?.id === c.id}
             today={today}
+            f={f}
             onDragStart={(e) => drag.start(e, c)}
             onDragEnd={drag.end}
             onDrop={(e) => drag.drop(e, col.id, c)}

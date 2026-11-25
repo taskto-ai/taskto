@@ -1,6 +1,6 @@
 import { type FormEvent, useState } from 'react'
 import { api, type Card, type Conversation, ws } from '../api'
-import { conversationTitle } from '../conversations/ConversationView'
+import { conversationTitle } from '../conversations/title'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
 import { Link, routePath } from '../router'
