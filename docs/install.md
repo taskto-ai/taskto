@@ -382,8 +382,9 @@ The policy is read at startup: restart the server to change it.
 
 ### Email
 
-The server can send email: the settings page's test message today, and the password resets, email
-invitations and notifications that later features add. It is **off until the operator names an SMTP
+The server can send email: the settings page's test message, the password reset a person asks for
+on the login page, the invitations an admin chooses to email, and the notifications that later
+features add. It is **off until the operator names an SMTP
 server**, and works the same for one person or a company: there is one SMTP server for the whole
 server, set here, never per workspace, and nothing in the database. Without it nothing changes:
 reset and invite links are still passed on by hand.
