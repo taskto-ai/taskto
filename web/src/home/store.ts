@@ -19,6 +19,11 @@ function subscribe(listener: () => void) {
   }
 }
 
+// The version now: a load started at it shows every change made before it.
+export function homeVersion(): number {
+  return version
+}
+
 // A number that changes whenever Home's placements did: a dependency to load them again on.
 export function useHomeVersion(): number {
   return useSyncExternalStore(subscribe, () => version)

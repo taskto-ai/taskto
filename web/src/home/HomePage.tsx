@@ -28,7 +28,7 @@ import { PageHeader } from '../ui/PageHeader'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { HomeCustomize } from './HomeCustomize'
 import { SetupChecklist } from './SetupChecklist'
-import { homeChanged, useHomeLoad, useHomeVersion } from './store'
+import { homeChanged, homeVersion, useHomeLoad, useHomeVersion } from './store'
 import { itemKey, WidgetCard, WidgetFailed, WidgetSkeletons } from './WidgetCard'
 import './Home.css'
 
@@ -64,17 +64,27 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
   const heading = useRef<HTMLHeadingElement>(null)
   const customize = useRef<HTMLButtonElement>(null)
   const version = useHomeVersion()
-  const home = useHomeLoad(() => api<HomeView>(`${ws(workspace)}/home`), [workspace])
+  // With the version it was loaded at, so a change's focus waits for the load that follows it.
+  const home = useHomeLoad(() => {
+    const at = homeVersion()
+    return api<HomeView>(`${ws(workspace)}/home`).then((view) => ({ view, at }))
+  }, [workspace])
+  const view = home.data?.view
   const [customizing, setCustomizing] = useState(false)
+  // Opened from the empty state's button, which goes away with it: the keyboard goes to what to add.
+  const [openedFromEmpty, setOpenedFromEmpty] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [said, setSaid] = useState('')
-  const pendingFocus = useRef<string[] | null>(null)
+  // Where the keyboard goes after a change, and the version Home must be loaded at to show it: an
+  // earlier load arriving later says nothing of this change.
+  const pendingFocus = useRef<{ names: string[]; at: number } | null>(null)
 
   // Once Home is shown again after a change, the keyboard goes back where the change left it.
   const settleFocus = useCallback(() => {
-    const names = pendingFocus.current
-    if (!names) return
+    const pending = pendingFocus.current
+    if (!pending || (home.data?.at ?? -1) < pending.at) return
     pendingFocus.current = null
+    const names = pending.names
     for (const name of names) {
       const el = focusTarget(name)
       if (el && !(el as HTMLButtonElement).disabled) {
@@ -83,14 +93,13 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
       }
     }
     customize.current?.focus()
-  }, [])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Home shown again is when to settle
-  useLayoutEffect(settleFocus, [home.data, settleFocus])
+  }, [home.data])
+  useLayoutEffect(settleFocus, [settleFocus])
 
   // Runs a change, then tells everything that shows Home to load it again, whether it worked or not:
   // after a refusal the lists show what is true now. What is shown stays while it loads.
   const run: Run = async (change, after = {}) => {
-    pendingFocus.current = after.focus ?? null
+    pendingFocus.current = null
     try {
       await change()
       setError(null)
@@ -99,10 +108,12 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
       setError(errorText(e))
     }
     homeChanged()
+    // Settled by the load this change starts, not by one started before it.
+    if (after.focus) pendingFocus.current = { names: after.focus, at: homeVersion() }
   }
   const base = ws(workspace)
   const scopeOf = (item: HomeItem) => (item.kind === 'pin' ? 'pin' : 'widget')
-  const listOf = (item: HomeItem) => (item.kind === 'pin' ? (home.data?.pins ?? []) : (home.data?.widgets ?? []))
+  const listOf = (item: HomeItem) => (item.kind === 'pin' ? (view?.pins ?? []) : (view?.widgets ?? []))
   const remove: Act = (item, name, focus) =>
     run(() => api(`${base}/home/items/${item.id}`, { method: 'DELETE' }), {
       message: t(item.kind === 'pin' ? 'home.announce.unpinned' : 'home.announce.removed', { name }),
@@ -115,9 +126,7 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
     })
   // Moves one of the person's own placements among their own, one step.
   const move: Move = (kind, item, step) => {
-    const own = (kind === 'widget' ? (home.data?.widgets ?? []) : (home.data?.pins ?? [])).filter(
-      (i) => i.source === 'personal',
-    )
+    const own = (kind === 'widget' ? (view?.widgets ?? []) : (view?.pins ?? [])).filter((i) => i.source === 'personal')
     const from = own.findIndex((i) => i.id === item.id)
     const to = from + step
     if (from < 0 || to < 0 || to >= own.length) return Promise.resolve()
@@ -133,7 +142,7 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
     })
   }
 
-  const widgets = home.data?.widgets ?? []
+  const widgets = view?.widgets ?? []
   const own = widgets.filter((i) => i.source === 'personal')
   const problem = error ?? home.error
   return (
@@ -147,7 +156,10 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
             icon={customizing ? 'check' : 'edit'}
             aria-expanded={customizing}
             aria-controls="ui-home-customize"
-            onClick={() => setCustomizing((c) => !c)}
+            onClick={() => {
+              setOpenedFromEmpty(false)
+              setCustomizing((c) => !c)
+            }}
           >
             {customizing ? t('home.done') : t('home.customize')}
           </Button>
@@ -168,7 +180,13 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
       {problem && <Notice tone="danger">{problem}</Notice>}
       {!home.data && !home.error && <WidgetSkeletons />}
       {home.data && widgets.length === 0 && !customizing && (
-        <EmptyHome workspace={workspace} onCustomize={() => setCustomizing(true)} />
+        <EmptyHome
+          workspace={workspace}
+          onCustomize={() => {
+            setOpenedFromEmpty(true)
+            setCustomizing(true)
+          }}
+        />
       )}
       {widgets.length > 0 && (
         <ul className="ui-home-widgets" aria-label={t('home.widgets')}>
@@ -198,12 +216,13 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
           })}
         </ul>
       )}
-      {customizing && home.data && (
+      {customizing && view && (
         <HomeCustomize
           id="ui-home-customize"
           workspace={workspace}
           admin={admin}
-          home={home.data}
+          home={view}
+          focusOnOpen={openedFromEmpty}
           run={run}
           move={move}
           remove={remove}

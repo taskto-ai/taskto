@@ -324,8 +324,10 @@ test('an empty Home offers the first step: adding a widget when an app offers on
   const { unmount } = render(<Shell me={me} onLogout={() => {}} />)
   await screen.findByText('Nothing on your Home yet')
   fireEvent.click(await screen.findByRole('button', { name: 'Add widgets' }))
-  // That opens customize mode, where the app's widget is offered.
+  // That opens customize mode, where the app's widget is offered, and the keyboard, whose button is
+  // gone with the empty state, is on what to add.
   expect(await screen.findByRole('button', { name: 'Add Spending to Home' })).toBeTruthy()
+  expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Add from your apps' }))
   expect(screen.getByRole('button', { name: 'Done' }).getAttribute('aria-expanded')).toBe('true')
   unmount()
 
@@ -505,4 +507,50 @@ test('a widget and a pin of the same name have “more” menus named apart', as
   fireEvent.click(await screen.findByRole('button', { name: 'Customize' }))
   expect(await screen.findByRole('button', { name: 'More actions for the Equipment widget' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'More actions for the Equipment pin' })).toBeTruthy()
+})
+
+test('a reload started before a move finishes doesn’t settle the keyboard; the reload after it does', async () => {
+  let order = [10, 11]
+  const byId: Record<number, HomeItem> = Object.fromEntries(
+    ['First', 'Second'].map((title, n) => [
+      10 + n,
+      widgetItem({ id: 10 + n, widget_id: `w${n}`, widget: { id: `w${n}`, title, kind: 'shortcut' } }),
+    ]),
+  )
+  const held: (() => void)[] = []
+  let hold = false
+  let finishMove: (() => void) | undefined
+  fakeFetch({
+    'GET /api/workspaces/1/home': async () => {
+      // What the server has when asked, answered when released.
+      const snapshot = home({ widgets: order.map((id) => byId[id]) })
+      if (hold) await new Promise<void>((resolve) => held.push(resolve))
+      return { body: snapshot }
+    },
+    'GET /api/workspaces/1/home/available': { body: { apps: [] } },
+    'PUT /api/workspaces/1/home/order': async (call) => {
+      await new Promise<void>((resolve) => (finishMove = resolve))
+      order = (call.body as { ids: number[] }).ids
+      return { status: 204 }
+    },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByRole('article', { name: 'First' })
+  fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+  const later = screen.getByRole('button', { name: 'Move First later' })
+  later.focus()
+  fireEvent.click(later)
+  await waitFor(() => expect(finishMove).toBeDefined())
+  // A change made elsewhere starts a reload while the move is on its way; it answers first.
+  hold = true
+  act(() => homeChanged())
+  await waitFor(() => expect(held.length).toBeGreaterThan(0))
+  act(() => {
+    for (const go of held.splice(0)) go()
+  })
+  // Then the move finishes, and Home loads what it did.
+  hold = false
+  act(() => finishMove?.())
+  await screen.findByText('First moved to position 2 of 2')
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Move First earlier' })))
 })

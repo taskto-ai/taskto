@@ -4,6 +4,7 @@
 // row's "more" menu. Visible labels are short ("Add", "Pin"); each control's name says what it acts
 // on ("Add Spending to Home"), so a list of them heard one after another is still clear.
 
+import { useEffect, useRef } from 'react'
 import { type AvailableApp, api, type HomeView, ws } from '../api'
 import { type Key, useT } from '../i18n'
 import { Badge } from '../ui/Badge'
@@ -28,6 +29,7 @@ export function HomeCustomize({
   move,
   remove,
   hide,
+  focusOnOpen = false,
 }: {
   id: string
   workspace: number
@@ -37,8 +39,15 @@ export function HomeCustomize({
   move: Move
   remove: Act
   hide: Act
+  // Put the keyboard on the "Add from your apps" heading when this opens.
+  focusOnOpen?: boolean
 }) {
   const t = useT()
+  const addHeading = useRef<HTMLHeadingElement>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when it opens
+  useEffect(() => {
+    if (focusOnOpen) addHeading.current?.focus()
+  }, [])
   const base = ws(workspace)
   const available = useHomeLoad(
     () => api<{ apps: AvailableApp[] }>(`${base}/home/available`).then((r) => r.apps),
@@ -216,7 +225,7 @@ export function HomeCustomize({
       )}
 
       <section className="ui-home-section" aria-labelledby="ui-home-add">
-        <Heading level={2} id="ui-home-add">
+        <Heading level={2} id="ui-home-add" ref={addHeading} tabIndex={-1}>
           {t('home.add')}
         </Heading>
         {available.error && <Notice tone="danger">{available.error}</Notice>}
