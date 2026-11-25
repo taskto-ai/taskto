@@ -326,7 +326,6 @@ function UpdateNow({
   const busy = running || ((pending || waiting) && !gaveUp)
   // Ask again a moment after the last answer (or failure) came, never while one is on its way: the
   // server restarts during an update, and a read that is cut off by the next one shows nothing.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `settled` is what moves the timer on
   useEffect(() => {
     if (!busy || settled === 0) return
     const timer = setTimeout(() => {
