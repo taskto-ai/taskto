@@ -42,7 +42,7 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
         <thead>
           <tr>
             {columns.map((c) => (
-              <th key={c.key} scope="col" data-numeric={c.numeric || undefined}>
+              <th key={c.key} scope="col" className="ui-table-head" data-numeric={c.numeric || undefined}>
                 {c.hiddenHeader ? <VisuallyHidden>{c.header}</VisuallyHidden> : c.header}
               </th>
             ))}
@@ -50,9 +50,9 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={rowKey(row)}>
+            <tr key={rowKey(row)} className="ui-table-row">
               {columns.map((c) => (
-                <td key={c.key} data-numeric={c.numeric || undefined}>
+                <td key={c.key} className="ui-table-cell" data-numeric={c.numeric || undefined}>
                   {c.cell(row)}
                 </td>
               ))}

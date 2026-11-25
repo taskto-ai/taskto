@@ -283,3 +283,32 @@ test('a system colour is a colour literal too, outside a theme', () => {
   expect(theme.err).toBe('')
   expect(theme.code).toBe(0)
 })
+
+test('an old element rule that can match anywhere leaves the design system’s elements out, or fails', () => {
+  const OPT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
+  for (const css of [
+    'h2 { margin: 0; }\n',
+    'p, .tt-a { text-wrap: pretty; }\n.tt-a { color: inherit; }\n',
+    '@media (pointer: coarse) {\n  label:has(> input[type="checkbox"]) { min-height: 44px; }\n}\n',
+    'main > section h3 { margin: 0; }\n',
+    'h2:not(:where(.ui-control)) { margin: 0; }\n',
+  ]) {
+    const r = run(css)
+    expect(r.code, css).toBe(1)
+    expect(r.err).toContain('reaches into the design system')
+  }
+  for (const css of [
+    `h2${OPT} { margin: 0; }\n`,
+    `label:has(> input[type="checkbox"])${OPT} { min-height: 44px; }\n`,
+    '.tt-markdown h2 { margin: 0; }\n#root p { margin: 0; }\n',
+    '@keyframes spin { from { rotate: 0; } to { rotate: 1turn; } }\n',
+    'html, body { margin: 0; }\n*, ::selection, :focus-visible { outline: 0; }\n',
+  ]) {
+    const r = run(css)
+    expect(r.err, css).toBe('')
+    expect(r.code).toBe(0)
+  }
+  // The design system's own stylesheets are layered and style their own classes: not looked at.
+  const own = runFiles({ 'ui/x.css': '@layer components { h2 { margin: 0; } }\n' })
+  expect(own.code).toBe(0)
+})
