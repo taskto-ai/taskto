@@ -52,14 +52,18 @@ func TestExportCardsReadsEachCardOnceWhileTheyMove(t *testing.T) {
 func TestExportBoardsAndCardsAreTheCallersToRead(t *testing.T) {
 	w := newWorld(t)
 	ctx := t.Context()
-	if err := w.e.s.ExportBoards(ctx, w.mallory.id, w.alicePrivate.ID, func(Board) error { return nil }); !errors.Is(err, ErrNotFound) {
+	err := w.e.s.ExportBoards(ctx, w.mallory.id, w.alicePrivate.ID, func(Board) error {
+		t.Error("a board of another person's private space was handed over")
+		return nil
+	})
+	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another person's private space = %v, want ErrNotFound", err)
 	}
 	if err := w.e.s.ExportCards(ctx, w.mallory.id, w.alicePrivate.ID, w.alicePersonal.ID, func(Thread) error { return nil }); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another person's cards = %v, want ErrNotFound", err)
 	}
 	var list []Board
-	err := w.e.s.ExportBoards(ctx, w.alice.id, w.alicePrivate.ID, func(b Board) error { list = append(list, b); return nil })
+	err = w.e.s.ExportBoards(ctx, w.alice.id, w.alicePrivate.ID, func(b Board) error { list = append(list, b); return nil })
 	if err != nil || len(list) != 1 || list[0].ID != w.alicePersonal.ID {
 		t.Fatalf("own boards = %v, %v", list, err)
 	}

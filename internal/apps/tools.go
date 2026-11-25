@@ -160,8 +160,9 @@ func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) (
 // definition, the rows and their attachments' metadata. A demotion, a removal or a publish
 // that happens meanwhile is therefore either all in what comes back or not at all: never rows
 // of a scope the person no longer has, nor rows shaped by another release than the definition
-// that is returned. If allow is set and says no for the person's access, the app is ErrNotFound.
-func (s *Service) snapshotRows(ctx context.Context, a Actor, spaceID, appID int64, allow func(access.AppAccess) bool) (App, access.AppAccess, []map[string]any, error) {
+// that is returned. check, if set, is asked inside the snapshot, once the access is known, and
+// an error from it ends the read.
+func (s *Service) snapshotRows(ctx context.Context, a Actor, spaceID, appID int64, check func(ctx context.Context, tx *sql.Tx, sp access.Space, acc access.AppAccess) error) (App, access.AppAccess, []map[string]any, error) {
 	var ap App
 	var acc access.AppAccess
 	var items []map[string]any
@@ -176,8 +177,10 @@ func (s *Service) snapshotRows(ctx context.Context, a Actor, spaceID, appID int6
 		if acc, err = appAccessBy(ctx, snap, a, sp.ID, appID); err != nil {
 			return err
 		}
-		if allow != nil && !allow(acc) {
-			return ErrNotFound
+		if check != nil {
+			if err := check(ctx, tx, sp, acc); err != nil {
+				return err
+			}
 		}
 		// The app and its rows are read asking for the app to be in this space: an app that
 		// moved before the snapshot began is ErrNotFound, never its rows read from the space it left.

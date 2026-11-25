@@ -684,11 +684,7 @@ func (ex *run) boards(ctx context.Context, p place) error {
 		if err := ex.boardJSON(ctx, p, b, base); err != nil {
 			return err
 		}
-		if err := ex.boardMarkdown(ctx, p, b, base); err != nil {
-			return err
-		}
-		ex.mf.Counts["boards"]++
-		return nil
+		return ex.boardMarkdown(ctx, p, b, base)
 	})
 	if errors.Is(err, boards.ErrNotFound) {
 		return ex.lost(ctx, p, fmt.Errorf("exporting boards: %w", err))
@@ -713,6 +709,9 @@ func (ex *run) boardJSON(ctx context.Context, p place, b boards.Board, base stri
 	if _, err := fmt.Fprintf(w, "{\n  \"board\": %s,\n  \"cards\": [", head); err != nil {
 		return err
 	}
+	// The board is in the zip from here, whole or cut short by a space the admin leaves: it counts
+	// once, however its Markdown file ends.
+	ex.mf.Counts["boards"]++
 	n := 0
 	err = ex.svc.boards.ExportCards(ctx, ex.user.ID, p.space.ID, b.ID, func(t boards.Thread) error {
 		if err := ex.checkWho(ctx, p); err != nil {
@@ -930,6 +929,9 @@ func (ex *run) apps(ctx context.Context, p place) error {
 		// a role taken away, or a publish, while the export runs can't mix them. A workspace export
 		// also asks for a role held in the app, not the way back an admin has into a stranded one.
 		got, err := ex.svc.apps.ExportApp(ctx, actor, p.space.ID, ap.ID, p.shared)
+		if errors.Is(err, apps.ErrNotAdmin) {
+			return errNotAdmin
+		}
 		if errors.Is(err, apps.ErrNotFound) {
 			// The app moved out of the space since the listing (it is another space's now), or the
 			// caller lost their place in it: its records stay out. If it is the space the caller

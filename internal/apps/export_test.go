@@ -107,7 +107,7 @@ func TestExportAppPairsTheDefinitionWithItsRecords(t *testing.T) {
 		cur = w.mustPatchDraft(w.alice, w.shared, cur, without(*cur.Draft, "description"))
 		published = w.tryPublish(w.alice, w.shared, cur, SchemaChange{ChangeFieldRemoved, "description"}).Code == 200
 	})
-	got, err := w.e.s.ExportApp(ctx, Actor{UserID: w.alice.id}, w.shared.ID, w.sharedApp.ID, true)
+	got, err := w.e.s.ExportApp(ctx, Actor{UserID: w.alice.id}, w.shared.ID, w.sharedApp.ID, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,5 +118,39 @@ func TestExportAppPairsTheDefinitionWithItsRecords(t *testing.T) {
 	hasValues := len(descriptions(got.Rows)) > 0
 	if hasField != hasValues {
 		t.Fatalf("release %d's definition has the field = %v but the records show it = %v: not one release", got.Live.Number, hasField, hasValues)
+	}
+}
+
+// A workspace export's read of an app asks, in the snapshot the app is read in, whether the
+// exporter is still an admin of the workspace: a demotion after the export's own check but before
+// the snapshot gets nothing of the app. A person's own export asks no such thing.
+func TestExportAppAsksTheWorkspaceRoleInItsSnapshot(t *testing.T) {
+	w := newWorld(t)
+	ctx := t.Context()
+	w.grantIn(w.sharedApp, w.owner.id, "reader")
+	owner := Actor{UserID: w.owner.id}
+	demote := func() {
+		if _, err := w.e.db.Exec(`UPDATE memberships SET role = 'member' WHERE workspace_id = ? AND user_id = ?`, w.ws, w.owner.id); err != nil {
+			t.Error(err)
+		}
+	}
+	w.e.dbHooks.BeforeBegin(demote)
+	got, err := w.e.s.ExportApp(ctx, owner, w.shared.ID, w.sharedApp.ID, true)
+	if !errors.Is(err, ErrNotAdmin) || len(got.Rows) != 0 || got.Live != nil {
+		t.Fatalf("a workspace export of an app by an admin demoted before its snapshot = %+v, %v, want ErrNotAdmin and nothing", got, err)
+	}
+	// Not a workspace export: their access to the space and the app is all it asks.
+	if _, err := w.e.s.ExportApp(ctx, owner, w.shared.ID, w.sharedApp.ID, false); err != nil {
+		t.Fatalf("an export that isn't the workspace's = %v", err)
+	}
+	// Nor is a disabled account an admin.
+	if _, err := w.e.db.Exec(`UPDATE memberships SET role = 'admin' WHERE workspace_id = ? AND user_id = ?`, w.ws, w.owner.id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.e.db.Exec(`UPDATE users SET disabled_at = CURRENT_TIMESTAMP WHERE id = ?`, w.owner.id); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := w.e.s.ExportApp(ctx, owner, w.shared.ID, w.sharedApp.ID, true); err == nil || len(got.Rows) != 0 {
+		t.Fatalf("a disabled admin's export of an app = %+v, %v, want nothing", got, err)
 	}
 }

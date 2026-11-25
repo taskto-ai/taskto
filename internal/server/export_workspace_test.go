@@ -177,7 +177,7 @@ func TestWorkspaceExportHoldsOnlyWhatTheAdminCanRead(t *testing.T) {
 			haveMD = strings.Contains(string(b), "team-card") && strings.Contains(string(b), "team-comment")
 		}
 	}
-	if !haveBoard || len(board.Cards) != 1 || board.Cards[0].Title != "team-card" || board.Cards[0].Comments[0].Body != "team-comment" {
+	if !haveBoard || len(board.Cards) != 1 || board.Cards[0].Title != "team-card" || len(board.Cards[0].Comments) != 1 || board.Cards[0].Comments[0].Body != "team-comment" {
 		t.Errorf("team board = %+v (have %v)", board, haveBoard)
 	}
 	if !haveMD {
@@ -569,7 +569,10 @@ func TestWorkspaceExportStopsReadingWhenTheAdminIsDemoted(t *testing.T) {
 			if !cut {
 				t.Fatalf("the export of a demoted admin went on to the end (%d bytes)", rec.Body.Len())
 			}
-			if after == nil || after() != 0 {
+			if after == nil {
+				t.Fatalf("the demotion hook never ran: no read of %s", tt.name)
+			}
+			if after() != 0 {
 				t.Errorf("%d reads of %s after the admin was demoted, want none", after(), tt.name)
 			}
 			if _, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len())); err == nil {
