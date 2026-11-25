@@ -27,6 +27,42 @@
       ],
       "action": "Open the notification"
     },
+    "notification_card_comment": {
+      "subject": "A card of yours has a new comment",
+      "title": "A card of yours has a new comment",
+      "paragraphs": [
+        "Open TaskTo.AI to read it.",
+        "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
+      ],
+      "action": "Open the notification"
+    },
+    "notification_card_mention": {
+      "subject": "You were mentioned in a comment",
+      "title": "You were mentioned in a comment",
+      "paragraphs": [
+        "Open TaskTo.AI to see it.",
+        "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
+      ],
+      "action": "Open the notification"
+    },
+    "notification_card_due": {
+      "subject": "A card of yours is due",
+      "title": "A card of yours is due",
+      "paragraphs": [
+        "Open TaskTo.AI to see it.",
+        "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
+      ],
+      "action": "Open the notification"
+    },
+    "notification_card_overdue": {
+      "subject": "A card of yours is overdue",
+      "title": "A card of yours is overdue",
+      "paragraphs": [
+        "Open TaskTo.AI to see it.",
+        "You get this email because you turned it on in Settings, Notifications. It says only what happened, never what is in it."
+      ],
+      "action": "Open the notification"
+    },
     "notification_app_effect_failed": {
       "subject": "An app action needs your attention",
       "title": "An app action needs your attention",

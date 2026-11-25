@@ -89,7 +89,7 @@ const (
 
 // EmailKinds are the kinds a person may choose email for.
 func EmailKinds() []string {
-	return []string{KindCardAssigned, KindAppEffectFailed}
+	return []string{KindCardAssigned, KindCardComment, KindCardMention, KindCardDue, KindCardOverdue, KindAppEffectFailed}
 }
 
 func emailKind(kind string) bool {
