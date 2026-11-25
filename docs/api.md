@@ -3056,8 +3056,8 @@ workspace admin's choice, made when they approve the app's contract. See
 **The contract.** From the draft the server works out, for each slot, a **contract**: the kind, the
 operations the app asks for, the record fields it sends out (names only), the currencies, the events
 it handles, for each field the integration may write the literals and the sources it may write, the
-`only_if` rules, `links` (each `create_payment_link` effect: its action, amount field, currency or
-currency field and its options, the fields written, and its `when`), and `handlers`, each event's
+`only_if` rules, `links` (each `create_payment_link` effect: its action, amount field, the fields its description names,
+currency or currency field and its options, the fields written, and its `when`), and `handlers`, each event's
 writes field by field, which bind a write to its event (moving a value from one event to another is
 another contract). It holds no wording: changing the text of a `description` without changing the
 fields it names needs no new approval. It is
@@ -3135,7 +3135,7 @@ every slot of the release that would become live has an approval of its contract
 integration is switched on and allowed in the app's space. A rollback is checked for the contract of
 the release it returns to, which may never have been approved or may have been revoked since. The
 code that uses an integration for the app asks again each time it acts, so revoking, switching the
-integration off and taking the space away stop the app at once.
+integration off and taking the space away stop the app's use of the integration at once; the app stays online.
 
 **Copies, templates and moves.** Approvals belong to an app, not to a definition: a duplicate and an
 installed template carry the slots and no approval, so they can't be published until their own
@@ -3495,7 +3495,7 @@ since the route is not one a token reaches.
 Those who may design or publish the app (`403 app_forbidden` otherwise). The same body as an action;
 it is worked out against the **draft** and **does nothing**: no record changes, no operation is
 kept, no entry is queued, no card or document is made. It answers `{"effects": […]}`, the effects
-that would apply, with `status: "simulated"`, what they would make in `detail` (a new record's `id`
+that would apply (not a `create_payment_link`, which is declared only), with `status: "simulated"`, what they would make in `detail` (a new record's `id`
 is `new`), and an `error` with the code an effect would fail with if the caller couldn't write its
 target.
 
@@ -3529,7 +3529,8 @@ draft doesn't declare, a value that doesn't fit its field, or a row the sample r
 `200` with `{"messages": […], "rows": […], "effects"?: […]}`: the A2UI messages that draw the screen (`createSurface`,
 `updateComponents`, `updateDataModel` for a start, as `…/surface` answers) or update it (as `…/actions`
 does), and the rows as the action left them, to send with the next step. For an insert or an update
-with effects, `effects` are the ones that would apply to the record, simulated on those rows (as
+with effects, `effects` are the ones that would apply to the record, simulated on those rows (a
+`create_payment_link` is declared only and is never simulated; as
 [`…/actions/preview`](#post-appsappactionspreview) answers; nothing is made). In a preview a
 **signature** or a **photo** is never required, since none is held, so an action whose record would
 carry one is not refused for the lack of it. The answer is the same

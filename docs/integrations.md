@@ -152,7 +152,7 @@ SHA-256 is the contract's **hash**.
 **Approval is by hash, through a queue.**
 
 1. The person who may publish the app reads the slot's contract and **requests** its approval,
-   naming the hash they read; a draft that changed since is refused.
+   naming the hash they read; the request is refused if the slot's contract hash has changed since.
 2. A workspace admin sees the queue: the app's and its space's names, who asked and the
    contract. Nothing of the app or its records is in it, which is why an app in another person's
    private space, which an admin can't open, is approved the same way.
@@ -168,7 +168,7 @@ SHA-256 is the contract's **hash**.
 5. The code that uses an integration for an app asks again each time (`Service.Binding`): the app is
    online, its live release declares the slot, that release's contract is approved, the integration is
    on and the space allowed. An admin who **revokes** an approval, switches the integration off or
-   removes the space stops the app at once.
+   removes the space stops the app's use of the integration at once; the app stays online.
 
 An approval is for the next draft as much as the live release: the live release's stays approved
 while the draft's is decided. In a one-person install the publisher is the admin: requesting,

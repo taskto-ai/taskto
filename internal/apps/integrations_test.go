@@ -1023,6 +1023,9 @@ func TestTheQueueIsPagedAndReachesTheOldest(t *testing.T) {
 		rec := i.queue(i.owner, i.ws, "?status=all&cursor="+cursor)
 		expect(t, rec, http.StatusOK)
 		page := decode[ApprovalList](t, rec)
+		if strings.Contains(rec.Body.String(), `"links":null`) || strings.Contains(rec.Body.String(), `"handlers":null`) {
+			t.Fatalf("a stored contract with no links or handlers is sent as null: %.300s", rec.Body.String())
+		}
 		pages++
 		if pages == 1 && len(page.Approvals) != maxApprovals {
 			t.Fatalf("the first page has %d", len(page.Approvals))
@@ -1121,6 +1124,17 @@ func TestTheContractBindsEachLinkToItsActionCurrencyAndCondition(t *testing.T) {
 	}
 	if hash(base) == hash(swapped) {
 		t.Error("swapping the currencies of two actions left the hash as it was")
+	}
+	// The fields a link's description names are bound to the link, not only to the slot.
+	swappedText, err := variant(t, append(slices.Clone(twoActions), `"Invoice {{number}} for {{customer}}"`, `"Reminder {{number}}"`, `"Reminder {{number}}"`, `"Invoice {{number}} for {{customer}}"`)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(base.contract("payments").Sends, swappedText.contract("payments").Sends) {
+		t.Fatal("the fields sent differ, so the test proves nothing")
+	}
+	if hash(base) == hash(swappedText) {
+		t.Error("swapping the descriptions' fields between two actions left the hash as it was")
 	}
 	// The condition on the link is part of what was approved: dropping it needs a new approval.
 	restricted, err := variant(t, `"kind": "create_payment_link", "integration": "payments"`,

@@ -466,7 +466,10 @@ type ContractLink struct {
 	// not wording: moving a request to another action is another contract.
 	Action      string `json:"action"`
 	AmountField string `json:"amount_field"`
-	Currency    string `json:"currency,omitempty"`
+	// Describes are the fields the link's description names, sorted: the fields it sends out as
+	// text. The wording itself is not in the contract.
+	Describes []string `json:"describes" apitypes:"nonnull"`
+	Currency  string   `json:"currency,omitempty"`
 	// CurrencyField and CurrencyOptions are the choice field the currency is read from, and the
 	// currencies it offers, sorted.
 	CurrencyField   string   `json:"currency_field,omitempty"`
@@ -534,8 +537,14 @@ func (d Definition) contract(slot string) Contract {
 				continue
 			}
 			c.Operations = mergeSorted(c.Operations, []string{e.Kind})
-			link := ContractLink{Action: name, AmountField: e.AmountField, Currency: e.Currency, CurrencyField: e.CurrencyField,
+			link := ContractLink{Action: name, AmountField: e.AmountField, Describes: []string{}, Currency: e.Currency, CurrencyField: e.CurrencyField,
 				URLField: e.URLField, IDField: e.IDField, When: e.When}
+			_ = holes(e.Description, func(text string, isHole bool) error {
+				if isHole && text != "id" {
+					link.Describes = mergeSorted(link.Describes, []string{text})
+				}
+				return nil
+			})
 			sends[e.AmountField] = true
 			if e.CurrencyField != "" {
 				sends[e.CurrencyField] = true

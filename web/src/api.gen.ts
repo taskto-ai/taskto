@@ -182,6 +182,7 @@ export type AppsContractHandler = {
 export type AppsContractLink = {
   action: string
   amount_field: string
+  describes: string[]
   currency?: string
   currency_field?: string
   currency_options?: string[]

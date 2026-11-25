@@ -221,6 +221,12 @@ func (c *Contract) normalize() {
 	if c.OnlyIf == nil {
 		c.OnlyIf = []ContractRule{}
 	}
+	if c.Links == nil {
+		c.Links = []ContractLink{}
+	}
+	if c.Handlers == nil {
+		c.Handlers = []ContractHandler{}
+	}
 }
 
 // approvalsOf loads the approvals of an app, newest first.
@@ -357,12 +363,17 @@ func (s *Service) integrationStatus(ctx context.Context, sp access.Space, a Acto
 	if !acc.Has(access.CapDesign) && !acc.Has(access.CapPublish) {
 		return IntegrationStatus{}, forbidden(string(access.CapDesign))
 	}
-	cur, err := app(ctx, s.db, sp.ID, appID)
-	if err != nil {
-		return IntegrationStatus{}, err
-	}
-	rows, err := approvalsOf(ctx, s.db, appID)
-	if err != nil {
+	// The draft, the live release and the approvals are read in one transaction: the status shows
+	// one moment's state, never an approval of a release that was no longer live when it was read.
+	var cur App
+	var rows []approvalRow
+	if err := s.snapshot(ctx, func(q queryer) (err error) {
+		if cur, err = app(ctx, q, sp.ID, appID); err != nil {
+			return err
+		}
+		rows, err = approvalsOf(ctx, q, appID)
+		return err
+	}); err != nil {
 		return IntegrationStatus{}, err
 	}
 	out := IntegrationStatus{Slots: []SlotStatus{}}
