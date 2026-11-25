@@ -1,0 +1,71 @@
+/* A sample second brand, "harbor": cool paper, navy ink and a signal yellow. It is not shipped:
+   the app imports only the default brand (../index.css). The tests load it, and so will the
+   gallery of components, to prove that a brand is this one block of colour roles and that
+   swapping it changes nothing else. It is chosen by data-brand="harbor" on <html>, with this file
+   imported; light and dark still come from the page's color-scheme. */
+
+@layer themes {
+  :root[data-brand="harbor"] {
+    --color-bg: light-dark(#f6f8fb, #0f1620);
+    --color-bg-sunken: light-dark(#e9eef4, #141c28);
+    --color-surface: light-dark(#ffffff, #182230);
+    --color-surface-own: light-dark(#e9eef4, #212c3c);
+    --color-paper: #ffffff;
+    --color-media: #000000;
+
+    --color-hover: light-dark(rgba(15, 22, 32, 0.05), rgba(246, 248, 251, 0.07));
+    --color-selected: light-dark(rgba(15, 22, 32, 0.08), rgba(246, 248, 251, 0.12));
+    --color-scrim: light-dark(rgba(15, 22, 32, 0.42), rgba(0, 0, 0, 0.6));
+    --color-shadow: light-dark(rgba(15, 22, 32, 0.35), rgba(0, 0, 0, 0.8));
+
+    --color-text: light-dark(#0f1620, #f6f8fb);
+    --color-text-soft: light-dark(#283444, #d0d7e2);
+    --color-text-muted: light-dark(#4f5b6c, #a3adbb);
+
+    --color-border: light-dark(rgba(15, 22, 32, 0.14), rgba(246, 248, 251, 0.14));
+    --color-border-strong: light-dark(#6f7b89, #8793a3);
+    --color-rule: light-dark(#0f1620, rgba(246, 248, 251, 0.24));
+
+    --color-accent: #ffd447;
+    --color-accent-hover: #ffe07a;
+    --color-on-accent: #0f1620;
+    --color-accent-edge: light-dark(#0f1620, #d9ac12);
+    --color-accent-soft: light-dark(#fff3c4, rgba(255, 212, 71, 0.14));
+
+    --color-focus: light-dark(#0f1620, #ffd447);
+    --color-link: light-dark(#1c4f9c, #9cc2ff);
+    --color-node: #ffd447;
+    --color-node-edge: #d9ac12;
+    --color-logo: #1c4f9c;
+
+    --color-success: light-dark(#00633f, #7df7c1);
+    --color-success-soft: light-dark(#d5f7e4, rgba(76, 239, 168, 0.14));
+    --color-warning: light-dark(#8a4200, #ffc266);
+    --color-warning-soft: light-dark(#fbeccb, rgba(255, 176, 77, 0.15));
+    --color-danger: light-dark(#b42318, #ff8a82);
+    --color-danger-soft: light-dark(#fde5e1, rgba(255, 138, 130, 0.15));
+    --color-on-danger: light-dark(#ffffff, #0f1620);
+    --color-info: light-dark(#1c4f9c, #9cc2ff);
+    --color-info-soft: light-dark(#e1ebfa, rgba(110, 160, 255, 0.16));
+    --color-neutral: light-dark(#4f5b6c, #a3adbb);
+    --color-neutral-soft: light-dark(#e3e9f0, rgba(246, 248, 251, 0.09));
+
+    --color-label-green: light-dark(#00633f, #7df7c1);
+    --color-label-green-soft: light-dark(#d5f7e4, rgba(76, 239, 168, 0.16));
+    --color-label-blue: light-dark(#1c4f9c, #a9c9ff);
+    --color-label-blue-soft: light-dark(#dfe9fa, rgba(110, 160, 255, 0.18));
+    --color-label-violet: light-dark(#5334a3, #cbbcff);
+    --color-label-violet-soft: light-dark(#e9e3fa, rgba(160, 130, 255, 0.2));
+    --color-label-pink: light-dark(#972159, #ffb0d2);
+    --color-label-pink-soft: light-dark(#fae1ec, rgba(255, 120, 180, 0.17));
+    --color-label-amber: light-dark(#7a4a00, #ffd27a);
+    --color-label-amber-soft: light-dark(#f9eac6, rgba(255, 190, 80, 0.16));
+    --color-label-teal: light-dark(#0b5f5a, #8be6de);
+    --color-label-teal-soft: light-dark(#d5f1ee, rgba(90, 220, 210, 0.15));
+
+    --color-column-todo: light-dark(#2f6fde, #7aa7ff);
+    --color-column-doing: light-dark(#b86e00, #ffb04d);
+    --color-column-review: light-dark(#7c5ce0, #b9a5ff);
+    --color-column-done: light-dark(#0e8a58, #4cefa8);
+  }
+}

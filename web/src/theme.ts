@@ -16,8 +16,10 @@ export function storedTheme(): Theme {
   return 'system'
 }
 
-// The page's ground in each theme: --tt-canvas in styles.css (a test keeps them equal), which
-// is what the top bar is, so the browser's own chrome (the address bar, the status bar) matches it.
+// The page's ground in each theme: --color-bg of the default brand, ui/themes/mint.css (tests keep
+// them equal), so the browser's own chrome (the address bar, the status bar) matches the page.
+// A brand theme is chosen apart from this, by data-brand on <html> (docs/design.md); only the
+// default brand ships, so these are its colours.
 export const THEME_COLOR = { light: '#faf8f4', dark: '#111110' } as const
 
 // The `theme-color` metas in index.html follow the OS through their media queries, which is right
