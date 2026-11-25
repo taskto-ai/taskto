@@ -61,6 +61,13 @@ const (
 	// email, or the server is busy making them. Retry-After says when to try again.
 	CodeTooManyResets Code = "too_many_resets"
 
+	// Disabling a member (internal/auth/disable.go). account_disabled is also what a login, a
+	// single sign-on and a reset link answer for a disabled account.
+
+	CodeAccountDisabled  Code = "account_disabled"
+	CodeDisableOwn       Code = "disable_own"
+	CodeDisableElsewhere Code = "disable_elsewhere"
+
 	// Your own sessions (internal/auth/sessions.go).
 
 	CodeSessionNotFound Code = "session_not_found"
