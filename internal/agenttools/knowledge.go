@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"net/http"
 	"strings"
 	"unicode/utf8"
 
@@ -69,11 +70,14 @@ type searchHit struct {
 // searchArgs are the arguments of search_docs and search_cards.
 type searchArgs struct {
 	Query string `json:"query"`
-	// SpaceID and Limit are raw to tell "not given" from null and from 0: none of the
-	// latter two is a value (a null space would widen the search to every space).
+	// SpaceID, Limit and Offset are raw to tell "not given" from null and from 0: null is never
+	// a value (a null space would widen the search to every space), and 10.0 is a whole number.
 	SpaceID json.RawMessage `json:"space_id"`
 	Limit   json.RawMessage `json:"limit"`
-	Offset  int             `json:"offset"`
+	Offset  json.RawMessage `json:"offset"`
+
+	// offset is Offset's value, set by the handlers once they have checked it (searchOffset).
+	offset int
 }
 
 // searchSpaces checks the arguments of a search, and returns them with the limit and the
@@ -96,6 +100,10 @@ func (s *Service) searchSpaces(ctx context.Context, c *call, args json.RawMessag
 			return a, 0, nil, invalidf("limit must be 1 to %d", maxSearchLimit)
 		}
 		limit = int(n)
+	}
+	var err error
+	if a.offset, err = searchOffset(a.Offset); err != nil {
+		return a, 0, nil, err
 	}
 	if s.o.Search == nil {
 		return a, 0, nil, errInvalid(off)
@@ -149,7 +157,7 @@ func (s *Service) searchCards(ctx context.Context, c *call, args json.RawMessage
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.o.Search.SearchCards(ctx, s.o.Access, c.User, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.Offset})
+	res, err := s.o.Search.SearchCards(ctx, s.o.Access, c.User, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.offset})
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +188,7 @@ func (s *Service) searchDocs(ctx context.Context, c *call, args json.RawMessage)
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.o.Search.Search(ctx, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.Offset})
+	res, err := s.o.Search.Search(ctx, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.offset})
 	if err != nil {
 		return nil, err
 	}
@@ -437,4 +445,144 @@ func (s *Service) author(ctx context.Context, c *call) (knowledge.Author, error)
 	}
 	err := s.o.DB.QueryRowContext(ctx, `SELECT name, email FROM users WHERE id = ?`, c.User).Scan(&by.Name, &by.Email)
 	return by, err
+}
+
+type recordHit struct {
+	SpaceID   int64  `json:"space_id"`
+	SpaceName string `json:"space_name"`
+	AppID     int64  `json:"app_id"`
+	AppName   string `json:"app_name"`
+	RecordID  int64  `json:"record_id"`
+	Snippet   string `json:"snippet"`
+}
+
+// searchRecords searches the records of the apps in one space, or in every space the user can
+// read in the call's workspace, by full text: only the records the user may read in each app
+// (their roles in it decide: every record, or only those they made), and only of the values of
+// the fields the app's live release declares.
+func (s *Service) searchRecords(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	a, limit, spaces, err := s.searchSpaces(ctx, c, args, "search is off on this server: use list_apps and list_app_rows")
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.o.Search.SearchRecords(ctx, s.o.Access, c.User, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.offset})
+	if err != nil {
+		return nil, err
+	}
+	hits := []recordHit{}
+	for _, r := range res.Results {
+		text, _ := cut(snippetText(r.Snippet), 1000)
+		hits = append(hits, recordHit{SpaceID: r.SpaceID, SpaceName: r.SpaceName, AppID: r.AppID, AppName: r.AppName,
+			RecordID: r.RecordID, Snippet: text})
+	}
+	return fitSearchReply(hits, a.offset, res.Incomplete, res.NextOffset)
+}
+
+type conversationHit struct {
+	ConversationID int64  `json:"conversation_id"`
+	Title          string `json:"title"`
+	Archived       bool   `json:"archived,omitempty"`
+	UpdatedAt      string `json:"updated_at"`
+	Snippet        string `json:"snippet,omitempty"`
+}
+
+// searchConversations searches the conversations the user owns in the call's workspace, by
+// their title and what was said in them: never anyone else's, whatever the arguments.
+func (s *Service) searchConversations(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	// Not at the tokens' endpoint (no_token in tools.json): this is the check behind it.
+	if c.Conversation == 0 {
+		return nil, &Refusal{Status: http.StatusForbidden, Message: "search_conversations works only in a TaskTo.AI conversation"}
+	}
+	var a searchArgs
+	if err := decode(args, &a); err != nil {
+		return nil, err
+	}
+	// space_id is not an argument of this tool: conversations belong to a person, not a space.
+	if a.SpaceID != nil {
+		return nil, invalidf("search_conversations takes no space_id: it searches the user's own conversations")
+	}
+	limit, err := searchLimit(a.Limit)
+	if err != nil {
+		return nil, err
+	}
+	if a.offset, err = searchOffset(a.Offset); err != nil {
+		return nil, err
+	}
+	if len(a.Query) > search.MaxQueryLen {
+		return nil, invalidf("query is at most %d bytes of UTF-8", search.MaxQueryLen)
+	}
+	if s.o.Search == nil {
+		return nil, errInvalid("search is off on this server")
+	}
+	res, err := s.o.Search.SearchConversations(ctx, c.User, c.Workspace, search.Query{Text: a.Query, Limit: limit, Offset: a.offset})
+	if err != nil {
+		return nil, err
+	}
+	hits := []conversationHit{}
+	for _, r := range res.Results {
+		text, _ := cut(snippetText(r.Snippet), 1000)
+		hits = append(hits, conversationHit{ConversationID: r.ConversationID, Title: r.Title, Archived: r.Archived,
+			UpdatedAt: r.UpdatedAt, Snippet: text})
+	}
+	return fitSearchReply(hits, a.offset, res.Incomplete, res.NextOffset)
+}
+
+// snippetText is a snippet's text, without its marks.
+func snippetText(segs []search.Segment) string {
+	var b strings.Builder
+	for _, seg := range segs {
+		b.WriteString(seg.Text)
+	}
+	return b.String()
+}
+
+// searchLimit reads a search's limit, which is raw to tell "not given" from null and 0.
+func searchLimit(raw json.RawMessage) (int, error) {
+	if raw == nil {
+		return 10, nil
+	}
+	n, ok := wholeNumber(raw)
+	if !ok || n < 1 || n > maxSearchLimit {
+		return 0, invalidf("limit must be 1 to %d", maxSearchLimit)
+	}
+	return int(n), nil
+}
+
+// searchOffset reads a search's offset, which is raw to tell "not given" from null: a whole
+// number from 0 to search.MaxOffset, as the schema says ("10.0" is one).
+func searchOffset(raw json.RawMessage) (int, error) {
+	if raw == nil {
+		return 0, nil
+	}
+	n, ok := wholeNumber(raw)
+	if !ok || n < 0 || n > search.MaxOffset {
+		return 0, invalidf("offset must be 0 to %d", search.MaxOffset)
+	}
+	return int(n), nil
+}
+
+// fitSearchReply is a search's reply, with as many of its hits as fit in MaxResult once encoded
+// (JSON escapes some characters of a snippet as six bytes): when it has to leave hits out, its
+// next_offset is the first of them, so the next page returns them, if that offset is one a search
+// accepts (search.MaxOffset: the schema's maximum). An incomplete reply has no next_offset,
+// whatever fits: it is searched again instead.
+func fitSearchReply[H any](hits []H, offset int, incomplete bool, next *int) (any, error) {
+	build := func(n int) any {
+		reply := map[string]any{"results": hits[:n]}
+		if incomplete {
+			reply["incomplete"] = true
+		}
+		switch {
+		case incomplete:
+		case n < len(hits):
+			if offset+n <= search.MaxOffset {
+				reply["next_offset"] = offset + n
+			}
+		case next != nil:
+			reply["next_offset"] = *next
+		}
+		return reply
+	}
+	_, reply, err := fitting(len(hits), build)
+	return reply, err
 }
