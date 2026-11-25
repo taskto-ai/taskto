@@ -30,7 +30,7 @@ import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { Select } from '../ui/Select'
-import { Alert, CopyButton, Loading, Section, SettingsTab, useAction } from './parts'
+import { Alert, CopyButton, FormError, Loading, Section, SettingsTab, useAction, useRefocus } from './parts'
 
 type Translate = ReturnType<typeof useT>
 
@@ -74,8 +74,16 @@ export function IntegrationsTab({ workspace }: { workspace: number }) {
   )
   const [editing, setEditing] = useState<number | 'new' | null>(null)
   const [confirmDialog, confirm] = useConfirm()
+  // What had the keyboard can go with a change: the removed row's menu, the empty state's button
+  // once the first account is in. The section's title takes it then.
+  const refocus = useRefocus(list.data)
   const done = () => {
+    if (list.data?.length === 0) refocus.after()
     setEditing(null)
+    list.reload()
+  }
+  const removed = () => {
+    refocus.after()
     list.reload()
   }
   const add = registry.data && (
@@ -89,7 +97,12 @@ export function IntegrationsTab({ workspace }: { workspace: number }) {
 
   return (
     <SettingsTab title={t('settings.integrations.title')} help={t('settings.help.integrations')}>
-      <Section title={title} help={t('settings.integrations.intro')} actions={!empty && add}>
+      <Section
+        title={title}
+        help={t('settings.integrations.intro')}
+        actions={!empty && add}
+        headingRef={refocus.heading}
+      >
         <Alert error={registry.error ?? list.error ?? spaces.error} />
         {!list.data && !list.error && <Loading lines={2} />}
         {empty && (
@@ -109,6 +122,7 @@ export function IntegrationsTab({ workspace }: { workspace: number }) {
                   spaces={spaces.data ?? []}
                   onEdit={() => setEditing(i.id)}
                   onChanged={list.reload}
+                  onRemoved={removed}
                   confirm={confirm}
                 />
               ))}
@@ -148,6 +162,7 @@ function IntegrationRow({
   spaces,
   onEdit,
   onChanged,
+  onRemoved,
   confirm,
 }: {
   base: string
@@ -156,6 +171,7 @@ function IntegrationRow({
   spaces: Space[]
   onEdit: () => void
   onChanged: () => void
+  onRemoved: () => void
   confirm: Confirm
 }) {
   const t = useT()
@@ -185,12 +201,13 @@ function IntegrationRow({
       confirmLabel: t('settings.actions.removeConfirm'),
       tone: 'danger',
     })
-    if (yes) action.run(() => api(url, { method: 'DELETE' })).then((ok) => ok && onChanged())
+    if (yes) action.run(() => api(url, { method: 'DELETE' })).then((ok) => ok && onRemoved())
   }
 
   return (
     <Row
       title={i.display_name}
+      actionsBelow
       status={
         <>
           {check?.ok && (
@@ -244,8 +261,10 @@ function IntegrationRow({
               t('settings.integrations.polling')
             )}
           </span>
-          {checking && <span>{t('settings.integrations.checking')}</span>}
-          {check?.ok && <span role="status">{t('settings.integrations.checkOk')}</span>}
+          {/* Always there, so what a check says is announced when it arrives. */}
+          <span role="status" className="settings-check-status">
+            {checking ? t('settings.integrations.checking') : check?.ok ? t('settings.integrations.checkOk') : ''}
+          </span>
           {check && !check.ok && (
             <span role="alert" className="settings-error-text">
               {codeText(check.code, check.params, '')}
@@ -340,10 +359,13 @@ function SpacesForm({
     <Dialog
       open
       onClose={onCancel}
+      dismissible={!action.busy}
       title={name}
       actions={
         <>
-          <Button onClick={onCancel}>{t('common.cancel')}</Button>
+          <Button onClick={onCancel} disabled={action.busy}>
+            {t('common.cancel')}
+          </Button>
           <Button type="submit" form={formId} variant="primary" loading={action.busy}>
             {t('settings.actions.save')}
           </Button>
@@ -358,7 +380,7 @@ function SpacesForm({
             <Checkbox key={s.id} label={spaceName(t, s)} checked={chosen.includes(s.id)} onChange={() => flip(s.id)} />
           ))}
         </fieldset>
-        <Alert error={action.error} />
+        <FormError error={action.error} />
       </form>
     </Dialog>
   )
@@ -379,7 +401,19 @@ function IntegrationForm({
 }) {
   const t = useT()
   const f = useFormat()
-  const action = useAction()
+  // The server names a field by its code (api_key, max_amount_minor); the error says its label.
+  const action = useAction(
+    new Map([
+      ['name', t('settings.actions.name')],
+      ['display_name', t('settings.providers.displayName')],
+      ['max_amount_minor', t('settings.integrations.ceiling')],
+      ['currencies', t('settings.integrations.currencies')],
+      ...registry.providers.flatMap((p) => [
+        ...p.secrets.map((x) => [x.name, label(t, 'secret', x.name)] as const),
+        ...p.settings.map((x) => [x.name, label(t, 'setting', x.name)] as const),
+      ]),
+    ]),
+  )
   const formId = useId()
   const [form, setForm] = useState({
     provider: integration?.provider ?? registry.providers[0]?.id ?? '',
@@ -441,10 +475,13 @@ function IntegrationForm({
     <Dialog
       open
       onClose={onCancel}
+      dismissible={!action.busy}
       title={name}
       actions={
         <>
-          <Button onClick={onCancel}>{t('common.cancel')}</Button>
+          <Button onClick={onCancel} disabled={action.busy}>
+            {t('common.cancel')}
+          </Button>
           <Button
             type="submit"
             form={formId}
@@ -557,17 +594,23 @@ function IntegrationForm({
           />
         </Field>
         <fieldset className="settings-fieldset">
-          <legend>{t('settings.integrations.currencies')}</legend>
-          {registry.currencies.map((c) => (
-            <Checkbox
-              key={c}
-              label={c}
-              checked={currencies.includes(c)}
-              onChange={() => setCurrencies((cs) => (cs.includes(c) ? cs.filter((x) => x !== c) : [...cs, c]))}
-            />
-          ))}
+          <legend>
+            {t('settings.integrations.currencies')}
+            {' · '}
+            {t('settings.integrations.currenciesChosen', { count: currencies.length })}
+          </legend>
+          <div className="settings-many-choices">
+            {registry.currencies.map((c) => (
+              <Checkbox
+                key={c}
+                label={c}
+                checked={currencies.includes(c)}
+                onChange={() => setCurrencies((cs) => (cs.includes(c) ? cs.filter((x) => x !== c) : [...cs, c]))}
+              />
+            ))}
+          </div>
         </fieldset>
-        <Alert error={action.error} />
+        <FormError error={action.error} />
       </form>
     </Dialog>
   )

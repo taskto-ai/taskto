@@ -353,3 +353,132 @@ test('with nothing connected, the empty state offers to connect an account', asy
   expect(await screen.findByText('No accounts connected yet.')).toBeTruthy()
   expect(screen.getAllByRole('button', { name: 'Connect an account' })).toHaveLength(1)
 })
+
+test('a save the server refuses keeps the dialog and what was typed, and the error takes the focus', async () => {
+  fakeFetch({
+    ...routes([]),
+    'POST /api/workspaces/1/integrations': {
+      status: 400,
+      body: {
+        error: 'the secret is not the provider’s shape',
+        code: 'integration_secret_invalid',
+        params: { secret: 'api_key' },
+      },
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect an account' }))
+  const form = screen.getByRole('form', { name: 'New integration' })
+  fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'shop' } })
+  fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'not-a-key' } })
+  fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '500' } })
+  fireEvent.click(within(form).getByRole('checkbox', { name: 'EUR' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
+  const alert = await within(form).findByRole('alert')
+  // The secret by its label, not its code.
+  expect(alert.textContent).toContain("The Secret key doesn't look like this provider's")
+  // Focused, so it is scrolled into view and read, wherever the long form was scrolled to.
+  await waitFor(() => expect(alert.closest('.settings-form-error')).toBe(document.activeElement))
+  expect(screen.getByRole('form', { name: 'New integration' })).toBe(form)
+  const key = within(form).getByLabelText('Secret key') as HTMLInputElement
+  expect(key.type).toBe('password')
+  expect(key.value).toBe('not-a-key')
+  expect((within(form).getByRole('checkbox', { name: 'EUR' }) as HTMLInputElement).checked).toBe(true)
+})
+
+test('the currencies are a bounded box of several columns, with how many are chosen', async () => {
+  fakeFetch(routes([]))
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect an account' }))
+  const form = screen.getByRole('form', { name: 'New integration' })
+  const group = within(form).getByRole('group', { name: /Currencies a payment may ask for · 0 chosen/ })
+  expect(group.querySelector('.settings-many-choices')?.querySelectorAll('input[type="checkbox"]')).toHaveLength(4)
+  fireEvent.click(within(group).getByRole('checkbox', { name: 'USD' }))
+  fireEvent.click(within(group).getByRole('checkbox', { name: 'EUR' }))
+  expect(within(form).getByRole('group', { name: /· 2 chosen/ })).toBe(group)
+})
+
+test('while it saves, the dialog can’t be closed: Escape and Cancel do nothing', async () => {
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fakeFetch({
+    ...routes(),
+    'PATCH /api/workspaces/1/integrations/7': async () => {
+      await gate
+      return { body: shop }
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  await findRow('Shop')
+  chooseFromMenu('More actions for Shop', 'Edit')
+  const form = screen.getByRole('form', { name: 'Edit Shop' })
+  const dialog = dialogOf(form)
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  const cancel = within(dialog).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement
+  await waitFor(() => expect(cancel.disabled).toBe(true))
+  dialog.dispatchEvent(new Event('cancel', { cancelable: true }))
+  fireEvent.keyDown(dialog, { key: 'Escape' })
+  fireEvent.click(cancel)
+  expect(screen.getByRole('form', { name: 'Edit Shop' })).toBe(form)
+  release()
+  await waitFor(() => expect(screen.queryByRole('form', { name: 'Edit Shop' })).toBeNull())
+})
+
+test('after a removal, and after the first account is in, the keyboard goes to the section’s title', async () => {
+  let list: Integration[] = [shop]
+  fakeFetch({
+    ...routes(),
+    'GET /api/workspaces/1/integrations': () => ({ body: { integrations: list } }),
+    'DELETE /api/workspaces/1/integrations/7': () => {
+      list = []
+      return { status: 204 }
+    },
+    'POST /api/workspaces/1/integrations': () => {
+      list = [shop]
+      return { status: 201, body: shop }
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  await findRow('Shop')
+  chooseFromMenu('More actions for Shop', 'Remove')
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }))
+  const heading = screen.getByRole('heading', { level: 2, name: 'Connected accounts' })
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+
+  // The empty state's button opens the form; once the account is in, that button is gone.
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect an account' }))
+  const form = screen.getByRole('form', { name: 'New integration' })
+  fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'shop' } })
+  fireEvent.change(within(form).getByLabelText('Secret key'), { target: { value: 'fake-key-for-the-form' } })
+  fireEvent.change(within(form).getByLabelText('Largest amount of one payment'), { target: { value: '500' } })
+  fireEvent.click(within(form).getByRole('checkbox', { name: 'EUR' }))
+  fireEvent.click(within(dialogOf(form)).getByRole('button', { name: 'Add' }))
+  await findRow('Shop')
+  await waitFor(() => expect(document.activeElement).toBe(heading))
+})
+
+test('a check’s outcome is said in a live region that is there before it arrives, "Checking…" too', async () => {
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fakeFetch({
+    ...routes(),
+    'POST /api/workspaces/1/integrations/7/check': async () => {
+      await gate
+      return { body: { ok: true } }
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="integrations" />)
+  const row = await findRow('Shop')
+  const live = row.querySelector('.settings-check-status') as HTMLElement
+  expect(live.getAttribute('role')).toBe('status')
+  expect(live.textContent).toBe('')
+  fireEvent.click(within(row).getByRole('button', { name: 'Test Shop' }))
+  await waitFor(() => expect(live.textContent).toBe('Checking…'))
+  release()
+  await waitFor(() => expect(live.textContent).toMatch(/The stored credentials open/))
+  expect(row.querySelector('.settings-check-status')).toBe(live)
+})

@@ -189,6 +189,30 @@
     color: var(--color-text);
   }
 
+  /* A form's error that takes the focus (FormError): the ring is the notice's own edge. */
+  .settings-form-error:focus {
+    outline: none;
+  }
+
+  .settings-form-error:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+    border-radius: var(--radius-md);
+  }
+
+  /* A long list of choices (a payment's currencies): several columns in a bounded box that
+     scrolls, so the form's fields, its error and its actions stay near each other. */
+  .settings-many-choices {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(calc(var(--space-16) + var(--space-6)), 1fr));
+    gap: var(--space-1) var(--space-3);
+    max-block-size: calc(var(--space-16) * 3);
+    overflow-y: auto;
+    padding: var(--space-2) var(--space-3);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+
   .settings-loading {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -362,6 +386,11 @@
 }
 
 @layer screens {
+  /* A check's outcome, always in the row so a screen reader hears it arrive; empty, it takes no room. */
+  .settings-check-status:empty {
+    display: none;
+  }
+
   .settings-error-text {
     color: var(--color-danger);
   }

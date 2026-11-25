@@ -5,21 +5,24 @@
 // (src/ui/) are where those elements are written; tests and the gallery's specimens are not
 // screens. CI runs it with css-check (`pnpm --filter @taskto/web run css`); so can anyone.
 //
-// What it sees: a JSX element of those names in a .tsx or .ts file under src/, its comments left
-// out (`{/* <button> */}` is not one). Whether `<button` is an element or text in a literal is told
-// by the nearest structural character before it: a quote, a backtick or a slash means it is inside
-// a string, a template or a regular expression (`'<button>Go</button>'`, `/<input/`); anything else
-// (an operator, a bracket, the end of another tag, `return`, with JSX text such as `Save ` between)
-// means an element. JSX text with a quote of its own just before an element (`Don't <button>`) is
-// read as a string, and that element is missed; the app's strings come through t(), so its JSX text
-// has none. An element made another way (React.createElement) is not seen; the app makes none.
+// What it sees: every JSX element of those names in a .tsx or .ts file under src/, found by
+// parsing the module with the parser the web build already has (rolldown's, through Vite), so a
+// name inside a string, a template, a regular expression or a comment is never taken for one, and
+// an element is found wherever JSX may be (after text, after `return` on a new line, `< button`).
+// An element made another way (React.createElement) is not seen; the app makes none. A module that
+// doesn't parse fails the check.
 //
 // --root <dir> checks another web directory, for the script's tests.
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { blankComments } from './css-check.mjs'
+
+// The build's own parser: rolldown, which Vite bundles with, reached through Vite so it is the
+// version the build uses and no dependency of its own.
+const fromVite = createRequire(createRequire(import.meta.url).resolve('vite/package.json'))
+const { parseAst } = await import(fromVite.resolve('rolldown/parseAst'))
 
 export const ELEMENTS = ['button', 'select', 'input', 'textarea']
 
@@ -62,52 +65,23 @@ export const ALLOWED = new Map([
   ['src/offline/ConfirmButton.tsx', { button: 3, reason: OUTSIDE_SHELL }],
 ])
 
-const ELEMENT = new RegExp(`<(${ELEMENTS.join('|')})(?=[\\s/>])`, 'g')
-
-// The hand-written controls in a module's source: each element's name and line.
-export function controls(source) {
-  const code = blankComments(source)
-  return [...code.matchAll(ELEMENT)]
-    .filter((m) => isElement(code, m.index))
-    .map((m) => ({
-      element: m[1],
-      line: code.slice(0, m.index).split('\n').length,
-    }))
-}
-
-// The characters that end a stretch of JSX text or of a literal's contents, looking back.
-const STRUCTURAL = new Set([
-  '<',
-  '>',
-  '{',
-  '}',
-  '(',
-  ')',
-  '[',
-  ']',
-  '=',
-  ';',
-  ',',
-  '?',
-  ':',
-  '&',
-  '|',
-  '!',
-  '"',
-  "'",
-  '`',
-  '/',
-])
-// Of those, the ones a literal's contents follow: a string's quote, a template's backtick, a regular
-// expression's slash.
-const LITERAL = new Set(['"', "'", '`', '/'])
-
-// Whether the `<name` at `at` is a JSX element, not text inside a string, a template or a regular
-// expression: the nearest structural character before it isn't a quote, a backtick or a slash.
-function isElement(code, at) {
-  let i = at - 1
-  while (i >= 0 && !STRUCTURAL.has(code[i])) i--
-  return i < 0 || !LITERAL.has(code[i])
+// The hand-written controls in a module's source: each element's name and line. `lang` is the
+// module's kind, 'tsx' or 'ts'.
+export function controls(source, lang = 'tsx') {
+  const found = []
+  const visit = (node) => {
+    if (Array.isArray(node)) {
+      for (const n of node) visit(n)
+      return
+    }
+    if (!node || typeof node !== 'object') return
+    if (node.type === 'JSXOpeningElement' && node.name?.type === 'JSXIdentifier' && ELEMENTS.includes(node.name.name)) {
+      found.push({ element: node.name.name, line: source.slice(0, node.start).split('\n').length })
+    }
+    for (const key of Object.keys(node)) if (key !== 'parent') visit(node[key])
+  }
+  visit(parseAst(source, { lang }))
+  return found.sort((x, y) => x.line - y.line)
 }
 
 function modules(dir, out = []) {
@@ -127,7 +101,15 @@ export function check(web, allowed = ALLOWED) {
   for (const path of modules(src)) {
     const file = relative(web, path).split('\\').join('/')
     if (file.startsWith('src/ui/')) continue
-    const found = controls(readFileSync(path, 'utf8'))
+    let found
+    try {
+      found = controls(readFileSync(path, 'utf8'), path.endsWith('.tsx') ? 'tsx' : 'ts')
+    } catch (e) {
+      errors.push(
+        `${file}: doesn't parse, so its controls can't be counted: ${e instanceof Error ? e.message.split('\n')[0] : e}`,
+      )
+      continue
+    }
     const allow = allowed.get(file)
     if (allow) seen.add(file)
     for (const element of ELEMENTS) {

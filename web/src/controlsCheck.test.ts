@@ -40,34 +40,63 @@ test('a control written by hand in a screen fails, with its file and line', () =
 })
 
 test('each of the four elements is caught, and nothing else', () => {
-  const found = controls('<input />\n<select>\n<textarea rows={2} />\n<Button>\n<buttons>\n<inputGroup />')
+  const found = controls(
+    'export const A = () => (\n  <>\n    <input />\n    <select />\n    <textarea rows={2} />\n    <Button />\n    <buttons />\n    <inputGroup />\n    <x.button />\n  </>\n)\n',
+  )
   expect(found.map((c) => c.element)).toEqual(['input', 'select', 'textarea'])
 })
 
-test('an element in a string, a template or a regular expression is not one; one after an operator or JSX text is', () => {
+test('a name in a string, a template, a regular expression or a comment is not an element', () => {
   const found = controls(
     [
       "export const html = '<button>Go</button>'",
       'export const page = `<select></select>`',
       'export const tag = /<input/',
-      'export const A = () => (',
-      '  <div>',
-      '    {open && <button type="button" />}',
-      '    {open ? <textarea /> : null}',
-      '  </div>',
-      ')',
-      'export const C = () => <div>Save <select /></div>',
-      'export function B() {',
-      '  return <input />',
+      '// <textarea>',
+      'export const A = () => <div>{/* <button> */}</div>',
+    ].join('\n'),
+  )
+  expect(found).toEqual([])
+})
+
+test('an element is found wherever JSX may be, with its line', () => {
+  const found = controls(
+    [
+      "const cls = 'card'",
+      'export function A() {',
+      '  return <button className={cls} />',
       '}',
+      'const page = `x`',
+      'export const B = () => <select />',
+      "const kind = 'a' as const",
+      'export const C = () => <input />',
+      'const half = 4 / 2',
+      'export const D = () => <div>Save <textarea /></div>',
+      'export const E = () => < button />',
+      'export const F = () => <',
+      '  button',
+      '/>',
+      "export const G = () => <div>Don't <input /></div>",
+      'export const H = () => <p>éèñ “quoted”</p>',
+      'export const I = () => <button />',
     ].join('\n'),
   )
   expect(found).toEqual([
-    { element: 'button', line: 6 },
-    { element: 'textarea', line: 7 },
-    { element: 'select', line: 10 },
-    { element: 'input', line: 12 },
+    { element: 'button', line: 3 },
+    { element: 'select', line: 6 },
+    { element: 'input', line: 8 },
+    { element: 'textarea', line: 10 },
+    { element: 'button', line: 11 },
+    { element: 'button', line: 12 },
+    { element: 'input', line: 15 },
+    { element: 'button', line: 17 },
   ])
+})
+
+test('a module that doesn’t parse fails the check, with its file', () => {
+  const r = run({ 'home/Broken.tsx': 'export const X = () => <div>\n' })
+  expect(r.code).toBe(1)
+  expect(r.err).toContain('src/home/Broken.tsx: doesn’t parse'.replace('’', "'"))
 })
 
 test('the components, the tests and the gallery may write them, and a comment is not one', () => {
@@ -86,7 +115,7 @@ test('an allowed file may have as many as it says, no more, and a count it no lo
   dirs.push(root)
   mkdirSync(join(root, 'src/boards'), { recursive: true })
   const write = (n: number) =>
-    writeFileSync(join(root, 'src/boards/BoardCard.tsx'), '<button type="button" />\n'.repeat(n))
+    writeFileSync(join(root, 'src/boards/BoardCard.tsx'), 'export const b = <button type="button" />\n'.repeat(n))
   write(1)
   expect(check(root, allowed)).toEqual([])
   write(2)

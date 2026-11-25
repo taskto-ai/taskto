@@ -43,3 +43,29 @@ test('a notification that is gone says so, with the way to the notifications', a
   expect(await screen.findByRole('alert')).toBeTruthy()
   expect(screen.getByRole('link', { name: 'Open your notifications' }).getAttribute('href')).toBe('/w/1/notifications')
 })
+
+test('the notification link page has its heading while it waits and when the notification is gone', async () => {
+  fakeFetch({ 'GET /api/me/notifications/9': { status: 404, body: { error: 'not found', code: 'not_found' } } })
+  render(<OpenNotification id={9} fallbackWorkspace={1} />)
+  expect(screen.getByRole('heading', { level: 1, name: 'Notification' })).toBeTruthy()
+  expect(await screen.findByRole('alert')).toBeTruthy()
+  expect(screen.getByRole('heading', { level: 1, name: 'Notification' })).toBeTruthy()
+})
+
+test('no answer from the server is said as that, in the app’s words, not as a notification that is gone', async () => {
+  vi.stubGlobal('fetch', () => Promise.reject(new TypeError('Failed to fetch')))
+  render(<OpenNotification id={9} fallbackWorkspace={1} />)
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain("The notification couldn't be opened: the server didn't answer.")
+  expect(screen.queryByText(/isn't available any more/)).toBeNull()
+  expect(screen.queryByText(/Failed to fetch/)).toBeNull()
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+})
+
+test('a confirmation with no answer from the server says so in the app’s words', async () => {
+  vi.stubGlobal('fetch', () => Promise.reject(new TypeError('Failed to fetch')))
+  render(<ConfirmEmail token="a-token-for-the-test" workspace={1} />)
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain("Your address couldn't be confirmed: the server didn't answer.")
+  expect(screen.queryByText(/Failed to fetch/)).toBeNull()
+})
