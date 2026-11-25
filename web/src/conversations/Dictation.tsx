@@ -5,10 +5,30 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { ApiError, api, codeText, type DictationStatus, dictationPath, errorText } from '../api'
 import { browserLocale, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Icon } from '../shell/Icon'
+import { Button } from '../ui/Button'
+import { IconButton } from '../ui/IconButton'
+import { Notice } from '../ui/Notice'
+import './Dictation.css'
 import { clock, encodeWav, type Recording, type StartRecording, startRecording, toBase64 } from './recorder'
 
 type Phase = 'idle' | 'starting' | 'recording' | 'transcribing'
+
+// The dictation as it is, for a place that draws its own controls (an app's text field): what it is
+// doing, its clock, why it failed, and what can be done. The chat box uses `controls` and `message`.
+export interface DictationState {
+  phase: Phase
+  // Seconds recorded, and the most a recording may last.
+  elapsed: number
+  max: number
+  // Whether a recording can start now (not while one is on its way, nor where dictation is off).
+  canStart: boolean
+  start: () => void
+  stop: () => void
+  cancel: () => void
+  error: string | null
+  // Sends again what was recorded but not turned into text, when there is such a recording.
+  retry?: () => void
+}
 
 // The status of a workspace's dictation, shared by the many fields of an app's screen so they ask
 // once: kept for a few seconds, and forgotten when the server says it isn't ready.
@@ -49,7 +69,7 @@ export function useDictation({
   record?: StartRecording
   shareStatus?: boolean
   name?: { label: string; title: string }
-}): { controls: ReactNode; message: ReactNode; unavailable?: string } {
+}): { controls: ReactNode; message: ReactNode; unavailable?: string; state?: DictationState } {
   const t = useT()
   const status = useLoad(
     () => (shareStatus ? sharedStatus(workspace) : api<DictationStatus>(dictationPath(workspace))),
@@ -168,49 +188,60 @@ export function useDictation({
 
   const controls =
     phase === 'recording' ? (
-      <>
-        <span className="tt-small tt-recording" role="timer" aria-label={t('conversations.dictation.recorded')}>
+      // Recording: the clock and the stop button in the danger tone, so it's plain the microphone is on.
+      <span className="ui-dictation" data-recording="">
+        <span className="ui-dictation-clock" role="timer" aria-label={t('conversations.dictation.recorded')}>
           {t('conversations.dictation.elapsed', { elapsed: clock(elapsed), max: clock(max) })}
         </span>
-        <button type="button" className="tt-button" onClick={cancel}>
+        <Button size="sm" variant="ghost" onClick={cancel}>
           {t('common.cancel')}
-        </button>
-        <button
-          type="button"
-          className="tt-button tt-recording"
+        </Button>
+        <IconButton
+          icon="stop"
+          className="ui-dictation-stop"
+          label={t('conversations.dictation.stop')}
           onClick={stop}
-          aria-label={t('conversations.dictation.stop')}
-          title={t('conversations.dictation.stopTitle')}
-        >
-          <Icon name="stop" />
-        </button>
-      </>
+        />
+      </span>
     ) : (
-      <button
-        type="button"
-        className="tt-button"
+      <IconButton
+        icon="mic"
         onClick={start}
         disabled={disabled || phase !== 'idle' || unavailable !== undefined}
-        aria-label={name?.label ?? t('conversations.dictation.dictate')}
-        title={unavailable ?? name?.title ?? t('conversations.dictation.dictateTitle')}
-      >
-        <Icon name="mic" />
-      </button>
+        label={name?.label ?? t('conversations.dictation.dictate')}
+        // Why it can't be used, where it can't: a disabled button shows no tooltip of its own.
+        title={unavailable ?? name?.title}
+      />
     )
 
   let message: ReactNode = null
   if (phase === 'transcribing')
-    message = <p className="tt-muted tt-small">{t('conversations.dictation.transcribing')}</p>
+    message = <p className="ui-dictation-progress">{t('conversations.dictation.transcribing')}</p>
   else if (error)
     message = (
-      <p role="alert" className="tt-error">
-        {error}{' '}
-        {unsent && (
-          <button type="button" className="tt-button" onClick={() => transcribe(unsent)}>
-            {t('app.tryAgain')}
-          </button>
-        )}
-      </p>
+      <Notice
+        tone="danger"
+        action={
+          unsent && (
+            <Button size="sm" onClick={() => transcribe(unsent)}>
+              {t('app.tryAgain')}
+            </Button>
+          )
+        }
+      >
+        {error}
+      </Notice>
     )
-  return { controls, message, unavailable }
+  const state: DictationState = {
+    phase,
+    elapsed,
+    max,
+    canStart: !disabled && phase === 'idle' && unavailable === undefined,
+    start: () => void start(),
+    stop,
+    cancel,
+    error,
+    retry: unsent ? () => void transcribe(unsent) : undefined,
+  }
+  return { controls, message, unavailable, state }
 }

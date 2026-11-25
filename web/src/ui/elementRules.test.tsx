@@ -1,13 +1,12 @@
 // @vitest-environment jsdom
 
-// The old global stylesheet (src/styles.css) is in no cascade layer, so a rule of it that matched
+// The old stylesheets (those src/styles.css lists) is in no cascade layer, so a rule of it that matched
 // an element a component draws would beat the component's own style. This draws the components
 // and checks two things: every element a component draws has a ui- class (what the old rules
 // leave out), and no rule of that stylesheet that can match anywhere reaches any of them, except
 // the ones css-check's EVERYWHERE allows on purpose. css-check guards how the rules are written;
 // this guards what they match.
 
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { ComponentType } from 'react'
@@ -17,6 +16,7 @@ import {
   allRules,
   compounds,
   EVERYWHERE,
+  oldStylesheets,
   optsOut,
   reachesAnywhere,
 } from '../../scripts/css-check.mjs'
@@ -48,7 +48,10 @@ interface Rule {
   line: number
 }
 
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+// Every old stylesheet the app loads (src/styles.css lists them, ui/base.css first), not the list,
+// which holds no rule.
+const sheets = oldStylesheets(join(__dirname, '../..'))
+const css = sheets.map((s) => s.css).join('\n')
 // Every rule that can match anywhere and is not allowed to reach everything.
 const guarded: Rule[] = allRules(css).filter(
   (r: Rule) =>
@@ -166,6 +169,13 @@ function drawEverything() {
   })
   return container
 }
+
+test("it reads the old stylesheets themselves: the base and every screen's file", () => {
+  expect(sheets.map((s) => s.file)).toEqual(
+    expect.arrayContaining(['src/ui/base.css', 'src/legacy-shared.css', 'src/boards/boards.legacy.css']),
+  )
+  expect(sheets.length).toBeGreaterThan(10)
+})
 
 test('every element a component draws has a ui- class', () => {
   const container = drawEverything()

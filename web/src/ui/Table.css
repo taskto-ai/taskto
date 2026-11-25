@@ -39,6 +39,11 @@
     vertical-align: middle;
   }
 
+  /* A row's header: a data cell's box, in the strong weight. */
+  .ui-table-rowhead {
+    font: var(--type-ui-strong);
+  }
+
   .ui-table-head {
     padding: var(--space-3) var(--space-4);
     border-block-end: var(--line-thin) solid var(--color-border);
@@ -48,6 +53,54 @@
     font-weight: 600;
     color: var(--color-text-muted);
     white-space: nowrap;
+  }
+
+  /* A sortable column's header: the header's own type, a button that fills it, the order's mark
+     after the name (muted until the column is the one the rows are in order by). */
+  .ui-table-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin: calc(var(--space-1) * -1) calc(var(--space-2) * -1);
+    padding: var(--space-1) var(--space-2);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .ui-table-sort:hover {
+    background: var(--color-hover);
+    color: var(--color-text);
+  }
+
+  .ui-table-sort:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  .ui-table-sort .ui-icon {
+    color: var(--color-text-muted);
+  }
+
+  .ui-table-sort[data-sorted] {
+    color: var(--color-text);
+  }
+
+  .ui-table-sort[data-sorted] .ui-icon {
+    color: var(--color-text);
+  }
+
+  .ui-table [data-numeric] .ui-table-sort {
+    flex-direction: row-reverse;
+  }
+
+  @media (pointer: coarse) {
+    .ui-table-sort {
+      min-block-size: var(--control-touch);
+    }
   }
 
   .ui-table-row:last-child > .ui-table-cell {

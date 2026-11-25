@@ -4,6 +4,7 @@
 import { expect, test } from 'vitest'
 import type { Card, Comment } from '../api'
 import { withComments } from './comments'
+import { dueState } from './due'
 import { boardFilter } from './filters'
 import { dropPosition } from './move'
 
@@ -94,4 +95,20 @@ test('a read with nothing new gives the same thread back', () => {
   const have = [comment(1), comment(2)]
   expect(withComments(have, [comment(1), comment(2)])).toBe(have)
   expect(withComments(have, [])).toBe(have)
+})
+
+test('a due date is overdue before today, soon today and tomorrow, and later after that; never for a finished card', () => {
+  const today = '2026-03-10'
+  const due = (d: string, column: Card['column'] = 'todo') => dueState({ due: d, column }, today)
+  expect(dueState({ due: null, column: 'todo' }, today)).toBeNull()
+  expect(due('2026-03-09')).toBe('overdue')
+  expect(due('2026-03-10')).toBe('soon')
+  expect(due('2026-03-11')).toBe('soon')
+  expect(due('2026-03-12')).toBe('later')
+  // Across a month's end and a year's.
+  expect(dueState({ due: '2026-04-01', column: 'todo' }, '2026-03-31')).toBe('soon')
+  expect(dueState({ due: '2027-01-01', column: 'todo' }, '2026-12-31')).toBe('soon')
+  // A done or archived card is neither late nor soon.
+  expect(due('2026-03-09', 'done')).toBe('later')
+  expect(due('2026-03-10', 'archived')).toBe('later')
 })

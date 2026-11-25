@@ -110,6 +110,7 @@ the default.
 | `-smtp-username` | `TASKTO_SMTP_USERNAME` | `smtp_username` | | the user to sign in as; goes with `-smtp-password-file` |
 | `-smtp-password-file` | `TASKTO_SMTP_PASSWORD_FILE` | `smtp_password_file` | | the file the SMTP password is read from at startup (an absolute path); the password is never a setting |
 | `-smtp-egress` | `TASKTO_SMTP_EGRESS` | `smtp_egress` | `any` | where the SMTP connection may go, as the provider accounts' policy above |
+| `-integration-egress` | `TASKTO_INTEGRATION_EGRESS` | `integration_egress` | `public` | where calls to integrations' providers (Stripe, Square) may go: `public` (addresses checked on every connection), `any`, or a list as for the provider accounts' policy above ([docs/integrations.md](docs/integrations.md#egress)) |
 | `-update-status-dir` | `TASKTO_UPDATE_STATUS_DIR` | `update_status_dir` | | where the host's updater writes the status operators see in Settings → About (read-only; an absolute path; [docs/install.md](docs/install.md#automatic-updates)) |
 | `-update-request-dir` | `TASKTO_UPDATE_REQUEST_DIR` | `update_request_dir` | | where Update now (Settings → About) puts its request for the host's updater to take (writable; an absolute path; [docs/install.md](docs/install.md#update-now)) |
 | `-agent` | `TASKTO_AGENT` | `agent` | `false` | run the agent runtime (see below) |
@@ -134,6 +135,7 @@ the default.
 | `-dictation-cache` | `TASKTO_DICTATION_CACHE` | `dictation_cache` | `<data-dir>/cache/dictation` | where the local speech model's files are kept |
 | `-addons-dir` | `TASKTO_ADDONS_DIR` | `addons_dir` | `<data-dir>/addons` | where the operator installs add-ons such as Desert Ant Voz ([docs/install.md](docs/install.md#dictation)) |
 | `-audit-retention` | `TASKTO_AUDIT_RETENTION` | `audit_retention` | `365` | days the audit log keeps its events, or `off` to stop deleting them by age (a workspace's events still go when it is deleted; [docs/audit.md](docs/audit.md)) |
+| `-app-deleted-retention` | `TASKTO_APP_DELETED_RETENTION` | `app_deleted_retention` | `90` | days a deleted record of an app stays restorable; after them it and its history are removed, or `off` to keep them for ever ([docs/install.md](docs/install.md#deleted-records-of-apps)) |
 | `-push-contact` | `TASKTO_PUSH_CONTACT` | `push_contact` | `https://taskto.ai` | how browsers' push services can reach whoever runs the server (the VAPID contact): a `mailto:` or `https:` URL ([docs/install.md](docs/install.md#web-push-notifications)) |
 | `-config` | `TASKTO_CONFIG` | | | config file to read |
 | `-version` | | | `false` | Print the version and exit |

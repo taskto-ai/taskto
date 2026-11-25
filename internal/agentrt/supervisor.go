@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"taskto.ai/taskto/internal/drain"
 	"taskto.ai/taskto/internal/lockfile"
 )
 
@@ -81,6 +82,15 @@ const maxSocketPath = 103
 // ErrStopped is returned by Ready and Start once the supervisor has been stopped.
 var ErrStopped = errors.New("agentrt: supervisor stopped")
 
+// ErrToolsBusy is returned by Stop when a handler of the tools socket was still running, after
+// its context ended and its connection closed, when the time for it ran out. It wraps
+// drain.ErrBusy: such a handler may still use the server's database.
+var ErrToolsBusy = fmt.Errorf("agentrt: a tools call is still running: %w", drain.ErrBusy)
+
+// toolsWait is how long Stop waits for the tools socket's handlers once the sidecar has exited.
+// A variable for tests.
+var toolsWait = 5 * time.Second
+
 // ErrDatabaseInUse is returned by Start when another supervisor holds the database.
 var ErrDatabaseInUse = errors.New("agentrt: database in use by another agent runtime")
 
@@ -108,6 +118,8 @@ type Supervisor struct {
 
 	kill chan struct{} // closed when a Stop's ctx ends: SIGKILL without waiting
 	done chan struct{} // closed once the run loop has returned and no sidecar runs
+
+	toolsErr error // what closing the tools socket returned; set before done is closed
 
 	mu      sync.Mutex
 	started bool
@@ -223,7 +235,7 @@ func (s *Supervisor) launch() error {
 		return err
 	}
 	// After the lock: a socket left here is a crashed server's, never a running one's.
-	closeTools := func() {}
+	closeTools := func() error { return nil }
 	if s.cfg.Tools != nil {
 		if closeTools, err = serveTools(s.tools, s.cfg.Tools, s.log); err != nil {
 			lock.Close()
@@ -233,7 +245,7 @@ func (s *Supervisor) launch() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopped {
-		closeTools()
+		_ = closeTools()
 		lock.Close()
 		return ErrStopped
 	}
@@ -245,7 +257,7 @@ func (s *Supervisor) launch() error {
 
 // serveTools serves h on a new socket at path, readable and writable by this user only
 // (it is in the owner-only socket directory too), and returns the func that closes it.
-func serveTools(path string, h http.Handler, log *slog.Logger) (func(), error) {
+func serveTools(path string, h http.Handler, log *slog.Logger) (func() error, error) {
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode().Type() != os.ModeSocket {
 			return nil, fmt.Errorf("agentrt: %s exists and isn't a socket", path)
@@ -262,8 +274,9 @@ func serveTools(path string, h http.Handler, log *slog.Logger) (func(), error) {
 		ln.Close()
 		return nil, fmt.Errorf("agentrt: tools socket: %w", err)
 	}
+	inflight := drain.New()
 	srv := &http.Server{
-		Handler:           h,
+		Handler:           inflight.Handler(h),
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
@@ -274,11 +287,18 @@ func serveTools(path string, h http.Handler, log *slog.Logger) (func(), error) {
 			log.Error("agent tools socket stopped serving", "err", err)
 		}
 	}()
-	return func() {
-		// The sidecar has exited, so no call is in flight that anyone waits for.
-		_ = srv.Close()
+	return func() error {
+		// The sidecar has exited, so no call is in flight that anyone waits for: end their
+		// contexts and connections. A handler still running after that may use the server's
+		// database, so it is waited for, and Stop says if one never returned.
+		err := inflight.Shutdown(srv, 0, toolsWait)
 		<-done
 		_ = os.Remove(path)
+		if errors.Is(err, drain.ErrBusy) {
+			log.Error("agent tools socket: a call did not return", "err", err)
+			return ErrToolsBusy
+		}
+		return nil
 	}, nil
 }
 
@@ -332,7 +352,8 @@ func (s *Supervisor) State() string {
 
 // Stop stops the sidecar: SIGTERM, then SIGKILL if it hasn't exited within StopTimeout, or
 // as soon as ctx ends. It returns once the sidecar has exited and the database lock is
-// released, with ctx's error if ctx ended first. It may be called more than once, and
+// released, with ctx's error if ctx ended first, and ErrToolsBusy if a call on the tools
+// socket was still running at the end. It may be called more than once, and
 // concurrently with Start.
 func (s *Supervisor) Stop(ctx context.Context) error {
 	s.mu.Lock()
@@ -347,12 +368,12 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 	s.mu.Unlock()
 	select {
 	case <-s.done:
-		return nil
+		return s.toolsErr
 	case <-ctx.Done():
 	}
 	select {
 	case <-s.done:
-		return nil // stopped in time after all
+		return s.toolsErr // stopped in time after all
 	default:
 	}
 	// Out of time: kill now, and still wait, so the caller never sees Stop return while a
@@ -365,16 +386,16 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 	}
 	s.mu.Unlock()
 	<-s.done
-	return ctx.Err()
+	return errors.Join(ctx.Err(), s.toolsErr)
 }
 
 // run starts the sidecar and restarts it after each exit until ctx ends. It is the only
 // goroutine that starts sidecar processes, and runOnce returns only after its process has
 // exited, so one never starts before the last one is gone.
-func (s *Supervisor) run(ctx context.Context, lock *os.File, closeTools func()) {
+func (s *Supervisor) run(ctx context.Context, lock *os.File, closeTools func() error) {
 	defer close(s.done)
 	defer lock.Close()
-	defer closeTools()
+	defer func() { s.toolsErr = closeTools() }()
 	backoff := s.cfg.MinBackoff
 	for {
 		uptime, err := s.runOnce(ctx)

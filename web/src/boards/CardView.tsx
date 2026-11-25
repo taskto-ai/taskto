@@ -1,17 +1,30 @@
+import { type RefObject, useCallback, useEffect, useMemo } from 'react'
 import type { Card, Space } from '../api'
 import { useT } from '../i18n'
-import { Icon } from '../shell/Icon'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Drawer } from '../ui/Drawer'
+import { MenuItem, MoreMenu } from '../ui/Menu'
+import { Notice } from '../ui/Notice'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
+import { Assignee } from './Assignee'
 import { Blocked } from './Blocked'
 import { CardDescription } from './CardDescription'
-import { CardMeta } from './CardMeta'
+import { Prop, Status } from './CardMeta'
 import { useCard } from './card'
-import { Links } from './Links'
-import { Planning } from './Planning'
+import { DraftsContext, makeDrafts } from './drafts'
+import { useFocusKeeper } from './focus'
+import { Conversations, Documents } from './Links'
+import { Due, Labels } from './Planning'
 import { usePeople } from './people'
-import { Thread } from './Thread'
+import { Composer, Thread } from './Thread'
 
-// The open card: its fields, its thread, and the changes a writer can make (useCard in card.ts
-// says how a change is sent, and what a conflict does).
+// The open card, in a drawer over the board (on a phone, over the whole screen): its title, its
+// properties as rows, each changed in place, its description, its thread and the box for a new
+// comment, and archiving or restoring it in its menu. useCard in card.ts says how a change is
+// sent, and what a conflict does. While it holds something unsaved (drafts.ts), closing it (Escape,
+// its close button) or opening another card asks first; `leave` is that question, for the board.
 export function CardView({
   url,
   workspace,
@@ -21,6 +34,7 @@ export function CardView({
   moved,
   onChanged,
   onClose,
+  leave,
 }: {
   url: string
   workspace: number
@@ -30,6 +44,9 @@ export function CardView({
   moved: Card | null
   onChanged: () => void
   onClose: () => void
+  // Set to the card's question before it goes: true when it may (nothing unsaved, or the person
+  // chose to discard it).
+  leave: RefObject<(() => Promise<boolean>) | null>
 }) {
   const {
     card,
@@ -48,103 +65,172 @@ export function CardView({
   } = useCard(url, moved, onChanged)
   const people = usePeople(workspace, space, canWrite)
   const t = useT()
+  useFocusKeeper('.ui-drawer')
   // A change can't start while one is being sent, or while a conflict waits for the writer.
   const held = busy || conflict !== null
+  const drafts = useMemo(makeDrafts, [])
+  const [confirmDialog, confirm] = useConfirm()
+  const mayLeave = useCallback(
+    async () =>
+      !drafts.any() ||
+      confirm({
+        title: t('boards.discardTitle'),
+        body: t('boards.discardBody'),
+        confirmLabel: t('boards.discard'),
+        tone: 'danger',
+      }),
+    [drafts, confirm, t],
+  )
+  useEffect(() => {
+    leave.current = mayLeave
+    return () => {
+      leave.current = null
+    }
+  }, [leave, mayLeave])
+  const close = async () => {
+    if (await mayLeave()) onClose()
+  }
 
   return (
-    <article className="tt-card-view" aria-label={card ? card.title : t('boards.card')}>
-      <div className="tt-pane-head">
-        <button type="button" className="tt-icon-button tt-back" aria-label={t('boards.back')} onClick={onClose}>
-          <Icon name="back" />
-        </button>
-        <h2>{card?.title ?? t('boards.card')}</h2>
-        <button type="button" className="tt-button" onClick={onClose}>
-          {t('boards.close')}
-        </button>
-      </div>
-      {loadError && !card && (
-        <p role="alert" className="tt-error">
-          {loadError}
-        </p>
-      )}
-      {!card && !loadError && <p className="tt-muted">{t('app.loading')}</p>}
-      {conflict && (
-        <div role="alert" className="tt-conflict">
-          <span>{t('boards.cardChanged')}</span>
-          <button type="button" className="tt-button" onClick={() => takeTheirs(conflict.current)}>
-            {t('boards.takeTheirs')}
-          </button>
-          <button
-            type="button"
-            className="tt-button tt-danger"
-            disabled={busy}
-            onClick={() => change(conflict.send, conflict.current)}
+    <DraftsContext.Provider value={drafts}>
+      <Drawer
+        open
+        onClose={close}
+        className="ui-board-drawer"
+        title={card?.title ?? t('boards.card')}
+        headerActions={
+          canWrite &&
+          card && (
+            <MoreMenu label={t('boards.cardActions')}>
+              {card.column === 'archived' ? (
+                <MenuItem icon="archive" disabled={held} onSelect={() => change(post('restore'))}>
+                  {t('boards.restore')}
+                </MenuItem>
+              ) : (
+                <MenuItem icon="archive" disabled={held} onSelect={() => change(post('archive'))}>
+                  {t('boards.archive')}
+                </MenuItem>
+              )}
+            </MoreMenu>
+          )
+        }
+        footer={canWrite && card && <Composer url={`${url}/comments`} people={people.data} onAdded={addComment} />}
+      >
+        {loadError && !card && <Notice tone="danger">{loadError}</Notice>}
+        {!card && !loadError && <CardSkeleton />}
+        {conflict && (
+          <Notice
+            tone="danger"
+            action={
+              <div className="ui-board-actions">
+                <Button size="sm" onClick={() => takeTheirs(conflict.current)}>
+                  {t('boards.takeTheirs')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={busy}
+                  onClick={() => change(conflict.send, conflict.current)}
+                >
+                  {t('boards.redoMine')}
+                </Button>
+              </div>
+            }
           >
-            {t('boards.redoMine')}
-          </button>
+            {t('boards.cardChanged')}
+          </Notice>
+        )}
+        {error && <Notice tone="danger">{error}</Notice>}
+        {stopped && <Notice tone="danger">{t('boards.pollStopped', { error: stopped })}</Notice>}
+        {card && (
+          <>
+            <dl className="ui-board-props">
+              <Prop label={t('boards.status')}>
+                <Status
+                  card={card}
+                  canWrite={canWrite}
+                  busy={held}
+                  onMove={(column) => change(post('move', { column }))}
+                />
+              </Prop>
+              <Prop label={t('boards.assignee')}>
+                <Assignee
+                  card={card}
+                  canWrite={canWrite}
+                  people={people.data}
+                  busy={held}
+                  onSet={(assignee) => change(patch({ assignee }))}
+                />
+              </Prop>
+              <Prop label={t('boards.dueDate')}>
+                <Due
+                  card={card}
+                  canWrite={canWrite}
+                  busy={held}
+                  onChange={(fields) => change(patch(fields), card, true)}
+                />
+              </Prop>
+              <Prop label={t('boards.labels')}>
+                <Labels
+                  card={card}
+                  canWrite={canWrite}
+                  busy={held}
+                  onChange={(fields) => change(patch(fields), card, true)}
+                />
+              </Prop>
+              <Prop label={t('boards.blocked')}>
+                <Blocked
+                  key={`blocked-${card.version}`}
+                  card={card}
+                  board={board}
+                  canWrite={canWrite}
+                  busy={held}
+                  onSet={(reason, by) => change(patch({ blocked_reason: reason, blocked_by: by }))}
+                />
+              </Prop>
+              <Prop label={t('boards.documents')}>
+                <Documents card={card} canWrite={canWrite} busy={held} onChange={(fields) => change(patch(fields))} />
+              </Prop>
+              <Prop label={t('boards.conversations')}>
+                <Conversations
+                  workspace={workspace}
+                  card={card}
+                  canWrite={canWrite}
+                  busy={held}
+                  onChange={(fields) => change(patch(fields))}
+                />
+              </Prop>
+            </dl>
+            <CardDescription
+              card={card}
+              canWrite={canWrite}
+              editing={editing}
+              busy={held}
+              onEdit={() => setEditing(true)}
+              onSave={(fields) => change(patch(fields))}
+              onCancel={() => setEditing(false)}
+            />
+            <Thread comments={card.comments} />
+          </>
+        )}
+      </Drawer>
+      {confirmDialog}
+    </DraftsContext.Provider>
+  )
+}
+
+// The card's shape while it loads: its rows, then its description.
+function CardSkeleton() {
+  const t = useT()
+  return (
+    <div className="ui-board-props" aria-busy="true">
+      <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+      {[40, 55, 35, 50, 30].map((w) => (
+        <div key={w} className="ui-board-prop">
+          <Skeleton width="70%" />
+          <Skeleton width={`${w}%`} />
         </div>
-      )}
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
-      {stopped && (
-        <p role="alert" className="tt-error">
-          {t('boards.pollStopped', { error: stopped })}
-        </p>
-      )}
-      {card && (
-        <>
-          <CardMeta
-            card={card}
-            canWrite={canWrite}
-            people={people.data}
-            busy={held}
-            onMove={(column) => change(post('move', { column }))}
-            onAssign={(assignee) => change(patch({ assignee }))}
-            onArchive={() => change(post('archive'))}
-            onRestore={() => change(post('restore'))}
-          />
-          <CardDescription
-            card={card}
-            canWrite={canWrite}
-            editing={editing}
-            busy={held}
-            onEdit={() => setEditing(true)}
-            onSave={(fields) => change(patch(fields))}
-            onCancel={() => setEditing(false)}
-          />
-          <Blocked
-            key={`blocked-${card.version}`}
-            card={card}
-            board={board}
-            canWrite={canWrite}
-            busy={held}
-            onSet={(reason, by) => change(patch({ blocked_reason: reason, blocked_by: by }))}
-          />
-          <Planning
-            card={card}
-            canWrite={canWrite}
-            busy={held}
-            onChange={(fields) => change(patch(fields), card, true)}
-          />
-          <Links
-            workspace={workspace}
-            card={card}
-            canWrite={canWrite}
-            busy={held}
-            onChange={(fields) => change(patch(fields))}
-          />
-          <Thread
-            url={`${url}/comments`}
-            comments={card.comments}
-            canWrite={canWrite}
-            people={people.data}
-            onAdded={addComment}
-          />
-        </>
-      )}
-    </article>
+      ))}
+    </div>
   )
 }

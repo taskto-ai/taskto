@@ -3,6 +3,8 @@
 // The page-structure components: Page, PageHeader, Heading, Toolbar, Panel, Rows, Table, EmptyState and
 // Notice.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Button } from './Button'
@@ -45,6 +47,14 @@ describe('Page and PageHeader', () => {
     const header = h1.closest('header') as HTMLElement
     expect(header.textContent).toBe('PrivatePersonalYour own cards.New card')
     expect(screen.getByRole('button', { name: 'New card' })).toBeTruthy()
+  })
+
+  test('a control after the title is beside the heading, not in its name', () => {
+    render(<PageHeader title="Personal" titleAction={<Button>Switch board</Button>} />)
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Personal' })
+    const button = screen.getByRole('button', { name: 'Switch board' })
+    expect(h1.contains(button)).toBe(false)
+    expect(h1.nextElementSibling).toBe(button)
   })
 
   test('a header inside another page is a level 2 heading', () => {
@@ -166,6 +176,81 @@ describe('Table', () => {
   })
 })
 
+describe('Row, actions below', () => {
+  test('its actions go on a line of their own that wraps, and other rows keep theirs beside the title', () => {
+    render(
+      <Rows label="Queue">
+        <Row title="Coffee" actionsBelow actions={<Button size="sm">Try again</Button>} />
+        <Row title="Tea" actions={<Button size="sm">Open</Button>} />
+      </Rows>,
+    )
+    const [coffee, tea] = screen.getAllByRole('listitem')
+    expect(coffee.dataset.actionsBelow).toBe('true')
+    expect(tea.dataset.actionsBelow).toBeUndefined()
+    // jsdom lays nothing out: the stylesheet is what puts them below and lets them wrap.
+    const css = readFileSync(join(__dirname, 'Rows.css'), 'utf8')
+    const rule = /\.ui-row\[data-actions-below\] > \.ui-row-actions \{([^}]*)\}/.exec(css)?.[1] ?? ''
+    expect(rule).toMatch(/flex: 1 1 100%/)
+    expect(rule).toMatch(/flex-wrap: wrap/)
+  })
+})
+
+describe('Row, opened', () => {
+  test('what opens under a row is inside its list item, after its actions', () => {
+    render(
+      <Rows label="Queue">
+        <Row title="Coffee" actions={<Button size="sm">Review</Button>}>
+          <section aria-label="Review Coffee">Choose a version</section>
+        </Row>
+        <Row title="Tea" />
+      </Rows>,
+    )
+    const [coffee, tea] = screen.getAllByRole('listitem')
+    const opened = screen.getByRole('region', { name: 'Review Coffee' })
+    expect(coffee.contains(opened)).toBe(true)
+    expect(coffee.lastElementChild?.contains(opened)).toBe(true)
+    // A row with nothing under it has no room for it.
+    expect(tea.querySelector('.ui-row-more')).toBeNull()
+  })
+})
+
+describe('Table, sorted', () => {
+  test('a sortable header is a button named by the column, and its cell says the order', () => {
+    const rows = [
+      { plan: 'Solo', seats: 1 },
+      { plan: 'Team', seats: 10 },
+    ]
+    const onSort = vi.fn()
+    render(
+      <Table
+        caption="Plans"
+        rows={rows}
+        rowKey={(r) => r.plan}
+        columns={[
+          { key: 'plan', header: 'Plan', sort: { direction: 'none', onSort }, cell: (r) => r.plan },
+          {
+            key: 'seats',
+            header: 'Seats',
+            numeric: true,
+            sort: { direction: 'descending', onSort: () => {} },
+            cell: (r) => r.seats,
+          },
+          { key: 'note', header: 'Note', cell: () => '' },
+        ]}
+      />,
+    )
+    expect(screen.getByRole('columnheader', { name: 'Seats' }).getAttribute('aria-sort')).toBe('descending')
+    // A sortable column the rows aren't in order by says no order: only one header does.
+    expect(screen.getByRole('columnheader', { name: 'Plan' }).hasAttribute('aria-sort')).toBe(false)
+    expect(screen.getByRole('button', { name: 'Plan' })).toBeTruthy()
+    // A column that can't be sorted says nothing of an order, and has no button.
+    expect(screen.getByRole('columnheader', { name: 'Note' }).hasAttribute('aria-sort')).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Note' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Plan' }))
+    expect(onSort).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('EmptyState', () => {
   test('says what the place is for and offers the action', () => {
     render(
@@ -225,6 +310,30 @@ describe('Heading', () => {
     expect(section.className).toBe('ui-heading')
     expect(section.dataset.size).toBe('section')
     expect(screen.getByRole('heading', { level: 3, name: 'Plans' }).dataset.size).toBe('title')
+  })
+})
+
+describe('Table with a column of row headers', () => {
+  test('that column names each row: its cells are row headers, the rest plain cells', () => {
+    const rows = [
+      { plan: 'Solo', seats: 1 },
+      { plan: 'Team', seats: 10 },
+    ]
+    render(
+      <Table
+        caption="Plans"
+        rowKey={(r) => r.plan}
+        rows={rows}
+        columns={[
+          { key: 'plan', header: 'Plan', rowHeader: true, cell: (r) => r.plan },
+          { key: 'seats', header: 'Seats', numeric: true, cell: (r) => r.seats },
+        ]}
+      />,
+    )
+    expect(screen.getAllByRole('rowheader').map((h) => h.textContent)).toEqual(['Solo', 'Team'])
+    expect(screen.getByRole('rowheader', { name: 'Team' }).getAttribute('scope')).toBe('row')
+    expect(screen.queryByRole('cell', { name: 'Team' })).toBeNull()
+    expect(screen.getByRole('cell', { name: '10' })).toBeTruthy()
   })
 })
 
