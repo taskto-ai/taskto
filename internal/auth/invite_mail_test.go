@@ -349,3 +349,41 @@ func TestInviteEmailSurvivesTheClientDisconnecting(t *testing.T) {
 		t.Fatalf("%d invite_emailed events, want 1", n)
 	}
 }
+
+func TestAShutdownEndsAnInviteEmailAndWaitsForIt(t *testing.T) {
+	relay := &slowRelay{started: make(chan struct{}), release: make(chan struct{})}
+	e := newEnv(t, Options{
+		PublicURL: publicURL,
+		Mail:      mail.NewService(relay, mail.Info{Host: "smtp.example.com", Port: 587, Security: "starttls", From: "taskto@example.com"}),
+	})
+	owner, ws := e.setup()
+	t.Cleanup(func() { e.svc.stopWork() })
+
+	req := owner.req(http.MethodPost, invitePath(ws), map[string]any{"email": "ana@example.com", "send_email": true})
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- owner.send(req) }()
+	select {
+	case <-relay.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the relay was never reached")
+	}
+	// The relay never answers: the server stopping ends the send, and Shutdown has waited for it by
+	// the time it returns, so the database can close.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := e.svc.Shutdown(ctx); err != nil {
+		t.Fatalf("the send wasn't ended: %v", err)
+	}
+	select {
+	case rec := <-done:
+		expect(t, rec, http.StatusCreated) // the invite exists, with its link to pass on
+		if got := decode[emailedInvite](t, rec); got.EmailSent == nil || *got.EmailSent {
+			t.Fatalf("reply = %s", rec.Body.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the handler never answered")
+	}
+	if n := len(relay.messages()); n != 0 {
+		t.Fatalf("%d messages", n)
+	}
+}

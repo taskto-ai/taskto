@@ -307,9 +307,13 @@ func (s *Service) takeInviteMail(admin int64, email string) (release func(), wai
 // whose link the admin has to pass on by hand then. The invite is already committed, so the
 // send isn't tied to the request: a client that disconnects during a slow relay doesn't abort it
 // (the handler still waits, so a client that stays gets the answer), and the timeout bounds it.
+// It ends when the server stops and is waited for then (Shutdown), as the reset emails are.
 func (s *Service) emailInvite(ctx context.Context, m Membership, by User, inv Invite, token string) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), inviteMailTimeout)
 	defer cancel()
+	defer context.AfterFunc(s.workCtx, cancel)()
+	s.mailWork.Add(1)
+	defer s.mailWork.Done()
 	days := int(math.Ceil(s.opts.InviteTTL.Hours() / 24))
 	err := s.opts.Mail.SendTemplate(ctx, inv.Email, s.inviteLocale(ctx, inv.Email, m, by.ID), "invite", map[string]string{
 		"inviter":    by.Name,
