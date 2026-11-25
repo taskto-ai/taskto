@@ -1,0 +1,127 @@
+/* The design tokens, in two layers (docs/design.md, "Tokens").
+
+   1. Scales, here: space, type sizes and the type roles built from them, radii, control heights,
+      elevation, motion, z-index levels and page widths. They are the same in every theme.
+   2. Colour roles, `--color-*`: what a colour is for (a ground, a level of text, a status), never
+      what it looks like. Their values are a brand theme's, in themes/ (mint.css is the default),
+      each written once as light-dark(light, dark); this file only uses them. The list of roles is
+      COLOR_ROLES in roles.ts, which a test holds every theme to.
+
+   Naming: `--<kind>-<name>`, with the kind one of color, space, text (a size), type (a role: a
+   font shorthand), font, tracking, radius, control, shadow, duration, ease, z and width. Nothing
+   but a colour role starts with `--color-`, and a colour is only ever a role: a scale that needs
+   one (a shadow) takes it from a role. No colour literal is written outside themes/.
+
+   The light or dark side is the page's color-scheme: the system's unless the person picked one
+   (data-theme on <html>, theme.ts). The brand is data-brand on <html>: absent, the default. */
+
+@layer tokens {
+  :root {
+    /* Space: steps of 4px. */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+    --space-10: 40px;
+    --space-12: 48px;
+    --space-16: 64px;
+
+    /* Fonts (SIL OFL 1.1), served from the app itself (main.tsx), with the system's behind them:
+       Inter for the interface and reading, Bricolage Grotesque for titles of 20px and up only,
+       JetBrains Mono for code, paths, commands and ids. */
+    --font-sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-display:
+      "Bricolage Grotesque Variable", "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    /* Type sizes. 14px is the interface, 16px what people read (documents, the chat). */
+    --text-xs: 12px;
+    --text-sm: 13px;
+    --text-md: 14px;
+    --text-lg: 16px;
+    --text-xl: 20px;
+    --text-2xl: 24px;
+
+    /* Type roles: a `font` shorthand each (weight, size / line height, family), used as
+       `font: var(--type-ui)`. The display face starts at --type-title; below it, Inter. */
+    --type-caption: 400 var(--text-xs) / 16px var(--font-sans);
+    --type-small: 400 var(--text-sm) / 18px var(--font-sans);
+    --type-ui: 400 var(--text-md) / 20px var(--font-sans);
+    --type-ui-strong: 600 var(--text-md) / 20px var(--font-sans);
+    --type-reading: 400 var(--text-lg) / 26px var(--font-sans);
+    --type-section: 600 var(--text-lg) / 24px var(--font-sans);
+    --type-title: 700 var(--text-xl) / 26px var(--font-display);
+    --type-display: 750 var(--text-2xl) / 30px var(--font-display);
+    --type-code: 400 var(--text-sm) / 20px var(--font-mono);
+    /* The display face is set tight, as on the website; Inter is not. */
+    --tracking-display: -0.02em;
+
+    /* Radii: a tag, a control or a card, a dialog, and the pill of a button. Today's controls are
+       still 8px, through --tt-radius in legacy.css; each moves to --radius-md as it is rebuilt. */
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-pill: 999px;
+
+    /* Control heights: small, regular, and the touch target. */
+    --control-sm: 28px;
+    --control-md: 36px;
+    --control-touch: 44px;
+
+    /* Elevation. Only what you press and what floats has a shadow: the primary button's short
+       hard lift (the website's), the soft one under a menu or a popover, a dialog's. */
+    --shadow-lift: 0 2px 0 var(--color-accent-edge);
+    --shadow-lift-hover: 0 3px 0 var(--color-accent-edge);
+    --shadow-pop: 0 12px 32px -12px var(--color-shadow);
+    --shadow-dialog: 0 24px 64px -24px var(--color-shadow);
+
+    /* Motion. Everything that moves stops under prefers-reduced-motion. */
+    --duration-fast: 120ms;
+    --duration-base: 160ms;
+    --duration-slow: 240ms;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+    /* Stacking, bottom to top, for what is positioned on the page. A modal <dialog> and a popover
+       are in the browser's top layer, above all of these, so a dialog or a menu built on them
+       sets no z-index at all.
+       sticky   a header or a bar that sticks while its page scrolls
+       sidebar  the sidebar on a wide screen
+       scrim    the shade behind the drawer on a phone: over the page, under the drawer
+       drawer   the sidebar as a drawer on a phone
+       overlay  what floats over the page without the top layer: a menu or a popup placed by hand
+       toast    a passing message, the update banner, a guard that must stay seen
+       skip     the skip link, above everything when it has the focus */
+    --z-sticky: 10;
+    --z-sidebar: 20;
+    --z-scrim: 25;
+    --z-drawer: 30;
+    --z-overlay: 40;
+    --z-toast: 50;
+    --z-skip: 100;
+
+    /* Widths: a page of reading or a form, a page of lists, and the sidebar. A board is the
+       window's full width. */
+    --width-reading: 760px;
+    --width-list: 1040px;
+    --width-sidebar: 232px;
+  }
+}
+
+/* Light, dark or the system's. These stay outside the layers: the apps renderer injects
+   `:where(:root) { color-scheme: light dark }` with no layer, and a rule with no layer beats every
+   rule in one, so a picked theme written in a layer would lose to it once an app opens. */
+:root {
+  color-scheme: light dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}

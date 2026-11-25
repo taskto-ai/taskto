@@ -12,6 +12,8 @@ import { trackKeyboard } from './pwa/viewport'
 import '@fontsource-variable/bricolage-grotesque/wght.css'
 import '@fontsource-variable/inter/wght.css'
 import '@fontsource-variable/jetbrains-mono/wght.css'
+// The design tokens first (scales, the brand's colour roles, the cascade layers), then the stylesheet.
+import './ui/index.css'
 import './styles.css'
 import { applyTheme, storedTheme } from './theme'
 
