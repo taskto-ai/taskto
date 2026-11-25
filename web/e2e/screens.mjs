@@ -294,7 +294,8 @@ export const SCREENS = [
     phase: 'seeded',
     show: async (s) => {
       await s.go(s.path('home'))
-      await s.page.locator('.tt-account summary').click()
+      // By its name: the bar's "New workspace" button is a menu of the same kind, so the class matches both.
+      await s.page.getByLabel(`Account: ${owner.name}`, { exact: true }).click()
     },
     ready: (s) => [heading(s, 'Home'), s.page.getByRole('button', { name: 'Log out' })],
   },

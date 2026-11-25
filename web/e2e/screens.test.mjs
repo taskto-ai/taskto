@@ -192,6 +192,21 @@ describe('ready checks', () => {
     for (const tab of SETTINGS_TABS) expect(SETTINGS_HEADINGS[tab]).toBeTruthy()
   })
 
+  it("opens the account menu by the person's name, not by a class the New workspace menu shares", async () => {
+    const calls = []
+    const target = { click: async () => calls.push('click') }
+    const s = {
+      go: async () => {},
+      path: () => '/',
+      page: {
+        getByLabel: (label, options) => (calls.push(['getByLabel', label, options]), target),
+        locator: (selector) => (calls.push(['locator', selector]), target),
+      },
+    }
+    await SCREENS.find((x) => x.name === 'account-menu').show(s)
+    expect(calls).toEqual([['getByLabel', 'Account: Ana Ribeiro', { exact: true }], 'click'])
+  })
+
   const locator = (shows, calls = []) => ({
     first: () => ({
       waitFor: async (options) => {
