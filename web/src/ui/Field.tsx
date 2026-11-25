@@ -86,10 +86,14 @@ export function useFieldControl(own: {
       ? own['aria-invalid'] !== 'false' && own['aria-invalid'] !== false
       : (field?.invalid ?? false))
   const describedBy = [own['aria-describedby'], field?.describedBy].filter(Boolean).join(' ') || undefined
+  // A specific kind of error the control names (grammar, spelling) is kept as it is said; only a
+  // plain one becomes true.
+  const token = own.invalid === undefined ? own['aria-invalid'] : undefined
+  const kind = token === 'grammar' || token === 'spelling' ? token : true
   return {
     id: field?.id ?? own.id,
     'aria-describedby': describedBy,
-    'aria-invalid': invalid ? (true as const) : undefined,
+    'aria-invalid': invalid ? kind : undefined,
     required: own.required ?? field?.required ?? undefined,
     invalid,
   }

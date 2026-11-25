@@ -170,3 +170,61 @@ describe('SegmentedControl', () => {
     expect(write.checked).toBe(false)
   })
 })
+
+function Mixed({ onRef }: { onRef?: (el: HTMLInputElement | null) => undefined | (() => void) }) {
+  const [checked, setChecked] = useState(false)
+  return (
+    <Checkbox label="All" checked={checked} indeterminate ref={onRef} onChange={(e) => setChecked(e.target.checked)} />
+  )
+}
+
+describe('Checkbox, controlled', () => {
+  test('stays mixed after a press while the prop says so', () => {
+    render(<Mixed />)
+    const box = screen.getByRole('checkbox', { name: 'All' }) as HTMLInputElement
+    expect(box.indeterminate).toBe(true)
+    fireEvent.click(box)
+    expect(box.checked).toBe(true)
+    expect(box.indeterminate).toBe(true)
+  })
+
+  test("runs the caller's ref cleanup when it detaches", () => {
+    const cleanup = vi.fn()
+    const seen: (HTMLInputElement | null)[] = []
+    const ref = (el: HTMLInputElement | null) => {
+      seen.push(el)
+      return cleanup
+    }
+    const { unmount } = render(<Mixed onRef={ref} />)
+    expect(seen[0]?.tagName).toBe('INPUT')
+    unmount()
+    expect(cleanup).toHaveBeenCalledTimes(1)
+    // A callback that returns a cleanup is not also called with null.
+    expect(seen).not.toContain(null)
+  })
+
+  test('an object ref is set, and cleared on unmount', () => {
+    const ref = { current: null as HTMLInputElement | null }
+    const { unmount } = render(<Checkbox label="One" ref={ref} />)
+    expect(ref.current?.tagName).toBe('INPUT')
+    unmount()
+    expect(ref.current).toBeNull()
+  })
+})
+
+describe('aria-invalid', () => {
+  test('keeps a kind of error the control names', () => {
+    render(
+      <>
+        <Input aria-label="a" aria-invalid="spelling" />
+        <Textarea aria-label="b" aria-invalid="grammar" />
+        <Input aria-label="c" aria-invalid="false" />
+        <Input aria-label="d" aria-invalid="spelling" invalid={false} />
+      </>,
+    )
+    expect(screen.getByRole('textbox', { name: 'a' }).getAttribute('aria-invalid')).toBe('spelling')
+    expect(screen.getByRole('textbox', { name: 'b' }).getAttribute('aria-invalid')).toBe('grammar')
+    expect(screen.getByRole('textbox', { name: 'c' }).hasAttribute('aria-invalid')).toBe(false)
+    expect(screen.getByRole('textbox', { name: 'd' }).hasAttribute('aria-invalid')).toBe(false)
+  })
+})

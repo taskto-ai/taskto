@@ -93,6 +93,64 @@ describe('Tooltip', () => {
     expect(isOpen()).toBe(false)
   })
 
+  test('stays open while the control has the focus, though the pointer leaves', () => {
+    const b = setup()
+    act(() => b.focus())
+    fireEvent.pointerEnter(b, { pointerType: 'mouse' })
+    fireEvent.pointerLeave(b, { pointerType: 'mouse' })
+    act(() => vi.advanceTimersByTime(CLOSE_DELAY_MS * 3))
+    expect(isOpen()).toBe(true)
+    act(() => b.blur())
+    expect(isOpen()).toBe(false)
+  })
+
+  test('stays open while the pointer rests on the control, though the focus leaves', () => {
+    const b = setup()
+    fireEvent.pointerEnter(b, { pointerType: 'mouse' })
+    act(() => b.focus())
+    expect(isOpen()).toBe(true)
+    act(() => b.blur())
+    expect(isOpen()).toBe(true)
+    fireEvent.pointerLeave(b, { pointerType: 'mouse' })
+    act(() => vi.advanceTimersByTime(CLOSE_DELAY_MS))
+    expect(isOpen()).toBe(false)
+  })
+
+  test('a hover on its way still opens it when the focus leaves first', () => {
+    const b = setup()
+    act(() => b.focus())
+    fireEvent.keyDown(b, { key: 'Escape' })
+    expect(isOpen()).toBe(false)
+    // The control still has the focus; the pointer comes, and the focus leaves before the delay.
+    fireEvent.pointerEnter(b, { pointerType: 'mouse' })
+    act(() => b.blur())
+    act(() => vi.advanceTimersByTime(OPEN_DELAY_MS))
+    expect(isOpen()).toBe(true)
+  })
+
+  test('follows the control when the page scrolls', () => {
+    const b = setup()
+    let top = 200
+    b.getBoundingClientRect = () => ({
+      top,
+      bottom: top + 36,
+      left: 100,
+      right: 200,
+      width: 100,
+      height: 36,
+      x: 100,
+      y: top,
+      toJSON: () => ({}),
+    })
+    act(() => b.focus())
+    const before = tip().style.top
+    top = 400
+    act(() => {
+      window.dispatchEvent(new Event('scroll'))
+    })
+    expect(tip().style.top).not.toBe(before)
+  })
+
   test('without describing, it is hidden from screen readers and adds no description', () => {
     const b = setup(false)
     expect(b.hasAttribute('aria-describedby')).toBe(false)
