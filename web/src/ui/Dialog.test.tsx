@@ -189,3 +189,133 @@ describe('ConfirmDialog', () => {
     expect(dialog()).toBeNull()
   })
 })
+
+// A screen that keeps its confirmation open while the action runs, and to show what went wrong.
+function BusyScreen() {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>
+        Delete
+      </button>
+      <ConfirmDialog
+        open={open}
+        busy={busy}
+        title="Delete Equipment?"
+        confirmLabel="Delete the app"
+        tone="danger"
+        onConfirm={() => setBusy(true)}
+        onCancel={() => setOpen(false)}
+      >
+        {busy ? 'Deleting…' : 'Its records go with it.'}
+      </ConfirmDialog>
+      <button type="button" onClick={() => setBusy(false)}>
+        Fail
+      </button>
+    </>
+  )
+}
+
+const pressEscape = () => fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+const nextTasks = () =>
+  act(async () => {
+    await new Promise((r) => setTimeout(r))
+    await new Promise((r) => setTimeout(r))
+  })
+
+describe('a dialog the browser closes while the screen keeps it open', () => {
+  test('opens again with the focus inside, and stays the topmost modal', async () => {
+    render(<BusyScreen />)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete the app' }))
+    // The first Escape the page may refuse; the next ones without a press in between it can't.
+    for (let i = 0; i < 3; i++) {
+      pressEscape()
+      await nextTasks()
+    }
+    expect(dialog().open).toBe(true)
+    expect(dialog().contains(document.activeElement)).toBe(true)
+    expect(modalOpen()).toBe(true)
+    expect(screen.getByRole('alertdialog', { name: 'Delete Equipment?' }).textContent).toContain('Deleting…')
+  })
+
+  test('when the screen lets it go, it goes, and no modal is left behind', async () => {
+    render(<BusyScreen />)
+    const opener = screen.getByRole('button', { name: 'Delete' })
+    opener.focus()
+    fireEvent.click(opener)
+    pressEscape()
+    await nextTasks()
+    expect(dialog()).toBeNull()
+    expect(modalOpen()).toBe(false)
+    expect(document.activeElement).toBe(opener)
+  })
+
+  test('one that is not dismissible opens again at once', async () => {
+    const onClose = vi.fn()
+    render(
+      <Dialog open onClose={onClose} title="The account changed" role="alertdialog" dismissible={false}>
+        <Button>Reload this page</Button>
+      </Dialog>,
+    )
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    pressEscape()
+    pressEscape()
+    await act(async () => {
+      await new Promise((r) => setTimeout(r))
+    })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(dialog().open).toBe(true)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reload this page' }))
+  })
+
+  test('a press outside closes it only when asked to', () => {
+    const onClose = vi.fn()
+    const { rerender } = render(<Dialog open onClose={onClose} title="Move the card" />)
+    fireEvent.click(dialog(), { clientX: -10, clientY: -10 })
+    expect(onClose).not.toHaveBeenCalled()
+    rerender(<Dialog open onClose={onClose} title="Move the card" closeOnOutsidePress />)
+    fireEvent.click(dialog(), { clientX: -10, clientY: -10 })
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+})
+
+// A screen that asks, and says what it was told.
+function Asker({ onAnswer, ask }: { onAnswer: (yes: boolean) => void; ask: number }) {
+  const [confirmDialog, confirm] = useConfirm()
+  return (
+    <>
+      <button type="button" onClick={async () => onAnswer(await confirm({ title: `Q${ask}`, confirmLabel: 'Yes' }))}>
+        Ask
+      </button>
+      {confirmDialog}
+    </>
+  )
+}
+describe('useConfirm', () => {
+  test('a question left open when the component goes is a no', async () => {
+    const answers: boolean[] = []
+    const { unmount } = render(<Asker ask={1} onAnswer={(a) => answers.push(a)} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    expect(dialog()).not.toBeNull()
+    await act(async () => {
+      unmount()
+    })
+    expect(answers).toEqual([false])
+  })
+
+  test('a second question settles the first as a no', async () => {
+    const answers: boolean[] = []
+    render(<Asker ask={1} onAnswer={(a) => answers.push(a)} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Ask' })[0])
+    })
+    expect(answers).toEqual([false])
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Yes' }))
+    })
+    expect(answers).toEqual([false, true])
+  })
+})

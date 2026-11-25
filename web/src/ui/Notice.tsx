@@ -4,6 +4,10 @@
 // The role follows the tone: danger is an alert (said at once when it appears), info, success
 // and warning a status (said when it changes), neutral nothing (it is part of the page). A notice
 // that is there when the page opens is read with the page whatever its role.
+//
+// A notice that is part of what the page shows, not news (an error a screen draws after its data
+// loads, every time it is visited), is `live={false}`: no role at all, so it is read with the page
+// and not announced on every visit.
 
 import type { ReactNode } from 'react'
 import { Icon } from './Icon'
@@ -28,11 +32,14 @@ export interface NoticeProps {
   children: ReactNode
   // A button or a link at the end: "Set up email", "Try again".
   action?: ReactNode
+  // False: part of the page, never announced (see above). The tone still shows in its colour and
+  // its icon.
+  live?: boolean
 }
 
-export function Notice({ tone = 'info', title, children, action }: NoticeProps) {
+export function Notice({ tone = 'info', title, children, action, live = true }: NoticeProps) {
   return (
-    <div className="ui-notice" data-tone={tone} role={ROLES[tone]}>
+    <div className="ui-notice" data-tone={tone} role={live ? ROLES[tone] : undefined}>
       <span className="ui-notice-icon" aria-hidden="true">
         <Icon name={ICONS[tone]} />
       </span>

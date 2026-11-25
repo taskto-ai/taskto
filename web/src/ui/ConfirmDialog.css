@@ -1,0 +1,7 @@
+@layer components {
+  /* The words that say what will happen, when they are a plain string. */
+  .ui-confirm-text {
+    margin: 0;
+    text-wrap: pretty;
+  }
+}
