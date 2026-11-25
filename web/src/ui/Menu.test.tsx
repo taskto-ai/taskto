@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { Menu, MenuButton, MenuItem, MenuList, MenuSeparator, MoreMenu } from './Menu'
+import { Menu, MenuButton, MenuGroup, MenuItem, MenuList, MenuSeparator, MoreMenu } from './Menu'
 
 afterEach(cleanup)
 
@@ -174,5 +174,63 @@ describe('Menu', () => {
     expect(button.textContent).toContain('Newest')
     act(() => button.click())
     expect(focused()).toBe('Oldest')
+  })
+
+  test('radio items in a named group say which is checked, and the keys move through them', () => {
+    const pick = vi.fn()
+    render(
+      <Menu>
+        <MenuButton label="Theme" />
+        <MenuList>
+          <MenuGroup label="Theme">
+            <MenuItem checked={false} onSelect={() => pick('light')}>
+              Light
+            </MenuItem>
+            <MenuItem checked onSelect={() => pick('dark')}>
+              Dark
+            </MenuItem>
+          </MenuGroup>
+          <MenuSeparator />
+          <MenuItem onSelect={() => pick('other')}>Other</MenuItem>
+        </MenuList>
+      </Menu>,
+    )
+    act(() => screen.getByRole('button', { name: 'Theme' }).click())
+    const group = screen.getByRole('group', { name: 'Theme' })
+    const radios = within(group).getAllByRole('menuitemradio')
+    expect(radios.map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'true'])
+    expect(focused()).toBe('Light')
+    fireEvent.keyDown(radios[0], { key: 'ArrowDown' })
+    expect(focused()).toBe('Dark')
+    fireEvent.keyDown(radios[1], { key: 'ArrowDown' })
+    expect(focused()).toBe('Other')
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' })
+    fireEvent.click(document.activeElement as HTMLElement)
+    expect(pick).toHaveBeenCalledWith('light')
+  })
+
+  test("a text menu button's indicator can be another icon, or none", () => {
+    render(
+      <>
+        <Menu>
+          <MenuButton label="Switch" indicator="chevron-updown">
+            A
+          </MenuButton>
+          <MenuList>
+            <MenuItem onSelect={() => {}}>x</MenuItem>
+          </MenuList>
+        </Menu>
+        <Menu>
+          <MenuButton label="Account" indicator={null}>
+            B
+          </MenuButton>
+          <MenuList>
+            <MenuItem onSelect={() => {}}>y</MenuItem>
+          </MenuList>
+        </Menu>
+      </>,
+    )
+    expect(screen.getByRole('button', { name: 'Switch' }).querySelectorAll('svg')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Account' }).querySelector('svg')).toBeNull()
   })
 })

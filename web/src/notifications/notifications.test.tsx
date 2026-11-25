@@ -283,8 +283,9 @@ test('signing out removes this device first, while the session can still say who
   })
   render(<App />)
   await screen.findByRole('heading', { name: 'Notifications' })
+  fireEvent.click(screen.getByRole('button', { name: 'Account: Owner' }))
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }))
   })
   await screen.findByRole('heading', { name: 'Log in' })
   const order = calls
@@ -399,7 +400,7 @@ test('the inbox pages older notifications in, and says when there are none', asy
 
 // --- The shell: the bell, and the address a push opens --------------------------------------
 
-test('the top bar has a bell with the unread count, which opens the inbox', async () => {
+test("the sidebar's inbox has the unread count, which opens it", async () => {
   window.history.replaceState(null, '', '/w/1/home')
   fakeFetch({
     'GET /api/workspaces/1/notifications/count': { body: { unread: 120 } },
@@ -409,7 +410,7 @@ test('the top bar has a bell with the unread count, which opens the inbox', asyn
   render(<Shell me={me} onLogout={() => {}} />)
   const bell = await screen.findByRole('link', { name: 'Notifications, 120 unread' })
   expect(bell.getAttribute('href')).toBe('/w/1/notifications')
-  expect(bell.textContent).toBe('99+')
+  expect(bell.textContent).toBe('Notifications99+')
   fireEvent.click(bell)
   await screen.findByRole('heading', { name: 'Notifications' })
 })
@@ -419,7 +420,7 @@ test('a server without an inbox, or one that fails, leaves the bell quiet and th
   fakeFetch({ 'GET /api/workspaces/1/spaces': { body: { spaces: [] } } })
   render(<Shell me={me} onLogout={() => {}} />)
   const bell = await screen.findByRole('link', { name: 'Notifications' })
-  expect(bell.textContent).toBe('')
+  expect(bell.textContent).toBe('Notifications')
 })
 
 test('the address a push opens reads the notification as the person, marks it read and goes where it leads', async () => {

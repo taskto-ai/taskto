@@ -1,29 +1,46 @@
-// "New workspace" in the top bar, beside the workspace switcher: a small form in the same kind
-// of popover as the account menu. The server decides who may (`can_create_workspace` in
+// "New workspace": a small form in a dialog, opened from the workspace switcher's menu, or from the
+// screen for someone with no workspace yet. The server decides who may (`can_create_workspace` in
 // /api/me, the operator's -workspace-creation); the shell only offers it to those it says yes to.
 
-import { type FormEvent, useRef, useState } from 'react'
+import { type FormEvent, useId, useState } from 'react'
 import { api, errorText, forAccount, type Me, type Workspace } from '../api'
 import { useT } from '../i18n'
-import { Icon } from './Icon'
+import { Button } from '../ui/Button'
+import { Dialog } from '../ui/Dialog'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
 
 // The answer of POST /api/workspaces: what /api/me says now, and the new workspace.
 type Created = Me & { workspace: Workspace }
 
 const MAX_NAME = 100
 
-// `user`: the account the form was opened for; the server refuses the request (409) if the browser's session
-// became another account's since, so a workspace is never made for someone the person didn't mean.
-export function NewWorkspace({ user, onCreated }: { user: number; onCreated: (me: Me, workspace: Workspace) => void }) {
+export interface NewWorkspaceDialogProps {
+  open: boolean
+  onClose: () => void
+  // The account the form was opened for; the server refuses the request (409) if the browser's
+  // session became another account's since, so a workspace is never made for someone the person
+  // didn't mean.
+  user: number
+  onCreated: (me: Me, workspace: Workspace) => void
+}
+
+export function NewWorkspaceDialog({ open, onClose, user, onCreated }: NewWorkspaceDialogProps) {
   const t = useT()
-  const details = useRef<HTMLDetailsElement>(null)
+  const form = useId()
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const close = () => {
+    setError(null)
+    onClose()
+  }
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    if (busy) return
+    if (busy || name.trim() === '') return
     setBusy(true)
     setError(null)
     try {
@@ -33,7 +50,7 @@ export function NewWorkspace({ user, onCreated }: { user: number; onCreated: (me
         body: { name: name.trim() },
       })
       setName('')
-      details.current?.removeAttribute('open')
+      onClose()
       onCreated(me, workspace)
     } catch (err) {
       setError(errorText(err))
@@ -43,24 +60,26 @@ export function NewWorkspace({ user, onCreated }: { user: number; onCreated: (me
   }
 
   return (
-    <details ref={details} className="tt-account tt-new-workspace">
-      <summary className="tt-icon-button" aria-label={t('shell.newWorkspace')} title={t('shell.newWorkspace')}>
-        <Icon name="plus" />
-      </summary>
-      <form className="tt-menu" onSubmit={submit}>
-        <label>
-          {t('shell.newWorkspaceName')}
-          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={MAX_NAME} />
-        </label>
-        {error && (
-          <p role="alert" className="tt-error">
-            {error}
-          </p>
-        )}
-        <button type="submit" className="tt-button tt-primary" disabled={busy || name.trim() === ''}>
-          {t('shell.createWorkspace')}
-        </button>
+    <Dialog
+      open={open}
+      onClose={close}
+      title={t('shell.newWorkspace')}
+      size="sm"
+      actions={
+        <>
+          <Button onClick={close}>{t('common.cancel')}</Button>
+          <Button type="submit" form={form} variant="primary" loading={busy} disabled={!busy && name.trim() === ''}>
+            {t('shell.createWorkspace')}
+          </Button>
+        </>
+      }
+    >
+      <form id={form} onSubmit={submit} className="ui-shell-new-workspace">
+        <Field label={t('shell.newWorkspaceName')} required>
+          <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={MAX_NAME} data-autofocus />
+        </Field>
+        {error && <Notice tone="danger">{error}</Notice>}
       </form>
-    </details>
+    </Dialog>
   )
 }

@@ -97,6 +97,12 @@ const queued = (): Omit<OutboxItem, 'seq' | 'version'> => ({
   updatedAt: '2026-11-02T10:00:00.000Z',
 })
 
+// Log out, from the account menu at the sidebar's foot.
+function logOut() {
+  fireEvent.click(screen.getByRole('button', { name: /^Account: / }))
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }))
+}
+
 async function signedInAs() {
   render(<App />)
   await waitFor(() => expect(runtimeState().runtime?.user).toBe(7))
@@ -108,7 +114,7 @@ test('signing in claims the account’s offline database, and signing out with n
   await signedInAs()
   expect(lastUser()).toEqual({ id: 7, name: 'Pat' })
   expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
-  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  logOut()
   await screen.findByRole('heading', { name: /sign in|log in/i })
   expect(calls.some((c) => c.path === '/api/logout')).toBe(true)
   expect((await indexedDB.databases()).map((d) => d.name)).not.toContain('taskto-offline-7')
@@ -126,7 +132,7 @@ test('signing out with records not sent asks first: cancel keeps everything, dis
   if (!runtime) throw new Error('no runtime')
   runtime.engine.pause('manual')
   await runtime.store.enqueue(queued(), [])
-  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  logOut()
   const dialog = await screen.findByRole('alertdialog')
   expect(dialog.textContent).toMatch(/1 record on this device hasn’t reached the server/)
   // Nothing was signed out yet.
@@ -135,7 +141,7 @@ test('signing out with records not sent asks first: cancel keeps everything, dis
   expect(screen.queryByRole('alertdialog')).toBeNull()
   expect(await runtime.store.listItems()).toHaveLength(1)
   // Discard and sign out: the record and the database go.
-  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  logOut()
   await screen.findByRole('alertdialog')
   fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
   fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
@@ -354,7 +360,7 @@ test('signing out when the outbox can’t be read warns that unsent records may 
   const calls = fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
   render(<App />)
   await screen.findByRole('banner')
-  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  logOut()
   // Not zero: nobody can say. The person is told, and nothing was signed out yet.
   const dialog = await screen.findByRole('alertdialog')
   expect(dialog.textContent).toMatch(/may not have reached the server/)
@@ -374,13 +380,13 @@ test('…and discards it only when the person says so, after being asked', async
   fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
   render(<App />)
   await screen.findByRole('banner')
-  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  logOut()
   await screen.findByRole('alertdialog')
   // Cancelling keeps everything.
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   expect(screen.queryByRole('alertdialog')).toBeNull()
   expect((await indexedDB.databases()).map((d) => d.name)).toContain('taskto-offline-7')
-  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  logOut()
   await screen.findByRole('alertdialog')
   fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
   fireEvent.click(screen.getByRole('button', { name: 'Yes, discard' }))
@@ -393,7 +399,7 @@ test('…and discards it only when the person says so, after being asked', async
 test('signing out names the account it is for, and a stale tab’s sign-out leaves the session that is there now alone', async () => {
   const calls = fakeFetch({ ...signedIn, 'POST /api/logout': { status: 204 } })
   await signedInAs()
-  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  logOut()
   await screen.findByRole('heading', { name: /sign in|log in/i })
   const out = calls.find((c) => c.path === '/api/logout')
   expect(out?.headers['x-taskto-expected-user']).toBe('7')
@@ -405,7 +411,7 @@ test('…and when the server says the session is another account’s, nobody is 
     'POST /api/logout': { status: 409, body: { error: 'another account', code: 'session_account_changed' } },
   })
   await signedInAs()
-  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  logOut()
   // This tab learns it is stale: nothing of the account is shown, and the sign-out went no further.
   await screen.findByRole('alertdialog')
   expect(calls.some((c) => c.path === '/api/logout')).toBe(true)
@@ -426,7 +432,7 @@ test('a record that appears after the person was asked is never deleted by the s
     await stale.enqueue(queued(), [])
     return seen
   }
-  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  logOut()
   const dialog = await screen.findByRole('alertdialog')
   expect(dialog.textContent).toMatch(/1 record on this device hasn’t reached the server/)
   expect(calls.some((c) => c.path === '/api/logout')).toBe(false)
