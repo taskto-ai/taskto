@@ -579,7 +579,7 @@ async function editing(over: { conflict?: boolean } = {}) {
 }
 
 const leaving = () => screen.findByRole('alertdialog', { name: 'Discard your changes to this record?' })
-const escape = (el: Element) => fireEvent.keyDown(el, { key: 'Escape' })
+const pressEscape = (el: Element) => fireEvent.keyDown(el, { key: 'Escape' })
 
 test('with a change not saved, Escape asks first; keeping is the default and keeps the text', async () => {
   await editing()
