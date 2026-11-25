@@ -251,7 +251,8 @@ export const SCREENS = [
     name: 'empty-apps',
     phase: 'empty',
     show: (s) => s.go(s.path('apps')),
-    ready: (s) => [heading(s, 'Apps'), text(s, 'No apps here yet.')],
+    // Every space is empty and says so: the first one's will do.
+    ready: (s) => [heading(s, 'Apps'), text(s, /^No apps in .+ yet$/).first()],
   },
   {
     name: 'empty-inbox',
@@ -386,7 +387,10 @@ export const SCREENS = [
     name: 'apps-templates',
     phase: 'seeded',
     show: (s) => s.go(s.path('apps', 'templates')),
-    ready: (s) => [heading(s, 'Start from a template'), heading(s, 'Expense tracker')],
+    ready: (s) => [
+      heading(s, 'Start from a template'),
+      s.page.getByRole('button', { name: 'Use the template Expense tracker', exact: true }),
+    ],
   },
   {
     name: 'app-open',
