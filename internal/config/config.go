@@ -168,9 +168,21 @@ type Config struct {
 	SMTPPasswordFile string
 	SMTPEgress       string
 
+	// IntegrationEgress is the egress policy of the calls to integrations' providers (Stripe,
+	// Square; see internal/egress and docs/integrations.md). Empty means "public": addresses are
+	// checked after name resolution on every connection, so loopback, private, link-local and
+	// metadata addresses are refused. Each adapter pins its own hosts besides, so the policy
+	// never lists provider names.
+	IntegrationEgress string
+
 	// AuditRetentionDays is how many days the audit log's events are kept (docs/audit.md). Zero
 	// means the default, 365; -1, "off" in the settings, keeps them for ever.
 	AuditRetentionDays int
+
+	// AppDeletedRetentionDays is how many days an app's deleted records stay restorable before
+	// they, and their history, are removed (docs/api.md). Zero means the default, 90; -1, "off" in
+	// the settings, keeps them for ever.
+	AppDeletedRetentionDays int
 
 	// ConfigFile is the config file that was read, or "" if none was.
 	ConfigFile string
@@ -372,6 +384,12 @@ var settings = []setting{
 		set:   setEgress(func(c *Config) *string { return &c.SMTPEgress }),
 	},
 	{
+		flag: "integration-egress", env: "TASKTO_INTEGRATION_EGRESS", key: "integration_egress",
+		usage: "where calls to integrations' providers may go: public, any, or a comma-separated list of public, hosts and CIDR prefixes (default public)",
+		get:   func(c Config) string { return c.IntegrationEgress },
+		set:   setIntegrationEgress(func(c *Config) *string { return &c.IntegrationEgress }),
+	},
+	{
 		flag: "agent", env: "TASKTO_AGENT", key: "agent", isBool: true,
 		usage: "run the agent runtime (a Node.js sidecar)",
 		get:   func(c Config) string { return strconv.FormatBool(c.Agent) },
@@ -553,6 +571,31 @@ var settings = []setting{
 		},
 	},
 	{
+		flag: "app-deleted-retention", env: "TASKTO_APP_DELETED_RETENTION", key: "app_deleted_retention",
+		usage: "days an app's deleted records stay restorable before they and their history are removed, or off to keep them for ever (default 90)",
+		get: func(c Config) string {
+			switch {
+			case c.AppDeletedRetentionDays < 0:
+				return "off"
+			case c.AppDeletedRetentionDays == 0:
+				return ""
+			}
+			return strconv.Itoa(c.AppDeletedRetentionDays)
+		},
+		set: func(c *Config, v string) error {
+			if v == "off" {
+				c.AppDeletedRetentionDays = -1
+				return nil
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 36500 {
+				return fmt.Errorf("want a number of days from 1 to 36500, or off, got %q", v)
+			}
+			c.AppDeletedRetentionDays = n
+			return nil
+		},
+	},
+	{
 		flag: "push-contact", env: "TASKTO_PUSH_CONTACT", key: "push_contact",
 		usage: "how browsers' push services can reach you, a mailto: or https: URL (default https://taskto.ai)",
 		get:   func(c Config) string { return c.PushContact },
@@ -602,6 +645,21 @@ func (c Config) SMTPEgressPolicy() egress.Policy {
 	return p
 }
 
+// IntegrationEgressPolicy is the egress policy of the calls to integrations' providers: what is
+// set, or "public" when nothing is. It fails closed: a value that is empty (egress.Parse reads an
+// empty policy as "any") or that doesn't parse is "public" too. Load has already checked it.
+func (c Config) IntegrationEgressPolicy() egress.Policy {
+	public := egress.MustParse("public")
+	if strings.TrimSpace(c.IntegrationEgress) == "" {
+		return public
+	}
+	p, err := egress.Parse(c.IntegrationEgress)
+	if err != nil {
+		return public
+	}
+	return p
+}
+
 // AuditRetention is how long the audit log's events are kept: a year when unset, and zero, for
 // ever, when turned off.
 func (c Config) AuditRetention() time.Duration {
@@ -612,6 +670,18 @@ func (c Config) AuditRetention() time.Duration {
 		return audit.DefaultRetention
 	}
 	return time.Duration(c.AuditRetentionDays) * 24 * time.Hour
+}
+
+// AppDeletedRetention is how long an app's deleted records are kept: 90 days when unset, and zero,
+// for ever, when turned off.
+func (c Config) AppDeletedRetention() time.Duration {
+	switch {
+	case c.AppDeletedRetentionDays < 0:
+		return 0
+	case c.AppDeletedRetentionDays == 0:
+		return 90 * 24 * time.Hour
+	}
+	return time.Duration(c.AppDeletedRetentionDays) * 24 * time.Hour
 }
 
 // LocalDictation is the local speech model, "off" included: parakeet-v3 when unset.
@@ -687,6 +757,26 @@ func setEgress(field func(*Config) *string) func(*Config, string) error {
 			return fmt.Errorf("egress policy: %w", err)
 		}
 		*field(c) = p.String()
+		return nil
+	}
+}
+
+// setIntegrationEgress is setEgress for the integrations' policy, where nothing said is "public",
+// not "any": an empty value (an empty flag or file entry) is the default, so it can't open calls
+// that carry credentials to every address. The checked text is kept as it was written, not
+// as the parsed policy prints it: "any." is a host name, and printing it as "any" would read back
+// as the opt-out of every restriction.
+func setIntegrationEgress(field func(*Config) *string) func(*Config, string) error {
+	return func(c *Config, v string) error {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			*field(c) = "public"
+			return nil
+		}
+		if _, err := egress.Parse(v); err != nil {
+			return fmt.Errorf("egress policy: %w", err)
+		}
+		*field(c) = v
 		return nil
 	}
 }

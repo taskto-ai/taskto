@@ -75,7 +75,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 |---|---|---|
 | `internal` | 500 | Something failed on the server; the log has the details. |
 | `bad_request` | 400 | A request the web app never sends (a wrong enum, a missing field); `error` says what. |
-| `invalid_json` | 400 | The body isn't one JSON object of the route's fields, or is over its size. |
+| `invalid_json` | 400 | The body isn't one JSON object of the route's fields (`null`, an array or a scalar is refused), or is over its size. |
 | `not_found` | 404 | What the path names doesn't exist, or isn't the caller's to see. |
 | `cross_origin` | 403 | The CSRF guard refused a cross-origin request. |
 | `content_type` | 415 | The body's `Content-Type` isn't `application/json` (or `application/octet-stream` where a route takes bytes). |
@@ -195,6 +195,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_template_board` | 400 | The template needs a board and none was given, or takes none and one was. |
 | `app_operation_invalid` | 422 | An action's `operation` isn't 8 to 64 letters, digits, `-` or `_`. |
 | `app_operation_reused` | 409 | The `operation` was used before for a different request. |
+| `app_token_rate_limited` | 429 | The caller's access tokens ran their budget of actions in this workspace (60 a minute); `Retry-After` says when to try again (params: `max`, `seconds`). |
 | `app_effects_backlog` | 409 | The app has `max` effects waiting: the action changed nothing. |
 | `app_effect_not_failed` | 409 | Only a failed effect is retried. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
@@ -284,6 +285,19 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `provider_models_count` | 400 | A provider account lists 1 to `max` models. |
 | `provider_model_invalid` | 400 | A model's ID must be 1 to `max` printable characters. |
 | `too_many_providers` | 409 | The workspace, or the user, has `max` provider accounts. |
+| `integration_not_found` | 404 | No such integration in the workspace. |
+| `integration_name_invalid` | 400 | An integration's name must be 1 to `max` characters of `a-z`, `0-9`, `.`, `_` or `-`, starting with a letter or digit. |
+| `integration_name_taken` | 409 | An integration with this name exists in the workspace. |
+| `integration_display_name_invalid` | 400 | An integration's display name may have up to `max` printable characters. |
+| `integration_provider_unknown` | 400 | The provider isn't one the server knows ([integrations.md](integrations.md#providers)). |
+| `integration_secret_required` | 400 | A secret the provider needs (`secret`) isn't given. In a check's answer: it isn't set. |
+| `integration_secret_invalid` | 400 | The value given for a secret (`secret`) isn't one the provider's credentials look like. It never quotes the value. |
+| `integration_secret_unreadable` | 200 | In a check's answer (`code`): a sealed secret (`secret`) doesn't open, usually because the server key changed since it was saved: set it again. |
+| `integration_setting_invalid` | 400 | A setting (`setting`) is unknown, missing, or not a value the provider accepts. |
+| `integration_limit_invalid` | 400 | The amount ceiling must be a whole number from 1 to `max`. |
+| `integration_currency_invalid` | 400 | The currencies must be 1 to `max` distinct codes from the list the server knows. |
+| `too_many_integrations` | 409 | The workspace has `max` integrations. |
+| `integration_in_use` | 409 | Something still names the integration (an approval of an app): disable it instead. |
 | `base_url_invalid` | 400 | Not an http or https URL of up to `max` characters, without a query or fragment (provider accounts, shared CLI accounts, dictation). |
 | `base_url_credentials` | 400 | The base URL has credentials in it: the key goes in `api_key`. |
 | `base_url_insecure` | 400 | A key would be sent over plain http to another machine: use https. |
@@ -389,10 +403,16 @@ workspace, and acts with exactly that user's access there, checked again on ever
   | `…/spaces/{space}/docs…`, `GET …/history…`, `…/restore/…` | the [knowledge base](#knowledge-base), all of it but removing old versions from history |
   | `GET …/search`, `GET …/spaces/{space}/search` | [searching](#search) |
   | `…/spaces/{space}/boards…` | the [boards](#boards), all of it |
+  | `GET …/apps`, `GET …/apps/{app}`, `GET …/apps/{app}/surface`, `GET …/apps/{app}/releases[/{release}]`, `GET …/apps/{app}/records…` (the list, `deleted`, `query` and a record's `history` and `effects`), `GET …/apps/{app}/effects`, `POST …/apps/{app}/actions` | [personal apps](#personal-apps): reading an app and its rows, and running its actions, as the token's user: the space's access and the app's roles are checked as for a session, and rows a token adds or changes are marked with its name |
 
-  Personal apps are not here: a personal access token reaches them only through the
-  [MCP tools](mcp.md) at `/mcp` (such as `list_apps` and `create_app`). The apps' REST routes
-  need a session and answer `403` to a token.
+  The rest of the apps' routes take a session only (`403` with a token): creating, changing,
+  moving, copying, previewing, publishing and rolling back an app, its roles, installing a
+  template, restoring a record, retrying an effect, a device's [offline
+  download](#get-appsappoffline) and the photo uploads and attachments. They are the web
+  app's own (the builder, a device's queue, bytes that aren't JSON), and a token builds and
+  changes apps through the [MCP tools](mcp.md) (`create_app`, `update_app`), which check the
+  same rules. A request to an apps route that names an account (`X-Taskto-Expected-User`, the
+  offline outbox's) is a session's: with a token it is `403` too.
 
   Every other route answers `403` to a request carrying a token, whatever else it carries
   (a session cookie too): logging in and out, setup, `GET /api/me`, invites, managing
@@ -992,7 +1012,8 @@ the [audit log](audit.md) as `member_disabled` (with how many logins it ended) a
 `member_enabled`.
 
 A request an admin sent just before being disabled changes nothing either: the writes of an admin
-(inviting, changing a role, removing a member, the workspace's settings, shared CLI accounts)
+(inviting, changing a role, removing a member, the workspace's settings, shared CLI accounts, the
+integrations)
 read the admin's account again in their transaction and answer `403 account_disabled`.
 
 ## Invites
@@ -2467,8 +2488,9 @@ their rows; its **writers** create and change apps and run their actions (which 
 rows). A viewer's action is `403`. **Sharing** an app is moving it to a shared space,
 with its rows (`…/move`); a whole workspace shares an app through a shared space everyone
 is a member of. Every route below is under
-`/api/workspaces/{workspace}/spaces/{space}/apps`, needs a session (`401`), goes through
-the [CSRF guard](#csrf) unless it is a `GET`, and answers `404` for a space or app the
+`/api/workspaces/{workspace}/spaces/{space}/apps`, needs a session (`401`), or an
+[access token](#access-tokens) on the routes that read an app and run its actions (the others
+answer a token `403`), goes through the [CSRF guard](#csrf) unless it is a `GET`, and answers `404` for a space or app the
 caller can't read, or that isn't where the path says (an app of another space), and `403`
 for a write the caller may only read: a viewer, or an archived space. Besides, `403` with
 the code `app_forbidden` is for something the space allows but the caller's **roles in the
@@ -2626,7 +2648,7 @@ last digits.
 ### `GET …/apps/{app}/records/{record}/history`
 
 A record's versions, newest first, at most 200 (`truncated` says if older ones were left
-out): `{"record": {…}, "history": [{"revision": 3, "operation": "update", "data": {…},
+out; a record's history holds its newest 500 versions, and drops the oldest as new ones are made): `{"record": {…}, "history": [{"revision": 3, "operation": "update", "data": {…},
 "at": "…", "by": {"id", "name", "agent", "via"}, "action": "edit_expense"}, …],
 "truncated": false}`. `record` is the record as it is now, with its `revision`, `data`,
 who created, changed and deleted it, and `deleted_at` if it is deleted (its history can
@@ -2660,7 +2682,9 @@ deleted, and `created_by` is never a system's: who may read their own records do
 ### `GET …/apps/{app}/records/deleted`
 
 The app's deleted records the caller may read, most recently deleted first, at most 1,000
-(`truncated`), in the same shape as `GET …/records`.
+(`truncated`), in the same shape as `GET …/records`. A deleted record is kept for **90 days** by
+default (the operator's `-app-deleted-retention`, or for ever with `off`); after that it is
+removed with its history and its photos, and is no longer listed or restorable.
 
 ### `POST …/apps/{app}/records/{record}/restore`
 
@@ -2671,7 +2695,10 @@ record back, with its history, as a new revision, and answers with it. `409` wit
 the app has no room for it; `400` if it no longer fits the live release's collection, which
 changed since (the field's code, such as `app_field_required`; a draft that isn't published
 doesn't count); `409` with `app_offline` while the app is offline, `409 app_not_published`
-before the first release. The history and deleted routes work for an offline app, whose data is kept.
+before the first release. A record deleted longer ago than the retention window (see
+[the deleted ones](#get-appsapprecordsdeleted)) has been removed, and restoring it is `404`, as for
+a record that never was; restoring inside the window works as ever. The history and deleted routes
+work for an offline app, whose data is kept.
 
 ### `GET …/apps/{app}/roles`
 
@@ -3146,6 +3173,22 @@ with, for an update or a delete, the optional `"expectedRevision"` (see
 [Records](#records-revisions-history-and-deleting); `422` if it isn't a revision, or the
 action inserts, `409` `app_record_conflict` if the record has another one). A delete marks
 the record deleted: it can be restored.
+
+With an [access token](#access-tokens) the action runs as the token's user, the changes are marked
+with the token's name, and the user's tokens together (with `run_app_action` over MCP) have a
+**budget of 60 actions a minute** in a workspace, with a burst of 60: over it the answer is
+`429 app_token_rate_limited` with `Retry-After`, in seconds, and nothing is done, except that a
+request that already committed (the same `operation` and `release`) is answered with its receipt, for
+a client that lost the answer. A session is never limited. Deleted rows and their history are kept until a retention rule removes them, and none purges them yet, so a token's insert and delete cycles keep growing storage within its action budget. A token's `operation` keys are in the same scope as the browser's: **the key belongs to the
+user and the app, not to the credential**, so a token and a session (or two tokens) of one user who
+send the same key meet. A client should make a random key for each change (8 to 64 letters, digits,
+`-`, `_`) and never reuse one for another: the same key with the same request replays it, and the
+same key with a different request is `409 app_operation_reused`. The effects such an action sets going
+(a card, a document) are done by the server's worker, as the user and not through the token: a
+document's commit says it was made by "TaskTo app" for the user, whichever credential asked (the
+commit is found again by that name after a crash, so it doesn't carry the token's name), while a
+card made by an effect is marked with the token's name, like the record.
+
 The server checks it against the app (`422` for an event the app doesn't declare,
 another surface, a context field the collection doesn't have, a value that doesn't fit
 its field, or a row the app doesn't have), applies it, and answers with the
@@ -3332,6 +3375,8 @@ complete or fail, so one slow after its lease ran out can't end a retry made sin
 right to change that record, in the scope their roles give now); `409 app_effect_not_failed` for one
 that didn't fail; `409 app_effects_backlog` when the app already has 500 effects waiting (a retry is
 waiting work like any other); `404` for an effect of a record the caller can't read. The worker checks access again when it runs, so a retry never widens what anyone may do.
+A session only: an effect read with an [access token](#access-tokens) says `"can_retry": false`,
+since the route is not one a token reaches.
 
 #### `POST …/apps/{app}/actions/preview`
 
@@ -3749,6 +3794,138 @@ reads the space may list them; they are seen only for the apps they may view.
   the app `403 app_forbidden` (`publish`), a private space `409 home_defaults_shared`.
 - `DELETE …/spaces/{space}/home/defaults/{default}`: `204`, with the same rights; `404` for a
   default of another space.
+
+## Integrations
+
+An integration is a workspace admin's connection to an account at an outside service. The
+first kind is `payments`, with Stripe and Square as providers. The providers are a closed list
+in the server's code; see [integrations.md](integrations.md). Every route below is **session
+only**: an access token, and with it MCP, is refused (`403`), and nothing here is offered to
+the agent. Every query is scoped to the workspace in the path, so another workspace's
+integration is a `404`.
+
+An integration looks like this:
+
+```json
+{
+  "id": 3,
+  "provider": "stripe",
+  "kind": "payments",
+  "name": "shop",
+  "display_name": "Shop",
+  "mode": "test",
+  "settings": {},
+  "max_amount_minor": 500000,
+  "currencies": ["EUR", "USD"],
+  "secrets": {"api_key": "set", "webhook_secret": "not set"},
+  "webhook_url": "https://taskto.example.com/hooks/0123456789abcdef0123456789abcdef",
+  "disabled": false,
+  "disabled_at": null,
+  "spaces": [12],
+  "other_spaces": 0,
+  "created_at": "…",
+  "updated_at": "…",
+  "last_event_at": null
+}
+```
+
+- **`provider`**: a registry id, `stripe` or `square`. It can't change.
+- **`name`**: 1–40 characters of `a-z 0-9 . _ -`, starting with a letter or digit, unique per
+  workspace. It can't change. **`display_name`**: up to 100 printable characters; defaults to
+  `name`.
+- **`mode`**: `test` or `live`, never sent: it is read from the API key's prefix (Stripe's
+  `sk_test_` or `sk_live_`, and the restricted `rk_` keys) or from the `environment` setting
+  (Square), so it can't disagree with the credentials.
+- **`settings`**: what the provider needs that isn't secret, a flat object of short
+  identifiers or choices (Stripe has none; Square has `environment`, `sandbox` or
+  `production`, and `location_id`). Never a URL: a setting can't point a call anywhere.
+- **`max_amount_minor`**: the admin's ceiling for one payment, a whole number from 1 to
+  1 000 000 000 000, in the smallest unit of the currency. **`currencies`**: 1 to 20 distinct
+  ISO 4217 codes from the server's closed list ([`integration-providers`](#get-apiworkspacesworkspaceintegration-providers)).
+  An app's definition never sets either.
+- **`secrets`**: **write-only**. Each of `api_key` and `webhook_secret` is `"set"` or
+  `"not set"`, never the value. A secret is sent in `secrets` on create or `PATCH`, of the shape
+  the provider's own have and at most 258 characters (a Stripe publishable key `pk_…` is
+  refused as an API key, with `integration_secret_invalid`); a value that doesn't fit is
+  refused without quoting it. A secret is replaced by sending a new one and can't be removed; to stop using
+  an account, disable the integration or delete it. A replaced webhook secret keeps verifying
+  events for a day (for the provider's own rotation overlap).
+- **`webhook_url`**: the address the provider's events will be sent to, `null` when the server has no
+  `-public-url`: webhooks are then unavailable. **Reserved:** no route serves it yet and events are
+  not processed, so don't register it at the provider until a later release says so; the same
+  holds for the webhook secret and its rotation. It holds a random 128-bit id and no
+  secret, and is made from the current `-public-url` each time, so it follows a change of it.
+- **`spaces`**: ids of the spaces whose apps may use the integration **that the caller may
+  manage**: their own private space and the workspace's shared spaces (archived ones too, so
+  they can be taken out). Another person's private space is never in it: **`other_spaces`**
+  counts the integration's allowed spaces the caller can't see, which they can't change
+  either. A new integration has none.
+
+### `GET /api/workspaces/{workspace}/integration-providers`
+
+Admin only. What a form needs to connect one: `{"providers": [{"id", "kinds", "secrets":
+[{"name", "required"}], "settings": [{"name", "options", "required"}]}], "currencies": […],
+"exponents": {"EUR": 2, "JPY": 0, …}, "max_amount_minor": …, "webhooks_available": bool}`.
+`exponents` is the server's number of decimals for each of `currencies`, the unit
+`max_amount_minor` is in; show an amount with it, not with the browser's own table (which
+differs for a few currencies). It is the provider's unit: COP, HUF and IDR have two decimals, and
+ISK too, its decimals always `00`.
+
+### `GET /api/workspaces/{workspace}/integrations`
+
+Admin only. `{"integrations": [integration, …]}`, oldest first.
+
+### `POST /api/workspaces/{workspace}/integrations`
+
+Admin only. `provider`, `name`, `secrets` (with the provider's required ones), `settings`
+(the provider's required ones), `max_amount_minor` and `currencies` are required;
+`display_name` is optional. Unknown fields are refused. `201` with the integration; `400` for
+an invalid field (`integration_provider_unknown`, `integration_name_invalid`,
+`integration_secret_required`, `integration_secret_invalid`, `integration_setting_invalid`,
+`integration_limit_invalid`, `integration_currency_invalid`); `409` if the name is taken or
+the workspace has 20 integrations.
+
+### `GET /api/workspaces/{workspace}/integrations/{integration}`
+
+Admin only. The integration, or `404`.
+
+### `PATCH /api/workspaces/{workspace}/integrations/{integration}`
+
+Admin only. Any of `display_name`, `settings` and `currencies` (each replaces the whole
+value), `secrets` (replaces the ones named), `max_amount_minor` and `disabled`; the rest stay.
+`disabled: true` switches the integration off (nothing sends or receives through it, and its
+approvals and events are kept) and `false` back on. `200` with the integration; `400` for an
+invalid field or an attempt to change the name or provider; `404`.
+
+### `PUT /api/workspaces/{workspace}/integrations/{integration}/spaces`
+
+Admin only. `{"spaces": [id, …]}` replaces the allowed spaces **among the ones the caller
+manages**. An admin may allow their own private space and the workspace's shared spaces,
+whether or not they are a member; any other space, another person's private space or another
+workspace's, is `404 space_not_found` and nothing changes. The integration's allowed spaces
+the caller can't manage (another admin's private space) stay as they are, whatever the list.
+`200` with the integration, as the caller sees it.
+
+### `POST /api/workspaces/{workspace}/integrations/{integration}/check`
+
+Admin only, no body. Looks at what the server holds: the provider's required secrets are set,
+open with the server's key and the settings are the provider's. It doesn't call the
+provider in this version (`remote` is `false`). `200`, always, with
+`{"ok": true, "remote": false}` or `{"ok": false, "remote": false, "code": "…", "params": {…}}`
+(`integration_secret_required`, `integration_secret_unreadable`, `integration_setting_invalid`).
+It never carries a provider's reply or a secret. `404` for another workspace's integration.
+
+### `DELETE /api/workspaces/{workspace}/integrations/{integration}`
+
+Admin only. `204`, with its secrets and allowed spaces; `404`; `409 integration_in_use` while
+something names it (an app's approval): disable it instead.
+
+### `GET /api/workspaces/{workspace}/spaces/{space}/integrations`
+
+Anyone who can read the space. What may be used in the space:
+`{"integrations": [{"id", "name", "display_name", "kind", "status"}]}`, with `status` `active`
+or `disabled`. Nothing about the account: no secret, no webhook address, no limit, no
+provider.
 
 ## Model providers
 

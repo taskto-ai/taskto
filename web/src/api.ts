@@ -613,6 +613,59 @@ export type ProviderAccount = {
 // `code` and `params` are the failure's, for codeText().
 export type ProviderCheck = { ok: boolean; error?: string; code?: string; params?: Params; missing?: string[] }
 
+// An integration: a workspace's connection to an account at a payment provider. A secret is only
+// ever "set" or "not set": the API never returns one.
+export type Integration = {
+  id: number
+  provider: string
+  kind: string
+  name: string
+  display_name: string
+  mode: 'test' | 'live'
+  settings: Record<string, string>
+  // The admin's ceiling for one payment, in the smallest unit of each currency, and the currencies.
+  max_amount_minor: number
+  currencies: string[]
+  secrets: Record<string, string>
+  // The address to register at the provider; null when the server has no public URL.
+  webhook_url: string | null
+  disabled: boolean
+  disabled_at: string | null
+  // The ids of the spaces whose apps may use it that the caller manages (their own private space
+  // and the shared ones), and how many more are allowed that they can't see: other people's
+  // private spaces, which are never named.
+  spaces: number[]
+  other_spaces: number
+  created_at: string
+  updated_at: string
+  last_event_at: string | null
+}
+
+export type IntegrationSecretSpec = { name: string; required: boolean }
+export type IntegrationSettingSpec = { name: string; options: string[]; required: boolean }
+export type IntegrationProvider = {
+  id: string
+  kinds: string[]
+  secrets: IntegrationSecretSpec[]
+  settings: IntegrationSettingSpec[]
+}
+
+// What the connect form needs: the closed list of providers and currencies.
+export type IntegrationRegistry = {
+  providers: IntegrationProvider[]
+  currencies: string[]
+  // The server's number of decimals for each currency: the unit a ceiling is in.
+  exponents: Record<string, number>
+  max_amount_minor: number
+  webhooks_available: boolean
+}
+
+// The answer of a check: `code` and `params` are for codeText().
+export type IntegrationCheck = { ok: boolean; remote: boolean; code?: string; params?: Params }
+
+// What a space's readers see of an integration allowed there.
+export type SpaceIntegration = { id: number; name: string; display_name: string; kind: string; status: string }
+
 export type SearchSettings = {
   embeddings: { account: number; provider: string; model: string } | null
   documents: number

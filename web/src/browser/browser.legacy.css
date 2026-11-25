@@ -1,0 +1,71 @@
+/* The agent browser: the help card, the panel and its live view (docs/agent-browser.md).
+
+   Its rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
+   and their order with the other files is styles.css's (docs/design.md, "Where styles live").
+   Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
+
+/* The agent browser: the help card, the panel and its live view (docs/agent-browser.md). */
+.tt-help {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.75rem 1.25rem 0;
+}
+
+.tt-help p {
+  margin: 0;
+}
+
+.tt-help .tt-row,
+.tt-browser-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tt-browser {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 1.25rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: 8px;
+}
+
+.tt-browser p {
+  margin: 0;
+}
+
+.tt-browser-head h3 {
+  margin: 0 auto 0 0;
+  font-size: 1rem;
+}
+
+.tt-live {
+  display: grid;
+  gap: 0.4rem;
+}
+
+/* noVNC scales the screen to fit this box (scaleViewport). */
+.tt-live-screen {
+  height: min(45vh, 460px);
+  background: var(--tt-line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tt-live[data-interactive] .tt-live-screen {
+  outline: 2px solid var(--tt-focus);
+}
+
+@media (max-width: 640px) {
+  .tt-help,
+  .tt-browser {
+    margin-inline-start: 0.75rem;
+    margin-inline-end: 0.75rem;
+  }
+
+  .tt-live-screen {
+    height: 40vh;
+  }
+}

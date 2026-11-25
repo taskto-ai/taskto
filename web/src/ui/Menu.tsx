@@ -34,6 +34,7 @@ import {
   useState,
 } from 'react'
 import { useT } from '../i18n'
+import { Link } from '../router'
 import { Button, type ButtonProps } from './Button'
 import { Icon, type IconName } from './Icon'
 import { IconButton } from './IconButton'
@@ -112,9 +113,20 @@ export interface MenuButtonProps extends Omit<ButtonProps, 'onClick' | 'children
   icon?: IconName
   // Text on the button, which then shows a chevron after it.
   children?: ReactNode
+  // The sign after the text: a chevron down (the default), another icon (`chevron-updown` for a
+  // switcher), or none (`null`), for a button whose text already says what it opens.
+  indicator?: IconName | null
 }
 
-export function MenuButton({ label, icon = 'more', children, variant = 'ghost', size, ...rest }: MenuButtonProps) {
+export function MenuButton({
+  label,
+  icon = 'more',
+  children,
+  indicator = 'chevron-down',
+  variant = 'ghost',
+  size,
+  ...rest
+}: MenuButtonProps) {
   const menu = useMenu('MenuButton')
   const t = useT()
   // A press on the button while the list is open closes it (the click outside does), and the
@@ -164,13 +176,13 @@ export function MenuButton({ label, icon = 'more', children, variant = 'ghost', 
         <span id={`${menu.buttonId}-value`} className="ui-menu-button-value">
           {children}
         </span>
-        <Icon name="chevron-down" size={16} />
+        {indicator && <Icon name={indicator} size={16} />}
       </span>
     </Button>
   )
 }
 
-const ITEM = '[role="menuitem"]'
+const ITEM = '[role="menuitem"], [role="menuitemradio"]'
 
 export function MenuList({ children, label }: { children: ReactNode; label?: string }) {
   const menu = useMenu('MenuList')
@@ -306,27 +318,81 @@ export interface MenuItemProps {
   // A destructive action: in the danger colour, and last, after a separator.
   tone?: 'danger'
   disabled?: boolean
+  // One choice of several (a theme, a language): a radio item, checked or not, with a check mark
+  // on the one that is. Put the choices in a MenuGroup that names them.
+  checked?: boolean
 }
 
-export function MenuItem({ children, onSelect, icon, tone, disabled }: MenuItemProps) {
+export function MenuItem({ children, onSelect, icon, tone, disabled, checked }: MenuItemProps) {
   const menu = useMenu('MenuItem')
+  const common = {
+    type: 'button' as const,
+    tabIndex: -1,
+    className: 'ui-menu-item',
+    'data-tone': tone,
+    'aria-disabled': disabled || undefined,
+    onClick: () => {
+      if (disabled) return
+      menu.closeMenu(true)
+      onSelect()
+    },
+  }
+  const content = (
+    <>
+      {icon && <Icon name={icon} />}
+      <span className="ui-menu-item-label">{children}</span>
+    </>
+  )
+  if (checked === undefined) {
+    return (
+      <button role="menuitem" {...common}>
+        {content}
+      </button>
+    )
+  }
   return (
-    <button
-      type="button"
+    <button role="menuitemradio" aria-checked={checked} {...common}>
+      {content}
+      <Icon name="check" size={16} className="ui-menu-item-check" />
+    </button>
+  )
+}
+
+// An item that goes somewhere: a real link, so it opens in a new tab or is copied as any link is,
+// drawn as an item. Enter follows it, as it does any link, and so does Space, as for the other items.
+export function MenuLink({ href, children, icon }: { href: string; children: ReactNode; icon?: IconName }) {
+  const menu = useMenu('MenuLink')
+  return (
+    <Link
+      href={href}
       role="menuitem"
       tabIndex={-1}
       className="ui-menu-item"
-      data-tone={tone}
-      aria-disabled={disabled || undefined}
-      onClick={() => {
-        if (disabled) return
-        menu.closeMenu(true)
-        onSelect()
+      onClick={() => menu.closeMenu(false)}
+      onKeyDown={(e) => {
+        if (e.key === ' ') {
+          e.preventDefault()
+          e.currentTarget.click()
+        }
       }}
     >
       {icon && <Icon name={icon} />}
       <span className="ui-menu-item-label">{children}</span>
-    </button>
+    </Link>
+  )
+}
+
+// A named group of items: the choices of one setting, with its name above them.
+export function MenuGroup({ label, children }: { label: string; children: ReactNode }) {
+  const id = useId()
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: a group of a menu's items is role="group" inside role="menu"; a <fieldset> is a form's.
+    <div role="group" aria-labelledby={id} className="ui-menu-group">
+      <div id={id} role="presentation" className="ui-menu-group-label">
+        {label}
+      </div>
+      {children}
+    </div>
   )
 }
 

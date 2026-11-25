@@ -121,6 +121,8 @@ export function WidgetCard({
                 label={title}
                 release={item.release}
                 transport={transport}
+                // Bare: the widget is its frame. The app keeps the room its rings and the primary's lift need.
+                frame="bare"
               />
             </div>
           )}

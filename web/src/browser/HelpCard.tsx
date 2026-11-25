@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { api, errorText } from '../api'
 import { t as translate, useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Notice } from '../ui/Notice'
+import './Browser.css'
 
 // What the agent asked for, from its browser_help call.
 export type HelpRequest = { reason: string; message: string }
@@ -51,30 +54,26 @@ export function HelpCard({
     }
   }
   return (
-    <section className="tt-conflict tt-help" aria-label={t('browser.help.label')}>
-      <p>
-        <strong>
-          {t(Object.hasOwn(TITLE, help.reason) ? TITLE[help.reason as keyof typeof TITLE] : 'browser.help.other')}
-        </strong>
-      </p>
-      {/* The model's words, shown as plain text. */}
-      <p className="tt-message-text">{help.message}</p>
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
-      <div className="tt-row">
-        <button type="button" className="tt-button tt-primary" disabled={!canTakeOver} onClick={onTakeOver}>
-          {t('browser.takeOver')}
-        </button>
-        <button type="button" className="tt-button" disabled={busy} onClick={() => answer(doneMessage())}>
-          {t('browser.help.done')}
-        </button>
-        <button type="button" className="tt-button" disabled={busy} onClick={() => answer(notNowMessage())}>
-          {t('browser.help.notNow')}
-        </button>
-      </div>
+    <section className="ui-browser-help" aria-label={t('browser.help.label')}>
+      <Notice
+        tone="info"
+        title={t(Object.hasOwn(TITLE, help.reason) ? TITLE[help.reason as keyof typeof TITLE] : 'browser.help.other')}
+      >
+        {/* The model's words, shown as plain text. */}
+        <p className="ui-browser-help-said">{help.message}</p>
+        <div className="ui-browser-actions">
+          <Button size="sm" icon="browser" disabled={!canTakeOver} onClick={onTakeOver}>
+            {t('browser.takeOver')}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => answer(doneMessage())}>
+            {t('browser.help.done')}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => answer(notNowMessage())}>
+            {t('browser.help.notNow')}
+          </Button>
+        </div>
+      </Notice>
+      {error && <Notice tone="danger">{error}</Notice>}
     </section>
   )
 }

@@ -80,17 +80,17 @@ offline is never rewritten by code that doesn't know its shape ([offline.md](off
 
 ## Phones: layout and keyboard
 
-- **Safe areas:** `viewport-fit=cover`, and the top bar, the page, the drawer, the composer and
+- **Safe areas:** `viewport-fit=cover`, and the phone's bar, the sidebar, the page, the drawer, the composer and
   the setup and login screens pad by `env(safe-area-inset-*)`, so nothing is under the notch,
   the status bar or the home bar. On iOS the installed app's status bar is translucent over the
-  top bar.
+  phone's bar.
 - **Touch targets:** where the pointer is coarse, every control is at least 44 × 44 CSS pixels
   (`--tt-touch`). The app is laid out down to a 360-pixel viewport.
 - **Keyboard:** inputs are 16 px on phones (iOS zooms in on smaller ones). Chrome on Android
   resizes the page for the on-screen keyboard (`interactive-widget=resizes-content`). iOS Safari
   doesn't, so while its visual viewport is much shorter than the window (and not zoomed) the app
   is sized to it (`viewport.ts`, `html[data-keyboard]`), which keeps the composer above the
-  keyboard and the top bar in view.
+  keyboard and the phone's bar in view.
 - **Focus:** a skip link to the page; the drawer takes focus when it opens, makes the page behind
   it inert, closes on Escape and gives focus back to its button; a page picked in it takes focus.
 - **Pull to refresh** is off in the installed app (`overscroll-behavior`), so a stray pull can't
@@ -100,10 +100,10 @@ offline is never rewritten by code that doesn't know its shape ([offline.md](off
 
 Two parts, the second optional:
 
-- **The inbox** (`web/src/notifications/`, the bell in the top bar and `/w/{workspace}/notifications`)
+- **The inbox** (`web/src/notifications/`, the inbox in the sidebar and `/w/{workspace}/notifications`)
   lists what happened that a person may want to see: a card assigned to them, an action of an app
   that failed for good and waits for their retry. It works in every browser, push or not, and is
-  what is true. The bell's count is asked for when the app opens, when it comes back to the
+  what is true. The inbox's count is asked for when the app opens, when it comes back to the
   foreground, when something was read here, when a push reached the worker, and once a minute while
   it is shown.
 - **Web Push** tells a device about a new notification when the app isn't open. It is
@@ -212,7 +212,7 @@ The tests run in jsdom and in a desktop Chromium that emulates a phone's viewpor
 Only a real device shows: that iOS offers Add to Home Screen and opens the installed app
 under a translucent status bar with the right insets; that Android's install prompt and
 maskable icon look right; that the keyboard handling (`viewport.ts`) keeps the composer and
-top bar in place on iOS; that the safe areas clear a notch in landscape; what a browser keeps of
+the phone's bar in place on iOS; that the safe areas clear a notch in landscape; what a browser keeps of
 IndexedDB after a restart or under storage pressure (the rest is in [offline.md](offline.md#what-the-tests-dont-cover)); that an update
 installed while the app is in the background prompts when it returns; and that the app opens
 offline after a phone's own restart.

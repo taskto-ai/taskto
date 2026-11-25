@@ -42,6 +42,7 @@ describe('Icon', () => {
       'info',
       'alert',
       'copy',
+      'at',
       'move',
       'offline',
     ]) {

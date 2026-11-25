@@ -21,6 +21,9 @@ services:
         VERSION: ${TASKTO_VERSION:-dev}
     image: ${TASKTO_IMAGE_PREFIX:-}taskto:${TASKTO_VERSION:-dev}
     restart: unless-stopped
+    # Docker's default of 10 s would kill the server in the middle of its shutdown, which waits
+    # for requests, emails and the agent runtime (65 s at most, docs/install.md#stopping-the-server).
+    stop_grace_period: 90s
     # Only this machine can reach it directly. Others come through the reverse proxy.
     ports:
       - "127.0.0.1:${TASKTO_PORT:-8080}:8080"

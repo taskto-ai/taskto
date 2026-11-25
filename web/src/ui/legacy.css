@@ -54,6 +54,17 @@
     /* Not on a scale: today's one radius and the top bar's height, as they were. */
     --tt-radius: 8px;
     --tt-topbar-h: 52px;
+    /* The sizes and spaces base.css had, none of them on a scale: as they were. */
+    --tt-text-body: 15px;
+    --tt-text-h1: 1.15rem;
+    --tt-text-h2: 1rem;
+    --tt-text-h3: 0.95rem;
+    --tt-text-code: 0.9em;
+    --tt-text-small: 0.85rem;
+    --tt-field-padding: 0.45rem 0.6rem;
+    --tt-error-margin: 0.25rem 0;
+    /* Not a step of the type scale: under 16px, iOS zooms in on a field that takes the focus. */
+    --tt-text-no-zoom: 16px;
 
     /* A cross, as a shape to mask with: its colour comes from the element that uses it. */
     --tt-clear-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.1 8 6.6l4.5-4.5 1.4 1.4L9.4 8l4.5 4.5-1.4 1.4L8 9.4l-4.5 4.5-1.4-1.4L6.6 8 2.1 3.5z'/%3E%3C/svg%3E");

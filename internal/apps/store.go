@@ -229,6 +229,11 @@ type Service struct {
 	// quota refuses an upload that would take its space or workspace over a storage quota
 	// (WithQuota); nil for none.
 	quota *quota.Service
+	// deletedRetention is how long a deleted record is kept before PurgeDeleted removes it; zero
+	// keeps them for ever (retention.go).
+	deletedRetention time.Duration
+	// budget limits the actions run with access tokens (tokenbudget.go).
+	budget *tokenBudget
 }
 
 // outboxHooks are for tests to stop the worker where a crash would.
@@ -245,7 +250,8 @@ type outboxHooks struct {
 
 // New returns the apps service over sqlDB, which must be migrated.
 func New(sqlDB *sql.DB, c *access.Checker) *Service {
-	return &Service{db: sqlDB, access: c, clock: time.Now, wake: make(chan struct{}, 1), thumbs: make(chan struct{}, maxThumbnails)}
+	return &Service{db: sqlDB, access: c, clock: time.Now, budget: sharedBudget(sqlDB), wake: make(chan struct{}, 1), thumbs: make(chan struct{}, maxThumbnails),
+		deletedRetention: DefaultDeletedRetention}
 }
 
 // timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the schema's format for times.
@@ -982,6 +988,15 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 // sent back is drawn by the release the action came from, limited to the fields the live
 // release declares (shownBy): nothing the live app leaves unseen is returned.
 func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
+	if err := s.spendTokenAction(actor, sp.WorkspaceID); err != nil {
+		// A request that committed before is answered with its receipt even over the budget: a
+		// client that lost the answer must be able to learn that it is in, and the receipt
+		// costs nothing but one lookup. Only a new operation is refused.
+		if IsRateLimited(err) && s.committed(ctx, sp.ID, actor, appID, action) {
+			return []Message{}, nil
+		}
+		return nil, err
+	}
 	msgs, err := s.actOnce(ctx, sp, actor, appID, action)
 	// A request this caller made before, under the same operation and release, and that committed,
 	// is answered with its receipt even when what they may do has changed since: a client that
@@ -1355,10 +1370,11 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 		}
 		var id int64
 		if err := tx.QueryRowContext(ctx, `
-			INSERT INTO app_rows (app_id, data, revision,
+			INSERT INTO app_rows (id, app_id, data, revision,
 				created_at, created_by, created_by_agent, created_via, created_action,
 				updated_at, updated_by, updated_by_agent, updated_via, updated_action)
-			VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			VALUES (max(coalesce((SELECT max(id) FROM app_rows), 0), (SELECT high FROM app_row_ids)) + 1,
+				?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			appID, string(raw), at, actor.UserID, actor.Agent, via(actor), actionColumn(ch),
 			at, actor.UserID, actor.Agent, via(actor), actionColumn(ch)).Scan(&id); err != nil {
 			return applied{}, err
@@ -1448,6 +1464,12 @@ func remember(ctx context.Context, tx *sql.Tx, appID, rowID, revision int64, op,
 		INSERT INTO app_row_history (app_id, row_id, revision, operation, data, at, actor, actor_agent, actor_via, action)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		appID, rowID, revision, op, data, at, actor.UserID, actor.Agent, via(actor), actionColumn(ch))
+	if err != nil || revision <= MaxRevisions {
+		return err
+	}
+	// Only the newest MaxRevisions versions are kept, so a record edited in a loop doesn't grow
+	// its history without bound (retention.go). The row's own data is the newest, always kept.
+	_, err = tx.ExecContext(ctx, `DELETE FROM app_row_history WHERE row_id = ? AND revision <= ?`, rowID, revision-MaxRevisions)
 	return err
 }
 

@@ -127,12 +127,15 @@ const (
 
 	// Personal apps (internal/apps).
 
-	CodeAppOffline     Code = "app_offline"
-	CodeAppChanged     Code = "app_changed"     // 409, with the app as it is now in "current"
-	CodeAppNameLength  Code = "app_name_length" // params: max
-	CodeTooManyApps    Code = "too_many_apps"   // params: max
-	CodeAppFull        Code = "app_full"        // params: max_rows, max_mib
-	CodeAppRowNotFound Code = "app_row_not_found"
+	CodeAppOffline    Code = "app_offline"
+	CodeAppChanged    Code = "app_changed"     // 409, with the app as it is now in "current"
+	CodeAppNameLength Code = "app_name_length" // params: max
+	CodeTooManyApps   Code = "too_many_apps"   // params: max
+	// CodeAppTokenRateLimited is a 429, with Retry-After: the user's access tokens ran their share
+	// of actions in the workspace this minute (params: max, seconds).
+	CodeAppTokenRateLimited Code = "app_token_rate_limited" //nolint:gosec // G101: an error code, not a credential
+	CodeAppFull             Code = "app_full"               // params: max_rows, max_mib
+	CodeAppRowNotFound      Code = "app_row_not_found"
 	// CodeAppPreviewFull is a preview at its own row limit (params: max_rows); CodeAppPreviewTooLarge
 	// a preview's request over its size limit (413; params: max_mib).
 	CodeAppPreviewFull     Code = "app_preview_full"
@@ -407,6 +410,22 @@ const (
 	CodeEmailVerifyInvalid       Code = "notification_email_verification_invalid"     // 400: the confirmation link is unknown, used, expired or for an address the person no longer has
 	CodeEmailVerifyTooSoon       Code = "notification_email_verification_too_soon"    // 429: a link was sent a moment ago; params: seconds to wait
 	CodeEmailVerifyUnavailable   Code = "notification_email_verification_unavailable" // 502: the confirmation mail couldn't be sent
+
+	// Integrations: a workspace's connections to outside providers (internal/integrations).
+
+	CodeIntegrationNotFound         Code = "integration_not_found"
+	CodeIntegrationNameInvalid      Code = "integration_name_invalid"         // params: max
+	CodeIntegrationNameTaken        Code = "integration_name_taken"           // 409
+	CodeIntegrationDisplayNameBad   Code = "integration_display_name_invalid" // params: max
+	CodeIntegrationProviderUnknown  Code = "integration_provider_unknown"
+	CodeIntegrationSecretRequired   Code = "integration_secret_required"   // params: secret
+	CodeIntegrationSecretInvalid    Code = "integration_secret_invalid"    // params: secret
+	CodeIntegrationSecretUnreadable Code = "integration_secret_unreadable" // in a check's answer: params: secret
+	CodeIntegrationSettingInvalid   Code = "integration_setting_invalid"   // params: setting
+	CodeIntegrationLimitInvalid     Code = "integration_limit_invalid"     // params: max
+	CodeIntegrationCurrencyInvalid  Code = "integration_currency_invalid"  // params: max
+	CodeTooManyIntegrations         Code = "too_many_integrations"         // params: max
+	CodeIntegrationInUse            Code = "integration_in_use"
 
 	// The operator's "Update now" (internal/server/updates.go, docs/api.md#update-now).
 

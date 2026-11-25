@@ -20,6 +20,10 @@ import {
 } from '../api'
 import { t as translate, useT } from '../i18n'
 import { applyUpdate, useUpdatePrompt } from '../pwa/update'
+import { Button } from '../ui/Button'
+import { Notice } from '../ui/Notice'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { EffectPreview } from './AppEffects'
 import { appsCatalog, unsupportedBy } from './catalog'
 import { fieldLabels, keepLabelsLinked } from './labels'
@@ -27,6 +31,7 @@ import { withOperation } from './operations'
 import { type AppFiles, AppFilesContext } from './PhotoInput'
 import { SubmitCaptures, SubmitCapturesContext } from './submit'
 import { TextDictation, workspaceOf } from './TextDictation'
+import './AppView.css'
 
 export type ActionPayload = Parameters<NonNullable<ConstructorParameters<typeof MessageProcessor>[1]>>[0]
 
@@ -129,6 +134,7 @@ export function AppView({
   release,
   reloadKey = 0,
   onAction,
+  frame = 'panel',
 }: {
   surfaceId: string
   label: string
@@ -140,6 +146,9 @@ export function AppView({
   reloadKey?: number
   // Called after an action ran, which may have set effects going.
   onAction?: () => void
+  // How the screen is set on the page: on a panel of its own (an app's page, a conversation), or
+  // bare inside something that is already one (a Home widget).
+  frame?: 'panel' | 'bare'
 }) {
   const [error, setError] = useState<string | null>(null)
   // What the last button of a draft's preview would have set going.
@@ -151,7 +160,6 @@ export function AppView({
   // reload the app: only a different surface does.
   const transportRef = useRef(transport)
   transportRef.current = transport
-  const t = useT()
   const unsupported = release ? unsupportedBy(release) : []
   const blocked = unsupported.length > 0
   const root = useRef<HTMLElement | null>(null)
@@ -167,12 +175,15 @@ export function AppView({
   const dictation = transport.files?.uploads ? workspaceOf(transport.files.base) : null
   // A submission is being made (a location taken as the form is submitted, the request on its way):
   // its buttons are off until it has an answer, and a press that gets through (a key) is that submission.
+  // Only the capture fields that can be part of it (a location, a signature, a barcode: each marked
+  // data-submit-free) keep theirs; a photo's are off, since removing one would delete an upload the
+  // request names.
   const [busy, setBusy] = useState(false)
   useEffect(() => captures.current.subscribe(() => setBusy(captures.current.busy)), [])
   useEffect(() => {
     if (!busy || !section) return
     const off = [...section.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')].filter(
-      (b) => !b.closest('.tt-capture'),
+      (b) => !b.closest('[data-submit-free]'),
     )
     for (const b of off) b.disabled = true
     return () => {
@@ -254,18 +265,14 @@ export function AppView({
     }
   }, [surfaceId, blocked, reloadKey])
 
-  if (blocked) return <UpdateRequired label={label} unsupported={unsupported} />
+  if (blocked) return <UpdateRequired label={label} unsupported={unsupported} frame={frame} />
 
   return (
-    <section className="tt-app" aria-label={label} aria-busy={busy || undefined} ref={attach}>
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
+    <section className="ui-app" data-frame={frame} aria-label={label} aria-busy={busy || undefined} ref={attach}>
+      {error && <Notice tone="danger">{error}</Notice>}
       <AppFilesContext.Provider value={transport.files ?? null}>
         <SubmitCapturesContext.Provider value={captures.current}>
-          {surface ? <A2uiSurface surface={surface} /> : !error && <p className="tt-muted">{t('app.loading')}</p>}
+          {surface ? <A2uiSurface surface={surface} /> : !error && <AppLoading />}
         </SubmitCapturesContext.Provider>
       </AppFilesContext.Provider>
       {dictation !== null && surface && <TextDictation root={section} workspace={dictation} />}
@@ -276,23 +283,46 @@ export function AppView({
 
 // Shown instead of an app this client can't draw: the person updates TaskTo.AI (the waiting
 // version if there is one, else a reload), and the app is there.
-function UpdateRequired({ label, unsupported }: { label: string; unsupported: string[] }) {
+function UpdateRequired({
+  label,
+  unsupported,
+  frame,
+}: {
+  label: string
+  unsupported: string[]
+  frame: 'panel' | 'bare'
+}) {
   const t = useT()
   const waiting = useUpdatePrompt()
   return (
-    <section className="tt-app tt-app-update" aria-label={label}>
-      <p role="status">
-        <strong>{t('apps.updateRequired.title')}</strong>
-      </p>
-      <p className="tt-muted">{t('apps.updateRequired.message')}</p>
-      <p className="tt-muted tt-small">{t('apps.updateRequired.needs', { needs: unsupported.join(', ') })}</p>
-      <button
-        type="button"
-        className="tt-button tt-primary"
-        onClick={() => (waiting ? applyUpdate() : window.location.reload())}
+    <section className="ui-app" data-frame={frame} aria-label={label}>
+      <Notice
+        tone="warning"
+        title={t('apps.updateRequired.title')}
+        action={
+          <Button variant="primary" onClick={() => (waiting ? applyUpdate() : window.location.reload())}>
+            {t('apps.updateRequired.update')}
+          </Button>
+        }
       >
-        {t('apps.updateRequired.update')}
-      </button>
+        <p>{t('apps.updateRequired.message')}</p>
+        <p className="ui-app-needs">{t('apps.updateRequired.needs', { needs: unsupported.join(', ') })}</p>
+      </Notice>
     </section>
+  )
+}
+
+// While the screen is on its way: the shape of a form (a heading, two fields, a button), and the
+// word for those who don't see it.
+function AppLoading() {
+  const t = useT()
+  return (
+    <div className="ui-app-loading" role="status">
+      <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+      <Skeleton width="40%" />
+      <Skeleton shape="block" height="var(--control-md)" />
+      <Skeleton shape="block" height="var(--control-md)" />
+      <Skeleton shape="block" width="30%" height="var(--control-md)" />
+    </div>
   )
 }
