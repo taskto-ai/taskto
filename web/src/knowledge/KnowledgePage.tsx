@@ -29,6 +29,7 @@ import { DocView } from './DocView'
 import { useDocs, useLatest } from './docs'
 import { focusLost } from './focus'
 import { type Guard, GuardContext, useGuard } from './guard'
+import { LoadingStatus } from './loading'
 import { NewDoc } from './NewDoc'
 import { Upload } from './Upload'
 import './knowledge.css'
@@ -88,8 +89,12 @@ export function KnowledgePage({
     [guard],
   )
 
+  // Each opening from outside the tree (a result, a link, a form) shows the document in the tree
+  // again, even in a folder the person had closed.
+  const [reveal, setReveal] = useState(0)
   const show = (path: string, editing = false, fromTree = false) => {
     setOpen({ path, editing, fromTree })
+    if (!fromTree) setReveal((n) => n + 1)
     setResultsInFront(false)
     setAdding(null)
     setDeleted(null)
@@ -115,6 +120,8 @@ export function KnowledgePage({
   const side = useRef<HTMLDivElement>(null)
   const main = useRef<HTMLDivElement>(null)
   const backFrom = useRef<string | null>(null)
+  // The result the open document was opened from: Back to the results gives it the keyboard.
+  const opener = useRef<HTMLElement | null>(null)
   const mounted = useRef(false)
   // biome-ignore lint/correctness/useExhaustiveDependencies: what it looks for is in the page, so each of these changes is a reason to run
   useLayoutEffect(() => {
@@ -132,7 +139,11 @@ export function KnowledgePage({
     const to =
       notice?.querySelector<HTMLElement>('button') ??
       notice ??
-      (showResults ? main.current?.querySelector<HTMLElement>('[data-results-title]') : null) ??
+      (showResults
+        ? opener.current?.isConnected
+          ? opener.current
+          : main.current?.querySelector<HTMLElement>('[data-results-title]')
+        : null) ??
       (open ? main.current?.querySelector<HTMLElement>('article h2') : null) ??
       item ??
       side.current?.querySelector<HTMLElement>('h1')
@@ -172,196 +183,201 @@ export function KnowledgePage({
 
   return (
     <GuardContext.Provider value={pageGuard}>
-      <div className="kb-frame">
-        <div className="kb" data-open={open || query ? 'main' : 'list'}>
-          <div className="kb-side" ref={side}>
-            <div className="kb-side-head">
-              <Heading level={1} size="title" tabIndex={-1}>
-                {t('shell.sections.knowledge')}
-              </Heading>
-              {base && canWrite && (
-                <>
-                  <IconButton
-                    icon="upload"
-                    size="sm"
-                    label={t('knowledge.upload')}
-                    onClick={() => setAdding('upload')}
-                  />
-                  <Button
-                    variant={editing ? 'secondary' : 'primary'}
-                    size="sm"
-                    icon="plus"
-                    onClick={() => setAdding('new')}
-                  >
-                    {t('knowledge.new')}
-                  </Button>
-                </>
+      <LoadingStatus>
+        <div className="kb-frame">
+          <div className="kb" data-open={open || query ? 'main' : 'list'}>
+            <div className="kb-side" ref={side}>
+              <div className="kb-side-head">
+                <Heading level={1} size="title" tabIndex={-1}>
+                  {t('shell.sections.knowledge')}
+                </Heading>
+                {base && canWrite && (
+                  <>
+                    <IconButton
+                      icon="upload"
+                      size="sm"
+                      label={t('knowledge.upload')}
+                      onClick={() => setAdding('upload')}
+                    />
+                    <Button
+                      variant={editing ? 'secondary' : 'primary'}
+                      size="sm"
+                      icon="plus"
+                      onClick={() => setAdding('new')}
+                    >
+                      {t('knowledge.new')}
+                    </Button>
+                  </>
+                )}
+              </div>
+              {spaces.data && spaces.data.length > 1 && (
+                <Select
+                  aria-label={t('knowledge.spaces.label')}
+                  value={space?.id}
+                  onChange={(e) => {
+                    const id = Number(e.target.value)
+                    ask(() => {
+                      setOpen(null)
+                      setAdding(null)
+                      setDeleted(null)
+                      choose(id)
+                    })
+                  }}
+                >
+                  {spaces.data.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {spaceLabel(s)}
+                    </option>
+                  ))}
+                </Select>
               )}
-            </div>
-            {spaces.data && spaces.data.length > 1 && (
-              <Select
-                aria-label={t('knowledge.spaces.label')}
-                value={space?.id}
-                onChange={(e) => {
-                  const id = Number(e.target.value)
-                  ask(() => {
-                    setOpen(null)
-                    setAdding(null)
-                    setDeleted(null)
-                    choose(id)
+              {spaces.data && spaces.data.length > 0 && (
+                <SearchBox
+                  space={space}
+                  onSearch={(q) => {
+                    setQuery((last) => ({ ...q, n: (last?.n ?? 0) + 1 }))
+                    setResultsInFront(true)
+                  }}
+                />
+              )}
+              {spaces.error && (
+                <Notice
+                  tone="danger"
+                  title={t('knowledge.errors.spaces')}
+                  action={
+                    <Button size="sm" onClick={spaces.reload}>
+                      {t('app.tryAgain')}
+                    </Button>
+                  }
+                >
+                  {spaces.error}
+                </Notice>
+              )}
+              {docs.error && (
+                <Notice
+                  tone="danger"
+                  title={t('knowledge.errors.documents')}
+                  action={
+                    <Button size="sm" onClick={docs.reload}>
+                      {t('app.tryAgain')}
+                    </Button>
+                  }
+                >
+                  {docs.error}
+                </Notice>
+              )}
+              {spaces.data?.length === 0 && <EmptyState title={t('knowledge.noSpaces')} />}
+              <DocList
+                key={base ?? ''}
+                docs={docs.data}
+                loading={loadingList}
+                current={open?.path}
+                reveal={reveal}
+                onOpen={(path) =>
+                  openDoc(path, () => {
+                    setQuery(null)
+                    show(path, false, true)
                   })
-                }}
-              >
-                {spaces.data.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {spaceLabel(s)}
-                  </option>
-                ))}
-              </Select>
-            )}
-            {spaces.data && spaces.data.length > 0 && (
-              <SearchBox
-                space={space}
-                onSearch={(q) => {
-                  setQuery((last) => ({ ...q, n: (last?.n ?? 0) + 1 }))
-                  setResultsInFront(true)
-                }}
+                }
+              />
+            </div>
+            <div className="kb-main" ref={main}>
+              {/* One place, whichever pane is in front, so a restore under way stays the same. */}
+              {deletedNotice}
+              {/* Kept while a document is in front of them, so Back to the results finds every page
+                that was loaded, where it was. */}
+              {query && (
+                <Page width="list" hidden={!showResults || asking}>
+                  <SearchResults
+                    key={query.n}
+                    workspace={workspace}
+                    space={space}
+                    query={query}
+                    onOpen={(r) => {
+                      const at = document.activeElement
+                      opener.current = at instanceof HTMLElement && main.current?.contains(at) ? at : null
+                      const go = () => {
+                        if (r.space_id !== space?.id) choose(r.space_id)
+                        show(r.path)
+                      }
+                      if (r.space_id === space?.id) openDoc(r.path, go)
+                      else ask(go)
+                    }}
+                    onClose={() => {
+                      setQuery(null)
+                      setResultsInFront(false)
+                    }}
+                  />
+                </Page>
+              )}
+              <Page width="reading" hidden={showResults && !asking}>
+                {base && open ? (
+                  <DocView
+                    key={`${base}/${open.path}`}
+                    base={base}
+                    path={open.path}
+                    space={space ? spaceLabel(space) : ''}
+                    canWrite={canWrite}
+                    admin={admin && canWrite}
+                    editing={open.editing ?? false}
+                    takeFocus={!open.fromTree}
+                    onEditing={setEditing}
+                    back={query ? 'results' : 'list'}
+                    onBack={() => {
+                      // To the results: in front of the document, which is kept as it is.
+                      if (query) return setResultsInFront(true)
+                      backFrom.current = open.path
+                      setOpen(null)
+                    }}
+                    onOpen={(path) => show(path)}
+                    onChanged={docs.reload}
+                    onDeleted={(doc) => {
+                      // The delete finished after the person went to another space: nothing to show.
+                      if (now.current.base !== base) return
+                      docs.reload()
+                      // Another document may be open by now; that one stays.
+                      if (now.current.path === doc.path) {
+                        ask(() => {
+                          if (now.current.base === base && now.current.path === doc.path) setOpen(null)
+                        }, 'deleted')
+                      }
+                      setDeleted({ base, path: doc.path, versioned: doc.versioned !== false })
+                    }}
+                  />
+                ) : empty ? (
+                  <div className="kb-empty">
+                    <EmptyState
+                      icon={<Icon name="knowledge" size={24} />}
+                      title={t('knowledge.empty')}
+                      actions={canWrite ? addButtons : undefined}
+                    >
+                      {canWrite ? t('knowledge.emptyHelp') : null}
+                    </EmptyState>
+                  </div>
+                ) : (
+                  docs.data && <EmptyState icon={<Icon name="file" size={24} />} title={t('knowledge.pick')} />
+                )}
+              </Page>
+            </div>
+            {base && adding === 'new' && (
+              <NewDoc
+                base={base}
+                onCreated={(path) => finished(path, true)}
+                onChanged={() => listChanged(base)}
+                onCancel={() => setAdding(null)}
               />
             )}
-            {spaces.error && (
-              <Notice
-                tone="danger"
-                title={t('knowledge.errors.spaces')}
-                action={
-                  <Button size="sm" onClick={spaces.reload}>
-                    {t('app.tryAgain')}
-                  </Button>
-                }
-              >
-                {spaces.error}
-              </Notice>
+            {base && adding === 'upload' && (
+              <Upload
+                base={base}
+                onDone={(path) => finished(path)}
+                onChanged={() => listChanged(base)}
+                onCancel={() => setAdding(null)}
+              />
             )}
-            {docs.error && (
-              <Notice
-                tone="danger"
-                title={t('knowledge.errors.documents')}
-                action={
-                  <Button size="sm" onClick={docs.reload}>
-                    {t('app.tryAgain')}
-                  </Button>
-                }
-              >
-                {docs.error}
-              </Notice>
-            )}
-            {spaces.data?.length === 0 && <EmptyState title={t('knowledge.noSpaces')} />}
-            <DocList
-              key={base ?? ''}
-              docs={docs.data}
-              loading={loadingList}
-              current={open?.path}
-              onOpen={(path) =>
-                openDoc(path, () => {
-                  setQuery(null)
-                  show(path, false, true)
-                })
-              }
-            />
           </div>
-          <div className="kb-main" ref={main}>
-            {/* Kept while a document is in front of them, so Back to the results finds every page
-                that was loaded, where it was. */}
-            {query && (
-              <Page width="list" hidden={!showResults || asking}>
-                {showResults && deletedNotice}
-                <SearchResults
-                  key={query.n}
-                  workspace={workspace}
-                  space={space}
-                  query={query}
-                  onOpen={(r) => {
-                    const go = () => {
-                      if (r.space_id !== space?.id) choose(r.space_id)
-                      show(r.path)
-                    }
-                    if (r.space_id === space?.id) openDoc(r.path, go)
-                    else ask(go)
-                  }}
-                  onClose={() => {
-                    setQuery(null)
-                    setResultsInFront(false)
-                  }}
-                />
-              </Page>
-            )}
-            <Page width="reading" hidden={showResults && !asking}>
-              {!showResults && deletedNotice}
-              {base && open ? (
-                <DocView
-                  key={`${base}/${open.path}`}
-                  base={base}
-                  path={open.path}
-                  space={space ? spaceLabel(space) : ''}
-                  canWrite={canWrite}
-                  admin={admin && canWrite}
-                  editing={open.editing ?? false}
-                  takeFocus={!open.fromTree}
-                  onEditing={setEditing}
-                  back={query ? 'results' : 'list'}
-                  onBack={() => {
-                    // To the results: in front of the document, which is kept as it is.
-                    if (query) return setResultsInFront(true)
-                    backFrom.current = open.path
-                    setOpen(null)
-                  }}
-                  onOpen={(path) => show(path)}
-                  onChanged={docs.reload}
-                  onDeleted={(doc) => {
-                    // The delete finished after the person went to another space: nothing to show.
-                    if (now.current.base !== base) return
-                    docs.reload()
-                    // Another document may be open by now; that one stays.
-                    if (now.current.path === doc.path) {
-                      ask(() => {
-                        if (now.current.base === base && now.current.path === doc.path) setOpen(null)
-                      }, 'deleted')
-                    }
-                    setDeleted({ base, path: doc.path, versioned: doc.versioned !== false })
-                  }}
-                />
-              ) : empty ? (
-                <div className="kb-empty">
-                  <EmptyState
-                    icon={<Icon name="knowledge" size={24} />}
-                    title={t('knowledge.empty')}
-                    actions={canWrite ? addButtons : undefined}
-                  >
-                    {canWrite ? t('knowledge.emptyHelp') : null}
-                  </EmptyState>
-                </div>
-              ) : (
-                docs.data && <EmptyState icon={<Icon name="file" size={24} />} title={t('knowledge.pick')} />
-              )}
-            </Page>
-          </div>
-          {base && adding === 'new' && (
-            <NewDoc
-              base={base}
-              onCreated={(path) => finished(path, true)}
-              onChanged={() => listChanged(base)}
-              onCancel={() => setAdding(null)}
-            />
-          )}
-          {base && adding === 'upload' && (
-            <Upload
-              base={base}
-              onDone={(path) => finished(path)}
-              onChanged={() => listChanged(base)}
-              onCancel={() => setAdding(null)}
-            />
-          )}
         </div>
-      </div>
+      </LoadingStatus>
     </GuardContext.Provider>
   )
 }

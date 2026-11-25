@@ -76,21 +76,27 @@ function kb(extra: Parameters<typeof fakeFetch>[0] = {}) {
   })
 }
 
-// The documents are a tree: a document's folders are opened (if they are closed), then it.
+// The documents are a tree: a document's folders are opened (if they are closed), then it. Each
+// is found by its exact path (the tree's own data on its rows), never by a pattern made from it.
 async function open(name = 'notes/plan.md') {
   const list = await screen.findByRole('list', { name: 'Documents' })
   const parts = name.split('/')
-  for (const folder of parts.slice(0, -1)) {
-    const button = within(list).getByRole('button', { name: new RegExp(`^${folder}`) })
+  for (let i = 1; i < parts.length; i++) {
+    const folder = parts.slice(0, i).join('/')
+    const row = [...list.querySelectorAll<HTMLElement>('[data-name-of]')].find(
+      (el) => el.dataset.nameOf === `folder:${folder}`,
+    )
+    const button = row?.closest('button')
+    if (!button) throw new Error(`no folder ${folder} in the tree`)
     if (button.getAttribute('aria-expanded') === 'false') fireEvent.click(button)
   }
-  fireEvent.click(inList(new RegExp(`^${name.replace(/\./g, '\\.')}$`)))
+  fireEvent.click(inList(name))
   return screen.findByRole('article', { name })
 }
-// A document in the tree, by its path.
-const inList = (path: RegExp) => {
+// A document in the tree: by its exact path, or a pattern written in the test.
+const inList = (path: string | RegExp) => {
   const item = [...screen.getByRole('list', { name: 'Documents' }).querySelectorAll<HTMLElement>('[data-path]')].find(
-    (b) => path.test(b.dataset.path ?? ''),
+    (b) => (typeof path === 'string' ? b.dataset.path === path : path.test(b.dataset.path ?? '')),
   )
   if (!item) throw new Error(`no document ${path} in the tree`)
   return item

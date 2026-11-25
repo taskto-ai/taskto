@@ -63,9 +63,25 @@
     min-inline-size: 0;
   }
 
+  /* The notice of a delete above whichever pane is in front, and that pane scrolling below it. */
   .kb-main {
+    display: flex;
+    flex-direction: column;
     min-inline-size: 0;
     min-block-size: 0;
+  }
+
+  .kb-main > .ui-page {
+    flex: 1;
+    min-block-size: 0;
+  }
+
+  .kb-main > .kb-deleted {
+    flex: none;
+    inline-size: 100%;
+    max-inline-size: calc(var(--width-list) + 2 * var(--space-8));
+    margin-inline: auto;
+    padding: var(--space-5) var(--space-8) 0;
   }
 
   .kb-deleted:focus {
@@ -192,9 +208,12 @@
     display: contents;
   }
 
+  /* A long name with no break in it wraps rather than leaving the pane. */
   .kb-doc-crumb {
+    min-inline-size: 0;
     font: var(--type-ui);
     color: var(--color-text-muted);
+    overflow-wrap: anywhere;
   }
 
   .kb-doc-separator {
@@ -345,6 +364,10 @@
       padding-inline: var(--space-2);
       border-inline-end: 0;
       overflow: visible;
+    }
+
+    .kb-main > .kb-deleted {
+      padding: var(--space-4) var(--space-4) 0;
     }
 
     .kb .ui-page {

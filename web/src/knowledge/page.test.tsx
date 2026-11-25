@@ -39,7 +39,15 @@ function kb(access: 'write' | 'read', extra: Parameters<typeof fakeFetch>[0] = {
   })
 }
 
-const folder = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name}`) })
+// A folder of the tree, by its exact path.
+const folder = (path: string) => {
+  const name = [...document.querySelectorAll<HTMLElement>('[data-name-of]')].find(
+    (el) => el.dataset.nameOf === `folder:${path}`,
+  )
+  const button = name?.closest('button')
+  if (!button) throw new Error(`no folder ${path} in the tree`)
+  return button
+}
 const heading = (article: HTMLElement) => within(article).getByRole('heading', { level: 2 })
 
 test('the tree: folders from the paths, first and in order; a closed one says how many it holds', async () => {
@@ -163,13 +171,15 @@ test('the list loads as the shape of a list, and the document as the shape of a 
     },
   })
   render(<KnowledgePage workspace={1} open="3:ideas.md" />)
-  const loading = await screen.findAllByText('Loading…')
-  // Said to a screen reader, inside the shapes that stand in for what comes.
-  for (const said of loading) expect(said.closest('[aria-busy="true"]')).not.toBeNull()
+  // Said once, through the page's polite status region, which is there before and after; the
+  // shapes that stand in for what comes say nothing themselves.
+  const status = () => screen.getAllByRole('status').find((el) => el.textContent === 'Loading…')
+  await waitFor(() => expect(status()).toBeTruthy())
+  expect(screen.getAllByText('Loading…')).toHaveLength(1)
   release()
   await screen.findByRole('list', { name: 'Documents' })
   await screen.findByRole('heading', { name: 'Ideas' })
-  expect(screen.queryByText('Loading…')).toBeNull()
+  await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull())
 })
 
 test('a list that fails says what failed, apart from the spaces, and tries again', async () => {
@@ -436,7 +446,8 @@ test('a delete from a search result is said beside the results, with the keyboar
   const said = await screen.findByText(/Deleted ideas\.md/)
   // In the pane that shows (the results'), not the list's, which a narrow page hides.
   const pane = await screen.findByRole('region', { name: 'Search results' })
-  expect(said.closest('.ui-page')).toBe(pane.closest('.ui-page'))
+  // Above the pane that is in front (the results), not in the list's, which a narrow page hides.
+  expect(pane.closest('[hidden]')).toBeNull()
   expect(said.closest('.kb-side')).toBeNull()
   expect(said.closest('[hidden]')).toBeNull()
   expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Restore' }))
@@ -569,4 +580,97 @@ test('Back to the results finds every page of them that was loaded, without aski
   const again = await screen.findByRole('region', { name: 'Search results' })
   expect(within(again).getByRole('button', { name: 'Plan' })).toBeTruthy()
   expect(calls.filter((c) => c.path.startsWith(`${S}/search?`))).toHaveLength(2)
+})
+
+test('a restore from the notice is the same one whichever pane comes in front while it runs', async () => {
+  let release: (v: unknown) => void = () => {}
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  kb('write', {
+    ...searchRoutes,
+    [`DELETE ${S}/docs/ideas.md`]: { body: { commit: 'c3' } },
+    [`GET ${S}/history/ideas.md`]: {
+      body: {
+        commits: [
+          { commit: 'c3', change: 'delete' },
+          { commit: 'c2', change: 'update', version: V1 },
+        ],
+      },
+    },
+    [`POST ${S}/restore/ideas.md`]: () => held.then(() => ({ body: { commit: 'c4', doc: doc('ideas.md') } })),
+  })
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  await within(article).findByRole('button', { name: 'More actions' })
+  fireEvent.click(within(article).getByRole('button', { name: 'More actions' }))
+  fireEvent.click(within(article).getByRole('menuitem', { name: 'Delete' }))
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
+  const restore = await screen.findByRole('button', { name: /Restore/ })
+  fireEvent.click(restore)
+  await waitFor(() => expect(restore.getAttribute('aria-busy')).toBe('true'))
+  // A search brings the results in front while the restore runs: the notice is the same one, still
+  // busy, and offers no second Restore.
+  searchFor('ideas')
+  await screen.findByRole('region', { name: 'Search results' })
+  expect(screen.getByRole('button', { name: /Restore/ })).toBe(restore)
+  expect(restore.getAttribute('aria-busy')).toBe('true')
+  release(undefined)
+})
+
+test('a document opened from a result is shown in the tree, even in a folder that was closed', async () => {
+  kb('read', {
+    ...searchRoutes,
+    [`GET ${S}/search`]: {
+      body: { results: [{ ...ideasResult, path: 'notes/plan.md', title: 'Plan' }], mode: 'fulltext' },
+    },
+  })
+  render(<KnowledgePage workspace={1} open="3:notes/plan.md" />)
+  await screen.findByRole('article', { name: 'notes/plan.md' })
+  await screen.findByRole('list', { name: 'Documents' })
+  fireEvent.click(folder('notes'))
+  expect(folder('notes').getAttribute('aria-expanded')).toBe('false')
+  searchFor('plan')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  fireEvent.click(await within(results).findByRole('button', { name: 'Plan' }))
+  await waitFor(() => expect(folder('notes').getAttribute('aria-expanded')).toBe('true'))
+})
+
+test('Back to the results gives the keyboard to the result that opened the document', async () => {
+  kb('read', {
+    ...searchRoutes,
+    [`GET ${S}/search`]: {
+      body: { results: [{ ...ideasResult, path: 'notes/plan.md', title: 'Plan' }, ideasResult], mode: 'fulltext' },
+    },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByRole('list', { name: 'Documents' })
+  searchFor('ideas')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  const second = await within(results).findByRole('button', { name: 'Ideas' })
+  second.focus()
+  fireEvent.click(second)
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  fireEvent.click(within(article).getByRole('button', { name: 'Back to the results' }))
+  await screen.findByRole('region', { name: 'Search results' })
+  expect(document.activeElement).toBe(second)
+})
+
+test('Try again on a document that failed keeps the keyboard in the document', async () => {
+  let fail = true
+  kb('read', {
+    [`GET ${S}/docs/ideas.md`]: () =>
+      fail ? { status: 500, body: { error: 'disk on fire' } } : { body: { ...doc('ideas.md'), content: '# Ideas\n' } },
+  })
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  const again = await within(article).findByRole('button', { name: 'Try again' })
+  again.focus()
+  fail = false
+  fireEvent.click(again)
+  expect(document.activeElement).toBe(heading(article))
+  await within(article).findByRole('heading', { name: 'Ideas' })
+  expect(document.activeElement).toBe(heading(article))
 })

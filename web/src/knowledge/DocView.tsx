@@ -21,6 +21,7 @@ import { Editor } from './Editor'
 import { focusLost } from './focus'
 import { GuardContext } from './guard'
 import { History } from './History'
+import { useLoadingStatus } from './loading'
 import { Move } from './Move'
 
 type Mode = 'view' | 'edit' | 'history'
@@ -210,7 +211,14 @@ export function DocView({
           tone="danger"
           title={t('knowledge.errors.document')}
           action={
-            <Button size="sm" onClick={doc.reload}>
+            <Button
+              size="sm"
+              onClick={() => {
+                // The button goes while the document loads again: the keyboard waits on the heading.
+                heading()?.focus()
+                doc.reload()
+              }}
+            >
               {t('app.tryAgain')}
             </Button>
           }
@@ -283,10 +291,9 @@ function Separator() {
 
 // The shape of a document while it loads: a title and some lines.
 function DocSkeleton() {
-  const t = useT()
+  useLoadingStatus(true)
   return (
-    <div className="kb-doc-loading" aria-busy="true">
-      <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+    <div className="kb-doc-loading">
       <Skeleton width="55%" height="var(--space-8)" />
       {['100%', '92%', '96%', '70%'].map((width, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no identity but their place

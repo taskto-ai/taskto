@@ -11,9 +11,9 @@ import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { Skeleton } from '../ui/Skeleton'
-import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { Content } from './Content'
 import { type Change, type Commit, encodePath, isStale, useDoc, useLatest } from './docs'
+import { useLoadingStatus } from './loading'
 import { Problem } from './Problem'
 
 const CHANGE_LABEL = {
@@ -59,6 +59,7 @@ export function History({
   // restore's reloads the document and the history.
   const [error, setError] = useState<{ error: unknown; reload: () => void; reloadable?: boolean } | null>(null)
   const [confirmDialog, confirm] = useConfirm()
+  useLoadingStatus(!first.data && !first.error)
   const unversioned = current.versioned === false
   const pages = first.data ? [first.data, ...older] : []
   const commits = pages.flatMap((p) => p.commits)
@@ -157,8 +158,7 @@ export function History({
         </Notice>
       )}
       {!first.data && !first.error && (
-        <div className="kb-history-loading" aria-busy="true">
-          <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+        <div className="kb-history-loading">
           {['70%', '50%', '60%'].map((width, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no identity but their place
             <Skeleton key={i} width={width} />
@@ -334,6 +334,7 @@ function ConfirmRemoveOld({
 function AtCommit({ url, commit, onLink }: { url: string; commit: Commit; onLink: LinkHandler }) {
   const at = `${url}?at=${commit.commit}`
   const doc = useDoc(at)
+  useLoadingStatus(!doc.data && !doc.error)
   const t = useT()
   const f = useFormat()
   const asOf = t('knowledge.history.asOf', { time: f.dateTime(commit.time) })
@@ -348,8 +349,7 @@ function AtCommit({ url, commit, onLink }: { url: string; commit: Commit; onLink
       </Heading>
       {doc.error && <Notice tone="danger">{doc.error}</Notice>}
       {!doc.data && !doc.error && (
-        <div className="kb-history-loading" aria-busy="true">
-          <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+        <div className="kb-history-loading">
           <Skeleton width="80%" />
           <Skeleton width="60%" />
         </div>

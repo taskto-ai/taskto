@@ -10,6 +10,7 @@ import { Icon } from '../ui/Icon'
 import { Skeleton } from '../ui/Skeleton'
 import { Tooltip } from '../ui/Tooltip'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
+import { useLoadingStatus } from './loading'
 
 export type Folder = { name: string; path: string; folders: Folder[]; files: Doc[]; count: number }
 
@@ -61,28 +62,34 @@ export function DocList({
   docs,
   loading,
   current,
+  reveal = 0,
   onOpen,
 }: {
   docs: Doc[] | undefined
   loading: boolean
   current: string | undefined
+  // Counts the openings from outside the tree: each shows the open document in it again.
+  reveal?: number
   onOpen: (path: string) => void
 }) {
   const t = useT()
   const locale = useLocale()
+  useLoadingStatus(loading)
   const tree = useMemo(
     () => (docs ? buildTree(docs, new Intl.Collator(locale, { numeric: true })) : null),
     [docs, locale],
   )
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set(current ? foldersOf(current) : []))
-  // A document opened from elsewhere (a link, a search) shows where it is.
+  // A document opened from elsewhere (a link, a search) shows where it is, also when it is the one
+  // already open in a folder the person closed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reveal is the reason to run again
   useEffect(() => {
     if (!current) return
     setOpen((was) => {
       const missing = foldersOf(current).filter((f) => !was.has(f))
       return missing.length === 0 ? was : new Set([...was, ...missing])
     })
-  }, [current])
+  }, [current, reveal])
   const toggle = (path: string) =>
     setOpen((was) => {
       const next = new Set(was)
@@ -115,8 +122,7 @@ export function DocList({
 
   if (loading) {
     return (
-      <div className="kb-tree-loading" aria-busy="true">
-        <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+      <div className="kb-tree-loading">
         {['60%', '45%', '75%', '55%', '40%', '65%'].map((width, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no identity but their place
           <Skeleton key={i} width={width} />
