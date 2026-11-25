@@ -13,6 +13,7 @@ import { Button } from '../ui/Button'
 import { useConfirm } from '../ui/ConfirmDialog'
 import { Drawer } from '../ui/Drawer'
 import { Field } from '../ui/Field'
+import { Heading } from '../ui/Heading'
 import { Input } from '../ui/Input'
 import { Notice } from '../ui/Notice'
 import { Select } from '../ui/Select'
@@ -308,7 +309,9 @@ export function RecordDetail({
             />
           ))}
         </form>
-        <h3 className="ui-record-section">{t('apps.records.history')}</h3>
+        <Heading level={3} size="subsection">
+          {t('apps.records.history')}
+        </Heading>
         {loaded.data && (
           <HistoryList id={id} versions={loaded.data.history} truncated={loaded.data.truncated} fields={fields} />
         )}

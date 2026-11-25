@@ -168,12 +168,6 @@
     overflow-wrap: anywhere;
   }
 
-  .ui-record-section {
-    margin: 0;
-    font: var(--type-ui-strong);
-    color: var(--color-text);
-  }
-
   .ui-record-footer {
     display: flex;
     flex-wrap: wrap;
