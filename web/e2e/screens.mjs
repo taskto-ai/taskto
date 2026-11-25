@@ -85,6 +85,7 @@ export const SETTINGS_HEADINGS = {
   dictation: 'Dictation',
   notifications: 'Your notifications',
   password: 'Password',
+  sessions: 'Active sessions',
   data: 'Export your data',
   tokens: 'Access tokens',
   storage: 'Storage',
