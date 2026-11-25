@@ -288,8 +288,10 @@ never nest, or both set the same value).
 - `ui/base.css` is mostly in `base`, so a component wins over an element's defaults (a field's
   border and padding, a button's font) by the layer alone, without fighting their specificity. Its
   element rules leave the components' elements out all the same, with the opt-out below ([The
-  old stylesheet's rules leave them alone](#components)): in the layer it is belt and braces,
-  costing nothing, and it keeps a rule off the components should it ever leave the layer.
+  old stylesheets' rules leave them alone](#components)). The layer settles only the properties
+  both rules set: a field's `min-height` from the base would still stretch a component that sets
+  its height and no `min-height`, which the opt-out prevents; and it keeps a rule off the
+  components should it ever leave the layer. It costs nothing (`:where()` adds no specificity).
 - Two parts of `ui/base.css` stay in no layer. First, what reaches every element on purpose,
   components included (`EVERYWHERE`): border-box sizing, the selection's and the scrollbars'
   colours, the caret, the search field's clear button, and 16px text in every field in a narrow
@@ -377,8 +379,8 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
   has `ui-control`), and each of those rules skips such elements: its subject carries
   `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no specificity, and the
   screens' own elements have no `ui-` class, so they are styled exactly as before. In
-  `ui/base.css`'s `@layer base` the layer alone already lets a component win; the opt-out stays
-  there too ([Where styles live](#where-styles-live)). Each component
+  `ui/base.css`'s `@layer base` a component wins where both set a property; the opt-out stays
+  there too, for what only the base sets ([Where styles live](#where-styles-live)). Each component
   draws its own focus ring (`--line-focus` in `--color-focus`, 3:1 on every ground). `css-check`
   fails on such a rule outside `web/src/ui/` or in `web/src/ui/base.css` without it, unless its `EVERYWHERE` list allows the
   selector, only for the properties it names, with the reason. `web/src/ui/elementRules.test.tsx`

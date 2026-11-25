@@ -4,7 +4,7 @@
 
    1. @layer base: a component's rule (@layer components) wins over these whatever their
       specificity, and so does every screen's rule that is still in no layer. Their element rules
-      leave the components' elements out all the same (see there).
+      leave the components' elements out all the same (see there for why).
    2. In no layer, what reaches every element on purpose, the components' too (css-check's
       EVERYWHERE): it wins over a component's own rule, as it did in the one stylesheet.
    3. In no layer, the touch screen's checkbox, radio and label rules (see there).
@@ -32,9 +32,10 @@
      each element rule here that can match anywhere leaves those out with
      `:not(:where([class^="ui-"], [class*=" ui-"]))`: `:where()` adds no specificity, so the screens'
      own elements, which have no ui- class, are styled exactly as before. In this layer a component
-     already wins over these rules, so the opt-out is belt and braces: it keeps a rule off the
-     components should it ever leave the layer, as the block at the end of this file has. css-check
-     fails on an element rule here without it (docs/design.md, "The components"). */
+     wins over these rules wherever both set a property, but not where only the base does: a field's
+     min-height here would still stretch a component that sets its height and no min-height. So the
+     opt-out stays, and it also keeps a rule off the components should the rule ever leave the
+     layer. css-check fails on an element rule here without it (docs/design.md, "Components"). */
 
   /* Headings are Bricolage Grotesque, heavy and tight as on the website, and break evenly. Text,
      labels and controls stay in Inter. */
