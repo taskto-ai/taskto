@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -371,6 +372,31 @@ func TestUpdateRequestedIsRateLimited(t *testing.T) {
 	}
 }
 
+// If the rate-limit record cannot be saved, a requested run must stop before doing any
+// update work. Otherwise each new request could start a run without the ten-minute limit.
+func TestUpdateRequestedNeedsItsRateLimitRecord(t *testing.T) {
+	for _, blocked := range []string{"request-last-run.new", "request-last-run"} {
+		t.Run(blocked, func(t *testing.T) {
+			e, dir := requestEnv(t)
+			// A directory makes either the write or the final rename fail, even as root.
+			e.sub("state/" + blocked)
+			e.request(dir, requestLine)
+			code, out := e.run("--requested")
+			if code == 0 || !strings.Contains(out, "can't record the requested run") {
+				t.Fatalf("exit %d, want refusal to run without its rate limit\n%s", code, out)
+			}
+			e.wantNoRequestLeft(dir)
+			e.wantUntouched()
+			if e.count(`^pull`) != 0 {
+				t.Error("an unrecorded request pulled images")
+			}
+			if s := e.public(); s.Running != nil {
+				t.Errorf("refused request is still running: %+v", s.Running)
+			}
+		})
+	}
+}
+
 // With no request waiting, a requested run does nothing and writes nothing (a path unit that
 // started it twice, a request another run took).
 func TestUpdateRequestedWithNoRequest(t *testing.T) {
@@ -510,6 +536,8 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 			| .services.taskto.volumes += [{type: "bind", source: "`+e.dir+`", target: "/above"}]`, "")
 	})
 	for name, tc := range map[string]struct{ edit, want string }{
+		"another service has it through a config":                              {`.services.caddy.configs = [{source: "request"}] | .configs.request.file = "STATE/request"`, "other than the server"},
+		"another service has it through a secret":                              {`.services.caddy.secrets = [{source: "request"}] | .secrets.request.file = "STATE/request"`, "other than the server"},
 		"the worker mounts it":                                                 {`.services["cli-worker"].volumes += [{type: "bind", source: "STATE/request", target: "/r"}]`, "host path"},
 		"a service other than the server mounts it":                            {`.services.caddy.volumes += [{type: "bind", source: "STATE/request", target: "/r"}]`, "other than the server"},
 		"a service other than the server mounts it by a link":                  {`.services.caddy.volumes += [{type: "bind", source: "{linkstate}/request", target: "/r", read_only: true}]`, "other than the server"},
@@ -547,6 +575,51 @@ func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
 		e.extra = []string{"TASKTO_UPDATE_REQUEST=" + e.state}
 		refused(t, e, `.services.taskto.volumes += [{type: "bind", source: "STATE", target: "/s"}]`, "place of its own")
 	})
+}
+
+// The rendered Compose settings can differ from containers that already exist. The running
+// safety check must independently reject another service's access to the request directory.
+func TestUpdateSafetyChecksRunningRequestMounts(t *testing.T) {
+	for _, kind := range []string{"none", "bind", "read-only bind", "alias", "volume", "inspect failure", "volume inspect failure"} {
+		t.Run(kind, func(t *testing.T) {
+			e := newUpdEnv(t)
+			req := filepath.Join(e.state, "request")
+			mount := map[string]any{"Type": "bind", "Source": req, "Destination": "/request", "RW": true}
+			switch kind {
+			case "none":
+				mount["Source"] = filepath.Join(e.dir, "unrelated")
+			case "read-only bind":
+				mount["RW"] = false
+			case "alias":
+				_ = e.paths() // creates a symbolic link to the state directory
+				mount["Source"] = filepath.Join(e.dir, "link-state", "request")
+			case "volume", "volume inspect failure":
+				mount = map[string]any{"Type": "volume", "Name": "taskto_requestvol", "Destination": "/request", "RW": true}
+				e.write("fake/volume-options", "taskto_requestvol "+req+"\n")
+				if kind == "volume inspect failure" {
+					e.failCalls(`^volume inspect .* taskto_requestvol`)
+				}
+			case "inspect failure":
+				e.failCalls(`^inspect id-caddy`)
+			}
+			data, err := json.Marshal([]map[string]any{mount})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.write("fake/caddy-mounts", string(data))
+			cmd := e.command()
+			cmd.Args[1] = filepath.Join(filepath.Dir(e.script), "safety-check.sh")
+			cmd.Env = append(cmd.Env, "TASKTO_ROOT="+e.srv)
+			out, err := cmd.CombinedOutput()
+			if kind == "none" {
+				if err != nil || !strings.Contains(string(out), "OK") {
+					t.Fatalf("unrelated mount: %v\n%s", err, out)
+				}
+			} else if err == nil || (!strings.Contains(string(out), "other than the server") && !strings.Contains(string(out), "can't inspect another service")) {
+				t.Fatalf("unsafe or unreadable mount accepted: %v\n%s", err, out)
+			}
+		})
+	}
 }
 
 // fmtReason is a status's reason, as text.

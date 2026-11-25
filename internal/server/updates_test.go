@@ -291,3 +291,39 @@ func TestUpdateRequestRefusals(t *testing.T) {
 		}
 	}
 }
+
+// A failed audit write or commit cannot expose the prepared file to the host. A commit can
+// fail after the insert succeeded, for example when a deferred foreign key is invalid.
+func TestUpdateRequestAuditFailureDoesNotPublish(t *testing.T) {
+	for _, stage := range []string{"record", "commit"} {
+		t.Run(stage, func(t *testing.T) {
+			statusDir, reqDir := t.TempDir(), t.TempDir()
+			s := newStackWith(t, func(o *Options) { o.UpdateStatusDir, o.UpdateRequestDir = statusDir, reqDir })
+			writeUpdateStatus(t, statusDir, requestStatus("release", ""))
+			if stage == "record" {
+				if _, err := s.db.Exec(`CREATE TRIGGER refuse_update_audit BEFORE INSERT ON audit_events
+					WHEN NEW.action = 'server_update_requested' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END`); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := s.db.Exec(`CREATE TABLE update_commit_failure (
+					workspace_id INTEGER REFERENCES workspaces(id) DEFERRABLE INITIALLY DEFERRED);
+					CREATE TRIGGER refuse_update_commit AFTER INSERT ON audit_events
+					WHEN NEW.action = 'server_update_requested' BEGIN INSERT INTO update_commit_failure VALUES (-1); END`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			code, body := s.browser(s.alice.cookie, http.MethodPost,
+				fmt.Sprintf("/api/workspaces/%d/updates/request", s.one), map[string]any{})
+			if code != http.StatusInternalServerError {
+				t.Fatalf("failed %s: %d %v", stage, code, body)
+			}
+			if entries, err := os.ReadDir(reqDir); err != nil || len(entries) != 0 {
+				t.Fatalf("failed %s left request files: %v (%v)", stage, entries, err)
+			}
+			if n := s.auditCount("server_update_requested"); n != 0 {
+				t.Fatalf("failed %s committed %d events", stage, n)
+			}
+		})
+	}
+}

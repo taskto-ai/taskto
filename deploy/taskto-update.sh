@@ -455,10 +455,15 @@ take_request() {
 		log "ignored: $reason"
 		exit 0
 	fi
-	if printf '%s %s\n' "$now" "$nonce" >"$STATE/request-last-run.new"; then
-		mv -f -T "$STATE/request-last-run.new" "$STATE/request-last-run" || log "can't write $STATE/request-last-run"
-	else
-		log "can't write $STATE/request-last-run"
+	# A request must not run without its rate-limit record: a full disk or a failed rename
+	# must never turn repeated requests into unrestricted update attempts.
+	if ! printf '%s %s\n' "$now" "$nonce" >"$STATE/request-last-run.new" ||
+		! mv -f -T "$STATE/request-last-run.new" "$STATE/request-last-run"; then
+		rm -f -- "$STATE/request-last-run.new" 2>/dev/null || true
+		result=failed reason="can't record the requested run: nothing done"
+		write_public || true
+		log "failed: $reason"
+		exit 1
 	fi
 	log "an operator requested an update: taken, and removed"
 	# From here the page shows the run as going on, until it ends.

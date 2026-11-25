@@ -33,6 +33,7 @@
 #                       `--profile backup`, as the updater does)
 #   config-edit-install the same, applied to the install's own project instead
 #   server-env          lines: more of the running server's environment (NAME=value)
+#   caddy-mounts        JSON: additional mounts of the running Caddy container
 #   `compose create` takes the options of `docker compose create` only (no --no-deps), and
 #   replaces the containers of the services it names and of their dependencies, or of all
 #   backup-schedule     the nightly backup service has a running container
@@ -173,6 +174,9 @@ container() {
 		nets='{"taskto_worker":{}}'
 		;;
 	esac
+	if [ "$1" = id-caddy ] && [ -s "$d/caddy-mounts" ]; then
+		mounts=$(jq -c --slurpfile extra "$d/caddy-mounts" '. + $extra[0]' <<<"$mounts")
+	fi
 	jq -cn --arg user "$user" --argjson capadd "$capadd" --argjson env "$env" --argjson mounts "$mounts" --argjson nets "$nets" --argjson hm "$hostmounts" \
 		'[{Config: {User: $user, Env: $env}, HostConfig: {CapDrop: ["ALL"], CapAdd: $capadd, SecurityOpt: ["no-new-privileges:true"], Privileged: false, Mounts: $hm},
 		   Mounts: $mounts, NetworkSettings: {Networks: $nets}}]'

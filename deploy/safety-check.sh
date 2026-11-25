@@ -133,6 +133,13 @@ only_public_readonly() {
 	jq -e --arg state "$state" --arg public "$public" --arg request "$request" "$HOLDS"'[.[] | select(holds(.p; .ro))] | length == 0' <<<"$r" >/dev/null ||
 		fail "the server has a host path that holds the updater's state, or can write where it publishes its status (only $public, read-only, and the request directory $request may be mounted)"
 }
+# No other service may see the request directory, even read-only or through an alias.
+only_server_requests() {
+	local r
+	r=$(resolved) || fail "a host path of another service's mounts can't be resolved: it isn't absolute, or isn't a path"
+	jq -e --arg request "$request" "$PARTS"'($request | parts) as $q | [.[] | (.p | parts) as $p | select(within($q; $p) or within($p; $q))] | length == 0' <<<"$r" >/dev/null ||
+		fail "a service other than the server has the updater's request directory ($request), or one above or inside it, mounted"
+}
 # volume_device NAME: the host path a named volume binds, as Docker has it (its effective options,
 # whatever the Compose file says: a volume that exists keeps the options it was made with, an
 # external one has only those), or nothing.
@@ -225,7 +232,9 @@ if [ "$mode" = static ]; then
 	# holds it or is inside it, as a bind mount or as a named volume's `device`.
 	others=$(jq -c '. as $c | [.services | to_entries[] | select(.key != "taskto") | .value.volumes[]?
 		| if .type == "bind" then {p: (.source // ""), ro: (.read_only == true)}
-		  elif .type == "volume" then {p: ($c.volumes[.source // ""].driver_opts.device // ""), ro: false} else empty end]' <<<"$cfg") ||
+		  elif .type == "volume" then {p: ($c.volumes[.source // ""].driver_opts.device // ""), ro: false} else empty end]
+		+ [.services | to_entries[] | select(.key != "taskto") | .value.configs[]? | {p: ($c.configs[.source // ""].file // ""), ro: true}]
+		+ [.services | to_entries[] | select(.key != "taskto") | .value.secrets[]? | {p: ($c.secrets[.source // ""].file // ""), ro: true}]' <<<"$cfg") ||
 		fail "can't read the other services' mounts"
 	# A named volume that exists already, or an external one, keeps the options it was made with
 	# whatever the Compose file says: its device, as Docker has it, counts too.
@@ -235,9 +244,7 @@ if [ "$mode" = static ]; then
 		dev=$(volume_device "$vn") || fail "can't inspect the volume $vn of a service other than the server"
 		others=$(jq -c --arg p "$dev" '. + [{p: $p, ro: false}]' <<<"$others") || fail "can't read the options of the volume $vn"
 	done < <(jq -r '. as $c | .services | to_entries[] | select(.key != "taskto") | .value.volumes[]? | select(.type == "volume") | ($c.volumes[.source // ""].name // .source)' <<<"$cfg")
-	r=$(resolved <<<"$others") || fail "a host path of another service's mounts can't be resolved: it isn't absolute, or isn't a path"
-	jq -e --arg request "$request" "$PARTS"'($request | parts) as $q | [.[] | (.p | parts) as $p | select(within($q; $p) or within($p; $q))] | length == 0' <<<"$r" >/dev/null ||
-		fail "a service other than the server has the updater's request directory ($request), or one above or inside it, mounted"
+	only_server_requests <<<"$others"
 
 	# The worker is on one network, its own, which the server isn't on, and the firewall's bridge.
 	t cli-worker '(.services[$s].networks // {default: null}) | length == 1' || fail "the worker isn't on one network only"
@@ -309,6 +316,22 @@ while IFS= read -r m; do
 		fail "can't read the options of the server's volume $vn"
 done < <(jq -c '.[0].Mounts[]? | select(.Type == "volume") | {n: .Name, rw: .RW}' <<<"$si")
 only_public_readonly <<<"$hostpaths"
+
+# Inspect what every other container actually mounts, including stopped containers which
+# could be started later. Named volumes retain their Docker options independently of Compose.
+containers=$(c ps -aq) || fail "can't list the project's containers"
+while IFS= read -r id; do
+	[ -n "$id" ] && [ "$id" != "$s" ] || continue
+	i=$(d inspect "$id") || fail "can't inspect another service's container"
+	others=$(jq -c '[.[0].Mounts[]? | select(.Type == "bind") | {p: (.Source // ""), ro: (.RW == false)}]' <<<"$i") ||
+		fail "can't read another service's mounts"
+	while IFS= read -r vn; do
+		[ -n "$vn" ] || continue
+		dev=$(volume_device "$vn") || fail "can't inspect another service's volume $vn"
+		others=$(jq -c --arg p "$dev" '. + [{p: $p, ro: false}]' <<<"$others") || fail "can't read another service's volume options"
+	done < <(jq -r '.[0].Mounts[]? | select(.Type == "volume") | .Name' <<<"$i")
+	only_server_requests <<<"$others"
+done <<<"$containers"
 
 # The worker is on one network, its own, which the server isn't on, and the firewall's bridge.
 q '.[0].NetworkSettings.Networks | length == 1' <<<"$wi" || fail "the worker isn't on one network only"

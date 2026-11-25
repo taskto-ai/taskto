@@ -1430,6 +1430,10 @@ How it goes, and what keeps the server from gaining power over the host:
    changing the install. Its content is a time and a random nonce, no secret. The request is an
    [audit event](audit.md) (`server_update_requested`), committed before the file is made visible
    to the host (it is written under another name first), so no update happens without its record.
+   This event records the operator's intent, not delivery or installation. If publication fails
+   after the commit, the API reports an error and the intent remains in the audit log; a crash
+   in that window can also leave only the intent. Hidden temporary files are never replayed on
+   restart. The operator can retry; the host's status reports whether a request actually ran.
 2. `taskto-update-request.path` (a systemd path unit) starts `taskto-update-request.service`
    when that file exists, which runs `taskto-update --requested`. Under the updater's lock it
    **renames the file out of the directory first** (so nothing the server can change there is

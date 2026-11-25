@@ -48,7 +48,9 @@ func updateStatus(version, statusDir, requestDir string) http.Handler {
 // request directory (updatestatus.Request) and never runs anything; the host's path unit and
 // updater do the rest (docs/install.md#update-now). One request waits at a time, none while a
 // run is changing the install, and each is an audit event, committed before the file is made
-// visible to the host, so a refused request records none and an update has always a record.
+// visible to the host, so an authorization or preflight refusal records none and an update
+// always has a record. The event records intent, not delivery: if publication fails or the
+// server stops after commit, the intent remains, and no hidden request is replayed on restart.
 func updateRequest(version, statusDir, requestDir string, sqlDB *sql.DB, now func() time.Time) http.Handler {
 	var mu sync.Mutex
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,12 +98,7 @@ func updateRequest(version, statusDir, requestDir string, sqlDB *sql.DB, now fun
 			apierr.Internal(w)
 			return
 		}
-		committed := false
-		defer func() {
-			if !committed {
-				prepared.Discard()
-			}
-		}()
+		defer prepared.Discard()
 		tx, err := sqlDB.BeginTx(r.Context(), nil)
 		if err != nil {
 			slog.Error("update request: begin", "err", err)
@@ -120,7 +117,6 @@ func updateRequest(version, statusDir, requestDir string, sqlDB *sql.DB, now fun
 			apierr.Internal(w)
 			return
 		}
-		committed = true
 		switch err := prepared.Publish(); {
 		case errors.Is(err, updatestatus.ErrPending):
 			apierr.Write(w, http.StatusConflict, apierr.CodeUpdateRequestPending, "an update is already requested")
