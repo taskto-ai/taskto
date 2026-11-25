@@ -253,7 +253,7 @@ func (s *Service) updateBoard(ctx context.Context, sp access.Space, a Actor, boa
 // Cards.
 
 const cardColumns = `c.id, c.board_id, c.title, c.body, c.col, c.rank, c.archived_from,
-	c.assignee_id, coalesce(au.name, ''), c.assignee_agent, c.blocked_reason,
+	c.assignee_id, coalesce(au.name, ''), c.assignee_agent, c.assignee_deleted, c.blocked_reason,
 	EXISTS (SELECT 1 FROM card_blockers cb WHERE cb.card_id = c.id), c.due,
 	(SELECT json_group_array(label) FROM (SELECT label FROM card_labels cl WHERE cl.card_id = c.id ORDER BY label)),
 	c.version,
@@ -274,10 +274,10 @@ func scanCard(row scanner) (Card, error) {
 	var assigneeID, createdBy, updatedBy sql.NullInt64
 	var assigneeName, createdName, updatedName string
 	var createdVia, updatedVia sql.NullString
-	var agent, hasBlockers, createdAgent, updatedAgent bool
+	var agent, assigneeDeleted, hasBlockers, createdAgent, updatedAgent bool
 	var labels string
 	if err := row.Scan(&c.ID, &c.BoardID, &c.Title, &c.Body, &c.Column, &c.Rank, &c.ArchivedFrom,
-		&assigneeID, &assigneeName, &agent, &c.BlockedReason, &hasBlockers, &c.Due, &labels, &c.Version,
+		&assigneeID, &assigneeName, &agent, &assigneeDeleted, &c.BlockedReason, &hasBlockers, &c.Due, &labels, &c.Version,
 		&c.CreatedAt, &createdBy, &createdName, &createdAgent, &createdVia,
 		&c.UpdatedAt, &updatedBy, &updatedName, &updatedAgent, &updatedVia); err != nil {
 		return Card{}, err
@@ -287,6 +287,8 @@ func scanCard(row scanner) (Card, error) {
 		c.Assignee = &Assignee{Kind: AssignAgent}
 	case assigneeID.Valid:
 		c.Assignee = &Assignee{Kind: AssignUser, ID: assigneeID.Int64, Name: assigneeName}
+	case assigneeDeleted:
+		c.Assignee = &Assignee{Kind: AssignDeleted}
 	}
 	c.Blocked = c.BlockedReason != nil || hasBlockers
 	c.CreatedBy = author(createdBy, createdName, createdAgent, createdVia)
@@ -962,7 +964,7 @@ func applyChanges(ctx context.Context, tx *sql.Tx, sp access.Space, a Actor, boa
 		if err := tx.QueryRowContext(ctx, `SELECT assignee_id FROM cards WHERE id = ?`, cardID).Scan(&previous); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE cards SET assignee_id = ?, assignee_agent = ? WHERE id = ?`,
+		if _, err := tx.ExecContext(ctx, `UPDATE cards SET assignee_id = ?, assignee_agent = ?, assignee_deleted = 0 WHERE id = ?`,
 			userID, agent, cardID); err != nil {
 			return err
 		}

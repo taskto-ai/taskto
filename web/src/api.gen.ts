@@ -247,11 +247,23 @@ export type AppsWidgetSummary = {
   label: string
 }
 
+export type AuthDeletionBlocker = {
+  workspace_id: number
+  workspace: string
+  operator: boolean
+}
+
 export type AuthMeUser = {
   id: number
   email: string
   name: string
   locale: string
+}
+
+export type AuthUser = {
+  id: number
+  email: string
+  name: string
 }
 
 export type AvailableApp = {
@@ -363,6 +375,18 @@ export type Conversation = {
   cli_permissions: string
 }
 
+export type DeletionReply = {
+  purge_at: string
+}
+
+export type DeletionStatus = {
+  grace_days: number
+  method: string
+  two_factor: boolean
+  fresh: boolean
+  blockers: AuthDeletionBlocker[]
+}
+
 export type Doc = {
   path: string
   version: string
@@ -447,6 +471,7 @@ export type Member = {
   role: string
   joined_at: string
   disabled: boolean
+  deletion_at: string | null
   two_factor?: boolean
 }
 
@@ -486,6 +511,14 @@ export type OfflineApp = {
   captured_at: string
   operations: Record<string, number>
   modifiable: number[]
+}
+
+export type PendingDeletion = {
+  user: AuthUser
+  requested_at: string
+  purge_at: string
+  purging: boolean
+  by_self: boolean
 }
 
 export type Pin = {

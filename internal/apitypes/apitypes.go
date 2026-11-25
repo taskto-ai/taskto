@@ -50,6 +50,9 @@ func Roots() []Root {
 		root[auth.Token]("Token"),
 		root[auth.InviteCreated]("InviteCreated"),
 		root[auth.TokenCreated]("TokenCreated"),
+		root[auth.DeletionStatus]("DeletionStatus"),
+		root[auth.DeletionReply]("DeletionReply"),
+		root[auth.PendingDeletion]("PendingDeletion"),
 
 		// Spaces and the knowledge base.
 		root[access.Space]("Space"),

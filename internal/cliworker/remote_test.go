@@ -5,6 +5,7 @@ package cliworker_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -150,5 +151,16 @@ func TestRemoteWorker(t *testing.T) {
 	}
 	if st, _ := r.Status(ctx, 1, cliworker.Claude, ""); st.LoggedIn {
 		t.Fatal("still signed in")
+	}
+
+	// A deleted account is forgotten, over the socket too.
+	if err := r.Forget(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(h.layout.User(1).Root); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the user's directory remains: %v", err)
+	}
+	if err := r.Forget(ctx, 0); err == nil {
+		t.Fatal("user 0 was accepted")
 	}
 }

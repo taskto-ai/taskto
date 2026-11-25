@@ -525,7 +525,11 @@ function BoardView({
 }
 
 const assigneeLabel = (t: T, a: NonNullable<Card['assignee']>) =>
-  a.kind === 'agent' ? t('boards.agent') : (a.name ?? t('boards.assigned'))
+  a.kind === 'agent'
+    ? t('boards.agent')
+    : a.kind === 'deleted'
+      ? t('common.deletedUser')
+      : (a.name ?? t('boards.assigned'))
 const authorLabel = (t: T, a: Author) =>
   !a
     ? t('boards.someone')
@@ -1182,7 +1186,7 @@ function Assignee({
 }) {
   const a = card.assignee
   const t = useT()
-  const value = !a ? '' : a.kind === 'agent' ? 'agent' : `user:${a.id}`
+  const value = !a ? '' : a.kind === 'deleted' ? 'deleted' : a.kind === 'agent' ? 'agent' : `user:${a.id}`
   const listed = people ?? []
   const others =
     a?.kind === 'user' && !listed.some((p) => p.id === a.id) ? [{ id: a.id, name: assigneeLabel(t, a) }] : []
@@ -1197,6 +1201,12 @@ function Assignee({
           onSet(v === '' ? null : v === 'agent' ? { kind: 'agent' } : { kind: 'user', id: Number(v.slice(5)) })
         }}
       >
+        {/* The account that was assigned is gone: shown as it is, not pickable; choosing anyone else replaces it. */}
+        {a?.kind === 'deleted' && (
+          <option value="deleted" disabled>
+            {t('common.deletedUser')}
+          </option>
+        )}
         <option value="">{t('boards.nobody')}</option>
         <option value="agent">{t('boards.agent')}</option>
         {[...others, ...listed].map((p) => (

@@ -67,7 +67,7 @@
       "restoreOp": "Restaurado",
       "version": "{operation} · revisão {revision} · {when} · {name}",
       "agent": "{name} (pelo agente)",
-      "unknownUser": "uma conta removida",
+      "unknownUser": "Usuário excluído",
       "synthetic": "Criado antes de o histórico ser guardado: este é o registro como estava então.",
       "versionsTruncated": "Só as {count} versões mais recentes são mostradas."
     },
@@ -632,7 +632,8 @@
       "newIntro": "Você foi convidado. Crie sua conta: seu e-mail é o endereço ao qual o convite foi enviado.",
       "creating": "Criando…",
       "create": "Criar a conta"
-    }
+    },
+    "accountDeleted": "Sua conta foi excluída. Ela está desativada agora e será apagada de vez em {date}; um operador deste servidor pode cancelar isso até lá."
   },
   "boards": {
     "board": "Quadro",
@@ -664,7 +665,7 @@
     "blocked": "Bloqueado",
     "agent": "Agente",
     "assigned": "Atribuído",
-    "someone": "Alguém",
+    "someone": "Usuário excluído",
     "byAgent": "{name} (agente)",
     "byAgentVia": "{name} (agente, {via})",
     "addCard": "Adicionar cartão",
@@ -1049,7 +1050,15 @@
     "notification_email_verification_too_soon": "Um link foi enviado agora há pouco. Veja sua caixa de entrada ou tente de novo em {seconds} segundos.",
     "notification_email_verification_unavailable": "Não foi possível enviar o e-mail de confirmação. Tente de novo.",
     "too_many_resets": "Muitos pedidos de redefinição: tente de novo mais tarde.",
-    "too_many_invite_emails": "Muitos convites enviados por e-mail: tente de novo mais tarde."
+    "too_many_invite_emails": "Muitos convites enviados por e-mail: tente de novo mais tarde.",
+    "deletion_reauth_required": "Entre de novo com seu provedor e tente outra vez: excluir uma conta sem senha exige um login feito nos últimos minutos.",
+    "deletion_last_admin": "Você é a única pessoa administradora de {workspace}: torne outra pessoa administradora primeiro.",
+    "deletion_last_operator": "Esta conta é a única administradora de {workspace}, que administra este servidor: torne outra pessoa administradora lá primeiro.",
+    "deletion_own": "Exclua sua própria conta nas suas configurações.",
+    "deletion_elsewhere": "Esta pessoa também pertence a um workspace que você não administra, então só quem administra todos os workspaces dela pode excluir a conta.",
+    "deletion_pending": "Esta conta aguarda exclusão: um operador do servidor pode cancelar.",
+    "deletion_not_pending": "Esta conta não aguarda exclusão.",
+    "deletion_purging": "Esta conta está sendo excluída agora: não dá mais para cancelar."
   },
   "language": {
     "label": "Idioma",
@@ -1172,7 +1181,21 @@
       "inviteSendEmail": "Enviar o link do convite por e-mail para este endereço",
       "inviteEmailed": "O convite foi enviado por e-mail para {email}. Você também pode enviar este link a essa pessoa. Ele é mostrado só agora, funciona uma vez e expira em {date}.",
       "inviteEmailFailed": "O convite foi criado, mas não foi possível enviar o e-mail para {email}: o log do servidor diz por quê. Envie este link a essa pessoa. Ele é mostrado só agora, funciona uma vez e expira em {date}.",
-      "inviteLink": "Link do convite"
+      "inviteLink": "Link do convite",
+      "deletionPending": "Exclusão em {date}",
+      "deleteAccount": "Excluir conta",
+      "deleteAccountQuestion": "Excluir a conta de {name}? A pessoa é desconectada de tudo e não consegue entrar. Depois do prazo de carência, o espaço privado, as conversas e os acessos dela são apagados de vez. O que ela fez em espaços compartilhados permanece, como “Usuário excluído”.",
+      "deleteAccountConfirm": "Sim, excluir a conta",
+      "deletions": "Contas aguardando exclusão",
+      "deletionsHelp": "Como operador deste servidor, você vê todas as contas que aguardam o fim do prazo de carência. Cancelar uma exclusão reativa a conta; depois que a limpeza começa, não dá mais para cancelar.",
+      "noDeletions": "Nenhuma conta aguarda exclusão.",
+      "deletedBySelf": "pela própria pessoa",
+      "deletedByAdmin": "por um administrador",
+      "deletionDetails": "Apagada em {date}, excluída {by}",
+      "deletionPurging": "Sendo apagada agora, excluída {by}",
+      "cancelDeletion": "Cancelar exclusão",
+      "cancelDeletionQuestion": "Cancelar a exclusão da conta de {name}? Ela é reativada e a pessoa entra como antes.",
+      "cancelDeletionConfirm": "Sim, cancelar"
     },
     "password": {
       "intro": "Mudar sua senha encerra suas sessões em todos os outros lugares. Este navegador continua conectado. Seus tokens de acesso continuam funcionando: revogue-os em Tokens de acesso.",
@@ -1749,7 +1772,10 @@
         "two_factor_enabled": "Login em duas etapas ativado",
         "two_factor_disabled": "Login em duas etapas desativado",
         "two_factor_recovery_codes_replaced": "Códigos de recuperação substituídos",
-        "two_factor_cleared": "Login em duas etapas removido por um administrador"
+        "two_factor_cleared": "Login em duas etapas removido por um administrador",
+        "account_deletion_requested": "Exclusão de conta solicitada",
+        "account_deletion_cancelled": "Exclusão de conta cancelada",
+        "account_purged": "Conta apagada de vez"
       },
       "targets": {
         "user": "Membro",
@@ -1794,7 +1820,16 @@
         "scope": "Escopo",
         "spaces": "Espaços compartilhados",
         "to": "Para",
-        "user_id": "Número do membro"
+        "user_id": "Número do membro",
+        "by_self": "Excluída pela própria pessoa",
+        "purge_days": "Dias até a limpeza",
+        "private_spaces": "Espaços privados apagados",
+        "conversations": "Conversas apagadas",
+        "access_grants": "Tokens de acesso apagados",
+        "cli_accounts": "Contas de CLI removidas",
+        "push_subscriptions": "Assinaturas push apagadas",
+        "documents_anonymized": "Commits com autor substituído",
+        "mentions_anonymized": "Menções anonimizadas"
       },
       "values": {
         "admin": "Administrador",
@@ -1826,6 +1861,30 @@
         "label": "Rótulo",
         "model": "Modelo"
       }
+    },
+    "delete": {
+      "title": "Excluir sua conta",
+      "intro": "Excluir sua conta a desativa na hora e desconecta você de tudo. Ela é mantida por {days} dias, e um operador do servidor pode cancelar a exclusão até lá; depois disso é apagada de vez.",
+      "removed": "O que é apagado:",
+      "removedPrivate": "Seu espaço privado em cada workspace: documentos e arquivos, quadros e apps com seus registros e fotos.",
+      "removedConversations": "Suas conversas com o agente.",
+      "removedLogins": "Seus logins de CLI, tokens de acesso, sessões, assinaturas de notificação push, preferências de notificação, login em duas etapas e identidades de login único.",
+      "kept": "O que você fez para outras pessoas permanece: cartões, comentários, documentos e registros de apps em espaços compartilhados, e o registro de auditoria. Eles aparecem como “Usuário excluído”, e seu nome e e-mail são retirados do histórico.",
+      "cancel": "Até o fim do prazo de carência, um operador do servidor pode cancelar a exclusão.",
+      "blocked": "Você ainda não pode excluir sua conta:",
+      "blockedAdmin": "Você é a única pessoa administradora de {workspace}: torne outra pessoa administradora primeiro.",
+      "blockedOperator": "Você é a única pessoa administradora de {workspace}, que administra este servidor: torne outra pessoa administradora lá primeiro.",
+      "exportFirst": "Baixar meus dados antes",
+      "start": "Excluir minha conta…",
+      "signInAgain": "Entre de novo com seu provedor e volte aqui: excluir uma conta sem senha exige um login feito nos últimos minutos.",
+      "formLabel": "Excluir sua conta",
+      "confirmIntro": "Digite sua senha para excluir sua conta. Você é desconectado na hora.",
+      "confirmIntroFresh": "Você entrou agora há pouco, o que confirma que é você. Excluir a conta desconecta você na hora.",
+      "password": "Sua senha",
+      "code": "Código de duas etapas ou código de recuperação",
+      "confirm": "Excluir minha conta",
+      "deleting": "Excluindo…",
+      "summary": "Exclua sua conta e o que é só seu: espaço privado, conversas e acessos. O que você fez para outras pessoas permanece. Você pode baixar seus dados antes."
     }
   },
   "pwa": {
@@ -1892,7 +1951,8 @@
     "copy": "Copiar",
     "copied": "Copiado",
     "copyNamed": "Copiar {name}",
-    "labelFor": "{label} {name}"
+    "labelFor": "{label} {name}",
+    "deletedUser": "Usuário excluído"
   },
   "knowledge": {
     "new": "Novo",

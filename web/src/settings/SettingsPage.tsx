@@ -91,7 +91,7 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
     case 'general':
       return <GeneralTab workspace={workspace} email={me.user.email} operator={me.is_operator === true} />
     case 'members':
-      return <MembersTab workspace={workspace.id} me={me.user.id} />
+      return <MembersTab workspace={workspace.id} me={me.user.id} operator={me.is_operator === true} />
     case 'spaces':
       return <SpacesTab workspace={workspace.id} />
     case 'audit':

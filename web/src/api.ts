@@ -184,7 +184,8 @@ export type Card = {
   body: string
   column: 'backlog' | 'todo' | 'doing' | 'review' | 'done' | 'archived'
   archived_from: Card['column'] | null
-  assignee: { kind: 'agent' } | { kind: 'user'; id: number; name?: string } | null
+  // `deleted`: the assignee's account was deleted; sent by the server only, never to it.
+  assignee: { kind: 'agent' } | { kind: 'user'; id: number; name?: string } | { kind: 'deleted' } | null
   blocked: boolean
   blocked_reason: string | null
   blocked_by: number[]
@@ -538,6 +539,8 @@ export type Member = {
   role: 'admin' | 'member'
   joined_at: string
   disabled?: boolean
+  // When the account is purged, if it was deleted and waits out its grace period (it is disabled too).
+  deletion_at?: string | null
   two_factor?: boolean
 }
 // One event of a workspace's audit log, with the names read when the log was (docs/audit.md).
@@ -546,6 +549,9 @@ export type AuditEntry = {
   at: string
   action: string
   actor_id: number | null
+  // The actor's account was deleted (actor_id is then null), or the account the event is about was.
+  actor_deleted: boolean
+  target_deleted: boolean
   // The actor and the user an event is about, while members of the workspace; null for an
   // anonymous event, a deleted user and one who has left.
   actor: { name: string; email: string } | null
@@ -557,6 +563,27 @@ export type AuditEntry = {
   client_addr: string | null
 }
 export type AuditPage = { events: AuditEntry[]; next: string }
+
+// Deleting an account (docs/api.md#deleting-an-account): what it takes (`method` is "password", with a
+// code too when `two_factor` is on, or "fresh_login" for an account with no password, `fresh` saying
+// whether the login is recent enough), the workspaces that would be left with no admin in use, and
+// how long the account is kept before it is purged.
+export type DeletionBlocker = { workspace_id: number; workspace: string; operator: boolean }
+export type DeletionStatus = {
+  grace_days: number
+  method: 'password' | 'fresh_login'
+  two_factor: boolean
+  fresh: boolean
+  blockers: DeletionBlocker[]
+}
+export type DeletionReply = { purge_at: string }
+export type PendingDeletion = {
+  user: { id: number; email: string; name: string }
+  requested_at: string
+  purge_at: string
+  purging: boolean
+  by_self: boolean
+}
 
 export type Invite = { id: number; email: string; role: 'admin' | 'member'; created_at: string; expires_at: string }
 // The reply that makes an invite or an access token: the record, with its secret, shown only now.

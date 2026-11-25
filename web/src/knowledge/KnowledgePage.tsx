@@ -6,7 +6,7 @@
 
 import { type FormEvent, useRef, useState } from 'react'
 import { ApiError, api, type Doc, errorText, ws } from '../api'
-import { has, useFormat, useT } from '../i18n'
+import { has, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { type LinkHandler, Markdown } from '../markdown'
 import { parseDocumentItem } from '../router'
@@ -15,6 +15,12 @@ import { Icon } from '../shell/Icon'
 import { SpacePicker, useSpaces } from '../spaces'
 
 type Change = { commit: string; doc?: Doc }
+
+// The address the server gives the author of a commit whose account was deleted (internal/knowledge,
+// DeletedAuthorEmail): shown translated, not as the name stored in git.
+const DELETED_AUTHOR = 'deleted-user@deleted.invalid'
+const authorName = (a: { name: string; email: string }, t: T) =>
+  a.email === DELETED_AUTHOR ? t('common.deletedUser') : a.name
 
 export type Commit = {
   commit: string
@@ -1009,8 +1015,12 @@ function History({
             </span>
             <span className="tt-muted tt-small">
               {c.agent
-                ? t('knowledge.history.byWithAgent', { name: c.author.name, agent: c.agent, time: f.dateTime(c.time) })
-                : t('knowledge.history.by', { name: c.author.name, time: f.dateTime(c.time) })}
+                ? t('knowledge.history.byWithAgent', {
+                    name: authorName(c.author, t),
+                    agent: c.agent,
+                    time: f.dateTime(c.time),
+                  })
+                : t('knowledge.history.by', { name: authorName(c.author, t), time: f.dateTime(c.time) })}
             </span>
             {c.version && unversioned && c.version === current.version && (
               <span className="tt-muted tt-small">{t('knowledge.history.current')}</span>

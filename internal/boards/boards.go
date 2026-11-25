@@ -104,6 +104,9 @@ type AssigneeKind string
 const (
 	AssignUser  AssigneeKind = "user"
 	AssignAgent AssigneeKind = "agent"
+	// AssignDeleted is a card whose assignee's account was deleted: it has no ID and no name, and
+	// it is only ever read, never sent (assigning the card to anyone replaces it).
+	AssignDeleted AssigneeKind = "deleted"
 )
 
 // Assignee is who a card is assigned to. In requests, ID names the user for AssignUser

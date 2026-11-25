@@ -481,3 +481,52 @@ func (s *Service) mentionedPeople(ctx context.Context, sp access.Space, viewer i
 	}
 	return nil
 }
+
+// AnonymizeMentions replaces the label of every mention of userID in the comments of every card
+// with label, for the purge of an account (internal/accountdeletion): the web app never shows a
+// mention's label, only the name the server resolves from the ID, but the stored text holds what
+// the writer typed, which is the person's name. The ID stays, so the mention keeps its place. It
+// returns how many comments it changed, and runs in tx, with the write lock.
+func AnonymizeMentions(ctx context.Context, tx *sql.Tx, userID int64, label string) (int64, error) {
+	type row struct {
+		id   int64
+		body string
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, body FROM card_comments WHERE instr(body, ?) > 0`, "(user:"+strconv.FormatInt(userID, 10)+")")
+	if err != nil {
+		return 0, err
+	}
+	var todo []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.body); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		todo = append(todo, r)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, r := range todo {
+		body := mentionPattern.ReplaceAllStringFunc(r.body, func(m string) string {
+			sub := mentionPattern.FindStringSubmatch(m)
+			if len(sub) != 2 || sub[1] != strconv.FormatInt(userID, 10) {
+				return m
+			}
+			return "@[" + label + "](user:" + sub[1] + ")"
+		})
+		if body == r.body {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE card_comments SET body = ? WHERE id = ?`, body, r.id); err != nil {
+			return 0, err
+		}
+		n++
+	}
+	return n, nil
+}

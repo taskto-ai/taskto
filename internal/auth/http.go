@@ -47,6 +47,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 
 	s.passwordRoutes(mux)
 	s.disableRoutes(mux)
+	s.deletionRoutes(mux)
 	s.sessionRoutes(mux)
 	s.twoFactorRoutes(mux)
 	s.ssoRoutes(mux)

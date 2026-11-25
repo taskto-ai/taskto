@@ -7,6 +7,7 @@
 
 import { api, exportPath, workspaceExportPath } from '../api'
 import { useT } from '../i18n'
+import { DeleteAccount } from './DeleteAccount'
 import { Alert, useAction } from './parts'
 
 export function DataTab({ workspace, admin = false }: { workspace: number; admin?: boolean }) {
@@ -40,6 +41,7 @@ export function DataTab({ workspace, admin = false }: { workspace: number; admin
         </p>
         <p className="tt-hint">{t('settings.data.limit')}</p>
       </section>
+      <DeleteAccount workspace={workspace} />
       {admin && (
         <section className="tt-panel" aria-labelledby="tt-data-workspace">
           <h2 id="tt-data-workspace">{t('settings.data.workspace.title')}</h2>

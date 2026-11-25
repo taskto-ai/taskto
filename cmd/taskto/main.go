@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/accountdeletion"
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/agenttools"
 	"taskto.ai/taskto/internal/apps"
@@ -267,6 +268,14 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	}
 	stopPush := notifier.Start(ctx)
 	defer stopPush()
+	// The purge of a deleted account, after its grace period: a job of the scheduler too, so its
+	// handler is registered before the scheduler starts.
+	deletions := accountdeletion.New(accountdeletion.Options{
+		DB: sqlDB, DataDir: cfg.DataDir, Scheduler: scheduler, Knowledge: kb, CLI: cliAccounts,
+	})
+	if err := deletions.Attach(); err != nil {
+		return err
+	}
 	stopSchedule := scheduler.Start(ctx)
 	defer stopSchedule()
 	tools := agenttools.New(agenttools.Options{
@@ -285,6 +294,14 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 			return err
 		}
 		defer agent.stop()
+		// A purged account's conversations are retired in the agent runtime too.
+		deletions.SetAgent(func(ctx context.Context) (conversations.Sidecar, error) {
+			c, err := agent.ready(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return c, nil
+		})
 		// A turn that switches to another CLI shows it in the conversation's model.
 		cliAccounts.SetModelSetter(func(ctx context.Context, conversation int64, cli cliworker.CLI) error {
 			c, err := agent.ready(ctx)
@@ -310,7 +327,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	}
 	authOpts := auth.Options{InsecureCookies: cfg.InsecureCookies, TrustedProxies: cfg.TrustedProxyPrefixes(), Key: key,
 		PublicURL: cfg.PublicURL, DisablePasswordLogin: cfg.DisablePasswordLogin,
-		WorkspaceCreation: cfg.WorkspaceCreationMode()}
+		WorkspaceCreation: cfg.WorkspaceCreationMode(), AccountDeletionGrace: time.Duration(cfg.AccountDeletionDays) * 24 * time.Hour}
 	authOpts.SSO = ssoProviders
 	if len(ssoProviders) > 0 {
 		slog.Info("single sign-on is on", "providers", len(ssoProviders), "public_url", cfg.PublicURL,
@@ -350,7 +367,10 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	}()
 	var accounts *auth.Service
 	handler, err := server.New(version, sqlDB, server.Options{
-		AccountsReady: func(svc *auth.Service) { accounts = svc },
+		AccountsReady: func(svc *auth.Service) {
+			accounts = svc
+			svc.SetDeletionScheduler(deletions)
+		},
 		Notifications: notifier,
 		Scheduler:     scheduler,
 		Auth:          authOpts,
@@ -379,6 +399,11 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		},
 	})
 	if err != nil {
+		return err
+	}
+	// Every deleted account has its purge scheduled: one made while no scheduler was set, or whose
+	// job was lost, gets it now.
+	if err := deletions.Reconcile(ctx); err != nil {
 		return err
 	}
 

@@ -119,6 +119,14 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `account_disabled` | 403 | The account is disabled ([Disabling a member](#disabling-a-member)): a login with the right password, a single sign-on (as `?sso_error=`), a password reset link and an admin whose own account was disabled meanwhile answer this. A disabled account's access token is `token_invalid`. |
 | `disable_own` | 400 | An admin can't disable or enable their own account. |
 | `disable_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `deletion_reauth_required` | 403 | Deleting an account that has no password needs a sign-in made in the last 5 minutes ([Deleting an account](#deleting-an-account)). |
+| `deletion_last_admin` | 409 | The account is the only admin in use of a workspace; `params.workspace` names it. |
+| `deletion_last_operator` | 409 | The account is the only admin in use of the workspace the server's setup made, whose admins are its operators; `params.workspace` names it. |
+| `deletion_own` | 400 | An admin deletes their own account from their own settings, not through the member route. |
+| `deletion_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `deletion_pending` | 409 | The account is waiting to be deleted already; disabling or enabling it is refused too. |
+| `deletion_not_pending` | 404 | The account isn't waiting to be deleted. |
+| `deletion_purging` | 409 | The purge has begun: the deletion can't be cancelled any more. |
 | `session_not_found` | 404 | No such session of the caller's (another user's sessions are never found). |
 | `session_current` | 400 | The session asked to be signed out is the one making the request: log out instead. |
 | `wrong_two_factor_code` | 401 / 403 | The code from the authenticator app (or the recovery code) is wrong, was used already, or is for another time. `401` at the second step of a login, `403` for a logged-in user's own settings. |
@@ -923,6 +931,8 @@ Any member. Members can see each other (boards need it to assign cards).
 ```
 
 `disabled` is true for an account an admin switched off ([below](#disabling-a-member)).
+`deletion_at` is when the account is purged, for one that was [deleted](#deleting-an-account) and
+waits out its grace period (it is `disabled` too); `null` for the rest.
 
 An admin's list also has `"two_factor": true` or `false` for each member, which says whether
 they have [two-factor login](#two-factor-login) on, for the clear above; nobody else sees it.
@@ -990,6 +1000,105 @@ the [audit log](audit.md) as `member_disabled` (with how many logins it ended) a
 A request an admin sent just before being disabled changes nothing either: the writes of an admin
 (inviting, changing a role, removing a member, the workspace's settings, shared CLI accounts)
 read the admin's account again in their transaction and answer `403 account_disabled`.
+
+### Deleting an account
+
+A person can delete their own account, and an admin can delete a member's. It is the one way an
+account goes: [removing a member](#delete-apiworkspacesworkspacemembersuser) only ends their access
+to one workspace and keeps their private space closed.
+
+**What happens.** The account is switched off at once, with the switch of [disabling a
+member](#disabling-a-member) (every login ended, no new one, its tokens, agents and jobs refused),
+and kept for a **grace period**, 14 days unless the operator sets `-account-deletion-days`
+(`TASKTO_ACCOUNT_DELETION_DAYS`, `account_deletion_days`, 1 to 365). An operator can cancel the
+deletion until then: the account is switched on again, as it was (an account an admin had disabled
+stays disabled). When the period ends, the scheduler runs the **purge**, once, as the server.
+
+**What the purge deletes: what the person owned alone.**
+
+- their private space in every workspace: the documents with the unversioned files and the large
+  files' bytes, their personal board, and their private apps with their records and photos, from
+  disk and from the database, and the [search](#search) index's rows for them;
+- their conversations, and the agent runtime's copies, which are retired (the runtime has no way to
+  delete one, see [install.md](install.md#privacy-and-account-deletion));
+- their CLI logins and shared-account mappings, with everything the CLI worker kept for them
+  (sessions, working directories, the agent browser's profile);
+- their access tokens, sessions, push subscriptions, notification settings and email ledger,
+  two-factor data, single sign-on identities, reset links, and the invitations to their address;
+- the account itself, with its name and email.
+
+**What stays: what they made for others.** Everything in a shared space stays, and the audit log
+stays. The people it names lose their account, which the product shows as **"Deleted user"**, in the
+way a row whose author is `null` always has been: a card's creator, a comment's author, a record's
+creator or version's actor, a board's creator, an app's author. Where `null` would read like "no
+one", the row says so: a card whose assignee was deleted has `"assignee": {"kind": "deleted"}`
+(until it is assigned to someone), an [audit](audit.md#deleted-accounts) event has `actor_deleted`
+or `target_deleted`, and a document's [history](#get-apiworkspacesworkspacespacesspacehistorypath) lists the author as `Deleted user
+<deleted-user@deleted.invalid>`: the purge replaces their name and address, in every shared space
+of the server, in each commit they authored or committed (a [history
+rewrite](#taking-a-files-old-versions-out-of-history), so those commits get new IDs; the documents' versions don't change).
+A comment's `@[Name](user:ID)` mention keeps its place and loses the label the writer typed.
+
+**Who may.** The person, proving it is them (below); or an admin of **every** workspace the account
+belongs to, by the rule for [password reset
+links](#post-apiworkspacesworkspacemembersuserpassword-reset), with nothing more to prove. The
+account must not be the only admin in use of a workspace (`409 deletion_last_admin`), and for the
+workspace the server's setup made, whose admins are its operators, not the last one
+(`409 deletion_last_operator`): make someone else an admin first. A disabled admin doesn't count as
+"in use". All of these take a session, never an access token (`403`).
+
+**Offering the export.** The web app offers [the person's data export](#export-my-data) before it
+asks to confirm. The server doesn't require it: an admin's deletion of a member's account can't
+(the data is the person's).
+
+#### `GET /api/me/deletion`
+
+What deleting the caller's own account takes:
+
+```json
+{"grace_days": 14, "method": "password", "two_factor": false, "fresh": false,
+ "blockers": [{"workspace_id": 1, "workspace": "Home", "operator": true}]}
+```
+
+`method` is `password` (and a code too if `two_factor` is true), or `fresh_login` for an account
+that signs in with a provider and has no password: it is proved by a login made in the last 5
+minutes (`fresh`). `blockers` lists the workspaces where the caller is the only admin in use;
+deleting is refused while there are any.
+
+#### `POST /api/me/deletion`
+
+`{"password": "…", "code": "…"}`: the current password, and a two-factor or recovery code if the
+account has two-factor login on; `{}` for an account with no password, which needs a recent login
+(`403 deletion_reauth_required` otherwise). A wrong password is `403 wrong_password` and a wrong
+code `403 wrong_two_factor_code`, both counted by the login limits like a failed login. `202` with
+`{"purge_at": "…"}`; the session is ended and its cookie cleared. `409` with the blocker's code
+above; `409 deletion_pending` if it was asked for already.
+
+#### `POST /api/workspaces/{workspace}/members/{user}/deletion`
+
+Admin only, no body. The same, for a member, with no password to prove. `202` with
+`{"purge_at": "…"}`; `404 member_not_found`; `400 deletion_own` for the caller's own account;
+`403 deletion_elsewhere` if the member belongs to a workspace the caller doesn't administer; the
+`409`s above. Recorded in the [audit log](audit.md) as `account_deletion_requested`.
+
+#### `GET /api/workspaces/{workspace}/account-deletions`
+
+Operators only ([Operators](#operators)): every account waiting to be deleted, soonest first:
+
+```json
+{"deletions": [{"user": {"id": 2, "email": "…", "name": "…"}, "requested_at": "…", "purge_at": "…",
+                "purging": false, "by_self": true}]}
+```
+
+#### `DELETE /api/workspaces/{workspace}/account-deletions/{user}`
+
+Operators only. Cancels the deletion: `204`; the account is switched on again and signs in as
+before (its logins ended with the deletion). `404 deletion_not_pending`; `409 deletion_purging`
+once the purge has begun, which can't be undone. Recorded as `account_deletion_cancelled`.
+
+**The purge is safe to repeat.** Each step finds what is left and finishes it, so a purge that was
+stopped or failed is tried again (with backoff, and at the next start); the account itself, with
+the audit events (`account_purged`, which holds only counts), goes last, in one transaction.
 
 ## Invites
 
@@ -2010,7 +2119,9 @@ A card:
 - `assignee`: `null`, `{"kind": "agent"}`, or `{"kind": "user", "id": …}`, a member of
   the workspace who can read the space (a viewer is fine), checked when assigned. In
   requests `name` is ignored. Someone who later loses access stays assigned until the
-  card is changed.
+  card is changed. A card whose assignee's account was [deleted](#deleting-an-account) has
+  `{"kind": "deleted"}`, which the server sends and never takes: it counts as unassigned for
+  the `assignee=none` filter, and assigning the card to anyone (or no one) replaces it.
 - `blocked` is true when the card has a `blocked_reason` or cards in `blocked_by`, which
   are other cards of the same board.
 - `docs` are knowledge-base paths within the board's space, like `notes/plan.md`

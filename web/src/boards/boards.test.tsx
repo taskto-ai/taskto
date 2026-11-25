@@ -929,3 +929,21 @@ test('a viewer sees the due date and labels but cannot change them', async () =>
   expect(within(plain).getByText('No due date.')).toBeTruthy()
   expect(within(plain).getByText('No labels.')).toBeTruthy()
 })
+
+test("a card whose assignee's account was deleted says so, and choosing someone replaces it", async () => {
+  const { sent } = server('write', (cards) => {
+    cards[0].assignee = { kind: 'deleted' }
+  })
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  const assignee = (await within(view).findByLabelText('Assignee')) as HTMLSelectElement
+  await within(assignee).findByRole('option', { name: 'Bo' })
+  // It shows as the deleted account, which can't be picked, and nothing is sent if the card is left alone.
+  expect(assignee.value).toBe('deleted')
+  expect((within(assignee).getByRole('option', { name: 'Deleted user' }) as HTMLOptionElement).disabled).toBe(true)
+  expect(sent('PATCH', `${C}/1`)).toEqual([])
+  // Choosing someone replaces it.
+  fireEvent.change(assignee, { target: { value: 'user:5' } })
+  await waitFor(() => expect(assignee.value).toBe('user:5'))
+  expect(within(assignee).queryByRole('option', { name: 'Deleted user' })).toBeNull()
+})

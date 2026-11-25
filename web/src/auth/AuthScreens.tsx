@@ -4,7 +4,8 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { ApiError, api, codeText, errorText, type Me } from '../api'
 import { BrandLogo } from '../BrandLogo'
-import { t, useT } from '../i18n'
+import { t, useFormat, useT } from '../i18n'
+import { takeDeletion } from './deleted'
 
 // The product's name, the same in every language.
 const BRAND = 'TaskTo.AI'
@@ -283,6 +284,9 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     return reply
   }, onDone)
   const [forgot, setForgot] = useState(false)
+  // Told once, to a person who has just deleted their account.
+  const [deleted] = useState(takeDeletion)
+  const f = useFormat()
   if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
   if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />
   const methods = loaded.state.methods
@@ -291,6 +295,11 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   }
   return (
     <AuthFrame title={t('auth.login.title')}>
+      {deleted && (
+        <p className="tt-notice" role="status">
+          {t('auth.accountDeleted', { date: f.date(deleted) })}
+        </p>
+      )}
       {ssoError && (
         <p role="alert" className="tt-error">
           {ssoError}

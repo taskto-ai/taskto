@@ -5,6 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
 import { InviteScreen, LoginScreen, ResetPasswordScreen } from './AuthScreens'
+import { rememberDeletion } from './deleted'
 
 afterEach(async () => {
   cleanup()
@@ -439,4 +440,17 @@ test('forgotten password: too many requests is said in words', async () => {
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ana@example.com' } })
   fireEvent.click(screen.getByRole('button', { name: 'Email me a link' }))
   expect((await screen.findByRole('alert')).textContent).toBe('Too many reset requests: try again later.')
+})
+
+test('after an account is deleted the login says when it is erased, once', async () => {
+  sessionStorage.clear()
+  rememberDeletion('2026-12-08T10:00:00.000Z')
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  const first = render(<LoginScreen onDone={() => {}} />)
+  await screen.findByText(/Your account was deleted\. It is switched off now and will be erased for good on .*2026/)
+  first.unmount()
+  // The notice is told once: a reload shows the plain login.
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  expect(screen.queryByText(/Your account was deleted/)).toBeNull()
 })

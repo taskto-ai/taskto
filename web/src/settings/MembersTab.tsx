@@ -3,7 +3,17 @@
 // the URL's fragment, which browsers don't send to servers or in Referer.
 
 import { type FormEvent, useState } from 'react'
-import { ApiError, api, type Invite, type InviteCreated, type MailStatus, type Member, mailPath, ws } from '../api'
+import {
+  ApiError,
+  api,
+  type Invite,
+  type InviteCreated,
+  type MailStatus,
+  type Member,
+  mailPath,
+  type PendingDeletion,
+  ws,
+} from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Alert, ConfirmButton, CopyButton, day, useAction } from './parts'
@@ -18,7 +28,7 @@ export function resetLink(token: string): string {
   return `${window.location.origin}/reset-password#${token}`
 }
 
-export function MembersTab({ workspace, me }: { workspace: number; me: number }) {
+export function MembersTab({ workspace, me, operator = false }: { workspace: number; me: number; operator?: boolean }) {
   const t = useT()
   const f = useFormat()
   const base = ws(workspace)
@@ -38,6 +48,22 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
   )
   const passwordLogin = methods.data?.password === true
 
+  // The accounts waiting to be deleted, which only the server's operators see and can cancel.
+  const deletions = useLoad(
+    () =>
+      operator
+        ? api<{ deletions: PendingDeletion[] }>(`${base}/account-deletions`).then((r) => r.deletions)
+        : Promise.resolve([] as PendingDeletion[]),
+    [base, operator],
+  )
+  const deleteAccount = (m: Member) =>
+    action
+      .run(() => api(`${base}/members/${m.id}/deletion`, { method: 'POST' }))
+      .then(() => Promise.all([members.reload(), deletions.reload()]))
+  const cancelDeletion = (user: number) =>
+    action
+      .run(() => api(`${base}/account-deletions/${user}`, { method: 'DELETE' }))
+      .then(() => Promise.all([members.reload(), deletions.reload()]))
   const setRole = (m: Member, role: Role) =>
     action.run(() => api(`${base}/members/${m.id}`, { method: 'PATCH', body: { role } })).then(members.reload)
   const remove = (m: Member) =>
@@ -75,7 +101,14 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                   <strong>
                     {m.name}
                     {m.id === me && <span className="tt-muted"> {t('settings.members.you')}</span>}
-                    {m.disabled && <span className="tt-badge"> {t('settings.members.disabled')}</span>}
+                    {m.deletion_at ? (
+                      <span className="tt-badge">
+                        {' '}
+                        {t('settings.members.deletionPending', { date: f.date(m.deletion_at) })}
+                      </span>
+                    ) : (
+                      m.disabled && <span className="tt-badge"> {t('settings.members.disabled')}</span>
+                    )}
                   </strong>
                   <span className="tt-muted tt-small">{m.email}</span>
                 </div>
@@ -103,6 +136,7 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                     </button>
                   )}
                   {m.id !== me &&
+                    !m.deletion_at &&
                     (m.disabled ? (
                       <button
                         type="button"
@@ -131,6 +165,16 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                       confirm={t('settings.members.clearTwoFactorConfirm')}
                       disabled={action.busy}
                       onConfirm={() => clearTwoFactor(m)}
+                    />
+                  )}
+                  {m.id !== me && !m.deletion_at && (
+                    <ConfirmButton
+                      label={t('settings.members.deleteAccount')}
+                      name={m.name}
+                      question={t('settings.members.deleteAccountQuestion', { name: m.name })}
+                      confirm={t('settings.members.deleteAccountConfirm')}
+                      disabled={action.busy}
+                      onConfirm={() => deleteAccount(m)}
                     />
                   )}
                   {m.id !== me && (
@@ -171,6 +215,45 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
         )}
         <p className="tt-muted tt-small">{t('settings.members.help')}</p>
       </section>
+
+      {operator && (
+        <section className="tt-panel" aria-labelledby="tt-deletions">
+          <h2 id="tt-deletions">{t('settings.members.deletions')}</h2>
+          <p className="tt-muted tt-small">{t('settings.members.deletionsHelp')}</p>
+          <Alert error={deletions.error} />
+          {deletions.data?.length === 0 && <p className="tt-muted">{t('settings.members.noDeletions')}</p>}
+          {deletions.data && deletions.data.length > 0 && (
+            <ul className="tt-rows" aria-label={t('settings.members.deletions')}>
+              {deletions.data.map((d) => (
+                <li key={d.user.id} className="tt-row">
+                  <div className="tt-row-main">
+                    <strong>{d.user.name}</strong>
+                    <span className="tt-muted tt-small">{d.user.email}</span>
+                    <span className="tt-muted tt-small">
+                      {t(d.purging ? 'settings.members.deletionPurging' : 'settings.members.deletionDetails', {
+                        date: f.date(d.purge_at),
+                        by: t(d.by_self ? 'settings.members.deletedBySelf' : 'settings.members.deletedByAdmin'),
+                      })}
+                    </span>
+                  </div>
+                  <div className="tt-row-actions">
+                    {!d.purging && (
+                      <ConfirmButton
+                        label={t('settings.members.cancelDeletion')}
+                        name={d.user.name}
+                        question={t('settings.members.cancelDeletionQuestion', { name: d.user.name })}
+                        confirm={t('settings.members.cancelDeletionConfirm')}
+                        disabled={action.busy}
+                        onConfirm={() => cancelDeletion(d.user.id)}
+                      />
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       <section className="tt-panel" aria-labelledby="tt-invites">
         <h2 id="tt-invites">{t('settings.members.invites')}</h2>

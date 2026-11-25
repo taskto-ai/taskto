@@ -46,6 +46,9 @@ type Member struct {
 	// Disabled says the account is switched off (disable.go): it keeps its membership and what it
 	// owns, and can't sign in or act until an admin enables it again.
 	Disabled bool `json:"disabled"`
+	// DeletionAt is when the account is purged, if it was deleted and waits out its grace period
+	// (deletion.go); it is Disabled too.
+	DeletionAt *string `json:"deletion_at"`
 	// TwoFactor says whether they have two-factor login on. Only an admin's view of the
 	// list has it.
 	TwoFactor *bool `json:"two_factor,omitempty"`
@@ -448,7 +451,8 @@ func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) 
 		order = "u.id"
 	}
 	query := `
-		SELECT u.id, u.email, u.name, m.role, m.created_at, u.disabled_at IS NOT NULL
+		SELECT u.id, u.email, u.name, m.role, m.created_at, u.disabled_at IS NOT NULL,
+			(SELECT d.purge_at FROM account_deletions d WHERE d.user_id = u.id)
 		FROM memberships m JOIN users u ON u.id = m.user_id
 		WHERE m.workspace_id = ? AND u.id > ?
 		ORDER BY ` + order
@@ -465,7 +469,7 @@ func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) 
 	all := []Member{}
 	for rows.Next() {
 		var m Member
-		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.Role, &m.JoinedAt, &m.Disabled); err != nil {
+		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.Role, &m.JoinedAt, &m.Disabled, &m.DeletionAt); err != nil {
 			return nil, err
 		}
 		all = append(all, m)
@@ -566,6 +570,10 @@ func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) e
 		}
 		if _, err = tx.ExecContext(ctx, `DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`,
 			workspaceID, userID); err != nil {
+			return err
+		}
+		// The scheduler's jobs of the member in this workspace went with it, a deletion's purge too.
+		if err := s.rehomePurge(ctx, tx, userID); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.MemberRemoved,

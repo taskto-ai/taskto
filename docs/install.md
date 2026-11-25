@@ -792,6 +792,52 @@ const result = await voz.transcribe(wav.buffer.slice(wav.byteOffset, wav.byteOff
 process.stdout.write(JSON.stringify({ text: result.text }));
 ```
 
+## Privacy and account deletion
+
+A person can delete their own account, and an admin can delete a member's
+([api.md](api.md#deleting-an-account)): that is the one way personal data leaves the server. This
+is what happens, and what doesn't.
+
+**Grace period.** The account is switched off at once and kept for `-account-deletion-days`
+(`TASKTO_ACCOUNT_DELETION_DAYS`, `account_deletion_days`; default 14, at most 365). During it an
+operator can cancel the deletion in Settings → Members ("Accounts waiting to be deleted"); the
+person can't sign in, but nothing is lost. It ends with the purge, which a server that was off at
+the time runs when it starts again. Telling people the period, and that an operator can cancel, is
+part of your own privacy notice: the web app says it where a person deletes their account.
+
+**What the purge deletes** (what the person owned alone): their private spaces in every workspace
+(documents and unversioned files, personal boards, private apps with their records and photos), their
+conversations, their CLI logins and shared-account mappings and everything the CLI worker kept for
+them (including the agent browser's profile), their access tokens, sessions, push subscriptions,
+notification settings, email ledger, two-factor data and single sign-on identities, the invitations
+to their address, the search index's rows for all of it, and the account.
+
+**What stays: what they made for others.** Cards, comments, documents and app records in shared
+spaces, and the audit log, stay, shown as "Deleted user". The person's name and address are replaced
+in the shared spaces' git history (a history rewrite, in every shared space of the server, so a space
+of a workspace they had left is covered too), and in the audit log. A person who wants their
+contributions to shared spaces gone too asks the space's admins to delete them as content; that
+is a decision about the workspace's records, not an account's.
+
+**What a purge can't reach.**
+
+- **Backups.** A backup made before the purge still holds the data. They age out by your
+  [retention](#backups) (restic's `forget`/`prune`, or deleting old archives): say in your privacy
+  notice how long that is. And a **restore** brings back the accounts the backup had: re-run the
+  deletions of the accounts that were deleted after it (the log, if kept, says which), or a
+  restored account that was purged is a live one again.
+- **The agent runtime's copy of a conversation.** Pi Durable, the runtime, never deletes a
+  conversation, so the purge **retires** each one (its work stops and the runtime refuses it from then
+  on, as for one that never existed) and deletes the server's record of whose it was. The runtime's own
+  records of what was said stay in `<data>/agent/agent.db`, unreachable and tied to no account. If
+  that is not enough for your obligations, stop the server and delete that database after the
+  purge (it loses *every* conversation's content, so do it only when you must).
+- **Model providers and CLI vendors.** What a conversation sent to a provider is theirs to delete.
+- **SQLite and the filesystem.** Deleted rows are overwritten as the database is reused, and
+  deleted files are only unlinked; use disk encryption if remnants matter to you.
+- **Authorship you didn't give to the server.** Text a person typed into another person's
+  document or comment (a quotation of their name) is content, not authorship.
+
 ## Backups
 
 `taskto backup` writes a snapshot of the data directory. It runs while the server does:

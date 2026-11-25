@@ -41,6 +41,13 @@ const (
 	MemberDisabled    = "member_disabled"
 	MemberEnabled     = "member_enabled"
 
+	// Deleting an account (docs/api.md#deleting-an-account): asked for (the account is switched off
+	// and kept for a grace period), cancelled, and purged. The purge's events say only how many of
+	// each kind of thing went, never a name or an address.
+	AccountDeletionRequested = "account_deletion_requested"
+	AccountDeletionCancelled = "account_deletion_cancelled"
+	AccountPurged            = "account_purged"
+
 	// Access tokens.
 	AccessTokenCreated = "access_token_created"
 	AccessTokenRevoked = "access_token_revoked"

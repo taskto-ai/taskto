@@ -68,6 +68,17 @@ const (
 	CodeDisableOwn       Code = "disable_own"
 	CodeDisableElsewhere Code = "disable_elsewhere"
 
+	// Deleting an account (internal/auth/deletion.go).
+
+	CodeDeletionReauth       Code = "deletion_reauth_required" // 403: no password to check; sign in again with the provider, then retry
+	CodeDeletionLastAdmin    Code = "deletion_last_admin"      // 409: the only working admin of a workspace; params: workspace
+	CodeDeletionLastOperator Code = "deletion_last_operator"   // 409: the only working admin of the workspace the server's setup made; params: workspace
+	CodeDeletionOwn          Code = "deletion_own"             // 400: an admin's own account is deleted from their own settings
+	CodeDeletionElsewhere    Code = "deletion_elsewhere"       // 403: the member also belongs to a workspace the admin doesn't administer
+	CodeDeletionPending      Code = "deletion_pending"         // 409: the account is waiting to be deleted already; the operator cancels it
+	CodeDeletionNotPending   Code = "deletion_not_pending"     // 404: the account isn't waiting to be deleted
+	CodeDeletionPurging      Code = "deletion_purging"         // 409: the purge has begun: it can't be cancelled any more
+
 	// Your own sessions (internal/auth/sessions.go).
 
 	CodeSessionNotFound Code = "session_not_found"

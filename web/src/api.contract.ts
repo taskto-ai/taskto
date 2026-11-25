@@ -21,6 +21,9 @@ export type Contract = [
   Is<Check<Gen.Token, Api.Token>>,
   Is<Check<Gen.InviteCreated, Api.InviteCreated>>,
   Is<Check<Gen.TokenCreated, Api.TokenCreated>>,
+  Is<Check<Gen.DeletionStatus, Api.DeletionStatus, 'method' | 'blockers[]'>>,
+  Is<Check<Gen.DeletionReply, Api.DeletionReply>>,
+  Is<Check<Gen.PendingDeletion, Api.PendingDeletion, 'user'>>,
   // Spaces and the knowledge base.
   Is<Check<Gen.Space, Api.Space>>,
   Is<Check<Gen.Doc, Api.Doc>>,

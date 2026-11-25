@@ -70,13 +70,16 @@ func fault(step string) error {
 	return rewriteFault(step)
 }
 
-// rewritePlan is what a rewrite does: the paths whose older versions leave git.
+// rewritePlan is what a rewrite does: the paths whose older versions leave git, and the
+// addresses whose commits lose their author (AnonymizeAuthors).
 type rewritePlan struct {
 	// after, if set, is main's commit before the change that calls for the rewrite: it is
 	// done once main has moved past it, so a change that never landed leaves the history
 	// as it was.
 	after string
 	paths []string
+	// authors are addresses, lower case, whose author and committer lines are replaced.
+	authors []string
 }
 
 const planHeader = "taskto-rewrite 1\n"
@@ -92,7 +95,15 @@ func (p rewritePlan) encode() []byte {
 	for _, name := range p.paths {
 		b.WriteString("path " + name + "\n")
 	}
+	for _, email := range p.authors {
+		b.WriteString("author " + email + "\n")
+	}
 	return []byte(b.String())
+}
+
+// planEmail reports whether value can be one of a journal's addresses: one line, no spaces.
+func planEmail(value string) bool {
+	return value != "" && len(value) <= 320 && !strings.ContainsAny(value, " \t\r\n\x00") && value == strings.ToLower(value)
 }
 
 func parsePlan(b []byte) (rewritePlan, error) {
@@ -109,6 +120,8 @@ func parsePlan(b []byte) (rewritePlan, error) {
 			p.after = value
 		case key == "path" && checkPath(value) == nil:
 			p.paths = append(p.paths, value)
+		case key == "author" && planEmail(value):
+			p.authors = append(p.authors, value)
 		default:
 			return rewritePlan{}, fmt.Errorf("knowledge: the history rewrite's journal has %q", line)
 		}
@@ -208,7 +221,7 @@ func (r *repo) resumeRewrite(sp access.Space) (_ plumbing.Hash, err error) {
 		return plumbing.ZeroHash, nil
 	}
 	start := time.Now()
-	stats, err := r.rewriteHistory(head, p.paths)
+	stats, err := r.rewriteHistory(head, p.paths, p.authors)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
@@ -236,7 +249,7 @@ type rewriteStats struct {
 // rewriteHistory rewrites every commit main reaches from head so that each blob at paths
 // is a pointer to its bytes, but for one that already is, and the blob each path has in
 // head (its current version stays as it is). It then moves main to the new head.
-func (r *repo) rewriteHistory(head *object.Commit, paths []string) (rewriteStats, error) {
+func (r *repo) rewriteHistory(head *object.Commit, paths, authors []string) (rewriteStats, error) {
 	rw := &rewriter{
 		r:        r,
 		keep:     map[string]plumbing.Hash{},
@@ -252,6 +265,12 @@ func (r *repo) rewriteHistory(head *object.Commit, paths []string) (rewriteStats
 		rw.keep[name] = h
 	}
 	rw.paths = paths
+	if len(authors) > 0 {
+		rw.authors = map[string]bool{}
+		for _, email := range authors {
+			rw.authors[email] = true
+		}
+	}
 	newHead, err := rw.commit(head.Hash)
 	if err != nil {
 		return rewriteStats{}, err
@@ -311,6 +330,8 @@ type treeKey struct {
 type rewriter struct {
 	r     *repo
 	paths []string
+	// authors are the addresses (lower case) whose signatures are replaced, if any.
+	authors map[string]bool
 	// keep is each path's blob in the head: its current version, which stays.
 	keep map[string]plumbing.Hash
 	// pointers, trees and commits map what was read to what replaces it.
@@ -373,13 +394,15 @@ func (rw *rewriter) rewriteCommit(c *object.Commit) (plumbing.Hash, error) {
 	for i, p := range c.ParentHashes {
 		parents[i] = rw.commits[p]
 	}
-	if tree == c.TreeHash && slices.Equal(parents, c.ParentHashes) {
+	author, committer := rw.signature(c.Author), rw.signature(c.Committer)
+	if tree == c.TreeHash && slices.Equal(parents, c.ParentHashes) && author == c.Author && committer == c.Committer {
 		return c.Hash, nil
 	}
-	// Everything but the tree and the parents is kept: authors, committers, their dates
-	// and time zones, the message. A signature would no longer match, so it goes.
+	// Everything but the tree, the parents and the signatures of the addresses named is kept:
+	// authors, committers, their dates and time zones, the message. A signature would no
+	// longer match, so it goes.
 	nc := &object.Commit{
-		Author: c.Author, Committer: c.Committer, MergeTag: c.MergeTag, Message: c.Message,
+		Author: author, Committer: committer, MergeTag: c.MergeTag, Message: c.Message,
 		TreeHash: tree, ParentHashes: parents, Encoding: c.Encoding, ExtraHeaders: c.ExtraHeaders,
 	}
 	obj := rw.r.st.NewEncodedObject()
@@ -387,6 +410,14 @@ func (rw *rewriter) rewriteCommit(c *object.Commit) (plumbing.Hash, error) {
 		return plumbing.ZeroHash, err
 	}
 	return rw.r.store(obj)
+}
+
+// signature is sig, or the placeholder for a deleted account if it names one of rw.authors.
+func (rw *rewriter) signature(sig object.Signature) object.Signature {
+	if rw.authors[strings.ToLower(sig.Email)] {
+		return object.Signature{Name: DeletedAuthorName, Email: DeletedAuthorEmail, When: sig.When}
+	}
+	return sig
 }
 
 // tree returns the tree h with the file at elems (the end of name) rewritten, storing it
@@ -835,4 +866,128 @@ func (r *repo) record(head *object.Commit, by Author, message string) (string, e
 		return "", err
 	}
 	return commit.String(), nil
+}
+
+// DeletedAuthorName and DeletedAuthorEmail are what a deleted account's name and address in a
+// space's history become (AnonymizeAuthors): the web app shows the address as "Deleted user",
+// translated.
+const (
+	DeletedAuthorName  = "Deleted user"
+	DeletedAuthorEmail = "deleted-user@deleted.invalid"
+)
+
+// AnonymizeAuthors replaces the name and address of the authors and committers of sp's history
+// whose address is one of emails with the placeholder of a deleted account, for the purge of an
+// account (internal/accountdeletion): what a person wrote in a shared space stays, and no longer
+// says who they were. It returns how many commits it rewrote (zero when none names them, which
+// leaves the history as it is). Every commit keeps its tree, dates and message, so documents'
+// versions (blob IDs) don't change, but commit IDs do from the first one rewritten on, as in any
+// history rewrite above, with the same crash safety: the journal names the addresses, the
+// rewrite is done again from the start by the next write or start, and what it leaves unreachable
+// (the old commits, which hold the address) is deleted before it ends. It is idempotent.
+func (s *Store) AnonymizeAuthors(ctx context.Context, sp access.Space, emails []string) (int, error) {
+	set := map[string]bool{}
+	var plan []string
+	for _, e := range emails {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if !planEmail(e) || set[e] {
+			continue
+		}
+		set[e] = true
+		plan = append(plan, e)
+	}
+	if len(plan) == 0 {
+		return 0, nil
+	}
+	slices.Sort(plan)
+	sp.Access = access.Write
+	// A look first, under the read lock and without telling the search index of a change: most
+	// spaces of a server have nothing of the person's.
+	var found bool
+	err := s.read(sp, func(r *repo) error {
+		head, err := r.head()
+		if err != nil || head == nil {
+			return err
+		}
+		n, err := r.countAuthored(ctx, head, set)
+		found = n > 0
+		return err
+	})
+	if errors.Is(err, errNoRepo) {
+		return 0, nil
+	}
+	if err != nil || !found {
+		return 0, err
+	}
+	var rewritten int
+	// It frees what it replaces: a full repository takes it too.
+	err = s.write(sp, -1, false, func(r *repo) error {
+		head, err := r.head()
+		if err != nil || head == nil {
+			return err
+		}
+		n, err := r.countAuthored(ctx, head, set)
+		if err != nil || n == 0 {
+			return err
+		}
+		rewritten = n
+		if err := r.planRewrite(rewritePlan{authors: plan}); err != nil {
+			return err
+		}
+		_, err = r.resumeRewrite(sp)
+		return err
+	})
+	if errors.Is(err, errNoRepo) {
+		return 0, nil
+	}
+	return rewritten, err
+}
+
+// countAuthored counts the commits main reaches from head whose author or committer has one of
+// the addresses in set (lower case).
+func (r *repo) countAuthored(ctx context.Context, head *object.Commit, set map[string]bool) (int, error) {
+	n := 0
+	seen := map[plumbing.Hash]bool{head.Hash: true}
+	stack := []*object.Commit{head}
+	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		c := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if set[strings.ToLower(c.Author.Email)] || set[strings.ToLower(c.Committer.Email)] {
+			n++
+		}
+		for _, p := range c.ParentHashes {
+			if seen[p] {
+				continue
+			}
+			seen[p] = true
+			pc, err := object.GetCommit(r.st, p)
+			if err != nil {
+				return 0, err
+			}
+			stack = append(stack, pc)
+		}
+	}
+	return n, nil
+}
+
+// RemoveSpace deletes everything sp keeps on disk: its git repository, its unversioned files
+// and the large files' bytes, and whatever the apps stored in its directory (photos), for a
+// private space whose owner's account is purged (internal/accountdeletion). It takes the space's
+// lock, so no write is half-way through, and forgets what the Store cached of it. The space's
+// rows are deleted by the caller, after: the directory goes first, so a purge that stops between
+// the two still finds the space to finish. Removing what is gone already succeeds.
+func (s *Store) RemoveSpace(sp access.Space) error {
+	st := s.state(sp.ID)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if err := os.RemoveAll(sp.Dir(s.dataDir)); err != nil {
+		return fmt.Errorf("knowledge: removing space %d: %w", sp.ID, err)
+	}
+	s.mu.Lock()
+	delete(s.spaces, sp.ID)
+	s.mu.Unlock()
+	return nil
 }

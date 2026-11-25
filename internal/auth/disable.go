@@ -57,6 +57,10 @@ func (s *Service) disableHandler(disable bool) http.Handler {
 		case errors.Is(err, errDisableOwn):
 			writeError(w, http.StatusBadRequest, apierr.CodeDisableOwn, err.Error())
 			return
+		case errors.Is(err, errDeletionPending):
+			// Its switch is the deletion's: an operator cancels that, which enables it again.
+			writeError(w, http.StatusConflict, apierr.CodeDeletionPending, err.Error())
+			return
 		case errors.Is(err, errDisableElsewhere):
 			writeError(w, http.StatusForbidden, apierr.CodeDisableElsewhere, err.Error())
 			return
@@ -127,6 +131,11 @@ func (s *Service) setDisabled(ctx context.Context, workspaceID, by, userID int64
 		}
 		if userID == by {
 			return errDisableOwn
+		}
+		if pending, err := isDeleting(ctx, tx, userID); err != nil {
+			return err
+		} else if pending {
+			return errDeletionPending
 		}
 		if all, err := administersAll(ctx, tx, by, userID); err != nil {
 			return err
