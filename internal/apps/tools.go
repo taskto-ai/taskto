@@ -410,6 +410,11 @@ func (s *Service) runAction(ctx context.Context, a Actor, spaceID, appID int64, 
 		return ActionResult{}, err
 	}
 	if err := s.spendTokenAction(a, sp.WorkspaceID); err != nil {
+		// A request that committed before is answered over the budget too, as a replay, for an
+		// agent that lost the answer; only a new operation is refused.
+		if IsRateLimited(err) && s.committed(ctx, sp.ID, a, appID, action) {
+			return ActionResult{Action: run.Action, Replayed: true}, nil
+		}
 		return ActionResult{}, err
 	}
 	done, err := s.runChange(ctx, sp, a, appID, action)

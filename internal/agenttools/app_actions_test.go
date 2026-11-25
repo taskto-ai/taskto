@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"taskto.ai/taskto/internal/apps"
 )
@@ -539,26 +541,76 @@ func TestRunAppActionRefusesAmbiguousArguments(t *testing.T) {
 	}
 }
 
+// freezeTokenBudget stops the clock the apps' token budget reads, so that no action is refilled
+// however slowly a test runs.
+func (tm *team) freezeTokenBudget() {
+	at := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	tm.apps.WithClock(func() time.Time { return at })
+}
+
 // An action over an access token's budget is refused with a 429 whose message says how long to
 // wait, as REST's Retry-After does, so an agent over MCP knows when to try again.
 func TestRunAppActionOverATokensBudgetSaysWhenToRetry(t *testing.T) {
 	tm := newTeam(t)
+	tm.freezeTokenBudget()
 	caller := Caller{Workspace: tm.one, User: tm.bob, Token: "laptop"}
 	raw, err := json.Marshal(tm.run(map[string]any{"action": "add_expense", "context": map[string]any{"description": "coffee", "amount": 1}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var refused *Refusal
-	for range apps.TokenActionBurst + 1 {
-		_, err = tm.tools.Call(context.Background(), caller, "run_app_action", raw)
-		if err != nil {
-			break
+	for i := range apps.TokenActionBurst {
+		if _, err := tm.tools.Call(context.Background(), caller, "run_app_action", raw); err != nil {
+			t.Fatalf("action %d of the burst: %v", i+1, err)
 		}
 	}
+	_, err = tm.tools.Call(context.Background(), caller, "run_app_action", raw)
+	var refused *Refusal
 	if !errors.As(err, &refused) || refused.Status != http.StatusTooManyRequests {
 		t.Fatalf("over the budget: %v", err)
 	}
 	if !regexp.MustCompile(`try again in \d+ seconds?`).MatchString(refused.Message) {
 		t.Errorf("the refusal %q doesn't say when to try again", refused.Message)
+	}
+}
+
+// A request that committed is answered as a replay even when the token's budget is spent, for an
+// agent that lost the answer; a new operation is refused.
+func TestRunAppActionReplaysACommittedOperationOverTheBudget(t *testing.T) {
+	tm := newTeam(t)
+	tm.freezeTokenBudget()
+	caller := Caller{Workspace: tm.one, User: tm.bob, Token: "laptop"}
+	call := func(operation string) (map[string]any, error) {
+		raw, err := json.Marshal(tm.run(map[string]any{"action": "add_expense", "operation": operation, "context": map[string]any{"description": "coffee", "amount": 1}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := tm.tools.Call(context.Background(), caller, "run_app_action", raw)
+		var res map[string]any
+		if err == nil {
+			if jerr := json.Unmarshal(out, &res); jerr != nil {
+				t.Fatal(jerr)
+			}
+		}
+		return res, err
+	}
+	if _, err := call("op-first-0001"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < apps.TokenActionBurst; i++ {
+		if _, err := call(fmt.Sprintf("op-fill-%04d", i)); err != nil {
+			t.Fatalf("action %d of the burst: %v", i+1, err)
+		}
+	}
+	var refused *Refusal
+	if _, err := call("op-new-0001"); !errors.As(err, &refused) || refused.Status != http.StatusTooManyRequests {
+		t.Fatalf("a new operation over the budget: %v", err)
+	}
+	res, err := call("op-first-0001")
+	if err != nil || res["replayed"] != true {
+		t.Fatalf("the committed operation over the budget = %v, %v; want a replay", res, err)
+	}
+	var rows int
+	if err := tm.db.QueryRow(`SELECT count(*) FROM app_rows WHERE app_id = ?`, tm.app).Scan(&rows); err != nil || rows != apps.TokenActionBurst {
+		t.Errorf("%d rows, %v; want one per operation that was allowed (%d)", rows, err, apps.TokenActionBurst)
 	}
 }

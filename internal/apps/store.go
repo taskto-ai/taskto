@@ -967,6 +967,12 @@ func (s *Service) surface(ctx context.Context, sp access.Space, actor Actor, app
 // release declares (shownBy): nothing the live app leaves unseen is returned.
 func (s *Service) act(ctx context.Context, sp access.Space, actor Actor, appID int64, action ClientAction) ([]Message, error) {
 	if err := s.spendTokenAction(actor, sp.WorkspaceID); err != nil {
+		// A request that committed before is answered with its receipt even over the budget: a
+		// client that lost the answer must be able to learn that it is in, and the receipt
+		// costs nothing but one lookup. Only a new operation is refused.
+		if IsRateLimited(err) && s.committed(ctx, sp.ID, actor, appID, action) {
+			return []Message{}, nil
+		}
 		return nil, err
 	}
 	msgs, err := s.actOnce(ctx, sp, actor, appID, action)

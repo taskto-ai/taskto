@@ -3133,8 +3133,9 @@ the record deleted: it can be restored.
 With an [access token](#access-tokens) the action runs as the token's user, the changes are marked
 with the token's name, and the user's tokens together (with `run_app_action` over MCP) have a
 **budget of 60 actions a minute** in a workspace, with a burst of 60: over it the answer is
-`429 app_token_rate_limited` with `Retry-After`, in seconds, and nothing is done. A session is never
-limited. A token's `operation` keys are in the same scope as the browser's: **the key belongs to the
+`429 app_token_rate_limited` with `Retry-After`, in seconds, and nothing is done, except that a
+request that already committed (the same `operation` and `release`) is answered with its receipt, for
+a client that lost the answer. A session is never limited. A token's `operation` keys are in the same scope as the browser's: **the key belongs to the
 user and the app, not to the credential**, so a token and a session (or two tokens) of one user who
 send the same key meet. A client should make a random key for each change (8 to 64 letters, digits,
 `-`, `_`) and never reuse one for another: the same key with the same request replays it, and the

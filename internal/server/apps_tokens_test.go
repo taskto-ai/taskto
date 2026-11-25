@@ -319,3 +319,39 @@ func TestAppsTokensKeepTheAppsRoles(t *testing.T) {
 		t.Errorf("a reader's token inserts = %d %s, want 403 app_forbidden", rec.Code, rec.Body)
 	}
 }
+
+// An action that committed is answered with its receipt over REST even when its token's budget is
+// spent, for a client that lost the answer; a new operation is still refused.
+func TestAppsTokensReplayACommittedActionOverTheBudget(t *testing.T) {
+	s := newStack(t)
+	appID := s.app(s.alice.cookie, s.alice.private, "coffee")
+	token, _ := s.newToken(s.alice.cookie, s.one, "laptop")
+	base := fmt.Sprintf("%s/%d", s.apps(s.one, s.alice.private), appID)
+	frozen := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	s.frozen = &frozen
+
+	release := s.toolOK(token, "list_app_actions", map[string]any{"space_id": s.alice.private, "app_id": appID})["release"]
+	withOperation := func(operation string) map[string]any {
+		body := addExpense(appID, operation)
+		body["operation"] = operation
+		body["release"] = release
+		return body
+	}
+	if rec := s.request(http.MethodPost, base+"/actions", withOperation("op-first-0001"), bearer(token)); rec.Code != http.StatusOK {
+		t.Fatalf("the first action = %d %s", rec.Code, rec.Body)
+	}
+	for i := 1; i < apps.TokenActionBurst; i++ {
+		if rec := s.request(http.MethodPost, base+"/actions", addExpense(appID, fmt.Sprintf("row %d", i)), bearer(token)); rec.Code != http.StatusOK {
+			t.Fatalf("action %d = %d %s", i+1, rec.Code, rec.Body)
+		}
+	}
+	if rec := s.request(http.MethodPost, base+"/actions", withOperation("op-new-0001"), bearer(token)); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("a new operation over the budget = %d %s, want 429", rec.Code, rec.Body)
+	}
+	if rec := s.request(http.MethodPost, base+"/actions", withOperation("op-first-0001"), bearer(token)); rec.Code != http.StatusOK {
+		t.Errorf("the committed operation over the budget = %d %s, want its receipt", rec.Code, rec.Body)
+	}
+	if n := s.scalar(`SELECT count(*) FROM app_rows WHERE app_id = ?`, appID); n != apps.TokenActionBurst+1 {
+		t.Errorf("%d rows, want the coffee and the %d the budget allowed", n, apps.TokenActionBurst)
+	}
+}

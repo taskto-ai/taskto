@@ -67,7 +67,8 @@ tools again after a crash (`replay: 'safe'`), and never a write. Change a tool i
 - **Actions run with a token are limited.** The actions a user's access tokens run in a workspace,
   over MCP (`run_app_action`) and over REST (`POST …/apps/{app}/actions`) together, are a budget of
   60 a minute (a token bucket, in memory, with a burst of 60: `apps.TokenActionsPerMinute`): over it
-  is `429 app_token_rate_limited` with `Retry-After`, a tool error for the model. A person's session
+  is `429 app_token_rate_limited` with `Retry-After`, a tool error for the model that says how many
+  seconds to wait (an operation that already committed is answered as a replay). A person's session
   and a conversation's own agent are not limited. Deleted records and their history are kept until a
   retention rule removes them, so the budget is what bounds how fast they grow.
 - **An app's action runs as the web app's does.** `run_app_action` calls the code behind
