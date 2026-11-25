@@ -1,10 +1,17 @@
-// The composer: the message (kept as a draft in this browser), dictation into it, send, and while
-// the agent works, steer, queue a follow-up or stop. The model picker goes below it.
+// The composer: one box holding the message (kept as a draft in this browser), the model picker,
+// dictation into the message, and send; while the agent works, steer, queue a follow-up or stop.
+// When nothing can be sent (the conversation is archived, or can't be read), the box is off and
+// the line above it says why.
 
-import { type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import { type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { api, errorText } from '../api'
 import { browserLocale, useT } from '../i18n'
-import { Icon } from '../shell/Icon'
+import { Button } from '../ui/Button'
+import { IconButton } from '../ui/IconButton'
+import { Notice } from '../ui/Notice'
+import { Textarea } from '../ui/Textarea'
+import { Tooltip } from '../ui/Tooltip'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { draftKey, readDraft, writeDraft } from '../uiState'
 import { useDictation } from './Dictation'
 
@@ -18,6 +25,7 @@ export function Composer({
   workspace,
   base,
   archived,
+  unreadable = false,
   running,
   onSent,
   children,
@@ -25,12 +33,17 @@ export function Composer({
   workspace: number
   base: string
   archived: boolean
+  // The conversation couldn't be read: nothing can be sent to it.
+  unreadable?: boolean
   running: boolean
   onSent: () => void
-  // Below the message: the model picker.
+  // In the box, under the message: the model picker.
   children?: ReactNode
 }) {
   const t = useT()
+  // Generated, as the view can be on a page twice (the builder).
+  const id = useId()
+  const off = archived || unreadable
   // An unsent message is kept in this browser, so leaving and coming back finds it where it was.
   // The key names the signed-in user, so no other account's tab reads or writes it.
   const messageKey = draftKey('message', base)
@@ -59,7 +72,7 @@ export function Composer({
     pendingId.current = null
     el?.focus()
   }
-  const dictation = useDictation({ workspace, disabled: archived, onText: insert })
+  const dictation = useDictation({ workspace, disabled: off, onText: insert })
 
   // While the agent works, a message steers it (joins the running work at its next step), or
   // waits for the work to end (follow_up). Otherwise it starts new work.
@@ -112,71 +125,76 @@ export function Composer({
     }
   }
   const empty = !text.trim()
+  // Why the box is off, or what a message does now.
+  const hint = unreadable
+    ? t('conversations.composer.unreadable')
+    : archived
+      ? t('conversations.composer.archived')
+      : running
+        ? t('conversations.composer.workingHint')
+        : null
+  const sendLabel = running ? t('conversations.composer.steer') : t('conversations.composer.send')
 
   return (
-    <form className="tt-composer" onSubmit={submit}>
-      {archived && <p className="tt-muted tt-small">{t('conversations.composer.archived')}</p>}
-      {running && !archived && <p className="tt-muted tt-small">{t('conversations.composer.workingHint')}</p>}
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
-      {dictation.message}
-      <div className="tt-composer-row">
-        <label className="tt-sr-only" htmlFor="tt-message">
-          {t('conversations.composer.message')}
-        </label>
-        <textarea
-          id="tt-message"
-          ref={box}
-          rows={2}
-          value={text}
-          placeholder={running ? t('conversations.composer.steerPlaceholder') : t('conversations.composer.placeholder')}
-          onChange={(e) => {
-            setText(e.target.value)
-            pendingId.current = null
-          }}
-          onKeyDown={keyDown}
-          disabled={archived}
-        />
-        {running && (
-          <>
-            {!archived && (
-              <button
-                type="button"
-                className="tt-button"
-                disabled={busy || empty}
-                onClick={() => send('follow_up')}
-                title={t('conversations.composer.queueTitle')}
-              >
-                {t('conversations.composer.queue')}
-              </button>
-            )}
-            <button
-              type="button"
-              className="tt-button"
-              onClick={stop}
-              disabled={stopping}
-              aria-label={t('conversations.composer.stop')}
-              title={t('conversations.composer.stopTitle')}
-            >
-              <Icon name="stop" />
-            </button>
-          </>
+    <form className="ui-chat-composer" onSubmit={submit}>
+      <div className="ui-chat-composer-column">
+        {hint && (
+          <p className="ui-chat-composer-hint" id={`${id}-hint`}>
+            {hint}
+          </p>
         )}
-        {dictation.controls}
-        <button
-          type="submit"
-          className="tt-button tt-primary"
-          disabled={archived || busy || empty}
-          aria-label={running ? t('conversations.composer.steer') : t('conversations.composer.send')}
-          title={running ? t('conversations.composer.steerTitle') : t('conversations.composer.send')}
-        >
-          <Icon name="send" />
-        </button>
+        {error && <Notice tone="danger">{error}</Notice>}
+        {dictation.message}
+        <div className="ui-chat-box" data-disabled={off || undefined}>
+          <VisuallyHidden>
+            <label htmlFor={id}>{t('conversations.composer.message')}</label>
+          </VisuallyHidden>
+          <Textarea
+            id={id}
+            ref={box}
+            rows={2}
+            className="ui-chat-input"
+            value={text}
+            placeholder={
+              running ? t('conversations.composer.steerPlaceholder') : t('conversations.composer.placeholder')
+            }
+            onChange={(e) => {
+              setText(e.target.value)
+              pendingId.current = null
+            }}
+            onKeyDown={keyDown}
+            disabled={off}
+            aria-describedby={hint ? `${id}-hint` : undefined}
+          />
+          <div className="ui-chat-box-row">
+            {children}
+            <span className="ui-chat-box-spacer" />
+            {running && (
+              <>
+                {!off && (
+                  <Tooltip content={t('conversations.composer.queueTitle')}>
+                    <Button size="sm" variant="ghost" disabled={busy || empty} onClick={() => send('follow_up')}>
+                      {t('conversations.composer.queue')}
+                    </Button>
+                  </Tooltip>
+                )}
+                <IconButton icon="stop" label={t('conversations.composer.stop')} onClick={stop} disabled={stopping} />
+              </>
+            )}
+            {dictation.controls}
+            <Tooltip content={running ? t('conversations.composer.steerTitle') : sendLabel} describes={running}>
+              <Button
+                type="submit"
+                variant="primary"
+                icon="send"
+                className="ui-chat-send"
+                disabled={off || busy || empty}
+                aria-label={sendLabel}
+              />
+            </Tooltip>
+          </div>
+        </div>
       </div>
-      {children}
     </form>
   )
 }

@@ -5,6 +5,10 @@ import { useEffect, useState } from 'react'
 import { api, CLI_PRODUCTS, type CliName, type CliQuestion, type Conversation, errorText } from '../api'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Notice } from '../ui/Notice'
+import { Switch } from '../ui/Switch'
 
 // The CLI's questions waiting for the owner's answer (docs/agent-safety.md): what it wants to
 // run, edit or fetch, as plain text, with Allow and Deny. The CLI waits meanwhile.
@@ -33,10 +37,11 @@ export function CliQuestions({
     const timer = window.setInterval(reload, QUESTIONS_POLL_MS)
     return () => window.clearInterval(timer)
   }, [running, reload])
-  const [busy, setBusy] = useState<string | null>(null)
+  // The answer on its way, so its own button shows it and both wait.
+  const [busy, setBusy] = useState<{ id: string; allow: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const answer = async (q: CliQuestion, allow: boolean) => {
-    setBusy(q.id)
+    setBusy({ id: q.id, allow })
     setError(null)
     try {
       await api(`${url}/cli-permissions/${encodeURIComponent(q.id)}`, { method: 'POST', body: { allow } })
@@ -51,38 +56,45 @@ export function CliQuestions({
   if (list.length === 0 && !error) return null
   return (
     <>
-      {error && (
-        <p role="alert" className="tt-error tt-cli-banner">
-          {error}
-        </p>
-      )}
+      {error && <Notice tone="danger">{error}</Notice>}
       {list.map((q) => (
         <section
           key={q.id}
-          className="tt-conflict tt-cli-banner"
+          className="ui-chat-question"
           aria-label={t('conversations.question.label', { cli: CLI_PRODUCTS[cli], tool: q.tool })}
         >
-          <p>
-            {t.rich('conversations.question.asks', {
+          <Notice
+            tone="warning"
+            title={t.rich('conversations.question.asks', {
               cli: CLI_PRODUCTS[cli],
-              tool: (text) => <strong>{text}</strong>,
+              tool: q.tool,
+              b: (text) => <strong key="tool">{text}</strong>,
             })}
-          </p>
-          {/* What the CLI wants to do, as plain text: never Markdown, never HTML. */}
-          {q.input && <pre className="tt-cli-output">{q.input}</pre>}
-          <div className="tt-actions">
-            <button
-              type="button"
-              className="tt-button tt-primary"
-              disabled={busy === q.id}
-              onClick={() => answer(q, true)}
-            >
-              {t('conversations.question.allow')}
-            </button>
-            <button type="button" className="tt-button" disabled={busy === q.id} onClick={() => answer(q, false)}>
-              {t('conversations.question.deny')}
-            </button>
-          </div>
+            action={
+              <span className="ui-chat-question-actions">
+                <Button
+                  size="sm"
+                  loading={busy?.id === q.id && busy.allow}
+                  disabled={busy?.id === q.id && !busy.allow}
+                  onClick={() => answer(q, true)}
+                >
+                  {t('conversations.question.allow')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={busy?.id === q.id && !busy.allow}
+                  disabled={busy?.id === q.id && busy.allow}
+                  onClick={() => answer(q, false)}
+                >
+                  {t('conversations.question.deny')}
+                </Button>
+              </span>
+            }
+          >
+            {/* What the CLI wants to do, as plain text: never Markdown, never HTML. */}
+            {q.input && <pre className="ui-chat-output">{q.input}</pre>}
+          </Notice>
         </section>
       ))}
     </>
@@ -105,9 +117,19 @@ export function CliPermissionsSwitch({
   const t = useT()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirmDialog, confirm] = useConfirm()
   const allowAll = conversation.cli_permissions === 'allow_all'
   const set = async (on: boolean) => {
-    if (on && !window.confirm(t('conversations.allowAll.confirm', { cli: CLI_PRODUCTS[cli] }))) {
+    // Turning the questions off says what it means first; turning them back on needs no question.
+    if (
+      on &&
+      !(await confirm({
+        title: t('conversations.allowAll.title', { cli: CLI_PRODUCTS[cli] }),
+        body: t('conversations.allowAll.confirm', { cli: CLI_PRODUCTS[cli] }),
+        confirmLabel: t('conversations.allowAll.confirmButton'),
+        tone: 'danger',
+      }))
+    ) {
       return
     }
     setBusy(true)
@@ -122,17 +144,16 @@ export function CliPermissionsSwitch({
     }
   }
   return (
-    <div className="tt-cli-banner tt-small">
-      <label>
-        <input type="checkbox" checked={allowAll} disabled={busy} onChange={(e) => set(e.target.checked)} />{' '}
-        {t('conversations.allowAll.label', { cli: CLI_PRODUCTS[cli] })}
-      </label>
-      {allowAll && <p>{t('conversations.allowAll.on')}</p>}
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
+    <div className="ui-chat-permissions">
+      <Switch
+        label={t('conversations.allowAll.label', { cli: CLI_PRODUCTS[cli] })}
+        checked={allowAll}
+        disabled={busy}
+        onChange={(e) => set(e.target.checked)}
+      />
+      {allowAll && <Notice tone="warning">{t('conversations.allowAll.on')}</Notice>}
+      {error && <Notice tone="danger">{error}</Notice>}
+      {confirmDialog}
     </div>
   )
 }
