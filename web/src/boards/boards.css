@@ -1,0 +1,228 @@
+/* Boards: the columns and their cards, a card open, its due date, labels, links, checks and
+   thread, and the filters.
+
+   Its rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
+   and their order with the other files is styles.css's (docs/design.md, "Where styles live").
+   Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
+
+.tt-columns {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(14rem, 1fr);
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.tt-column {
+  display: grid;
+  gap: 0.5rem;
+  align-content: start;
+  padding: 0.6rem;
+  background: var(--tt-hover);
+  border-radius: var(--tt-radius);
+}
+
+.tt-column h2 {
+  font-size: 0.9rem;
+}
+
+.tt-column ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-card {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.55rem 0.65rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  overflow-wrap: anywhere;
+}
+
+.tt-card[data-blocked] {
+  border-inline-start: 3px solid var(--tt-danger);
+}
+
+.tt-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.tt-board[data-open="card"] {
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 26rem);
+}
+
+button.tt-card {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+button.tt-card:hover {
+  background: var(--tt-hover);
+}
+
+button.tt-card[aria-current] {
+  border-color: var(--tt-focus);
+}
+
+.tt-add-card {
+  justify-content: flex-start;
+  border-style: dashed;
+  background: transparent;
+  color: var(--tt-muted);
+}
+
+.tt-blocked {
+  margin: 0;
+  color: var(--tt-danger);
+}
+
+/* A card's due date (late ones in the danger colour) and labels, on the board and in the card. */
+.tt-due {
+  margin: 0;
+  color: var(--tt-muted);
+}
+
+.tt-due[data-overdue],
+input[data-overdue] {
+  color: var(--tt-danger);
+  font-weight: 600;
+}
+
+.tt-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tt-label .tt-icon-button {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.tt-planning {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tt-board-filters {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.tt-card-view {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tt-column[data-drop] {
+  outline: 2px dashed var(--tt-focus);
+  outline-offset: -2px;
+}
+
+.tt-column li[draggable="true"] {
+  cursor: grab;
+}
+
+.tt-column li[data-dragged] {
+  opacity: 0.5;
+}
+
+.tt-link-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.tt-link-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+.tt-blocked-section,
+.tt-links,
+.tt-thread {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-comment {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--tt-line);
+}
+
+.tt-checks {
+  display: grid;
+  gap: 0.3rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+}
+
+.tt-checks label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 400;
+}
+
+.tt-checks input {
+  min-height: 0;
+}
+
+/* Phones: the sidebar is a drawer, and one pane at a time. */
+
+@media (max-width: 48rem) {
+  .tt-board[data-open="card"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tt-board[data-open="card"] > .tt-columns,
+  .tt-board[data-open="card"] > .tt-board-filters {
+    display: none;
+  }
+}

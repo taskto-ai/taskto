@@ -278,6 +278,15 @@ const OLD_VALUES: Record<string, [string, string]> = {
   'topbar-h': ['52px', '52px'],
   'sidebar-w': ['232px', '232px'],
   touch: ['44px', '44px'],
+  // The values base.css wrote as literals, which it takes from these aliases.
+  'text-body': ['15px', '15px'],
+  'text-h1': ['1.15rem', '1.15rem'],
+  'text-h2': ['1rem', '1rem'],
+  'text-h3': ['0.95rem', '0.95rem'],
+  'text-code': ['0.9em', '0.9em'],
+  'text-small': ['0.85rem', '0.85rem'],
+  'field-padding': ['0.45rem 0.6rem', '0.45rem 0.6rem'],
+  'error-margin': ['0.25rem 0', '0.25rem 0'],
   'clear-icon': Array(2).fill(
     `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.1 8 6.6l4.5-4.5 1.4 1.4L9.4 8l4.5 4.5-1.4 1.4L8 9.4l-4.5 4.5-1.4-1.4L6.6 8 2.1 3.5z'/%3E%3C/svg%3E")`,
   ) as [string, string],
@@ -313,10 +322,14 @@ describe('the old --tt-* names', () => {
     expect(OLD_NAMES.filter((name) => !pinned.includes(name))).toEqual([])
   })
 
-  test('every --tt-* name the stylesheet uses without a fallback is defined', () => {
+  test('every --tt-* name the stylesheets use without a fallback is defined', () => {
     // Set by script at run time (pwa/viewport.ts), not by a stylesheet.
     const runtime = new Set(['--tt-viewport-h', '--tt-viewport-top'])
-    const css = readFileSync(join(dir, '../styles.css'), 'utf8')
+    const src = join(dir, '..')
+    const sheets = readdirSync(src, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.css'))
+    // The screens' files, the base and the shared rules: not only the list that imports them.
+    expect(sheets).toEqual(expect.arrayContaining(['ui/base.css', 'legacy-shared.css', 'boards/boards.css']))
+    const css = sheets.map((f) => readFileSync(join(src, f), 'utf8')).join('\n')
     const missing = [...css.matchAll(/var\((--tt-[a-z0-9-]+)\s*\)/g)]
       .map((m) => m[1])
       .filter((n) => !runtime.has(n) && !props.has(n))
