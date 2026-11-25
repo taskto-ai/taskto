@@ -2567,7 +2567,8 @@
     "close": "Fechar",
     "moreActions": "Mais ações",
     "dismiss": "Dispensar",
-    "notifications": "Notificações"
+    "notifications": "Notificações",
+    "menuButtonName": "{label}:"
   },
   "gallery": {
     "title": "Sistema de design",
@@ -2664,6 +2665,17 @@
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
       "workspaceName": "Acme Studio"
+    },
+    "labels": {
+      "onboarding": "integração",
+      "writing": "redação",
+      "copy": "texto",
+      "blocked": "bloqueado",
+      "launch": "lançamento",
+      "design": "design",
+      "i18n": "i18n",
+      "bug": "bug",
+      "urgent": "urgente"
     },
     "layout": {
       "widths": "Larguras: leitura (760px), lista (1.040px), total",
@@ -2777,7 +2789,10 @@
       "filters": "Filtros",
       "labels": "Etiquetas",
       "assignedToMe": "Atribuídos a mim",
-      "addColumn": "Adicionar uma coluna"
+      "addColumn": "Adicionar uma coluna",
+      "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo",
+      "busyAsk": "Excluir e falhar…",
+      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo."
     }
   }
 }

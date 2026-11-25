@@ -41,11 +41,4 @@
       opacity: 0;
     }
   }
-
-  /* There is no hover on touch: the tooltip is never needed there. */
-  @media (hover: none) {
-    .ui-tooltip {
-      display: none;
-    }
-  }
 }

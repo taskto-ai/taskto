@@ -4,7 +4,7 @@
     justify-items: center;
     gap: var(--space-2);
     padding: var(--space-8) var(--space-5);
-    border: 1px dashed var(--color-border-strong);
+    border: var(--line-thin) dashed var(--color-border-strong);
     border-radius: var(--radius-lg);
     text-align: center;
     color: var(--color-text-muted);
@@ -17,12 +17,14 @@
   }
 
   .ui-empty-title {
+    text-wrap: balance;
     margin: 0;
     font: var(--type-ui-strong);
     color: var(--color-text);
   }
 
   .ui-empty-body {
+    text-wrap: pretty;
     max-inline-size: 48ch;
   }
 

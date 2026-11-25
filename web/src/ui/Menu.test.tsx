@@ -98,6 +98,64 @@ describe('Menu', () => {
     vi.restoreAllMocks()
   })
 
+  test('the same letter typed quickly again and again goes round the items that start with it', () => {
+    const { button } = setup()
+    fireEvent.click(button)
+    fireEvent.keyDown(list(), { key: 'r' })
+    fireEvent.keyDown(list(), { key: 'r' })
+    expect(focused()).toBe('Rebuild')
+    fireEvent.keyDown(list(), { key: 'r' })
+    expect(focused()).toBe('Rename')
+    // After a pause, letters that spell more look for an item that starts with them all.
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000)
+    fireEvent.keyDown(list(), { key: 'h' })
+    fireEvent.keyDown(list(), { key: 'i' })
+    expect(focused()).toBe('History')
+    vi.restoreAllMocks()
+  })
+
+  test('the outside-press listener is there only while it is open', () => {
+    const add = vi.spyOn(document, 'addEventListener')
+    const remove = vi.spyOn(document, 'removeEventListener')
+    const { button } = setup()
+    const presses = (spy: typeof add) => spy.mock.calls.filter((c) => c[0] === 'pointerdown').length
+    expect(presses(add)).toBe(0)
+    fireEvent.click(button)
+    expect(presses(add)).toBe(1)
+    fireEvent.keyDown(list(), { key: 'Escape' })
+    expect(presses(remove)).toBe(1)
+    vi.restoreAllMocks()
+  })
+
+  test('closes when its button scrolls out of sight, and follows it while it is in sight', async () => {
+    const { button } = setup()
+    fireEvent.click(button)
+    const rect = (top: number) => ({
+      top,
+      bottom: top + 32,
+      left: 100,
+      right: 132,
+      width: 32,
+      height: 32,
+      x: 100,
+      y: top,
+      toJSON() {},
+    })
+    const spy = vi.spyOn(button, 'getBoundingClientRect').mockReturnValue(rect(300) as DOMRect)
+    await act(async () => {
+      window.dispatchEvent(new Event('scroll'))
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    spy.mockReturnValue(rect(-100) as DOMRect)
+    await act(async () => {
+      window.dispatchEvent(new Event('scroll'))
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    expect(button.getAttribute('aria-expanded')).toBe('false')
+    vi.restoreAllMocks()
+  })
+
   test('choosing an item runs it, closes the menu and gives the focus back to the button', () => {
     const { button, rename } = setup()
     fireEvent.click(button)
@@ -161,7 +219,7 @@ describe('Menu', () => {
     expect(button.getAttribute('aria-expanded')).toBe('false')
   })
 
-  test('a menu button with text shows it, and its label names it', () => {
+  test('a menu button with text is named by what it chooses and by the words it shows', () => {
     render(
       <Menu align="start">
         <MenuButton label="Sort by">Newest</MenuButton>
@@ -170,8 +228,9 @@ describe('Menu', () => {
         </MenuList>
       </Menu>,
     )
-    const button = screen.getByRole('button', { name: 'Sort by' })
-    expect(button.textContent).toContain('Newest')
+    // The visible words are in the name (a voice command says them), after what they choose.
+    const button = screen.getByRole('button', { name: 'Sort by: Newest' })
+    expect(button.getAttribute('aria-label')).toBeNull()
     act(() => button.click())
     expect(focused()).toBe('Oldest')
   })

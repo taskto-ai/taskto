@@ -2545,7 +2545,8 @@
     "close": "Close",
     "moreActions": "More actions",
     "dismiss": "Dismiss",
-    "notifications": "Notifications"
+    "notifications": "Notifications",
+    "menuButtonName": "{label}:"
   },
   "gallery": {
     "title": "Design system",
@@ -2642,6 +2643,17 @@
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
       "workspaceName": "Acme Studio"
+    },
+    "labels": {
+      "onboarding": "onboarding",
+      "writing": "writing",
+      "copy": "copy",
+      "blocked": "blocked",
+      "launch": "launch",
+      "design": "design",
+      "i18n": "i18n",
+      "bug": "bug",
+      "urgent": "urgent"
     },
     "layout": {
       "widths": "Widths: reading (760px), list (1,040px), full",
@@ -2755,7 +2767,10 @@
       "filters": "Filters",
       "labels": "Labels",
       "assignedToMe": "Assigned to me",
-      "addColumn": "Add a column"
+      "addColumn": "Add a column",
+      "headings": "Sizes from the type roles: the display face from 20px up, Inter below",
+      "busyAsk": "Delete, then fail…",
+      "busyFailed": "The app could not be deleted. Nothing was changed; try again."
     }
   }
 }

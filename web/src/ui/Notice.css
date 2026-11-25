@@ -37,16 +37,17 @@
     flex: none;
     display: inline-flex;
     /* One line of text tall, so the icon sits on the first line. */
-    block-size: 18px;
+    block-size: 1lh;
     align-items: center;
     color: var(--ui-notice-mark);
   }
 
   .ui-notice-body {
+    text-wrap: pretty;
     flex: 1 1 16rem;
     min-inline-size: 0;
     display: grid;
-    gap: 2px;
+    gap: calc(var(--space-1) / 2);
   }
 
   .ui-notice-title {
