@@ -24,7 +24,7 @@ import {
   type SpaceMember,
   ws,
 } from '../api'
-import { conversationTitle } from '../conversations/ConversationView'
+import { conversationTitle } from '../conversations/title'
 import { type Key, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Markdown, type MentionNames } from '../markdown'

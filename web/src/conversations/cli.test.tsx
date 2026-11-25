@@ -6,8 +6,9 @@ import type { CliAccount, CliAccounts } from '../api'
 import { parseRoute, usePath } from '../router'
 import { LOGIN_POLL_MS } from '../settings/CliAccountsTab'
 import { type Call, fakeFetch, fakeStreams } from '../test/fakes'
+import { QUESTIONS_POLL_MS } from './CliPermissions'
 import { ConversationsPage } from './ConversationsPage'
-import { QUESTIONS_POLL_MS, reconnectAccount } from './ConversationView'
+import { reconnectAccount } from './ReconnectBanner'
 import { pendingHelp, transcript } from './transcript'
 
 const conversation = {
