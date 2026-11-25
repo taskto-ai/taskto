@@ -840,6 +840,7 @@
     "app_changed": "Someone changed this app meanwhile: reload and try again.",
     "app_name_length": "An app name needs 1 to {max} characters.",
     "too_many_apps": "A space can have at most {max} apps.",
+    "app_token_rate_limited": "Your access tokens ran {max} actions in a minute here, which is the most allowed. Try again in {seconds} seconds.",
     "app_full": "This app is full: it holds at most {max_rows} rows and {max_mib} MiB of data.",
     "app_preview_full": "The preview is full: it holds at most {max_rows} sample rows. Start it again.",
     "app_preview_too_large": "The preview’s sample data is too large (at most {max_mib} MiB). Start it again.",
@@ -906,6 +907,19 @@
     "provider_models_count": "List 1 to {max} models.",
     "provider_model_invalid": "Each model ID needs 1 to {max} printable characters.",
     "too_many_providers": "You can have at most {max} provider accounts here: remove one first.",
+    "integration_not_found": "Integration not found.",
+    "integration_name_invalid": "The name needs 1 to {max} characters: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit.",
+    "integration_name_taken": "An integration with this name already exists.",
+    "integration_display_name_invalid": "The display name can have up to {max} printable characters.",
+    "integration_provider_unknown": "This provider isn't supported.",
+    "integration_secret_required": "Enter the {secret}.",
+    "integration_secret_invalid": "The {secret} doesn't look like this provider's: check that you copied the right one.",
+    "integration_secret_unreadable": "The saved {secret} can't be read, because the server's key has changed. Enter it again.",
+    "integration_setting_invalid": "The setting {setting} is missing or not valid.",
+    "integration_limit_invalid": "The amount ceiling must be a whole number from 1 to {max}.",
+    "integration_currency_invalid": "Choose 1 to {max} currencies from the list.",
+    "too_many_integrations": "You can have at most {max} integrations in a workspace: remove one first.",
+    "integration_in_use": "An app still uses this integration: switch it off instead of removing it.",
     "base_url_invalid": "Enter an http or https URL of up to {max} characters, without a query or fragment.",
     "base_url_credentials": "The URL can't contain a user name or password: put the key in the API key field.",
     "base_url_insecure": "Use https: a key is only sent over plain http to this machine.",
@@ -1065,6 +1079,7 @@
       "audit": "Audit log",
       "storage": "Storage",
       "providers": "Model providers",
+      "integrations": "Integrations",
       "cliAccounts": "CLI accounts",
       "search": "Search",
       "dictation": "Dictation",
@@ -1518,6 +1533,69 @@
       "none": "No accounts yet.",
       "noneHelp": "Add one to use its models in conversations."
     },
+    "integrations": {
+      "title": "Integrations",
+      "intro": "Connect an account at a payment provider. The credentials are stored encrypted on the server and never shown again, and no app, agent or member can read them. You choose which spaces may use an account and the largest amount and the currencies one payment may have.",
+      "backupHint": "A backup holds the server's key next to the stored credentials, so it is as sensitive as they are. After restoring a backup on another machine, replace each credential at its provider and here.",
+      "webhooksUnavailable": "Webhooks unavailable: set the server's public URL (-public-url). Reconciling payments without webhooks isn't built yet.",
+      "add": "Connect an account",
+      "none": "No accounts connected yet.",
+      "newIntegration": "New integration",
+      "providerLabel": "Provider",
+      "provider": {
+        "stripe": "Stripe",
+        "square": "Square"
+      },
+      "kind": {
+        "payments": "Payments"
+      },
+      "mode": {
+        "test": "Test mode",
+        "live": "Live mode: real money"
+      },
+      "secret": {
+        "api_key": "Secret key",
+        "webhook_secret": "Webhook signing secret"
+      },
+      "setting": {
+        "environment": "Environment",
+        "location_id": "Location ID"
+      },
+      "settingOption": {
+        "sandbox": "Sandbox",
+        "production": "Production"
+      },
+      "secretSet": "{name} set",
+      "secretNotSet": "{name} not set",
+      "newSecret": "New {name}",
+      "keepSecret": "Leave empty to keep the stored one",
+      "secretHint": "Stored encrypted on the server and never shown again.",
+      "secretHintStored": "Stored encrypted on the server and never shown again: one is stored now.",
+      "ceiling": "Largest amount of one payment",
+      "ceilingHint": "In the smallest unit of the currency: cents for euros, whole yen for yen.",
+      "ceilingPreview": "That is {amounts}.",
+      "currencies": "Currencies a payment may ask for",
+      "limits": "Up to {amounts} per payment",
+      "allowedIn": "Allowed in: {spaces}",
+      "allowedNowhere": "Not allowed in any space yet, so no app can use it.",
+      "webhookAddress": "Register this address at the provider:",
+      "polling": "No public URL: webhooks are unavailable, and reconciling payments without them isn't built yet.",
+      "switchedOff": "switched off",
+      "switchOff": "Switch off",
+      "switchOn": "Switch on",
+      "switchOffNamed": "Switch off {name}",
+      "switchOnNamed": "Switch on {name}",
+      "checking": "Checking…",
+      "checkOk": "The stored credentials open and the settings are right. The provider wasn't called.",
+      "spaces": "Spaces",
+      "spacesNamed": "Spaces of {name}",
+      "spacesHint": "Apps in the spaces you choose may use this account, once you approve them. Another person's private space can't be chosen.",
+      "privateSpace": "{name} (private)",
+      "archivedSpace": "{name} (archived)",
+      "otherSpaces_one": "And {count} private space of another member, which you can't see.",
+      "otherSpaces_other": "And {count} private spaces of other members, which you can't see.",
+      "removeQuestion": "Remove {name}? Its credentials are deleted with it."
+    },
     "cliAccounts": {
       "title": "Your CLI accounts",
       "intro": "Conversations can run on Claude Code, Codex or Grok Build, signed in with your own subscription. Only you use these logins, in your own conversations, in any of your workspaces.",
@@ -1800,6 +1878,12 @@
         "search_embeddings_changed": "Search embeddings changed",
         "search_consent_changed": "Search consent changed",
         "dictation_settings_changed": "Dictation settings changed",
+        "integration_created": "Integration connected",
+        "integration_updated": "Integration changed",
+        "integration_removed": "Integration removed",
+        "integration_disabled": "Integration switched off",
+        "integration_enabled": "Integration switched on",
+        "integration_spaces_changed": "Integration's spaces changed",
         "data_export_started": "Data export started",
         "workspace_export_started": "Workspace export started",
         "server_update_requested": "Update requested",
@@ -1815,7 +1899,8 @@
         "space": "Shared space",
         "access_token": "Access token",
         "provider_account": "Model provider account",
-        "shared_cli_account": "Shared CLI account"
+        "shared_cli_account": "Shared CLI account",
+        "integration": "Integration"
       },
       "details": {
         "account": "Account",
@@ -1852,7 +1937,12 @@
         "scope": "Scope",
         "spaces": "Shared spaces",
         "to": "To",
-        "user_id": "Member number"
+        "user_id": "Member number",
+        "added": "Spaces added",
+        "removed": "Spaces removed",
+        "mode": "Mode",
+        "webhook_secret_set": "Webhook secret set",
+        "webhook_secret_changed": "Webhook secret changed"
       },
       "values": {
         "admin": "Admin",
@@ -1882,7 +1972,13 @@
         "compat": "Compatibility",
         "models": "Models",
         "label": "Label",
-        "model": "Model"
+        "model": "Model",
+        "settings": "Settings",
+        "max_amount": "Amount ceiling",
+        "currencies": "Currencies",
+        "webhook_secret": "Webhook secret",
+        "test": "Test",
+        "live": "Live"
       },
       "event": "Event",
       "when": "When"
