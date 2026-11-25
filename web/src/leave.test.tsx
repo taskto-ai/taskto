@@ -95,8 +95,10 @@ test('a page with nothing to lose lets Back through at once, with no undoing', a
 })
 
 test('an entry the app did not make (from before it started) goes on without the question', async () => {
-  window.history.pushState(null, '', '/w/1/elsewhere')
+  // The router is watching before the entry is made, so the entry stays unnumbered whatever ran
+  // before this test.
   render(<Page ask={null} />)
+  window.history.pushState(null, '', '/w/1/elsewhere')
   act(() => navigate('/w/1/boards'))
   cleanup()
   const ask = vi.fn()
@@ -115,4 +117,51 @@ test('a page that stops asking (it went, or its draft was saved) is asked no mor
   act(() => navigate('/w/1/knowledge'))
   expect(ask).not.toHaveBeenCalled()
   expect(window.location.pathname).toBe('/w/1/knowledge')
+})
+
+test('an answer to an older question pushes nothing once another move was asked about', () => {
+  const answers: (() => void)[] = []
+  const ask = vi.fn((go: () => void) => {
+    answers.push(go)
+  })
+  render(<Page ask={ask} />)
+  act(() => navigate('/w/1/boards'))
+  act(() => navigate('/w/1/apps'))
+  expect(ask).toHaveBeenCalledTimes(2)
+  // The first question's yes comes late: stale, nothing happens.
+  act(() => answers[0]())
+  expect(window.location.pathname).toBe('/w/1/home')
+  act(() => answers[1]())
+  expect(window.location.pathname).toBe('/w/1/apps')
+})
+
+test('Back pressed twice while the page asks ends where the app says it is, and a yes goes where it was asked', async () => {
+  render(<Page ask={null} />)
+  act(() => navigate('/w/1/a'))
+  act(() => navigate('/w/1/b'))
+  act(() => navigate('/w/1/c'))
+  cleanup()
+  const answers: (() => void)[] = []
+  const ask = vi.fn((go: () => void) => {
+    answers.push(go)
+  })
+  const { getByTestId } = render(<Page ask={ask} />)
+  await act(async () => {
+    window.history.back()
+    window.history.back()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  })
+  await settled()
+  // Undone: the address and the page agree, on the entry the person was on.
+  expect(window.location.pathname).toBe('/w/1/c')
+  expect(getByTestId('path').textContent).toBe('/w/1/c')
+  expect(ask).toHaveBeenCalled()
+  // The latest question's yes goes; any older one does nothing.
+  await act(async () => {
+    for (const go of answers.slice(0, -1)) go()
+    answers.at(-1)?.()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  })
+  expect(getByTestId('path').textContent).toBe(window.location.pathname)
+  expect(window.location.pathname).not.toBe('/w/1/c')
 })

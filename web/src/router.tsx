@@ -1,7 +1,7 @@
 // A small router on the History API: the server answers every path outside /api with the
 // app (internal/webui), so a URL can be bookmarked and reloaded.
 
-import { type AnchorHTMLAttributes, type MouseEvent, useEffect, useRef, useSyncExternalStore } from 'react'
+import { type AnchorHTMLAttributes, type MouseEvent, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 
 const listeners = new Set<() => void>()
 
@@ -37,17 +37,34 @@ export type BeforeLeave = (go: () => void) => void
 // The pages that ask, the latest last: it is the one asked.
 const askers: BeforeLeave[] = []
 const asker = (): BeforeLeave | undefined => askers.at(-1)
-// Where the app is in the history it numbered.
+// The entry the app is on: where it last went, or agreed to go.
 let index = 0
-// The popstate the app causes itself: the undoing of a move (`undo`), and the redoing of one the
-// page agreed to (`redo`).
-let undo = false
-let redo = false
+// One more for each question asked and each move made: an answer to an older question is stale,
+// and does nothing (the person is asked again by whatever they do next).
+let generation = 0
+// The one move through the history of the app's own that is on its way, and where to: back to
+// `index` (undoing the person's Back or Forward), or on to the entry the page agreed to. A popstate
+// that lands on it is that move; one that lands elsewhere is the person's, made meanwhile.
+let flight: number | null = null
+// An agreed Back or Forward that waits for the undoing on its way to land first.
+let after: number | null = null
 let watching = false
 
 function numbered(state: unknown): number | undefined {
   const idx = (state as { idx?: unknown } | null)?.idx
   return typeof idx === 'number' ? idx : undefined
+}
+
+// A move made: the pages hear of it, and every question before it is stale.
+function moved() {
+  generation += 1
+  notify()
+}
+
+// The app's own move to the entry `to`, from the one the address is at.
+function travel(from: number, to: number) {
+  flight = to
+  window.history.go(to - from)
 }
 
 function watchHistory() {
@@ -58,19 +75,40 @@ function watchHistory() {
   else index = here
   window.addEventListener('popstate', (e) => {
     const to = numbered(e.state)
-    if (undo) {
-      // Back where the person was: nothing changed for the page.
-      undo = false
+    if (to === undefined) {
+      // An entry from before the app numbered them: it can't be undone, so it goes on.
+      flight = null
+      moved()
       return
     }
+    if (flight !== null && to === flight) {
+      flight = null
+      if (to !== index) {
+        // The move the page agreed to.
+        index = to
+        moved()
+        return
+      }
+      // Back where the person was. An agreed move that waited for this goes now.
+      if (after !== null) {
+        const next = after
+        after = null
+        travel(index, next)
+      }
+      return
+    }
+    // The person's own move (one made while the app's was on its way included).
+    flight = null
+    after = null
+    if (to === index) return
     const ask = asker()
-    if (redo || !ask || to === undefined || to === index) {
-      redo = false
-      if (to !== undefined) index = to
-      notify()
+    if (!ask) {
+      index = to
+      moved()
       return
     }
-    const delta = to - index
+    generation += 1
+    const mine = generation
     let now = true
     let agreed = false
     ask(() => {
@@ -78,25 +116,28 @@ function watchHistory() {
         agreed = true
         return
       }
-      redo = true
-      window.history.go(delta)
+      if (mine !== generation) return
+      // The undoing may still be on its way: then this goes when it has landed.
+      if (flight === index) after = to
+      else travel(index, to)
     })
     now = false
     if (agreed) {
       index = to
-      notify()
+      moved()
       return
     }
-    undo = true
-    window.history.go(-delta)
+    travel(to, index)
   })
 }
 
 // While `ask` is given, moves to another page wait for it (see above). The latest page to ask is
-// the one asked.
+// the one asked; it is told what the page last committed, never a render React set aside.
 export function useBeforeLeave(ask: BeforeLeave | null) {
   const latest = useRef(ask)
-  latest.current = ask
+  useLayoutEffect(() => {
+    latest.current = ask
+  })
   const on = ask !== null
   useEffect(() => {
     if (!on) return
@@ -121,11 +162,16 @@ export function navigate(path: string, { replace = false } = {}) {
   const go = () => {
     index += 1
     window.history.pushState({ idx: index }, '', path)
-    notify()
+    moved()
   }
   const ask = asker()
-  if (ask) ask(go)
-  else go()
+  if (!ask) return go()
+  generation += 1
+  const mine = generation
+  // An answer after another question or move is stale, and pushes nothing.
+  ask(() => {
+    if (mine === generation) go()
+  })
 }
 
 export function usePath(): string {
