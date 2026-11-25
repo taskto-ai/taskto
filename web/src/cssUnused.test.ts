@@ -54,3 +54,23 @@ test('a class in a lookup table, a string or index.html keeps its rule; a ui- cl
   })
   expect(unusedClassErrors(root)).toEqual([])
 })
+
+test('a name in a declaration’s value, an attribute selector or a comment is not a rule for the class', () => {
+  const root = web({
+    'src/old.legacy.css':
+      '/* .tt-in-a-comment { margin: 0; } */\n.ui-x::before { content: ".tt-in-a-string"; }\n[data-kind="tt-in-an-attribute"] { margin: 0; }\n@media (width > 1px) {\n  .tt-nested { margin: 0; }\n}\n',
+  })
+  expect(unusedClassErrors(root)).toEqual([
+    'src/old.legacy.css:5: .tt-nested has a rule but nothing in the app uses the class: delete its rules',
+  ])
+})
+
+test('a class only in an HTML comment of index.html keeps no rule alive', () => {
+  const root = web({
+    'src/old.legacy.css': '.tt-commented { margin: 0; }\n.tt-real { margin: 0; }\n',
+    'index.html': '<!-- <div class="tt-commented"></div> -->\n<body class="tt-real"></body>\n',
+  })
+  expect(unusedClassErrors(root)).toEqual([
+    'src/old.legacy.css:1: .tt-commented has a rule but nothing in the app uses the class: delete its rules',
+  ])
+})

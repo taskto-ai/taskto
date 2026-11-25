@@ -345,14 +345,7 @@ a literal under `web/src/ui/` ([above](#where-styles-live)), and, the other way 
 names an old `tt-` class that no module mentions (a rule left behind when its screen moved: it goes;
 only the old classes, since a component's `ui-` class can be built from pieces the check can't see).
 A class that is deliberately an unstyled hook goes in the script's `UNSTYLED` list, with the
-reason.
-
-`web/scripts/controls-check.mjs`, run with it, fails on a `<button>`, `<select>`, `<input>` or
-`<textarea>` written outside `web/src/ui/`: a screen uses `Button`, `IconButton`, `Input`, `Select`,
-`Textarea`, `Checkbox` or `Switch`. Its `ALLOWED` list names the few files that may keep one, how
-many and why (a file picker, which only `<input type="file">` opens; a read-only checkbox in a
-rendered document; a board's card, whose whole surface is the button that opens it; and the screens
-outside the shell until they are rebuilt). It reads class selectors (not an attribute selector's
+reason. It reads class selectors (not an attribute selector's
 value), a component's `className`, and the strings of a lookup table in capitals
 (`const HEALTH_CLASS = { ok: 'tt-ok' }`); a class built from pieces is not seen, and the header of
 the script says what else it can't.
@@ -442,7 +435,7 @@ knowledge base, settings) is two panes, the detail a `Page` of its own.
 ## Adding a screen
 
 1. Build it from the components and the tokens only: no `<button>`, `<input>`, `<select>` or
-   `<textarea>` of its own (`controls-check`), no `tt-` class, no colour literal.
+   `<textarea>` of its own, no `tt-` class, no colour literal.
 2. Its own layout goes in a stylesheet beside its components (`<screen>/<Name>.css`), every rule in
    `@layer screens`, classes prefixed with the screen's name or `ui-`, values from the tokens, and
    logical properties (`margin-inline-start`), so right-to-left works. Its module imports it; it is

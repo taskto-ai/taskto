@@ -1095,22 +1095,24 @@ export function unusedClassErrors(web) {
   const code = components(src)
     .filter((f) => !/\.gallery\.tsx?$/.test(f))
     .map((f) => blankComments(readFileSync(f, 'utf8')))
+  // The page's own markup, its comments left out as a module's are.
   const html = join(web, 'index.html')
-  if (existsSync(html)) code.push(readFileSync(html, 'utf8'))
+  if (existsSync(html)) code.push(readFileSync(html, 'utf8').replace(/<!--[\s\S]*?-->/g, ''))
   const used = new Set(
     code.flatMap((c) => [...c.matchAll(/(?<![\w-])tt-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g)].map((m) => m[0])),
   )
   const errors = []
   for (const path of stylesheets(src)) {
     const file = relative(web, path).split('\\').join('/')
-    const css = blankCssComments(readFileSync(path, 'utf8'))
+    // The rules' selectors only: not a declaration's value (`content: ".tt-x"`), an attribute
+    // selector's value or a comment.
     const reported = new Set()
-    for (const m of css.matchAll(/\.(tt-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g)) {
-      const cls = m[1]
-      if (used.has(cls) || reported.has(cls)) continue
-      reported.add(cls)
-      const line = css.slice(0, m.index).split('\n').length
-      errors.push(`${file}:${line}: .${cls} has a rule but nothing in the app uses the class: delete its rules`)
+    for (const { selector, line } of allRules(readFileSync(path, 'utf8'))) {
+      for (const cls of classSelectors(selector)) {
+        if (!cls.startsWith('tt-') || used.has(cls) || reported.has(cls)) continue
+        reported.add(cls)
+        errors.push(`${file}:${line}: .${cls} has a rule but nothing in the app uses the class: delete its rules`)
+      }
     }
   }
   return errors
