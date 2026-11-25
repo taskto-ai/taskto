@@ -169,6 +169,36 @@ describe('Tooltip', () => {
     expect(isOpen()).toBe(true)
   })
 
+  test('placed again when its words change while it is open', () => {
+    const draw = (content: string) => (
+      <Tooltip content={content}>
+        <button type="button">Share</button>
+      </Tooltip>
+    )
+    const { rerender } = render(draw('Short'))
+    const b = screen.getByRole('button', { name: 'Share' })
+    // At the window's end (jsdom's window is 1024 wide).
+    b.getBoundingClientRect = () => ({
+      top: 200,
+      bottom: 236,
+      left: 960,
+      right: 1000,
+      width: 40,
+      height: 36,
+      x: 960,
+      y: 200,
+      toJSON: () => ({}),
+    })
+    let width = 40
+    Object.defineProperty(tip(), 'offsetWidth', { configurable: true, get: () => width })
+    act(() => b.focus())
+    const before = tip().style.left
+    width = 200
+    rerender(draw('A much longer line of words'))
+    expect(tip().style.left).not.toBe(before)
+    expect(Number.parseFloat(tip().style.left) + width).toBeLessThanOrEqual(1024)
+  })
+
   test('follows the control when the page scrolls', () => {
     const b = setup()
     let top = 200
@@ -190,6 +220,54 @@ describe('Tooltip', () => {
       window.dispatchEvent(new Event('scroll'))
     })
     expect(tip().style.top).not.toBe(before)
+  })
+
+  test('one that can be seen takes the Escape that closes it, so a drawer or a dialog under it stays', () => {
+    const b = setup()
+    act(() => b.focus())
+    const key = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    act(() => {
+      b.dispatchEvent(key)
+    })
+    expect(isOpen()).toBe(false)
+    expect(key.defaultPrevented).toBe(true)
+  })
+
+  test('one a stylesheet hides leaves the Escape to what is under it', () => {
+    const b = setup()
+    act(() => b.focus())
+    tip().style.display = 'none'
+    const key = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    act(() => {
+      b.dispatchEvent(key)
+    })
+    expect(isOpen()).toBe(false)
+    expect(key.defaultPrevented).toBe(false)
+  })
+
+  test('beside the control: after its end, or before its start right to left', () => {
+    const rect = { top: 100, bottom: 144, left: 8, right: 52, width: 44, height: 44, x: 8, y: 100, toJSON: () => ({}) }
+    const draw = (dir: 'ltr' | 'rtl') => {
+      render(
+        <div dir={dir}>
+          <Tooltip content="Boards" describes={false} side="inline-end">
+            <button type="button">B</button>
+          </Tooltip>
+        </div>,
+      )
+      const b = screen.getByRole('button', { name: 'B' })
+      b.getBoundingClientRect = () => ({ ...rect, left: dir === 'ltr' ? 8 : 960, right: dir === 'ltr' ? 52 : 1004 })
+      act(() => b.focus())
+      return tip()
+    }
+    const ltr = draw('ltr')
+    expect(ltr.dataset.side).toBe('inline-end')
+    // jsdom lays nothing out: the tooltip is 0 wide, so its start is the gap (--space-2, 8px) after
+    // the control's end, at 52px.
+    expect(ltr.style.left).toBe('60px')
+    cleanup()
+    const rtl = draw('rtl')
+    expect(Number.parseFloat(rtl.style.left)).toBeLessThan(960)
   })
 
   test('without describing, it is hidden from screen readers and adds no description', () => {
