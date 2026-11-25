@@ -394,6 +394,24 @@ func TestTurnRefusals(t *testing.T) {
 	if code, _, _ := e.post(conv, "/cli/turn", turnBody{Turn: "t", CLI: "claude", Model: "default", Prompt: "x"}); code != http.StatusForbidden {
 		t.Errorf("archived: %d", code)
 	}
+	if _, err := e.db.Exec(`UPDATE conversations SET archived_at = NULL WHERE id = ?`, conv); err != nil {
+		t.Fatal(err)
+	}
+	// A disabled owner's conversation can't start a turn either, and can once enabled.
+	if _, err := e.db.Exec(`UPDATE users SET disabled_at = '2026-01-02T03:04:05.000Z' WHERE id = ?`, e.owner.id); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/cli/turn", "/cli/stop", "/cli/wait"} {
+		if code, _, _ := e.post(conv, path, turnBody{Turn: "t", CLI: "claude", Model: "default", Prompt: "x"}); code != http.StatusForbidden {
+			t.Errorf("%s for a disabled owner: %d", path, code)
+		}
+	}
+	if _, err := e.db.Exec(`UPDATE users SET disabled_at = NULL WHERE id = ?`, e.owner.id); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := e.post(conv, "/cli/turn", turnBody{Turn: "t", CLI: "claude", Model: "default", Prompt: ""}); code != http.StatusBadRequest {
+		t.Errorf("an enabled owner reaches the request's own checks: %d", code)
+	}
 }
 
 // Local mode with a second user refuses the turn, as it refuses logins.

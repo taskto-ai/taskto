@@ -529,13 +529,15 @@ export type CardWithThread = Card & { comments: Comment[] }
 
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
 
-// two_factor is the admins' view only: whether the member has two-factor login on.
+// two_factor is the admins' view only: whether the member has two-factor login on. disabled is
+// an admin having switched the account off: signed out, refused at login, everything kept.
 export type Member = {
   id: number
   email: string
   name: string
   role: 'admin' | 'member'
   joined_at: string
+  disabled?: boolean
   two_factor?: boolean
 }
 // One event of a workspace's audit log, with the names read when the log was (docs/audit.md).

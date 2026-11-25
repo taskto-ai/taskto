@@ -3,6 +3,8 @@
 package cliaccounts
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/cliworker/clitest"
 )
@@ -450,5 +454,64 @@ func TestReplayRetiresTheEarlierToken(t *testing.T) {
 	e.svc.endTurn("c1-replayed")
 	if res := proxyCall(t, e, second, "/cli-proxy/v1/messages"); res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("after the turn ended: %d", res.StatusCode)
+	}
+}
+
+// An admin's request that passed the middleware before the admin was disabled reaches the handler
+// after: it changes nothing and is answered 403, in every write of the shared accounts.
+func TestDisabledAdminChangesNoSharedAccountSettings(t *testing.T) {
+	e := newEnv(t, LocalUnsafe, nil)
+	admin, ws := e.setup()
+	member := e.invite(admin, ws, "member@example.com")
+	p := newProvider(t)
+	existing := admin.addShared(ws, cliworker.Claude, p.URL)
+
+	a := auth.New(e.db, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
+	// The admin is disabled after RequireAdmin let the request through, before the handler runs.
+	race := func(h http.HandlerFunc) http.Handler {
+		return a.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, err := e.db.Exec(`UPDATE users SET disabled_at = '2030-01-01T00:00:00.000Z' WHERE id = ?`, admin.id); err != nil {
+				t.Error(err)
+			}
+			h(w, r)
+		}))
+	}
+	mux := http.NewServeMux()
+	const base = "/api/workspaces/{workspace}/cli-accounts"
+	mux.Handle("POST "+base, race(e.svc.handleSharedCreate))
+	mux.Handle("PATCH "+base+"/modes", race(e.svc.handleSetModes))
+	mux.Handle("PATCH "+base+"/{account}", race(e.svc.withShared(e.svc.handleSharedUpdate)))
+	mux.Handle("DELETE "+base+"/{account}", race(e.svc.withShared(e.svc.handleSharedDelete)))
+
+	call := func(method, path string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		if _, err := e.db.Exec(`UPDATE users SET disabled_at = NULL WHERE id = ?`, admin.id); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw))
+		r.Header.Set("Content-Type", "application/json")
+		r.AddCookie(admin.cookie)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		return rec
+	}
+	one := sharedPath(ws) + "/" + itoa(existing.ID)
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"create": call(http.MethodPost, sharedPath(ws), map[string]string{"cli": "claude", "label": "Another", "base_url": p.URL, "api_key": sharedKey}),
+		"modes":  call(http.MethodPatch, sharedPath(ws)+"/modes", map[string]any{"default_mode": "shared", "members": map[string]any{itoa(member.id): "shared"}}),
+		"update": call(http.MethodPatch, one, map[string]string{"label": "Renamed"}),
+		"delete": call(http.MethodDelete, one, nil),
+	} {
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), string(apierr.CodeAccountDisabled)) {
+			t.Errorf("%s by a disabled admin: %d %s, want 403 %s", name, rec.Code, rec.Body.String(), apierr.CodeAccountDisabled)
+		}
+	}
+	if _, err := e.db.Exec(`UPDATE users SET disabled_at = NULL WHERE id = ?`, admin.id); err != nil {
+		t.Fatal(err)
+	}
+	list := decode[sharedList](t, admin.do(http.MethodGet, sharedPath(ws), nil))
+	if len(list.Accounts) != 1 || list.Accounts[0].Label != existing.Label || list.DefaultMode != OwnElseShared {
+		t.Fatalf("a disabled admin changed something: %+v", list)
 	}
 }

@@ -43,6 +43,9 @@ type Member struct {
 	User
 	Role     Role   `json:"role"`
 	JoinedAt string `json:"joined_at"`
+	// Disabled says the account is switched off (disable.go): it keeps its membership and what it
+	// owns, and can't sign in or act until an admin enables it again.
+	Disabled bool `json:"disabled"`
 	// TwoFactor says whether they have two-factor login on. Only an admin's view of the
 	// list has it.
 	TwoFactor *bool `json:"two_factor,omitempty"`
@@ -68,6 +71,9 @@ var (
 	errAlreadyMember  = errors.New("already a member of this workspace")
 	errEmailTaken     = errors.New("an account with this email exists")
 	errInviteInvalid  = errors.New("the invite is unknown, used or expired")
+	// errAccountDisabled is the answer of every way of signing in, or of acting as an account, for
+	// a disabled one (disable.go).
+	errAccountDisabled = errors.New("this account is disabled: ask a workspace admin to enable it")
 )
 
 // The limits on one account's workspace creation, whatever -workspace-creation says: with
@@ -292,6 +298,14 @@ func (s *Service) insertSession(ctx context.Context, tx *sql.Tx, userID int64) (
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= ?`, stamp(now)); err != nil {
 		return "", err
 	}
+	// Every new session is made here, so a disabled account never gets one, whichever way it signed in.
+	var disabled bool
+	if err := tx.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM users WHERE id = ?`, userID).Scan(&disabled); err != nil {
+		return "", err
+	}
+	if disabled {
+		return "", errAccountDisabled
+	}
 	token, hash := newToken()
 	browser, os := deviceOf(ctx)
 	_, err := tx.ExecContext(ctx, `
@@ -313,7 +327,7 @@ func (s *Service) sessionUser(ctx context.Context, token string) (User, error) {
 	err := s.db.QueryRowContext(ctx, `
 		SELECT u.id, u.email, u.name, s.id, COALESCE(s.last_seen_at, s.created_at)
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > ?`, hashToken(token), stamp(now)).
+		WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled_at IS NULL`, hashToken(token), stamp(now)).
 		Scan(&u.ID, &u.Email, &u.Name, &id, &seen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, errNotFound
@@ -434,7 +448,7 @@ func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) 
 		order = "u.id"
 	}
 	query := `
-		SELECT u.id, u.email, u.name, m.role, m.created_at
+		SELECT u.id, u.email, u.name, m.role, m.created_at, u.disabled_at IS NOT NULL
 		FROM memberships m JOIN users u ON u.id = m.user_id
 		WHERE m.workspace_id = ? AND u.id > ?
 		ORDER BY ` + order
@@ -451,7 +465,7 @@ func Roster(ctx context.Context, q Queryer, workspaceID int64, page RosterPage) 
 	all := []Member{}
 	for rows.Next() {
 		var m Member
-		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.Role, &m.JoinedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.Role, &m.JoinedAt, &m.Disabled); err != nil {
 			return nil, err
 		}
 		all = append(all, m)
@@ -483,15 +497,18 @@ func roleIn(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) (Role, e
 	return role, err
 }
 
-// checkNotLastAdmin fails with errLastAdmin if the workspace has only one admin. Call it
-// before demoting or removing an admin.
-func checkNotLastAdmin(ctx context.Context, tx *sql.Tx, workspaceID int64) error {
-	var admins int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE workspace_id = ? AND role = ?`,
-		workspaceID, RoleAdmin).Scan(&admins); err != nil {
+// checkNotLastAdmin fails with errLastAdmin unless the workspace has an admin besides userID
+// whose account is in use: a disabled admin can't run the workspace, so they don't count. Call
+// it before demoting or removing an admin.
+func checkNotLastAdmin(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) error {
+	var others int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT count(*) FROM memberships m JOIN users u ON u.id = m.user_id
+		WHERE m.workspace_id = ? AND m.role = ? AND m.user_id <> ? AND u.disabled_at IS NULL`,
+		workspaceID, RoleAdmin, userID).Scan(&others); err != nil {
 		return err
 	}
-	if admins <= 1 {
+	if others == 0 {
 		return errLastAdmin
 	}
 	return nil
@@ -500,12 +517,15 @@ func checkNotLastAdmin(ctx context.Context, tx *sql.Tx, workspaceID int64) error
 // setRole changes a member's role. The last admin can't be demoted.
 func (s *Service) setRole(ctx context.Context, workspaceID, userID int64, role Role) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
+		if err := EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		current, err := roleIn(ctx, tx, workspaceID, userID)
 		if err != nil || current == role {
 			return err
 		}
 		if current == RoleAdmin {
-			if err := checkNotLastAdmin(ctx, tx, workspaceID); err != nil {
+			if err := checkNotLastAdmin(ctx, tx, workspaceID, userID); err != nil {
 				return err
 			}
 		}
@@ -521,12 +541,15 @@ func (s *Service) setRole(ctx context.Context, workspaceID, userID int64, role R
 // removeMember takes a user out of a workspace. The last admin can't be removed.
 func (s *Service) removeMember(ctx context.Context, workspaceID, userID int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
+		if err := EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		current, err := roleIn(ctx, tx, workspaceID, userID)
 		if err != nil {
 			return err
 		}
 		if current == RoleAdmin {
-			if err := checkNotLastAdmin(ctx, tx, workspaceID); err != nil {
+			if err := checkNotLastAdmin(ctx, tx, workspaceID, userID); err != nil {
 				return err
 			}
 		}
@@ -610,6 +633,9 @@ func (s *Service) createInvite(ctx context.Context, workspaceID, by int64, email
 	inv := Invite{Email: email, Role: role, CreatedAt: stamp(now), ExpiresAt: stamp(now.Add(s.opts.InviteTTL))}
 	token, hash := newToken()
 	err := s.write(ctx, func(tx *sql.Tx) error {
+		if err := EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		var member bool
 		if err := tx.QueryRowContext(ctx, `
 			SELECT EXISTS (SELECT 1 FROM memberships m JOIN users u ON u.id = m.user_id
@@ -662,6 +688,9 @@ func (s *Service) pendingInvites(ctx context.Context, workspaceID int64) ([]Invi
 // deleteInvite withdraws an invite of workspaceID, or fails with errNotFound.
 func (s *Service) deleteInvite(ctx context.Context, workspaceID, inviteID int64) error {
 	return s.write(ctx, func(tx *sql.Tx) error {
+		if err := EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		var email, created string
 		var role Role
 		err := tx.QueryRowContext(ctx, `DELETE FROM invites WHERE id = ? AND workspace_id = ? AND accepted_at IS NULL RETURNING email, role, created_at`,
