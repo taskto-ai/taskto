@@ -303,6 +303,11 @@ func (s *slowRelay) Send(ctx context.Context, m mail.Message) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	// Released and cancelled at once, the select may pick either: a send whose context was
+	// cancelled fails whichever it picked, so a test can't pass by luck.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return s.recorder.Send(ctx, m)
 }
 
