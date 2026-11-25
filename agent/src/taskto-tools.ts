@@ -121,6 +121,8 @@ export type ToolSpec = {
   read_only: boolean
   /** The conversation agent's alone, not listed over MCP: the agent browser's tools. */
   conversation_only?: boolean
+  /** Offered here, in conversations, but not at the access tokens' MCP endpoint (the server's alone). */
+  no_token?: boolean
   input_schema: Schema<object>
 }
 

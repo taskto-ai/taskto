@@ -113,6 +113,35 @@ describe('Rows', () => {
     expect(screen.getByText('Edited 2 hours ago')).toBeTruthy()
     expect(screen.getByText('Expenses').closest('li')?.dataset.current).toBe('true')
   })
+
+  test('a row that opens in place: its title is a button, called by a click or the keyboard', () => {
+    const open = vi.fn()
+    render(
+      <Rows label="Results">
+        <Row title="Launch plan" detail="launch/plan.md" onOpen={open} current />
+        <Row title="Ideas" />
+      </Rows>,
+    )
+    const title = screen.getByRole('button', { name: 'Launch plan' })
+    expect(title.getAttribute('aria-current')).toBe('true')
+    expect(title.closest('li')?.dataset.link).toBe('true')
+    fireEvent.click(title)
+    expect(open).toHaveBeenCalledOnce()
+    // A row with neither a link nor onOpen is text.
+    expect(screen.queryByRole('button', { name: 'Ideas' })).toBeNull()
+    expect(screen.getByText('Ideas').closest('li')?.dataset.link).toBeUndefined()
+  })
+
+  test("a link row's onOpen is called before the app follows it", () => {
+    const open = vi.fn()
+    render(
+      <Rows>
+        <Row title="Equipment" href="/w/1/apps/3" onOpen={open} />
+      </Rows>,
+    )
+    fireEvent.click(screen.getByRole('link', { name: 'Equipment' }))
+    expect(open).toHaveBeenCalledOnce()
+  })
 })
 
 describe('Table', () => {

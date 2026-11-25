@@ -200,10 +200,14 @@ const ICONS = { neutral: 'info', success: 'check', danger: 'alert' } as const
 
 function ToastView({ item }: { item: ToastItem }) {
   const t = useT()
-  const [held, setHeld] = useState(false)
+  // The pointer and the focus each hold it, apart: the focus on its action keeps it while the
+  // pointer wanders off, and the other way round.
+  const [pointer, setPointer] = useState(false)
+  const [focus, setFocus] = useState(false)
+  const held = pointer || focus
 
   // It leaves by itself, unless the pointer or the focus is on it: then the time starts again
-  // once they leave.
+  // once both have left.
   useEffect(() => {
     if (held) return
     const timer = setTimeout(() => dismissToast(item.id), item.duration)
@@ -215,11 +219,11 @@ function ToastView({ item }: { item: ToastItem }) {
     <div
       className="ui-toast"
       data-tone={item.tone}
-      onPointerEnter={() => setHeld(true)}
-      onPointerLeave={() => setHeld(false)}
-      onFocus={() => setHeld(true)}
+      onPointerEnter={() => setPointer(true)}
+      onPointerLeave={() => setPointer(false)}
+      onFocus={() => setFocus(true)}
       onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHeld(false)
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocus(false)
       }}
     >
       <span className="ui-toast-icon" aria-hidden="true">

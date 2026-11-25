@@ -62,13 +62,16 @@ export function place(
 // Whether an element is out of sight in a box that scrolls or clips it, or in the window.
 export function scrolledAway(el: Element): boolean {
   const r = el.getBoundingClientRect()
-  const outside = (b: { top: number; bottom: number; left: number; right: number }) =>
-    r.bottom <= b.top || r.top >= b.bottom || r.right <= b.left || r.left >= b.right
-  if (outside({ top: 0, left: 0, bottom: window.innerHeight, right: window.innerWidth })) return true
+  const outsideX = (b: { left: number; right: number }) => r.right <= b.left || r.left >= b.right
+  const outsideY = (b: { top: number; bottom: number }) => r.bottom <= b.top || r.top >= b.bottom
+  if (outsideX({ left: 0, right: window.innerWidth }) || outsideY({ top: 0, bottom: window.innerHeight })) return true
+  // A box clips on each axis on its own: `overflow-x: clip` with `overflow-y: visible` hides only
+  // what is beside it, not what is below it.
   for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
     const s = getComputedStyle(p)
-    if (s.overflowX === 'visible' && s.overflowY === 'visible') continue
-    if (outside(p.getBoundingClientRect())) return true
+    const b = p.getBoundingClientRect()
+    if (s.overflowX !== 'visible' && outsideX(b)) return true
+    if (s.overflowY !== 'visible' && outsideY(b)) return true
   }
   return false
 }

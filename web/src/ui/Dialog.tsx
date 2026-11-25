@@ -47,17 +47,23 @@ export function Dialog(props: DialogProps) {
 }
 
 // Where the focus goes when the dialog opens: not the close button, which comes first, but what
-// the dialog is for.
+// the dialog is for. Each candidate is tried in turn until one takes the focus (one can be hidden
+// or disabled); the dialog itself is the last.
 function focusFirst(dialog: HTMLDialogElement) {
-  const firstIn = (selector: string) => {
+  const within = (selector: string) => {
     const part = dialog.querySelector(selector)
-    return part ? focusables(part)[0] : undefined
+    return part ? focusables(part) : []
   }
-  const marked = [...dialog.querySelectorAll<HTMLElement>('[data-autofocus]')].find(
-    (el) => !(el as HTMLButtonElement).disabled,
-  )
-  const first = marked ?? firstIn('.ui-dialog-body') ?? firstIn('.ui-dialog-actions') ?? dialog
-  first.focus()
+  const candidates = [
+    ...[...dialog.querySelectorAll<HTMLElement>('[data-autofocus]')],
+    ...within('.ui-dialog-body'),
+    ...within('.ui-dialog-actions'),
+    dialog,
+  ]
+  for (const el of candidates) {
+    el.focus()
+    if (document.activeElement === el) return
+  }
 }
 
 function OpenDialog({
@@ -74,11 +80,14 @@ function OpenDialog({
   const t = useT()
   const ref = useRef<HTMLDialogElement>(null)
   const id = useId()
-  // The latest props, for the listeners set up once.
+  // The latest committed props, for the listeners set up once: written after each commit, so a
+  // render that never commits (a transition that suspends) can't change what Escape does.
   const close = useRef(onClose)
-  close.current = onClose
   const canClose = useRef(dismissible)
-  canClose.current = dismissible
+  useLayoutEffect(() => {
+    close.current = onClose
+    canClose.current = dismissible
+  })
 
   useLayoutEffect(() => {
     const dialog = ref.current
@@ -114,7 +123,7 @@ function OpenDialog({
       if (!mounted || dialog.open || !dialog.isConnected) return
       dialog.showModal()
       focusFirst(dialog)
-      modalReopened()
+      modalReopened(dialog)
     }
     const closed = () => {
       if (dialog.open) return
