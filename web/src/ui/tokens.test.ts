@@ -166,7 +166,8 @@ describe('the tokens', () => {
   test('the page declares the layers’ order before any stylesheet, as index.css does', () => {
     // A production build links the stylesheets of shared chunks (a component's `@layer components`)
     // before the entry's, so the order is fixed in the page itself, ahead of every <link> and <style>.
-    const html = readFileSync(join(dir, '../../index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '')
+    // The page as it is: its comments name no element, so they need no stripping.
+    const html = readFileSync(join(dir, '../../index.html'), 'utf8')
     const head = html.slice(0, html.indexOf('</head>'))
     const firstStyle = head.search(/<style\b|<link[^>]*rel="stylesheet"/)
     expect(firstStyle).toBeGreaterThan(-1)

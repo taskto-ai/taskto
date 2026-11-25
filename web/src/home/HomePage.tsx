@@ -43,7 +43,11 @@ export type Act = (item: HomeItem, name: string, focus?: string[]) => Promise<vo
 // The name a control carries so the keyboard can be put back on it after Home is shown again:
 // what it acts on (a widget, a pin, an offer) and which control it is.
 export const focusName = (scope: string, key: string, control: string) => `${scope}:${key}:${control}`
-const focusSelector = (name: string) => `[data-home-focus="${name.replace(/"/g, '\\"')}"]`
+// The control that carries a focus name, found by comparing the names, not by building a selector
+// from one (a name holds an item's key, which no selector should have to escape).
+function focusTarget(name: string): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>('[data-home-focus]')].find((el) => el.dataset.homeFocus === name)
+}
 
 // Where the keyboard goes when a placement is taken off: the same control of the next one, or the
 // one before, of the same list.
@@ -72,7 +76,7 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
     if (!names) return
     pendingFocus.current = null
     for (const name of names) {
-      const el = document.querySelector<HTMLElement>(focusSelector(name))
+      const el = focusTarget(name)
       if (el && !(el as HTMLButtonElement).disabled) {
         el.focus()
         return
