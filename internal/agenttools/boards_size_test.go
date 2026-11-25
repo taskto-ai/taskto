@@ -274,3 +274,93 @@ func TestShowCardFitsWithItsCutMark(t *testing.T) {
 		}
 	}
 }
+
+// A card whose docs alone are more than a result may be does not leave list_cards with an
+// empty page: it is shown with the last docs left out, marked, and next moves past it.
+func TestListCardsPageAlwaysHasACard(t *testing.T) {
+	w := newWorld(t)
+	space := map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal}
+	var docs []string
+	for i := range 50 {
+		docs = append(docs, fmt.Sprintf("%02d/%s.md", i, strings.Repeat("<", 240)))
+	}
+	// Two cards with 72 KiB of docs each (and a body list_cards cuts), around small ones.
+	var created []int64
+	for _, c := range []struct {
+		title string
+		docs  []string
+	}{{"Big one", docs}, {"Small", nil}, {"Big two", docs}, {"Last", nil}} {
+		args := map[string]any{"title": c.title, "body": strings.Repeat("<", 4<<10), "docs": c.docs}
+		for k, v := range space {
+			args[k] = v
+		}
+		created = append(created, id(w.ok(w.aliceConv, "create_card", args)["id"]))
+	}
+
+	var got []int64
+	args := map[string]any{}
+	for k, v := range space {
+		args[k] = v
+	}
+	for pages := 0; ; pages++ {
+		if pages > len(created) {
+			t.Fatal("no end to the pages")
+		}
+		out := w.ok(w.aliceConv, "list_cards", args)
+		checkFits(t, "list_cards", out)
+		cards := out["cards"].([]any)
+		if len(cards) == 0 {
+			t.Fatalf("page %d is empty, truncated = %v", pages, out["truncated"])
+		}
+		for _, v := range cards {
+			card := v.(map[string]any)
+			got = append(got, id(card["id"]))
+			if card["title"] == "Big one" || card["title"] == "Big two" {
+				if card["docs_truncated"] != true || len(card["docs"].([]any)) == 0 || len(card["docs"].([]any)) >= len(docs) {
+					t.Fatalf("%v: %d docs, docs_truncated = %v", card["title"], len(card["docs"].([]any)), card["docs_truncated"])
+				}
+			} else if _, marked := card["docs_truncated"]; marked {
+				t.Fatalf("%v is marked cut", card["title"])
+			}
+		}
+		next, more := out["next"]
+		if more != (out["truncated"] == true) {
+			t.Fatalf("truncated = %v, next = %v", out["truncated"], next)
+		}
+		if !more {
+			break
+		}
+		if next != float64(got[len(got)-1]) {
+			t.Fatalf("next = %v after card %d", next, got[len(got)-1])
+		}
+		args = map[string]any{"after": next}
+		for k, v := range space {
+			args[k] = v
+		}
+	}
+	if fmt.Sprint(got) != fmt.Sprint(created) {
+		t.Fatalf("pages gave cards %v, want %v", got, created)
+	}
+
+	// The stored card is untouched.
+	stored, err := w.tools.o.Boards.ShowCard(context.Background(), boards.Actor{UserID: w.alice}, w.alicePrivate, w.alicePersonal, created[0])
+	if err != nil || len(stored.Docs) != len(docs) {
+		t.Fatalf("stored docs = %d, %v", len(stored.Docs), err)
+	}
+
+	// A card that is the whole list and doesn't fit alone is shown cut, with nothing after it.
+	only := map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal, "text": "Big one"}
+	out := w.ok(w.aliceConv, "list_cards", only)
+	checkFits(t, "list_cards", out)
+	if cards := out["cards"].([]any); len(cards) != 1 || cards[0].(map[string]any)["docs_truncated"] != true {
+		t.Fatalf("cards = %v", out["cards"])
+	}
+	if _, more := out["next"]; more || out["truncated"] == true {
+		t.Fatalf("a last card is followed by next: %v", out["next"])
+	}
+
+	// after must be a card of the list, and the board must be the caller's to read.
+	w.status(400, w.aliceConv, "list_cards", map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal, "after": 999999})
+	w.status(400, w.aliceConv, "list_cards", map[string]any{"space_id": w.alicePrivate, "board_id": w.alicePersonal, "after": -1})
+	w.status(404, w.aliceConv, "list_cards", map[string]any{"space_id": w.bobPrivate, "board_id": w.bobPersonal, "after": created[0]})
+}

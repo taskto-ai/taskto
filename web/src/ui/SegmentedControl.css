@@ -56,10 +56,14 @@
     font-weight: 500;
   }
 
+  /* The chosen one is raised on the surface. Its outline is transparent here, and drawn in forced
+     colours, where the browser drops the shadow and the grounds and paints an outline in the
+     system's colour: the choice is still seen. */
   .ui-segment-input:checked + .ui-segment-face {
     background: var(--color-surface);
     color: var(--color-text);
     box-shadow: 0 0 0 var(--line-thin) var(--color-border);
+    outline: var(--line-strong) solid transparent;
   }
 
   .ui-segment-input:focus-visible {
