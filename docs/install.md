@@ -1150,6 +1150,32 @@ docker compose exec taskto taskto conversations -lost -orphans clean
 
 Outside Docker, add `-data-dir` (or `-config`) as for `taskto backup`.
 
+## Stopping the server
+
+On SIGTERM or SIGINT (what `docker compose stop`, `down` and a restart send) the server stops
+taking requests and shuts down in bounded steps, so that nothing writes the data directory
+after it lets go of it:
+
+| Step | At most |
+|---|---|
+| Requests finish on their own, then are ended | 10 s |
+| The handlers that ignored that are waited for | 5 s |
+| The emails the server accepted | 10 s |
+| The CLI workers' proxy | 10 s |
+| The scheduler's running jobs | 10 s |
+| The agent runtime: SIGTERM, then SIGKILL after 15 s, and its tools calls | 20 s |
+
+That is 65 s in the worst case, and a quiet server stops in well under a second. Docker kills a
+container that is still running when its stop grace period ends, and its default is 10 s, so
+`compose.yaml` sets `stop_grace_period: 90s` for the server. Keep it at least that long if you
+override it in `compose.override.yaml`; the update script takes the setting as it is.
+
+If something still runs when its time is up (a handler that doesn't stop), the server logs it,
+leaves the database open for it and exits with an error. The data directory's lock stays held
+until the process is gone, so a second server or `taskto restore` is refused until then.
+SQLite recovers its write-ahead log on the next start. The same shutdown follows when the
+listener fails: the server drains, then exits with the listener's error.
+
 ## Upgrade and rollback
 
 The database schema changes only through migrations, which the server applies when it

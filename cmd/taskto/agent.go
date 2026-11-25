@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"taskto.ai/taskto/internal/agentrt"
 	"taskto.ai/taskto/internal/config"
@@ -113,7 +112,7 @@ func startAgent(ctx context.Context, cfg config.Config, store *providers.Store, 
 		stopFeed()
 		<-feedDone
 		// The sidecar gets its StopTimeout (15 s) after SIGTERM; then it is killed.
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), sidecarStopWait)
 		defer cancel()
 		err := sup.Stop(ctx)
 		if err != nil {

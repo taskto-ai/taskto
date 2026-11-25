@@ -86,6 +86,8 @@ func main() {
 	if err := run(ctx, cfg, nil); err != nil {
 		stop()
 		slog.Error("taskto stopped", "err", err)
+		// Exits at once: a data directory lock that run kept for work still running goes with
+		// the process, and nothing else is waited for here.
 		os.Exit(1)
 	}
 }
@@ -170,7 +172,17 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer func() {
+		if stuck.busy {
+			// Work that uses the data directory is still running, and the database is left open for
+			// it: whoever takes the lock now (a second server, `taskto restore`) would write beside
+			// it. The lock goes with the process, which is exiting.
+			keepLock(lock)
+			slog.Error("shutdown: keeping the data directory's lock until the process exits")
+			return
+		}
+		_ = lock.Close()
+	}()
 	dbPath := filepath.Join(cfg.DataDir, db.FileName)
 	sqlDB, err := db.Open(ctx, dbPath)
 	if err != nil {
@@ -406,7 +418,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	}
 	// Event streams last until their client leaves: end them, so they don't hold up a shutdown.
 	srv.RegisterOnShutdown(convs.EndStreams)
-	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.Addr)
+	ln, err := listen(ctx, cfg.Addr)
 	if err != nil {
 		return err
 	}
@@ -421,36 +433,58 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		listening(ln.Addr())
 	}
 
+	// Whether a signal ends the server or its listener fails, the same shutdown follows: every
+	// handler is done, or given up on and reported, before the deferred stops run and the
+	// database closes. A request still running then would find it closed.
+	var listenErr error
 	select {
-	case err := <-errc:
-		return err
+	case listenErr = <-errc:
+		slog.Error("the listener failed; shutting down", "err", listenErr)
 	case <-ctx.Done():
-		// Every handler is done, or given up on and reported, before the deferred stops run and
-		// the database closes: a request still running then would find it closed.
-		err := inflight.Shutdown(srv, shutdownGrace, handlerWait)
-		if serveErr := <-errc; !errors.Is(serveErr, http.ErrServerClosed) {
-			err = errors.Join(err, serveErr)
-		}
-		stuck.note("the server's requests", err)
-		// The emails the server accepted are made after its answer: end their sends and wait for
-		// them, with a deadline of its own so a slow shutdown above doesn't leave none, and
-		// whether or not that went well. The database closes (the deferred Close) only after this,
-		// and not at all if they are still running, as with a request.
-		idleCtx, stopIdle := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stopIdle()
-		if err := accounts.Shutdown(idleCtx); err != nil {
-			slog.Warn("shutting down with emails still being made")
-			stuck.note("the emails being made", fmt.Errorf("%w: %w", drain.ErrBusy, err))
-		}
-		return nil
 	}
+	err = inflight.Shutdown(srv, shutdownGrace, handlerWait)
+	if listenErr == nil {
+		if serveErr := <-errc; !errors.Is(serveErr, http.ErrServerClosed) {
+			listenErr = serveErr
+		}
+	}
+	stuck.note("the server's requests", err)
+	// The emails the server accepted are made after its answer: end their sends and wait for
+	// them, with a deadline of its own so a slow shutdown above doesn't leave none, and
+	// whether or not that went well. The database closes (the deferred Close) only after this,
+	// and not at all if they are still running, as with a request.
+	idleCtx, stopIdle := context.WithTimeout(context.Background(), emailWait)
+	defer stopIdle()
+	if err := accounts.Shutdown(idleCtx); err != nil {
+		slog.Warn("shutting down with emails still being made")
+		stuck.note("the emails being made", fmt.Errorf("%w: %w", drain.ErrBusy, err))
+	}
+	// The listener's own error is the result, ahead of whatever the shutdown adds to it.
+	return listenErr
+}
+
+// heldLocks are the data-directory locks run kept open when it returned with work still running.
+// They are referenced from here so the garbage collector never closes one (an *os.File closes
+// itself when it is collected); the process's exit releases them.
+var (
+	heldLocksMu sync.Mutex
+	heldLocks   []*os.File
+)
+
+func keepLock(f *os.File) {
+	heldLocksMu.Lock()
+	defer heldLocksMu.Unlock()
+	heldLocks = append(heldLocks, f)
 }
 
 // shutdownGrace is how long a shutdown lets requests finish before it ends their contexts, and
 // wrapHandler lets a test put a handler of its own beside the server's. Both are for tests.
 var (
-	shutdownGrace = 10 * time.Second
+	shutdownGrace = defaultShutdownGrace
 	wrapHandler   = func(h http.Handler, _ *sql.DB) http.Handler { return h }
+	listen        = func(ctx context.Context, addr string) (net.Listener, error) {
+		return new(net.ListenConfig).Listen(ctx, "tcp", addr)
+	}
 )
 
 // egressOf is the provider accounts' egress policies of cfg.

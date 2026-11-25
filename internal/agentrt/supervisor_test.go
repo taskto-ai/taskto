@@ -654,6 +654,16 @@ func TestSupervisorStopKillsAStubbornSidecar(t *testing.T) {
 	if !processGone(pid) {
 		t.Fatal("the sidecar survived Stop")
 	}
+	// The supervisor reaped it and logged how it ended: by SIGKILL, not an exit of its own.
+	killed := ""
+	for _, line := range strings.Split(f.log.String(), "\n") {
+		if strings.Contains(line, `msg="agent sidecar killed"`) {
+			killed = line
+		}
+	}
+	if !strings.Contains(killed, fmt.Sprintf("pid=%d ", pid)) || !strings.Contains(killed, `exit="signal: killed"`) {
+		t.Fatalf("the reaped sidecar's exit status isn't SIGKILL; its log line: %q", killed)
+	}
 }
 
 func TestSupervisorStopRespectsContext(t *testing.T) {

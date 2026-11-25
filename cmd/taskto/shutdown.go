@@ -10,8 +10,23 @@ import (
 )
 
 // handlerWait is how long a shutdown waits for the handlers of a listener, after it has ended
-// their contexts and closed their connections.
-const handlerWait = 5 * time.Second
+// their contexts and closed their connections. A variable for tests.
+var handlerWait = defaultHandlerWait
+
+// The parts of a shutdown, each bounded. shutdownBudget is their sum: the time a stop takes at
+// the very most, which the container's stop_grace_period (compose.yaml) must cover, or Docker
+// kills the process before the drain has finished and the database is left to recover.
+const (
+	defaultShutdownGrace = 10 * time.Second // requests finish on their own, then are ended
+	defaultHandlerWait   = 5 * time.Second  // then waited for, after their connections are closed
+	emailWait            = 10 * time.Second // the emails the server accepted
+	proxyGrace           = 5 * time.Second  // the CLI workers' proxy, which then waits as above too
+	schedulerWait        = 10 * time.Second // a job's handler (schedule's default stop wait)
+	sidecarStopWait      = 20 * time.Second // the agent sidecar: SIGTERM, 15 s, SIGKILL, its tools socket
+
+	shutdownBudget = defaultShutdownGrace + defaultHandlerWait + emailWait +
+		proxyGrace + defaultHandlerWait + schedulerWait + sidecarStopWait
+)
 
 // shutdownReport collects what could not be stopped cleanly while run shuts down. Whatever it is
 // told was still running when it gave up (a handler that ignores its context) may use the

@@ -124,7 +124,7 @@ func startCLIProxy(ctx context.Context, cfg config.Config, svc *cliaccounts.Serv
 	// stopping it waits for them, and the caller closes the database only after that.
 	inflight := drain.New()
 	srv := &http.Server{Handler: inflight.Handler(svc.ProxyHandler()), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
-	stop := func() error { return inflight.Shutdown(srv, 5*time.Second, handlerWait) }
+	stop := func() error { return inflight.Shutdown(srv, proxyGrace, handlerWait) }
 	if path, ok := strings.CutPrefix(listen, "unix:"); ok {
 		// Config made sure of the URL: the worker's relay, as the CLIs reach it.
 		shared.ProxyURL = cfg.CLIProxyURL
