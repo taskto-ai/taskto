@@ -4,7 +4,7 @@
 // logins: the providers' terms forbid sharing one. Admins also set which accounts each member's
 // turns use here (their own, the workspace's, or their own if connected, else the workspace's).
 
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useId, useState } from 'react'
 import {
   api,
   CLI_PRODUCTS,
@@ -18,8 +18,20 @@ import {
 } from '../api'
 import { type Key, type Params, useT } from '../i18n'
 import { useLoad } from '../load'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { type ConfirmOptions, useConfirm } from '../ui/ConfirmDialog'
+import { Dialog } from '../ui/Dialog'
+import { EmptyState } from '../ui/EmptyState'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { MenuItem, MenuSeparator, MoreMenu } from '../ui/Menu'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { Select } from '../ui/Select'
 import { CliLimits } from './CliAccountsTab'
-import { Alert, ConfirmButton, useAction } from './parts'
+import { Alert, Loading, Section, useAction } from './parts'
 
 // The terms that govern an API key of each provider, linked next to the shared accounts.
 export const SHARED_TERMS: Record<CliName, { label: Key; href: string }[]> = {
@@ -59,23 +71,26 @@ export function SharedCliAccountsPanel({ workspace, admin }: { workspace: number
   const base = `${ws(workspace)}/cli-accounts`
   const list = useLoad(() => api<SharedCliAccounts>(base), [base])
   const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [confirmDialog, confirm] = useConfirm()
   const t = useT()
   const done = () => {
     setEditing(null)
     list.reload()
   }
+  const add = (
+    <Button icon="plus" onClick={() => setEditing('new')}>
+      {t('settings.sharedCli.add')}
+    </Button>
+  )
+  const empty = list.data?.accounts.length === 0
+  const account = typeof editing === 'number' ? list.data?.accounts.find((a) => a.id === editing) : undefined
   return (
-    <section className="tt-panel" aria-label={t('settings.sharedCli.title')}>
-      <div className="tt-pane-head">
-        <h2>{t('settings.sharedCli.title')}</h2>
-        {admin && editing !== 'new' && (
-          <button type="button" className="tt-button" onClick={() => setEditing('new')}>
-            {t('settings.sharedCli.add')}
-          </button>
-        )}
-      </div>
-      <p className="tt-muted tt-small">{t('settings.sharedCli.intro')}</p>
-      <ul className="tt-terms tt-small" aria-label={t('settings.sharedCli.termsLabel')}>
+    <Section
+      title={t('settings.sharedCli.title')}
+      help={t('settings.sharedCli.intro')}
+      actions={admin && !empty && add}
+    >
+      <ul className="settings-terms" aria-label={t('settings.sharedCli.termsLabel')}>
         {(Object.keys(SHARED_TERMS) as CliName[]).map((cli) => (
           <li key={cli}>
             {t('settings.sharedCli.termsOf', { name: CLI_PRODUCTS[cli] })}{' '}
@@ -92,22 +107,21 @@ export function SharedCliAccountsPanel({ workspace, admin }: { workspace: number
       </ul>
       <Alert error={list.error} />
       {list.data && !list.data.enabled && list.data.reason && (
-        <p className="tt-notice">{codeText(list.data.reason_code, undefined, list.data.reason)}</p>
+        <Notice tone="neutral">{codeText(list.data.reason_code, undefined, list.data.reason)}</Notice>
       )}
-      {list.data && <p className="tt-small">{t(YOURS[list.data.mode])}</p>}
-      {editing === 'new' && <SharedForm base={base} onDone={done} onCancel={() => setEditing(null)} />}
-      {!list.data && !list.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {list.data?.accounts.length === 0 && editing !== 'new' && (
-        <p className="tt-muted">{t('settings.actions.none')}</p>
+      {list.data && <Notice tone="info">{t(YOURS[list.data.mode])}</Notice>}
+      {!list.data && !list.error && <Loading lines={2} />}
+      {empty && (
+        <Panel>
+          <EmptyState title={t('settings.sharedCli.none')} actions={admin && add}>
+            {admin && t('settings.sharedCli.noneHelp')}
+          </EmptyState>
+        </Panel>
       )}
       {list.data && list.data.accounts.length > 0 && (
-        <ul className="tt-rows">
-          {list.data.accounts.map((a) =>
-            editing === a.id ? (
-              <li key={a.id} className="tt-row tt-row-open">
-                <SharedForm base={base} account={a} onDone={done} onCancel={() => setEditing(null)} />
-              </li>
-            ) : (
+        <Panel>
+          <Rows label={t('settings.sharedCli.title')}>
+            {list.data.accounts.map((a) => (
               <SharedRow
                 key={a.id}
                 base={base}
@@ -115,13 +129,24 @@ export function SharedCliAccountsPanel({ workspace, admin }: { workspace: number
                 admin={admin}
                 onEdit={() => setEditing(a.id)}
                 onRemoved={done}
+                confirm={confirm}
               />
-            ),
-          )}
-        </ul>
+            ))}
+          </Rows>
+        </Panel>
+      )}
+      {(editing === 'new' || account) && (
+        <SharedForm
+          key={account?.id ?? 'new'}
+          base={base}
+          account={account}
+          onDone={done}
+          onCancel={() => setEditing(null)}
+        />
       )}
       {admin && <Modes base={base} onChanged={list.reload} />}
-    </section>
+      {confirmDialog}
+    </Section>
   )
 }
 
@@ -131,12 +156,14 @@ function SharedRow({
   admin,
   onEdit,
   onRemoved,
+  confirm,
 }: {
   base: string
   account: SharedCliAccount
   admin: boolean
   onEdit: () => void
   onRemoved: () => void
+  confirm: (options: ConfirmOptions) => Promise<boolean>
 }) {
   const [test, setTest] = useState<Test | null>(null)
   const action = useAction()
@@ -146,74 +173,94 @@ function SharedRow({
     setTest(null)
     action.run(async () => setTest(await api<Test>(`${base}/${a.id}/test`, { method: 'POST', body: {} })))
   }
-  const remove = () => action.run(() => api(`${base}/${a.id}`, { method: 'DELETE' })).then((ok) => ok && onRemoved())
+  const remove = async () => {
+    const yes = await confirm({
+      title: t('settings.sharedCli.removeQuestion', { name: title }),
+      confirmLabel: t('settings.actions.removeConfirm'),
+      tone: 'danger',
+    })
+    if (yes) action.run(() => api(`${base}/${a.id}`, { method: 'DELETE' })).then((ok) => ok && onRemoved())
+  }
   return (
-    <li className="tt-row" aria-label={title}>
-      <div className="tt-row-main">
-        <strong>{title}</strong>
-        <span className="tt-muted tt-small">
-          <code>{a.base_url}</code>
-          {a.model && (
-            <>
-              {' · '}
-              {t.rich('settings.sharedCli.model', { model: <code>{a.model}</code> })}
-            </>
-          )}
-          {' · '}
-          {t('settings.sharedCli.keySet')}
-        </span>
-        {test && (
-          <span className={test.ok ? 'tt-ok tt-small' : 'tt-error tt-small'} role={test.ok ? 'status' : 'alert'}>
-            {test.ok ? t('settings.sharedCli.keyAccepted') : codeText(test.code, test.params, test.message)}
+    <Row
+      title={title}
+      status={
+        test &&
+        (test.ok ? (
+          <Badge tone="success" dot>
+            {t('settings.sharedCli.accepted')}
+          </Badge>
+        ) : (
+          <Badge tone="danger" dot>
+            {t('settings.sharedCli.refused')}
+          </Badge>
+        ))
+      }
+      detail={
+        <span className="settings-row-extra">
+          <span>
+            <code>{a.base_url}</code>
+            {a.model && (
+              <>
+                {' · '}
+                {t.rich('settings.sharedCli.model', { model: <code>{a.model}</code> })}
+              </>
+            )}
+            {' · '}
+            {t('settings.sharedCli.keySet')}
           </span>
-        )}
-        <Alert error={action.error} />
-        <CliLimits
-          account={{
-            id: String(a.id),
-            cli: a.cli,
-            slot: 0,
-            label: a.label,
-            name: a.name,
-            available: true,
-            state: 'connected',
-            auth_method: 'api_key',
-            limits: a.limits,
-            limits_at: a.limits_at,
-            login: null,
-          }}
-        />
-      </div>
-      {admin && (
-        <div className="tt-row-actions">
-          <button
-            type="button"
-            className="tt-button"
-            aria-label={t('settings.actions.testNamed', { name: title })}
-            disabled={action.busy}
-            onClick={run}
-          >
-            {t('settings.actions.test')}
-          </button>
-          <button
-            type="button"
-            className="tt-button"
-            aria-label={t('settings.actions.editNamed', { name: title })}
-            onClick={onEdit}
-          >
-            {t('settings.actions.edit')}
-          </button>
-          <ConfirmButton
-            label={t('settings.actions.remove')}
-            name={title}
-            question={t('settings.sharedCli.removeQuestion', { name: title })}
-            confirm={t('settings.actions.removeConfirm')}
-            disabled={action.busy}
-            onConfirm={remove}
+          {test && (
+            <span role={test.ok ? 'status' : 'alert'} className={test.ok ? undefined : 'settings-error-text'}>
+              {test.ok ? t('settings.sharedCli.keyAccepted') : codeText(test.code, test.params, test.message)}
+            </span>
+          )}
+          {action.error && (
+            <span role="alert" className="settings-error-text">
+              {action.error}
+            </span>
+          )}
+          <CliLimits
+            account={{
+              id: String(a.id),
+              cli: a.cli,
+              slot: 0,
+              label: a.label,
+              name: a.name,
+              available: true,
+              state: 'connected',
+              auth_method: 'api_key',
+              limits: a.limits,
+              limits_at: a.limits_at,
+              login: null,
+            }}
           />
-        </div>
-      )}
-    </li>
+        </span>
+      }
+      actions={
+        admin && (
+          <>
+            <Button
+              size="sm"
+              aria-label={t('settings.actions.testNamed', { name: title })}
+              loading={action.busy && !test}
+              disabled={action.busy}
+              onClick={run}
+            >
+              {t('settings.actions.test')}
+            </Button>
+            <MoreMenu label={t('settings.moreFor', { name: title })}>
+              <MenuItem icon="edit" onSelect={onEdit}>
+                {t('settings.actions.edit')}
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem tone="danger" onSelect={remove} disabled={action.busy}>
+                {t('settings.actions.remove')}
+              </MenuItem>
+            </MoreMenu>
+          </>
+        )
+      }
+    />
   )
 }
 
@@ -239,6 +286,7 @@ function SharedForm({
     setForm((f) => ({ ...f, [key]: e.target.value }))
   const action = useAction()
   const t = useT()
+  const formId = useId()
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     const body: Record<string, string> = { label: form.label.trim(), model: form.model.trim() }
@@ -251,83 +299,78 @@ function SharedForm({
     )
     if (ok) onDone()
   }
+  const label = account
+    ? t('settings.actions.editNamed', { name: `${account.name} · ${account.label}` })
+    : t('settings.sharedCli.newAccount')
   return (
-    <form
-      className="tt-form"
-      onSubmit={submit}
-      aria-label={
-        account
-          ? t('settings.actions.editNamed', { name: `${account.name} · ${account.label}` })
-          : t('settings.sharedCli.newAccount')
+    <Dialog
+      open
+      onClose={onCancel}
+      title={label}
+      actions={
+        <>
+          <Button onClick={onCancel}>{t('common.cancel')}</Button>
+          <Button type="submit" form={formId} variant="primary" loading={action.busy}>
+            {account ? t('settings.actions.save') : t('settings.actions.add')}
+          </Button>
+        </>
       }
     >
-      {!account && (
-        <label>
-          {t('settings.sharedCli.cli')}
-          <select value={form.cli} onChange={set('cli')}>
-            {(Object.keys(CLI_PRODUCTS) as CliName[]).map((cli) => (
-              <option key={cli} value={cli}>
-                {CLI_PRODUCTS[cli]}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <label>
-        {t('settings.actions.name')}
-        <input
-          value={form.label}
-          onChange={set('label')}
-          required
-          maxLength={60}
-          placeholder={t('settings.sharedCli.namePlaceholder')}
-        />
-      </label>
-      <label>
-        {t('settings.sharedCli.address')}
-        <input
-          type="url"
-          value={form.base_url}
-          onChange={set('base_url')}
-          placeholder={DEFAULT_URL[form.cli]}
-          spellCheck={false}
-        />
-      </label>
-      <span className="tt-hint">{t('settings.sharedCli.addressHint')}</span>
-      <label>
-        {t('settings.actions.model')}
-        <input
-          value={form.model}
-          onChange={set('model')}
-          maxLength={128}
-          spellCheck={false}
-          placeholder={t('settings.actions.optional')}
-        />
-      </label>
-      <span className="tt-hint">{t('settings.sharedCli.modelHint')}</span>
-      <label>
-        {account ? t('settings.actions.newApiKey') : t('settings.actions.apiKey')}
-        <input
-          type="password"
-          value={form.api_key}
-          onChange={set('api_key')}
+      <form id={formId} className="settings-form" onSubmit={submit} aria-label={label}>
+        {!account && (
+          <Field label={t('settings.sharedCli.cli')}>
+            <Select value={form.cli} onChange={set('cli')}>
+              {(Object.keys(CLI_PRODUCTS) as CliName[]).map((cli) => (
+                <option key={cli} value={cli}>
+                  {CLI_PRODUCTS[cli]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
+        <Field label={t('settings.actions.name')} required>
+          <Input
+            value={form.label}
+            onChange={set('label')}
+            maxLength={60}
+            placeholder={t('settings.sharedCli.namePlaceholder')}
+          />
+        </Field>
+        <Field label={t('settings.sharedCli.address')} hint={t('settings.sharedCli.addressHint')}>
+          <Input
+            type="url"
+            value={form.base_url}
+            onChange={set('base_url')}
+            placeholder={DEFAULT_URL[form.cli]}
+            spellCheck={false}
+          />
+        </Field>
+        <Field label={t('settings.actions.model')} hint={t('settings.sharedCli.modelHint')}>
+          <Input
+            value={form.model}
+            onChange={set('model')}
+            maxLength={128}
+            spellCheck={false}
+            placeholder={t('settings.actions.optional')}
+          />
+        </Field>
+        <Field
+          label={account ? t('settings.actions.newApiKey') : t('settings.actions.apiKey')}
+          hint={t('settings.sharedCli.keyHint')}
           required={!account}
-          autoComplete="new-password"
-          spellCheck={false}
-          placeholder={account ? t('settings.actions.keepKey') : ''}
-        />
-      </label>
-      <span className="tt-hint">{t('settings.sharedCli.keyHint')}</span>
-      <Alert error={action.error} />
-      <div className="tt-row-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={action.busy}>
-          {account ? t('settings.actions.save') : t('settings.actions.add')}
-        </button>
-        <button type="button" className="tt-button" onClick={onCancel}>
-          {t('common.cancel')}
-        </button>
-      </div>
-    </form>
+        >
+          <Input
+            type="password"
+            value={form.api_key}
+            onChange={set('api_key')}
+            autoComplete="new-password"
+            spellCheck={false}
+            placeholder={account ? t('settings.actions.keepKey') : ''}
+          />
+        </Field>
+        <Alert error={action.error} />
+      </form>
+    </Dialog>
   )
 }
 
@@ -346,11 +389,9 @@ function Modes({ base, onChanged }: { base: string; onChanged: () => void }) {
       })
   if (!modes.data) return <Alert error={modes.error} />
   return (
-    <div className="tt-cli-modes">
-      <h3>{t('settings.sharedCli.modesTitle')}</h3>
-      <label>
-        {t('settings.sharedCli.defaultMode')}
-        <select
+    <Section title={t('settings.sharedCli.modesTitle')} level={3}>
+      <Field label={t('settings.sharedCli.defaultMode')}>
+        <Select
           value={modes.data.default_mode}
           disabled={action.busy}
           onChange={(e) => save({ default_mode: e.target.value })}
@@ -360,32 +401,36 @@ function Modes({ base, onChanged }: { base: string; onChanged: () => void }) {
               {t(MODE_LABEL[m])}
             </option>
           ))}
-        </select>
-      </label>
-      <ul className="tt-rows">
-        {modes.data.members.map((m) => (
-          <li key={m.user_id} className="tt-row" aria-label={m.name}>
-            <div className="tt-row-main">
-              <strong>{m.name}</strong>
-              <span className="tt-muted tt-small">{m.email}</span>
-            </div>
-            <select
-              aria-label={t('settings.sharedCli.accountsFor', { name: m.name })}
-              value={m.mode ?? ''}
-              disabled={action.busy}
-              onChange={(e) => save({ members: { [m.user_id]: e.target.value || null } })}
-            >
-              <option value="">{t('settings.sharedCli.theDefault')}</option>
-              {(Object.keys(MODE_LABEL) as CliAccountMode[]).map((mode) => (
-                <option key={mode} value={mode}>
-                  {t(MODE_LABEL[mode])}
-                </option>
-              ))}
-            </select>
-          </li>
-        ))}
-      </ul>
+        </Select>
+      </Field>
+      <Panel>
+        <ul className="settings-modes">
+          {modes.data.members.map((m) => (
+            <li key={m.user_id} className="settings-mode">
+              <span className="settings-person-text">
+                <span className="settings-person-name">{m.name}</span>
+                <span className="settings-muted">{m.email}</span>
+              </span>
+              <Select
+                size="sm"
+                className="settings-mode-select"
+                aria-label={t('settings.sharedCli.accountsFor', { name: m.name })}
+                value={m.mode ?? ''}
+                disabled={action.busy}
+                onChange={(e) => save({ members: { [m.user_id]: e.target.value || null } })}
+              >
+                <option value="">{t('settings.sharedCli.theDefault')}</option>
+                {(Object.keys(MODE_LABEL) as CliAccountMode[]).map((mode) => (
+                  <option key={mode} value={mode}>
+                    {t(MODE_LABEL[mode])}
+                  </option>
+                ))}
+              </Select>
+            </li>
+          ))}
+        </ul>
+      </Panel>
       <Alert error={action.error} />
-    </div>
+    </Section>
   )
 }
