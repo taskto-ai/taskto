@@ -94,17 +94,17 @@ test("the app's own stylesheet and components pass", () => {
 })
 
 test('the search result snippet and the settings code sample have a class each', () => {
-  const search = readFileSync(join(web, 'src/search/search.css'), 'utf8')
+  const search = readFileSync(join(web, 'src/search/search.legacy.css'), 'utf8')
   const rules = [...search.matchAll(/(^|\n)\.tt-snippet \{([^}]*)\}/g)]
   // A search snippet is running text: a grid would make each highlighted word a row of its own.
   expect(rules).toHaveLength(1)
   expect(rules[0][2]).not.toMatch(/display:\s*grid/)
-  const settings = readFileSync(join(web, 'src/settings/settings.css'), 'utf8')
+  const settings = readFileSync(join(web, 'src/settings/settings.legacy.css'), 'utf8')
   expect(settings).toMatch(/\n\.tt-setup-snippet \{[^}]*display:\s*grid/)
 })
 
 test('the settings code sample keeps the colour and the wrapping the shared snippet class once gave it', () => {
-  const css = readFileSync(join(web, 'src/settings/settings.css'), 'utf8')
+  const css = readFileSync(join(web, 'src/settings/settings.legacy.css'), 'utf8')
   const rule = css.match(/(^|\n)\.tt-setup-snippet \{([^}]*)\}/)?.[2] ?? ''
   // The headings and commands there were muted and wrapped anywhere, before the class was renamed.
   expect(rule).toMatch(/color:\s*var\(--tt-muted\)/)
@@ -290,11 +290,11 @@ test('a system colour is a colour literal too, outside a theme', () => {
 
 test("a selector one screen declares, declared again in another screen's stylesheet, is declared twice", () => {
   const r = runFiles({
-    'boards/boards.css': '.tt-card { margin: 0; }\n',
-    'apps/apps.css': '\n\n.tt-card { padding: 0; }\n',
+    'boards/boards.legacy.css': '.tt-card { margin: 0; }\n',
+    'apps/apps.legacy.css': '\n\n.tt-card { padding: 0; }\n',
   })
   expect(r.code).toBe(1)
-  expect(r.err).toContain('src/boards/boards.css:1: .tt-card is declared again (first at src/apps/apps.css:3)')
+  expect(r.err).toContain('src/boards/boards.legacy.css:1: .tt-card is declared again (first at src/apps/apps.legacy.css:3)')
 })
 
 describe('in the design system, a size, a space, a radius, a shadow and a duration are tokens', () => {
@@ -345,7 +345,7 @@ describe('in the design system, a size, a space, a radius, a shadow and a durati
       'ui/tokens.css': '@layer tokens { :root { --space-1: 4px; --duration-fast: 120ms; } }\n',
       'ui/legacy.css': '@layer tokens { :root { --tt-radius: 8px; } }\n',
       'ui/themes/brand.css': '@layer themes { :root { --color-x: Canvas; } }\n',
-      'boards/boards.css': '.tt-card { padding: 0.6rem; border-radius: 8px; font-size: 0.85rem; }\n',
+      'boards/boards.legacy.css': '.tt-card { padding: 0.6rem; border-radius: 8px; font-size: 0.85rem; }\n',
     })
     expect(r.err).toBe('')
     expect(r.code).toBe(0)
@@ -436,27 +436,27 @@ describe('how the app loads its stylesheets', () => {
     expect(stray.err).toContain('src/search/extra.css: nothing loads it')
 
     const dropped = app({
-      'styles.css': OLD_STYLESHEETS.filter((f) => f !== 'search/search.css')
+      'styles.css': OLD_STYLESHEETS.filter((f) => f !== 'search/search.legacy.css')
         .map((f) => `@import "./${f}";`)
         .join('\n'),
     })
     expect(dropped.code).toBe(1)
-    expect(dropped.err).toContain('src/search/search.css: nothing loads it')
+    expect(dropped.err).toContain('src/search/search.legacy.css: nothing loads it')
     expect(dropped.err).toContain('src/styles.css: lists ')
 
-    const gone = app({ 'pwa/pwa.css': null })
+    const gone = app({ 'pwa/pwa.legacy.css': null })
     expect(gone.code).toBe(1)
-    expect(gone.err).toContain('src/styles.css: lists src/pwa/pwa.css, which is not there')
+    expect(gone.err).toContain('src/styles.css: lists src/pwa/pwa.legacy.css, which is not there')
   })
 
   test('a stylesheet both listed and imported by a module is loaded twice', () => {
-    const r = app({ 'boards/Board.tsx': "import './boards.css'\n" })
+    const r = app({ 'boards/Board.tsx': "import './boards.legacy.css'\n" })
     expect(r.code).toBe(1)
-    expect(r.err).toContain('src/boards/boards.css: loaded more than one way')
+    expect(r.err).toContain('src/boards/boards.legacy.css: loaded more than one way')
   })
 
   test('the list is in its order, plain, and nothing else', () => {
-    const moved = [...OLD_STYLESHEETS.filter((f) => f !== 'shell/shell.css'), 'shell/shell.css']
+    const moved = [...OLD_STYLESHEETS.filter((f) => f !== 'shell/shell.legacy.css'), 'shell/shell.legacy.css']
     const order = app({ 'styles.css': moved.map((f) => `@import "./${f}";`).join('\n') })
     expect(order.code).toBe(1)
     expect(order.err).toContain('the old stylesheets are, in this order')
@@ -477,9 +477,9 @@ describe('how the app loads its stylesheets', () => {
   })
 
   test("an old screen's file declares no layer", () => {
-    const r = app({ 'apps/apps.css': '@layer screens {\n  .tt-app { color: inherit; }\n}\n' })
+    const r = app({ 'apps/apps.legacy.css': '@layer screens {\n  .tt-app { color: inherit; }\n}\n' })
     expect(r.code).toBe(1)
-    expect(r.err).toContain('src/apps/apps.css:1: declares `@layer screens`')
+    expect(r.err).toContain('src/apps/apps.legacy.css:1: declares `@layer screens`')
   })
 
   test('ui/base.css is one @layer base block, then what reaches everything on purpose, then the touch block', () => {

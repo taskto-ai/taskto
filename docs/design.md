@@ -256,9 +256,9 @@ dark-mode badge ended up white on salmon.
 | `web/src/ui/<Name>.css` | `components` | a component's rules, beside `<Name>.tsx`, which imports it |
 | a new screen's own stylesheet | `screens` | beside the screen's components, imported by them |
 | `web/src/legacy-shared.css` | none | what several screens share from before the components: buttons, lists, panels and rows, notices, labels, the editor and the form pattern. Each is what a component replaces; nothing new goes in |
-| `web/src/<screen>/<screen>.css` | none | a screen's own rules, beside its components: `shell`, `auth`, `conversations`, `knowledge`, `boards`, `search`, `apps`, `settings`, `browser`, `pwa`, `home`, `offline`, `notifications` |
-| `web/src/markdown.css` | none | the Markdown renderer's, beside `markdown.tsx` |
-| `web/src/styles.css` | | the list of `@import`s of the old stylesheets (the rows from `base.css` to `markdown.css`), in the order of the cascade, and nothing else |
+| `web/src/<screen>/<screen>.legacy.css` | none | an old screen's own rules, beside its components (named so a rebuilt screen's `<Screen>.css` can sit beside it, also on a file system that ignores case): `shell`, `auth`, `conversations`, `knowledge`, `boards`, `search`, `apps`, `settings`, `browser`, `pwa`, `home`, `offline`, `notifications` |
+| `web/src/markdown.legacy.css` | none | the Markdown renderer's, beside `markdown.tsx` |
+| `web/src/styles.css` | | the list of `@import`s of the old stylesheets (the rows from `base.css` to `markdown.legacy.css`), in the order of the cascade, and nothing else |
 
 `web/src/main.tsx` imports `ui/index.css` first and `styles.css` after the fonts; components import
 their own stylesheets. Nothing outside `index.css` declares a layer's place: `index.css` sets the
@@ -304,7 +304,7 @@ never nest, or both set the same value).
   in no layer, they need the opt-out absolutely: without it, they made the design system's switch a
   20px square on a touch screen.
 - The screens' files and `legacy-shared.css` are in no layer, and a rule of theirs that can match
-  anywhere (`input[data-overdue]` in `boards/boards.css`) carries the opt-out for that reason. In no
+  anywhere (`input[data-overdue]` in `boards/boards.legacy.css`) carries the opt-out for that reason. In no
   layer, a screen's rule beats
   every component's rule whatever the specificity, so while a screen's old classes are on an element
   a component's class can't restyle it: a screen moves onto a component by taking the old class
@@ -315,7 +315,7 @@ never nest, or both set the same value).
   over a later one, and a layered one over one in no layer), which is one more reason the app
   writes none.
 - The apps renderer's styles are in no layer, so the rules that override them (`.tt-app .a2ui-…`,
-  in `apps/apps.css`) stay in no layer, even when the rest of that file moves into `screens`.
+  in `apps/apps.legacy.css`) stay in no layer, even when the rest of that file moves into `screens`.
 
 **Changing the order.** Moving a rule to another file, or into a layer, can change which rule wins
 on an element. Before such a change, list the pairs of rules that could meet on one element with a
@@ -475,14 +475,14 @@ The A2UI renderer styles itself from `--a2ui-*` custom properties with defaults 
 primary button, grey borders). `:root` sets them from the tokens above, so an app's buttons, fields,
 choices and captions follow the theme without any change to the renderer or to what an app can say:
 pill buttons and choices, a mint primary button outlined in ink (the renderer draws it with no
-border, so `apps/apps.css` adds one), the display face for titles, and the deep green for a borderless
+border, so `apps/apps.legacy.css` adds one), the display face for titles, and the deep green for a borderless
 button's text. The renderer colours several things with its primary, which is the mint: a borderless
 button's text, a focused field's border, the picked tab and a slider's thumb. Each is pointed at a
 token that can be seen on the page instead (the deep green, or the focus colour), because mint there
 would be 1.4:1 on cream. When the renderer gains another use of its primary, check it the same way.
 
 A button's label is a Text component, and the renderer colours Text from `--_a2ui-text-color` (a
-caption, from its own muted colour, over that). So `apps/apps.css` points the label at the button's
+caption, from its own muted colour, over that). So `apps/apps.legacy.css` points the label at the button's
 ink: the borderless button sets that variable to the deep green as well as its own `color`, and a
 label in a button inherits it in every variant, so a caption on a mint button is ink on mint
 (12.8:1) and not muted grey (1.6:1).

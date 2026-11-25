@@ -173,7 +173,7 @@ describe('the tokens', () => {
       levels.join(' < '),
     ).toBe(true)
     const found = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*(\d+)/g)].map((m) => Number(m[1])))
-    // The scan reads the stylesheets that declare them (the skip link's is in shell/shell.css).
+    // The scan reads the stylesheets that declare them (the skip link's is in shell/shell.legacy.css).
     expect(found.length).toBeGreaterThan(0)
     expect(levels.at(-1)).toBeGreaterThanOrEqual(Math.max(...found))
   })
@@ -332,7 +332,7 @@ describe('the old --tt-* names', () => {
     // Set by script at run time (pwa/viewport.ts), not by a stylesheet.
     const runtime = new Set(['--tt-viewport-h', '--tt-viewport-top'])
     // The screens' files, the base and the shared rules: not only the list that imports them.
-    expect(sheetPaths()).toEqual(expect.arrayContaining(['ui/base.css', 'legacy-shared.css', 'boards/boards.css']))
+    expect(sheetPaths()).toEqual(expect.arrayContaining(['ui/base.css', 'legacy-shared.css', 'boards/boards.legacy.css']))
     const css = allSheets().join('\n')
     const missing = [...css.matchAll(/var\((--tt-[a-z0-9-]+)\s*\)/g)]
       .map((m) => m[1])

@@ -172,7 +172,7 @@ function drawEverything() {
 
 test("it reads the old stylesheets themselves: the base and every screen's file", () => {
   expect(sheets.map((s) => s.file)).toEqual(
-    expect.arrayContaining(['src/ui/base.css', 'src/legacy-shared.css', 'src/boards/boards.css']),
+    expect.arrayContaining(['src/ui/base.css', 'src/legacy-shared.css', 'src/boards/boards.legacy.css']),
   )
   expect(sheets.length).toBeGreaterThan(10)
 })
