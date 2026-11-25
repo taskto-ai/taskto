@@ -351,6 +351,12 @@
       "deleteConfirm": "Sim, excluir este registro",
       "deleteQuestion": "Excluir o registro {id}?",
       "deleteBody": "Ele vai para Excluídos com o seu histórico, onde pode ser restaurado.",
+      "leave": {
+        "title": "Descartar suas alterações neste registro?",
+        "body": "O que você alterou aqui não foi salvo. Continue editando para voltar a ele, ou descarte.",
+        "discard": "Descartar minhas alterações",
+        "keep": "Continuar editando"
+      },
       "cancel": "Cancelar",
       "empty": "—",
       "unset": "Sem valor",

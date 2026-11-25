@@ -5,7 +5,7 @@
 // server's current values are shown beside it, and they choose to save theirs over them or to drop
 // theirs. What the server decides is never second-guessed here.
 
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ApiError, type AppField, type AppRecord, api, errorText, type RecordVersion } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -46,6 +46,7 @@ export function RecordDetail({
   canRestore,
   onClose,
   onChanged,
+  onUnsaved,
 }: {
   // …/spaces/{space}/apps/{app}
   base: string
@@ -60,7 +61,12 @@ export function RecordDetail({
   deleted: boolean
   canChange: boolean
   canRestore: boolean
-  onClose: () => void
+  // Asked to close (its close button, Escape); or, with 'gone', closed because the record left the
+  // list (deleted, restored), which nothing is lost by.
+  onClose: (how?: 'gone') => void
+  // Whether the drawer holds what isn't saved: a field the person changed, or a conflict on screen
+  // (their version and the server's). The explorer asks before anything closes it then.
+  onUnsaved?: (unsaved: boolean) => void
   // Something changed (an edit, a delete, a restore): the list and the app's screen are loaded again.
   onChanged: () => void
 }) {
@@ -80,9 +86,16 @@ export function RecordDetail({
   const editable = canChange && !deleted && !!updateAction && !record?.deleted_at
   const title = t('apps.records.record', { id: String(id) })
 
+  // What isn't saved: a changed field, or a conflict on screen (both versions are the person's to
+  // choose from). Said to the explorer, which asks before anything closes the drawer then.
+  const unsaved = Object.keys(edits).length > 0 || conflict !== null
+  const tell = useRef(onUnsaved)
+  tell.current = onUnsaved
+  useEffect(() => tell.current?.(unsaved), [unsaved])
+
   if (!record) {
     return (
-      <Drawer open title={title} onClose={onClose}>
+      <Drawer open title={title} onClose={() => onClose()}>
         {loaded.error ? (
           <Notice tone="danger">{loaded.error}</Notice>
         ) : (
@@ -161,7 +174,7 @@ export function RecordDetail({
     try {
       await send(deleteAction, { id })
       onChanged()
-      onClose()
+      onClose('gone')
       return
     } catch (e) {
       setError(errorText(e))
@@ -186,7 +199,7 @@ export function RecordDetail({
     try {
       await api(`${base}/records/${id}/restore`, { method: 'POST', body: { expected_revision: record.revision } })
       onChanged()
-      onClose()
+      onClose('gone')
       return
     } catch (e) {
       setError(errorText(e))
@@ -238,8 +251,9 @@ export function RecordDetail({
     ) : undefined
 
   return (
-    <Drawer open title={title} onClose={onClose} footer={footer}>
+    <Drawer open title={title} onClose={() => onClose()} footer={footer}>
       {confirmDialog}
+      {/* Escape in a field (a text box, a date, a choice) is the field's: the Drawer leaves it. */}
       <div className="ui-record">
         <p className="ui-record-meta">
           {t('apps.records.revision', { revision: String(revision) })}

@@ -11,7 +11,7 @@
 //
 // The text lands in the field as typed text would: the person edits it before saving.
 
-import { useSyncExternalStore } from 'react'
+import { useId, useSyncExternalStore } from 'react'
 import { useDictation } from '../conversations/Dictation'
 import { clock } from '../conversations/recorder'
 import { useT } from '../i18n'
@@ -57,6 +57,9 @@ export function FieldDictation({
     shareStatus: true,
   })
   const label = t('apps.dictation.dictate', { field })
+  // Why it can't be used now, said beside it: the button is described by it, so focus says it too.
+  const why = useId()
+  const reason = !online || unavailable !== undefined
   // A server without dictation, or that can't say, has nothing to offer online; offline the button
   // is there, off, with why.
   if (online && !state) return null
@@ -80,17 +83,18 @@ export function FieldDictation({
           disabled={!online || !state?.canStart}
           // Where the speech goes, or why it can't be taken now.
           title={!online ? t('apps.dictation.offline') : (unavailable ?? t('apps.dictation.title'))}
+          aria-describedby={reason ? why : undefined}
           aria-busy={phase === 'starting' || phase === 'transcribing' || undefined}
           onClick={() => state?.start()}
         />
       )}
       {!online && (
-        <span role="status" className="ui-dictate-note">
+        <span role="status" className="ui-dictate-note" id={why}>
           {t('apps.dictation.offline')}
         </span>
       )}
       {online && unavailable !== undefined && (
-        <span role="status" className="ui-dictate-note">
+        <span role="status" className="ui-dictate-note" id={why}>
           {t('apps.dictation.unavailable', { reason: unavailable })}
         </span>
       )}

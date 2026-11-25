@@ -260,7 +260,7 @@ export function SignatureField({
 
   if (value && files) {
     return (
-      <fieldset className="ui-capture">
+      <fieldset className="ui-capture" data-submit-free>
         <legend className="ui-capture-label">{heading}</legend>
         {files.local ? (
           // Still on this device: nothing of it is on the server to link to.
@@ -287,7 +287,7 @@ export function SignatureField({
   }
   if (readOnly) {
     return (
-      <fieldset className="ui-capture">
+      <fieldset className="ui-capture" data-submit-free>
         <legend className="ui-capture-label">{heading}</legend>
         <p className="ui-capture-empty">{t('apps.signature.none')}</p>
       </fieldset>
@@ -296,7 +296,7 @@ export function SignatureField({
 
   const typedReady = name.trim() !== '' && confirmed
   return (
-    <fieldset className="ui-capture" aria-describedby={`${ids}-note`}>
+    <fieldset className="ui-capture" data-submit-free aria-describedby={`${ids}-note`}>
       <legend className="ui-capture-label">{heading}</legend>
       <SegmentedControl
         label={t('apps.signature.how')}

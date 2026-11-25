@@ -98,7 +98,7 @@ export function LocationField({
 
   const heading = label ?? t('apps.location.label')
   return (
-    <fieldset className="ui-capture" aria-describedby={readOnly ? undefined : `${ids}-note`}>
+    <fieldset className="ui-capture" data-submit-free aria-describedby={readOnly ? undefined : `${ids}-note`}>
       <legend className="ui-capture-label">{heading}</legend>
       {value ? (
         <p className="ui-capture-value" role="status">

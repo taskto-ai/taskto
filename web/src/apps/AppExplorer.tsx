@@ -4,11 +4,12 @@
 // is edited, its history read and, for a deleted one, restored. The server decides what each person
 // reads and may change: this only asks.
 
-import { useId, useMemo, useState, useSyncExternalStore } from 'react'
+import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { type AppDefinition, type AppField, type AppRecord, api, type RecordPage } from '../api'
 import { type Format, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Field } from '../ui/Field'
 import { IconButton } from '../ui/IconButton'
@@ -104,12 +105,51 @@ export function AppExplorer({
   const qs = queryString(query)
   const list = useLoad(() => api<RecordPage>(`${base}/records/query?${qs}`), [base, qs])
 
-  // A new question starts from its first page.
-  const ask = (change: () => void) => {
-    change()
-    setCursors([''])
-    setOpen(null)
+  // The record open in the drawer holds what isn't saved (a changed field, a conflict on screen):
+  // read when something would close it, so the person is asked first and keeping is the default.
+  const unsaved = useRef(false)
+  const [leaveDialog, confirmLeave] = useConfirm()
+  const askToLeave = () =>
+    confirmLeave({
+      title: t('apps.explorer.leave.title'),
+      body: t('apps.explorer.leave.body'),
+      confirmLabel: t('apps.explorer.leave.discard'),
+      cancelLabel: t('apps.explorer.leave.keep'),
+      tone: 'danger',
+    })
+  // Does `go` at once when nothing is unsaved (as before: the list asks the server straight away),
+  // and only after the person chose to discard when something is.
+  const leaving = (go: () => void) => {
+    if (!unsaved.current) return go()
+    void askToLeave().then((discard) => {
+      if (!discard) return
+      unsaved.current = false
+      go()
+    })
   }
+  // After a record left the list (deleted, restored), the keyboard goes to the list's count, which
+  // says what the list holds now: the row it came from is gone.
+  const count = useRef<HTMLParagraphElement>(null)
+  const closeRecord = (how?: 'gone') => {
+    if (how === 'gone') {
+      unsaved.current = false
+      setOpen(null)
+      setTimeout(() => count.current?.focus(), 0)
+      return
+    }
+    leaving(() => setOpen(null))
+  }
+  const openRecord = (id: number) => {
+    if (id !== open) leaving(() => setOpen(id))
+  }
+
+  // A new question starts from its first page, and closes the record (asking first, as above).
+  const ask = (change: () => void) =>
+    leaving(() => {
+      change()
+      setCursors([''])
+      setOpen(null)
+    })
   const chooseTab = (next: Tab) =>
     ask(() => {
       setTab(next)
@@ -215,16 +255,16 @@ export function AppExplorer({
             sort={sort}
             deleted={deleted}
             onSort={sortBy}
-            onOpen={setOpen}
+            onOpen={openRecord}
           />
         )}
         {page && page.records.length > 0 && narrow && (
-          <RecordCards records={page.records} fields={fields} deleted={deleted} onOpen={setOpen} />
+          <RecordCards records={page.records} fields={fields} deleted={deleted} onOpen={openRecord} />
         )}
 
         {page && (
           <footer className="ui-explorer-foot">
-            <p role="status" className="ui-explorer-count">
+            <p role="status" className="ui-explorer-count" ref={count} tabIndex={-1}>
               {page.records.length > 0
                 ? t('apps.explorer.showing', {
                     from: f.number(first),
@@ -277,10 +317,14 @@ export function AppExplorer({
           deleted={deleted}
           canChange={canChange}
           canRestore={canRestore}
-          onClose={() => setOpen(null)}
+          onClose={closeRecord}
           onChanged={changed}
+          onUnsaved={(now) => {
+            unsaved.current = now
+          }}
         />
       )}
+      {leaveDialog}
     </div>
   )
 }
@@ -488,6 +532,8 @@ function RecordTable({
     {
       key: '_id',
       header: t('apps.explorer.id'),
+      // The record's number names its row.
+      rowHeader: true,
       cell: (rec) => (
         <Button
           size="sm"
