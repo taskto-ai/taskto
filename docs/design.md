@@ -385,7 +385,12 @@ and lift (the renderer draws it with no border), a disabled button as Button's f
 than half opacity, and the error text as Field's. So an app's controls are drawn as the component
 library's in light, dark and every brand. `web/src/apps/theme.test.ts` checks that every renderer
 component the server's catalog allows is themed, that each control gets the ring and the touch
-height, and that every colour variable is a role.
+height, and that every colour variable is a role; `web/e2e/app/app-rings.e2e.mjs` checks in
+Chromium that no ring is cut, in a launched app and in a Home widget. A box that clips (one that
+scrolls) cuts what reaches past it: so the row of tabs scrolls sideways only and draws a tab's ring
+inside the tab, the launched app's panel scrolls inside its padding, and a screen in a Home widget
+doesn't scroll itself (the widget's body does) and keeps 8px of room for a ring and the primary's
+lift.
 
 The file is in no layer on purpose. The renderer adopts its defaults (`:where(:root) { … }`) and each
 component's rules (`a2ui-basic-button .a2ui-button { … }`) at run time, in no layer and after the
