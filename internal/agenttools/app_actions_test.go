@@ -3,9 +3,13 @@ package agenttools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
+
+	"taskto.ai/taskto/internal/apps"
 )
 
 // ledger is the expenses example with an update, a navigation-free set of actions of every kind
@@ -532,5 +536,29 @@ func TestRunAppActionRefusesAmbiguousArguments(t *testing.T) {
 			!strings.Contains(strings.Join(strings.Fields(string(schema.Properties["context"])), ""), `"not":{"required":["id"]}`) {
 			t.Fatalf("schema = %s", d.InputSchema)
 		}
+	}
+}
+
+// An action over an access token's budget is refused with a 429 whose message says how long to
+// wait, as REST's Retry-After does, so an agent over MCP knows when to try again.
+func TestRunAppActionOverATokensBudgetSaysWhenToRetry(t *testing.T) {
+	tm := newTeam(t)
+	caller := Caller{Workspace: tm.one, User: tm.bob, Token: "laptop"}
+	raw, err := json.Marshal(tm.run(map[string]any{"action": "add_expense", "context": map[string]any{"description": "coffee", "amount": 1}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refused *Refusal
+	for range apps.TokenActionBurst + 1 {
+		_, err = tm.tools.Call(context.Background(), caller, "run_app_action", raw)
+		if err != nil {
+			break
+		}
+	}
+	if !errors.As(err, &refused) || refused.Status != http.StatusTooManyRequests {
+		t.Fatalf("over the budget: %v", err)
+	}
+	if !regexp.MustCompile(`try again in \d+ seconds?`).MatchString(refused.Message) {
+		t.Errorf("the refusal %q doesn't say when to try again", refused.Message)
 	}
 }

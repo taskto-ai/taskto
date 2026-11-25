@@ -114,6 +114,16 @@ func IsRateLimited(err error) bool {
 	return errors.As(err, &limited)
 }
 
+// RetryAfter is how many seconds to wait before an action may run again, for an error that is the
+// refusal of an action over an access token's budget (IsRateLimited), and whether err is one.
+func RetryAfter(err error) (int, bool) {
+	var limited *rateLimitedError
+	if !errors.As(err, &limited) {
+		return 0, false
+	}
+	return limited.retryAfter(), true
+}
+
 // retryAfter is wait in whole seconds, at least one.
 func (e *rateLimitedError) retryAfter() int { return max(1, int(math.Ceil(e.wait.Seconds()))) }
 
