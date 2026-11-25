@@ -147,7 +147,10 @@ export function parseColor(text: string): RGBA {
       const [r, g, b] = parts.slice(0, 3).map(Number)
       const a =
         parts[3] === undefined ? 1 : parts[3].endsWith('%') ? Number.parseFloat(parts[3]) / 100 : Number(parts[3])
-      if ([r, g, b, a].every((v) => Number.isFinite(v))) return [r, g, b, a]
+      // In range, as the browser would show them: a channel past 255 would be clamped there, and
+      // the contrast computed from the unclamped number would be wrong.
+      const channel = (v: number) => Number.isFinite(v) && v >= 0 && v <= 255
+      if ([r, g, b].every(channel) && Number.isFinite(a) && a >= 0 && a <= 1) return [r, g, b, a]
     }
   }
   throw new Error(`not a colour the tokens may use: ${text}`)

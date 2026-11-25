@@ -268,3 +268,12 @@ describe('the old --tt-* names', () => {
     expect([...new Set(missing)]).toEqual([])
   })
 })
+
+describe('reading colours', () => {
+  test('a channel or an alpha out of range is not a colour, so a theme cannot pass with one', () => {
+    expect(() => parseColor('rgb(999, 999, 999)')).toThrow()
+    expect(() => parseColor('rgba(0, 0, 0, 1.5)')).toThrow()
+    expect(() => parseColor('rgb(-1, 0, 0)')).toThrow()
+    expect(parseColor('rgba(255, 0, 0, 0.5)')).toEqual([255, 0, 0, 0.5])
+  })
+})

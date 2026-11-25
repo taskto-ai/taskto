@@ -111,9 +111,10 @@ export function scan(css) {
   }
   return { top, mentioned, declarations }
 
-  // A declaration is `property: value` inside a rule (a rule nested in another counts too).
+  // A declaration is `property: value` in any block: a rule's, or an at-rule's that holds
+  // declarations (@property, @font-face, @page). A selector ends at `{`, so it never gets here.
   function declaration(text, at) {
-    if (blocks.at(-1) !== 'rule' && !blocks.includes('rule')) return
+    if (blocks.length === 0) return
     const colon = text.indexOf(':')
     if (colon < 0) return
     const property = text.slice(0, colon).trim()
@@ -146,9 +147,34 @@ const NAMED_COLORS = new Set(
 const COLOR_FUNCTION = /(?<![\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i
 const HEX = /#[0-9a-fA-F]{3,8}(?![\w-])/
 
+// Properties whose words are names the author picks (an animation, a font, a grid area …), where
+// `red` is an identifier and not a colour. Hex colours and colour functions are still looked for.
+const IDENTIFIER_PROPERTIES = new Set([
+  'animation',
+  'animation-name',
+  'font',
+  'font-family',
+  'grid-area',
+  'grid-column',
+  'grid-row',
+  'grid-template',
+  'grid-template-areas',
+  'list-style',
+  'list-style-type',
+  'counter-reset',
+  'counter-increment',
+  'counter-set',
+  'container',
+  'container-name',
+  'view-transition-name',
+  'transition',
+  'transition-property',
+  'will-change',
+])
+
 // The colour literal a declaration's value holds, if any: not in a string, a url() or a custom
-// property's name.
-export function colorLiteral(value) {
+// property's name, and a colour's name not where a name is an identifier.
+export function colorLiteral(value, property = '') {
   const bare = value
     .replace(/url\((?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^)]*)\)/gi, 'url()')
     .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
@@ -157,6 +183,7 @@ export function colorLiteral(value) {
   if (hex) return hex[0]
   const fn = COLOR_FUNCTION.exec(bare)
   if (fn) return `${fn[0]})`
+  if (IDENTIFIER_PROPERTIES.has(property.toLowerCase())) return undefined
   for (const word of bare.matchAll(/(?<![\w-])[a-zA-Z]+(?![\w-])/g)) {
     if (NAMED_COLORS.has(word[0].toLowerCase())) return word[0]
   }
@@ -343,7 +370,7 @@ export function check(web) {
     }
     if (file.startsWith(THEMES)) continue
     for (const { property, value, line } of sheet.declarations) {
-      const literal = colorLiteral(value)
+      const literal = colorLiteral(value, property)
       if (literal) {
         errors.push(
           `${file}:${line}: ${property} has the colour literal ${literal}: use a colour role, var(--color-…), or add one to the themes in ${THEMES}`,

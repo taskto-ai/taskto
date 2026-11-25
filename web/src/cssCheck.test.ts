@@ -218,3 +218,23 @@ test('a theme may write colours, and comments, strings, urls, names and ids are 
   expect(r.err).toBe('')
   expect(r.code).toBe(0)
 })
+
+test('a colour in an at-rule that holds declarations is looked for too', () => {
+  const r = runFiles({
+    'ui/shade.css': '@property --shade {\n  syntax: "<color>";\n  inherits: false;\n  initial-value: #fff;\n}\n',
+  })
+  expect(r.code).toBe(1)
+  expect(r.err).toContain('src/ui/shade.css:4: initial-value has the colour literal #fff')
+})
+
+test("a colour's name is an identifier where the author names things, but a hex colour is not", () => {
+  const ok = runFiles({
+    'ui/anim.css':
+      '@keyframes red { to { opacity: 1; } }\n.tt-a { animation: red 1s; animation-name: red; grid-area: teal; }\n',
+  })
+  expect(ok.err).toBe('')
+  expect(ok.code).toBe(0)
+  const hex = runFiles({ 'ui/anim.css': '.tt-a { transition: color 1s, outline-color 1s #000; }\n' })
+  expect(hex.code).toBe(1)
+  expect(hex.err).toContain('transition has the colour literal #000')
+})
