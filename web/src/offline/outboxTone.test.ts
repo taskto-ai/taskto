@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 // The badge each record of the queue wears says its state in colour as well as words: what waits is
 // neutral, what is being sent informs, what was sent succeeded, what needs the person is a warning,
 // and what the server refused, or couldn't be reached for, is the danger.
