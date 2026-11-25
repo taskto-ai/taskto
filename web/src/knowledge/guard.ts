@@ -19,13 +19,16 @@ type Wait = { go: () => void; why: Why }
 export type Guard = {
   // Runs `go`: at once if no draft would be lost, else after the question is answered yes.
   ask: (go: () => void, why?: Why) => void
-  // The editor's: whether its draft differs from what was loaded, and whether it is saving.
-  report: (dirty: boolean, saving: boolean) => void
-  // The editor's: its save landed, so what was waiting for it goes on.
-  saved: () => void
-  // The editor's: it is gone, saved or not. The question about its draft goes with it, and so
-  // does what waited for a save that never landed: a later choice of the person is not undone.
-  dispose: () => void
+  // What an editor tells the guard, each with its own id: only the editor that was last heard
+  // from is listened to, so a save that lands late from one that is gone changes nothing.
+  //
+  // Whether its draft differs from what was loaded, and whether it is saving.
+  report: (editor: string, dirty: boolean, saving: boolean) => void
+  // Its save landed, so what was waiting for it goes on.
+  saved: (editor: string) => void
+  // It is gone, saved or not. The question about its draft goes with it, and so does what
+  // waited for a save that never landed: a later choice of the person is not undone.
+  dispose: (editor: string) => void
   // The question about discarding the draft, when it is open, and its two answers.
   asking: Why | null
   discard: () => void
@@ -46,6 +49,8 @@ export const GuardContext = createContext<Guard>(nothing)
 
 export function useGuard(): Guard {
   const state = useRef({ dirty: false, saving: false })
+  // The editor that is there: the one that reported last and has not been disposed.
+  const current = useRef<string | null>(null)
   const [pending, setPending] = useState<Wait | null>(null)
   const open = useRef<Wait | null>(null)
   open.current = pending
@@ -62,7 +67,8 @@ export function useGuard(): Guard {
     else go()
   }, [])
   const report = useCallback(
-    (dirty: boolean, saving: boolean) => {
+    (editor: string, dirty: boolean, saving: boolean) => {
+      current.current = editor
       state.current = { dirty, saving }
       if (saving) {
         // Saving after being asked is an answer: the person keeps the text, and goes on after it.
@@ -82,11 +88,17 @@ export function useGuard(): Guard {
     },
     [goOn],
   )
-  const saved = useCallback(() => {
-    setPending(null)
-    goOn()
-  }, [goOn])
-  const dispose = useCallback(() => {
+  const saved = useCallback(
+    (editor: string) => {
+      if (current.current !== editor) return
+      setPending(null)
+      goOn()
+    },
+    [goOn],
+  )
+  const dispose = useCallback((editor: string) => {
+    if (current.current !== editor) return
+    current.current = null
     state.current = { dirty: false, saving: false }
     queued.current = null
     setPending(null)

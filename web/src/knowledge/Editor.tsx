@@ -1,7 +1,7 @@
 // Editing a Markdown document: the text and its preview, what changed, and the choice a
 // conflict asks for (useDraft has the saving).
 
-import { useContext, useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useId, useRef, useState } from 'react'
 import type { Doc } from '../api'
 import { useT } from '../i18n'
 import { Markdown } from '../markdown'
@@ -29,20 +29,21 @@ export function Editor({
   // Whatever would close the editor asks first while the draft differs from what was loaded.
   const guard = useContext(GuardContext)
   const { report, saved, dispose, asking, keep } = guard
+  const me = useId()
   const { text, setText, message, setMessage, dirty, busy, error, conflict, save, takeTheirs, overwrite } = useDraft(
     url,
     doc,
     () => {
       onSaved()
-      saved()
+      saved(me)
     },
   )
   const [tab, setTab] = useState<'write' | 'preview'>('write')
   const t = useT()
   useEffect(() => {
-    report(dirty, busy)
-  }, [dirty, busy, report])
-  useEffect(() => dispose, [dispose])
+    report(me, dirty, busy)
+  }, [me, dirty, busy, report])
+  useEffect(() => () => dispose(me), [me, dispose])
 
   // The question comes into view and takes the focus; "Keep editing", by button or Escape,
   // gives the focus back to the text, with the cursor where it was.
