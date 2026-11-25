@@ -509,6 +509,8 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, http.StatusConflict, body)
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, apierr.CodeNotFound, ErrNotFound.Error())
+	case errors.Is(err, auth.ErrAccountDisabled):
+		auth.WriteAccountDisabled(w) // the admin was disabled after the request was let in
 	case errors.Is(err, errSpaceArchived):
 		writeError(w, http.StatusForbidden, apierr.CodeSpaceArchived, err.Error())
 	case errors.Is(err, ErrReadOnly):

@@ -1015,7 +1015,7 @@ the [audit log](audit.md) as `member_disabled` (with how many logins it ended) a
 
 A request an admin sent just before being disabled changes nothing either: the writes of an admin
 (inviting, changing a role, removing a member, the workspace's settings, shared CLI accounts, the
-integrations)
+integrations, the decisions on apps' integration requests)
 read the admin's account again in their transaction and answer `403 account_disabled`.
 
 ## Invites

@@ -13,6 +13,8 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/auth"
 )
 
 // invoiceJSON is an invoicing app that declares a slot of payments: sending an invoice asks for a
@@ -402,6 +404,36 @@ func TestRequestsAreRepeatableAndDecisionsFinal(t *testing.T) {
 	expect(t, i.approve(i.owner, first.ID, i.stripe), http.StatusConflict)
 	expect(t, i.decide(i.owner, i.ws, first.ID, "revoke", nil), http.StatusOK)
 	expect(t, i.tryPublish(i.alice, i.shared, i.app), http.StatusConflict)
+}
+
+// An admin disabled after RequireAdmin let their request in decides nothing: each decision reads
+// their account again in its transaction, and the answer is account_disabled.
+func TestDecisionsOfAnAdminDisabledMeanwhile(t *testing.T) {
+	i := newInv(t)
+	i.allow(i.stripe, i.shared)
+	req := i.mustRequest(i.alice, i.shared, i.app)
+	if _, err := i.e.db.Exec(`UPDATE users SET disabled_at = '2026-01-01T00:00:00.000Z' WHERE id = ?`, i.owner.id); err != nil {
+		t.Fatal(err)
+	}
+	ctx := audit.WithActor(context.Background(), i.owner.id)
+	if _, err := i.e.s.approve(ctx, i.ws, i.owner.id, req.ID, Decision{IntegrationID: i.stripe}); !errors.Is(err, auth.ErrAccountDisabled) {
+		t.Fatalf("approve by a disabled admin = %v", err)
+	}
+	if _, err := i.e.s.reject(ctx, i.ws, i.owner.id, req.ID); !errors.Is(err, auth.ErrAccountDisabled) {
+		t.Fatalf("reject by a disabled admin = %v", err)
+	}
+	if _, err := i.e.s.revoke(ctx, i.ws, i.owner.id, req.ID); !errors.Is(err, auth.ErrAccountDisabled) {
+		t.Fatalf("revoke by a disabled admin = %v", err)
+	}
+	if st := i.status(i.alice, i.shared, i.app); st.Slots[0].Status != ApprovalRequested {
+		t.Fatalf("a disabled admin changed the request: %+v", st.Slots[0])
+	}
+	rec := httptest.NewRecorder()
+	fail(rec, httptest.NewRequest(http.MethodPost, "/", nil), auth.ErrAccountDisabled)
+	expect(t, rec, http.StatusForbidden)
+	if code(t, rec) != string(apierr.CodeAccountDisabled) {
+		t.Fatalf("the answer = %s", rec.Body.String())
+	}
 }
 
 func TestApprovingChecksTheIntegration(t *testing.T) {

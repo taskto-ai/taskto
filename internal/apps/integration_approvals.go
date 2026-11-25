@@ -526,6 +526,10 @@ func notPending() error {
 func (s *Service) approve(ctx context.Context, workspace, admin, id int64, d Decision) (IntegrationApproval, error) {
 	var out IntegrationApproval
 	err := s.write(ctx, func(tx *sql.Tx) error {
+		// An admin disabled after RequireAdmin let the request in decides nothing.
+		if err := auth.EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		r, err := decide(ctx, tx, workspace, id)
 		if err != nil {
 			return err
@@ -587,6 +591,10 @@ func (s *Service) approve(ctx context.Context, workspace, admin, id int64, d Dec
 func (s *Service) reject(ctx context.Context, workspace, admin, id int64) (IntegrationApproval, error) {
 	var out IntegrationApproval
 	err := s.write(ctx, func(tx *sql.Tx) error {
+		// An admin disabled after RequireAdmin let the request in decides nothing.
+		if err := auth.EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		r, err := decide(ctx, tx, workspace, id)
 		if err != nil {
 			return err
@@ -613,6 +621,10 @@ func (s *Service) reject(ctx context.Context, workspace, admin, id int64) (Integ
 func (s *Service) revoke(ctx context.Context, workspace, admin, id int64) (IntegrationApproval, error) {
 	var out IntegrationApproval
 	err := s.write(ctx, func(tx *sql.Tx) error {
+		// An admin disabled after RequireAdmin let the request in decides nothing.
+		if err := auth.EnsureActorEnabled(ctx, tx); err != nil {
+			return err
+		}
 		r, err := decide(ctx, tx, workspace, id)
 		if err != nil {
 			return err
