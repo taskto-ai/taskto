@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -168,7 +169,11 @@ func TestConversationSearchIsOnlyOfTheCallersOwn(t *testing.T) {
 	if _, err := w.e.db.Exec(`DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`, w.ws, w.bob.id); err != nil {
 		t.Fatal(err)
 	}
-	wantConversations(t, "bob as a former member", w.searchConversations(w.alice, w.ws, "trip"), "Alice's trip")
+	expect(t, w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/conversations?q=zanzibar", w.ws), nil), http.StatusNotFound)
+	// The statement itself asks for the membership too, whatever route is in front of it.
+	if r, err := w.e.idx.SearchConversations(ctx, w.bob.id, w.ws, Query{Text: "zanzibar"}); err != nil || len(r.Results) != 0 {
+		t.Fatalf("a former member found %+v, %v", r, err)
+	}
 	if _, err := w.e.db.Exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, w.ws, w.bob.id); err != nil {
 		t.Fatal(err)
 	}
@@ -452,5 +457,91 @@ func TestConversationMarksAreNeverReused(t *testing.T) {
 			t.Fatalf("revision %d came twice", n)
 		}
 		seen[n] = true
+	}
+}
+
+// A conversation that only its title matches has no snippet: the start of its text would be
+// quoted as if it had matched.
+func TestConversationSnippetIsOnlyOfWhatMatched(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	w.conversation(w.alice, w.ws, "Quokka facts", "nothing about the animal here, only the weather", src)
+	r := w.searchConversations(w.alice, w.ws, "quokka")
+	if len(r.Results) != 1 || len(r.Results[0].Snippet) != 0 {
+		t.Fatalf("a title-only match = %+v", r)
+	}
+	w.conversation(w.alice, w.ws, "Weather", "we talked about the quokka at length", src)
+	for _, c := range w.searchConversations(w.alice, w.ws, "quokka").Results {
+		if c.Title == "Weather" && !anyMatch(c.Snippet) {
+			t.Fatalf("a body match = %+v", c)
+		}
+	}
+}
+
+func anyMatch(segs []Segment) bool {
+	for _, s := range segs {
+		if s.Match {
+			return true
+		}
+	}
+	return false
+}
+
+// A text write is for a conversation still waiting: one that another sync already dealt with, at
+// the same revision, is left alone.
+func TestConversationIndexSkipsAConversationNoLongerQueued(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	c := w.conversation(w.alice, w.ws, "Trip", "words about quokkas", src)
+	if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	var revision int64
+	if err := w.e.db.QueryRow(`SELECT revision FROM search_conversation_revisions WHERE conversation_id = ?`, c).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	// A slower sync of the same revision brings other text, and finds the queue empty.
+	err := w.e.idx.write(ctx, func(tx *sql.Tx) error {
+		return indexConversation(ctx, tx, queuedConversation{id: c, agentID: w.agentID(c), revision: revision}, "words about numbats", false)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantConversations(t, "the first text", w.searchConversations(w.alice, w.ws, "quokkas"), "Trip")
+	wantConversations(t, "the slower sync's text", w.searchConversations(w.alice, w.ws, "numbats"))
+}
+
+// The skip list of a long drain holds only conversations still queued after being read: with every
+// conversation taken off the queue as it is read, it stays empty however many there are.
+func TestConversationDrainSkipsOnlyWhatStaysQueued(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	for i := range conversationBatch*3 + 5 {
+		w.conversation(w.alice, w.ws, fmt.Sprintf("Trip %d", i), "words", src)
+	}
+	if left, err := w.e.idx.syncConversations(ctx, src, 0, 0, 0, 0); err != nil || left {
+		t.Fatalf("the drain = %v, %v", left, err)
+	}
+	var queued int
+	if err := w.e.db.QueryRow(`SELECT count(*) FROM search_conversation_queue`).Scan(&queued); err != nil || queued != 0 {
+		t.Fatalf("queued after the drain = %d, %v", queued, err)
+	}
+	// One marked while it is read stays queued, and is not read twice by the same drain.
+	c := w.conversation(w.alice, w.ws, "Marked", "words", src)
+	agent := w.agentID(c)
+	before := src.called()
+	src.during = func(id int64) {
+		if id == agent {
+			w.mark(c)
+		}
+	}
+	if _, err := w.e.idx.syncConversations(ctx, src, 0, 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if reads := src.called() - before; reads != 1 {
+		t.Fatalf("a conversation marked as it was read was read %d times by one drain", reads)
 	}
 }

@@ -456,3 +456,23 @@ test('a search that finds only records or conversations is not nothing', async (
   await within(results).findByRole('link', { name: /Orchard trip/ })
   expect(within(results).queryByText('Nothing found.')).toBeNull()
 })
+
+test('a page of records that has none to show still leads to the next', async () => {
+  fakeSearch({
+    'GET /api/workspaces/1/spaces': { body: { spaces } },
+    'GET /api/workspaces/1/spaces/2/docs': { body: { docs: [] } },
+    'GET /api/workspaces/1/search': { body: { results: [], mode: 'fulltext' } },
+    'GET /api/workspaces/1/search/cards': none,
+    'GET /api/workspaces/1/search/records?q=orchard': { body: { results: [], next_offset: 1 } },
+    'GET /api/workspaces/1/search/records?q=orchard&offset=1': { body: { results: [record(7, 'Garden log')] } },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByText('No documents in this space yet.')
+  search('orchard', 'In all spaces')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  const more = await within(results).findByRole('button', { name: 'More records' })
+  // Not "nothing found" while a page of records is still to come.
+  expect(within(results).queryByText('Nothing found.')).toBeNull()
+  fireEvent.click(more)
+  await within(results).findByRole('link', { name: /Garden log/ })
+})

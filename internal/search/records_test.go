@@ -529,3 +529,32 @@ func TestRecordSearchSaysIncompleteWhenAHitIsDropped(t *testing.T) {
 		t.Fatalf("after losing the space: %+v, %v", res, err)
 	}
 }
+
+// A search indexes only so many records before it answers, and leaves the rest queued, which it
+// finds behind: the background sync does the rest.
+func TestRecordSyncStopsAtItsLimit(t *testing.T) {
+	w := newWorld(t)
+	a := w.newApp(w.alice, w.team, "Team expenses", true)
+	for i := range 5 {
+		w.addRecord(w.alice, w.team, a, fmt.Sprintf("zanzibar %d", i))
+	}
+	queued := func() int {
+		var n int
+		if err := w.e.db.QueryRow(`SELECT count(*) FROM search_record_queue`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if queued() != 5 {
+		t.Fatalf("queued = %d", queued())
+	}
+	if err := w.e.idx.syncRecordsWithin(ctx, fmt.Sprintf("[%d]", a.ID), 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	if queued() != 3 {
+		t.Fatalf("queued after a sync of 2 = %d, want 3", queued())
+	}
+	if err := w.e.idx.syncRecords(ctx, ""); err != nil || queued() != 0 {
+		t.Fatalf("after the background sync: %d, %v", queued(), err)
+	}
+}

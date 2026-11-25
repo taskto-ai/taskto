@@ -231,7 +231,10 @@ function ResultPages({
   // is slow leaves the documents as they are, and says so beside them. Nothing is "not found"
   // until every search answered (one that failed hasn't).
   const othersAnswered = cards.answered && records.answered && conversations.answered
-  const nothingElse = cardResults.length === 0 && recordResults.length === 0 && conversationResults.length === 0
+  // A records page with none to show may be followed by pages that have some.
+  const recordsMore = records.last?.next_offset !== undefined
+  const nothingElse =
+    cardResults.length === 0 && recordResults.length === 0 && conversationResults.length === 0 && !recordsMore
 
   return (
     <section className="tt-search-results" aria-label={t('search.results.label')}>
@@ -356,17 +359,18 @@ function ResultPages({
               </li>
             ))}
           </ul>
-          {records.last?.next_offset !== undefined && (
-            <button type="button" className="tt-button" onClick={records.loadMore} disabled={records.loading}>
-              {t('search.records.more')}
-            </button>
-          )}
-          {records.error && (
-            <p role="alert" className="tt-error">
-              {records.error}
-            </p>
-          )}
         </>
+      )}
+      {/* Also when this page held none the caller reads: the later ones may. */}
+      {recordsMore && (
+        <button type="button" className="tt-button" onClick={records.loadMore} disabled={records.loading}>
+          {t('search.records.more')}
+        </button>
+      )}
+      {records.error && (
+        <p role="alert" className="tt-error">
+          {records.error}
+        </p>
       )}
       {(first.data || first.error) && !conversations.settled && (
         <p className="tt-muted">{t('search.conversations.searching')}</p>

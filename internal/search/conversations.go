@@ -107,8 +107,10 @@ const conversationOrderSQL = `CASE WHEN c.id IN (SELECT rowid FROM search_conver
 
 // conversationSnippetSQL is the snippet of what was said, matches marked: 24 words long, or
 // 64 in a text with an unspaced script (see snippetSQL). Empty if only the title matched.
-const conversationSnippetSQL = `snippet(search_conversation_fts, 1, char(2), char(3), '…',
-	CASE WHEN instr(search_conversation_fts.body, char(31)) THEN 64 ELSE 24 END)`
+const conversationSnippetSQL = `CASE WHEN c.id IN (SELECT rowid FROM search_conversation_fts WHERE search_conversation_fts MATCH ?)
+	THEN snippet(search_conversation_fts, 1, char(2), char(3), '…',
+		CASE WHEN instr(search_conversation_fts.body, char(31)) THEN 64 ELSE 24 END)
+	ELSE '' END`
 
 // ownConversationSQL is the condition on a row c of conversations that makes it userID's, in
 // workspaceID, who must be a member there: the condition every route to a conversation makes
@@ -131,7 +133,7 @@ func (x *Index) SearchConversations(ctx context.Context, userID, workspaceID int
 	}
 	var found []ConversationResult
 	for try := 1; ; try++ {
-		incomplete, err := x.syncConversations(ctx, src, userID, workspaceID, conversationSyncMax, conversationSyncBudget)
+		_, err := x.syncConversations(ctx, src, userID, workspaceID, conversationSyncMax, conversationSyncBudget)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ConversationResults{}, ctx.Err()
@@ -143,7 +145,8 @@ func (x *Index) SearchConversations(ctx context.Context, userID, workspaceID int
 		if found, behind, err = x.findConversations(ctx, userID, workspaceID, match, q); err != nil {
 			return ConversationResults{}, err
 		}
-		if !behind && !incomplete {
+		// Whether work remains is what the queue says now, however the sync ended.
+		if !behind {
 			break
 		}
 		if try == conversationSyncTries {
@@ -171,6 +174,7 @@ func (x *Index) SearchConversations(ctx context.Context, userID, workspaceID int
 // state of the database.
 func (x *Index) findConversations(ctx context.Context, userID, workspaceID int64, match string, q Query) ([]ConversationResult, bool, error) {
 	titleMatch := "{title} : (" + match + ")"
+	bodyMatch := "{body} : (" + match + ")"
 	rows, err := x.db.QueryContext(ctx, `SELECT st.behind, p.id, p.title, p.archived, p.updated_at, p.snippet, p.title_first
 		FROM (SELECT EXISTS (SELECT 1 FROM search_conversation_queue sq JOIN conversations c ON c.id = sq.conversation_id
 			WHERE `+ownConversationSQL+`) AS behind) st
@@ -184,7 +188,7 @@ func (x *Index) findConversations(ctx context.Context, userID, workspaceID int64
 				AND NOT EXISTS (SELECT 1 FROM search_conversation_queue WHERE conversation_id = c.id)
 			ORDER BY `+conversationOrderSQL+` LIMIT ? OFFSET ?) p ON true
 		ORDER BY p.title_first DESC, p.updated_at DESC, p.id DESC`,
-		workspaceID, userID, titleMatch, match, workspaceID, userID, titleMatch, q.Limit+1, q.Offset)
+		workspaceID, userID, titleMatch, bodyMatch, match, workspaceID, userID, titleMatch, q.Limit+1, q.Offset)
 	if err != nil {
 		return nil, false, err
 	}
@@ -290,12 +294,41 @@ func (x *Index) syncConversations(ctx context.Context, src ConversationSource, u
 				return true, err
 			}
 		}
-		// A conversation indexed but marked meanwhile is queued still: don't read it again in
-		// this sync.
-		for _, qc := range batch {
-			skip = append(skip, qc.id)
+		// A conversation marked while it was read is queued still: don't read it again in this
+		// sync. Those taken off the queue need no skipping, which keeps the list short.
+		still, err := x.stillQueued(ctx, batch)
+		if err != nil {
+			return false, err
 		}
+		skip = append(skip, still...)
 	}
+}
+
+// stillQueued is which of the conversations are in the queue now.
+func (x *Index) stillQueued(ctx context.Context, batch []queuedConversation) ([]int64, error) {
+	ids := make([]int64, len(batch))
+	for i, qc := range batch {
+		ids[i] = qc.id
+	}
+	in, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := x.db.QueryContext(ctx, `SELECT conversation_id FROM search_conversation_queue
+		WHERE conversation_id IN (SELECT value FROM json_each(?))`, string(in))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // queuedConversations reads the next conversations in the queue of the scope, newest first,
@@ -342,6 +375,17 @@ func indexConversation(ctx context.Context, tx *sql.Tx, qc queuedConversation, t
 	}
 	if revision != qc.revision {
 		return nil
+	}
+	if !gone {
+		// Another sync of the same revision may have indexed it already, or found the agent
+		// runtime without it: a text write is for a conversation still waiting.
+		var queued int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM search_conversation_queue WHERE conversation_id = ?`, qc.id).Scan(&queued); err != nil {
+			return err
+		}
+		if queued == 0 {
+			return nil
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM search_conversation_fts WHERE rowid = ?`, qc.id); err != nil {
 		return err

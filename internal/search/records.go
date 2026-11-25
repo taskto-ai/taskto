@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apps"
@@ -42,6 +43,13 @@ import (
 
 // recordBatch is how many records one transaction of a sync indexes.
 const recordBatch = 200
+
+// recordSyncMax is the most records a search indexes before it answers; the rest are left for the
+// background sync, and the answer says it may be incomplete if the caller reads any of them.
+const recordSyncMax = 2000
+
+// recordSyncBudget is how long a search spends indexing before it answers.
+const recordSyncBudget = 20 * time.Second
 
 // recordSyncTries is how many times a search indexes the records it looks in, and looks
 // again, before it says its results may be incomplete.
@@ -174,7 +182,7 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 	scope := recordScope{spaces: string(spacesJSON), all: string(allJSON), own: string(ownJSON), user: userID}
 	var found []RecordResult
 	for try := 1; ; try++ {
-		if err := x.syncRecords(ctx, string(appsJSON)); err != nil {
+		if err := x.syncRecordsWithin(ctx, string(appsJSON), recordSyncMax, recordSyncBudget); err != nil {
 			if ctx.Err() != nil {
 				return RecordResults{}, ctx.Err()
 			}
@@ -356,8 +364,20 @@ func (x *Index) queueRecords(ctx context.Context) error {
 }
 
 // syncRecords indexes again the queued records of the apps in (a JSON array of IDs; every app
-// if it is empty), a batch at a time.
+// if it is empty), a batch at a time, until none is left.
 func (x *Index) syncRecords(ctx context.Context, in string) error {
+	return x.syncRecordsWithin(ctx, in, 0, 0)
+}
+
+// syncRecordsWithin is syncRecords for at most limit records and for at most budget (0: no
+// limit), leaving the rest queued: a search that is over time leaves them to the background sync,
+// and finds them behind.
+func (x *Index) syncRecordsWithin(ctx context.Context, in string, limit int, budget time.Duration) error {
+	if budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
 	all := in == ""
 	if all {
 		in = "[]"
@@ -365,9 +385,16 @@ func (x *Index) syncRecords(ctx context.Context, in string) error {
 	// Batches go by ID, each from where the last stopped, so a record changed again meanwhile
 	// can't keep a sync going: the search that wanted it finds it behind.
 	var after int64
-	for {
-		rows, err := x.db.QueryContext(ctx, queuedRecordIDsSQL, after, all, in, recordBatch)
+	for done := 0; limit == 0 || done < limit; {
+		size := recordBatch
+		if limit > 0 {
+			size = min(size, limit-done)
+		}
+		rows, err := x.db.QueryContext(ctx, queuedRecordIDsSQL, after, all, in, size)
 		if err != nil {
+			if budget > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil // out of time: the rest is for the background sync
+			}
 			return err
 		}
 		var stale []int64
@@ -386,6 +413,7 @@ func (x *Index) syncRecords(ctx context.Context, in string) error {
 			return nil
 		}
 		after = stale[len(stale)-1]
+		done += len(stale)
 		if err := x.write(ctx, func(tx *sql.Tx) error {
 			for _, id := range stale {
 				if err := indexRecord(ctx, tx, id); err != nil {
@@ -394,9 +422,13 @@ func (x *Index) syncRecords(ctx context.Context, in string) error {
 			}
 			return nil
 		}); err != nil {
+			if budget > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil
+			}
 			return err
 		}
 	}
+	return nil
 }
 
 // indexRecord puts the record as it is now in the index, or takes it out of it if it is gone,
