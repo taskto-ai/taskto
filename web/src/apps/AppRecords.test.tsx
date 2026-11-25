@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { AppAccess, AppDefinition } from '../api'
 import { fakeFetch } from '../test/fakes'
-import { AppRecords } from './AppRecords'
+import { AppRecords, RecordsButton } from './AppRecords'
 
 afterEach(() => {
   cleanup()
@@ -61,9 +62,22 @@ const phone = () =>
     addEventListener: () => {},
     removeEventListener: () => {},
   }))
-const renderRecords = (over: Partial<Parameters<typeof AppRecords>[0]> = {}) =>
+type RecordsProps = Omit<Parameters<typeof AppRecords>[0], 'id' | 'open' | 'onClose'>
+
+// The records as the app's page has them: the button in its header, and the panel it opens.
+function Records(props: RecordsProps) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <RecordsButton access={props.access} open={open} controls="records" onToggle={() => setOpen((o) => !o)} />
+      <AppRecords id="records" open={open} onClose={() => setOpen(false)} {...props} />
+    </>
+  )
+}
+
+const renderRecords = (over: Partial<RecordsProps> = {}) =>
   render(
-    <AppRecords
+    <Records
       base={base}
       appId={9}
       access={manager}

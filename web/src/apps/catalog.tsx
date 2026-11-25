@@ -29,11 +29,12 @@ const StatApi = {
     .strict(),
 }
 
-// A labelled headline number, such as a total: a term and its value.
+// A labelled headline number, such as a total: a term and its value, drawn as a tile (AppView.css);
+// tiles in one of the app's rows wrap onto the next line when there isn't room.
 const Stat = createComponentImplementation(StatApi, ({ props }) => (
-  <dl className="tt-stat">
-    <dt className="tt-stat-label">{props.label}</dt>
-    <dd className="tt-stat-value">{props.value}</dd>
+  <dl className="ui-stat">
+    <dt className="ui-stat-label">{props.label}</dt>
+    <dd className="ui-stat-value">{props.value}</dd>
   </dl>
 ))
 
@@ -205,7 +206,7 @@ const ScreensApi = {
 
 const Screens = createComponentImplementation(ScreensApi, ({ props, buildChild }) => {
   const shown = props.screens.find((s) => s.name === props.current)
-  return <div className="tt-screen">{shown ? buildChild(shown.child) : null}</div>
+  return <div className="ui-app-screen">{shown ? buildChild(shown.child) : null}</div>
 })
 
 // Left out: what loads from elsewhere, and regular expressions. An app's pattern would run in

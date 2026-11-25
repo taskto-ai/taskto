@@ -10,8 +10,12 @@ import { ApiError, type App, api, ws } from '../api'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
 import { Link } from '../router'
+import { Icon } from '../ui/Icon'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { AppStage } from './AppStage'
 import { appPath } from './route'
+import './AppPreview.css'
 
 export function AppPreview({ workspace, space, app }: { workspace: number; space: number; app: number }) {
   const base = `${ws(workspace)}/spaces/${space}/apps/${app}`
@@ -28,25 +32,29 @@ export function AppPreview({ workspace, space, app }: { workspace: number; space
   const t = useT()
 
   if (info.data === null) {
-    return <p className="tt-app-preview tt-muted tt-small">{t('apps.unavailable')}</p>
+    return <p className="ui-app-preview ui-app-preview-note">{t('apps.unavailable')}</p>
   }
   return (
-    <div className="tt-app-preview">
+    <div className="ui-app-preview">
       {info.error ? (
-        <p className="tt-muted tt-small">{t('apps.cantShow', { error: info.error })}</p>
+        <p className="ui-app-preview-note">{t('apps.cantShow', { error: info.error })}</p>
       ) : info.data?.archived_at ? (
-        <p className="tt-muted tt-small">{t('apps.offlineNamed', { name: info.data.name })}</p>
+        <p className="ui-app-preview-note">{t('apps.offlineNamed', { name: info.data.name })}</p>
       ) : info.data ? (
         <AppStage base={base} app={info.data} />
       ) : (
-        <p className="tt-muted tt-small">{t('app.loading')}</p>
+        <div className="ui-app-preview-loading" role="status">
+          <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+          <Skeleton shape="block" height="calc(var(--space-16) * 2)" />
+        </div>
       )}
       <Link
-        className="tt-small"
+        className="ui-app-preview-open"
         href={appPath(workspace, space, app)}
         aria-label={info.data ? t('apps.openNamedInApps', { name: info.data.name }) : undefined}
       >
         {t('apps.openInApps')}
+        <Icon name="chevron-end" size={14} />
       </Link>
     </div>
   )
