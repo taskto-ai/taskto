@@ -56,6 +56,7 @@ export const AUDIT_ACTIONS = [
   'dictation_settings_changed',
   'data_export_started',
   'workspace_export_started',
+  'server_update_requested',
   'two_factor_enabled',
   'two_factor_disabled',
   'two_factor_recovery_codes_replaced',
