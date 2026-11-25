@@ -170,12 +170,24 @@ export type AppsContract = {
   events: string[]
   writes: AppsContractWrite[]
   only_if: AppsContractRule[]
+  links: AppsContractLink[]
   handlers: AppsContractHandler[]
 }
 
 export type AppsContractHandler = {
   event: string
   sets: AppsContractSet[]
+}
+
+export type AppsContractLink = {
+  action: string
+  amount_field: string
+  currency?: string
+  currency_field?: string
+  currency_options?: string[]
+  url_field: string
+  id_field: string
+  when?: AppsRule
 }
 
 export type AppsContractRule = {

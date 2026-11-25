@@ -3056,8 +3056,11 @@ workspace admin's choice, made when they approve the app's contract. See
 **The contract.** From the draft the server works out, for each slot, a **contract**: the kind, the
 operations the app asks for, the record fields it sends out (names only), the currencies, the events
 it handles, for each field the integration may write the literals and the sources it may write, the
-`only_if` rules, and `handlers`, each event's writes field by field, which bind a write to its event
-(moving a value from one event to another is another contract). It holds no wording (a change to a `description` needs no new approval) and is
+`only_if` rules, `links` (each `create_payment_link` effect: its action, amount field, currency or
+currency field and its options, the fields written, and its `when`), and `handlers`, each event's
+writes field by field, which bind a write to its event (moving a value from one event to another is
+another contract). It holds no wording: changing the text of a `description` without changing the
+fields it names needs no new approval. It is
 never sent by a client. Its **hash** (SHA-256, hex, of the contract's JSON, whose lists are sorted)
 names it. Changing what is sent out, what may be written or when, changes the hash.
 
@@ -3359,7 +3362,7 @@ its release needs the capability `effect.<kind>` of each kind it uses (`requires
 | `update_card` | `card`, `column` | moves the card the `create_card` effect called `card` made for the record |
 | `create_document` | `space_id`, `path`, `content`? | a Markdown document, never over another |
 | `open_route` | `route`: `board` (`space_id`, `board_id`), `card` (`card`) or `document` (`space_id`, `path`) | a place to open in the web app, as a kind and IDs; never an address |
-| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount; a version 3 effect that holds no provider, address or key. An action has at most one |
+| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | **declared only, for now**: asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount; a version 3 effect that holds no provider, address or key. It is checked, put in the contract and gates publishing, but it makes no outbox entry and does nothing when the action runs. An action has at most one |
 
 Every kind may have `when`, a rule ([Fields and rules](#fields-and-rules)) over the record as the change leaves it: the
 effect applies only then. `title`, `body`, `content`, `path` and `docs` are **templates**: text
@@ -3376,7 +3379,7 @@ the moment of the write, with the write lock held. Every effect runs as the user
 their access **when it runs**.
 
 **The outbox.** When the action changes a record, the change and one entry per effect that applies
-are committed **in the same transaction**. The request answers then; the server's worker does the
+(a `create_payment_link` is declared only, and makes none) are committed **in the same transaction**. The request answers then; the server's worker does the
 entries afterwards, so they go on when nobody has the app open, and a crash loses none. An action
 may carry an `operation`, its **idempotency key** (8 to 64 letters, digits, `-`, `_`), which a
 client makes once for a press of a button and sends again with every retry of it (the web app keeps

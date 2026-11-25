@@ -428,7 +428,7 @@ func (e Effect) checkPaymentLink(c Collection) error {
 // ----- the contract -----
 
 // contractVersion is the format of Contract, in its hash, so a change of format is a new hash.
-const contractVersion = 1
+const contractVersion = 2
 
 // Contract is what the server derives from a draft for one slot: what the app may send out and
 // what the integration may write back, in field names and literals, never in the app's wording.
@@ -449,10 +449,32 @@ type Contract struct {
 	Writes []ContractWrite `json:"writes" apitypes:"nonnull"`
 	// OnlyIf are the rules that gate each event's writes.
 	OnlyIf []ContractRule `json:"only_if" apitypes:"nonnull"`
+	// Links are the payment links the app asks for, one per effect: its action, the amount field,
+	// the currency (a literal, or a choice field and its options), where the link and its id are
+	// written, and the rule the record must meet. It binds a currency to the amount it is asked
+	// for, and keeps a restriction (when) from being dropped without a new approval.
+	Links []ContractLink `json:"links" apitypes:"nonnull"`
 	// Handlers are each event's writes, field by field. Writes above says what may be written to a
 	// field whatever the event; this binds each write to its event, so moving a value from one
 	// event to another is another contract.
 	Handlers []ContractHandler `json:"handlers" apitypes:"nonnull"`
+}
+
+// ContractLink is one kind of payment link request an app makes. It holds no wording.
+type ContractLink struct {
+	// Action is the action whose effect asks. It is an identifier (a client runs an action by it),
+	// not wording: moving a request to another action is another contract.
+	Action      string `json:"action"`
+	AmountField string `json:"amount_field"`
+	Currency    string `json:"currency,omitempty"`
+	// CurrencyField and CurrencyOptions are the choice field the currency is read from, and the
+	// currencies it offers, sorted.
+	CurrencyField   string   `json:"currency_field,omitempty"`
+	CurrencyOptions []string `json:"currency_options,omitempty"`
+	URLField        string   `json:"url_field"`
+	IDField         string   `json:"id_field"`
+	// When is the rule the record must meet, as the change leaves it, for the link to be asked for.
+	When *Rule `json:"when,omitempty"`
 }
 
 // ContractHandler is what one event writes.
@@ -494,9 +516,10 @@ const (
 func (d Definition) contract(slot string) Contract {
 	s := d.Integrations[slot]
 	c := Contract{Version: contractVersion, Kind: s.Kind,
-		Operations: []string{}, Sends: []string{}, Currencies: []string{}, Events: []string{}, Writes: []ContractWrite{}, OnlyIf: []ContractRule{}, Handlers: []ContractHandler{}}
+		Operations: []string{}, Sends: []string{}, Currencies: []string{}, Events: []string{}, Writes: []ContractWrite{}, OnlyIf: []ContractRule{}, Links: []ContractLink{}, Handlers: []ContractHandler{}}
 	sends, currencies := map[string]bool{}, map[string]bool{}
 	writes := map[string]*ContractWrite{}
+	var links []json.RawMessage // the encoded links already in c.Links
 	write := func(field string) *ContractWrite {
 		w := writes[field]
 		if w == nil {
@@ -511,16 +534,23 @@ func (d Definition) contract(slot string) Contract {
 				continue
 			}
 			c.Operations = mergeSorted(c.Operations, []string{e.Kind})
+			link := ContractLink{Action: name, AmountField: e.AmountField, Currency: e.Currency, CurrencyField: e.CurrencyField,
+				URLField: e.URLField, IDField: e.IDField, When: e.When}
 			sends[e.AmountField] = true
 			if e.CurrencyField != "" {
 				sends[e.CurrencyField] = true
 				if f, ok := d.Collection.field(e.CurrencyField); ok {
+					link.CurrencyOptions = sortedCopy(f.Options)
 					for _, o := range f.Options {
 						currencies[o] = true
 					}
 				}
 			} else {
 				currencies[e.Currency] = true
+			}
+			if raw, err := json.Marshal(link); err == nil && !slices.ContainsFunc(links, func(l json.RawMessage) bool { return bytes.Equal(l, raw) }) {
+				links = append(links, raw)
+				c.Links = append(c.Links, link)
 			}
 			_ = holes(e.Description, func(text string, isHole bool) error {
 				if isHole && text != "id" {
@@ -560,6 +590,12 @@ func (d Definition) contract(slot string) Contract {
 		}
 		c.Handlers = append(c.Handlers, handler)
 	}
+	// Links in a fixed order, whatever the order of the actions and their effects.
+	slices.SortFunc(c.Links, func(a, b ContractLink) int {
+		x, _ := json.Marshal(a)
+		y, _ := json.Marshal(b)
+		return bytes.Compare(x, y)
+	})
 	c.Sends = sortedKeys(sends)
 	c.Currencies = sortedKeys(currencies)
 	for _, field := range sortedKeys(writes) {
@@ -568,6 +604,13 @@ func (d Definition) contract(slot string) Contract {
 		c.Writes = append(c.Writes, *w)
 	}
 	return c
+}
+
+// sortedCopy returns a sorted copy of list.
+func sortedCopy(list []string) []string {
+	out := slices.Clone(list)
+	slices.Sort(out)
+	return out
 }
 
 // Hash is the contract's canonical hash: the SHA-256, in hex, of its JSON, whose fields come in a

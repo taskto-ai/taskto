@@ -287,10 +287,31 @@ type Binding struct {
 // declares the slot, that release's contract is approved, and the integration it was bound to is
 // switched on and allowed in the app's space. Anything less is ErrIntegrationUnapproved (or
 // ErrOffline, ErrNotPublished), so revoking, switching off and taking the space away work at once.
-func (s *Service) Binding(ctx context.Context, appID int64, slot string) (Binding, error) {
+func (s *Service) Binding(ctx context.Context, appID int64, slot string) (out Binding, err error) {
+	// The app, its live release and its approvals are read in one transaction: they are one
+	// moment's state, and a publish or a decision can't land between them.
+	err = s.snapshot(ctx, func(q queryer) error {
+		out, err = liveBinding(ctx, q, appID, slot)
+		return err
+	})
+	return out, err
+}
+
+// snapshot runs fn in one read transaction, so what fn reads is the state of one moment.
+func (s *Service) snapshot(ctx context.Context, fn func(q queryer) error) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	return fn(tx)
+}
+
+// liveBinding is Binding's reading, through q.
+func liveBinding(ctx context.Context, q queryer, appID int64, slot string) (Binding, error) {
 	var archived sql.NullString
 	var live sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, `SELECT archived_at, live_release FROM apps WHERE id = ?`, appID).Scan(&archived, &live); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT archived_at, live_release FROM apps WHERE id = ?`, appID).Scan(&archived, &live); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Binding{}, ErrNotFound
 		}
@@ -302,7 +323,7 @@ func (s *Service) Binding(ctx context.Context, appID int64, slot string) (Bindin
 	if !live.Valid {
 		return Binding{}, ErrNotPublished
 	}
-	rel, err := loadRelease(ctx, s.db, appID, live.Int64, true)
+	rel, err := loadRelease(ctx, q, appID, live.Int64, true)
 	if err != nil {
 		return Binding{}, err
 	}
@@ -310,7 +331,7 @@ func (s *Service) Binding(ctx context.Context, appID int64, slot string) (Bindin
 		return Binding{}, ErrIntegrationUnapproved
 	}
 	contract := rel.Definition.contract(slot)
-	rows, err := approvalsOf(ctx, s.db, appID)
+	rows, err := approvalsOf(ctx, q, appID)
 	if err != nil {
 		return Binding{}, err
 	}
@@ -454,6 +475,9 @@ func approvalView(ctx context.Context, q queryer, workspace, id int64) (Integrat
 func isLive(ctx context.Context, q queryer, r approvalRow) (bool, error) {
 	var number sql.NullInt64
 	if err := q.QueryRowContext(ctx, `SELECT live_release FROM apps WHERE id = ?`, r.appID).Scan(&number); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil // an app deleted meanwhile has no live release
+		}
 		return false, err
 	}
 	if !number.Valid {
@@ -492,38 +516,44 @@ func (s *Service) listApprovals(ctx context.Context, workspace int64, status, cu
 		}
 		before = n
 	}
-	rows, err := s.db.QueryContext(ctx, approvalSelect+` WHERE sp.workspace_id = ? AND (? = 'all' OR a.status = ?) AND a.id < ? ORDER BY a.id DESC LIMIT ?`,
-		workspace, status, status, before, maxApprovals+1)
-	if err != nil {
-		return ApprovalList{}, err
-	}
-	var all []approvalRow
-	for rows.Next() {
-		r, err := scanApproval(rows)
+	var out ApprovalList
+	// The page and the live state of each approval are one moment's, so an app deleted or a release
+	// made meanwhile can't put the two at odds.
+	err := s.snapshot(ctx, func(q queryer) error {
+		rows, err := q.QueryContext(ctx, approvalSelect+` WHERE sp.workspace_id = ? AND (? = 'all' OR a.status = ?) AND a.id < ? ORDER BY a.id DESC LIMIT ?`,
+			workspace, status, status, before, maxApprovals+1)
 		if err != nil {
+			return err
+		}
+		var all []approvalRow
+		for rows.Next() {
+			r, err := scanApproval(rows)
+			if err != nil {
+				_ = rows.Close()
+				return err
+			}
+			all = append(all, r)
+		}
+		if err := rows.Err(); err != nil {
 			_ = rows.Close()
-			return ApprovalList{}, err
+			return err
 		}
-		all = append(all, r)
-	}
-	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return ApprovalList{}, err
-	}
-	_ = rows.Close()
-	out := ApprovalList{Approvals: make([]IntegrationApproval, 0, len(all))}
-	if len(all) > maxApprovals { // one more than a page: there are older ones
-		all = all[:maxApprovals]
-		next := strconv.FormatInt(all[len(all)-1].id, 10)
-		out.NextCursor = &next
-	}
-	for _, r := range all {
-		if r.live, err = isLive(ctx, s.db, r); err != nil {
-			return ApprovalList{}, err
+		out = ApprovalList{Approvals: make([]IntegrationApproval, 0, len(all))}
+		if len(all) > maxApprovals { // one more than a page: there are older ones
+			all = all[:maxApprovals]
+			next := strconv.FormatInt(all[len(all)-1].id, 10)
+			out.NextCursor = &next
 		}
-		out.Approvals = append(out.Approvals, r.view())
-	}
-	return out, nil
+		for _, r := range all {
+			if r.live, err = isLive(ctx, q, r); err != nil {
+				return err
+			}
+			out.Approvals = append(out.Approvals, r.view())
+		}
+		return nil
+	})
+	return out, err
 }
 
 // decide loads the workspace's approval inside tx, for an admin to decide on.

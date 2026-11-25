@@ -143,9 +143,11 @@ those are the admin's, on the integration.
 **The contract** is computed by the server from the draft, never sent by a client: the kind, the
 operations the app asks for, the record fields it sends out (names only), the currencies, the events
 it handles, for each field the integration may write the literals and sources it may write, and the
-rules that gate them. It has no wording, so a changed description needs no new approval; sending
-another field, writing another field or value, writing a value in another event, or loosening a rule does. Its SHA-256 is the
-contract's **hash**.
+rules that gate them, and for each payment link the action that asks, its amount, its currency and
+its `when`. It has no wording, so a changed description that names the same fields needs no new
+approval; sending another field, writing another field or value, writing a value in another event,
+asking in another currency or from another action, dropping a `when`, or loosening a rule does. Its
+SHA-256 is the contract's **hash**.
 
 **Approval is by hash, through a queue.**
 

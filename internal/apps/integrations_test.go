@@ -1100,3 +1100,58 @@ func TestAnApprovalIdIsNeverGivenAgain(t *testing.T) {
 		t.Errorf("approving the deleted request's id: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestTheContractBindsEachLinkToItsActionCurrencyAndCondition(t *testing.T) {
+	hash := func(d Definition) string { return d.contract("payments").Hash() }
+	// Two actions ask for a link, in two currencies.
+	twoActions := []string{`"add": {"kind": "insert"},`, `"add": {"kind": "insert"},
+    "resend": {"kind": "update", "effects": [{"kind": "create_payment_link", "integration": "payments", "amount_field": "total",
+      "currency": "USD", "description": "Reminder {{number}}", "url_field": "pay_url", "id_field": "payment_id"}]},`}
+	base, err := variant(t, twoActions...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The currencies swap between the actions: the same ones are asked in, by other actions.
+	swapped, err := variant(t, append(slices.Clone(twoActions), `"currency": "EUR"`, `"currency": "USD"`, `"currency": "USD"`, `"currency": "EUR"`)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(base.contract("payments").Currencies, swapped.contract("payments").Currencies) {
+		t.Fatal("the currencies differ, so the test proves nothing")
+	}
+	if hash(base) == hash(swapped) {
+		t.Error("swapping the currencies of two actions left the hash as it was")
+	}
+	// The condition on the link is part of what was approved: dropping it needs a new approval.
+	restricted, err := variant(t, `"kind": "create_payment_link", "integration": "payments"`,
+		`"kind": "create_payment_link", "when": {"field": "status", "op": "eq", "value": "draft"}, "integration": "payments"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := variant(t)
+	if hash(restricted) == hash(plain) {
+		t.Error("a link's when is not in the contract")
+	}
+	// Wording stays out of it.
+	reworded, err := variant(t, `"Invoice {{number}} for {{customer}}"`, `"Pay {{customer}}, {{number}}"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash(reworded) != hash(plain) {
+		t.Error("the wording of the description changed the contract")
+	}
+}
+
+func TestTheQueueSurvivesAnAppDeletedBetweenReads(t *testing.T) {
+	i := newInv(t)
+	req := i.mustRequest(i.alice, i.shared, i.app)
+	r := approvalRow{appID: i.app.ID + 1000, slot: "payments"}
+	if live, err := isLive(context.Background(), i.e.db, r); err != nil || live {
+		t.Errorf("isLive of a deleted app = %v, %v", live, err)
+	}
+	rec := i.queue(i.owner, i.ws, "")
+	expect(t, rec, http.StatusOK)
+	if got := decode[ApprovalList](t, rec); len(got.Approvals) != 1 || got.Approvals[0].ID != req.ID {
+		t.Errorf("queue = %+v", got)
+	}
+}
