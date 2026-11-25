@@ -14,6 +14,7 @@ import {
   emailPath,
   emailVerificationPath,
 } from '../notifications/api'
+import { timeZones } from '../timezone'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
@@ -24,17 +25,6 @@ import { Alert, FormActions, Loading, Section, useAction } from './parts'
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 
-// The time zones the browser knows, with the one in use first if it isn't among them.
-function zones(current: string): string[] {
-  const known =
-    (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.('timeZone') ?? []
-  const all = new Set<string>(['UTC', ...known])
-  all.add(current)
-  return [...all]
-}
-
-const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-
 export function EmailNotifications({ workspace }: { workspace: number }) {
   const t = useT()
   const f = useFormat()
@@ -42,7 +32,7 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
   const [saved, setSaved] = useState<EmailChoices | null>(null)
   const action = useAction()
   const choices = saved ?? loaded.data
-  const zoneList = useMemo(() => zones(choices?.digest.timezone ?? 'UTC'), [choices?.digest.timezone])
+  const zoneList = useMemo(() => timeZones(choices?.digest.timezone ?? 'UTC'), [choices?.digest.timezone])
 
   const label = (kind: EmailKind) => t(`notifications.settings.email.${kind}`)
 
@@ -55,15 +45,11 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
     })
   }
 
+  // The summary is at the hour of the person's own time zone (Time zone, above) until they choose
+  // another for it here: the server says which, so nothing about it is sent with a kind.
   const setKind = (kind: EmailKind, mode: EmailMode) => {
     if (!choices) return
-    const hadDigest = EMAIL_KINDS.some((k) => choices.kinds[k] === 'digest')
-    // The first summary is set to the person's own time zone, unless they have chosen one.
-    const digest =
-      mode === 'digest' && !hadDigest && !choices.digest.chosen
-        ? { hour: choices.digest.hour, timezone: browserZone() }
-        : undefined
-    void save({ kinds: { [kind]: mode }, digest })
+    void save({ kinds: { [kind]: mode } })
   }
 
   const [linkSent, setLinkSent] = useState(false)

@@ -6,9 +6,17 @@ import { type Format, type T, useFormat, useT } from '../i18n'
 import { coordinates, isLocation } from './capture'
 import { photoIds } from './photos'
 
-// The name of who did something, and that it was through the agent.
+// The name of who did something, and that it was through the agent. A change the server made on its
+// own is an integration's: named as far as the server can name it ("Stripe · payments").
 export function who(a: RecordAuthor | null, t: T): string {
   if (!a) return t('apps.records.unknownUser')
+  if (a.system) {
+    const { provider, name, removed } = a.system
+    if (removed) return t('apps.records.system.removed')
+    if (provider && name) return t('apps.records.system.providerNamed', { provider, name })
+    if (provider || name) return t('apps.records.system.named', { name: provider || name || '' })
+    return t('apps.records.system.generic')
+  }
   return a.agent ? t('apps.records.agent', { name: a.name }) : a.name
 }
 
@@ -59,7 +67,7 @@ export function preview(data: Record<string, unknown>, f: Format, t: T, fields?:
   return parts.length > 0 ? parts.join(' · ') : t('apps.records.empty')
 }
 
-// A record's versions, newest first.
+// A record's versions, newest first, as a timeline (AppExplorer.css).
 export function HistoryList({
   id,
   versions,
@@ -77,24 +85,26 @@ export function HistoryList({
     t(v.operation === 'restore' ? 'apps.records.restoreOp' : `apps.records.${v.operation}`)
   return (
     <>
-      <ol className="tt-history" aria-label={t('apps.records.historyNamed', { id: String(id) })}>
+      <ol className="ui-timeline" aria-label={t('apps.records.historyNamed', { id: String(id) })}>
         {versions.map((v) => (
-          <li key={v.revision}>
-            <div className="tt-small">
+          <li key={v.revision} className="ui-timeline-item">
+            <p className="ui-timeline-title">
               {t('apps.records.version', {
                 operation: operation(v),
                 revision: String(v.revision),
                 when: f.dateTime(v.at),
                 name: who(v.by, t),
               })}
-            </div>
-            <div className="tt-muted tt-small tt-record-data">{preview(v.data, f, t, fields)}</div>
-            {v.synthetic && <div className="tt-muted tt-small">{t('apps.records.synthetic')}</div>}
+            </p>
+            <p className="ui-timeline-detail">{preview(v.data, f, t, fields)}</p>
+            {v.synthetic && <p className="ui-timeline-detail">{t('apps.records.synthetic')}</p>}
           </li>
         ))}
       </ol>
       {truncated && (
-        <p className="tt-muted tt-small">{t('apps.records.versionsTruncated', { count: f.number(versions.length) })}</p>
+        <p className="ui-timeline-detail">
+          {t('apps.records.versionsTruncated', { count: f.number(versions.length) })}
+        </p>
       )}
     </>
   )

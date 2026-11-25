@@ -172,6 +172,15 @@ test('typed coordinates out of range show a message and store nothing', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Use these coordinates' }))
   expect(screen.getByRole('alert').textContent).toMatch(/latitude from −90 to 90/)
   expect(changed).not.toHaveBeenCalled()
+  // Both inputs are described by the message, so it is read again when either is focused.
+  for (const name of ['Latitude', 'Longitude']) {
+    const input = screen.getByLabelText(name)
+    const described = (input.getAttribute('aria-describedby') ?? '')
+      .split(' ')
+      .map((id) => document.getElementById(id)?.textContent ?? '')
+      .join(' ')
+    expect(described, name).toMatch(/latitude from −90 to 90/)
+  }
 })
 
 test('a stored location is shown, read-only, with no way to change it', () => {
@@ -334,11 +343,18 @@ test('touch-action: none is set on the signature pad and nowhere else in the app
     }
   }
   walk(join(import.meta.dirname, '..'))
-  // The stylesheet rule for the pad's class, and the pad's own inline style.
-  expect(found.sort()).toEqual(['apps/SignaturePad.tsx', 'apps/apps.legacy.css'])
-  const css = readFileSync(join(import.meta.dirname, 'apps.legacy.css'), 'utf8')
-  const rule = /([^{}]+)\{[^}]*touch-action:\s*none[^}]*\}/.exec(css.replace(/\/\*[\s\S]*?\*\//g, ''))
-  expect(rule?.[1].trim()).toBe('.tt-signature-canvas')
+  // The stylesheet rule for the pad's class, and the pad's own inline style. (apps.legacy.css
+  // still holds the pad's old rule, for its old class, until the old stylesheets' unused rules go.)
+  expect(found.filter((f) => f !== 'apps/apps.legacy.css').sort()).toEqual([
+    'apps/SignaturePad.tsx',
+    'apps/capture.css',
+  ])
+  for (const file of found.filter((f) => f.endsWith('.css'))) {
+    const css = readFileSync(join(import.meta.dirname, '..', file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const selectors = [...css.matchAll(/([^{}]+)\{[^}]*touch-action:\s*none[^}]*\}/g)].map((m) => m[1].trim())
+    expect(selectors.length, file).toBeGreaterThan(0)
+    for (const sel of selectors) expect(['.tt-signature-canvas', '.ui-signature-canvas'], file).toContain(sel)
+  }
 })
 
 test('drawing keeps the strokes, undo and clear take them back, and saving uploads a PNG', async () => {
@@ -403,7 +419,7 @@ test('a name typed and confirmed is a signature too, for the keyboard', async ()
   fakeFetch(uploadRoutes())
   const changed = vi.fn()
   render(<Sign onValue={changed} />)
-  fireEvent.click(screen.getByRole('button', { name: 'Type your name' }))
+  fireEvent.click(screen.getByRole('radio', { name: 'Type your name' }))
   const save = screen.getByRole('button', { name: 'Save signature' }) as HTMLButtonElement
   expect(save.disabled).toBe(true)
   fireEvent.change(screen.getByLabelText('Your full name'), { target: { value: 'Ada Lovelace' } })
@@ -639,6 +655,20 @@ test('online, the microphone says in its title where the speech goes', async () 
   const mic = (await screen.findByRole('button', { name: 'Dictate into Notes' })) as HTMLButtonElement
   expect(mic.disabled).toBe(false)
   expect(mic.title).toMatch(/sent to this server.*needs a connection/)
+})
+
+test('the microphone is the same button online and offline: the library’s, never the chat box’s old one', async () => {
+  stubNavigator('onLine', true)
+  fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
+  const { unmount } = render(<FieldDictation workspace={1} field="Notes" onText={() => {}} />)
+  const online = await screen.findByRole('button', { name: 'Dictate into Notes' })
+  expect(online.className).toContain('ui-icon-button')
+  expect(online.className).not.toContain('tt-button')
+  unmount()
+  stubNavigator('onLine', false)
+  render(<FieldDictation workspace={1} field="Notes" onText={() => {}} />)
+  const offline = screen.getByRole('button', { name: 'Dictate into Notes' })
+  expect(offline.className).toBe(online.className)
 })
 
 test('where the workspace has dictation off, the reason and the keyboard’s own dictation are said', async () => {
@@ -894,4 +924,65 @@ test('nothing in the web app or the agent watches the device’s position', () =
   walk(join(import.meta.dirname, '..'))
   walk(join(import.meta.dirname, '../../../agent/src'))
   expect(hits).toEqual([])
+})
+
+test('on a screen, the typed signature’s name field is named by its own label, not the confirming box’s', async () => {
+  stubCanvas()
+  stubNavigator('onLine', true)
+  fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
+  render(
+    <AppView
+      surfaceId="app-9"
+      label="Inspection"
+      release={{ definition_version: DEFINITION_VERSION, requires: NEEDS }}
+      transport={{ load: async () => structuredClone(screenMessages), act: vi.fn(async () => []), files }}
+    />,
+  )
+  fireEvent.click(await screen.findByRole('radio', { name: 'Type your name' }))
+  // The screen's label linking runs on what was just drawn.
+  await new Promise((r) => setTimeout(r, 0))
+  const name = screen.getByRole('textbox', { name: 'Your full name' })
+  expect(name.getAttribute('aria-labelledby')).toBeNull()
+  expect(screen.getByRole('checkbox', { name: /typing my name here is my signature/ })).toBeTruthy()
+})
+
+test('while a submission is being made, a photo’s buttons are held, and only the fields that can be part of it are not', async () => {
+  stubCanvas()
+  stubNavigator('onLine', true)
+  const geo = { getCurrentPosition: vi.fn(), watchPosition: vi.fn(), clearWatch: vi.fn() }
+  stubNavigator('geolocation', geo)
+  fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
+  // The screen above, with a photo field holding one photo already.
+  const messages = structuredClone(screenMessages) as typeof screenMessages
+  const comps = (messages[1] as unknown as { updateComponents: { components: Record<string, unknown>[] } })
+    .updateComponents.components
+  ;(comps[0] as { children: string[] }).children.unshift('pics')
+  comps.push({ id: 'pics', component: 'PhotoInput', field: 'pics', label: 'Pictures', value: { path: '/draft/pics' } })
+  const model = (messages[2] as unknown as { updateDataModel: { value: Record<string, Record<string, unknown>> } })
+    .updateDataModel.value
+  model.draft.pics = ['0123456789abcdef0123456789abcdef']
+  model._files.pics = { max_files: 3, max_bytes: 1048576 }
+  render(
+    <AppView
+      surfaceId="app-9"
+      label="Inspection"
+      release={{
+        definition_version: DEFINITION_VERSION,
+        requires: [...NEEDS, 'component.PhotoInput', 'field.attachment'],
+      }}
+      transport={{ load: async () => messages, act: vi.fn(async () => []), files }}
+    />,
+  )
+  const save = await screen.findByRole('button', { name: 'Save' })
+  const remove = screen.getByRole('button', { name: 'Remove photo 1' }) as HTMLButtonElement
+  const byHand = screen.getByRole('button', { name: 'Enter coordinates by hand' }) as HTMLButtonElement
+  expect(remove.disabled).toBe(false)
+  // The location is taken as the form is submitted, and the answer doesn't come: the submission waits.
+  fireEvent.click(save)
+  await waitFor(() => expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(true))
+  // Removing a photo now would delete an upload the request names: held.
+  expect(remove.disabled).toBe(true)
+  // The location, part of what is being sent, stays usable.
+  expect(byHand.disabled).toBe(false)
 })

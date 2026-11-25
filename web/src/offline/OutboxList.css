@@ -1,0 +1,43 @@
+/* The records made on this device (OutboxList): a row each, its state as a badge, what it waits for
+   or why it needs the person, and its actions; the review of one opens under its row. */
+
+@layer screens {
+  .ui-outbox {
+    display: grid;
+    gap: var(--space-3);
+    min-inline-size: 0;
+  }
+
+  .ui-outbox-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .ui-outbox-note {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-outbox > .ui-button {
+    justify-self: start;
+  }
+
+  .ui-outbox-line {
+    display: block;
+  }
+
+  .ui-outbox-line[data-tone="danger"] {
+    color: var(--color-danger);
+    font-weight: 500;
+  }
+
+  /* Discard, the one that can't be undone, apart from the safe actions: at the end of their line,
+     with room before it (on its own line when they wrap). */
+  .ui-outbox-discard {
+    margin-inline-start: auto;
+    padding-inline-start: var(--space-4);
+  }
+}

@@ -142,6 +142,7 @@ export type AppsAuthor = {
   name: string
   agent: boolean
   via?: string
+  system?: AppsSystemAuthor
 }
 
 export type AppsAvailableDefault = {
@@ -360,6 +361,14 @@ export type AppsSummary = {
   month_of?: string
 }
 
+export type AppsSystemAuthor = {
+  kind: string
+  id: number
+  provider?: string
+  name?: string
+  removed?: boolean
+}
+
 export type AppsTemplateRoles = {
   installer: string[]
   members?: string[]
@@ -375,6 +384,7 @@ export type AuthMeUser = {
   email: string
   name: string
   locale: string
+  time_zone: string
 }
 
 export type AvailableApp = {

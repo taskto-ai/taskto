@@ -10,6 +10,10 @@
 import { createContext, useContext, useEffect, useId, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useFormat, useT } from '../i18n'
+import { Button, buttonClass } from '../ui/Button'
+import { Icon } from '../ui/Icon'
+import { IconButton } from '../ui/IconButton'
+import { Notice } from '../ui/Notice'
 import {
   DEFAULT_LIMITS,
   discardPhoto,
@@ -20,6 +24,7 @@ import {
   UploadCancelled,
   uploadPhoto,
 } from './photos'
+import './capture.css'
 
 // Where the app's attachments are (…/spaces/{space}/apps/{app}), given by the screen that draws
 // them; uploads is false where the screen is a preview, whose buttons change nothing.
@@ -185,75 +190,77 @@ export function PhotoField({
 
   const heading = label ?? t('apps.photos.label')
   return (
-    <fieldset className="tt-photos" aria-describedby={hintId}>
-      <legend className="tt-photos-label">{heading}</legend>
+    <fieldset className="ui-capture" aria-describedby={hintId}>
+      <legend className="ui-capture-label">{heading}</legend>
       {files && value.length > 0 && (
-        <ul className="tt-photo-grid">
+        <ul className="ui-photo-grid">
           {value.map((id, i) => (
-            <li key={id} className="tt-photo">
+            <li key={id} className="ui-photo">
               <img
                 src={files.local ? files.local.url(id) : thumbnailUrl(files.base, id)}
                 alt={t('apps.photos.photoN', { n: i + 1, total: value.length })}
                 loading="lazy"
               />
-              <button
-                type="button"
-                className="tt-button"
-                aria-label={t('apps.photos.removeNamed', { n: i + 1 })}
-                onClick={() => remove(id)}
-              >
-                {t('apps.photos.remove')}
-              </button>
+              <span className="ui-photo-remove">
+                <IconButton
+                  size="sm"
+                  icon="close"
+                  label={t('apps.photos.removeNamed', { n: i + 1 })}
+                  onClick={() => remove(id)}
+                />
+              </span>
             </li>
           ))}
         </ul>
       )}
       {pending.length > 0 && (
-        <ul className="tt-photo-uploads">
+        <ul className="ui-photo-uploads">
           {pending.map((p) => (
-            <li key={p.key} className="tt-photo-upload">
-              <span className="tt-photo-name">{p.name}</span>
+            <li key={p.key} className="ui-photo-upload" data-failed={p.failed ? true : undefined}>
+              <span className="ui-photo-name">{p.name}</span>
               {p.failed ? (
                 <>
-                  <span role="alert" className="tt-error tt-small">
+                  <span role="alert" className="ui-photo-failed">
+                    <Icon name="alert" size={14} />
                     {t('apps.photos.failed', { name: p.name, error: p.failed })}
                   </span>
-                  <button
-                    type="button"
-                    className="tt-button"
+                  <Button
+                    size="sm"
                     aria-label={t('apps.photos.retryNamed', { name: p.name })}
                     onClick={() => void run(p)}
                   >
                     {t('apps.photos.retry')}
-                  </button>
+                  </Button>
                 </>
               ) : (
                 <progress
+                  className="ui-photo-progress"
                   max={p.file.size}
                   value={p.sent}
                   aria-label={t('apps.photos.progressNamed', { name: p.name })}
                 />
               )}
-              <button
-                type="button"
-                className="tt-button"
-                aria-label={t('apps.photos.cancelNamed', { name: p.name })}
+              <IconButton
+                size="sm"
+                icon="close"
+                label={t('apps.photos.cancelNamed', { name: p.name })}
                 onClick={() => cancel(p)}
-              >
-                {t('apps.photos.cancel')}
-              </button>
+              />
             </li>
           ))}
         </ul>
       )}
-      <div className="tt-photo-add">
+      <div className="ui-photo-add">
         {/* The camera: where the browser has one, this opens it; where it hasn't, or the person has
-            blocked it, the library's input below does the same job. */}
-        <label className={`tt-button${!canAdd || cameraBlocked ? ' tt-disabled' : ''}`}>
+            blocked it, the library's input below does the same job. A file input has no component of
+            its own: it is kept, unseen over its label, for the keyboard and screen readers, and the
+            label is what is seen, drawn as a button. */}
+        <label className={buttonClass()} data-disabled={!canAdd || cameraBlocked || undefined}>
+          <Icon name="upload" size={16} />
           {t('apps.photos.take')}
           <input
             type="file"
-            className="tt-file-input"
+            className="ui-photo-file"
             accept={PHOTO_TYPES.join(',')}
             capture="environment"
             disabled={!canAdd || cameraBlocked}
@@ -263,11 +270,12 @@ export function PhotoField({
             }}
           />
         </label>
-        <label className={`tt-button${!canAdd ? ' tt-disabled' : ''}`}>
+        <label className={buttonClass()} data-disabled={!canAdd || undefined}>
+          <Icon name="folder" size={16} />
           {t('apps.photos.choose')}
           <input
             type="file"
-            className="tt-file-input"
+            className="ui-photo-file"
             accept={PHOTO_TYPES.join(',')}
             multiple={limits.max_files > 1}
             disabled={!canAdd}
@@ -278,7 +286,7 @@ export function PhotoField({
           />
         </label>
       </div>
-      <p id={hintId} className="tt-muted tt-small">
+      <p id={hintId} className="ui-capture-note">
         {!uploads
           ? t(files ? 'apps.photos.previewOnly' : 'apps.photos.notHere')
           : cameraBlocked
@@ -287,11 +295,7 @@ export function PhotoField({
         {t('apps.photos.limit', { count: limits.max_files })}{' '}
         {t('apps.photos.maxSize', { max: f.bytes(limits.max_bytes) })}
       </p>
-      {problem && (
-        <p role="alert" className="tt-error tt-small">
-          {problem}
-        </p>
-      )}
+      {problem && <Notice tone="danger">{problem}</Notice>}
     </fieldset>
   )
 }
@@ -313,11 +317,12 @@ export function PhotoStrip({
   if (local) ids = ids.filter((id) => local.url(id) !== undefined)
   if (ids.length === 0) return null
   return (
-    <figure className="tt-photos" aria-label={label ?? t('apps.photos.label')}>
-      <ul className="tt-photo-grid">
+    <figure className="ui-photos" aria-label={label ?? t('apps.photos.label')}>
+      <ul className="ui-photo-grid">
         {ids.map((id, i) => (
-          <li key={id} className="tt-photo">
+          <li key={id} className="ui-photo">
             <a
+              className="ui-capture-link"
               href={local ? local.url(id) : photoUrl(base, id)}
               target="_blank"
               rel="noopener noreferrer"

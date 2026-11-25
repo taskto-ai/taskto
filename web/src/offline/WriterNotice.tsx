@@ -4,6 +4,8 @@
 
 import { useState } from 'react'
 import { useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Notice } from '../ui/Notice'
 import { useWriter } from './hooks'
 import type { Runtime } from './runtime'
 
@@ -13,19 +15,23 @@ export function WriterNotice({ runtime }: { runtime: Runtime }) {
   const [waiting, setWaiting] = useState(false)
   if (writer) return null
   return (
-    <p className="tt-muted tt-small" role="status">
-      <span>{waiting ? t('offline.writer.waiting') : t('offline.writer.elsewhere')}</span>{' '}
-      <button
-        type="button"
-        className="tt-button"
-        disabled={waiting}
-        onClick={() => {
-          setWaiting(true)
-          void runtime.writer.takeOver().finally(() => setWaiting(false))
-        }}
-      >
-        {t('offline.writer.takeOver')}
-      </button>
-    </p>
+    <Notice
+      tone="info"
+      action={
+        <Button
+          size="sm"
+          loading={waiting}
+          disabled={waiting}
+          onClick={() => {
+            setWaiting(true)
+            void runtime.writer.takeOver().finally(() => setWaiting(false))
+          }}
+        >
+          {t('offline.writer.takeOver')}
+        </Button>
+      }
+    >
+      {waiting ? t('offline.writer.waiting') : t('offline.writer.elsewhere')}
+    </Notice>
   )
 }

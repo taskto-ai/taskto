@@ -166,8 +166,59 @@ const COMPONENTS_APP = {
       { name: 'hours', type: 'number' },
     ],
   },
-  actions: { add: { kind: 'insert' }, noop: { kind: 'navigate', screen: 'main' } },
+  actions: {
+    add: { kind: 'insert' },
+    edit: { kind: 'update' },
+    remove: { kind: 'delete' },
+    noop: { kind: 'navigate', screen: 'main' },
+  },
   summaries: { count: { kind: 'count' }, total_hours: { kind: 'sum', field: 'hours' } },
+}
+
+// An app whose one form holds every capture field TaskTo.AI's catalog has: photos, a location, a
+// signature and a barcode, each with its own field in the collection.
+const CAPTURE_APP_NAME = 'Every capture field'
+const CAPTURE_APP = {
+  screens: [
+    {
+      name: 'main',
+      root: 'main-root',
+      components: [
+        C('main-root', 'Column', { children: ['title', 'photos', 'place', 'signed', 'code', 'save'] }),
+        C('title', 'Text', { text: 'Site visit', variant: 'h2' }),
+        C('photos', 'PhotoInput', { field: 'photos', label: 'Photos of the site', value: { path: '/draft/photos' } }),
+        C('place', 'LocationInput', { field: 'place', label: 'Where you are', value: { path: '/draft/place' } }),
+        C('signed', 'SignatureInput', { field: 'signed', label: 'Your signature', value: { path: '/draft/signed' } }),
+        C('code', 'BarcodeInput', { field: 'code', label: 'Asset tag', value: { path: '/draft/code' } }),
+        C('save', 'Button', {
+          variant: 'primary',
+          child: 'save-label',
+          action: {
+            event: {
+              name: 'add',
+              context: {
+                photos: { path: '/draft/photos' },
+                place: { path: '/draft/place' },
+                signed: { path: '/draft/signed' },
+                code: { path: '/draft/code' },
+              },
+            },
+          },
+        }),
+        label('save-label', 'Save the visit'),
+      ],
+    },
+  ],
+  entry: 'main',
+  collection: {
+    fields: [
+      { name: 'photos', type: 'attachment', max_files: 3 },
+      { name: 'place', type: 'location' },
+      { name: 'signed', type: 'signature' },
+      { name: 'code', type: 'barcode' },
+    ],
+  },
+  actions: { add: { kind: 'insert' } },
 }
 
 // What a screen needs, in the order the run goes: before any account exists, with an account and
@@ -414,6 +465,58 @@ export const SCREENS = [
       await text(s, 'Submit', true).scrollIntoViewIfNeeded()
     },
     ready: (s) => [text(s, 'Submit', true), text(s, 'Safety notes', true)],
+  },
+  {
+    // Its records, opened from the app's header: the explorer (a table, or rows on a phone).
+    name: 'app-records',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`))
+      await s.page.getByRole('button', { name: 'Records and history' }).click()
+      await text(s, 'Riverside depot', true).first().waitFor()
+    },
+    ready: (s) => [text(s, 'Riverside depot', true).first(), text(s, /matching records/)],
+  },
+  {
+    // What its button set going: documents made, and a log the later visits couldn't make.
+    name: 'app-effects',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`))
+      await s.page.getByRole('button', { name: /^Effects/ }).click()
+      await s.page.getByRole('list', { name: 'The app’s effects' }).scrollIntoViewIfNeeded()
+    },
+    ready: (s) => [s.page.getByRole('list', { name: 'The app’s effects' })],
+  },
+  {
+    // One record open, with its fields and its history.
+    name: 'app-record',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`))
+      await s.page.getByRole('button', { name: 'Records and history' }).click()
+      await s.page
+        .getByRole('button', { name: /^Open record \d+$/ })
+        .first()
+        .click()
+    },
+    ready: (s) => [heading(s, /^Record \d+$/), text(s, /^History$/)],
+  },
+  // The capture fields: a photo, a location, a signature and a barcode, at the form's top and end.
+  {
+    name: 'app-capture',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('apps', `${s.ids.space}-${s.ids.captureApp}`)),
+    ready: (s) => [heading(s, CAPTURE_APP_NAME), text(s, 'Take a photo', true)],
+  },
+  {
+    name: 'app-capture-end',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.captureApp}`))
+      await text(s, 'Save the visit', true).scrollIntoViewIfNeeded()
+    },
+    ready: (s) => [text(s, 'Save the visit', true), s.page.getByLabel(/Code \(type it/)],
   },
   {
     name: 'app-builder',
@@ -1000,11 +1103,42 @@ async function seed({ api, base, workspace, agent, say }) {
     apps.push(app)
   }
   // An app that uses every component of the renderer an app may (docs/design.md, "The apps
-  // renderer").
+  // renderer"), with a few records through its own action, for its records and their history.
   {
-    const app = await api('POST', `${P}/apps`, { name: COMPONENTS_APP_NAME, definition: COMPONENTS_APP })
+    // What its button sets going: a document for each visit, and one log that only the first visit
+    // can make (a document is never written over), so the others' fail, with their retry.
+    const effects = [
+      { kind: 'create_document', space_id: mine.id, path: 'visits/{{id}}.md', content: 'Site: {{site}}\n' },
+      { kind: 'create_document', space_id: mine.id, path: 'visits/log.md', content: 'First visit: {{site}}\n' },
+    ]
+    const definition = {
+      ...COMPONENTS_APP,
+      actions: { ...COMPONENTS_APP.actions, add: { kind: 'insert', effects } },
+    }
+    const app = await api('POST', `${P}/apps`, { name: COMPONENTS_APP_NAME, definition })
     await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
     apps.componentsApp = app.id
+    const visits = [
+      ['North pumping station', 3.5],
+      ['Riverside depot', 1.25],
+      ['Old mill substation', 6],
+    ]
+    for (const [i, [site, hours]] of visits.entries()) {
+      await api('POST', `${P}/apps/${app.id}/actions`, {
+        name: 'add',
+        surfaceId: `app-${app.id}`,
+        sourceComponentId: 'a-save',
+        timestamp: new Date().toISOString(),
+        context: { site, hours },
+        operation: `screens-visit-${i}`,
+      })
+    }
+  }
+  // An app whose form holds every capture field.
+  {
+    const app = await api('POST', `${P}/apps`, { name: CAPTURE_APP_NAME, definition: CAPTURE_APP })
+    await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
+    apps.captureApp = app.id
   }
   const available = (await api('GET', `${W}/home/available`)).apps ?? []
   let homeApp
@@ -1057,6 +1191,7 @@ async function seed({ api, base, workspace, agent, say }) {
     appName: apps[0].name,
     homeApp: homeApp ?? apps[0].name,
     componentsApp: apps.componentsApp,
+    captureApp: apps.captureApp,
     conversation: talk?.id,
   }
 }

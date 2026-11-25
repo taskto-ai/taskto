@@ -4,6 +4,7 @@ import { Button } from './Button'
 import { Specimen } from './GalleryParts'
 import { Icon } from './Icon'
 import { MenuItem, MenuSeparator, MoreMenu } from './Menu'
+import { Notice } from './Notice'
 import { Panel } from './Panel'
 import { Row, Rows } from './Rows'
 
@@ -82,6 +83,40 @@ export default function RowsGallery() {
               title={t('gallery.layout.currentRow')}
               detail={t('gallery.layout.currentDetail')}
               current
+            />
+            <Row
+              leading={<Icon name="alert" />}
+              title={t('gallery.layout.expenses')}
+              status={
+                <Badge tone="danger" dot>
+                  {t('gallery.state.error')}
+                </Badge>
+              }
+            >
+              <Notice tone="warning">{t('gallery.layout.openedRow')}</Notice>
+            </Row>
+            <Row
+              leading={<Icon name="alert" />}
+              title={t('gallery.layout.expenses')}
+              detail={t('gallery.layout.actionsBelow')}
+              status={
+                <Badge tone="danger" dot>
+                  {t('gallery.state.error')}
+                </Badge>
+              }
+              actionsBelow
+              actions={
+                <>
+                  <Button size="sm">{t('gallery.layout.openApp')}</Button>
+                  <Button size="sm">{t('gallery.layout.openApp')}</Button>
+                  <Button size="sm" variant="ghost">
+                    {t('gallery.layout.openApp')}
+                  </Button>
+                  <Button size="sm" variant="danger">
+                    {t('gallery.layout.remove')}
+                  </Button>
+                </>
+              }
             />
           </Rows>
         </Panel>

@@ -46,6 +46,18 @@ export function LaunchedApp({
   const recordsId = useId()
   // The header's way to the records, which takes the keyboard back when the panel is closed from inside.
   const recordsToggle = useRef<HTMLButtonElement>(null)
+  // The explorer's way out: while a record in it holds unsaved changes, it asks before the panel
+  // goes (and the changes with it).
+  const leaveRecords = useRef<((go: () => void) => void) | null>(null)
+  const closeRecords = (fromInside: boolean) => {
+    const go = () => {
+      setRecordsOpen(false)
+      // Closed from inside the panel, which goes: the keyboard back to the header's way to it.
+      if (fromInside) recordsToggle.current?.focus()
+    }
+    if (leaveRecords.current) leaveRecords.current(go)
+    else go()
+  }
   const back = routePath({ workspace, section: 'apps' })
   const t = useT()
   const data = info.data
@@ -86,7 +98,7 @@ export function LaunchedApp({
                 open={recordsOpen}
                 controls={recordsId}
                 ref={recordsToggle}
-                onToggle={() => setRecordsOpen((o) => !o)}
+                onToggle={() => (recordsOpen ? closeRecords(false) : setRecordsOpen(true))}
               />
               {writable && data.access.design && (
                 <ButtonLink
@@ -137,10 +149,8 @@ export function LaunchedApp({
           <AppRecords
             id={recordsId}
             open={recordsOpen}
-            onClose={() => {
-              setRecordsOpen(false)
-              recordsToggle.current?.focus()
-            }}
+            onClose={() => closeRecords(true)}
+            leaveRef={leaveRecords}
             base={base}
             appId={app}
             access={data.access}
