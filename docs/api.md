@@ -2589,7 +2589,9 @@ The live records the caller may read, most recently changed first, at most 1,000
 "updated_by", "updated_action", "deleted_at", "deleted_by", "deleted_action"}`, data
 holding the fields the **live release's** collection declares (the draft's don't count until
 published); `created_by` and the others are
-`{"id", "name", "agent", "via"}` or `null`. Read scope and `403`/`404` as for the history.
+`{"id", "name", "agent", "via"}`, or `null` (the user's account is gone), or, for a change the
+server made on its own, `{"id": 0, "name": "", "agent": false, "system": {…}}` (see
+[a change made by the server](#a-change-made-by-the-server)). Read scope and `403`/`404` as for the history.
 
 ### `GET …/apps/{app}/records/query`
 
@@ -2652,7 +2654,30 @@ out; a record's history holds its newest 500 versions, and drops the oldest as n
 who created, changed and deleted it, and `deleted_at` if it is deleted (its history can
 still be read). Data holds the fields the live release's collection declares. Needs reading the record:
 `404` for one the caller may not read or that doesn't exist, `403` with `read_records`
-for a role that reads no record.
+for a role that reads no record. `by` may be [a change made by the server](#a-change-made-by-the-server).
+
+#### A change made by the server
+
+Some changes to a record have no user: the server makes them itself, through the system writer,
+a Go API with no route, no tool and no way for an app's definition or a model to reach it (the
+integrations that write a payment link back to a record, or apply what a provider reported,
+use it). Its authority is only the fields an approved contract declares, checked when it writes
+against the live release; it has no roles, the record must still fit the collection, and it
+queues no effects. It is a change like any other: the revision goes up by one, a person's
+stale edit or an offline device's gets the usual `409 app_record_conflict` showing the
+server's value, and a write that sets what is already there changes nothing. In `by`,
+`updated_by` and the other authors of a record, such a change has no user:
+
+```json
+{"id": 0, "name": "", "agent": false,
+ "system": {"kind": "integration", "id": 7, "provider": "Stripe", "name": "payments"}}
+```
+
+`kind` is what acted (`integration`), `id` its id; `provider` and `name` are the integration's
+labels once the server can name it (absent until then), and `removed: true` stands in their place
+for an integration that no longer exists. The version's `action` is the normalized event that
+caused it (such as `payment.succeeded`). A `null` author still means only that an account was
+deleted, and `created_by` is never a system's: who may read their own records doesn't change.
 
 ### `GET …/apps/{app}/records/deleted`
 
