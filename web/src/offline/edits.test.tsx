@@ -2035,3 +2035,34 @@ test('discarding the earlier change wakes the queue: the change that waited for 
   expect(actionCalls(calls)).toHaveLength(1)
   expect((await store.listItems()).map((i) => i.state)).toEqual(['synced'])
 })
+
+test('the discard question names its record; cancelling or Escape keeps it, and confirming discards that one only', async () => {
+  const { store, runtime, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  await transport.act(press('add_expense', { description: 'Tea', amount: '2' }))
+  render(<Harness runtime={runtime} />)
+  const entry = await screen.findByText(/Expenses: change to Coffee/)
+  const row = () => entry.closest('li') as HTMLElement
+  const question = () => screen.findByRole('alertdialog', { name: /Discard Expenses: change to Coffee/ })
+  expect(await store.listItems()).toHaveLength(2)
+
+  // Cancel keeps it.
+  fireEvent.click(within(row()).getByRole('button', { name: /Discard/ }))
+  fireEvent.click(within(await question()).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(await store.listItems()).toHaveLength(2)
+
+  // Escape keeps it (the dialog's own cancel).
+  fireEvent.click(within(row()).getByRole('button', { name: /Discard/ }))
+  const asked = await question()
+  fireEvent(asked, new Event('cancel', { cancelable: true }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(await store.listItems()).toHaveLength(2)
+
+  // Confirming discards that record, and only it.
+  fireEvent.click(within(row()).getByRole('button', { name: /Discard/ }))
+  fireEvent.click(within(await question()).getByRole('button', { name: 'Yes, discard' }))
+  await waitFor(async () => expect(await store.listItems()).toHaveLength(1))
+  const [left] = await store.listItems()
+  expect(left.action.context).toMatchObject({ description: 'Tea' })
+})

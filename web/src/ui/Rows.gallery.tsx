@@ -89,6 +89,29 @@ export default function RowsGallery() {
             >
               <Notice tone="warning">{t('gallery.layout.openedRow')}</Notice>
             </Row>
+            <Row
+              leading={<Icon name="alert" />}
+              title={t('gallery.layout.expenses')}
+              detail={t('gallery.layout.actionsBelow')}
+              status={
+                <Badge tone="danger" dot>
+                  {t('gallery.state.error')}
+                </Badge>
+              }
+              actionsBelow
+              actions={
+                <>
+                  <Button size="sm">{t('gallery.layout.openApp')}</Button>
+                  <Button size="sm">{t('gallery.layout.openApp')}</Button>
+                  <Button size="sm" variant="ghost">
+                    {t('gallery.layout.openApp')}
+                  </Button>
+                  <Button size="sm" variant="danger">
+                    {t('gallery.layout.remove')}
+                  </Button>
+                </>
+              }
+            />
           </Rows>
         </Panel>
       </div>

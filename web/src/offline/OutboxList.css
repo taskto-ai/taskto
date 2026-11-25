@@ -33,4 +33,11 @@
     color: var(--color-danger);
     font-weight: 500;
   }
+
+  /* Discard, the one that can't be undone, apart from the safe actions: at the end of their line,
+     with room before it (on its own line when they wrap). */
+  .ui-outbox-discard {
+    margin-inline-start: auto;
+    padding-inline-start: var(--space-4);
+  }
 }

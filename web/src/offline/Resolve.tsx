@@ -335,8 +335,12 @@ const stripId = (context: Record<string, unknown>) => {
   return rest
 }
 
+const as = (role: 'table' | 'rowgroup' | 'row' | 'columnheader' | 'rowheader' | 'cell') => ({ role })
+
 // What the person changed, field by field, beside what was there when they started and what the
-// server has now.
+// server has now. Its roles are said outright: on a phone its rows and cells are laid out as grids
+// (one under the other), and some browsers drop a table's meaning when its parts aren't displayed
+// as a table's. (Written through `as`, since a linter takes a table's own roles for redundant.)
 function ConflictTable({
   fields,
   item,
@@ -356,23 +360,36 @@ function ConflictTable({
   const del = kindOf(item) === 'delete'
   const shown = fields.filter((field) => field.name in changed || !same(original[field.name], server[field.name]))
   return (
-    <table className="ui-resolve-table">
-      <thead>
-        <tr>
-          <th scope="col">{t('offline.resolve.column.field')}</th>
-          <th scope="col">{t('offline.resolve.column.original')}</th>
-          <th scope="col">{del ? t('offline.resolve.column.deleted') : t('offline.resolve.column.mine')}</th>
-          <th scope="col">{t('offline.resolve.column.server')}</th>
+    <table className="ui-resolve-table" {...as('table')}>
+      <thead {...as('rowgroup')}>
+        <tr {...as('row')}>
+          <th scope="col" {...as('columnheader')}>
+            {t('offline.resolve.column.field')}
+          </th>
+          <th scope="col" {...as('columnheader')}>
+            {t('offline.resolve.column.original')}
+          </th>
+          <th scope="col" {...as('columnheader')}>
+            {del ? t('offline.resolve.column.deleted') : t('offline.resolve.column.mine')}
+          </th>
+          <th scope="col" {...as('columnheader')}>
+            {t('offline.resolve.column.server')}
+          </th>
         </tr>
       </thead>
-      <tbody>
+      <tbody {...as('rowgroup')}>
         {shown.map((field) => (
-          <tr key={field.name}>
-            <th scope="row">{field.name}</th>
-            <td data-label={t('offline.resolve.column.original')}>
+          <tr key={field.name} {...as('row')}>
+            <th scope="row" {...as('rowheader')}>
+              {field.name}
+            </th>
+            <td {...as('cell')} data-label={t('offline.resolve.column.original')}>
               <ValueText value={original[field.name]} f={f} field={field} />
             </td>
-            <td data-label={del ? t('offline.resolve.column.deleted') : t('offline.resolve.column.mine')}>
+            <td
+              {...as('cell')}
+              data-label={del ? t('offline.resolve.column.deleted') : t('offline.resolve.column.mine')}
+            >
               {del ? (
                 <span className="ui-resolve-empty">{t('offline.resolve.deletedMark')}</span>
               ) : (
@@ -383,7 +400,7 @@ function ConflictTable({
                 />
               )}
             </td>
-            <td data-label={t('offline.resolve.column.server')}>
+            <td {...as('cell')} data-label={t('offline.resolve.column.server')}>
               <ValueText value={server[field.name]} f={f} field={field} />
             </td>
           </tr>

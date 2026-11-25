@@ -181,8 +181,13 @@ export function OutboxList({
                     )}
                   </>
                 }
+                // Under the row, on a line of their own that wraps: a record that needs attention can
+                // have four. A row with nothing to do (sent, being sent) has none.
+                actionsBelow
                 actions={
-                  writer && (
+                  writer &&
+                  item.state !== 'synced' &&
+                  item.state !== 'syncing' && (
                     <>
                       {reviewable && (
                         <Button
@@ -222,7 +227,8 @@ export function OutboxList({
                           {t('offline.queue.send')}
                         </Button>
                       )}
-                      {item.state !== 'synced' && item.state !== 'syncing' && (
+                      {/* Apart from the safe ones, at the end. */}
+                      <span className="ui-outbox-discard">
                         <DiscardButton
                           runtime={runtime}
                           item={item}
@@ -230,7 +236,7 @@ export function OutboxList({
                           onDone={() => setNotice(null)}
                           onError={setNotice}
                         />
-                      )}
+                      </span>
                     </>
                   )
                 }

@@ -32,8 +32,10 @@ export function DiscardButton({
   const asked = useRef<SeenAs | null>(null)
   const ask = async () => {
     asked.current = seenAs(item)
+    // Named: the page under the question has several rows like it.
     const yes = await confirm({
-      title: t('offline.queue.discardQuestion'),
+      title: t('offline.queue.discardTitle', { name }),
+      body: t('offline.queue.discardBody'),
       confirmLabel: t('offline.queue.discardConfirm'),
       tone: 'danger',
     })
