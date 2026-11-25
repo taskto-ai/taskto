@@ -60,4 +60,7 @@ export type Contract = [
   Is<Check<Gen.IntegrationRegistry, Api.IntegrationRegistry>>,
   Is<Check<Gen.IntegrationCheck, Api.IntegrationCheck>>,
   Is<Check<Gen.SpaceIntegration, Api.SpaceIntegration>>,
+  // The host's updates, for the server's operators.
+  Is<Check<Gen.UpdateReport, Api.UpdateStatus>>,
+  Is<Check<Gen.UpdateRequested, Api.UpdateRequested>>,
 ]

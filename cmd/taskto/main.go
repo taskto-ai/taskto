@@ -374,8 +374,10 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		BackupDataDir: cfg.DataDir,
 		// The host updater's status, read-only (docs/install.md#automatic-updates).
 		UpdateStatusDir: cfg.UpdateStatusDir,
-		Quota:           quotas,
-		Mail:            mailer,
+		// Update now's request, for the same updater to take; the one place of its the server writes.
+		UpdateRequestDir: cfg.UpdateRequestDir,
+		Quota:            quotas,
+		Mail:             mailer,
 		// Photos that were never saved in a record are removed after a day, and an app moved to
 		// another space has its files follow it (internal/apps/attachments.go).
 		AppsReady: func(svc *apps.Service) {

@@ -112,6 +112,7 @@ the default.
 | `-smtp-egress` | `TASKTO_SMTP_EGRESS` | `smtp_egress` | `any` | where the SMTP connection may go, as the provider accounts' policy above |
 | `-integration-egress` | `TASKTO_INTEGRATION_EGRESS` | `integration_egress` | `public` | where calls to integrations' providers (Stripe, Square) may go: `public` (addresses checked on every connection), `any`, or a list as for the provider accounts' policy above ([docs/integrations.md](docs/integrations.md#egress)) |
 | `-update-status-dir` | `TASKTO_UPDATE_STATUS_DIR` | `update_status_dir` | | where the host's updater writes the status operators see in Settings → About (read-only; an absolute path; [docs/install.md](docs/install.md#automatic-updates)) |
+| `-update-request-dir` | `TASKTO_UPDATE_REQUEST_DIR` | `update_request_dir` | | where Update now (Settings → About) puts its request for the host's updater to take (writable; an absolute path; [docs/install.md](docs/install.md#update-now)) |
 | `-agent` | `TASKTO_AGENT` | `agent` | `false` | run the agent runtime (see below) |
 | `-agent-node` | `TASKTO_AGENT_NODE` | `agent_node` | `node` | Node.js executable for the agent runtime, looked up in `PATH` unless it is a path |
 | `-agent-entry` | `TASKTO_AGENT_ENTRY` | `agent_entry` | see below | the agent runtime's entry point |

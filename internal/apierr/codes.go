@@ -423,4 +423,11 @@ const (
 	CodeIntegrationCurrencyInvalid  Code = "integration_currency_invalid"  // params: max
 	CodeTooManyIntegrations         Code = "too_many_integrations"         // params: max
 	CodeIntegrationInUse            Code = "integration_in_use"
+
+	// The operator's "Update now" (internal/server/updates.go, docs/api.md#update-now).
+
+	CodeUpdateRequestUnsupported Code = "update_request_unsupported" // 409: no request directory, or the host's updater or its path unit can't take one (deploy/INSTALL.md step 16)
+	CodeUpdateChannelOff         Code = "update_channel_off"         // 409: the updater's channel is off
+	CodeUpdateRequestPending     Code = "update_request_pending"     // 409: a request waits for the host to take it
+	CodeUpdateRunning            Code = "update_running"             // 409: a run is changing the install
 )

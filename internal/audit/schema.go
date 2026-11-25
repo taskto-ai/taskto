@@ -143,6 +143,8 @@ var schemas = map[string]map[string]kind{
 	SpaceMemberRoleChanged: {"user_id": number, "from": spaceRoles, "to": spaceRoles},
 	SpaceMemberRemoved:     {"user_id": number, "role": spaceRoles, "cascade": cascadeFlag},
 
+	ServerUpdateRequested: {"channel": oneOf("release", "main")},
+
 	DataExportStarted:      {},
 	WorkspaceExportStarted: {"spaces": number},
 
