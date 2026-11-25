@@ -5,7 +5,7 @@
 // to the server (which refuses if it changed meanwhile), and a change of endpoint stops
 // embedding until someone consents again.
 
-import { type FormEvent, type ReactNode, useState } from 'react'
+import { type FormEvent, type ReactNode, useId, useState } from 'react'
 import {
   api,
   type Consent,
@@ -19,7 +19,15 @@ import {
 import { useT } from '../i18n'
 import { useLoad } from '../load'
 import { spaceLabel } from '../spaces'
-import { Alert, day, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { Field } from '../ui/Field'
+import { Heading } from '../ui/Heading'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Select } from '../ui/Select'
+import { Alert, day, Facts, FormActions, Loading, Section, SettingsTab, useAction } from './parts'
 
 export function SearchTab({ workspace, admin }: { workspace: number; admin: boolean }) {
   const base = ws(workspace)
@@ -35,11 +43,23 @@ export function SearchTab({ workspace, admin }: { workspace: number; admin: bool
   const t = useT()
 
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-embeddings">
-        <h2 id="tt-embeddings">{t('settings.search.title')}</h2>
-        <p className="tt-muted tt-small">{t('settings.search.intro')}</p>
+    <SettingsTab title={t('settings.tabs.search')} help={t('settings.help.search')}>
+      <Section
+        title={t('settings.search.title')}
+        help={t('settings.search.intro')}
+        actions={
+          settings.data &&
+          (settings.data.embeddings ? (
+            <Badge tone="success" dot>
+              {t('settings.search.onBadge')}
+            </Badge>
+          ) : (
+            <Badge tone="neutral">{t('settings.search.offBadge')}</Badge>
+          ))
+        }
+      >
         <Alert error={settings.error ?? accounts.error} />
+        {!settings.data && !settings.error && <Loading lines={2} />}
         {settings.data && <Status settings={settings.data} accounts={accounts.data} />}
         {admin && settings.data && accounts.data && (
           <EmbeddingsForm
@@ -57,13 +77,11 @@ export function SearchTab({ workspace, admin }: { workspace: number; admin: bool
             }}
           />
         )}
-      </section>
+      </Section>
 
-      <section className="tt-panel" aria-labelledby="tt-consent">
-        <h2 id="tt-consent">{t('settings.search.yourSpaces')}</h2>
-        <p className="tt-muted tt-small">{t('settings.search.spacesIntro')}</p>
+      <Section title={t('settings.search.yourSpaces')} help={t('settings.search.spacesIntro')}>
         <Alert error={spaces.error} />
-        {!spaces.data && !spaces.error && <p className="tt-muted">{t('app.loading')}</p>}
+        {!spaces.data && !spaces.error && <Loading />}
         {spaces.data?.map((s) => (
           <SpaceConsent
             key={`${s.id}/${round}`}
@@ -73,8 +91,8 @@ export function SearchTab({ workspace, admin }: { workspace: number; admin: bool
             members={members.data}
           />
         ))}
-      </section>
-    </div>
+      </Section>
+    </SettingsTab>
   )
 }
 
@@ -85,9 +103,9 @@ function accountName(accounts: ProviderAccount[] | undefined, id: number): strin
 function Status({ settings, accounts }: { settings: SearchSettings; accounts: ProviderAccount[] | undefined }) {
   const t = useT()
   const e = settings.embeddings
-  if (!e) return <p>{t('settings.search.noModel')}</p>
+  if (!e) return <Notice tone="neutral">{t('settings.search.noModel')}</Notice>
   return (
-    <p>
+    <p className="settings-text">
       {t.rich('settings.search.status', {
         model: <code>{e.model}</code>,
         account: accountName(accounts, e.account) ?? t('settings.search.anAccount'),
@@ -124,59 +142,62 @@ function EmbeddingsForm({
     put({ account: Number(account), model: model.trim() })
   }
   const chosen = accounts.find((a) => String(a.id) === account)
+  const listId = useId()
+  const servedId = useId()
 
   if (accounts.length === 0) {
-    return <p className="tt-muted">{t('settings.search.accountsFirst')}</p>
+    return <Notice tone="neutral">{t('settings.search.accountsFirst')}</Notice>
   }
   return (
-    <form className="tt-form" onSubmit={submit} aria-label={t('settings.search.form')}>
-      <div className="tt-form-row">
-        <label>
-          {t('settings.search.account')}
-          <select value={account} onChange={(e) => setAccount(e.target.value)}>
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          {t('settings.actions.model')}
-          <input
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            required
-            maxLength={256}
-            list="tt-embed-models"
-            placeholder="nomic-embed-text"
-            spellCheck={false}
-          />
-          <datalist id="tt-embed-models">
+    <Panel padded>
+      <form className="settings-form" onSubmit={submit} aria-label={t('settings.search.form')}>
+        <div className="settings-form-row">
+          <Field label={t('settings.search.account')}>
+            <Select value={account} onChange={(e) => setAccount(e.target.value)}>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.display_name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={t('settings.actions.model')} required>
+            <Input
+              aria-describedby={chosen ? servedId : undefined}
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              maxLength={256}
+              list={listId}
+              placeholder="nomic-embed-text"
+              spellCheck={false}
+            />
+          </Field>
+          <datalist id={listId}>
             {chosen?.models.map((m) => (
               <option key={m.id} value={m.id} />
             ))}
           </datalist>
-        </label>
-      </div>
-      {chosen && (
-        <p className="tt-muted tt-small">
-          {t.rich('settings.search.servedAt', { url: <code>{`${chosen.base_url}/embeddings`}</code> })}
-        </p>
-      )}
-      <p className="tt-warning tt-small">{t('settings.search.changeWarning')}</p>
-      <Alert error={action.error} />
-      <div className="tt-row-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={action.busy}>
-          {action.busy ? t('settings.search.checking') : t('settings.actions.save')}
-        </button>
-        {settings.embeddings && (
-          <button type="button" className="tt-button" disabled={action.busy} onClick={() => put(null)}>
-            {t('settings.search.turnOff')}
-          </button>
+        </div>
+        {/* Under the row rather than under the model, so the two fields' boxes line up. */}
+        {chosen && (
+          <p className="settings-muted" id={servedId}>
+            {t.rich('settings.search.servedAt', { url: <code>{`${chosen.base_url}/embeddings`}</code> })}
+          </p>
         )}
-      </div>
-    </form>
+        <Notice tone="warning">{t('settings.search.changeWarning')}</Notice>
+        <Alert error={action.error} />
+        <FormActions>
+          <Button type="submit" variant="primary" loading={action.busy}>
+            {t('settings.actions.save')}
+          </Button>
+          {settings.embeddings && (
+            <Button variant="ghost" disabled={action.busy} onClick={() => put(null)}>
+              {t('settings.search.turnOff')}
+            </Button>
+          )}
+        </FormActions>
+      </form>
+    </Panel>
   )
 }
 
@@ -184,25 +205,22 @@ function Endpoint({ endpoint, accounts }: { endpoint: ConsentEndpoint; accounts:
   const t = useT()
   const name = accountName(accounts, endpoint.account)
   return (
-    <dl className="tt-endpoint">
-      <dt>{t('settings.search.account')}</dt>
-      <dd>
-        {name ? `${name} ` : ''}
-        <code>{`#${endpoint.account}`}</code>
-      </dd>
-      <dt>{t('settings.search.provider')}</dt>
-      <dd>
-        <code>{endpoint.provider}</code>
-      </dd>
-      <dt>{t('settings.actions.model')}</dt>
-      <dd>
-        <code>{endpoint.model}</code>
-      </dd>
-      <dt>{t('settings.actions.baseUrl')}</dt>
-      <dd>
-        <code>{endpoint.base_url}</code>
-      </dd>
-    </dl>
+    <Facts
+      items={[
+        {
+          term: t('settings.search.account'),
+          value: (
+            <>
+              {name ? `${name} ` : ''}
+              <code>{`#${endpoint.account}`}</code>
+            </>
+          ),
+        },
+        { term: t('settings.search.provider'), value: <code>{endpoint.provider}</code> },
+        { term: t('settings.actions.model'), value: <code>{endpoint.model}</code> },
+        { term: t('settings.actions.baseUrl'), value: <code>{endpoint.base_url}</code> },
+      ]}
+    />
   )
 }
 
@@ -240,77 +258,79 @@ function SpaceConsent({
   }
 
   return (
-    <article className="tt-consent" aria-label={label} data-enabled={c?.enabled || undefined}>
-      <h3>{label}</h3>
+    <Panel as="section" padded className="settings-panel-body" aria-label={label}>
+      <header className="settings-section-head">
+        <div className="settings-section-titles">
+          <Heading level={3}>{label}</Heading>
+        </div>
+        {c?.endpoint &&
+          (c.enabled ? (
+            <Badge tone="success" dot>
+              {t('settings.search.consentOn')}
+            </Badge>
+          ) : c.given_at ? (
+            <Badge tone="warning">{t('settings.search.consentPaused')}</Badge>
+          ) : (
+            <Badge tone="neutral">{t('settings.search.consentOff')}</Badge>
+          ))}
+      </header>
       <Alert error={consent.error} />
-      {!c && !consent.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {c && !c.endpoint && <p>{t('settings.search.fullTextOnly')}</p>}
+      {!c && !consent.error && <Loading lines={2} />}
+      {c && !c.endpoint && <p className="settings-muted">{t('settings.search.fullTextOnly')}</p>}
       {c?.endpoint && (
         <>
-          {c.enabled ? (
-            <p>
-              {by && c.given_at
+          <p className="settings-text">
+            {c.enabled
+              ? by && c.given_at
                 ? t.rich('settings.search.onBy', { name: by, date: day(c.given_at), strong })
-                : t.rich('settings.search.on', { strong })}
-            </p>
-          ) : c.given_at ? (
-            <p>{t.rich('settings.search.paused', { strong })}</p>
-          ) : (
-            <p>{t.rich('settings.search.offState', { strong })}</p>
-          )}
+                : t.rich('settings.search.on', { strong })
+              : c.given_at
+                ? t.rich('settings.search.paused', { strong })
+                : t.rich('settings.search.offState', { strong })}
+          </p>
           <Endpoint endpoint={c.endpoint} accounts={accounts} />
           {!canDecide && (
-            <p className="tt-muted tt-small">
+            <p className="settings-muted">
               {space.kind === 'private' ? t('settings.search.onlyOwner') : t('settings.search.onlyEditors')}
             </p>
           )}
           {canDecide && c.enabled && (
-            <div className="tt-row-actions">
-              <button
-                type="button"
-                className="tt-button"
-                disabled={action.busy}
-                onClick={() => put({ enabled: false })}
-              >
+            <FormActions>
+              <Button disabled={action.busy} onClick={() => put({ enabled: false })}>
                 {t('settings.search.withdraw')}
-              </button>
-              <span className="tt-muted tt-small">{t('settings.search.withdrawNote')}</span>
-            </div>
+              </Button>
+              <span className="settings-muted">{t('settings.search.withdrawNote')}</span>
+            </FormActions>
           )}
           {canDecide && !c.enabled && !asking && (
-            <div className="tt-row-actions">
-              <button type="button" className="tt-button" disabled={action.busy} onClick={() => setAsking(true)}>
+            <FormActions>
+              <Button disabled={action.busy} onClick={() => setAsking(true)}>
                 {t('settings.search.consent')}
-              </button>
-            </div>
+              </Button>
+            </FormActions>
           )}
           {canDecide && !c.enabled && asking && (
-            <fieldset className="tt-confirm-box" aria-label={t('settings.search.consentFor', { name: label })}>
-              <p>
+            <fieldset className="settings-fieldset" aria-label={t('settings.search.consentFor', { name: label })}>
+              <Notice tone="warning" title={t('settings.search.consentFor', { name: label })}>
                 {t.rich(space.kind === 'private' ? 'settings.search.askPrivate' : 'settings.search.askShared', {
                   name: label,
                   url: <code>{c.endpoint.base_url}</code>,
                   model: <code>{c.endpoint.model}</code>,
                 })}
-              </p>
-              <div className="tt-row-actions">
-                <button
-                  type="button"
-                  className="tt-button tt-primary"
-                  disabled={action.busy}
-                  onClick={() => put({ enabled: true, endpoint: c.endpoint })}
-                >
+              </Notice>
+              <FormActions>
+                <Button disabled={action.busy} onClick={() => put({ enabled: true, endpoint: c.endpoint })}>
                   {t('settings.search.yes')}
-                </button>
-                <button type="button" className="tt-button" onClick={() => setAsking(false)}>
+                </Button>
+                <Button variant="ghost" onClick={() => setAsking(false)}>
                   {t('common.cancel')}
-                </button>
-              </div>
+                </Button>
+              </FormActions>
             </fieldset>
           )}
         </>
       )}
       <Alert error={action.error} />
-    </article>
+    </Panel>
   )
 }

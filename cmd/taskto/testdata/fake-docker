@@ -199,7 +199,7 @@ config_json() {
 		| {type: "bind", source: "/srv/taskto/backup", target: "/run/taskto-backup", read_only: true} as $keys
 		| {name: "taskto",
 		   services: ({
-		     taskto: {image: ($p + "taskto:" + $v), cap_drop: ["ALL"], security_opt: ["no-new-privileges:true"],
+		     taskto: {image: ($p + "taskto:" + $v), stop_grace_period: "1m30s", cap_drop: ["ALL"], security_opt: ["no-new-privileges:true"],
 		              environment: {TASKTO_CLI_WORKERS: "container", TASKTO_DISABLE_PASSWORD_LOGIN: ""},
 		              volumes: [$data, {type: "volume", source: "cli-run", target: "/run/taskto-cli", volume: {}},
 		                        {type: "bind", source: $pub, target: "/update-status", read_only: true},

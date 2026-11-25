@@ -474,6 +474,77 @@ func TestUpdateStatusDir(t *testing.T) {
 	}
 }
 
+// Integrations' providers are reached through addresses checked on every connection unless the
+// operator says otherwise: the default is "public", not "any".
+func TestIntegrationEgress(t *testing.T) {
+	cfg, err := Load(nil, env(nil), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := cfg.IntegrationEgressPolicy(); p.IsAny() || p.String() != "public" {
+		t.Fatalf("default policy = %q", p.String())
+	}
+	cfg, err = Load(nil, env(map[string]string{"TASKTO_INTEGRATION_EGRESS": "any"}), io.Discard)
+	if err != nil || !cfg.IntegrationEgressPolicy().IsAny() {
+		t.Fatalf("any: %v, %+v", err, cfg.IntegrationEgress)
+	}
+	cfg, err = Load([]string{"-integration-egress", "public"}, env(map[string]string{"TASKTO_INTEGRATION_EGRESS": "any"}), io.Discard)
+	if err != nil || cfg.IntegrationEgressPolicy().IsAny() {
+		t.Fatalf("the flag takes precedence: %v, %+v", err, cfg.IntegrationEgress)
+	}
+	if _, err := Load(nil, env(map[string]string{"TASKTO_INTEGRATION_EGRESS": "nonsense!"}), io.Discard); err == nil || !strings.Contains(err.Error(), "egress") {
+		t.Fatalf("a bad policy: %v", err)
+	}
+}
+
+// An empty setting is "public", never "any": it must not open calls that carry credentials.
+func TestIntegrationEgressEmptyIsPublic(t *testing.T) {
+	file := writeConfig(t, `integration_egress = ""`)
+	for name, tt := range map[string]struct {
+		args []string
+		env  map[string]string
+	}{
+		"an empty flag":     {args: []string{"-integration-egress", ""}},
+		"a blank flag":      {args: []string{"-integration-egress", "  "}},
+		"an empty variable": {env: map[string]string{"TASKTO_INTEGRATION_EGRESS": ""}},
+		"an empty file key": {args: []string{"-config", file}},
+	} {
+		cfg, err := Load(tt.args, env(tt.env), io.Discard)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if p := cfg.IntegrationEgressPolicy(); p.IsAny() || p.String() != "public" {
+			t.Errorf("%s: policy = %q, want public", name, p.String())
+		}
+	}
+	// The method fails closed on its own: an unset, blank or unparsable field is "public".
+	for _, v := range []string{"", "  ", "nonsense!", "any, public", ",,"} {
+		if p := (Config{IntegrationEgress: v}).IntegrationEgressPolicy(); p.IsAny() || p.String() != "public" {
+			t.Errorf("IntegrationEgress = %q: policy = %q, want public", v, p.String())
+		}
+	}
+	if p := (Config{IntegrationEgress: "any"}).IntegrationEgressPolicy(); !p.IsAny() {
+		t.Error("an explicit any was refused")
+	}
+}
+
+// "any." is a host name, not the opt-out: it must stay one when the policy is stored and read back.
+func TestIntegrationEgressKeepsWhatWasWritten(t *testing.T) {
+	for _, v := range []string{"any.", "ANY.", "public, any."} {
+		cfg, err := Load([]string{"-integration-egress", v}, env(nil), io.Discard)
+		if err != nil {
+			t.Fatalf("%q: %v", v, err)
+		}
+		if cfg.IntegrationEgressPolicy().IsAny() {
+			t.Errorf("%q was read as any", v)
+		}
+	}
+	cfg, err := Load([]string{"-integration-egress", "ANY"}, env(nil), io.Discard)
+	if err != nil || !cfg.IntegrationEgressPolicy().IsAny() {
+		t.Errorf("a literal any is the opt-out: %v", err)
+	}
+}
+
 func TestSMTPSettings(t *testing.T) {
 	cfg, err := Load(nil, env(map[string]string{ //nolint:gosec // G101: names of settings and a path, not credentials
 		"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "TaskTo <taskto@example.com>",

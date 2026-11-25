@@ -353,6 +353,14 @@ func (c *Checker) Readable(ctx context.Context, userID, workspaceID int64) ([]Sp
 	return c.list(ctx, userID, workspaceID, false)
 }
 
+// Manageable lists what a workspace admin may manage in workspaceID: their private space, and
+// every shared space whether or not they are a member of it, never another person's private
+// space. The caller has checked that userID is an admin of the workspace; for anyone else it
+// is Readable.
+func (c *Checker) Manageable(ctx context.Context, userID, workspaceID int64) ([]Space, error) {
+	return c.list(ctx, userID, workspaceID, true)
+}
+
 // list is Readable, plus, with everyShared, the workspace's shared spaces userID isn't a
 // member of (for admins managing them).
 func (c *Checker) list(ctx context.Context, userID, workspaceID int64, everyShared bool) ([]Space, error) {

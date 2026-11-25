@@ -289,9 +289,10 @@ func (r *resolver) thing(query string, id int64, created string) (*string, error
 // member's, an invite's address is in the event's details, and a private space is its owner's:
 // none is resolved.
 const (
-	spaceName    = `SELECT name FROM spaces WHERE id = ? AND workspace_id = ? AND created_at = ? AND kind = 'shared'`
-	providerName = `SELECT display_name FROM provider_accounts WHERE id = ? AND workspace_id = ? AND created_at = ?`
-	sharedName   = `SELECT label FROM cli_shared_accounts WHERE id = ? AND workspace_id = ? AND created_at = ?`
+	spaceName       = `SELECT name FROM spaces WHERE id = ? AND workspace_id = ? AND created_at = ? AND kind = 'shared'`
+	providerName    = `SELECT display_name FROM provider_accounts WHERE id = ? AND workspace_id = ? AND created_at = ?`
+	sharedName      = `SELECT label FROM cli_shared_accounts WHERE id = ? AND workspace_id = ? AND created_at = ?`
+	integrationName = `SELECT display_name FROM integrations WHERE id = ? AND workspace_id = ? AND created_at = ?`
 )
 
 func (r *resolver) target(row Row) (*Person, *string, error) {
@@ -318,11 +319,13 @@ func (r *resolver) target(row Row) (*Person, *string, error) {
 		}
 		p, err := r.member(id, created)
 		return p, nil, err
-	case TargetSpace, TargetProvider, TargetSharedAccount:
+	case TargetSpace, TargetProvider, TargetSharedAccount, TargetIntegration:
 		if created == "" {
 			return nil, nil, nil
 		}
-		query := map[string]string{TargetSpace: spaceName, TargetProvider: providerName, TargetSharedAccount: sharedName}[row.TargetType]
+		query := map[string]string{
+			TargetSpace: spaceName, TargetProvider: providerName, TargetSharedAccount: sharedName, TargetIntegration: integrationName,
+		}[row.TargetType]
 		n, err := r.thing(query, id, created)
 		return nil, n, err
 	}

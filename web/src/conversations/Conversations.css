@@ -1,0 +1,574 @@
+/* The conversations: the list beside the open one (one or the other on a phone), and a
+   conversation as a column: its head, its notices, the transcript (which takes what is left and
+   scrolls on its own) and the composer. The transcript, the notices and the composer keep to
+   the reading width in the middle of the pane, at the reading size. */
+
+@layer screens {
+  .ui-chat-layout {
+    block-size: 100%;
+    display: grid;
+    grid-template-columns: minmax(15rem, 19rem) minmax(0, 1fr);
+  }
+
+  /* The list. */
+
+  .ui-chat-list {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-block-size: 0;
+    padding: var(--space-4) var(--space-3) calc(var(--space-4) + env(safe-area-inset-bottom));
+    border-inline-end: var(--line-thin) solid var(--color-border);
+    overflow-y: auto;
+  }
+
+  .ui-chat-list-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2) var(--space-2);
+  }
+
+  /* Never broken inside a word: with too little room, the buttons go under it. */
+  .ui-chat-list-title {
+    flex: 1 0 auto;
+    overflow-wrap: normal;
+  }
+
+  .ui-chat-list-loading {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  /* The conversations as quiet rows: no rule between them, the open one on the selected ground. */
+  .ui-chat-rows .ui-row {
+    min-block-size: 0;
+    padding: var(--space-2) var(--space-3);
+    border-block-end: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .ui-chat-rows .ui-row-title {
+    font: var(--type-ui);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ui-chat-rows .ui-row[data-current] .ui-row-title {
+    font: var(--type-ui-strong);
+  }
+
+  .ui-chat-list-foot {
+    margin-block-start: auto;
+    padding-block-start: var(--space-3);
+  }
+
+  /* A conversation. */
+
+  /* Positioned, as are the transcript and the list: what is placed absolutely inside them (the
+     screen reader's labels) stays inside, and never makes the window itself scroll. */
+  .ui-chat {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    block-size: 100%;
+    min-block-size: 0;
+    min-inline-size: 0;
+  }
+
+  .ui-chat > * {
+    flex: none;
+    min-inline-size: 0;
+  }
+
+  .ui-chat-none {
+    display: grid;
+    place-items: center;
+    padding: var(--space-6);
+  }
+
+  .ui-chat-head-wrap {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-6);
+    border-block-end: var(--line-thin) solid var(--color-border);
+  }
+
+  .ui-chat-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-block-size: var(--space-10);
+  }
+
+  /* Back to the list: only where the list isn't beside it. */
+  .ui-chat-back {
+    display: none;
+  }
+
+  .ui-chat-title {
+    flex: 1;
+    min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: var(--type-section);
+  }
+
+  .ui-chat-rename {
+    flex: 1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+
+  .ui-chat-rename .ui-textbox {
+    flex: 1 1 8rem;
+    min-inline-size: 0;
+  }
+
+  .ui-chat-status {
+    flex: none;
+  }
+
+  .ui-chat-actions {
+    flex: none;
+    display: flex;
+    gap: var(--space-1);
+  }
+
+  /* What asks for the person: a CLI's question, a sign-in, the browser. */
+  /* At most a part of the pane, scrolling inside, so the transcript and the composer stay in view. */
+  .ui-chat-notices {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+    max-block-size: 45%;
+    overflow-y: auto;
+    padding: var(--space-3) var(--space-6) var(--space-1);
+  }
+
+  .ui-chat-notices:empty {
+    display: none;
+  }
+
+  .ui-chat-notices > * {
+    inline-size: 100%;
+    max-inline-size: var(--width-reading);
+    margin-inline: auto;
+  }
+
+  .ui-chat-question,
+  .ui-chat-reconnect,
+  .ui-chat-permissions {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .ui-chat-reconnect p {
+    margin: 0 0 var(--space-2);
+  }
+
+  .ui-chat-question-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  /* The transcript. */
+
+  .ui-chat-transcript {
+    position: relative;
+    flex: 1 1 0;
+    min-block-size: 0;
+    overflow-y: auto;
+    padding: var(--space-6);
+  }
+
+  .ui-chat-column {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+    max-inline-size: var(--width-reading);
+    margin-inline: auto;
+    font: var(--type-reading);
+    color: var(--color-text);
+  }
+
+  .ui-chat-earlier {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-2);
+  }
+
+  .ui-chat-msg {
+    min-inline-size: 0;
+  }
+
+  /* The person's message: a quiet bubble at the end side. */
+  .ui-chat-msg[data-role="user"] {
+    justify-self: end;
+    display: grid;
+    gap: var(--space-2);
+    max-inline-size: min(36rem, 85%);
+    padding: var(--space-2) var(--space-4);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-lg);
+    border-end-end-radius: var(--radius-sm);
+    background: var(--color-bg-sunken);
+  }
+
+  .ui-chat-msg-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* The agent's reply: its dot, then what it did and said. */
+  .ui-chat-msg[data-role="assistant"] {
+    display: grid;
+    grid-template-columns: var(--space-6) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .ui-chat-msg-dot {
+    margin-block-start: calc((1lh - var(--mark-node)) / 2);
+  }
+
+  /* The agent's entries one after another are one turn: one dot, closer together. */
+  .ui-chat-msg[data-role="assistant"] + .ui-chat-msg[data-role="assistant"] {
+    margin-block-start: calc(var(--space-2) - var(--space-5));
+  }
+
+  .ui-chat-msg[data-role="assistant"] + .ui-chat-msg[data-role="assistant"] .ui-chat-msg-dot {
+    visibility: hidden;
+  }
+
+  .ui-chat-msg-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+    min-inline-size: 0;
+    justify-items: start;
+  }
+
+  .ui-chat-msg-body > * {
+    max-inline-size: 100%;
+  }
+
+  .ui-chat-markdown {
+    inline-size: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-chat-pending {
+    color: var(--color-text-muted);
+  }
+
+  .ui-chat-working {
+    color: var(--color-text-muted);
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: 0;
+    font: var(--type-small);
+  }
+
+  /* What the agent did: compact lines. */
+  .ui-chat-tool {
+    display: grid;
+    gap: var(--space-2);
+    justify-items: start;
+    inline-size: 100%;
+  }
+
+  .ui-chat-tool-line {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-block-size: var(--control-sm);
+    margin: 0;
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--color-neutral-soft);
+    font: var(--type-small);
+    color: var(--color-text-soft);
+  }
+
+  .ui-chat-tool-check {
+    color: var(--color-success);
+  }
+
+  .ui-chat-tool-label {
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-chat-tool-name {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--color-text);
+  }
+
+  .ui-chat-tool-link {
+    color: var(--color-link);
+  }
+
+  .ui-chat-tool-output {
+    display: grid;
+    gap: var(--space-2);
+    inline-size: 100%;
+  }
+
+  .ui-chat-tool-output > summary {
+    justify-self: start;
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .ui-chat-tool-output > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .ui-chat-tool-output > summary:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  @media (hover: hover) {
+    .ui-chat-tool-output > summary:hover {
+      background: var(--color-hover);
+    }
+  }
+
+  .ui-chat-tool-chevron {
+    transition: rotate var(--duration-fast) var(--ease-out);
+  }
+
+  .ui-chat-tool-output[open] .ui-chat-tool-chevron {
+    rotate: 180deg;
+  }
+
+  /* A CLI's work, or what it asks to run: plain text lines. */
+  .ui-chat-output {
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    max-block-size: 16rem;
+    overflow: auto;
+    font: var(--type-code);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--color-text);
+    background: var(--color-bg-sunken);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+
+  .ui-chat-app-loading {
+    inline-size: 100%;
+  }
+
+  /* The composer: one box at the reading width. */
+
+  .ui-chat-composer {
+    padding: 0 var(--space-6) calc(var(--space-5) + env(safe-area-inset-bottom));
+  }
+
+  /* The screen keyboard is up (src/pwa/viewport.ts): the home bar isn't there. */
+  html[data-keyboard="open"] .ui-chat-composer {
+    padding-block-end: var(--space-3);
+  }
+
+  .ui-chat-composer-column {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+    max-inline-size: var(--width-reading);
+    margin-inline: auto;
+  }
+
+  .ui-chat-composer-hint {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-chat-box {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+    padding: var(--space-2);
+    border: var(--line-thin) solid var(--color-border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+  }
+
+  .ui-chat-box:focus-within {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  .ui-chat-box[data-disabled] {
+    border-color: var(--color-border);
+    background: var(--color-bg-sunken);
+  }
+
+  /* The box draws the field: the text area inside has no edge of its own. */
+  .ui-chat-box .ui-chat-input,
+  .ui-chat-box .ui-chat-input:hover,
+  .ui-chat-box .ui-chat-input:focus-visible,
+  .ui-chat-box .ui-chat-input:disabled {
+    min-block-size: var(--control-touch);
+    max-block-size: 12rem;
+    padding: var(--space-1) var(--space-2);
+    border: 0;
+    outline: 0;
+    box-shadow: none;
+    background: transparent;
+    resize: none;
+    font: var(--type-reading);
+  }
+
+  .ui-chat-box-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .ui-chat-box-spacer {
+    flex: 1;
+  }
+
+  .ui-chat-send {
+    inline-size: var(--control-md);
+    padding-inline: 0;
+  }
+
+  /* The model: a quiet control in the box, and its notes on a line of their own under it. */
+  .ui-chat-model {
+    display: contents;
+  }
+
+  /* It may shrink, its text cut by the select itself; nothing clips its focus ring. */
+  .ui-chat-model-select {
+    flex: 0 1 auto;
+    inline-size: auto;
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+
+  .ui-chat-model-select .ui-select-native {
+    inline-size: 100%;
+    min-inline-size: 0;
+    text-overflow: ellipsis;
+    border-color: transparent;
+    background: transparent;
+    color: var(--color-text-soft);
+    font: var(--type-small);
+  }
+
+  @media (hover: hover) {
+    .ui-chat-model-select .ui-select-native:hover {
+      background: var(--color-hover);
+    }
+  }
+
+  .ui-chat-model-note {
+    order: 1;
+    flex-basis: 100%;
+    padding-inline: var(--space-2);
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-chat-model-note[data-tone="danger"] {
+    color: var(--color-danger);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-chat-tool-chevron {
+      transition: none;
+    }
+  }
+
+  /* A phone: the list or the conversation, with a way back. */
+  @media (max-width: 48rem) {
+    .ui-chat-layout {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ui-chat-list {
+      border-inline-end: 0;
+    }
+
+    .ui-chat-layout[data-open="conversation"] .ui-chat-list,
+    .ui-chat-layout[data-open="list"] .ui-chat {
+      display: none;
+    }
+
+    .ui-chat-back {
+      display: inline-flex;
+    }
+
+    .ui-chat-head-wrap,
+    .ui-chat-transcript,
+    .ui-chat-composer {
+      padding-inline: var(--space-3);
+    }
+
+    .ui-chat-notices {
+      padding-inline: var(--space-3);
+    }
+
+    .ui-chat-transcript {
+      padding-block: var(--space-4);
+    }
+
+    .ui-chat-composer {
+      padding-block-end: calc(var(--space-3) + env(safe-area-inset-bottom));
+    }
+
+    .ui-chat-msg[data-role="user"] {
+      max-inline-size: 90%;
+    }
+
+    /* Short, with the screen keyboard up: the notices take less, and the composer is compact
+       (one line of text that grows as it fills, the controls on one row), so Send stays in view. */
+    .ui-chat-notices {
+      max-block-size: 30%;
+      padding-block: var(--space-2);
+      border-block-end: var(--line-thin) solid var(--color-border);
+    }
+
+    .ui-chat-composer-hint {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .ui-chat-box {
+      gap: 0;
+      padding: var(--space-1);
+    }
+
+    .ui-chat-box .ui-chat-input,
+    .ui-chat-box .ui-chat-input:hover,
+    .ui-chat-box .ui-chat-input:focus-visible,
+    .ui-chat-box .ui-chat-input:disabled {
+      field-sizing: content;
+      min-block-size: var(--control-touch);
+      max-block-size: 7.5rem;
+    }
+
+    .ui-chat-model-select {
+      flex: 0 1 40%;
+    }
+  }
+}

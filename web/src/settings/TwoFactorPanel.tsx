@@ -8,7 +8,14 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { api } from '../api'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, CopyButton, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Alert, CopyButton, CopyField, FormActions, Loading, Section, useAction } from './parts'
 import { qrSvg, svgSource } from './qr'
 
 type Status = { enabled: boolean; recovery_codes_left: number }
@@ -26,9 +33,20 @@ export function TwoFactorPanel() {
   }
 
   return (
-    <section className="tt-panel" aria-labelledby="tt-two-factor">
-      <h2 id="tt-two-factor">{t('settings.twoFactor.title')}</h2>
-      <p className="tt-muted tt-small">{t('settings.twoFactor.intro')}</p>
+    <Section
+      title={t('settings.twoFactor.title')}
+      help={t('settings.twoFactor.intro')}
+      actions={
+        status.data &&
+        (status.data.enabled ? (
+          <Badge tone="success" dot>
+            {t('settings.twoFactor.onBadge')}
+          </Badge>
+        ) : (
+          <Badge tone="neutral">{t('settings.twoFactor.offBadge')}</Badge>
+        ))
+      }
+    >
       <Alert error={status.error} />
       {codes ? (
         <RecoveryCodes
@@ -39,7 +57,7 @@ export function TwoFactorPanel() {
           }}
         />
       ) : !status.data ? (
-        !status.error && <p className="tt-muted">{t('app.loading')}</p>
+        !status.error && <Loading lines={2} />
       ) : status.data.enabled ? (
         <TurnedOn status={status.data} onCodes={setCodes} onOff={done} />
       ) : setup ? (
@@ -50,12 +68,14 @@ export function TwoFactorPanel() {
           onCodes={(c) => {
             setSetup(null)
             setCodes(c)
+            // It is on now: the badge says so while the codes are on screen.
+            status.reload()
           }}
         />
       ) : (
         <Start onStarted={setSetup} />
       )}
-    </section>
+    </Section>
   )
 }
 
@@ -75,23 +95,25 @@ function Start({ onStarted }: { onStarted: (s: Setup) => void }) {
     }
   }
   return (
-    <form className="tt-form" onSubmit={submit}>
-      <p>{t('settings.twoFactor.off')}</p>
-      <label>
-        {t('settings.twoFactor.password')}
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          autoComplete="current-password"
-        />
-      </label>
-      <Alert error={action.error} />
-      <button type="submit" className="tt-button tt-primary" disabled={action.busy}>
-        {t('settings.twoFactor.turnOn')}
-      </button>
-    </form>
+    <Panel padded>
+      <form className="settings-form" onSubmit={submit}>
+        <p className="settings-text">{t('settings.twoFactor.off')}</p>
+        <Field label={t('settings.twoFactor.password')} required>
+          <Input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
+        </Field>
+        <Alert error={action.error} />
+        <FormActions>
+          <Button type="submit" loading={action.busy}>
+            {t('settings.twoFactor.turnOn')}
+          </Button>
+        </FormActions>
+      </form>
+    </Panel>
   )
 }
 
@@ -124,40 +146,36 @@ function Confirm({
     else onFailed()
   }
   return (
-    <form className="tt-form" onSubmit={submit}>
-      <p>{t('settings.twoFactor.step1')}</p>
-      <Qr text={setup.otpauth_uri} />
-      <p className="tt-small">{t('settings.twoFactor.orType')}</p>
-      <div className="tt-copy">
-        <input
-          readOnly
+    <Panel padded>
+      <form className="settings-form" onSubmit={submit}>
+        <p className="settings-text">{t('settings.twoFactor.step1')}</p>
+        <Qr text={setup.otpauth_uri} />
+        <p className="settings-muted">{t('settings.twoFactor.orType')}</p>
+        <CopyField
           value={setup.secret}
-          aria-label={t('settings.twoFactor.secret')}
-          onFocus={(e) => e.target.select()}
+          label={t('settings.twoFactor.secret')}
+          name={t('settings.twoFactor.secretName')}
         />
-        <CopyButton text={setup.secret} name={t('settings.twoFactor.secretName')} />
-      </div>
-      <label>
-        {t('settings.twoFactor.step2')}
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          required
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          spellCheck={false}
-        />
-      </label>
-      <Alert error={action.error} />
-      <div className="tt-row-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={action.busy || code.trim() === ''}>
-          {t('settings.twoFactor.confirm')}
-        </button>
-        <button type="button" className="tt-button" onClick={onCancel} disabled={action.busy}>
-          {t('settings.twoFactor.cancel')}
-        </button>
-      </div>
-    </form>
+        <Field label={t('settings.twoFactor.step2')} required>
+          <Input
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            spellCheck={false}
+          />
+        </Field>
+        <Alert error={action.error} />
+        <FormActions>
+          <Button type="submit" loading={action.busy} disabled={code.trim() === ''}>
+            {t('settings.twoFactor.confirm')}
+          </Button>
+          <Button variant="ghost" onClick={onCancel} disabled={action.busy}>
+            {t('settings.twoFactor.cancel')}
+          </Button>
+        </FormActions>
+      </form>
+    </Panel>
   )
 }
 
@@ -179,14 +197,10 @@ function Qr({ text }: { text: string }) {
       live = false
     }
   }, [text])
-  if (failed) return <p className="tt-muted tt-small">{t('settings.twoFactor.qrFailed')}</p>
+  if (failed) return <Notice tone="warning">{t('settings.twoFactor.qrFailed')}</Notice>
   return (
-    <div className="tt-qr">
-      {src ? (
-        <img src={src} alt={t('settings.twoFactor.qrAlt')} />
-      ) : (
-        <span className="tt-muted">{t('app.loading')}</span>
-      )}
+    <div className="settings-qr">
+      {src ? <img src={src} alt={t('settings.twoFactor.qrAlt')} /> : <Loading lines={1} />}
     </div>
   )
 }
@@ -194,24 +208,22 @@ function Qr({ text }: { text: string }) {
 function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
   const t = useT()
   return (
-    <div className="tt-notice" role="status">
-      <p>
-        <strong>{t('settings.twoFactor.codesTitle')}</strong> {t('settings.twoFactor.codesHelp')}
-      </p>
-      <ul className="tt-recovery" aria-label={t('settings.twoFactor.codesTitle')}>
-        {codes.map((c) => (
-          <li key={c}>
-            <code>{c}</code>
-          </li>
-        ))}
-      </ul>
-      <div className="tt-row-actions">
-        <CopyButton text={codes.join('\n')} name={t('settings.twoFactor.codesName')} />
-        <button type="button" className="tt-button tt-primary" onClick={onDone}>
-          {t('settings.twoFactor.codesSaved')}
-        </button>
+    <Notice tone="warning" title={t('settings.twoFactor.codesTitle')}>
+      <div className="settings-panel-body">
+        <p className="settings-text">{t('settings.twoFactor.codesHelp')}</p>
+        <ul className="settings-recovery" aria-label={t('settings.twoFactor.codesTitle')}>
+          {codes.map((c) => (
+            <li key={c}>
+              <code>{c}</code>
+            </li>
+          ))}
+        </ul>
+        <FormActions>
+          <CopyButton text={codes.join('\n')} name={t('settings.twoFactor.codesName')} />
+          <Button onClick={onDone}>{t('settings.twoFactor.codesSaved')}</Button>
+        </FormActions>
       </div>
-    </div>
+    </Notice>
   )
 }
 
@@ -226,7 +238,7 @@ function TurnedOn({
 }) {
   const t = useT()
   const [form, setForm] = useState({ password: '', code: '' })
-  const [off, setOff] = useState(false)
+  const [confirmDialog, confirm] = useConfirm()
   const action = useAction()
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((f) => ({ ...f, [key]: e.target.value }))
@@ -246,44 +258,44 @@ function TurnedOn({
     const ok = await action.run(() => api('/api/me/two-factor/disable', { method: 'POST', body: form }))
     if (ok) {
       setForm({ password: '', code: '' })
-      setOff(false)
       onOff()
     }
   }
 
+  const askOff = async () => {
+    const yes = await confirm({
+      title: t('settings.twoFactor.turnOffQuestion'),
+      confirmLabel: t('settings.twoFactor.turnOffConfirm'),
+      tone: 'danger',
+    })
+    if (yes) turnOff()
+  }
+
   return (
-    <form className="tt-form" onSubmit={(e) => e.preventDefault()}>
-      <p role="status">{t('settings.twoFactor.on')}</p>
-      <p className="tt-muted tt-small">{t('settings.twoFactor.left', { count: status.recovery_codes_left })}</p>
-      <p className="tt-muted tt-small">{t('settings.twoFactor.changeHelp')}</p>
-      <label>
-        {t('settings.twoFactor.password')}
-        <input type="password" value={form.password} onChange={set('password')} autoComplete="current-password" />
-      </label>
-      <label>
-        {t('settings.twoFactor.code')}
-        <input value={form.code} onChange={set('code')} autoComplete="one-time-code" spellCheck={false} />
-      </label>
-      <Alert error={action.error} />
-      <div className="tt-row-actions">
-        <button type="button" className="tt-button" disabled={action.busy || !ready} onClick={newCodes}>
-          {t('settings.twoFactor.newCodes')}
-        </button>
-        {off ? (
-          <>
-            <button type="button" className="tt-button tt-danger" disabled={action.busy || !ready} onClick={turnOff}>
-              {t('settings.twoFactor.turnOffConfirm')}
-            </button>
-            <button type="button" className="tt-button" onClick={() => setOff(false)} disabled={action.busy}>
-              {t('settings.twoFactor.cancel')}
-            </button>
-          </>
-        ) : (
-          <button type="button" className="tt-button" disabled={action.busy || !ready} onClick={() => setOff(true)}>
+    <Panel padded>
+      <form className="settings-form" onSubmit={(e) => e.preventDefault()}>
+        <p className="settings-text" role="status">
+          {t('settings.twoFactor.on')}
+        </p>
+        <p className="settings-muted">{t('settings.twoFactor.left', { count: status.recovery_codes_left })}</p>
+        <p className="settings-muted">{t('settings.twoFactor.changeHelp')}</p>
+        <Field label={t('settings.twoFactor.password')}>
+          <Input type="password" value={form.password} onChange={set('password')} autoComplete="current-password" />
+        </Field>
+        <Field label={t('settings.twoFactor.code')}>
+          <Input value={form.code} onChange={set('code')} autoComplete="one-time-code" spellCheck={false} />
+        </Field>
+        <Alert error={action.error} />
+        <FormActions>
+          <Button disabled={action.busy || !ready} onClick={newCodes}>
+            {t('settings.twoFactor.newCodes')}
+          </Button>
+          <Button variant="danger" disabled={action.busy || !ready} onClick={askOff}>
             {t('settings.twoFactor.turnOff')}
-          </button>
-        )}
-      </div>
-    </form>
+          </Button>
+        </FormActions>
+      </form>
+      {confirmDialog}
+    </Panel>
   )
 }
