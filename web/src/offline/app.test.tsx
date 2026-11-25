@@ -10,7 +10,9 @@ import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { App } from '../App'
+import { sameSession } from '../session'
 import { fakeFetch } from '../test/fakes'
+import { toast } from '../ui/Toast'
 import { deactivate, lastUser, rememberUser, runtimeState } from './runtime'
 import { OfflineStore, type OutboxItem } from './store'
 
@@ -320,6 +322,19 @@ test('a tab that learns another account signed in shows only that, and nothing o
   // Its connection to the database is closed: nothing more can be read through it.
   await waitFor(() => expect(runtime.store.listItems()).rejects.toThrow())
   expect(screen.getByRole('button', { name: 'Reload this page' })).toBeTruthy()
+})
+
+test('another account signed in from another tab ends this page’s session: its work and toasts stop', async () => {
+  fakeFetch({ ...signedIn })
+  await signedInAs()
+  const still = sameSession()
+  toast('Something of the account before')
+  expect(await screen.findByText('Something of the account before')).toBeTruthy()
+  window.localStorage.setItem(LAST_KEY, JSON.stringify({ id: 8, name: 'Bob' }))
+  fireEvent(window, new StorageEvent('storage', { key: LAST_KEY }))
+  await screen.findByRole('alertdialog')
+  expect(still()).toBe(false)
+  expect(screen.queryByText('Something of the account before')).toBeNull()
 })
 
 test('a send refused because the session is another account’s shows the same, and keeps the record', async () => {

@@ -107,8 +107,15 @@ export function App() {
   const signedIn = session.state === 'in'
   // The toasts are the signed-in person's: when the session ends (logged out, lost) or becomes
   // another account's, theirs go, so nothing of one person's ("“Plans” was created.", with a way
-  // to open it) is left on the login screen or in the next person's session.
-  const account = session.state === 'in' || session.state === 'invite' ? (session.me?.user.id ?? null) : null
+  // to open it) is left on the login screen or in the next person's session. Another account signed
+  // in from another tab ends this page's session too (`problem`), though its state still names the
+  // one before.
+  const account =
+    problem === 'account'
+      ? 'changed'
+      : session.state === 'in' || session.state === 'invite'
+        ? (session.me?.user.id ?? null)
+        : null
   const shown = useRef(account)
   useEffect(() => {
     if (shown.current === account) return

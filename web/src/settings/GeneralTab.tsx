@@ -6,6 +6,7 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { api, type MailStatus, mailPath, type Workspace } from '../api'
 import { DEFAULT_LOCALE, LOCALES, localeName, setPreferences, t as translate, useT } from '../i18n'
 import { useLoad } from '../load'
+import { useMounted } from '../mounted'
 import { sameSession } from '../session'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
@@ -24,6 +25,7 @@ export function GeneralTab({ workspace, email, operator }: { workspace: Workspac
   // The workspace's value from the server, when it comes again.
   useEffect(() => setLocale(workspace.locale || DEFAULT_LOCALE), [workspace.locale])
   const { busy, error, run } = useAction()
+  const mounted = useMounted()
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     // English, the default, is stored as "": no default picked.
@@ -32,8 +34,8 @@ export function GeneralTab({ workspace, email, operator }: { workspace: Workspac
     const ok = await run(() => api(`/api/workspaces/${workspace.id}`, { method: 'PATCH', body }))
     if (ok) {
       await setPreferences({ workspace: body.locale })
-      // The session may have ended while the language's file was loading.
-      if (!session()) return
+      // The session may have ended, or the person left the tab, while the language's file loaded.
+      if (!session() || !mounted.current) return
       // In the language the page is in now, which the change may have made another.
       toast({ message: translate('settings.general.saved'), tone: 'success' })
     }
