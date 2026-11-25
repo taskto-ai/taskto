@@ -102,8 +102,11 @@ export function Deleted({
         if (!before && !res.next) throw new Error(t('knowledge.deleted.noEarlier', { path }))
         page = res.next ?? ''
       }
+      // The notice went away while the history was searched, or the restore was on its way: the
+      // person is elsewhere by now, and it is not opened over what they are reading.
+      if (signal.aborted) return
       await api<Change>(`${base}/restore/${encodePath(path)}`, { method: 'POST', body: { commit: before.commit } })
-      onRestored(path)
+      if (!signal.aborted) onRestored(path)
     } catch (err) {
       if (!signal.aborted) setError(errorText(err))
     } finally {

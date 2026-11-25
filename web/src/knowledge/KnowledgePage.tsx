@@ -171,7 +171,11 @@ export function KnowledgePage({
                 if (now.current.base !== base) return
                 docs.reload()
                 // Another document may be open by now; that one stays.
-                if (now.current.path === doc.path) setOpen(null)
+                if (now.current.path === doc.path) {
+                  ask(() => {
+                    if (now.current.base === base && now.current.path === doc.path) setOpen(null)
+                  })
+                }
                 setDeleted({ base, path: doc.path, versioned: doc.versioned !== false })
               }}
             />

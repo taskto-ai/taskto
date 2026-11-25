@@ -347,3 +347,49 @@ test('restoring a deleted document says so when no version of it is left', async
   fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
   await screen.findByText('No earlier version of notes/plan.md was found.')
 })
+
+test('a restore that finishes after the notice was left does not open its document', async () => {
+  const held = gate<{ body: unknown }>()
+  const calls = kb({
+    [`DELETE ${S}/docs/notes/plan.md`]: { body: { commit: 'c30' } },
+    [`GET ${S}/history/notes/plan.md`]: {
+      body: { commits: [commit('c30', 'delete'), commit('c2', 'update', { version: V1 })] },
+    },
+    [`POST ${S}/restore/notes/plan.md`]: () => held.answer,
+  })
+  render(<KnowledgePage workspace={1} />)
+  const doc = await open()
+  fireEvent.click(await within(doc).findByRole('button', { name: 'Delete' }))
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Delete the document' })).getByRole('button', { name: 'Delete' }),
+  )
+  fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
+  await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true))
+
+  // The person opens another document: the notice goes, and the restore ends after that.
+  fireEvent.click(screen.getByRole('button', { name: /notes\/other\.md/ }))
+  await screen.findByRole('article', { name: 'notes/other.md' })
+  held.release({ body: { commit: 'c31', doc: plan } })
+  await flush()
+  expect(screen.getByRole('article', { name: 'notes/other.md' })).toBeTruthy()
+  expect(screen.queryByRole('article', { name: 'notes/plan.md' })).toBeNull()
+})
+
+test('a delete that finishes while the document is being edited asks before closing a changed draft', async () => {
+  const held = gate<{ body: unknown }>()
+  kb({ [`DELETE ${S}/docs/notes/plan.md`]: () => held.answer })
+  render(<KnowledgePage workspace={1} />)
+  const doc = await open()
+  fireEvent.click(await within(doc).findByRole('button', { name: 'Delete' }))
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Delete the document' })).getByRole('button', { name: 'Delete' }),
+  )
+  // Cancel doesn't stop the delete; the person goes on to edit the document.
+  fireEvent.click(within(doc).getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(within(doc).getByRole('button', { name: 'Edit' }))
+  fireEvent.change(await within(doc).findByLabelText('Text'), { target: { value: 'Mine.' } })
+  held.release({ body: { commit: 'c3' } })
+
+  await within(doc).findByRole('group', { name: 'Discard your changes' })
+  expect((within(doc).getByLabelText('Text') as HTMLTextAreaElement).value).toBe('Mine.')
+})
