@@ -25,6 +25,7 @@ import (
 	"taskto.ai/taskto/internal/browser"
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/drain"
 )
 
 // fakeBrowsers stands in for the CLI worker's browsers, and records whose browser each call
@@ -657,5 +658,34 @@ func TestTools(t *testing.T) {
 		if a.user != 7 {
 			t.Errorf("an action for user %d", a.user)
 		}
+	}
+}
+
+// A live view that is open when the server shuts down ends with the shutdown: its connection is
+// hijacked, so http.Server can neither wait for it nor close it, and the drain's wait for the
+// handler would fail with ErrBusy if the bridge outlived the request's context.
+func TestLiveViewEndsWithTheShutdown(t *testing.T) {
+	old := liveRecheck
+	t.Cleanup(func() { liveRecheck = old })
+	liveRecheck = time.Hour // the shutdown, not a look at the session, ends it
+
+	e := newEnv(t, newFake(), nil)
+	owner, _ := e.setup()
+	tracker := drain.New()
+	srv := httptest.NewUnstartedServer(tracker.Handler(e.h))
+	srv.Start()
+	defer srv.Close()
+	ws := openLive(t, srv, owner)
+	defer ws.Close()
+
+	began := time.Now()
+	if err := tracker.Shutdown(srv.Config, 0, 3*time.Second); err != nil {
+		t.Fatalf("shutdown with a live view open: %v", err)
+	}
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("shutdown took %s with a live view open", took)
+	}
+	if !liveEnds(ws) {
+		t.Fatal("the live view outlived the shutdown")
 	}
 }
