@@ -1,0 +1,61 @@
+/* The names the stylesheet used before the tokens had two layers, kept as aliases of the roles
+   and scales until every screen has moved onto those; then this file goes. A test checks that
+   each still resolves. Don't use these in new CSS: use the role or the scale. */
+
+@layer tokens {
+  :root {
+    --tt-canvas: var(--color-bg);
+    --tt-stone: var(--color-bg-sunken);
+    --tt-surface: var(--color-surface);
+    --tt-user: var(--color-surface-own);
+    --tt-qr-ground: var(--color-paper);
+    --tt-hover: var(--color-hover);
+    --tt-selected: var(--color-selected);
+    --tt-scrim: var(--color-scrim);
+
+    --tt-fg: var(--color-text);
+    --tt-fg-soft: var(--color-text-soft);
+    --tt-muted: var(--color-text-muted);
+
+    --tt-line: var(--color-border);
+    --tt-line-strong: var(--color-border-strong);
+    --tt-rule: var(--color-rule);
+
+    --tt-accent: var(--color-accent);
+    --tt-accent-hover: var(--color-accent-hover);
+    --tt-on-accent: var(--color-on-accent);
+    --tt-accent-edge: var(--color-accent-edge);
+    --tt-accent-soft: var(--color-accent-soft);
+    --tt-focus: var(--color-focus);
+    --tt-link: var(--color-link);
+    --tt-node: var(--color-node);
+    --tt-node-edge: var(--color-node-edge);
+    --tt-logo-dot: var(--color-logo);
+
+    /* The top bar is the page's ground; it goes when the shell is the sidebar. */
+    --tt-bar: var(--color-bg);
+    --tt-on-bar: var(--color-text);
+    --tt-on-bar-muted: var(--color-text-muted);
+
+    --tt-danger: var(--color-danger);
+    --tt-on-danger: var(--color-on-danger);
+    --tt-success: var(--color-success);
+    --tt-warning: var(--color-warning);
+
+    --tt-shadow-lift: var(--shadow-lift);
+    --tt-shadow-lift-hover: var(--shadow-lift-hover);
+    --tt-shadow-pop: var(--shadow-pop);
+
+    --tt-font: var(--font-sans);
+    --tt-display: var(--font-display);
+    --tt-mono: var(--font-mono);
+    --tt-touch: var(--control-touch);
+    --tt-sidebar-w: var(--width-sidebar);
+    /* Not on a scale: today's one radius and the top bar's height, as they were. */
+    --tt-radius: 8px;
+    --tt-topbar-h: 52px;
+
+    /* A cross, as a shape to mask with: its colour comes from the element that uses it. */
+    --tt-clear-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.1 8 6.6l4.5-4.5 1.4 1.4L9.4 8l4.5 4.5-1.4 1.4L8 9.4l-4.5 4.5-1.4-1.4L6.6 8 2.1 3.5z'/%3E%3C/svg%3E");
+  }
+}

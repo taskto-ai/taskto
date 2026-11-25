@@ -1,12 +1,17 @@
 #!/usr/bin/env node
-// Checks the web app's one global stylesheet (src/styles.css) against its components. CI runs it;
-// so can anyone: `pnpm --filter @taskto/web run css`.
+// Checks the web app's stylesheets (every .css file under src/: styles.css, and the design system's
+// files in src/ui/) against each other and against the components. CI runs it; so can anyone:
+// `pnpm --filter @taskto/web run css`.
 //
 // Fails on:
-// - a `.tt-` selector declared more than once at the top level of the stylesheet (a second rule
-//   with the same selector silently overrides or merges with the first; a state or a screen size
-//   goes in an at-rule block, or in a selector of its own);
-// - a `tt-` class a component's className uses that no rule of the stylesheet mentions.
+// - a `.tt-` selector declared more than once at the top level, in one file or across files (a
+//   second rule with the same selector silently overrides or merges with the first; a state or a
+//   screen size goes in an at-rule block, or in a selector of its own). A rule inside `@layer`
+//   blocks only is at the top level: a layer orders rules, it doesn't set them apart;
+// - a `tt-` class a component's className uses that no rule of any stylesheet mentions;
+// - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
+//   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
+//   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in.
 //
 // Dependency-free: the stylesheet is read by a small scanner (comments and strings skipped), the
 // components by looking at what each className holds.
@@ -22,7 +27,8 @@
 //   from pieces (`'tt-' + kind`), is not seen: such a class has to be written out in the
 //   stylesheet's component anyway, and the check can't tell it is missing.
 //
-// --root <dir> checks another web directory (its src/ and src/styles.css), for the script's tests.
+// --root <dir> checks another web directory (its src/ and the stylesheets in it), for the script's
+// tests.
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
@@ -46,12 +52,15 @@ export function classSelectors(prelude) {
   return [...bare.matchAll(CLASS_SELECTOR)].map((m) => m[1])
 }
 
-// The stylesheet's rules at depth 0: each with its selector list and the classes it names.
-// At-rules (@media, @keyframes, @font-face, @layer …) are not rules here, but the classes inside
-// an at-rule's block still count as styled.
+// The stylesheet's rules at the top level (at depth 0, or inside `@layer` blocks only): each with
+// its selector list and the classes it names. Other at-rules (@media, @keyframes, @font-face …) are
+// not rules here, but the classes inside an at-rule's block still count as styled. And every
+// declaration, with its line, for the colour check.
 export function scan(css) {
   const top = [] // selectors declared at the top level, each with its line
   const mentioned = new Set()
+  const declarations = [] // { property, value, line }
+  const blocks = [] // for each open block: 'layer', 'at' (another at-rule) or 'rule'
   let depth = 0
   let prelude = ''
   let preludeLine = 1
@@ -77,26 +86,134 @@ export function scan(css) {
       const text = prelude.trim()
       const isAt = text.startsWith('@')
       for (const name of classSelectors(text)) mentioned.add(name)
-      if (!isAt && depth === 0) {
+      if (!isAt && blocks.every((b) => b === 'layer')) {
         for (const sel of splitSelectors(text)) top.push({ selector: sel, line: preludeLine })
       }
+      blocks.push(isAt ? (/^@layer\b/.test(text) ? 'layer' : 'at') : 'rule')
       depth++
       prelude = ''
       continue
     }
     if (c === '}') {
+      declaration(prelude, preludeLine)
+      blocks.pop()
       depth = Math.max(0, depth - 1)
       prelude = ''
       continue
     }
     if (c === ';') {
+      declaration(prelude, preludeLine)
       prelude = ''
       continue
     }
     if (prelude.trim() === '') preludeLine = line
     prelude += c
   }
-  return { top, mentioned }
+  return { top, mentioned, declarations }
+
+  // A declaration is `property: value` in any block: a rule's, or an at-rule's that holds
+  // declarations (@property, @font-face, @page). A selector ends at `{`, so it never gets here.
+  function declaration(text, at) {
+    if (blocks.length === 0) return
+    const colon = text.indexOf(':')
+    if (colon < 0) return
+    const property = text.slice(0, colon).trim()
+    if (!/^-{0,2}[a-zA-Z][\w-]*$/.test(property)) return
+    declarations.push({ property, value: text.slice(colon + 1).trim(), line: at })
+  }
+}
+
+// The colours CSS knows by name (CSS Color 4), and the colour functions.
+const NAMED_COLORS = new Set(
+  (
+    'aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown ' +
+    'burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan ' +
+    'darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid ' +
+    'darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet ' +
+    'deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ' +
+    'ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki ' +
+    'lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow ' +
+    'lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray ' +
+    'lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine ' +
+    'mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen ' +
+    'mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace ' +
+    'olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred ' +
+    'papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue ' +
+    'saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey ' +
+    'snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow ' +
+    'yellowgreen ' +
+    // The system colours (CSS Color 4, and the deprecated ones browsers still take): the
+    // browser's or the OS's colours, which no theme sets, so they are literals here too.
+    'accentcolor accentcolortext activetext buttonborder buttonface buttontext canvas canvastext field ' +
+    'fieldtext graytext highlight highlighttext linktext mark marktext selecteditem selecteditemtext ' +
+    'visitedtext activeborder activecaption appworkspace background buttonhighlight buttonshadow ' +
+    'captiontext inactiveborder inactivecaption inactivecaptiontext infobackground infotext menu menutext ' +
+    'scrollbar threeddarkshadow threedface threedhighlight threedlightshadow threedshadow window ' +
+    'windowframe windowtext'
+  ).split(' '),
+)
+const COLOR_FUNCTION = /(?<![\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i
+const HEX = /#[0-9a-fA-F]{3,8}(?![\w-])/
+
+// Properties whose words are names the author picks (an animation, a font, a grid area …), where
+// `red` is an identifier and not a colour. Hex colours and colour functions are still looked for.
+const IDENTIFIER_PROPERTIES = new Set([
+  'animation',
+  'animation-name',
+  'font',
+  'font-family',
+  'grid-area',
+  'grid-column',
+  'grid-row',
+  'grid-template',
+  'grid-template-areas',
+  'list-style',
+  'list-style-type',
+  'counter-reset',
+  'counter-increment',
+  'counter-set',
+  'container',
+  'container-name',
+  'view-transition-name',
+  'transition',
+  'transition-property',
+  'will-change',
+])
+
+// What is inside the parentheses of a value's functions; the rest is blanked. The fallback of a
+// var() at the value's top level is blanked too: it stands where an identifier would. A var()
+// inside another function (a gradient's colour stop) keeps its fallback looked in.
+function functionArguments(value) {
+  const stack = [] // for each open parenthesis: is it a var()'s?
+  let out = ''
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i]
+    if (c === ')') stack.pop()
+    const inside = stack.length > 0 && !stack[0]
+    out += inside && c !== '(' ? c : ' '
+    if (c === '(') stack.push(/(?<![\w-])var$/i.test(value.slice(0, i)))
+  }
+  return out
+}
+
+// The colour literal a declaration's value holds, if any: not in a string, a url() or a custom
+// property's name, and a colour's name not where a name is an identifier.
+export function colorLiteral(value, property = '') {
+  const bare = value
+    .replace(/url\((?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^)]*)\)/gi, 'url()')
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
+    .replace(/--[\w-]+/g, '--x')
+  const hex = HEX.exec(bare)
+  if (hex) return hex[0]
+  const fn = COLOR_FUNCTION.exec(bare)
+  if (fn) return `${fn[0]})`
+  // Where words are names the author picks, only a function's arguments can hold a colour's name
+  // (`list-style: linear-gradient(red, blue)`); a bare `red` there is an identifier.
+  const words = IDENTIFIER_PROPERTIES.has(property.toLowerCase()) ? functionArguments(bare) : bare
+  for (const word of words.matchAll(/(?<![\w-])[a-zA-Z]+(?![\w-])/g)) {
+    if (NAMED_COLORS.has(word[0].toLowerCase())) return word[0]
+  }
+  return undefined
 }
 
 // "a, b > c" → ["a", "b > c"], not splitting inside parentheses (:is(a, b)).
@@ -247,19 +364,45 @@ function components(dir, out = []) {
   return out
 }
 
+function stylesheets(dir, out = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) stylesheets(path, out)
+    else if (entry.name.endsWith('.css')) out.push(path)
+  }
+  return out
+}
+
+// Where the colour literals live: the brand themes, and nowhere else.
+const THEMES = 'src/ui/themes/'
+
 export function check(web) {
   const errors = []
-  const stylesheet = join(web, 'src/styles.css')
-  const { top, mentioned } = scan(readFileSync(stylesheet, 'utf8'))
-
-  const seen = new Map()
-  for (const { selector, line } of top) {
-    if (!/\.tt-/.test(selector)) continue
-    if (seen.has(selector)) {
-      errors.push(
-        `src/styles.css:${line}: ${selector} is declared again (first at line ${seen.get(selector)}): merge the two, or give one its own class`,
-      )
-    } else seen.set(selector, line)
+  const mentioned = new Set()
+  const seen = new Map() // selector → { file, line }
+  for (const path of stylesheets(join(web, 'src'))) {
+    const file = relative(web, path).split('\\').join('/')
+    const sheet = scan(readFileSync(path, 'utf8'))
+    for (const name of sheet.mentioned) mentioned.add(name)
+    for (const { selector, line } of sheet.top) {
+      if (!/\.tt-/.test(selector)) continue
+      const first = seen.get(selector)
+      if (first) {
+        const where = first.file === file ? `line ${first.line}` : `${first.file}:${first.line}`
+        errors.push(
+          `${file}:${line}: ${selector} is declared again (first at ${where}): merge the two, or give one its own class`,
+        )
+      } else seen.set(selector, { file, line })
+    }
+    if (file.startsWith(THEMES)) continue
+    for (const { property, value, line } of sheet.declarations) {
+      const literal = colorLiteral(value, property)
+      if (literal) {
+        errors.push(
+          `${file}:${line}: ${property} has the colour literal ${literal}: use a colour role, var(--color-…), or add one to the themes in ${THEMES}`,
+        )
+      }
+    }
   }
 
   const unstyled = new Map()
@@ -272,7 +415,7 @@ export function check(web) {
     }
   }
   for (const [cls, where] of unstyled) {
-    errors.push(`${where}: ${cls} is used but no rule in src/styles.css has it: style it, or remove it`)
+    errors.push(`${where}: ${cls} is used but no rule in the stylesheets has it: style it, or remove it`)
   }
   for (const cls of UNSTYLED.keys()) {
     if (mentioned.has(cls)) errors.push(`${cls} is in the allowlist but now has a rule: remove it from the allowlist`)
@@ -289,5 +432,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     for (const e of errors) console.error(`  ${e}`)
     process.exit(1)
   }
-  console.log('css-check: no selector is declared twice, and every tt- class a component uses has a rule')
+  console.log(
+    'css-check: no selector is declared twice, every tt- class a component uses has a rule, and no colour is written outside the themes',
+  )
 }
