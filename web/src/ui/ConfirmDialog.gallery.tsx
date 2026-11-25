@@ -40,11 +40,7 @@ function BusyThenFails() {
           }, 3000)
         }}
       >
-        {failed ? (
-          <Notice tone="danger">{t('gallery.layout.busyFailed')}</Notice>
-        ) : (
-          t('gallery.layout.deleteBody')
-        )}
+        {failed ? <Notice tone="danger">{t('gallery.layout.busyFailed')}</Notice> : t('gallery.layout.deleteBody')}
       </ConfirmDialog>
     </>
   )
