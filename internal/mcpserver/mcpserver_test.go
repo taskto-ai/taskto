@@ -288,7 +288,7 @@ func TestToolsAreAnnotatedAsTheirDefinitionsSay(t *testing.T) {
 	for _, tl := range listTools(t, f.endpoint, tokenA) {
 		byName[tl.Name] = tl
 	}
-	for _, name := range []string{"list_spaces", "read_doc", "list_cards", "list_apps", "show_app", "list_app_rows", "query_app_rows", "app_catalog"} {
+	for _, name := range []string{"list_spaces", "read_doc", "list_cards", "list_apps", "list_integrations", "show_app", "list_app_rows", "query_app_rows", "app_catalog"} {
 		if tl, ok := byName[name]; !ok || !tl.Annotations.ReadOnlyHint {
 			t.Errorf("%s should be listed as read-only: %+v", name, tl)
 		}
@@ -330,6 +330,7 @@ func TestATokenOfOneWorkspaceCannotActInAnother(t *testing.T) {
 			args map[string]any
 		}{
 			{"list_apps", map[string]any{"space_id": c.foreign}},
+			{"list_integrations", map[string]any{"space_id": c.foreign}},
 			{"list_boards", map[string]any{"space_id": c.foreign}},
 			{"list_members", map[string]any{"space_id": c.foreign}},
 			{"create_app", map[string]any{"space_id": c.foreign, "name": "x", "definition": map[string]any{}}},
@@ -340,8 +341,10 @@ func TestATokenOfOneWorkspaceCannotActInAnother(t *testing.T) {
 			}
 		}
 		// Their own space answers.
-		if code, refused, text := callTool(t, f.endpoint, c.token, "list_apps", map[string]any{"space_id": c.own}); code != http.StatusOK || refused {
-			t.Errorf("%s's token: list_apps in their own space = %d %v %q", c.name, code, refused, text)
+		for _, tool := range []string{"list_apps", "list_integrations"} {
+			if code, refused, text := callTool(t, f.endpoint, c.token, tool, map[string]any{"space_id": c.own}); code != http.StatusOK || refused {
+				t.Errorf("%s's token: %s in their own space = %d %v %q", c.name, tool, code, refused, text)
+			}
 		}
 	}
 	var n int

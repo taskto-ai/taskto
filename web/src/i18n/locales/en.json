@@ -116,7 +116,8 @@
         "intro": "This action would set going:",
         "none": "This action would set nothing going.",
         "wouldFail": "It would fail for you: {error}"
-      }
+      },
+      "paymentLinkNoAmount": "Amount from the record"
     },
     "roles": {
       "open": "Roles",
@@ -281,7 +282,8 @@
           "createDocument": "Creates a document at {path} in {space}",
           "openBoard": "Offers a link to {board}",
           "openCard": "Offers a link to the card this record made",
-          "openDocument": "Offers a link to the document {path} in {space}"
+          "openDocument": "Offers a link to the document {path} in {space}",
+          "createPaymentLink": "Asks the “{slot}” outside service for a link to pay the amount in “{amount}”"
         },
         "target": {
           "board": "{board} ({space})",
@@ -580,6 +582,77 @@
     "takeOfflineConfirm": {
       "title": "Take {name} offline?",
       "body": "Nobody can open it until someone who may publish it restores it. Its records are kept."
+    },
+    "integrations": {
+      "title": "Outside services",
+      "intro": "This app asks these outside services for something. An admin has to approve exactly what is listed before it can be published, and changing any of it needs a new approval. To change what it asks, ask the agent in the conversation.",
+      "slotNamed": "Service “{slot}”",
+      "status": {
+        "none": "Not asked for yet",
+        "requested": "Waiting for an admin",
+        "approved": "Approved",
+        "rejected": "Turned down",
+        "revoked": "Revoked",
+        "unusable": "Approved, but not usable now"
+      },
+      "was": {
+        "rejected": "An admin turned this down. You can change the app and ask again, or ask again as it is.",
+        "revoked": "An admin withdrew this approval. Ask again to get it back."
+      },
+      "waiting": "An admin will see this request in Settings, under Integration approvals. Publishing waits for their answer.",
+      "openQueue": "Open the approvals to decide",
+      "request": "Ask an admin to approve",
+      "requestAgain": "Ask again",
+      "connectedTo": "Connected to {name}.",
+      "connectedUnusable": "Connected to {name}, which is switched off or not allowed in this space now. An admin changes that in Settings, under Integrations.",
+      "liveUnusable": "The live release can’t use this service right now: an admin withdrew the approval, switched the integration off or no longer allows it in this space.",
+      "publishWaits": "Publishing waits for an admin to approve what this app asks of {slots}.",
+      "publishBroken": "The integration for {slots} is switched off or isn’t allowed in this space. An admin has to change that in Settings, under Integrations, before this can be published.",
+      "approveAndPublish": "Approve and publish…",
+      "approve": {
+        "title": "Approve and publish",
+        "intro": "You are an admin of this workspace, so you can approve what this app asks of the outside services below and publish it in one step.",
+        "connect": "Connect it to",
+        "choose": "Choose an integration",
+        "option": "{name} ({mode})",
+        "none": "No integration for {kind} is connected and switched on yet.",
+        "openSettings": "Open the integrations",
+        "allowSpace": "This also allows the integration in {space}.",
+        "consent": "By continuing you approve exactly what is listed above, for this app, and publish it.",
+        "confirm": "Approve and publish"
+      },
+      "contract": {
+        "field": "“{name}”",
+        "service": {
+          "payments": "payment"
+        },
+        "sends": "Sends to the {service} service the values of {fields}.",
+        "link": "When the action {action} runs, it asks for a payment link for the amount in {amount}, in {currency}, and writes the link to {url} and its number to {id}.",
+        "linkWhen": "{link} Only when {rule}.",
+        "linkCurrencyField": "the currency in {field} ({options})",
+        "handlersIntro": "When the service reports something about a payment, it may write to the record:",
+        "event": "When {event}:",
+        "eventWhen": "When {event}, only if {rule}:",
+        "events": {
+          "payment": {
+            "succeeded": "a payment succeeds",
+            "expired": "a payment link expires",
+            "failed": "a payment fails",
+            "refunded": "a payment is refunded"
+          }
+        },
+        "setValue": "sets {field} to {value}",
+        "setFrom": "sets {field} to {source}",
+        "source": {
+          "occurred_at": "the time the payment happened",
+          "paid_at": "the time it was paid",
+          "amount": "the amount paid",
+          "currency": "the currency it was paid in",
+          "receipt_url": "the address of the receipt",
+          "payment_id": "the payment’s number at the service"
+        },
+        "limits": "Nothing else: no other field, no web address, no key. An admin connects the account and sets its limits."
+      }
     }
   },
   "auth": {
@@ -1150,7 +1223,8 @@
       "data": "Your data",
       "tokens": "Access tokens",
       "about": "About",
-      "notifications": "Notifications"
+      "notifications": "Notifications",
+      "integrationApprovals": "Integration approvals"
     },
     "general": {
       "language": "Default language",
@@ -2079,7 +2153,45 @@
       "search": "How search finds documents, and which spaces consent to semantic search.",
       "integrations": "Accounts at payment providers that apps may use."
     },
-    "actionsColumn": "Actions"
+    "actionsColumn": "Actions",
+    "approvals": {
+      "title": "Integration approvals",
+      "intro": "Apps ask here to use an outside service, such as taking payments. You see what an app asks in plain words, who asked and where, and never the app or its records. Approving connects the app to one of the workspace’s integrations.",
+      "filter": "Show requests that are",
+      "filters": {
+        "requested": "Waiting",
+        "approved": "Approved",
+        "rejected": "Turned down",
+        "revoked": "Revoked"
+      },
+      "empty": {
+        "requested": "No requests are waiting.",
+        "approved": "Nothing is approved.",
+        "rejected": "Nothing was turned down.",
+        "revoked": "Nothing was revoked."
+      },
+      "list": "Requests",
+      "detail": "{slot} · {space} · asked by {who}, {when}",
+      "unknownPerson": "someone who has left",
+      "review": "Review",
+      "view": "View",
+      "reviewNamed": "Review the request of {app}",
+      "older": "Show older requests",
+      "dialogTitle": "Request of {app}",
+      "dialogDetail": "Service {slot} in {space}. Asked by {who}, {when}.",
+      "reject": "Turn down",
+      "approve": "Approve",
+      "revoke": "Revoke approval",
+      "approved": "Approved {app}. It can be published now.",
+      "rejected": "Turned down the request of {app}.",
+      "revoked": "Revoked the approval of {app}.",
+      "isLive": "This is what the live release asks.",
+      "decidedBy": "Decided by {who}, {when}.",
+      "allowSpace": "The integration isn’t allowed in {space} yet. Approving also allows it there.",
+      "revokeQuestion": "Revoke the approval of {app}?",
+      "revokeBody": "The app stops using the integration at once. It can’t be published, or rolled back to, with this contract until it is approved again.",
+      "revokeLive": "This is what the live release asks. It stops using the integration at once, though it stays online, and it can’t be published or rolled back to until it is approved again."
+    }
   },
   "pwa": {
     "update": {
@@ -2149,7 +2261,8 @@
     "copy": "Copy",
     "copied": "Copied",
     "copyNamed": "Copy {name}",
-    "labelFor": "{label} {name}"
+    "labelFor": "{label} {name}",
+    "close": "Close"
   },
   "knowledge": {
     "new": "New",

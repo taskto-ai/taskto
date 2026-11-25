@@ -28,6 +28,8 @@ import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
+import { ApproveAndPublishDialog, SlotsSection, undecided, usable, useSlots } from './AppIntegrations'
+import { useIsAdmin } from './admin'
 import { effectLines } from './effectLines'
 
 // What went wrong with a change to an app, for people. A role that doesn't allow it names what is
@@ -260,8 +262,21 @@ export function PublishPanel({
   headingLevel?: 2 | 3
 }) {
   const t = useT()
+  const f = useFormat()
+  const admin = useIsAdmin()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The outside services the draft asks for: a release can't be made of it until each is approved.
+  const slots = useSlots(base, app)
+  const declares = Object.keys(app.draft?.integrations ?? {}).length > 0
+  const blocked = (slots.data?.slots ?? []).filter((s) => !usable(s))
+  const toApprove = blocked.filter(undecided)
+  // Approved, but the integration was switched off or taken out of the space since: an approval can't
+  // mend that, an admin does in Settings.
+  const broken = blocked.filter((s) => !undecided(s))
+  const gated = declares && (blocked.length > 0 || (slots.data === undefined && !slots.error))
+  // The draft's version an admin is approving and publishing at once, as `reviewed` is for a review.
+  const [approving, setApproving] = useState<number | null>(null)
   // The draft's version the person is confirming, which a publish names: the draft they were
   // shown, never a newer one that arrived while the confirmation was open.
   const [reviewed, setReviewed] = useState<number | null>(null)
@@ -283,9 +298,10 @@ export function PublishPanel({
   useEffect(() => {
     if (seen.current === app.version) return
     seen.current = app.version
-    if (reviewed !== null || migration !== null) {
+    if (reviewed !== null || migration !== null || approving !== null) {
       setReviewed(null)
       setMigration(null)
+      setApproving(null)
       setMoved(true)
     }
   }, [app.version])
@@ -348,6 +364,23 @@ export function PublishPanel({
     )
   else if (migration) action = null
   else if (nothing) action = published === null && <p className="apps-note">{t('apps.builder.publish.nothing')}</p>
+  else if (gated)
+    // What is asked of an outside service has no approval yet: publishing is refused until it has.
+    // An admin approves and publishes in one step; anyone else waits for one (the section above asks).
+    action =
+      blocked.length === 0 ? null : admin && broken.length === 0 ? (
+        <div className="apps-actions">
+          <Button ref={actionButton} variant="primary" onClick={() => setApproving(app.version)}>
+            {t('apps.integrations.approveAndPublish')}
+          </Button>
+        </div>
+      ) : (
+        <p className="apps-note">
+          {t(broken.length > 0 ? 'apps.integrations.publishBroken' : 'apps.integrations.publishWaits', {
+            slots: f.list(blocked.map((s) => s.slot)),
+          })}
+        </p>
+      )
   else if (personal)
     action = (
       <div className="apps-actions">
@@ -405,6 +438,22 @@ export function PublishPanel({
         <dd>
           <Capabilities app={app} />
         </dd>
+        {declares && (
+          <>
+            <dt>{t('apps.integrations.title')}</dt>
+            <dd>
+              <SlotsSection
+                workspace={space.workspace_id}
+                base={base}
+                slots={slots.data}
+                error={slots.error}
+                mayRequest={mayPublish && !admin}
+                admin={admin}
+                reload={slots.reload}
+              />
+            </dd>
+          </>
+        )}
       </dl>
       {published !== null && (
         <Notice tone="success">
@@ -427,6 +476,25 @@ export function PublishPanel({
             setMigration(null)
             setError(null)
             setRefocus((n) => n + 1)
+          }}
+        />
+      )}
+      {approving !== null && admin && mayPublish && !migration && (
+        <ApproveAndPublishDialog
+          workspace={space.workspace_id}
+          base={base}
+          space={space}
+          slots={toApprove}
+          onClose={() => {
+            if (busy) return
+            setApproving(null)
+            setRefocus((n) => n + 1)
+          }}
+          onApproved={async () => {
+            slots.reload()
+            await run(approving, [])
+            slots.reload()
+            setApproving(null)
           }}
         />
       )}

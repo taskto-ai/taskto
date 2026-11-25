@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -1561,3 +1562,75 @@ func TestOnlyAnAdminMayKeepAnApprovalsSpace(t *testing.T) {
 		t.Fatalf("a member kept the grant: %v", got)
 	}
 }
+
+// The builder's preview says what a payment link would ask for, from the sample record, and does
+// nothing else: no entry queued, no approval needed, no row written.
+func TestThePreviewSaysThePaymentLinkWithoutMakingOne(t *testing.T) {
+	i := newInv(t)
+	s := i.shared
+	rows := []PreviewRow{{ID: 1, Revision: 1, Data: map[string]any{
+		"number": "A-1", "customer": "Ada", "total": float64(120), "currency": "EUR", "status": "draft"}}}
+	send := &ClientAction{Name: "send", SurfaceID: SurfaceID(i.app.ID), Context: map[string]any{"id": float64(1)}}
+	before := everythingStored(t, i.e)
+
+	// Nothing is approved, and the preview works all the same.
+	reply := i.mustPreview(i.alice, s, i.app, PreviewRequest{Rows: rows, Action: send})
+	if len(reply.Effects) != 1 {
+		t.Fatalf("effects = %+v", reply.Effects)
+	}
+	e := reply.Effects[0]
+	if e.Kind != EffectCreatePaymentLink || e.Status != StateSimulated || e.Error != nil || e.Detail.Currency != "EUR" ||
+		e.Detail.Amount == nil || *e.Detail.Amount != 120 {
+		t.Fatalf("the simulated link = %+v", e)
+	}
+	// The same through the endpoint that only simulates the effects.
+	rec := i.alice.do(http.MethodPost, appPath(s, i.app.ID, "/actions/preview"), map[string]any{
+		"name": "send", "surfaceId": SurfaceID(i.app.ID), "context": map[string]any{"id": float64(1)}, "rows": rows})
+	if rec.Code == http.StatusOK {
+		if p := decode[Preview](t, rec); len(p.Effects) > 1 {
+			t.Fatalf("simulated = %+v", p)
+		}
+	}
+
+	// It made nothing real and queued nothing.
+	if got := everythingStored(t, i.e); got != before {
+		t.Fatalf("the preview changed what is stored:\n%s\n--- now\n%s", before, got)
+	}
+	if n := i.count(`SELECT count(*) FROM app_effects WHERE app_id = ?`, i.app.ID); n != 0 {
+		t.Fatalf("a preview queued %d effects", n)
+	}
+
+	// Only those who may design or publish the app preview it: another member of the space, and
+	// someone outside it, are refused as before.
+	expect(t, i.bob.do(http.MethodPost, appPath(s, i.app.ID, "/preview"), PreviewRequest{Rows: rows, Action: send}), http.StatusForbidden)
+	expect(t, i.mallory.do(http.MethodPost, appPath(s, i.app.ID, "/preview"), PreviewRequest{Rows: rows, Action: send}), http.StatusNotFound)
+}
+
+// A sample record that has no usable amount is said without one, never guessed, and the currency
+// comes from the field when the effect names one.
+func TestThePreviewedLinkNeverGuessesAnAmount(t *testing.T) {
+	e := Effect{Kind: EffectCreatePaymentLink, AmountField: "total", CurrencyField: "currency", Currency: "USD"}
+	for name, tc := range map[string]struct {
+		data     map[string]any
+		amount   *float64
+		currency string
+	}{
+		"a number":          {map[string]any{"total": 12.5, "currency": "EUR"}, ptr(12.5), "EUR"},
+		"a whole number":    {map[string]any{"total": int64(7), "currency": "EUR"}, ptr(7), "EUR"},
+		"a json number":     {map[string]any{"total": json.Number("3.25")}, ptr(3.25), "USD"},
+		"no amount":         {map[string]any{"currency": "EUR"}, nil, "EUR"},
+		"a null amount":     {map[string]any{"total": nil}, nil, "USD"},
+		"text for a number": {map[string]any{"total": "120"}, nil, "USD"},
+		"not a number":      {map[string]any{"total": math.NaN()}, nil, "USD"},
+		"infinite":          {map[string]any{"total": math.Inf(1)}, nil, "USD"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := previewLink(e, tc.data)
+			if (d.Amount == nil) != (tc.amount == nil) || (d.Amount != nil && *d.Amount != *tc.amount) || d.Currency != tc.currency {
+				t.Fatalf("previewLink = %+v, want %v %s", d, tc.amount, tc.currency)
+			}
+		})
+	}
+}
+
+func ptr(f float64) *float64 { return &f }

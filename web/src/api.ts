@@ -283,6 +283,9 @@ export type AppActionKind = 'insert' | 'update' | 'delete' | 'navigate'
 export type AppDraft = DefinitionNeeds & {
   collection?: { fields: AppField[] }
   actions?: Record<string, { kind: AppActionKind; effects?: DraftEffect[] }>
+  // The slots of outside services the draft declares, by name (internal/apps/integrations.go). Only
+  // their names and kinds are read here: what each is approved for is the server's contract.
+  integrations?: Record<string, { kind: string }>
 }
 
 // An effect an action of a definition declares (internal/apps/effects.go): what a change sets going
@@ -298,6 +301,12 @@ export type DraftEffect = {
   card?: string
   path?: string
   route?: 'board' | 'card' | 'document'
+  // A payment link: the slot it asks, the amount's field and the currency (a code, or the choice
+  // field it is read from).
+  integration?: string
+  amount_field?: string
+  currency?: string
+  currency_field?: string
 }
 
 // The space, and board, an effect of the draft acts on, with the names the caller may be told (none
@@ -471,7 +480,7 @@ export type AppRecord = {
 // An effect an action of an app set going, as the server's outbox lists it: what it makes, how it is
 // getting on, why it failed, and what it made if the caller may read where. `simulated` is of a
 // preview only.
-export type EffectKind = 'create_card' | 'update_card' | 'create_document' | 'open_route'
+export type EffectKind = 'create_card' | 'update_card' | 'create_document' | 'open_route' | 'create_payment_link'
 export type EffectStatus = 'pending' | 'running' | 'done' | 'failed' | 'simulated'
 export type AppEffect = {
   // 0 for a simulated one.
@@ -487,7 +496,8 @@ export type AppEffect = {
   attempts: number
   next_attempt_at: string | null
   error: { code: string; params?: Params } | null
-  detail: { title?: string; column?: string; path?: string; route?: string }
+  // amount and currency: what a simulated payment link would ask for, in the currency's own units.
+  detail: { title?: string; column?: string; path?: string; route?: string; amount?: number; currency?: string }
   result?: Record<string, unknown>
   created_at?: string
   updated_at?: string
@@ -672,6 +682,81 @@ export type IntegrationRegistry = {
 
 // The answer of a check: `code` and `params` are for codeText().
 export type IntegrationCheck = { ok: boolean; remote: boolean; code?: string; params?: Params }
+
+// What the server works out of a draft for one slot of an outside service: what the app sends out
+// and what the service may write back, in field names and literals, never in the app's wording. An
+// admin approves its hash (docs/api.md, "Integrations of an app").
+export type ContractLink = {
+  action: string
+  amount_field: string
+  describes: string[]
+  currency?: string
+  currency_field?: string
+  currency_options?: string[]
+  url_field: string
+  id_field: string
+  when?: Rule
+}
+export type ContractSet = { field: string; value?: unknown; from?: string }
+export type ContractHandler = { event: string; sets: ContractSet[] }
+export type ContractRule = { event: string; rule: Rule }
+export type ContractWrite = { field: string; values: unknown[]; from: string[] }
+export type IntegrationContract = {
+  version: number
+  kind: string
+  operations: string[]
+  sends: string[]
+  currencies: string[]
+  events: string[]
+  writes: ContractWrite[]
+  only_if: ContractRule[]
+  links: ContractLink[]
+  handlers: ContractHandler[]
+}
+
+// How an approval of a contract stands: asked for, decided, or not asked for yet.
+export type ApprovalStatus = 'none' | 'requested' | 'approved' | 'rejected' | 'revoked'
+
+// The integration an approval connects a slot to; `usable` is whether it is switched on and allowed
+// in the app's space now.
+export type BoundIntegration = { id: number; name: string; display_name: string; usable: boolean }
+
+// A slot of the draft, with where the approval of its contract stands, and the live release's.
+export type SlotStatus = {
+  slot: string
+  kind: string
+  contract: IntegrationContract
+  contract_hash: string
+  status: ApprovalStatus
+  approval_id: number | null
+  integration: BoundIntegration | null
+  live: { contract_hash: string; status: ApprovalStatus; usable: boolean } | null
+}
+export type IntegrationStatus = { slots: SlotStatus[] }
+
+// A request for the approval of one contract, as an admin's queue and the one who asked see it: what
+// the requester submitted and the names of the app and its space, nothing of the app or its records.
+export type IntegrationApproval = {
+  id: number
+  app_id: number
+  app_name: string
+  space_id: number
+  space_name: string
+  space_kind: string
+  slot: string
+  kind: string
+  contract: IntegrationContract
+  contract_hash: string
+  status: ApprovalStatus
+  // Whether the contract is the live release's: revoking it stops the app's use at once.
+  live: boolean
+  integration: BoundIntegration | null
+  requested_by: RecordAuthor | null
+  requested_at: string
+  decided_by: RecordAuthor | null
+  decided_at: string | null
+}
+export type IntegrationApprovalList = { approvals: IntegrationApproval[]; next_cursor: string | null }
 
 // What a space's readers see of an integration allowed there.
 export type SpaceIntegration = { id: number; name: string; display_name: string; kind: string; status: string }

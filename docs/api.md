@@ -3429,7 +3429,7 @@ its release needs the capability `effect.<kind>` of each kind it uses (`requires
 | `update_card` | `card`, `column` | moves the card the `create_card` effect called `card` made for the record |
 | `create_document` | `space_id`, `path`, `content`? | a Markdown document, never over another |
 | `open_route` | `route`: `board` (`space_id`, `board_id`), `card` (`card`) or `document` (`space_id`, `path`) | a place to open in the web app, as a kind and IDs; never an address |
-| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | **declared only, for now**: asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount; a version 3 effect that holds no provider, address or key. It is checked, put in the contract and gates publishing, but it makes no outbox entry and does nothing when the action runs. An action has at most one |
+| `create_payment_link` | `integration`, `amount_field`, `currency` or `currency_field`, `url_field`, `id_field`, `description`? | **declared only, for now**: asks the slot `integration` ([integrations](#integrations-of-an-app)) for a link to pay the amount; a version 3 effect that holds no provider, address or key. It is checked, put in the contract and gates publishing, and a preview says what it would ask for, but it makes no outbox entry and does nothing when the action runs. An action has at most one |
 
 Every kind may have `when`, a rule ([Fields and rules](#fields-and-rules)) over the record as the change leaves it: the
 effect applies only then. `title`, `body`, `content`, `path` and `docs` are **templates**: text
@@ -3562,9 +3562,11 @@ since the route is not one a token reaches.
 Those who may design or publish the app (`403 app_forbidden` otherwise). The same body as an action;
 it is worked out against the **draft** and **does nothing**: no record changes, no operation is
 kept, no entry is queued, no card or document is made. It answers `{"effects": […]}`, the effects
-that would apply (not a `create_payment_link`, which is declared only), with `status: "simulated"`, what they would make in `detail` (a new record's `id`
+that would apply, with `status: "simulated"`, what they would make in `detail` (a new record's `id`
 is `new`), and an `error` with the code an effect would fail with if the caller couldn't write its
-target.
+target. A `create_payment_link` is only said: its `detail` is the `amount` the sample record has in the
+amount field (in the currency's own units, such as euros, and left out when the record has no number there)
+and its `currency`, and the preview calls no service, opens no secret and needs no approval.
 
 Like the preview below, it never reads the app's records: the action is tried on the `rows` of the
 body (the preview's own, as below) or, without them, on sample rows made from the draft's
@@ -3597,7 +3599,7 @@ draft doesn't declare, a value that doesn't fit its field, or a row the sample r
 `updateComponents`, `updateDataModel` for a start, as `…/surface` answers) or update it (as `…/actions`
 does), and the rows as the action left them, to send with the next step. For an insert or an update
 with effects, `effects` are the ones that would apply to the record, simulated on those rows (a
-`create_payment_link` is declared only and is never simulated; as
+`create_payment_link` as an `amount` and a `currency` in its `detail`, nothing more; as
 [`…/actions/preview`](#post-appsappactionspreview) answers; nothing is made). In a preview a
 **signature** or a **photo** is never required, since none is held, so an action whose record would
 carry one is not refused for the lack of it. The answer is the same
