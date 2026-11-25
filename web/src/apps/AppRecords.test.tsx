@@ -586,7 +586,7 @@ test('with a change not saved, Escape asks first; keeping is the default and kee
   // From the drawer's own buttons (Escape in a field is the field's, below).
   const close = within(drawer()).getByRole('button', { name: 'Close' })
   close.focus()
-  escape(close)
+  pressEscape(close)
   const ask = await leaving()
   // Keeping is what the dialog starts on.
   expect(document.activeElement).toBe(within(ask).getByRole('button', { name: 'Keep editing' }))
@@ -595,7 +595,7 @@ test('with a change not saved, Escape asks first; keeping is the default and kee
   expect((field('description') as HTMLInputElement).value).toBe('Team lunch')
 
   // Discarding closes it.
-  escape(close)
+  pressEscape(close)
   fireEvent.click(within(await leaving()).getByRole('button', { name: 'Discard my changes' }))
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Record 4' })).toBeNull())
 })
@@ -603,7 +603,7 @@ test('with a change not saved, Escape asks first; keeping is the default and kee
 test('Escape in a field is the field’s (a text, a choice, the list’s search): it never closes the drawer', async () => {
   const { description } = await editing()
   for (const el of [description, field('kind'), screen.getByRole('searchbox')]) {
-    escape(el)
+    pressEscape(el)
     await new Promise((r) => setTimeout(r, 0))
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(drawer()).toBeTruthy()
@@ -645,7 +645,7 @@ test('opening another record with a change not saved asks first', async () => {
 
 test('with a conflict on screen, Escape asks first: neither version is lost without a choice', async () => {
   await editing({ conflict: true })
-  escape(drawer())
+  pressEscape(drawer())
   fireEvent.click(within(await leaving()).getByRole('button', { name: 'Keep editing' }))
   await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
   expect(within(drawer()).getByRole('region', { name: 'Someone else changed this record meanwhile' })).toBeTruthy()
@@ -663,7 +663,7 @@ test('with nothing changed, Escape closes the drawer at once', async () => {
   openExplorer()
   fireEvent.click(await screen.findByRole('button', { name: 'Open record 4' }))
   await waitFor(() => field('description'))
-  escape(drawer())
+  pressEscape(drawer())
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Record 4' })).toBeNull())
   expect(screen.queryByRole('alertdialog')).toBeNull()
 })
