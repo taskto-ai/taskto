@@ -2,6 +2,7 @@
 // path in a URL, what a refusal means, what kind of file a path names, and the loading of the
 // list and of one document.
 
+import { useEffect, useRef } from 'react'
 import { ApiError, api, type Doc } from '../api'
 import { has } from '../i18n'
 import { useLoad } from '../load'
@@ -24,6 +25,9 @@ export type Commit = {
 export const encodePath = (path: string) => path.split('/').map(encodeURIComponent).join('/')
 
 export const isConflict = (e: unknown) => e instanceof ApiError && e.status === 409
+// What a request asked for is gone or changed: a conflict, or (for a history page that starts
+// after a commit the history no longer has) the server's 404.
+export const isStale = (e: unknown) => e instanceof ApiError && (e.status === 409 || e.status === 404)
 // A conflict the server named (doc_changed, doc_exists…): its message says what happened.
 export const isNamedConflict = (e: unknown) =>
   e instanceof ApiError && e.status === 409 && !!e.code && e.code !== 'doc_conflict' && has(`errors.${e.code}`)
@@ -64,6 +68,33 @@ export function resolveDocLink(from: string, href: string): string | null {
     } else if (part !== '.' && part !== '') parts.push(part)
   }
   return parts.length > 0 ? parts.join('/') : null
+}
+
+// What is shown now, which a callback made earlier can read: an answer is applied only if what
+// it was asked for (the space, the document, the list's generation) is still what is shown.
+//
+//   const now = useLatest(base)
+//   ...
+//   const made = base
+//   api(...).then((res) => now.current === made && apply(res))
+export function useLatest<T>(value: T) {
+  const ref = useRef(value)
+  ref.current = value
+  return ref
+}
+
+// Whether the part that made a request is still on the screen when its answer comes: an action
+// the person asked for is finished either way (the list reloads), but what it would open is
+// opened only for someone who is still there.
+export function useMounted() {
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  return mounted
 }
 
 // The space's documents, every page of them; nothing while there is no space.

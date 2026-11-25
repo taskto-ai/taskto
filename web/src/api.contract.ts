@@ -52,4 +52,7 @@ export type Contract = [
   Is<Check<Gen.HomeItem, Api.HomeItem>>,
   Is<Check<Gen.HomeView, Api.HomeView>>,
   Is<Check<Gen.AvailableApp, Api.AvailableApp>>,
+  // The host's updates, for the server's operators.
+  Is<Check<Gen.UpdateReport, Api.UpdateStatus>>,
+  Is<Check<Gen.UpdateRequested, Api.UpdateRequested>>,
 ]

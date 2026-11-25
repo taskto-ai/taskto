@@ -1,10 +1,10 @@
 // Uploading a file into the space: any file, at any path, created unless the person chooses to
 // replace one already there.
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ApiError, api, type Doc, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
-import { type Change, encodePath, isConflict, isMarkdown } from './docs'
+import { type Change, encodePath, isConflict, isMarkdown, useMounted } from './docs'
 
 // A Markdown file is sent as its text, checked here to be UTF-8; any other file as its bytes,
 // streamed by the browser whatever its size.
@@ -19,10 +19,14 @@ async function markdownText(file: File, notUtf8: string): Promise<string> {
 export function Upload({
   base,
   onDone,
+  onChanged,
   onCancel,
 }: {
   base: string
+  // The file is in the space: its document opens, if the form is still there.
   onDone: (path: string) => void
+  // The space's list of documents may have changed, whatever became of the form.
+  onChanged: () => void
   onCancel: () => void
 }) {
   const [file, setFile] = useState<File | null>(null)
@@ -34,11 +38,24 @@ export function Upload({
   const t = useT()
   const f = useFormat()
 
+  // The upload in flight: only Cancel stops it, and then nothing opens. When the form goes away
+  // for another reason (the person went to a document, or another space) the upload goes on
+  // and finishes, since a large one takes minutes; it just doesn't open the file over what they
+  // are doing.
+  const sending = useRef<AbortController | null>(null)
+  const mounted = useMounted()
+  const cancel = () => {
+    sending.current?.abort()
+    onCancel()
+  }
+
   // Without `replace`, it only creates: a file already there is the user's to replace.
   const send = async (replace: boolean) => {
     if (!file || !target) return
     setBusy(true)
     setError(null)
+    sending.current = new AbortController()
+    const { signal } = sending.current
     try {
       const url = `${base}/docs/${encodePath(target)}`
       const text = isMarkdown(target)
@@ -46,20 +63,27 @@ export function Upload({
         : null
       // Gone since it was found: replacing it is creating it.
       const current = replace
-        ? await api<Doc>(url).catch((e: unknown) => {
+        ? await api<Doc>(url, { signal }).catch((e: unknown) => {
             if (e instanceof ApiError && e.status === 404) return null
             throw e
           })
         : null
       if (text !== null) {
         const body = { content: text }
-        await api<Change>(url, { method: 'PUT', body: current ? { ...body, base_version: current.version } : body })
+        await api<Change>(url, {
+          method: 'PUT',
+          body: current ? { ...body, base_version: current.version } : body,
+          signal,
+        })
       } else {
         const query = current ? `?base_version=${current.version}` : ''
-        await api<Change>(`${url}${query}`, { method: 'PUT', bytes: file })
+        await api<Change>(`${url}${query}`, { method: 'PUT', bytes: file, signal })
       }
-      onDone(target)
+      onChanged()
+      if (mounted.current && !signal.aborted) onDone(target)
     } catch (err) {
+      // Cancelled: the server may have finished all the same, so the list is read again.
+      if (signal.aborted) return onChanged()
       setExists(isConflict(err) && !replace)
       setError(
         isConflict(err)
@@ -69,7 +93,7 @@ export function Upload({
           : errorText(err),
       )
     } finally {
-      setBusy(false)
+      if (!signal.aborted) setBusy(false)
     }
   }
 
@@ -126,7 +150,7 @@ export function Upload({
             {t('knowledge.uploadForm.submit')}
           </button>
         )}
-        <button type="button" className="tt-button" onClick={onCancel}>
+        <button type="button" className="tt-button" onClick={cancel}>
           {t('common.cancel')}
         </button>
       </div>
