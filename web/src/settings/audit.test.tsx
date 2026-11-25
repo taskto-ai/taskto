@@ -254,7 +254,7 @@ test('an event of a deleted account says so, and its target is not a stray numbe
     },
   })
   render(<SettingsPage me={me} workspace={admin} tab="audit" />)
-  await screen.findByRole('list', { name: 'Audit log' })
+  await screen.findByRole('table', { name: 'Audit log' })
   expect(screen.getByText('By Deleted user')).toBeTruthy()
   expect(log().getByText('Account purged')).toBeTruthy()
   expect(screen.getByText('Member: Deleted user')).toBeTruthy()
