@@ -177,8 +177,9 @@
 
 /* In no layer: what reaches every element on purpose, the design system's too (css-check's
    EVERYWHERE): border-box sizing, the selection's and the scrollbars' colours, the caret, the search
-   field's clear button, and 16px text in every field in a narrow window, which keeps iOS from
-   zooming in on focus. In @layer base a component's own rule would win over them; here they win, as
+   field's clear button, and 16px text by default in a field in a narrow window, which keeps iOS
+   from zooming in on focus (a default: a more specific old rule, such as `.tt-editor textarea`,
+   still sets its own size). In @layer base a component's own rule would win over them; here they win, as
    they did when they were in the one stylesheet. */
 *,
 *::before,

@@ -455,10 +455,16 @@ export function topLevel(css) {
     const prelude = text.slice(i, j).trim().replace(/\s+/g, ' ')
     const line = text.slice(0, i).split('\n').length
     if (text[j] === '{') {
+      // To the block's end: braces inside a string (`content: "}"`) or escaped are not the block's.
       let depth = 0
       for (; j < text.length; j++) {
-        if (text[j] === '{') depth++
-        else if (text[j] === '}' && --depth === 0) break
+        const c = text[j]
+        if (c === '\\') j++
+        else if (c === '"' || c === "'") {
+          j++
+          while (j < text.length && text[j] !== c) j += text[j] === '\\' ? 2 : 1
+        } else if (c === '{') depth++
+        else if (c === '}' && --depth === 0) break
       }
       out.push({ kind: 'block', prelude, line, start: i, end: j + 1 })
     } else {
@@ -516,7 +522,8 @@ function loadingErrors(web, sheets) {
   const errors = []
   // The entry's first import: the layers are declared by the first stylesheet the build emits.
   const entry = blankComments(readFileSync(join(web, ENTRY), 'utf8'))
-  const first = /\bimport\s+(?:[^'"]*?\bfrom\s+)?["']([^"']+)["']/.exec(entry)
+  const entryImports = [...entry.matchAll(/\bimport\s+(?:[^'"]*?\bfrom\s+)?["']([^"']+)["']/g)].map((m) => m[1])
+  const first = entryImports.length > 0 ? [null, entryImports[0]] : null
   if (first?.[1] !== './ui/index.css') {
     errors.push(
       `${ENTRY}: its first import is ${first ? `'${first[1]}'` : 'missing'}, not './ui/index.css': the build emits CSS in import order, so a component's @layer block would come before the layers' order is declared, and @layer base would beat @layer components`,
@@ -543,19 +550,32 @@ function loadingErrors(web, sheets) {
   for (const f of listed) if (!sheets.includes(f)) errors.push(`${LIST}: lists ${f}, which is not there`)
 
   // Every stylesheet is loaded, and one way only.
+  // Each way a stylesheet is loaded, by kind: listed in the list, imported by ui/index.css, or
+  // imported by modules (several modules importing one component's stylesheet are one way).
   const ways = new Map(sheets.map((f) => [f, []]))
-  const add = (f, way) => ways.get(f)?.push(way)
-  add(LIST, 'imported by src/main.tsx')
-  for (const f of listed) add(f, `listed in ${LIST}`)
-  for (const s of cssImports(web, DESIGN_ENTRY)) add(s.file, `imported by ${DESIGN_ENTRY}`)
-  for (const [f, modules] of moduleImports(web)) add(f, `imported by ${modules.join(', ')}`)
-  for (const [f, how] of ways) {
-    const kinds = new Set(how.map((h) => h.replace(/ by .*/, ' by').replace(/^listed.*/, 'listed')))
+  const add = (f, kind, way) => ways.get(f)?.push({ kind, way })
+  // The list itself counts as loaded only if the entry imports it.
+  if (!entryImports.includes('./styles.css')) {
+    errors.push(`${ENTRY}: doesn't import './styles.css', so no old stylesheet it lists is loaded`)
+  }
+  for (const f of listed) add(f, 'list', `listed in ${LIST}`)
+  for (const s of cssImports(web, DESIGN_ENTRY)) add(s.file, 'index', `imported by ${DESIGN_ENTRY}`)
+  for (const [f, modules] of moduleImports(web)) {
+    // The entry's own imports are of the list and of ui/index.css, which load in ways of their own.
+    const others = modules.filter((m) => m !== ENTRY)
+    if (others.length > 0) add(f, 'module', `imported by ${others.join(', ')}`)
+    else if (f !== LIST && f !== DESIGN_ENTRY) add(f, 'module', `imported by ${ENTRY}`)
+  }
+  ways.delete(LIST)
+  ways.delete(DESIGN_ENTRY)
+  for (const [f, list] of ways) {
+    const how = list.map((w) => w.way)
+    const kinds = new Set(list.map((w) => w.kind))
     if (how.length === 0) {
       errors.push(
         `${f}: nothing loads it: an old screen's rules are listed in ${LIST} (OLD_STYLESHEETS); a component's or a new screen's stylesheet is imported by its module`,
       )
-    } else if (kinds.size > 1 || (how.some((h) => h.startsWith('listed')) && how.length > 1)) {
+    } else if (kinds.size > 1 || list.filter((w) => w.kind !== 'module').length > 1) {
       errors.push(`${f}: loaded more than one way (${how.join('; ')}): one is its place in the cascade`)
     }
   }

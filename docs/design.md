@@ -26,7 +26,9 @@ component's `@layer components { … }`) before the entry's, so no import order 
 `index.css` first. And `index.css` is the first import of `web/src/main.tsx`, so that within the
 entry's own stylesheet the tokens come before anything else. `web/src/ui/tokens.test.ts` fails when
 the page's statement is missing, comes after a stylesheet or differs from `index.css`'s, and when
-anything else is `main.tsx`'s first import; so does `css-check`.
+anything else is `main.tsx`'s first import; so does `css-check`. The order is written twice, in
+`web/index.html` and in `ui/index.css`: change the two together (the browser keeps the first one it
+meets).
 
 | File | Layer | What |
 |---|---|---|
@@ -298,9 +300,11 @@ never nest, or both set the same value).
   components should it ever leave the layer. It costs nothing (`:where()` adds no specificity).
 - Two parts of `ui/base.css` stay in no layer. First, what reaches every element on purpose,
   components included (`EVERYWHERE`): border-box sizing, the selection's and the scrollbars'
-  colours, the caret, the search field's clear button, and 16px text in every field in a narrow
-  window, which keeps iOS from zooming in on focus (`--tt-text-no-zoom`, an alias of its own, not a
-  step of the type scale, so a change to the scale can't bring the zoom back). These win over a
+  colours, the caret, the search field's clear button, and 16px text by default in a field in a
+  narrow window, which keeps iOS from zooming in on focus (`--tt-text-no-zoom`, an alias of its own,
+  not a step of the type scale, so a change to the scale can't bring the zoom back). It is a
+  default, not a guarantee: a more specific old rule still sets its own size (`.tt-editor textarea`
+  keeps its 0.9rem, as it did before). These win over a
   component's own rule, as they did in the one stylesheet; in the layer they would lose to it.
   Second, on a touch screen, the rules that make a checkbox or a radio the box alone and its label
   the target: they beat single-class rules of the screens by specificity (`.tt-checks label`,
@@ -322,10 +326,13 @@ never nest, or both set the same value).
   in `apps/apps.legacy.css`) stay in no layer, even when the rest of that file moves into `screens`.
 
 **Changing the order.** Moving a rule to another file, or into a layer, can change which rule wins
-on an element. Before such a change, list the pairs of rules that could meet on one element with a
-property in common and the same specificity whose order changes, and the rules a new layer would
-make lose to one in no layer (or, for an `!important` declaration, win over it); then compare
-`make screens` before and after.
+on an element. Before such a change, list every pair of rules that could meet on one element and set
+a property in common, and work out each pair's winner before and after: first by layer (no layer
+over `screens` over `components` over `base` over `themes` over `tokens`; turned round for
+`!important`), then by specificity, then by order, which settles only rules of the same layer and
+specificity. A rule moved between named layers (from `base` to `screens`, say) can go from losing
+to winning against a rule in `components` whatever their specificities. Then compare `make screens`
+before and after.
 
 **Tokens only, in the design system.** Under `web/src/ui/`, apart from the files that define the
 tokens (`tokens.css`, `themes/` and `legacy.css`), a font size, a spacing value (`margin`,

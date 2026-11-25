@@ -451,6 +451,22 @@ describe('how the app loads its stylesheets', () => {
     expect(gone.err).toContain('src/styles.css: lists src/pwa/pwa.legacy.css, which is not there')
   })
 
+  test('the list counts only if the entry imports it', () => {
+    const r = app({ 'main.tsx': "import './ui/index.css'\nimport { App } from './App'\n" })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain("src/main.tsx: doesn't import './styles.css'")
+  })
+
+  test('a stylesheet ui/index.css imports and a module imports too is loaded twice', () => {
+    const r = app({
+      'ui/index.css': '@layer tokens, themes, base, components, screens;\n@import "./Box.css";\n',
+      'ui/Box.tsx': "import './Box.css'\n",
+      'ui/Box.css': '@layer components { .ui-box { color: inherit; } }\n',
+    })
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('src/ui/Box.css: loaded more than one way')
+  })
+
   test('a stylesheet both listed and imported by a module is loaded twice', () => {
     const r = app({ 'boards/Board.tsx': "import './boards.legacy.css'\n" })
     expect(r.code).toBe(1)
@@ -520,6 +536,16 @@ describe('how the app loads its stylesheets', () => {
       expect(r.code, rule).toBe(1)
       expect(r.err, rule).toContain('is in no layer: only what reaches every element on purpose (EVERYWHERE) is')
     }
+  })
+
+  test('a brace inside a string or escaped is not the end of a block of ui/base.css', () => {
+    const base = GOOD_BASE.replace(
+      `  a${OPT} { color: inherit; }\n`,
+      `  a${OPT} { color: inherit; }\n  .tt-mark::before { content: "}"; }\n  .tt-open::after { content: '{'; }\n  .tt-esc::before { content: "\\\\}"; }\n`,
+    )
+    const r = app({ 'ui/base.css': base })
+    expect(r.err).toBe('')
+    expect(r.code).toBe(0)
   })
 
   test("ui/base.css's element rules leave the components' elements out, in the layer and outside it", () => {
