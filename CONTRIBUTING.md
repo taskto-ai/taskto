@@ -30,7 +30,7 @@ first account with it.
 
 | Target | What it does |
 |---|---|
-| `make check` | what CI runs: lint, `go test ./...`, the translation check, the web and agent builds and their tests |
+| `make check` | what CI runs: lint, `go test ./...`, the translation and stylesheet checks, the web and agent builds and their tests |
 | `make lint` | golangci-lint (Go) and Biome (TypeScript) |
 | `make fmt` | format Go and TypeScript, and apply the linters' safe fixes |
 | `make build` | the web app and the agent, then `bin/taskto` with the web app embedded |

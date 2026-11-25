@@ -734,7 +734,7 @@
     "labels": "Etiquetas",
     "noLabels": "Sem etiquetas.",
     "labelField": "Nova etiqueta",
-    "labelPlaceholder": "design",
+    "labelPlaceholder": "Adicionar uma etiqueta",
     "addLabel": "Adicionar etiqueta",
     "removeLabel": "Remover a etiqueta {label}",
     "filters": "Filtrar os cartões",
