@@ -101,9 +101,6 @@ func Request(dir string, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("updatestatus: %w", err)
 	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
-		return fmt.Errorf("updatestatus: %w", err)
-	}
 	// A hard link fails when the name is taken, where a rename would replace it: two presses at
 	// once make one request.
 	if err := os.Link(tmp.Name(), final); err != nil {

@@ -1781,6 +1781,7 @@
         "archived": "Archived",
         "base_host": "Server",
         "cascade": "Followed from another change",
+        "channel": "Channel",
         "cli": "CLI",
         "created_account": "Account created",
         "default_mode": "Default mode",

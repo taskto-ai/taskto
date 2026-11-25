@@ -1793,6 +1793,7 @@
         "archived": "Arquivado",
         "base_host": "Servidor",
         "cascade": "Consequência de outra alteração",
+        "channel": "Canal",
         "cli": "CLI",
         "created_account": "Conta criada",
         "default_mode": "Modo padrão",

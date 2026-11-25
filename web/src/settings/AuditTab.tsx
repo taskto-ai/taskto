@@ -83,6 +83,7 @@ export const AUDIT_DETAILS = [
   'archived',
   'base_host',
   'cascade',
+  'channel',
   'cli',
   'created_account',
   'default_mode',
