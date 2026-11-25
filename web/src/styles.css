@@ -527,6 +527,7 @@ textarea {
 }
 
 .tt-topbar {
+  position: relative; /* the new-workspace form hangs from the bar */
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -649,6 +650,36 @@ textarea {
   box-shadow: var(--tt-shadow-pop);
   display: grid;
   gap: 0.6rem;
+}
+
+/* "New workspace" sits at the switcher's side, near the start of the bar, so its form is anchored
+   to the bar and not to its own button: from the bar's start edge, never wider than the screen,
+   in either text direction. On the screen for someone with no workspace, where there is no bar,
+   it hangs from the button, centred. */
+.tt-topbar .tt-new-workspace {
+  position: static;
+}
+
+.tt-new-workspace .tt-menu {
+  inset-inline-end: auto;
+  inset-inline-start: 0.5rem;
+  width: min(16rem, calc(100vw - 1rem));
+  box-sizing: border-box;
+}
+
+.tt-center .tt-new-workspace .tt-menu {
+  inset-inline-start: 50%;
+  translate: -50% 0;
+}
+
+[dir="rtl"] .tt-center .tt-new-workspace .tt-menu {
+  translate: 50% 0;
+}
+
+.tt-new-workspace summary {
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--tt-radius);
 }
 
 .tt-menu p {

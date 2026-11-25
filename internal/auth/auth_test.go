@@ -224,7 +224,9 @@ func TestSetup(t *testing.T) {
 
 	got := decode[me](t, owner.do(http.MethodGet, "/api/me", nil))
 	want := me{User: meUser{User: User{ID: got.User.ID, Email: "owner@example.com", Name: "Owner"}},
-		Workspaces: []Membership{{WorkspaceID: ws, WorkspaceName: "Home", Role: RoleAdmin}}}
+		Workspaces:         []Membership{{WorkspaceID: ws, WorkspaceName: "Home", Role: RoleAdmin}},
+		CanCreateWorkspace: true, // the owner administers a workspace, and the default lets admins make more
+		IsOperator:         true} // and it is the one setup made
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("GET /api/me = %+v, want %+v", got, want)
 	}

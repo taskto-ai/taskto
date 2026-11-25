@@ -462,3 +462,124 @@ test('the account menu leads to the install guidance', async () => {
   await screen.findByRole('heading', { name: 'Install the app' })
   expect(window.location.pathname).toBe('/w/1/settings/about')
 })
+
+test('"New workspace" is offered only when the server lets the person, and switches to the one made', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const created = {
+    workspace: { id: 9, name: 'Side project', role: 'admin' },
+    user: me.user,
+    workspaces: [...me.workspaces, { id: 9, name: 'Side project', role: 'admin' }],
+    can_create_workspace: true,
+  }
+  const calls = fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: true } },
+    'POST /api/workspaces': { status: 201, body: created },
+    'GET /api/workspaces/9/conversations': { body: { conversations: [] } },
+    ...pages,
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+
+  fireEvent.click(screen.getByLabelText('New workspace'))
+  fireEvent.change(screen.getByLabelText('Name of the new workspace'), { target: { value: '  Side project ' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }))
+
+  await waitFor(() => expect(window.location.pathname).toBe('/w/9/conversations'))
+  expect(calls.filter((c) => c.path === '/api/workspaces' && c.method === 'POST').map((c) => c.body)).toEqual([
+    { name: 'Side project' },
+  ])
+  // The request says which account the form was opened for, so a session that became another's is refused.
+  expect(calls.find((c) => c.path === '/api/workspaces' && c.method === 'POST')?.headers).toMatchObject({
+    'x-taskto-expected-user': String(me.user.id),
+  })
+  // The switcher lists it and shows it.
+  await waitFor(() => expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe('9'))
+  expect(localStorage.getItem('taskto.workspace')).toBe('9')
+})
+
+test('"New workspace" says why a server refused, and is not offered to those it did not allow', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: true } },
+    'POST /api/workspaces': {
+      status: 403,
+      body: { error: 'no', code: 'workspace_creation_refused' },
+    },
+    ...pages,
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  fireEvent.click(screen.getByLabelText('New workspace'))
+  fireEvent.change(screen.getByLabelText('Name of the new workspace'), { target: { value: 'X' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }))
+  expect((await screen.findByRole('alert')).textContent).toBe(
+    "This server doesn't let you create a workspace. Ask the person who runs it.",
+  )
+  expect(window.location.pathname).toBe('/w/1/conversations')
+
+  cleanup()
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: false } },
+    ...pages,
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  expect(screen.queryByLabelText('New workspace')).toBeNull()
+})
+
+test('a workspace made after the person logged out does not bring the shell back', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: true } },
+    'POST /api/workspaces': async () => {
+      await held // the answer comes after the logout below
+      return {
+        status: 201,
+        body: { workspace: { id: 9, name: 'Late', role: 'admin' }, user: me.user, workspaces: me.workspaces },
+      }
+    },
+    'POST /api/logout': { status: 204 },
+    ...pages,
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  fireEvent.click(screen.getByLabelText('New workspace'))
+  fireEvent.change(screen.getByLabelText('Name of the new workspace'), { target: { value: 'Late' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+  await screen.findByRole('heading', { name: 'Log in' })
+  await act(async () => {
+    release()
+    await held
+  })
+  expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
+  expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
+})
+
+test('someone with no workspace is offered "New workspace" when the server lets them', async () => {
+  window.history.replaceState(null, '', '/')
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { user: me.user, workspaces: [], can_create_workspace: true } },
+  })
+  render(<App />)
+  await screen.findByText(/member of any workspace/)
+  expect(screen.getByLabelText('New workspace')).toBeTruthy()
+
+  cleanup()
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { user: me.user, workspaces: [], can_create_workspace: false } },
+  })
+  render(<App />)
+  await screen.findByText(/member of any workspace/)
+  expect(screen.queryByLabelText('New workspace')).toBeNull()
+})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -57,13 +58,35 @@ type Invite struct {
 }
 
 var (
-	errSetupDone     = errors.New("the server is already set up")
-	errNotFound      = errors.New("not found")
-	errLastAdmin     = errors.New("a workspace needs at least one admin")
-	errAlreadyMember = errors.New("already a member of this workspace")
-	errEmailTaken    = errors.New("an account with this email exists")
-	errInviteInvalid = errors.New("the invite is unknown, used or expired")
+	errSetupDone = errors.New("the server is already set up")
+	errNotFound  = errors.New("not found")
+	// errCreationRefused: this server's setting doesn't let the caller create a workspace.
+	errCreationRefused = errors.New("this server doesn't let you create a workspace")
+	// errWorkspaceLimit: the caller has made as many workspaces as one account may.
+	errWorkspaceLimit = fmt.Errorf("an account can create at most %d workspaces", maxWorkspacesPerUser)
+	errLastAdmin      = errors.New("a workspace needs at least one admin")
+	errAlreadyMember  = errors.New("already a member of this workspace")
+	errEmailTaken     = errors.New("an account with this email exists")
+	errInviteInvalid  = errors.New("the invite is unknown, used or expired")
 )
+
+// The limits on one account's workspace creation, whatever -workspace-creation says: with
+// "anyone" a single session would otherwise make workspaces without end, each with its own
+// private space, audit rows and storage.
+const (
+	// maxWorkspacesPerUser is how many workspaces one account may have made, ever.
+	maxWorkspacesPerUser = 10
+	// workspaceBurst workspaces may be made within workspaceWindow by one account.
+	workspaceBurst  = 5
+	workspaceWindow = time.Hour
+)
+
+// workspaceRateError is a refusal to create another workspace so soon: try again after wait.
+type workspaceRateError struct{ wait time.Duration }
+
+func (e *workspaceRateError) Error() string {
+	return "too many workspaces created lately: try again later"
+}
 
 // timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the format of the schema's
 // defaults, so stored times compare correctly as text.
@@ -113,7 +136,7 @@ func (s *Service) setup(ctx context.Context, email, name, passwordHash, workspac
 		if u, err = insertUser(ctx, tx, email, name, passwordHash); err != nil {
 			return err
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO workspaces (name) VALUES (?)`, workspace)
+		res, err := tx.ExecContext(ctx, `INSERT INTO workspaces (name, created_by, is_setup) VALUES (?, ?, 1)`, workspace, u.ID)
 		if err != nil {
 			return err
 		}
@@ -132,6 +155,110 @@ func (s *Service) setup(ctx context.Context, email, name, passwordHash, workspac
 			TargetType: audit.TargetWorkspace, Target: wsID})
 	})
 	return u, token, err
+}
+
+// creationMode is who may create a workspace: CreateByAdmins unless the operator chose
+// another of the three.
+func (s *Service) creationMode() string {
+	switch s.opts.WorkspaceCreation {
+	case CreateByAnyone, CreateByNobody:
+		return s.opts.WorkspaceCreation
+	}
+	return CreateByAdmins
+}
+
+// mayCreateWorkspace reports whether userID may create a workspace under the operator's
+// setting, reading through q.
+func (s *Service) mayCreateWorkspace(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, userID int64) (bool, error) {
+	switch s.creationMode() {
+	case CreateByAnyone:
+		return true, nil
+	case CreateByNobody:
+		return false, nil
+	}
+	var admin bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = ? AND role = ?)`,
+		userID, RoleAdmin).Scan(&admin)
+	return admin, err
+}
+
+// createWorkspace makes a workspace named name with userID as its first admin, as setup
+// does for the first one, in one transaction: the membership's trigger gives them their
+// private space. It fails with errCreationRefused unless the operator's setting lets userID
+// create one, checked in the same transaction as the insert so a demotion can't race it.
+func (s *Service) createWorkspace(ctx context.Context, userID int64, name string) (Membership, error) {
+	m := Membership{WorkspaceName: name, Role: RoleAdmin}
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		ok, err := s.mayCreateWorkspace(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errCreationRefused
+		}
+		if err := s.checkWorkspaceLimits(ctx, tx, userID); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `INSERT INTO workspaces (name, created_by, created_at) VALUES (?, ?, ?)`,
+			name, userID, stamp(s.now()))
+		if err != nil {
+			return err
+		}
+		if m.WorkspaceID, err = res.LastInsertId(); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, ?)`,
+			m.WorkspaceID, userID, RoleAdmin); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Workspace: m.WorkspaceID, Actor: userID, Action: audit.WorkspaceCreated,
+			TargetType: audit.TargetWorkspace, Target: m.WorkspaceID, Details: audit.Details{"allowed_by": s.creationMode()}})
+	})
+	return m, err
+}
+
+// checkWorkspaceLimits refuses with errWorkspaceLimit once userID has made
+// maxWorkspacesPerUser workspaces, and with a *workspaceRateError once they made workspaceBurst
+// within workspaceWindow. It reads through tx, the transaction that inserts the new one, so
+// concurrent requests can't each pass.
+func (s *Service) checkWorkspaceLimits(ctx context.Context, tx *sql.Tx, userID int64) error {
+	var total int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM workspaces WHERE created_by = ?`, userID).Scan(&total); err != nil {
+		return err
+	}
+	if total >= maxWorkspacesPerUser {
+		return errWorkspaceLimit
+	}
+	now := s.now()
+	rows, err := tx.QueryContext(ctx, `SELECT created_at FROM workspaces WHERE created_by = ? AND created_at > ?
+		ORDER BY created_at DESC LIMIT ?`, userID, stamp(now.Add(-workspaceWindow)), workspaceBurst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	var recent []time.Time
+	for rows.Next() {
+		var at string
+		if err := rows.Scan(&at); err != nil {
+			return err
+		}
+		t, err := time.Parse(timeFormat, at)
+		if err != nil {
+			return err
+		}
+		recent = append(recent, t)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(recent) >= workspaceBurst {
+		// The oldest of the burst leaves the window first.
+		wait := recent[len(recent)-1].Add(workspaceWindow).Sub(now)
+		return &workspaceRateError{wait: max(wait, time.Second)}
+	}
+	return nil
 }
 
 func insertUser(ctx context.Context, tx *sql.Tx, email, name, passwordHash string) (User, error) {

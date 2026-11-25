@@ -115,6 +115,7 @@ var schemas = map[string]map[string]kind{
 	SSOLoginFailed:    {"provider": tag, "reason": tag},
 	SSOIdentityLinked: {"provider": tag, "created_account": boolean},
 
+	WorkspaceCreated:  {"allowed_by": oneOf("admins", "anyone")},
 	WorkspaceUpdated:  {"fields": someOf("locale"), "locale": tag},
 	InviteCreated:     {"email": email, "role": roles},
 	InviteRevoked:     {"email": email, "role": roles},

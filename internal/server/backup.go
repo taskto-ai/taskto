@@ -42,9 +42,10 @@ func backupHealth(dataDir string) http.Handler {
 	})
 }
 
-// backupStatus is GET /api/workspaces/{workspace}/backup, for the workspace's admins
+// backupStatus is GET /api/workspaces/{workspace}/backup, for the server's operators
 // (Settings → About): the schedule's whole status, with its health. The server's backups
-// are the whole server's, so any workspace's admins see them.
+// are the whole server's, and the status can name the backup host, so the admins of a
+// workspace someone else made don't see it (auth.Service.RequireOperator).
 func backupStatus(dataDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		st, ok, err := readBackupStatus(dataDir)

@@ -6,7 +6,12 @@ import type { Me, MyStorage, SpaceUsage, StorageReport, Workspace } from '../api
 import { fakeFetch } from '../test/fakes'
 import { SettingsPage } from './SettingsPage'
 
-const me: Me = { user: { id: 1, email: 'owner@example.com', name: 'Owner' }, workspaces: [] }
+const me: Me = {
+  user: { id: 1, email: 'owner@example.com', name: 'Owner' },
+  workspaces: [],
+  can_create_workspace: false,
+  is_operator: false,
+}
 const admin: Workspace = { id: 1, name: 'Home', role: 'admin' }
 const member: Workspace = { id: 1, name: 'Home', role: 'member' }
 
