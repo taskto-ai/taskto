@@ -6,7 +6,11 @@
 import { api, type MyStorage, type SpaceUsage, type StorageReport, usagePath } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert } from './parts'
+import { Badge } from '../ui/Badge'
+import { EmptyState } from '../ui/EmptyState'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { Alert, Loading, Section, SettingsTab } from './parts'
 
 export function StorageTab({ workspace, admin }: { workspace: number; admin: boolean }) {
   return admin ? <AdminStorage workspace={workspace} /> : <MemberStorage workspace={workspace} />
@@ -20,14 +24,16 @@ function AdminStorage({ workspace }: { workspace: number }) {
   // The biggest first: what an admin looks for is what fills the workspace.
   const spaces = r ? [...r.spaces].sort((a, b) => b.total - a.total || a.id - b.id) : []
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-storage">
-        <h2 id="tt-storage">{t('settings.storage.title')}</h2>
-        <p className="tt-muted tt-small">{t('settings.storage.intro')}</p>
-        <Alert error={report.error} />
-        {!r && !report.error && <p className="tt-muted">{t('app.loading')}</p>}
-        {r && (
-          <>
+    <SettingsTab title={t('settings.storage.title')} help={t('settings.storage.intro')}>
+      <Alert error={report.error} />
+      {!r && !report.error && <Loading />}
+      {r && (
+        <Panel padded className="settings-panel-body">
+          <div className="settings-storage-total">
+            <span className="settings-person-name">
+              {t('settings.storage.workspace')}
+              <Fullness used={r.total} limit={r.quota.workspace} />
+            </span>
             <Meter
               label={t('settings.storage.workspace')}
               used={r.total}
@@ -38,25 +44,26 @@ function AdminStorage({ workspace }: { workspace: number }) {
                   : t('settings.storage.usedNoLimit', { used: f.bytes(r.total) })
               }
             />
-            <p className="tt-muted tt-small">
-              {r.quota.user > 0
-                ? t('settings.storage.userQuota', { limit: f.bytes(r.quota.user) })
-                : t('settings.storage.userNoQuota')}
-            </p>
-          </>
-        )}
-      </section>
-      {r && (
-        <section className="tt-panel" aria-labelledby="tt-storage-spaces">
-          <h2 id="tt-storage-spaces">{t('settings.storage.spaces')}</h2>
-          <ul className="tt-rows">
-            {spaces.map((s) => (
-              <SpaceRow key={s.id} space={s} />
-            ))}
-          </ul>
-        </section>
+          </div>
+          <p className="settings-muted">
+            {r.quota.user > 0
+              ? t('settings.storage.userQuota', { limit: f.bytes(r.quota.user) })
+              : t('settings.storage.userNoQuota')}
+          </p>
+        </Panel>
       )}
-    </div>
+      {r && (
+        <Section title={t('settings.storage.spaces')}>
+          <Panel>
+            <Rows label={t('settings.storage.spaces')}>
+              {spaces.map((s) => (
+                <SpaceRow key={s.id} space={s} />
+              ))}
+            </Rows>
+          </Panel>
+        </Section>
+      )}
+    </SettingsTab>
   )
 }
 
@@ -66,25 +73,21 @@ function MemberStorage({ workspace }: { workspace: number }) {
   const mine = useLoad(() => api<MyStorage>(`${usagePath(workspace)}/me`), [workspace])
   const m = mine.data
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-storage-mine">
-        <h2 id="tt-storage-mine">{t('settings.storage.yours')}</h2>
-        <p className="tt-muted tt-small">{t('settings.storage.yoursIntro')}</p>
-        <Alert error={mine.error} />
-        {!m && !mine.error && <p className="tt-muted">{t('app.loading')}</p>}
-        {m && !m.space && <p className="tt-muted">{t('settings.storage.noPrivate')}</p>}
-        {m?.space && (
-          <ul className="tt-rows">
+    <SettingsTab title={t('settings.storage.title')} help={t('settings.storage.yoursIntro')}>
+      <Alert error={mine.error} />
+      {!m && !mine.error && <Loading />}
+      {m && !m.space && <EmptyState title={t('settings.storage.noPrivate')} />}
+      {m?.space && (
+        <Panel>
+          <Rows>
             <SpaceRow space={m.space} own />
-          </ul>
-        )}
-        {m && m.quota.workspace > 0 && (
-          <p className="tt-muted tt-small">
-            {t('settings.storage.workspaceQuota', { limit: f.bytes(m.quota.workspace) })}
-          </p>
-        )}
-      </section>
-    </div>
+          </Rows>
+        </Panel>
+      )}
+      {m && m.quota.workspace > 0 && (
+        <p className="settings-muted">{t('settings.storage.workspaceQuota', { limit: f.bytes(m.quota.workspace) })}</p>
+      )}
+    </SettingsTab>
   )
 }
 
@@ -97,38 +100,50 @@ function SpaceRow({ space, own }: { space: SpaceUsage; own?: boolean }) {
       ? t('settings.storage.privateOf', { name: space.owner.name })
       : space.name
   return (
-    <li className="tt-row">
-      <div className="tt-row-main">
-        <strong>{name}</strong>
-        {space.owner && !own && <span className="tt-muted tt-small"> {space.owner.email}</span>}
-        <span className="tt-muted tt-small">
-          {t('settings.storage.breakdown', {
-            documents: f.bytes(space.knowledge_versioned),
-            files: f.bytes(space.knowledge_unversioned),
-            photos: f.bytes(space.attachments),
-          })}
+    <Row
+      title={name}
+      status={<Fullness used={space.total} limit={space.limit} />}
+      detail={
+        <span className="settings-row-extra">
+          {space.owner && !own && <span>{space.owner.email}</span>}
+          <span>
+            {t('settings.storage.breakdown', {
+              documents: f.bytes(space.knowledge_versioned),
+              files: f.bytes(space.knowledge_unversioned),
+              photos: f.bytes(space.attachments),
+            })}
+          </span>
+          <Meter
+            label={name}
+            used={space.total}
+            limit={space.limit}
+            text={
+              space.limit > 0
+                ? t('settings.storage.usedOf', { used: f.bytes(space.total), limit: f.bytes(space.limit) })
+                : f.bytes(space.total)
+            }
+          />
         </span>
-        <Meter
-          label={name}
-          used={space.total}
-          limit={space.limit}
-          text={
-            space.limit > 0
-              ? t('settings.storage.usedOf', { used: f.bytes(space.total), limit: f.bytes(space.limit) })
-              : f.bytes(space.total)
-          }
-        />
-      </div>
-    </li>
+      }
+    />
   )
+}
+
+// A space at or near its limit says so: nearly full from nine tenths, full at the limit.
+function Fullness({ used, limit }: { used: number; limit: number }) {
+  const t = useT()
+  if (limit <= 0) return null
+  if (used >= limit) return <Badge tone="danger">{t('settings.storage.full')}</Badge>
+  if (used >= limit * 0.9) return <Badge tone="warning">{t('settings.storage.nearlyFull')}</Badge>
+  return null
 }
 
 // A figure with a bar when there is a limit to measure it against.
 function Meter({ label, used, limit, text }: { label: string; used: number; limit: number; text: string }) {
   return (
-    <div className="tt-storage-meter">
+    <span className="settings-meter">
       <span>{text}</span>
       {limit > 0 && <progress value={Math.min(used, limit)} max={limit} aria-label={label} />}
-    </div>
+    </span>
   )
 }

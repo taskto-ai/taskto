@@ -1,14 +1,16 @@
-// The workspace's settings, a tab each: general (its default language), members and invites,
-// shared spaces, the audit log, storage (what each space stores, against the quotas), model providers, CLI accounts, search, dictation, notifications (push on this
-// device), your password, your sessions, your data (a zip to download), access
-// tokens and about. Admins see them all; members see model providers (their own accounts, and
-// the workspace's to read), their own CLI accounts, search (their spaces' consent), dictation
-// (what is in use), notifications, their own password, data, access tokens and storage, and about (the credits; admins also
-// see the server's backups there). The tab is the route's item.
+// The workspace's settings, a tab each, found in a side list of three groups: the workspace's
+// (general, members and invites, shared spaces, the audit log, model providers, CLI accounts,
+// search, dictation, storage), your own (notifications, your password, your sessions, your data,
+// access tokens) and the server's (about). On a phone the list is a choice at the top of the page.
+// Admins see them all; members see model providers (their own accounts, and the workspace's to
+// read), their own CLI accounts, search (their spaces' consent), dictation (what is in use),
+// notifications, their own password, data, access tokens and storage, and about (the credits;
+// admins also see the server's backups there). The tab is the route's item.
 
 import type { Me, Workspace } from '../api'
 import { type Key, useT } from '../i18n'
-import { Link, routePath } from '../router'
+import { Link, navigate, routePath } from '../router'
+import { Select } from '../ui/Select'
 import { AboutTab } from './AboutTab'
 import { AuditTab } from './AuditTab'
 import { CliAccountsTab } from './CliAccountsTab'
@@ -24,6 +26,7 @@ import { SessionsTab } from './SessionsTab'
 import { SpacesTab } from './SpacesTab'
 import { StorageTab } from './StorageTab'
 import { TokensTab } from './TokensTab'
+import './Settings.css'
 
 type Tab =
   | 'general'
@@ -42,22 +45,30 @@ type Tab =
   | 'storage'
   | 'about'
 
-const TABS: { tab: Tab; label: Key; admin: boolean }[] = [
-  { tab: 'general', label: 'settings.tabs.general', admin: true },
-  { tab: 'members', label: 'settings.tabs.members', admin: true },
-  { tab: 'spaces', label: 'settings.tabs.spaces', admin: true },
-  { tab: 'audit', label: 'settings.tabs.audit', admin: true },
-  { tab: 'providers', label: 'settings.tabs.providers', admin: false },
-  { tab: 'cli-accounts', label: 'settings.tabs.cliAccounts', admin: false },
-  { tab: 'search', label: 'settings.tabs.search', admin: false },
-  { tab: 'dictation', label: 'settings.tabs.dictation', admin: false },
-  { tab: 'notifications', label: 'settings.tabs.notifications', admin: false },
-  { tab: 'password', label: 'settings.tabs.password', admin: false },
-  { tab: 'sessions', label: 'settings.tabs.sessions', admin: false },
-  { tab: 'data', label: 'settings.tabs.data', admin: false },
-  { tab: 'tokens', label: 'settings.tabs.tokens', admin: false },
-  { tab: 'storage', label: 'settings.tabs.storage', admin: false },
-  { tab: 'about', label: 'settings.tabs.about', admin: false },
+type Group = 'workspace' | 'you' | 'server'
+
+const TABS: { tab: Tab; label: Key; admin: boolean; group: Group }[] = [
+  { tab: 'general', label: 'settings.tabs.general', admin: true, group: 'workspace' },
+  { tab: 'members', label: 'settings.tabs.members', admin: true, group: 'workspace' },
+  { tab: 'spaces', label: 'settings.tabs.spaces', admin: true, group: 'workspace' },
+  { tab: 'audit', label: 'settings.tabs.audit', admin: true, group: 'workspace' },
+  { tab: 'providers', label: 'settings.tabs.providers', admin: false, group: 'workspace' },
+  { tab: 'cli-accounts', label: 'settings.tabs.cliAccounts', admin: false, group: 'workspace' },
+  { tab: 'search', label: 'settings.tabs.search', admin: false, group: 'workspace' },
+  { tab: 'dictation', label: 'settings.tabs.dictation', admin: false, group: 'workspace' },
+  { tab: 'storage', label: 'settings.tabs.storage', admin: false, group: 'workspace' },
+  { tab: 'notifications', label: 'settings.tabs.notifications', admin: false, group: 'you' },
+  { tab: 'password', label: 'settings.tabs.password', admin: false, group: 'you' },
+  { tab: 'sessions', label: 'settings.tabs.sessions', admin: false, group: 'you' },
+  { tab: 'data', label: 'settings.tabs.data', admin: false, group: 'you' },
+  { tab: 'tokens', label: 'settings.tabs.tokens', admin: false, group: 'you' },
+  { tab: 'about', label: 'settings.tabs.about', admin: false, group: 'server' },
+]
+
+const GROUPS: { group: Group; label: Key }[] = [
+  { group: 'workspace', label: 'settings.groups.workspace' },
+  { group: 'you', label: 'settings.groups.you' },
+  { group: 'server', label: 'settings.groups.server' },
 ]
 
 export function SettingsPage({ me, workspace, tab }: { me: Me; workspace: Workspace; tab?: string }) {
@@ -65,22 +76,58 @@ export function SettingsPage({ me, workspace, tab }: { me: Me; workspace: Worksp
   const admin = workspace.role === 'admin'
   const tabs = TABS.filter((x) => admin || !x.admin)
   const current = tabs.find((x) => x.tab === tab) ?? tabs[0]
+  const href = (tab: Tab) => routePath({ workspace: workspace.id, section: 'settings', item: tab })
   return (
-    <div className="tt-section">
-      <div className="tt-pane-head">
-        <h1>{t('settings.title')}</h1>
-      </div>
-      <nav className="tt-tabs" aria-label={t('settings.title')}>
-        {tabs.map((tab) => (
-          <Link
-            key={tab.tab}
-            href={routePath({ workspace: workspace.id, section: 'settings', item: tab.tab })}
-            aria-current={tab === current ? 'page' : undefined}
-          >
-            {t(tab.label)}
-          </Link>
-        ))}
+    <div className="settings-layout">
+      <nav className="settings-nav" aria-label={t('settings.title')}>
+        <p className="settings-nav-title">{t('settings.title')}</p>
+        {GROUPS.map((g) => {
+          const items = tabs.filter((x) => x.group === g.group)
+          if (items.length === 0) return null
+          const id = `settings-group-${g.group}`
+          return (
+            <div key={g.group}>
+              <p className="settings-nav-label" id={id}>
+                {t(g.label)}
+              </p>
+              <ul className="settings-nav-group" aria-labelledby={id}>
+                {items.map((x) => (
+                  <li key={x.tab}>
+                    <Link
+                      className="settings-nav-link"
+                      href={href(x.tab)}
+                      aria-current={x === current ? 'page' : undefined}
+                    >
+                      {t(x.label)}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        })}
       </nav>
+      <div className="settings-picker">
+        <Select
+          aria-label={t('settings.choose')}
+          value={current.tab}
+          onChange={(e) => navigate(href(e.target.value as Tab))}
+        >
+          {GROUPS.map((g) => {
+            const items = tabs.filter((x) => x.group === g.group)
+            if (items.length === 0) return null
+            return (
+              <optgroup key={g.group} label={t(g.label)}>
+                {items.map((x) => (
+                  <option key={x.tab} value={x.tab}>
+                    {t(x.label)}
+                  </option>
+                ))}
+              </optgroup>
+            )
+          })}
+        </Select>
+      </div>
       <Panel tab={current.tab} me={me} workspace={workspace} />
     </div>
   )

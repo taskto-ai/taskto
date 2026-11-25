@@ -2,11 +2,22 @@
 // A new token is shown once, when it is made: the server keeps only its hash. It lives in
 // this tab's state and nowhere else (no storage, no log), so leaving the tab forgets it.
 
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useId, useState } from 'react'
 import { api, type Token, type TokenCreated, ws } from '../api'
 import { type Key, type T, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, ConfirmButton, CopyButton, day, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Dialog } from '../ui/Dialog'
+import { EmptyState } from '../ui/EmptyState'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { Select } from '../ui/Select'
+import { Alert, CopyButton, CopyField, day, Loading, Section, SettingsTab, useAction } from './parts'
 
 type Made = TokenCreated
 
@@ -22,75 +33,96 @@ export function TokensTab({ workspace }: { workspace: number }) {
   const base = `${ws(workspace)}/tokens`
   const tokens = useLoad(() => api<{ tokens: Token[] }>(base).then((r) => r.tokens), [base])
   const [made, setMade] = useState<Made | null>(null)
+  const [creating, setCreating] = useState(false)
   const action = useAction()
+  const [confirmDialog, confirm] = useConfirm()
   const t = useT()
 
-  const revoke = (token: Token) =>
-    action
-      .run(() => api(`${base}/${token.id}`, { method: 'DELETE' }))
-      .then((ok) => {
-        // Only once it is gone: a failed revoke keeps the new token on screen, still valid.
-        if (!ok) return
-        if (made?.id === token.id) setMade(null)
-        tokens.reload()
-      })
+  const revoke = async (token: Token) => {
+    const yes = await confirm({
+      title: t('settings.tokens.revokeQuestion', { name: token.name }),
+      confirmLabel: t('settings.tokens.revokeConfirm'),
+      tone: 'danger',
+    })
+    if (!yes) return
+    const ok = await action.run(() => api(`${base}/${token.id}`, { method: 'DELETE' }))
+    // Only once it is gone: a failed revoke keeps the new token on screen, still valid.
+    if (!ok) return
+    if (made?.id === token.id) setMade(null)
+    tokens.reload()
+  }
+
+  // One new token on show at a time: another would replace it, and its secret is shown only
+  // once. Done first.
+  const held = made !== null
+  const createButton = (
+    <Button variant="primary" icon="plus" disabled={held} onClick={() => setCreating(true)}>
+      {t('settings.tokens.create')}
+    </Button>
+  )
+  const empty = tokens.data?.length === 0
 
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-tokens">
-        <h2 id="tt-tokens">{t('settings.tokens.title')}</h2>
-        <p className="tt-muted tt-small">{t('settings.tokens.intro')}</p>
-        <CreateToken
-          base={base}
-          // One new token on show at a time: another would replace it, and its secret is
-          // shown only once. Done first.
-          held={made !== null}
-          onCreated={(token) => {
-            setMade(token)
-            tokens.reload()
-          }}
-        />
-        {made && <NewToken key={made.id} made={made} onDone={() => setMade(null)} />}
-        <Alert error={tokens.error ?? action.error} />
-        {!tokens.data && !tokens.error && <p className="tt-muted">{t('app.loading')}</p>}
-        {tokens.data?.length === 0 && <p className="tt-muted">{t('settings.tokens.none')}</p>}
-        {tokens.data && tokens.data.length > 0 && (
-          <ul className="tt-rows" aria-label={t('settings.tokens.yours')}>
-            {tokens.data.map((token) => (
-              <li key={token.id} className="tt-row">
-                <div className="tt-row-main">
-                  <strong>{token.name}</strong>
-                  <span className="tt-muted tt-small">
-                    {[
-                      t('settings.tokens.created', { date: day(token.created_at) }),
-                      token.last_used_at
-                        ? t('settings.tokens.lastUsed', { date: day(token.last_used_at) })
-                        : t('settings.tokens.neverUsed'),
-                      expiry(t, token.expires_at),
-                    ].join(' · ')}
-                  </span>
-                </div>
-                <div className="tt-row-actions">
-                  <ConfirmButton
-                    label={t('settings.tokens.revoke')}
-                    name={token.name}
-                    question={t('settings.tokens.revokeQuestion', { name: token.name })}
-                    confirm={t('settings.tokens.revokeConfirm')}
-                    disabled={action.busy}
-                    onConfirm={() => revoke(token)}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+    <SettingsTab title={t('settings.tokens.title')} help={t('settings.help.tokens')} actions={!empty && createButton}>
+      <p className="settings-muted">{t('settings.tokens.intro')}</p>
+      {made && <NewToken key={made.id} made={made} onDone={() => setMade(null)} />}
+      <Alert error={tokens.error ?? action.error} />
+      {!tokens.data && !tokens.error && <Loading />}
+      {empty && (
+        <EmptyState title={t('settings.tokens.none')} actions={createButton}>
+          {t('settings.tokens.noneHelp')}
+        </EmptyState>
+      )}
+      {tokens.data && tokens.data.length > 0 && (
+        <Panel>
+          <Rows label={t('settings.tokens.yours')}>
+            {tokens.data.map((token) => {
+              const expired = token.expires_at !== null && new Date(token.expires_at).getTime() <= Date.now()
+              return (
+                <Row
+                  key={token.id}
+                  title={token.name}
+                  detail={[
+                    t('settings.tokens.created', { date: day(token.created_at) }),
+                    token.last_used_at
+                      ? t('settings.tokens.lastUsed', { date: day(token.last_used_at) })
+                      : t('settings.tokens.neverUsed'),
+                    expiry(t, token.expires_at),
+                  ].join(' · ')}
+                  status={expired && <Badge tone="neutral">{t('settings.tokens.expiredBadge')}</Badge>}
+                  actions={
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t('common.labelFor', { label: t('settings.tokens.revoke'), name: token.name })}
+                      disabled={action.busy}
+                      onClick={() => revoke(token)}
+                    >
+                      {t('settings.tokens.revoke')}
+                    </Button>
+                  }
+                />
+              )
+            })}
+          </Rows>
+        </Panel>
+      )}
 
-      <section className="tt-panel" aria-labelledby="tt-setup">
-        <h2 id="tt-setup">{t('settings.tokens.connect')}</h2>
+      <Section title={t('settings.tokens.connect')}>
         <Setup key={made?.id ?? 0} token={made?.token} />
-      </section>
-    </div>
+      </Section>
+      <CreateToken
+        open={creating && !held}
+        base={base}
+        onClose={() => setCreating(false)}
+        onCreated={(token) => {
+          setCreating(false)
+          setMade(token)
+          tokens.reload()
+        }}
+      />
+      {confirmDialog}
+    </SettingsTab>
   )
 }
 
@@ -101,14 +133,24 @@ function expiry(t: T, at: string | null): string {
     : t('settings.tokens.expires', { date: day(at) })
 }
 
-function CreateToken({ base, held, onCreated }: { base: string; held: boolean; onCreated: (t: Made) => void }) {
+function CreateToken({
+  open,
+  base,
+  onClose,
+  onCreated,
+}: {
+  open: boolean
+  base: string
+  onClose: () => void
+  onCreated: (t: Made) => void
+}) {
   const [name, setName] = useState('')
   const [days, setDays] = useState('90')
   const action = useAction()
   const t = useT()
+  const formId = useId()
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    if (held) return
     const expires_at = days ? new Date(Date.now() + Number(days) * 86_400_000).toISOString() : undefined
     let made: Made | undefined
     const ok = await action.run(async () => {
@@ -120,61 +162,62 @@ function CreateToken({ base, held, onCreated }: { base: string; held: boolean; o
     }
   }
   return (
-    <>
-      <form className="tt-form tt-form-row" onSubmit={submit}>
-        <label>
-          {t('settings.tokens.name')}
-          <input
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t('settings.tokens.newTitle')}
+      actions={
+        <>
+          <Button onClick={onClose}>{t('common.cancel')}</Button>
+          <Button type="submit" form={formId} variant="primary" loading={action.busy}>
+            {t('settings.tokens.create')}
+          </Button>
+        </>
+      }
+    >
+      <form id={formId} className="settings-form" onSubmit={submit}>
+        <Field label={t('settings.tokens.name')}>
+          <Input
+            required
             value={name}
             onChange={(e) => setName(e.target.value)}
-            required
             maxLength={100}
             placeholder={t('settings.tokens.namePlaceholder')}
             autoComplete="off"
+            data-autofocus
           />
-        </label>
-        <label>
-          {t('settings.tokens.expiresLabel')}
-          <select value={days} onChange={(e) => setDays(e.target.value)}>
+        </Field>
+        <Field label={t('settings.tokens.expiresLabel')}>
+          <Select value={days} onChange={(e) => setDays(e.target.value)}>
             {EXPIRY.map((x) => (
               <option key={x.label} value={x.days ?? ''}>
                 {t(x.label)}
               </option>
             ))}
-          </select>
-        </label>
-        <button type="submit" className="tt-button tt-primary" disabled={action.busy || held}>
-          {action.busy ? t('settings.tokens.creating') : t('settings.tokens.create')}
-        </button>
-        {held && <span className="tt-muted tt-small">{t('settings.tokens.held')}</span>}
+          </Select>
+        </Field>
+        <Alert error={action.error} />
       </form>
-      <Alert error={action.error} />
-    </>
+    </Dialog>
   )
 }
 
 function NewToken({ made, onDone }: { made: Made; onDone: () => void }) {
   const t = useT()
   return (
-    <div className="tt-notice" role="status">
-      <p>
-        {t.rich('settings.tokens.made', { name: <strong>{made.name}</strong>, b: (text) => <strong>{text}</strong> })}
-      </p>
-      <div className="tt-copy">
-        <input
-          readOnly
-          value={made.token}
-          aria-label={t('settings.tokens.newToken')}
-          onFocus={(e) => e.target.select()}
-        />
-        <CopyButton text={made.token} />
+    <Notice
+      tone="warning"
+      title={t('settings.tokens.newToken')}
+      action={<Button onClick={onDone}>{t('settings.tokens.done')}</Button>}
+    >
+      <div className="settings-panel-body">
+        <p className="settings-text">
+          {t.rich('settings.tokens.made', { name: <strong>{made.name}</strong>, b: (text) => <strong>{text}</strong> })}
+        </p>
+        <CopyField value={made.token} label={t('settings.tokens.newToken')} />
+        <p className="settings-muted">{t('settings.tokens.held')}</p>
       </div>
-      <div>
-        <button type="button" className="tt-button" onClick={onDone}>
-          {t('settings.tokens.done')}
-        </button>
-      </div>
-    </div>
+    </Notice>
   )
 }
 
@@ -208,24 +251,28 @@ function Setup({ token }: { token?: string }) {
   ]
   return (
     <>
-      <p className="tt-muted tt-small">
+      <p className="settings-muted">
         {t.rich('settings.tokens.setup.endpoint', { url: <code>{url}</code>, code: (text) => <code>{text}</code> })}
       </p>
       {snippets.map((s) => (
-        <section
+        <Panel
           key={s.label}
-          className="tt-setup-snippet"
+          as="section"
+          padded
+          className="settings-panel-body"
           aria-label={t('settings.tokens.setup.named', { name: s.label })}
         >
-          <h3>{s.label}</h3>
-          <p className="tt-muted tt-small">{s.note}</p>
+          <div className="settings-snippet-head">
+            <div className="settings-section-titles">
+              <h3 className="settings-section-title">{s.label}</h3>
+              <p className="settings-section-help">{s.note}</p>
+            </div>
+            <CopyButton size="sm" text={s.text} name={t('settings.tokens.setup.theNamed', { name: s.label })} />
+          </div>
           <pre>
             <code>{s.text}</code>
           </pre>
-          <div>
-            <CopyButton text={s.text} name={t('settings.tokens.setup.theNamed', { name: s.label })} />
-          </div>
-        </section>
+        </Panel>
       ))}
     </>
   )

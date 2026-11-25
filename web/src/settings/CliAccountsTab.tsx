@@ -25,7 +25,15 @@ import {
 } from '../api'
 import { type Key, t as translate, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, ConfirmButton, CopyButton, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Field } from '../ui/Field'
+import type { IconName } from '../ui/Icon'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Alert, CopyField, FormActions, Loading, Section, SettingsTab, useAction } from './parts'
 import { SharedCliAccountsPanel } from './SharedCliAccounts'
 import { SwitchingPanel } from './SwitchingPanel'
 
@@ -53,34 +61,30 @@ export function CliAccountsTab({ workspace, admin = false }: { workspace?: numbe
   const list = useLoad(() => api<CliAccounts>(CLI_ACCOUNTS), [])
   const t = useT()
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-label={t('settings.tabs.cliAccounts')}>
-        <div className="tt-pane-head">
-          <h2>{t('settings.cliAccounts.title')}</h2>
-        </div>
-        <p className="tt-muted tt-small">{t('settings.cliAccounts.intro')}</p>
+    <SettingsTab title={t('settings.tabs.cliAccounts')} help={t('settings.help.cliAccounts')}>
+      <Section title={t('settings.cliAccounts.title')} help={t('settings.cliAccounts.intro')}>
         <Alert error={list.error} />
-        {!list.data && !list.error && <p className="tt-muted">{t('app.loading')}</p>}
+        {!list.data && !list.error && <Loading />}
         {list.data && !list.data.enabled && (
-          <p className="tt-notice">
+          <Notice tone="neutral">
             {list.data.reason
               ? codeText(list.data.reason_code, undefined, list.data.reason)
               : t('settings.cliAccounts.off')}
-          </p>
+          </Notice>
         )}
-      </section>
-      {list.data?.enabled &&
-        list.data.accounts.map((a, i, all) => (
-          <div key={a.id} className="tt-cli-accounts">
-            <AccountCard account={a} onChanged={list.reload} />
-            {all[i + 1]?.cli !== a.cli && (
-              <AddAccount accounts={all.filter((b) => b.cli === a.cli)} onChanged={list.reload} />
-            )}
-          </div>
-        ))}
+        {list.data?.enabled &&
+          list.data.accounts.map((a, i, all) => (
+            <div key={a.id} className="settings-cli-account">
+              <AccountCard account={a} onChanged={list.reload} />
+              {all[i + 1]?.cli !== a.cli && (
+                <AddAccount accounts={all.filter((b) => b.cli === a.cli)} onChanged={list.reload} />
+              )}
+            </div>
+          ))}
+      </Section>
       {list.data?.enabled && <SwitchingPanel />}
       {workspace !== undefined && <SharedCliAccountsPanel workspace={workspace} admin={admin} />}
-    </div>
+    </SettingsTab>
   )
 }
 
@@ -97,66 +101,80 @@ function AddAccount({ accounts, onChanged }: { accounts: CliAccount[]; onChanged
   while (used.has(next)) next++
   if (next > MAX_CLI_ACCOUNTS) return null
   return (
-    <div className="tt-cli-add">
+    <div className="settings-cli-add">
       <CliLoginFlow
         account={`${first.cli}-${next}`}
         name={first.name}
         label={t('settings.cliAccounts.addAnother')}
+        icon="plus"
         onConnected={onChanged}
       />
-      <p className="tt-muted tt-small">{t('settings.cliAccounts.ownLogin')}</p>
+      <p className="settings-muted">{t('settings.cliAccounts.ownLogin')}</p>
     </div>
   )
 }
 
+const STATE_TONE: Record<CliAccount['state'], 'success' | 'warning' | 'neutral'> = {
+  connected: 'success',
+  reconnect: 'warning',
+  disconnected: 'neutral',
+}
+
 function AccountCard({ account: a, onChanged }: { account: CliAccount; onChanged: () => void }) {
   const action = useAction()
+  const [confirmDialog, confirm] = useConfirm()
   const t = useT()
   const check = () =>
     action.run(() => api(`${CLI_ACCOUNTS}/${a.id}/check`, { method: 'POST', body: {} })).then(onChanged)
-  const disconnect = () =>
-    action.run(() => api(`${CLI_ACCOUNTS}/${a.id}`, { method: 'DELETE' })).then((ok) => ok && onChanged())
   const title = cliAccountTitle(a)
-  const stateClass = a.state === 'connected' ? 'tt-ok' : a.state === 'reconnect' ? 'tt-warning' : 'tt-muted'
+  const disconnect = async () => {
+    const yes = await confirm({
+      title: t('settings.cliAccounts.disconnectQuestion', { name: title }),
+      confirmLabel: t('settings.cliAccounts.disconnectConfirm'),
+      tone: 'danger',
+    })
+    if (yes) action.run(() => api(`${CLI_ACCOUNTS}/${a.id}`, { method: 'DELETE' })).then((ok) => ok && onChanged())
+  }
 
   return (
-    <section className="tt-panel" aria-label={title}>
-      <div className="tt-pane-head">
-        <h2>{title}</h2>
+    <Panel as="section" padded className="settings-panel-body" aria-label={title}>
+      <header className="settings-section-head">
+        <div className="settings-section-titles">
+          <h3 className="settings-section-title settings-person-name">
+            {title}
+            <Badge tone={STATE_TONE[a.state] ?? 'neutral'} dot={a.state === 'connected'}>
+              {STATE_LABEL[a.state] ? t(STATE_LABEL[a.state]) : a.state}
+            </Badge>
+          </h3>
+          {a.auth_method && (
+            <p className="settings-section-help">{t('settings.cliAccounts.signedInWith', { method: a.auth_method })}</p>
+          )}
+        </div>
         {a.available && (
-          <div className="tt-row-actions">
-            <button
-              type="button"
-              className="tt-button"
+          <div className="settings-section-actions">
+            <Button
+              size="sm"
               aria-label={t('settings.cliAccounts.checkNamed', { name: title })}
-              disabled={action.busy}
+              loading={action.busy}
               onClick={check}
             >
               {t('settings.cliAccounts.check')}
-            </button>
+            </Button>
             {a.state !== 'disconnected' && (
-              <ConfirmButton
-                label={t('settings.cliAccounts.disconnect')}
-                name={title}
-                question={t('settings.cliAccounts.disconnectQuestion', { name: title })}
-                confirm={t('settings.cliAccounts.disconnectConfirm')}
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={t('common.labelFor', { label: t('settings.cliAccounts.disconnect'), name: title })}
                 disabled={action.busy}
-                onConfirm={disconnect}
-              />
+                onClick={disconnect}
+              >
+                {t('settings.cliAccounts.disconnect')}
+              </Button>
             )}
           </div>
         )}
-      </div>
-      <p className="tt-small">
-        <span className={stateClass}>{STATE_LABEL[a.state] ? t(STATE_LABEL[a.state]) : a.state}</span>
-        {a.auth_method && (
-          <span className="tt-muted">
-            {' · '}
-            {t('settings.cliAccounts.signedInWith', { method: a.auth_method })}
-          </span>
-        )}
-      </p>
-      {!a.available && <p className="tt-muted">{t('settings.cliAccounts.notInstalled')}</p>}
+      </header>
+      {!a.available && <Notice tone="neutral">{t('settings.cliAccounts.notInstalled')}</Notice>}
       <Alert error={action.error} />
       {a.state !== 'disconnected' && <LabelForm account={a} onChanged={onChanged} />}
       {a.available && (
@@ -169,7 +187,7 @@ function AccountCard({ account: a, onChanged }: { account: CliAccount; onChanged
             initial={a.login}
             onConnected={onChanged}
           />
-          <p className="tt-muted tt-small">
+          <p className="settings-muted">
             {t('settings.cliAccounts.ownSubscription')}{' '}
             <a href={CLI_TERMS[a.cli]} target="_blank" rel="noopener noreferrer">
               {t('settings.actions.termsOf', { name: a.name })}
@@ -178,7 +196,8 @@ function AccountCard({ account: a, onChanged }: { account: CliAccount; onChanged
         </>
       )}
       <CliLimits account={a} />
-    </section>
+      {confirmDialog}
+    </Panel>
   )
 }
 
@@ -203,22 +222,23 @@ function LabelForm({ account: a, onChanged }: { account: CliAccount; onChanged: 
   }
   return (
     <form
-      className="tt-form tt-inline"
+      className="settings-form"
       onSubmit={save}
       aria-label={t('settings.cliAccounts.nameOf', { name: cliAccountTitle(a) })}
     >
-      <label>
-        {t('settings.actions.name')}
-        <input
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          maxLength={40}
-          placeholder={t('settings.cliAccounts.namePlaceholder')}
-        />
-      </label>
-      <button type="submit" className="tt-button" disabled={action.busy || label.trim() === a.label}>
-        {t('settings.actions.save')}
-      </button>
+      <div className="settings-form-row">
+        <Field label={t('settings.actions.name')}>
+          <Input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            maxLength={40}
+            placeholder={t('settings.cliAccounts.namePlaceholder')}
+          />
+        </Field>
+        <Button type="submit" loading={action.busy} disabled={label.trim() === a.label}>
+          {t('settings.actions.save')}
+        </Button>
+      </div>
       <Alert error={action.error} />
     </form>
   )
@@ -239,6 +259,7 @@ export function CliLoginFlow({
   label,
   offer = true,
   initial,
+  icon,
   onConnected,
 }: {
   // The account's handle: `claude`, or `claude-2` for another account.
@@ -247,6 +268,7 @@ export function CliLoginFlow({
   label: string
   offer?: boolean
   initial?: CliLogin | null
+  icon?: IconName
   onConnected: () => void
 }) {
   const [login, setLogin] = useState<CliLogin | null>(() => shown(initial))
@@ -332,50 +354,50 @@ export function CliLoginFlow({
 
   if (!login) {
     return (
-      <div className="tt-cli-login">
-        {connected && !offer && (
-          <p className="tt-ok tt-small" role="status">
-            {t('settings.cliAccounts.signedIn', { name })}
-          </p>
-        )}
+      <div className="settings-panel-body">
+        {connected && !offer && <Notice tone="success">{t('settings.cliAccounts.signedIn', { name })}</Notice>}
         <Alert error={action.error ?? pollError} />
         {offer && (
-          <div>
-            <button
-              type="button"
-              className="tt-button tt-primary"
+          <FormActions>
+            <Button
+              icon={icon}
               aria-label={t('common.labelFor', { label, name })}
-              disabled={action.busy}
+              loading={action.busy}
               onClick={start}
             >
               {label}
-            </button>
-          </div>
+            </Button>
+          </FormActions>
         )}
       </div>
     )
   }
   if (!live(login)) {
     return (
-      <div className="tt-cli-login">
-        <p role="alert" className="tt-error">
+      <div className="settings-panel-body">
+        <Notice tone="danger">
           {login.state === 'expired' ? t('settings.cliAccounts.expired') : t('settings.cliAccounts.failed')}
           {/* Why it failed, in the CLI's own words, which can't be translated; an expired one says no more. */}
           {login.state === 'failed' && login.message ? ` ${login.message}` : ''}
-        </p>
+        </Notice>
         <Alert error={action.error} />
-        <div>
-          <button type="button" className="tt-button" disabled={action.busy} onClick={start}>
+        <FormActions>
+          <Button loading={action.busy} onClick={start}>
             {t('app.tryAgain')}
-          </button>
-        </div>
+          </Button>
+        </FormActions>
       </div>
     )
   }
   return (
-    <section className="tt-notice tt-cli-login" aria-label={t('settings.cliAccounts.signingIn', { name })}>
+    <Panel
+      as="section"
+      padded
+      className="settings-panel-body settings-cli-login"
+      aria-label={t('settings.cliAccounts.signingIn', { name })}
+    >
       {login.state === 'starting' || !login.url ? (
-        <p className="tt-muted">{t('settings.cliAccounts.starting', { name })}</p>
+        <p className="settings-muted">{t('settings.cliAccounts.starting', { name })}</p>
       ) : (
         <SignIn login={login} name={name} />
       )}
@@ -383,15 +405,15 @@ export function CliLoginFlow({
         <CodeForm base={base} name={name} onSent={update} />
       )}
       {login.state === 'waiting' && !login.needs_code && login.url && (
-        <p className="tt-muted tt-small">{t('settings.cliAccounts.waiting')}</p>
+        <p className="settings-muted">{t('settings.cliAccounts.waiting')}</p>
       )}
       <Alert error={action.error ?? pollError} />
-      <div>
-        <button type="button" className="tt-button" disabled={action.busy} onClick={cancel}>
+      <FormActions>
+        <Button variant="ghost" disabled={action.busy} onClick={cancel}>
           {t('common.cancel')}
-        </button>
-      </div>
-    </section>
+        </Button>
+      </FormActions>
+    </Panel>
   )
 }
 
@@ -411,7 +433,7 @@ function SignIn({ login, name }: { login: CliLogin; name: string }) {
   return (
     <>
       {trusted ? (
-        <p>
+        <p className="settings-text">
           {t.rich(message, {
             url,
             link: (text) => (
@@ -423,25 +445,19 @@ function SignIn({ login, name }: { login: CliLogin; name: string }) {
         </p>
       ) : (
         <>
-          <p role="alert" className="tt-warning">
-            {t('settings.cliAccounts.untrusted', { name })}
+          <Notice tone="warning">{t('settings.cliAccounts.untrusted', { name })}</Notice>
+          <p className="settings-text">
+            <code>{url}</code>
           </p>
-          <p>
-            <code className="tt-cli-url">{url}</code>
-          </p>
-          {login.code && <p>{t('settings.cliAccounts.enterCodeThere')}</p>}
+          {login.code && <p className="settings-text">{t('settings.cliAccounts.enterCodeThere')}</p>}
         </>
       )}
       {login.code && (
-        <div className="tt-copy">
-          <input
-            readOnly
-            value={login.code}
-            aria-label={t('settings.cliAccounts.oneTimeCode')}
-            onFocus={(e) => e.target.select()}
-          />
-          <CopyButton text={login.code} name={t('settings.cliAccounts.theCode')} />
-        </div>
+        <CopyField
+          value={login.code}
+          label={t('settings.cliAccounts.oneTimeCode')}
+          name={t('settings.cliAccounts.theCode')}
+        />
       )}
     </>
   )
@@ -461,24 +477,23 @@ function CodeForm({ base, name, onSent }: { base: string; name: string; onSent: 
     })
   }
   return (
-    <form className="tt-form" onSubmit={submit} aria-label={t('settings.cliAccounts.codeOf', { name })}>
-      <label>
-        {t('settings.cliAccounts.pasteCode')}
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-          maxLength={512}
-          required
-        />
-      </label>
-      <Alert error={action.error} />
-      <div>
-        <button type="submit" className="tt-button tt-primary" disabled={action.busy || !code.trim()}>
+    <form className="settings-form" onSubmit={submit} aria-label={t('settings.cliAccounts.codeOf', { name })}>
+      <div className="settings-form-row">
+        <Field label={t('settings.cliAccounts.pasteCode')}>
+          <Input
+            required
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={512}
+          />
+        </Field>
+        <Button type="submit" loading={action.busy} disabled={!code.trim()}>
           {t('settings.cliAccounts.sendCode')}
-        </button>
+        </Button>
       </div>
+      <Alert error={action.error} />
     </form>
   )
 }
@@ -514,56 +529,54 @@ export function CliLimits({ account: a }: { account: CliAccount }) {
   const t = useT()
   const f = useFormat()
   const when = (time: string) => (Number.isNaN(new Date(time).getTime()) ? time : f.dateTime(time))
-  if (a.cli === 'grok') return <p className="tt-muted tt-small">{t('settings.cliAccounts.limits.grokNone')}</p>
-  if (a.limits.length === 0) return <p className="tt-muted tt-small">{t('settings.cliAccounts.limits.none')}</p>
+  if (a.cli === 'grok') return <p className="settings-muted">{t('settings.cliAccounts.limits.grokNone')}</p>
+  if (a.limits.length === 0) return <p className="settings-muted">{t('settings.cliAccounts.limits.none')}</p>
   return (
-    <div className="tt-cli-limits">
-      <h3>{t('settings.cliAccounts.limits.title')}</h3>
-      <ul className="tt-rows">
+    <div className="settings-limits">
+      <h4 className="settings-limits-title">{t('settings.cliAccounts.limits.title')}</h4>
+      <ul className="settings-limits-list">
         {a.limits.map((l) => {
           const label = windowLabel(l)
           const used = typeof l.used_percent === 'number' ? Math.min(100, Math.max(0, l.used_percent)) : null
           return (
-            <li key={l.window} className="tt-row tt-cli-limit" aria-label={label} data-status={l.status || undefined}>
-              <div className="tt-row-main">
-                <strong>{label}</strong>
-                {used !== null && (
-                  <span className="tt-cli-meter">
-                    <meter
-                      min={0}
-                      max={100}
-                      low={70}
-                      high={90}
-                      optimum={0}
-                      value={used}
-                      aria-label={t('settings.cliAccounts.limits.usedNamed', { name: label })}
-                    />
-                    <span className="tt-small">
-                      {t('settings.cliAccounts.limits.used', {
-                        percent: f.number(Math.round(used) / 100, { style: 'percent' }),
-                      })}
-                    </span>
-                  </span>
-                )}
+            <li key={l.window} aria-label={label} className="settings-limit">
+              <span className="settings-person-name">
+                {label}
                 {l.status === 'allowed_warning' && (
-                  <span className="tt-warning tt-small">{t('settings.cliAccounts.limits.close')}</span>
+                  <Badge tone="warning">{t('settings.cliAccounts.limits.close')}</Badge>
                 )}
-                {l.status === 'rejected' && (
-                  <span className="tt-error tt-small">{t('settings.cliAccounts.limits.reached')}</span>
-                )}
-                {l.resets_at && (
-                  <span className="tt-muted tt-small">
-                    {t('settings.cliAccounts.limits.resets', { time: when(l.resets_at) })}
+                {l.status === 'rejected' && <Badge tone="danger">{t('settings.cliAccounts.limits.reached')}</Badge>}
+              </span>
+              {used !== null && (
+                <span className="settings-meter">
+                  <meter
+                    min={0}
+                    max={100}
+                    low={70}
+                    high={90}
+                    optimum={0}
+                    value={used}
+                    aria-label={t('settings.cliAccounts.limits.usedNamed', { name: label })}
+                  />
+                  <span>
+                    {t('settings.cliAccounts.limits.used', {
+                      percent: f.number(Math.round(used) / 100, { style: 'percent' }),
+                    })}
                   </span>
-                )}
-                {l.detail && <span className="tt-small">{l.detail}</span>}
-              </div>
+                </span>
+              )}
+              {l.resets_at && (
+                <span className="settings-muted">
+                  {t('settings.cliAccounts.limits.resets', { time: when(l.resets_at) })}
+                </span>
+              )}
+              {l.detail && <span className="settings-muted">{l.detail}</span>}
             </li>
           )
         })}
       </ul>
       {a.limits_at && (
-        <p className="tt-muted tt-small">{t('settings.cliAccounts.limits.asOf', { time: when(a.limits_at) })}</p>
+        <p className="settings-muted">{t('settings.cliAccounts.limits.asOf', { time: when(a.limits_at) })}</p>
       )}
     </div>
   )

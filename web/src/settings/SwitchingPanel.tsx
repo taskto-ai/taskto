@@ -6,8 +6,16 @@
 import { api, CLI_PRODUCTS, CLI_SWITCHING, type CliName, type CliSwitching, type QueueAccount } from '../api'
 import { type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { Field } from '../ui/Field'
+import { IconButton } from '../ui/IconButton'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Select } from '../ui/Select'
+import { Switch } from '../ui/Switch'
 import { CLI_TERMS } from './CliAccountsTab'
-import { Alert, useAction } from './parts'
+import { Alert, Loading, Section, useAction } from './parts'
 import { SHARED_TERMS } from './SharedCliAccounts'
 
 const entry = (a: QueueAccount) => (a.kind === 'own' ? { account: a.id } : { shared: Number(a.id) })
@@ -45,11 +53,10 @@ export function SwitchingPanel() {
       .then(() => state.reload())
   if (!state.data) {
     return (
-      <section className="tt-panel" aria-label={t('settings.switching.title')}>
-        <h2>{t('settings.switching.title')}</h2>
+      <Section title={t('settings.switching.title')}>
         <Alert error={state.error} />
-        {!state.error && <p className="tt-muted">{t('app.loading')}</p>}
-      </section>
+        {!state.error && <Loading lines={2} />}
+      </Section>
     )
   }
   const { enabled, queue, available } = state.data
@@ -63,98 +70,95 @@ export function SwitchingPanel() {
   }
   const clis = [...new Set(available.map((a) => a.cli))] as CliName[]
   return (
-    <section className="tt-panel" aria-label={t('settings.switching.title')}>
-      <div className="tt-pane-head">
-        <h2>{t('settings.switching.title')}</h2>
-      </div>
-      <p className="tt-muted tt-small">{t('settings.switching.intro')}</p>
-      <label className="tt-check">
-        <input
-          type="checkbox"
+    <Section title={t('settings.switching.title')} help={t('settings.switching.intro')}>
+      <Panel padded className="settings-panel-body">
+        <Switch
+          label={t('settings.switching.toggle')}
           checked={enabled}
           disabled={action.busy}
           onChange={(e) => save({ enabled: e.target.checked })}
         />
-        {t('settings.switching.toggle')}
-      </label>
-      <p className="tt-warning tt-small">{t('settings.switching.warning')}</p>
-      {clis.length > 0 && (
-        <ul className="tt-terms tt-small" aria-label={t('settings.switching.termsLabel')}>
-          {clis.map((cli) => (
-            <li key={cli}>
-              <a href={CLI_TERMS[cli]} target="_blank" rel="noopener noreferrer">
-                {t('settings.actions.termsOf', { name: CLI_PRODUCTS[cli] })}
-              </a>
-              {available.some((a) => a.cli === cli && a.kind === 'shared') &&
-                SHARED_TERMS[cli].map((term) => (
-                  <span key={term.href}>
-                    {' · '}
-                    <a href={term.href} target="_blank" rel="noopener noreferrer">
-                      {t(term.label)}
-                    </a>
-                  </span>
-                ))}
-            </li>
-          ))}
-        </ul>
-      )}
+        <Notice tone="warning">
+          {t('settings.switching.warning')}
+          {clis.length > 0 && (
+            <ul className="settings-terms" aria-label={t('settings.switching.termsLabel')}>
+              {clis.map((cli) => (
+                <li key={cli}>
+                  <a href={CLI_TERMS[cli]} target="_blank" rel="noopener noreferrer">
+                    {t('settings.actions.termsOf', { name: CLI_PRODUCTS[cli] })}
+                  </a>
+                  {available.some((a) => a.cli === cli && a.kind === 'shared') &&
+                    SHARED_TERMS[cli].map((term) => (
+                      <span key={term.href}>
+                        {' · '}
+                        <a href={term.href} target="_blank" rel="noopener noreferrer">
+                          {t(term.label)}
+                        </a>
+                      </span>
+                    ))}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Notice>
+      </Panel>
       <Alert error={action.error} />
       {queue.length === 0 ? (
-        <p className="tt-muted">{t('settings.switching.empty')}</p>
+        <p className="settings-muted">{t('settings.switching.empty')}</p>
       ) : (
-        <ol className="tt-rows" aria-label={t('settings.switching.queue')}>
-          {queue.map((a, i) => {
-            const title = queueTitle(t, a)
-            return (
-              <li key={key(a)} className="tt-row" aria-label={title}>
-                <div className="tt-row-main">
-                  <strong>{t('settings.switching.position', { position: i + 1, name: title })}</strong>
-                  {a.limited && (
-                    <span className="tt-warning tt-small">
-                      {a.limited_until
-                        ? t('settings.switching.atLimitUntil', { time: f.dateTime(a.limited_until) })
-                        : t('settings.switching.atLimit')}
+        <Panel>
+          <ol className="settings-queue" aria-label={t('settings.switching.queue')}>
+            {queue.map((a, i) => {
+              const title = queueTitle(t, a)
+              return (
+                <li key={key(a)} className="settings-queue-item" aria-label={title}>
+                  <span className="settings-person-text">
+                    <span className="settings-person-name">
+                      {t('settings.switching.position', { position: i + 1, name: title })}
+                      {a.limited && <Badge tone="warning">{t('settings.switching.limitedBadge')}</Badge>}
                     </span>
-                  )}
-                </div>
-                <div className="tt-row-actions">
-                  <button
-                    type="button"
-                    className="tt-button"
-                    aria-label={t('settings.switching.moveUp', { name: title })}
-                    disabled={action.busy || i === 0}
-                    onClick={() => move(i, -1)}
-                  >
-                    {'↑'}
-                  </button>
-                  <button
-                    type="button"
-                    className="tt-button"
-                    aria-label={t('settings.switching.moveDown', { name: title })}
-                    disabled={action.busy || i === queue.length - 1}
-                    onClick={() => move(i, 1)}
-                  >
-                    {'↓'}
-                  </button>
-                  <button
-                    type="button"
-                    className="tt-button"
-                    aria-label={t('settings.switching.removeNamed', { name: title })}
-                    disabled={action.busy}
-                    onClick={() => save({ queue: queue.filter((_, j) => j !== i) })}
-                  >
-                    {t('settings.actions.remove')}
-                  </button>
-                </div>
-              </li>
-            )
-          })}
-        </ol>
+                    {a.limited && (
+                      <span className="settings-muted">
+                        {a.limited_until
+                          ? t('settings.switching.atLimitUntil', { time: f.dateTime(a.limited_until) })
+                          : t('settings.switching.atLimit')}
+                      </span>
+                    )}
+                  </span>
+                  <span className="settings-actions">
+                    <IconButton
+                      size="sm"
+                      icon="up"
+                      label={t('settings.switching.moveUp', { name: title })}
+                      disabled={action.busy || i === 0}
+                      onClick={() => move(i, -1)}
+                    />
+                    <IconButton
+                      size="sm"
+                      icon="down"
+                      label={t('settings.switching.moveDown', { name: title })}
+                      disabled={action.busy || i === queue.length - 1}
+                      onClick={() => move(i, 1)}
+                    />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={t('settings.switching.removeNamed', { name: title })}
+                      disabled={action.busy}
+                      onClick={() => save({ queue: queue.filter((_, j) => j !== i) })}
+                    >
+                      {t('settings.actions.remove')}
+                    </Button>
+                  </span>
+                </li>
+              )
+            })}
+          </ol>
+        </Panel>
       )}
       {rest.length > 0 && (
-        <label>
-          {t('settings.switching.addTo')}
-          <select
+        <Field label={t('settings.switching.addTo')}>
+          <Select
             value=""
             disabled={action.busy}
             onChange={(e) => {
@@ -168,9 +172,9 @@ export function SwitchingPanel() {
                 {queueTitle(t, a)}
               </option>
             ))}
-          </select>
-        </label>
+          </Select>
+        </Field>
       )}
-    </section>
+    </Section>
   )
 }

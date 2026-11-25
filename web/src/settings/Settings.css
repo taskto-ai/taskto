@@ -1,0 +1,532 @@
+/* Settings: the side list of tabs in groups beside the tab's page, and what the tabs share. */
+@layer screens {
+  .settings-layout {
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr);
+    block-size: 100%;
+    min-block-size: 0;
+  }
+
+  .settings-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-block-size: 0;
+    overflow-y: auto;
+    padding: var(--space-6) var(--space-3);
+    border-inline-end: 1px solid var(--color-border);
+  }
+
+  .settings-nav-title {
+    margin: 0;
+    padding: 0 var(--space-2) var(--space-2);
+    font: var(--type-title);
+    letter-spacing: var(--tracking-display);
+    color: var(--color-text);
+  }
+
+  .settings-nav-group {
+    display: grid;
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .settings-nav-label {
+    margin: 0;
+    padding: var(--space-4) var(--space-2) var(--space-1);
+    font: var(--type-caption);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+
+  .settings-nav-link {
+    display: flex;
+    align-items: center;
+    min-block-size: var(--control-md);
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-sm);
+    font: var(--type-ui);
+    color: var(--color-text-soft);
+    text-decoration: none;
+    transition: background-color var(--duration-fast) var(--ease-out);
+  }
+
+  .settings-nav-link:hover {
+    background: var(--color-hover);
+    color: var(--color-text);
+  }
+
+  .settings-nav-link:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: calc(-1 * var(--line-focus));
+  }
+
+  .settings-nav-link[aria-current="page"] {
+    background: var(--color-selected);
+    color: var(--color-text);
+    font: var(--type-ui-strong);
+  }
+
+  /* On a phone, a choice of tab at the top of the page in place of the side list. */
+  .settings-picker {
+    display: none;
+  }
+
+  @media (max-width: 48rem) {
+    .settings-layout {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .settings-nav {
+      display: none;
+    }
+
+    .settings-picker {
+      display: block;
+      padding: var(--space-4) var(--space-4) 0;
+    }
+  }
+
+  @media (pointer: coarse) {
+    .settings-nav-link {
+      min-block-size: var(--control-touch);
+    }
+  }
+
+  /* A section of a tab. */
+  .settings-section {
+    display: grid;
+    gap: var(--space-3);
+    min-inline-size: 0;
+  }
+
+  .settings-section[data-level="3"] {
+    gap: var(--space-2);
+  }
+
+  .settings-section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .settings-section-titles {
+    flex: 1 1 16rem;
+    min-inline-size: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .settings-section-title {
+    margin: 0;
+    font: var(--type-section);
+    color: var(--color-text);
+  }
+
+  .settings-section[data-level="3"] .settings-section-title {
+    font: var(--type-ui-strong);
+  }
+
+  .settings-section-help {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .settings-section-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  /* A form: its fields one under another, its actions at the end. */
+  .settings-form {
+    display: grid;
+    gap: var(--space-4);
+    min-inline-size: 0;
+  }
+
+  /* Fields side by side on a wide screen, the button at their foot. */
+  .settings-form-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-3);
+  }
+
+  .settings-form-row > .ui-field {
+    flex: 1 1 12rem;
+    min-inline-size: 0;
+  }
+
+  .settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .settings-fieldset {
+    display: grid;
+    gap: var(--space-4);
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-inline-size: 0;
+  }
+
+  .settings-fieldset > legend {
+    padding: 0;
+    margin-block-end: var(--space-2);
+    font: var(--type-ui-strong);
+    color: var(--color-text);
+  }
+
+  .settings-loading {
+    display: grid;
+    gap: var(--space-2);
+    padding-block: var(--space-2);
+  }
+
+  .settings-copy {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+    min-inline-size: 0;
+  }
+
+  .settings-copy > .ui-textbox {
+    flex: 1;
+    min-inline-size: 0;
+    font: var(--type-code);
+  }
+
+  /* A term and its value per line. */
+  .settings-facts {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+  }
+
+  .settings-fact {
+    display: grid;
+    grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
+    gap: var(--space-3);
+    font: var(--type-small);
+  }
+
+  .settings-fact > dt {
+    color: var(--color-text-muted);
+  }
+
+  .settings-fact > dd {
+    margin: 0;
+    color: var(--color-text);
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 30rem) {
+    .settings-fact {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0;
+    }
+  }
+
+  /* Plain text in a tab: a paragraph, a list of points, code. */
+  .settings-text {
+    margin: 0;
+    font: var(--type-ui);
+    color: var(--color-text);
+  }
+
+  .settings-muted {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .settings-list {
+    margin: 0;
+    padding-inline-start: var(--space-5);
+    display: grid;
+    gap: var(--space-1);
+    font: var(--type-ui);
+  }
+
+  .settings-page code {
+    font: var(--type-code);
+    overflow-wrap: anywhere;
+  }
+
+  .settings-page pre {
+    margin: 0;
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-sunken);
+    overflow-x: auto;
+    font: var(--type-code);
+  }
+
+  .settings-page a {
+    color: var(--color-link);
+  }
+
+  /* A row's details under its title: a line of facts, a status, a meter. */
+  .settings-row-extra {
+    display: grid;
+    gap: var(--space-1);
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .settings-row-extra:empty {
+    display: none;
+  }
+
+  .settings-meter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-3);
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .settings-meter > progress,
+  .settings-meter > meter {
+    flex: 1 1 10rem;
+    max-inline-size: 16rem;
+    block-size: var(--space-2);
+    accent-color: var(--color-accent);
+  }
+
+  /* A panel's inside, for a form or text. */
+  .settings-panel-body {
+    display: grid;
+    gap: var(--space-4);
+  }
+}
+
+@layer screens {
+  /* A person in a table: their avatar, name with badges, and address. */
+  .settings-person {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-inline-size: 0;
+  }
+
+  .settings-person-text {
+    display: grid;
+    gap: 2px;
+    min-inline-size: 0;
+  }
+
+  .settings-person-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    font: var(--type-ui-strong);
+    color: var(--color-text);
+  }
+
+  .settings-cell-end {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .settings-invite {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border-block-end: 1px solid var(--color-border);
+  }
+
+  .settings-invite:last-child {
+    border-block-end: 0;
+  }
+
+  .settings-form-row > .settings-field-narrow {
+    flex: 0 1 10rem;
+  }
+
+  .settings-panel-note {
+    padding: var(--space-3) var(--space-4);
+  }
+}
+
+@layer screens {
+  .settings-error-text {
+    color: var(--color-danger);
+  }
+
+  .settings-switch-row {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  /* The audit log's filters: as many in a row as fit. */
+  .settings-filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+    gap: var(--space-3);
+  }
+
+  .settings-audit-event {
+    display: grid;
+    gap: 2px;
+    min-inline-size: 0;
+    font: var(--type-small);
+  }
+
+  .settings-audit-event > strong {
+    font: var(--type-ui-strong);
+  }
+
+  .settings-audit-when {
+    display: grid;
+    gap: 2px;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+
+  .settings-audit-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
+    margin: 0;
+    color: var(--color-text-muted);
+  }
+
+  .settings-audit-details > div {
+    display: flex;
+    gap: var(--space-1);
+  }
+
+  .settings-audit-details dt::after {
+    content: ":";
+  }
+
+  .settings-audit-details dd {
+    margin: 0;
+    color: var(--color-text-soft);
+  }
+
+  .settings-storage-total {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .settings-cli-account,
+  .settings-cli-add {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .settings-cli-login {
+    background: var(--color-bg-sunken);
+  }
+
+  .settings-terms {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: var(--space-1);
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  /* Automatic switching's queue: a numbered list, each with its moves. */
+  .settings-queue {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .settings-queue-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-4);
+    min-block-size: var(--control-touch);
+    padding: var(--space-3) var(--space-4);
+    border-block-end: 1px solid var(--color-border);
+  }
+
+  .settings-queue-item:last-child {
+    border-block-end: 0;
+  }
+
+  /* A CLI account's usage limits. */
+  .settings-limits {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .settings-limits-title {
+    margin: 0;
+    font: var(--type-ui-strong);
+    color: var(--color-text);
+  }
+
+  .settings-limits-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .settings-limit {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  /* Email notifications: one choice per kind, two side by side where they fit. */
+  .settings-choices {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+    gap: var(--space-4);
+  }
+
+  .settings-snippet-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: start;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .settings-recovery {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .settings-qr {
+    inline-size: 12rem;
+    max-inline-size: 100%;
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    background: var(--color-paper);
+  }
+
+  .settings-qr > img {
+    display: block;
+    inline-size: 100%;
+    block-size: auto;
+  }
+}

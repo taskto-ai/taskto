@@ -1,9 +1,18 @@
-// What the settings pages share: running a change and showing its error, asking before one
-// that can't be undone, dates, and copying a value.
+// What the settings pages share: a tab's frame (its page and header) and its sections, running a
+// change and showing its error, the shape of what is loading, a read-only value to copy, a list of
+// facts, and dates. Every tab is built from these and the components in ../ui, so they read alike.
 
-import { useCallback, useEffect, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useId, useState } from 'react'
 import { errorText } from '../api'
 import { format, useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Page } from '../ui/Page'
+import { PageHeader } from '../ui/PageHeader'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
+import './Settings.css'
 
 // Runs one change at a time; a failure is kept, to show next to what failed.
 export function useAction() {
@@ -25,73 +34,89 @@ export function useAction() {
   return { busy, error, run }
 }
 
+// What failed, where it failed: a danger notice, said at once.
 export function Alert({ error }: { error: string | null | undefined }) {
   if (!error) return null
+  return <Notice tone="danger">{error}</Notice>
+}
+
+// A tab: the page at the reading width, its name and a line on what it is for, then its sections.
+export function SettingsTab({
+  title,
+  help,
+  actions,
+  children,
+}: {
+  title: string
+  help?: ReactNode
+  actions?: ReactNode
+  children: ReactNode
+}) {
   return (
-    <p role="alert" className="tt-error">
-      {error}
-    </p>
+    <Page width="reading" className="settings-page">
+      <PageHeader title={title} help={help} actions={actions} />
+      {children}
+    </Page>
   )
 }
 
-// A button that asks once more before it acts. `name` tells rows apart for screen readers:
-// "Remove Alice", not one "Remove" per row.
-// `confirm` is the button that acts, in a whole phrase ("Yes, remove"): translated, since
-// it can't be made from the label in any language but English.
-export function ConfirmButton({
+// A part of a tab: its heading, a line of help under it, the section's own actions at the end, and
+// what it holds. `level` 3 for a section inside another.
+export function Section({
+  title,
+  help,
+  actions,
   label,
-  name,
-  question,
-  confirm,
-  disabled,
-  onOpen,
-  onConfirm,
+  level = 2,
+  children,
 }: {
-  label: string
-  name?: string
-  question: string
-  confirm: string
-  disabled?: boolean
-  // Called when the question is asked, with what the confirmation will be about decided here, not
-  // when it is answered: what changed in between is not what was asked about.
-  onOpen?: () => void
-  onConfirm: () => void
+  title?: ReactNode
+  help?: ReactNode
+  actions?: ReactNode
+  // The section's name when it has no visible title.
+  label?: string
+  level?: 2 | 3
+  children?: ReactNode
 }) {
-  const t = useT()
-  const [asking, setAsking] = useState(false)
-  if (!asking) {
-    return (
-      <button
-        type="button"
-        className="tt-button"
-        aria-label={name ? t('common.labelFor', { label, name }) : undefined}
-        disabled={disabled}
-        onClick={() => {
-          onOpen?.()
-          setAsking(true)
-        }}
-      >
-        {label}
-      </button>
-    )
-  }
+  const id = useId()
+  const Heading = level === 2 ? 'h2' : 'h3'
   return (
-    <fieldset className="tt-confirm" aria-label={question}>
-      <span>{question}</span>
-      <button
-        type="button"
-        className="tt-button tt-danger"
-        onClick={() => {
-          setAsking(false)
-          onConfirm()
-        }}
-      >
-        {confirm}
-      </button>
-      <button type="button" className="tt-button" onClick={() => setAsking(false)}>
-        {t('common.cancel')}
-      </button>
-    </fieldset>
+    <section
+      className="settings-section"
+      data-level={level}
+      aria-labelledby={title ? `${id}-title` : undefined}
+      aria-label={title ? undefined : label}
+    >
+      {(title || actions) && (
+        <header className="settings-section-head">
+          <div className="settings-section-titles">
+            {title && (
+              <Heading id={`${id}-title`} className="settings-section-title">
+                {title}
+              </Heading>
+            )}
+            {help && <p className="settings-section-help">{help}</p>}
+          </div>
+          {actions && <div className="settings-section-actions">{actions}</div>}
+        </header>
+      )}
+      {!title && !actions && help && <p className="settings-section-help">{help}</p>}
+      {children}
+    </section>
+  )
+}
+
+// The shape of what is still loading, with "Loading" said to a screen reader.
+export function Loading({ lines = 3 }: { lines?: number }) {
+  const t = useT()
+  return (
+    <div className="settings-loading" role="status" aria-busy="true">
+      <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+      {Array.from({ length: lines }, (_, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: placeholders with no identity of their own.
+        <Skeleton key={i} width={i === lines - 1 ? '60%' : '100%'} />
+      ))}
+    </div>
   )
 }
 
@@ -102,7 +127,7 @@ export function day(time: string): string {
 }
 
 // Copies text to the clipboard; without one (plain http, or refused) the text is still selectable.
-export function CopyButton({ text, name }: { text: string; name?: string }) {
+export function CopyButton({ text, name, size = 'md' }: { text: string; name?: string; size?: 'md' | 'sm' }) {
   const t = useT()
   const [copied, setCopied] = useState(false)
   // "Copied" is for that copy, not from then on; the timer goes with the button.
@@ -120,13 +145,42 @@ export function CopyButton({ text, name }: { text: string; name?: string }) {
     }
   }
   return (
-    <button
-      type="button"
-      className="tt-button"
+    <Button
+      size={size}
+      icon={copied ? 'check' : 'copy'}
       aria-label={name ? t('common.copyNamed', { name }) : undefined}
       onClick={copy}
     >
       {copied ? t('common.copied') : t('common.copy')}
-    </button>
+    </Button>
   )
+}
+
+// A value shown once, to copy: a read-only field that selects itself, and the copy button.
+export function CopyField({ value, label, name }: { value: string; label: string; name?: string }) {
+  return (
+    <div className="settings-copy">
+      <Input readOnly value={value} aria-label={label} onFocus={(e) => e.target.select()} spellCheck={false} />
+      <CopyButton text={value} name={name} />
+    </div>
+  )
+}
+
+// Facts about a thing, a term and its value per line: an endpoint, the server's email.
+export function Facts({ items }: { items: { term: ReactNode; value: ReactNode; key?: string }[] }) {
+  return (
+    <dl className="settings-facts">
+      {items.map((x, i) => (
+        <div key={x.key ?? i} className="settings-fact">
+          <dt>{x.term}</dt>
+          <dd>{x.value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+// A form's actions: its one primary button first, then the rest.
+export function FormActions({ children }: { children: ReactNode }) {
+  return <div className="settings-actions">{children}</div>
 }

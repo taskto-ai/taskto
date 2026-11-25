@@ -4,9 +4,16 @@
 
 import { type FormEvent, useEffect, useState } from 'react'
 import { api, type MailStatus, mailPath, type Workspace } from '../api'
-import { DEFAULT_LOCALE, LOCALES, localeName, setPreferences, useT } from '../i18n'
+import { DEFAULT_LOCALE, LOCALES, localeName, setPreferences, t as translate, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { Field } from '../ui/Field'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Select } from '../ui/Select'
+import { toast } from '../ui/Toast'
+import { Alert, Facts, FormActions, Loading, Section, SettingsTab, useAction } from './parts'
 
 // `operator`: they run the server, so the server's own email is theirs to see; other admins' routes for it
 // answer 403.
@@ -15,60 +22,41 @@ export function GeneralTab({ workspace, email, operator }: { workspace: Workspac
   const [locale, setLocale] = useState(workspace.locale || DEFAULT_LOCALE)
   // The workspace's value from the server, when it comes again.
   useEffect(() => setLocale(workspace.locale || DEFAULT_LOCALE), [workspace.locale])
-  const [saved, setSaved] = useState(false)
   const { busy, error, run } = useAction()
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    setSaved(false)
     // English, the default, is stored as "": no default picked.
     const body = { locale: locale === DEFAULT_LOCALE ? '' : locale }
     const ok = await run(() => api(`/api/workspaces/${workspace.id}`, { method: 'PATCH', body }))
     if (ok) {
-      setSaved(true)
       await setPreferences({ workspace: body.locale })
+      // In the language the page is in now, which the change may have made another.
+      toast({ message: translate('settings.general.saved'), tone: 'success' })
     }
   }
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-general">
-        <h2 id="tt-general">{t('settings.tabs.general')}</h2>
-        <form className="tt-form" onSubmit={submit}>
-          <label>
-            {t('settings.general.language')}
-            <select
-              value={locale}
-              onChange={(e) => {
-                setLocale(e.target.value)
-                setSaved(false)
-              }}
-              aria-describedby="tt-general-language"
-            >
+    <SettingsTab title={t('settings.tabs.general')} help={t('settings.help.general')}>
+      <Panel padded>
+        <form className="settings-form" onSubmit={submit}>
+          <Field label={t('settings.general.language')} hint={t('settings.general.languageHelp')}>
+            <Select value={locale} onChange={(e) => setLocale(e.target.value)}>
               {LOCALES.map((tag) => (
                 <option key={tag} value={tag} lang={tag}>
                   {localeName(tag)}
                 </option>
               ))}
-            </select>
-          </label>
-          <span id="tt-general-language" className="tt-muted tt-small">
-            {t('settings.general.languageHelp')}
-          </span>
+            </Select>
+          </Field>
           <Alert error={error} />
-          <div>
-            <button type="submit" className="tt-button tt-primary" disabled={busy}>
+          <FormActions>
+            <Button type="submit" variant="primary" loading={busy}>
               {t('settings.general.save')}
-            </button>
-            {saved && (
-              <span role="status" className="tt-muted">
-                {' '}
-                {t('settings.general.saved')}
-              </span>
-            )}
-          </div>
+            </Button>
+          </FormActions>
         </form>
-      </section>
+      </Panel>
       {operator && <MailPanel workspace={workspace.id} email={email} />}
-    </div>
+    </SettingsTab>
   )
 }
 
@@ -77,55 +65,57 @@ export function GeneralTab({ workspace, email, operator }: { workspace: Workspac
 function MailPanel({ workspace, email }: { workspace: number; email: string }) {
   const t = useT()
   const status = useLoad(() => api<MailStatus>(mailPath(workspace)), [workspace])
-  const [sentTo, setSentTo] = useState<string | null>(null)
   const { busy, error, run } = useAction()
-  const send = async () => {
-    setSentTo(null)
-    await run(async () => {
+  const send = () =>
+    run(async () => {
       const r = await api<{ sent_to: string }>(`${mailPath(workspace)}/test`, { method: 'POST', body: {} })
-      setSentTo(r.sent_to)
+      toast({ message: t('settings.general.mail.sent', { email: r.sent_to }), tone: 'success' })
     })
-  }
   const m = status.data
   return (
-    <section className="tt-panel" aria-labelledby="tt-mail">
-      <h2 id="tt-mail">{t('settings.general.mail.title')}</h2>
+    <Section
+      title={t('settings.general.mail.title')}
+      actions={
+        m &&
+        (m.configured ? (
+          <Badge tone="success" dot>
+            {t('settings.general.mail.on')}
+          </Badge>
+        ) : (
+          <Badge tone="neutral">{t('settings.general.mail.offBadge')}</Badge>
+        ))
+      }
+    >
       <Alert error={status.error} />
-      {!m && !status.error && <p className="tt-muted">{t('settings.general.mail.loading')}</p>}
-      {m && !m.configured && <p className="tt-muted">{t('settings.general.mail.off')}</p>}
+      {!m && !status.error && <Loading lines={2} />}
+      {m && !m.configured && <Notice tone="neutral">{t('settings.general.mail.off')}</Notice>}
       {m?.configured && (
-        <>
-          <dl className="tt-endpoint">
-            <dt>{t('settings.general.mail.server')}</dt>
-            <dd>
-              <code>{t('settings.general.mail.serverValue', { host: m.host, port: String(m.port) })}</code>
-            </dd>
-            <dt>{t('settings.general.mail.security')}</dt>
-            <dd>{t(`settings.general.mail.securities.${m.security}`)}</dd>
-            <dt>{t('settings.general.mail.from')}</dt>
-            <dd>
-              <code>{m.from}</code>
-            </dd>
-            <dt>{t('settings.general.mail.signIn')}</dt>
-            <dd>
-              {m.password === 'set' ? t('settings.general.mail.signInSet') : t('settings.general.mail.signInNone')}
-            </dd>
-          </dl>
-          {m.sends_links === false && <p className="tt-muted">{t('settings.general.mail.noLinks')}</p>}
-          <div>
-            <button type="button" className="tt-button" disabled={busy} onClick={send}>
-              {busy ? t('settings.general.mail.testing') : t('settings.general.mail.test')}
-            </button>{' '}
-            <span className="tt-muted tt-small">{t('settings.general.mail.testHelp', { email })}</span>
-          </div>
+        <Panel padded className="settings-panel-body">
+          <Facts
+            items={[
+              {
+                term: t('settings.general.mail.server'),
+                value: <code>{t('settings.general.mail.serverValue', { host: m.host, port: String(m.port) })}</code>,
+              },
+              { term: t('settings.general.mail.security'), value: t(`settings.general.mail.securities.${m.security}`) },
+              { term: t('settings.general.mail.from'), value: <code>{m.from}</code> },
+              {
+                term: t('settings.general.mail.signIn'),
+                value:
+                  m.password === 'set' ? t('settings.general.mail.signInSet') : t('settings.general.mail.signInNone'),
+              },
+            ]}
+          />
+          {m.sends_links === false && <Notice tone="neutral">{t('settings.general.mail.noLinks')}</Notice>}
+          <FormActions>
+            <Button loading={busy} onClick={send}>
+              {t('settings.general.mail.test')}
+            </Button>
+            <span className="settings-muted">{t('settings.general.mail.testHelp', { email })}</span>
+          </FormActions>
           <Alert error={error} />
-          {sentTo && (
-            <p role="status" className="tt-ok">
-              {t('settings.general.mail.sent', { email: sentTo })}
-            </p>
-          )}
-        </>
+        </Panel>
       )}
-    </section>
+    </Section>
   )
 }
