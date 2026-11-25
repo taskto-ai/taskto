@@ -6,11 +6,13 @@
 // screens. CI runs it with css-check (`pnpm --filter @taskto/web run css`); so can anyone.
 //
 // What it sees: a JSX element of those names in a .tsx or .ts file under src/, its comments left
-// out (`{/* <button> */}` is not one). A JSX element comes after an operator, a bracket or another
-// tag (`(`, `>`, `{`, `?`, `:`, `&&`, `=`, `,`, `return`); the same text inside a string, a template
-// or a regular expression comes after a quote, a backtick or a slash, and is not one
-// (`'<button>Go</button>'`, `/<button/`). An element made another way (React.createElement) is not
-// seen; the app makes none.
+// out (`{/* <button> */}` is not one). Whether `<button` is an element or text in a literal is told
+// by the nearest structural character before it: a quote, a backtick or a slash means it is inside
+// a string, a template or a regular expression (`'<button>Go</button>'`, `/<input/`); anything else
+// (an operator, a bracket, the end of another tag, `return`, with JSX text such as `Save ` between)
+// means an element. JSX text with a quote of its own just before an element (`Don't <button>`) is
+// read as a string, and that element is missed; the app's strings come through t(), so its JSX text
+// has none. An element made another way (React.createElement) is not seen; the app makes none.
 //
 // --root <dir> checks another web directory, for the script's tests.
 
@@ -66,16 +68,47 @@ const ELEMENT = new RegExp(`<(${ELEMENTS.join('|')})(?=[\\s/>])`, 'g')
 export function controls(source) {
   const code = blankComments(source)
   return [...code.matchAll(ELEMENT)]
-    .filter((m) => JSX_BEFORE.test(code.slice(Math.max(0, m.index - 16), m.index)))
+    .filter((m) => isElement(code, m.index))
     .map((m) => ({
       element: m[1],
       line: code.slice(0, m.index).split('\n').length,
     }))
 }
 
-// What comes right before a JSX element: the start of the file, or (spaces aside) an operator, a
-// bracket, the end of another tag, or `return`.
-const JSX_BEFORE = /(?:^|[(>{}?:&|=,;[]|\breturn)\s*$/
+// The characters that end a stretch of JSX text or of a literal's contents, looking back.
+const STRUCTURAL = new Set([
+  '<',
+  '>',
+  '{',
+  '}',
+  '(',
+  ')',
+  '[',
+  ']',
+  '=',
+  ';',
+  ',',
+  '?',
+  ':',
+  '&',
+  '|',
+  '!',
+  '"',
+  "'",
+  '`',
+  '/',
+])
+// Of those, the ones a literal's contents follow: a string's quote, a template's backtick, a regular
+// expression's slash.
+const LITERAL = new Set(['"', "'", '`', '/'])
+
+// Whether the `<name` at `at` is a JSX element, not text inside a string, a template or a regular
+// expression: the nearest structural character before it isn't a quote, a backtick or a slash.
+function isElement(code, at) {
+  let i = at - 1
+  while (i >= 0 && !STRUCTURAL.has(code[i])) i--
+  return i < 0 || !LITERAL.has(code[i])
+}
 
 function modules(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

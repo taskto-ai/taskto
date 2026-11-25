@@ -44,7 +44,7 @@ test('each of the four elements is caught, and nothing else', () => {
   expect(found.map((c) => c.element)).toEqual(['input', 'select', 'textarea'])
 })
 
-test('an element in a string, a template or a regular expression is not one; one after an operator is', () => {
+test('an element in a string, a template or a regular expression is not one; one after an operator or JSX text is', () => {
   const found = controls(
     [
       "export const html = '<button>Go</button>'",
@@ -56,6 +56,7 @@ test('an element in a string, a template or a regular expression is not one; one
       '    {open ? <textarea /> : null}',
       '  </div>',
       ')',
+      'export const C = () => <div>Save <select /></div>',
       'export function B() {',
       '  return <input />',
       '}',
@@ -64,7 +65,8 @@ test('an element in a string, a template or a regular expression is not one; one
   expect(found).toEqual([
     { element: 'button', line: 6 },
     { element: 'textarea', line: 7 },
-    { element: 'input', line: 11 },
+    { element: 'select', line: 10 },
+    { element: 'input', line: 12 },
   ])
 })
 
