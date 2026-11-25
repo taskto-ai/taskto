@@ -355,8 +355,6 @@ test('the top bar gives way to a long workspace name: the mark stands for the lo
 })
 
 test('the menu button opens the sidebar as a drawer, and a link closes it', async () => {
-  // Opened at a page's own URL: from /, the shell first goes to the default page, and that
-  // change of page closes the drawer, so a click before it lands would be undone.
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
   const { container } = render(<App />)
@@ -431,8 +429,12 @@ test('a change of page closes the drawer: a link, back and forward; a hash or a 
   const go = (path: string) => act(() => navigate(path))
   const back = (delta: number) =>
     act(async () => {
+      // jsdom traverses the history in a task of its own and then fires popstate: wait for that.
+      const traversed = new Promise<void>((resolve) =>
+        window.addEventListener('popstate', () => resolve(), { once: true }),
+      )
       window.history.go(delta)
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      await traversed
     })
 
   await go('/w/1/boards')
