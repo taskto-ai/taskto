@@ -1050,6 +1050,8 @@ test('someone with no workspace is offered "New workspace" when the server lets 
   render(<App />)
   // The screen is the page's heading, and the form opens in a dialog, which fits a phone.
   await screen.findByRole('heading', { level: 1, name: 'No workspace yet' })
+  // Logging out is offered beside it.
+  expect(screen.getByRole('button', { name: 'Log out' })).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'New workspace' }))
   const dialog = screen.getByRole('dialog', { name: 'New workspace' })
   fireEvent.change(within(dialog).getByLabelText(/Name of the new workspace/), { target: { value: ' Mine ' } })

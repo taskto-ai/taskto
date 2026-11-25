@@ -14,7 +14,8 @@ scenario('first-run setup creates the owner, and the owner can log out and back 
   await page.getByLabel('Email').fill(owner.email)
   await page.getByLabel('Password', { exact: true }).fill(owner.password)
   await page.getByRole('button', { name: 'Create the owner' }).click()
-  await page.getByRole('alert').waitFor()
+  // The refusal is said with the token's field, which is marked invalid.
+  await page.getByLabel('Setup token').and(page.locator('[aria-invalid="true"]')).waitFor()
   assert.equal(await page.getByRole('navigation', { name: 'Sections' }).count(), 0)
 
   // The right token signs the owner in, to their workspace.

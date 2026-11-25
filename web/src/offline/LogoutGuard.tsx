@@ -7,7 +7,7 @@
 // there and that this version can't check, and chooses to keep the database (sign out without
 // deleting it) or to discard it.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -44,8 +44,22 @@ export function LogoutGuard({
   const [failure, setFailure] = useState<string | null>(null)
   // Discarding is a second, explicit step.
   const [discarding, setDiscarding] = useState(false)
+  // A sync is under way: one at a time (a second press before React draws `busy` is refused too),
+  // and the guard can't be closed meanwhile, since its end may sign the person out.
+  const syncing = useRef(false)
+  // The guard is still on screen. Once it is gone (cancelled, or the page moved on) a sync that ends
+  // later signs nobody out and changes nothing: the person was shown the app again.
+  const live = useRef(true)
+  useEffect(() => {
+    live.current = true
+    return () => {
+      live.current = false
+    }
+  }, [])
 
   const sync = async () => {
+    if (syncing.current) return
+    syncing.current = true
     setBusy(true)
     setStuck(false)
     setFailure(null)
@@ -57,30 +71,43 @@ export function LogoutGuard({
       // is told, and nothing is attempted.
       if (!runtime.writer.holds()) {
         await runtime.writer.takeOver()
+        if (!live.current) return
         if (!runtime.writer.holds()) {
           setFailure(t('offline.logout.notWriter'))
           return
         }
       }
       await runtime.engine.retry()
+      if (!live.current) return
       const unsent = await runtime.store.unsynced()
+      if (!live.current) return
       setLeft(unsent.length)
       if (unsent.length === 0) onSignOut()
       else setStuck(true)
     } catch (e) {
+      if (!live.current) return
       // The right was lost while this ran (another tab took it), or the device refused.
       setFailure(e instanceof NotWriter ? t('offline.logout.notWriter') : errorText(e))
     } finally {
-      setBusy(false)
+      syncing.current = false
+      if (live.current) setBusy(false)
     }
   }
+  // Escape and the close button are Cancel, but not while a sync runs.
+  const cancel = () => {
+    if (!syncing.current) onCancel()
+  }
+  // The safe way out takes the focus: keeping or sending the records, or else (nothing to sync
+  // here) Cancel, never the destructive button.
+  const canSync = !unreadable && runtime !== null
 
   return (
     <>
       <Dialog
         open
-        // Escape, as Cancel: nothing is signed out and nothing is deleted.
-        onClose={onCancel}
+        // Escape, as Cancel: nothing is signed out and nothing is deleted. Not while a sync runs.
+        onClose={cancel}
+        dismissible={!busy}
         role="alertdialog"
         size="sm"
         title={t('offline.logout.title')}
@@ -89,16 +116,21 @@ export function LogoutGuard({
             <Button variant="danger" disabled={busy} onClick={() => setDiscarding(true)}>
               {t('offline.logout.discard')}
             </Button>
-            <Button disabled={busy} onClick={onCancel}>
+            <Button disabled={busy} onClick={cancel} data-autofocus={!unreadable && !canSync ? true : undefined}>
               {t('offline.logout.cancel')}
             </Button>
-            {/* The safe way out takes the focus: keeping or sending the records. */}
             {unreadable ? (
               <Button variant="primary" disabled={busy} onClick={onKeep} data-autofocus>
                 {t('offline.logout.keep')}
               </Button>
             ) : (
-              <Button variant="primary" loading={busy} disabled={!runtime} onClick={() => void sync()} data-autofocus>
+              <Button
+                variant="primary"
+                loading={busy}
+                disabled={!runtime}
+                onClick={() => void sync()}
+                data-autofocus={canSync ? true : undefined}
+              >
                 {t('offline.logout.sync')}
               </Button>
             )}

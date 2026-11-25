@@ -54,7 +54,7 @@ test('the account changed: one answer, reloading, focused, and nothing closes it
   expect(screen.getByRole('alertdialog', { name: 'The account changed' })).toBe(dialog)
 })
 
-test('signing out with no database open here: Sync is off, Escape is Cancel, discarding is asked again', () => {
+test('signing out with no database open here: Sync is off, Cancel is focused, Escape is Cancel, discarding is asked again', () => {
   const onSignOut = vi.fn()
   const onCancel = vi.fn()
   render(<LogoutGuard runtime={null} count={3} onSignOut={onSignOut} onCancel={onCancel} />)
@@ -62,6 +62,8 @@ test('signing out with no database open here: Sync is off, Escape is Cancel, dis
   expect(dialog.textContent).toMatch(/3 records on this device haven’t reached the server/)
   // With no database open here there is nothing to sync, and it says so by being unavailable.
   expect((screen.getByRole('button', { name: 'Sync now' }) as HTMLButtonElement).disabled).toBe(true)
+  // The safe answer has the focus, never the destructive one.
+  expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
   pressEscape(dialog)
   expect(onCancel).toHaveBeenCalledOnce()
   fireEvent.click(screen.getByRole('button', { name: 'Discard and sign out' }))
@@ -106,4 +108,60 @@ test('signing out with unsent records and the database open: Sync now is the foc
   fireEvent.click(sync)
   await vi.waitFor(() => expect(onSignOut).toHaveBeenCalledOnce())
   expect(retry).toHaveBeenCalledOnce()
+})
+
+// A sync whose end the test decides: the engine's retry waits until `finish` is called.
+function pendingSync() {
+  let finish: () => void = () => {}
+  const retry = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve
+      }),
+  )
+  const runtime = {
+    user: 7,
+    writer: soleWriter,
+    engine: { retry },
+    store: { unsynced: async () => [] },
+    stop: () => {},
+  } as unknown as Runtime
+  return { runtime, retry, finish: () => finish() }
+}
+
+test('while a sync runs the guard can’t be closed: no close button, and Escape does nothing', async () => {
+  const onSignOut = vi.fn()
+  const onCancel = vi.fn()
+  const sync = pendingSync()
+  render(<LogoutGuard runtime={sync.runtime} count={1} onSignOut={onSignOut} onCancel={onCancel} />)
+  const dialog = screen.getByRole('alertdialog', { name: 'Records not sent yet' })
+  fireEvent.click(screen.getByRole('button', { name: 'Sync now' }))
+  await vi.waitFor(() => expect(sync.retry).toHaveBeenCalledOnce())
+  expect(within(dialog).queryByRole('button', { name: 'Close' })).toBeNull()
+  pressEscape(dialog)
+  expect(onCancel).not.toHaveBeenCalled()
+  // A second press while it runs starts nothing more.
+  fireEvent.click(screen.getByRole('button', { name: /Sync now/ }))
+  expect(sync.retry).toHaveBeenCalledOnce()
+  await act(async () => sync.finish())
+  await vi.waitFor(() => expect(onSignOut).toHaveBeenCalledOnce())
+  // Once it ended, Escape is Cancel again.
+  pressEscape(dialog)
+  expect(onCancel).toHaveBeenCalledOnce()
+})
+
+test('a guard that goes away while its sync runs signs nobody out when the sync ends', async () => {
+  const onSignOut = vi.fn()
+  const sync = pendingSync()
+  const { unmount } = render(<LogoutGuard runtime={sync.runtime} count={1} onSignOut={onSignOut} onCancel={() => {}} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Sync now' }))
+  await vi.waitFor(() => expect(sync.retry).toHaveBeenCalledOnce())
+  // The app took the guard away (it was cancelled, or the page moved on), and then the sync ends
+  // with nothing left unsent.
+  unmount()
+  await act(async () => {
+    sync.finish()
+    await new Promise((r) => setTimeout(r))
+  })
+  expect(onSignOut).not.toHaveBeenCalled()
 })

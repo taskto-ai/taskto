@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
@@ -13,6 +13,15 @@ afterEach(async () => {
   window.history.replaceState(null, '', '/')
   await setPreferences({ user: null })
 })
+
+// A field's error, as a screen reader reaches it: the text of the field's description once the field
+// is marked invalid (Field says it in its own live region; it is not an alert as well).
+async function fieldError(label: string) {
+  const field = screen.getByLabelText(label)
+  await vi.waitFor(() => expect(field.getAttribute('aria-invalid')).toBe('true'))
+  const ids = (field.getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean)
+  return ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ')
+}
 
 const both = {
   password: true,
@@ -237,7 +246,8 @@ test('a login that asks for a code is not logged in until the code is given', as
   const code = screen.getByLabelText('Code from your app, or a recovery code')
   fireEvent.change(code, { target: { value: '000000' } })
   fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
-  expect((await screen.findByRole('alert')).textContent).toContain('code is wrong')
+  expect(await fieldError(codeLabel)).toContain('code is wrong')
+  expect(screen.queryByRole('alert')).toBeNull()
   expect(onDone).not.toHaveBeenCalled()
 
   fireEvent.change(code, { target: { value: '123456' } })
@@ -305,7 +315,8 @@ test('a reset link for an account with two-factor login asks for a code and is n
 
   fireEvent.change(screen.getByLabelText(codeLabel), { target: { value: '000000' } })
   fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
-  expect((await screen.findByRole('alert')).textContent).toContain('code is wrong')
+  expect(await fieldError(codeLabel)).toContain('code is wrong')
+  expect(screen.queryByRole('alert')).toBeNull()
   expect(onDone).not.toHaveBeenCalled()
   fireEvent.change(screen.getByLabelText(codeLabel), { target: { value: '123456' } })
   fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
@@ -496,11 +507,9 @@ test('a wrong code is said under the code field, which is marked invalid', async
   expect(code.autocomplete).toBe('one-time-code')
   fireEvent.change(code, { target: { value: '000000' } })
   fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
-  const alert = await screen.findByRole('alert')
-  expect(code.getAttribute('aria-invalid')).toBe('true')
-  // The message is the field's description, so it is said with the field.
-  const described = (code.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id))
-  expect(described.some((el) => el?.contains(alert))).toBe(true)
+  // The message is the field's description, so it is said with the field, and only there.
+  expect(await fieldError(codeLabel)).toContain('code is wrong')
+  expect(screen.queryByRole('alert')).toBeNull()
 })
 
 test('a failure that is not about one field is said for the form, and no field is marked', async () => {
@@ -537,8 +546,7 @@ test('setup: where the token is found is the fieldâ€™s help, with the log lineâ€
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.com' } })
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create the owner' }))
-  await screen.findByRole('alert')
-  expect(token.getAttribute('aria-invalid')).toBe('true')
+  expect(await fieldError('Setup token')).toContain('setup token')
   expect(onDone).not.toHaveBeenCalled()
 
   fireEvent.change(token, { target: { value: ' right-token ' } })
@@ -554,8 +562,9 @@ test('a reset whose two passwords differ says so under the second, and sends not
   fireEvent.change(await screen.findByLabelText('New password'), { target: { value: 'fake-new-password-123' } })
   const again = screen.getByLabelText('New password again')
   fireEvent.change(again, { target: { value: 'fake-new-password-124' } })
-  expect((await screen.findByRole('alert')).textContent).toBe("The passwords don't match.")
-  expect(again.getAttribute('aria-invalid')).toBe('true')
+  expect(await fieldError('New password again')).toContain("The passwords don't match.")
+  // Not an alert as well: a live alert on every character typed would be said again and again.
+  expect(screen.queryByRole('alert')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Set the password' }))
   expect(calls.some((c) => c.method === 'POST')).toBe(false)
 })
@@ -711,12 +720,12 @@ test('an error about a field goes once that field is edited, and stays while ano
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.com' } })
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create the owner' }))
-  await screen.findByRole('alert')
+  await fieldError('Setup token')
   fireEvent.change(screen.getByLabelText('Your name'), { target: { value: 'Owner Two' } })
   expect(token.getAttribute('aria-invalid')).toBe('true')
   fireEvent.change(token, { target: { value: 'right-token' } })
   expect(token.getAttribute('aria-invalid')).toBeNull()
-  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.queryByText(/setup token/i, { selector: '.ui-field-error *' })).toBeNull()
 })
 
 // --- One request at a time, whatever submits the form (not only its button).
@@ -757,7 +766,7 @@ test('setup submitted twice while the first is on its way sends one request, and
   fireEvent.submit(formOf('Setup token'))
   await vi.waitFor(() => expect(calls.filter((c) => c.path === '/api/setup')).toHaveLength(1))
   answer({ status: 403, body: { error: 'wrong token', code: 'setup_token' } })
-  await screen.findByRole('alert')
+  await fieldError('Setup token')
   // Settled: the next submit goes.
   fireEvent.submit(formOf('Setup token'))
   await vi.waitFor(() => expect(calls.filter((c) => c.path === '/api/setup')).toHaveLength(2))
@@ -778,4 +787,44 @@ test('a reset link asked for twice while the first is on its way is asked for on
   answer({ status: 202, body: {} })
   await screen.findByText('Check your email')
   expect(calls.filter((c) => c.path === '/api/password-reset/request')).toHaveLength(1)
+})
+
+test('after a login answers, a submit while the app is still opening the account sends nothing more', async () => {
+  const calls = fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: owner },
+  })
+  // The app takes its time with the session (its preferences, the offline data): the screen stays.
+  const onDone = vi.fn()
+  render(<LoginScreen onDone={onDone} />)
+  fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'owner@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.submit(formOf('Password'))
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce())
+  fireEvent.submit(formOf('Password'))
+  await new Promise((r) => setTimeout(r))
+  expect(calls.filter((c) => c.path === '/api/login')).toHaveLength(1)
+})
+
+test('a single sign-on start pressed twice before the page draws it, on one provider or two, starts once', async () => {
+  let answer: (v: { body: unknown }) => void = () => {}
+  const calls = fakeFetch({
+    'GET /api/login/methods': { body: both },
+    'POST /api/sso/google/start': () => new Promise((resolve) => (answer = resolve)),
+    'POST /api/sso/authentik/start': () => new Promise((resolve) => (answer = resolve)),
+  })
+  const assign = stubAssign()
+  render(<LoginScreen onDone={() => {}} />)
+  const google = await screen.findByRole('button', { name: 'Continue with Google' })
+  const authentik = screen.getByRole('button', { name: 'Continue with Authentik' })
+  // Both presses land before React draws the first one's loading state.
+  act(() => {
+    google.click()
+    google.click()
+    authentik.click()
+  })
+  await vi.waitFor(() => expect(calls.filter((c) => c.path.startsWith('/api/sso/'))).toHaveLength(1))
+  answer({ body: { url: 'https://accounts.example.com/authorize?state=fake' } })
+  await vi.waitFor(() => expect(assign).toHaveBeenCalledOnce())
+  expect(calls.filter((c) => c.path.startsWith('/api/sso/'))).toHaveLength(1)
 })

@@ -53,15 +53,12 @@ const FIELD_OF: Record<string, string> = {
   wrong_two_factor_code: 'code',
 }
 
-// A field's error, said as soon as it appears, as the form's is.
-const said = (text: string) => <span role="alert">{text}</span>
-
 // Where a failure shows on a form with these fields: under one of them, or for the whole form.
 function placed(failure: Failure | null, fields: readonly string[]) {
   const field = failure?.code ? FIELD_OF[failure.code] : undefined
   const onField = field !== undefined && fields.includes(field)
   return {
-    field: (name: string) => (failure && onField && field === name ? said(failure.text) : undefined),
+    field: (name: string) => (failure && onField && field === name ? failure.text : undefined),
     // It takes the focus after a failed submit (AuthForm), so it can be focused, but isn't a tab stop.
     form:
       failure && !onField ? (
@@ -101,15 +98,20 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
     inFlight.current = true
     setBusy(true)
     setFailure(null)
+    // The mark goes where `busy` goes, never earlier: after a success the screen is on its way out
+    // (onDone may still be opening the account's offline data), and a submit meanwhile would make
+    // a second session or be refused.
+    const settle = () => {
+      inFlight.current = false
+      setBusy(false)
+    }
     try {
       const me = await send()
       if (me) onDone(me)
-      else setBusy(false)
+      else settle()
     } catch (err) {
       setFailure(failureOf(err))
-      setBusy(false)
-    } finally {
-      inFlight.current = false
+      settle()
     }
   }
   return { busy, failure, submit, edited }
@@ -623,7 +625,7 @@ export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: 
             autoComplete="new-password"
           />
         </Field>
-        <Field label={t('auth.reset.again')} error={mismatch ? said(t('auth.reset.mismatch')) : undefined}>
+        <Field label={t('auth.reset.again')} error={mismatch ? t('auth.reset.mismatch') : undefined}>
           <PasswordInput
             name="password-again"
             value={again}

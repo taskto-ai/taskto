@@ -1,18 +1,29 @@
 @layer screens {
   /* The page: the brand's ground, the card centred on it. Clear of an installed app's status and
-     home bars, and of the notch on its sides. */
+     home bars, and of the notch on its sides. It scrolls on its own: with the on-screen keyboard up
+     (html[data-keyboard], ui/base.css) the page is only the part above it and the body doesn't
+     scroll, so a form taller than that is scrolled here. */
   .ui-auth {
-    min-block-size: 100%;
-    display: grid;
-    place-items: center;
+    block-size: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
     padding-block: max(var(--space-6), env(safe-area-inset-top)) max(var(--space-6), env(safe-area-inset-bottom));
-    padding-inline: max(var(--space-4), env(safe-area-inset-left)) max(var(--space-4), env(safe-area-inset-right));
+    /* env()'s insets are the screen's left and right whatever the language's direction (a notch
+       in landscape), so these are physical. */
+    padding-left: max(var(--space-4), env(safe-area-inset-left));
+    padding-right: max(var(--space-4), env(safe-area-inset-right));
     background: var(--color-bg);
     color: var(--color-text);
     font: var(--type-ui);
   }
 
+  /* Centred by its margins, not by the container's alignment: a card taller than the page then
+     starts at the top and scrolls, where centring would cut its top off. */
   .ui-auth-card {
+    flex: none;
+    margin: auto;
     inline-size: min(100%, calc(var(--width-reading) / 2 + 2 * var(--space-8)));
     display: grid;
     gap: var(--space-6);
@@ -137,11 +148,8 @@
   }
 
   @media (max-width: 30rem) {
-    .ui-auth {
-      place-items: start center;
-    }
-
     .ui-auth-card {
+      margin-block: 0 auto;
       padding: var(--space-6) var(--space-5);
       gap: var(--space-5);
       box-shadow: none;
