@@ -6,8 +6,11 @@
 // screens. CI runs it with css-check (`pnpm --filter @taskto/web run css`); so can anyone.
 //
 // What it sees: a JSX element of those names in a .tsx or .ts file under src/, its comments left
-// out (`{/* <button> */}` is not one). An element made another way (React.createElement, a string
-// of HTML) is not seen; the app makes none.
+// out (`{/* <button> */}` is not one). A JSX element comes after an operator, a bracket or another
+// tag (`(`, `>`, `{`, `?`, `:`, `&&`, `=`, `,`, `return`); the same text inside a string, a template
+// or a regular expression comes after a quote, a backtick or a slash, and is not one
+// (`'<button>Go</button>'`, `/<button/`). An element made another way (React.createElement) is not
+// seen; the app makes none.
 //
 // --root <dir> checks another web directory, for the script's tests.
 
@@ -62,11 +65,17 @@ const ELEMENT = new RegExp(`<(${ELEMENTS.join('|')})(?=[\\s/>])`, 'g')
 // The hand-written controls in a module's source: each element's name and line.
 export function controls(source) {
   const code = blankComments(source)
-  return [...code.matchAll(ELEMENT)].map((m) => ({
-    element: m[1],
-    line: code.slice(0, m.index).split('\n').length,
-  }))
+  return [...code.matchAll(ELEMENT)]
+    .filter((m) => JSX_BEFORE.test(code.slice(Math.max(0, m.index - 16), m.index)))
+    .map((m) => ({
+      element: m[1],
+      line: code.slice(0, m.index).split('\n').length,
+    }))
 }
+
+// What comes right before a JSX element: the start of the file, or (spaces aside) an operator, a
+// bracket, the end of another tag, or `return`.
+const JSX_BEFORE = /(?:^|[(>{}?:&|=,;[]|\breturn)\s*$/
 
 function modules(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

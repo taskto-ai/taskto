@@ -44,6 +44,30 @@ test('each of the four elements is caught, and nothing else', () => {
   expect(found.map((c) => c.element)).toEqual(['input', 'select', 'textarea'])
 })
 
+test('an element in a string, a template or a regular expression is not one; one after an operator is', () => {
+  const found = controls(
+    [
+      "export const html = '<button>Go</button>'",
+      'export const page = `<select></select>`',
+      'export const tag = /<input/',
+      'export const A = () => (',
+      '  <div>',
+      '    {open && <button type="button" />}',
+      '    {open ? <textarea /> : null}',
+      '  </div>',
+      ')',
+      'export function B() {',
+      '  return <input />',
+      '}',
+    ].join('\n'),
+  )
+  expect(found).toEqual([
+    { element: 'button', line: 6 },
+    { element: 'textarea', line: 7 },
+    { element: 'input', line: 11 },
+  ])
+})
+
 test('the components, the tests and the gallery may write them, and a comment is not one', () => {
   const r = run({
     'ui/Button.tsx': 'export const B = () => <button type="button" />\n',
