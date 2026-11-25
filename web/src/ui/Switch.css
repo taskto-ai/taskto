@@ -40,6 +40,10 @@
     aspect-ratio: 1;
     border-radius: var(--radius-pill);
     background: var(--color-text-muted);
+    /* Unseen here; in forced colours the browser paints it in the system's colour and drops the
+       grounds, so the thumb, and so where it is (off at the start, on at the end), stays seen. */
+    outline: var(--line-strong) solid transparent;
+    outline-offset: calc(var(--line-strong) * -1);
     transition:
       translate var(--duration-fast) var(--ease-out),
       background-color var(--duration-fast) var(--ease-out);

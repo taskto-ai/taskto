@@ -61,9 +61,12 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
   const anchor = useRef<HTMLSpanElement>(null)
   const tip = useRef<HTMLSpanElement>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  // What holds it open: the pointer resting on the control (or on the tooltip) and the keyboard's
+  // focus. Leaving one closes it only when the other is gone too.
+  const hovered = useRef(false)
+  const focused = useRef(false)
   const [open, setOpen] = useState(false)
 
-  const clear = () => clearTimeout(timer.current)
   const show = useCallback((delay: number) => {
     clearTimeout(timer.current)
     if (delay === 0) setOpen(true)
@@ -74,10 +77,18 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
     if (delay === 0) setOpen(false)
     else timer.current = setTimeout(() => setOpen(false), delay)
   }, [])
+  // Closes it unless something still holds it open.
+  const release = useCallback(
+    (delay: number) => {
+      if (hovered.current || focused.current) clearTimeout(timer.current)
+      else hide(delay)
+    },
+    [hide],
+  )
 
   useEffect(() => () => clearTimeout(timer.current), [])
 
-  // Escape closes it, wherever the focus is.
+  // Escape closes it, wherever the focus is, until the control is entered or focused again.
   useEffect(() => {
     if (!open) return
     const key = (e: KeyboardEvent) => {
@@ -87,7 +98,8 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
     return () => document.removeEventListener('keydown', key, true)
   }, [open, hide])
 
-  // Into the top layer and next to the control.
+  // Into the top layer and next to the control, and kept there while the page or any box around
+  // the control scrolls, or the window changes size.
   useLayoutEffect(() => {
     const el = tip.current
     const target = anchor.current?.firstElementChild
@@ -101,28 +113,57 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
       }
     }
     if (!open) return
-    const r = target.getBoundingClientRect()
-    const w = el.offsetWidth
-    const h = el.offsetHeight
-    const vw = document.documentElement.clientWidth || window.innerWidth
-    const vh = document.documentElement.clientHeight || window.innerHeight
-    const above = r.top - GAP - h
-    const top = above >= MARGIN || r.bottom + GAP + h > vh - MARGIN ? Math.max(MARGIN, above) : r.bottom + GAP
-    const left = Math.min(Math.max(MARGIN, r.left + r.width / 2 - w / 2), Math.max(MARGIN, vw - MARGIN - w))
-    el.style.top = `${top}px`
-    el.style.left = `${left}px`
+    const place = () => {
+      const r = target.getBoundingClientRect()
+      const w = el.offsetWidth
+      const h = el.offsetHeight
+      const vw = document.documentElement.clientWidth || window.innerWidth
+      const vh = document.documentElement.clientHeight || window.innerHeight
+      const above = r.top - GAP - h
+      const top = above >= MARGIN || r.bottom + GAP + h > vh - MARGIN ? Math.max(MARGIN, above) : r.bottom + GAP
+      const left = Math.min(Math.max(MARGIN, r.left + r.width / 2 - w / 2), Math.max(MARGIN, vw - MARGIN - w))
+      el.style.top = `${top}px`
+      el.style.left = `${left}px`
+    }
+    place()
+    // Scroll events don't bubble, but a listener capturing on the window hears every box's.
+    window.addEventListener('scroll', place, { capture: true, passive: true })
+    window.addEventListener('resize', place)
+    return () => {
+      window.removeEventListener('scroll', place, { capture: true })
+      window.removeEventListener('resize', place)
+    }
   }, [open])
 
   const pointerIn = (e: ReactPointerEvent) => {
     if (e.pointerType === 'touch') return
+    hovered.current = true
     show(OPEN_DELAY_MS)
   }
   const pointerOut = (e: ReactPointerEvent) => {
     if (e.pointerType === 'touch') return
-    hide(CLOSE_DELAY_MS)
+    hovered.current = false
+    release(CLOSE_DELAY_MS)
+  }
+  // On the tooltip itself: the pointer on its way from the control keeps it open.
+  const tipIn = () => {
+    hovered.current = true
+    clearTimeout(timer.current)
   }
   const focus = (e: ReactFocusEvent) => {
-    if (focusVisible(e.target)) show(0)
+    if (!focusVisible(e.target)) return
+    focused.current = true
+    show(0)
+  }
+  const blur = () => {
+    focused.current = false
+    release(0)
+  }
+  // Pressing the control is using it: the tooltip goes, whatever held it.
+  const press = () => {
+    hovered.current = false
+    focused.current = false
+    hide(0)
   }
 
   const describedBy = [children.props['aria-describedby'], describes ? id : undefined].filter(Boolean).join(' ')
@@ -134,9 +175,9 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
       className="ui-tooltip-anchor"
       onPointerEnter={pointerIn}
       onPointerLeave={pointerOut}
-      onPointerDown={() => hide(0)}
+      onPointerDown={press}
       onFocus={focus}
-      onBlur={() => hide(0)}
+      onBlur={blur}
     >
       {cloneElement(children, { 'aria-describedby': describedBy || undefined })}
       <span
@@ -147,7 +188,7 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
         className="ui-tooltip"
         data-open={open ? '' : undefined}
         aria-hidden={describes ? undefined : true}
-        onPointerEnter={clear}
+        onPointerEnter={tipIn}
         onPointerLeave={pointerOut}
       >
         {content}

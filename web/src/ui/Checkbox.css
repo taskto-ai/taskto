@@ -70,7 +70,7 @@
     translate: none;
   }
 
-  .ui-check-box[aria-invalid="true"] {
+  .ui-check-box[aria-invalid]:not([aria-invalid="false"]) {
     border-color: var(--color-danger);
   }
 

@@ -2644,6 +2644,17 @@
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
       "workspaceName": "Acme Studio"
+    },
+    "labels": {
+      "onboarding": "integração",
+      "writing": "redação",
+      "copy": "texto",
+      "blocked": "bloqueado",
+      "launch": "lançamento",
+      "design": "design",
+      "i18n": "i18n",
+      "bug": "bug",
+      "urgent": "urgente"
     }
   }
 }
