@@ -32,7 +32,12 @@
     font-weight: 500;
   }
 
+  /* The error's live region takes no room while it is empty (no gap of the grid for it). */
+  .ui-field-live:empty {
+    margin-block-start: calc(var(--space-2) * -1);
+  }
+
   .ui-field-error .ui-icon {
-    margin-block-start: 1px;
+    margin-block-start: var(--line-thin);
   }
 }

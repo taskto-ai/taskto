@@ -2530,7 +2530,8 @@
     "close": "Close",
     "moreActions": "More actions",
     "dismiss": "Dismiss",
-    "notifications": "Notifications"
+    "notifications": "Notifications",
+    "menuButtonName": "{label}:"
   },
   "gallery": {
     "title": "Design system",
@@ -2752,7 +2753,9 @@
       "labels": "Labels",
       "assignedToMe": "Assigned to me",
       "addColumn": "Add a column",
-      "headings": "Sizes from the type roles: the display face from 20px up, Inter below"
+      "headings": "Sizes from the type roles: the display face from 20px up, Inter below",
+      "busyAsk": "Delete, then fail…",
+      "busyFailed": "The app could not be deleted. Nothing was changed; try again."
     }
   }
 }

@@ -29,6 +29,8 @@ function Board({ dialog = false }: { dialog?: boolean }) {
         footer={<button type="button">Comment</button>}
       >
         <p>Draft the post for the launch.</p>
+        <input aria-label="Comment" />
+        <button type="button">Save</button>
         <Dialog open={dialog} onClose={() => {}} title="Move the card" />
       </Drawer>
     </div>
@@ -107,5 +109,24 @@ describe('Drawer', () => {
     fireEvent.keyDown(other, { key: 'Escape' })
     expect(region()).toBeNull()
     expect(document.activeElement).toBe(other)
+  })
+
+  test('Escape a handler of the page took is not the drawer’s', () => {
+    render(<Board />)
+    open()
+    const take = (e: KeyboardEvent) => e.preventDefault()
+    document.addEventListener('keydown', take, true)
+    fireEvent.keyDown(region() as HTMLElement, { key: 'Escape' })
+    document.removeEventListener('keydown', take, true)
+    expect(region()).not.toBeNull()
+  })
+
+  test('Escape in a field belongs to the field; from a button it closes the drawer', () => {
+    render(<Board />)
+    open()
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Comment' }), { key: 'Escape' })
+    expect(region()).not.toBeNull()
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Save' }), { key: 'Escape' })
+    expect(region()).toBeNull()
   })
 })
