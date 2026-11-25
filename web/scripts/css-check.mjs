@@ -1,0 +1,690 @@
+#!/usr/bin/env node
+// Checks the web app's stylesheets (every .css file under src/: styles.css, and the design system's
+// files in src/ui/) against each other and against the components. CI runs it; so can anyone:
+// `pnpm --filter @taskto/web run css`.
+//
+// Fails on:
+// - a `.tt-` or `.ui-` selector declared more than once at the top level, in one file or across files (a
+//   second rule with the same selector silently overrides or merges with the first; a state or a
+//   screen size goes in an at-rule block, or in a selector of its own). A rule inside `@layer`
+//   blocks only is at the top level: a layer orders rules, it doesn't set them apart;
+// - a `tt-` or `ui-` class a component's className uses that no rule of any stylesheet mentions;
+// - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
+//   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
+//   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in;
+// - a rule in a stylesheet outside src/ui/ that can match an element wherever it is (by its name,
+//   a state, a pseudo-element, an attribute, `*`; not `.tt-x h2`) and doesn't leave the design
+//   system's elements out with OPT_OUT, unless EVERYWHERE lists its selector and every property it
+//   sets: such a rule is in no layer and would beat the components' own styles.
+//
+// Dependency-free: the stylesheet is read by a small scanner (comments and strings skipped), the
+// components by looking at what each className holds.
+//
+// What it sees, and what it doesn't:
+// - In the stylesheet, a class is a `.tt-name` selector. An attribute selector's value
+//   (`[data-state="tt-name"]`), a string, a comment and an `@keyframes` name are not classes.
+// - In a component, a class is a `tt-` name inside a className: a string, or an expression (a
+//   template, a conditional, a join), and the strings of a lookup table that a constant holds:
+//   `const NAME = { ok: 'tt-ok' }` or `const NAME = ['tt-a', 'tt-b']`, with the name in capitals,
+//   in the same file (a map imported from another file is read there), and the strings of an
+//   array a constant of any name holds (`const cls = ['ui-a', big ? 'ui-a-big' : '']`, the way the
+//   components build their classes). A string that is only a class name in another kind of
+//   constant (`const cls = 'ui-a'`), or built from pieces (`'tt-' + kind`), is not seen: such a
+//   class has to be written out in the stylesheet's component anyway, and the check can't tell it
+//   is missing.
+//
+// --root <dir> checks another web directory (its src/ and the stylesheets in it), for the script's
+// tests.
+
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Classes that components use as hooks (for tests, for scripts, or to say what an element is)
+// and that deliberately have no rule. Each needs a reason; a class that is merely not styled yet
+// gets a rule, not an entry here.
+export const UNSTYLED = new Map([
+  [
+    'ui-control',
+    "marks a control's native element (Button, Input, Checkbox …); like every ui- class it keeps the old element rules off, and no rule needs it on its own",
+  ],
+])
+
+// The app's own classes: `tt-` (the screens) and `ui-` (the design system's components, src/ui/).
+const CLASS = /(?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*/g
+// A class selector: the name after a dot.
+const CLASS_SELECTOR = /\.((?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g
+
+// The class selectors of a rule's prelude, without what is inside an attribute selector's
+// brackets or a string.
+export function classSelectors(prelude) {
+  const bare = prelude.replace(/\[[^\]]*\]/g, '').replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
+  return [...bare.matchAll(CLASS_SELECTOR)].map((m) => m[1])
+}
+
+// The stylesheet's rules at the top level (at depth 0, or inside `@layer` blocks only): each with
+// its selector list and the classes it names. Other at-rules (@media, @keyframes, @font-face …) are
+// not rules here, but the classes inside an at-rule's block still count as styled. And every
+// declaration, with its line, for the colour check.
+export function scan(css) {
+  const top = [] // selectors declared at the top level, each with its line
+  const mentioned = new Set()
+  const declarations = [] // { property, value, line }
+  const blocks = [] // for each open block: 'layer', 'at' (another at-rule) or 'rule'
+  let depth = 0
+  let prelude = ''
+  let preludeLine = 1
+  let line = 1
+  for (let i = 0; i < css.length; i++) {
+    const c = css[i]
+    if (c === '\n') line++
+    if (c === '/' && css[i + 1] === '*') {
+      const end = css.indexOf('*/', i + 2)
+      const stop = end === -1 ? css.length : end + 2
+      for (const ch of css.slice(i, stop)) if (ch === '\n') line++
+      i = stop - 1
+      continue
+    }
+    if (c === '"' || c === "'") {
+      let j = i + 1
+      while (j < css.length && css[j] !== c) j += css[j] === '\\' ? 2 : 1
+      prelude += css.slice(i, j + 1)
+      i = j
+      continue
+    }
+    if (c === '{') {
+      const text = prelude.trim()
+      const isAt = text.startsWith('@')
+      for (const name of classSelectors(text)) mentioned.add(name)
+      if (!isAt && blocks.every((b) => b === 'layer')) {
+        for (const sel of splitSelectors(text)) top.push({ selector: sel, line: preludeLine })
+      }
+      blocks.push(isAt ? (/^@layer\b/.test(text) ? 'layer' : 'at') : 'rule')
+      depth++
+      prelude = ''
+      continue
+    }
+    if (c === '}') {
+      declaration(prelude, preludeLine)
+      blocks.pop()
+      depth = Math.max(0, depth - 1)
+      prelude = ''
+      continue
+    }
+    if (c === ';') {
+      declaration(prelude, preludeLine)
+      prelude = ''
+      continue
+    }
+    if (prelude.trim() === '') preludeLine = line
+    prelude += c
+  }
+  return { top, mentioned, declarations }
+
+  // A declaration is `property: value` in any block: a rule's, or an at-rule's that holds
+  // declarations (@property, @font-face, @page). A selector ends at `{`, so it never gets here.
+  function declaration(text, at) {
+    if (blocks.length === 0) return
+    const colon = text.indexOf(':')
+    if (colon < 0) return
+    const property = text.slice(0, colon).trim()
+    if (!/^-{0,2}[a-zA-Z][\w-]*$/.test(property)) return
+    declarations.push({ property, value: text.slice(colon + 1).trim(), line: at })
+  }
+}
+
+// The colours CSS knows by name (CSS Color 4), and the colour functions.
+const NAMED_COLORS = new Set(
+  (
+    'aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown ' +
+    'burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan ' +
+    'darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid ' +
+    'darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet ' +
+    'deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ' +
+    'ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki ' +
+    'lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow ' +
+    'lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray ' +
+    'lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine ' +
+    'mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen ' +
+    'mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace ' +
+    'olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred ' +
+    'papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue ' +
+    'saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey ' +
+    'snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow ' +
+    'yellowgreen ' +
+    // The system colours (CSS Color 4, and the deprecated ones browsers still take): the
+    // browser's or the OS's colours, which no theme sets, so they are literals here too.
+    'accentcolor accentcolortext activetext buttonborder buttonface buttontext canvas canvastext field ' +
+    'fieldtext graytext highlight highlighttext linktext mark marktext selecteditem selecteditemtext ' +
+    'visitedtext activeborder activecaption appworkspace background buttonhighlight buttonshadow ' +
+    'captiontext inactiveborder inactivecaption inactivecaptiontext infobackground infotext menu menutext ' +
+    'scrollbar threeddarkshadow threedface threedhighlight threedlightshadow threedshadow window ' +
+    'windowframe windowtext'
+  ).split(' '),
+)
+const COLOR_FUNCTION = /(?<![\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i
+const HEX = /#[0-9a-fA-F]{3,8}(?![\w-])/
+
+// Properties whose words are names the author picks (an animation, a font, a grid area …), where
+// `red` is an identifier and not a colour. Hex colours and colour functions are still looked for.
+const IDENTIFIER_PROPERTIES = new Set([
+  'animation',
+  'animation-name',
+  'font',
+  'font-family',
+  'grid-area',
+  'grid-column',
+  'grid-row',
+  'grid-template',
+  'grid-template-areas',
+  'list-style',
+  'list-style-type',
+  'counter-reset',
+  'counter-increment',
+  'counter-set',
+  'container',
+  'container-name',
+  'view-transition-name',
+  'transition',
+  'transition-property',
+  'will-change',
+])
+
+// What is inside the parentheses of a value's functions; the rest is blanked. The fallback of a
+// var() at the value's top level is blanked too: it stands where an identifier would. A var()
+// inside another function (a gradient's colour stop) keeps its fallback looked in.
+function functionArguments(value) {
+  const stack = [] // for each open parenthesis: is it a var()'s?
+  let out = ''
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i]
+    if (c === ')') stack.pop()
+    const inside = stack.length > 0 && !stack[0]
+    out += inside && c !== '(' ? c : ' '
+    if (c === '(') stack.push(/(?<![\w-])var$/i.test(value.slice(0, i)))
+  }
+  return out
+}
+
+// The colour literal a declaration's value holds, if any: not in a string, a url() or a custom
+// property's name, and a colour's name not where a name is an identifier.
+export function colorLiteral(value, property = '') {
+  const bare = value
+    .replace(/url\((?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^)]*)\)/gi, 'url()')
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
+    .replace(/--[\w-]+/g, '--x')
+  const hex = HEX.exec(bare)
+  if (hex) return hex[0]
+  const fn = COLOR_FUNCTION.exec(bare)
+  if (fn) return `${fn[0]})`
+  // Where words are names the author picks, only a function's arguments can hold a colour's name
+  // (`list-style: linear-gradient(red, blue)`); a bare `red` there is an identifier.
+  const words = IDENTIFIER_PROPERTIES.has(property.toLowerCase()) ? functionArguments(bare) : bare
+  for (const word of words.matchAll(/(?<![\w-])[a-zA-Z]+(?![\w-])/g)) {
+    if (NAMED_COLORS.has(word[0].toLowerCase())) return word[0]
+  }
+  return undefined
+}
+
+// "a, b > c" → ["a", "b > c"], not splitting inside parentheses (:is(a, b)).
+function splitSelectors(text) {
+  const out = []
+  let depth = 0
+  let cur = ''
+  for (const c of text) {
+    if (c === '(') depth++
+    if (c === ')') depth--
+    if (c === ',' && depth === 0) {
+      out.push(cur)
+      cur = ''
+    } else cur += c
+  }
+  out.push(cur)
+  return out.map((s) => s.replace(/\s+/g, ' ').trim()).filter(Boolean)
+}
+
+// The `tt-` classes inside what a component passes as className: a string, or an expression
+// (a template, a conditional, a join) read up to its closing brace.
+export function classesUsed(raw) {
+  const source = blankComments(raw)
+  const used = new Map() // class → offset of the first use
+  for (const m of source.matchAll(/\bclassName\s*=\s*/g)) {
+    const start = m.index + m[0].length
+    const end = expressionEnd(source, start)
+    for (const c of source.slice(start, end).matchAll(CLASS)) {
+      // A whole class name only: not `--tt-fg` (a custom property), nor the end of `not-tt-x`.
+      if (/[\w-]/.test(source[start + c.index - 1] ?? '')) continue
+      if (!used.has(c[0])) used.set(c[0], start + c.index)
+    }
+  }
+  tableClasses(source, used)
+  return used
+}
+
+// The strings of the lookup tables a component declares (`const NAME = { ok: 'tt-ok' }`,
+// `const NAME = ['tt-a']`; a name in capitals) that are class names only.
+// The source with its comments replaced by spaces (newlines kept, so offsets and lines stay):
+// `// className="tt-old"` and `{/* className="tt-old" */}` use nothing. Strings and templates are
+// skipped whole, so a `//` in a URL is not a comment.
+export function blankComments(source) {
+  let out = ''
+  for (let i = 0; i < source.length; ) {
+    const c = source[i]
+    let end = i + 1
+    if (c === '"' || c === "'") end = skipString(source, i, c) + 1
+    else if (c === '`') end = skipTemplate(source, i) + 1
+    else if (c === '/' && source[i + 1] === '/') {
+      end = source.indexOf('\n', i)
+      if (end < 0) end = source.length
+      out += ' '.repeat(end - i)
+      i = end
+      continue
+    } else if (c === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2)
+      end = close < 0 ? source.length : close + 2
+      out += source.slice(i, end).replace(/[^\n]/g, ' ')
+      i = end
+      continue
+    }
+    out += source.slice(i, end)
+    i = end
+  }
+  return out
+}
+
+function tableClasses(source, used) {
+  // A table in capitals (an object or an array), or an array a component builds its classes from,
+  // whatever its name, typed or not: `const cls: string[] = ['ui-button', big ? 'ui-button-big' : '']`.
+  for (const m of source.matchAll(/\bconst\s+(?:[A-Z][A-Z0-9_]*\b[^=\n]*=\s*(?=[{[])|[a-z]\w*\b[^=\n]*=\s*(?=\[))/g)) {
+    const start = m.index + m[0].length
+    const end = tableEnd(source, start)
+    for (const lit of source
+      .slice(start, end)
+      .matchAll(/(["'])((?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*(?: (?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*)*)\1/g)) {
+      for (const c of lit[2].matchAll(CLASS)) {
+        const at = start + lit.index + 1 + c.index
+        if (!used.has(c[0])) used.set(c[0], at)
+      }
+    }
+  }
+}
+
+// The end of the {…} or […] that begins at start.
+function tableEnd(s, start) {
+  let depth = 0
+  for (let i = start; i < s.length; i++) {
+    const c = s[i]
+    if (c === '"' || c === "'") i = skipString(s, i, c)
+    else if (c === '`') i = skipTemplate(s, i)
+    else if (c === '{' || c === '[') depth++
+    else if ((c === '}' || c === ']') && --depth === 0) return i + 1
+  }
+  return s.length
+}
+
+function expressionEnd(s, start) {
+  const open = s[start]
+  if (open === '"' || open === "'") {
+    const close = s.indexOf(open, start + 1)
+    return close === -1 ? s.length : close + 1
+  }
+  if (open !== '{') return start
+  let depth = 0
+  for (let i = start; i < s.length; i++) {
+    const c = s[i]
+    if (c === '"' || c === "'") {
+      i = skipString(s, i, c)
+    } else if (c === '`') {
+      i = skipTemplate(s, i)
+    } else if (c === '{') depth++
+    else if (c === '}' && --depth === 0) return i + 1
+  }
+  return s.length
+}
+
+function skipString(s, i, q) {
+  let j = i + 1
+  while (j < s.length && s[j] !== q) j += s[j] === '\\' ? 2 : 1
+  return j
+}
+
+// A template literal, whose ${ } holes hold code (and may hold templates).
+function skipTemplate(s, i) {
+  let j = i + 1
+  while (j < s.length && s[j] !== '`') {
+    if (s[j] === '\\') j += 2
+    else if (s[j] === '$' && s[j + 1] === '{') {
+      let depth = 0
+      for (j += 1; j < s.length; j++) {
+        if (s[j] === '`') j = skipTemplate(s, j)
+        else if (s[j] === '"' || s[j] === "'") j = skipString(s, j, s[j])
+        else if (s[j] === '{') depth++
+        else if (s[j] === '}' && --depth === 0) break
+      }
+      j++
+    } else j++
+  }
+  return j
+}
+
+function components(dir, out = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) components(path, out)
+    else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) out.push(path)
+  }
+  return out
+}
+
+function stylesheets(dir, out = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) stylesheets(path, out)
+    else if (entry.name.endsWith('.css')) out.push(path)
+  }
+  return out
+}
+
+// Where the colour literals live: the brand themes, and nowhere else.
+const THEMES = 'src/ui/themes/'
+
+// --- Rules that reach every element --------------------------------------------------------
+//
+// The old stylesheets (every one outside src/ui/) are in no cascade layer, so a rule of theirs
+// that can match an element wherever it is beats every component of the design system, whatever
+// the specificity of the component's own rule. Such a rule styles by an element's name (`h2`,
+// `button`), by a state or a pseudo-element alone (`:focus-visible`, `::placeholder`), by an
+// attribute alone, by `*`, or by `:is(…)`; and nothing scopes it but what wraps every page
+// (WRAPPERS). Each one leaves the design system's elements out: every element a component
+// draws has a class that starts with `ui-`, and the rule's subject carries OPT_OUT, which adds no
+// specificity (docs/design.md, "The components"). A rule scoped by an old container
+// (`.tt-markdown h2`) reaches only inside it, and is left alone.
+
+export const OPT_OUT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
+
+// What wraps every page: a rule scoped by one of these still reaches every component.
+export const WRAPPERS = new Set(['#root', '.tt-shell', '.tt-body', '.tt-page', '#tt-main'])
+
+// Rules that deliberately reach every element, the design system's too: the selector, the only
+// properties it may set, and the reason. A rule that sets anything else is not allowed by it.
+export const EVERYWHERE = new Map([
+  ['html', { properties: ['height', '-webkit-text-size-adjust'], reason: 'the page itself: no component draws it' }],
+  [
+    'body',
+    {
+      properties: [
+        'height',
+        'margin',
+        'background',
+        'color',
+        'font',
+        '-webkit-font-smoothing',
+        'text-rendering',
+        'overscroll-behavior-y',
+        'touch-action',
+      ],
+      reason: 'the page itself: no component draws it, and its font and colour are what everything inherits',
+    },
+  ],
+  [
+    'html[data-keyboard="open"] body',
+    {
+      properties: ['height', 'min-height', 'max-height', 'overflow'],
+      reason: "the page itself, while a phone's keyboard is open",
+    },
+  ],
+  [':root', { properties: [], reason: 'the page itself' }],
+  [
+    '*',
+    {
+      properties: ['box-sizing', 'scrollbar-color'],
+      reason: "border-box sizing and the scrollbars' colours, wanted on every element",
+    },
+  ],
+  ['*::before', { properties: ['box-sizing'], reason: 'border-box sizing, wanted on every element' }],
+  ['*::after', { properties: ['box-sizing'], reason: 'border-box sizing, wanted on every element' }],
+  ['::selection', { properties: ['background', 'color'], reason: 'the selection in the palette, wanted everywhere' }],
+  [
+    'input',
+    {
+      properties: ['caret-color', 'font-size'],
+      reason: "every field: the caret in the text's colour, and 16px on a narrow screen so iOS doesn't zoom in",
+    },
+  ],
+  [
+    'textarea',
+    {
+      properties: ['caret-color', 'font-size'],
+      reason: "every field: the caret in the text's colour, and 16px on a narrow screen so iOS doesn't zoom in",
+    },
+  ],
+  ['select', { properties: ['font-size'], reason: "every field: 16px on a narrow screen so iOS doesn't zoom in" }],
+  [
+    'input[type="search"]::-webkit-search-cancel-button',
+    {
+      properties: [
+        '-webkit-appearance',
+        'appearance',
+        'inline-size',
+        'block-size',
+        'cursor',
+        'background-color',
+        '-webkit-mask',
+        'mask',
+      ],
+      reason: "every search field's clear button, in the palette",
+    },
+  ],
+  [
+    'input[type="search"]::-webkit-search-cancel-button:hover',
+    { properties: ['background-color'], reason: "every search field's clear button, in the palette" },
+  ],
+])
+
+// Every rule's selectors at any depth (inside @media and @layer too, not inside @keyframes,
+// whose `from` and `to` are not elements), each with its line and the properties its block sets.
+export function allRules(css) {
+  const out = []
+  const blocks = [] // for each open block: { kind: 'keyframes' | 'at' | 'rule', rules?: [...] }
+  let prelude = ''
+  let preludeLine = 1
+  let line = 1
+  const declare = (text) => {
+    const top = blocks.at(-1)
+    if (top?.kind !== 'rule') return
+    const colon = text.indexOf(':')
+    if (colon < 0) return
+    const property = text.slice(0, colon).trim().toLowerCase()
+    if (/^-{0,2}[a-z][\w-]*$/.test(property)) for (const r of top.rules) r.properties.push(property)
+  }
+  for (let i = 0; i < css.length; i++) {
+    const c = css[i]
+    if (c === '\n') line++
+    if (c === '/' && css[i + 1] === '*') {
+      const end = css.indexOf('*/', i + 2)
+      const stop = end === -1 ? css.length : end + 2
+      for (const ch of css.slice(i, stop)) if (ch === '\n') line++
+      i = stop - 1
+      continue
+    }
+    if (c === '"' || c === "'") {
+      let j = i + 1
+      while (j < css.length && css[j] !== c) j += css[j] === '\\' ? 2 : 1
+      prelude += css.slice(i, j + 1)
+      i = j
+      continue
+    }
+    if (c === '{') {
+      const text = prelude.trim()
+      if (text.startsWith('@')) blocks.push({ kind: /^@(-[a-z]+-)?keyframes\b/.test(text) ? 'keyframes' : 'at' })
+      else {
+        const rules = []
+        if (!blocks.some((b) => b.kind === 'keyframes')) {
+          for (const selector of splitSelectors(text)) {
+            const r = { selector, line: preludeLine, properties: [] }
+            rules.push(r)
+            out.push(r)
+          }
+        }
+        blocks.push({ kind: 'rule', rules })
+      }
+      prelude = ''
+      continue
+    }
+    if (c === ';') {
+      declare(prelude)
+      prelude = ''
+      continue
+    }
+    if (c === '}') {
+      declare(prelude)
+      blocks.pop()
+      prelude = ''
+      continue
+    }
+    if (prelude.trim() === '') preludeLine = line
+    prelude += c
+  }
+  return out
+}
+
+// A selector's compounds: "a > b:has(> c) d" → ["a", "b:has(> c)", "d"].
+export function compounds(selector) {
+  const out = []
+  let depth = 0
+  let cur = ''
+  for (const c of selector) {
+    if (c === '(' || c === '[') depth++
+    if (c === ')' || c === ']') depth--
+    if (depth === 0 && /[\s>+~]/.test(c)) {
+      if (cur) out.push(cur)
+      cur = ''
+    } else cur += c
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
+// A compound without what is inside its parentheses and brackets: what it says of the element
+// itself (`:is(.a, h2)` says nothing of its own, so it is not scoped by `.a`).
+function own(compound) {
+  let out = ''
+  let depth = 0
+  for (const c of compound) {
+    if (c === '(' || c === '[') depth++
+    if (depth === 0) out += c
+    if (c === ')' || c === ']') depth--
+  }
+  return out
+}
+
+// The classes and ids a compound names of its own element.
+const scopes = (compound) => own(compound).match(/[.#][\w-]+/g) ?? []
+
+// Whether a rule can match an element wherever it is in the app: its subject names no class or
+// id of its own, and every compound before it is unscoped or a wrapper of every page.
+export function reachesAnywhere(selector) {
+  const parts = compounds(selector)
+  const subject = parts.at(-1) ?? ''
+  if (scopes(subject).length > 0) return false
+  return parts.slice(0, -1).every((p) => scopes(p).every((s) => WRAPPERS.has(s)))
+}
+
+// Whether a compound leaves the design system's elements out: OPT_OUT is one of its own
+// pseudo-classes, at the top level, not inside another function (`:not(:not(…OPT_OUT…))` would
+// select exactly those elements).
+export function optsOut(compound) {
+  let depth = 0
+  for (let i = 0; i < compound.length; i++) {
+    if (depth === 0 && compound.startsWith(OPT_OUT, i)) return true
+    const c = compound[i]
+    if (c === '(' || c === '[') depth++
+    if (c === ')' || c === ']') depth--
+  }
+  return false
+}
+
+// Whether a rule that reaches anywhere is allowed: it leaves the design system's elements out,
+// or EVERYWHERE lists its selector and it sets only the properties listed there.
+export function allowedEverywhere({ selector, properties }) {
+  if (optsOut(compounds(selector).at(-1) ?? '')) return true
+  const allowed = EVERYWHERE.get(selector)
+  return Boolean(allowed && properties.every((p) => allowed.properties.includes(p)))
+}
+
+function everywhereErrors(file, css) {
+  const errors = []
+  for (const rule of allRules(css)) {
+    if (!reachesAnywhere(rule.selector) || allowedEverywhere(rule)) continue
+    const listed = EVERYWHERE.get(rule.selector)
+    const extra = listed ? rule.properties.filter((p) => !listed.properties.includes(p)) : []
+    errors.push(
+      listed
+        ? `${file}:${rule.line}: \`${rule.selector}\` reaches every element, and EVERYWHERE allows it only ${listed.properties.join(', ')}, not ${extra.join(', ')}: give the rest ${OPT_OUT}`
+        : `${file}:${rule.line}: \`${rule.selector}\` reaches into the design system's components: give its subject ${OPT_OUT}, or list it in EVERYWHERE with the properties and the reason`,
+    )
+  }
+  return errors
+}
+
+export function check(web) {
+  const errors = []
+  const mentioned = new Set()
+  const seen = new Map() // selector → { file, line }
+  for (const path of stylesheets(join(web, 'src'))) {
+    const file = relative(web, path).split('\\').join('/')
+    const sheet = scan(readFileSync(path, 'utf8'))
+    for (const name of sheet.mentioned) mentioned.add(name)
+    for (const { selector, line } of sheet.top) {
+      if (!/\.(?:tt|ui)-/.test(selector)) continue
+      const first = seen.get(selector)
+      if (first) {
+        const where = first.file === file ? `line ${first.line}` : `${first.file}:${first.line}`
+        errors.push(
+          `${file}:${line}: ${selector} is declared again (first at ${where}): merge the two, or give one its own class`,
+        )
+      } else seen.set(selector, { file, line })
+    }
+    if (!file.startsWith('src/ui/')) errors.push(...everywhereErrors(file, readFileSync(path, 'utf8')))
+    if (file.startsWith(THEMES)) continue
+    for (const { property, value, line } of sheet.declarations) {
+      const literal = colorLiteral(value, property)
+      if (literal) {
+        errors.push(
+          `${file}:${line}: ${property} has the colour literal ${literal}: use a colour role, var(--color-…), or add one to the themes in ${THEMES}`,
+        )
+      }
+    }
+  }
+
+  const unstyled = new Map()
+  for (const file of components(join(web, 'src'))) {
+    const source = readFileSync(file, 'utf8')
+    for (const [cls, offset] of classesUsed(source)) {
+      if (mentioned.has(cls) || UNSTYLED.has(cls) || unstyled.has(cls)) continue
+      const line = source.slice(0, offset).split('\n').length
+      unstyled.set(cls, `${relative(web, file)}:${line}`)
+    }
+  }
+  for (const [cls, where] of unstyled) {
+    errors.push(`${where}: ${cls} is used but no rule in the stylesheets has it: style it, or remove it`)
+  }
+  for (const cls of UNSTYLED.keys()) {
+    if (mentioned.has(cls)) errors.push(`${cls} is in the allowlist but now has a rule: remove it from the allowlist`)
+  }
+  return errors
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const at = process.argv.indexOf('--root')
+  const web = at > 0 ? process.argv[at + 1] : join(dirname(fileURLToPath(import.meta.url)), '..')
+  const errors = check(web)
+  if (errors.length > 0) {
+    console.error(`css-check: ${errors.length} problem${errors.length === 1 ? '' : 's'}\n`)
+    for (const e of errors) console.error(`  ${e}`)
+    process.exit(1)
+  }
+  console.log(
+    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, no colour is written outside the themes, and no old rule reaches into a component',
+  )
+}

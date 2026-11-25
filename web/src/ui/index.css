@@ -1,0 +1,12 @@
+/* The design system's entry, imported once by main.tsx before anything else that styles the page.
+
+   The cascade layers, in order: a later layer wins over an earlier one, whatever the specificity.
+   tokens (scales, and the old names), themes (the colour roles of the brand), base (elements),
+   components (one file per component), screens (what only one screen needs). A rule in no layer
+   wins over all of them: styles.css is in none until its rules move into components and screens. */
+@layer tokens, themes, base, components, screens;
+
+@import "./tokens.css";
+@import "./themes/mint.css";
+@import "./legacy.css";
+@import "./a2ui.css";

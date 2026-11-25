@@ -1,135 +1,13 @@
 /* The app's look: the taskto.ai website's identity, "mint on paper". Warm cream paper, near-black
    ink, and one electric mint that is always a fill (a button, a dot, a selected row) with ink on
-   top of it, never the colour of text on a light ground: mint is too light to read there. Where
-   the app needs a green to read or to press against a light ground (links, success), it is the
-   deeper green derived from the mint in docs/design.md. The website is light only; the dark
-   palette is this app's own, grown from the website's night (#111110) with the mint as it is.
+   top of it, never the colour of text on a light ground: mint is too light to read there.
 
-   Colours are tokens on :root, each written once as light-dark(light, dark). Which side applies
-   is the page's colour scheme: the system's (`light dark`), unless the viewer picked a theme
-   (data-theme on <html>, theme.ts). Contrast is checked, not guessed: every text pair is at least
-   4.5:1 and every control border and focus ring at least 3:1 (the numbers are in docs/design.md).
+   Every value comes from the design tokens in ui/, which main.tsx imports first: the scales in
+   ui/tokens.css and the colour roles of the brand in ui/themes/ (docs/design.md). This file still
+   uses the older --tt-* names, which ui/legacy.css keeps as aliases of those until the screens
+   move onto the tokens. Never write a colour literal here: use a token, or add a role.
    Below 48rem the sidebar is a drawer and the conversations page shows the list or the open
    conversation. */
-
-:root {
-  color-scheme: light dark;
-
-  /* Grounds: the page (cream), the sidebar and quiet bands (stone), and what sits on them
-     (cards, inputs: white). The dark grounds step up from night. */
-  --tt-canvas: light-dark(#faf8f4, #111110);
-  --tt-stone: light-dark(#f1efe9, #181816);
-  --tt-surface: light-dark(#ffffff, #1b1b19);
-  --tt-hover: light-dark(rgba(17, 17, 16, 0.05), rgba(250, 248, 244, 0.07));
-  --tt-selected: light-dark(rgba(17, 17, 16, 0.08), rgba(250, 248, 244, 0.12));
-  --tt-user: light-dark(#f1efe9, #262624);
-
-  /* Text: ink, a softer ink, and the website's muted. */
-  --tt-fg: light-dark(#111110, #faf8f4);
-  --tt-fg-soft: light-dark(#2e2d2a, #d6d3cc);
-  --tt-muted: light-dark(#5c5a55, #aba89f);
-
-  /* Lines: a hairline (the website's ink at 15%) between things, the ink rule under the top bar,
-     and a stronger line for the edge of a control. */
-  --tt-line: light-dark(rgba(17, 17, 16, 0.15), rgba(250, 248, 244, 0.14));
-  --tt-rule: light-dark(#111110, rgba(250, 248, 244, 0.24));
-  --tt-line-strong: light-dark(#7e7b74, #8a877f);
-
-  /* The primary action is mint with ink on it, outlined in ink (a darker mint in the dark, where
-     ink would vanish). Mint is never the colour of text or of a thin line on light grounds. */
-  --tt-accent: #4cefa8;
-  --tt-accent-hover: #6bf5b8;
-  --tt-on-accent: #111110;
-  --tt-accent-edge: light-dark(#111110, #1fc98a);
-  --tt-accent-soft: light-dark(#dcfceb, rgba(76, 239, 168, 0.14));
-  /* The focus ring, and any thin line or text that must stand out as "current": ink on light,
-     mint on night (the website's own rule). */
-  --tt-focus: light-dark(#111110, #4cefa8);
-  /* Links and other green text: deep enough for 4.5:1 on every light ground; the mint itself in
-     the dark. */
-  --tt-link: light-dark(#006b45, #4cefa8);
-
-  /* The AI node: the mint dot, with the website's mint edge as its ring. The logo keeps its own
-     green (#00a86b), used in the mark only. */
-  --tt-node: #4cefa8;
-  --tt-node-edge: #1fc98a;
-  --tt-logo-dot: #00a86b;
-
-  /* The top bar is the page's cream (the website's nav), under an ink rule. */
-  --tt-bar: var(--tt-canvas);
-  --tt-on-bar: var(--tt-fg);
-  --tt-on-bar-muted: var(--tt-muted);
-
-  /* Status. Success is the link green, so the system keeps one green. */
-  --tt-danger: light-dark(#b42318, #ff8a82);
-  --tt-on-danger: light-dark(#ffffff, #111110);
-  --tt-success: var(--tt-link);
-  --tt-warning: light-dark(#9a4700, #ffb04d);
-
-  /* A QR code is dark on light whatever the theme: a scanner reads it that way. */
-  --tt-qr-ground: light-dark(#ffffff, #ffffff);
-
-  --tt-scrim: light-dark(rgba(17, 17, 16, 0.42), rgba(0, 0, 0, 0.6));
-  /* Only what you are meant to press, and what floats, has a shadow: the buttons' short hard lift
-     (the website's), and the soft one under a menu or a dialog. light-dark() takes colours only,
-     so the lengths stay outside it. */
-  --tt-shadow-lift: 0 2px 0 var(--tt-accent-edge);
-  --tt-shadow-lift-hover: 0 3px 0 var(--tt-accent-edge);
-  --tt-shadow-pop: 0 12px 32px -12px light-dark(rgba(17, 17, 16, 0.35), rgba(0, 0, 0, 0.8));
-
-  /* Fonts (SIL OFL 1.1), served from the app itself (main.tsx): nothing is fetched from another
-     site. The website's three: Inter for the interface and what people read, Bricolage Grotesque
-     for headings and the brand, JetBrains Mono for paths, commands, ids and code. The system's
-     fonts stand in until they load, and for any script these don't cover. */
-  --tt-font: "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --tt-display:
-    "Bricolage Grotesque Variable", "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --tt-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --tt-radius: 8px;
-  --tt-topbar-h: 52px;
-  --tt-sidebar-w: 232px;
-  --tt-touch: 44px;
-
-  /* The apps renderer (A2UI) reads its own variables; these hand it the brand, so an app's
-     buttons, fields and choices look like the rest of the page, in both schemes. */
-  --a2ui-color-primary: var(--tt-accent);
-  --a2ui-color-primary-hover: var(--tt-accent-hover);
-  --a2ui-color-on-primary: var(--tt-on-accent);
-  --a2ui-color-secondary-hover: var(--tt-hover);
-  --a2ui-color-on-secondary: var(--tt-fg);
-  --a2ui-color-border: var(--tt-line-strong);
-  --a2ui-color-surface: var(--tt-surface);
-  --a2ui-color-input: var(--tt-surface);
-  --a2ui-color-on-input: var(--tt-fg);
-  --a2ui-color-on-surface: var(--tt-fg);
-  --a2ui-color-on-background: var(--tt-fg);
-  --a2ui-text-caption-color: var(--tt-muted);
-  --a2ui-textfield-color-error: var(--tt-danger);
-  --a2ui-choicepicker-color-error: var(--tt-danger);
-  --a2ui-datetimeinput-color-error: var(--tt-danger);
-  /* Its buttons and choices are pills, as the app's are; its titles are the display face. */
-  --a2ui-button-border-radius: 999px;
-  --a2ui-button-padding: 0.4rem 1rem;
-  --a2ui-button-font-weight: 600;
-  --a2ui-choicepicker-chip-font-size: 0.875rem;
-  --a2ui-choicepicker-chip-padding: 0.3rem 0.85rem;
-  --a2ui-choicepicker-chip-background-selected: var(--tt-accent);
-  --a2ui-font-family-title: var(--tt-display);
-  --a2ui-text-a-color: var(--tt-link);
-  /* Whatever the renderer colours with its primary must still be seen when that is the mint:
-     a focused field, the picked tab, a slider's thumb take the focus colour (ink; mint on night). */
-  --a2ui-textfield-color-border-focus: var(--tt-focus);
-  --a2ui-tabs-header-color-active: var(--tt-fg);
-  --a2ui-slider-thumb-color: var(--tt-focus);
-}
-
-:root[data-theme="light"] {
-  color-scheme: light;
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-}
 
 *,
 *::before,
@@ -152,46 +30,54 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* The element rules of this file (h1, p, a, button, input …) are in no layer, so they would beat
+   every rule of a component in ui/ (which are in `@layer components`) whatever its specificity.
+   Every element a component of the design system draws has a class that starts with `ui-`, and
+   each element rule that can match anywhere leaves those out with
+   `:not(:where([class^="ui-"], [class*=" ui-"]))`: `:where()` adds no specificity, so the screens'
+   own elements, which have no ui- class, are styled exactly as before. css-check fails on an
+   element rule here without it (docs/design.md, "The components"). */
+
 /* Headings are Bricolage Grotesque, heavy and tight as on the website, and break evenly. Text,
    labels and controls stay in Inter. */
-h1,
-h2,
-h3 {
+h1:not(:where([class^="ui-"], [class*=" ui-"])),
+h2:not(:where([class^="ui-"], [class*=" ui-"])),
+h3:not(:where([class^="ui-"], [class*=" ui-"])) {
   font-family: var(--tt-display);
   font-weight: 750;
   letter-spacing: -0.025em;
   text-wrap: balance;
 }
 
-p {
+p:not(:where([class^="ui-"], [class*=" ui-"])) {
   text-wrap: pretty;
 }
 
-h1,
-h2 {
+h1:not(:where([class^="ui-"], [class*=" ui-"])),
+h2:not(:where([class^="ui-"], [class*=" ui-"])) {
   margin: 0;
   font-size: 1.15rem;
   line-height: 1.3;
 }
 
-h2 {
+h2:not(:where([class^="ui-"], [class*=" ui-"])) {
   font-size: 1rem;
 }
 
-h3 {
+h3:not(:where([class^="ui-"], [class*=" ui-"])) {
   margin: 0;
   font-size: 0.95rem;
 }
 
-code,
-pre,
-kbd,
-samp {
+code:not(:where([class^="ui-"], [class*=" ui-"])),
+pre:not(:where([class^="ui-"], [class*=" ui-"])),
+kbd:not(:where([class^="ui-"], [class*=" ui-"])),
+samp:not(:where([class^="ui-"], [class*=" ui-"])) {
   font-family: var(--tt-mono);
   font-size: 0.9em;
 }
 
-a {
+a:not(:where([class^="ui-"], [class*=" ui-"])) {
   color: inherit;
   text-underline-offset: 0.2em;
   text-decoration-thickness: 1.5px;
@@ -209,8 +95,25 @@ textarea {
   caret-color: var(--tt-fg);
 }
 
+/* The search field's clear button is the browser's blue: drawn in the muted text colour, the
+   ink on hover (a mask, so the theme's colour fills it). */
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  inline-size: 1rem;
+  block-size: 1rem;
+  cursor: pointer;
+  background-color: var(--tt-muted);
+  -webkit-mask: var(--tt-clear-icon) center / contain no-repeat;
+  mask: var(--tt-clear-icon) center / contain no-repeat;
+}
+
+input[type="search"]::-webkit-search-cancel-button:hover {
+  background-color: var(--tt-fg);
+}
+
 /* A placeholder is text: the browser's own is a faded grey under 4.5:1 on a dark field. */
-::placeholder {
+:not(:where([class^="ui-"], [class*=" ui-"]))::placeholder {
   color: var(--tt-muted);
   opacity: 1;
 }
@@ -219,22 +122,21 @@ textarea {
   scrollbar-color: var(--tt-line-strong) transparent;
 }
 
-:focus-visible {
+:focus-visible:not(:where([class^="ui-"], [class*=" ui-"])) {
   outline: 2.5px solid var(--tt-focus);
   outline-offset: 2px;
 }
 
-input,
-select,
-textarea,
-button {
+button:not(:where([class^="ui-"], [class*=" ui-"])) {
   font: inherit;
   color: inherit;
 }
 
-input,
-select,
-textarea {
+input:not(:where([class^="ui-"], [class*=" ui-"])),
+select:not(:where([class^="ui-"], [class*=" ui-"])),
+textarea:not(:where([class^="ui-"], [class*=" ui-"])) {
+  font: inherit;
+  color: inherit;
   background: var(--tt-surface);
   border: 1px solid var(--tt-line-strong);
   border-radius: var(--tt-radius);
@@ -279,6 +181,9 @@ textarea {
   place-content: center;
   gap: 1rem;
   padding: 1rem;
+  /* Screens without the shell (setup, login, errors) keep clear of the status and home bars. */
+  padding-block-start: max(1rem, env(safe-area-inset-top));
+  padding-block-end: max(1rem, env(safe-area-inset-bottom));
   text-align: center;
 }
 
@@ -322,6 +227,7 @@ textarea {
   /* Pills, as on the website. */
   border-radius: 999px;
   background: var(--tt-surface);
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -332,10 +238,6 @@ textarea {
 .tt-button:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.tt-button {
-  font-weight: 500;
 }
 
 /* The one thing you press: mint, outlined in ink, on a short hard lift that rises on hover and
@@ -422,8 +324,8 @@ textarea {
 
 /* Fingers: every control is at least 44px each way (--tt-touch). */
 @media (pointer: coarse) {
-  input,
-  select,
+  input:not(:where([class^="ui-"], [class*=" ui-"])),
+  select:not(:where([class^="ui-"], [class*=" ui-"])),
   .tt-button,
   .tt-icon-button,
   .tt-account summary {
@@ -442,15 +344,15 @@ textarea {
 
   /* Checkboxes and radios are the box itself: their label is what is pressed, so the label is
      the target. */
-  input[type="checkbox"],
-  input[type="radio"] {
+  input[type="checkbox"]:not(:where([class^="ui-"], [class*=" ui-"])),
+  input[type="radio"]:not(:where([class^="ui-"], [class*=" ui-"])) {
     min-height: 0;
     width: 1.25rem;
     height: 1.25rem;
   }
 
-  label:has(> input[type="checkbox"]),
-  label:has(> input[type="radio"]) {
+  label:has(> input[type="checkbox"]):not(:where([class^="ui-"], [class*=" ui-"])),
+  label:has(> input[type="radio"]):not(:where([class^="ui-"], [class*=" ui-"])) {
     min-height: var(--tt-touch);
     align-items: center;
   }
@@ -463,6 +365,9 @@ textarea {
   display: grid;
   place-items: center;
   padding: 1rem;
+  /* Clear of the status and home bars, as .tt-center is. */
+  padding-block-start: max(1rem, env(safe-area-inset-top));
+  padding-block-end: max(1rem, env(safe-area-inset-bottom));
 }
 
 .tt-auth-card {
@@ -560,9 +465,7 @@ textarea {
 
 /* The bar never overflows: what is fixed (the menu, the mark, the bell, the theme, the account)
    keeps its size, and the workspace's name gives way, cut with an ellipsis. */
-.tt-topbar .tt-brand,
-.tt-topbar-end,
-.tt-menu-button {
+.tt-topbar .tt-brand {
   flex: none;
 }
 
@@ -592,6 +495,7 @@ textarea {
 }
 
 .tt-topbar-end {
+  flex: none;
   margin-inline-start: auto;
   display: flex;
   align-items: center;
@@ -605,6 +509,7 @@ textarea {
 }
 
 .tt-menu-button {
+  flex: none;
   display: none;
 }
 
@@ -841,9 +746,6 @@ textarea {
 .tt-chat > .tt-pane-head {
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--tt-line);
-}
-
-.tt-chat > .tt-pane-head {
   flex-wrap: nowrap;
 }
 
@@ -1096,24 +998,6 @@ button.tt-recording {
   gap: 0.4rem;
 }
 
-.tt-notice,
-.tt-conflict {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0.5rem 0.75rem;
-  border-radius: var(--tt-radius);
-  border-inline-start: 3px solid var(--tt-focus);
-  background: var(--tt-accent-soft);
-}
-
-.tt-conflict {
-  border-inline-start-color: var(--tt-warning);
-  background: var(--tt-hover);
-}
-
 .tt-search {
   display: flex;
   flex-wrap: wrap;
@@ -1187,11 +1071,6 @@ button.tt-recording {
   min-width: 0;
 }
 
-.tt-history {
-  display: grid;
-  gap: 0.5rem;
-}
-
 .tt-history-entry {
   display: grid;
   gap: 0.2rem;
@@ -1246,7 +1125,7 @@ button.tt-card[aria-current] {
 }
 
 .tt-due[data-overdue],
-input[data-overdue] {
+input[data-overdue]:not(:where([class^="ui-"], [class*=" ui-"])) {
   color: var(--tt-danger);
   font-weight: 600;
 }
@@ -1359,6 +1238,14 @@ input[data-overdue] {
   border-top: 1px solid var(--tt-line);
 }
 
+/* A person mentioned in a comment: their name, set apart from the words around it. */
+.tt-mention {
+  padding: 0 0.2em;
+  border-radius: 0.25em;
+  background: var(--tt-accent-soft);
+  font-weight: 600;
+}
+
 .tt-checks {
   display: grid;
   gap: 0.3rem;
@@ -1395,35 +1282,31 @@ input[data-overdue] {
   margin-bottom: 0;
 }
 
-.tt-markdown h1,
-.tt-markdown h2,
+.tt-markdown h1 {
+  margin: 1rem 0 0.4rem;
+  font-size: 1.35rem;
+}
+
+.tt-markdown h2 {
+  margin: 1rem 0 0.4rem;
+}
+
 .tt-markdown h3,
 .tt-markdown h4,
 .tt-markdown h5,
 .tt-markdown h6 {
   margin: 1rem 0 0.4rem;
-}
-
-.tt-markdown h1 {
-  font-size: 1.35rem;
-}
-
-.tt-markdown h3,
-.tt-markdown h4,
-.tt-markdown h5,
-.tt-markdown h6 {
   font-size: 0.95rem;
 }
 
 .tt-markdown p,
 .tt-markdown ul,
-.tt-markdown ol,
-.tt-markdown pre,
-.tt-markdown blockquote {
+.tt-markdown ol {
   margin: 0 0 0.75rem;
 }
 
 .tt-markdown pre {
+  margin: 0 0 0.75rem;
   padding: 0.6rem 0.75rem;
   background: var(--tt-hover);
   border-radius: var(--tt-radius);
@@ -1437,9 +1320,28 @@ input[data-overdue] {
 }
 
 .tt-markdown blockquote {
+  margin: 0 0 0.75rem;
   padding-inline-start: 0.75rem;
   border-inline-start: 3px solid var(--tt-line-strong);
   color: var(--tt-muted);
+}
+
+/* A task list item: the box, then its words, in the place of the bullet. Read-only. */
+.tt-task-item {
+  list-style: none;
+  margin-inline-start: -1.4rem;
+}
+
+.tt-task-item > label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.tt-task-item input {
+  flex: none;
+  min-height: 0;
+  margin: 0;
 }
 
 .tt-markdown hr {
@@ -1587,12 +1489,19 @@ input[data-overdue] {
 }
 
 .tt-app-actions,
-.tt-app-rename,
 .tt-app-move {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+.tt-app-rename {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  flex: 1;
 }
 
 .tt-app-roles {
@@ -1609,10 +1518,6 @@ input[data-overdue] {
   text-align: start;
 }
 
-.tt-app-rename {
-  flex: 1;
-}
-
 a.tt-button {
   color: inherit;
   text-decoration: none;
@@ -1624,8 +1529,7 @@ a.tt-button.tt-primary {
 
 /* The records of a launched app, their history and the deleted ones. */
 
-.tt-records,
-.tt-records-panel {
+.tt-records {
   display: grid;
   gap: 0.5rem;
   min-inline-size: 0;
@@ -1636,6 +1540,9 @@ a.tt-button.tt-primary {
 }
 
 .tt-records-panel {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
   padding: 0.75rem;
   background: var(--tt-surface);
   border: 1px solid var(--tt-line);
@@ -1651,8 +1558,7 @@ a.tt-button.tt-primary {
   gap: 0.4rem;
 }
 
-.tt-record-list,
-.tt-history {
+.tt-record-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1673,6 +1579,11 @@ a.tt-button.tt-primary {
 }
 
 .tt-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
   padding-inline-start: 0.75rem;
   border-inline-start: 2px solid var(--tt-line);
 }
@@ -1800,8 +1711,7 @@ a.tt-button.tt-primary {
   margin: 0;
 }
 
-.tt-record-fields > div,
-.tt-record-field {
+.tt-record-fields > div {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 0.5rem;
@@ -1825,6 +1735,7 @@ a.tt-button.tt-primary {
 .tt-record-field {
   display: grid;
   gap: 0.2rem;
+  align-items: baseline;
 }
 
 .tt-record-field input,
@@ -1846,10 +1757,13 @@ a.tt-button.tt-primary {
 
 .tt-conflict {
   display: grid;
+  align-items: center;
   gap: 0.5rem;
+  margin: 0;
   padding: 0.6rem;
   border: 2px solid var(--tt-focus);
   border-radius: var(--tt-radius);
+  background: var(--tt-hover);
 }
 
 .tt-conflict-table {
@@ -1930,7 +1844,6 @@ a.tt-button.tt-primary {
   gap: 0.4rem;
 }
 
-.tt-app-migration,
 .tt-app-releases {
   flex-basis: 100%;
   display: grid;
@@ -1941,6 +1854,12 @@ a.tt-button.tt-primary {
 }
 
 .tt-app-migration {
+  flex-basis: 100%;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
   margin: 0;
   min-inline-size: 0;
 }
@@ -2101,7 +2020,7 @@ a.tt-button.tt-primary {
   border-color: var(--tt-danger);
 }
 
-fieldset {
+fieldset:not(:where([class^="ui-"], [class*=" ui-"])) {
   margin: 0;
   padding: 0;
   border: 0;
@@ -2115,6 +2034,29 @@ fieldset {
   gap: 0.5rem;
 }
 
+/* A headline number in an app (the Stat component): a small muted label over a larger value, with
+   no indent from the browser's list defaults. */
+.tt-stat {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+  padding: 0;
+}
+
+.tt-stat-label {
+  margin: 0;
+  color: var(--tt-muted);
+  font-size: 0.85rem;
+}
+
+.tt-stat-value {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
 .tt-ok {
   color: var(--tt-success);
 }
@@ -2123,7 +2065,17 @@ fieldset {
   color: var(--tt-warning);
 }
 
-.tt-notice,
+.tt-notice {
+  display: grid;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: var(--tt-radius);
+  border-inline-start: 3px solid var(--tt-focus);
+  background: var(--tt-accent-soft);
+}
+
 .tt-confirm-box {
   display: grid;
   gap: 0.6rem;
@@ -2170,13 +2122,17 @@ fieldset {
   font-size: 0.85rem;
 }
 
-.tt-snippet {
+.tt-setup-snippet {
   display: grid;
   gap: 0.4rem;
   min-width: 0;
+  /* As it was when this and the search result's snippet shared one class: the headings and the
+     commands are muted, and a long line wraps. */
+  color: var(--tt-muted);
+  overflow-wrap: anywhere;
 }
 
-.tt-snippet pre {
+.tt-setup-snippet pre {
   margin: 0;
   padding: 0.6rem 0.75rem;
   background: var(--tt-hover);
@@ -2315,6 +2271,14 @@ fieldset {
 
 .tt-consent p {
   margin: 0;
+}
+
+/* Update now (Settings > About): the button or the progress of a requested update, above the
+   list of what the updater last did. */
+.tt-update-now {
+  display: grid;
+  gap: 0.5rem;
+  margin-block: 0.75rem;
 }
 
 .tt-endpoint {
@@ -2481,13 +2445,14 @@ fieldset {
   max-inline-size: 42rem;
 }
 
-.tt-builder-form,
-.tt-builder-where {
+.tt-builder-form {
   display: grid;
   gap: 0.6rem;
 }
 
 .tt-builder-where {
+  display: grid;
+  gap: 0.6rem;
   margin: 0;
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--tt-line);
@@ -2817,10 +2782,6 @@ body {
   outline: none; /* focused by the skip link and the drawer, not a control */
 }
 
-.tt-warning {
-  color: var(--tt-warning);
-}
-
 .tt-steps {
   display: grid;
   gap: 0.4rem;
@@ -2876,13 +2837,6 @@ html[data-keyboard="open"] .tt-composer {
   }
 }
 
-/* Screens without the shell (setup, login, errors) keep clear of the status and home bars. */
-.tt-auth,
-.tt-center {
-  padding-block-start: max(1rem, env(safe-area-inset-top));
-  padding-block-end: max(1rem, env(safe-area-inset-bottom));
-}
-
 /* Photos of an app: the input (camera and library), the uploads on their way, and the thumbnails. */
 
 .tt-photos {
@@ -2899,7 +2853,6 @@ html[data-keyboard="open"] .tt-composer {
   font-weight: 600;
 }
 
-.tt-photo-grid,
 .tt-photo-uploads {
   display: grid;
   gap: 0.5rem;
@@ -2909,6 +2862,11 @@ html[data-keyboard="open"] .tt-composer {
 }
 
 .tt-photo-grid {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr));
 }
 
@@ -3060,7 +3018,7 @@ html[data-keyboard="open"] .tt-composer {
   box-sizing: border-box;
   border: 1px solid var(--tt-border, currentColor);
   border-radius: 0.5rem;
-  background: white;
+  background: var(--color-paper);
   cursor: crosshair;
 }
 
@@ -3070,7 +3028,7 @@ html[data-keyboard="open"] .tt-composer {
   inline-size: 20rem;
   border: 1px solid var(--tt-border, currentColor);
   border-radius: 0.5rem;
-  background: white;
+  background: var(--color-paper);
 }
 
 .tt-barcode-camera video {
@@ -3080,7 +3038,7 @@ html[data-keyboard="open"] .tt-composer {
   aspect-ratio: 4 / 3;
   object-fit: cover;
   border-radius: 0.5rem;
-  background: black;
+  background: var(--color-media);
 }
 
 .tt-dictate-slot {
@@ -3141,9 +3099,7 @@ html[data-keyboard="open"] .tt-composer {
 
 /* Effects of an app's actions: what they set going, and the ones that failed. */
 
-.tt-effects,
-.tt-effects-panel,
-.tt-effects-preview {
+.tt-effects {
   display: grid;
   gap: 0.5rem;
   min-inline-size: 0;
@@ -3159,6 +3115,9 @@ html[data-keyboard="open"] .tt-composer {
 
 .tt-effects-panel,
 .tt-effects-preview {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
   padding: 0.75rem;
   background: var(--tt-surface);
   border: 1px solid var(--tt-line);

@@ -109,7 +109,7 @@ prompts or sampling.
 
 ## What your agent can do
 
-The 38 tools of [agent-tools.md](agent-tools.md#the-tools): `list_spaces`, `list_members` (who a card can be assigned to), `search_docs`, `search_cards` (the cards on boards),
+The 39 tools of [agent-tools.md](agent-tools.md#the-tools): `list_spaces`, `list_members` (who a card can be assigned to), `search_docs`, `search_cards` (the cards on boards), `search_records` (the text of an app's records you may read),
 `list_docs`, `read_doc` (also plain-text files, and a document as of an older commit), `write_doc`, `move_doc`, `delete_doc`,
 `doc_history` and `restore_doc` (a document's history and what brings it back), the board tools of
 [boards-agent-tools.md](boards-agent-tools.md), and the app tools: `app_catalog`,

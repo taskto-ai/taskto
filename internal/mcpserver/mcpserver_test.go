@@ -40,6 +40,7 @@ type fixture struct {
 	spaceA, spaceB int64
 	endpoint       http.Handler
 	browserTools   []string // the conversation-only tools
+	noTokenTools   []string // the tools of conversations that the access tokens' endpoint leaves out
 	definitions    map[string]agenttools.Definition
 }
 
@@ -100,9 +101,12 @@ func newFixture(t *testing.T) *fixture {
 		if d.ConversationOnly {
 			f.browserTools = append(f.browserTools, d.Name)
 		}
+		if d.NoToken {
+			f.noTokenTools = append(f.noTokenTools, d.Name)
+		}
 	}
-	if len(f.browserTools) == 0 {
-		t.Fatal("tools.json has no conversation-only tools: the listing tests would prove nothing")
+	if len(f.browserTools) == 0 || len(f.noTokenTools) == 0 {
+		t.Fatal("tools.json has no conversation-only or no-token tools: the listing tests would prove nothing")
 	}
 	return f
 }
@@ -203,13 +207,13 @@ func (f *fixture) callerA(*http.Request) (agenttools.Caller, error) {
 	return agenttools.Caller{Workspace: f.wsA, User: f.userA, Conversation: 1}, nil
 }
 
-// /mcp lists the tools of people's own agents: every tool but the conversation-only ones,
-// with their descriptions' hints, whatever token asks.
+// /mcp lists the tools of people's own agents: every tool but the conversation-only ones and the
+// ones a token doesn't get, with their descriptions' hints, whatever token asks.
 func TestMCPListsNoConversationOnlyTools(t *testing.T) {
 	f := newFixture(t)
 	var want []string
 	for name, d := range f.definitions {
-		if !d.ConversationOnly {
+		if !d.ConversationOnly && !d.NoToken {
 			want = append(want, name)
 		}
 	}
@@ -219,32 +223,34 @@ func TestMCPListsNoConversationOnlyTools(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Errorf("/mcp lists %v, want %v", got, want)
 		}
-		for _, name := range f.browserTools {
+		for _, name := range slices.Concat(f.browserTools, f.noTokenTools) {
 			if slices.Contains(got, name) {
 				t.Errorf("/mcp lists the conversation-only tool %s", name)
 			}
 		}
 	}
 	// And one can't be called by name either: it isn't there.
-	for _, name := range f.browserTools {
+	for _, name := range slices.Concat(f.browserTools, f.noTokenTools) {
 		if _, refused, text := callTool(t, f.endpoint, tokenA, name, map[string]any{}); !refused || !strings.Contains(text, "unknown tool") {
 			t.Errorf("/mcp calls %s: refused %v, %q; want an unknown tool", name, refused, text)
 		}
 	}
 }
 
-// The turns' endpoint has the browser tools too while the agent browser is on, and is /mcp's
-// list without them while it is off.
+// The turns' endpoint has the tools a token doesn't get, and the browser tools too while the agent
+// browser is on; with it off, it is /mcp's list and those.
 func TestForTurnsListsBrowserToolsOnlyWhenOn(t *testing.T) {
 	f := newFixture(t)
 	mcpTools := names(listTools(t, f.endpoint, tokenA))
 
+	wantOff := slices.Concat(mcpTools, f.noTokenTools)
+	slices.Sort(wantOff)
 	off := names(listTools(t, f.forTurns(false, f.callerA), "any-turn-token"))
-	if !slices.Equal(off, mcpTools) {
-		t.Errorf("turns' tools with the browser off = %v, want /mcp's %v", off, mcpTools)
+	if !slices.Equal(off, wantOff) {
+		t.Errorf("turns' tools with the browser off = %v, want /mcp's and the conversations' %v", off, wantOff)
 	}
 	on := names(listTools(t, f.forTurns(true, f.callerA), "any-turn-token"))
-	wantOn := append(slices.Clone(mcpTools), f.browserTools...)
+	wantOn := slices.Concat(wantOff, f.browserTools)
 	slices.Sort(wantOn)
 	if !slices.Equal(on, wantOn) {
 		t.Errorf("turns' tools with the browser on = %v, want %v", on, wantOn)

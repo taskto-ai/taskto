@@ -187,6 +187,7 @@ func TestServerWideViewsAreForOperatorsNotForAdminsOfCreatedWorkspaces(t *testin
 	} {
 		for _, path := range []string{
 			fmt.Sprintf("/api/workspaces/%d/backup", tt.ws),
+			fmt.Sprintf("/api/workspaces/%d/updates", tt.ws),
 			mailPath(tt.ws, ""),
 		} {
 			code, body := s.browser(tt.cookie, http.MethodGet, path, nil)

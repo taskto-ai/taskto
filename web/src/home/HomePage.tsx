@@ -64,7 +64,7 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
 
   const widgets = home.data?.widgets ?? []
   return (
-    <div className="tt-section tt-home">
+    <div className="tt-section">
       <div className="tt-pane-head">
         <h1 ref={heading} tabIndex={-1}>
           {t('shell.sections.home')}

@@ -53,7 +53,7 @@ type callerKey struct{}
 // calls. version is the server's, as it introduces itself.
 func New(version string, accounts *auth.Service, tools *agenttools.Service) http.Handler {
 	// The agent browser's tools are left out: their hand-over to the user is in a conversation.
-	return serve(version, instructions, tools, false, authenticate(accounts))
+	return serve(version, instructions, tools, false, true, authenticate(accounts))
 }
 
 // turnInstructions are what a turn's CLI tells its model about the server.
@@ -66,7 +66,7 @@ type Authorize func(*http.Request) (agenttools.Caller, error)
 // request's caller from its turn's token (cliaccounts.Service.ToolsCaller), and tools run the
 // calls; browser says whether to offer the agent browser's tools.
 func ForTurns(version string, authorize Authorize, tools *agenttools.Service, browser bool) http.Handler {
-	return serve(version, turnInstructions, tools, browser, func(next http.Handler) http.Handler {
+	return serve(version, turnInstructions, tools, browser, false, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c, err := authorize(r)
 			var refused *agenttools.Refusal
@@ -90,13 +90,14 @@ func ForTurns(version string, authorize Authorize, tools *agenttools.Service, br
 }
 
 // serve returns the MCP handler of the tools, behind cross-origin protection and auth, which
-// puts each request's caller on its context. withBrowser adds the conversation-only tools.
-func serve(version, instructions string, tools *agenttools.Service, withBrowser bool, auth func(http.Handler) http.Handler) http.Handler {
+// puts each request's caller on its context. withBrowser adds the conversation-only tools; tokens
+// is for the endpoint of access tokens, which leaves out the tools only a conversation has.
+func serve(version, instructions string, tools *agenttools.Service, withBrowser, tokens bool, auth func(http.Handler) http.Handler) http.Handler {
 	s := mcp.NewServer(&mcp.Implementation{Name: "taskto", Title: "TaskTo.AI", Version: version},
 		&mcp.ServerOptions{Instructions: instructions})
 	closed := false
 	for _, d := range agenttools.Definitions() {
-		if d.ConversationOnly && !withBrowser {
+		if (d.ConversationOnly && !withBrowser) || (d.NoToken && tokens) {
 			continue
 		}
 		s.AddTool(&mcp.Tool{

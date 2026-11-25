@@ -1,0 +1,91 @@
+/* The default brand: the taskto.ai website's "mint on paper". Cream paper, stone, near-black ink
+   and one electric mint that is a fill (a button, a dot, a selected row) with ink on it, never
+   the colour of text on a light ground. The website is light only; the dark side is the app's
+   own, grown from the website's night (#111110) with the same mint.
+
+   A brand theme is this one block and nothing else: every colour role (COLOR_ROLES in
+   ../roles.ts), each as light-dark(light, dark) or one value for both, and no other property.
+   Every text pair it allows is at least 4.5:1, and a control's edge and the focus ring 3:1
+   (../contrast.ts, checked by a test). docs/design.md has the numbers. */
+
+@layer themes {
+  :root {
+    /* Grounds: the page (cream), the sidebar and a board's columns (stone), what sits on them
+       (cards, inputs, menus: white), the person's own message, a ground that is white in every
+       theme (a QR code, a signature: dark on light is how they are read), and the black behind a
+       camera's picture. */
+    --color-bg: light-dark(#faf8f4, #111110);
+    --color-bg-sunken: light-dark(#f1efe9, #181816);
+    --color-surface: light-dark(#ffffff, #1b1b19);
+    --color-surface-own: light-dark(#f1efe9, #262624);
+    --color-paper: #ffffff;
+    --color-media: #000000;
+
+    /* Tints laid over a ground: hover, a pressed or selected item, the scrim under a dialog, and
+       the colour of a shadow. */
+    --color-hover: light-dark(rgba(17, 17, 16, 0.05), rgba(250, 248, 244, 0.07));
+    --color-selected: light-dark(rgba(17, 17, 16, 0.08), rgba(250, 248, 244, 0.12));
+    --color-scrim: light-dark(rgba(17, 17, 16, 0.42), rgba(0, 0, 0, 0.6));
+    --color-shadow: light-dark(rgba(17, 17, 16, 0.35), rgba(0, 0, 0, 0.8));
+
+    /* Text: ink, a softer ink, the website's muted. */
+    --color-text: light-dark(#111110, #faf8f4);
+    --color-text-soft: light-dark(#2e2d2a, #d6d3cc);
+    --color-text-muted: light-dark(#5c5a55, #aba89f);
+
+    /* Lines: a hairline between things, the edge of a control (3:1), and an ink rule. */
+    --color-border: light-dark(rgba(17, 17, 16, 0.15), rgba(250, 248, 244, 0.14));
+    --color-border-strong: light-dark(#7e7b74, #8a877f);
+    --color-rule: light-dark(#111110, rgba(250, 248, 244, 0.24));
+
+    /* The primary action: mint with ink on it, outlined in ink (the mint edge in the dark), and
+       the soft mint of the current item. */
+    --color-accent: #4cefa8;
+    --color-accent-hover: #6bf5b8;
+    --color-on-accent: #111110;
+    --color-accent-edge: light-dark(#111110, #1fc98a);
+    --color-accent-soft: light-dark(#dcfceb, rgba(76, 239, 168, 0.14));
+
+    /* The focus ring (ink on light, mint on night), links (the mint's deep green on light), the
+       agent's dot and its ring, and the logo's own green, used in the logo only. */
+    --color-focus: light-dark(#111110, #4cefa8);
+    --color-link: light-dark(#006b45, #4cefa8);
+    --color-node: #4cefa8;
+    --color-node-edge: #1fc98a;
+    --color-logo: #00a86b;
+
+    /* Status: a colour for text and marks, and a soft ground under it. Success is the link's
+       green, so the system keeps one green. Neutral is for what is off or inactive. */
+    --color-success: light-dark(#006b45, #4cefa8);
+    --color-success-soft: light-dark(#dcfceb, rgba(76, 239, 168, 0.14));
+    --color-warning: light-dark(#9a4700, #ffb04d);
+    --color-warning-soft: light-dark(#fbeccb, rgba(255, 176, 77, 0.15));
+    --color-danger: light-dark(#b42318, #ff8a82);
+    --color-danger-soft: light-dark(#fde5e1, rgba(255, 138, 130, 0.15));
+    --color-on-danger: light-dark(#ffffff, #111110);
+    --color-info: light-dark(#1c4f9c, #9cc2ff);
+    --color-info-soft: light-dark(#e1ebfa, rgba(110, 160, 255, 0.16));
+    --color-neutral: light-dark(#5c5a55, #aba89f);
+    --color-neutral-soft: light-dark(#ebe8e1, rgba(250, 248, 244, 0.09));
+
+    /* A board label's six hues, picked from the label's name: text, and its soft ground. */
+    --color-label-green: light-dark(#00633f, #7df7c1);
+    --color-label-green-soft: light-dark(#d5f7e4, rgba(76, 239, 168, 0.16));
+    --color-label-blue: light-dark(#1c4f9c, #a9c9ff);
+    --color-label-blue-soft: light-dark(#dfe9fa, rgba(110, 160, 255, 0.18));
+    --color-label-violet: light-dark(#5334a3, #cbbcff);
+    --color-label-violet-soft: light-dark(#e9e3fa, rgba(160, 130, 255, 0.2));
+    --color-label-pink: light-dark(#972159, #ffb0d2);
+    --color-label-pink-soft: light-dark(#fae1ec, rgba(255, 120, 180, 0.17));
+    --color-label-amber: light-dark(#7a4a00, #ffd27a);
+    --color-label-amber-soft: light-dark(#f9eac6, rgba(255, 190, 80, 0.16));
+    --color-label-teal: light-dark(#0b5f5a, #8be6de);
+    --color-label-teal-soft: light-dark(#d5f1ee, rgba(90, 220, 210, 0.15));
+
+    /* The dot beside a board column's name, by the column's kind. */
+    --color-column-todo: light-dark(#2f6fde, #7aa7ff);
+    --color-column-doing: light-dark(#b86e00, #ffb04d);
+    --color-column-review: light-dark(#7c5ce0, #b9a5ff);
+    --color-column-done: light-dark(#0e8a58, #4cefa8);
+  }
+}

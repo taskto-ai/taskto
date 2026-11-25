@@ -382,8 +382,9 @@ The policy is read at startup: restart the server to change it.
 
 ### Email
 
-The server can send email: the settings page's test message today, and the password resets, email
-invitations and notifications that later features add. It is **off until the operator names an SMTP
+The server can send email: the settings page's test message, the password reset a person asks for
+on the login page, the invitations an admin chooses to email, and the notifications that later
+features add. It is **off until the operator names an SMTP
 server**, and works the same for one person or a company: there is one SMTP server for the whole
 server, set here, never per workspace, and nothing in the database. Without it nothing changes:
 reset and invite links are still passed on by hand.
@@ -403,6 +404,8 @@ your password?**, and the invite dialog doesn't offer to email.
 | `smtp_username` | `-smtp-username`, `TASKTO_SMTP_USERNAME` | The account to sign in as (`PLAIN` or `LOGIN`). Leave out for a relay that lets the server send without signing in. |
 | `smtp_password_file` | `-smtp-password-file`, `TASKTO_SMTP_PASSWORD_FILE` | The absolute path of a file holding the password, which goes with `smtp_username`. |
 | `smtp_egress` | `-smtp-egress`, `TASKTO_SMTP_EGRESS` | Where the connection may go: `any` (the default), `public`, or a comma-separated list of `public`, hosts, addresses and CIDR prefixes, as for [provider accounts](#where-provider-accounts-may-connect). Every connection is checked after name resolution. An internal relay on a private address needs it listed here, or `any`. |
+| `update_status_dir` | `-update-status-dir`, `TASKTO_UPDATE_STATUS_DIR` | The directory where the host's updater writes the status admins see in Settings → About, an absolute path. The server only reads it. The Compose install sets it to the read-only mount of the updater's `public` directory ([automatic updates](#automatic-updates)); empty, the page says no updater is shown. |
+| `update_request_dir` | `-update-request-dir`, `TASKTO_UPDATE_REQUEST_DIR` | The directory where Update now (Settings → About) puts its request for the host's updater to take, an absolute path. The one place of the updater's that the server writes: the Compose install mounts the updater's `request` directory there, read-write ([Update now](#update-now)); empty, the button says it is unavailable. |
 
 **The password is never a setting.** It is read from its file when the server starts, kept only in
 memory, and is never logged, never returned by the API (the settings page says only whether the
@@ -1310,7 +1313,14 @@ never over an interrupted or stopped update.
      data, no host path or Docker socket, and on its own network, the firewall's bridge; and
      the two ways to get mounts without naming them: no service with `volumes_from`, and no
      config or secret mounted into the worker; the user rule is the running check's, exactly
-     `65532:65532`);
+     `65532:65532`). The rule about the updater's own files (the server may see only its
+     public directory, read-only, and can't write that) is about where a path leads, not how it
+     is spelled: every host path the server would mount, whether a bind mount, a named volume's
+     `device` or a file a config or a secret is made from, is resolved first (symbolic links
+     followed, `.` and `..` worked out), and the options of a volume that exists already, or is
+     external, are read from Docker (`docker volume inspect`), since a volume keeps the options
+     it was made with whatever the Compose file says. The running check does the same, so what
+     is refused before the new server starts is what would be refused after;
    - the public address answers as the current version before anything changes (Caddy's HTTPS
      address from this machine, or in `traefik` mode the LAN port and `https://<domain>/healthz`
      as a visitor reaches it): a broken proxy isn't the update's to fix;
@@ -1339,6 +1349,117 @@ never over an interrupted or stopped update.
 5. *After a success*, and only then, the updater's own older backups are pruned: the newest
    three by the time in their names (regular files with the updater's name only, never this
    run's), and nothing else in that directory, nor the nightly backups.
+
+**What operators see.** Settings → About shows the operators (the admins of the workspace the
+server's setup made, who run it; an admin of a workspace someone made later doesn't see it)
+the version the server runs, the version on record in `.env`, the updater's channel and hold,
+its last run and last change (the result, when, the versions, a reason, whether it made a
+backup), and, while the install waits for a person, what to do: a stopped or interrupted
+update (`taskto-update --clear-block`, once the install is put right) or a release that needs
+steps by hand (`taskto-update --to VERSION`). The same is at
+[`GET /api/workspaces/{workspace}/updates`](api.md). The server gets it without gaining any
+power over the host (the one thing it can do is [ask for a run](#update-now)): on every run (and each night a stop is still waiting) the updater writes
+a copy of its status, made for this, to `/var/lib/taskto-update/public/status.json`
+(`needs_person` in it is what the page's alert is made of), and `compose.yaml` mounts that one
+directory into the server, **read-only**, at `/update-status` (`TASKTO_UPDATE_STATUS_DIR`).
+
+The copy is **structured, never prose**: results and reasons are words of a closed list
+(`reason_code` in the updater), versions are checked to be versions, and a backup is only
+"made". It has no backup path, registry host, volume name or path of the updater's record, no
+image digests, and nothing from the updater's own state (the transaction, the old files, the
+address a notification goes to); those stay in the host's journal (`journalctl -u
+taskto-update`) and in `/var/lib/taskto-update/status.json`, which the server can't see. The
+server checks every word again when it reads. The server can't write there, run the updater,
+or reach Docker, and `deploy/safety-check.sh` fails an install whose server can see anything
+else of `/var/lib/taskto-update`, or can write there, by whatever path or link.
+
+The directory is the updater's alone. If you move it (`TASKTO_UPDATE_PUBLIC` in `/etc/taskto/install.env`, which every run of the
+updater reads, by hand or by the timer, with `TASKTO_UPDATE_STATUS_SOURCE` in `.env` set to
+the same path), it may be anywhere, but the
+updater writes there only if the directory is **owned by root, with every directory above it
+owned by root and not writable by its group or others** (a symbolic link on the way must be
+root's too, and where it leads is checked the same way); otherwise it logs why and publishes
+nothing, and the update itself goes on. The file is made by a new temporary file the updater
+creates in that directory (`mktemp`, never a name it could be guessed) and moved into place, so
+nothing the server could plant is ever written through, and the safety check refuses a server
+that mounts that directory (or one above or inside it) writable, however it is reached. Docker
+makes the directory on its own if it isn't there yet (root's, readable by the server). On a
+machine that isn't a host install (a try-out with `docker compose up`), point
+`TASKTO_UPDATE_STATUS_SOURCE` at any directory you can mount; with no status in it the page
+shows only the server's version, as it does when the server wasn't told a directory at all. A
+status older than three days is called stale: the updater writes it on every run, so its timer
+isn't running.
+
+**The updater of an existing host must be reinstalled once.** The updater is a script of the
+host (`/usr/local/sbin/taskto-update`), and the timer runs the copy that is there: updating the
+server, by hand or by an older updater, doesn't update it. A host whose updater predates the
+status never writes one, so the page has nothing to show, and says "the updater on this host is
+too old to report" (a server that is a release, with the status directory set up, and no status
+in it). So the first release that has this status needs one more step on every host that was
+set up before it: **runbook step 16, run again** (its Run and its Check, from a checkout of that
+release), which puts the release's `taskto-update`, its service and timer on the host, makes
+the public directory and ends with `taskto-update --publish-status` on the host, which writes
+the first copy at once, without checking for an update, instead of at the next night's run. On
+the `main` channel, whose servers run a commit and not a tag, do the same from a checkout of
+the commit the host runs (`TASKTO_VERSION` in `/srv/taskto/.env`) or a newer one, with
+`TASKTO_VERSION` in `~/.config/taskto-install.env` set to it for the step: a `main` host that
+isn't reinstalled keeps its old updater, however far it updates the server.
+
+### Update now
+
+Settings → About has an **Update now** button for the operators. It asks the host's updater to
+do what its nightly run would do, now: install the newest version of its configured channel,
+with the same checks, the backup and the way back. It is a request, and **the request carries
+nothing**: no version, no repository, no flag. A compromised server can ask for an update to
+what the channel already offers, and nothing else, and every gate of the nightly run holds for it:
+
+- a hold (`/etc/taskto/update.hold`), a release whose notes say `manual-upgrade: true` (and every
+  later one), a worker firewall that changed, an update that was stopped or interrupted, a server
+  that isn't the version on record, and the channel off, each end the run as `skipped`, `blocked`
+  or `interrupted`, with the reason in the status, and the page says why and that
+  `taskto-update --to VERSION` on the host is how to install anyway, once it is dealt with;
+- with `TASKTO_UPDATE_CHANNEL=off` the button is unavailable, and the path unit below is off.
+
+How it goes, and what keeps the server from gaining power over the host:
+
+1. The server writes **one small file**, `update-now`, into a directory of its own,
+   `/var/lib/taskto-update/request` (`TASKTO_UPDATE_REQUEST_DIR` in the server; `compose.yaml`
+   mounts `${TASKTO_UPDATE_REQUEST_SOURCE}` at `/update-request`, read-write). It is made by a
+   temporary file in that directory and a hard link, so it appears whole or not at all, and a
+   second one can't replace it: one request waits at a time, and none is taken while a run is
+   changing the install. Its content is a time and a random nonce, no secret. The request is an
+   [audit event](audit.md) (`server_update_requested`), committed before the file is made visible
+   to the host (it is written under another name first), so no update happens without its record.
+   This event records the operator's intent, not delivery or installation. If publication fails
+   after the commit, the API reports an error and the intent remains in the audit log; a crash
+   in that window can also leave only the intent. Hidden temporary files are never replayed on
+   restart. The operator can retry; the host's status reports whether a request actually ran.
+2. `taskto-update-request.path` (a systemd path unit) starts `taskto-update-request.service`
+   when that file exists, which runs `taskto-update --requested`. Under the updater's lock it
+   **renames the file out of the directory first** (so nothing the server can change there is
+   read or followed), looks at what it is, and removes it, so it can't start again by itself. A
+   request that isn't a regular file of at most 512 bytes (a link, a directory, a fifo, a large
+   file) is removed and ignored, and so is one whose whole content isn't the one fixed line the
+   server writes (a time and a nonce). The content is only ever matched against that pattern; it is
+   never used as an argument. Then it is the nightly run.
+3. The host ignores a request within ten minutes of the last requested run, and the same request
+   twice (the page says so); a request that comes while the nightly run is going waits for it.
+4. The status copy the server reads has what the page needs: whether this host can take a
+   request (`requests.supported`: the directory is in place and the path unit is on), whether a
+   run is going on (`running`), which runs were requested, and what became of the last request
+   (`requests.last`, which also covers one turned away before it ran). While it runs the server
+   restarts, and the page keeps asking and shows the result once it answers again.
+
+The request directory is **the one place of the updater's the server may write.**
+`deploy/safety-check.sh` fails an install where the server mounts it in any other way, any other
+path of the updater's, or where any service but the server (the CLI worker above all) mounts it or
+a directory that holds it or is inside it, however the path is spelled. The updater reads it only
+if it is a real directory (never a link), owned by the server's uid (65532), on the same
+filesystem as the updater's state, and under directories only root can write. A host that doesn't
+have it (installed before the button) keeps working: the button says the host can't take a
+request yet, and **runbook step 16, run again**, installs the path unit and makes the directory.
+Docker makes a missing source directory itself, as root's, which the server can't write, so
+the host reports it as not in place.
 
 ## When an update fails
 

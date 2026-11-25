@@ -29,10 +29,13 @@ export const AUDIT_ACTIONS = [
   'workspace_created',
   'workspace_updated',
   'invite_created',
+  'invite_emailed',
   'invite_revoked',
   'invite_accepted',
   'member_role_changed',
   'member_removed',
+  'member_disabled',
+  'member_enabled',
   'access_token_created',
   'access_token_revoked',
   'access_token_used',
@@ -52,6 +55,8 @@ export const AUDIT_ACTIONS = [
   'search_consent_changed',
   'dictation_settings_changed',
   'data_export_started',
+  'workspace_export_started',
+  'server_update_requested',
   'two_factor_enabled',
   'two_factor_disabled',
   'two_factor_recovery_codes_replaced',
@@ -78,6 +83,7 @@ export const AUDIT_DETAILS = [
   'archived',
   'base_host',
   'cascade',
+  'channel',
   'cli',
   'created_account',
   'default_mode',
@@ -101,6 +107,7 @@ export const AUDIT_DETAILS = [
   'reason',
   'role',
   'scope',
+  'spaces',
   'to',
   'user_id',
 ] as const
@@ -242,7 +249,7 @@ export function AuditTab({ workspace }: { workspace: number }) {
           <p className="tt-muted">{t(filtered ? 'settings.audit.noMatches' : 'settings.audit.empty')}</p>
         )}
         {events.length > 0 && (
-          <ul className="tt-rows tt-audit-events" aria-label={t('settings.audit.title')}>
+          <ul className="tt-rows" aria-label={t('settings.audit.title')}>
             {events.map((e) => (
               <Event key={e.id} e={e} />
             ))}

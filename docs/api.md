@@ -92,6 +92,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `workspace_limit` | 403 | The caller has already created `max` workspaces, the most one account may. |
 | `too_many_workspaces` | 429 | The caller created 5 workspaces within the last hour; `Retry-After` says when to try again. |
 | `operator_only` | 403 | Only the server's operator (an admin of the workspace setup made) may do this. |
+| `update_request_unsupported` | 409 | "Update now" can't be taken: the server has no request directory, or the host's updater, its request directory or its path unit isn't in place (deploy/INSTALL.md step 16). |
+| `update_channel_off` | 409 | The updater's channel is off (`TASKTO_UPDATE_CHANNEL=off`): nothing runs by itself, and "Update now" is refused. |
+| `update_request_pending` | 409 | An update was requested and the host hasn't taken the request yet. |
+| `update_running` | 409 | The updater is changing the install now. |
 | `workspace_name_length` | 400 | A workspace's name must have 1 to `max` characters. |
 | `password_too_short` | 400 | The password has fewer than `min` characters. |
 | `password_too_long` | 400 | The password has more than `max` bytes. |
@@ -116,6 +120,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `reset_invalid` | 404 | The reset link is unknown, used or expired. |
 | `reset_own` | 400 | An admin changes their own password in Settings, not with a reset link. |
 | `reset_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `account_disabled` | 403 | The account is disabled ([Disabling a member](#disabling-a-member)): a login with the right password, a single sign-on (as `?sso_error=`), a password reset link and an admin whose own account was disabled meanwhile answer this. A disabled account's access token is `token_invalid`. |
+| `disable_own` | 400 | An admin can't disable or enable their own account. |
+| `disable_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
 | `session_not_found` | 404 | No such session of the caller's (another user's sessions are never found). |
 | `session_current` | 400 | The session asked to be signed out is the one making the request: log out instead. |
 | `wrong_two_factor_code` | 401 / 403 | The code from the authenticator app (or the recovery code) is wrong, was used already, or is for another time. `401` at the second step of a login, `403` for a logged-in user's own settings. |
@@ -128,6 +135,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `two_factor_clear_own` | 400 | An admin turns off their own two-factor login in Settings, not by clearing it. |
 | `two_factor_clear_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
 | `too_many_resets` | 429 | Too many reset emails asked for from this address or for this email, or the server is busy taking in requests for them; `Retry-After` says when to try again. |
+| `too_many_invite_emails` | 429 | Too many invitations emailed by the admin, or to the address, lately; `Retry-After` says when to try again. |
 | `password_login_disabled` | 403 | Passwords are turned off on this server ([sso.md](sso.md#turning-passwords-off)): logging in, a new account with a password, making a reset link and using one answer this. |
 | `sso_unknown_provider` | 404 | No such single sign-on provider. |
 | `sso_failed` | 502 | The provider didn't answer. As `?sso_error=`: the provider or the exchange failed, or the person declined (details are in the server's log). |
@@ -922,8 +930,10 @@ admin's link.
 Any member. Members can see each other (boards need it to assign cards).
 
 ```json
-{"members": [{"id": 2, "email": "member@example.com", "name": "Member", "role": "member", "joined_at": "…"}]}
+{"members": [{"id": 2, "email": "member@example.com", "name": "Member", "role": "member", "joined_at": "…", "disabled": false}]}
 ```
+
+`disabled` is true for an account an admin switched off ([below](#disabling-a-member)).
 
 An admin's list also has `"two_factor": true` or `false` for each member, which says whether
 they have [two-factor login](#two-factor-login) on, for the clear above; nobody else sees it.
@@ -938,7 +948,59 @@ member; `409` if it would leave the workspace without an admin.
 Admin only. Removes the member; their access to the workspace, and to all its shared
 spaces, ends with their next request. Their private space is kept, closed (see
 [Spaces and access](#spaces-and-access)). `204`; `404` if the user isn't a member; `409`
-for the last admin.
+for the last admin. A disabled admin doesn't count as one: the workspace needs another whose
+account is in use.
+
+### Disabling a member
+
+An admin can switch an account off without removing it, for someone who is away, has lost a
+device or has left the company, and switch it on again later.
+
+While an account is disabled:
+
+- it is signed out everywhere at once, and its reset links end;
+- it can't log in: a password login with the right password is `403 account_disabled` (a wrong
+  one is the usual `401`, so nobody who doesn't know the password learns the account is off), a
+  single sign-on is refused with `?sso_error=account_disabled`, and a reset link sets nothing;
+- its access tokens, for the REST API and MCP, are refused (`401 token_invalid`);
+- its conversations' agents and CLI turns are refused at their next call: no new turn starts, a
+  turn running loses TaskTo's tools and its workspace account's proxy, and what a person's
+  agent or a scheduled job would do for it is refused as for someone with no space;
+- what is open when it is disabled is cut: an open [agent browser live
+  view](agent-browser.md) ends at once (it also ends, within seconds, whenever its login does:
+  signed out, revoked, or replaced by a password change or reset), and an open conversation's event
+  stream ends at its next heartbeat;
+- what was queued for it waits instead of failing: an app's effects and a scheduled
+  job of its person (reminders, recurring jobs) are neither done nor failed while it is off, with
+  no failure notification and no try used up, and are looked at again every minute; enabling the
+  account lets them run as it was, with the access it has then;
+- and what it owns stays: its memberships, spaces and their files, boards, apps, conversations,
+  access tokens and CLI logins. Enabling it restores its access as it was, except for the
+  sessions, which stay signed out: the person logs in again.
+
+An account belongs to every workspace its person is in, so the switch is the account's, not one
+workspace's, and the rule for who may flip it is the one for [password reset
+links](#post-apiworkspacesworkspacemembersuserpassword-reset): an admin of **every** workspace the
+account belongs to. Both routes take a session, never an access token (`403`), and no body.
+
+#### `POST /api/workspaces/{workspace}/members/{user}/disable`
+
+Admin only; the user must be a member of the workspace. `204`, also for an account that is
+disabled already (nothing changes and nothing is recorded). `400 disable_own` for the caller's own
+account; `403 disable_elsewhere` if the member belongs to a workspace the caller doesn't
+administer; `404 member_not_found`. The caller can't leave a workspace without an admin this way:
+the caller is an admin of each of the account's workspaces and in use themselves (`403
+account_disabled` for an admin disabled by another at the same moment).
+
+#### `POST /api/workspaces/{workspace}/members/{user}/enable`
+
+The same rules and answers; enabling an account that isn't disabled changes nothing. Recorded in
+the [audit log](audit.md) as `member_disabled` (with how many logins it ended) and
+`member_enabled`.
+
+A request an admin sent just before being disabled changes nothing either: the writes of an admin
+(inviting, changing a role, removing a member, the workspace's settings, shared CLI accounts)
+read the admin's account again in their transaction and answer `403 account_disabled`.
 
 ## Invites
 
@@ -949,14 +1011,27 @@ browsers don't send to servers or in `Referer`.
 
 ### `POST /api/workspaces/{workspace}/invites`
 
-Admin only. `{"email": "new@example.com", "role": "member"}`; `role` defaults to
-`member`.
+Admin only. `{"email": "new@example.com", "role": "member", "send_email": true}`; `role` defaults
+to `member`, and `send_email` (optional) also emails the invite link to the address.
 
 ```json
-{"id": 3, "email": "new@example.com", "role": "member", "created_at": "…", "expires_at": "…", "token": "…"}
+{"id": 3, "email": "new@example.com", "role": "member", "created_at": "…", "expires_at": "…", "token": "…", "email_sent": true}
 ```
 
-`201`; `409` if the address already belongs to a member.
+`201`; `409` if the address already belongs to a member. The token is always returned, so the
+link can be copied and passed on by hand whether or not an email was asked for.
+
+`email_sent` is there only when `send_email` was: `true` if the SMTP server took the message,
+`false` if it didn't (the invite exists anyway, and the failure is logged by its step and the
+SMTP reply's number, never in the answer). The message goes only to the invite's address, with
+the link `/invite#<token>` built on the server's `public_url` ([install.md](install.md#email)),
+in the language of the invited person's account if they have one that picked one, else the
+workspace's default, else the admin's own, else English; it names the workspace and the admin.
+The link isn't logged. `409 mail_not_configured` for `send_email` where the server can't email
+links (nothing is made); `GET /api/workspaces/{workspace}/mail` says so (`sends_links`).
+`429 too_many_invite_emails` with `Retry-After` for `send_email` past 30 an hour for the admin
+(across workspaces) or 3 an hour for the address (nothing is made); invites without `send_email`
+have no such limit.
 
 ### `GET /api/workspaces/{workspace}/invites`
 
@@ -1051,7 +1126,7 @@ app's button does both: it posts, then goes to the address.
 | `boards/<id>-<name>.json`, `boards/<id>-<name>.md` | Each board of the private space, archived ones too (the personal board): the board and its cards (all columns, archived cards too, in the order of their IDs), each with its thread of comments. The JSON is `{"board": {…}, "cards": [{…card as the API gives it…, "comments": […]}]}`, exactly what `GET …/cards/{card}` answers. The Markdown is the same, for reading: a heading per card, with its column, details, body and comments. The two files are read one after the other, so a card edited between them can differ in them. |
 | `conversations/<id>-<title>.json` | Each conversation the caller owns **in this workspace**, archived ones too: `{"conversation": {…as the conversations API gives it…}, "entries": […], "transcript": "complete"}`. The entries are the agent runtime's, oldest first, in the shape the web app draws, as `GET …/conversations/{conversation}/entries` pages them, as the history was when its export began. If the agent runtime is off, no longer has the conversation or stops answering (each read waits at most 30 seconds), `transcript` is `"unavailable"` (`entries` empty) or `"incomplete"` (the entries read before it stopped), and the manifest says so. |
 | `apps/<id>-<name>.json` | Each app of the private space, offline ones too: `{"app": {id, name, archived_at, created_at, updated_at}, "records": […]}`. The records are the live ones (not deleted), as the agent's `list_app_rows` tool gives them (each field by name, with `id` and `revision`). An attachment field holds each photo's metadata, not its bytes; the app's definition isn't included (copy the app, or see [templates](templates.md)). |
-| `manifest.json` | `{"format": 1, "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, apps, records}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file whose bytes the server no longer has), `documents` with `unavailable` (the space's history was rewritten while the export read it) or `off` (the server has no knowledge base), `app` with `unavailable` and its ID (the app was moved out of the private space while the export read it), `conversations` with `off` (the server has none), or `transcript` with `unavailable` or `incomplete` and a conversation's ID; it is capped at 1000 (`"skipped_truncated": true` then). |
+| `manifest.json` | `{"format": 1, "scope": "user", "exported_at", "workspace": {id, name}, "user": {id, name, email}, "counts": {documents, boards, cards, comments, conversations, apps, records}, "skipped": […]}`. `skipped` lists what couldn't be included, as `{"kind", "reason", "ref"}`: `document` with `unavailable` and its path (a file whose bytes the server no longer has), `documents` with `unavailable` (the space's history was rewritten while the export read it) or `off` (the server has no knowledge base), `app` with `unavailable` and its ID (the app was moved out of the private space while the export read it), `conversations` with `off` (the server has none), or `transcript` with `unavailable` or `incomplete` and a conversation's ID; it is capped at 1000 (`"skipped_truncated": true` then). |
 
 **The scope is where a thing is now, and who owns a conversation.** The documents, boards and
 apps are those in the caller's private space at the moment each is read, so an app or a document
@@ -1065,7 +1140,7 @@ where the caller is a member or an editor; other people's private spaces, cards,
 records; the caller's data in other workspaces (export each workspace on its own); search indexes,
 tokens, sessions and every secret. Boards, apps and documents of a shared space belong to the
 space, not to a person, so ownership isn't the question there: someone who wants them copies them
-into their private space first.
+into their private space first. A workspace's admin has [their own export](#export-a-workspace) of the shared spaces they are a member of.
 
 **Names inside the zip** come from people, so none is used as it is. Each element of a path is
 cleaned (a name's `/`, `\`, `:`, `*`, `?`, quotes, `<`, `>`, `|`, control and bidirectional
@@ -1106,6 +1181,69 @@ the exporter as actor and target; one turned away by its limits isn't.
 
 **The web app** has a "Your data" tab in Settings, for every member: a button that posts, shows
 the 409 and 429 reasons in the person's language, and goes to the address it is given.
+
+## Export a workspace
+
+An admin's export of a workspace's shared content, as a zip: the shared spaces' documents, boards
+and apps with their records, and the list of the workspace's members. It reuses everything of
+[Export my data](#export-my-data): the same ticket (a `POST`, then a `GET` of the address it
+answers with), the same limits, the same streaming and the same safe names.
+
+**It never shows an admin more than the app does.** Workspace admins don't read the shared spaces
+they aren't members of: they see those spaces' names and member lists, to manage them. So the
+export holds only the shared spaces **the admin is a member of**, archived ones included and
+flagged. To export another shared space, the admin joins it first, which every member of it sees in
+its list. Nobody's private space is in it (not the admin's own either: that is their
+[own export](#export-my-data)), and neither is any conversation or anything of another
+workspace.
+
+### `POST /api/workspaces/{workspace}/export/workspace`
+
+Starts the export: it takes one of the caller's exports of the hour, records a
+`workspace_export_started` event on the [audit log](audit.md), and answers `200` with
+`{"download": "/api/workspaces/1/export/workspace/<token>", "expires_in": 60}`. It needs an admin
+of the workspace (`403` for any other member, `404` for someone who isn't a member) and a session
+(`403` with an access token). Like the person's own export it is a `POST` with a JSON body
+(`{}`), so a link or a prefetch starts nothing.
+
+### `GET /api/workspaces/{workspace}/export/workspace/{token}`
+
+Streams the zip (`200`, `Content-Type: application/zip`, `Content-Disposition: attachment;
+filename="taskto-export-YYYYMMDD.zip"`, `Cache-Control: no-store`). The token is single-use, good
+for `expires_in` seconds, and only for the same admin, workspace and login that started it; a
+personal export's token doesn't open it and the other way round (`404`); the download asks for an
+admin again, so one who was demoted since gets `403`.
+
+| Path in the zip | What |
+|---|---|
+| `members.json` | `{"members": [{"id", "name", "email", "role", "joined_at"}, …]}`: every member of the workspace, which every member sees in the app too. Read a page at a time. |
+| `spaces/<id>-<name>/space.json` | The space: `{"id", "name", "archived_at", "created_at", "role"}`, where `role` is the admin's own (`editor` or `viewer`) and `archived_at` is set for an archived space. |
+| `spaces/<id>-<name>/documents/…` | The space's documents, as in the personal export: the current version of every file at one commit, large files from the space's own storage, never as a Git LFS pointer. |
+| `spaces/<id>-<name>/boards/<id>-<name>.json`, `.md` | Each board of the space, archived ones too, with every card and its comments, as in the personal export. Boards come a page at a time, in the order of their IDs. |
+| `spaces/<id>-<name>/apps/<id>-<name>.json` | Each app the admin may open: `{"app": {id, name, archived_at, created_at, updated_at}, "live": {…the live release, with its `definition`…}, "records": […]}`. The records are those the admin may read in the app (all of them, or only their own, by their role in it), as the agent's `list_app_rows` tool gives them; an attachment field holds each photo's metadata, not its bytes. The app, its `live` definition and its records are read in one snapshot of the admin's access, so a publish or a change of roles while the export runs never mixes two states. The draft and earlier releases aren't included. An app the admin holds no role in isn't exported, even if it is listed to them because it has roles and no builder (the way back an admin has to set its roles right): that gives no records, and an export holds what the admin's roles give them. |
+| `manifest.json` | As the personal export's, with `"scope": "workspace"`, `"user"` the exporter, `counts` (`members`, `spaces`, `documents`, `boards`, `cards`, `comments`, `apps`, `records`), `spaces` (`id`, `name`, `dir`, the folder it is in, and `archived_at`) and `skipped`, which adds `"space"` (the shared space an item was in) and the kind `space` with the reason `access_lost` for a space the admin stopped being a member of while the export ran. |
+
+**A space the admin leaves meanwhile is left out from then on.** The spaces are those the admin is a
+member of when the export starts, and each is read as the admin: before each space, each document
+and each app, and again whenever the boards or apps say the space isn't there, the admin's
+membership of it, and of the workspace as an admin, is checked. A space whose membership was lost
+stops there and is listed in the manifest as `access_lost`; what was read while the admin was a
+member stays in the zip, as whole files. The membership is read in the same snapshot as each page
+of boards, each page of a board's cards and each card, and checked again once a document is open,
+before it goes into the zip. An admin who is no longer an admin (demoted, removed or disabled) ends the export: that is checked
+before each page of members, board, card, app and document, and once more before the zip is
+closed, so what is left is a truncated zip that doesn't open, as for any export that fails.
+
+**Names, memory and limits are the personal export's**: the same cleaning and uniqueness of names,
+one page, one card's thread or one app's records in memory at a time, two minutes for each write
+to be taken, and the same gate (one export at a time per person, whichever kind; 3 an hour; 4 at
+once on the server; `409 export_running`, `429 export_rate_limited`).
+
+Each export that is started is a `workspace_export_started` event on the [audit log](audit.md),
+with the admin as actor, the workspace as target and the number of spaces as its only detail.
+
+**The web app**: an admin's "Your data" tab in Settings has a second section, "Export the
+workspace", that says what is and isn't in it, with a button that posts and goes to the address.
 
 ## Spaces
 
@@ -1719,6 +1857,115 @@ Read access to the space (`404` for one the caller can't read). Query: `q`, `lim
 Any member. The same, across the boards of every space of the workspace the caller can read.
 Both routes also take an access token.
 
+### Searching app records
+
+The records of personal apps are searched apart from documents and cards, by full text only,
+with the same words, phrases, scripts and limits. What is searched is the **values** of a
+record's text fields (strings, choices, with their labels as people read them, and barcodes)
+as the app's **live release** declares them: never a field's name, never a field the live
+release doesn't declare or a value of another type than its field's (no read of the record
+shows those), and nothing of a draft, so an app that was never published has no searched
+records, and one that is published has them from that moment. Deleted records, and the records of an archived app, are not
+searched. Records are never sent to an embeddings endpoint.
+
+Only the records the caller may read, in the apps they may open, are found, by the same rule
+every list of records goes by: the roles of the app decide whether they read every record or
+only the ones they made (a `user` role reads only its own; no role that reads records, none),
+inside the spaces they can read. Another member's private space, a shared space the caller isn't
+in, another workspace and an app whose roles leave the caller out are never searched, admins
+included. Results are newest change first, with no score: the order depends on the records the
+caller can read only, never on others'.
+
+The index follows the apps' rows: a record added, changed, deleted or restored, and every record
+of an app whose live release changes (a publish, a rollback), is queued in the same transaction, and
+a search indexes the queued records of the apps it looks in before it answers, so it never
+quotes text older than the record. As for cards, a search that still finds some behind says
+`"incomplete": true`, leaves them out, and has no `next_offset`; only the records the caller
+may read can make it so; so can a search that is over its allowance (2,000 records and 20 seconds in
+all, however often it looks again), and a change of the caller's own access while it runs makes it look
+again with the new access, so it never says anything of records the caller no longer reads (a later
+page, whose `offset` counted records under the old access, is then `"incomplete": true` with no results and no
+`next_offset`: start again from the first page). An app that moves to another space is searched under the access to
+the space it is in then, and who may read what is checked again, through the same checks, after the
+records are found.
+
+### `GET /api/workspaces/{workspace}/spaces/{space}/search/records`
+
+Read access to the space (`404` for one the caller can't read). Query: `q`, `limit` and
+`offset`, as for a document search, with the same errors.
+
+```json
+{
+  "results": [
+    {
+      "space_id": 3,
+      "space_name": "Team",
+      "app_id": 9,
+      "app_name": "Expenses",
+      "record_id": 118,
+      "snippet": [{"text": "lunch at the "}, {"text": "orchard", "match": true}]
+    }
+  ],
+  "next_offset": 20
+}
+```
+
+- `snippet`: the passage of the record's values that matched, as plain text in pieces: never
+  markup.
+- `incomplete`, `next_offset`: as for cards.
+- The web app links a result to its app, `/w/{workspace}/apps/{space_id}-{app_id}`.
+
+### `GET /api/workspaces/{workspace}/search/records`
+
+Any member. The same, across the apps of every space of the workspace the caller can read.
+Both routes also take an access token.
+
+### Searching conversations
+
+A person's own conversations with the agent are searched apart too, by full text only: a
+conversation's title, and what was said in it (the person's messages and the agent's, as the
+agent runtime's transcript has them; not the system's instructions and not what a tool returned,
+and only the newest 256 KiB of a long conversation). Conversations are private to their owner:
+only the caller's own, in this workspace, as a member of it whose account isn't disabled, are found, archived ones too, whoever
+else is in the workspace, and an administrator's included. They are never sent to an embeddings
+endpoint. A conversation whose title has every word of the query comes first, then the others, the
+conversation updated last first within each; no score is returned.
+
+The index follows the transcript, which the server doesn't see change as the agent writes. A
+conversation is marked updated, and so queued, when it is created, renamed or archived, when a
+message is sent to it, and when the agent runtime has dealt with that message (the end of the
+agent's reply); a search first reads again the transcripts of the caller's queued conversations,
+newest first, up to 60 transcripts and for at most 20 seconds in all (however often it looks again), and never quotes a conversation that is
+queued. One that can't be read (the agent runtime is off or still starting, or the search ran out of
+time) is left out and the reply says `"incomplete": true`, with no `next_offset`; a later search finds
+it. A conversation the agent runtime has lost leaves the index, and one that is removed takes its
+index with it. The server also indexes them in the background, and at start the ones marked in the
+last day. What the agent said while a turn runs is found once the turn ends.
+
+### `GET /api/workspaces/{workspace}/search/conversations`
+
+Any member, with a session (an access token is not accepted: conversations are the person's, in
+their own browser). Query: `q`, `limit` and `offset`, as for a document search.
+
+```json
+{
+  "results": [
+    {
+      "conversation_id": 12,
+      "title": "Planning the trip",
+      "archived": false,
+      "updated_at": "2026-11-24T18:00:00.000Z",
+      "snippet": [{"text": "…a flight to "}, {"text": "Zanzibar", "match": true}]
+    }
+  ]
+}
+```
+
+- `snippet`: the passage of what was said that matched; empty if only the title matched.
+- `archived` and `title` are the conversation's now, not as it was indexed.
+- `incomplete`, `next_offset`: as for cards.
+- The web app links a result to `/w/{workspace}/conversations/{conversation_id}`.
+
 ### `GET /api/workspaces/{workspace}/search/settings`
 
 Any member. The workspace's embeddings model, or `null`, and how far the index is:
@@ -2071,8 +2318,10 @@ kept in step with the card by the change that touches it:
 - **Once.** A person is told once per card, kind and due date, however many times a job runs (a
   retry, a clock that stepped back, a card given to someone else and back). Edits that change
   neither `due`, the assignee nor the card's column leave the jobs alone, a reminder that is ready
-  but hasn't run yet included. A new date is a new reminder. An old notice whose card has a
-  different date now (or none) is shown as a plain "something changed" mention of the card.
+  but hasn't run yet included. A new date is a new reminder. An old notice whose card is no longer
+  what it was made for (a different date now or none, done or archived, given to someone else or
+  to the agent, or in an archived board or space) is shown as a plain "something changed" mention
+  of the card, and is not mailed or counted in a summary, as the job itself would have made none.
 - **Where.** Every way of changing a card keeps the jobs: the web app's routes, the agent's tools,
   the MCP tools and the apps' effects. Archiving a board or a shared space cancels its cards' jobs
   and restoring it makes them again; a person who leaves a space or the workspace loses theirs, and
@@ -2122,7 +2371,10 @@ for the workspace's members, about the caller only.
 #### `GET /api/workspaces/{workspace}/notification-email`
 
 `{"available": true, "address": {"email": "ana@example.com", "state": "verified"}, "kinds":
-{"card_assigned": "off", "app_effect_failed": "digest"}, "digest": {"hour": 8, "timezone": "UTC"}}`.
+{"card_assigned": "off", "card_comment": "instant", "card_mention": "instant", "card_due": "off",
+"card_overdue": "off", "app_effect_failed": "digest"}, "digest": {"hour": 8, "timezone": "UTC"}}`.
+There is a choice for each of the six kinds a notification can have (`card_assigned`, `card_comment`,
+`card_mention`, `card_due`, `card_overdue`, `app_effect_failed`), every one `off` until chosen.
 `available` is false when the server has no SMTP server or no public URL (nothing can be turned on
 then, and everything can still be turned off). `address.state` is `unverified` (no link waits),
 `pending` (a link was sent and may still be opened) or `verified`; nothing is sent unless it is
@@ -3829,6 +4081,102 @@ an access token); other admins get `403` `operator_only`. The status, error incl
 scheduled time they were for. A success doesn't clear `last_error`: it is current only if
 `last_error_at` is after `last_success`. With `health` `none`, the other fields are absent.
 A user or a URL's password in an error is replaced by `***`.
+
+### `GET /api/workspaces/{workspace}/updates`
+
+[Operators](#operators) only (admins of the workspace the server's setup made; an admin of a
+workspace someone made later gets `403` `operator_only`, a member `403`, an outsider `404`), with a
+browser session (not an access token). The server's version, and what the host's updater last
+said about the automatic updates ([docs/install.md](install.md#automatic-updates)). The updater
+runs on the host, outside the server, and writes a copy of its status into a directory the
+server mounts read-only; this only reads that copy, and never runs or changes the updater.
+
+```json
+{
+  "configured": true,
+  "running_version": "v0.3.0",
+  "stale": false,
+  "status": {
+    "version": 1,
+    "checked": "2026-03-10T03:10:05Z",
+    "channel": "release",
+    "hold": false,
+    "recorded_version": "v0.3.0",
+    "last_run": {"at": "2026-03-10T03:10:00Z", "finished": "2026-03-10T03:10:05Z", "result": "skipped",
+                 "from": "v0.3.0", "code": "manual-upgrade"},
+    "last_change": {"at": "2026-03-01T03:12:00Z", "finished": "2026-03-01T03:15:30Z", "result": "updated",
+                    "from": "v0.2.0", "to": "v0.3.0", "backed_up": true},
+    "needs_person": {"kind": "manual-upgrade", "code": "manual-upgrade"}
+  }
+}
+```
+
+`configured` is whether the server was told where the status is (`TASKTO_UPDATE_STATUS_DIR`;
+the Compose install sets it); `status` is `null` while the updater hasn't written one, and
+`expects_status` is then `true` when this server is a release (or a build of one commit) and
+is configured: such a server's host should have an updater that writes a status, so one that
+hasn't is older than the status, and the page says to reinstall it
+([deploy/INSTALL.md](../deploy/INSTALL.md#step-16-automatic-updates)). `stale` is true when the
+status wasn't written for three days (the updater writes it on every run, so its timer isn't
+running). `running_version` is the server's own version, and `recorded_version` the one the
+install's `.env` says: they differ when someone changed the install outside the updater.
+
+The status is structured, and nothing in it is free text: the updater publishes only words
+from closed lists and versions, and the server checks them again (a word it doesn't know
+becomes `unknown` or `other`, a version that isn't one is dropped). Where a backup is, a
+registry's host, a volume's name and the updater's record stay on the host, in its journal.
+`result` is the updater's: `updated`, `up-to-date`, `skipped`, `failed`, `rolled-back`,
+`rollback-failed`, `stopped`, `stop-failed`, `blocked`, `interrupted`, `cleared` or `refused`.
+`code` says why, when there is a reason: `off`, `hold`, `manual-upgrade`, `github`,
+`not-published`, `not-newer`, `version-mismatch`, `server-down`, `unsafe-settings`, `disk`,
+`registry`, `backup`, `bad-setting`, `firewall`, `settings`, `blocked`, `stopped`, `stop-failed`,
+`rollback-failed`, `interrupted`, `rolled-back`, `unrecorded-failure` or `other`, which the web
+app translates (`settings.about.updates.reasons.<code>`). `backed_up` is whether the run made
+a backup. `last_change` is the last run that changed the install (an update, or a failure of
+one), which a quiet night doesn't replace. `needs_person` is `null` unless the install waits for
+someone: `blocked` (an update stopped or was interrupted, or the server isn't the version on
+record; a person looks, puts it right and runs `taskto-update --clear-block` on the host) or
+`manual-upgrade` (a release's notes say so, or it changes the worker's firewall; follow them,
+then `taskto-update --to VERSION`). A file that can't be read is a `500`.
+
+`request` says whether "Update now" can be pressed (below): `available`, and when it can't,
+`reason`, one of `not_configured` (the server has no request directory), `unsupported` (the
+host's updater predates the button, its request directory or path unit isn't in place, it has
+written no status yet or the status is stale), `off` (the channel is off), `pending` (a request
+waits, since `pending_since`) or `running` (a run is changing the install). `status.running`
+is set while a run is in progress (`since`, `to` once chosen, `requested`: it was asked for in the
+app); a note older than three hours is not believed. `status.requests` is the updater's side of
+the button: `supported`, and `last`, the outcome of the last requested run (`at`, `finished`,
+`result`, `code`), which also covers a request the updater turned away before it ran (`result`
+`ignored`, `code` `rate-limited` or `bad-request`). A run the operator asked for has
+`requested: true` in `last_run` and `last_change`.
+
+### `POST /api/workspaces/{workspace}/updates/request`
+
+"Update now". [Operators](#operators) only, with a browser session, and no body. It asks the
+host's updater to do what its nightly run would: install the newest version on its configured
+channel, with its usual checks, its backup and its way back. **The request carries no version,
+repository or argument, and the server runs nothing:** it writes one small file into a directory
+of its own (`TASKTO_UPDATE_REQUEST_DIR`), which a systemd path unit on the host watches and
+`taskto-update --requested` takes, removes and acts on. Every gate of the nightly run holds: an
+update hold, a release that needs steps by hand (`manual-upgrade: true`), a worker firewall that
+changed, an interrupted or stopped update, and a channel that is off. The outcome is in the
+status (`last_run`, `status.requests.last`), with the reason as a code; a person does what the
+gate asks, then `taskto-update --to` on the host.
+
+```json
+{"requested_at": "2026-03-10T03:10:00Z"}
+```
+
+`202` with `requested_at`. `409`: `update_request_unsupported`, `update_channel_off`,
+`update_request_pending` (one request waits at a time; one nobody took for three hours doesn't
+count) or `update_running`; `403` `operator_only` and the usual `404`, `401` and `403` for a
+non-member, no login and an access token. The request is an event on the
+[audit log](audit.md), `server_update_requested` (with the channel), committed before the file
+is made visible to the host: a refused request records none, and no update happens without one. The server also doesn't know whether the host
+accepts it: the host ignores a second request within ten minutes of the last (`rate-limited`) and
+anything in the directory that isn't a small regular file holding the one fixed line the server
+writes (`bad-request`).
 
 ### `GET /healthz/backup`
 

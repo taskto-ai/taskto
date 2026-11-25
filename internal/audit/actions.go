@@ -34,9 +34,12 @@ const (
 	WorkspaceUpdated  = "workspace_updated"
 	InviteCreated     = "invite_created"
 	InviteRevoked     = "invite_revoked"
+	InviteEmailed     = "invite_emailed"
 	InviteAccepted    = "invite_accepted"
 	MemberRoleChanged = "member_role_changed"
 	MemberRemoved     = "member_removed"
+	MemberDisabled    = "member_disabled"
+	MemberEnabled     = "member_enabled"
 
 	// Access tokens.
 	AccessTokenCreated = "access_token_created"
@@ -52,6 +55,8 @@ const (
 
 	// A person takes their own data out (internal/export).
 	DataExportStarted = "data_export_started"
+	// An admin takes out the shared spaces they are a member of, and the member list.
+	WorkspaceExportStarted = "workspace_export_started"
 
 	// Model provider accounts, shared CLI accounts, search and dictation.
 	ProviderAccountCreated   = "provider_account_created"
@@ -64,6 +69,9 @@ const (
 	SearchEmbeddingsChanged  = "search_embeddings_changed"
 	SearchConsentChanged     = "search_consent_changed"
 	DictationSettingsChanged = "dictation_settings_changed"
+
+	// An operator asks the host's updater to update the server now (Settings → About).
+	ServerUpdateRequested = "server_update_requested"
 )
 
 // Target types.

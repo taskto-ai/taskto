@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import type { Me } from '../api'
 import { setPreferences } from '../i18n'
+import { navigate } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { Shell } from './Shell'
 
@@ -23,6 +24,7 @@ const pages = {
   'GET /api/workspaces/4/conversations': { body: { conversations: [] } },
   // Settings → About, for an admin.
   'GET /api/workspaces/1/backup': { body: { health: 'none' } },
+  'GET /api/workspaces/1/updates': { body: { configured: false, running_version: 'dev', status: null } },
 }
 
 beforeEach(() => {
@@ -354,8 +356,6 @@ test('the top bar gives way to a long workspace name: the mark stands for the lo
 })
 
 test('the menu button opens the sidebar as a drawer, and a link closes it', async () => {
-  // Opened at a page's own URL: from /, the shell first goes to the default page, and that
-  // change of page closes the drawer, so a click before it lands would be undone.
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
   const { container } = render(<App />)
@@ -369,10 +369,9 @@ test('the menu button opens the sidebar as a drawer, and a link closes it', asyn
   expect(shell.dataset.drawer).toBe('closed')
 })
 
-test("a click on the menu button as soon as the shell is drawn isn't undone by the shell's first effects", async () => {
-  // In a browser a person can click before React has run the effects of the first draw (they run
-  // after it, in a task of their own); a draw inside act() runs them at once, so draw outside it.
-  window.history.replaceState(null, '', '/w/1/conversations')
+// In a browser a person can click before React has run the effects of the first draw (they run
+// after it, in a task of their own); a draw inside act() runs them at once, so draw outside it.
+async function clickMenuAtFirstDraw(): Promise<string> {
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
   const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   const before = env.IS_REACT_ACT_ENVIRONMENT
@@ -392,12 +391,70 @@ test("a click on the menu button as soon as the shell is drawn isn't undone by t
     })
     host.querySelector<HTMLButtonElement>('.tt-menu-button')?.click()
     await new Promise((resolve) => setTimeout(resolve, 50))
-    expect((host.querySelector('.tt-shell') as HTMLElement).dataset.drawer).toBe('open')
+    return (host.querySelector('.tt-shell') as HTMLElement).dataset.drawer ?? ''
   } finally {
     root.unmount()
     host.remove()
     env.IS_REACT_ACT_ENVIRONMENT = before
   }
+}
+
+test("a click on the menu button as soon as the shell is drawn isn't undone by the shell's first effects", async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  expect(await clickMenuAtFirstDraw()).toBe('open')
+})
+
+test('nor is it when the shell rewrites the address to its canonical form: a trailing slash, no page, an unknown workspace', async () => {
+  for (const [opened, canonical] of [
+    ['/w/1/conversations/', '/w/1/conversations'],
+    ['/', '/w/1/conversations'],
+    ['/w/9/boards', '/w/1/boards'],
+  ]) {
+    window.history.replaceState(null, '', opened)
+    expect(await clickMenuAtFirstDraw(), opened).toBe('open')
+    expect(window.location.pathname).toBe(canonical)
+  }
+})
+
+test('a change of page closes the drawer: a link, back and forward; a hash or a query does not', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: me },
+    ...pages,
+    'GET /api/workspaces/1/spaces': { body: { spaces: [] } },
+  })
+  const { container } = render(<App />)
+  const menu = await screen.findByRole('button', { name: 'Open the menu' })
+  const shell = container.querySelector('.tt-shell') as HTMLElement
+  const go = (path: string) => act(() => navigate(path))
+  const back = (delta: number) =>
+    act(async () => {
+      // jsdom traverses the history in a task of its own and then fires popstate: wait for that.
+      const traversed = new Promise<void>((resolve) =>
+        window.addEventListener('popstate', () => resolve(), { once: true }),
+      )
+      window.history.go(delta)
+      await traversed
+    })
+
+  await go('/w/1/boards')
+  fireEvent.click(menu)
+  expect(shell.dataset.drawer).toBe('open')
+  await act(async () => {
+    window.history.replaceState(null, '', '/w/1/boards?x=1#top')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
+  expect(shell.dataset.drawer).toBe('open')
+  await back(-1)
+  expect(window.location.pathname).toBe('/w/1/conversations')
+  expect(shell.dataset.drawer).toBe('closed')
+
+  fireEvent.click(menu)
+  expect(shell.dataset.drawer).toBe('open')
+  await back(1)
+  expect(window.location.pathname).toBe('/w/1/boards')
+  expect(shell.dataset.drawer).toBe('closed')
 })
 
 test('the drawer takes focus, makes the page inert, and Escape closes it back to its button', async () => {
@@ -420,6 +477,37 @@ test('the drawer takes focus, makes the page inert, and Escape closes it back to
   expect((container.querySelector('.tt-shell') as HTMLElement).dataset.drawer).toBe('closed')
   expect(document.activeElement).toBe(menu)
   expect(main.hasAttribute('inert')).toBe(false)
+})
+
+test('with the drawer and the account menu open, Escape closes the menu first and the next one the drawer', async () => {
+  const { menu, summary, container } = await openAccountMenu()
+  const button = screen.getByRole('button', { name: 'Open the menu' })
+  const shell = container.querySelector('.tt-shell') as HTMLElement
+  // The drawer first, then the menu (its listeners come after the drawer's).
+  await closeMenu(menu)
+  fireEvent.click(button)
+  expect(shell.dataset.drawer).toBe('open')
+  await openMenu(menu)
+
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(menu.open).toBe(false)
+  expect(document.activeElement).toBe(summary)
+  expect(shell.dataset.drawer).toBe('open')
+
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(shell.dataset.drawer).toBe('closed')
+  expect(document.activeElement).toBe(button)
+
+  // An open language list, in the menu, in the drawer: the list's Escape is neither's.
+  fireEvent.click(button)
+  await openMenu(menu)
+  const language = within(menu).getByRole('combobox', { name: 'Language' }) as HTMLSelectElement
+  language.focus()
+  const matches = language.matches.bind(language)
+  vi.spyOn(language, 'matches').mockImplementation((s) => s === ':open' || matches(s))
+  fireEvent.keyDown(language, { key: 'Escape' })
+  expect(menu.open).toBe(true)
+  expect(shell.dataset.drawer).toBe('open')
 })
 
 test('picking a page in the drawer moves focus to the page', async () => {
@@ -461,6 +549,143 @@ test('the account menu leads to the install guidance', async () => {
   fireEvent.click(await screen.findByRole('link', { name: 'Install the app' }))
   await screen.findByRole('heading', { name: 'Install the app' })
   expect(window.location.pathname).toBe('/w/1/settings/about')
+})
+
+// The account menu is a <details>: open, with the page behind it and a control outside it.
+async function openAccountMenu() {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  const { container } = render(<App />)
+  await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull())
+  await screen.findByText('Pick a conversation, or start a new one.')
+  const menu = container.querySelector('details.tt-account') as HTMLDetailsElement
+  const summary = menu.querySelector('summary') as HTMLElement
+  await openMenu(menu)
+  return { menu, summary, container }
+}
+
+// Opens the menu as a person does, with the toggle event that follows (jsdom sends it a task
+// later), which is when the menu starts listening.
+async function openMenu(menu: HTMLDetailsElement) {
+  const toggled = new Promise((done) => menu.addEventListener('toggle', done, { once: true }))
+  menu.open = true
+  await toggled
+}
+async function closeMenu(menu: HTMLDetailsElement) {
+  const toggled = new Promise((done) => menu.addEventListener('toggle', done, { once: true }))
+  menu.open = false
+  await toggled
+}
+
+test('Escape closes the account menu and gives focus back to its summary', async () => {
+  const { menu, summary } = await openAccountMenu()
+  const logout = within(menu).getByRole('button', { name: 'Log out' })
+  logout.focus()
+  expect(menu.open).toBe(true)
+
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(menu.open).toBe(false)
+  expect(document.activeElement).toBe(summary)
+})
+
+test('the language list takes its own Escape while it is open: the menu stays, and the next Escape closes it', async () => {
+  const { menu, summary } = await openAccountMenu()
+  const language = within(menu).getByRole('combobox', { name: 'Language' }) as HTMLSelectElement
+  language.focus()
+  // jsdom can't open a native <select>: its :open state is what a browser says while the list
+  // is shown, and it is the one thing the handler asks.
+  const matches = language.matches.bind(language)
+  const opened = vi.spyOn(language, 'matches').mockImplementation((s) => s === ':open' || matches(s))
+  fireEvent.keyDown(language, { key: 'Escape' })
+  expect(menu.open).toBe(true)
+  expect(document.activeElement).toBe(language)
+
+  // The list closed (the browser took the Escape): the next one is the menu's.
+  opened.mockImplementation((s) => (s === ':open' ? false : matches(s)))
+  fireEvent.keyDown(language, { key: 'Escape' })
+  expect(menu.open).toBe(false)
+  expect(document.activeElement).toBe(summary)
+
+  // A browser that doesn't know :open throws on it: the control is taken as closed.
+  await openMenu(menu)
+  language.focus()
+  opened.mockImplementation((s) => {
+    if (s === ':open') throw new SyntaxError('not a selector')
+    return matches(s)
+  })
+  fireEvent.keyDown(language, { key: 'Escape' })
+  expect(menu.open).toBe(false)
+})
+
+test('an Escape another handler has taken does not close the account menu', async () => {
+  const { menu } = await openAccountMenu()
+  const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+  event.preventDefault()
+  document.dispatchEvent(event)
+  expect(menu.open).toBe(true)
+})
+
+test('the account menu listens on the document only while it is open', async () => {
+  const added: string[] = []
+  const removed: string[] = []
+  const add = vi.spyOn(document, 'addEventListener').mockImplementation(function (this: Document, type, ...rest) {
+    added.push(type)
+    return EventTarget.prototype.addEventListener.call(this, type, ...(rest as [EventListener]))
+  })
+  const remove = vi.spyOn(document, 'removeEventListener').mockImplementation(function (this: Document, type, ...rest) {
+    removed.push(type)
+    return EventTarget.prototype.removeEventListener.call(this, type, ...(rest as [EventListener]))
+  })
+  try {
+    const { menu } = await openAccountMenu()
+    // What it has attached: a press and a focus outside, and Escape.
+    for (const type of ['keydown', 'pointerdown', 'focusin']) {
+      expect(added.filter((a) => a === type).length - removed.filter((r) => r === type).length, type).toBeGreaterThan(0)
+    }
+    const live = (type: string) => added.filter((a) => a === type).length - removed.filter((r) => r === type).length
+    const open = { pointerdown: live('pointerdown'), focusin: live('focusin') }
+    await closeMenu(menu)
+    expect(live('pointerdown')).toBe(open.pointerdown - 1)
+    expect(live('focusin')).toBe(open.focusin - 1)
+    // Closed, a press elsewhere or Escape reaches no handler of the menu.
+    const before = added.length
+    fireEvent.pointerDown(document.body)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(menu.open).toBe(false)
+    expect(added.length).toBe(before)
+    // And it comes back with the menu.
+    await openMenu(menu)
+    expect(live('pointerdown')).toBe(open.pointerdown)
+  } finally {
+    add.mockRestore()
+    remove.mockRestore()
+  }
+})
+
+test('a press or focus outside the account menu closes it; inside it does not', async () => {
+  const { menu, container } = await openAccountMenu()
+  const inside = within(menu).getByRole('button', { name: 'Log out' })
+  fireEvent.pointerDown(inside)
+  fireEvent.focusIn(inside)
+  expect(menu.open).toBe(true)
+
+  fireEvent.pointerDown(container.querySelector('main') as HTMLElement)
+  expect(menu.open).toBe(false)
+
+  await act(() => new Promise((done) => setTimeout(done, 0))) // its toggle event, and the listeners going
+  await openMenu(menu)
+  fireEvent.focusIn(screen.getByRole('button', { name: 'Skip to the content' }))
+  expect(menu.open).toBe(false)
+})
+
+test('Escape with the account menu closed leaves focus where it is', async () => {
+  const { menu, summary } = await openAccountMenu()
+  await closeMenu(menu)
+  const skip = screen.getByRole('button', { name: 'Skip to the content' })
+  skip.focus()
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(document.activeElement).toBe(skip)
+  expect(document.activeElement).not.toBe(summary)
 })
 
 test('"New workspace" is offered only when the server lets the person, and switches to the one made', async () => {

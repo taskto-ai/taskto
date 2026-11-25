@@ -1009,3 +1009,46 @@ func TestAFailedEffectReadWithATokenIsNotRetryable(t *testing.T) {
 		t.Errorf("a token reads %+v, want the failed effect without can_retry", card)
 	}
 }
+
+// The entries of a user whose account is disabled wait: they neither run nor fail (no code, no
+// notification, no try used up), however many times the worker looks, and they are done, once,
+// when the account is enabled again.
+func TestEffectsOfADisabledUserWaitForTheAccount(t *testing.T) {
+	f := newFX(t)
+	f.mustSubmit(f.alice, "op-disabled-1", "East gate", "fail")
+	disable := func(verb string) {
+		t.Helper()
+		expect(t, f.owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/%s", f.ws, f.alice.id, verb), nil), http.StatusNoContent)
+	}
+	disable("disable")
+	// Many more rounds than an entry has tries, each past the longest wait.
+	for range 3 * maxAttempts {
+		f.later(backoffMax + holdDelay)
+		f.work()
+	}
+	if n := len(f.cards()); n != 0 {
+		t.Fatalf("%d cards made for a disabled user", n)
+	}
+	if n := f.count(`SELECT count(*) FROM app_effects WHERE state = 'pending' AND attempts = 0 AND error_code IS NULL`); n != 3 {
+		t.Fatalf("%d entries are waiting untouched, want 3", n)
+	}
+	if n := f.count(`SELECT count(*) FROM notifications`); n != 0 {
+		t.Fatalf("%d notifications for entries that did not fail", n)
+	}
+	if _, err := f.docs.Read(f.ctx(), f.maint, f.east(), ""); err == nil {
+		t.Fatal("a document was made for a disabled user")
+	}
+
+	disable("enable")
+	f.later(holdDelay + time.Second)
+	f.work()
+	if n := len(f.cards()); n != 1 {
+		t.Fatalf("%d cards after enabling, want 1", n)
+	}
+	if n := f.count(`SELECT count(*) FROM app_effects WHERE state = 'done'`); n != 3 {
+		t.Fatalf("%d entries done after enabling, want 3", n)
+	}
+	if _, err := f.docs.Read(f.ctx(), f.maint, f.east(), ""); err != nil {
+		t.Fatalf("the document after enabling: %v", err)
+	}
+}

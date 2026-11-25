@@ -313,25 +313,43 @@ func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAcc
 // and its roles changed between them). It returns the space as the person sees it too. The errors
 // are App's.
 func (c *Checker) AppNamed(ctx context.Context, userID, spaceID, appID int64) (Space, AppAccess, string, error) {
-	tx, err := c.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return Space{}, AppAccess{}, "", err
-	}
-	defer func() { _ = tx.Rollback() }() // nothing was written
-	snap := &Checker{db: c.db, reads: tx, auth: c.auth}
-	sp, err := snap.Check(ctx, userID, spaceID)
-	if err != nil {
-		return Space{}, AppAccess{}, "", err
-	}
-	acc, err := snap.App(ctx, userID, spaceID, appID)
-	if err != nil {
-		return Space{}, AppAccess{}, "", err
-	}
+	var sp Space
+	var acc AppAccess
 	var name string
-	if err := tx.QueryRowContext(ctx, `SELECT name FROM apps WHERE id = ? AND space_id = ?`, appID, spaceID).Scan(&name); err != nil {
+	err := c.Snapshot(ctx, func(snap *Checker, tx *sql.Tx) (err error) {
+		if sp, err = snap.Check(ctx, userID, spaceID); err != nil {
+			return err
+		}
+		if acc, err = snap.App(ctx, userID, spaceID, appID); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx, `SELECT name FROM apps WHERE id = ? AND space_id = ?`, appID, spaceID).Scan(&name)
+	})
+	if err != nil {
 		return Space{}, AppAccess{}, "", err
 	}
 	return sp, acc, name, nil
+}
+
+// Snapshot runs fn in one read-only transaction: a single snapshot that takes no write lock (see
+// package db). snap is a Checker whose checks read inside it, and tx is the same transaction for
+// the reads that go with them, so what a person may do and what fn reads of it come from one
+// state: nothing that changes meanwhile (a demotion, a removal, an app moving) can make the two
+// disagree. The snapshot starts with the first read, and fn must not write.
+//
+// On a checker that already reads inside a transaction (Checker.On) that transaction is the
+// snapshot: a second one would wait for the one that holds the write lock.
+func (c *Checker) Snapshot(ctx context.Context, fn func(snap *Checker, tx *sql.Tx) error) error {
+	tx, held := c.reads.(*sql.Tx)
+	if !held {
+		var err error
+		tx, err = c.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }() // nothing was written
+	}
+	return fn(&Checker{db: c.db, reads: tx, auth: c.auth}, tx)
 }
 
 // stranded is whether a set of assignments (every one of an app's) leaves it with nobody who may

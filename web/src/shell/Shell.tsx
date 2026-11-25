@@ -123,14 +123,16 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
   // element can't take focus: it is focused once the drawer has closed (the effect below).
   const focusPage = useRef(false)
   // Only a change of page closes it, not the first draw: that effect runs after the draw, and a
-  // click on the menu button before it would be undone.
-  const drawnAt = useRef(path)
+  // click on the menu button before it would be undone. The page is the resolved route, not the
+  // address: the shell rewriting an address to its canonical form (a trailing slash, a default
+  // page, another workspace) isn't a navigation. A hash or a query never reaches either.
+  const drawnAt = useRef(target)
   useEffect(() => {
-    if (drawnAt.current === path) return
-    drawnAt.current = path
+    if (drawnAt.current === target) return
+    drawnAt.current = target
     if (drawerOpen.current) focusPage.current = true
     setDrawer(false)
-  }, [path])
+  }, [target])
   useEffect(() => {
     if (drawer || !focusPage.current) return
     focusPage.current = false
@@ -144,7 +146,9 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
       sidebar.current?.querySelector<HTMLElement>('a')
     )?.focus()
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
+      // An Escape the account menu or an open list has taken is theirs: the drawer stays.
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (e.target instanceof HTMLSelectElement && isOpen(e.target)) return
       setDrawer(false)
       menuButton.current?.focus()
     }
@@ -363,12 +367,55 @@ function ThemeSelect({ theme, onChange, t }: { theme: Theme; onChange: (theme: T
   )
 }
 
+// Whether a form control's list is open (the `:open` state: a <select>'s picker). A browser
+// without it never says so, and the control behaves as it did.
+function isOpen(el: Element): boolean {
+  try {
+    return el.matches(':open')
+  } catch {
+    return false
+  }
+}
+
 function AccountMenu({ me, workspace, onLogout, t }: { me: Me; workspace: number; onLogout: () => void; t: T }) {
   const { name, email } = me.user
   const { installed } = useInstall()
+  const menu = useRef<HTMLDetailsElement>(null)
+  const summary = useRef<HTMLElement>(null)
+  // A <details> only closes on its summary: Escape, and a press or focus outside it, close it
+  // too, and Escape gives focus back to the summary, which the menu's items had. The listeners
+  // are on the document only while the menu is open.
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const close = () => menu.current?.removeAttribute('open')
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || !menu.current?.open) return
+      // A language list that is open takes this Escape to close itself: the menu stays, and the
+      // next Escape closes it.
+      if (e.target instanceof HTMLSelectElement && isOpen(e.target)) return
+      // Taken, so a drawer behind the menu stays open for this Escape, and the focus the
+      // drawer would take doesn't close the menu first.
+      e.preventDefault()
+      close()
+      summary.current?.focus()
+    }
+    const onOutside = (e: Event) => {
+      if (menu.current?.open && e.target instanceof Node && !menu.current.contains(e.target)) close()
+    }
+    // In the capture phase, so it comes before the drawer's own Escape.
+    document.addEventListener('keydown', onKey, true)
+    document.addEventListener('pointerdown', onOutside)
+    document.addEventListener('focusin', onOutside)
+    return () => {
+      document.removeEventListener('keydown', onKey, true)
+      document.removeEventListener('pointerdown', onOutside)
+      document.removeEventListener('focusin', onOutside)
+    }
+  }, [open])
   return (
-    <details className="tt-account">
-      <summary aria-label={t('shell.account', { name })}>
+    <details className="tt-account" ref={menu} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary ref={summary} aria-label={t('shell.account', { name })}>
         <span className="tt-avatar" aria-hidden>
           {name.trim().charAt(0).toUpperCase() || '?'}
         </span>
@@ -384,7 +431,7 @@ function AccountMenu({ me, workspace, onLogout, t }: { me: Me; workspace: number
           <Link
             className="tt-button"
             href={routePath({ workspace, section: 'settings', item: 'about' })}
-            onClick={(e) => e.currentTarget.closest('details')?.removeAttribute('open')}
+            onClick={() => menu.current?.removeAttribute('open')}
           >
             {t('shell.installApp')}
           </Link>

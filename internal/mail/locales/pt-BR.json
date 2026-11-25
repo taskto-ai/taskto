@@ -27,6 +27,42 @@
       ],
       "action": "Abrir a notificação"
     },
+    "notification_card_comment": {
+      "subject": "Um cartão seu tem um novo comentário",
+      "title": "Um cartão seu tem um novo comentário",
+      "paragraphs": [
+        "Abra o TaskTo.AI para lê-lo.",
+        "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
+      ],
+      "action": "Abrir a notificação"
+    },
+    "notification_card_mention": {
+      "subject": "Você foi mencionado em um comentário",
+      "title": "Você foi mencionado em um comentário",
+      "paragraphs": [
+        "Abra o TaskTo.AI para vê-lo.",
+        "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
+      ],
+      "action": "Abrir a notificação"
+    },
+    "notification_card_due": {
+      "subject": "Um cartão seu vence",
+      "title": "Um cartão seu vence",
+      "paragraphs": [
+        "Abra o TaskTo.AI para vê-lo.",
+        "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
+      ],
+      "action": "Abrir a notificação"
+    },
+    "notification_card_overdue": {
+      "subject": "Um cartão seu está atrasado",
+      "title": "Um cartão seu está atrasado",
+      "paragraphs": [
+        "Abra o TaskTo.AI para vê-lo.",
+        "Você recebe este e-mail porque o ativou em Configurações, Notificações. Ele diz apenas o que aconteceu, nunca o conteúdo."
+      ],
+      "action": "Abrir a notificação"
+    },
     "notification_app_effect_failed": {
       "subject": "Uma ação de app precisa da sua atenção",
       "title": "Uma ação de app precisa da sua atenção",
@@ -53,6 +89,15 @@
         "Se não foi você, ignore esta mensagem: sua senha continua a mesma."
       ],
       "action": "Escolher uma nova senha"
+    },
+    "invite": {
+      "subject": "{inviter} convidou você para {workspace} no TaskTo.AI",
+      "title": "Você foi convidado para {workspace}",
+      "paragraphs": [
+        "{inviter} convidou você para o espaço de trabalho {workspace} no TaskTo.AI. Use o botão abaixo para aceitar. O convite é para este endereço de e-mail, funciona uma única vez e por {days} dias.",
+        "Se você não esperava por isto, ignore esta mensagem: nada acontece até que alguém aceite."
+      ],
+      "action": "Aceitar o convite"
     }
   }
 }

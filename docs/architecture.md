@@ -93,7 +93,10 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   [api.md](api.md#search). Board cards (title, body, comments) have a full-text index of
   their own, searched apart from documents and never embedded; it follows the boards by
   a queue that database triggers fill with every card whose text or thread changed, so
-  whatever wrote them, a search is right ([api.md](api.md#searching-cards)).
+  whatever wrote them, a search is right ([api.md](api.md#searching-cards)). So do the text
+  values of app records, only those the caller may read by their roles in each app
+  ([api.md](api.md#searching-app-records)), and a person's own conversations, from the
+  agent runtime's transcript ([api.md](api.md#searching-conversations)).
 - **Boards:** backlog → todo → doing → review → done. Cards have an assignee (person or
   agent), links to docs and conversations, and a blocked reason.
 - **Personal apps:** saved [A2UI](https://a2ui.org/) screens built from a fixed component

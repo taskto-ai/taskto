@@ -45,7 +45,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 |---|---|---|---|---|
 | `setup_completed` | first-run setup | the new one | workspace | |
 | `login_succeeded` | a password login: with two-factor login on, once its code is given (the password alone makes a challenge, which is not a login) | | user | `method` |
-| `login_failed` | a wrong password, or an account with no password or that doesn't exist, or a wrong code at the second step of a login | | user, if it exists | `method`, `reason` (`wrong_code` for the second step; the account is the target; no actor, since whoever typed isn't known to be its owner) |
+| `login_failed` | a wrong password, or an account with no password or that doesn't exist, or a right password for a disabled account, or a wrong code at the second step of a login | | user, if it exists | `method`, `reason` (`wrong_code` for the second step, `account_disabled` for a disabled account; the account is the target; no actor, since whoever typed isn't known to be its owner) |
 | `session_revoked` | a user signs out one of their other sessions from Settings | | user | |
 | `other_sessions_revoked` | a user signs out all their other sessions (none ended records nothing) | | user | `logins_ended` |
 | `logout` | logging out of a live session: one that has expired is no logout, and records nothing | | user | |
@@ -64,8 +64,10 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `workspace_created` | a person creates a workspace (`POST /api/workspaces`) | the new one (in its own log, not the first workspace's) | workspace | `allowed_by` (`admins` or `anyone`: the setting that let them) |
 | `workspace_updated` | an admin changes the workspace | the workspace | workspace | `fields`, `locale` |
 | `invite_created`, `invite_revoked` | an admin invites someone, or withdraws it | the invite's | invite | `email` (the full address), `role` |
+| `invite_emailed` | an admin had an invite's link emailed to its address, and the SMTP server took the message (the invite itself is `invite_created`) | the invite's | invite | |
 | `invite_accepted` | an invite is used, by a new account or an existing one | the invite's | invite | `role`, `already_member` |
 | `member_role_changed` | an admin changes a member's role | the workspace | user | `from`, `to` |
+| `member_disabled`, `member_enabled` | an admin switches a member's account off or on (one already in that state records nothing) | the workspace the admin asked in | user | `logins_ended` on a disable: the sessions it signed out |
 | `member_removed` | an admin removes a member | the workspace | user | `role`; the tokens and shared-space seats that go with it are events of their own (see below) |
 | `access_token_created`, `access_token_revoked` | a member makes or revokes their own token | the token's | access token | `expires`; `cascade` on one revoked by a member's removal |
 | `access_token_used` | a token authenticates a request, at most once a minute (the cadence of the token's `last_used_at`), through the REST API or MCP | the token's | access token | |
@@ -74,6 +76,8 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `space_member_added`, `space_member_role_changed`, `space_member_removed` | a shared space's members | the space's | space | `user_id`, `role`, or `from` and `to`; `cascade` on one removed with the member |
 | `provider_account_created`, `_updated`, `_removed` | a model provider account, a workspace's or a person's own | the account's, none for a personal one | account | `kind`, `scope`, `base_host`, `fields`, `api_key_set` or `api_key_changed` |
 | `data_export_started` | a member starts the export of their own data (`GET …/export`); one event per export that began, none for one turned away by its limits | the workspace | user (the exporter) | |
+| `workspace_export_started` | an admin starts the export of the workspace's shared spaces they are a member of and its member list; one event per export that began, none for one turned away by its limits | the workspace | workspace | `spaces`: how many shared spaces it holds (never their names) |
+| `server_update_requested` | an operator presses "Update now" in Settings → About; one event per request that was written, none for one refused (a pending request, a running update, a channel that is off, a host that can't take one) | the workspace they asked in | workspace | `channel`: the updater's channel, `release` or `main` |
 | `shared_cli_account_created`, `_updated`, `_removed` | a workspace's shared CLI account | the workspace | account | `cli`, `base_host`, `fields`, `api_key_set` or `api_key_changed`; `members_signed_out` on removal |
 | `cli_account_modes_changed` | the default or members' modes for shared CLI accounts changed (a request that changes nothing records nothing) | the workspace | workspace | `default_mode` if it changed, `members_changed` |
 | `search_embeddings_changed` | the workspace's embeddings model is set or turned off, or its account is removed | the workspace | workspace | `enabled`, `account`; `cascade` when the account's removal turned it off |

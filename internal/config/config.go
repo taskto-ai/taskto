@@ -34,6 +34,14 @@ type Config struct {
 	// DataDir holds everything the server stores: the SQLite database, and later the
 	// knowledge-base repositories and the agent runtime's state.
 	DataDir string
+	// UpdateStatusDir is the directory where the host's updater (deploy/taskto-update.sh) writes
+	// the status it shows admins (docs/install.md#automatic-updates); the server only reads it.
+	// Empty means no updater is set up for this server.
+	UpdateStatusDir string
+	// UpdateRequestDir is the directory "Update now" (Settings → About) puts its request in, for
+	// the host's updater to take. It is the one place of the updater's that the server writes.
+	// Empty means the button is off.
+	UpdateRequestDir string
 	// InsecureCookies drops the Secure attribute from the session cookie, so a browser
 	// sends it over plain http. For local development only: on any other network the
 	// cookie would travel in clear text.
@@ -196,6 +204,30 @@ var settings = []setting{
 		usage: "directory for the database and other stored data",
 		get:   func(c Config) string { return c.DataDir },
 		set:   func(c *Config, v string) error { c.DataDir = v; return nil },
+	},
+	{
+		flag: "update-status-dir", env: "TASKTO_UPDATE_STATUS_DIR", key: "update_status_dir",
+		usage: "the directory where the host's updater writes its status, which admins see in Settings > About (read-only; an absolute path)",
+		get:   func(c Config) string { return c.UpdateStatusDir },
+		set: func(c *Config, v string) error {
+			if v != "" && !filepath.IsAbs(v) {
+				return errors.New("want an absolute path")
+			}
+			c.UpdateStatusDir = v
+			return nil
+		},
+	},
+	{
+		flag: "update-request-dir", env: "TASKTO_UPDATE_REQUEST_DIR", key: "update_request_dir",
+		usage: "the directory where Update now (Settings > About) puts its request, for the host's updater to take (writable; an absolute path)",
+		get:   func(c Config) string { return c.UpdateRequestDir },
+		set: func(c *Config, v string) error {
+			if v != "" && !filepath.IsAbs(v) {
+				return errors.New("want an absolute path")
+			}
+			c.UpdateRequestDir = v
+			return nil
+		},
 	},
 	{
 		flag: "insecure-cookies", env: "TASKTO_INSECURE_COOKIES", key: "insecure_cookies", isBool: true,

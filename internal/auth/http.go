@@ -46,6 +46,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/workspaces/{workspace}/tokens/{token}", s.RequireMember(http.HandlerFunc(s.handleDeleteToken)))
 
 	s.passwordRoutes(mux)
+	s.disableRoutes(mux)
 	s.sessionRoutes(mux)
 	s.twoFactorRoutes(mux)
 	s.ssoRoutes(mux)
@@ -283,6 +284,19 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	refund()
 	s.at("password-verified")
 
+	// Only after the password matched, so the answer doesn't tell anyone else that an account
+	// exists, or is off.
+	disabled, err := s.isDisabled(r.Context(), s.db, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if disabled {
+		s.loginFailed(r, u.ID, "account_disabled")
+		accountDisabled(w)
+		return
+	}
+
 	// What the password earns is decided in one transaction that checks the hash is still the
 	// one that matched (a change or reset meanwhile ended the sessions and challenges the old
 	// password could make) and reads the two-factor state: a user with it on gets no session
@@ -291,6 +305,12 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	out, err := s.passwordSignIn(r.Context(), u.ID, hash)
 	if errors.Is(err, errPasswordChanged) {
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
+		return
+	}
+	if errors.Is(err, errAccountDisabled) {
+		// Disabled since the check above.
+		s.loginFailed(r, u.ID, "account_disabled")
+		accountDisabled(w)
 		return
 	}
 	if err != nil {
@@ -412,6 +432,8 @@ func (s *Service) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email string `json:"email"`
 		Role  Role   `json:"role"`
+		// SendEmail also emails the invite link to the invited address (mailer.go).
+		SendEmail bool `json:"send_email"`
 	}
 	if !readJSON(w, r, &req) {
 		return
@@ -428,19 +450,43 @@ func (s *Service) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, `role must be "admin" or "member"`)
 		return
 	}
+	var release func()
+	if req.SendEmail {
+		if !s.EmailLinks() {
+			writeError(w, http.StatusConflict, apierr.CodeMailNotConfigured,
+				"emailing links isn't set up: send the invite link yourself")
+			return
+		}
+		var wait time.Duration
+		if release, wait = s.takeInviteMail(u.ID, email); release == nil {
+			limited(w, wait, apierr.CodeTooManyInviteEmails, "too many invitations emailed: try again later")
+			return
+		}
+	}
 	inv, token, err := s.createInvite(r.Context(), m.WorkspaceID, u.ID, email, req.Role)
 	if err != nil {
+		if release != nil {
+			release() // nothing was sent
+		}
 		s.fail(w, r, err)
 		return
 	}
+	reply := InviteCreated{Invite: inv, Token: token}
+	if req.SendEmail {
+		sent := s.emailInvite(r.Context(), m, u, inv, token)
+		reply.EmailSent = &sent
+	}
 	// The only time the token is shown: the database keeps its hash.
-	writeJSON(w, http.StatusCreated, InviteCreated{Invite: inv, Token: token})
+	writeJSON(w, http.StatusCreated, reply)
 }
 
-// InviteCreated is the reply that makes an invite: the invite and its token, shown only now.
+// InviteCreated is the reply that makes an invite: the invite and its token, shown only now, and,
+// if the email was asked for, whether it went to the relay. The invite exists either way, and its
+// link is here, to copy.
 type InviteCreated struct {
 	Invite
-	Token string `json:"token"`
+	Token     string `json:"token"`
+	EmailSent *bool  `json:"email_sent,omitempty"`
 }
 
 func (s *Service) handleDeleteInvite(w http.ResponseWriter, r *http.Request) {
@@ -560,11 +606,19 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, err error) {
 			"an account with this email exists: log in, then accept the invite"
 	case errors.Is(err, errInviteInvalid):
 		status, code, msg = http.StatusNotFound, apierr.CodeInviteInvalid, errInviteInvalid.Error()
+	case errors.Is(err, errAccountDisabled):
+		// The admin was disabled after the request was authenticated.
+		accountDisabled(w)
+		return
 	default:
 		serverError(w, r, err)
 		return
 	}
 	writeError(w, status, code, msg)
+}
+
+func accountDisabled(w http.ResponseWriter) {
+	writeError(w, http.StatusForbidden, apierr.CodeAccountDisabled, errAccountDisabled.Error())
 }
 
 func passwordLoginDisabled(w http.ResponseWriter) {

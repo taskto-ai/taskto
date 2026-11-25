@@ -13,7 +13,7 @@ import (
 // field never widens a call, and a limit of 0 is not the default.
 func TestSearchRefusesNullAndNonPositiveArguments(t *testing.T) {
 	w := newWorld(t)
-	for _, tool := range []string{"search_docs", "search_cards"} {
+	for _, tool := range []string{"search_docs", "search_cards", "search_records"} {
 		for _, v := range []any{nil, 0, -1, "1", 1.5} {
 			w.status(http.StatusBadRequest, w.aliceConv, tool, map[string]any{"query": "zanzibar", "space_id": v})
 		}
@@ -37,7 +37,7 @@ func TestSearchRefusesNullAndNonPositiveArguments(t *testing.T) {
 // refused over the bytes, and ASCII up to the limit is searched.
 func TestSearchQueryLimitIsInBytes(t *testing.T) {
 	w := newWorld(t)
-	for _, tool := range []string{"search_docs", "search_cards"} {
+	for _, tool := range []string{"search_docs", "search_cards", "search_records"} {
 		// 300 characters, 600 bytes: within the schema's count, over the bytes.
 		w.status(http.StatusBadRequest, w.aliceConv, tool, map[string]any{"query": strings.Repeat("é", 300)})
 		w.status(http.StatusBadRequest, w.aliceConv, tool, map[string]any{"query": strings.Repeat("a", 501)})

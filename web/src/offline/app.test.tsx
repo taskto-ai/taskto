@@ -55,6 +55,7 @@ const signedIn = {
   'GET /api/me': { body: me },
   'GET /api/workspaces/1/conversations': { body: { conversations: [] } },
   'GET /api/workspaces/1/backup': { body: { health: 'none' } },
+  'GET /api/workspaces/1/updates': { body: { configured: false, running_version: 'dev', status: null } },
 }
 
 beforeEach(() => {

@@ -3,7 +3,7 @@
 // the URL's fragment, which browsers don't send to servers or in Referer.
 
 import { type FormEvent, useState } from 'react'
-import { ApiError, api, type Invite, type InviteCreated, type Member, ws } from '../api'
+import { ApiError, api, type Invite, type InviteCreated, type MailStatus, type Member, mailPath, ws } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Alert, ConfirmButton, CopyButton, day, useAction } from './parts'
@@ -42,6 +42,10 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
     action.run(() => api(`${base}/members/${m.id}`, { method: 'PATCH', body: { role } })).then(members.reload)
   const remove = (m: Member) =>
     action.run(() => api(`${base}/members/${m.id}`, { method: 'DELETE' })).then(members.reload)
+  const setDisabled = (m: Member, disabled: boolean) =>
+    action
+      .run(() => api(`${base}/members/${m.id}/${disabled ? 'disable' : 'enable'}`, { method: 'POST' }))
+      .then(members.reload)
   const withdraw = (i: Invite) =>
     action.run(() => api(`${base}/invites/${i.id}`, { method: 'DELETE' })).then(invites.reload)
   const clearTwoFactor = (m: Member) =>
@@ -71,6 +75,7 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                   <strong>
                     {m.name}
                     {m.id === me && <span className="tt-muted"> {t('settings.members.you')}</span>}
+                    {m.disabled && <span className="tt-badge"> {t('settings.members.disabled')}</span>}
                   </strong>
                   <span className="tt-muted tt-small">{m.email}</span>
                 </div>
@@ -97,6 +102,27 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                       {t('settings.members.resetLink')}
                     </button>
                   )}
+                  {m.id !== me &&
+                    (m.disabled ? (
+                      <button
+                        type="button"
+                        className="tt-button"
+                        aria-label={t('common.labelFor', { label: t('settings.members.enable'), name: m.name })}
+                        disabled={action.busy}
+                        onClick={() => setDisabled(m, false)}
+                      >
+                        {t('settings.members.enable')}
+                      </button>
+                    ) : (
+                      <ConfirmButton
+                        label={t('settings.members.disable')}
+                        name={m.name}
+                        question={t('settings.members.disableQuestion', { name: m.name })}
+                        confirm={t('settings.members.disableConfirm')}
+                        disabled={action.busy}
+                        onConfirm={() => setDisabled(m, true)}
+                      />
+                    ))}
                   {m.id !== me && m.two_factor && (
                     <ConfirmButton
                       label={t('settings.members.clearTwoFactor')}
@@ -148,7 +174,7 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
 
       <section className="tt-panel" aria-labelledby="tt-invites">
         <h2 id="tt-invites">{t('settings.members.invites')}</h2>
-        <InviteForm base={base} onInvited={invites.reload} />
+        <InviteForm workspace={workspace} base={base} onInvited={invites.reload} />
         <Alert error={invites.error} />
         {invites.data?.length === 0 && <p className="tt-muted">{t('settings.members.noInvites')}</p>}
         {invites.data && invites.data.length > 0 && (
@@ -183,22 +209,45 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
   )
 }
 
-function InviteForm({ base, onInvited }: { base: string; onInvited: () => void }) {
+function InviteForm({ workspace, base, onInvited }: { workspace: number; base: string; onInvited: () => void }) {
   const t = useT()
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<Role>('member')
-  const [made, setMade] = useState<{ email: string; link: string; expires: string } | null>(null)
+  const [made, setMade] = useState<{
+    email: string
+    link: string
+    expires: string
+    // Whether the email was asked for, and went: null when it wasn't asked for.
+    emailed: boolean | null
+  } | null>(null)
   const [copied, setCopied] = useState(false)
+  const [sendEmail, setSendEmail] = useState(true)
   const action = useAction()
+  // Offered only where the server can email links; any failure to know says no, and the invite is
+  // made and copied by hand, as it always was.
+  const mail = useLoad(
+    () => api<MailStatus>(mailPath(workspace)).catch(() => ({ configured: false }) as MailStatus),
+    [workspace],
+  )
+  const canEmail = mail.data?.sends_links === true
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    let invite: (Invite & { token: string }) | undefined
+    let invite: InviteCreated | undefined
+    const ask = canEmail && sendEmail
     const ok = await action.run(async () => {
-      invite = await api<InviteCreated>(`${base}/invites`, { method: 'POST', body: { email, role } })
+      invite = await api<InviteCreated>(`${base}/invites`, {
+        method: 'POST',
+        body: ask ? { email, role, send_email: true } : { email, role },
+      })
     })
     if (ok && invite) {
-      setMade({ email: invite.email, link: inviteLink(invite.token), expires: invite.expires_at })
+      setMade({
+        email: invite.email,
+        link: inviteLink(invite.token),
+        expires: invite.expires_at,
+        emailed: ask ? invite.email_sent === true : null,
+      })
       setCopied(false)
       setEmail('')
       onInvited()
@@ -230,12 +279,25 @@ function InviteForm({ base, onInvited }: { base: string; onInvited: () => void }
         <button type="submit" className="tt-button tt-primary" disabled={action.busy}>
           {action.busy ? t('settings.members.inviting') : t('settings.members.invite')}
         </button>
+        {canEmail && (
+          <label className="tt-check">
+            <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
+            {t('settings.members.inviteSendEmail')}
+          </label>
+        )}
       </form>
       <Alert error={action.error} />
       {made && (
         <div className="tt-notice" role="status">
           <p>
-            {t.rich('settings.members.inviteMade', { email: <strong>{made.email}</strong>, date: day(made.expires) })}
+            {t.rich(
+              made.emailed === true
+                ? 'settings.members.inviteEmailed'
+                : made.emailed === false
+                  ? 'settings.members.inviteEmailFailed'
+                  : 'settings.members.inviteMade',
+              { email: <strong>{made.email}</strong>, date: day(made.expires) },
+            )}
           </p>
           <div className="tt-copy">
             <input

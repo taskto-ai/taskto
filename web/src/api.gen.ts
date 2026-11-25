@@ -430,6 +430,7 @@ export type InviteCreated = {
   created_at: string
   expires_at: string
   token: string
+  email_sent?: boolean
 }
 
 export type Me = {
@@ -445,6 +446,7 @@ export type Member = {
   name: string
   role: string
   joined_at: string
+  disabled: boolean
   two_factor?: boolean
 }
 
@@ -530,6 +532,72 @@ export type TokenCreated = {
   expires_at: string | null
   last_used_at: string | null
   token: string
+}
+
+export type UpdateReport = {
+  configured: boolean
+  running_version: string
+  expects_status?: boolean
+  stale?: boolean
+  status: UpdatestatusStatus | null
+  request: UpdatestatusRequestState
+}
+
+export type UpdateRequested = {
+  requested_at: string
+}
+
+export type UpdatestatusNeedsPerson = {
+  kind: string
+  code?: string
+}
+
+export type UpdatestatusRequestRun = {
+  at?: string
+  finished?: string
+  result: string
+  code?: string
+}
+
+export type UpdatestatusRequestState = {
+  available: boolean
+  reason?: string
+  pending_since?: string
+}
+
+export type UpdatestatusRequests = {
+  supported: boolean
+  last: UpdatestatusRequestRun | null
+}
+
+export type UpdatestatusRun = {
+  at?: string
+  finished?: string
+  result: string
+  from?: string
+  to?: string
+  code?: string
+  backed_up?: boolean
+  requested?: boolean
+}
+
+export type UpdatestatusRunning = {
+  since: string
+  to?: string
+  requested?: boolean
+}
+
+export type UpdatestatusStatus = {
+  version: number
+  checked?: string
+  channel: string
+  hold?: boolean
+  recorded_version?: string
+  last_run: UpdatestatusRun | null
+  last_change: UpdatestatusRun | null
+  needs_person: UpdatestatusNeedsPerson | null
+  running: UpdatestatusRunning | null
+  requests: UpdatestatusRequests | null
 }
 
 export type Widget = {
