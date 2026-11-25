@@ -1540,6 +1540,10 @@
       "spacesNamed": "Espaços de {name}",
       "spacesHint": "Os apps dos espaços que você escolher podem usar esta conta, depois que você os aprovar. O espaço privado de outra pessoa não pode ser escolhido.",
       "privateSpace": "{name} (privado)",
+      "archivedSpace": "{name} (arquivado)",
+      "otherSpaces_one": "E {count} espaço privado de outro membro, que você não pode ver.",
+      "otherSpaces_many": "E {count} de espaços privados de outros membros, que você não pode ver.",
+      "otherSpaces_other": "E {count} espaços privados de outros membros, que você não pode ver.",
       "removeQuestion": "Remover {name}? As credenciais são apagadas junto."
     },
     "cliAccounts": {

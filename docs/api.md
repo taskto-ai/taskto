@@ -3739,7 +3739,7 @@ reads the space may list them; they are seen only for the apps they may view.
 An integration is a workspace admin's connection to an account at an outside service. The
 first kind is `payments`, with Stripe and Square as providers. The providers are a closed list
 in the server's code; see [integrations.md](integrations.md). Every route below is **session
-only**: an access token, and with it MCP, is refused (`401`), and nothing here is offered to
+only**: an access token, and with it MCP, is refused (`403`), and nothing here is offered to
 the agent. Every query is scoped to the workspace in the path, so another workspace's
 integration is a `404`.
 
@@ -3761,6 +3761,7 @@ An integration looks like this:
   "disabled": false,
   "disabled_at": null,
   "spaces": [12],
+  "other_spaces": 0,
   "created_at": "…",
   "updated_at": "…",
   "last_event_at": null
@@ -3782,23 +3783,29 @@ An integration looks like this:
   ISO 4217 codes from the server's closed list ([`integration-providers`](#get-apiworkspacesworkspaceintegration-providers)).
   An app's definition never sets either.
 - **`secrets`**: **write-only**. Each of `api_key` and `webhook_secret` is `"set"` or
-  `"not set"`, never the value. A secret is sent in `secrets` on create or `PATCH`, 8 to 4096
-  characters that look like the provider's own (a Stripe publishable key `pk_…` is refused as
-  an API key, with `integration_secret_invalid`); a value that doesn't fit is refused without
-  quoting it. A secret is replaced by sending a new one and can't be removed; to stop using
+  `"not set"`, never the value. A secret is sent in `secrets` on create or `PATCH`, of the shape
+  the provider's own have and at most 258 characters (a Stripe publishable key `pk_…` is
+  refused as an API key, with `integration_secret_invalid`); a value that doesn't fit is
+  refused without quoting it. A secret is replaced by sending a new one and can't be removed; to stop using
   an account, disable the integration or delete it. A replaced webhook secret keeps verifying
   events for a day (for the provider's own rotation overlap).
 - **`webhook_url`**: the address to register at the provider, `null` when the server has no
   `-public-url`: payments are then found by polling. It holds a random 128-bit id and no
-  secret.
-- **`spaces`**: ids of the spaces whose apps may use the integration. A new integration has
-  none.
+  secret. It is made from the current `-public-url` each time, so it follows a change of it.
+- **`spaces`**: ids of the spaces whose apps may use the integration **that the caller may
+  manage**: their own private space and the workspace's shared spaces (archived ones too, so
+  they can be taken out). Another person's private space is never in it: **`other_spaces`**
+  counts the integration's allowed spaces the caller can't see, which they can't change
+  either. A new integration has none.
 
 ### `GET /api/workspaces/{workspace}/integration-providers`
 
 Admin only. What a form needs to connect one: `{"providers": [{"id", "kinds", "secrets":
 [{"name", "required"}], "settings": [{"name", "options", "required"}]}], "currencies": […],
-"max_amount_minor": …, "webhooks_available": bool}`.
+"exponents": {"EUR": 2, "JPY": 0, …}, "max_amount_minor": …, "webhooks_available": bool}`.
+`exponents` is the server's number of decimals for each of `currencies`, the unit
+`max_amount_minor` is in; show an amount with it, not with the browser's own table (which
+differs for a few currencies).
 
 ### `GET /api/workspaces/{workspace}/integrations`
 
@@ -3828,10 +3835,12 @@ invalid field or an attempt to change the name or provider; `404`.
 
 ### `PUT /api/workspaces/{workspace}/integrations/{integration}/spaces`
 
-Admin only. `{"spaces": [id, …]}` replaces the allowed spaces. An admin may allow their own
-private space and the workspace's shared spaces, whether or not they are a member; any other
-space, another person's private space or another workspace's, is `404 space_not_found` and
-nothing changes. `200` with the integration.
+Admin only. `{"spaces": [id, …]}` replaces the allowed spaces **among the ones the caller
+manages**. An admin may allow their own private space and the workspace's shared spaces,
+whether or not they are a member; any other space, another person's private space or another
+workspace's, is `404 space_not_found` and nothing changes. The integration's allowed spaces
+the caller can't manage (another admin's private space) stay as they are, whatever the list.
+`200` with the integration, as the caller sees it.
 
 ### `POST /api/workspaces/{workspace}/integrations/{integration}/check`
 

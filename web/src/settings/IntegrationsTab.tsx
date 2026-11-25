@@ -27,20 +27,25 @@ function label(t: Translate, group: string, code: string): string {
   return has(key) ? t(key as Key) : code
 }
 
-// The number of decimals a currency has, from the formatter's own table.
-function decimals(f: Format, currency: string): number {
-  return new Intl.NumberFormat(f.locale, { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2
-}
+// The number of decimals of each currency, the server's own table (a ceiling is checked in its
+// unit), never the browser's: they differ for a few currencies, such as the peso and the forint.
+type Exponents = Record<string, number>
 
 // An amount in a currency's smallest unit, written as people write money.
-function money(f: Format, minor: number, currency: string): string {
-  return f.number(minor / 10 ** decimals(f, currency), { style: 'currency', currency })
+function money(f: Format, exponents: Exponents, minor: number, currency: string): string {
+  const digits = exponents[currency] ?? 2
+  return f.number(minor / 10 ** digits, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })
 }
 
 // What a ceiling comes to in each of the currencies: the same number of smallest units is not the
 // same sum in euros and in yen, so the page says each.
-function amounts(f: Format, minor: number, currencies: string[]): string {
-  return f.list(currencies.map((c) => money(f, minor, c)))
+function amounts(f: Format, exponents: Exponents, minor: number, currencies: string[]): string {
+  return f.list(currencies.map((c) => money(f, exponents, minor, c)))
 }
 
 export function IntegrationsTab({ workspace }: { workspace: number }) {
@@ -48,9 +53,10 @@ export function IntegrationsTab({ workspace }: { workspace: number }) {
   const base = `${ws(workspace)}/integrations`
   const registry = useLoad(() => api<IntegrationRegistry>(`${ws(workspace)}/integration-providers`), [workspace])
   const list = useLoad(() => api<{ integrations: Integration[] }>(base).then((r) => r.integrations), [base])
+  // Every space the admin manages, archived ones too: an archived space an integration is still
+  // allowed in has to be shown to be taken out (the spaces form offers the others only).
   const spaces = useLoad(
-    () =>
-      api<{ spaces: Space[] }>(`${ws(workspace)}/spaces?all=true`).then((r) => r.spaces.filter((s) => !s.archived_at)),
+    () => api<{ spaces: Space[] }>(`${ws(workspace)}/spaces?all=true`).then((r) => r.spaces),
     [workspace],
   )
   const [editing, setEditing] = useState<number | 'new' | null>(null)
@@ -101,6 +107,7 @@ export function IntegrationsTab({ workspace }: { workspace: number }) {
                   key={i.id}
                   base={base}
                   integration={i}
+                  exponents={(registry.data as IntegrationRegistry).exponents}
                   spaces={spaces.data ?? []}
                   onEdit={() => setEditing(i.id)}
                   onChanged={list.reload}
@@ -117,12 +124,14 @@ export function IntegrationsTab({ workspace }: { workspace: number }) {
 function IntegrationRow({
   base,
   integration: i,
+  exponents,
   spaces,
   onEdit,
   onChanged,
 }: {
   base: string
   integration: Integration
+  exponents: Exponents
   spaces: Space[]
   onEdit: () => void
   onChanged: () => void
@@ -131,13 +140,20 @@ function IntegrationRow({
   const f = useFormat()
   const action = useAction()
   const [check, setCheck] = useState<IntegrationCheck | null>(null)
+  const [checking, setChecking] = useState(false)
   const [choosing, setChoosing] = useState(false)
   const url = `${base}/${i.id}`
-  const names = i.spaces.map((id) => spaces.find((s) => s.id === id)).filter((s): s is Space => s !== undefined)
+  const names = i.spaces
+    .map((id) => spaces.find((s) => s.id === id))
+    .filter((s): s is Space => s !== undefined)
+    .map((s) => spaceName(t, s))
 
   const runCheck = () => {
     setCheck(null)
-    action.run(async () => setCheck(await api<IntegrationCheck>(`${url}/check`, { method: 'POST' })))
+    setChecking(true)
+    action
+      .run(async () => setCheck(await api<IntegrationCheck>(`${url}/check`, { method: 'POST' })))
+      .finally(() => setChecking(false))
   }
   const toggle = () =>
     action.run(() => api(url, { method: 'PATCH', body: { disabled: !i.disabled } })).then((ok) => ok && onChanged())
@@ -166,13 +182,14 @@ function IntegrationRow({
         </span>
         <span className="tt-muted tt-small">
           {t('settings.integrations.limits', {
-            amounts: amounts(f, i.max_amount_minor, i.currencies),
+            amounts: amounts(f, exponents, i.max_amount_minor, i.currencies),
           })}
         </span>
         <span className="tt-muted tt-small">
-          {names.length > 0
-            ? t('settings.integrations.allowedIn', { spaces: f.list(names.map((s) => s.name)) })
-            : t('settings.integrations.allowedNowhere')}
+          {names.length > 0 && t('settings.integrations.allowedIn', { spaces: f.list(names) })}
+          {names.length === 0 && i.other_spaces === 0 && t('settings.integrations.allowedNowhere')}
+          {i.other_spaces > 0 &&
+            `${names.length > 0 ? ' ' : ''}${t('settings.integrations.otherSpaces', { count: i.other_spaces })}`}
         </span>
         <span className="tt-muted tt-small">
           {i.webhook_url ? (
@@ -183,7 +200,7 @@ function IntegrationRow({
             t('settings.integrations.polling')
           )}
         </span>
-        {action.busy && !check && <span className="tt-muted tt-small">{t('settings.integrations.checking')}</span>}
+        {checking && <span className="tt-muted tt-small">{t('settings.integrations.checking')}</span>}
         {check?.ok && (
           <span className="tt-ok tt-small" role="status">
             {t('settings.integrations.checkOk')}
@@ -199,7 +216,7 @@ function IntegrationRow({
           <SpacesForm
             url={url}
             integration={i}
-            spaces={spaces}
+            spaces={spaces.filter((s) => !s.archived_at || i.spaces.includes(s.id))}
             onDone={() => {
               setChoosing(false)
               onChanged()
@@ -259,8 +276,16 @@ function IntegrationRow({
   )
 }
 
+// A space as the lists name it: marked when it is the admin's private one or is archived.
+function spaceName(t: Translate, s: Space): string {
+  if (s.kind === 'private') return t('settings.integrations.privateSpace', { name: s.name })
+  if (s.archived_at) return t('settings.integrations.archivedSpace', { name: s.name })
+  return s.name
+}
+
 // Which spaces may use the integration: the admin's own private space and the shared ones, since
-// those are the ones an admin may allow without being let into anyone else's.
+// those are the ones an admin may allow without being let into anyone else's. An archived space it
+// is still allowed in is listed too, marked, so it can be taken out.
 function SpacesForm({
   url,
   integration,
@@ -295,7 +320,7 @@ function SpacesForm({
         {spaces.map((s) => (
           <label key={s.id}>
             <input type="checkbox" checked={chosen.includes(s.id)} onChange={() => flip(s.id)} />
-            {s.kind === 'private' ? t('settings.integrations.privateSpace', { name: s.name }) : s.name}
+            {spaceName(t, s)}
           </label>
         ))}
       </fieldset>
@@ -340,17 +365,26 @@ function IntegrationForm({
   const provider: IntegrationProvider | undefined = registry.providers.find((p) => p.id === form.provider)
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((x) => ({ ...x, [key]: e.target.value }))
+  // Another provider has other secrets and settings: what was typed for the last one is dropped,
+  // never sent to the new one.
+  const pickProvider = (e: { target: { value: string } }) => {
+    set('provider')(e)
+    setSettings({})
+    setSecrets({})
+  }
   const ceiling = Number(form.max_amount_minor)
   const preview =
-    Number.isSafeInteger(ceiling) && ceiling > 0 && currencies.length > 0 ? amounts(f, ceiling, currencies) : null
+    Number.isSafeInteger(ceiling) && ceiling > 0 && currencies.length > 0
+      ? amounts(f, registry.exponents, ceiling, currencies)
+      : null
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     if (!provider) return
-    // Only the secrets that were typed: an empty box keeps the stored one.
+    // Only the secrets of this provider that were typed: an empty box keeps the stored one.
     const typed = Object.fromEntries(
-      Object.entries(secrets)
-        .map(([k, v]) => [k, v.trim()] as const)
+      provider.secrets
+        .map((spec) => [spec.name, (secrets[spec.name] ?? '').trim()] as const)
         .filter(([, v]) => v !== ''),
     )
     const wanted = Object.fromEntries(provider.settings.map((s) => [s.name, (settings[s.name] ?? '').trim()]))
@@ -386,7 +420,7 @@ function IntegrationForm({
         <>
           <label>
             {t('settings.integrations.providerLabel')}
-            <select value={form.provider} onChange={set('provider')} required>
+            <select value={form.provider} onChange={pickProvider} required>
               {registry.providers.map((p) => (
                 <option key={p.id} value={p.id}>
                   {label(t, 'provider', p.id)}

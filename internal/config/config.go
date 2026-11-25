@@ -366,7 +366,7 @@ var settings = []setting{
 		flag: "integration-egress", env: "TASKTO_INTEGRATION_EGRESS", key: "integration_egress",
 		usage: "where calls to integrations' providers may go: public, any, or a comma-separated list of public, hosts and CIDR prefixes (default public)",
 		get:   func(c Config) string { return c.IntegrationEgress },
-		set:   setEgress(func(c *Config) *string { return &c.IntegrationEgress }),
+		set:   setIntegrationEgress(func(c *Config) *string { return &c.IntegrationEgress }),
 	},
 	{
 		flag: "agent", env: "TASKTO_AGENT", key: "agent", isBool: true,
@@ -600,12 +600,17 @@ func (c Config) SMTPEgressPolicy() egress.Policy {
 }
 
 // IntegrationEgressPolicy is the egress policy of the calls to integrations' providers: what is
-// set, or "public" when nothing is. Load has already checked it.
+// set, or "public" when nothing is. It fails closed: a value that is empty (egress.Parse reads an
+// empty policy as "any") or that doesn't parse is "public" too. Load has already checked it.
 func (c Config) IntegrationEgressPolicy() egress.Policy {
-	if c.IntegrationEgress == "" {
-		return egress.MustParse("public")
+	public := egress.MustParse("public")
+	if strings.TrimSpace(c.IntegrationEgress) == "" {
+		return public
 	}
-	p, _ := egress.Parse(c.IntegrationEgress)
+	p, err := egress.Parse(c.IntegrationEgress)
+	if err != nil {
+		return public
+	}
 	return p
 }
 
@@ -695,6 +700,20 @@ func setEgress(field func(*Config) *string) func(*Config, string) error {
 		}
 		*field(c) = p.String()
 		return nil
+	}
+}
+
+// setIntegrationEgress is setEgress for the integrations' policy, where nothing said is "public",
+// not "any": an empty value (an empty flag, variable or file entry) is the default, so it can't
+// open calls that carry credentials to every address.
+func setIntegrationEgress(field func(*Config) *string) func(*Config, string) error {
+	set := setEgress(field)
+	return func(c *Config, v string) error {
+		if strings.TrimSpace(v) == "" {
+			*field(c) = "public"
+			return nil
+		}
+		return set(c, v)
 	}
 }
 

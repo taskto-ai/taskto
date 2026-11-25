@@ -8,7 +8,8 @@
 -- and an admin binds it (a later migration holds those approvals).
 
 CREATE TABLE integrations (
-    id           INTEGER PRIMARY KEY,
+    -- AUTOINCREMENT, so an id is never given to a second integration: a sealed secret is bound to it.
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
     workspace_id INTEGER NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
     -- 128 random bits in hex: the only thing in the webhook's address, so it can't be guessed.
     public_id    TEXT NOT NULL UNIQUE CHECK (length(public_id) = 32),
@@ -25,9 +26,6 @@ CREATE TABLE integrations (
     -- smallest unit, and the currencies (a JSON array of ISO 4217 codes) that may be asked for.
     max_amount_minor INTEGER NOT NULL CHECK (max_amount_minor > 0),
     currencies   TEXT NOT NULL CHECK (json_valid(currencies) AND json_type(currencies) = 'array' AND json_array_length(currencies) > 0),
-    -- The address the admin was told to register at the provider, when the server had a public
-    -- URL; '' when it had none (payments are then reconciled by polling).
-    webhook_url  TEXT NOT NULL DEFAULT '',
     -- Set while an admin has switched the integration off: nothing sends or receives, and
     -- its approvals and events are kept.
     disabled_at  TEXT,
@@ -44,8 +42,8 @@ CREATE TABLE integrations (
 CREATE INDEX integrations_by_workspace ON integrations (workspace_id, id);
 
 -- The secrets of an integration, sealed with the server key (internal/serverkey) under
--- associated data that names the integration and the secret, so a sealed value copied to
--- another row or name doesn't open. Write-only: nothing reads one back to a person.
+-- associated data that names the workspace, the integration (its row id and public id) and the
+-- secret, so a sealed value copied to another row, workspace or name doesn't open. Write-only: nothing reads one back to a person.
 --
 -- name is 'api_key', 'webhook_secret' or 'webhook_secret_previous'. When a webhook secret is
 -- replaced the old one is kept as the previous one until expires_at, so events signed before
@@ -75,6 +73,14 @@ CREATE INDEX integration_spaces_by_space ON integration_spaces (space_id);
 -- another's.
 CREATE TRIGGER integration_spaces_same_workspace
 BEFORE INSERT ON integration_spaces
+WHEN (SELECT workspace_id FROM integrations WHERE id = NEW.integration_id)
+     IS NOT (SELECT workspace_id FROM spaces WHERE id = NEW.space_id)
+BEGIN
+    SELECT RAISE(ABORT, 'an integration is used only in its own workspace''s spaces');
+END;
+
+CREATE TRIGGER integration_spaces_same_workspace_update
+BEFORE UPDATE OF integration_id, space_id ON integration_spaces
 WHEN (SELECT workspace_id FROM integrations WHERE id = NEW.integration_id)
      IS NOT (SELECT workspace_id FROM spaces WHERE id = NEW.space_id)
 BEGIN

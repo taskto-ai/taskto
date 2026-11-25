@@ -5,11 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -722,6 +724,14 @@ func TestSpaceReadersSeeNoSecrets(t *testing.T) {
 	// Someone who can't read the space gets what everyone gets for a space they can't open: 404.
 	expectCode(t, outsider.do(http.MethodGet, path, nil), http.StatusNotFound, "space_not_found")
 	expectCode(t, (&client{e: e}).do(http.MethodGet, path, nil), http.StatusUnauthorized, "not_logged_in")
+	// An access token, even a member's own, is refused on this route: only sessions list a space's
+	// integrations, so a token's holder (an agent) never learns an integration's name.
+	rec = member.do(http.MethodPost, wsPath(ws, "tokens"), map[string]any{"name": "t"})
+	expect(t, rec, http.StatusCreated)
+	token := &client{e: e, bearer: decode[auth.TokenCreated](t, rec).Secret}
+	if rec := token.do(http.MethodGet, path, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("an access token on the space route = %d, want 403; body %s", rec.Code, rec.Body.String())
+	}
 	// Another workspace's admin can't read it through their own workspace's id either.
 	_, ws2 := e.otherWorkspace(owner)
 	expectCode(t, owner.do(http.MethodGet, wsPath(ws2, fmt.Sprintf("spaces/%d/integrations", shared)), nil), http.StatusNotFound, "space_not_found")
@@ -914,5 +924,250 @@ func TestMigrationHasNoLeftoverDefaults(t *testing.T) {
 		if _, err := e.db.Exec(`UPDATE integrations SET `+col+` WHERE id = ?`, in.ID); err == nil { //nolint:gosec // G202: col is from the list above
 			t.Errorf("UPDATE integrations SET %s succeeded", col)
 		}
+	}
+}
+
+// A sealed value opens only under the workspace, public id, row id and name it was sealed for.
+func TestSealedSecretsBindWorkspaceRowAndName(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	var publicID string
+	var sealed []byte
+	if err := e.db.QueryRow(`SELECT public_id FROM integrations WHERE id = ?`, in.ID).Scan(&publicID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.QueryRow(`SELECT sealed FROM integration_secrets WHERE integration_id = ? AND name = 'api_key'`, in.ID).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	own := sealRef{workspace: ws, id: in.ID, publicID: publicID}
+	if plain, err := e.key.Open(sealed, own.ad(SecretAPIKey)); err != nil || string(plain) != stripeTestKey {
+		t.Fatalf("the sealed key doesn't open under its own data: %v", err)
+	}
+	for name, ref := range map[string]sealRef{
+		"another row":       {workspace: ws, id: in.ID + 1, publicID: publicID},
+		"another workspace": {workspace: ws + 1, id: in.ID, publicID: publicID},
+		"another public id": {workspace: ws, id: in.ID, publicID: strings.Repeat("0", 32)},
+	} {
+		if _, err := e.key.Open(sealed, ref.ad(SecretAPIKey)); err == nil {
+			t.Errorf("a sealed key opened under %s", name)
+		}
+	}
+	for _, name := range []string{SecretWebhookSecret, SecretWebhookSecretPrevious, ""} {
+		if _, err := e.key.Open(sealed, own.ad(name)); err == nil {
+			t.Errorf("a sealed key opened under the name %q", name)
+		}
+	}
+
+	// A sealed key copied over the same integration's other secret doesn't open as that one.
+	if _, err := e.db.Exec(`UPDATE integration_secrets SET sealed = ? WHERE integration_id = ? AND name = 'webhook_secret'`, sealed, in.ID); err != nil {
+		t.Fatal(err)
+	}
+	var bad unreadableError
+	if _, err := e.store.credentials(context.Background(), ws, in.ID); !errors.As(err, &bad) || bad.secret != SecretWebhookSecret {
+		t.Fatalf("a key copied over the webhook secret opened: %v", err)
+	}
+
+	// The same blob under another workspace's integration doesn't open either.
+	_, ws2 := e.otherWorkspace(owner)
+	other := e.create(owner, ws2, stripeBody("main"))
+	if _, err := e.db.Exec(`UPDATE integration_secrets SET sealed = ? WHERE integration_id = ? AND name = 'api_key'`, sealed, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.credentials(context.Background(), ws2, other.ID); !errors.As(err, &bad) || bad.secret != SecretAPIKey {
+		t.Fatalf("a key copied to another workspace's integration opened: %v", err)
+	}
+}
+
+// A row id is never reused, so a sealed secret left behind by a deleted integration can't be
+// attached to a new one by id.
+func TestIntegrationIDsAreNeverReused(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	first := e.create(owner, ws, stripeBody("main"))
+	expect(t, owner.do(http.MethodDelete, wsPath(ws, fmt.Sprintf("integrations/%d", first.ID)), nil), http.StatusNoContent)
+	second := e.create(owner, ws, stripeBody("main"))
+	if second.ID <= first.ID {
+		t.Fatalf("the id of a removed integration was reused: %d after %d", second.ID, first.ID)
+	}
+}
+
+// What an admin sees and changes of an integration's spaces is what they manage: their private
+// space and the shared ones. Another admin's private space is never in a reply, and an admin's
+// change leaves it as it is.
+func TestSpacesAreScopedToTheCaller(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	other := e.invite(owner, ws, "admin2@example.com", "admin")
+	in := e.create(owner, ws, stripeBody("main"))
+	shared := e.sharedSpace(owner, ws, "Shop")
+	mine := e.privateSpace(owner, ws)
+	theirs := e.privateSpace(other, ws)
+	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+	ctx := context.Background()
+	sorted := func(ids []int64) []int64 {
+		out := slices.Clone(ids)
+		slices.Sort(out)
+		return out
+	}
+
+	got := decode[Integration](t, other.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared, theirs}}))
+	if !slices.Equal(sorted(got.Spaces), sorted([]int64{shared, theirs})) || got.OtherSpaces != 0 {
+		t.Fatalf("the other admin's view = %+v", got)
+	}
+
+	// The first admin sees the shared space, and only counts the other admin's private one.
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"get": owner.do(http.MethodGet, one, nil), "put": owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared}}),
+	} {
+		expect(t, rec, http.StatusOK)
+		if got := decode[Integration](t, rec); !slices.Equal(got.Spaces, []int64{shared}) || got.OtherSpaces != 1 {
+			t.Fatalf("%s: the first admin's view = %+v", name, got)
+		}
+	}
+	list := decode[struct {
+		Integrations []Integration `json:"integrations"`
+	}](t, owner.do(http.MethodGet, wsPath(ws, "integrations"), nil)).Integrations
+	if len(list) != 1 || !slices.Equal(list[0].Spaces, []int64{shared}) || list[0].OtherSpaces != 1 {
+		t.Fatalf("the first admin's list = %+v", list)
+	}
+	// The private space's id is in none of what the first admin was sent, in any field.
+	for _, rec := range []*httptest.ResponseRecorder{owner.do(http.MethodGet, one, nil), owner.do(http.MethodGet, wsPath(ws, "integrations"), nil)} {
+		var raw any
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatal(err)
+		}
+		if mentions(raw, float64(theirs)) {
+			t.Fatalf("the other admin's private space id %d is in %s", theirs, rec.Body.String())
+		}
+	}
+
+	// Naming the other admin's private space is "not found", and what it was set to stays.
+	expectCode(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared, theirs}}), http.StatusNotFound, "space_not_found")
+
+	// The first admin's changes touch their own subset only: the other admin's space stays.
+	got = decode[Integration](t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{mine}}))
+	if !slices.Equal(got.Spaces, []int64{mine}) || got.OtherSpaces != 1 {
+		t.Fatalf("after replacing the first admin's spaces = %+v", got)
+	}
+	if ok, err := e.store.usable(ctx, ws, in.ID, theirs); err != nil || !ok {
+		t.Fatalf("the other admin's private space was removed by someone else: %v, %v", ok, err)
+	}
+	got = decode[Integration](t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{}}))
+	if len(got.Spaces) != 0 || got.OtherSpaces != 1 {
+		t.Fatalf("after emptying the first admin's spaces = %+v", got)
+	}
+	if ok, _ := e.store.usable(ctx, ws, in.ID, theirs); !ok {
+		t.Fatal("emptying the list removed another admin's private space")
+	}
+	if ok, _ := e.store.usable(ctx, ws, in.ID, shared); ok {
+		t.Fatal("a shared space the admin took out is still allowed")
+	}
+	// And the other admin sees their own and counts the first admin's private space (none now).
+	got = decode[Integration](t, other.do(http.MethodGet, one, nil))
+	if !slices.Equal(got.Spaces, []int64{theirs}) || got.OtherSpaces != 0 {
+		t.Fatalf("the other admin's view after = %+v", got)
+	}
+	// An admin can take their own private space out too.
+	expect(t, other.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{}}), http.StatusOK)
+	if ok, _ := e.store.usable(ctx, ws, in.ID, theirs); ok {
+		t.Fatal("the other admin couldn't remove their own space")
+	}
+	// Nothing was added or removed beyond what each admin did: 2 + 1 added, and 1 + 1 + 1 removed.
+	var added, removed float64
+	for _, ev := range e.events(ws, audit.IntegrationSpacesChanged) {
+		added += ev.Details["added"].(float64)
+		removed += ev.Details["removed"].(float64)
+	}
+	if added != 3 || removed != 3 {
+		t.Fatalf("audit added %v, removed %v; want 3 and 3", added, removed)
+	}
+}
+
+// mentions says whether a decoded JSON value holds the number n anywhere.
+func mentions(v any, n float64) bool {
+	switch v := v.(type) {
+	case float64:
+		return v == n
+	case []any:
+		for _, x := range v {
+			if mentions(x, n) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, x := range v {
+			if mentions(x, n) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The webhook address is made from the server's public URL when it is shown, never stored, so
+// changing -public-url changes the address and no stale one is left in the database.
+func TestWebhookAddressFollowsThePublicURL(t *testing.T) {
+	e := newEnv(t, "https://old.example.com")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	if in.WebhookURL == nil || !strings.HasPrefix(*in.WebhookURL, "https://old.example.com"+HookPrefix) {
+		t.Fatalf("webhook url = %v", in.WebhookURL)
+	}
+	var stored int
+	if err := e.db.QueryRow(`SELECT count(*) FROM pragma_table_info('integrations') WHERE name = 'webhook_url'`).Scan(&stored); err != nil || stored != 0 {
+		t.Fatalf("the address is stored: %d, %v", stored, err)
+	}
+	// The same database behind a server with another public URL.
+	mux := http.NewServeMux()
+	a := auth.New(e.db, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
+	a.Routes(mux)
+	spaces := access.New(e.db, a)
+	New(e.store, Options{PublicURL: "https://new.example.com"}).Routes(mux, a, spaces)
+	e.h = auth.CSRF(mux)
+	moved := decode[Integration](t, owner.do(http.MethodGet, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), nil))
+	if moved.WebhookURL == nil || *moved.WebhookURL != "https://new.example.com"+HookPrefix+strings.TrimPrefix(*in.WebhookURL, "https://old.example.com"+HookPrefix) {
+		t.Fatalf("webhook url after the change = %v", moved.WebhookURL)
+	}
+}
+
+// The connect form gets the server's own decimals for each currency, so what the web app shows
+// and what the server checks are the same unit.
+func TestRegistryServesCurrencyExponents(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	reg := decode[Registry](t, owner.do(http.MethodGet, wsPath(ws, "integration-providers"), nil))
+	if len(reg.Exponents) != len(reg.Currencies) {
+		t.Fatalf("exponents = %v for currencies %v", reg.Exponents, reg.Currencies)
+	}
+	for _, c := range reg.Currencies {
+		want, _ := Exponent(c)
+		if got, ok := reg.Exponents[c]; !ok || got != want {
+			t.Errorf("%s: exponent %d, %v; want %d", c, got, ok, want)
+		}
+	}
+	if reg.Exponents["JPY"] != 0 || reg.Exponents["EUR"] != 2 || reg.Exponents["COP"] != 2 {
+		t.Errorf("exponents = %v", reg.Exponents)
+	}
+}
+
+// The schema keeps a space in the integration's workspace on an update too, not only an insert.
+func TestAllowedSpaceCannotMoveToAnotherWorkspace(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	shared := e.sharedSpace(owner, ws, "Shop")
+	expect(t, owner.do(http.MethodPut, wsPath(ws, fmt.Sprintf("integrations/%d/spaces", in.ID)), map[string]any{"spaces": []int64{shared}}), http.StatusOK)
+	_, ws2 := e.otherWorkspace(owner)
+	foreign := e.sharedSpace(owner, ws2, "Elsewhere")
+	if _, err := e.db.Exec(`UPDATE integration_spaces SET space_id = ? WHERE integration_id = ?`, foreign, in.ID); err == nil {
+		t.Fatal("an allowed space was moved to another workspace's space")
+	}
+	in2 := e.create(owner, ws2, stripeBody("main"))
+	if _, err := e.db.Exec(`UPDATE integration_spaces SET integration_id = ? WHERE integration_id = ?`, in2.ID, in.ID); err == nil {
+		t.Fatal("an allowed space was moved to another workspace's integration")
+	}
+	if ok, _ := e.store.usable(context.Background(), ws, in.ID, shared); !ok {
+		t.Fatal("a refused update changed the allowed space")
 	}
 }

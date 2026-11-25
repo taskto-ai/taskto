@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -39,6 +40,8 @@ func TestRequestBuilderRefusesHostsTheAdapterDoesNotOwn(t *testing.T) {
 		"another scheme":            "ftp://api.stripe.com/",
 		"an opaque URL":             "https:api.stripe.com",
 		"a host of another adapter": "https://connect.squareup.com/v2/payments",
+		"an empty port":             "https://api.stripe.com:/v1/balance",
+		"no host":                   "https:///v1/balance",
 	} {
 		_, err := stripeClient.NewRequest(context.Background(), http.MethodGet, url, nil)
 		if !errors.Is(err, ErrHostNotOwned) {
@@ -46,6 +49,92 @@ func TestRequestBuilderRefusesHostsTheAdapterDoesNotOwn(t *testing.T) {
 		}
 		if err != nil && strings.Contains(err.Error(), "example") {
 			t.Errorf("%s: the error quotes the URL: %v", name, err)
+		}
+	}
+}
+
+// Unicode case mapping must never make a look-alike equal an adapter's host: the dialer encodes
+// the look-alike as IDNA and connects to another domain.
+func TestRequestBuilderRefusesNonASCIIHosts(t *testing.T) {
+	stripeClient := NewClient(Lookup("stripe"), nil, egress.MustParse("public"))
+	for name, url := range map[string]string{
+		"a dotted capital I (maps to i)":      "https://api.str\u0130pe.com/v1/balance",
+		"a long s (maps to s)":                "https://api.\u017ftripe.com/v1/balance",
+		"a Kelvin sign":                       "https://api.stripe.com.\u212a/",
+		"a fullwidth dot":                     "https://api\uff0estripe\uff0ecom/",
+		"an ideographic full stop":            "https://api\u3002stripe\u3002com/",
+		"a fullwidth letter":                  "https://api.stripe.\uff43om/",
+		"an escaped capital I":                "https://api.str%C4%B0pe.com/",
+		"punycode of a look-alike":            "https://xn--api-stripe-w6a.com/",
+		"punycode in place of the whole host": "https://xn--stripe-api.com/",
+		"a zero-width space":                  "https://api.stripe\u200b.com/",
+	} {
+		if _, err := stripeClient.NewRequest(context.Background(), http.MethodGet, url, nil); !errors.Is(err, ErrHostNotOwned) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	// The same holds for the tests' own endpoint, where the old comparison folded case by Unicode.
+	c := NewClient(Lookup("stripe"), nil, egress.MustParse("any"), WithTestEndpoint("kfake.test:8080"))
+	for name, url := range map[string]string{
+		"the endpoint":      "http://kfake.test:8080/",
+		"its capital forms": "http://KFAKE.test:8080/",
+	} {
+		if _, err := c.NewRequest(context.Background(), http.MethodGet, url, nil); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := c.NewRequest(context.Background(), http.MethodGet, "http://\u212afake.test:8080/", nil); !errors.Is(err, ErrHostNotOwned) {
+		t.Errorf("a Kelvin sign for k at the test endpoint: err = %v", err)
+	}
+	// An endpoint that isn't ASCII is never set.
+	odd := NewClient(Lookup("stripe"), nil, egress.MustParse("any"), WithTestEndpoint("\u212afake.test:8080"))
+	if odd.testHost != "" {
+		t.Errorf("a non-ASCII test endpoint was kept: %q", odd.testHost)
+	}
+}
+
+func TestASCIILower(t *testing.T) {
+	if got, ok := asciiLower("API.Stripe.COM"); !ok || got != "api.stripe.com" {
+		t.Errorf("asciiLower = %q, %v", got, ok)
+	}
+	for _, s := range []string{"\u0130", "\u212a", "\u017f", "a\u00e9"} {
+		if got, ok := asciiLower(s); ok || got != "" {
+			t.Errorf("asciiLower(%q) = %q, %v", s, got, ok)
+		}
+	}
+}
+
+// A request that wasn't made by NewRequest is checked again where it is sent, as completely.
+func TestDoChecksWhatTheBuilderChecks(t *testing.T) {
+	c := NewClient(Lookup("stripe"), nil, egress.MustParse("any"))
+	ok, err := c.NewRequest(context.Background(), http.MethodGet, "https://api.stripe.com/v1/balance", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withHost := func(host string) *http.Request {
+		r := ok.Clone(context.Background())
+		r.Host = host
+		return r
+	}
+	for name, req := range map[string]*http.Request{
+		"a nil request":               nil,
+		"no URL":                      {},
+		"user info":                   {Method: http.MethodGet, URL: &url.URL{Scheme: "https", User: url.User("u"), Host: "api.stripe.com"}},
+		"an opaque URL":               {Method: http.MethodGet, URL: &url.URL{Scheme: "https", Opaque: "//api.stripe.com/x"}},
+		"an empty port":               {Method: http.MethodGet, URL: &url.URL{Scheme: "https", Host: "api.stripe.com:"}},
+		"a Host header of another":    withHost("example.com"),
+		"a Host header with a port":   withHost("api.stripe.com:8443"),
+		"a non-ASCII Host header":     withHost("api.str\u0130pe.com"),
+		"a Host header of a sibling":  withHost("files.stripe.com"),
+		"a plain-http scheme":         {Method: http.MethodGet, URL: &url.URL{Scheme: "http", Host: "api.stripe.com"}},
+		"a non-ASCII host in the URL": {Method: http.MethodGet, URL: &url.URL{Scheme: "https", Host: "api.str\u0130pe.com"}},
+	} {
+		resp, err := c.Do(req)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		if !errors.Is(err, ErrHostNotOwned) {
+			t.Errorf("%s: Do: %v", name, err)
 		}
 	}
 }

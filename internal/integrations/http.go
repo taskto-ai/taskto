@@ -81,14 +81,57 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service, spaces *access.Che
 		s.spaces.RequireSpace(access.Read, http.HandlerFunc(s.handleForSpace)))
 }
 
-// view is an integration as the API shows it, with the webhook address the server's public URL
-// gives it.
-func (s *Service) view(rec record) Integration {
+// view is an integration as the API shows the caller: the webhook address the server's public
+// URL gives it, and the spaces it is allowed in that the caller manages (visible), which never
+// include another person's private space; those are only counted.
+func (s *Service) view(rec record, visible map[int64]bool) Integration {
 	out := rec.Integration
+	out.Spaces = []int64{}
+	out.OtherSpaces = 0
+	for _, sp := range rec.Spaces {
+		if visible[sp] {
+			out.Spaces = append(out.Spaces, sp)
+		} else {
+			out.OtherSpaces++
+		}
+	}
 	if u := hookURL(s.publicURL, rec.publicID); u != "" {
 		out.WebhookURL = &u
 	}
 	return out
+}
+
+// manageable lists the spaces the caller, an admin, may manage: the ids view and setSpaces scope
+// everything to. On an error it has answered.
+func (s *Service) manageable(w http.ResponseWriter, r *http.Request) ([]int64, bool) {
+	spaces, err := s.spaces.Manageable(r.Context(), actorOf(r), workspaceOf(r))
+	if err != nil {
+		serverError(w, r, err)
+		return nil, false
+	}
+	ids := make([]int64, len(spaces))
+	for i, sp := range spaces {
+		ids[i] = sp.ID
+	}
+	return ids, true
+}
+
+// visibleTo is the set of ids view takes.
+func visibleTo(ids []int64) map[int64]bool {
+	set := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set
+}
+
+// respondOne writes rec as the caller sees it.
+func (s *Service) respondOne(w http.ResponseWriter, r *http.Request, status int, rec record) {
+	ids, ok := s.manageable(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, status, s.view(rec, visibleTo(ids)))
 }
 
 func workspaceOf(r *http.Request) int64 {
@@ -113,6 +156,9 @@ type ProviderInfo struct {
 type Registry struct {
 	Providers  []ProviderInfo `json:"providers" apitypes:"nonnull"`
 	Currencies []string       `json:"currencies" apitypes:"nonnull"`
+	// Exponents is each currency's number of decimals, the server's own table: the web app
+	// writes an amount in the unit the server checks it in, whatever its formatter says.
+	Exponents map[string]int `json:"exponents" apitypes:"nonnull"`
 	// MaxAmountMinor is the largest amount ceiling the server accepts.
 	MaxAmountMinor int64 `json:"max_amount_minor"`
 	// WebhooksAvailable is whether the server has a public URL, so providers can reach it.
@@ -120,7 +166,7 @@ type Registry struct {
 }
 
 func (s *Service) handleProviders(w http.ResponseWriter, _ *http.Request) {
-	reg := Registry{Providers: []ProviderInfo{}, Currencies: Currencies(), MaxAmountMinor: MaxAmountMinor, WebhooksAvailable: s.publicURL != ""}
+	reg := Registry{Providers: []ProviderInfo{}, Currencies: Currencies(), Exponents: Exponents(), MaxAmountMinor: MaxAmountMinor, WebhooksAvailable: s.publicURL != ""}
 	for _, p := range Providers() {
 		reg.Providers = append(reg.Providers, ProviderInfo{ID: p.ID(), Kinds: p.Kinds(), Secrets: p.Secrets(), Settings: p.Settings()})
 	}
@@ -133,9 +179,14 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	ids, ok := s.manageable(w, r)
+	if !ok {
+		return
+	}
+	visible := visibleTo(ids)
 	out := make([]Integration, len(recs))
 	for i, rec := range recs {
-		out[i] = s.view(rec)
+		out[i] = s.view(rec, visible)
 	}
 	writeJSON(w, http.StatusOK, map[string][]Integration{"integrations": out})
 }
@@ -159,7 +210,7 @@ func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.view(rec))
+	s.respondOne(w, r, http.StatusOK, rec)
 }
 
 // createRequest is the body of a create. Secrets are the clear values, which only live here,
@@ -184,14 +235,13 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, err)
 		return
 	}
-	d.publicURL = s.publicURL
 	rec, err := s.store.create(r.Context(), workspaceOf(r), actorOf(r), d)
 	if err != nil {
 		fail(w, r, err)
 		return
 	}
 	slog.InfoContext(r.Context(), "integration created", "integration", rec.ID, "provider", rec.Provider, "by", actorOf(r))
-	writeJSON(w, http.StatusCreated, s.view(rec))
+	s.respondOne(w, r, http.StatusCreated, rec)
 }
 
 // updateRequest is the body of a PATCH. An absent or null field stays as it is. settings and
@@ -224,7 +274,7 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.InfoContext(r.Context(), "integration changed", "integration", rec.ID, "provider", rec.Provider, "by", actorOf(r))
-	writeJSON(w, http.StatusOK, s.view(rec))
+	s.respondOne(w, r, http.StatusOK, rec)
 }
 
 func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
@@ -260,27 +310,27 @@ func (s *Service) handleSpaces(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only spaces the admin can see and manage: their own private space and the workspace's shared
 	// ones. Anyone else's private space is "not found", as it is everywhere else.
-	manageable, err := s.spaces.Manageable(r.Context(), actorOf(r), workspaceOf(r))
-	if err != nil {
-		serverError(w, r, err)
+	manageable, ok := s.manageable(w, r)
+	if !ok {
 		return
 	}
 	want := slices.Clone(req.Spaces)
 	slices.Sort(want)
 	want = slices.Compact(want)
 	for _, sp := range want {
-		if !slices.ContainsFunc(manageable, func(m access.Space) bool { return m.ID == sp }) {
+		if !slices.Contains(manageable, sp) {
 			writeError(w, http.StatusNotFound, apierr.CodeSpaceNotFound, "space not found")
 			return
 		}
 	}
-	rec, err := s.store.setSpaces(r.Context(), workspaceOf(r), actorOf(r), id, want)
+	// Only the caller's manageable spaces change; the integration's others stay as they are.
+	rec, err := s.store.setSpaces(r.Context(), workspaceOf(r), actorOf(r), id, want, manageable)
 	if err != nil {
 		fail(w, r, err)
 		return
 	}
 	slog.InfoContext(r.Context(), "integration spaces changed", "integration", id, "spaces", len(rec.Spaces), "by", actorOf(r))
-	writeJSON(w, http.StatusOK, s.view(rec))
+	s.respondOne(w, r, http.StatusOK, rec)
 }
 
 // CheckResult is the answer of a check. Remote says whether the provider was asked: this version

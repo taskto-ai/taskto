@@ -626,8 +626,11 @@ export type Integration = {
   webhook_url: string | null
   disabled: boolean
   disabled_at: string | null
-  // The ids of the spaces whose apps may use it.
+  // The ids of the spaces whose apps may use it that the caller manages (their own private space
+  // and the shared ones), and how many more are allowed that they can't see: other people's
+  // private spaces, which are never named.
   spaces: number[]
+  other_spaces: number
   created_at: string
   updated_at: string
   last_event_at: string | null
@@ -646,6 +649,8 @@ export type IntegrationProvider = {
 export type IntegrationRegistry = {
   providers: IntegrationProvider[]
   currencies: string[]
+  // The server's number of decimals for each currency: the unit a ceiling is in.
+  exponents: Record<string, number>
   max_amount_minor: number
   webhooks_available: boolean
 }

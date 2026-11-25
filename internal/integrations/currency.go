@@ -1,6 +1,7 @@
 package integrations
 
 import (
+	"maps"
 	"slices"
 	"strings"
 )
@@ -33,6 +34,9 @@ func Currencies() []string {
 	slices.Sort(codes)
 	return codes
 }
+
+// Exponents is a copy of the table, by code: what the web app writes an amount with.
+func Exponents() map[string]int { return maps.Clone(exponents) }
 
 // Limits of an integration's limits.
 const (

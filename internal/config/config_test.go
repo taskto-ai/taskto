@@ -497,6 +497,37 @@ func TestIntegrationEgress(t *testing.T) {
 	}
 }
 
+// An empty setting is "public", never "any": it must not open calls that carry credentials.
+func TestIntegrationEgressEmptyIsPublic(t *testing.T) {
+	file := writeConfig(t, `integration_egress = ""`)
+	for name, tt := range map[string]struct {
+		args []string
+		env  map[string]string
+	}{
+		"an empty flag":     {args: []string{"-integration-egress", ""}},
+		"a blank flag":      {args: []string{"-integration-egress", "  "}},
+		"an empty variable": {env: map[string]string{"TASKTO_INTEGRATION_EGRESS": ""}},
+		"an empty file key": {args: []string{"-config", file}},
+	} {
+		cfg, err := Load(tt.args, env(tt.env), io.Discard)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if p := cfg.IntegrationEgressPolicy(); p.IsAny() || p.String() != "public" {
+			t.Errorf("%s: policy = %q, want public", name, p.String())
+		}
+	}
+	// The method fails closed on its own: an unset, blank or unparsable field is "public".
+	for _, v := range []string{"", "  ", "nonsense!", "any, public", ",,"} {
+		if p := (Config{IntegrationEgress: v}).IntegrationEgressPolicy(); p.IsAny() || p.String() != "public" {
+			t.Errorf("IntegrationEgress = %q: policy = %q, want public", v, p.String())
+		}
+	}
+	if p := (Config{IntegrationEgress: "any"}).IntegrationEgressPolicy(); !p.IsAny() {
+		t.Error("an explicit any was refused")
+	}
+}
+
 func TestSMTPSettings(t *testing.T) {
 	cfg, err := Load(nil, env(map[string]string{ //nolint:gosec // G101: names of settings and a path, not credentials
 		"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "TaskTo <taskto@example.com>",

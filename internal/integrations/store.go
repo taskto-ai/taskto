@@ -59,8 +59,12 @@ type Integration struct {
 	WebhookURL *string `json:"webhook_url"`
 	Disabled   bool    `json:"disabled"`
 	DisabledAt *string `json:"disabled_at"`
-	// Spaces are the spaces whose apps may use the integration, by id.
+	// Spaces are the spaces whose apps may use the integration, by id: only the ones the caller
+	// may manage (their own private space and the workspace's shared ones), never another
+	// person's private space. OtherSpaces counts the rest, which the caller can neither see nor
+	// change.
 	Spaces      []int64 `json:"spaces" apitypes:"nonnull"`
+	OtherSpaces int     `json:"other_spaces"`
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
 	LastEventAt *string `json:"last_event_at"`
@@ -72,7 +76,8 @@ const (
 	secretNotSet = "not set"
 )
 
-// record is a stored integration with what the API doesn't show.
+// record is a stored integration with what the API doesn't show. Its Spaces are all of them,
+// whoever's: the API shows a caller only the ones they manage (Service.view).
 type record struct {
 	Integration
 	publicID string
@@ -92,9 +97,22 @@ func NewStore(sqlDB *sql.DB, key *serverkey.Key) *Store {
 	return &Store{db: sqlDB, key: key, now: time.Now}
 }
 
-// secretAD binds a sealed secret to its integration and name.
-func secretAD(id int64, name string) []byte {
-	return []byte("taskto integration:" + strconv.FormatInt(id, 10) + ":" + name)
+// sealRef is what a sealed secret is bound to: the integration's workspace, row id and public id.
+// Each part is checked when a secret is opened, so a sealed value copied to another row (even one
+// that took a deleted row's id), another workspace or another name doesn't open.
+type sealRef struct {
+	workspace, id int64
+	publicID      string
+}
+
+// ad is the associated data a secret called name is sealed under. None of the parts holds a ":".
+func (r sealRef) ad(name string) []byte {
+	return []byte("taskto integration:" + strconv.FormatInt(r.workspace, 10) + ":" + r.publicID + ":" +
+		strconv.FormatInt(r.id, 10) + ":" + name)
+}
+
+func (r record) sealRef(workspace int64) sealRef {
+	return sealRef{workspace: workspace, id: r.ID, publicID: r.publicID}
 }
 
 // timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the schema's default.
@@ -236,8 +254,6 @@ type draft struct {
 	maxAmount   int64
 	currencies  []string
 	mode        string
-	// publicURL is the server's public URL, "" when it has none: the webhook address is made from it.
-	publicURL string
 }
 
 func newPublicID() (string, error) {
@@ -249,8 +265,8 @@ func newPublicID() (string, error) {
 }
 
 // seal stores a secret sealed for its integration and name.
-func (s *Store) seal(ctx context.Context, tx *sql.Tx, id int64, name, value string, expires *time.Time) error {
-	sealed, err := s.key.Seal([]byte(value), secretAD(id, name))
+func (s *Store) seal(ctx context.Context, tx *sql.Tx, ref sealRef, name, value string, expires *time.Time) error {
+	sealed, err := s.key.Seal([]byte(value), ref.ad(name))
 	if err != nil {
 		return err
 	}
@@ -261,7 +277,7 @@ func (s *Store) seal(ctx context.Context, tx *sql.Tx, id int64, name, value stri
 	_, err = tx.ExecContext(ctx, `INSERT INTO integration_secrets (integration_id, name, sealed, set_at, expires_at)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (integration_id, name) DO UPDATE SET sealed = excluded.sealed, set_at = excluded.set_at, expires_at = excluded.expires_at`,
-		id, name, sealed, s.stamp(s.now()), exp)
+		ref.id, name, sealed, s.stamp(s.now()), exp)
 	return err
 }
 
@@ -294,9 +310,9 @@ func (s *Store) create(ctx context.Context, workspace, user int64, d draft) (rec
 		}
 		now := s.stamp(s.now())
 		res, err := tx.ExecContext(ctx, `INSERT INTO integrations (workspace_id, public_id, provider, name, display_name, mode, settings,
-			max_amount_minor, currencies, webhook_url, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			max_amount_minor, currencies, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			workspace, publicID, d.provider.ID(), d.name, d.displayName, d.mode, string(settings), d.maxAmount, string(currencies),
-			hookURL(d.publicURL, publicID), user, now, now)
+			user, now, now)
 		if err != nil {
 			return err
 		}
@@ -305,8 +321,9 @@ func (s *Store) create(ctx context.Context, workspace, user int64, d draft) (rec
 			return err
 		}
 		// The secrets are sealed for the row's id, which only exists now.
+		ref := sealRef{workspace: workspace, id: id, publicID: publicID}
 		for name, value := range d.secrets {
-			if err := s.seal(ctx, tx, id, name, value, nil); err != nil {
+			if err := s.seal(ctx, tx, ref, name, value, nil); err != nil {
 				return err
 			}
 		}
@@ -392,18 +409,19 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 		}
 
 		now := s.now()
+		ref := old.sealRef(workspace)
 		if webhook, ok := c.secrets[SecretWebhookSecret]; ok {
 			// The secret that is replaced keeps verifying for a day, so events the provider signed
 			// with it before the change took effect there aren't refused.
-			if err := s.keepPrevious(ctx, tx, id, now); err != nil {
+			if err := s.keepPrevious(ctx, tx, ref, now); err != nil {
 				return err
 			}
-			if err := s.seal(ctx, tx, id, SecretWebhookSecret, webhook, nil); err != nil {
+			if err := s.seal(ctx, tx, ref, SecretWebhookSecret, webhook, nil); err != nil {
 				return err
 			}
 		}
 		if key, ok := c.secrets[SecretAPIKey]; ok {
-			if err := s.seal(ctx, tx, id, SecretAPIKey, key, nil); err != nil {
+			if err := s.seal(ctx, tx, ref, SecretAPIKey, key, nil); err != nil {
 				return err
 			}
 		}
@@ -456,26 +474,26 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 // keepPrevious moves the integration's current webhook secret to the previous one, valid for
 // previousOverlap, and drops a previous one that has expired. With no current secret, or one that
 // doesn't open (the server key changed), there is nothing to keep.
-func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, id int64, now time.Time) error {
+func (s *Store) keepPrevious(ctx context.Context, tx *sql.Tx, ref sealRef, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM integration_secrets WHERE integration_id = ? AND name = ? AND expires_at <= ?`,
-		id, SecretWebhookSecretPrevious, s.stamp(now)); err != nil {
+		ref.id, SecretWebhookSecretPrevious, s.stamp(now)); err != nil {
 		return err
 	}
 	var sealed []byte
 	err := tx.QueryRowContext(ctx, `SELECT sealed FROM integration_secrets WHERE integration_id = ? AND name = ?`,
-		id, SecretWebhookSecret).Scan(&sealed)
+		ref.id, SecretWebhookSecret).Scan(&sealed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	plain, err := s.key.Open(sealed, secretAD(id, SecretWebhookSecret))
+	plain, err := s.key.Open(sealed, ref.ad(SecretWebhookSecret))
 	if err != nil {
 		return nil //nolint:nilerr // a secret that doesn't open can't be kept: the replacement stands alone
 	}
 	expires := now.Add(previousOverlap)
-	return s.seal(ctx, tx, id, SecretWebhookSecretPrevious, string(plain), &expires)
+	return s.seal(ctx, tx, ref, SecretWebhookSecretPrevious, string(plain), &expires)
 }
 
 // remove deletes the workspace's integration id with its secrets and spaces. Anything that
@@ -517,9 +535,11 @@ func isForeignKey(err error) bool {
 	return strings.Contains(err.Error(), "FOREIGN KEY constraint failed")
 }
 
-// setSpaces replaces the spaces the integration may be used in. The caller has checked that the
-// spaces are ones the admin may allow; the schema checks that they are in the workspace.
-func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces []int64) (record, error) {
+// setSpaces replaces the spaces the integration may be used in, among the ones the caller may
+// manage (manageable): the integration's spaces outside it, another person's private space, are
+// kept as they are. The caller has checked that spaces are all manageable; the schema checks
+// that they are in the workspace.
+func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces []int64, manageable []int64) (record, error) {
 	var rec record
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		old, err := s.get(ctx, tx, workspace, id)
@@ -537,7 +557,7 @@ func (s *Store) setSpaces(ctx context.Context, workspace, user, id int64, spaces
 			}
 		}
 		for _, sp := range old.Spaces {
-			if !slices.Contains(spaces, sp) {
+			if slices.Contains(manageable, sp) && !slices.Contains(spaces, sp) {
 				if _, err := tx.ExecContext(ctx, `DELETE FROM integration_spaces WHERE integration_id = ? AND space_id = ?`, id, sp); err != nil {
 					return err
 				}
@@ -590,7 +610,7 @@ func (s *Store) credentials(ctx context.Context, workspace, id int64) (Credentia
 		if err := rows.Scan(&name, &sealed, &expires); err != nil {
 			return Credentials{}, err
 		}
-		plain, openErr := s.key.Open(sealed, secretAD(id, name))
+		plain, openErr := s.key.Open(sealed, rec.sealRef(workspace).ad(name))
 		if name == SecretWebhookSecretPrevious && (openErr != nil || (expires != nil && *expires <= now)) {
 			continue
 		}

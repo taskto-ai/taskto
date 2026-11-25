@@ -69,8 +69,9 @@ validated in Go.
 ## Secrets
 
 - Credentials are sealed with the server's key (`internal/serverkey`, AES-256-GCM) with
-  associated data that names the integration and the secret, so a sealed value copied to
-  another row or name doesn't open.
+  associated data that names the workspace, the integration (its row id, which is never
+  reused, and its public id) and the secret, so a sealed value copied to another row,
+  workspace or name doesn't open.
 - They are **write-only**. The API answers `"set"` or `"not set"` for each. A secret is
   replaced by sending a new one and can't be read or removed; to stop using an account,
   switch the integration off or remove it.
@@ -98,8 +99,10 @@ validated in Go.
   routes.
 - An admin may allow their own private space and the workspace's shared spaces, whether or not
   they are a member of them. Another person's private space, or another workspace's, is `404`
-  and nothing changes: the admin never needs to read it. The database refuses an allowance
-  across workspaces, too.
+  and nothing changes: the admin never needs to read it, and no reply shows it: an integration
+  lists only the allowed spaces the caller manages, and counts the others. A change of the
+  list changes only the caller's own subset, so one admin can't take away another's private
+  space. The database refuses an allowance across workspaces, on insert and on update.
 - Anyone who can read a space sees which integrations are allowed there, with a name, kind and
   status. No secret, no webhook address, no limit, no provider.
 - The name, provider and workspace of an integration, and its `public_id`, never change (the
@@ -132,11 +135,13 @@ comes with the first change that calls a provider.
 Calls to providers go through their own egress policy, `-integration-egress` /
 `TASKTO_INTEGRATION_EGRESS`, **`public` by default**: the address of every connection is
 checked after name resolution, so loopback, private, link-local and metadata addresses are
-refused, and a redirect is an answer, never followed.
+refused, and a redirect is an answer, never followed. An empty value is `public` too, and so is
+one the server can't parse: the policy fails closed, never open.
 
 Besides, every adapter has constant API hosts, and the **request builder** (`Client`) refuses
 any URL whose host the adapter doesn't own (a look-alike, a sibling, a port, a plain `http`
-URL, an address, credentials in the URL) before the dialer is reached. Only the Go server
+URL, an address, credentials in the URL, an empty port, a host with any non-ASCII character
+such as a look-alike whose Unicode case mapping equals an adapter's host) before the dialer is reached. Only the Go server
 calls providers; the agent runtime never does. Tests reach a fake provider through a
 constructor option that no setting can set.
 

@@ -1534,6 +1534,9 @@
       "spacesNamed": "Spaces of {name}",
       "spacesHint": "Apps in the spaces you choose may use this account, once you approve them. Another person's private space can't be chosen.",
       "privateSpace": "{name} (private)",
+      "archivedSpace": "{name} (archived)",
+      "otherSpaces_one": "And {count} private space of another member, which you can't see.",
+      "otherSpaces_other": "And {count} private spaces of other members, which you can't see.",
       "removeQuestion": "Remove {name}? Its credentials are deleted with it."
     },
     "cliAccounts": {

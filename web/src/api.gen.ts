@@ -430,6 +430,7 @@ export type Integration = {
   disabled: boolean
   disabled_at: string | null
   spaces: number[]
+  other_spaces: number
   created_at: string
   updated_at: string
   last_event_at: string | null
@@ -445,6 +446,7 @@ export type IntegrationCheck = {
 export type IntegrationRegistry = {
   providers: IntegrationsProviderInfo[]
   currencies: string[]
+  exponents: Record<string, number>
   max_amount_minor: number
   webhooks_available: boolean
 }
