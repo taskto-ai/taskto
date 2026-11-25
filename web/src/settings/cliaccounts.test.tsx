@@ -173,9 +173,10 @@ test("an untrusted URL is text with a warning; Claude Code's code is pasted back
   expect(url.closest('a')).toBeNull()
   expect(screen.queryByRole('link', { name: /example\.com/ })).toBeNull()
   expect(document.querySelector('b')).toBeNull()
-  expect(
-    screen.getByText("This address isn't Claude Code's known sign-in page. Check it before you open it."),
-  ).toBeTruthy()
+  // A security warning: an alert, said at once.
+  expect(screen.getAllByRole('alert').map((a) => a.textContent)).toContain(
+    "This address isn't Claude Code's known sign-in page. Check it before you open it.",
+  )
 
   fireEvent.change(screen.getByLabelText('Paste the code the sign-in page shows'), {
     target: { value: '  fake-code#state  ' },

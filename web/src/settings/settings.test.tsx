@@ -1201,3 +1201,20 @@ test("a member's actions are reached by keyboard, and Escape leaves the question
   await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
   expect(sent(calls, 'DELETE', '/api/workspaces/1/members/3')).toEqual([])
 })
+
+test('a cancelled new-token dialog forgets what was typed and what failed', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/tokens': { body: { tokens: [token({})] } },
+    'POST /api/workspaces/1/tokens': { status: 409, body: { error: 'too many tokens: at most 50 per member' } },
+  })
+  render(<SettingsPage me={me} workspace={member} tab="tokens" />)
+  await screen.findByRole('list', { name: 'Your tokens' })
+  const dialog = await createToken('half typed')
+  await within(dialog).findByRole('alert')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  fireEvent.click(screen.getByRole('button', { name: 'Create token' }))
+  const again = await screen.findByRole('dialog', { name: 'New access token' })
+  expect((within(again).getByLabelText('Token name') as HTMLInputElement).value).toBe('')
+  expect(within(again).queryByRole('alert')).toBeNull()
+})

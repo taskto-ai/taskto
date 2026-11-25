@@ -444,6 +444,7 @@
     padding: 0;
     list-style: none;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-1);
     font: var(--type-small);
     color: var(--color-text-muted);

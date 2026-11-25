@@ -191,7 +191,11 @@ test('a release that needs manual steps says so, and a version that is not on re
   render(<SettingsPage me={me} workspace={admin} tab="about" />)
   expect(await screen.findByText(/A new release needs steps by hand/)).toBeTruthy()
   expect(screen.getByText('taskto-update --to VERSION').tagName).toBe('CODE')
-  expect(screen.getByText(/This is not the version the install records/)).toBeTruthy()
+  // The sentence wraps in a notice, never in a pill that would cut it off; the badge is short.
+  const sentence = screen.getByText(/This is not the version the install records/)
+  expect(sentence.closest('.ui-badge')).toBeNull()
+  expect(sentence.closest('.ui-notice')?.getAttribute('data-tone')).toBe('warning')
+  expect(screen.getByText('Not the recorded version').closest('.ui-badge')).toBeTruthy()
 })
 
 test('a stale status, a hold, and a server with no updater each say so, in the admin language', async () => {

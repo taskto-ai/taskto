@@ -83,6 +83,9 @@ test('turning it on: the password, then the secret as a QR code and as text, the
   fireEvent.click(screen.getByRole('button', { name: 'Confirm and turn on' }))
   const list = await screen.findByRole('list', { name: 'Your recovery codes' })
   expect(list.textContent).toBe('aaaa-bbbb-ccccdddd-eeee-ffff')
+  // It is on from this moment, while the codes are on screen: the badge says so.
+  expect(await screen.findByText('On')).toBeTruthy()
+  expect(screen.queryByText('Off')).toBeNull()
   expect(sent(calls, 'POST', '/api/me/two-factor/confirm').at(-1)).toEqual({
     enrolment: 'fake-enrolment',
     code: '123456',
