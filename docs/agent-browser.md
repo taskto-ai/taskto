@@ -197,7 +197,9 @@ All under `/api/me/browser`, for the signed-in user's own browser only, like
   the tabs, and when it stops if idle;
 - `POST /api/me/browser/start` and `POST /api/me/browser/stop` (`{"browser": "personal"}`);
 - `GET /api/me/browser/live`: the live view's WebSocket (binary RFB). It checks the session,
-  checks that the Origin is this server, and needs the personal browser to be running.
+  checks that the Origin is this server, and needs the personal browser to be running. The view
+  lasts as long as the login that opened it: signing that login out, from any browser, closes it
+  at once, and a session that ended some other way closes it within seconds (`auth.WatchSession`).
 
 Every route has a test that one user can't see or reach another's browser. The isolation tests
 (root, Linux) cover what one user's process tries against another's:

@@ -46,6 +46,8 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `setup_completed` | first-run setup | the new one | workspace | |
 | `login_succeeded` | a password login: with two-factor login on, once its code is given (the password alone makes a challenge, which is not a login) | | user | `method` |
 | `login_failed` | a wrong password, or an account with no password or that doesn't exist, or a right password for a disabled account, or a wrong code at the second step of a login | | user, if it exists | `method`, `reason` (`wrong_code` for the second step, `account_disabled` for a disabled account; the account is the target; no actor, since whoever typed isn't known to be its owner) |
+| `session_revoked` | a user signs out one of their other sessions from Settings | | user | |
+| `other_sessions_revoked` | a user signs out all their other sessions (none ended records nothing) | | user | `logins_ended` |
 | `logout` | logging out of a live session: one that has expired is no logout, and records nothing | | user | |
 | `password_changed` | a user changes their own password | | user | |
 | `password_change_failed` | the current password was wrong | | user | |
@@ -58,6 +60,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `sso_login_succeeded` | a single sign-on login | | user | `provider` |
 | `sso_login_failed` | a refused single sign-on login | | | `provider`, `reason` |
 | `sso_identity_linked` | an identity is linked to an account | | user | `provider`, `created_account` |
+| `workspace_created` | a person creates a workspace (`POST /api/workspaces`) | the new one (in its own log, not the first workspace's) | workspace | `allowed_by` (`admins` or `anyone`: the setting that let them) |
 | `workspace_updated` | an admin changes the workspace | the workspace | workspace | `fields`, `locale` |
 | `invite_created`, `invite_revoked` | an admin invites someone, or withdraws it | the invite's | invite | `email` (the full address), `role` |
 | `invite_accepted` | an invite is used, by a new account or an existing one | the invite's | invite | `role`, `already_member` |

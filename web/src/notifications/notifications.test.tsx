@@ -15,6 +15,8 @@ const SERVER_KEY = 'AQID' // the server's public key, as the push endpoint gives
 const me = {
   user: { id: 1, email: 'owner@example.com', name: 'Owner' },
   workspaces: [{ id: 1, name: 'Home', role: 'admin' as const }],
+  can_create_workspace: false,
+  is_operator: false,
 }
 
 type Sub = ReturnType<typeof fakeSub>

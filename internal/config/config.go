@@ -51,6 +51,10 @@ type Config struct {
 	// DisablePasswordLogin turns passwords off, for instances where everyone signs in with a
 	// provider. Needs SSOProviders.
 	DisablePasswordLogin bool
+	// WorkspaceCreation says who may create a workspace besides first-run setup: "admins"
+	// (the default; an admin of any existing workspace), "anyone" (every signed-in person) or
+	// "off" (nobody: the one workspace setup made, and no others). See WorkspaceCreationMode.
+	WorkspaceCreation string
 	// ProviderEgressWorkspace and ProviderEgressPersonal are the egress policies of the
 	// provider accounts workspaces' admins add and those any member adds for themselves: which
 	// addresses the server, and the agent runtime, may connect to when they call the
@@ -228,6 +232,19 @@ var settings = []setting{
 		usage: "turn password logins off, so everyone signs in with a single sign-on provider (needs -sso-providers)",
 		get:   func(c Config) string { return strconv.FormatBool(c.DisablePasswordLogin) },
 		set:   setBool(func(c *Config) *bool { return &c.DisablePasswordLogin }),
+	},
+	{
+		flag: "workspace-creation", env: "TASKTO_WORKSPACE_CREATION", key: "workspace_creation",
+		usage: "who may create a workspace: admins (default; an admin of any workspace), anyone (everyone signed in) or off",
+		get:   func(c Config) string { return c.WorkspaceCreationMode() },
+		set: func(c *Config, v string) error {
+			switch v {
+			case "admins", "anyone", "off":
+				c.WorkspaceCreation = v
+				return nil
+			}
+			return errors.New("must be admins, anyone or off")
+		},
 	},
 	{
 		flag: "provider-egress-workspace", env: "TASKTO_PROVIDER_EGRESS_WORKSPACE", key: "provider_egress_workspace",
@@ -515,6 +532,14 @@ var settings = []setting{
 			return nil
 		},
 	},
+}
+
+// WorkspaceCreationMode is who may create a workspace: "admins" when unset.
+func (c Config) WorkspaceCreationMode() string {
+	if c.WorkspaceCreation == "" {
+		return "admins"
+	}
+	return c.WorkspaceCreation
 }
 
 // SMTPSecurityMode is how the SMTP connection is secured, "starttls" when unset.

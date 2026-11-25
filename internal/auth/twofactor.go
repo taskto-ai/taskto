@@ -791,6 +791,7 @@ func (s *Service) handleClearTwoFactor(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	s.endLive(userID, "") // their sessions ended, and their open connections go with them
 	slog.InfoContext(r.Context(), "a member's two-factor login cleared", "user_id", userID, "by", admin.ID, "workspace_id", m.WorkspaceID)
 	w.WriteHeader(http.StatusNoContent)
 }

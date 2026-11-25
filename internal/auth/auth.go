@@ -57,10 +57,21 @@ type Options struct {
 	// DisablePasswordLogin turns off logging in, setting up an account on an invite, and
 	// using a reset link with a password. Needs SSO, or nobody could log in.
 	DisablePasswordLogin bool
+	// WorkspaceCreation says who may create a workspace with POST /api/workspaces: "admins"
+	// (the default, and what any value other than the next two means: an admin of any existing
+	// workspace), "anyone" (every signed-in person) or "off" (nobody).
+	WorkspaceCreation string
 	// Key seals the secrets of two-factor login (internal/serverkey). Without one nobody can
 	// turn it on, and the routes that need it answer 500.
 	Key *serverkey.Key
 }
+
+// The values of Options.WorkspaceCreation.
+const (
+	CreateByAdmins = "admins"
+	CreateByAnyone = "anyone"
+	CreateByNobody = "off"
+)
 
 // Login limits, in failed attempts per window; a successful login counts against none.
 //
@@ -302,6 +313,42 @@ func (s *Service) RequireMember(next http.Handler) http.Handler {
 // RequireAdmin is RequireMember for admins only; it answers 403 to other members.
 func (s *Service) RequireAdmin(next http.Handler) http.Handler {
 	return s.requireRole(next, true)
+}
+
+// RequireOperator is RequireAdmin for what belongs to the whole server rather than to one
+// workspace (its backups, its outgoing email): it also answers 403 (operator_only) unless the
+// caller is an operator, an admin of the workspace the server's setup made. An admin of a
+// workspace someone made later is not.
+func (s *Service) RequireOperator(next http.Handler) http.Handler {
+	return s.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, _ := UserFrom(r.Context())
+		ok, err := s.IsOperator(r.Context(), u.ID)
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusForbidden, apierr.CodeOperatorOnly, "only the server's operator can do this")
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// IsOperator reports whether userID is an admin of the workspace the server's setup made
+// (workspaces.is_setup), which is how the server tells the people who run it from the admins
+// of the workspaces others create. See docs/api.md#operators.
+func (s *Service) IsOperator(ctx context.Context, userID int64) (bool, error) {
+	return isOperator(ctx, s.db, userID)
+}
+
+func isOperator(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, userID int64) (bool, error) {
+	var ok bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM memberships m JOIN workspaces w ON w.id = m.workspace_id
+		WHERE m.user_id = ? AND m.role = ? AND w.is_setup = 1)`, userID, RoleAdmin).Scan(&ok)
+	return ok, err
 }
 
 func (s *Service) requireRole(next http.Handler, admin bool) http.Handler {

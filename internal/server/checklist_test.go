@@ -172,3 +172,33 @@ func TestChecklistIsRefusedToAccessTokens(t *testing.T) {
 		t.Fatalf("a token made %d marks", n)
 	}
 }
+
+// Whether the server can send email and whether its backups run are the server's, not the
+// workspace's: the checklist of an admin who made their own workspace doesn't list them, and an
+// operator's does.
+func TestChecklistListsServerStepsOnlyForOperators(t *testing.T) {
+	s := newStackWith(t, func(o *Options) {
+		o.Auth.WorkspaceCreation = "anyone"
+		o.Mail = mail.NewService(&recorder{}, testInfo)
+	})
+	bobs := s.createWorkspace(s.bob.cookie, "Bob's")
+	code, body := s.browser(s.bob.cookie, http.MethodGet, checklistPath(bobs, ""), nil)
+	if code != http.StatusOK {
+		t.Fatalf("bob's checklist = %d %v", code, body)
+	}
+	items, _ := body["items"].([]any)
+	var ids []string
+	for _, it := range items {
+		ids = append(ids, it.(map[string]any)["id"].(string))
+	}
+	if fmt.Sprint(ids) != "[invite provider space app]" {
+		t.Fatalf("bob's steps = %v, want only the workspace's own", ids)
+	}
+	if body["complete"] != false {
+		t.Fatalf("complete = %v", body["complete"])
+	}
+	_, body = s.browser(s.alice.cookie, http.MethodGet, checklistPath(s.one, ""), nil)
+	if got := steps(t, body); got["email"] != "done" || got["backups"] != "todo" {
+		t.Fatalf("the operator's steps = %v", got)
+	}
+}

@@ -16,6 +16,8 @@ export const AUDIT_ACTIONS = [
   'login_succeeded',
   'login_failed',
   'logout',
+  'session_revoked',
+  'other_sessions_revoked',
   'password_changed',
   'password_change_failed',
   'password_reset_created',
@@ -23,6 +25,7 @@ export const AUDIT_ACTIONS = [
   'sso_login_succeeded',
   'sso_login_failed',
   'sso_identity_linked',
+  'workspace_created',
   'workspace_updated',
   'invite_created',
   'invite_revoked',
@@ -69,6 +72,7 @@ export const AUDIT_TARGETS = [
 // The names of the facts an event may carry (internal/audit/schema.go).
 export const AUDIT_DETAILS = [
   'account',
+  'allowed_by',
   'already_member',
   'api_key_changed',
   'api_key_set',
@@ -261,7 +265,7 @@ const valueKey = (v: string) => `settings.audit.values.${v}` as Key
 
 // The details whose values are codes with a translation (roles, modes, the names of fields); the
 // rest are names and addresses, shown as they are.
-const CODED = new Set(['role', 'from', 'to', 'default_mode', 'method', 'scope', 'reason', 'fields'])
+const CODED = new Set(['allowed_by', 'role', 'from', 'to', 'default_mode', 'method', 'scope', 'reason', 'fields'])
 
 function Event({ e }: { e: AuditEntry }) {
   const t = useT()
