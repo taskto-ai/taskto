@@ -1947,7 +1947,11 @@
       "loadTheirs": "Load their version",
       "overwrite": "Overwrite with mine",
       "saveAgain": "Save mine again",
-      "save": "Save"
+      "save": "Save",
+      "discardLabel": "Discard your changes",
+      "discardQuestion": "You have changes that aren't saved. Discard them?",
+      "discard": "Discard my changes",
+      "keepEditing": "Keep editing"
     },
     "move": {
       "label": "Move the document",

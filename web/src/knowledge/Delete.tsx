@@ -1,7 +1,7 @@
 // Deleting a document, after a question, and the notice after it, with the way to bring it
 // back from its history.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type Doc, errorText } from '../api'
 import { useT } from '../i18n'
 import { type Change, type Commit, encodePath } from './docs'
@@ -79,21 +79,35 @@ export function Deleted({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const t = useT()
+  // The search of the history stops when the notice goes away.
+  const search = useRef<AbortController | null>(null)
+  useEffect(() => () => search.current?.abort(), [])
   const restore = async () => {
     setBusy(true)
     setError(null)
+    search.current = new AbortController()
+    const { signal } = search.current
     try {
-      const { commits } = await api<{ commits: Commit[] }>(`${base}/history/${encodePath(path)}?limit=10`)
-      // Someone made it again since: nothing to bring back, it is there.
-      if (commits[0] && commits[0].change !== 'delete') return onRestored(path)
-      const before = commits.find((c) => c.change !== 'delete')
-      if (!before) throw new Error(t('knowledge.deleted.noEarlier', { path }))
+      // The newest version still kept, however far back the history goes: a page at a time.
+      const history = `${base}/history/${encodePath(path)}`
+      let before: Commit | undefined
+      for (let page = '', first = true; !before; first = false) {
+        const res = await api<{ commits: Commit[]; next?: string }>(
+          page ? `${history}?before=${encodeURIComponent(page)}` : history,
+          { signal },
+        )
+        // Someone made it again since: nothing to bring back, it is there.
+        if (first && res.commits[0] && res.commits[0].change !== 'delete') return onRestored(path)
+        before = res.commits.find((c) => c.change !== 'delete' && c.versioned !== false)
+        if (!before && !res.next) throw new Error(t('knowledge.deleted.noEarlier', { path }))
+        page = res.next ?? ''
+      }
       await api<Change>(`${base}/restore/${encodePath(path)}`, { method: 'POST', body: { commit: before.commit } })
       onRestored(path)
     } catch (err) {
-      setError(errorText(err))
+      if (!signal.aborted) setError(errorText(err))
     } finally {
-      setBusy(false)
+      if (!signal.aborted) setBusy(false)
     }
   }
   if (!versioned) {

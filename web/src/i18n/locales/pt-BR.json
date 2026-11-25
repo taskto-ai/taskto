@@ -1959,7 +1959,11 @@
       "loadTheirs": "Carregar a versão da outra pessoa",
       "overwrite": "Substituir pela minha",
       "saveAgain": "Salvar a minha de novo",
-      "save": "Salvar"
+      "save": "Salvar",
+      "discardLabel": "Descartar as alterações",
+      "discardQuestion": "Você tem alterações que não foram salvas. Descartá-las?",
+      "discard": "Descartar minhas alterações",
+      "keepEditing": "Continuar editando"
     },
     "move": {
       "label": "Mover o documento",

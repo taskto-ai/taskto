@@ -1,10 +1,11 @@
 // Editing a Markdown document: the text and its preview, what changed, and the choice a
 // conflict asks for (useDraft has the saving).
 
-import { useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import type { Doc } from '../api'
 import { useT } from '../i18n'
 import { Markdown } from '../markdown'
+import { GuardContext } from './guard'
 import { useDraft } from './useDraft'
 
 export function Editor({
@@ -18,13 +19,20 @@ export function Editor({
   onSaved: () => void
   onCancel: () => void
 }) {
-  const { text, setText, message, setMessage, busy, error, conflict, save, takeTheirs, overwrite } = useDraft(
+  const { text, setText, message, setMessage, dirty, busy, error, conflict, save, takeTheirs, overwrite } = useDraft(
     url,
     doc,
     onSaved,
   )
   const [tab, setTab] = useState<'write' | 'preview'>('write')
   const t = useT()
+  // Whatever would close the editor asks first while the draft differs from what was loaded.
+  const guard = useContext(GuardContext)
+  const { report } = guard
+  useEffect(() => {
+    report(dirty)
+    return () => report(false)
+  }, [dirty, report])
 
   return (
     <form
@@ -89,11 +97,25 @@ export function Editor({
           {error}
         </p>
       )}
+      {guard.asking && (
+        // The same question-and-two-buttons panel as deleting a document.
+        <fieldset className="tt-panel" aria-label={t('knowledge.editor.discardLabel')}>
+          <p>{t('knowledge.editor.discardQuestion')}</p>
+          <div className="tt-actions">
+            <button type="button" className="tt-button tt-danger" onClick={guard.discard}>
+              {t('knowledge.editor.discard')}
+            </button>
+            <button type="button" className="tt-button" onClick={guard.keep}>
+              {t('knowledge.editor.keepEditing')}
+            </button>
+          </div>
+        </fieldset>
+      )}
       <div className="tt-actions">
         <button type="submit" className="tt-button tt-primary" disabled={busy || conflict !== null}>
           {t('knowledge.editor.save')}
         </button>
-        <button type="button" className="tt-button" onClick={onCancel}>
+        <button type="button" className="tt-button" onClick={() => guard.ask(onCancel)}>
           {t('common.cancel')}
         </button>
       </div>

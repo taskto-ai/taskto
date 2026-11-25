@@ -2,6 +2,7 @@
 // path in a URL, what a refusal means, what kind of file a path names, and the loading of the
 // list and of one document.
 
+import { useRef } from 'react'
 import { ApiError, api, type Doc } from '../api'
 import { has } from '../i18n'
 import { useLoad } from '../load'
@@ -64,6 +65,19 @@ export function resolveDocLink(from: string, href: string): string | null {
     } else if (part !== '.' && part !== '') parts.push(part)
   }
   return parts.length > 0 ? parts.join('/') : null
+}
+
+// What is shown now, which a callback made earlier can read: an answer is applied only if what
+// it was asked for (the space, the document, the list's generation) is still what is shown.
+//
+//   const now = useLatest(base)
+//   ...
+//   const made = base
+//   api(...).then((res) => now.current === made && apply(res))
+export function useLatest<T>(value: T) {
+  const ref = useRef(value)
+  ref.current = value
+  return ref
 }
 
 // The space's documents, every page of them; nothing while there is no space.

@@ -1,7 +1,7 @@
 // Uploading a file into the space: any file, at any path, created unless the person chooses to
 // replace one already there.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError, api, type Doc, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
 import { type Change, encodePath, isConflict, isMarkdown } from './docs'
@@ -34,11 +34,21 @@ export function Upload({
   const t = useT()
   const f = useFormat()
 
+  // The upload in flight: Cancel, or the form going away, stops it, and then nothing opens.
+  const sending = useRef<AbortController | null>(null)
+  useEffect(() => () => sending.current?.abort(), [])
+  const cancel = () => {
+    sending.current?.abort()
+    onCancel()
+  }
+
   // Without `replace`, it only creates: a file already there is the user's to replace.
   const send = async (replace: boolean) => {
     if (!file || !target) return
     setBusy(true)
     setError(null)
+    sending.current = new AbortController()
+    const { signal } = sending.current
     try {
       const url = `${base}/docs/${encodePath(target)}`
       const text = isMarkdown(target)
@@ -46,20 +56,25 @@ export function Upload({
         : null
       // Gone since it was found: replacing it is creating it.
       const current = replace
-        ? await api<Doc>(url).catch((e: unknown) => {
+        ? await api<Doc>(url, { signal }).catch((e: unknown) => {
             if (e instanceof ApiError && e.status === 404) return null
             throw e
           })
         : null
       if (text !== null) {
         const body = { content: text }
-        await api<Change>(url, { method: 'PUT', body: current ? { ...body, base_version: current.version } : body })
+        await api<Change>(url, {
+          method: 'PUT',
+          body: current ? { ...body, base_version: current.version } : body,
+          signal,
+        })
       } else {
         const query = current ? `?base_version=${current.version}` : ''
-        await api<Change>(`${url}${query}`, { method: 'PUT', bytes: file })
+        await api<Change>(`${url}${query}`, { method: 'PUT', bytes: file, signal })
       }
-      onDone(target)
+      if (!signal.aborted) onDone(target)
     } catch (err) {
+      if (signal.aborted) return
       setExists(isConflict(err) && !replace)
       setError(
         isConflict(err)
@@ -69,7 +84,7 @@ export function Upload({
           : errorText(err),
       )
     } finally {
-      setBusy(false)
+      if (!signal.aborted) setBusy(false)
     }
   }
 
@@ -126,7 +141,7 @@ export function Upload({
             {t('knowledge.uploadForm.submit')}
           </button>
         )}
-        <button type="button" className="tt-button" onClick={onCancel}>
+        <button type="button" className="tt-button" onClick={cancel}>
           {t('common.cancel')}
         </button>
       </div>

@@ -5,7 +5,13 @@ import { vi } from 'vitest'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
 
 // body is the JSON sent, parsed; any other body (a file's Blob, text that isn't JSON) as it was.
-export type Call = { method: string; path: string; body: unknown; headers: Record<string, string> }
+export type Call = {
+  method: string
+  path: string
+  body: unknown
+  headers: Record<string, string>
+  signal?: AbortSignal
+}
 type Answer = { status?: number; body?: unknown }
 // A function may answer later, to hold a request open.
 type Reply = Answer | ((call: Call) => Answer | Promise<Answer>)
@@ -35,6 +41,8 @@ export function fakeFetch(routes: Record<string, Reply>) {
       value: Object.fromEntries(new Headers(init?.headers).entries()),
       enumerable: false,
     })
+    // So is the signal a request can be aborted with: a held-open route watches it.
+    Object.defineProperty(call, 'signal', { value: init?.signal ?? undefined, enumerable: false })
     calls.push(call)
     const route = routes[`${method} ${call.path}`] ?? routes[`${method} ${url.pathname}`]
     const reply =
