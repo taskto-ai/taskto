@@ -8,7 +8,7 @@
       COLOR_ROLES in roles.ts, which a test holds every theme to.
 
    Naming: `--<kind>-<name>`, with the kind one of color, space, text (a size), type (a role: a
-   font shorthand), font, tracking, radius, control, shadow, duration, ease, z and width. Nothing
+   font shorthand), font, tracking, radius, control, line, mark, lift, shadow, duration, ease, z and width. Nothing
    but a colour role starts with `--color-`, and a colour is only ever a role: a scale that needs
    one (a shadow) takes it from a role. No colour literal is written outside themes/.
 
@@ -71,10 +71,28 @@
     --control-md: 36px;
     --control-touch: 44px;
 
+    /* Lines: a control's edge, the primary button's ink outline and a checked box's, and the
+       focus ring with the gap between it and what it rings. */
+    --line-thin: 1px;
+    --line-strong: 1.5px;
+    --line-focus: 2.5px;
+    --line-focus-offset: 2px;
+
+    /* The marks a control draws: a checkbox's box and the line of its mark, a switch's track (its height is the box's),
+       a status dot, the agent's dot. */
+    --mark-check: 18px;
+    --mark-stroke: 2px;
+    --mark-switch: 32px;
+    --mark-dot: 6px;
+    --mark-node: 10px;
+
     /* Elevation. Only what you press and what floats has a shadow: the primary button's short
        hard lift (the website's), the soft one under a menu or a popover, a dialog's. */
-    --shadow-lift: 0 2px 0 var(--color-accent-edge);
-    --shadow-lift-hover: 0 3px 0 var(--color-accent-edge);
+    --lift-rise: 1px;
+    --lift-press: 2px;
+    --lift-hover: 3px;
+    --shadow-lift: 0 var(--lift-press) 0 var(--color-accent-edge);
+    --shadow-lift-hover: 0 var(--lift-hover) 0 var(--color-accent-edge);
     --shadow-pop: 0 12px 32px -12px var(--color-shadow);
     --shadow-dialog: 0 24px 64px -24px var(--color-shadow);
 

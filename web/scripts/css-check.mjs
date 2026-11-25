@@ -4,11 +4,11 @@
 // `pnpm --filter @taskto/web run css`.
 //
 // Fails on:
-// - a `.tt-` selector declared more than once at the top level, in one file or across files (a
+// - a `.tt-` or `.ui-` selector declared more than once at the top level, in one file or across files (a
 //   second rule with the same selector silently overrides or merges with the first; a state or a
 //   screen size goes in an at-rule block, or in a selector of its own). A rule inside `@layer`
 //   blocks only is at the top level: a layer orders rules, it doesn't set them apart;
-// - a `tt-` class a component's className uses that no rule of any stylesheet mentions;
+// - a `tt-` or `ui-` class a component's className uses that no rule of any stylesheet mentions;
 // - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
 //   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
 //   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in.
@@ -22,10 +22,12 @@
 // - In a component, a class is a `tt-` name inside a className: a string, or an expression (a
 //   template, a conditional, a join), and the strings of a lookup table that a constant holds:
 //   `const NAME = { ok: 'tt-ok' }` or `const NAME = ['tt-a', 'tt-b']`, with the name in capitals,
-//   in the same file (a map imported from another file is read there). A string that is only a
-//   class name, in a constant whose name is not in capitals, or in a function's body, or built
-//   from pieces (`'tt-' + kind`), is not seen: such a class has to be written out in the
-//   stylesheet's component anyway, and the check can't tell it is missing.
+//   in the same file (a map imported from another file is read there), and the strings of an
+//   array a constant of any name holds (`const cls = ['ui-a', big ? 'ui-a-big' : '']`, the way the
+//   components build their classes). A string that is only a class name in another kind of
+//   constant (`const cls = 'ui-a'`), or built from pieces (`'tt-' + kind`), is not seen: such a
+//   class has to be written out in the stylesheet's component anyway, and the check can't tell it
+//   is missing.
 //
 // --root <dir> checks another web directory (its src/ and the stylesheets in it), for the script's
 // tests.
@@ -38,12 +40,16 @@ import { fileURLToPath } from 'node:url'
 // and that deliberately have no rule. Each needs a reason; a class that is merely not styled yet
 // gets a rule, not an entry here.
 export const UNSTYLED = new Map([
-  // (none today)
+  [
+    'ui-control',
+    "marks a control's native element (Button, Input, Checkbox …); like every ui- class it keeps the old element rules off, and no rule needs it on its own",
+  ],
 ])
 
-const CLASS = /tt-[a-z0-9]+(?:-[a-z0-9]+)*/g
+// The app's own classes: `tt-` (the screens) and `ui-` (the design system's components, src/ui/).
+const CLASS = /(?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*/g
 // A class selector: the name after a dot.
-const CLASS_SELECTOR = /\.(tt-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g
+const CLASS_SELECTOR = /\.((?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g
 
 // The class selectors of a rule's prelude, without what is inside an attribute selector's
 // brackets or a string.
@@ -283,12 +289,14 @@ export function blankComments(source) {
 }
 
 function tableClasses(source, used) {
-  for (const m of source.matchAll(/\bconst\s+[A-Z][A-Z0-9_]*\b[^=\n]*=\s*(?=[{[])/g)) {
+  // A table in capitals (an object or an array), or an array a component builds its classes from,
+  // whatever its name, typed or not: `const cls: string[] = ['ui-button', big ? 'ui-button-big' : '']`.
+  for (const m of source.matchAll(/\bconst\s+(?:[A-Z][A-Z0-9_]*\b[^=\n]*=\s*(?=[{[])|[a-z]\w*\b[^=\n]*=\s*(?=\[))/g)) {
     const start = m.index + m[0].length
     const end = tableEnd(source, start)
     for (const lit of source
       .slice(start, end)
-      .matchAll(/(["'])(tt-[a-z0-9]+(?:-[a-z0-9]+)*(?: tt-[a-z0-9]+(?:-[a-z0-9]+)*)*)\1/g)) {
+      .matchAll(/(["'])((?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*(?: (?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*)*)\1/g)) {
       for (const c of lit[2].matchAll(CLASS)) {
         const at = start + lit.index + 1 + c.index
         if (!used.has(c[0])) used.set(c[0], at)
@@ -385,7 +393,7 @@ export function check(web) {
     const sheet = scan(readFileSync(path, 'utf8'))
     for (const name of sheet.mentioned) mentioned.add(name)
     for (const { selector, line } of sheet.top) {
-      if (!/\.tt-/.test(selector)) continue
+      if (!/\.(?:tt|ui)-/.test(selector)) continue
       const first = seen.get(selector)
       if (first) {
         const where = first.file === file ? `line ${first.line}` : `${first.file}:${first.line}`
@@ -433,6 +441,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exit(1)
   }
   console.log(
-    'css-check: no selector is declared twice, every tt- class a component uses has a rule, and no colour is written outside the themes',
+    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, and no colour is written outside the themes',
   )
 }
