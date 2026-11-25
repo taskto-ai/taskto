@@ -79,6 +79,9 @@ type Options struct {
 	// MailTestCooldown is how long an admin waits between test emails; zero is 30 seconds and
 	// a negative duration is no wait. Tests shorten it.
 	MailTestCooldown time.Duration
+	// AccountsReady, if set, is called with the account system the server made, so its caller can
+	// end and wait for the emails it accepted (auth.Service.Shutdown) before the database closes.
+	AccountsReady func(*auth.Service)
 	// AppsReady, if set, is called with the apps service the server made, which keeps attachments
 	// in DataDir (none if that is empty), so its caller can run its maintenance
 	// (apps.Service.Maintain) for as long as it serves.
@@ -97,7 +100,11 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /healthz", healthz(version, sqlDB, opts.AgentState))
 	mux.Handle("GET /healthz/backup", backupHealth(opts.BackupDataDir))
+	opts.Auth.Mail = opts.Mail
 	accounts := auth.New(sqlDB, opts.Auth)
+	if opts.AccountsReady != nil {
+		opts.AccountsReady(accounts)
+	}
 	accounts.Routes(mux)
 	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireOperator(backupStatus(opts.BackupDataDir)))
 	auditRoutes(mux, accounts, sqlDB)

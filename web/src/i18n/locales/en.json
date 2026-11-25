@@ -576,7 +576,18 @@
       "forgot": "Forgot your password? Ask a workspace admin for a reset link.",
       "title": "Log in",
       "busy": "Logging in…",
-      "submit": "Log in"
+      "submit": "Log in",
+      "forgotByEmail": "Forgot your password?"
+    },
+    "forgot": {
+      "title": "Reset your password",
+      "intro": "Enter your account's email address. If an account has it, we'll email a link to choose a new password.",
+      "submit": "Email me a link",
+      "busy": "Sending…",
+      "sentTitle": "Check your email",
+      "sent": "If an account has {email}, a link to choose a new password is on its way.",
+      "sentHelp": "The link works once and expires. If nothing arrives in a few minutes, look in the spam folder, or ask a workspace admin for a reset link.",
+      "back": "Back to login"
     },
     "reset": {
       "title": "Set a new password",
@@ -1030,7 +1041,8 @@
     "offline_record_changed": "This record changed on this device (in another tab or window) since this screen was drawn. It is shown as it is now: check it and try again.",
     "notification_email_verification_invalid": "That confirmation link doesn't work: it was used, has expired, or was replaced by a newer one. Ask for a new link in Settings, Notifications.",
     "notification_email_verification_too_soon": "A link was sent a moment ago. Check your inbox, or try again in {seconds} seconds.",
-    "notification_email_verification_unavailable": "The confirmation email couldn't be sent. Try again."
+    "notification_email_verification_unavailable": "The confirmation email couldn't be sent. Try again.",
+    "too_many_resets": "Too many reset requests: try again later."
   },
   "language": {
     "label": "Language",
@@ -1589,6 +1601,7 @@
         "password_changed": "Password changed",
         "password_change_failed": "Password change refused (wrong current password)",
         "password_reset_created": "Password reset link made",
+        "password_reset_requested": "Reset link asked for by email",
         "password_reset_used": "Password set with a reset link",
         "sso_login_succeeded": "Signed in with single sign-on",
         "sso_login_failed": "Single sign-on refused",
@@ -1646,6 +1659,7 @@
         "created_account": "Account created",
         "default_mode": "Default mode",
         "email": "Address",
+        "emailed": "Emailed",
         "enabled": "On",
         "engine": "Engine",
         "expires": "Expires",
