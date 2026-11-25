@@ -1,138 +1,13 @@
 /* The app's look: the taskto.ai website's identity, "mint on paper". Warm cream paper, near-black
    ink, and one electric mint that is always a fill (a button, a dot, a selected row) with ink on
-   top of it, never the colour of text on a light ground: mint is too light to read there. Where
-   the app needs a green to read or to press against a light ground (links, success), it is the
-   deeper green derived from the mint in docs/design.md. The website is light only; the dark
-   palette is this app's own, grown from the website's night (#111110) with the mint as it is.
+   top of it, never the colour of text on a light ground: mint is too light to read there.
 
-   Colours are tokens on :root, each written once as light-dark(light, dark). Which side applies
-   is the page's colour scheme: the system's (`light dark`), unless the viewer picked a theme
-   (data-theme on <html>, theme.ts). Contrast is checked, not guessed: every text pair is at least
-   4.5:1 and every control border and focus ring at least 3:1 (the numbers are in docs/design.md).
+   Every value comes from the design tokens in ui/, which main.tsx imports first: the scales in
+   ui/tokens.css and the colour roles of the brand in ui/themes/ (docs/design.md). This file still
+   uses the older --tt-* names, which ui/legacy.css keeps as aliases of those until the screens
+   move onto the tokens. Never write a colour literal here: use a token, or add a role.
    Below 48rem the sidebar is a drawer and the conversations page shows the list or the open
    conversation. */
-
-:root {
-  color-scheme: light dark;
-
-  /* Grounds: the page (cream), the sidebar and quiet bands (stone), and what sits on them
-     (cards, inputs: white). The dark grounds step up from night. */
-  --tt-canvas: light-dark(#faf8f4, #111110);
-  --tt-stone: light-dark(#f1efe9, #181816);
-  --tt-surface: light-dark(#ffffff, #1b1b19);
-  --tt-hover: light-dark(rgba(17, 17, 16, 0.05), rgba(250, 248, 244, 0.07));
-  --tt-selected: light-dark(rgba(17, 17, 16, 0.08), rgba(250, 248, 244, 0.12));
-  --tt-user: light-dark(#f1efe9, #262624);
-
-  /* Text: ink, a softer ink, and the website's muted. */
-  --tt-fg: light-dark(#111110, #faf8f4);
-  --tt-fg-soft: light-dark(#2e2d2a, #d6d3cc);
-  --tt-muted: light-dark(#5c5a55, #aba89f);
-
-  /* Lines: a hairline (the website's ink at 15%) between things, the ink rule under the top bar,
-     and a stronger line for the edge of a control. */
-  --tt-line: light-dark(rgba(17, 17, 16, 0.15), rgba(250, 248, 244, 0.14));
-  --tt-rule: light-dark(#111110, rgba(250, 248, 244, 0.24));
-  --tt-line-strong: light-dark(#7e7b74, #8a877f);
-
-  /* The primary action is mint with ink on it, outlined in ink (a darker mint in the dark, where
-     ink would vanish). Mint is never the colour of text or of a thin line on light grounds. */
-  --tt-accent: #4cefa8;
-  --tt-accent-hover: #6bf5b8;
-  --tt-on-accent: #111110;
-  --tt-accent-edge: light-dark(#111110, #1fc98a);
-  --tt-accent-soft: light-dark(#dcfceb, rgba(76, 239, 168, 0.14));
-  /* The focus ring, and any thin line or text that must stand out as "current": ink on light,
-     mint on night (the website's own rule). */
-  --tt-focus: light-dark(#111110, #4cefa8);
-  /* Links and other green text: deep enough for 4.5:1 on every light ground; the mint itself in
-     the dark. */
-  --tt-link: light-dark(#006b45, #4cefa8);
-
-  /* The AI node: the mint dot, with the website's mint edge as its ring. The logo keeps its own
-     green (#00a86b), used in the mark only. */
-  --tt-node: #4cefa8;
-  --tt-node-edge: #1fc98a;
-  --tt-logo-dot: #00a86b;
-
-  /* The top bar is the page's cream (the website's nav), under an ink rule. */
-  --tt-bar: var(--tt-canvas);
-  --tt-on-bar: var(--tt-fg);
-  --tt-on-bar-muted: var(--tt-muted);
-
-  /* Status. Success is the link green, so the system keeps one green. */
-  --tt-danger: light-dark(#b42318, #ff8a82);
-  --tt-on-danger: light-dark(#ffffff, #111110);
-  --tt-success: var(--tt-link);
-  --tt-warning: light-dark(#9a4700, #ffb04d);
-
-  /* A cross, as a shape to mask with: its colour comes from the element that uses it. */
-  --tt-clear-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.1 8 6.6l4.5-4.5 1.4 1.4L9.4 8l4.5 4.5-1.4 1.4L8 9.4l-4.5 4.5-1.4-1.4L6.6 8 2.1 3.5z'/%3E%3C/svg%3E");
-
-  /* A QR code is dark on light whatever the theme: a scanner reads it that way. */
-  --tt-qr-ground: light-dark(#ffffff, #ffffff);
-
-  --tt-scrim: light-dark(rgba(17, 17, 16, 0.42), rgba(0, 0, 0, 0.6));
-  /* Only what you are meant to press, and what floats, has a shadow: the buttons' short hard lift
-     (the website's), and the soft one under a menu or a dialog. light-dark() takes colours only,
-     so the lengths stay outside it. */
-  --tt-shadow-lift: 0 2px 0 var(--tt-accent-edge);
-  --tt-shadow-lift-hover: 0 3px 0 var(--tt-accent-edge);
-  --tt-shadow-pop: 0 12px 32px -12px light-dark(rgba(17, 17, 16, 0.35), rgba(0, 0, 0, 0.8));
-
-  /* Fonts (SIL OFL 1.1), served from the app itself (main.tsx): nothing is fetched from another
-     site. The website's three: Inter for the interface and what people read, Bricolage Grotesque
-     for headings and the brand, JetBrains Mono for paths, commands, ids and code. The system's
-     fonts stand in until they load, and for any script these don't cover. */
-  --tt-font: "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --tt-display:
-    "Bricolage Grotesque Variable", "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --tt-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --tt-radius: 8px;
-  --tt-topbar-h: 52px;
-  --tt-sidebar-w: 232px;
-  --tt-touch: 44px;
-
-  /* The apps renderer (A2UI) reads its own variables; these hand it the brand, so an app's
-     buttons, fields and choices look like the rest of the page, in both schemes. */
-  --a2ui-color-primary: var(--tt-accent);
-  --a2ui-color-primary-hover: var(--tt-accent-hover);
-  --a2ui-color-on-primary: var(--tt-on-accent);
-  --a2ui-color-secondary-hover: var(--tt-hover);
-  --a2ui-color-on-secondary: var(--tt-fg);
-  --a2ui-color-border: var(--tt-line-strong);
-  --a2ui-color-surface: var(--tt-surface);
-  --a2ui-color-input: var(--tt-surface);
-  --a2ui-color-on-input: var(--tt-fg);
-  --a2ui-color-on-surface: var(--tt-fg);
-  --a2ui-color-on-background: var(--tt-fg);
-  --a2ui-text-caption-color: var(--tt-muted);
-  --a2ui-textfield-color-error: var(--tt-danger);
-  --a2ui-choicepicker-color-error: var(--tt-danger);
-  --a2ui-datetimeinput-color-error: var(--tt-danger);
-  /* Its buttons and choices are pills, as the app's are; its titles are the display face. */
-  --a2ui-button-border-radius: 999px;
-  --a2ui-button-padding: 0.4rem 1rem;
-  --a2ui-button-font-weight: 600;
-  --a2ui-choicepicker-chip-font-size: 0.875rem;
-  --a2ui-choicepicker-chip-padding: 0.3rem 0.85rem;
-  --a2ui-choicepicker-chip-background-selected: var(--tt-accent);
-  --a2ui-font-family-title: var(--tt-display);
-  --a2ui-text-a-color: var(--tt-link);
-  /* Whatever the renderer colours with its primary must still be seen when that is the mint:
-     a focused field, the picked tab, a slider's thumb take the focus colour (ink; mint on night). */
-  --a2ui-textfield-color-border-focus: var(--tt-focus);
-  --a2ui-tabs-header-color-active: var(--tt-fg);
-  --a2ui-slider-thumb-color: var(--tt-focus);
-}
-
-:root[data-theme="light"] {
-  color-scheme: light;
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-}
 
 *,
 *::before,
@@ -3128,7 +3003,7 @@ html[data-keyboard="open"] .tt-composer {
   box-sizing: border-box;
   border: 1px solid var(--tt-border, currentColor);
   border-radius: 0.5rem;
-  background: white;
+  background: var(--color-paper);
   cursor: crosshair;
 }
 
@@ -3138,7 +3013,7 @@ html[data-keyboard="open"] .tt-composer {
   inline-size: 20rem;
   border: 1px solid var(--tt-border, currentColor);
   border-radius: 0.5rem;
-  background: white;
+  background: var(--color-paper);
 }
 
 .tt-barcode-camera video {
@@ -3148,7 +3023,7 @@ html[data-keyboard="open"] .tt-composer {
   aspect-ratio: 4 / 3;
   object-fit: cover;
   border-radius: 0.5rem;
-  background: black;
+  background: var(--color-media);
 }
 
 .tt-dictate-slot {
