@@ -6,7 +6,7 @@
 // the user's login to that CLI has expired, a banner to sign in again right here: the turn
 // waits for it and goes on by itself.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   api,
@@ -73,21 +73,22 @@ export function ConversationView({
   // Whether the server refused the conversation (403, 404 or 410) on its last answer: then it
   // can't be read. Any other failure (a server restarting, the network) is shown with a way to try
   // again, and the composer stays usable.
+  // Only the latest read says so: an answer to a read since superseded is dropped, as useLoad drops it.
   const [refused, setRefused] = useState(false)
-  const meta = useLoad(
-    () =>
-      api<Conversation>(base).then(
-        (c) => {
-          setRefused(false)
-          return c
-        },
-        (e: unknown) => {
-          setRefused(e instanceof ApiError && REFUSED.has(e.status))
-          throw e
-        },
-      ),
-    [base],
-  )
+  const reads = useRef(0)
+  const meta = useLoad(() => {
+    const read = ++reads.current
+    return api<Conversation>(base).then(
+      (c) => {
+        if (read === reads.current) setRefused(false)
+        return c
+      },
+      (e: unknown) => {
+        if (read === reads.current) setRefused(e instanceof ApiError && REFUSED.has(e.status))
+        throw e
+      },
+    )
+  }, [base])
   const { view, status } = useConversationStream(`${base}/events`, streams)
   // Nothing can be sent: the server refused it and nothing of it is shown, or the stream found it gone.
   const unreadable = (refused && !meta.data) || status === 'gone'

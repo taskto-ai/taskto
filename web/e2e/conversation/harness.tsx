@@ -23,7 +23,6 @@ import { initLocale } from '../../src/i18n'
 const params = new URLSearchParams(window.location.search)
 const scenario = params.get('s') ?? 'chat'
 if (params.get('lang')) localStorage.setItem('taskto.locale', params.get('lang') as string)
-if (params.get('dir') === 'rtl') document.documentElement.dir = 'rtl'
 
 const now = Date.now()
 const ago = (minutes: number) => new Date(now - minutes * 60_000).toISOString()
@@ -342,6 +341,8 @@ const streams: EventSourceFactory = () => {
 }
 
 await initLocale()
+// After the language, which sets the direction of its own.
+if (params.get('dir') === 'rtl') document.documentElement.dir = 'rtl'
 const open = scenario === 'list' || scenario === 'empty' ? undefined : '7'
 history.replaceState(null, '', `/w/1/conversations${open ? `/${open}` : ''}${window.location.search}`)
 const root = document.getElementById('root') as HTMLElement

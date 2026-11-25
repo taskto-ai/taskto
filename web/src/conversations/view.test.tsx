@@ -160,3 +160,25 @@ test('two views on one page each have their own fields', async () => {
   expect(boxes[0].id).not.toBe(boxes[1].id)
   expect(document.getElementById('tt-message')).toBeNull()
 })
+
+test("a refusal that answers a read since superseded doesn't turn the composer off", async () => {
+  let refuse7: (a: { status: number; body: unknown }) => void = () => {}
+  fakeFetch({
+    // Conversation 7's answer comes late, after the view moved on to 8.
+    'GET /api/workspaces/1/conversations/7': () =>
+      new Promise((done) => {
+        refuse7 = done
+      }),
+    // And 8's read fails for a reason that is no refusal: its composer stays usable.
+    'GET /api/workspaces/1/conversations/8': { status: 502, body: { error: 'bad gateway' } },
+  })
+  const { factory } = fakeStreams()
+  const props = { workspace: 1, backHref: '/w/1/conversations', onChanged: () => {}, streams: factory }
+  const { rerender } = render(<ConversationView {...props} id={7} />)
+  await waitFor(() => expect(refuse7).not.toBe(undefined))
+  rerender(<ConversationView {...props} id={8} />)
+  await screen.findByRole('button', { name: 'Try again' })
+  await act(async () => refuse7({ status: 404, body: { error: 'not found' } }))
+  expect(box().disabled).toBe(false)
+  expect(box().getAttribute('aria-describedby')).toBeNull()
+})

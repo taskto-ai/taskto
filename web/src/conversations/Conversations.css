@@ -456,15 +456,18 @@
     display: contents;
   }
 
+  /* It may shrink, its text cut by the select itself; nothing clips its focus ring. */
   .ui-chat-model-select {
     flex: 0 1 auto;
-    overflow: hidden;
     inline-size: auto;
     min-inline-size: 0;
     max-inline-size: 100%;
   }
 
   .ui-chat-model-select .ui-select-native {
+    inline-size: 100%;
+    min-inline-size: 0;
+    text-overflow: ellipsis;
     border-color: transparent;
     background: transparent;
     color: var(--color-text-soft);
