@@ -1,46 +1,86 @@
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useId, useState } from 'react'
 import { api, type Board, errorText } from '../api'
 import { useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Dialog } from '../ui/Dialog'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
 
-export function RenameBoard({
-  board,
-  onSave,
+// A board's name, asked in a dialog: renaming one, or a new one.
+function NameDialog({
+  title,
+  formLabel,
+  initial,
+  submitLabel,
+  error,
+  onSubmit,
   onCancel,
 }: {
-  board: Board
-  onSave: (name: string) => Promise<void>
+  title: string
+  formLabel: string
+  initial: string
+  submitLabel: string
+  error?: string | null
+  onSubmit: (name: string) => Promise<void>
   onCancel: () => void
 }) {
-  const [name, setName] = useState(board.name)
+  const [name, setName] = useState(initial)
   const [busy, setBusy] = useState(false)
+  const form = useId()
   const t = useT()
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
-    await onSave(name.trim())
+    await onSubmit(name.trim())
     setBusy(false)
   }
   return (
-    <form className="tt-panel tt-form" aria-label={t('boards.renameBoard')} onSubmit={submit}>
-      <label>
-        {t('boards.name')}
-        <input
-          value={name}
-          maxLength={100}
-          onChange={(e) => setName(e.target.value)}
-          // biome-ignore lint/a11y/noAutofocus: the form was opened to type this
-          autoFocus
-        />
-      </label>
-      <div className="tt-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={busy || !name.trim()}>
-          {t('boards.save')}
-        </button>
-        <button type="button" className="tt-button" onClick={onCancel}>
-          {t('common.cancel')}
-        </button>
-      </div>
-    </form>
+    <Dialog
+      open
+      onClose={onCancel}
+      title={title}
+      size="sm"
+      actions={
+        <>
+          <Button onClick={onCancel}>{t('common.cancel')}</Button>
+          <Button type="submit" form={form} variant="primary" loading={busy} disabled={!name.trim()}>
+            {submitLabel}
+          </Button>
+        </>
+      }
+    >
+      <form id={form} aria-label={formLabel} onSubmit={submit}>
+        <Field label={t('boards.name')} error={error ?? undefined}>
+          <Input value={name} maxLength={100} onChange={(e) => setName(e.target.value)} data-autofocus />
+        </Field>
+      </form>
+    </Dialog>
+  )
+}
+
+export function RenameBoard({
+  board,
+  error,
+  onSave,
+  onCancel,
+}: {
+  board: Board
+  // Why the last save failed.
+  error: string | null
+  onSave: (name: string) => Promise<void>
+  onCancel: () => void
+}) {
+  const t = useT()
+  return (
+    <NameDialog
+      title={t('boards.renameBoard')}
+      formLabel={t('boards.renameBoard')}
+      initial={board.name}
+      submitLabel={t('boards.save')}
+      error={error}
+      onSubmit={onSave}
+      onCancel={onCancel}
+    />
   )
 }
 
@@ -53,46 +93,25 @@ export function NewBoard({
   onCreated: (b: Board) => void
   onCancel: () => void
 }) {
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const t = useT()
-  const submit = async (e: FormEvent) => {
-    e.preventDefault()
-    setBusy(true)
+  const create = async (name: string) => {
     setError(null)
     try {
-      onCreated(await api<Board>(url, { method: 'POST', body: { name: name.trim() } }))
+      onCreated(await api<Board>(url, { method: 'POST', body: { name } }))
     } catch (err) {
       setError(errorText(err))
-      setBusy(false)
     }
   }
   return (
-    <form className="tt-panel tt-form" aria-label={t('boards.newBoard')} onSubmit={submit}>
-      <label>
-        {t('boards.name')}
-        <input
-          value={name}
-          maxLength={100}
-          onChange={(e) => setName(e.target.value)}
-          // biome-ignore lint/a11y/noAutofocus: the form was opened to type this
-          autoFocus
-        />
-      </label>
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
-      <div className="tt-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={busy || !name.trim()}>
-          {t('boards.create')}
-        </button>
-        <button type="button" className="tt-button" onClick={onCancel}>
-          {t('common.cancel')}
-        </button>
-      </div>
-    </form>
+    <NameDialog
+      title={t('boards.newBoard')}
+      formLabel={t('boards.newBoard')}
+      initial=""
+      submitLabel={t('boards.create')}
+      error={error}
+      onSubmit={create}
+      onCancel={onCancel}
+    />
   )
 }
