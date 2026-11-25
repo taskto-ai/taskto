@@ -21,6 +21,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/auth"
+	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/providers"
@@ -75,6 +76,7 @@ func newEnv(t testing.TB) *env {
 	kb := knowledge.New(dir, knowledge.Options{})
 	idx := New(sqlDB, kb, store, Options{})
 	kb.Routes(mux, spaces)
+	boards.New(sqlDB, spaces).Routes(mux)
 	idx.Routes(mux, accounts, spaces)
 	fake := newFakeEmbeddings(t)
 	return &env{t: t, h: auth.CSRF(mux, knowledge.RawBodyRoutes...), idx: idx, kb: kb, dataDir: dir, embed: fake}

@@ -51,6 +51,10 @@ type Config struct {
 	// DisablePasswordLogin turns passwords off, for instances where everyone signs in with a
 	// provider. Needs SSOProviders.
 	DisablePasswordLogin bool
+	// WorkspaceCreation says who may create a workspace besides first-run setup: "admins"
+	// (the default; an admin of any existing workspace), "anyone" (every signed-in person) or
+	// "off" (nobody: the one workspace setup made, and no others). See WorkspaceCreationMode.
+	WorkspaceCreation string
 	// ProviderEgressWorkspace and ProviderEgressPersonal are the egress policies of the
 	// provider accounts workspaces' admins add and those any member adds for themselves: which
 	// addresses the server, and the agent runtime, may connect to when they call the
@@ -118,6 +122,12 @@ type Config struct {
 	// KBMaxUnversionedSize caps the bytes of each space's unversioned files, in bytes.
 	// Zero means the knowledge base's default.
 	KBMaxUnversionedSize int64
+	// StorageQuotaWorkspace caps what all of a workspace's spaces store together, in bytes
+	// (docs/quotas.md). Zero, the default, is unlimited.
+	StorageQuotaWorkspace int64
+	// StorageQuotaUser caps what each member's private space stores, in bytes. Zero, the
+	// default, is unlimited.
+	StorageQuotaUser int64
 	// SearchVectorCache is the most memory semantic search's vector cache may hold, in
 	// bytes. Zero means the search index's default; negative, "off", turns the cache off.
 	SearchVectorCache int64
@@ -222,6 +232,19 @@ var settings = []setting{
 		usage: "turn password logins off, so everyone signs in with a single sign-on provider (needs -sso-providers)",
 		get:   func(c Config) string { return strconv.FormatBool(c.DisablePasswordLogin) },
 		set:   setBool(func(c *Config) *bool { return &c.DisablePasswordLogin }),
+	},
+	{
+		flag: "workspace-creation", env: "TASKTO_WORKSPACE_CREATION", key: "workspace_creation",
+		usage: "who may create a workspace: admins (default; an admin of any workspace), anyone (everyone signed in) or off",
+		get:   func(c Config) string { return c.WorkspaceCreationMode() },
+		set: func(c *Config, v string) error {
+			switch v {
+			case "admins", "anyone", "off":
+				c.WorkspaceCreation = v
+				return nil
+			}
+			return errors.New("must be admins, anyone or off")
+		},
 	},
 	{
 		flag: "provider-egress-workspace", env: "TASKTO_PROVIDER_EGRESS_WORKSPACE", key: "provider_egress_workspace",
@@ -419,6 +442,18 @@ var settings = []setting{
 		set:   setSize(func(c *Config) *int64 { return &c.KBMaxUnversionedSize }),
 	},
 	{
+		flag: "storage-quota-workspace", env: "TASKTO_STORAGE_QUOTA_WORKSPACE", key: "storage_quota_workspace",
+		usage: "most each workspace may store in all its spaces (knowledge base and app photos), in bytes or with KiB, MiB or GiB (default: unlimited)",
+		get:   func(c Config) string { return formatSize(c.StorageQuotaWorkspace) },
+		set:   setSize(func(c *Config) *int64 { return &c.StorageQuotaWorkspace }),
+	},
+	{
+		flag: "storage-quota-user", env: "TASKTO_STORAGE_QUOTA_USER", key: "storage_quota_user",
+		usage: "most each member's private space may store (knowledge base and app photos), in bytes or with KiB, MiB or GiB (default: unlimited)",
+		get:   func(c Config) string { return formatSize(c.StorageQuotaUser) },
+		set:   setSize(func(c *Config) *int64 { return &c.StorageQuotaUser }),
+	},
+	{
 		flag: "search-vector-cache", env: "TASKTO_SEARCH_VECTOR_CACHE", key: "search_vector_cache",
 		usage: "most memory semantic search keeps vectors in, in bytes or with KiB, MiB or GiB, or off (default 1GiB)",
 		get: func(c Config) string {
@@ -497,6 +532,14 @@ var settings = []setting{
 			return nil
 		},
 	},
+}
+
+// WorkspaceCreationMode is who may create a workspace: "admins" when unset.
+func (c Config) WorkspaceCreationMode() string {
+	if c.WorkspaceCreation == "" {
+		return "admins"
+	}
+	return c.WorkspaceCreation
 }
 
 // SMTPSecurityMode is how the SMTP connection is secured, "starttls" when unset.

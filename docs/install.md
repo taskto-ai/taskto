@@ -433,7 +433,7 @@ Then `docker compose up -d taskto` (a change to `.env` needs the container recre
 log says `outgoing email is on`, with the host, port and security, never the account.
 
 **Check it:** an admin opens Settings → General → Email, which shows the server, the port, how it
-is secured and the sender (the sender is shown to every workspace's admins; the user name and the
+is secured and the sender (the sender is shown to the operators, the admins of the first workspace; the user name and the
 password never are, so give the account a name that isn't also the sender's address if you
 would rather not show it), and presses **Send a test email**. The message goes to the admin's own
 address, in their language, and nowhere else. If it fails, the page says at which step (the
@@ -441,6 +441,14 @@ connection, the TLS upgrade, the sign-in, or the server refusing the message); t
 reply is not shown, since it can name internal hosts or repeat what was sent: the log
 (`mail: the test email failed`) has the step and the reply's number only, and never the server's
 words. The test is limited to one a person every 30 seconds, and three at once on the server.
+
+**Notification email.** With an SMTP server **and** `public_url` (the server's external origin, as
+for [single sign-on](sso.md); the links in a mail go there), people can choose in Settings →
+Notifications to be emailed about a kind of notification as it happens, or in one summary a day. It
+is off for everyone until they choose, and a mail says only what happened and links back, never what
+a card or an app holds ([pwa.md](pwa.md#email)). Before the first notification mail to an address,
+its owner opens a confirmation link sent to it. Without the SMTP server or the public URL the
+choices say so and nothing is sent.
 
 Messages are plain text with a simple HTML alternative, translated into the recipient's language
 (the one they picked, else their workspace's default, else English), with their texts in the
@@ -491,6 +499,69 @@ The redirect URI for a provider with the id `google` is
 override), which is why `{"file": …}`, read from the mounted directory, is preferred. Restart the server
 after changing the file (`docker compose up -d taskto` after a change to `.env` or the override, which recreates the container; `restart` keeps the old environment). Turning passwords off leaves the owner signing in through the provider
 with the email they set up with ([sso.md](sso.md#turning-passwords-off)).
+
+### Who may create a workspace
+
+Setup makes the first workspace. People make more with "New workspace" in the workspace
+switcher, as far as the operator lets them (`-workspace-creation`, `TASKTO_WORKSPACE_CREATION`,
+`workspace_creation` in the config file):
+
+| Value | Who may |
+|---|---|
+| `admins` (the default) | anyone who is an admin of at least one workspace, so the owner, and whoever they make an admin |
+| `anyone` | every signed-in person, members of other workspaces included |
+| `off` | nobody: the server keeps the workspace setup made |
+
+Whoever creates a workspace is its first admin and the only person in it; they invite the
+others. A workspace shares nothing with the others: its members, spaces, boards, apps,
+documents and tokens belong to it, and the person who made it is no admin of any other
+because of it. `anyone` suits a server that is a small community of people each with
+workspaces of their own; on a company's server, leave `admins` or turn it `off`, so no
+one outside the admins adds workspaces to your storage. A person who is a member of
+workspaces only, or of none (they were removed from theirs), can't create one under `admins`.
+Changing the setting needs a restart (`docker compose up -d taskto` after editing `.env`),
+and workspaces already made stay as they are. Each creation is in the audit log
+(`workspace_created`), on the new workspace's own log, not the first's. Whatever the setting, one
+account can create at most 10 workspaces and 5 an hour, so a single session can't fill the server.
+
+**Operators.** The people who run the server are the admins of the workspace setup made (the
+first one; a stored marker, not an id). Only they see what belongs to the whole server in
+Settings: the backups' status (which can name the backup host) and the outgoing email. The admins
+of a workspace someone else created, with `anyone`, don't, and their requests for those get `403`
+(`operator_only`). Everything else an admin does is inside their own workspace.
+
+```sh
+# .env
+TASKTO_WORKSPACE_CREATION=anyone   # admins (default), anyone or off
+```
+
+### Two-factor login
+
+Anyone can turn on a second step for their password login in **Settings → Password →
+Two-factor login**: a six-digit code from an authenticator app (any TOTP app: Aegis, 1Password, Google
+Authenticator, Authy, a hardware key's OATH), and ten single-use recovery codes to print or keep
+in a password manager. There is nothing to configure: it needs `server.key`, which the server
+makes on first run. What to know as the operator:
+
+- **Back up `server.key` with the database.** The secrets are sealed with it. A restore with
+  a different key leaves every user's secret unreadable, so their logins fail at the code until
+  an admin clears it (Settings → Members → **Clear two-factor**) and they turn it on again.
+  Restore the `server.key` that goes with the database. If it is lost and no admin who may clear
+  the member can sign in (an owner who is the only admin, say), use the stopped-server recovery
+  below.
+- **A lost phone and lost recovery codes** is an admin's job: Settings → Members → *Clear
+  two-factor* for that member. It works under the rule for a password reset link: only
+  an admin of every workspace the member belongs to may do it, and the member's sessions end.
+  The member then signs in with their password and turns it on again. An owner who is the
+  only admin and lost both has to restore from a backup, or edit the database: delete their
+  rows in `user_totp`, `user_recovery_codes` and `login_challenges`, with the server stopped.
+- **Signing in with a provider has no second step**: the provider's own sign-in is trusted
+  as it is. Ask the provider for two-factor login if you want it there
+  ([sso.md](sso.md#two-factor-login)). Access tokens and the CLI turns have none either.
+- The authenticator's clock must agree with the server's: codes are accepted for the current
+  30-second step and the one either side, so a difference of up to 30 seconds always works, and
+  a larger one only depending on where in a step the two clocks are. Keep the server's clock
+  right (NTP).
 
 ## Models
 

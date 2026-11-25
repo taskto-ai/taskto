@@ -10,7 +10,8 @@
 // and the few details its action is declared to have (schema.go), each of a fixed type: a
 // boolean, a number, a value from a fixed list, a host, an address. Record refuses any other
 // detail or a value of another type, so a careless call fails its test rather than leaking.
-// This package stores and removes events; the admin view is separate.
+// This package stores, removes and reads events (ListWorkspace); who may read them is the
+// admin route's to decide (internal/server).
 package audit
 
 import (
@@ -242,8 +243,9 @@ type Filter struct {
 	Limit int
 }
 
-// List returns events, newest first. It checks no access: its callers decide who may see which
-// workspace's events.
+// List returns events, newest first, for tests. A zero Workspace is every workspace's events and
+// those of none, so nothing that answers a request uses it: the admin view's ListWorkspace
+// (view.go) refuses a missing workspace. It checks no access.
 func List(ctx context.Context, db *sql.DB, f Filter) ([]Row, error) {
 	if f.Limit <= 0 {
 		f.Limit = 100
@@ -266,17 +268,26 @@ func List(ctx context.Context, db *sql.DB, f Filter) ([]Row, error) {
 	defer rows.Close()
 	all := []Row{}
 	for rows.Next() {
-		var r Row
-		var details string
-		if err := rows.Scan(&r.ID, &r.At, &r.WorkspaceID, &r.ActorID, &r.Action, &r.TargetType, &r.TargetID, &r.TargetCreatedAt, &details, &r.ClientAddr); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal([]byte(details), &r.Details); err != nil {
+		r, err := scan(rows)
+		if err != nil {
 			return nil, err
 		}
 		all = append(all, r)
 	}
 	return all, rows.Err()
+}
+
+// scan reads one event from a query of the columns List and ListWorkspace select.
+func scan(rows *sql.Rows) (Row, error) {
+	var r Row
+	var details string
+	if err := rows.Scan(&r.ID, &r.At, &r.WorkspaceID, &r.ActorID, &r.Action, &r.TargetType, &r.TargetID, &r.TargetCreatedAt, &details, &r.ClientAddr); err != nil {
+		return Row{}, err
+	}
+	if err := json.Unmarshal([]byte(details), &r.Details); err != nil {
+		return Row{}, err
+	}
+	return r, nil
 }
 
 // DefaultRetention is how long events are kept unless the operator says otherwise.

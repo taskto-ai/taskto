@@ -27,6 +27,7 @@ import (
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/serverkey"
 )
@@ -45,8 +46,10 @@ type stack struct {
 	db  *sql.DB
 	h   http.Handler
 	dir string // the data directory
-	one int64
-	two int64
+	// sched is the scheduler the boards' reminders are on; its worker isn't started.
+	sched *schedule.Service
+	one   int64
+	two   int64
 
 	alice, bob, carol  person
 	secret, team       int64
@@ -66,6 +69,15 @@ func newStack(t *testing.T) *stack { return newStackWith(t, nil) }
 // newStackWith is newStack with the server's options changed by mod.
 func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	t.Helper()
+	if mod == nil {
+		return newStackDB(t, nil)
+	}
+	return newStackDB(t, func(o *Options, _ *sql.DB) { mod(o) })
+}
+
+// newStackDB is newStackWith with the stack's database given to mod too, for a service that needs it.
+func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	sqlDB, err := db.Open(ctx, filepath.Join(dir, db.FileName))
@@ -84,12 +96,20 @@ func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	store := providers.NewStore(sqlDB, key)
 	index := search.New(sqlDB, kb, store, search.Options{})
 	spaces := access.New(sqlDB, nil)
+	// The scheduler and the boards' reminders, as the command sets them up: the handlers on the
+	// service the tools use, and the same scheduler given to the server for its HTTP routes.
+	boardSvc := boards.New(sqlDB, spaces)
+	sched := schedule.New(sqlDB, spaces, schedule.Options{})
+	if err := boardSvc.EnableReminders(sched); err != nil {
+		t.Fatal(err)
+	}
 	tools := agenttools.New(agenttools.Options{
-		DB: sqlDB, Key: key, Access: spaces, Boards: boards.New(sqlDB, spaces), Apps: apps.New(sqlDB, spaces),
+		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: apps.New(sqlDB, spaces),
 		Knowledge: kb, Search: index,
 	})
-	s := &stack{t: t, db: sqlDB, dir: dir, setupToken: auth.NewSetupToken()}
+	s := &stack{t: t, db: sqlDB, dir: dir, sched: sched, setupToken: auth.NewSetupToken()}
 	opts := Options{
+		Scheduler:     sched,
 		Auth:          auth.Options{InsecureCookies: true, SetupToken: s.setupToken, HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}},
 		Search:        index,
 		Providers:     providers.New(store, nil),
@@ -98,7 +118,7 @@ func newStackWith(t *testing.T, mod func(*Options)) *stack {
 		BackupDataDir: dir,
 	}
 	if mod != nil {
-		mod(&opts)
+		mod(&opts, sqlDB)
 	}
 	s.h = newHandler(t, sqlDB, opts)
 	srv := httptest.NewServer(s.h)
@@ -122,9 +142,8 @@ func newStackWith(t *testing.T, mod func(*Options)) *stack {
 	s.team = s.sharedSpace("Team", s.bob)
 	s.alicePersonalBoard = s.scalar(`SELECT id FROM boards WHERE space_id = ?`, s.alice.private)
 
-	// A second workspace for alice: there is no API to make one yet.
-	s.two = s.scalar(`INSERT INTO workspaces (name) VALUES ('Two') RETURNING id`)
-	s.exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'admin')`, s.two, s.alice.id)
+	// A second workspace for alice, made as anyone who administers one may.
+	s.two = s.createWorkspace(s.alice.cookie, "Two")
 	s.alicePrivate2 = s.scalar(`SELECT id FROM spaces WHERE workspace_id = ? AND owner_id = ?`, s.two, s.alice.id)
 	return s
 }
@@ -165,6 +184,17 @@ func (s *stack) sharedSpace(name string, editor person) int64 {
 		}
 	}
 	return spaceID
+}
+
+// createWorkspace makes a workspace for the browser with cookie, which must be allowed to,
+// and returns its ID.
+func (s *stack) createWorkspace(cookie, name string) int64 {
+	s.t.Helper()
+	code, body := s.browser(cookie, http.MethodPost, "/api/workspaces", map[string]any{"name": name})
+	if code != http.StatusCreated {
+		s.t.Fatalf("create workspace %q = %d %v", name, code, body)
+	}
+	return id(body["workspace"].(map[string]any)["id"])
 }
 
 func (s *stack) exec(q string, args ...any) {

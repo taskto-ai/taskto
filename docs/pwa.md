@@ -122,10 +122,10 @@ its lifetime, or for a notification that was read meanwhile, is not sent.
 
 **What a push says.** The worker shows `TaskTo.AI` with one line for the kind of notification, in
 the person's language, and nothing else. The server sends only `{"id", "kind"}` (the
-notification's own ID, and its kind: `card_assigned`, `app_effect_failed`, or `changed`), encrypted
+notification's own ID, and its kind: `card_assigned`, `card_comment`, `card_mention`, `card_due`, `card_overdue`, `app_effect_failed`, or `changed`), encrypted
 to the browser (RFC 8291) and signed with the server's VAPID key (RFC 8292), both done with the
 standard library (`internal/notifications/webpush.go`). No title, no name, no ID of a card or app.
-The worker can't load the app's translations, so the page gives it the three lines when push is
+The worker can't load the app's translations, so the page gives it the lines for each kind when push is
 turned on and when the language changes; they are kept in a cache of their own
 (`taskto-push-strings`), which an update of the app leaves alone and which holds no one's data.
 
@@ -161,6 +161,46 @@ gone, is "not available". Signed out, the address is kept through the login. The
 - They leave their last workspace. Leaving one of several ends that workspace's notifications
   (and the pushes queued for them) and no more. A person in no workspace can't register a device,
   and the app doesn't try when it opens.
+
+### Email
+
+Email is the third way to be told, after the inbox and push, and is **off for everyone** until a
+person chooses, in Settings → Notifications, for each kind of notification and each workspace:
+*email me soon after*, *include in a daily summary*, or neither. It needs a server that can send mail
+and knows its own address ([install.md](install.md#email): `smtp_host` and `public_url`); without
+them the choices can't be turned on, and every choice can still be turned off.
+
+**A confirmed address.** The first time a person turns an email choice on (and again if their address
+changes), a link is mailed to the address on their account. Nothing else is mailed to it until they
+have opened the link while signed in: a typo in an address can't be sent notifications. The link
+works once, expires after 24 hours, is limited to one every 5 minutes, and holds a random token that
+the server stores only hashed and never logs. The settings show whether the address is confirmed,
+waiting for the link, or not, and can send another link.
+
+A mail says what a push says and no more: that a card was assigned to you, or that an app action
+needs you, in the person's language, and a link back to the notification (`/notification/{id}`), which
+the app opens only for the signed-in person and checks again. It never holds a title, a name, a
+comment or the ID of a card or an app. The summary says only how many notifications are unread and
+links to the inbox; it counts none the person may no longer read, and so does an instant mail:
+access is checked when the mail is made, not when the notification was. A summary counts what came
+after the kind was turned to it, and one notification in one summary only. At most 20 instant mails
+go to a person in an hour (the rest are in the inbox); a notification that was read, or is older than
+a day, is not mailed. The summary is sent at the hour (and in the time zone) the person chose, once a
+day, by the [general scheduler](api.md#notification-email); each run schedules the next from the
+person's own date, so daylight saving time doesn't move it (an hour the clocks skip is the first moment after the gap). Saving another choice leaves a waiting summary as it is. Leaving the workspace ends it.
+
+**At most once.** A mail that arrives twice is worse than one that doesn't (the inbox has it either
+way), so before a message is handed to the SMTP server the attempt is written to a ledger, under a
+key for what it is (the notification, or the summary's occurrence). A key with a row is not sent
+again, except when the server definitely refused it (a reply code, a refused connection or sign-in):
+that is tried again, a few times, with growing waits. When the outcome is unknown (the server stopped
+with the attempt written, or the connection was lost after the message was sent) it is counted as
+sent and never repeated, so in that rare case a mail may be lost. The hourly limit counts the same
+ledger, so concurrent sends can't pass it and deleting notifications doesn't reset it. Right before
+the submission, the choice, the address, the person's membership and access to what it is about (and
+for a summary, that it is still the person's current one) are checked again, so opting out or
+losing access cancels a mail that is already on its way. Instant mails are sent by a worker of
+their own, so a slow SMTP server never delays a push.
 
 The server side is `internal/notifications` ([api.md](api.md#notifications)); what a self-hosted
 server must reach is in [install.md](install.md#web-push-notifications).
@@ -207,4 +247,7 @@ per site; what the app adds is the words for each refusal. The server's side che
 asks for its notice to go with copies of the code, so the build writes `assets/THIRD_PARTY_NOTICES.txt`
 (`web/pwa/notices.ts`) from the installed packages' own `LICENSE` files and their versions, and the Apache-2.0 text kept
 in `web/licenses/`, and the server serves it next to the decoder's `.wasm`. The service worker does not precache it.
+The same package's QR writer draws the secret of [two-factor login](api.md#two-factor-login) in Settings (it is loaded
+on that page, from the app's own files); its `.wasm` (about 670 kB) is covered by the same notice and, since turning
+two-factor login on needs the server anyway, the service worker does not precache it.
 A test checks that every notice is in it in full.

@@ -53,6 +53,7 @@ step-by-step install on a fresh Ubuntu VM.
 | [docs/releasing.md](docs/releasing.md) | cutting a release, and what makes servers take it |
 | [docs/pwa.md](docs/pwa.md) | the installable app: manifest, offline shell, service worker, updates, phones |
 | [docs/templates.md](docs/templates.md) | the bundled app templates (expense tracker, equipment checkout, inspection), installing them and duplicating apps |
+| [docs/web-e2e.md](docs/web-e2e.md) | the web app's end to end tests: what they cover, how to run them, and the traces a failure leaves |
 | [docs/offline.md](docs/offline.md) | apps offline: downloads, the durable outbox for records made offline, sync, sign-out and revocation |
 | [docs/sso.md](docs/sso.md) | single sign-on with Google, Authentik or any OpenID Connect provider |
 | [docs/audit.md](docs/audit.md) | the audit log of security and admin actions: what is recorded, never recorded, and for how long |
@@ -99,6 +100,7 @@ the default.
 | `-sso-providers` | `TASKTO_SSO_PROVIDERS` | `sso_providers` | | the single sign-on providers file, JSON ([docs/sso.md](docs/sso.md)); needs `-public-url` |
 | `-public-url` | `TASKTO_PUBLIC_URL` | `public_url` | | the server's external `https` origin, such as `https://taskto.example.com`, which single sign-on's redirect URIs are built on |
 | `-disable-password-login` | `TASKTO_DISABLE_PASSWORD_LOGIN` | `disable_password_login` | `false` | turn password logins off, so everyone signs in with a provider; needs `-sso-providers` |
+| `-workspace-creation` | `TASKTO_WORKSPACE_CREATION` | `workspace_creation` | `admins` | who may create more workspaces than setup's: `admins` (an admin of any workspace), `anyone` (everyone signed in) or `off` ([docs/install.md](docs/install.md#who-may-create-a-workspace)) |
 | `-provider-egress-workspace` | `TASKTO_PROVIDER_EGRESS_WORKSPACE` | `provider_egress_workspace` | `any` | where workspaces' provider accounts may connect: `any`, `public`, or a comma-separated list of `public`, hosts, IP addresses and CIDR prefixes ([docs/install.md](docs/install.md#where-provider-accounts-may-connect)) |
 | `-provider-egress-personal` | `TASKTO_PROVIDER_EGRESS_PERSONAL` | `provider_egress_personal` | `any` | the same for members' personal provider accounts |
 | `-smtp-host` | `TASKTO_SMTP_HOST` | `smtp_host` | | the SMTP server that sends the server's email; empty means no email ([docs/install.md](docs/install.md#email)) |
@@ -123,6 +125,8 @@ the default.
 | `-kb-large-file-size` | `TASKTO_KB_LARGE_FILE_SIZE` | `kb_large_file_size` | `50MiB` | files other than Markdown over this size are kept out of git, unversioned, as audio, video and heavy binaries such as archives always are; also the largest Markdown document ([docs/api.md](docs/api.md#unversioned-files)) |
 | `-kb-max-repo-size` | `TASKTO_KB_MAX_REPO_SIZE` | `kb_max_repo_size` | `1GiB` | cap on each space's knowledge-base repository, history included (unversioned files' bytes aside) |
 | `-kb-max-unversioned-size` | `TASKTO_KB_MAX_UNVERSIONED_SIZE` | `kb_max_unversioned_size` | `20GiB` | cap on the bytes of each space's unversioned files together |
+| `-storage-quota-workspace` | `TASKTO_STORAGE_QUOTA_WORKSPACE` | `storage_quota_workspace` | unlimited | most each workspace may store in all its spaces together, knowledge base and app photos (bytes, or with `KiB`, `MiB`, `GiB`); writes over it are refused ([docs/quotas.md](docs/quotas.md)) |
+| `-storage-quota-user` | `TASKTO_STORAGE_QUOTA_USER` | `storage_quota_user` | unlimited | most each member's private space may store, in each workspace they belong to ([docs/quotas.md](docs/quotas.md)) |
 | `-search-vector-cache` | `TASKTO_SEARCH_VECTOR_CACHE` | `search_vector_cache` | `1GiB` | most memory semantic search keeps vectors in, or `off`; a passage of 768 dimensions takes about 3 KiB, so 200,000 take about 600 MiB. Spaces that don't fit are read from the database at each search, about 25 times slower |
 | `-dictation-local` | `TASKTO_DICTATION_LOCAL` | `dictation_local` | `parakeet-v3` | the server's speech model for workspaces using the `local` engine (the workspace default; an admin can also choose the hosted API or an installed add-on): `parakeet-v3`, `whistle` or `off`; downloaded on first use ([docs/install.md](docs/install.md#dictation)) |
 | `-dictation-cache` | `TASKTO_DICTATION_CACHE` | `dictation_cache` | `<data-dir>/cache/dictation` | where the local speech model's files are kept |

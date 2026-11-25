@@ -96,6 +96,13 @@ func (c *Checker) updateShared(ctx context.Context, workspaceID, spaceID int64, 
 		if err := mustAffect(res, ErrNotFound); err != nil {
 			return err
 		}
+		if archived != nil {
+			for _, h := range c.archiveHooks {
+				if err := h(ctx, tx, spaceID); err != nil {
+					return err
+				}
+			}
+		}
 		// What changed, and the two switches' new values; the new name isn't recorded, it is
 		// text a person typed.
 		details := audit.Details{}
@@ -117,7 +124,7 @@ func (c *Checker) updateShared(ctx context.Context, workspaceID, spaceID int64, 
 
 // members lists a shared space's members, by name.
 func (c *Checker) members(ctx context.Context, spaceID int64) ([]Member, error) {
-	return spaceMembers(ctx, c.db, spaceID, auth.RosterPage{})
+	return spaceMembers(ctx, c.reads, spaceID, auth.RosterPage{})
 }
 
 // spaceMembers lists a shared space's members, as auth.Roster does a workspace's.
@@ -172,6 +179,11 @@ func (c *Checker) addMember(ctx context.Context, workspaceID, spaceID, userID in
 		}
 		if err := mustAffect(res, errAlreadyMember); err != nil {
 			return err
+		}
+		for _, h := range c.memberHooks {
+			if err := h(ctx, tx, spaceID, userID); err != nil {
+				return err
+			}
 		}
 		return audit.Record(ctx, tx, audit.Event{Workspace: workspaceID, Action: audit.SpaceMemberAdded,
 			TargetType: audit.TargetSpace, Target: spaceID, Details: audit.Details{"user_id": userID, "role": string(role)}})

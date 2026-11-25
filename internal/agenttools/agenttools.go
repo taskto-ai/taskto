@@ -56,6 +56,7 @@ import (
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/knowledge"
+	"taskto.ai/taskto/internal/quota"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/serverkey"
 )
@@ -133,27 +134,45 @@ func Definitions() []Definition {
 func New(o Options) *Service {
 	s := &Service{o: o}
 	s.tools = map[string]tool{
-		"list_spaces":    s.listSpaces,
-		"list_members":   s.listMembers,
-		"search_docs":    s.searchDocs,
-		"list_docs":      s.listDocs,
-		"read_doc":       s.readDoc,
-		"write_doc":      s.writeDoc,
-		"list_boards":    s.listBoards,
-		"list_cards":     s.listCards,
-		"show_card":      s.showCard,
-		"create_card":    s.createCard,
-		"update_card":    s.updateCard,
-		"move_card":      s.moveCard,
-		"comment_card":   s.commentCard,
-		"set_blocked":    s.setBlocked,
-		"app_catalog":    s.appCatalog,
-		"list_apps":      s.listApps,
-		"show_app":       s.showApp,
-		"list_app_rows":  s.listAppRows,
-		"query_app_rows": s.queryAppRows,
-		"create_app":     s.createApp,
-		"update_app":     s.updateApp,
+		"list_spaces":      s.listSpaces,
+		"list_members":     s.listMembers,
+		"search_docs":      s.searchDocs,
+		"search_cards":     s.searchCards,
+		"list_docs":        s.listDocs,
+		"read_doc":         s.readDoc,
+		"write_doc":        s.writeDoc,
+		"move_doc":         s.moveDoc,
+		"delete_doc":       s.deleteDoc,
+		"doc_history":      s.docHistory,
+		"restore_doc":      s.restoreDoc,
+		"list_boards":      s.listBoards,
+		"list_cards":       s.listCards,
+		"show_card":        s.showCard,
+		"create_card":      s.createCard,
+		"update_card":      s.updateCard,
+		"move_card":        s.moveCard,
+		"comment_card":     s.commentCard,
+		"set_blocked":      s.setBlocked,
+		"create_board":     s.createBoard,
+		"update_board":     s.updateBoard,
+		"archive_card":     s.archiveCard,
+		"restore_card":     s.restoreCard,
+		"app_catalog":      s.appCatalog,
+		"list_apps":        s.listApps,
+		"show_app":         s.showApp,
+		"list_app_rows":    s.listAppRows,
+		"query_app_rows":   s.queryAppRows,
+		"create_app":       s.createApp,
+		"update_app":       s.updateApp,
+		"list_app_actions": s.listAppActions,
+		"run_app_action":   s.runAppAction,
+
+		"list_app_templates":   s.listAppTemplates,
+		"install_app_template": s.installAppTemplate,
+		"duplicate_app":        s.duplicateApp,
+		"list_app_effects":     s.listAppEffects,
+		"list_app_releases":    s.listAppReleases,
+		"show_app_roles":       s.showAppRoles,
 	}
 	for _, name := range browserTools {
 		s.tools[name] = s.browserTool(name)
@@ -358,10 +377,21 @@ func (s *Service) refusal(ctx context.Context, name string, err error) error {
 	case errors.Is(err, boards.ErrReadOnly), errors.Is(err, boards.ErrBoardArchived), errors.Is(err, knowledge.ErrReadOnly), errors.Is(err, apps.ErrReadOnly),
 		errors.Is(err, apps.ErrForbidden):
 		return &Refusal{http.StatusForbidden, err.Error()}
-	case errors.Is(err, boards.ErrStale), errors.Is(err, knowledge.ErrConflict), errors.Is(err, apps.ErrStale), errors.Is(err, apps.ErrFull):
+	case errors.Is(err, boards.ErrStale), errors.Is(err, knowledge.ErrConflict), errors.Is(err, apps.ErrStale), errors.Is(err, apps.ErrFull),
+		errors.Is(err, apps.ErrOffline), errors.Is(err, apps.ErrNotPublished), errors.Is(err, apps.ErrOperationReused):
 		return &Refusal{http.StatusConflict, err.Error()}
+	case errors.Is(err, apps.ErrReleaseOutdated):
+		return &Refusal{http.StatusConflict, "the app's live release is not expected_release: nothing was done; call list_app_actions again and decide again"}
+	case errors.Is(err, apps.ErrConflict):
+		return &Refusal{http.StatusConflict, err.Error() + ": read the record again (query_app_rows) and decide again"}
 	case errors.Is(err, knowledge.ErrTooLarge), errors.Is(err, knowledge.ErrRepoFull):
 		return &Refusal{http.StatusRequestEntityTooLarge, err.Error()}
+	case errors.Is(err, quota.ErrExceeded):
+		return &Refusal{http.StatusInsufficientStorage, err.Error()}
+	case errors.Is(err, quota.ErrUnavailable):
+		return &Refusal{http.StatusServiceUnavailable, "the storage in use can't be measured right now; try again in a moment"}
+	case errors.Is(err, knowledge.ErrNotKept):
+		return &Refusal{http.StatusGone, err.Error()}
 	default:
 		if ctx.Err() != nil {
 			return ctx.Err() // the caller went away

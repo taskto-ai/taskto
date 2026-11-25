@@ -3,7 +3,7 @@
 // the URL's fragment, which browsers don't send to servers or in Referer.
 
 import { type FormEvent, useState } from 'react'
-import { ApiError, api, type Invite, type Member, ws } from '../api'
+import { ApiError, api, type Invite, type InviteCreated, type Member, ws } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Alert, ConfirmButton, CopyButton, day, useAction } from './parts'
@@ -44,6 +44,8 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
     action.run(() => api(`${base}/members/${m.id}`, { method: 'DELETE' })).then(members.reload)
   const withdraw = (i: Invite) =>
     action.run(() => api(`${base}/invites/${i.id}`, { method: 'DELETE' })).then(invites.reload)
+  const clearTwoFactor = (m: Member) =>
+    action.run(() => api(`${base}/members/${m.id}/two-factor`, { method: 'DELETE' })).then(members.reload)
   const [reset, setReset] = useState<{ member: Member; link: string; expires: string } | null>(null)
   const makeReset = async (m: Member) => {
     let made: { token: string; expires_at: string } | undefined
@@ -94,6 +96,16 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                     >
                       {t('settings.members.resetLink')}
                     </button>
+                  )}
+                  {m.id !== me && m.two_factor && (
+                    <ConfirmButton
+                      label={t('settings.members.clearTwoFactor')}
+                      name={m.name}
+                      question={t('settings.members.clearTwoFactorQuestion', { name: m.name })}
+                      confirm={t('settings.members.clearTwoFactorConfirm')}
+                      disabled={action.busy}
+                      onConfirm={() => clearTwoFactor(m)}
+                    />
                   )}
                   {m.id !== me && (
                     <ConfirmButton
@@ -183,7 +195,7 @@ function InviteForm({ base, onInvited }: { base: string; onInvited: () => void }
     e.preventDefault()
     let invite: (Invite & { token: string }) | undefined
     const ok = await action.run(async () => {
-      invite = await api<Invite & { token: string }>(`${base}/invites`, { method: 'POST', body: { email, role } })
+      invite = await api<InviteCreated>(`${base}/invites`, { method: 'POST', body: { email, role } })
     })
     if (ok && invite) {
       setMade({ email: invite.email, link: inviteLink(invite.token), expires: invite.expires_at })

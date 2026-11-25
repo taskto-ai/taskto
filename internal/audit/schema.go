@@ -97,17 +97,23 @@ var (
 var schemas = map[string]map[string]kind{
 	SetupCompleted:       {},
 	LoginSucceeded:       {"method": oneOf("password")},
-	LoginFailed:          {"method": oneOf("password"), "reason": oneOf("unknown_account", "no_password", "wrong_password")},
+	LoginFailed:          {"method": oneOf("password"), "reason": oneOf("unknown_account", "no_password", "wrong_password", "wrong_code")},
 	Logout:               {},
 	PasswordChanged:      {},
 	PasswordChangeFailed: {},
 	PasswordResetCreated: {},
 	PasswordResetUsed:    {},
 
+	TwoFactorEnabled:               {},
+	TwoFactorDisabled:              {},
+	TwoFactorRecoveryCodesReplaced: {},
+	TwoFactorCleared:               {},
+
 	SSOLoginSucceeded: {"provider": tag},
 	SSOLoginFailed:    {"provider": tag, "reason": tag},
 	SSOIdentityLinked: {"provider": tag, "created_account": boolean},
 
+	WorkspaceCreated:  {"allowed_by": oneOf("admins", "anyone")},
 	WorkspaceUpdated:  {"fields": someOf("locale"), "locale": tag},
 	InviteCreated:     {"email": email, "role": roles},
 	InviteRevoked:     {"email": email, "role": roles},
@@ -124,6 +130,8 @@ var schemas = map[string]map[string]kind{
 	SpaceMemberAdded:       {"user_id": number, "role": spaceRoles},
 	SpaceMemberRoleChanged: {"user_id": number, "from": spaceRoles, "to": spaceRoles},
 	SpaceMemberRemoved:     {"user_id": number, "role": spaceRoles, "cascade": cascadeFlag},
+
+	DataExportStarted: {},
 
 	ProviderAccountCreated: {"kind": oneOf("openai-compatible"), "scope": oneOf("workspace", "user"), "base_host": host, "api_key_set": boolean},
 	ProviderAccountUpdated: {

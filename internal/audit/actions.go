@@ -13,12 +13,19 @@ const (
 	PasswordResetCreated = "password_reset_created"
 	PasswordResetUsed    = "password_reset_used"
 
+	// Two-factor login.
+	TwoFactorEnabled               = "two_factor_enabled"
+	TwoFactorDisabled              = "two_factor_disabled"
+	TwoFactorRecoveryCodesReplaced = "two_factor_recovery_codes_replaced"
+	TwoFactorCleared               = "two_factor_cleared"
+
 	// Single sign-on.
 	SSOLoginSucceeded = "sso_login_succeeded"
 	SSOLoginFailed    = "sso_login_failed"
 	SSOIdentityLinked = "sso_identity_linked"
 
 	// Workspaces, members and invites.
+	WorkspaceCreated  = "workspace_created"
 	WorkspaceUpdated  = "workspace_updated"
 	InviteCreated     = "invite_created"
 	InviteRevoked     = "invite_revoked"
@@ -37,6 +44,9 @@ const (
 	SpaceMemberAdded       = "space_member_added"
 	SpaceMemberRoleChanged = "space_member_role_changed"
 	SpaceMemberRemoved     = "space_member_removed"
+
+	// A person takes their own data out (internal/export).
+	DataExportStarted = "data_export_started"
 
 	// Model provider accounts, shared CLI accounts, search and dictation.
 	ProviderAccountCreated   = "provider_account_created"

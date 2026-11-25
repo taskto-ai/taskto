@@ -90,7 +90,10 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   and before every search. Embeddings are made in the background, and only of spaces whose
   owner or editors consented to that very endpoint, so an admin can't route a space's text
   elsewhere. A search only ever looks in spaces the caller can read. See
-  [api.md](api.md#search).
+  [api.md](api.md#search). Board cards (title, body, comments) have a full-text index of
+  their own, searched apart from documents and never embedded; it follows the boards by
+  a queue that database triggers fill with every card whose text or thread changed, so
+  whatever wrote them, a search is right ([api.md](api.md#searching-cards)).
 - **Boards:** backlog → todo → doing → review → done. Cards have an assignee (person or
   agent), links to docs and conversations, and a blocked reason.
 - **Personal apps:** saved [A2UI](https://a2ui.org/) screens built from a fixed component
@@ -178,6 +181,17 @@ no extra process); it has no feature of its own.
   costs nothing (`EXPLAIN QUERY PLAN` is checked in a test). The worker runs bounded batches, so
   cleanup gets a turn however long the queue is, and fails a row whose time can't be read instead
   of stopping on it.
+- **First user: due-date reminders.** A card with a due date and a person as its assignee has two
+  jobs for that person, `card.due-reminder` and `card.overdue`, keyed by the card. They are made,
+  moved and cancelled in the transaction of the card change that needs them, and their handlers
+  make a `card_due` and a `card_overdue` notification once per person, card, kind and date
+  ([api.md](api.md#due-date-reminders)). Every path that changes a card shares the one scheduler
+  (the command gives it to the HTTP server too), archiving a board or space follows through a hook
+  (`access.Checker.OnArchiveChange`), the schema drops a person's jobs when they lose access to
+  the space or workspace (`0038`) and hooks in the transaction that adds them back make them again
+  (`access.Checker.OnMemberAdded` for a shared space, `auth.Service.OnMemberAdded` for a workspace;
+  neither package knows the boards), and the server schedules the jobs of cards dated before
+  reminders existed when it starts (`boards.Service.ReconcileReminders`).
 
 ## Agent safety
 

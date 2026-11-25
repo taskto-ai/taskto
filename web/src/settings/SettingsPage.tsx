@@ -1,16 +1,18 @@
 // The workspace's settings, a tab each: general (its default language), members and invites,
-// shared spaces, model providers, CLI accounts, search, dictation, notifications (push on this
-// device), your password, access
+// shared spaces, the audit log, storage (what each space stores, against the quotas), model providers, CLI accounts, search, dictation, notifications (push on this
+// device), your password, your data (a zip to download), access
 // tokens and about. Admins see them all; members see model providers (their own accounts, and
 // the workspace's to read), their own CLI accounts, search (their spaces' consent), dictation
-// (what is in use), notifications, their own password and access tokens, and about (the credits; admins also
+// (what is in use), notifications, their own password, data, access tokens and storage, and about (the credits; admins also
 // see the server's backups there). The tab is the route's item.
 
 import type { Me, Workspace } from '../api'
 import { type Key, useT } from '../i18n'
 import { Link, routePath } from '../router'
 import { AboutTab } from './AboutTab'
+import { AuditTab } from './AuditTab'
 import { CliAccountsTab } from './CliAccountsTab'
+import { DataTab } from './DataTab'
 import { DictationTab } from './DictationTab'
 import { GeneralTab } from './GeneralTab'
 import { MembersTab } from './MembersTab'
@@ -19,32 +21,39 @@ import { PasswordTab } from './PasswordTab'
 import { ProvidersTab } from './ProvidersTab'
 import { SearchTab } from './SearchTab'
 import { SpacesTab } from './SpacesTab'
+import { StorageTab } from './StorageTab'
 import { TokensTab } from './TokensTab'
 
 type Tab =
   | 'general'
   | 'members'
   | 'spaces'
+  | 'audit'
   | 'providers'
   | 'cli-accounts'
   | 'search'
   | 'dictation'
   | 'notifications'
   | 'password'
+  | 'data'
   | 'tokens'
+  | 'storage'
   | 'about'
 
 const TABS: { tab: Tab; label: Key; admin: boolean }[] = [
   { tab: 'general', label: 'settings.tabs.general', admin: true },
   { tab: 'members', label: 'settings.tabs.members', admin: true },
   { tab: 'spaces', label: 'settings.tabs.spaces', admin: true },
+  { tab: 'audit', label: 'settings.tabs.audit', admin: true },
   { tab: 'providers', label: 'settings.tabs.providers', admin: false },
   { tab: 'cli-accounts', label: 'settings.tabs.cliAccounts', admin: false },
   { tab: 'search', label: 'settings.tabs.search', admin: false },
   { tab: 'dictation', label: 'settings.tabs.dictation', admin: false },
   { tab: 'notifications', label: 'settings.tabs.notifications', admin: false },
   { tab: 'password', label: 'settings.tabs.password', admin: false },
+  { tab: 'data', label: 'settings.tabs.data', admin: false },
   { tab: 'tokens', label: 'settings.tabs.tokens', admin: false },
+  { tab: 'storage', label: 'settings.tabs.storage', admin: false },
   { tab: 'about', label: 'settings.tabs.about', admin: false },
 ]
 
@@ -77,11 +86,15 @@ export function SettingsPage({ me, workspace, tab }: { me: Me; workspace: Worksp
 function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace }) {
   switch (tab) {
     case 'general':
-      return <GeneralTab workspace={workspace} email={me.user.email} />
+      return <GeneralTab workspace={workspace} email={me.user.email} operator={me.is_operator === true} />
     case 'members':
       return <MembersTab workspace={workspace.id} me={me.user.id} />
     case 'spaces':
       return <SpacesTab workspace={workspace.id} />
+    case 'audit':
+      return <AuditTab workspace={workspace.id} />
+    case 'storage':
+      return <StorageTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'providers':
       return <ProvidersTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'cli-accounts':
@@ -94,9 +107,11 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
       return <NotificationsTab me={me.user.id} workspace={workspace.id} />
     case 'password':
       return <PasswordTab />
+    case 'data':
+      return <DataTab workspace={workspace.id} />
     case 'tokens':
       return <TokensTab workspace={workspace.id} />
     case 'about':
-      return <AboutTab workspace={workspace.id} admin={workspace.role === 'admin'} />
+      return <AboutTab workspace={workspace.id} operator={workspace.role === 'admin' && me.is_operator === true} />
   }
 }

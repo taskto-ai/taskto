@@ -292,6 +292,51 @@ test('transient failures back off, and stop retrying for ever: the person is ask
   expect((await store.listItems())[0].state).toBe('synced')
 })
 
+test.each([
+  ['quota_workspace', { max_mib: 100 }],
+  ['quota_user', { max_mib: 10 }],
+  ['knowledge_full', undefined],
+])(
+  'a send refused for want of storage (%s) is not tried again on a timer: the person is asked',
+  async (code, params) => {
+    const store = await openStore()
+    await queue(store, { description: 'Lunch', amount: '1' })
+    const calls = fakeFetch({
+      [`POST ${base}/actions`]: { status: 507, body: { error: 'full', code, params } },
+    })
+    const c = clock()
+    const engine = engineOf(store, c)
+    for (let i = 0; i < 3; i++) {
+      c.advance(10 * 60_000)
+      await engine.run()
+    }
+    const [item] = await store.listItems()
+    expect(item).toMatchObject({ state: 'attention', attention: 'refused', error: { status: 507, code } })
+    // Sent once: a retry fails the same way until someone makes room.
+    expect(calls).toHaveLength(1)
+    // What the person typed is kept, and "try again" is theirs once there is room.
+    expect(item.action.context).toEqual({ description: 'Lunch', amount: '1' })
+    fakeFetch({ [`POST ${base}/actions`]: { body: [] } })
+    await engine.retry(item.id)
+    expect((await store.listItems())[0].state).toBe('synced')
+  },
+)
+
+test('a send the storage could not measure (503) is still retried', async () => {
+  const store = await openStore()
+  await queue(store, { description: 'Lunch', amount: '1' })
+  const calls = fakeFetch({
+    [`POST ${base}/actions`]: { status: 503, body: { error: 'busy', code: 'quota_unavailable' } },
+  })
+  const c = clock()
+  const engine = engineOf(store, c)
+  c.advance(10 * 60_000)
+  await engine.run()
+  const [item] = await store.listItems()
+  expect(item.state).toBe('queued')
+  expect(calls).toHaveLength(1)
+})
+
 test('an ended session pauses sending, loses nothing, and resumes once someone signs in', async () => {
   const store = await openStore()
   await queue(store, { description: 'Lunch', amount: '12' })

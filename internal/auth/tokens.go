@@ -249,10 +249,14 @@ func (s *Service) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The only time the token is shown: the database keeps its hash.
-	writeJSON(w, http.StatusCreated, struct {
-		Token
-		Secret string `json:"token"`
-	}{t, token})
+	writeJSON(w, http.StatusCreated, TokenCreated{Token: t, Secret: token})
+}
+
+// TokenCreated is the reply that makes an access token: the token's record and its secret,
+// shown only now.
+type TokenCreated struct {
+	Token
+	Secret string `json:"token"`
 }
 
 func (s *Service) handleDeleteToken(w http.ResponseWriter, r *http.Request) {
