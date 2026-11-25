@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Checks the web app's stylesheets (every .css file under src/: styles.css, and the design system's
-// files in src/ui/) against each other and against the components. CI runs it; so can anyone:
+// Checks the web app's stylesheets (every .css file under src/: the design system's files in src/ui/,
+// the screens' beside their components, and styles.css, the list that imports those) against each
+// other and against the components. CI runs it; so can anyone:
 // `pnpm --filter @taskto/web run css`.
 //
 // Fails on:
@@ -11,7 +12,12 @@
 // - a `tt-` class a component's className uses that no rule of any stylesheet mentions;
 // - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
 //   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
-//   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in.
+//   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in;
+// - under src/ui/, apart from the files that define the tokens (tokens.css, themes/, and the old
+//   names' aliases in legacy.css): a font size, a spacing value (margin, padding, gap), a radius, a
+//   shadow or a duration written as a literal, not as a token (var(--space-…), var(--text-…) …).
+//   A few literals are not on any scale and are allowed: SCALE_LITERALS, each with its reason. The
+//   screens' older stylesheets are not held to this until they are rebuilt.
 //
 // Dependency-free: the stylesheet is read by a small scanner (comments and strings skipped), the
 // components by looking at what each className holds.
@@ -376,6 +382,47 @@ function stylesheets(dir, out = []) {
 // Where the colour literals live: the brand themes, and nowhere else.
 const THEMES = 'src/ui/themes/'
 
+// Where every size, space, radius, shadow and duration is a token: the design system's files,
+// except those that define the tokens.
+const TOKENS_ONLY = 'src/ui/'
+const DEFINE_TOKENS = ['src/ui/tokens.css', 'src/ui/legacy.css', THEMES]
+
+// Literals that are not on a scale and never will be, so they may be written as they are.
+export const SCALE_LITERALS = new Map([
+  ['0', 'nothing: no space, no radius, no time (with or without a unit)'],
+  ['1px', 'a hairline: a border-wide offset, finer than the smallest step'],
+  ['100%', 'the whole of the box'],
+  ['50%', 'half of the box: the radius of a circle'],
+])
+
+// The properties whose lengths and times are a scale's: a font size, a space, a radius, a shadow
+// and a duration.
+const SCALE_PROPERTY =
+  /^(font|font-size|margin(-.+)?|padding(-.+)?|gap|row-gap|column-gap|border(-.+)?-radius|box-shadow|text-shadow|transition(-duration|-delay)?|animation(-duration|-delay)?)$/i
+
+// The first literal length or time a declaration's value holds where a token belongs, if any.
+// A var() without a fallback is a token; a fallback is looked in. env() (the safe areas) is the
+// device's, and a unitless number (a line height, a weight, a factor in calc()) is no length.
+export function scaleLiteral(value, property) {
+  if (property.startsWith('--') || !SCALE_PROPERTY.test(property)) return undefined
+  let bare = value
+    .replace(/url\((?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^)]*)\)/gi, 'url()')
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
+    .replace(/(?<![\w-])env\([^)]*\)/gi, ' ')
+  // var(--a) goes; var(--a, fallback) leaves its fallback, innermost first.
+  for (let prev = ''; prev !== bare; ) {
+    prev = bare
+    bare = bare.replace(/var\(\s*--[\w-]+\s*(?:,([^()]*))?\)/gi, (_, fallback) => ` ${fallback ?? ''} `)
+  }
+  for (const m of bare.matchAll(/(?<![\w.#-])-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?([a-z%]+)(?![\w-])/gi)) {
+    const literal = m[0].toLowerCase()
+    if (/^-?0*\.?0*[a-z%]+$/.test(literal)) continue // a zero, whatever its unit
+    if (SCALE_LITERALS.has(literal)) continue
+    return m[0]
+  }
+  return undefined
+}
+
 export function check(web) {
   const errors = []
   const mentioned = new Set()
@@ -395,7 +442,14 @@ export function check(web) {
       } else seen.set(selector, { file, line })
     }
     if (file.startsWith(THEMES)) continue
+    const tokensOnly = file.startsWith(TOKENS_ONLY) && !DEFINE_TOKENS.some((d) => file === d || (d.endsWith('/') && file.startsWith(d)))
     for (const { property, value, line } of sheet.declarations) {
+      const scale = tokensOnly && scaleLiteral(value, property)
+      if (scale) {
+        errors.push(
+          `${file}:${line}: ${property} has the literal ${scale}: use a token from src/ui/tokens.css (var(--space-…), var(--text-…), var(--radius-…), var(--shadow-…), var(--duration-…)), or add one`,
+        )
+      }
       const literal = colorLiteral(value, property)
       if (literal) {
         errors.push(
@@ -433,6 +487,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exit(1)
   }
   console.log(
-    'css-check: no selector is declared twice, every tt- class a component uses has a rule, and no colour is written outside the themes',
+    'css-check: no selector is declared twice, every tt- class a component uses has a rule, no colour is written outside the themes, and src/ui/ takes its sizes, spaces, radii, shadows and durations from the tokens',
   )
 }
