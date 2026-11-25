@@ -28,6 +28,14 @@ type session struct {
 
 func ptr[T any](v T) *T { return &v }
 
+// optionalBool is a boolean parameter's value, or nil (Stripe's null) when it wasn't sent.
+func optionalBool(form url.Values, name string) any {
+	if v, ok := form[name]; ok {
+		return v[len(v)-1] == "true"
+	}
+	return nil
+}
+
 // submitTypes are the values of submit_type, which a session and a link both take.
 var submitTypes = []string{"auto", "book", "donate", "pay"}
 
@@ -84,6 +92,9 @@ func (s *Stripe) createSession(r *http.Request, form url.Values, _ string) reply
 	if v := form.Get("submit_type"); v != "" && !slices.Contains(submitTypes, v) {
 		return invalid("", "Invalid submit_type: must be one of "+strings.Join(submitTypes, ", ")+".", "submit_type")
 	}
+	if rp := boolParam(form, "allow_promotion_codes"); rp != nil {
+		return *rp
+	}
 	items, currency, rp := parseLineItems(form, maxSessionLines)
 	if rp != nil {
 		return *rp
@@ -127,7 +138,8 @@ func (s *Stripe) createSession(r *http.Request, form url.Values, _ string) reply
 			CancelURL: optional(form.Get("cancel_url")), ClientReferenceID: optional(form.Get("client_reference_id")),
 			Created: now.Unix(), Currency: currency, CustomFields: []any{},
 			CustomerCreation: "if_required", CustomerEmail: optional(form.Get("customer_email")),
-			ExpiresAt: expires.Unix(), Livemode: s.live, Locale: optional(form.Get("locale")),
+			AllowPromotionCodes: optionalBool(form, "allow_promotion_codes"),
+			ExpiresAt:           expires.Unix(), Livemode: s.live, Locale: optional(form.Get("locale")),
 			Metadata: meta, Mode: "payment", PaymentMethodCollection: "always",
 			PaymentMethodTypes: []string{"card"}, PaymentStatus: PaymentUnpaid, Status: SessionOpen,
 			SubmitType: optional(form.Get("submit_type")), SuccessURL: &success,
@@ -191,8 +203,10 @@ func (s *Stripe) expireLocked(ss *session, at time.Time) {
 }
 
 // expireDue expires the open sessions whose time has come. The caller holds s.mu.
-func (s *Stripe) expireDue() {
-	now := s.clock.Now()
+func (s *Stripe) expireDue() { s.expireDueAt(s.clock.Now()) }
+
+// expireDueAt is expireDue at a time the caller read once, for a caller that goes on to use it.
+func (s *Stripe) expireDueAt(now time.Time) {
 	for _, id := range s.sessionOrder {
 		ss := s.sessions[id]
 		if ss.Status == SessionOpen && ss.ExpiresAt <= now.Unix() {

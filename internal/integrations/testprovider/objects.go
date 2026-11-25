@@ -74,7 +74,8 @@ type TotalDetails struct {
 }
 
 // PaymentLink is Stripe's Payment Link object. A link never expires by itself and takes no
-// client reference: payments through it are Checkout Sessions that carry its id.
+// client reference. At Stripe payments through it are Checkout Sessions that carry its id; the
+// fake doesn't make them, so a link here is created, read, updated and deactivated only.
 type PaymentLink struct {
 	ID              string            `json:"id"`
 	Object          string            `json:"object"`

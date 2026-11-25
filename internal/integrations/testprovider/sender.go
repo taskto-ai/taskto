@@ -176,7 +176,11 @@ func WithHTTPClient(c *http.Client) SenderOption {
 // hook's path.
 func NewSender(hookURL string, opts ...SenderOption) *Sender {
 	s := &Sender{url: hookURL, secret: TestWebhookSecret, clock: realClock{},
-		do: (&http.Client{Timeout: 30 * time.Second}).Do}
+		do: (&http.Client{
+			Timeout: 30 * time.Second,
+			// A redirect is a failed delivery to Stripe: the answer to record is the 3xx.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}).Do}
 	for _, o := range opts {
 		o(s)
 	}
@@ -206,6 +210,9 @@ type Advancer interface{ Advance(time.Duration) }
 // wait lets d pass: a clock that can advance is moved at once; with another, the wait is real
 // and ends early, with the context's error, when ctx is done.
 func (s *Sender) wait(ctx context.Context, d time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if c, ok := s.clock.(Advancer); ok {
 		c.Advance(d)
 		return nil
@@ -282,6 +289,9 @@ func (s *Sender) SendBody(ctx context.Context, id, typ string, body []byte, opts
 }
 
 func (s *Sender) post(ctx context.Context, id, typ string, body []byte, header string, at time.Time) (Delivery, error) {
+	if err := ctx.Err(); err != nil { // a handler that ignores its context must not run after a cancel
+		return Delivery{}, err
+	}
 	target := s.url
 	if target == "" {
 		target = "http://hook.test" + s.path
@@ -300,7 +310,10 @@ func (s *Sender) post(ctx context.Context, id, typ string, body []byte, header s
 		return Delivery{}, fmt.Errorf("testprovider: delivering %s: %w", typ, err)
 	}
 	defer resp.Body.Close()
-	answer, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	answer, readErr := io.ReadAll(io.LimitReader(resp.Body, maxAnswer+1))
+	if readErr == nil && len(answer) > maxAnswer {
+		answer, readErr = answer[:maxAnswer], fmt.Errorf("the answer is larger than %d bytes", maxAnswer)
+	}
 	d := Delivery{EventID: id, Type: typ, Body: bytes.Clone(body), Signature: header, SignedAt: at,
 		Status: resp.StatusCode, Response: answer, Header: resp.Header}
 	s.mu.Lock()
@@ -313,6 +326,9 @@ func (s *Sender) post(ctx context.Context, id, typ string, body []byte, header s
 	}
 	return d, nil
 }
+
+// maxAnswer is the most of a handler's answer the sender keeps.
+const maxAnswer = 1 << 20
 
 // clone is a copy of the delivery that shares nothing with it.
 func (d Delivery) clone() Delivery {
@@ -337,10 +353,12 @@ func (s *Sender) SendAll(ctx context.Context, evs []Event, opts ...SignOption) (
 	out := make([]Delivery, 0, len(evs))
 	for _, ev := range evs {
 		d, err := s.Send(ctx, ev, opts...)
+		if d.Status != 0 { // made, and perhaps unreadable: it is in the sender's record, so in this
+			out = append(out, d)
+		}
 		if err != nil {
 			return out, err
 		}
-		out = append(out, d)
 	}
 	return out, nil
 }
@@ -351,10 +369,12 @@ func (s *Sender) Duplicate(ctx context.Context, ev Event, n int, opts ...SignOpt
 	out := make([]Delivery, 0, n)
 	for range n {
 		d, err := s.Send(ctx, ev, opts...)
+		if d.Status != 0 {
+			out = append(out, d)
+		}
 		if err != nil {
 			return out, err
 		}
-		out = append(out, d)
 	}
 	return out, nil
 }

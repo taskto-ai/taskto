@@ -28,16 +28,21 @@ var (
 // data the integration must never keep.
 var Payer = CustomerDetails{Email: "payer@example.test", Name: "A. Payer"}
 
-func (s *Stripe) openSession(id string) (*session, error) {
+// openSession finds an open session, expiring those whose time has come. It returns the time it
+// read from the clock, which the caller uses for what it makes: the decision that the session is
+// open and the time of what follows are of one reading, so a clock moving meanwhile can't put a
+// payment after its session's expiry.
+func (s *Stripe) openSession(id string) (*session, time.Time, error) {
 	ss, ok := s.sessions[id]
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrNoSuchSession, id)
+		return nil, time.Time{}, fmt.Errorf("%w: %s", ErrNoSuchSession, id)
 	}
-	s.expireDue()
+	at := s.clock.Now()
+	s.expireDueAt(at)
 	if ss.Status != SessionOpen {
-		return nil, fmt.Errorf("%w: %s is %s", ErrNotOpen, id, ss.Status)
+		return nil, time.Time{}, fmt.Errorf("%w: %s is %s", ErrNotOpen, id, ss.Status)
 	}
-	return ss, nil
+	return ss, at, nil
 }
 
 func (s *Stripe) intentOf(ss *session, status string) map[string]any {
@@ -93,11 +98,10 @@ func values(evs []*Event) []Event {
 func (s *Stripe) Pay(sessionID string) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ss, err := s.openSession(sessionID)
+	ss, at, err := s.openSession(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	at := s.clock.Now()
 	evs := s.begin(ss, at)
 	ss.chargeID = "ch_" + randomID(24)
 	ss.receiptURL = "https://pay.stripe.com/receipts/payment/" + randomID(40)
@@ -118,11 +122,10 @@ func (s *Stripe) Pay(sessionID string) ([]Event, error) {
 func (s *Stripe) PayDelayed(sessionID string) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ss, err := s.openSession(sessionID)
+	ss, at, err := s.openSession(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	at := s.clock.Now()
 	evs := s.begin(ss, at)
 	ss.Status, ss.URL = SessionComplete, nil
 	ss.delayed = true
@@ -169,11 +172,10 @@ func (s *Stripe) SettleDelayed(sessionID string, succeeded bool) ([]Event, error
 func (s *Stripe) Decline(sessionID string) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ss, err := s.openSession(sessionID)
+	ss, at, err := s.openSession(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	at := s.clock.Now()
 	evs := s.begin(ss, at)
 	ss.attempts++
 	ss.chargeID = "ch_" + randomID(24) // the intent's latest charge, in the failure events too
@@ -191,12 +193,12 @@ func (s *Stripe) Decline(sessionID string) ([]Event, error) {
 func (s *Stripe) Expire(sessionID string) ([]Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ss, err := s.openSession(sessionID)
+	ss, at, err := s.openSession(sessionID)
 	if err != nil {
 		return nil, err
 	}
 	before := len(s.events)
-	s.expireLocked(ss, s.clock.Now())
+	s.expireLocked(ss, at)
 	return values(s.events[before:]), nil
 }
 

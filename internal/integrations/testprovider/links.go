@@ -14,6 +14,9 @@ type paymentLink struct {
 	items []lineItem
 }
 
+// linkHosts is the host a link of a submit_type lives on.
+var linkHosts = map[string]string{"auto": "buy", "pay": "buy", "donate": "donate", "book": "book"}
+
 func (l *paymentLink) snapshot() PaymentLink {
 	out := l.PaymentLink
 	out.Metadata = maps.Clone(l.Metadata)
@@ -29,6 +32,9 @@ func (s *Stripe) createLink(_ *http.Request, form url.Values, _ string) reply {
 	}
 	if v := form.Get("submit_type"); v != "" && !slices.Contains(submitTypes, v) {
 		return invalid("", "Invalid submit_type: must be one of "+strings.Join(submitTypes, ", ")+".", "submit_type")
+	}
+	if rp := boolParam(form, "allow_promotion_codes"); rp != nil {
+		return *rp
 	}
 	items, currency, rp := parseLineItems(form, maxLinkLines)
 	if rp != nil {
@@ -47,6 +53,9 @@ func (s *Stripe) createLink(_ *http.Request, form url.Values, _ string) reply {
 	after := map[string]any{"type": "hosted_confirmation", "hosted_confirmation": map[string]any{"custom_message": nil}}
 	switch t := form.Get("after_completion[type]"); t {
 	case "", "hosted_confirmation":
+		if msg := form.Get("after_completion[hosted_confirmation][custom_message]"); msg != "" {
+			after = map[string]any{"type": "hosted_confirmation", "hosted_confirmation": map[string]any{"custom_message": msg}}
+		}
 	case "redirect":
 		u := form.Get("after_completion[redirect][url]")
 		if u == "" {
@@ -64,7 +73,7 @@ func (s *Stripe) createLink(_ *http.Request, form url.Values, _ string) reply {
 		submit = "auto"
 	}
 	id := "plink_" + randomID(24)
-	host := "https://buy.stripe.com/"
+	host := "https://" + linkHosts[submit] + ".stripe.com/" // buy, donate or book
 	if !s.live {
 		host += "test_"
 	}

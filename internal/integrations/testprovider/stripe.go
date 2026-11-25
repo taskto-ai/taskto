@@ -11,8 +11,9 @@
 //     POST /v1/checkout/sessions/{id}/expire: hosted Checkout in payment mode, the way to a link
 //     that carries a reference of ours (client_reference_id) and expires by itself.
 //   - POST /v1/payment_links, GET and POST /v1/payment_links/{id}: Payment Links. A link takes
-//     no client reference and never expires; a payment through one is a Checkout Session that
-//     carries the link's id.
+//     no client reference and never expires. At Stripe a payment through one is a Checkout
+//     Session that carries the link's id; the fake doesn't make those, so a link here is created,
+//     read, updated and deactivated only.
 //   - GET /v1/events and GET /v1/events/{id}: the events of the last 30 days, newest first.
 //   - GET /v1/balance: a harmless authenticated call, for a connection check.
 //
@@ -277,7 +278,10 @@ func (s *Stripe) handle(r *http.Request, body []byte, rec *Request) reply {
 			return invalid("", "Invalid request: the body isn't a valid form.", "")
 		}
 	} else {
-		form = r.URL.Query()
+		var err error
+		if form, err = url.ParseQuery(r.URL.RawQuery); err != nil {
+			return invalid("", "Invalid request: the query string isn't valid.", "")
+		}
 	}
 	rec.Form = form
 

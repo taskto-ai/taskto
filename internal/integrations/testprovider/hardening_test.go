@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -349,8 +350,12 @@ func TestATruncatedAnswerIsAnErrorAndTheDeliveryIsKept(t *testing.T) {
 	t.Cleanup(srv.Close)
 	clock := testprovider.NewManualClock(time.Time{})
 	s := testprovider.NewSender(srv.URL, testprovider.WithSenderClock(clock))
-	if _, err := s.SendAll(context.Background(), []testprovider.Event{someEvent(clock), someEvent(clock)}); err == nil {
+	got, err := s.SendAll(context.Background(), []testprovider.Event{someEvent(clock), someEvent(clock)})
+	if err == nil {
 		t.Fatal("a truncated answer reported success")
+	}
+	if len(got) != 1 {
+		t.Errorf("SendAll returned %d deliveries beside the error, want the one that was made", len(got))
 	}
 	if n := len(s.Deliveries()); n != 1 {
 		t.Errorf("the delivery that was made is kept, and sending stops: %d deliveries", n)
@@ -377,5 +382,243 @@ func TestDeliveriesAreCopies(t *testing.T) {
 	}
 	if again, err := s.Replay(context.Background(), s.Deliveries()[0]); err != nil || string(again.Body) != was {
 		t.Errorf("the replay: %v %q", err, again.Body)
+	}
+}
+
+func TestEventsReadInCreationOrderToo(t *testing.T) {
+	f, clock, a := newFake(t)
+	a.newSession(5000, "usd", "first") // expires in 24 hours
+	form := sessionForm(5000, "usd", "second")
+	form.Set("expires_at", strconv.FormatInt(clock.Now().Add(31*time.Minute).Unix(), 10))
+	a.post("/v1/checkout/sessions", form, "")
+	clock.Advance(25 * time.Hour)
+	f.Sessions() // both expire when noticed, the one made first being the later in time
+	var last int64
+	for _, e := range f.Events() {
+		if e.Created < last {
+			t.Fatalf("Events isn't oldest first: %d after %d", e.Created, last)
+		}
+		last = e.Created
+	}
+	if n := len(f.EventsOfType(testprovider.EventSessionExpired)); n != 2 {
+		t.Errorf("expired events: %d", n)
+	}
+}
+
+func TestWildcardsAreForTheTypeFilterOnly(t *testing.T) {
+	f, _, a := newFake(t)
+	s := a.newSession(5000, "usd", "r")
+	if _, err := f.Pay(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	count := func(q url.Values) int {
+		var list struct{ Data []testprovider.Event }
+		ans := a.get("/v1/events", q)
+		ans.into(t, &list)
+		return len(list.Data)
+	}
+	if n := count(url.Values{"type": {"charge.*"}}); n != 2 {
+		t.Errorf("type=charge.*: %d events, want the charge's two", n)
+	}
+	if n := count(url.Values{"types[]": {"charge.*"}}); n != 0 {
+		t.Errorf("types[]=charge.*: %d events, want none: it takes names", n)
+	}
+	if n := count(url.Values{"types[]": {"charge.succeeded"}}); n != 1 {
+		t.Errorf("types[]=charge.succeeded: %d", n)
+	}
+}
+
+func TestLinksKeepTheirConfirmationMessageAndHost(t *testing.T) {
+	f, _, a := newFake(t)
+	form := linkForm(1)
+	form.Set("after_completion[hosted_confirmation][custom_message]", "Thank you")
+	var l testprovider.PaymentLink
+	a.post("/v1/payment_links", form, "").into(t, &l)
+	if got := l.AfterCompletion["hosted_confirmation"].(map[string]any)["custom_message"]; got != "Thank you" {
+		t.Errorf("the message: %v", got)
+	}
+	var again testprovider.PaymentLink
+	a.get("/v1/payment_links/"+l.ID, nil).into(t, &again)
+	if got := again.AfterCompletion["hosted_confirmation"].(map[string]any)["custom_message"]; got != "Thank you" {
+		t.Errorf("the message on retrieve: %v", got)
+	}
+	for submit, host := range map[string]string{"": "buy", "pay": "buy", "donate": "donate", "book": "book"} {
+		form := linkForm(1)
+		if submit != "" {
+			form.Set("submit_type", submit)
+		}
+		var l testprovider.PaymentLink
+		a.post("/v1/payment_links", form, "").into(t, &l)
+		if want := "https://" + host + ".stripe.com/test_"; !strings.HasPrefix(l.URL, want) {
+			t.Errorf("submit_type %q: %s, want it to start %s", submit, l.URL, want)
+		}
+	}
+	_ = f
+}
+
+func TestAnArrayIndexHasOneSpelling(t *testing.T) {
+	_, _, a := newFake(t)
+	form := sessionForm(100, "usd", "r") // too small to pay on its own
+	form.Set("line_items[0][price_data][unit_amount]", "5000")
+	form.Set("line_items[00][price_data][unit_amount]", "200")
+	if ans := a.post("/v1/checkout/sessions", form, ""); ans.status != http.StatusBadRequest {
+		t.Errorf("line_items[00]: %d %s", ans.status, ans.raw)
+	}
+}
+
+// driftClock moves by drift each time it is read once on is set: a clock that doesn't stand still
+// between two readings of one operation.
+type driftClock struct {
+	mu    sync.Mutex
+	now   time.Time
+	drift time.Duration
+	on    bool
+}
+
+func (c *driftClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t := c.now
+	if c.on {
+		c.now = c.now.Add(c.drift)
+	}
+	return t
+}
+
+func (c *driftClock) set(on bool) { c.mu.Lock(); c.on = on; c.mu.Unlock() }
+
+func TestAPaymentIsOfTheTimeTheSessionWasFoundOpen(t *testing.T) {
+	clock := &driftClock{now: testprovider.DefaultStart, drift: time.Hour}
+	f := testprovider.NewStripe(t, testprovider.WithClock(clock))
+	a := newAPI(t, f)
+	form := sessionForm(5000, "usd", "r")
+	form.Set("expires_at", strconv.FormatInt(clock.Now().Add(31*time.Minute).Unix(), 10))
+	var s testprovider.Session
+	a.post("/v1/checkout/sessions", form, "").into(t, &s)
+	for name, pay := range map[string]func(string) ([]testprovider.Event, error){"Pay": f.Pay, "PayDelayed": f.PayDelayed} {
+		_ = name
+		clock.set(false)
+		s = func() testprovider.Session {
+			var n testprovider.Session
+			form := sessionForm(5000, "usd", name)
+			form.Set("expires_at", strconv.FormatInt(clock.Now().Add(31*time.Minute).Unix(), 10))
+			a.post("/v1/checkout/sessions", form, "").into(t, &n)
+			return n
+		}()
+		clock.set(true) // from here every reading is an hour later than the last
+		evs, err := pay(s.ID)
+		clock.set(false)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, e := range evs {
+			if e.Created >= s.ExpiresAt {
+				t.Errorf("%s: %s was made at or after the session's expiry", name, e.Type)
+			}
+		}
+	}
+}
+
+func TestPromotionCodesAreABoolean(t *testing.T) {
+	_, _, a := newFake(t)
+	for name, path := range map[string]string{"a session": "/v1/checkout/sessions", "a link": "/v1/payment_links"} {
+		form := sessionForm(5000, "usd", "r")
+		if path == "/v1/payment_links" {
+			form = linkForm(1)
+		}
+		form.Set("allow_promotion_codes", "not-a-boolean")
+		if ans := a.post(path, form, ""); ans.status != http.StatusBadRequest {
+			t.Errorf("%s: %d", name, ans.status)
+		}
+		form.Set("allow_promotion_codes", "true")
+		if ans := a.post(path, form, ""); ans.status != http.StatusOK {
+			t.Errorf("%s with true: %d %s", name, ans.status, ans.raw)
+		}
+	}
+	form := sessionForm(5000, "usd", "r")
+	form.Set("allow_promotion_codes", "true")
+	var s struct {
+		AllowPromotionCodes any `json:"allow_promotion_codes"`
+	}
+	a.post("/v1/checkout/sessions", form, "").into(t, &s)
+	if s.AllowPromotionCodes != true {
+		t.Errorf("the session's allow_promotion_codes: %v", s.AllowPromotionCodes)
+	}
+}
+
+func TestAMalformedQueryIsRefused(t *testing.T) {
+	f, _, a := newFake(t)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, f.URL()+"/v1/events?limit=%ZZ", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+f.APIKey())
+	req.Header.Set("Stripe-Version", testprovider.DefaultAPIVersion)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("a malformed query: %d", resp.StatusCode)
+	}
+}
+
+func TestADeliveryThatIsRedirectedFailed(t *testing.T) {
+	var elsewhere int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/hook", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/other", http.StatusFound) })
+	mux.HandleFunc("/other", func(w http.ResponseWriter, _ *http.Request) { elsewhere++; w.WriteHeader(http.StatusOK) })
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	clock := testprovider.NewManualClock(time.Time{})
+	d, err := testprovider.NewSender(srv.URL+"/hook", testprovider.WithSenderClock(clock)).Send(context.Background(), someEvent(clock))
+	if err != nil || d.Status != http.StatusFound || d.OK() || elsewhere != 0 {
+		t.Errorf("status %d, ok %v, followed %d times, err %v", d.Status, d.OK(), elsewhere, err)
+	}
+}
+
+func TestACanceledContextDeliversNothing(t *testing.T) {
+	clock := testprovider.NewManualClock(time.Time{})
+	h := newHook(clock)
+	s := testprovider.NewHandlerSender(h, "/h", testprovider.WithSenderClock(clock))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := clock.Now()
+	for name, opts := range map[string][]testprovider.SignOption{"no delay": nil, "a delay": {testprovider.Delayed(time.Hour)}} {
+		if _, err := s.Send(ctx, someEvent(clock), opts...); !errors.Is(err, context.Canceled) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if applied, refused := h.count(); applied != 0 || refused != 0 {
+		t.Errorf("the handler ran: %d applied, %d refused", applied, refused)
+	}
+	if !clock.Now().Equal(start) {
+		t.Errorf("a canceled delivery moved the clock to %v", clock.Now())
+	}
+}
+
+func TestAnAnswerAtTheCapIsKeptAndOneOverIsAnError(t *testing.T) {
+	const capBytes = 1 << 20
+	answer := func(declared, written int) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", strconv.Itoa(declared))
+			_, _ = w.Write(make([]byte, written))
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	clock := testprovider.NewManualClock(time.Time{})
+	send := func(srv *httptest.Server) (testprovider.Delivery, error) {
+		return testprovider.NewSender(srv.URL, testprovider.WithSenderClock(clock)).Send(context.Background(), someEvent(clock))
+	}
+	if d, err := send(answer(capBytes, capBytes)); err != nil || len(d.Response) != capBytes {
+		t.Errorf("a whole answer of the cap: %v, %d bytes", err, len(d.Response))
+	}
+	if _, err := send(answer(2*capBytes, capBytes)); err == nil {
+		t.Error("an answer cut off at the cap reported success")
+	}
+	if d, err := send(answer(capBytes+1, capBytes+1)); err == nil || d.Status != http.StatusOK {
+		t.Errorf("an answer over the cap: %v, status %d", err, d.Status)
 	}
 }

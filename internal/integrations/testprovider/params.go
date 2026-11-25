@@ -16,15 +16,19 @@ import (
 // lists is refused here, so add it (and a test) when a card starts to send one.
 const metaKey = `[^\[\]]{1,200}`
 
+// idx is an array index in its one spelling: 0, 1, 2, … and not 00 or 01, which would be another
+// key for the same line.
+const idx = `(?:0|[1-9]\d*)`
+
 var (
 	lineItemParams = []string{
-		`line_items\[\d+\]\[quantity\]`,
-		`line_items\[\d+\]\[price\]`,
-		`line_items\[\d+\]\[price_data\]\[currency\]`,
-		`line_items\[\d+\]\[price_data\]\[unit_amount\]`,
-		`line_items\[\d+\]\[price_data\]\[product_data\]\[(name|description)\]`,
-		`line_items\[\d+\]\[price_data\]\[product_data\]\[metadata\]\[` + metaKey + `\]`,
-		`line_items\[\d+\]\[metadata\]\[` + metaKey + `\]`,
+		`line_items\[` + idx + `\]\[quantity\]`,
+		`line_items\[` + idx + `\]\[price\]`,
+		`line_items\[` + idx + `\]\[price_data\]\[currency\]`,
+		`line_items\[` + idx + `\]\[price_data\]\[unit_amount\]`,
+		`line_items\[` + idx + `\]\[price_data\]\[product_data\]\[(name|description)\]`,
+		`line_items\[` + idx + `\]\[price_data\]\[product_data\]\[metadata\]\[` + metaKey + `\]`,
+		`line_items\[` + idx + `\]\[metadata\]\[` + metaKey + `\]`,
 	}
 
 	sessionParamRes = compileAll(append([]string{
@@ -48,7 +52,7 @@ var (
 	// `metadata` on its own, with an empty value, clears all of a link's metadata.
 	linkUpdateParamRes = compileAll([]string{`active`, `inactive_message`, `metadata`, `metadata\[` + metaKey + `\]`})
 
-	lineItemIndex = regexp.MustCompile(`^line_items\[(\d+)\]`)
+	lineItemIndex = regexp.MustCompile(`^line_items\[(` + idx + `)\]`)
 )
 
 func compileAll(patterns []string) []*regexp.Regexp {
@@ -75,6 +79,15 @@ next:
 			}
 		}
 		rp := invalid("parameter_unknown", "Received unknown parameter: "+k, k)
+		return &rp
+	}
+	return nil
+}
+
+// boolParam refuses a boolean parameter that is present and isn't "true" or "false".
+func boolParam(form url.Values, name string) *reply {
+	if v, ok := form[name]; ok && v[len(v)-1] != "true" && v[len(v)-1] != "false" {
+		rp := invalid("", "Invalid boolean: "+v[len(v)-1], name)
 		return &rp
 	}
 	return nil

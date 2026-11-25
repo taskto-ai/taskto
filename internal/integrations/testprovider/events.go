@@ -36,6 +36,9 @@ func (s *Stripe) Events() []Event {
 	for i, e := range s.events {
 		out[i] = e.clone()
 	}
+	// Oldest first by creation time: a session that expired by the clock is recorded when it is
+	// noticed, which may be after a later-made event. Equal times keep the order of making.
+	slices.SortStableFunc(out, func(a, b Event) int { return cmp.Compare(a.Created, b.Created) })
 	return out
 }
 
@@ -59,17 +62,18 @@ func (s *Stripe) listEvents(_ *http.Request, form url.Values, _ string) reply {
 	if rp := unknownParam(form, eventListParams); rp != nil {
 		return *rp
 	}
-	var types []string
+	var types []string // names that must match exactly: Stripe's `types` takes specific event names
 	for k, v := range form {
 		if strings.HasPrefix(k, "types[") {
 			types = append(types, v...)
 		}
 	}
+	var pattern string // `type` takes a name or a prefix followed by *
 	if form.Get("type") != "" {
 		if len(types) > 0 {
 			return invalid("", "You may pass one of `type` and `types`, not both.", "type")
 		}
-		types = []string{form.Get("type")}
+		pattern = form.Get("type")
 	}
 	if len(types) > 20 {
 		return invalid("", "You can pass at most 20 types.", "types")
@@ -113,7 +117,8 @@ func (s *Stripe) listEvents(_ *http.Request, form url.Values, _ string) reply {
 		e := s.events[i]
 		switch {
 		case e.Created < floor,
-			len(types) > 0 && !matchesType(types, e.Type),
+			len(types) > 0 && !slices.Contains(types, e.Type),
+			pattern != "" && !matchesPattern(pattern, e.Type),
 			hasGT && e.Created <= gt, hasGTE && e.Created < gte,
 			hasLT && e.Created >= lt, hasLTE && e.Created > lte,
 			hasExact && e.Created != exact:
@@ -142,17 +147,13 @@ func (s *Stripe) listEvents(_ *http.Request, form url.Values, _ string) reply {
 	return jsonReply(http.StatusOK, listOf("/v1/events", more, data))
 }
 
-// matchesType is Stripe's type filter: an exact name, or a prefix followed by a * wildcard.
-func matchesType(patterns []string, typ string) bool {
-	for _, p := range patterns {
-		if p == typ {
-			return true
-		}
-		if prefix, ok := strings.CutSuffix(p, "*"); ok && strings.HasPrefix(typ, prefix) {
-			return true
-		}
+// matchesPattern is Stripe's `type` filter: an exact name, or a prefix followed by a * wildcard.
+func matchesPattern(pattern, typ string) bool {
+	if pattern == typ {
+		return true
 	}
-	return false
+	prefix, ok := strings.CutSuffix(pattern, "*")
+	return ok && strings.HasPrefix(typ, prefix)
 }
 
 func (s *Stripe) retrieveEvent(_ *http.Request, form url.Values, id string) reply {
