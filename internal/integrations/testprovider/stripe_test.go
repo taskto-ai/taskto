@@ -732,9 +732,10 @@ func TestPaymentLinks(t *testing.T) {
 
 	// Deactivating is the way to stop a link taking payments.
 	up := a.post("/v1/payment_links/"+l.ID, url.Values{"active": {"false"}, "metadata[note]": {"stopped"}}, "")
-	up.into(t, &l)
-	if up.status != 200 || l.Active || l.Metadata["note"] != "stopped" || l.Metadata["ref"] != "ref_link" {
-		t.Errorf("update: %d %+v", up.status, l)
+	var updated testprovider.PaymentLink // a fresh value: what the answer leaves out must show
+	up.into(t, &updated)
+	if up.status != 200 || updated.Active || updated.Metadata["note"] != "stopped" || updated.Metadata["ref"] != "ref_link" {
+		t.Errorf("update: %d %+v", up.status, updated)
 	}
 	if ans := a.get("/v1/payment_links/plink_nope", nil); ans.status != 404 {
 		t.Errorf("unknown link: %d", ans.status)

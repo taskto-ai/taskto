@@ -203,14 +203,23 @@ func NewHandlerSender(h http.Handler, path string, opts ...SenderOption) *Sender
 // that isn't, Delayed really waits.
 type Advancer interface{ Advance(time.Duration) }
 
-func (s *Sender) wait(d time.Duration) {
-	switch c := s.clock.(type) {
-	case Advancer:
+// wait lets d pass: a clock that can advance is moved at once; with another, the wait is real
+// and ends early, with the context's error, when ctx is done.
+func (s *Sender) wait(ctx context.Context, d time.Duration) error {
+	if c, ok := s.clock.(Advancer); ok {
 		c.Advance(d)
-	default:
-		if d > 0 {
-			time.Sleep(d)
-		}
+		return nil
+	}
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -228,7 +237,9 @@ func (s *Sender) SendBody(ctx context.Context, id, typ string, body []byte, opts
 		o(&sg)
 	}
 	if sg.Delay > 0 {
-		s.wait(sg.Delay)
+		if err := s.wait(ctx, sg.Delay); err != nil {
+			return Delivery{}, err
+		}
 	}
 	at := sg.At
 	if at.IsZero() {

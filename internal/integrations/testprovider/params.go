@@ -44,7 +44,8 @@ var (
 		`payment_intent_data\[metadata\]\[` + metaKey + `\]`,
 	}, lineItemParams...))
 
-	linkUpdateParamRes = compileAll([]string{`active`, `inactive_message`, `metadata\[` + metaKey + `\]`})
+	// `metadata` on its own, with an empty value, clears all of a link's metadata.
+	linkUpdateParamRes = compileAll([]string{`active`, `inactive_message`, `metadata`, `metadata\[` + metaKey + `\]`})
 
 	lineItemIndex = regexp.MustCompile(`^line_items\[(\d+)\]`)
 )
@@ -92,30 +93,48 @@ func badInteger(param, value string) *reply {
 // limits: 50 keys, keys of at most 40 characters, values of at most 500.
 func metadataOf(form url.Values, prefix string) (map[string]string, *reply) {
 	out := map[string]string{}
+	if rp := mergeMetadata(out, form, prefix); rp != nil {
+		return nil, rp
+	}
+	return out, nil
+}
+
+// mergeMetadata applies the pairs under prefix to into, which a caller passes as a copy of what
+// it keeps: an empty value unsets the key, and the limits (see metadataOf) are checked on the
+// result. On a refusal into may be half changed.
+func mergeMetadata(into map[string]string, form url.Values, prefix string) *reply {
 	p := prefix + "["
-	for k, v := range form {
+	keys := make([]string, 0, len(form))
+	for k := range form {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // the first refusal is the same on every run
+	for _, k := range keys {
 		if !strings.HasPrefix(k, p) || !strings.HasSuffix(k, "]") {
 			continue
 		}
 		key := k[len(p) : len(k)-1]
+		v := form[k]
 		val := v[len(v)-1]
 		switch {
 		case len(key) > 40:
 			rp := invalid("", "Metadata key names can be at most 40 characters.", k)
-			return nil, &rp
+			return &rp
 		case len(val) > 500:
 			rp := invalid("", "Metadata values can be at most 500 characters.", k)
-			return nil, &rp
+			return &rp
 		}
-		if val != "" { // an empty value unsets the key
-			out[key] = val
+		if val == "" {
+			delete(into, key)
+		} else {
+			into[key] = val
 		}
 	}
-	if len(out) > 50 {
+	if len(into) > 50 {
 		rp := invalid("", "You can have at most 50 keys in metadata.", prefix)
-		return nil, &rp
+		return &rp
 	}
-	return out, nil
+	return nil
 }
 
 // lineItem is one line of a session or a link, from price_data (the integration's way: the
@@ -126,7 +145,13 @@ type lineItem struct {
 	Quantity          int64
 }
 
-func parseLineItems(form url.Values) (items []lineItem, currency string, rp *reply) {
+// Line limits: a Checkout Session in payment mode takes 100 lines, a Payment Link 20.
+const (
+	maxSessionLines = 100
+	maxLinkLines    = 20
+)
+
+func parseLineItems(form url.Values, maxLines int) (items []lineItem, currency string, rp *reply) {
 	seen := map[int]bool{}
 	for k := range form {
 		if m := lineItemIndex.FindStringSubmatch(k); m != nil {
@@ -137,8 +162,8 @@ func parseLineItems(form url.Values) (items []lineItem, currency string, rp *rep
 	if len(seen) == 0 {
 		return nil, "", missing("line_items")
 	}
-	if len(seen) > 100 {
-		r := invalid("", "You can have at most 100 line items in payment mode.", "line_items")
+	if len(seen) > maxLines {
+		r := invalid("", fmt.Sprintf("You can have at most %d line items.", maxLines), "line_items")
 		return nil, "", &r
 	}
 	for i := range len(seen) {

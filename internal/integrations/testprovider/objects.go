@@ -3,6 +3,7 @@ package testprovider
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 )
 
 // Session is Stripe's Checkout Session object, with the fields the integration reads and the
@@ -108,6 +109,12 @@ type EventData struct {
 type EventRequest struct {
 	ID             *string `json:"id"`
 	IdempotencyKey *string `json:"idempotency_key"`
+}
+
+// clone is a copy of the event that shares nothing with it.
+func (e Event) clone() Event {
+	e.Data.Object = slices.Clone(e.Data.Object)
+	return e
 }
 
 // Body is the event as Stripe sends it to a webhook: the bytes that are signed.

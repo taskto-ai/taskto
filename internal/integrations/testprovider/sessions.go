@@ -4,6 +4,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -19,13 +20,32 @@ type session struct {
 	receiptURL  string
 	refunded    int64
 	attempts    int
+	// delayed is true from a delayed payment's start (PayDelayed) until it settles, either way.
+	delayed bool
 }
 
 func ptr[T any](v T) *T { return &v }
 
-// snapshot is the session as an API answer or an event shows it now.
+// copyOf points at a copy of what p points at.
+func copyOf[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	return ptr(*p)
+}
+
+// snapshot is the session as an API answer or an event shows it now: it shares nothing with the
+// session the fake keeps, so a test that changes what it was given changes nothing else.
 func (ss *session) snapshot() Session {
 	out := ss.Session
+	out.CancelURL, out.ClientReferenceID, out.Customer = copyOf(out.CancelURL), copyOf(out.ClientReferenceID), copyOf(out.Customer)
+	out.CustomerDetails, out.CustomerEmail, out.Invoice = copyOf(out.CustomerDetails), copyOf(out.CustomerEmail), copyOf(out.Invoice)
+	out.Locale, out.PaymentIntent, out.PaymentLink = copyOf(out.Locale), copyOf(out.PaymentIntent), copyOf(out.PaymentLink)
+	out.RecoveredFrom, out.ReturnURL, out.SetupIntent = copyOf(out.RecoveredFrom), copyOf(out.ReturnURL), copyOf(out.SetupIntent)
+	out.SubmitType, out.Subscription, out.SuccessURL = copyOf(out.SubmitType), copyOf(out.Subscription), copyOf(out.SuccessURL)
+	out.URL = copyOf(out.URL)
+	out.CustomFields = slices.Clone(out.CustomFields)
+	out.PaymentMethodTypes = slices.Clone(out.PaymentMethodTypes)
 	out.Metadata = maps.Clone(ss.Metadata)
 	if out.Metadata == nil {
 		out.Metadata = map[string]string{}
@@ -56,7 +76,7 @@ func (s *Stripe) createSession(r *http.Request, form url.Values, _ string) reply
 			return invalid("url_invalid", "Not a valid URL", p)
 		}
 	}
-	items, currency, rp := parseLineItems(form)
+	items, currency, rp := parseLineItems(form, maxSessionLines)
 	if rp != nil {
 		return *rp
 	}

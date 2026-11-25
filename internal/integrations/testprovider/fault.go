@@ -2,6 +2,7 @@ package testprovider
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -133,20 +134,25 @@ func (s *Stripe) ClearFaults() {
 	s.faults = nil
 }
 
-// takeFault returns the first queued fault matching r, using up one of its strikes.
-func (s *Stripe) takeFault(r *http.Request) *Fault {
-	for i, f := range s.faults {
-		if !f.matches(r) {
-			continue
+// peekFault returns the first queued fault matching r, and uses nothing up.
+func (s *Stripe) peekFault(r *http.Request) *Fault {
+	for _, f := range s.faults {
+		if f.matches(r) {
+			return f
 		}
-		taken := *f
-		if f.times > 0 {
-			f.times--
-			if f.times == 0 {
-				s.faults = append(s.faults[:i], s.faults[i+1:]...)
-			}
-		}
-		return &taken
 	}
 	return nil
+}
+
+// useFault uses up one strike of a queued fault that peekFault returned.
+func (s *Stripe) useFault(f *Fault) {
+	if f.times <= 0 {
+		return
+	}
+	f.times--
+	if f.times == 0 {
+		if i := slices.Index(s.faults, f); i >= 0 {
+			s.faults = slices.Delete(s.faults, i, i+1)
+		}
+	}
 }

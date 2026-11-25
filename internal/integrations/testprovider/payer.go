@@ -83,7 +83,7 @@ func (s *Stripe) begin(ss *session, at time.Time) []*Event {
 func values(evs []*Event) []Event {
 	out := make([]Event, len(evs))
 	for i, e := range evs {
-		out[i] = *e
+		out[i] = e.clone()
 	}
 	return out
 }
@@ -125,6 +125,7 @@ func (s *Stripe) PayDelayed(sessionID string) ([]Event, error) {
 	at := s.clock.Now()
 	evs := s.begin(ss, at)
 	ss.Status, ss.URL = SessionComplete, nil
+	ss.delayed = true
 	d := Payer
 	ss.CustomerDetails = &d
 	evs = append(evs,
@@ -142,9 +143,10 @@ func (s *Stripe) SettleDelayed(sessionID string, succeeded bool) ([]Event, error
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNoSuchSession, sessionID)
 	}
-	if ss.Status != SessionComplete || ss.PaymentStatus != PaymentUnpaid {
+	if !ss.delayed {
 		return nil, fmt.Errorf("%w: %s isn't waiting for a delayed payment", ErrNotOpen, sessionID)
 	}
+	ss.delayed = false // both outcomes end the wait; a failed payment stays complete and unpaid
 	at := s.clock.Now()
 	if !succeeded {
 		return values([]*Event{

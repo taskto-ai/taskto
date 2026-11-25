@@ -32,11 +32,12 @@ package testprovider
 
 import (
 	"crypto/subtle"
-	"encoding/base64"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -157,7 +158,24 @@ type Request struct {
 func (s *Stripe) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]Request(nil), s.log...)
+	out := make([]Request, len(s.log))
+	for i, r := range s.log {
+		r.Query, r.Form = cloneValues(r.Query), cloneValues(r.Form)
+		out[i] = r
+	}
+	return out
+}
+
+// cloneValues copies the map and the slices of v, so a caller can't change what the fake kept.
+func cloneValues(v url.Values) url.Values {
+	if v == nil {
+		return nil
+	}
+	out := make(url.Values, len(v))
+	for k, vs := range v {
+		out[k] = slices.Clone(vs)
+	}
+	return out
 }
 
 // RequestsTo returns the requests to method and path.
@@ -181,16 +199,25 @@ type idemEntry struct {
 // remove it after.
 const idemTTL = 24 * time.Hour
 
+// maxBody is the largest request body the fake reads.
+const maxBody = 1 << 20
+
 // ServeHTTP is the fake's handler. It is exported so a test may mount the fake in its own
 // server; NewStripe has already done it.
 func (s *Stripe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, readErr := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	_ = r.Body.Close()
 
 	s.mu.Lock()
 	rec := Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.Query(), At: s.clock.Now(),
 		IdempotencyKey: r.Header.Get("Idempotency-Key"), APIVersion: r.Header.Get("Stripe-Version")}
-	rp := s.handle(r, body, &rec)
+	var rp reply
+	if readErr != nil || len(body) > maxBody {
+		// A body cut short or cut off at the limit must not run as if it were whole.
+		rp = invalid("", "The request body couldn't be read in full, or is larger than 1 MiB.", "")
+	} else {
+		rp = s.handle(r, body, &rec)
+	}
 	rec.Status = rp.status
 	if rp.drop || rp.hang {
 		rec.Status = 0
@@ -239,7 +266,8 @@ func (s *Stripe) handle(r *http.Request, body []byte, rec *Request) reply {
 	}
 	var form url.Values
 	if r.Method == http.MethodPost {
-		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+		ct := r.Header.Get("Content-Type")
+		if mt, _, err := mime.ParseMediaType(ct); err != nil || mt != "application/x-www-form-urlencoded" {
 			return invalid("", "Invalid request: the API takes application/x-www-form-urlencoded bodies, not "+
 				"\""+ct+"\".", "")
 		}
@@ -252,8 +280,9 @@ func (s *Stripe) handle(r *http.Request, body []byte, rec *Request) reply {
 	}
 	rec.Form = form
 
-	fault := s.takeFault(r)
+	fault := s.peekFault(r)
 	if fault != nil && !fault.After {
+		s.useFault(fault)
 		rec.Faulted = true
 		return fault.reply()
 	}
@@ -288,7 +317,10 @@ func (s *Stripe) handle(r *http.Request, body []byte, rec *Request) reply {
 		rp = fn(s, r, form, id)
 	}
 
-	if fault != nil { // After: the operation ran, the client sees the fault
+	// An After fault strikes only a request whose operation ran: not a replay of a saved answer
+	// and not a refusal, which leave the fault queued for the request that does run.
+	if fault != nil && !rp.replayed && (rp.executed || rp.status < 400) {
+		s.useFault(fault)
 		rec.Faulted = true
 		fr := fault.reply()
 		if e := s.idem[key]; e != nil && !fr.drop && !fr.hang && rp.executed && !rp.replayed {
@@ -308,8 +340,9 @@ func (s *Stripe) authenticate(r *http.Request, rec *Request) (reply, bool) {
 	case strings.HasPrefix(h, "Bearer "):
 		given, scheme = strings.TrimPrefix(h, "Bearer "), "bearer"
 	case strings.HasPrefix(h, "Basic "):
-		raw, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(h, "Basic "))
-		given, _, _ = strings.Cut(string(raw), ":")
+		if user, _, ok := r.BasicAuth(); ok { // the credentials must carry their separator
+			given = user
+		}
 		scheme = "basic"
 	}
 	if given == "" {

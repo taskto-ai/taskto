@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -84,9 +85,11 @@ func newHook(clock testprovider.Clock, secrets ...string) *hook {
 }
 
 func (h *hook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	buf := make([]byte, 1<<20)
-	n, _ := r.Body.Read(buf)
-	body := buf[:n]
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "unreadable body", http.StatusBadRequest)
+		return
+	}
 	if err := verifyStripe(r.Header.Get(testprovider.SignatureHeader), body, h.secrets, h.clock.Now(), testprovider.Tolerance); err != nil {
 		h.mu.Lock()
 		h.refused++

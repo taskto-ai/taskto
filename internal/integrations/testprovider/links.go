@@ -25,7 +25,7 @@ func (s *Stripe) createLink(_ *http.Request, form url.Values, _ string) reply {
 	if rp := unknownParam(form, linkParamRes); rp != nil {
 		return *rp
 	}
-	items, currency, rp := parseLineItems(form)
+	items, currency, rp := parseLineItems(form, maxLinkLines)
 	if rp != nil {
 		return *rp
 	}
@@ -93,26 +93,29 @@ func (s *Stripe) updateLink(_ *http.Request, form url.Values, id string) reply {
 	if !ok {
 		return noSuch("payment link", id, "payment_link")
 	}
+	// Everything is checked before anything changes: a refused update leaves the link as it was.
+	active := l.Active
 	if v := form.Get("active"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil || (v != "true" && v != "false") {
 			return invalid("", "Invalid boolean: "+v, "active")
 		}
-		l.Active = b
+		active = b
 	}
-	for k, v := range form {
-		if len(k) > len("metadata[]") && k[:9] == "metadata[" {
-			key := k[9 : len(k)-1]
-			if v[len(v)-1] == "" {
-				delete(l.Metadata, key)
-			} else {
-				if l.Metadata == nil {
-					l.Metadata = map[string]string{}
-				}
-				l.Metadata[key] = v[len(v)-1]
-			}
+	meta := maps.Clone(l.Metadata)
+	if meta == nil {
+		meta = map[string]string{}
+	}
+	if _, ok := form["metadata"]; ok {
+		if form.Get("metadata") != "" {
+			return invalid("", "Invalid metadata: pass an empty string to clear it, or set its keys one by one.", "metadata")
 		}
+		clear(meta) // `metadata=` empties it; keys passed beside it are then set
 	}
+	if rp := mergeMetadata(meta, form, "metadata"); rp != nil {
+		return *rp
+	}
+	l.Active, l.Metadata = active, meta
 	rp := jsonReply(http.StatusOK, l.snapshot())
 	rp.executed = true
 	return rp

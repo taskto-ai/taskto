@@ -1,9 +1,11 @@
 package testprovider
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +34,7 @@ func (s *Stripe) Events() []Event {
 	defer s.mu.Unlock()
 	out := make([]Event, len(s.events))
 	for i, e := range s.events {
-		out[i] = *e
+		out[i] = e.clone()
 	}
 	return out
 }
@@ -58,16 +60,16 @@ func (s *Stripe) listEvents(_ *http.Request, form url.Values, _ string) reply {
 		return *rp
 	}
 	var types []string
-	if form.Get("type") != "" {
-		if len(form["types[]"]) > 0 {
-			return invalid("", "You may pass one of `type` and `types`, not both.", "type")
-		}
-		types = []string{form.Get("type")}
-	}
 	for k, v := range form {
 		if strings.HasPrefix(k, "types[") {
 			types = append(types, v...)
 		}
+	}
+	if form.Get("type") != "" {
+		if len(types) > 0 {
+			return invalid("", "You may pass one of `type` and `types`, not both.", "type")
+		}
+		types = []string{form.Get("type")}
 	}
 	if len(types) > 20 {
 		return invalid("", "You can pass at most 20 types.", "types")
@@ -106,9 +108,8 @@ func (s *Stripe) listEvents(_ *http.Request, form url.Values, _ string) reply {
 	}
 
 	floor := s.clock.Now().Add(-eventRetention).Unix()
-	byID := map[string]*Event{}
-	var ids []string
-	for i := len(s.events) - 1; i >= 0; i-- { // newest first
+	var eligible []*Event
+	for i := len(s.events) - 1; i >= 0; i-- {
 		e := s.events[i]
 		switch {
 		case e.Created < floor,
@@ -118,6 +119,15 @@ func (s *Stripe) listEvents(_ *http.Request, form url.Values, _ string) reply {
 			hasExact && e.Created != exact:
 			continue
 		}
+		eligible = append(eligible, e)
+	}
+	// Newest first by creation time; events made at the same time keep the later one first. A
+	// session that expired by the clock is recorded when it is noticed, not when it expired, so
+	// the order of making isn't always the order of time.
+	slices.SortStableFunc(eligible, func(a, b *Event) int { return cmp.Compare(b.Created, a.Created) })
+	byID := make(map[string]*Event, len(eligible))
+	ids := make([]string, 0, len(eligible))
+	for _, e := range eligible {
 		byID[e.ID] = e
 		ids = append(ids, e.ID)
 	}
