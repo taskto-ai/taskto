@@ -9,6 +9,8 @@ import { SettingsPage } from './SettingsPage'
 const me: Me = {
   user: { id: 1, email: 'owner@example.com', name: 'Owner' },
   workspaces: [{ id: 1, name: 'Home', role: 'member' }],
+  can_create_workspace: false,
+  is_operator: false,
 }
 const member: Workspace = { id: 1, name: 'Home', role: 'member' }
 
