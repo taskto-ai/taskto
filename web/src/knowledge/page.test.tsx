@@ -344,8 +344,11 @@ test('a name the column cuts shows in full in a tooltip, and only then', async (
     await waitFor(() => expect(tip(/^a-folder-name/)).toBe(long))
     expect(tip(/^ideas\.md/)).toBe('')
   } finally {
+    // jsdom defines them on Element: when HTMLElement had none of its own, the overrides go.
     if (sw) Object.defineProperty(HTMLElement.prototype, 'scrollWidth', sw)
+    else Reflect.deleteProperty(HTMLElement.prototype, 'scrollWidth')
     if (cw) Object.defineProperty(HTMLElement.prototype, 'clientWidth', cw)
+    else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth')
   }
 })
 
