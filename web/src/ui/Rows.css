@@ -14,7 +14,7 @@
     gap: var(--space-3) var(--space-4);
     min-block-size: var(--control-touch);
     padding: var(--space-3) var(--space-4);
-    border-block-end: 1px solid var(--color-border);
+    border-block-end: var(--line-thin) solid var(--color-border);
     transition: background-color var(--duration-fast) var(--ease-out);
   }
 
@@ -34,7 +34,7 @@
     flex: 1 1 12rem;
     min-inline-size: 0;
     display: grid;
-    gap: 2px;
+    gap: calc(var(--space-1) / 2);
   }
 
   .ui-row-title {
@@ -47,21 +47,31 @@
     text-decoration: none;
   }
 
+  /* A row that opens in place: its title is a button that looks like the title. */
+  .ui-row-open {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    text-align: start;
+    cursor: pointer;
+  }
+
   /* A row that is a link answers a click anywhere on it: the link's box covers the row, and the
      status and the actions sit above it. */
-  a.ui-row-title::after {
+  :is(a, button).ui-row-title::after {
     content: "";
     position: absolute;
     inset: 0;
   }
 
-  a.ui-row-title:focus-visible {
+  :is(a, button).ui-row-title:focus-visible {
     outline: none;
   }
 
-  .ui-row[data-link]:has(a.ui-row-title:focus-visible) {
-    outline: 2px solid var(--color-focus);
-    outline-offset: -2px;
+  .ui-row[data-link]:has(.ui-row-title:focus-visible) {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: calc(-1 * var(--line-focus));
   }
 
   .ui-row-detail {

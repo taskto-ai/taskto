@@ -2543,7 +2543,8 @@
     "close": "Close",
     "moreActions": "More actions",
     "dismiss": "Dismiss",
-    "notifications": "Notifications"
+    "notifications": "Notifications",
+    "menuButtonName": "{label}:"
   },
   "gallery": {
     "title": "Design system",
@@ -2765,7 +2766,13 @@
       "labels": "Labels",
       "assignedToMe": "Assigned to me",
       "addColumn": "Add a column",
-      "headings": "Sizes from the type roles: the display face from 20px up, Inter below"
+      "headings": "Sizes from the type roles: the display face from 20px up, Inter below",
+      "busyAsk": "Delete, then fail…",
+      "busyFailed": "The app could not be deleted. Nothing was changed; try again.",
+      "inPlaceRow": "A search result",
+      "inPlaceDetail": "Opens on this page, in place",
+      "focusTarget": "Moved to by a script (a ref, and tabIndex -1)",
+      "focusIt": "Send the keyboard to the title"
     }
   }
 }

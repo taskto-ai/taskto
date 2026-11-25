@@ -122,6 +122,19 @@
     --width-reading: 760px;
     --width-list: 1040px;
     --width-sidebar: 232px;
+
+    /* Widths of what floats over a page: a menu (at least, at most), a toast, a side drawer, and
+       a dialog (a question, a form, more). Each is also kept inside a narrow window. */
+    --width-menu-min: 208px;
+    --width-menu-max: 320px;
+    --width-toast: 380px;
+    --width-drawer: 456px;
+    --width-dialog-sm: 420px;
+    --width-dialog-md: 560px;
+    --width-dialog-lg: var(--width-reading);
+
+    /* The narrow screen (a phone) starts below 40rem (640px). A media query can't read a custom
+       property, so it is written `@media (max-width: 40rem)` wherever it is used. */
   }
 }
 

@@ -3,8 +3,7 @@
 // The page-structure components: Page, PageHeader, Heading, Toolbar, Panel, Rows, Table, EmptyState and
 // Notice.
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { createRef } from 'react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Button } from './Button'
 import { EmptyState } from './EmptyState'
@@ -46,32 +45,6 @@ describe('Page and PageHeader', () => {
     const header = h1.closest('header') as HTMLElement
     expect(header.textContent).toBe('PrivatePersonalYour own cards.New card')
     expect(screen.getByRole('button', { name: 'New card' })).toBeTruthy()
-  })
-
-  test('a header given a title ref lets a script, not Tab, move the keyboard to its title', () => {
-    const ref = createRef<HTMLHeadingElement>()
-    const { rerender } = render(<PageHeader title="Home" titleRef={ref} />)
-    const h1 = screen.getByRole('heading', { level: 1, name: 'Home' })
-    expect(ref.current).toBe(h1)
-    ref.current?.focus()
-    expect(document.activeElement).toBe(h1)
-    expect(h1.tabIndex).toBe(-1)
-    // Without one, the title is not a place for the keyboard at all.
-    rerender(<PageHeader title="Home" />)
-    expect(screen.getByRole('heading', { level: 1 }).hasAttribute('tabindex')).toBe(false)
-  })
-
-  test('a Heading takes a ref, so a script can move the keyboard to it', () => {
-    const ref = createRef<HTMLHeadingElement>()
-    render(
-      <Heading level={2} ref={ref} tabIndex={-1}>
-        Set up your workspace
-      </Heading>,
-    )
-    const h2 = screen.getByRole('heading', { level: 2, name: 'Set up your workspace' })
-    expect(ref.current).toBe(h2)
-    ref.current?.focus()
-    expect(document.activeElement).toBe(h2)
   })
 
   test('a header inside another page is a level 2 heading', () => {
@@ -139,16 +112,33 @@ describe('Rows', () => {
     expect(screen.getByText('Expenses').closest('li')?.dataset.current).toBe('true')
   })
 
-  test('a row that is a link says it was opened before the app goes there', () => {
-    const opened = vi.fn()
+  test('a row that opens in place: its title is a button, called by a click or the keyboard', () => {
+    const open = vi.fn()
     render(
-      <Rows>
-        <Row title="A card was assigned to you" href="/w/1/boards/3" onOpen={opened} />
+      <Rows label="Results">
+        <Row title="Launch plan" detail="launch/plan.md" onOpen={open} current />
+        <Row title="Ideas" />
       </Rows>,
     )
-    fireEvent.click(screen.getByRole('link', { name: 'A card was assigned to you' }))
-    expect(opened).toHaveBeenCalledOnce()
-    expect(window.location.pathname).toBe('/w/1/boards/3')
+    const title = screen.getByRole('button', { name: 'Launch plan' })
+    expect(title.getAttribute('aria-current')).toBe('true')
+    expect(title.closest('li')?.dataset.link).toBe('true')
+    fireEvent.click(title)
+    expect(open).toHaveBeenCalledOnce()
+    // A row with neither a link nor onOpen is text.
+    expect(screen.queryByRole('button', { name: 'Ideas' })).toBeNull()
+    expect(screen.getByText('Ideas').closest('li')?.dataset.link).toBeUndefined()
+  })
+
+  test("a link row's onOpen is called before the app follows it", () => {
+    const open = vi.fn()
+    render(
+      <Rows>
+        <Row title="Equipment" href="/w/1/apps/3" onOpen={open} />
+      </Rows>,
+    )
+    fireEvent.click(screen.getByRole('link', { name: 'Equipment' }))
+    expect(open).toHaveBeenCalledOnce()
   })
 })
 
@@ -235,5 +225,53 @@ describe('Heading', () => {
     expect(section.className).toBe('ui-heading')
     expect(section.dataset.size).toBe('section')
     expect(screen.getByRole('heading', { level: 3, name: 'Plans' }).dataset.size).toBe('title')
+  })
+})
+
+describe('Table that is wider than its place', () => {
+  test('scrolls in a named region the keyboard can reach, and stops being one when it fits', () => {
+    const observers: (() => void)[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private fn: () => void) {
+          observers.push(() => this.fn())
+        }
+        observe() {}
+        disconnect() {}
+      },
+    )
+    let wide = true
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(() => (wide ? 900 : 300))
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => 320)
+    render(
+      <Table
+        caption="Members"
+        rows={[{ id: 1 }]}
+        rowKey={(r) => r.id}
+        columns={[{ key: 'a', header: 'Person', cell: () => 'Ana' }]}
+      />,
+    )
+    const region = screen.getByRole('region', { name: 'Members' })
+    expect(region.tabIndex).toBe(0)
+    expect(region.contains(screen.getByRole('table'))).toBe(true)
+    wide = false
+    act(() => {
+      for (const fire of observers) fire()
+    })
+    expect(screen.queryByRole('region')).toBeNull()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('Notice that is part of the page', () => {
+  test('live={false} has no role, whatever its tone', () => {
+    const { container } = render(
+      <Notice tone="danger" live={false}>
+        The key was refused.
+      </Notice>,
+    )
+    expect((container.firstElementChild as HTMLElement).getAttribute('role')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

@@ -1,13 +1,17 @@
 @layer components {
   .ui-tabs {
-    border-block-end: 1px solid var(--color-border);
+    min-inline-size: 0;
   }
 
-  /* On a narrow screen the tabs scroll sideways in their row; the page doesn't. */
+  /* On a narrow screen the tabs scroll sideways in their row; the page doesn't, and the row never
+     scrolls up and down. The hairline under the row is drawn inside it, so the current tab's
+     rule can lie on it without overflowing it. */
   .ui-tabs-list {
     display: flex;
     gap: var(--space-1);
     overflow-x: auto;
+    overflow-y: hidden;
+    box-shadow: inset 0 calc(-1 * var(--line-thin)) 0 var(--color-border);
     scrollbar-width: none;
   }
 
@@ -37,8 +41,8 @@
   }
 
   .ui-tab:focus-visible {
-    outline: 2px solid var(--color-focus);
-    outline-offset: -2px;
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: calc(-1 * var(--line-focus));
   }
 
   /* The current tab: ink text and an ink rule under it, so it is marked by more than colour. */
@@ -53,10 +57,14 @@
     content: "";
     position: absolute;
     inset-inline: var(--space-2);
-    inset-block-end: -1px;
-    block-size: 2px;
+    inset-block-end: 0;
+    block-size: var(--line-focus);
     border-radius: var(--radius-pill);
     background: var(--color-text);
+  }
+
+  .ui-tab-label {
+    white-space: nowrap;
   }
 
   .ui-tab-count {

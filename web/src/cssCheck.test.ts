@@ -284,7 +284,7 @@ test('a system colour is a colour literal too, outside a theme', () => {
   expect(theme.code).toBe(0)
 })
 
-test('an old element rule that can match anywhere leaves the design system’s elements out, or fails', () => {
+test('an old rule that can match anywhere leaves the design system’s elements out, or fails', () => {
   const OPT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
   for (const css of [
     'h2 { margin: 0; }\n',
@@ -292,17 +292,30 @@ test('an old element rule that can match anywhere leaves the design system’s e
     '@media (pointer: coarse) {\n  label:has(> input[type="checkbox"]) { min-height: 44px; }\n}\n',
     'main > section h3 { margin: 0; }\n',
     'h2:not(:where(.ui-control)) { margin: 0; }\n',
+    // Not by an element name, and still everywhere.
+    ':is(h1, h2) { margin: 0; }\n',
+    ':focus-visible { outline: 2px solid; }\n',
+    '::placeholder { opacity: 1; }\n',
+    '[data-busy] { cursor: wait; }\n',
+    '* { color: inherit; }\n',
+    // A wrapper of every page scopes nothing.
+    '.tt-page h2 { margin: 0; }\n#root p { margin: 0; }\n',
+    // Allowed by its selector, but for other properties only.
+    'input, select, textarea { font: inherit; border: 1px solid; }\n',
+    'input { caret-color: auto; padding: 0; }\n',
   ]) {
     const r = run(css)
     expect(r.code, css).toBe(1)
-    expect(r.err).toContain('reaches into the design system')
+    expect(r.err).toMatch(/reaches (into the design system|every element)/)
   }
   for (const css of [
     `h2${OPT} { margin: 0; }\n`,
     `label:has(> input[type="checkbox"])${OPT} { min-height: 44px; }\n`,
-    '.tt-markdown h2 { margin: 0; }\n#root p { margin: 0; }\n',
+    `:focus-visible${OPT} { outline: 2px solid; }\n${OPT}::placeholder { opacity: 1; }\n`,
+    '.tt-markdown h2 { margin: 0; }\n.tt-page .tt-card p { margin: 0; }\n',
     '@keyframes spin { from { rotate: 0; } to { rotate: 1turn; } }\n',
-    'html, body { margin: 0; }\n*, ::selection, :focus-visible { outline: 0; }\n',
+    'html { height: 100%; }\nbody { margin: 0; }\n*, *::before { box-sizing: border-box; }\n::selection { color: inherit; }\n',
+    'input, textarea { caret-color: auto; }\n@media (max-width: 48rem) { input, select, textarea { font-size: 16px; } }\n',
   ]) {
     const r = run(css)
     expect(r.err, css).toBe('')

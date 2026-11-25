@@ -109,3 +109,22 @@ describe('Tabs as links', () => {
     expect(window.location.pathname).not.toBe('/w/1/settings/members')
   })
 })
+
+describe('Tabs with some links and some not', () => {
+  test('are drawn as buttons, and say it is a mistake in development', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(
+      <Tabs
+        label="Mixed"
+        value="a"
+        items={[
+          { id: 'a', label: 'A', href: '/a' },
+          { id: 'b', label: 'B' },
+        ]}
+      />,
+    )
+    expect(screen.getAllByRole('tab')).toHaveLength(2)
+    expect(error).toHaveBeenCalled()
+    error.mockRestore()
+  })
+})
