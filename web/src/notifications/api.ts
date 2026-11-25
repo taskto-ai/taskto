@@ -42,8 +42,21 @@ export const INBOX_CHANGED = 'taskto:inbox-changed'
 // instant (a mail soon after) or digest (counted in a daily summary). `available` is false when the
 // server can't send mail, and then nothing can be turned on.
 export type EmailMode = 'off' | 'instant' | 'digest'
-export type EmailKind = 'card_assigned' | 'app_effect_failed'
-export const EMAIL_KINDS: EmailKind[] = ['card_assigned', 'app_effect_failed']
+export type EmailKind =
+  | 'card_assigned'
+  | 'card_comment'
+  | 'card_mention'
+  | 'card_due'
+  | 'card_overdue'
+  | 'app_effect_failed'
+export const EMAIL_KINDS: EmailKind[] = [
+  'card_assigned',
+  'card_comment',
+  'card_mention',
+  'card_due',
+  'card_overdue',
+  'app_effect_failed',
+]
 export type EmailAddress = { email: string; state: 'unverified' | 'pending' | 'verified' }
 export type EmailChoices = {
   available: boolean

@@ -215,3 +215,26 @@ describe('calendar dates', () => {
     expect(result.current.calendarDate('2026-03-08')).toBe('Mar 8, 2026')
   })
 })
+
+describe('sizes', () => {
+  it('writes a byte as B, and kB and MB as they are, in every language the app has', async () => {
+    for (const tag of LOCALES) {
+      await setPreferences({ user: tag, workspace: null })
+      const { result } = renderHook(() => useFormat())
+      const bytes = result.current.bytes
+      // Not "41 byte" or "41 bytes": the unit is a symbol, like kB and MB.
+      expect(bytes(41), tag).toMatch(/^41\s?B$/)
+      expect(bytes(1), tag).toMatch(/^1\s?B$/)
+      expect(bytes(0), tag).toMatch(/^0\s?B$/)
+      expect(bytes(2500), tag).toMatch(/kB$/)
+      expect(bytes(3_400_000), tag).toMatch(/MB$/)
+    }
+  })
+
+  it('keeps English as "41 B", "2.5 kB"', () => {
+    const { result } = renderHook(() => useFormat())
+    expect(result.current.bytes(41)).toBe('41 B')
+    expect(result.current.bytes(2500)).toBe('2.5 kB')
+    expect(result.current.bytes(1_500_000)).toBe('1.5 MB')
+  })
+})

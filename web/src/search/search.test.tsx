@@ -166,6 +166,26 @@ test('searching the same again asks the server again', async () => {
   await waitFor(() => expect(searches()).toBe(2))
 })
 
+test("a result's snippet shows without the document's Markdown marks, its matches still marked", async () => {
+  const hit = {
+    ...result(spaces[0], 'notes/plan.md', 'Quarterly plan'),
+    snippet: [{ text: '## Plan\n\nThe **first ' }, { text: 'orchard', match: true }, { text: '** is `small`' }],
+  }
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces } },
+    'GET /api/workspaces/1/spaces/2/docs': { body: { docs: [] } },
+    'GET /api/workspaces/1/spaces/2/search': { body: { results: [hit], mode: 'hybrid' } },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByText('No documents in this space yet.')
+  search('orchard')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  const shown = await within(results).findByRole('button', { name: /Quarterly plan/ })
+  const snippet = shown.querySelector('.tt-snippet')
+  expect(snippet?.textContent).toBe('Plan The first orchard is small')
+  expect([...(snippet?.querySelectorAll('mark') ?? [])].map((m) => m.textContent)).toEqual(['orchard'])
+})
+
 const card = (id: number, title: string, column = 'doing', board = { id: 7, name: 'Roadmap' }) => ({
   space_id: 3,
   space_name: 'Team',

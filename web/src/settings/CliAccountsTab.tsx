@@ -120,7 +120,7 @@ function AccountCard({ account: a, onChanged }: { account: CliAccount; onChanged
   const stateClass = a.state === 'connected' ? 'tt-ok' : a.state === 'reconnect' ? 'tt-warning' : 'tt-muted'
 
   return (
-    <section className="tt-panel tt-cli-account" aria-label={title}>
+    <section className="tt-panel" aria-label={title}>
       <div className="tt-pane-head">
         <h2>{title}</h2>
         {a.available && (

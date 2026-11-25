@@ -336,12 +336,19 @@ func (c *Checker) AppNamed(ctx context.Context, userID, spaceID, appID int64) (S
 // the reads that go with them, so what a person may do and what fn reads of it come from one
 // state: nothing that changes meanwhile (a demotion, a removal, an app moving) can make the two
 // disagree. The snapshot starts with the first read, and fn must not write.
+//
+// On a checker that already reads inside a transaction (Checker.On) that transaction is the
+// snapshot: a second one would wait for the one that holds the write lock.
 func (c *Checker) Snapshot(ctx context.Context, fn func(snap *Checker, tx *sql.Tx) error) error {
-	tx, err := c.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return err
+	tx, held := c.reads.(*sql.Tx)
+	if !held {
+		var err error
+		tx, err = c.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }() // nothing was written
 	}
-	defer func() { _ = tx.Rollback() }() // nothing was written
 	return fn(&Checker{db: c.db, reads: tx, auth: c.auth}, tx)
 }
 

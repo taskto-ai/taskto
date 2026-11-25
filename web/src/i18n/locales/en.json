@@ -730,7 +730,7 @@
     "labels": "Labels",
     "noLabels": "No labels.",
     "labelField": "New label",
-    "labelPlaceholder": "design",
+    "labelPlaceholder": "Add a label",
     "addLabel": "Add label",
     "removeLabel": "Remove the label {label}",
     "filters": "Filter the cards",
@@ -2417,6 +2417,10 @@
       "emailUnavailable": "Email isn't set up on this server, so notifications can't be sent by email. The person who runs the server can turn it on.",
       "email": {
         "card_assigned": "A card was assigned to you",
+        "card_comment": "A card of yours has a new comment",
+        "card_mention": "You were mentioned in a comment",
+        "card_due": "A card of yours is due",
+        "card_overdue": "A card of yours is overdue",
         "app_effect_failed": "An app action needs your attention"
       },
       "emailOff": "Don't email me",

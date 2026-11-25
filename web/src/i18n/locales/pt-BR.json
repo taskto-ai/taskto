@@ -734,7 +734,7 @@
     "labels": "Etiquetas",
     "noLabels": "Sem etiquetas.",
     "labelField": "Nova etiqueta",
-    "labelPlaceholder": "design",
+    "labelPlaceholder": "Adicionar uma etiqueta",
     "addLabel": "Adicionar etiqueta",
     "removeLabel": "Remover a etiqueta {label}",
     "filters": "Filtrar os cartões",
@@ -2438,6 +2438,10 @@
       "emailUnavailable": "O e-mail não está configurado neste servidor, então as notificações não podem ser enviadas por e-mail. Quem administra o servidor pode ativá-lo.",
       "email": {
         "card_assigned": "Um cartão foi atribuído a você",
+        "card_comment": "Um cartão seu tem um novo comentário",
+        "card_mention": "Você foi mencionado em um comentário",
+        "card_due": "Um cartão seu vence",
+        "card_overdue": "Um cartão seu está atrasado",
         "app_effect_failed": "Uma ação de app precisa da sua atenção"
       },
       "emailOff": "Não me enviar e-mail",

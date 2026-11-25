@@ -212,7 +212,11 @@ function Setup({ token }: { token?: string }) {
         {t.rich('settings.tokens.setup.endpoint', { url: <code>{url}</code>, code: (text) => <code>{text}</code> })}
       </p>
       {snippets.map((s) => (
-        <section key={s.label} className="tt-snippet" aria-label={t('settings.tokens.setup.named', { name: s.label })}>
+        <section
+          key={s.label}
+          className="tt-setup-snippet"
+          aria-label={t('settings.tokens.setup.named', { name: s.label })}
+        >
           <h3>{s.label}</h3>
           <p className="tt-muted tt-small">{s.note}</p>
           <pre>
