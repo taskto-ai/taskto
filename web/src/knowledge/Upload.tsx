@@ -1,9 +1,15 @@
-// Uploading a file into the space: any file, at any path, created unless the person chooses to
-// replace one already there.
+// Uploading a file into the space, in a dialog: any file, at any path, created unless the person
+// chooses to replace one already there. While it is sent, the dialog says what and how big.
 
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { ApiError, api, type Doc, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Dialog } from '../ui/Dialog'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Spinner } from '../ui/Spinner'
 import { type Change, encodePath, isConflict, isMarkdown, useMounted } from './docs'
 
 // A Markdown file is sent as its text, checked here to be UTF-8; any other file as its bytes,
@@ -37,11 +43,13 @@ export function Upload({
   const target = path.trim().replace(/^\/+/, '')
   const t = useT()
   const f = useFormat()
+  const form = useId()
 
   // The upload in flight: only Cancel stops it, and then nothing opens. When the form goes away
   // for another reason (the person went to a document, or another space) the upload goes on
   // and finishes, since a large one takes minutes; it just doesn't open the file over what they
-  // are doing.
+  // are doing. So the dialog's own close (its button, Escape) only closes it: a long upload
+  // goes on while the person works, and Cancel is what stops it.
   const sending = useRef<AbortController | null>(null)
   const mounted = useMounted()
   const cancel = () => {
@@ -98,62 +106,66 @@ export function Upload({
   }
 
   return (
-    <form
-      className="tt-panel tt-form"
-      aria-label={t('knowledge.uploadForm.label')}
-      onSubmit={(e) => {
-        e.preventDefault()
-        send(false)
-      }}
+    <Dialog
+      open
+      title={t('knowledge.uploadForm.label')}
+      onClose={onCancel}
+      actions={
+        <>
+          <Button onClick={cancel}>{t('common.cancel')}</Button>
+          {exists ? (
+            <Button variant="danger" loading={busy} onClick={() => send(true)}>
+              {t('knowledge.uploadForm.replace')}
+            </Button>
+          ) : (
+            <Button type="submit" form={form} variant="primary" loading={busy} disabled={busy || !file || !target}>
+              {t('knowledge.uploadForm.submit')}
+            </Button>
+          )}
+        </>
+      }
     >
-      <label>
-        {t('knowledge.uploadForm.file')}
-        <input
-          type="file"
-          onChange={(e) => {
-            const f = e.target.files?.[0] ?? null
-            setFile(f)
-            setExists(false)
-            setError(null)
-            if (f) setPath(f.name)
-          }}
-        />
-      </label>
-      <label>
-        {t('knowledge.uploadForm.saveAs')}
-        <input
-          value={path}
-          onChange={(e) => {
-            setPath(e.target.value)
-            setExists(false)
-          }}
-        />
-      </label>
-      <span className="tt-hint">{t('knowledge.uploadForm.hint')}</span>
-      {busy && file && (
-        <p className="tt-muted" role="status">
-          {t('knowledge.uploadForm.sending', { name: file.name, size: f.bytes(file.size) })}
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
-      <div className="tt-actions">
-        {exists ? (
-          <button type="button" className="tt-button tt-danger" disabled={busy} onClick={() => send(true)}>
-            {t('knowledge.uploadForm.replace')}
-          </button>
-        ) : (
-          <button type="submit" className="tt-button tt-primary" disabled={busy || !file || !target}>
-            {t('knowledge.uploadForm.submit')}
-          </button>
+      <form
+        id={form}
+        className="kb-form"
+        aria-label={t('knowledge.uploadForm.label')}
+        onSubmit={(e) => {
+          e.preventDefault()
+          send(false)
+        }}
+      >
+        <Field label={t('knowledge.uploadForm.file')}>
+          <Input
+            data-autofocus
+            type="file"
+            className="kb-file-input"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null
+              setFile(f)
+              setExists(false)
+              setError(null)
+              if (f) setPath(f.name)
+            }}
+          />
+        </Field>
+        <Field label={t('knowledge.uploadForm.saveAs')} hint={t('knowledge.uploadForm.hint')}>
+          <Input
+            value={path}
+            onChange={(e) => {
+              setPath(e.target.value)
+              setExists(false)
+            }}
+          />
+        </Field>
+        {busy && file && (
+          <p className="kb-sending" role="status">
+            <Spinner size="sm" />
+            <span>{t('knowledge.uploadForm.sending', { name: file.name, size: f.bytes(file.size) })}</span>
+          </p>
         )}
-        <button type="button" className="tt-button" onClick={cancel}>
-          {t('common.cancel')}
-        </button>
-      </div>
-    </form>
+        {/* A refusal, "already exists" too: said at once, as an alert. */}
+        {error && <Notice tone="danger">{error}</Notice>}
+      </form>
+    </Dialog>
   )
 }

@@ -2158,7 +2158,9 @@
       "move": "Mover",
       "delete": "Excluir",
       "empty": "Este documento está vazio.",
-      "download": "Baixar"
+      "download": "Baixar",
+      "backToResults": "Voltar aos resultados",
+      "separator": "/"
     },
     "editor": {
       "label": "Editar o documento",
@@ -2216,7 +2218,23 @@
       "removedCount_one": "{count} versão antiga removida do histórico.",
       "removedCount_other": "{count} versões antigas removidas do histórico.",
       "removedCount_many": "{count} de versões antigas removidas do histórico.",
-      "removedNone": "Não havia versões antigas para remover."
+      "removedNone": "Não havia versões antigas para remover.",
+      "restoreTitle": "Restaurar esta versão?",
+      "restoreQuestion": "{path} volta a ser o que era em {time}. A versão que tem agora fica no histórico.",
+      "changeBy": "{change} · {by}"
+    },
+    "emptyHelp": "Escreva um novo documento ou envie um arquivo.",
+    "pick": "Escolha um documento para lê-lo.",
+    "errors": {
+      "spaces": "Não foi possível carregar os espaços.",
+      "documents": "Não foi possível carregar os documentos.",
+      "document": "Não foi possível carregar este documento.",
+      "history": "Não foi possível carregar o histórico."
+    },
+    "tree": {
+      "count_one": "{count} documento",
+      "count_other": "{count} documentos",
+      "count_many": "{count} de documentos"
     }
   },
   "search": {
@@ -2475,7 +2493,14 @@
       "unpinned": "{name} removido do menu",
       "defaultSet": "{name} agora é um padrão do espaço",
       "defaultUnset": "{name} não é mais um padrão do espaço"
-    }
+    },
+    "empty": "Nada no seu Início ainda. Escolha Personalizar para colocar aqui um widget de um dos seus apps ou para fixar um app no menu.",
+    "unavailableShort": {
+      "offline": "· app fora do ar",
+      "unpublished": "· app não publicado",
+      "removed": "· não é mais oferecido"
+    },
+    "default": "· definido para o espaço"
   },
   "checklist": {
     "title": "Configure seu workspace",
@@ -2916,7 +2941,8 @@
       "personB": "Tomás Oliveira",
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
-      "workspaceName": "Acme Studio"
+      "workspaceName": "Acme Studio",
+      "tooltipEmpty": "Sem conteúdo: nenhuma dica"
     },
     "labels": {
       "onboarding": "integração",

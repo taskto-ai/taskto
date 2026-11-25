@@ -2145,7 +2145,9 @@
       "move": "Move",
       "delete": "Delete",
       "empty": "This document is empty.",
-      "download": "Download"
+      "download": "Download",
+      "backToResults": "Back to the results",
+      "separator": "/"
     },
     "editor": {
       "label": "Edit the document",
@@ -2202,7 +2204,22 @@
       "removeSubmit": "Remove old versions",
       "removedCount_one": "Removed {count} old version from the history.",
       "removedCount_other": "Removed {count} old versions from the history.",
-      "removedNone": "There were no old versions to remove."
+      "removedNone": "There were no old versions to remove.",
+      "restoreTitle": "Restore this version?",
+      "restoreQuestion": "{path} becomes again what it was on {time}. The version it has now stays in its history.",
+      "changeBy": "{change} · {by}"
+    },
+    "emptyHelp": "Write a new document, or upload a file.",
+    "pick": "Choose a document to read it.",
+    "errors": {
+      "spaces": "The spaces couldn't be loaded.",
+      "documents": "The documents couldn't be loaded.",
+      "document": "This document couldn't be loaded.",
+      "history": "The history couldn't be loaded."
+    },
+    "tree": {
+      "count_one": "{count} document",
+      "count_other": "{count} documents"
     }
   },
   "search": {
@@ -2460,7 +2477,14 @@
       "unpinned": "{name} removed from the menu",
       "defaultSet": "{name} is now a default for the space",
       "defaultUnset": "{name} is no longer a default for the space"
-    }
+    },
+    "empty": "Nothing on your Home yet. Choose Customize to put a widget from one of your apps here, or to pin an app to the menu.",
+    "unavailableShort": {
+      "offline": "· app offline",
+      "unpublished": "· app not published",
+      "removed": "· no longer offered"
+    },
+    "default": "· set for the space"
   },
   "checklist": {
     "title": "Set up your workspace",
@@ -2894,7 +2918,8 @@
       "personB": "Tomás Oliveira",
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
-      "workspaceName": "Acme Studio"
+      "workspaceName": "Acme Studio",
+      "tooltipEmpty": "Without content: no tooltip"
     },
     "labels": {
       "onboarding": "onboarding",

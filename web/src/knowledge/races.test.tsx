@@ -76,18 +76,54 @@ function kb(extra: Parameters<typeof fakeFetch>[0] = {}) {
   })
 }
 
+// The documents are a tree: a document's folders are opened (if they are closed), then it. Each
+// is found by its exact path (the tree's own data on its rows), never by a pattern made from it.
 async function open(name = 'notes/plan.md') {
-  fireEvent.click(await screen.findByRole('button', { name: new RegExp(name.replace('.', '\\.')) }))
+  const list = await screen.findByRole('list', { name: 'Documents' })
+  const parts = name.split('/')
+  for (let i = 1; i < parts.length; i++) {
+    const folder = parts.slice(0, i).join('/')
+    const row = [...list.querySelectorAll<HTMLElement>('[data-name-of]')].find(
+      (el) => el.dataset.nameOf === `folder:${folder}`,
+    )
+    const button = row?.closest('button')
+    if (!button) throw new Error(`no folder ${folder} in the tree`)
+    if (button.getAttribute('aria-expanded') === 'false') fireEvent.click(button)
+  }
+  fireEvent.click(inList(name))
   return screen.findByRole('article', { name })
 }
-const inList = (name: RegExp) => screen.getByRole('button', { name })
+// A document in the tree: by its exact path, or a pattern written in the test.
+const inList = (path: string | RegExp) => {
+  const item = [...screen.getByRole('list', { name: 'Documents' }).querySelectorAll<HTMLElement>('[data-path]')].find(
+    (b) => (typeof path === 'string' ? b.dataset.path === path : path.test(b.dataset.path ?? '')),
+  )
+  if (!item) throw new Error(`no document ${path} in the tree`)
+  return item
+}
+
+// One of the document's actions in its "More actions" menu.
+function fromMenu(doc: HTMLElement, name: string) {
+  fireEvent.click(within(doc).getByRole('button', { name: 'More actions' }))
+  fireEvent.click(within(doc).getByRole('menuitem', { name }))
+}
 
 // The delete question of a document, answered yes.
 async function confirmDelete(doc: HTMLElement) {
-  fireEvent.click(await within(doc).findByRole('button', { name: 'Delete' }))
+  await within(doc).findByRole('button', { name: 'More actions' })
+  fromMenu(doc, 'Delete')
   fireEvent.click(
-    within(screen.getByRole('group', { name: 'Delete the document' })).getByRole('button', { name: 'Delete' }),
+    within(screen.getByRole('alertdialog', { name: 'Delete the document' })).getByRole('button', { name: 'Delete' }),
   )
+}
+
+// The move dialog of a document, sent with a new name.
+async function move(doc: HTMLElement, to: string) {
+  await within(doc).findByRole('button', { name: 'More actions' })
+  fromMenu(doc, 'Move')
+  const dialog = within(doc).getByRole('dialog', { name: 'Move the document' })
+  fireEvent.change(within(dialog).getByLabelText('New name'), { target: { value: to } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
 }
 
 // A draft in the editor of the open document.
@@ -97,6 +133,13 @@ async function draft(doc: HTMLElement, text = 'Mine.') {
   return within(doc).getByLabelText('Text') as HTMLTextAreaElement
 }
 const asked = () => screen.queryByRole('alertdialog', { name: 'Discard your changes' })
+
+// Restoring a version asks first: answered yes.
+async function restoreVersion(doc: HTMLElement) {
+  fireEvent.click(await within(doc).findByRole('button', { name: 'Restore this version' }))
+  const ask = screen.getByRole('alertdialog', { name: 'Restore this version?' })
+  fireEvent.click(within(ask).getByRole('button', { name: 'Restore this version' }))
+}
 
 test('the fake ends an aborted request as a fetch does', async () => {
   fakeFetch({ 'GET /x': () => new Promise(() => {}) })
@@ -164,9 +207,11 @@ test('a restore that finishes after Edit was opened keeps the draft', async () =
   render(<KnowledgePage workspace={1} />)
   const doc = await open()
   fireEvent.click(await within(doc).findByRole('button', { name: 'History' }))
-  fireEvent.click(await within(doc).findByRole('button', { name: 'Restore this version' }))
+  await restoreVersion(doc)
   await waitFor(() => expect(made(calls, 'POST')).toBe(true))
 
+  // From the history back to the document, and on to Edit.
+  fireEvent.click(within(doc).getByRole('button', { name: 'Document' }))
   fireEvent.click(within(doc).getByRole('button', { name: 'Edit' }))
   fireEvent.change(await within(doc).findByLabelText('Text'), { target: { value: 'My new draft.' } })
   held.release({ body: { commit: 'c3', doc: plan } })
@@ -303,7 +348,9 @@ test('the question is in view, has the focus, and Keep editing (or Escape) gives
 
     fireEvent.click(within(doc).getByRole('button', { name: 'Cancel' }))
     const question = within(doc).getByRole('alertdialog', { name: 'Discard your changes' })
-    expect(scrolled).toHaveBeenCalled()
+    // In view: a modal dialog, over the page wherever it is scrolled.
+    expect((question as HTMLDialogElement).open).toBe(true)
+    expect(question.dataset.modal).toBe('')
     expect(document.activeElement).toBe(within(question).getByRole('button', { name: 'Keep editing' }))
 
     fireEvent.click(within(question).getByRole('button', { name: 'Keep editing' }))
@@ -428,10 +475,12 @@ test('a move that lands after Edit was opened asks, saying the document was move
   })
   render(<KnowledgePage workspace={1} />)
   const doc = await open()
-  fireEvent.click(await within(doc).findByRole('button', { name: 'Move' }))
-  fireEvent.change(within(doc).getByLabelText('New name'), { target: { value: 'archive/plan.md' } })
-  fireEvent.click(within(doc).getAllByRole('button', { name: 'Move' }).at(-1) as HTMLElement)
+  await move(doc, 'archive/plan.md')
   await waitFor(() => expect(made(calls, 'PATCH')).toBe(true))
+  // The move goes on when its dialog is closed, and the page behind it is the person's again.
+  fireEvent.click(
+    within(within(doc).getByRole('dialog', { name: 'Move the document' })).getByRole('button', { name: 'Cancel' }),
+  )
   const text = await draft(doc)
   held.release({ body: { commit: 'c2', doc: { ...plan, path: 'archive/plan.md' } } })
 
@@ -448,10 +497,12 @@ test('a move that lands after the person went to another document opens nothing'
   const calls = kb({ [`PATCH ${S}/docs/notes/plan.md`]: () => held.answer })
   render(<KnowledgePage workspace={1} />)
   const doc = await open()
-  fireEvent.click(await within(doc).findByRole('button', { name: 'Move' }))
-  fireEvent.change(within(doc).getByLabelText('New name'), { target: { value: 'archive/plan.md' } })
-  fireEvent.click(within(doc).getAllByRole('button', { name: 'Move' }).at(-1) as HTMLElement)
+  await move(doc, 'archive/plan.md')
   await waitFor(() => expect(made(calls, 'PATCH')).toBe(true))
+  // The move goes on when its dialog is closed, and the page behind it is the person's again.
+  fireEvent.click(
+    within(within(doc).getByRole('dialog', { name: 'Move the document' })).getByRole('button', { name: 'Cancel' }),
+  )
   fireEvent.click(inList(/notes\/other\.md/))
   await screen.findByRole('article', { name: 'notes/other.md' })
   held.release({ body: { commit: 'c2', doc: { ...plan, path: 'archive/plan.md' } } })
@@ -463,7 +514,7 @@ test('a move that lands after the person went to another document opens nothing'
 // Starts an upload of logo.png whose request is held, and returns it.
 async function startUpload(calls: Call[]) {
   fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
-  const form = screen.getByRole('form', { name: 'Upload a file' })
+  const form = screen.getByRole('dialog', { name: 'Upload a file' })
   fireEvent.change(within(form).getByLabelText('File'), {
     target: { files: [new File([new Uint8Array([1, 2, 3])], 'logo.png')] },
   })
@@ -501,8 +552,7 @@ test('an upload goes on when its form goes away: it finishes, the list is read a
   const { put } = await startUpload(calls)
 
   // The person opens a document of the list: the form closes, and the upload is not stopped.
-  fireEvent.click(inList(/notes\/other\.md/))
-  await screen.findByRole('article', { name: 'notes/other.md' })
+  await open('notes/other.md')
   expect(screen.queryByRole('form', { name: 'Upload a file' })).toBeNull()
   expect(put.signal?.aborted).toBe(false)
   held.release(uploaded)
@@ -644,7 +694,7 @@ test('after a restore conflict, Reload loads the document and its history', asyn
   render(<KnowledgePage workspace={1} />)
   const doc = await open()
   fireEvent.click(await within(doc).findByRole('button', { name: 'History' }))
-  fireEvent.click(await within(doc).findByRole('button', { name: 'Restore this version' }))
+  await restoreVersion(doc)
   const alert = await within(doc).findByRole('alert')
   fireEvent.click(within(alert).getByRole('button', { name: 'Reload' }))
   await waitFor(() => expect(reads(calls, `${S}/history/notes/plan.md`)).toBe(2))
