@@ -350,6 +350,9 @@ func (e *updEnv) command(args ...string) *exec.Cmd {
 		"TASKTO_UPDATE_NOTIFY_FILE=" + filepath.Join(e.etc, "update-notify-url"),
 		"TASKTO_UPDATE_API=" + e.server.URL, "TASKTO_UPDATE_RAW=" + e.server.URL + "/raw", "TASKTO_UPDATE_HEALTH=" + e.server.URL + "/healthz",
 		"TASKTO_UPDATE_HELPER=helper:test", "TASKTO_UPDATE_VERIFY_TIMEOUT=2", "TASKTO_UPDATE_POLL=1",
+		// The public directory must be its owner's, as root's on a host: here, the test's, and the
+		// check of the directories above it stops at the test's own.
+		"TASKTO_UPDATE_OWNER=" + strconv.Itoa(os.Getuid()), "TASKTO_UPDATE_TRUSTED_ROOT=" + e.dir,
 	}, e.extra...)
 	return cmd
 }

@@ -4,6 +4,7 @@
 #
 #   taskto-update [--dry-run] [--to VERSION]
 #   taskto-update --clear-block
+#   taskto-update --publish-status
 #
 # It does the safe common case and leaves the rest to a person. One run: choose a version,
 # resolve it to one commit and take every file and image from that commit, check it all before
@@ -53,6 +54,15 @@
 # server is healthy and is the version in .env, the worker's firewall rules are in and the safety
 # rules hold in the running containers.
 #
+# What admins see (Settings → About): after every run, and on each night a stop is still waiting,
+# it writes a copy of its status, made for the server, to $PUBLIC/status.json ($STATE/public by
+# default), which compose.yaml mounts read-only into the server (write_public below): codes and
+# versions only, no path, host or volume name (those stay in the journal and $STATE/status.json).
+# The server reads nothing else of $STATE and runs nothing: deploy/safety-check.sh fails an
+# install where it could. --publish-status writes that copy from what is there, and nothing
+# else: it is what the first run of a newer updater needs to show admins at once, instead of at
+# the next timer (INSTALL.md step 16).
+#
 # Every outside command and place is a variable (DOCKER, CURL, FLOCK, SYSTEMCTL, the
 # TASKTO_UPDATE_* paths and base URLs below), so cmd/taskto/update_test.go runs it against fakes.
 #
@@ -73,6 +83,12 @@ ROOT=${TASKTO_UPDATE_ROOT:-/srv/taskto}
 INSTALL_ENV=${TASKTO_UPDATE_INSTALL_ENV:-/etc/taskto/install.env}
 HOLD=${TASKTO_UPDATE_HOLD:-/etc/taskto/update.hold}
 STATE=${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}
+# The one directory the server may read (compose.yaml mounts it, read-only): the status for admins.
+PUBLIC=""  # set below, once `setting` is defined: the environment's, else install.env's, else $STATE/public
+# Who must own it and every directory above it, and where the check of those stops (the
+# directory above which nothing is checked): root and / on a host, other values for the tests.
+OWNER=${TASKTO_UPDATE_OWNER:-0}
+TRUSTED_ROOT=${TASKTO_UPDATE_TRUSTED_ROOT:-/}
 BACKUPS=${TASKTO_UPDATE_BACKUPS:-/var/backups/taskto}
 LOCK=${TASKTO_UPDATE_LOCK:-/run/taskto-update.lock}
 FIREWALL=${TASKTO_UPDATE_FIREWALL:-/usr/local/sbin/taskto-worker-firewall}
@@ -104,9 +120,12 @@ log() { printf 'taskto-update: %s\n' "$*"; }
 envget() { { sed -n "s/^$2=//p" "$1" 2>/dev/null || true; } | tail -n 1 | sed "s/^'//; s/'\$//"; }
 # setting NAME DEFAULT: the environment's NAME, else install.env's, else DEFAULT.
 setting() { local v=${!1:-}; [ -n "$v" ] || v=$(envget "$INSTALL_ENV" "$1"); printf '%s' "${v:-$2}"; }
+# Where the status for the server goes: in install.env, so a run by hand, the timer's and the
+# runbook's all agree, with TASKTO_UPDATE_STATUS_SOURCE in .env saying the same to Compose.
+PUBLIC=$(setting TASKTO_UPDATE_PUBLIC "$STATE/public")
 
 usage() {
-	echo "usage: taskto-update [--dry-run] [--to vMAJOR.MINOR.PATCH|FULL-SHA] | --clear-block" >&2
+	echo "usage: taskto-update [--dry-run] [--to vMAJOR.MINOR.PATCH|FULL-SHA] | --clear-block | --publish-status" >&2
 	exit "${1:-2}"
 }
 
@@ -124,11 +143,12 @@ semver_key() {
 }
 semver_gt() { [[ "$(semver_key "$1")" > "$(semver_key "$2")" ]]; }
 
-DRY=0 TO="" CLEAR=0
+DRY=0 TO="" CLEAR=0 PUBLISH=0
 while [ $# -gt 0 ]; do
 	case $1 in
 	--dry-run) DRY=1 ;;
 	--clear-block) CLEAR=1 ;;
+	--publish-status) PUBLISH=1 ;;
 	--to)
 		[ $# -ge 2 ] && [ -n "$2" ] || usage
 		TO=$2
@@ -140,6 +160,7 @@ while [ $# -gt 0 ]; do
 	shift
 done
 if [ "$CLEAR" = 1 ] && { [ "$DRY" = 1 ] || [ -n "$TO" ]; }; then usage; fi
+if [ "$PUBLISH" = 1 ] && { [ "$CLEAR" = 1 ] || [ "$DRY" = 1 ] || [ -n "$TO" ]; }; then usage; fi
 if [ -n "$TO" ] && ! is_semver "$TO" && ! is_sha "$TO"; then
 	echo "taskto-update: --to takes a vMAJOR.MINOR.PATCH tag or a full commit SHA" >&2
 	exit 2
@@ -156,7 +177,7 @@ CHANNEL=$(setting TASKTO_UPDATE_CHANNEL release)
 REPO=$(setting TASKTO_UPDATE_REPO taskto-ai/taskto)
 KEEP=$(setting TASKTO_UPDATE_KEEP 3)
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-result="" from="" to="" sha="" reason="" backup="" digests='{}'
+result="" from="" to="" sha="" reason="" backup="" digests='{}' needs=""
 stage="" login_config=""
 # The transaction: what the run changes, kept in $TX from before the first change until a
 # terminal outcome, so a run that is stopped half way is found, not mistaken for done. After a
@@ -174,15 +195,174 @@ write_status() {
 	install -d -m 755 "$STATE"
 	jq -n --arg at "$started" --arg end "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg result "$result" --arg channel "$CHANNEL" \
 		--arg from "$from" --arg to "$to" --arg sha "$sha" --arg reason "$reason" --arg backup "$backup" \
+		--arg code "$(reason_code "$result" "$reason")" \
 		--argjson digests "$digests" --argjson last "$last" --argjson change "$change" '
 		{at: $at, finished: $end, result: $result, channel: $channel, from: $from, to: $to, sha: $sha,
-		 reason: $reason, backup: $backup, digests: $digests} as $s
+		 reason: $reason, code: $code, backup: $backup, digests: $digests} as $s
 		| $s + {last_change: (if $change then $s else $last end)}' >"$f.new" || {
 		# A write that failed half way (a full disk) leaves the last status as it was.
 		rm -f "$f.new"
 		return 1
 	}
 	mv -f "$f.new" "$f"
+	write_public || log "can't write $PUBLIC/status.json"
+}
+
+# reason_code RESULT REASON: the code that stands for a run's reason, one of a closed list the
+# server and the web app know (internal/updatestatus, `settings.updates.reasons`), or nothing for a
+# run that needs none. The reason's own words name paths, hosts and volumes: they stay in the
+# journal and $STATE/status.json, and never reach the server. A reason that matches nothing
+# here is `other`.
+reason_code() {
+	case $1 in
+	updated | up-to-date | cleared | dry-run | published | "") return 0 ;;
+	stopped | stop-failed | rollback-failed | interrupted | rolled-back)
+		printf '%s' "$1"
+		return 0
+		;;
+	esac
+	case $2 in
+	"automatic updates are off"*) echo off ;;
+	"updates are on hold"*) echo hold ;;
+	*"needs manual steps"* | *"worker firewall changed"*) echo manual-upgrade ;;
+	*"GitHub's"* | *"release list is longer"*) echo github ;;
+	*"images aren't published"*) echo not-published ;;
+	*"is older than"* | *"isn't a descendant"* | *"already on"* | *"can't tell whether"* | *"neither a release nor a commit"*) echo not-newer ;;
+	*"the server runs"*) echo version-mismatch ;;
+	*"doesn't answer at"*) echo server-down ;;
+	*"break a safety rule"*) echo unsafe-settings ;;
+	*"not enough free disk"*) echo disk ;;
+	*"can't pull"* | *"log in to the registry"*) echo registry ;;
+	*"the backup failed"*) echo backup ;;
+	TASKTO_*) echo bad-setting ;;
+	*"firewall"*) echo firewall ;;
+	*"Compose"*) echo settings ;;
+	*) if [ "$1" = blocked ]; then echo blocked; else echo other; fi ;;
+	esac
+}
+
+# blocked_code: why the install waits for a person, as a code (reason_code's list): from the
+# transaction's phase while there is one, else from this run's refusal, else from the run that
+# left the marker.
+blocked_code() {
+	local ph=""
+	if [ -e "$TX" ]; then ph=$(jq -r '.phase // ""' "$TX" 2>/dev/null) || ph=""; fi
+	case $ph in
+	stopped | stop-failed | rollback-failed)
+		printf '%s' "$ph"
+		return 0
+		;;
+	rolled-back)
+		echo unrecorded-failure
+		return 0
+		;;
+	"") ;;
+	*)
+		echo interrupted
+		return 0
+		;;
+	esac
+	case $result:$reason in
+	blocked:*"the server runs"*)
+		echo version-mismatch
+		return 0
+		;;
+	esac
+	case $(jq -r '.result // ""' "$STATE/status.json" 2>/dev/null) in
+	stopped) echo stopped ;;
+	stop-failed) echo stop-failed ;;
+	rollback-failed) echo rollback-failed ;;
+	interrupted) echo interrupted ;;
+	*) echo blocked ;;
+	esac
+}
+
+# trusted_path PATH: PATH, and every directory above it up to $TRUSTED_ROOT, is a directory
+# owned by $OWNER that its group and others can't write; a symbolic link on the way belongs to
+# $OWNER too, and the place it leads to is checked the same way. So nobody but the updater can
+# put, replace or swap anything in it, however the server mounts it.
+trusted_path() {
+	local p=$1 q=/ part info t u m r
+	local -a parts prefixes=(/)
+	case /$p/ in */../* | */./*) return 1 ;; esac
+	IFS=/ read -ra parts <<<"${p#/}"
+	for part in "${parts[@]}"; do
+		[ -n "$part" ] || continue
+		q=${q%/}/$part
+		prefixes+=("$q")
+	done
+	for q in "${prefixes[@]}"; do
+		[[ $q == "$TRUSTED_ROOT" || $q == "${TRUSTED_ROOT%/}"/* ]] || continue
+		info=$(stat -c '%F|%u|%a' -- "$q") || return 1
+		IFS='|' read -r t u m <<<"$info"
+		[ "$u" = "$OWNER" ] || return 1
+		if [ "$t" = "symbolic link" ]; then
+			r=$(realpath -e -- "$q") || return 1
+			trusted_path "$r" || return 1
+		else
+			[ "$t" = directory ] && [ $((8#$m & 8#022)) -eq 0 ] || return 1
+		fi
+	done
+}
+
+# write_public: the part of the status the server shows its admins (Settings → About), in $PUBLIC,
+# the one directory compose.yaml mounts, read-only, into the server. It is a copy made for that,
+# of codes and versions only: no digests, no path, host or volume name, nothing from the
+# transaction, the old files or the backups, and never a setting that may hold a secret (the
+# notification address). Every text of it is from a closed list (reason_code), every version
+# checked to be one, and the backup only a yes or no. It says what the server can't know: the
+# last run and the last change, the version on record, whether a hold is on, and whether the
+# install waits for a person (`needs_person`: kind `blocked`, cleared with `taskto-update
+# --clear-block`, or `manual-upgrade`, done by hand, then `taskto-update --to`).
+#
+# The directory is the updater's alone: it must belong to $OWNER, with every directory above it,
+# and no one else may write any of them (trusted_path), so the server can't plant a link or a
+# file there even if something mounts it writable. The file is written to a temporary file made
+# in it for this (mktemp: a name that is new, created exclusively) and moved into place, so the
+# server sees the old file or the new one, never part of one, and no name is one to guess;
+# `checked` is when, so a status that stops being written shows as stale. A failure to write it
+# never changes the outcome.
+write_public() {
+	[ "$DRY" = 0 ] || return 0
+	local f=$PUBLIC/status.json tmp priv=null kind="" code="" hold=false
+	[[ $PUBLIC == /* ]] || { log "$PUBLIC isn't an absolute path"; return 1; }
+	install -d -m 755 "$PUBLIC" || return 1
+	trusted_path "$PUBLIC" || {
+		log "$PUBLIC, or a directory above it, isn't owned by uid $OWNER or can be written by others: nothing is published there"
+		return 1
+	}
+	if [ -s "$STATE/status.json" ]; then priv=$(jq -c '.' "$STATE/status.json" 2>/dev/null) || priv=null; fi
+	if [ -e "$STATE/blocked" ] || [ -e "$TX" ]; then
+		kind=blocked code=$(blocked_code)
+	elif [ -n "$needs" ]; then
+		kind=$needs code=manual-upgrade
+	else
+		# A run that couldn't tell (a hold, the channel off, a failed check, an unreadable release
+		# list) can't say the steps were done: what was pending stays, until a run looks and finds
+		# nothing newer, or an update is made.
+		case $result in updated | cleared | up-to-date) ;; *)
+			if [ -s "$f" ] && [ "$(jq -r '.needs_person.kind // ""' "$f" 2>/dev/null)" = manual-upgrade ]; then
+				kind=manual-upgrade code=manual-upgrade
+			fi
+			;;
+		esac
+	fi
+	[ ! -e "$HOLD" ] || hold=true
+	tmp=$(mktemp "$PUBLIC/.status.XXXXXXXX") || return 1
+	jq -n --argjson priv "$priv" --arg checked "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg channel "$CHANNEL" --argjson hold "$hold" \
+		--arg recorded "$(envget "$ROOT/.env" TASKTO_VERSION)" --arg kind "$kind" --arg code "$code" '
+		def ver: if type == "string" and length <= 100 and test("^(v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)|[0-9a-f]{40})$") then . else null end;
+		def run: if . == null then null else {at, finished, result, from: (.from | ver), to: (.to | ver), code: (.code // null), backed_up: ((.backup // "") != "")} end;
+		{version: 1, checked: $checked, channel: $channel, hold: $hold, recorded_version: ($recorded | ver),
+		 last_run: ($priv | run), last_change: ($priv.last_change // null | run),
+		 needs_person: (if $kind == "" then null else {kind: $kind, code: $code} end)}' >"$tmp" || {
+		rm -f "$tmp"
+		return 1
+	}
+	if ! chmod 644 "$tmp" || ! mv -f -T "$tmp" "$f"; then
+		rm -f "$tmp"
+		return 1
+	fi
 }
 
 # notify: the outcome, as JSON, POSTed to the URL in $NOTIFY_FILE, if there is one: any outcome
@@ -360,6 +540,7 @@ choose_release() {
 	# The release itself and every one between it and this install.
 	for ((i = pick; i < ${#tags[@]}; i++)); do
 		if [ "${manual[i]}" = true ]; then
+			needs="manual-upgrade"
 			finish skipped "${tags[i]} needs manual steps (its notes say manual-upgrade: true): follow its notes, then run taskto-update --to ${tags[pick]}"
 		fi
 	done
@@ -638,6 +819,7 @@ preflight() {
 	# The worker's firewall is never changed here: a version that changes it is for a person.
 	[ -e "$FIREWALL" ] || { reason="$FIREWALL isn't installed (runbook step 8)"; return 1; }
 	if ! cmp -s "$stage/deploy/worker-firewall.sh" "$FIREWALL"; then
+		needs="manual-upgrade"
 		finish skipped "the worker firewall changed in $to: update by hand (runbook step 8), then run taskto-update --to $to"
 	fi
 	firewall_ok || { reason="the worker's firewall isn't in place (its unit, or its rules): runbook step 8's check says what"; return 1; }
@@ -681,7 +863,7 @@ preflight() {
 		new_images=$(jq -c --arg k "$ref" --arg v "$id" '. + {($k): $v}' <<<"$new_images")
 	done
 	# The safety rules, on the new settings, before anything of them starts.
-	if ! out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER bash "$stage/deploy/safety-check.sh" --static "$stage" 2>&1); then
+	if ! out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER TASKTO_UPDATE_STATE=$STATE TASKTO_UPDATE_PUBLIC=$PUBLIC bash "$stage/deploy/safety-check.sh" --static "$stage" 2>&1); then
 		reason="$to's Compose settings break a safety rule: $(printf '%s' "$out" | tail -n 1)"
 		return 1
 	fi
@@ -809,7 +991,7 @@ verify() {
 		[ "$(compose ps --format '{{.State}}' "$svc")" = running ] || { reason="$svc isn't running"; return 1; }
 	done
 	firewall_ok || { reason="the worker's firewall isn't in place"; return 1; }
-	out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER bash "$2" 2>&1) || { reason="the safety rules: $(printf '%s' "$out" | tail -n 1)"; return 1; }
+	out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER TASKTO_UPDATE_STATE=$STATE TASKTO_UPDATE_PUBLIC=$PUBLIC bash "$2" 2>&1) || { reason="the safety rules: $(printf '%s' "$out" | tail -n 1)"; return 1; }
 }
 
 # created_match EXPECTED: every container of the project was made from the image that was
@@ -975,7 +1157,7 @@ clear_block() {
 	firewall_ok || refuse "the worker's firewall isn't in place (its unit, or its rules): runbook step 8's check says what"
 	stage=$(mktemp -d) || refuse "no temporary directory"
 	sf=$(resolve_sha "$from") && fetch "$sf" deploy/safety-check.sh "$stage/safety.sh" || refuse "can't fetch deploy/safety-check.sh of $from to check the running containers with"
-	out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER bash "$stage/safety.sh" 2>&1) || refuse "the safety rules don't hold in the running containers: $(printf '%s' "$out" | tail -n 1)"
+	out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER TASKTO_UPDATE_STATE=$STATE TASKTO_UPDATE_PUBLIC=$PUBLIC bash "$stage/safety.sh" 2>&1) || refuse "the safety rules don't hold in the running containers: $(printf '%s' "$out" | tail -n 1)"
 	if [ -e "$TX" ]; then
 		t_to=$(jq -r '.to // empty' "$TX" 2>/dev/null) || t_to=""
 		# The release the stop was for is recorded as failed already, unless it is what runs now.
@@ -1011,6 +1193,17 @@ port=$(envget "$ROOT/.env" TASKTO_PORT)
 HEALTH_URL=${TASKTO_UPDATE_HEALTH:-http://127.0.0.1:${port:-8080}/healthz}
 last=""
 if [ "$CLEAR" = 1 ]; then clear_block; fi
+# --publish-status: the server's copy of the status, from what is there, and nothing else.
+if [ "$PUBLISH" = 1 ]; then
+	write_public || {
+		result=failed
+		log "can't write $PUBLIC/status.json"
+		exit 1
+	}
+	result=published
+	log "wrote $PUBLIC/status.json"
+	exit 0
+fi
 # An update that was stopped half way (a crash, a reboot, a kill) left its record, and one that
 # failed after the new server started, or whose way back failed, left it too: nothing runs,
 # not even --to, until a person has looked, since the files may be on either version and the
@@ -1029,12 +1222,14 @@ if [ -e "$TX" ]; then
 		# The stack couldn't be confirmed stopped: that comes first, since a restart would run the new version.
 		[ "$tphase" != stop-failed ] || reason="the stack of the failed update from $from to $to could NOT be confirmed stopped: stop it by hand now (docker compose stop; docker ps), since a restart would run the new version on the data it may have changed. Then, $reason"
 		log "blocked: $reason"
+		write_public || log "can't write $PUBLIC/status.json"
 		notify || true
 		exit 1
 		;;
 	rolled-back)
 		result=blocked reason="the update from $from to $to was rolled back (the server is on $from), but $to couldn't be recorded as failed in $STATE/failed: make $STATE writable, then run taskto-update --clear-block, which records it"
 		log "blocked: $reason"
+		write_public || log "can't write $PUBLIC/status.json"
 		notify || true
 		exit 1
 		;;
@@ -1051,6 +1246,9 @@ if [ -z "$TO" ] && [ -e "$STATE/blocked" ] && [ "$DRY" = 0 ]; then
 	# The status stays what the failed run said.
 	result=blocked reason="$(cat "$STATE/blocked"); look at it, then run taskto-update --clear-block (or taskto-update --to VERSION)"
 	log "blocked: $reason"
+	# Its own status stays, but the server's copy is made again: it says the install is still
+	# waiting, and when this was last looked at.
+	write_public || log "can't write $PUBLIC/status.json"
 	notify || true
 	exit 1
 fi
