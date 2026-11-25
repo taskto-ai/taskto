@@ -131,16 +131,6 @@
     gap: 2px;
   }
 
-  .settings-section-title {
-    margin: 0;
-    font: var(--type-section);
-    color: var(--color-text);
-  }
-
-  .settings-section[data-level="3"] .settings-section-title {
-    font: var(--type-ui-strong);
-  }
-
   .settings-section-help {
     margin: 0;
     font: var(--type-small);
@@ -479,12 +469,6 @@
   .settings-limits {
     display: grid;
     gap: var(--space-2);
-  }
-
-  .settings-limits-title {
-    margin: 0;
-    font: var(--type-ui-strong);
-    color: var(--color-text);
   }
 
   .settings-limits-list {

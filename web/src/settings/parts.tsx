@@ -6,6 +6,7 @@ import { type ReactNode, useCallback, useEffect, useId, useState } from 'react'
 import { errorText } from '../api'
 import { format, useT } from '../i18n'
 import { Button } from '../ui/Button'
+import { Heading } from '../ui/Heading'
 import { Input } from '../ui/Input'
 import { Notice } from '../ui/Notice'
 import { Page } from '../ui/Page'
@@ -79,7 +80,6 @@ export function Section({
   children?: ReactNode
 }) {
   const id = useId()
-  const Heading = level === 2 ? 'h2' : 'h3'
   return (
     <section
       className="settings-section"
@@ -91,7 +91,7 @@ export function Section({
         <header className="settings-section-head">
           <div className="settings-section-titles">
             {title && (
-              <Heading id={`${id}-title`} className="settings-section-title">
+              <Heading level={level} size={level === 2 ? 'section' : 'subsection'} id={`${id}-title`}>
                 {title}
               </Heading>
             )}

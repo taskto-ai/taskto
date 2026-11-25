@@ -12,6 +12,7 @@ import { useConfirm } from '../ui/ConfirmDialog'
 import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Field } from '../ui/Field'
+import { Heading } from '../ui/Heading'
 import { Input } from '../ui/Input'
 import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
@@ -264,7 +265,9 @@ function Setup({ token }: { token?: string }) {
         >
           <div className="settings-snippet-head">
             <div className="settings-section-titles">
-              <h3 className="settings-section-title">{s.label}</h3>
+              <Heading level={3} size="subsection">
+                {s.label}
+              </Heading>
               <p className="settings-section-help">{s.note}</p>
             </div>
             <CopyButton size="sm" text={s.text} name={t('settings.tokens.setup.theNamed', { name: s.label })} />

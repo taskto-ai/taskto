@@ -22,6 +22,7 @@ import { spaceLabel } from '../spaces'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
+import { Heading } from '../ui/Heading'
 import { Input } from '../ui/Input'
 import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
@@ -256,7 +257,7 @@ function SpaceConsent({
     <Panel as="section" padded className="settings-panel-body" aria-label={label}>
       <header className="settings-section-head">
         <div className="settings-section-titles">
-          <h3 className="settings-section-title">{label}</h3>
+          <Heading level={3}>{label}</Heading>
         </div>
         {c?.endpoint &&
           (c.enabled ? (

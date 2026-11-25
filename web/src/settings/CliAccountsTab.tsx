@@ -29,6 +29,7 @@ import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { useConfirm } from '../ui/ConfirmDialog'
 import { Field } from '../ui/Field'
+import { Heading } from '../ui/Heading'
 import type { IconName } from '../ui/Icon'
 import { Input } from '../ui/Input'
 import { Notice } from '../ui/Notice'
@@ -140,12 +141,12 @@ function AccountCard({ account: a, onChanged }: { account: CliAccount; onChanged
     <Panel as="section" padded className="settings-panel-body" aria-label={title}>
       <header className="settings-section-head">
         <div className="settings-section-titles">
-          <h3 className="settings-section-title settings-person-name">
+          <Heading level={3} className="settings-person-name">
             {title}
             <Badge tone={STATE_TONE[a.state] ?? 'neutral'} dot={a.state === 'connected'}>
               {STATE_LABEL[a.state] ? t(STATE_LABEL[a.state]) : a.state}
             </Badge>
-          </h3>
+          </Heading>
           {a.auth_method && (
             <p className="settings-section-help">{t('settings.cliAccounts.signedInWith', { method: a.auth_method })}</p>
           )}
@@ -533,7 +534,9 @@ export function CliLimits({ account: a }: { account: CliAccount }) {
   if (a.limits.length === 0) return <p className="settings-muted">{t('settings.cliAccounts.limits.none')}</p>
   return (
     <div className="settings-limits">
-      <h4 className="settings-limits-title">{t('settings.cliAccounts.limits.title')}</h4>
+      <Heading level={4} size="subsection">
+        {t('settings.cliAccounts.limits.title')}
+      </Heading>
       <ul className="settings-limits-list">
         {a.limits.map((l) => {
           const label = windowLabel(l)
