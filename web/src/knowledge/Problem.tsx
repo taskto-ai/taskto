@@ -3,9 +3,18 @@ import { useT } from '../i18n'
 import { isConflict, isNamedConflict } from './docs'
 
 // A change refused because the document changed meanwhile: say so, and offer the reload.
-export function Problem({ error, onReload }: { error: unknown; onReload: () => void }) {
+// reloadable: this error is one for which the reload is offered too (what was asked for is gone).
+export function Problem({
+  error,
+  onReload,
+  reloadable = false,
+}: {
+  error: unknown
+  onReload: () => void
+  reloadable?: boolean
+}) {
   const t = useT()
-  if (!isConflict(error)) {
+  if (!isConflict(error) && !reloadable) {
     return (
       <p role="alert" className="tt-error">
         {errorText(error)}

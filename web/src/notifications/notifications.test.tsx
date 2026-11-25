@@ -398,6 +398,97 @@ test('the inbox pages older notifications in, and says when there are none', asy
   await screen.findByText('No notifications yet.')
 })
 
+test('each notification says where it happened and when: how long ago for the last day, kept current, with the date and time on hover; the date and time after that', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+  vi.setSystemTime(new Date('2026-03-01T12:00:00.000Z'))
+  try {
+    fakeFetch({
+      'GET /api/workspaces/1/notifications': {
+        body: {
+          notifications: [
+            item(3),
+            item(2, {
+              kind: 'app_effect_failed',
+              params: { app: 'Inspections' },
+              target: { section: 'apps' },
+              read: true,
+            }),
+            // Five weeks old: its date, not "last month".
+            item(1, { created_at: '2026-01-25T09:30:00.000Z', read: true }),
+          ],
+          more: false,
+          unread: 1,
+        },
+      },
+    })
+    render(<NotificationsPage workspace={1} />)
+    const list = await screen.findByRole('list', { name: 'Notifications' })
+    const [recent, app, old] = within(list).getAllByRole('listitem')
+    expect(within(recent).getByText('Boards ·')).toBeTruthy()
+    expect(within(app).getByText('Apps ·')).toBeTruthy()
+    const when = recent.querySelector('time') as HTMLTimeElement
+    expect(when.textContent).toBe('2 hours ago')
+    expect(when.dateTime).toBe('2026-03-01T10:00:00.000Z')
+    // The date and time are its description, shown on focus as on hover.
+    expect(when.tabIndex).toBe(0)
+    const described = document.getElementById(when.getAttribute('aria-describedby') ?? '')
+    expect(described?.textContent).toMatch(/Mar 1, 2026/)
+    const oldWhen = old.querySelector('time') as HTMLTimeElement
+    expect(oldWhen.dateTime).toBe('2026-01-25T09:30:00.000Z')
+    expect(oldWhen.textContent).toMatch(/Jan 25, 2026/)
+    expect(oldWhen.textContent).not.toMatch(/ago|last/)
+    // Left open, the inbox keeps saying how long ago it is.
+    act(() => {
+      vi.setSystemTime(new Date('2026-03-01T13:00:00.000Z'))
+      vi.advanceTimersByTime(30_000)
+    })
+    expect(when.textContent).toBe('3 hours ago')
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('an unread notification is marked for the eye and the ear, a read one is not', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/notifications': {
+      body: { notifications: [item(2), item(1, { read: true })], more: false, unread: 1 },
+    },
+  })
+  render(<NotificationsPage workspace={1} />)
+  const list = await screen.findByRole('list', { name: 'Notifications' })
+  const [unread, read] = within(list).getAllByRole('listitem')
+  // Bold with a mark, and "Unread:" for a screen reader, on the unread one only.
+  expect(within(unread).getByRole('link').textContent).toMatch(/^Unread: /)
+  expect(within(read).getByRole('link').textContent).not.toMatch(/Unread/)
+  expect(unread.querySelector('[data-unread]')).toBeTruthy()
+  expect(read.querySelector('[data-unread]')).toBeNull()
+})
+
+test('a notification that may not say its subject does not say where it happened either', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/notifications': {
+      body: {
+        notifications: [item(1, { kind: 'changed', params: undefined, target: { section: 'home' } })],
+        more: false,
+        unread: 1,
+      },
+    },
+  })
+  render(<NotificationsPage workspace={1} />)
+  const list = await screen.findByRole('list', { name: 'Notifications' })
+  const row = within(list).getByRole('listitem')
+  expect(within(row).queryByText(/Home/)).toBeNull()
+  expect(row.querySelector('time')).toBeTruthy()
+})
+
+test('an empty inbox says what will show there', async () => {
+  fakeFetch({ 'GET /api/workspaces/1/notifications': { body: { notifications: [], more: false, unread: 0 } } })
+  render(<NotificationsPage workspace={1} />)
+  await screen.findByText('No notifications yet.')
+  expect(screen.getByText(/When a card is assigned to you/)).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Mark all as read' }) as HTMLButtonElement).disabled).toBe(true)
+})
+
 // --- The shell: the bell, and the address a push opens --------------------------------------
 
 test("the sidebar's inbox has the unread count, which opens it", async () => {
