@@ -149,6 +149,9 @@ func (s *Service) handleCreateReset(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errResetElsewhere):
 		writeError(w, http.StatusForbidden, apierr.CodeResetElsewhere, err.Error())
 		return
+	case errors.Is(err, errAccountDisabled):
+		accountDisabled(w)
+		return
 	case err != nil:
 		serverError(w, r, err)
 		return
@@ -216,6 +219,10 @@ func (s *Service) failReset(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusNotFound, apierr.CodeResetInvalid, err.Error())
 		return
 	}
+	if errors.Is(err, errAccountDisabled) {
+		accountDisabled(w)
+		return
+	}
 	serverError(w, r, err)
 }
 
@@ -255,7 +262,7 @@ func (s *Service) changePassword(ctx context.Context, userID int64, current, new
 			TargetType: audit.TargetUser, Target: userID})
 	})
 	if err == nil {
-		s.endLive(userID, "") // the sessions that were open are gone, and their open connections go
+		s.endLive(userID, "") // the sessions that were open are gone, and their live connections go
 	}
 	return token, err
 }
@@ -290,8 +297,9 @@ func (s *Service) endSignIns(ctx context.Context, tx *sql.Tx, userID int64) erro
 
 // createReset makes a reset link for userID, a member of workspaceID, by the admin by, in
 // place of any earlier one. It fails with errNotFound if userID isn't a member,
-// errResetOwn for the admin's own account, and errResetElsewhere if userID belongs to a
-// workspace by doesn't administer.
+// errResetOwn for the admin's own account, errResetElsewhere if userID belongs to a
+// workspace by doesn't administer, and errAccountDisabled if by has been disabled since the
+// request was authenticated.
 func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64) (token, expires string, err error) {
 	now := s.now()
 	expires = stamp(now.Add(s.opts.ResetTTL))
@@ -307,6 +315,13 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 			return err
 		} else if !all {
 			return errResetElsewhere
+		}
+		// Read here, in the transaction that holds the write lock: a request that passed the
+		// middleware before the admin was disabled must not make a link that takes over an account.
+		if off, err := s.isDisabled(ctx, tx, by); err != nil {
+			return err
+		} else if off {
+			return errAccountDisabled
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM password_resets WHERE user_id = ?`, userID); err != nil {
 			return err
@@ -327,21 +342,41 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 	return token, expires, nil
 }
 
+// administersAll reports whether by is an admin of every workspace userID belongs to: the
+// rule for acting on someone's sign-in (a reset link, clearing their second factor, disabling the
+// account), so that an admin of one workspace can't take over or lock out an account that reaches
+// another.
+func administersAll(ctx context.Context, tx *sql.Tx, by, userID int64) (bool, error) {
+	var elsewhere bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM memberships t
+			WHERE t.user_id = ? AND NOT EXISTS (
+				SELECT 1 FROM memberships a
+				WHERE a.workspace_id = t.workspace_id AND a.user_id = ? AND a.role = ?))`,
+		userID, by, RoleAdmin).Scan(&elsewhere)
+	return !elsewhere, err
+}
+
 type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // resetUser returns the user a reset token is for, or errResetInvalid if it is unknown or
-// expired.
+// expired, and errAccountDisabled for a disabled account: no way back in but being enabled.
 func (s *Service) resetUser(ctx context.Context, q querier, token string) (User, error) {
 	var u User
+	var disabled bool
 	err := q.QueryRowContext(ctx, `
-		SELECT u.id, u.email, u.name
+		SELECT u.id, u.email, u.name, u.disabled_at IS NOT NULL
 		FROM password_resets p JOIN users u ON u.id = p.user_id
 		WHERE p.token_hash = ? AND p.expires_at > ?`, hashToken(token), stamp(s.now())).
-		Scan(&u.ID, &u.Email, &u.Name)
+		Scan(&u.ID, &u.Email, &u.Name, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, errResetInvalid
+	}
+	if err == nil && disabled {
+		return User{}, errAccountDisabled
 	}
 	return u, err
 }

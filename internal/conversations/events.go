@@ -57,6 +57,14 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(sessionCtx)
 	defer cancel()
 	defer context.AfterFunc(s.closing, cancel)()
+	if s.watchSession != nil {
+		// The stream lasts as long as the login that opened it, not only as long as its owner
+		// has access now: an account disabled and enabled again between two heartbeats has no
+		// session left, and its stream goes with it.
+		session, stop := s.watchSession(r, s.heartbeat)
+		defer stop()
+		defer context.AfterFunc(session, cancel)()
+	}
 	watch, err := rt.Watch(ctx, c.agentID)
 	if err != nil {
 		conversationError(w, r, c, err)

@@ -37,6 +37,8 @@ const (
 	InviteAccepted    = "invite_accepted"
 	MemberRoleChanged = "member_role_changed"
 	MemberRemoved     = "member_removed"
+	MemberDisabled    = "member_disabled"
+	MemberEnabled     = "member_enabled"
 
 	// Access tokens.
 	AccessTokenCreated = "access_token_created"
