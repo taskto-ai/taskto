@@ -85,6 +85,11 @@ type Service struct {
 	heartbeat     time.Duration // between comments on an idle event stream
 	writeTimeout  time.Duration // for the client to take one event before it is dropped
 	maxStreams    int           // open event streams per user, across their conversations
+
+	// heartbeatTicks is the clock of an event stream's heartbeats: the channel that says when
+	// one is due, and the func that releases it. nil: a ticker every heartbeat. Tests set it
+	// to make each heartbeat, and the access check it carries, happen exactly when they say.
+	heartbeatTicks func() (<-chan time.Time, func())
 }
 
 // New returns the API over the database sqlDB, which must be migrated. agent is nil when the
