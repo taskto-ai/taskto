@@ -2662,6 +2662,17 @@
       "personD": "Priya Natarajan",
       "workspaceName": "Acme Studio"
     },
+    "labels": {
+      "onboarding": "integração",
+      "writing": "redação",
+      "copy": "texto",
+      "blocked": "bloqueado",
+      "launch": "lançamento",
+      "design": "design",
+      "i18n": "i18n",
+      "bug": "bug",
+      "urgent": "urgente"
+    },
     "layout": {
       "widths": "Larguras: leitura (760px), lista (1.040px), total",
       "widthHelp": "O conteúdo fica centralizado na largura desta página.",
