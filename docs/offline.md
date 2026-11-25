@@ -204,17 +204,30 @@ The rules:
   list). Discarding wakes the queue: a later change to the same record that waited for it is sent
   at once.
 - **A list is never left as it was read.** Every write to the database is announced on a
-  BroadcastChannel of the account (`OfflineStore.connectTabs`), and a tab that hears it reads its
-  lists again, so what another tab queued, sent or settled is shown without a reload. A tab that
-  becomes the writer (or stops being it) reads again too, since the tab that held the right
-  changed the queue meanwhile. And a change **refused** because it was made on an older view of
-  the queue (`ItemChanged`, `RecordChanged`, `CopyChanged`, `NotWriter`) makes the tab read again
-  at once, in the same step as the refusal, so the next press acts on what is really there: a
-  discard that was refused leaves the person with the record as it is now and the same question.
-  A discard of a record that has gone out meanwhile (it is syncing, or the server has it) says
-  that it is on its way to the server, rather than only that it changed; nothing is removed and
-  the record is sent as it always was. A browser without BroadcastChannel loses only the first
-  of these: the lists then read again for the other reasons.
+  BroadcastChannel of the account (`OfflineStore.connectTabs`, joined when the runtime starts and
+  let go of when it stops), and a tab that hears it reads its lists again, so what another tab
+  queued, sent or settled is shown without a reload. A tab that becomes the writer (or stops being
+  it) reads again too, since the tab that held the right changed the queue meanwhile. And a change
+  **refused** because it was made on an older view of the queue makes the tab read again at once,
+  so the next press acts on what is really there: a discard that was refused leaves the person with
+  the record as it is now and the same question. That holds for every such refusal: those the
+  store makes in its transaction (`ItemChanged`, `RecordChanged`, `CopyChanged`, `NotWriter`) and
+  those made before the store is asked (a choice on an item that is not the version that was shown,
+  a tab that is not the writer, a screen drawn from another revision or session). The reads are one
+  at a time: one read in flight and, however many announcements arrive meanwhile, one more after
+  it, so a burst costs two reads at most and an older read never lands after a newer one. A browser
+  without BroadcastChannel loses only the first of these: the lists then read again for the other
+  reasons.
+- **What a refused discard says.** A discard is refused when the item is not as it was when the
+  question was asked. If the item is **syncing** (a send claimed it) or **synced** (the server has
+  it), the person is told that the record is on its way to the server, or already there, and so
+  can't be discarded now; nothing is removed and the record is sent as it always was. Any other
+  change, including an item that came back to the queue after a send nobody answered
+  (`unconfirmed`: it is waiting, and it can be discarded), says only that it changed in another tab
+  and to review it again: the list shows it as it is, and the same question can be asked about it.
+  A "Discard …?" question that is open when its row stops offering a discard (the record started
+  sending in another tab, or this tab is not the writer any more) is closed, and the person is told
+  that it was and why; nothing is removed.
 - **Signing out loses only what was shown.** The records the person is told they would lose are
   listed with their versions, and *Discard and sign out* approves exactly those: an item that was
   changed since (a newer edit coalesced into it) or made since is not agreed to, nothing is

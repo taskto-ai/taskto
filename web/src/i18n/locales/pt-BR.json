@@ -2647,6 +2647,7 @@
       "discardTitle": "Descartar {name}?",
       "discardBody": "Ele é apagado deste dispositivo e nunca é enviado.",
       "discardConfirm": "Sim, descartar",
+      "discardClosed": "A pergunta sobre descartar um registro foi fechada porque o registro mudou em outra aba ou janela (está sendo enviado, ou essa aba assumiu o controle). Nada foi removido. A lista mostra em que pé ele está.",
       "clearSynced": "Limpar registros sincronizados",
       "waiting_one": "{count} registro aguardando sincronização",
       "waiting_many": "{count} de registros aguardando sincronização",

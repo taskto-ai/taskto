@@ -2629,6 +2629,7 @@
       "discardTitle": "Discard {name}?",
       "discardBody": "It is deleted from this device and never sent.",
       "discardConfirm": "Yes, discard",
+      "discardClosed": "The question about discarding a record was closed because the record changed in another tab or window (it is being sent, or that tab took over). Nothing was removed. The list shows where it stands.",
       "clearSynced": "Clear synced records",
       "waiting_one": "{count} record waiting to sync",
       "waiting_other": "{count} records waiting to sync",
