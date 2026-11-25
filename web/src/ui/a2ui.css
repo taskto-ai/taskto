@@ -342,6 +342,7 @@
 }
 
 .ui-app .a2ui-tab-button {
+  box-sizing: border-box;
   flex: none;
   min-block-size: var(--control-md);
   margin-block-end: 0;
