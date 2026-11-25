@@ -388,7 +388,7 @@ test('the templates are in Portuguese too', async () => {
 })
 
 test('the template screens use logical properties and fit a phone', () => {
-  const css = readFileSync(join(process.cwd(), 'src/styles.css'), 'utf8')
+  const css = readFileSync(join(process.cwd(), 'src/apps/apps.legacy.css'), 'utf8')
   const block = css.slice(css.indexOf('/* Templates:'))
   // One column at 360px: a card is never wider than the screen, whatever the minimum says.
   expect(block).toContain('minmax(min(100%, 18rem), 1fr)')
