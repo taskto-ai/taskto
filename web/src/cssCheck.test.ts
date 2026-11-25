@@ -667,6 +667,13 @@ describe('nested rules in an old stylesheet', () => {
       '.tt-card a[href*="&"]',
       '.tt-card .x\\&y',
     ])
+    // After a compound's start, the parent is a condition on that element, and a parent of
+    // wrappers alone scopes nothing.
+    expect(verdicts('body .tt-shell { .tt-page& input { margin: 0; } }').at(-1)).toEqual({
+      selector: '.tt-page:is(body .tt-shell) input',
+      properties: ['margin'],
+      refused: true,
+    })
     // Each of several parents.
     expect(allRules('.tt-a, .tt-b { & p { margin: 0; } }').map((r) => r.selector)).toEqual([
       '.tt-a',

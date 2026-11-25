@@ -882,7 +882,9 @@ export const EVERYWHERE = new Map([
 
 // A nested rule's selector as the one it stands for: `&` is the parent (`.tt-card { &:hover }` is
 // `.tt-card:hover`), and a selector without `&` is inside it (`.tt-card { h2 }` is `.tt-card h2`).
-// Only a bare `&` is the nesting selector: one in a string (`a[href*="&"]`) or escaped (`\\&`)
+// `&` is the parent selector: at the start of a compound it is the parent's text, which ends in
+// the compound the rest is added to; after the start of one it is `:is(parent)`. Only a bare `&`
+// is the nesting selector: one in a string (`a[href*="&"]`) or escaped (`\\&`)
 // is a character.
 export function nestedSelector(parent, child) {
   let out = ''
@@ -898,7 +900,9 @@ export function nestedSelector(parent, child) {
       out += child.slice(i, j + 1)
       i = j
     } else if (c === '&') {
-      out += parent
+      // After a compound's start (`.tt-page&`), the parent is a condition on that same element:
+      // `:is(parent)`, not its text glued on (`.tt-pagebody`). At a compound's start, its text.
+      out += /[^\s>+~(]$/.test(out) ? `:is(${parent})` : parent
       nested = true
     } else out += c
   }
