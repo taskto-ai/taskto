@@ -596,7 +596,14 @@ test('opening the app signed in with no workspace registers nothing', async () =
 const emailChoices = (over: Record<string, unknown> = {}) => ({
   available: true,
   address: { email: 'owner@example.com', state: 'verified' },
-  kinds: { card_assigned: 'off', app_effect_failed: 'off' },
+  kinds: {
+    card_assigned: 'off',
+    card_comment: 'off',
+    card_mention: 'off',
+    card_due: 'off',
+    card_overdue: 'off',
+    app_effect_failed: 'off',
+  },
   digest: { hour: 8, timezone: 'UTC', chosen: false },
   ...over,
 })
@@ -639,6 +646,35 @@ test('email is chosen per kind, as it happens or in a daily summary, and is off 
   expect(puts[2]).toEqual({ digest: { hour: 18, timezone: first?.timezone } })
 })
 
+test('every kind that can be mailed has a choice of its own, off until chosen', async () => {
+  pushBrowser({ permission: 'denied' })
+  let saved = emailChoices()
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
+    'PUT /api/workspaces/1/notification-email': (call) => {
+      const body = call.body as { kinds?: Record<string, string> }
+      saved = { ...saved, kinds: { ...saved.kinds, ...body.kinds } } as typeof saved
+      return { body: saved }
+    },
+  })
+  render(<NotificationsTab me={1} workspace={1} />)
+  const labels: Record<string, string> = {
+    card_assigned: 'A card was assigned to you',
+    card_comment: 'A card of yours has a new comment',
+    card_mention: 'You were mentioned in a comment',
+    card_due: 'A card of yours is due',
+    card_overdue: 'A card of yours is overdue',
+    app_effect_failed: 'An app action needs your attention',
+  }
+  for (const [kind, label] of Object.entries(labels)) {
+    const select = (await screen.findByLabelText(label)) as HTMLSelectElement
+    expect(select.value).toBe('off')
+    fireEvent.change(select, { target: { value: 'instant' } })
+    await waitFor(() => expect(select.value).toBe('instant'))
+    expect(calls.filter((c) => c.method === 'PUT').pop()?.body).toEqual({ kinds: { [kind]: 'instant' } })
+  }
+})
+
 test('where the server can not send mail, email says so and offers nothing', async () => {
   pushBrowser({ permission: 'denied' })
   fakeFetch({ 'GET /api/workspaces/1/notification-email': { body: emailChoices({ available: false }) } })
@@ -649,7 +685,7 @@ test('where the server can not send mail, email says so and offers nothing', asy
 
 test('email that is on can be turned off where the server can no longer send mail', async () => {
   pushBrowser({ permission: 'denied' })
-  let saved = emailChoices({ available: false, kinds: { card_assigned: 'instant', app_effect_failed: 'off' } })
+  let saved = emailChoices({ available: false, kinds: { ...emailChoices().kinds, card_assigned: 'instant' } })
   const calls = fakeFetch({
     'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
     'PUT /api/workspaces/1/notification-email': (call) => {
@@ -675,7 +711,7 @@ test('the panel says whether the address is confirmed and sends the link', async
   pushBrowser({ permission: 'denied' })
   let saved = emailChoices({
     address: { email: 'owner@example.com', state: 'unverified' },
-    kinds: { card_assigned: 'instant', app_effect_failed: 'off' },
+    kinds: { ...emailChoices().kinds, card_assigned: 'instant' },
   })
   const calls = fakeFetch({
     'GET /api/workspaces/1/notification-email': () => ({ body: saved }),

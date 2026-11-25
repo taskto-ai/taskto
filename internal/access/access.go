@@ -253,6 +253,16 @@ func lookupIn(ctx context.Context, q Querier, userID, spaceID int64) (Space, err
 	return s, err
 }
 
+// On is the checker reading inside tx, a transaction its caller holds: every check and every
+// CheckWith through it, and the caller's own statements on tx, come from one state. The
+// database's writers wait while tx is open, so a caller asks for its answers and acts on them in
+// the same transaction, and keeps it short (no network calls inside).
+func (c *Checker) On(tx *sql.Tx) *Checker {
+	on := *c
+	on.reads = tx
+	return &on
+}
+
 // Check returns spaceID as userID sees it, if they may at least read it, and ErrNotFound
 // otherwise (ErrDisabled, which is one, for a disabled account).
 func (c *Checker) Check(ctx context.Context, userID, spaceID int64) (Space, error) {

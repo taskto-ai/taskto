@@ -192,6 +192,10 @@ type Service struct {
 	// afterReserve runs between a mail's place in the ledger being reserved and the last check
 	// before it is submitted; a field for tests, which change the world in that gap.
 	afterReserve func()
+	// betweenReads runs, in the transaction that decides whether an instant mail may go out, between
+	// reading what the person may read and reading the address; a field for tests, which change that
+	// transaction's state from inside it.
+	betweenReads func(*sql.Tx)
 }
 
 // New returns the service over a migrated database, making the server's VAPID key pair if it has
