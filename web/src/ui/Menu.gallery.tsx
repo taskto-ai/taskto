@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { useT } from '../i18n'
 import { Specimen } from './GalleryParts'
-import { Menu, MenuButton, MenuItem, MenuLink, MenuList, MenuSeparator, MoreMenu } from './Menu'
+import { Menu, MenuButton, MenuGroup, MenuItem, MenuLink, MenuList, MenuSeparator, MoreMenu } from './Menu'
 
 export const title = 'Menu'
 
@@ -25,6 +26,29 @@ function Items() {
         {t('gallery.sample.delete')}
       </MenuItem>
     </>
+  )
+}
+
+// One choice of several, as radio items in a named group, behind a switcher's button.
+function Choices() {
+  const t = useT()
+  const options = [t('gallery.layout.newest'), t('gallery.layout.oldest'), t('gallery.layout.name')]
+  const [picked, setPicked] = useState(0)
+  return (
+    <Menu align="start">
+      <MenuButton label={t('gallery.layout.sortBy')} variant="secondary" size="sm" indicator="chevron-updown">
+        {options[picked]}
+      </MenuButton>
+      <MenuList>
+        <MenuGroup label={t('gallery.layout.sortBy')}>
+          {options.map((o, i) => (
+            <MenuItem key={o} checked={i === picked} onSelect={() => setPicked(i)}>
+              {o}
+            </MenuItem>
+          ))}
+        </MenuGroup>
+      </MenuList>
+    </Menu>
   )
 }
 
@@ -70,6 +94,9 @@ export default function MenuGallery() {
         <MoreMenu align="start">
           <Items />
         </MoreMenu>
+      </Specimen>
+      <Specimen caption={t('gallery.layout.menuChoices')}>
+        <Choices />
       </Specimen>
     </>
   )

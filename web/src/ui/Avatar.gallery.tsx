@@ -1,5 +1,5 @@
 import { useT } from '../i18n'
-import { Avatar } from './Avatar'
+import { Avatar, initialsAmong } from './Avatar'
 import { Specimen } from './GalleryParts'
 
 export const title = 'Avatar'
@@ -29,6 +29,11 @@ export default function AvatarGallery() {
         <Avatar name={t('gallery.sample.workspaceName')} shape="square" size="sm" />
         <Avatar name={t('gallery.sample.workspaceName')} shape="square" />
         <Avatar name={t('gallery.sample.workspaceName')} shape="square" size="lg" />
+      </Specimen>
+      <Specimen caption={t('gallery.state.distinctInitials')}>
+        {initialsAmong(people).map((letters, i) => (
+          <Avatar key={people[i]} name={people[i]} letters={letters} shape="square" size="sm" />
+        ))}
       </Specimen>
     </>
   )
