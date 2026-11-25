@@ -11,7 +11,11 @@
 // - a `tt-` or `ui-` class a component's className uses that no rule of any stylesheet mentions;
 // - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
 //   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
-//   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in.
+//   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in;
+// - a rule in a stylesheet outside src/ui/ that can match an element wherever it is (by its name,
+//   a state, a pseudo-element, an attribute, `*`; not `.tt-x h2`) and doesn't leave the design
+//   system's elements out with OPT_OUT, unless EVERYWHERE lists its selector and every property it
+//   sets: such a rule is in no layer and would beat the components' own styles.
 //
 // Dependency-free: the stylesheet is read by a small scanner (comments and strings skipped), the
 // components by looking at what each className holds.
@@ -384,6 +388,245 @@ function stylesheets(dir, out = []) {
 // Where the colour literals live: the brand themes, and nowhere else.
 const THEMES = 'src/ui/themes/'
 
+// --- Rules that reach every element --------------------------------------------------------
+//
+// The old stylesheets (every one outside src/ui/) are in no cascade layer, so a rule of theirs
+// that can match an element wherever it is beats every component of the design system, whatever
+// the specificity of the component's own rule. Such a rule styles by an element's name (`h2`,
+// `button`), by a state or a pseudo-element alone (`:focus-visible`, `::placeholder`), by an
+// attribute alone, by `*`, or by `:is(…)`; and nothing scopes it but what wraps every page
+// (WRAPPERS). Each one leaves the design system's elements out: every element a component
+// draws has a class that starts with `ui-`, and the rule's subject carries OPT_OUT, which adds no
+// specificity (docs/design.md, "The components"). A rule scoped by an old container
+// (`.tt-markdown h2`) reaches only inside it, and is left alone.
+
+export const OPT_OUT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
+
+// What wraps every page: a rule scoped by one of these still reaches every component.
+export const WRAPPERS = new Set(['#root', '.tt-shell', '.tt-body', '.tt-page', '#tt-main'])
+
+// Rules that deliberately reach every element, the design system's too: the selector, the only
+// properties it may set, and the reason. A rule that sets anything else is not allowed by it.
+export const EVERYWHERE = new Map([
+  ['html', { properties: ['height', '-webkit-text-size-adjust'], reason: 'the page itself: no component draws it' }],
+  [
+    'body',
+    {
+      properties: [
+        'height',
+        'margin',
+        'background',
+        'color',
+        'font',
+        '-webkit-font-smoothing',
+        'text-rendering',
+        'overscroll-behavior-y',
+        'touch-action',
+      ],
+      reason: 'the page itself: no component draws it, and its font and colour are what everything inherits',
+    },
+  ],
+  [
+    'html[data-keyboard="open"] body',
+    {
+      properties: ['height', 'min-height', 'max-height', 'overflow'],
+      reason: "the page itself, while a phone's keyboard is open",
+    },
+  ],
+  [':root', { properties: [], reason: 'the page itself' }],
+  [
+    '*',
+    {
+      properties: ['box-sizing', 'scrollbar-color'],
+      reason: "border-box sizing and the scrollbars' colours, wanted on every element",
+    },
+  ],
+  ['*::before', { properties: ['box-sizing'], reason: 'border-box sizing, wanted on every element' }],
+  ['*::after', { properties: ['box-sizing'], reason: 'border-box sizing, wanted on every element' }],
+  ['::selection', { properties: ['background', 'color'], reason: 'the selection in the palette, wanted everywhere' }],
+  [
+    'input',
+    {
+      properties: ['caret-color', 'font-size'],
+      reason: "every field: the caret in the text's colour, and 16px on a narrow screen so iOS doesn't zoom in",
+    },
+  ],
+  [
+    'textarea',
+    {
+      properties: ['caret-color', 'font-size'],
+      reason: "every field: the caret in the text's colour, and 16px on a narrow screen so iOS doesn't zoom in",
+    },
+  ],
+  ['select', { properties: ['font-size'], reason: "every field: 16px on a narrow screen so iOS doesn't zoom in" }],
+  [
+    'input[type="search"]::-webkit-search-cancel-button',
+    {
+      properties: [
+        '-webkit-appearance',
+        'appearance',
+        'inline-size',
+        'block-size',
+        'cursor',
+        'background-color',
+        '-webkit-mask',
+        'mask',
+      ],
+      reason: "every search field's clear button, in the palette",
+    },
+  ],
+  [
+    'input[type="search"]::-webkit-search-cancel-button:hover',
+    { properties: ['background-color'], reason: "every search field's clear button, in the palette" },
+  ],
+])
+
+// Every rule's selectors at any depth (inside @media and @layer too, not inside @keyframes,
+// whose `from` and `to` are not elements), each with its line and the properties its block sets.
+export function allRules(css) {
+  const out = []
+  const blocks = [] // for each open block: { kind: 'keyframes' | 'at' | 'rule', rules?: [...] }
+  let prelude = ''
+  let preludeLine = 1
+  let line = 1
+  const declare = (text) => {
+    const top = blocks.at(-1)
+    if (top?.kind !== 'rule') return
+    const colon = text.indexOf(':')
+    if (colon < 0) return
+    const property = text.slice(0, colon).trim().toLowerCase()
+    if (/^-{0,2}[a-z][\w-]*$/.test(property)) for (const r of top.rules) r.properties.push(property)
+  }
+  for (let i = 0; i < css.length; i++) {
+    const c = css[i]
+    if (c === '\n') line++
+    if (c === '/' && css[i + 1] === '*') {
+      const end = css.indexOf('*/', i + 2)
+      const stop = end === -1 ? css.length : end + 2
+      for (const ch of css.slice(i, stop)) if (ch === '\n') line++
+      i = stop - 1
+      continue
+    }
+    if (c === '"' || c === "'") {
+      let j = i + 1
+      while (j < css.length && css[j] !== c) j += css[j] === '\\' ? 2 : 1
+      prelude += css.slice(i, j + 1)
+      i = j
+      continue
+    }
+    if (c === '{') {
+      const text = prelude.trim()
+      if (text.startsWith('@')) blocks.push({ kind: /^@(-[a-z]+-)?keyframes\b/.test(text) ? 'keyframes' : 'at' })
+      else {
+        const rules = []
+        if (!blocks.some((b) => b.kind === 'keyframes')) {
+          for (const selector of splitSelectors(text)) {
+            const r = { selector, line: preludeLine, properties: [] }
+            rules.push(r)
+            out.push(r)
+          }
+        }
+        blocks.push({ kind: 'rule', rules })
+      }
+      prelude = ''
+      continue
+    }
+    if (c === ';') {
+      declare(prelude)
+      prelude = ''
+      continue
+    }
+    if (c === '}') {
+      declare(prelude)
+      blocks.pop()
+      prelude = ''
+      continue
+    }
+    if (prelude.trim() === '') preludeLine = line
+    prelude += c
+  }
+  return out
+}
+
+// A selector's compounds: "a > b:has(> c) d" → ["a", "b:has(> c)", "d"].
+export function compounds(selector) {
+  const out = []
+  let depth = 0
+  let cur = ''
+  for (const c of selector) {
+    if (c === '(' || c === '[') depth++
+    if (c === ')' || c === ']') depth--
+    if (depth === 0 && /[\s>+~]/.test(c)) {
+      if (cur) out.push(cur)
+      cur = ''
+    } else cur += c
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
+// A compound without what is inside its parentheses and brackets: what it says of the element
+// itself (`:is(.a, h2)` says nothing of its own, so it is not scoped by `.a`).
+function own(compound) {
+  let out = ''
+  let depth = 0
+  for (const c of compound) {
+    if (c === '(' || c === '[') depth++
+    if (depth === 0) out += c
+    if (c === ')' || c === ']') depth--
+  }
+  return out
+}
+
+// The classes and ids a compound names of its own element.
+const scopes = (compound) => own(compound).match(/[.#][\w-]+/g) ?? []
+
+// Whether a rule can match an element wherever it is in the app: its subject names no class or
+// id of its own, and every compound before it is unscoped or a wrapper of every page.
+export function reachesAnywhere(selector) {
+  const parts = compounds(selector)
+  const subject = parts.at(-1) ?? ''
+  if (scopes(subject).length > 0) return false
+  return parts.slice(0, -1).every((p) => scopes(p).every((s) => WRAPPERS.has(s)))
+}
+
+// Whether a compound leaves the design system's elements out: OPT_OUT is one of its own
+// pseudo-classes, at the top level, not inside another function (`:not(:not(…OPT_OUT…))` would
+// select exactly those elements).
+export function optsOut(compound) {
+  let depth = 0
+  for (let i = 0; i < compound.length; i++) {
+    if (depth === 0 && compound.startsWith(OPT_OUT, i)) return true
+    const c = compound[i]
+    if (c === '(' || c === '[') depth++
+    if (c === ')' || c === ']') depth--
+  }
+  return false
+}
+
+// Whether a rule that reaches anywhere is allowed: it leaves the design system's elements out,
+// or EVERYWHERE lists its selector and it sets only the properties listed there.
+export function allowedEverywhere({ selector, properties }) {
+  if (optsOut(compounds(selector).at(-1) ?? '')) return true
+  const allowed = EVERYWHERE.get(selector)
+  return Boolean(allowed && properties.every((p) => allowed.properties.includes(p)))
+}
+
+function everywhereErrors(file, css) {
+  const errors = []
+  for (const rule of allRules(css)) {
+    if (!reachesAnywhere(rule.selector) || allowedEverywhere(rule)) continue
+    const listed = EVERYWHERE.get(rule.selector)
+    const extra = listed ? rule.properties.filter((p) => !listed.properties.includes(p)) : []
+    errors.push(
+      listed
+        ? `${file}:${rule.line}: \`${rule.selector}\` reaches every element, and EVERYWHERE allows it only ${listed.properties.join(', ')}, not ${extra.join(', ')}: give the rest ${OPT_OUT}`
+        : `${file}:${rule.line}: \`${rule.selector}\` reaches into the design system's components: give its subject ${OPT_OUT}, or list it in EVERYWHERE with the properties and the reason`,
+    )
+  }
+  return errors
+}
+
 export function check(web) {
   const errors = []
   const mentioned = new Set()
@@ -402,6 +645,7 @@ export function check(web) {
         )
       } else seen.set(selector, { file, line })
     }
+    if (!file.startsWith('src/ui/')) errors.push(...everywhereErrors(file, readFileSync(path, 'utf8')))
     if (file.startsWith(THEMES)) continue
     for (const { property, value, line } of sheet.declarations) {
       const literal = colorLiteral(value, property)
@@ -441,6 +685,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exit(1)
   }
   console.log(
-    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, and no colour is written outside the themes',
+    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, no colour is written outside the themes, and no old rule reaches into a component',
   )
 }

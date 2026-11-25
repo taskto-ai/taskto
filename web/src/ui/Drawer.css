@@ -1,0 +1,91 @@
+@layer components {
+  .ui-drawer {
+    --ui-drawer-width: var(--width-drawer);
+    --ui-drawer-from: 100%;
+    position: fixed;
+    inset-block: 0;
+    inset-inline-end: 0;
+    z-index: var(--z-drawer);
+    box-sizing: border-box;
+    inline-size: min(var(--ui-drawer-width), 100vw);
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    border-inline-start: var(--line-thin) solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: var(--shadow-pop);
+    font: var(--type-ui);
+    padding-block: env(safe-area-inset-top) env(safe-area-inset-bottom);
+    animation: ui-drawer-in var(--duration-slow) var(--ease-out);
+  }
+
+  /* It comes in from the inline end: the left in a right-to-left page. */
+  :root[dir="rtl"] .ui-drawer {
+    --ui-drawer-from: -100%;
+  }
+
+  .ui-drawer:focus-visible {
+    outline: none;
+  }
+
+  @keyframes ui-drawer-in {
+    from {
+      translate: var(--ui-drawer-from) 0;
+    }
+  }
+
+  .ui-drawer-header {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-5) var(--space-4) var(--space-3) var(--space-6);
+  }
+
+  .ui-drawer-title {
+    text-wrap: balance;
+    flex: 1;
+    min-inline-size: 0;
+    margin: 0;
+    padding-block-start: var(--space-1);
+    font: var(--type-title);
+    letter-spacing: var(--tracking-display);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-drawer-body {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 var(--space-6) var(--space-5);
+    display: grid;
+    gap: var(--space-5);
+    align-content: start;
+  }
+
+  .ui-drawer-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-6) var(--space-5);
+    border-block-start: var(--line-thin) solid var(--color-border);
+  }
+
+  @media (max-width: 40rem) {
+    .ui-drawer {
+      inline-size: 100vw;
+      border-inline-start: 0;
+    }
+
+    .ui-drawer-header,
+    .ui-drawer-body,
+    .ui-drawer-footer {
+      padding-inline: var(--space-4);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-drawer {
+      animation: none;
+    }
+  }
+}

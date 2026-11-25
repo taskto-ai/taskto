@@ -273,19 +273,35 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
   them is 44px.
 - **States are designed.** Hover, focus (the ring), pressed, disabled (a look of its own on the
   neutral ground, never half-opacity) and, where they apply, loading and invalid.
-- **The old element rules leave them alone.** `styles.css` is in no layer, so its rules that
-  style an element by its name (headings, `p`, `a`, `button`, the fields, a checkbox's or a
-  radio's label, also under `pointer: coarse`) would beat every component. Every element a
-  component draws has a class that starts with `ui-` (a control's native element also has
-  `ui-control`), and each of those rules skips such elements: its subject ends with
+- **The old stylesheet's rules leave them alone.** `styles.css` is in no layer, so a rule of it
+  that can match an element wherever it is would beat every component's own style: one by an
+  element's name (`h1` to `h3`, `p`, `code`, `pre`, `kbd`, `samp`, `a`, `button`, the fields, a
+  checkbox's or a radio's label, also under `pointer: coarse`, `fieldset`), by a state or a
+  pseudo-element alone (`:focus-visible`, `::placeholder`), by an attribute alone, by `*` or by
+  `:is()`, or under what wraps every page (`#root`, `.tt-shell`, `.tt-body`, `.tt-page`). Every
+  element a component draws has a class that starts with `ui-` (a control's native element also
+  has `ui-control`), and each of those rules skips such elements: its subject carries
   `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no specificity, and the
-  screens' own elements have no `ui-` class, so they are styled as before.
-  `web/src/ui/controlRules.test.tsx` draws every gallery and fails when a rule of `styles.css`
-  reaches one of these elements, or names a `ui-` class outside `:where()`.
-- **Two rules reach every field on purpose:** the caret's colour, and 16px text in a window under
-  48rem (it keeps iOS from zooming in on focus), with a mouse too. A field then has 16px text
-  beside 14px buttons; its height is set by the control scale, not by its text, so a row still
-  lines up. (On a touch screen a field's text is 16px in any window.)
+  screens' own elements have no `ui-` class, so they are styled exactly as before. Each component
+  draws its own focus ring (`--line-focus` in `--color-focus`, 3:1 on every ground). `css-check`
+  fails on such a rule outside `web/src/ui/` without it, unless its `EVERYWHERE` list allows the
+  selector, only for the properties it names, with the reason. `web/src/ui/elementRules.test.tsx`
+  draws every component (each gallery, and the overlays open) and fails when an element a
+  component draws has no `ui-` class or a rule of `styles.css` reaches one;
+  `web/src/ui/controlRules.test.tsx` checks the controls the same way, and that no rule names a
+  `ui-` class outside `:where()`. A rule scoped by an old container (`.tt-x h2`) still reaches a
+  component put inside that container: a rebuilt screen leaves the container behind.
+- **What reaches every element on purpose** (`EVERYWHERE`): the page's `html` and `body`, border-box
+  sizing, the scrollbars' and the selection's colours, the search field's clear button, and two
+  rules for every field: the caret's colour, and 16px text in a window under 48rem (it keeps iOS
+  from zooming in on focus), with a mouse too. A field then has 16px text beside 14px buttons; its
+  height is set by the control scale, not by its text, so a row still lines up. (On a touch screen
+  a field's text is 16px in any window.)
+- **Headings.** The look of a heading comes from the type roles, not from the element: the display
+  face only from 20px up (`--type-display`, 24px: `PageHeader`'s title; `--type-title`, 20px: a
+  dialog's and a drawer's title) and Inter below. A screen's own heading is `Heading` (`level` for
+  the outline, `size` `display`, `title`, `section` (the default, 16px Inter) or `subsection`), never
+  a bare `<h2>`, which would get the old stylesheet's heavy display face.
 
 **The gallery.** `pnpm --filter @taskto/web run dev`, then `/_gallery` on the dev server: the colour
 and type roles and every component's specimens, with switches for light and dark, the sample second
