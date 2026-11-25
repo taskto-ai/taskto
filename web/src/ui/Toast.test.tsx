@@ -69,6 +69,22 @@ describe('Toast', () => {
     expect(shown().queryByText('Saved')).toBeNull()
   })
 
+  test('stays while the focus is on it, though the pointer has left', () => {
+    render(<Toaster />)
+    act(() => {
+      toast({ message: 'Card archived', duration: 1000, action: { label: 'Undo', onClick: () => {} } })
+    })
+    const el = shown().getByText('Card archived').closest('.ui-toast') as HTMLElement
+    fireEvent.pointerEnter(el)
+    fireEvent.focus(shown().getByRole('button', { name: 'Undo' }))
+    fireEvent.pointerLeave(el)
+    act(() => vi.advanceTimersByTime(5000))
+    expect(shown().queryByText('Card archived')).not.toBeNull()
+    fireEvent.blur(shown().getByRole('button', { name: 'Undo' }), { relatedTarget: document.body })
+    act(() => vi.advanceTimersByTime(1000))
+    expect(shown().queryByText('Card archived')).toBeNull()
+  })
+
   test('can be dismissed, by its button and by its id', () => {
     render(<Toaster />)
     let id = 0

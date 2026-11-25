@@ -1,7 +1,10 @@
 // About: TaskTo.AI's licence, the credits of the third-party work this workspace uses, as
 // the server lists them (a local speech model's, or an add-on's while it is on), and for
-// admins, how the server's scheduled backups are doing (docs/install.md#backups) and what its
-// host's updater last did (docs/install.md#automatic-updates).
+// admins, how the server's scheduled backups are doing (docs/install.md#backups), what its
+// host's updater last did (docs/install.md#automatic-updates), and for operators the Update now
+// button, which asks that updater for a run (docs/install.md#update-now).
+
+import { useEffect, useState } from 'react'
 
 import {
   ApiError,
@@ -11,17 +14,21 @@ import {
   type Credit,
   type DictationStatus,
   dictationPath,
+  type UpdateRequested,
   type UpdateRun,
   type UpdateStatus,
+  updateRequestPath,
   updatesPath,
 } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { InstallPanel } from '../pwa/InstallPanel'
 import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
 import { Notice, type NoticeTone } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
-import { Alert, Facts, Loading, Section, SettingsTab } from './parts'
+import { Alert, Facts, FormActions, Loading, Section, SettingsTab, useAction } from './parts'
 
 // `operator`: an admin who runs the server, the only one who sees its backups.
 export function AboutTab({ workspace, operator }: { workspace: number; operator: boolean }) {
@@ -71,6 +78,7 @@ const RESULTS = [
   'blocked',
   'interrupted',
   'cleared',
+  'ignored',
   'unknown',
 ] as const
 const CHANNELS = ['release', 'main', 'off'] as const
@@ -99,6 +107,8 @@ const REASONS = [
   'interrupted',
   'rolled-back',
   'unrecorded-failure',
+  'rate-limited',
+  'bad-request',
 ] as const
 const isReason = (c: string): c is (typeof REASONS)[number] => (REASONS as readonly string[]).includes(c)
 // Runs that ended with something wrong, which a person should look at, whether or not the updater
@@ -120,7 +130,8 @@ const UPDATE_TONE: Record<UpdateHealth, NoticeTone> = {
 }
 
 // What the host's updater last did. The updater runs on the host, and the server only reads what
-// it wrote: nothing here runs or changes it, and what a person must do is done on the host.
+// it wrote: nothing here runs or changes it. Update now asks it for a run (a request that names no
+// version), and what a person must do about a gate is done on the host.
 function UpdatesPanel({ workspace }: { workspace: number }) {
   const t = useT()
   const f = useFormat()
@@ -183,7 +194,8 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
         )
       }
     >
-      <Alert error={updates.error} />
+      {/* While an update goes on the server restarts, and a failed read is expected: UpdateNow says so. */}
+      {!(st?.running || (st && u?.request.reason === 'pending')) && <Alert error={updates.error} />}
       {!u && !updates.error && <Loading lines={3} />}
       {u && !u.configured && <Notice tone="neutral">{t('settings.about.updates.notConfigured')}</Notice>}
       {u?.configured && !st && !u.expects_status && (
@@ -214,6 +226,18 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
           )}
           <p className="settings-muted">{t('settings.about.updates.needs.where')}</p>
         </Panel>
+      )}
+      {u?.configured && st && (
+        <UpdateNow
+          workspace={workspace}
+          report={u}
+          reload={updates.reload}
+          settled={updates.settled ?? 0}
+          loading={updates.loading ?? false}
+          loadError={updates.error}
+          label={label}
+          reasonText={reasonText}
+        />
       )}
       {mismatch && <Notice tone="warning">{t('settings.about.updates.mismatch')}</Notice>}
       {u && (
@@ -269,6 +293,121 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
         </Panel>
       )}
     </Section>
+  )
+}
+
+// How often the page asks again while an update is pending or running, and how long it waits for
+// the host to start one it asked for before it says so.
+const POLL_MS = 3000
+const GIVE_UP_MS = 15 * 60_000
+
+// Update now: asks the host's updater for the nightly run, now. The request has no version: the
+// host installs the newest of its channel, under every gate of the nightly run, and the outcome
+// (an update, or why not) comes back in the status the page already reads. The server restarts
+// during an update, so the page keeps asking and says so until it answers again.
+function UpdateNow({
+  workspace,
+  report,
+  reload,
+  settled,
+  loading,
+  loadError,
+  label,
+  reasonText,
+}: {
+  workspace: number
+  report: UpdateStatus
+  reload: () => void
+  // How many reads have ended: the next one is asked for after the last ended, not on a clock.
+  settled: number
+  loading: boolean
+  loadError: string | null
+  label: (result: string) => string
+  reasonText: (code: string) => string
+}) {
+  const t = useT()
+  const action = useAction()
+  const [confirmDialog, confirm] = useConfirm()
+  const [requestedAt, setRequestedAt] = useState<string | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+  const st = report.status
+  const req = report.request
+  const reason = req.reason ?? ''
+  const running = !!st?.running
+  const pending = reason === 'pending'
+  // The updater stamps a run with the second it started in; ours is the second we asked in.
+  const since = requestedAt === null ? null : Math.floor(Date.parse(requestedAt) / 1000) * 1000
+  const last = st?.requests?.last ?? null
+  const answered = since !== null && !!last?.at && Date.parse(last.at) >= since
+  // A request that waits, or was just made, and that nobody has answered: since when.
+  const askedAt = since ?? (pending && req.pending_since ? Date.parse(req.pending_since) : null)
+  const waiting = since !== null && !answered
+  // The host never took it (its path unit is off) or never answered: said, whether or not the file
+  // still waits in the directory.
+  const gaveUp = !answered && !running && askedAt !== null && now - askedAt > GIVE_UP_MS
+  const busy = running || ((pending || waiting) && !gaveUp)
+  // Ask again a moment after the last answer (or failure) came, never while one is on its way: the
+  // server restarts during an update, and a read that is cut off by the next one shows nothing.
+  useEffect(() => {
+    if (!busy || loading || settled === 0) return
+    const timer = setTimeout(() => {
+      setNow(Date.now())
+      reload()
+    }, POLL_MS)
+    return () => clearTimeout(timer)
+  }, [busy, loading, settled, reload])
+  const press = async () => {
+    const yes = await confirm({
+      title: t('settings.about.updates.now.question'),
+      confirmLabel: t('settings.about.updates.now.confirm'),
+    })
+    if (!yes) return false
+    const ok = await action.run(async () => {
+      const r = await api<UpdateRequested>(updateRequestPath(workspace), { method: 'POST', body: {} })
+      setRequestedAt(r.requested_at)
+      setNow(Date.now())
+    })
+    reload()
+    return ok
+  }
+  const outcome = answered && !busy && last
+  return (
+    <>
+      {busy && (
+        <Notice tone="info">
+          {t(running ? 'settings.about.updates.now.updating' : 'settings.about.updates.now.requested')}
+        </Notice>
+      )}
+      {busy && loadError && <p className="settings-muted">{t('settings.about.updates.now.reconnecting')}</p>}
+      {gaveUp && <Notice tone="warning">{t('settings.about.updates.now.gaveUp')}</Notice>}
+      {outcome && (
+        <Notice tone={outcome.result === 'updated' ? 'success' : 'neutral'}>
+          <p className="settings-text">
+            {t('settings.about.updates.now.outcome', { result: label(outcome.result) })}
+          </p>
+          {outcome.code && (
+            <p className="settings-text">{t('settings.about.updates.why', { reason: reasonText(outcome.code) })}</p>
+          )}
+          {(outcome.result === 'skipped' || outcome.result === 'failed') && (
+            <p className="settings-muted">
+              {t.rich('settings.about.updates.now.hint', { command: <code>{'taskto-update --to VERSION'}</code> })}
+            </p>
+          )}
+        </Notice>
+      )}
+      {!busy && req.available && (
+        <FormActions>
+          <Button disabled={action.busy} onClick={press}>
+            {t('settings.about.updates.now.button')}
+          </Button>
+        </FormActions>
+      )}
+      {!busy && !req.available && (reason === 'not_configured' || reason === 'unsupported' || reason === 'off') && (
+        <p className="settings-muted">{t(`settings.about.updates.now.unavailable.${reason}`)}</p>
+      )}
+      <Alert error={action.error} />
+      {confirmDialog}
+    </>
   )
 }
 

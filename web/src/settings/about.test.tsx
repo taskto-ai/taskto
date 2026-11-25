@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { BackupStatus, Me, UpdateStatus, Workspace } from '../api'
 import { setPreferences } from '../i18n'
@@ -19,6 +19,7 @@ const member: Workspace = { id: 1, name: 'Home', role: 'member' }
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -102,7 +103,9 @@ const updates = (
 ): UpdateStatus => ({
   configured: true,
   running_version: 'v0.3.0',
+  request: { available: true },
   status: {
+    version: 1,
     checked: ago(2),
     channel: 'release',
     recorded_version: 'v0.3.0',
@@ -121,6 +124,8 @@ const updates = (
       backed_up: true,
     },
     needs_person: null,
+    running: null,
+    requests: { supported: true, last: null },
     ...status,
   },
   ...over,
@@ -275,4 +280,164 @@ test("an admin of a workspace they made, who doesn't run the server, doesn't see
   await screen.findByText(/Nothing this workspace uses now asks for a credit/)
   expect(screen.queryByRole('heading', { name: 'Backups' })).toBeNull()
   expect(asked(calls)).toEqual([])
+})
+
+const requestRoute = 'POST /api/workspaces/1/updates/request'
+
+test('an operator confirms Update now, and the request carries nothing', async () => {
+  const calls = fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': { body: updates() },
+    [requestRoute]: { status: 202, body: { requested_at: new Date().toISOString() } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Update now' }))
+  // It says what happens before it does anything.
+  expect(screen.getByText(/after a backup\. The server restarts/)).toBeTruthy()
+  expect(calls.filter((c) => c.method === 'POST')).toEqual([])
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, update now' }))
+  expect(await screen.findByText(/Update requested\. Waiting for the host to start it/)).toBeTruthy()
+  const posts = calls.filter((c) => c.method === 'POST')
+  expect(posts.length).toBe(1)
+  expect(posts[0]?.path).toBe('/api/workspaces/1/updates/request')
+  expect(posts[0]?.body).toEqual({})
+  expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
+})
+
+test('while an update runs the page says so, and the failed reads of its restart are not errors', async () => {
+  let answer: { status?: number; body?: unknown } = {
+    body: updates({}, { running: { since: ago(0.01), requested: true } }),
+  }
+  fakeFetch({ ...noBackups, 'GET /api/workspaces/1/updates': () => answer })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/Updating\. The server restarts during this/)).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
+  answer = { status: 502, body: { error: 'bad gateway' } }
+  // The page asks again by itself.
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 3300))
+  })
+  expect(await screen.findByText(/The server isn't answering/)).toBeTruthy()
+  expect(screen.queryByRole('alert')).toBeNull()
+  answer = {
+    body: updates(
+      { running_version: 'v0.4.0' },
+      {
+        recorded_version: 'v0.4.0',
+        requests: { supported: true, last: { at: ago(0.2), finished: ago(0.01), result: 'updated' } },
+      },
+    ),
+  }
+}, 15000)
+
+test('the first status read after Update now may take longer than the polling interval', async () => {
+  let reads = 0
+  let finish!: (reply: { body: UpdateStatus }) => void
+  const slow = new Promise<{ body: UpdateStatus }>((resolve) => {
+    finish = resolve
+  })
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': () => {
+      reads++
+      return reads === 1 ? { body: updates() } : slow
+    },
+    [requestRoute]: { status: 202, body: { requested_at: new Date().toISOString() } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Update now' }))
+  vi.useFakeTimers()
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, update now' }))
+  })
+  expect(reads).toBe(2)
+  await act(() => vi.advanceTimersByTimeAsync(4000))
+  expect(reads).toBe(2)
+  await act(async () => {
+    const at = new Date().toISOString()
+    finish({ body: updates({}, { requests: { supported: true, last: { at, finished: at, result: 'updated' } } }) })
+  })
+  expect(screen.getByText(/The update you asked for: Updated/)).toBeTruthy()
+})
+
+test("Update now's refusals are said in words, with the way on for the host", async () => {
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates({ request: { available: false, reason: 'unsupported' } }),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/The host can't take an update request yet/)).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
+  cleanup()
+
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates({ request: { available: false, reason: 'off' } }, { channel: 'off' }),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/Update now is off while automatic updates are off/)).toBeTruthy()
+  cleanup()
+
+  // A press the server turns away is an error in the user's language, and the page reloads.
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': { body: updates() },
+    [requestRoute]: { status: 409, body: { error: 'running', code: 'update_running' } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Update now' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, update now' }))
+  expect((await screen.findByRole('alert')).textContent).toMatch(/An update is running now/)
+})
+
+test('an update a gate turned away says why, and points to the host', async () => {
+  const at = ago(0.5)
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates({}, { requests: { supported: true, last: { at, finished: at, result: 'skipped', code: 'hold' } } }),
+    },
+    [requestRoute]: { status: 202, body: { requested_at: ago(1) } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Update now' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Yes, update now' }))
+  expect(await screen.findByText(/The update you asked for: Nothing done\./)).toBeTruthy()
+  expect(screen.getAllByText(/Why: Updates are on hold\./).length).toBeGreaterThanOrEqual(1)
+  expect(screen.getByText('taskto-update --to VERSION').tagName).toBe('CODE')
+})
+
+test("an admin who doesn't run the server never sees Update now", async () => {
+  fakeFetch({})
+  render(<SettingsPage me={notOperator} workspace={admin} tab="about" />)
+  await screen.findByText(/Nothing this workspace uses now asks for a credit/)
+  expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
+})
+
+test('a request the host never took says so after a while, instead of waiting for ever', async () => {
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates({ request: { available: false, reason: 'pending', pending_since: ago(0.5) } }),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/The host hasn't started the update/)).toBeTruthy()
+  expect(screen.queryByText(/Update requested\. Waiting/)).toBeNull()
+  cleanup()
+
+  // A fresh one is still waited for.
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates({ request: { available: false, reason: 'pending', pending_since: ago(0.01) } }),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/Update requested\. Waiting/)).toBeTruthy()
+  expect(screen.queryByText(/The host hasn't started the update/)).toBeNull()
 })

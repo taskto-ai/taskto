@@ -38,6 +38,10 @@ type Config struct {
 	// the status it shows admins (docs/install.md#automatic-updates); the server only reads it.
 	// Empty means no updater is set up for this server.
 	UpdateStatusDir string
+	// UpdateRequestDir is the directory "Update now" (Settings → About) puts its request in, for
+	// the host's updater to take. It is the one place of the updater's that the server writes.
+	// Empty means the button is off.
+	UpdateRequestDir string
 	// InsecureCookies drops the Secure attribute from the session cookie, so a browser
 	// sends it over plain http. For local development only: on any other network the
 	// cookie would travel in clear text.
@@ -210,6 +214,18 @@ var settings = []setting{
 				return errors.New("want an absolute path")
 			}
 			c.UpdateStatusDir = v
+			return nil
+		},
+	},
+	{
+		flag: "update-request-dir", env: "TASKTO_UPDATE_REQUEST_DIR", key: "update_request_dir",
+		usage: "the directory where Update now (Settings > About) puts its request, for the host's updater to take (writable; an absolute path)",
+		get:   func(c Config) string { return c.UpdateRequestDir },
+		set: func(c *Config, v string) error {
+			if v != "" && !filepath.IsAbs(v) {
+				return errors.New("want an absolute path")
+			}
+			c.UpdateRequestDir = v
 			return nil
 		},
 	},

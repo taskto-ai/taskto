@@ -12,8 +12,14 @@ import { join } from 'node:path'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import { afterEach, expect, test } from 'vitest'
-// @ts-expect-error: a plain ES module script, without types
-import { allowedEverywhere, allRules, EVERYWHERE, OPT_OUT, reachesAnywhere } from '../../scripts/css-check.mjs'
+import {
+  allowedEverywhere,
+  allRules,
+  compounds,
+  EVERYWHERE,
+  optsOut,
+  reachesAnywhere,
+} from '../../scripts/css-check.mjs'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Dialog } from './Dialog'
 import { Drawer } from './Drawer'
@@ -174,7 +180,7 @@ test('every element a component draws has a ui- class', () => {
 
 test('the old stylesheet has rules to check, and they still reach the screens’ own elements', () => {
   expect(guarded.length).toBeGreaterThan(20)
-  expect(guarded.every((r) => r.selector.includes(OPT_OUT))).toBe(true)
+  expect(guarded.every((r) => optsOut(compounds(r.selector).at(-1) ?? ''))).toBe(true)
   document.body.innerHTML =
     '<h2 class="tt-x">a</h2><p>b</p><a href="#">c</a><button>d</button><code>e</code><input><select></select><textarea></textarea><fieldset></fieldset>'
   for (const el of document.body.children) {
