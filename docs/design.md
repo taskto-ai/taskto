@@ -56,12 +56,32 @@ CSS uses the roles and scales; the aliases go when the last screen has moved.
 |---|---|
 | Space | `--space-1` 4px, `-2` 8, `-3` 12, `-4` 16, `-5` 20, `-6` 24, `-8` 32, `-10` 40, `-12` 48, `-16` 64 |
 | Type sizes | `--text-xs` 12px, `-sm` 13, `-md` 14 (the interface), `-lg` 16 (reading), `-xl` 20, `-2xl` 24 |
-| Radius | `--radius-sm` 6px (a tag), `-md` 10 (a control, a card), `-lg` 14 (a dialog), `-pill` |
+| Radius | `--radius-sm` 6px (a tag), `-md` 10 (a control, a card), `-lg` 14 (a dialog), `-pill`. Today's controls and cards are still 8px, through the old `--tt-radius`: each moves to `--radius-md` (10px) as it is rebuilt, and 8px lives on only as that alias until the last one has moved |
 | Control height | `--control-sm` 28px, `--control-md` 36, `--control-touch` 44 (the touch target) |
 | Elevation | `--shadow-lift` and `--shadow-lift-hover` (the primary button's hard lift), `--shadow-pop` (a menu, a popover), `--shadow-dialog` |
 | Motion | `--duration-fast` 120ms, `-base` 160, `-slow` 240; `--ease-out`, `--ease-in-out`; all of it stops under `prefers-reduced-motion` |
-| Stacking | `--z-sticky` 10, `--z-sidebar` 20, `--z-drawer` 30, `--z-overlay` 40, `--z-toast` 50 (a `<dialog>` and a popover are in the browser's top layer, above all of them) |
+| Stacking | the `--z-*` levels, below |
 | Width | `--width-reading` 760px (reading and forms), `--width-list` 1,040px (lists), `--width-sidebar` 232px; a board is the window's width |
+
+### Stacking
+
+Bottom to top. A modal `<dialog>` and a popover are in the browser's top layer, above every level
+here, so a dialog, a menu or a tooltip built on them sets no `z-index` at all: these levels are for
+what is positioned on the page.
+
+| Level | Value | What belongs there |
+|---|---|---|
+| `--z-sticky` | 10 | a header or a bar that sticks while its page scrolls |
+| `--z-sidebar` | 20 | the sidebar on a wide screen |
+| `--z-scrim` | 25 | the shade behind the drawer on a phone: over the page, under the drawer |
+| `--z-drawer` | 30 | the sidebar as a drawer on a phone |
+| `--z-overlay` | 40 | what floats over the page without the top layer: a menu or a popup placed by hand |
+| `--z-toast` | 50 | a passing message, the update banner, a guard that must stay seen |
+| `--z-skip` | 100 | the skip link, above everything when it has the focus |
+
+The stylesheet's own numbers (the skip link's 100, the banner's and the guard's 50, the phone's
+scrim at 10 under the sidebar's 20) stay as they are until their rules move onto these levels. A
+test keeps the levels in this order and `--z-skip` at or above every `z-index` in the stylesheets.
 
 ### The type roles
 
@@ -271,7 +291,9 @@ Pills, as on the website. A plain button is white with a 1px control edge. **The
 (the one thing a screen asks you to press) is mint with ink on it, outlined in 1.5px ink and lifted
 on a hard 2px ink shadow that rises to 3px on hover and is pressed flat on click (in the dark, the
 outline and the lift are the mint edge). The motion stops under `prefers-reduced-motion`. Icon
-buttons, fields and cards keep the app's 8px radius.
+buttons, fields and cards are 8px today, through the old `--tt-radius`; as each is rebuilt on the
+components it takes `--radius-md` (10px, as in the approved prototype), and 8px lives on only as
+that alias until the last one has moved.
 
 ## Fonts
 

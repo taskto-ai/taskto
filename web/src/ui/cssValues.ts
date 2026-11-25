@@ -7,7 +7,11 @@ export interface Rule {
   selector: string
   // The @layer the rule is in, if any.
   layer: string | undefined
+  // The custom properties it declares, with their values.
   props: Map<string, string>
+  // The name of every declaration in it, in order, custom property or not (`color`,
+  // `accent-color`): what a rule may not set is checked against this, not against props.
+  declarations: string[]
 }
 
 // The rules of a stylesheet with the custom properties they declare. Comments are skipped; a
@@ -25,6 +29,7 @@ export function rules(css: string): Rule[] {
     const colon = text.indexOf(':')
     if (colon < 0) return
     const name = text.slice(0, colon).trim()
+    rule.declarations.push(name)
     if (name.startsWith('--'))
       rule.props.set(
         name,
@@ -51,6 +56,7 @@ export function rules(css: string): Rule[] {
           selector: prelude.replace(/\s+/g, ' '),
           layer: layer?.prelude.slice('@layer'.length).trim(),
           props: new Map(),
+          declarations: [],
         }
         out.push(rule)
         stack.push({ prelude, rule })

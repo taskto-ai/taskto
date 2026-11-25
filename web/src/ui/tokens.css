@@ -59,7 +59,8 @@
     /* The display face is set tight, as on the website; Inter is not. */
     --tracking-display: -0.02em;
 
-    /* Radii: a tag, a control or a card, a dialog, and the pill of a button. */
+    /* Radii: a tag, a control or a card, a dialog, and the pill of a button. Today's controls are
+       still 8px, through --tt-radius in legacy.css; each moves to --radius-md as it is rebuilt. */
     --radius-sm: 6px;
     --radius-md: 10px;
     --radius-lg: 14px;
@@ -98,12 +99,23 @@
     --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
     --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
-    /* Stacking, for what is not in the browser's top layer (a <dialog> and a popover are). */
+    /* Stacking, bottom to top, for what is positioned on the page. A modal <dialog> and a popover
+       are in the browser's top layer, above all of these, so a dialog or a menu built on them
+       sets no z-index at all.
+       sticky   a header or a bar that sticks while its page scrolls
+       sidebar  the sidebar on a wide screen
+       scrim    the shade behind the drawer on a phone: over the page, under the drawer
+       drawer   the sidebar as a drawer on a phone
+       overlay  what floats over the page without the top layer: a menu or a popup placed by hand
+       toast    a passing message, the update banner, a guard that must stay seen
+       skip     the skip link, above everything when it has the focus */
     --z-sticky: 10;
     --z-sidebar: 20;
+    --z-scrim: 25;
     --z-drawer: 30;
     --z-overlay: 40;
     --z-toast: 50;
+    --z-skip: 100;
 
     /* Widths: a page of reading or a form, a page of lists, and the sidebar. A board is the
        window's full width. */
