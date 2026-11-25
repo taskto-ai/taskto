@@ -121,6 +121,8 @@ describe('the capture fields', () => {
     expect(declares('.ui-capture .ui-button', /min-block-size: var\(--control-touch\)/)).toBe(true)
     expect(declares('.ui-capture .ui-icon-button', /min-inline-size: var\(--control-touch\)/)).toBe(true)
     expect(declares('.ui-photo-add > label', /min-block-size: var\(--control-touch\)/)).toBe(true)
+    // The dictation's text buttons (Cancel, Try again) as well as its microphone.
+    expect(declares('.ui-dictate .ui-button', /min-block-size: var\(--control-touch\)/)).toBe(true)
   })
 
   test('the pad and the saved signature are on paper, and the camera on media, in every theme', () => {

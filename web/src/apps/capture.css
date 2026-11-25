@@ -332,6 +332,16 @@
     color: var(--color-danger);
   }
 
+  /* The manual coordinates' error, which both inputs are described by. */
+  .ui-capture-error {
+    justify-self: stretch;
+  }
+
+  /* Every dictation action, the small ones too, is a finger's size whatever the pointer. */
+  .ui-dictate .ui-button {
+    min-block-size: var(--control-touch);
+  }
+
   .ui-dictate .ui-icon-button {
     min-block-size: var(--control-touch);
     min-inline-size: var(--control-touch);

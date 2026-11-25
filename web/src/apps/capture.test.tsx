@@ -172,6 +172,15 @@ test('typed coordinates out of range show a message and store nothing', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Use these coordinates' }))
   expect(screen.getByRole('alert').textContent).toMatch(/latitude from −90 to 90/)
   expect(changed).not.toHaveBeenCalled()
+  // Both inputs are described by the message, so it is read again when either is focused.
+  for (const name of ['Latitude', 'Longitude']) {
+    const input = screen.getByLabelText(name)
+    const described = (input.getAttribute('aria-describedby') ?? '')
+      .split(' ')
+      .map((id) => document.getElementById(id)?.textContent ?? '')
+      .join(' ')
+    expect(described, name).toMatch(/latitude from −90 to 90/)
+  }
 })
 
 test('a stored location is shown, read-only, with no way to change it', () => {
