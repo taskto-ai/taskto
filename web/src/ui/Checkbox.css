@@ -1,0 +1,105 @@
+/* A checkbox: an 18px box with the control's edge; checked or mixed, filled with ink and marked in
+   the page's colour (the website's, ink rather than mint, since a mark this small must be seen). */
+
+@layer components {
+  .ui-check {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-block-size: var(--control-sm);
+    font: var(--type-ui);
+    color: var(--color-text);
+    cursor: pointer;
+  }
+
+  .ui-check-box {
+    appearance: none;
+    box-sizing: border-box;
+    display: grid;
+    place-content: center;
+    flex: none;
+    inline-size: var(--mark-check);
+    block-size: var(--mark-check);
+    margin: 0;
+    padding: 0;
+    border: var(--line-strong) solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    cursor: pointer;
+    transition:
+      background-color var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out);
+  }
+
+  .ui-check-box::after {
+    content: "";
+    box-sizing: border-box;
+    inline-size: calc(var(--mark-check) / 2);
+    block-size: calc(var(--mark-check) / 4);
+    border: solid transparent;
+    border-width: 0 0 var(--line-strong) var(--line-strong);
+    rotate: -45deg;
+    translate: 0 -1px;
+  }
+
+  .ui-check:hover .ui-check-box:not(:disabled) {
+    border-color: var(--color-text);
+  }
+
+  .ui-check-box:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  .ui-check-box:checked,
+  .ui-check-box:indeterminate {
+    border-color: var(--color-text);
+    background: var(--color-text);
+  }
+
+  .ui-check-box:checked::after {
+    border-color: var(--color-bg);
+    border-width: 0 0 var(--line-focus-offset) var(--line-focus-offset);
+  }
+
+  .ui-check-box:indeterminate::after {
+    block-size: 0;
+    border-color: var(--color-bg);
+    border-width: 0 0 var(--line-focus-offset);
+    rotate: none;
+    translate: none;
+  }
+
+  .ui-check-box[aria-invalid="true"] {
+    border-color: var(--color-danger);
+  }
+
+  /* Disabled: the neutral ground, a muted mark and label. */
+  .ui-check:has(.ui-check-box:disabled) {
+    color: var(--color-text-muted);
+    cursor: not-allowed;
+  }
+
+  .ui-check-box:disabled {
+    border-color: var(--color-border);
+    background: var(--color-neutral-soft);
+    cursor: not-allowed;
+  }
+
+  .ui-check-box:disabled:checked::after,
+  .ui-check-box:disabled:indeterminate::after {
+    border-color: var(--color-text-muted);
+  }
+
+  @media (pointer: coarse) {
+    .ui-check {
+      min-block-size: var(--control-touch);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-check-box {
+      transition: none;
+    }
+  }
+}

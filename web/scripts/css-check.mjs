@@ -4,11 +4,11 @@
 // `pnpm --filter @taskto/web run css`.
 //
 // Fails on:
-// - a `.tt-` selector declared more than once at the top level, in one file or across files (a
+// - a `.tt-` or `.ui-` selector declared more than once at the top level, in one file or across files (a
 //   second rule with the same selector silently overrides or merges with the first; a state or a
 //   screen size goes in an at-rule block, or in a selector of its own). A rule inside `@layer`
 //   blocks only is at the top level: a layer orders rules, it doesn't set them apart;
-// - a `tt-` class a component's className uses that no rule of any stylesheet mentions;
+// - a `tt-` or `ui-` class a component's className uses that no rule of any stylesheet mentions;
 // - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
 //   such as `white`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
 //   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in.
@@ -41,9 +41,10 @@ export const UNSTYLED = new Map([
   // (none today)
 ])
 
-const CLASS = /tt-[a-z0-9]+(?:-[a-z0-9]+)*/g
+// The app's own classes: `tt-` (the screens) and `ui-` (the design system's components, src/ui/).
+const CLASS = /(?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*/g
 // A class selector: the name after a dot.
-const CLASS_SELECTOR = /\.(tt-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g
+const CLASS_SELECTOR = /\.((?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g
 
 // The class selectors of a rule's prelude, without what is inside an attribute selector's
 // brackets or a string.
@@ -280,7 +281,7 @@ function tableClasses(source, used) {
     const end = tableEnd(source, start)
     for (const lit of source
       .slice(start, end)
-      .matchAll(/(["'])(tt-[a-z0-9]+(?:-[a-z0-9]+)*(?: tt-[a-z0-9]+(?:-[a-z0-9]+)*)*)\1/g)) {
+      .matchAll(/(["'])((?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*(?: (?:tt|ui)-[a-z0-9]+(?:-[a-z0-9]+)*)*)\1/g)) {
       for (const c of lit[2].matchAll(CLASS)) {
         const at = start + lit.index + 1 + c.index
         if (!used.has(c[0])) used.set(c[0], at)
@@ -377,7 +378,7 @@ export function check(web) {
     const sheet = scan(readFileSync(path, 'utf8'))
     for (const name of sheet.mentioned) mentioned.add(name)
     for (const { selector, line } of sheet.top) {
-      if (!/\.tt-/.test(selector)) continue
+      if (!/\.(?:tt|ui)-/.test(selector)) continue
       const first = seen.get(selector)
       if (first) {
         const where = first.file === file ? `line ${first.line}` : `${first.file}:${first.line}`
@@ -425,6 +426,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exit(1)
   }
   console.log(
-    'css-check: no selector is declared twice, every tt- class a component uses has a rule, and no colour is written outside the themes',
+    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, and no colour is written outside the themes',
   )
 }

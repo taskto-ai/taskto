@@ -167,23 +167,12 @@
     cursor: not-allowed;
   }
 
-  /* Fingers: a regular button is the touch target's height; a small one keeps its look, with an
-     invisible target that reaches the touch size around it. */
+  /* Fingers: every button is the touch target's height, the small one too, so a row of small
+     controls (whose fields grow the same way) still lines up. */
   @media (pointer: coarse) {
-    .ui-button {
-      block-size: var(--control-touch);
-    }
-
+    .ui-button,
     .ui-button-sm {
-      block-size: var(--control-sm);
-    }
-
-    .ui-button-sm::after {
-      content: "";
-      position: absolute;
-      inset-block: calc((var(--control-sm) - var(--control-touch)) / 2);
-      inset-inline: 0;
-      min-inline-size: var(--control-touch);
+      block-size: var(--control-touch);
     }
   }
 

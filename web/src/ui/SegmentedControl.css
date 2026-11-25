@@ -1,0 +1,96 @@
+/* A segmented control: a pill of the neutral ground, the chosen segment raised on the surface.
+   Its outer height is a control's, so it lines up with buttons and fields of its size. */
+
+@layer components {
+  .ui-segmented {
+    box-sizing: border-box;
+    display: inline-flex;
+    vertical-align: middle;
+    gap: var(--space-1);
+    block-size: var(--control-md);
+    padding: var(--space-1);
+    border-radius: var(--radius-pill);
+    background: var(--color-neutral-soft);
+  }
+
+  .ui-segmented-sm {
+    block-size: var(--control-sm);
+    padding: calc(var(--space-1) / 2);
+    gap: calc(var(--space-1) / 2);
+  }
+
+  .ui-segment {
+    position: relative;
+    display: flex;
+  }
+
+  /* The radio is the whole segment, unseen: the face beside it is what is drawn. */
+  .ui-segment-input {
+    appearance: none;
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    border-radius: var(--radius-pill);
+    cursor: pointer;
+  }
+
+  .ui-segment-face {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding-inline: var(--space-3);
+    border-radius: var(--radius-pill);
+    font: var(--type-small);
+    font-weight: 500;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    pointer-events: none;
+    transition:
+      background-color var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+
+  .ui-segmented-sm .ui-segment-face {
+    padding-inline: var(--space-2);
+    font: var(--type-caption);
+    font-weight: 500;
+  }
+
+  .ui-segment-input:checked + .ui-segment-face {
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: 0 0 0 var(--line-thin) var(--color-border);
+  }
+
+  .ui-segment-input:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  /* Disabled: not pressable, its words muted; the chosen one keeps its raised ground. */
+  .ui-segment-input:disabled {
+    cursor: not-allowed;
+  }
+
+  .ui-segment-input:disabled + .ui-segment-face {
+    color: var(--color-text-muted);
+    font-weight: 400;
+  }
+
+  .ui-segment-input:hover:not(:disabled) + .ui-segment-face {
+    color: var(--color-text);
+  }
+
+  @media (pointer: coarse) {
+    .ui-segmented,
+    .ui-segmented-sm {
+      block-size: var(--control-touch);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-segment-face {
+      transition: none;
+    }
+  }
+}

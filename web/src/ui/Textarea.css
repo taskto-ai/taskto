@@ -1,0 +1,12 @@
+/* The box is Input's (Input.css); this is what only a textarea has. */
+
+@layer components {
+  .ui-textarea {
+    display: block;
+    min-block-size: var(--control-md);
+    padding-block: var(--space-2);
+    resize: vertical;
+    field-sizing: content;
+    max-block-size: calc(var(--control-md) * 8);
+  }
+}

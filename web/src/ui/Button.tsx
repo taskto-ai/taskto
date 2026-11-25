@@ -6,8 +6,8 @@
 // - ghost: no ground until hovered, for the quieter actions of a row or a toolbar.
 // - danger: what deletes or can't be undone, in the danger colour.
 //
-// Two sizes, md (36px) and sm (28px); on a touch screen md grows to 44px and sm keeps its look
-// with a 44px target around it. A disabled button has a look of its own (a flat grey pill), never
+// Two sizes, md (36px) and sm (28px); on a touch screen both are 44px, as the fields are, so a
+// row of controls of one size still lines up. A disabled button has a look of its own (a flat grey pill), never
 // a faded copy of its variant. A loading one keeps its width and its name, shows a spinner over
 // its label, says "Loading" to a screen reader and can't be pressed, but keeps the focus it has.
 // `type` is "button" unless said otherwise, so a button in a form doesn't submit it by accident.

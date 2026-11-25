@@ -1,0 +1,84 @@
+/* The text controls: Input, Textarea and Select share this box, .ui-textbox (an edge inside a fixed height, the
+   control's radius, the surface), so a field lines up with a button of its size. Focus is the
+   ring, not a change of the edge, so an invalid field shows both. */
+
+@layer components {
+  .ui-textbox {
+    box-sizing: border-box;
+    inline-size: 100%;
+    min-inline-size: 0;
+    margin: 0;
+    padding-block: 0;
+    padding-inline: var(--space-3);
+    border: var(--line-thin) solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font: var(--type-ui);
+    caret-color: var(--color-text);
+    transition:
+      border-color var(--duration-fast) var(--ease-out),
+      background-color var(--duration-fast) var(--ease-out);
+  }
+
+  .ui-textbox-md {
+    block-size: var(--control-md);
+  }
+
+  .ui-textbox-sm {
+    block-size: var(--control-sm);
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-sm);
+    font: var(--type-small);
+  }
+
+  .ui-textbox::placeholder {
+    color: var(--color-text-muted);
+    opacity: 1;
+  }
+
+  .ui-textbox:hover {
+    border-color: var(--color-text-muted);
+  }
+
+  .ui-textbox:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  .ui-textbox[aria-invalid="true"] {
+    border-color: var(--color-danger);
+  }
+
+  /* Disabled: the neutral ground, muted text, no edge to press. Read-only keeps its look but loses
+     its edge's weight. */
+  .ui-textbox:disabled {
+    border-color: transparent;
+    background: var(--color-neutral-soft);
+    color: var(--color-text-muted);
+    cursor: not-allowed;
+  }
+
+  .ui-textbox:read-only:not(:disabled, select) {
+    border-color: var(--color-border);
+    background: var(--color-bg-sunken);
+  }
+
+  /* Fingers: the touch height; the text at 16px so a phone doesn't zoom in on focus. */
+  @media (pointer: coarse) {
+    .ui-textbox-md,
+    .ui-textbox-sm {
+      block-size: var(--control-touch);
+    }
+
+    .ui-textbox {
+      font-size: var(--text-lg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-textbox {
+      transition: none;
+    }
+  }
+}

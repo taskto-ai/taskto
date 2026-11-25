@@ -1,0 +1,34 @@
+@layer components {
+  .ui-avatar {
+    box-sizing: border-box;
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    vertical-align: middle;
+    inline-size: var(--control-sm);
+    block-size: var(--control-sm);
+    border-radius: var(--radius-pill);
+    background: var(--hue-soft, var(--color-neutral-soft));
+    color: var(--hue-text, var(--color-text));
+    font: var(--type-caption);
+    font-weight: 600;
+    line-height: 1;
+    user-select: none;
+  }
+
+  .ui-avatar-sm {
+    inline-size: calc(var(--space-5) + var(--space-1) / 2);
+    block-size: calc(var(--space-5) + var(--space-1) / 2);
+    font-size: calc(var(--text-xs) - 1px);
+  }
+
+  .ui-avatar-lg {
+    inline-size: var(--control-md);
+    block-size: var(--control-md);
+    font: var(--type-ui-strong);
+  }
+
+  .ui-avatar-square {
+    border-radius: var(--radius-sm);
+  }
+}

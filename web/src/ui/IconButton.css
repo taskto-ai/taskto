@@ -51,22 +51,12 @@
     cursor: not-allowed;
   }
 
-  /* Fingers: a regular one is the touch size; a small one keeps its look inside a 44px target. */
+  /* Fingers: the touch size, either size. */
   @media (pointer: coarse) {
-    .ui-icon-button {
+    .ui-icon-button,
+    .ui-icon-button-sm {
       inline-size: var(--control-touch);
       block-size: var(--control-touch);
-    }
-
-    .ui-icon-button-sm {
-      inline-size: var(--control-sm);
-      block-size: var(--control-sm);
-    }
-
-    .ui-icon-button-sm::after {
-      content: "";
-      position: absolute;
-      inset: calc((var(--control-sm) - var(--control-touch)) / 2);
     }
   }
 

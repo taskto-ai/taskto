@@ -254,3 +254,16 @@ test("a colour's name inside a function's arguments is a colour, even where name
   expect(stops.code).toBe(1)
   expect(stops.err).toContain('list-style has the colour literal red')
 })
+
+test("checks the design system's ui- classes as it checks tt- ones", () => {
+  const twice = run('.ui-button { color: inherit; }\n.ui-button { margin: 0; }\n')
+  expect(twice.code).toBe(1)
+  expect(twice.err).toContain('.ui-button is declared again')
+  const unstyled = run('.ui-button { color: inherit; }\n', { 'A.tsx': component('"ui-button ui-missing"') })
+  expect(unstyled.code).toBe(1)
+  expect(unstyled.err).toContain('ui-missing is used but no rule')
+  expect(unstyled.err).not.toContain('ui-button is used')
+  // A custom property that happens to start like a class is not one.
+  const prop = run('.ui-x { --ui-y: 0; }\n', { 'A.tsx': component('"ui-x"') })
+  expect(prop.code).toBe(0)
+})
