@@ -34,6 +34,7 @@ const (
 	WorkspaceUpdated  = "workspace_updated"
 	InviteCreated     = "invite_created"
 	InviteRevoked     = "invite_revoked"
+	InviteEmailed     = "invite_emailed"
 	InviteAccepted    = "invite_accepted"
 	MemberRoleChanged = "member_role_changed"
 	MemberRemoved     = "member_removed"
