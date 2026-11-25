@@ -9,6 +9,7 @@ import { type Key, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
+import { Heading } from '../ui/Heading'
 import { IconButton } from '../ui/IconButton'
 import { MenuItem, MoreMenu } from '../ui/Menu'
 import { Notice } from '../ui/Notice'
@@ -84,9 +85,9 @@ export function HomeCustomize({
 
       <section className="ui-home-section" aria-labelledby="ui-home-pins">
         <header className="ui-home-section-head">
-          <h2 id="ui-home-pins" className="ui-home-section-title">
+          <Heading level={2} id="ui-home-pins">
             {t('home.pins')}
-          </h2>
+          </Heading>
           <p className="ui-home-help">{t('home.pinsIntro')}</p>
         </header>
         {home.pins.length === 0 ? (
@@ -152,9 +153,9 @@ export function HomeCustomize({
 
       {home.hidden.length > 0 && (
         <section className="ui-home-section" aria-labelledby="ui-home-hidden">
-          <h2 id="ui-home-hidden" className="ui-home-section-title">
+          <Heading level={2} id="ui-home-hidden">
             {t('home.hidden')}
-          </h2>
+          </Heading>
           <Panel>
             <Rows label={t('home.hidden')}>
               {home.hidden.map((h) => {
@@ -182,9 +183,9 @@ export function HomeCustomize({
       )}
 
       <section className="ui-home-section" aria-labelledby="ui-home-add">
-        <h2 id="ui-home-add" className="ui-home-section-title">
+        <Heading level={2} id="ui-home-add">
           {t('home.add')}
-        </h2>
+        </Heading>
         {available.error && <Notice tone="danger">{available.error}</Notice>}
         {available.data?.length === 0 && <p className="ui-home-help">{t('home.noApps')}</p>}
         {available.data?.map((a) => {
@@ -193,9 +194,9 @@ export function HomeCustomize({
           const pinName = a.pin?.label || a.name
           return (
             <div key={`${a.space_id}:${a.app_id}`} className="ui-home-group">
-              <h3 className="ui-home-group-title">
+              <Heading level={3} size="subsection">
                 {a.name} <span className="ui-home-group-space">{space(a)}</span>
-              </h3>
+              </Heading>
               <Panel>
                 <Rows label={a.name}>
                   {a.widgets.map((w) => {

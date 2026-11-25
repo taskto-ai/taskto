@@ -12,6 +12,7 @@ import { AppView, httpTransport } from '../apps/AppView'
 import { appPath } from '../apps/route'
 import { type Key, useT } from '../i18n'
 import { Button, ButtonLink } from '../ui/Button'
+import { Heading } from '../ui/Heading'
 import { IconButton } from '../ui/IconButton'
 import { Panel } from '../ui/Panel'
 import { Skeleton } from '../ui/Skeleton'
@@ -58,9 +59,9 @@ export function WidgetCard({
     >
       <div className="ui-home-widget-head">
         <div className="ui-home-widget-titles">
-          <h2 id={headingId} className="ui-home-widget-title">
+          <Heading level={2} size="subsection" id={headingId}>
             {title}
-          </h2>
+          </Heading>
           <p className="ui-home-widget-from">
             {item.source === 'default'
               ? t('home.fromAppDefault', { name: item.app_name })

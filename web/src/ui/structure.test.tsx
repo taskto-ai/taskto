@@ -61,6 +61,19 @@ describe('Page and PageHeader', () => {
     expect(screen.getByRole('heading', { level: 1 }).hasAttribute('tabindex')).toBe(false)
   })
 
+  test('a Heading takes a ref, so a script can move the keyboard to it', () => {
+    const ref = createRef<HTMLHeadingElement>()
+    render(
+      <Heading level={2} ref={ref} tabIndex={-1}>
+        Set up your workspace
+      </Heading>,
+    )
+    const h2 = screen.getByRole('heading', { level: 2, name: 'Set up your workspace' })
+    expect(ref.current).toBe(h2)
+    ref.current?.focus()
+    expect(document.activeElement).toBe(h2)
+  })
+
   test('a header inside another page is a level 2 heading', () => {
     render(<PageHeader title="Members" level={2} />)
     expect(screen.getByRole('heading', { level: 2, name: 'Members' })).toBeTruthy()

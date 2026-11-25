@@ -18,6 +18,7 @@ import { useLoad } from '../load'
 import { routePath } from '../router'
 import { Badge } from '../ui/Badge'
 import { Button, ButtonLink } from '../ui/Button'
+import { Heading } from '../ui/Heading'
 import { Icon } from '../ui/Icon'
 import { IconButton } from '../ui/IconButton'
 import { Notice } from '../ui/Notice'
@@ -159,9 +160,9 @@ export function SetupChecklist({
       <Panel as="section" padded className="ui-checklist" aria-labelledby="ui-checklist-title">
         <div className="ui-checklist-head">
           <div className="ui-checklist-titles">
-            <h2 id="ui-checklist-title" ref={title} tabIndex={-1} className="ui-home-section-title">
+            <Heading level={2} id="ui-checklist-title" ref={title} tabIndex={-1}>
               {t('checklist.title')}
-            </h2>
+            </Heading>
             <p className="ui-home-help">{t('checklist.intro')}</p>
           </div>
           <IconButton icon="close" label={t('checklist.dismiss')} onClick={dismiss} />
@@ -258,9 +259,9 @@ export function ChecklistRestore({ workspace }: { workspace: number }) {
   return (
     <Panel as="section" padded className="ui-home-restore" aria-labelledby="ui-home-checklist">
       <div className="ui-home-restore-text">
-        <h2 id="ui-home-checklist" className="ui-home-section-title">
+        <Heading level={2} id="ui-home-checklist">
           {t('checklist.title')}
-        </h2>
+        </Heading>
         <p className="ui-home-help">{t('checklist.dismissedNote')}</p>
       </div>
       {error && <Notice tone="danger">{error}</Notice>}
