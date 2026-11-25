@@ -222,6 +222,16 @@ Accounts made by signing in have no password. They can't use the password login,
 password" refuses them. If passwords are on, an admin's reset link still lets such a person
 set one.
 
+## Two-factor login
+
+TaskTo's own [two-factor login](api.md#two-factor-login) (a TOTP code after the password) is
+for **password logins only**. Signing in with a provider makes a session as soon as the
+provider vouches for the person, with no code asked: whether that sign-in needs a second
+factor is for the provider to decide, and for you to turn on there (Google's 2-Step
+Verification, an Authentik authentication flow with an authenticator stage). A person who has
+two-factor login on and signs in with both a password and a provider is asked for a code
+only on the password.
+
 ## Security notes
 
 - **The callback is a state-changing `GET`**, the one such route, because the provider's

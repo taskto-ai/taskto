@@ -284,7 +284,7 @@ func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAcc
 		return AppAccess{}, err
 	}
 	var exists bool
-	if err := c.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM apps WHERE id = ? AND space_id = ?)`,
+	if err := c.reads.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM apps WHERE id = ? AND space_id = ?)`,
 		appID, spaceID).Scan(&exists); err != nil {
 		return AppAccess{}, err
 	}
@@ -296,7 +296,7 @@ func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAcc
 		return AppAccess{}, err
 	}
 	var anyGrants bool
-	if err := c.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM app_roles WHERE app_id = ?)`,
+	if err := c.reads.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM app_roles WHERE app_id = ?)`,
 		appID).Scan(&anyGrants); err != nil {
 		return AppAccess{}, err
 	}
@@ -306,6 +306,32 @@ func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAcc
 		return AppAccess{}, err
 	}
 	return appAccess(sp.Access, roles, restricted, rescue), nil
+}
+
+// AppNamed is App and the app's name, read in one snapshot: what the person may do and what the
+// app is called come from the same state, which two reads can't give (the app could be renamed
+// and its roles changed between them). It returns the space as the person sees it too. The errors
+// are App's.
+func (c *Checker) AppNamed(ctx context.Context, userID, spaceID, appID int64) (Space, AppAccess, string, error) {
+	tx, err := c.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Space{}, AppAccess{}, "", err
+	}
+	defer func() { _ = tx.Rollback() }() // nothing was written
+	snap := &Checker{db: c.db, reads: tx, auth: c.auth}
+	sp, err := snap.Check(ctx, userID, spaceID)
+	if err != nil {
+		return Space{}, AppAccess{}, "", err
+	}
+	acc, err := snap.App(ctx, userID, spaceID, appID)
+	if err != nil {
+		return Space{}, AppAccess{}, "", err
+	}
+	var name string
+	if err := tx.QueryRowContext(ctx, `SELECT name FROM apps WHERE id = ? AND space_id = ?`, appID, spaceID).Scan(&name); err != nil {
+		return Space{}, AppAccess{}, "", err
+	}
+	return sp, acc, name, nil
 }
 
 // stranded is whether a set of assignments (every one of an app's) leaves it with nobody who may
@@ -337,7 +363,7 @@ func (c *Checker) rescues(ctx context.Context, userID int64, sp Space, appID int
 		return false, err
 	}
 	var isStranded bool
-	err = c.db.QueryRowContext(ctx, `SELECT EXISTS (`+strandedApps+` AND a.id = ?)`, sp.ID, appID).Scan(&isStranded)
+	err = c.reads.QueryRowContext(ctx, `SELECT EXISTS (`+strandedApps+` AND a.id = ?)`, sp.ID, appID).Scan(&isStranded)
 	return isStranded, err
 }
 
@@ -348,7 +374,7 @@ func (c *Checker) administers(ctx context.Context, userID int64, sp Space) (bool
 		return false, nil
 	}
 	var admin bool
-	err := c.db.QueryRowContext(ctx,
+	err := c.reads.QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM memberships WHERE workspace_id = ? AND user_id = ? AND role = 'admin')`,
 		sp.WorkspaceID, userID).Scan(&admin)
 	return admin, err
@@ -357,7 +383,7 @@ func (c *Checker) administers(ctx context.Context, userID int64, sp Space) (bool
 // AppsIn returns what userID may do in each app of the space, by app ID, for a space they
 // can read (as Check returned it), in one query: every app of the space has an entry.
 func (c *Checker) AppsIn(ctx context.Context, userID int64, sp Space) (map[int64]AppAccess, error) {
-	rows, err := c.db.QueryContext(ctx, `
+	rows, err := c.reads.QueryContext(ctx, `
 		SELECT a.id, EXISTS (SELECT 1 FROM app_roles x WHERE x.app_id = a.id), r.user_id, r.role
 		FROM apps a LEFT JOIN app_roles r ON r.app_id = a.id AND (r.user_id = ? OR r.user_id IS NULL)
 		WHERE a.space_id = ?`, userID, sp.ID)
@@ -393,7 +419,7 @@ func (c *Checker) AppsIn(ctx context.Context, userID int64, sp Space) (map[int64
 	}
 	rescue := map[int64]bool{}
 	if admin {
-		ids, err := c.db.QueryContext(ctx, strandedApps, sp.ID)
+		ids, err := c.reads.QueryContext(ctx, strandedApps, sp.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -419,7 +445,7 @@ func (c *Checker) AppsIn(ctx context.Context, userID int64, sp Space) (map[int64
 
 // grantRows reads the role rows of an app that concern userID (theirs and the default's).
 func (c *Checker) grantRows(ctx context.Context, userID, appID int64) ([]grantRow, error) {
-	rows, err := c.db.QueryContext(ctx,
+	rows, err := c.reads.QueryContext(ctx,
 		`SELECT user_id, role FROM app_roles WHERE app_id = ? AND (user_id = ? OR user_id IS NULL)`, appID, userID)
 	if err != nil {
 		return nil, err
@@ -456,7 +482,7 @@ var (
 // AppGrants lists the role assignments of an app of spaceID: those of single users first,
 // by user ID, then the default's.
 func (c *Checker) AppGrants(ctx context.Context, spaceID, appID int64) ([]AppGrant, error) {
-	rows, err := c.db.QueryContext(ctx, `
+	rows, err := c.reads.QueryContext(ctx, `
 		SELECT r.user_id, r.role FROM app_roles r JOIN apps a ON a.id = r.app_id
 		WHERE r.app_id = ? AND a.space_id = ?
 		ORDER BY r.user_id IS NULL, r.user_id`, appID, spaceID)

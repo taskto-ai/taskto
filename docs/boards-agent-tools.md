@@ -39,21 +39,36 @@ plus `ErrInvalid` with a message the model can act on.
 
 | Tool | Go method (`*boards.Service`) | HTTP equivalent | Does |
 |---|---|---|---|
-| `list_boards` | `ListBoards(ctx, actor, space)` | `GET …/boards` | The space's boards that aren't archived. |
+| `list_boards` | `ListBoards` / `ListAllBoards(ctx, actor, space)` | `GET …/boards` | The space's boards that aren't archived; with `archived: true`, the archived ones too, last (`archived_at` is set). `after` (a board `id`) starts the page after that board; when there are more than fit, `truncated` is `true` and `next` is the `after` of the next page (send the same `archived`). |
 | `list_cards` | `ListCards(ctx, actor, space, board, Filter)` | `GET …/cards` | Cards in board order, or by due date. `Filter`: `Column`, `Assignee` (`user` + `AssigneeID`, `agent`, `none`), `Blocked`, `Text`, `Labels` (all of them), `DueBefore` and `DueAfter` (dates, inclusive), `Overdue` (with `Today`, the user's date; default today in UTC) and `Sort` (`board` or `due`). Each card carries `due` and `labels`. |
 | `show_card` | `ShowCard(ctx, actor, space, board, card)` | `GET …/cards/{card}` | The card with its thread. |
 | `create_card` | `CreateCard(ctx, actor, space, board, NewCard)` | `POST …/cards` | A new card; `Title` required; column, position, assignee, blocked state, docs, conversations, due date and labels optional. |
 | `update_card` | `UpdateCard(ctx, actor, space, board, card, CardChanges)` | `PATCH …/cards/{card}` | Edits title, body, assignee, blocked state, docs, conversations, due date (`null` clears it) and labels (the whole list); needs `Version`. |
 | `move_card` | `MoveCard(ctx, actor, space, board, card, Move)` | `POST …/cards/{card}/move` | To a column (not `archived`) at a 0-based position; needs `Version`. |
+| `archive_card` | `ArchiveCard(ctx, actor, space, board, card, version)` | `POST …/cards/{card}/archive` | Takes a card out of the columns, remembering its column; needs `Version`. It stays in `list_cards` with `column: "archived"`. |
+| `restore_card` | `RestoreCard(ctx, actor, space, board, card, version, column)` | `POST …/cards/{card}/restore` | Brings an archived card back, last in the column it came from or in `column`; needs `Version`. |
+| `create_board` | `CreateBoard(ctx, actor, space, name)` | `POST …/boards` | A team board in a shared space (a private space has only its personal board); `name` 1 to 100 characters. |
+| `update_board` | `UpdateBoard(ctx, actor, space, board, BoardChanges)` | `PATCH …/boards/{board}` | Renames a board and archives (`archived: true`) or unarchives it; needs `Version`. A personal board can't be archived; an archived board takes no change but being unarchived, with a rename sent together with `archived: false` as over HTTP (`ErrBoardArchived`). |
 | `comment_card` | `Comment(ctx, actor, space, board, card, body)` | `POST …/cards/{card}/comments` | Adds to the thread. |
 | `set_blocked` | `SetBlocked(ctx, actor, space, board, card, version, reason, blockedBy)` | `PATCH …/cards/{card}` | Sets why the card is blocked and the cards (same board) it waits for; a nil reason and no cards unblock it. |
 
-Archiving and restoring cards, and creating, renaming and archiving boards, are left to
-people for now; adding them is a method each over code that exists.
+The write tools above are not read-only: the CLI's permission prompt asks the owner first
+(MCP clients see no `readOnlyHint`). They need the right to write the space, as the HTTP
+routes do (`ErrReadOnly` for a viewer or an archived space). Nothing is deleted: cards and
+boards are archived, never removed, and both can be brought back. A board records the user
+who made a change, not whether the agent made it (cards and comments also record that).
 
 The tool schemas the sidecar registers mirror the Go types' JSON (`NewCard`,
 `CardChanges`, `Move`, `Filter`), and tool results are the JSON of `Board`, `Card`,
 `Thread` and `Comment`, the same shapes as the HTTP replies.
+
+A result is at most 64 KiB of JSON, and a card can be more than that once it is escaped
+(a body of 32 KiB, `<` being six bytes; 50 doc paths of 1 KiB). A tool that changes a card
+or adds a comment has done so before it answers, so it never fails for the size of the
+reply: the last `docs` are left out (`docs_truncated: true`), then the card's (or
+comment's) `body` is shortened until the reply fits, ends with `[…cut]` and the reply says
+`body_truncated: true`. `show_card` does the same, for a body over what fits with no
+comment after cutting it at 16 KiB, and for the docs. Read the whole card with the web app or the HTTP API.
 
 ## A conversation that works a card
 

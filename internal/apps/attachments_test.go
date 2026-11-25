@@ -3,8 +3,10 @@ package apps
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"image"
@@ -1087,5 +1089,83 @@ func TestPicturesAreInspectedAndThumbnailed(t *testing.T) {
 	broken := append([]byte{0xff, 0xd8, 0xff, 0xe1, 0x00, 0x08, 'E', 'x', 'i', 'f', 0, 0}, testJPEG(t, 10, 10)[2:]...)
 	if o := orientationOf(broken); o != 1 {
 		t.Fatalf("orientation of garbage = %d", o)
+	}
+}
+
+// A write whose context ends inside its transaction is rolled back before write returns: left to
+// database/sql's own goroutine, the connection would still be busy, and a worker that closes the
+// database at shutdown (or begins the next write) would meet a locked file.
+func TestWriteCancelledInsideItsTransactionLeavesNoConnectionBusy(t *testing.T) {
+	e := newEnv(t)
+	for range 200 {
+		ctx, cancel := context.WithCancel(context.Background())
+		err := e.s.write(ctx, func(tx *sql.Tx) error {
+			cancel()
+			_, err := tx.ExecContext(ctx, `INSERT INTO users (email, name, password_hash) VALUES ('c@example.com', 'C', 'x')`)
+			return err
+		})
+		if err == nil {
+			t.Fatal("a write cancelled inside its transaction succeeded")
+		}
+		if inUse := e.db.Stats().InUse; inUse != 0 {
+			t.Fatalf("%d connections still busy after write returned", inUse)
+		}
+	}
+	// Nothing was written, and the next writer begins at once.
+	var n int
+	if err := e.db.QueryRow(`SELECT count(*) FROM users WHERE email = 'c@example.com'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("users = %d, %v; want the cancelled insert rolled back", n, err)
+	}
+	if err := e.s.write(context.Background(), func(tx *sql.Tx) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A sweep whose context has ended stops at once and removes nothing more.
+func TestCancelledSweepRemovesNothing(t *testing.T) {
+	w := newWorld(t)
+	s := w.shared
+	a := w.createPhotos(w.alice, s, "Photos")
+	orphan := w.upload(w.alice, s, a, "photos", testPNG(t, 40, 30), 4096)
+	stray := filepath.Join(s.Dir(w.e.dataDir), filesDir, fmt.Sprint(a.ID), strings.Repeat("0", 32)+".thumb")
+	if err := os.WriteFile(stray, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := w.e.s.Sweep(ctx, time.Now().Add(AttachmentTTL+time.Hour)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Sweep = %v, want context.Canceled", err)
+	}
+	expect(t, w.fetch(w.alice, s, a, orphan, false), http.StatusOK)
+	if _, err := os.Stat(stray); err != nil {
+		t.Fatalf("a cancelled sweep removed a file: %v", err)
+	}
+	// The strays' scan itself checks between spaces, apps and files.
+	if err := w.e.s.sweepStrays(ctx, time.Now().Add(AttachmentTTL+time.Hour)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("sweepStrays = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Fatalf("a cancelled scan removed a file: %v", err)
+	}
+}
+
+// A caller that gave up after the transaction's last statement isn't told "no" for a write that
+// was committed: the write is rolled back.
+func TestWriteCancelledAfterItsLastStatementIsRolledBack(t *testing.T) {
+	e := newEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	err := e.s.write(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO users (email, name, password_hash) VALUES ('late@example.com', 'L', 'x')`); err != nil {
+			return err
+		}
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("write = %v, want context.Canceled", err)
+	}
+	var n int
+	if err := e.db.QueryRow(`SELECT count(*) FROM users WHERE email = 'late@example.com'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("users = %d, %v; want the write rolled back", n, err)
 	}
 }

@@ -99,6 +99,8 @@ type env struct {
 	box   *mailbox
 	// bodies is every API answer, which must never show the VAPID private key.
 	bodies [][]byte
+	// hooks run what a test sets at chosen moments of the database's use.
+	hooks *db.Hooks
 }
 
 func newEnv(t *testing.T, tls bool) *env { return newEnvWith(t, tls, nil) }
@@ -107,7 +109,8 @@ func newEnv(t *testing.T, tls bool) *env { return newEnvWith(t, tls, nil) }
 func newEnvWith(t *testing.T, tls bool, change func(*env, *notifications.Options)) *env {
 	t.Helper()
 	ctx := context.Background()
-	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))
+	hooks := &db.Hooks{}
+	sqlDB, err := db.OpenHooked(ctx, filepath.Join(t.TempDir(), db.FileName), hooks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +124,7 @@ func newEnvWith(t *testing.T, tls bool, change func(*env, *notifications.Options
 	}
 	accounts := auth.New(sqlDB, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
 	spaces := access.New(sqlDB, accounts)
-	e := &env{t: t, db: sqlDB, key: key, push: newPushServer(t), cards: boards.New(sqlDB, spaces)}
+	e := &env{t: t, db: sqlDB, hooks: hooks, key: key, push: newPushServer(t), cards: boards.New(sqlDB, spaces)}
 	opts := notifications.Options{Key: key, Now: func() time.Time { return time.Now().Add(e.skew) }}
 	if tls {
 		// The test push service is on loopback: a client of its own, and the policy that goes with it.
@@ -1244,5 +1247,270 @@ func TestDueAndOverdueNotificationsNameTheCardAndDateOnlyWhileItIsReadable(t *te
 		if it.Kind != notifications.KindChanged || len(it.Params) != 0 {
 			t.Fatalf("an item after access ended = %+v", it)
 		}
+	}
+}
+
+// comment adds a comment to a card as u, through the boards service.
+func (w *world) comment(u *user, card int64, body string) {
+	w.t.Helper()
+	if _, err := w.cards.Comment(context.Background(), boards.Actor{UserID: u.id}, w.space.ID, w.board, card, body); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func mention(name string, u *user) string { return fmt.Sprintf("@[%s](user:%d)", name, u.id) }
+
+func TestACommentTellsTheAssigneeAndNotTheCommenter(t *testing.T) {
+	w := newWorld(t, true)
+	card := w.assign("Paint the fence", w.bob)
+	before := w.inbox(w.bob, "").Unread // the assignment
+
+	w.comment(w.owner, card, "The paint is in the shed")
+	in := w.inbox(w.bob, "")
+	if in.Unread != before+1 {
+		t.Fatalf("bob's inbox = %+v", in)
+	}
+	it := in.Notifications[0]
+	wantItem := fmt.Sprintf("%d:%d:%d", w.space.ID, w.board, card)
+	if it.Kind != notifications.KindCardComment || it.Params["title"] != "Paint the fence" || it.Target.Section != "boards" || it.Target.Item != wantItem {
+		t.Fatalf("item = %+v", it)
+	}
+	// The text of the comment is in no notification: it is only a reference to the card.
+	if raw, _ := json.Marshal(in); strings.Contains(string(raw), "shed") {
+		t.Fatalf("the comment's text is in the inbox: %s", raw)
+	}
+	// The commenter, and a member who can't see the space, are told nothing.
+	if n := w.inbox(w.owner, "").Unread + w.inbox(w.mallory, "").Unread; n != 0 {
+		t.Fatalf("others were told: %d", n)
+	}
+	// Commenting on a card assigned to yourself tells nobody.
+	w.comment(w.bob, card, "Mine, on it")
+	if w.inbox(w.bob, "").Unread != before+1 {
+		t.Fatal("commenting on your own card made a notification")
+	}
+	// A card of nobody tells nobody.
+	unowned, err := w.cards.CreateCard(context.Background(), boards.Actor{UserID: w.owner.id}, w.space.ID, w.board, boards.NewCard{Title: "Unowned"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	was := [3]int{w.inbox(w.owner, "").Unread, w.inbox(w.bob, "").Unread, w.inbox(w.mallory, "").Unread}
+	w.comment(w.bob, unowned.ID, "hello")
+	w.comment(w.owner, unowned.ID, "hello again")
+	if after := [3]int{w.inbox(w.owner, "").Unread, w.inbox(w.bob, "").Unread, w.inbox(w.mallory, "").Unread}; after != was {
+		t.Fatalf("unread before %v, after %v: a card of nobody told someone", was, after)
+	}
+}
+
+func TestAMentionTellsThePersonOnceAndOnlyIfTheyMayReadTheBoard(t *testing.T) {
+	w := newWorld(t, true)
+	card := w.assign("Plan", w.owner)
+	base := w.inbox(w.owner, "").Unread
+
+	// Bob is mentioned twice and the owner (the assignee) once, by someone else; mallory, who is a
+	// member of the workspace but not of the space, and a user that doesn't exist, are mentioned too.
+	w.comment(w.bob, card, "Hi "+mention("Bob", w.bob)+" and "+mention("Mallory", w.mallory)+" and "+mention("Owner", w.owner)+
+		" "+mention("Bob", w.bob)+" @[Nobody](user:99999)")
+	if n := w.inbox(w.owner, "").Unread - base; n != 1 {
+		t.Fatalf("the assignee, also mentioned, was told %d times", n)
+	}
+	if it := w.inbox(w.owner, "").Notifications[0]; it.Kind != notifications.KindCardMention {
+		t.Fatalf("item = %+v: a mention takes the place of the comment's", it)
+	}
+	// Mentioning yourself tells nobody.
+	if w.inbox(w.bob, "").Unread != 0 {
+		t.Fatalf("bob = %+v", w.inbox(w.bob, ""))
+	}
+	// Mallory can't read the board: no notification, not even a "changed" one.
+	if n := w.count("notifications", "user_id = ?", w.mallory.id); n != 0 {
+		t.Fatalf("someone who can't read the board has %d notifications", n)
+	}
+	w.comment(w.owner, card, "Looping in "+mention("Bob", w.bob))
+	in := w.inbox(w.bob, "")
+	if in.Unread != 1 || in.Notifications[0].Kind != notifications.KindCardMention || in.Notifications[0].Params["title"] != "Plan" {
+		t.Fatalf("bob = %+v", in)
+	}
+	// The name in the token isn't trusted: it is the ID that counts.
+	w.comment(w.owner, card, "@[Someone else](user:"+fmt.Sprint(w.bob.id)+")")
+	if w.inbox(w.bob, "").Unread != 2 {
+		t.Fatal("a mention with another name didn't tell the person of that ID")
+	}
+	// Plain text isn't a mention.
+	w.comment(w.owner, card, "@Bob @bob@example.com [Bob](user:"+fmt.Sprint(w.bob.id)+")")
+	if w.inbox(w.bob, "").Unread != 2 {
+		t.Fatal("plain text told someone")
+	}
+}
+
+func TestACommentNotificationShowsNothingOnceAccessEnds(t *testing.T) {
+	w := newWorld(t, true)
+	card := w.assign("Quarterly layoffs plan", w.owner)
+	w.comment(w.owner, card, "Please read "+mention("Bob", w.bob))
+	if w.inbox(w.bob, "").Unread != 1 {
+		t.Fatal("bob wasn't told")
+	}
+	expect(t, w.owner.do(http.MethodDelete, fmt.Sprintf("/api/workspaces/%d/spaces/%d/members/%d", w.ws, w.space.ID, w.bob.id), nil), http.StatusNoContent)
+
+	// What bob was told before shows nothing of the card, and mentioning him now tells him nothing.
+	w.comment(w.owner, card, "Bob is out: "+mention("Bob", w.bob))
+	raw := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/notifications", w.ws), nil)
+	expect(t, raw, http.StatusOK)
+	in := decode[notifications.List](t, raw)
+	if len(in.Notifications) != 1 || in.Notifications[0].Kind != notifications.KindChanged || len(in.Notifications[0].Params) != 0 {
+		t.Fatalf("inbox = %s", raw.Body)
+	}
+	for _, leak := range []string{"Quarterly", "layoffs", "card_mention"} {
+		if strings.Contains(raw.Body.String(), leak) {
+			t.Fatalf("the inbox still says %q: %s", leak, raw.Body)
+		}
+	}
+}
+
+// whileRendering makes fn happen just after the inbox has read what it needs to decide, and before
+// it reads what it shows: the moment two separate reads would leave open. A renderer that decides
+// and reads in one statement runs fn before the statement, or after it, and either is consistent.
+func (w *world) whileRendering(fn func()) {
+	w.hooks.BeforeQuery("title", fn)
+}
+
+func TestARenamedCardShowsNothingToSomeoneWhoseAccessEndedAtTheSameTime(t *testing.T) {
+	for _, kind := range []string{notifications.KindCardAssigned, notifications.KindCardComment, notifications.KindCardMention} {
+		t.Run(kind, func(t *testing.T) {
+			w := newWorld(t, true)
+			card := w.assign("Quarterly layoffs plan", w.bob)
+			if kind == notifications.KindCardComment {
+				w.comment(w.owner, card, "Please read")
+			}
+			if kind == notifications.KindCardMention {
+				w.comment(w.owner, card, "Please read "+mention("Bob", w.bob))
+			}
+			w.whileRendering(func() {
+				// Bob is taken out of the space and the card is renamed, between the access check and
+				// the title's read, if there were two.
+				if _, err := w.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.space.ID, w.bob.id); err != nil {
+					t.Error(err)
+				}
+				if _, err := w.db.Exec(`UPDATE cards SET title = 'Secret renamed' WHERE id = ?`, card); err != nil {
+					t.Error(err)
+				}
+			})
+			raw := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/notifications", w.ws), nil)
+			expect(t, raw, http.StatusOK)
+			if strings.Contains(raw.Body.String(), "Secret") || strings.Contains(raw.Body.String(), "Quarterly") {
+				t.Fatalf("the inbox shows a title to someone who lost access: %s", raw.Body)
+			}
+			assertOnlyGeneric(t, raw, 1+btoi(kind != notifications.KindCardAssigned))
+			// Settled, it is the same answer.
+			if strings.Contains(w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/notifications", w.ws), nil).Body.String(), "Secret") {
+				t.Fatal("the title shows once the rename has settled")
+			}
+		})
+	}
+}
+
+func TestAnAppNameShowsNothingToSomeoneWhoseAccessEndedAtTheSameTime(t *testing.T) {
+	w := newWorld(t, true)
+	var app int64
+	if err := w.db.QueryRow(`INSERT INTO apps (space_id, name, definition) VALUES (?, 'Inspections', '{}') RETURNING id`, w.space.ID).Scan(&app); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := w.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := notifications.Add(context.Background(), tx, notifications.Notice{UserID: w.bob.id, WorkspaceID: w.ws, Kind: notifications.KindAppEffectFailed,
+		Ref: notifications.Ref{Space: w.space.ID, App: app, Effect: 7}, DedupeKey: "effect:7:1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	w.hooks.BeforeQuery("FROM spaces s", func() {
+		if _, err := w.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.space.ID, w.bob.id); err != nil {
+			t.Error(err)
+		}
+		if _, err := w.db.Exec(`UPDATE apps SET name = 'Secret renamed' WHERE id = ?`, app); err != nil {
+			t.Error(err)
+		}
+	})
+	raw := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/notifications", w.ws), nil)
+	expect(t, raw, http.StatusOK)
+	if strings.Contains(raw.Body.String(), "Secret") || strings.Contains(raw.Body.String(), "Inspections") {
+		t.Fatalf("the inbox shows an app's name to someone who lost access: %s", raw.Body)
+	}
+	assertOnlyGeneric(t, raw, 1)
+}
+
+// assertOnlyGeneric checks that every one of the want items an inbox answer holds is the generic
+// "something changed": no names, no IDs, a link to the workspace's home.
+func assertOnlyGeneric(t *testing.T, raw *httptest.ResponseRecorder, want int) {
+	t.Helper()
+	expect(t, raw, http.StatusOK)
+	in := decode[notifications.List](t, raw)
+	if len(in.Notifications) != want {
+		t.Fatalf("%d items, want %d: %s", len(in.Notifications), want, raw.Body)
+	}
+	for _, it := range in.Notifications {
+		if it.Kind != notifications.KindChanged || len(it.Params) != 0 || it.Target.Section != "home" || it.Target.Item != "" {
+			t.Fatalf("item = %+v, want the generic one", it)
+		}
+	}
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// A grant the app's roles get while the inbox renders it must not show the name read before it: the
+// right to view and the name are one snapshot.
+func TestAnAppNameAndTheRightToViewItAreOneSnapshot(t *testing.T) {
+	w := newWorld(t, true)
+	var app int64
+	if err := w.db.QueryRow(`INSERT INTO apps (space_id, name, definition) VALUES (?, 'Inspections', '{}') RETURNING id`, w.space.ID).Scan(&app); err != nil {
+		t.Fatal(err)
+	}
+	// Restricted to the owner: Bob can't view it.
+	if _, err := w.db.Exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'builder')`, app, w.owner.id); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := w.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := notifications.Add(context.Background(), tx, notifications.Notice{UserID: w.bob.id, WorkspaceID: w.ws, Kind: notifications.KindAppEffectFailed,
+		Ref: notifications.Ref{Space: w.space.ID, App: app, Effect: 7}, DedupeKey: "effect:7:1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// Between the two reads there were, Bob is granted the app and it is renamed.
+	w.hooks.BeforeQuery("FROM app_roles", func() {
+		if _, err := w.db.Exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'user')`, app, w.bob.id); err != nil {
+			t.Error(err)
+		}
+		if _, err := w.db.Exec(`UPDATE apps SET name = 'Renamed' WHERE id = ?`, app); err != nil {
+			t.Error(err)
+		}
+	})
+	raw := w.bob.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/notifications", w.ws), nil)
+	if strings.Contains(raw.Body.String(), "Inspections") || strings.Contains(raw.Body.String(), "Renamed") {
+		t.Fatalf("a name from another moment than the right to view it: %s", raw.Body)
+	}
+	assertOnlyGeneric(t, raw, 1)
+}
+
+func TestACommentInCodeOrEscapedTellsNobodyAndOnePersonCanBeMentionedBeside(t *testing.T) {
+	w := newWorld(t, true)
+	card := w.assign("Plan", w.owner)
+	w.comment(w.owner, card, "```\n"+mention("Bob", w.bob)+"\n```\n`"+mention("Bob", w.bob)+"` \\"+mention("Bob", w.bob))
+	if n := w.count("notifications", "user_id = ?", w.bob.id); n != 0 {
+		t.Fatalf("a mention in code or escaped made %d notifications", n)
+	}
+	w.comment(w.owner, card, "```\n"+mention("Bob", w.bob)+"\n```\nbut "+mention("Bob", w.bob))
+	if n := w.count("notifications", "user_id = ?", w.bob.id); n != 1 {
+		t.Fatalf("a mention beside code made %d notifications", n)
 	}
 }

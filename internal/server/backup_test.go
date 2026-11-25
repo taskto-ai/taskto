@@ -67,7 +67,7 @@ func TestHealthzBackup(t *testing.T) {
 	}
 }
 
-// The whole status, error included, is for the workspace's admins only.
+// The whole status, error included, is for the server's operators only.
 func TestBackupStatusIsForAdmins(t *testing.T) {
 	s := newStack(t)
 	path := func(ws int64) string { return fmt.Sprintf("/api/workspaces/%d/backup", ws) }

@@ -292,6 +292,11 @@ export type BoardsAuthor = {
   via?: string
 }
 
+export type BoardsMentionedPerson = {
+  id: number
+  name: string
+}
+
 export type Card = {
   id: number
   board_id: number
@@ -345,6 +350,7 @@ export type Comment = {
   author: BoardsAuthor | null
   body: string
   created_at: string
+  mentions: BoardsMentionedPerson[]
 }
 
 export type Conversation = {
@@ -429,6 +435,8 @@ export type InviteCreated = {
 export type Me = {
   user: AuthMeUser
   workspaces: Workspace[]
+  can_create_workspace: boolean
+  is_operator: boolean
 }
 
 export type Member = {
@@ -437,6 +445,7 @@ export type Member = {
   name: string
   role: string
   joined_at: string
+  two_factor?: boolean
 }
 
 export type NotificationItem = {

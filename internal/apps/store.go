@@ -13,6 +13,7 @@ import (
 
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/apierr"
+	"taskto.ai/taskto/internal/quota"
 )
 
 // Actor is who makes a change: a user, or the agent working for one. The agent has
@@ -207,6 +208,9 @@ type Service struct {
 	dataDir string
 	locks   fileLocks
 	thumbs  chan struct{}
+	// quota refuses an upload that would take its space or workspace over a storage quota
+	// (WithQuota); nil for none.
+	quota *quota.Service
 }
 
 // outboxHooks are for tests to stop the worker where a crash would.
@@ -241,7 +245,16 @@ type scanner interface{ Scan(dest ...any) error }
 // write runs fn in a transaction. Transactions take the write lock when they begin (see
 // package db), so the checks in fn (versions, bounds) hold for its writes.
 func (s *Service) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The transaction's own context is never cancelled. database/sql rolls a transaction back on a
+	// goroutine of its own when its context ends, and the connection stays busy until that has
+	// finished: the deferred Rollback below then answers sql.ErrTxDone at once, and a caller that
+	// closes the database or begins another write (a worker at shutdown) can't tell. Cancelling
+	// ctx still stops fn's statements, which take ctx themselves, and fn's error is rolled back here,
+	// before write returns. A BEGIN waiting for the write lock gives up after busy_timeout.
+	tx, err := s.db.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return err
 	}
@@ -253,6 +266,11 @@ func (s *Service) write(ctx context.Context, fn func(*sql.Tx) error) (err error)
 		}
 	}()
 	if err := fn(tx); err != nil {
+		return err
+	}
+	// Commit no longer sees the caller's cancellation (the transaction's context is detached): a
+	// caller that gave up is told so, and its writes are rolled back, not committed behind it.
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return tx.Commit()

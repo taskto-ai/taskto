@@ -12,6 +12,12 @@
 // access.Checker.Readable spaces for a workspace-wide search. Indexing reads every space,
 // as the server; searching never reads a space the caller can't.
 //
+// Board cards are searched too (cards.go), by full text only and apart from documents. The
+// boards are their truth, as git is the documents': a search first indexes again the cards
+// of the spaces it looks in that changed (a queue the boards' own writes fill, by triggers),
+// and the same isolation holds. Cards are ranked from their own text only, never from
+// statistics of the whole index, so nothing a caller can't read changes what they see.
+//
 // Embeddings come from the workspace's choice of one of its provider accounts (an
 // OpenAI-compatible /embeddings endpoint, such as Ollama's), and are made in the
 // background: a change never waits for them. Vectors are stored as BLOBs and compared in
@@ -64,6 +70,9 @@ type Index struct {
 	// when set, hears of each batch's files and bytes of text.
 	batchFiles, batchBytes int
 	onBatch                func(files, bytes int)
+	// afterCardSync, when set, is called by a card search after it has indexed the cards it
+	// looks in and before it finds them; tests change the world there.
+	afterCardSync func()
 
 	locks sync.Map // space ID → chan struct{} of one slot: one sync of a space at a time
 	// syncWait is how long a search waits for a sync of a space already running before it
@@ -141,6 +150,14 @@ func (x *Index) syncLoop(ctx context.Context) {
 	// have left any of them behind.
 	if err := x.syncAll(ctx); err != nil && ctx.Err() == nil {
 		x.log.Error("search: catching up at startup", "err", err)
+	}
+	// And every card: the boards' cards are indexed as a search needs them, and this does
+	// it once for all before anyone searches.
+	if err := x.queueCards(ctx); err != nil && ctx.Err() == nil {
+		x.log.Error("search: queueing cards at startup", "err", err)
+	}
+	if err := x.syncCards(ctx, ""); err != nil && ctx.Err() == nil {
+		x.log.Error("search: indexing cards at startup", "err", err)
 	}
 	tick := time.NewTicker(sweepEvery)
 	defer tick.Stop()
@@ -230,7 +247,16 @@ func (x *Index) lock(ctx context.Context, spaceID int64) (unlock func(), err err
 // write runs fn in a transaction. Transactions take the database's write lock when they
 // begin (see package db): keep them short, and never call the network inside one.
 func (x *Index) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
-	tx, err := x.db.BeginTx(ctx, nil)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The transaction's own context is never cancelled. database/sql rolls a transaction back on a
+	// goroutine of its own when its context ends, and the connection stays busy until that has
+	// finished: the deferred Rollback below then answers sql.ErrTxDone at once, and a caller that
+	// closes the database or begins another write (a worker at shutdown) can't tell. Cancelling
+	// ctx still stops fn's statements, which take ctx themselves, and fn's error is rolled back here,
+	// before write returns. A BEGIN waiting for the write lock gives up after busy_timeout.
+	tx, err := x.db.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return err
 	}
@@ -242,6 +268,11 @@ func (x *Index) write(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 		}
 	}()
 	if err := fn(tx); err != nil {
+		return err
+	}
+	// Commit no longer sees the caller's cancellation (the transaction's context is detached): a
+	// caller that gave up is told so, and its writes are rolled back, not committed behind it.
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return tx.Commit()
