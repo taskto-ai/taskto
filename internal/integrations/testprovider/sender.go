@@ -300,20 +300,35 @@ func (s *Sender) post(ctx context.Context, id, typ string, body []byte, header s
 		return Delivery{}, fmt.Errorf("testprovider: delivering %s: %w", typ, err)
 	}
 	defer resp.Body.Close()
-	answer, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	answer, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	d := Delivery{EventID: id, Type: typ, Body: bytes.Clone(body), Signature: header, SignedAt: at,
 		Status: resp.StatusCode, Response: answer, Header: resp.Header}
 	s.mu.Lock()
-	s.deliveries = append(s.deliveries, d)
+	s.deliveries = append(s.deliveries, d.clone()) // what is kept shares nothing with what is returned
 	s.mu.Unlock()
+	if readErr != nil {
+		// The handler got the event and may have applied it: no retry here, and the delivery is
+		// kept and returned beside the error.
+		return d, fmt.Errorf("testprovider: reading the answer to %s: %w", typ, readErr)
+	}
 	return d, nil
+}
+
+// clone is a copy of the delivery that shares nothing with it.
+func (d Delivery) clone() Delivery {
+	d.Body, d.Response, d.Header = bytes.Clone(d.Body), bytes.Clone(d.Response), d.Header.Clone()
+	return d
 }
 
 // Deliveries returns what the sender has sent, oldest first.
 func (s *Sender) Deliveries() []Delivery {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]Delivery(nil), s.deliveries...)
+	out := make([]Delivery, len(s.deliveries))
+	for i, d := range s.deliveries {
+		out[i] = d.clone()
+	}
+	return out
 }
 
 // SendAll delivers the events in the order given, each signed afresh, and returns the

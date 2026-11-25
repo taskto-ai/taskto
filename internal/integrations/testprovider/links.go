@@ -4,7 +4,9 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 )
 
 type paymentLink struct {
@@ -24,6 +26,9 @@ func (l *paymentLink) snapshot() PaymentLink {
 func (s *Stripe) createLink(_ *http.Request, form url.Values, _ string) reply {
 	if rp := unknownParam(form, linkParamRes); rp != nil {
 		return *rp
+	}
+	if v := form.Get("submit_type"); v != "" && !slices.Contains(submitTypes, v) {
+		return invalid("", "Invalid submit_type: must be one of "+strings.Join(submitTypes, ", ")+".", "submit_type")
 	}
 	items, currency, rp := parseLineItems(form, maxLinkLines)
 	if rp != nil {

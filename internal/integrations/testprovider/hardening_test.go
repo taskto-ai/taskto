@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -264,5 +265,117 @@ func TestADelayedDeliveryEndsWhenItsContextIsDone(t *testing.T) {
 	_, err := sender.Send(ctx, someEvent(clock), testprovider.Delayed(time.Hour))
 	if !errors.Is(err, context.Canceled) || time.Since(start) > 5*time.Second {
 		t.Errorf("err %v after %v", err, time.Since(start))
+	}
+}
+
+func TestParametersStripeRefusesAtThePinnedVersion(t *testing.T) {
+	_, _, a := newFake(t)
+	card := sessionForm(5000, "usd", "r")
+	card.Set("payment_method_types[0]", "card") // removed from Checkout Session creation
+	if ans := a.post("/v1/checkout/sessions", card, ""); ans.status != http.StatusBadRequest {
+		t.Errorf("payment_method_types: %d %s", ans.status, ans.raw)
+	} else if _, code := ans.errorCode(); code != "parameter_unknown" {
+		t.Errorf("code %q", code)
+	}
+	if ans := a.get("/v1/events", url.Values{"delivery_success": {"true"}}); ans.status != http.StatusBadRequest {
+		t.Errorf("delivery_success is ignored, not refused: %d", ans.status)
+	}
+	for name, path := range map[string]string{"a session": "/v1/checkout/sessions", "a link": "/v1/payment_links"} {
+		form := sessionForm(5000, "usd", "r")
+		if path == "/v1/payment_links" {
+			form = linkForm(1)
+		}
+		form.Set("submit_type", "pay")
+		if ans := a.post(path, form, ""); ans.status != http.StatusOK {
+			t.Errorf("%s with submit_type=pay: %d %s", name, ans.status, ans.raw)
+		}
+		form.Set("submit_type", "not_a_submit_type")
+		if ans := a.post(path, form, ""); ans.status != http.StatusBadRequest {
+			t.Errorf("%s with a bad submit_type: %d", name, ans.status)
+		}
+	}
+}
+
+func TestLimitsCountCharactersNotBytes(t *testing.T) {
+	_, _, a := newFake(t)
+	form := sessionForm(5000, "usd", strings.Repeat("é", 200))
+	form.Set("metadata["+strings.Repeat("é", 40)+"]", strings.Repeat("é", 250))
+	if ans := a.post("/v1/checkout/sessions", form, ""); ans.status != http.StatusOK {
+		t.Errorf("limits met in characters: %d %s", ans.status, ans.raw)
+	}
+	for name, mutate := range map[string]func(url.Values){
+		"a 41-character key":    func(v url.Values) { v.Set("metadata["+strings.Repeat("é", 41)+"]", "x") },
+		"a 501-character value": func(v url.Values) { v.Set("metadata[long]", strings.Repeat("é", 501)) },
+		"a 201-character ref":   func(v url.Values) { v.Set("client_reference_id", strings.Repeat("é", 201)) },
+	} {
+		bad := sessionForm(5000, "usd", "r")
+		mutate(bad)
+		if ans := a.post("/v1/checkout/sessions", bad, ""); ans.status != http.StatusBadRequest {
+			t.Errorf("%s: %d", name, ans.status)
+		}
+	}
+}
+
+func TestADeclinedChargeIsTheIntentsLatestInBothEvents(t *testing.T) {
+	f, _, a := newFake(t)
+	s := a.newSession(5000, "usd", "r")
+	evs, err := f.Decline(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chargeID, latest any
+	for _, e := range evs {
+		var o map[string]any
+		if err := json.Unmarshal(e.Data.Object, &o); err != nil {
+			t.Fatal(err)
+		}
+		switch e.Type {
+		case testprovider.EventChargeFailed:
+			chargeID = o["id"]
+		case testprovider.EventIntentFailed:
+			latest = o["latest_charge"]
+		}
+	}
+	if chargeID == nil || chargeID != latest {
+		t.Errorf("charge.failed is %v, the intent's latest_charge %v", chargeID, latest)
+	}
+}
+
+func TestATruncatedAnswerIsAnErrorAndTheDeliveryIsKept(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("short")) // fewer bytes than promised: the server drops the connection
+	}))
+	t.Cleanup(srv.Close)
+	clock := testprovider.NewManualClock(time.Time{})
+	s := testprovider.NewSender(srv.URL, testprovider.WithSenderClock(clock))
+	if _, err := s.SendAll(context.Background(), []testprovider.Event{someEvent(clock), someEvent(clock)}); err == nil {
+		t.Fatal("a truncated answer reported success")
+	}
+	if n := len(s.Deliveries()); n != 1 {
+		t.Errorf("the delivery that was made is kept, and sending stops: %d deliveries", n)
+	}
+}
+
+func TestDeliveriesAreCopies(t *testing.T) {
+	clock := testprovider.NewManualClock(time.Time{})
+	h := newHook(clock)
+	s := testprovider.NewHandlerSender(h, "/h", testprovider.WithSenderClock(clock))
+	d, err := s.Send(context.Background(), someEvent(clock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	was := string(d.Body)
+	d.Body[0] = 'X'
+	if kept := s.Deliveries(); string(kept[0].Body) != was {
+		t.Fatalf("a returned delivery changed the kept one")
+	} else {
+		kept[0].Body[0] = 'Y'
+	}
+	if kept := s.Deliveries()[0]; string(kept.Body) != was {
+		t.Fatalf("a listed delivery changed the kept one")
+	}
+	if again, err := s.Replay(context.Background(), s.Deliveries()[0]); err != nil || string(again.Body) != was {
+		t.Errorf("the replay: %v %q", err, again.Body)
 	}
 }

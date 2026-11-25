@@ -22,7 +22,8 @@
 // other API versions and bodies that aren't form-encoded, and fails on demand (Fail).
 //
 // Not modelled: prices, products and customers (a line's amount comes inline, in price_data),
-// subscriptions and setup mode, expanding objects, Connect, thin events, and concurrent requests
+// subscriptions and setup mode, expanding objects, Connect, thin events, the delivery state of
+// events (a list's delivery_success is refused), and concurrent requests
 // with one idempotency key (requests are served one at a time, so the second finds the first's
 // answer). The money rules are Stripe's common cases: amounts in whole minor units with a
 // minimum of 50 and a maximum of 99999999 for every currency.

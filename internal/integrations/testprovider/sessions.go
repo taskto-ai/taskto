@@ -6,7 +6,9 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // session is a Checkout Session and what the fake keeps beside it to make the payment's other
@@ -25,6 +27,9 @@ type session struct {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// submitTypes are the values of submit_type, which a session and a link both take.
+var submitTypes = []string{"auto", "book", "donate", "pay"}
 
 // copyOf points at a copy of what p points at.
 func copyOf[T any](p *T) *T {
@@ -76,6 +81,9 @@ func (s *Stripe) createSession(r *http.Request, form url.Values, _ string) reply
 			return invalid("url_invalid", "Not a valid URL", p)
 		}
 	}
+	if v := form.Get("submit_type"); v != "" && !slices.Contains(submitTypes, v) {
+		return invalid("", "Invalid submit_type: must be one of "+strings.Join(submitTypes, ", ")+".", "submit_type")
+	}
 	items, currency, rp := parseLineItems(form, maxSessionLines)
 	if rp != nil {
 		return *rp
@@ -84,7 +92,7 @@ func (s *Stripe) createSession(r *http.Request, form url.Values, _ string) reply
 	if rp != nil {
 		return *rp
 	}
-	if ref := form.Get("client_reference_id"); len(ref) > 200 {
+	if ref := form.Get("client_reference_id"); utf8.RuneCountInString(ref) > 200 {
 		return invalid("string_too_long", "Invalid string: client_reference_id must be at most 200 characters.", "client_reference_id")
 	}
 	meta, rp := metadataOf(form, "metadata")

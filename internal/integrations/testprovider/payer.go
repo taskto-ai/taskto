@@ -176,8 +176,8 @@ func (s *Stripe) Decline(sessionID string) ([]Event, error) {
 	at := s.clock.Now()
 	evs := s.begin(ss, at)
 	ss.attempts++
+	ss.chargeID = "ch_" + randomID(24) // the intent's latest charge, in the failure events too
 	failed := s.chargeOf(ss, "failed")
-	failed["id"] = "ch_" + randomID(24)
 	failed["failure_code"] = "card_declined"
 	evs = append(evs,
 		s.emit(EventChargeFailed, failed, at),

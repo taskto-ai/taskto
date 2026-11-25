@@ -51,7 +51,7 @@ func (s *Stripe) EventsOfType(typ string) []Event {
 }
 
 var eventListParams = compileAll([]string{
-	`type`, `types\[\d*\]`, `limit`, `starting_after`, `ending_before`, `delivery_success`,
+	`type`, `types\[\d*\]`, `limit`, `starting_after`, `ending_before`,
 	`created`, `created\[(gt|gte|lt|lte)\]`,
 })
 

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Stripe's v1 API takes form-encoded bodies with bracket notation (line_items[0][quantity]=1)
@@ -29,7 +30,7 @@ var (
 	sessionParamRes = compileAll(append([]string{
 		`mode`, `success_url`, `cancel_url`, `client_reference_id`, `customer_email`, `expires_at`,
 		`locale`, `submit_type`, `ui_mode`, `customer_creation`, `billing_address_collection`,
-		`allow_promotion_codes`, `payment_method_types\[\d*\]`,
+		`allow_promotion_codes`,
 		`metadata\[` + metaKey + `\]`,
 		`payment_intent_data\[(description|statement_descriptor|receipt_email)\]`,
 		`payment_intent_data\[metadata\]\[` + metaKey + `\]`,
@@ -117,10 +118,10 @@ func mergeMetadata(into map[string]string, form url.Values, prefix string) *repl
 		v := form[k]
 		val := v[len(v)-1]
 		switch {
-		case len(key) > 40:
+		case utf8.RuneCountInString(key) > 40:
 			rp := invalid("", "Metadata key names can be at most 40 characters.", k)
 			return &rp
-		case len(val) > 500:
+		case utf8.RuneCountInString(val) > 500:
 			rp := invalid("", "Metadata values can be at most 500 characters.", k)
 			return &rp
 		}
