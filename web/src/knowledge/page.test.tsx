@@ -455,3 +455,96 @@ test('cancelling the delete question deletes nothing', async () => {
   expect(screen.getByRole('article', { name: 'ideas.md' })).toBe(article)
   expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(0)
 })
+
+const asked = () => screen.queryByRole('alertdialog', { name: 'Discard your changes' })
+
+test('a search, its Close and Back to the results ask nothing while editing: the draft waits behind them', async () => {
+  kb('write', searchRoutes)
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  fireEvent.click(await within(article).findByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(article).getByLabelText('Text'), { target: { value: 'Unsaved words.' } })
+  searchFor('ideas')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  expect(asked()).toBeNull()
+  fireEvent.click(within(results).getByRole('button', { name: 'Close' }))
+  expect(asked()).toBeNull()
+  searchFor('ideas')
+  fireEvent.click(
+    await within(await screen.findByRole('region', { name: 'Search results' })).findByRole('button', { name: 'Ideas' }),
+  )
+  fireEvent.click(within(article).getByRole('button', { name: 'Back to the results' }))
+  expect(asked()).toBeNull()
+  expect((within(article).getByLabelText('Text') as HTMLTextAreaElement).value).toBe('Unsaved words.')
+})
+
+test('another result, opened while a draft waits behind the results, asks with the draft in front', async () => {
+  kb('write', {
+    ...searchRoutes,
+    [`GET ${S}/search`]: {
+      body: {
+        results: [ideasResult, { ...ideasResult, path: 'notes/plan.md', title: 'Plan' }],
+        mode: 'fulltext',
+      },
+    },
+  })
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  fireEvent.click(await within(article).findByRole('button', { name: 'Edit' }))
+  const text = within(article).getByLabelText('Text') as HTMLTextAreaElement
+  fireEvent.change(text, { target: { value: 'Unsaved words.' } })
+  text.setSelectionRange(3, 7)
+  searchFor('plan')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  fireEvent.click(await within(results).findByRole('button', { name: 'Plan' }))
+
+  // The question, over the document it is about, which is in front again; the results wait.
+  const question = asked() as HTMLElement
+  expect(question).not.toBeNull()
+  expect(article.closest('[hidden]')).toBeNull()
+  expect(results.closest('[hidden]')).not.toBeNull()
+  expect(document.activeElement).toBe(within(question).getByRole('button', { name: 'Keep editing' }))
+
+  // Keep editing: back in the text, where the cursor was, with the document in front.
+  fireEvent.click(within(question).getByRole('button', { name: 'Keep editing' }))
+  expect(asked()).toBeNull()
+  expect(article.closest('[hidden]')).toBeNull()
+  expect(document.activeElement).toBe(text)
+  expect([text.selectionStart, text.selectionEnd]).toEqual([3, 7])
+
+  // Asked again and answered Discard: the other result opens.
+  searchFor('plan')
+  fireEvent.click(
+    await within(await screen.findByRole('region', { name: 'Search results' })).findByRole('button', { name: 'Plan' }),
+  )
+  fireEvent.click(within(asked() as HTMLElement).getByRole('button', { name: 'Discard my changes' }))
+  await screen.findByRole('article', { name: 'notes/plan.md' })
+})
+
+test('closing the upload dialog leaves the upload going; only its Cancel stops it', async () => {
+  let release: (v: unknown) => void = () => {}
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const calls = kb('write', {
+    [`PUT ${S}/docs/logo.png`]: () =>
+      held.then(() => ({ status: 201, body: { commit: 'c1', doc: { path: 'logo.png', version: V2, size: 3 } } })),
+  })
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
+  const dialog = screen.getByRole('dialog', { name: 'Upload a file' })
+  fireEvent.change(within(dialog).getByLabelText('File'), {
+    target: { files: [new File([new Uint8Array([1, 2, 3])], 'logo.png')] },
+  })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Upload' }))
+  await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(calls.find((c) => c.method === 'PUT')?.signal?.aborted).toBe(false)
+  release(undefined)
+  // It finished: the list is read again, and nothing opened over the page.
+  await waitFor(() => expect(calls.filter((c) => c.path === `${S}/docs?limit=1000`)).toHaveLength(2))
+  expect(screen.queryByRole('article')).toBeNull()
+})

@@ -92,6 +92,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `workspace_limit` | 403 | The caller has already created `max` workspaces, the most one account may. |
 | `too_many_workspaces` | 429 | The caller created 5 workspaces within the last hour; `Retry-After` says when to try again. |
 | `operator_only` | 403 | Only the server's operator (an admin of the workspace setup made) may do this. |
+| `update_request_unsupported` | 409 | "Update now" can't be taken: the server has no request directory, or the host's updater, its request directory or its path unit isn't in place (deploy/INSTALL.md step 16). |
+| `update_channel_off` | 409 | The updater's channel is off (`TASKTO_UPDATE_CHANNEL=off`): nothing runs by itself, and "Update now" is refused. |
+| `update_request_pending` | 409 | An update was requested and the host hasn't taken the request yet. |
+| `update_running` | 409 | The updater is changing the install now. |
 | `workspace_name_length` | 400 | A workspace's name must have 1 to `max` characters. |
 | `password_too_short` | 400 | The password has fewer than `min` characters. |
 | `password_too_long` | 400 | The password has more than `max` bytes. |
@@ -4109,6 +4113,45 @@ someone: `blocked` (an update stopped or was interrupted, or the server isn't th
 record; a person looks, puts it right and runs `taskto-update --clear-block` on the host) or
 `manual-upgrade` (a release's notes say so, or it changes the worker's firewall; follow them,
 then `taskto-update --to VERSION`). A file that can't be read is a `500`.
+
+`request` says whether "Update now" can be pressed (below): `available`, and when it can't,
+`reason`, one of `not_configured` (the server has no request directory), `unsupported` (the
+host's updater predates the button, its request directory or path unit isn't in place, it has
+written no status yet or the status is stale), `off` (the channel is off), `pending` (a request
+waits, since `pending_since`) or `running` (a run is changing the install). `status.running`
+is set while a run is in progress (`since`, `to` once chosen, `requested`: it was asked for in the
+app); a note older than three hours is not believed. `status.requests` is the updater's side of
+the button: `supported`, and `last`, the outcome of the last requested run (`at`, `finished`,
+`result`, `code`), which also covers a request the updater turned away before it ran (`result`
+`ignored`, `code` `rate-limited` or `bad-request`). A run the operator asked for has
+`requested: true` in `last_run` and `last_change`.
+
+### `POST /api/workspaces/{workspace}/updates/request`
+
+"Update now". [Operators](#operators) only, with a browser session, and no body. It asks the
+host's updater to do what its nightly run would: install the newest version on its configured
+channel, with its usual checks, its backup and its way back. **The request carries no version,
+repository or argument, and the server runs nothing:** it writes one small file into a directory
+of its own (`TASKTO_UPDATE_REQUEST_DIR`), which a systemd path unit on the host watches and
+`taskto-update --requested` takes, removes and acts on. Every gate of the nightly run holds: an
+update hold, a release that needs steps by hand (`manual-upgrade: true`), a worker firewall that
+changed, an interrupted or stopped update, and a channel that is off. The outcome is in the
+status (`last_run`, `status.requests.last`), with the reason as a code; a person does what the
+gate asks, then `taskto-update --to` on the host.
+
+```json
+{"requested_at": "2026-03-10T03:10:00Z"}
+```
+
+`202` with `requested_at`. `409`: `update_request_unsupported`, `update_channel_off`,
+`update_request_pending` (one request waits at a time; one nobody took for three hours doesn't
+count) or `update_running`; `403` `operator_only` and the usual `404`, `401` and `403` for a
+non-member, no login and an access token. The request is an event on the
+[audit log](audit.md), `server_update_requested` (with the channel), committed before the file
+is made visible to the host: a refused request records none, and no update happens without one. The server also doesn't know whether the host
+accepts it: the host ignores a second request within ten minutes of the last (`rate-limited`) and
+anything in the directory that isn't a small regular file holding the one fixed line the server
+writes (`bad-request`).
 
 ### `GET /healthz/backup`
 

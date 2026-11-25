@@ -3,7 +3,7 @@
 // reader, the editor, history). Moving and deleting ask in a dialog. On a phone, or when it was
 // opened from search results, its back button returns there.
 
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useContext, useLayoutEffect, useRef, useState } from 'react'
 import type { Doc } from '../api'
 import { useFormat, useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -16,9 +16,10 @@ import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { Content } from './Content'
 import { ConfirmDelete } from './Delete'
-import { encodePath, resolveDocLink, useDoc } from './docs'
+import { encodePath, resolveDocLink, useDoc, useLatest, useMounted } from './docs'
 import { Editor } from './Editor'
 import { focusLost } from './focus'
+import { GuardContext } from './guard'
 import { History } from './History'
 import { Move } from './Move'
 
@@ -112,11 +113,24 @@ export function DocView({
     if (modeChanged && focusLost()) (toggleButton.current ?? heading())?.focus()
   }, [mode, doc.data !== undefined])
 
+  const { ask } = useContext(GuardContext)
+  const shown = useLatest(mode)
+  const mounted = useMounted()
   const changed = (focus: 'edit' | 'heading') => {
     next.current = focus
     doc.reload()
     onChanged()
     setMode('view')
+  }
+  // A restore that finishes after the person went on to Edit (or Move) changes the document,
+  // but doesn't take the screen from them: the draft they are writing stays.
+  const restored = () => {
+    doc.reload()
+    onChanged()
+    if (shown.current === 'history') {
+      next.current = 'heading'
+      setMode('view')
+    }
   }
 
   const name = path.split('/').pop() ?? path
@@ -129,7 +143,9 @@ export function DocView({
           <IconButton
             icon="back"
             label={t(back === 'results' ? 'knowledge.doc.backToResults' : 'knowledge.doc.back')}
-            onClick={onBack}
+            // Back to the results keeps the document behind them, draft and all; back to the list
+            // closes it, so a draft that would be lost asks first.
+            onClick={() => (back === 'results' ? onBack() : ask(onBack))}
           />
         </span>
         <div className="kb-doc-where">
@@ -222,7 +238,7 @@ export function DocView({
           canWrite={canWrite}
           admin={admin}
           onLink={onLink}
-          onRestored={() => changed('heading')}
+          onRestored={restored}
           onReload={doc.reload}
         />
       )}
@@ -233,7 +249,9 @@ export function DocView({
           doc={doc.data}
           onMoved={(to) => {
             onChanged()
-            onOpen(to)
+            // The person may have gone elsewhere, or on to edit, while it was moving: the moved
+            // document opens for someone who is still here, and asks before it replaces a draft.
+            if (mounted.current) ask(() => onOpen(to), 'moved')
           }}
           onReload={doc.reload}
           onCancel={() => setAsking(null)}

@@ -768,6 +768,10 @@
     "workspace_limit": "Você já criou {max} espaços de trabalho, o máximo para uma conta. Fale com quem administra este servidor.",
     "too_many_workspaces": "Você acabou de criar vários espaços de trabalho. Tente de novo daqui a pouco.",
     "operator_only": "Só quem administra este servidor pode fazer isso.",
+    "update_request_unsupported": "Este servidor ainda não aceita um pedido de atualização: o atualizador do host precisa ser configurado de novo (passo 16 do roteiro de instalação).",
+    "update_channel_off": "As atualizações automáticas estão desligadas neste servidor (o canal está desligado), então não há nada para atualizar.",
+    "update_request_pending": "Já há uma atualização pedida. O host do servidor a pega em instantes.",
+    "update_running": "Uma atualização está em andamento. Esta página a acompanha.",
     "workspace_name_length": "O nome de um espaço de trabalho precisa ter de 1 a {max} caracteres.",
     "password_too_short": "A senha precisa ter pelo menos {min} caracteres.",
     "password_too_long": "A senha pode ter no máximo {max} bytes.",
@@ -1348,7 +1352,23 @@
       },
       "updates": {
         "title": "Atualizações",
-        "intro": "O host do servidor o atualiza sozinho (docs/install.md, Atualizações automáticas). Isto é o que o atualizador informou por último; o servidor só lê, e não pode executar nem alterar o atualizador.",
+        "intro": "O host do servidor o atualiza sozinho (docs/install.md, Atualizações automáticas). Isto é o que o atualizador informou por último. O servidor não executa nem altera o atualizador: Atualizar agora apenas faz um pedido a ele, sem indicar versão.",
+        "now": {
+          "button": "Atualizar agora",
+          "question": "O host instala a versão mais nova do seu canal, com as mesmas verificações da execução da noite, depois de um backup. O servidor reinicia, então esta página reconecta em alguns minutos. Atualizar agora?",
+          "confirm": "Sim, atualizar agora",
+          "requested": "Atualização pedida. Aguardando o host iniciá-la…",
+          "updating": "Atualizando. O servidor reinicia durante isto; a página reconecta sozinha e mostra o resultado.",
+          "reconnecting": "O servidor não está respondendo (ele reinicia durante uma atualização). Tentando de novo…",
+          "gaveUp": "O host não iniciou a atualização. Confira se a unidade de caminho está ligada (systemctl status taskto-update-request.path) e veja o diário dele (journalctl -u taskto-update-request).",
+          "outcome": "A atualização que você pediu: {result}.",
+          "hint": "Depois de resolver isso, para instalar mesmo assim execute {command} no host.",
+          "unavailable": {
+            "not_configured": "Este servidor não está configurado para receber um pedido de atualização (não tem diretório de pedidos). O guia de instalação (docs/install.md, Atualizar agora) explica como.",
+            "unsupported": "O host ainda não pode receber um pedido de atualização: o atualizador, o diretório de pedidos ou a unidade de caminho dele é de antes deste botão. Reinstale como o passo 16 do roteiro de instalação (deploy/INSTALL.md) diz.",
+            "off": "Atualizar agora fica desligado enquanto as atualizações automáticas estiverem desligadas (o canal está desligado)."
+          }
+        },
         "notConfigured": "Este servidor não está configurado para mostrar o estado do atualizador. O guia de instalação (docs/install.md, Atualizações automáticas) explica como.",
         "noStatus": "O atualizador ainda não informou nada. Ele informa depois de cada execução, que é toda noite no host; até rodar uma vez, não há o que mostrar.",
         "health": {
@@ -1392,6 +1412,7 @@
           "blocked": "Recusou-se a rodar",
           "interrupted": "Interrompido",
           "cleared": "Uma pessoa liberou uma parada",
+          "ignored": "Recusada",
           "unknown": "Desconhecido"
         },
         "channelHold": "{channel} (em espera)",
@@ -1422,7 +1443,9 @@
           "rollback-failed": "A atualização falhou e a versão antiga não pôde ser recolocada.",
           "interrupted": "Uma atualização foi interrompida e não terminou nem foi desfeita.",
           "rolled-back": "A atualização falhou e a versão antiga foi recolocada.",
-          "unrecorded-failure": "Uma atualização foi desfeita, mas a versão não pôde ser registrada como falha."
+          "unrecorded-failure": "Uma atualização foi desfeita, mas a versão não pôde ser registrada como falha.",
+          "rate-limited": "Uma atualização pedida rodou há poucos minutos, então este pedido foi recusado. Tente de novo mais tarde.",
+          "bad-request": "O pedido não era um arquivo comum e pequeno, então o host o removeu e não fez nada."
         }
       }
     },
@@ -1746,6 +1769,7 @@
         "dictation_settings_changed": "Configurações de ditado alteradas",
         "data_export_started": "Exportação de dados iniciada",
         "workspace_export_started": "Exportação do espaço de trabalho iniciada",
+        "server_update_requested": "Atualização pedida",
         "two_factor_enabled": "Login em duas etapas ativado",
         "two_factor_disabled": "Login em duas etapas desativado",
         "two_factor_recovery_codes_replaced": "Códigos de recuperação substituídos",
@@ -1769,6 +1793,7 @@
         "archived": "Arquivado",
         "base_host": "Servidor",
         "cascade": "Consequência de outra alteração",
+        "channel": "Canal",
         "cli": "CLI",
         "created_account": "Conta criada",
         "default_mode": "Modo padrão",
@@ -1961,7 +1986,13 @@
       "loadTheirs": "Carregar a versão da outra pessoa",
       "overwrite": "Substituir pela minha",
       "saveAgain": "Salvar a minha de novo",
-      "save": "Salvar"
+      "save": "Salvar",
+      "discardLabel": "Descartar as alterações",
+      "discardQuestion": "Você tem alterações que não foram salvas. Descartá-las?",
+      "discardDeleted": "Este documento foi excluído. Você tem alterações que não foram salvas. Descartá-las?",
+      "discardMoved": "Este documento foi movido. Você tem alterações que não foram salvas. Descartá-las?",
+      "discard": "Descartar minhas alterações",
+      "keepEditing": "Continuar editando"
     },
     "move": {
       "label": "Mover o documento",

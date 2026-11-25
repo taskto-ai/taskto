@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, type Doc } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
@@ -13,7 +13,7 @@ import { Row, Rows } from '../ui/Rows'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { Content } from './Content'
-import { type Change, type Commit, encodePath, useDoc } from './docs'
+import { type Change, type Commit, encodePath, isStale, useDoc, useLatest } from './docs'
 import { Problem } from './Problem'
 
 const CHANGE_LABEL = {
@@ -46,13 +46,18 @@ export function History({
   onReload: () => void
 }) {
   const historyUrl = `${base}/history/${encodePath(current.path)}`
-  const first = useLoad(() => api<{ commits: Commit[]; next?: string }>(historyUrl), [historyUrl])
+  // Each time the list is made again (old versions removed, a reload) it is a new generation:
+  // the old one's pages, request and views are gone, and a late answer for it is dropped.
+  const [generation, setGeneration] = useState(0)
+  const first = useLoad(() => api<{ commits: Commit[]; next?: string }>(historyUrl), [historyUrl, generation])
   const [removing, setRemoving] = useState(false)
   const [removed, setRemoved] = useState<number | null>(null)
   const [older, setOlder] = useState<{ commits: Commit[]; next?: string }[]>([])
   const [viewing, setViewing] = useState<Commit | null>(null)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<unknown>(null)
+  // What failed, and what its Reload brings back: the older page's reloads the history, a
+  // restore's reloads the document and the history.
+  const [error, setError] = useState<{ error: unknown; reload: () => void; reloadable?: boolean } | null>(null)
   const [confirmDialog, confirm] = useConfirm()
   const unversioned = current.versioned === false
   const pages = first.data ? [first.data, ...older] : []
@@ -68,21 +73,41 @@ export function History({
   const f = useFormat()
 
   // One page at a time: a second click while one loads would add the same page twice.
-  const loadingOlder = useRef(false)
+  const loadingOlder = useRef<AbortController | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const now = useLatest(generation)
+  useEffect(() => () => loadingOlder.current?.abort(), [])
   const more = async () => {
     if (!next || loadingOlder.current) return
-    loadingOlder.current = true
+    const made = generation
+    const request = new AbortController()
+    loadingOlder.current = request
     setLoadingMore(true)
     try {
-      const page = await api<{ commits: Commit[]; next?: string }>(`${historyUrl}?before=${encodeURIComponent(next)}`)
-      setOlder((o) => [...o, page])
+      const page = await api<{ commits: Commit[]; next?: string }>(`${historyUrl}?before=${encodeURIComponent(next)}`, {
+        signal: request.signal,
+      })
+      if (!request.signal.aborted && now.current === made) setOlder((o) => [...o, page])
     } catch (err) {
-      setError(err)
+      // A request this list ended itself (it was made again, or went away) is not an error.
+      if (request.signal.aborted || now.current !== made) return
+      setError({ error: err, reload: reloadHistory, reloadable: isStale(err) })
     } finally {
-      loadingOlder.current = false
-      setLoadingMore(false)
+      if (loadingOlder.current === request) {
+        loadingOlder.current = null
+        setLoadingMore(false)
+      }
     }
+  }
+  // The list again from its newest page: what it showed, and asked for, is dropped.
+  const reloadHistory = () => {
+    loadingOlder.current?.abort()
+    loadingOlder.current = null
+    setLoadingMore(false)
+    setViewing(null)
+    setOlder([])
+    setError(null)
+    setGeneration((g) => g + 1)
   }
   const restore = async (c: Commit) => {
     setBusy(true)
@@ -94,7 +119,13 @@ export function History({
       })
       onRestored()
     } catch (err) {
-      setError(err)
+      setError({
+        error: err,
+        reload: () => {
+          reloadHistory()
+          onReload()
+        },
+      })
       setBusy(false)
     }
   }
@@ -137,10 +168,11 @@ export function History({
       {unversioned && <Notice tone="neutral">{t('knowledge.history.unversioned')}</Notice>}
       {error !== null && (
         <Problem
-          error={error}
+          error={error.error}
+          reloadable={error.reloadable}
           onReload={() => {
             setError(null)
-            onReload()
+            error.reload()
           }}
         />
       )}
@@ -226,9 +258,7 @@ export function History({
             setRemoving(false)
             setRemoved(n)
             // The commits have new IDs: the history is loaded again.
-            setViewing(null)
-            setOlder([])
-            first.reload()
+            reloadHistory()
           }}
           onReload={onReload}
           onCancel={() => setRemoving(false)}
