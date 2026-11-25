@@ -1064,6 +1064,18 @@ version that changes the worker's firewall, and an update that was interrupted o
 gets the Docker socket. With `TASKTO_UPDATE_CHANNEL=off` this step removes the timer and
 keeps the script, for `taskto-update --to`, when `TASKTO_VERSION` has one.
 
+**This step is required again on a VM set up before the release that added the update status
+to Settings → About.** The updater is a script of the VM, and its timer runs the copy that is
+there; updating the server (by hand, or by an older updater) never updates it, and an updater
+that predates the status never writes one, so the page says "the updater on this host is too
+old to report". For that release: set `TASKTO_VERSION` in `~/.config/taskto-install.env` to it
+(on the `main` channel, to the commit the VM runs, `TASKTO_VERSION` in `/srv/taskto/.env`, or a
+newer one), and run this step's Run and Check from a checkout of it. The Run ends by writing
+the first status at once (`taskto-update --publish-status` on the VM, which looks for no
+update and changes nothing), so the page doesn't wait for the next night; to do only that by
+hand, run `sudo taskto-update --publish-status`. Afterwards each run writes it, and Settings →
+About (for the server's operators) shows it.
+
 **Run**: every file is taken out of git and checked before anything is sent, so a version
 without the script never puts an empty file on the VM. Such a version is only for
 `TASKTO_UPDATE_CHANNEL=off`, and the step is then skipped.
@@ -1090,6 +1102,8 @@ else
   vm <<'EOF'
 . /etc/taskto/install.env
 install -d -m 755 /var/lib/taskto-update /var/lib/taskto-update/public
+# The updater writes the status for the server there only while it and every directory above it are root's and nobody else's to write.
+/usr/local/sbin/taskto-update --publish-status || echo "WARN: the first status for Settings → About wasn't written (the lines above say why)"
 if [ "${TASKTO_UPDATE_CHANNEL:-release}" = off ]; then
   systemctl disable --now taskto-update.timer >/dev/null 2>&1 || true
 else
@@ -1150,8 +1164,9 @@ sends the address, secret included, and the message in the clear. It is optional
 
 To hold updates for a while, make `/etc/taskto/update.hold` on the VM (`touch`), and remove it
 to go on. The last run's result is in `/var/lib/taskto-update/status.json`, each run's line
-in `journalctl -u taskto-update`, and admins see it in **Settings → About** (a copy in
-`/var/lib/taskto-update/public/`, which the server mounts read-only). To run one by hand: `sudo taskto-update`, or `sudo
+in `journalctl -u taskto-update`, and the server's operators see it in **Settings → About** (a
+structured copy, codes and versions only, in `/var/lib/taskto-update/public/`, which the server
+mounts read-only). To run one by hand: `sudo taskto-update`, or `sudo
 taskto-update --to vX.Y.Z`. What the updater leaves to a person, and what to do then, is in
 [docs/install.md](../docs/install.md#automatic-updates) and, for a stopped update, the
 [Rollback](#rollback) section below.

@@ -34,7 +34,7 @@ func TestUpdateWritesTheStatusForTheServer(t *testing.T) {
 	if s.Version != 1 || s.Channel != "release" || s.Hold || s.RecordedVersion != updNew || s.NeedsPerson != nil {
 		t.Fatalf("status = %+v", s)
 	}
-	if s.LastRun == nil || s.LastRun.Result != "updated" || s.LastRun.From != updOld || s.LastRun.To != updNew || s.LastRun.Backup == "" ||
+	if s.LastRun == nil || s.LastRun.Result != "updated" || s.LastRun.From != updOld || s.LastRun.To != updNew || !s.LastRun.BackedUp ||
 		s.LastChange == nil || s.LastChange.Result != "updated" || s.LastRun.Finished.Before(s.LastRun.At) {
 		t.Fatalf("runs = %+v, %+v", s.LastRun, s.LastChange)
 	}
@@ -113,8 +113,7 @@ func TestUpdateStatusForTheServerSaysAManualUpgradeIsWaiting(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	s := e.public()
-	if s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindManualUpgrade || !strings.Contains(s.NeedsPerson.Reason, updNew+" needs manual steps") ||
-		!strings.Contains(s.NeedsPerson.Reason, "taskto-update --to") || s.LastRun.Result != "skipped" {
+	if s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindManualUpgrade || s.NeedsPerson.Code != "manual-upgrade" || s.LastRun.Code != "manual-upgrade" || s.LastRun.Result != "skipped" {
 		t.Fatalf("status = %+v, %+v", s.NeedsPerson, s.LastRun)
 	}
 	// The person did the steps and ran --to: nothing waits.
@@ -134,7 +133,7 @@ func TestUpdateStatusForTheServerSaysAFirewallChangeIsWaiting(t *testing.T) {
 	if code, _ := e.run(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if s := e.public(); s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindManualUpgrade || !strings.Contains(s.NeedsPerson.Reason, "worker firewall changed") {
+	if s := e.public(); s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindManualUpgrade || s.NeedsPerson.Code != "manual-upgrade" || s.LastRun.Code != "manual-upgrade" {
 		t.Fatalf("status = %+v", s.NeedsPerson)
 	}
 }
@@ -149,7 +148,7 @@ func TestUpdateStatusForTheServerSaysAStopIsWaitingUntilItIsCleared(t *testing.T
 		t.Fatalf("exit %d, want 2", code)
 	}
 	s := e.public()
-	if s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindBlocked || !strings.Contains(s.NeedsPerson.Reason, "--clear-block") ||
+	if s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindBlocked || s.NeedsPerson.Code != "stopped" || s.LastRun.Code != "stopped" ||
 		s.LastRun.Result != "stopped" || s.LastChange == nil || s.LastChange.Result != "stopped" {
 		t.Fatalf("after a stop: %+v, %+v", s.NeedsPerson, s.LastRun)
 	}
@@ -189,7 +188,7 @@ func TestUpdateStatusForTheServerSaysAVersionMismatchIsWaiting(t *testing.T) {
 		t.Fatalf("exit %d, want 1", code)
 	}
 	s := e.public()
-	if s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindBlocked || !strings.Contains(s.NeedsPerson.Reason, "v0.9.9") ||
+	if s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindBlocked || s.NeedsPerson.Code != "version-mismatch" || s.LastRun.Code != "version-mismatch" ||
 		s.RecordedVersion != updOld {
 		t.Fatalf("status = %+v, recorded %q", s.NeedsPerson, s.RecordedVersion)
 	}
@@ -251,7 +250,7 @@ func TestUpdateStatusForTheServerKeepsAPendingManualUpgrade(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	if s := e.public(); s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindManualUpgrade ||
-		!strings.Contains(s.NeedsPerson.Reason, updNew+" needs manual steps") || !s.Hold || s.LastRun.Result != "skipped" {
+		s.NeedsPerson.Code != "manual-upgrade" || !s.Hold || s.LastRun.Result != "skipped" || s.LastRun.Code != "hold" {
 		t.Fatalf("on hold: %+v, %+v", s.NeedsPerson, s.LastRun)
 	}
 	// The same with the channel off.
@@ -311,8 +310,7 @@ func TestUpdateStatusForTheServerGivesTheCurrentReasonForAStop(t *testing.T) {
 		t.Fatalf("exit %d, want 1", code)
 	}
 	s := e.public()
-	if s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindBlocked || strings.Contains(s.NeedsPerson.Reason, "an older run") ||
-		!strings.Contains(s.NeedsPerson.Reason, "--clear-block") {
+	if s.NeedsPerson == nil || s.NeedsPerson.Kind != updatestatus.KindBlocked || s.NeedsPerson.Code != "stopped" {
 		t.Fatalf("status = %+v", s.NeedsPerson)
 	}
 }

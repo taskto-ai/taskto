@@ -1304,7 +1304,14 @@ never over an interrupted or stopped update.
      data, no host path or Docker socket, and on its own network, the firewall's bridge; and
      the two ways to get mounts without naming them: no service with `volumes_from`, and no
      config or secret mounted into the worker; the user rule is the running check's, exactly
-     `65532:65532`);
+     `65532:65532`). The rule about the updater's own files (the server may see only its
+     public directory, read-only, and can't write that) is about where a path leads, not how it
+     is spelled: every host path the server would mount, whether a bind mount, a named volume's
+     `device` or a file a config or a secret is made from, is resolved first (symbolic links
+     followed, `.` and `..` worked out), and the options of a volume that exists already, or is
+     external, are read from Docker (`docker volume inspect`), since a volume keeps the options
+     it was made with whatever the Compose file says. The running check does the same, so what
+     is refused before the new server starts is what would be refused after;
    - the public address answers as the current version before anything changes (Caddy's HTTPS
      address from this machine, or in `traefik` mode the LAN port and `https://<domain>/healthz`
      as a visitor reaches it): a broken proxy isn't the update's to fix;
@@ -1334,26 +1341,59 @@ never over an interrupted or stopped update.
    three by the time in their names (regular files with the updater's name only, never this
    run's), and nothing else in that directory, nor the nightly backups.
 
-**What admins see.** Settings → About shows an admin the version the server runs, the version
-on record in `.env`, the updater's channel and hold, its last run and last change (the result,
-when, the versions, the reason, the backup it made), and, while the install waits for a
-person, what to do: a stopped or interrupted update (`taskto-update --clear-block`, once the
-install is put right) or a release that needs steps by hand (`taskto-update --to VERSION`).
-The same is at [`GET /api/workspaces/{workspace}/updates`](api.md). The server gets it without
-gaining any power over the host: on every run (and each night a stop is still waiting) the
-updater writes a copy of its status, made for this, to `/var/lib/taskto-update/public/status.json`
+**What operators see.** Settings → About shows the operators (the admins of the workspace the
+server's setup made, who run it; an admin of a workspace someone made later doesn't see it)
+the version the server runs, the version on record in `.env`, the updater's channel and hold,
+its last run and last change (the result, when, the versions, a reason, whether it made a
+backup), and, while the install waits for a person, what to do: a stopped or interrupted
+update (`taskto-update --clear-block`, once the install is put right) or a release that needs
+steps by hand (`taskto-update --to VERSION`). The same is at
+[`GET /api/workspaces/{workspace}/updates`](api.md). The server gets it without gaining any
+power over the host: on every run (and each night a stop is still waiting) the updater writes
+a copy of its status, made for this, to `/var/lib/taskto-update/public/status.json`
 (`needs_person` in it is what the page's alert is made of), and `compose.yaml` mounts that one
-directory into the server, **read-only**, at `/update-status` (`TASKTO_UPDATE_STATUS_DIR`). The copy has
-no image digests, and nothing from the updater's own state (the transaction, the old files, the
-backups, the address a notification goes to); the server can't write there, run the updater,
+directory into the server, **read-only**, at `/update-status` (`TASKTO_UPDATE_STATUS_DIR`).
+
+The copy is **structured, never prose**: results and reasons are words of a closed list
+(`reason_code` in the updater), versions are checked to be versions, and a backup is only
+"made". It has no backup path, registry host, volume name or path of the updater's record, no
+image digests, and nothing from the updater's own state (the transaction, the old files, the
+address a notification goes to); those stay in the host's journal (`journalctl -u
+taskto-update`) and in `/var/lib/taskto-update/status.json`, which the server can't see. The
+server checks every word again when it reads. The server can't write there, run the updater,
 or reach Docker, and `deploy/safety-check.sh` fails an install whose server can see anything
-else of `/var/lib/taskto-update`, or can write there. Docker makes the directory on its
-own if it isn't there yet (root's, readable by the server), and `TASKTO_UPDATE_STATUS_SOURCE`
-in `.env` puts it somewhere else, if the updater's `TASKTO_UPDATE_PUBLIC` does too. On a machine that
-isn't a host install (a try-out with `docker compose up`), point `TASKTO_UPDATE_STATUS_SOURCE` at any
-directory you can mount; with no status in it the page shows only the server's version, as it does
-when the server wasn't told a directory at all. A status older than three days is called stale: the updater writes it on every run,
-so its timer isn't running.
+else of `/var/lib/taskto-update`, or can write there, by whatever path or link.
+
+The directory is the updater's alone. If you move it (`TASKTO_UPDATE_PUBLIC`, with
+`TASKTO_UPDATE_STATUS_SOURCE` in `.env` set to the same path), it may be anywhere, but the
+updater writes there only if the directory is **owned by root, with every directory above it
+owned by root and not writable by its group or others** (a symbolic link on the way must be
+root's too, and where it leads is checked the same way); otherwise it logs why and publishes
+nothing, and the update itself goes on. The file is made by a new temporary file the updater
+creates in that directory (`mktemp`, never a name it could be guessed) and moved into place, so
+nothing the server could plant is ever written through, and the safety check refuses a server
+that mounts that directory (or one above or inside it) writable, however it is reached. Docker
+makes the directory on its own if it isn't there yet (root's, readable by the server). On a
+machine that isn't a host install (a try-out with `docker compose up`), point
+`TASKTO_UPDATE_STATUS_SOURCE` at any directory you can mount; with no status in it the page
+shows only the server's version, as it does when the server wasn't told a directory at all. A
+status older than three days is called stale: the updater writes it on every run, so its timer
+isn't running.
+
+**The updater of an existing host must be reinstalled once.** The updater is a script of the
+host (`/usr/local/sbin/taskto-update`), and the timer runs the copy that is there: updating the
+server, by hand or by an older updater, doesn't update it. A host whose updater predates the
+status never writes one, so the page has nothing to show, and says "the updater on this host is
+too old to report" (a server that is a release, with the status directory set up, and no status
+in it). So the first release that has this status needs one more step on every host that was
+set up before it: **runbook step 16, run again** (its Run and its Check, from a checkout of that
+release), which puts the release's `taskto-update`, its service and timer on the host, makes
+the public directory and ends with `taskto-update --publish-status` on the host, which writes
+the first copy at once, without checking for an update, instead of at the next night's run. On
+the `main` channel, whose servers run a commit and not a tag, do the same from a checkout of
+the commit the host runs (`TASKTO_VERSION` in `/srv/taskto/.env`) or a newer one, with
+`TASKTO_VERSION` in `~/.config/taskto-install.env` set to it for the step: a `main` host that
+isn't reinstalled keeps its old updater, however far it updates the server.
 
 ## When an update fails
 

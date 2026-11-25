@@ -18,7 +18,16 @@
 #   TASKTO_ROOT          the Compose project (default /srv/taskto)
 #   DOCKER               the docker command (default docker)
 #   TASKTO_UPDATE_STATE  the updater's state directory (default /var/lib/taskto-update), which the
-#                        server may not see, except its `public` directory, read-only
+#                        server may not see, except its public directory, read-only
+#   TASKTO_UPDATE_PUBLIC the updater's public directory, where it writes the status the server
+#                        reads (default $TASKTO_UPDATE_STATE/public): the server may mount it
+#                        read-only, never writable, whatever path or alias it is mounted by
+#
+# Host paths are compared as the kernel reaches them: each path a container mounts (a bind
+# mount, a named volume's `device`, a file-backed config or secret) and the two above are
+# resolved first (`realpath -m`: symbolic links followed, `.` and `..` worked out, a part that
+# doesn't exist yet taken as it is), so a link to the state is the state, and a path that only
+# spells `..` but leads elsewhere is that other place.
 #
 # Compose is always given its inputs: the project name, DIR's .env, and DIR's compose.yaml and,
 # when it exists, compose.override.yaml, and no other file (the updater refuses an install that
@@ -26,8 +35,6 @@
 set -euo pipefail
 
 DOCKER=${DOCKER:-docker}
-state=${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}
-state=${state%/}
 mode=live dir=""
 case ${1:-} in
 "") ;;
@@ -56,16 +63,47 @@ fail() {
 d() { "$DOCKER" "$@" </dev/null; }
 # docker compose, on the project's explicit inputs.
 c() { d compose "${cargs[@]}" "$@"; }
-# jq: holds(PATH; READ_ONLY): a mount of host path PATH lets the server see what is in the updater's
-# state directory $state, other than its `public` directory read-only: the state itself, a directory
-# above it, or anything under it. Both paths are compared by their parts, with `.` and empty parts
-# (`//`) dropped, as the kernel reads them; a path with `..` in it is taken to hold the state,
-# since where it leads isn't worked out here (a symbolic link in a path isn't followed either:
-# the rule is on the paths Compose and Docker report).
-HOLDS='def parts: split("/") | map(select(. != "" and . != "."));
-	def holds($p; $ro): ($p | parts) as $p | ($state | parts) as $s
-		| (($p | index("..")) != null) or ($p == $s[0:($p | length)])
-		or (($p | length) > ($s | length) and $p[0:($s | length)] == $s and ($p != $s + ["public"] or $ro != true)); '
+# The protected paths, resolved: the updater's state, and its public directory.
+state=$(realpath -m -- "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}") || fail "can't resolve the updater's state directory"
+public=$(realpath -m -- "${TASKTO_UPDATE_PUBLIC:-$state/public}") || fail "can't resolve the updater's public directory"
+# jq: holds(PATH; READ_ONLY), on resolved paths (no `.`, `..` or links left in them): a mount of
+# host path PATH lets the server see what is in the updater's state directory $state, other than
+# its public directory read-only: the state itself, a directory above it, or anything under it; or
+# lets it write the public directory $public, which may be outside the state: that directory, one
+# above it, or one inside it, writable. Paths are compared by their parts.
+HOLDS='def parts: split("/") | map(select(. != ""));
+	def within($a; $b): ($a | length) <= ($b | length) and $b[0:($a | length)] == $a;
+	def holds($p; $ro): ($p | parts) as $p | ($state | parts) as $s | ($public | parts) as $u
+		| within($p; $s)
+		or (within($s; $p) and ($p != $u or $ro != true))
+		or ($ro != true and (within($p; $u) or within($u; $p))); '
+
+# resolved: the host paths on standard input, a JSON array of {p, ro}, with each p resolved (a
+# path that is empty is a mount that has none, and is dropped).
+resolved() {
+	local out='[]' p ro r
+	while IFS= read -r -d '' p && IFS= read -r -d '' ro; do
+		r=$(realpath -m -- "$p") || return 1
+		out=$(jq -c --arg r "$r" --argjson ro "$ro" '. + [{p: $r, ro: $ro}]' <<<"$out") || return 1
+	done < <(jq -j '.[] | select(.p != "") | .p, "\u0000", (.ro | tostring), "\u0000"')
+	printf '%s' "$out"
+}
+# only_public_readonly: the host paths on standard input, a JSON array of {p, ro}, are the
+# server's: it may see the updater's public directory, read-only, and nothing else of its state.
+only_public_readonly() {
+	local r
+	r=$(resolved) || fail "can't resolve a host path of the server's mounts"
+	jq -e --arg state "$state" --arg public "$public" "$HOLDS"'[.[] | select(holds(.p; .ro))] | length == 0' <<<"$r" >/dev/null ||
+		fail "the server has a host path that holds the updater's state, or can write where it publishes its status (only $public, read-only, may be mounted)"
+}
+# volume_device NAME: the host path a named volume binds, as Docker has it (its effective options,
+# whatever the Compose file says: a volume that exists keeps the options it was made with, an
+# external one has only those), or nothing.
+volume_device() {
+	local o
+	o=$(d volume inspect --format '{{json .Options}}' "$1") || return 1
+	jq -r '.device // ""' <<<"$o"
+}
 
 
 if [ "$mode" = static ]; then
@@ -124,15 +162,28 @@ if [ "$mode" = static ]; then
 		t "$s" '[.services[$s].volumes[]? | select(((.source // "") + (.target // "")) | contains("docker.sock"))] | length == 0' ||
 			fail "a container has the Docker socket"
 	done
-	# The server reads one thing of the host's updater, its status for admins: the directory
-	# $state/public, read-only. Nothing that holds the updater's own state (the transaction, the
-	# old files and .env, the backups), and no directory above it, which would hold it. A host
-	# path comes as a bind mount, or as a named volume whose driver options bind one (`device`).
-	jq -e --arg state "$state" "$HOLDS"'. as $c | [.services.taskto.volumes[]?
-			| (if .type == "bind" then {p: (.source // ""), ro: (.read_only == true)}
-			   elif .type == "volume" then {p: ($c.volumes[.source // ""].driver_opts.device // ""), ro: (.read_only == true)} else empty end)
-			| select(.p != "") | select(holds(.p; .ro))] | length == 0' <<<"$cfg" >/dev/null ||
-		fail "the server has a host path that holds the updater's state (only $state/public, read-only, may be mounted)"
+	# The server reads one thing of the host's updater, its status for admins: the public
+	# directory, read-only. Nothing that holds the updater's own state (the transaction, the old
+	# files and .env, the backups), no directory above it, and nothing that can write the public
+	# directory. A host path comes as a bind mount; as a named volume whose driver options bind
+	# one (`device`), in the Compose file or, for a volume that exists already or is external,
+	# in Docker (a volume keeps the options it was made with); or as a file a config or a secret
+	# of the server is made from. All of them are resolved (links followed) before they are compared.
+	hostpaths=$(jq -c '. as $c | [.services.taskto.volumes[]?
+			| select(.type == "bind") | {p: (.source // ""), ro: (.read_only == true)}]
+		+ [.services.taskto.volumes[]? | select(.type == "volume")
+			| {p: ($c.volumes[.source // ""].driver_opts.device // ""), ro: (.read_only == true)}]
+		+ [(.services.taskto.configs // [])[]? | {p: ($c.configs[.source // ""].file // ""), ro: true}]
+		+ [(.services.taskto.secrets // [])[]? | {p: ($c.secrets[.source // ""].file // ""), ro: true}]' <<<"$cfg") || fail "can't read the server's mounts"
+	existing=$(d volume ls --format '{{.Name}}') || fail "can't list the Docker volumes"
+	while IFS= read -r m; do
+		[ -n "$m" ] || continue
+		vn=$(jq -r '.n' <<<"$m")
+		grep -qxF -- "$vn" <<<"$existing" || continue
+		dev=$(volume_device "$vn") || fail "can't inspect the server's volume $vn"
+		hostpaths=$(jq -c --arg p "$dev" --argjson m "$m" '. + [{p: $p, ro: $m.ro}]' <<<"$hostpaths") || fail "can't read the options of the server's volume $vn"
+	done < <(jq -c '. as $c | .services.taskto.volumes[]? | select(.type == "volume") | {n: ($c.volumes[.source // ""].name // .source), ro: (.read_only == true)}' <<<"$cfg")
+	only_public_readonly <<<"$hostpaths"
 
 	# The worker is on one network, its own, which the server isn't on, and the firewall's bridge.
 	t cli-worker '(.services[$s].networks // {default: null}) | length == 1' || fail "the worker isn't on one network only"
@@ -191,19 +242,19 @@ for i in "$si" "$wi"; do
 	q '[.[0].Mounts[]? | select(((.Source // "") + (.Destination // "")) | contains("docker.sock"))] | length == 0' <<<"$i" ||
 		fail "a container has the Docker socket"
 done
-# The same for the updater's state as in the static check: the server may mount $state/public,
-# read-only. A named volume that binds a host path shows in the volume's options, not the mount's.
+# The same for the updater's state as in the static check: the server may mount the public
+# directory, read-only. A named volume that binds a host path shows in the volume's options, not
+# the mount's.
 hostpaths=$(jq -c '[.[0].Mounts[]? | select(.Type == "bind") | {p: (.Source // ""), ro: (.RW == false)}]' <<<"$si")
 # Each mount keeps its own read-only flag: a volume can be mounted twice.
 while IFS= read -r m; do
 	[ -n "$m" ] || continue
 	vn=$(jq -r '.n' <<<"$m")
-	vo=$(d volume inspect --format '{{json .Options}}' "$vn") || fail "can't inspect the server's volume $vn"
-	hostpaths=$(jq -c --argjson m "$m" --argjson o "$vo" '. + [{p: ($o.device // ""), ro: ($m.rw == false)}]' <<<"$hostpaths") ||
+	dev=$(volume_device "$vn") || fail "can't inspect the server's volume $vn"
+	hostpaths=$(jq -c --arg p "$dev" --argjson m "$m" '. + [{p: $p, ro: ($m.rw == false)}]' <<<"$hostpaths") ||
 		fail "can't read the options of the server's volume $vn"
 done < <(jq -c '.[0].Mounts[]? | select(.Type == "volume") | {n: .Name, rw: .RW}' <<<"$si")
-jq -e --arg state "$state" "$HOLDS"'[.[] | select(.p != "") | select(holds(.p; .ro))] | length == 0' <<<"$hostpaths" >/dev/null ||
-	fail "the server has a host path that holds the updater's state (only $state/public, read-only, may be mounted)"
+only_public_readonly <<<"$hostpaths"
 
 # The worker is on one network, its own, which the server isn't on, and the firewall's bridge.
 q '.[0].NetworkSettings.Networks | length == 1' <<<"$wi" || fail "the worker isn't on one network only"

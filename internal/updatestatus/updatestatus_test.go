@@ -1,6 +1,7 @@
 package updatestatus
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,15 +26,16 @@ func TestRead(t *testing.T) {
 	}
 
 	write(t, dir, `{"version":1,"checked":"2026-11-20T03:10:00Z","channel":"release","hold":true,"recorded_version":"v0.3.0",
-		"last_run":{"at":"2026-11-20T03:00:00Z","finished":"2026-11-20T03:10:00Z","result":"skipped","from":"v0.3.0","reason":"v0.4.0 needs manual steps"},
-		"last_change":{"at":"2026-11-10T03:00:00Z","result":"updated","from":"v0.2.0","to":"v0.3.0","backup":"/var/backups/taskto/x.tar.gz"},
-		"needs_person":{"kind":"manual-upgrade","reason":"v0.4.0 needs manual steps"}}`)
+		"last_run":{"at":"2026-11-20T03:00:00Z","finished":"2026-11-20T03:10:00Z","result":"skipped","from":"v0.3.0","code":"manual-upgrade"},
+		"last_change":{"at":"2026-11-10T03:00:00Z","result":"updated","from":"v0.2.0","to":"v0.3.0","backed_up":true},
+		"needs_person":{"kind":"manual-upgrade","code":"manual-upgrade"}}`)
 	s, ok, err := Read(dir)
 	if err != nil || !ok {
 		t.Fatalf("read: %v %v", ok, err)
 	}
 	if s.Channel != "release" || !s.Hold || s.RecordedVersion != "v0.3.0" || s.LastRun.Result != "skipped" ||
-		s.LastChange.To != "v0.3.0" || s.LastChange.Backup == "" || s.NeedsPerson.Kind != KindManualUpgrade ||
+		s.LastChange.To != "v0.3.0" || !s.LastChange.BackedUp || s.LastRun.Code != "manual-upgrade" || s.NeedsPerson.Kind != KindManualUpgrade ||
+		s.NeedsPerson.Code != "manual-upgrade" ||
 		s.LastRun.Finished.Sub(s.LastRun.At) != 10*time.Minute {
 		t.Fatalf("status = %+v", s)
 	}
@@ -69,18 +71,57 @@ func TestReadRefusesWhatIsNotAStatus(t *testing.T) {
 	}
 }
 
-// What people read is bounded, whatever the file says, and cut on a character.
-func TestReadClipsTexts(t *testing.T) {
+// The status is structured: whatever the file holds, only words of the closed lists and real
+// versions come out, so a path, a host or a volume's name in it never reaches an admin's page.
+func TestReadKeepsOnlyStructuredStatus(t *testing.T) {
 	dir := t.TempDir()
-	long := strings.Repeat("é", maxText)
-	write(t, dir, `{"version":1,"channel":"release","last_run":{"result":"failed","reason":"`+long+`"},"needs_person":{"kind":"blocked","reason":"`+long+`"}}`)
-	s, _, err := Read(dir)
+	write(t, dir, `{"version":1,"checked":"2026-11-20T03:10:00Z","channel":"registry.internal.example/x","recorded_version":"/var/lib/taskto-update",
+		"last_run":{"result":"cleaning /var/backups/taskto","from":"v0.3.0 and more","to":"v1.2.3","code":"can't pull registry.internal.example/taskto:v1","reason":"a path /var/backups/b.tar.gz","backup":"/var/backups/b.tar.gz"},
+		"last_change":{"result":"stopped","from":"0123456789abcdef0123456789abcdef01234567","to":"v01.2.3","code":"stopped"},
+		"needs_person":{"kind":"blocked","code":"volume taskto_data"}}`)
+	s, ok, err := Read(dir)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if s.Channel != "" || s.RecordedVersion != "" {
+		t.Errorf("channel %q, recorded %q", s.Channel, s.RecordedVersion)
+	}
+	r := s.LastRun
+	if r.Result != Unknown || r.From != "" || r.To != "v1.2.3" || r.Code != CodeOther {
+		t.Errorf("last run = %+v", r)
+	}
+	c := s.LastChange
+	if c.Result != "stopped" || c.From != "0123456789abcdef0123456789abcdef01234567" || c.To != "" || c.Code != "stopped" {
+		t.Errorf("last change = %+v", c)
+	}
+	if s.NeedsPerson.Kind != KindBlocked || s.NeedsPerson.Code != CodeOther {
+		t.Errorf("needs = %+v", s.NeedsPerson)
+	}
+	// What is sent on has no field to carry a text, whatever the file had.
+	out, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range []string{s.LastRun.Reason, s.NeedsPerson.Reason} {
-		if len(v) > maxText+len("…") || !strings.HasSuffix(v, "…") {
-			t.Fatalf("not clipped: %d bytes", len(v))
+	for _, never := range []string{"/var/", "registry.internal", "taskto_data", "reason", "backup\""} {
+		if strings.Contains(string(out), never) {
+			t.Errorf("the status has %q: %s", never, out)
+		}
+	}
+	// A need of a kind this version doesn't know is none.
+	write(t, dir, `{"version":1,"needs_person":{"kind":"sudo rm -rf","code":"other"}}`)
+	if s, _, err := Read(dir); err != nil || s.NeedsPerson != nil {
+		t.Errorf("unknown kind: %+v %v", s.NeedsPerson, err)
+	}
+}
+
+func TestIsVersion(t *testing.T) {
+	for v, want := range map[string]bool{
+		"v0.3.0": true, "v10.20.30": true, "0123456789abcdef0123456789abcdef01234567": true,
+		"dev": false, "": false, "v01.2.3": false, "v1.2": false, "v1.2.3-rc1": false, "0123456789ABCDEF0123456789abcdef01234567": false,
+		"v1.2.3\n": false, strings.Repeat("a", 41): false,
+	} {
+		if IsVersion(v) != want {
+			t.Errorf("IsVersion(%q) = %v", v, !want)
 		}
 	}
 }

@@ -1318,7 +1318,7 @@
         "title": "Atualizações",
         "intro": "O host do servidor o atualiza sozinho (docs/install.md, Atualizações automáticas). Isto é o que o atualizador informou por último; o servidor só lê, e não pode executar nem alterar o atualizador.",
         "notConfigured": "Este servidor não está configurado para mostrar o estado do atualizador. O guia de instalação (docs/install.md, Atualizações automáticas) explica como.",
-        "noStatus": "O atualizador ainda não informou nada. Ele roda toda noite no host; até rodar uma vez, não há o que mostrar.",
+        "noStatus": "O atualizador ainda não informou nada. Ele informa depois de cada execução, que é toda noite no host; até rodar uma vez, não há o que mostrar.",
         "health": {
           "ok": "As atualizações estão funcionando.",
           "hold": "As atualizações estão em espera: nenhuma execução automática instala algo até o arquivo de espera ser removido no host.",
@@ -1331,7 +1331,7 @@
         "needs": {
           "blocked": "Veja o que está abaixo, acerte a instalação no host e rode {command} lá. A seção Rollback do guia de instalação tem os passos.",
           "manualUpgrade": "Siga as notas dessa versão no host e rode {command} lá, com a versão.",
-          "reason": "O que o atualizador disse: {reason}"
+          "where": "Os detalhes estão no journal do host (journalctl -u taskto-update); esta página só tem o resultado."
         },
         "running": "Versão em execução",
         "recorded": "Versão registrada",
@@ -1348,7 +1348,6 @@
         "noRun": "Nenhuma ainda",
         "runLine": "{result}, {time}",
         "versions": "{from} → {to}",
-        "backup": "Backup antes dela: {path}",
         "result": {
           "updated": "Atualizado",
           "up-to-date": "Já estava em dia",
@@ -1360,10 +1359,39 @@
           "stop-failed": "Falhou, e não se confirmou que o servidor parou",
           "blocked": "Recusou-se a rodar",
           "interrupted": "Interrompido",
-          "cleared": "Uma pessoa liberou uma parada"
+          "cleared": "Uma pessoa liberou uma parada",
+          "unknown": "Desconhecido"
         },
         "channelHold": "{channel} (em espera)",
-        "channelName": "{channel}"
+        "channelName": "{channel}",
+        "tooOld": "O atualizador deste host é antigo demais para informar: ele é anterior a este estado e nunca escreveu um. Reinstale-o como diz o passo 16 do roteiro de instalação (deploy/INSTALL.md) e rode {command} no host.",
+        "backedUp": "Foi feito um backup antes dela, no host.",
+        "why": "Por quê: {reason}",
+        "reasons": {
+          "other": "O atualizador não deu um motivo mais específico.",
+          "off": "As atualizações automáticas estão desligadas (o canal é off).",
+          "hold": "As atualizações estão em espera.",
+          "manual-upgrade": "A versão mais nova precisa de passos manuais; as notas dela dizem quais.",
+          "github": "As informações de versões do GitHub não puderam ser lidas, então nada foi alterado.",
+          "not-published": "As imagens da versão mais nova ainda não foram publicadas, ou ela já falhou aqui antes.",
+          "not-newer": "Nenhuma versão mais nova pôde ser escolhida: ela não é mais nova que esta, ou não deu para comparar as duas.",
+          "version-mismatch": "O servidor em execução não é a versão que a instalação registra.",
+          "server-down": "O servidor não respondeu à verificação de saúde, então não foi atualizado.",
+          "unsafe-settings": "As configurações da nova versão violam uma regra de segurança, então ela foi recusada antes de qualquer coisa iniciar.",
+          "disk": "Não havia disco livre suficiente para um backup e as imagens.",
+          "registry": "As novas imagens não puderam ser baixadas, ou o login no registro falhou.",
+          "backup": "O backup antes da atualização falhou, então nada foi alterado.",
+          "bad-setting": "Uma configuração do atualizador está errada.",
+          "firewall": "O firewall do worker não está em vigor, ou mudou.",
+          "settings": "As configurações do Compose da nova versão não puderam ser usadas com esta instalação.",
+          "blocked": "Uma falha anterior espera por uma pessoa.",
+          "stopped": "O novo servidor falhou depois de iniciar, então a pilha foi parada e o backup guardado.",
+          "stop-failed": "O novo servidor falhou depois de iniciar e não se confirmou que a pilha parou: pare-a à mão agora.",
+          "rollback-failed": "A atualização falhou e a versão antiga não pôde ser recolocada.",
+          "interrupted": "Uma atualização foi interrompida e não terminou nem foi desfeita.",
+          "rolled-back": "A atualização falhou e a versão antiga foi recolocada.",
+          "unrecorded-failure": "Uma atualização foi desfeita, mas a versão não pôde ser registrada como falha."
+        }
       }
     },
     "actions": {

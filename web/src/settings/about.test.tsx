@@ -111,7 +111,6 @@ const updates = (
       finished: ago(2.9),
       result: 'up-to-date',
       from: 'v0.3.0',
-      reason: 'no release is newer than v0.3.0',
     },
     last_change: {
       at: ago(100),
@@ -119,7 +118,7 @@ const updates = (
       result: 'updated',
       from: 'v0.2.0',
       to: 'v0.3.0',
-      backup: '/var/backups/taskto/b.tar.gz',
+      backed_up: true,
     },
     needs_person: null,
     ...status,
@@ -135,7 +134,7 @@ test('admins see the running version, the last run and change, and the version o
   expect(screen.getByText(/Already up to date/)).toBeTruthy()
   expect(screen.getByText(/^Updated,/)).toBeTruthy()
   expect(screen.getByText(/v0\.2\.0 → v0\.3\.0/)).toBeTruthy()
-  expect(screen.getByText('/var/backups/taskto/b.tar.gz').tagName).toBe('CODE')
+  expect(screen.getByText(/A backup was made before it, on the host\./)).toBeTruthy()
   expect(screen.queryByRole('alert')).toBeNull()
 })
 
@@ -151,9 +150,9 @@ test('a stop that needs a person is an alert with the command that clears it', a
             result: 'stopped',
             from: 'v0.3.0',
             to: 'v0.4.0',
-            reason: 'v0.4.0 started and then failed',
+            code: 'stopped',
           },
-          needs_person: { kind: 'blocked', reason: 'v0.4.0 started and then failed: restore the backup' },
+          needs_person: { kind: 'blocked', code: 'stopped' },
         },
       ),
     },
@@ -161,7 +160,8 @@ test('a stop that needs a person is an alert with the command that clears it', a
   render(<SettingsPage me={me} workspace={admin} tab="about" />)
   expect((await screen.findByRole('alert')).textContent).toMatch(/An update needs a person/)
   expect(screen.getByText('taskto-update --clear-block').tagName).toBe('CODE')
-  expect(screen.getByText('v0.4.0 started and then failed: restore the backup').tagName).toBe('CODE')
+  expect(screen.getAllByText(/Why: The new server failed after it started, so the stack was stopped/).length).toBe(2)
+  expect(screen.getByText(/The details are in the host's journal/)).toBeTruthy()
   expect(screen.getByText(/Failed, and the server was stopped/)).toBeTruthy()
 })
 
@@ -169,16 +169,13 @@ test('a fresh failed run is not reported as working, even when nothing waits for
   fakeFetch({
     ...noBackups,
     'GET /api/workspaces/1/updates': {
-      body: updates(
-        {},
-        { last_run: { finished: ago(1), result: 'failed', from: 'v0.3.0', reason: 'the disk is nearly full' } },
-      ),
+      body: updates({}, { last_run: { finished: ago(1), result: 'failed', from: 'v0.3.0', code: 'disk' } }),
     },
   })
   render(<SettingsPage me={me} workspace={admin} tab="about" />)
   expect(await screen.findByText(/The last update run failed/)).toBeTruthy()
   expect(screen.queryByText('Updates are working.')).toBeNull()
-  expect(screen.getByText('the disk is nearly full').tagName).toBe('CODE')
+  expect(screen.getByText(/Why: There wasn't enough free disk/)).toBeTruthy()
 })
 
 test('a release that needs manual steps says so, and a version that is not on record is called out', async () => {
@@ -187,7 +184,7 @@ test('a release that needs manual steps says so, and a version that is not on re
     'GET /api/workspaces/1/updates': {
       body: updates(
         { running_version: 'v0.3.1' },
-        { needs_person: { kind: 'manual-upgrade', reason: 'v0.4.0 needs manual steps' } },
+        { needs_person: { kind: 'manual-upgrade', code: 'manual-upgrade' } },
       ),
     },
   })
@@ -221,6 +218,43 @@ test('a stale status, a hold, and a server with no updater each say so, in the a
   })
   render(<SettingsPage me={me} workspace={admin} tab="about" />)
   expect(await screen.findByText(/The updater hasn't reported yet/)).toBeTruthy()
+})
+
+test('a release whose updater has written nothing is told its updater is too old to report', async () => {
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: { configured: true, running_version: 'v0.9.0', expects_status: true, status: null },
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/The updater on this host is too old to report/)).toBeTruthy()
+  expect(screen.getByText('taskto-update --publish-status').tagName).toBe('CODE')
+  expect(screen.queryByText(/The updater hasn't reported yet/)).toBeNull()
+})
+
+test('the updater only gives words from a list: an unknown code or result is shown as a general one', async () => {
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': {
+      body: updates(
+        {},
+        { last_run: { finished: ago(1), result: 'surprise', from: 'v0.3.0', code: '/var/backups/taskto/x.tar.gz' } },
+      ),
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  expect(await screen.findByText(/Unknown, /)).toBeTruthy()
+  expect(screen.getByText(/Why: The updater gave no more specific reason/)).toBeTruthy()
+  expect(screen.queryByText(/backups\/taskto/)).toBeNull()
+})
+
+test("an admin who doesn't run the server doesn't see updates or ask for them", async () => {
+  const calls = fakeFetch({})
+  render(<SettingsPage me={notOperator} workspace={admin} tab="about" />)
+  await screen.findByText(/Nothing this workspace uses now asks for a credit/)
+  expect(screen.queryByRole('heading', { name: 'Updates' })).toBeNull()
+  expect(calls.filter((c) => c.path === '/api/workspaces/1/updates')).toEqual([])
 })
 
 test("members don't see updates, and don't ask for them", async () => {

@@ -73,9 +73,36 @@ const RESULTS = [
   'blocked',
   'interrupted',
   'cleared',
+  'unknown',
 ] as const
 const CHANNELS = ['release', 'main', 'off'] as const
-// What the updater wrote may be a word this version doesn't know: it is shown as it is.
+// The updater's reason codes (internal/updatestatus): each has its sentence in the language files.
+const REASONS = [
+  'other',
+  'off',
+  'hold',
+  'manual-upgrade',
+  'github',
+  'not-published',
+  'not-newer',
+  'version-mismatch',
+  'server-down',
+  'unsafe-settings',
+  'disk',
+  'registry',
+  'backup',
+  'bad-setting',
+  'firewall',
+  'settings',
+  'blocked',
+  'stopped',
+  'stop-failed',
+  'rollback-failed',
+  'interrupted',
+  'rolled-back',
+  'unrecorded-failure',
+] as const
+const isReason = (c: string): c is (typeof REASONS)[number] => (REASONS as readonly string[]).includes(c)
 // Runs that ended with something wrong, which a person should look at, whether or not the updater
 // also blocked itself.
 const FAILURES = ['failed', 'rolled-back', 'rollback-failed', 'stopped', 'stop-failed', 'interrupted']
@@ -114,7 +141,8 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
     else health = 'ok'
   }
   const mismatch = !!st?.recorded_version && !!u && st.recorded_version !== u.running_version
-  const label = (r: string) => (isResult(r) ? t(`settings.about.updates.result.${r}`) : r)
+  const label = (r: string) => t(`settings.about.updates.result.${isResult(r) ? r : 'unknown'}`)
+  const reasonText = (c: string) => t(`settings.about.updates.reasons.${isReason(c) ? c : 'other'}`)
   const run = (r: UpdateRun | null | undefined) => {
     if (!r) return t('settings.about.updates.noRun')
     const when = r.finished ?? r.at
@@ -130,16 +158,16 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
             {t('settings.about.updates.versions', { from: r.from || '?', to: r.to })}
           </>
         )}
-        {r.reason && (
+        {r.code && (
           <>
             <br />
-            <code>{r.reason}</code>
+            {t('settings.about.updates.why', { reason: reasonText(r.code) })}
           </>
         )}
-        {r.backup && (
+        {r.backed_up && (
           <>
             <br />
-            {t.rich('settings.about.updates.backup', { path: <code>{r.backup}</code> })}
+            {t('settings.about.updates.backedUp')}
           </>
         )}
       </>
@@ -152,7 +180,12 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
       <Alert error={updates.error} />
       {!u && !updates.error && <p className="tt-muted">{t('app.loading')}</p>}
       {u && !u.configured && <p className="tt-muted">{t('settings.about.updates.notConfigured')}</p>}
-      {u?.configured && !st && <p className="tt-muted">{t('settings.about.updates.noStatus')}</p>}
+      {u?.configured && !st && !u.expects_status && <p className="tt-muted">{t('settings.about.updates.noStatus')}</p>}
+      {u?.configured && !st && u.expects_status && (
+        <p className="tt-warning">
+          {t.rich('settings.about.updates.tooOld', { command: <code>{'taskto-update --publish-status'}</code> })}
+        </p>
+      )}
       {health && (
         <p className={UPDATE_CLASS[health]} role={health === 'blocked' ? 'alert' : undefined}>
           {t(`settings.about.updates.health.${health}`)}
@@ -172,9 +205,8 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
               },
             )}
           </p>
-          {needs.reason && (
-            <p>{t.rich('settings.about.updates.needs.reason', { reason: <code>{needs.reason}</code> })}</p>
-          )}
+          {needs.code && <p>{t('settings.about.updates.why', { reason: reasonText(needs.code) })}</p>}
+          <p className="tt-muted">{t('settings.about.updates.needs.where')}</p>
         </>
       )}
       {u && (
@@ -202,7 +234,9 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
               <dt>{t('settings.about.updates.channel')}</dt>
               <dd>
                 {t(st.hold ? 'settings.about.updates.channelHold' : 'settings.about.updates.channelName', {
-                  channel: isChannel(st.channel) ? t(`settings.about.updates.channelValue.${st.channel}`) : st.channel,
+                  channel: isChannel(st.channel)
+                    ? t(`settings.about.updates.channelValue.${st.channel}`)
+                    : st.channel || '?',
                 })}
               </dd>
               <dt>{t('settings.about.updates.lastRun')}</dt>

@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 )
 
@@ -26,11 +27,48 @@ const FileName = "status.json"
 // this means the updater isn't running.
 const StaleAfter = 72 * time.Hour
 
-// maxSize bounds the file a reader accepts; maxText bounds each text in it that people read.
-const (
-	maxSize = 1 << 20
-	maxText = 4000
-)
+// maxSize bounds the file a reader accepts.
+const maxSize = 1 << 20
+
+// The updater publishes structured status only: results and reasons from the closed lists
+// below, versions, and yes or no. What a person needs to know beyond that (a backup's path, a
+// registry's host, a volume's name, where the updater keeps its record) stays on the host, in
+// its journal, and the web app says where to look. The reader enforces it again, whatever the
+// file holds: a word that is not on a list becomes Unknown or CodeOther, a version that isn't
+// one is dropped.
+
+// Unknown is the result of a run whose result isn't one the reader knows.
+const Unknown = "unknown"
+
+var results = setOf("updated", "up-to-date", "skipped", "failed", "rolled-back", "rollback-failed",
+	"stopped", "stop-failed", "blocked", "interrupted", "cleared", "refused")
+
+// CodeOther is the reason code of a reason the updater couldn't put in any other word.
+const CodeOther = "other"
+
+// codes are the reasons the updater may give (deploy/taskto-update.sh's reason_code and
+// blocked_code), each translated by the web app (settings.updates.reasons.<code>).
+var codes = setOf(CodeOther, "off", "hold", "manual-upgrade", "github", "not-published", "not-newer",
+	"version-mismatch", "server-down", "unsafe-settings", "disk", "registry", "backup", "bad-setting",
+	"firewall", "settings", "blocked", "stopped", "stop-failed", "rollback-failed", "interrupted",
+	"rolled-back", "unrecorded-failure")
+
+var channels = setOf("release", "main", "off")
+
+func setOf(v ...string) map[string]bool {
+	m := make(map[string]bool, len(v))
+	for _, s := range v {
+		m[s] = true
+	}
+	return m
+}
+
+// versionRE is a release (vMAJOR.MINOR.PATCH, no leading zeros) or a full commit SHA, the only
+// versions there are.
+var versionRE = regexp.MustCompile(`^(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)|[0-9a-f]{40})$`)
+
+// IsVersion reports whether v is a release version or a full commit SHA.
+func IsVersion(v string) bool { return len(v) <= 100 && versionRE.MatchString(v) }
 
 // Run is one run of the updater, as it recorded it.
 type Run struct {
@@ -43,10 +81,10 @@ type Run struct {
 	// From and To are the versions it started on and chose; To is empty when it chose none.
 	From string `json:"from,omitempty"`
 	To   string `json:"to,omitempty"`
-	// Reason says why, in the updater's words (it is empty after a success), and Backup is
-	// the file it backed up to before an update, on the host.
-	Reason string `json:"reason,omitempty"`
-	Backup string `json:"backup,omitempty"`
+	// Code says why, as one word of a closed list (empty after a success), and BackedUp whether
+	// the run made a backup before it changed anything. Where it is stays on the host.
+	Code     string `json:"code,omitempty"`
+	BackedUp bool   `json:"backed_up,omitempty"`
 }
 
 // NeedsPerson kinds.
@@ -59,10 +97,10 @@ const (
 	KindManualUpgrade = "manual-upgrade"
 )
 
-// NeedsPerson is the reason the install waits for a person.
+// NeedsPerson is the reason the install waits for a person, as a kind and a code.
 type NeedsPerson struct {
-	Kind   string `json:"kind"`
-	Reason string `json:"reason,omitempty"`
+	Kind string `json:"kind"`
+	Code string `json:"code,omitempty"`
 }
 
 // Status is the updater's status as the server reads it. Times are UTC.
@@ -116,27 +154,41 @@ func Read(dir string) (s Status, ok bool, err error) {
 	if s.Version != 1 {
 		return Status{}, false, fmt.Errorf("the update status %s has format %d, not 1", Path(dir), s.Version)
 	}
-	s.clip()
+	s.sanitize()
 	return s, true, nil
 }
 
-// clip bounds the texts a person reads, whatever the file holds.
-func (s *Status) clip() {
+// sanitize keeps only what the closed lists and the version's grammar allow, whatever the file
+// holds.
+func (s *Status) sanitize() {
+	if !channels[s.Channel] {
+		s.Channel = ""
+	}
+	s.RecordedVersion = version(s.RecordedVersion)
 	for _, r := range []*Run{s.LastRun, s.LastChange} {
-		if r != nil {
-			r.Reason, r.Backup = clip(r.Reason), clip(r.Backup)
+		if r == nil {
+			continue
+		}
+		if !results[r.Result] {
+			r.Result = Unknown
+		}
+		r.From, r.To = version(r.From), version(r.To)
+		if r.Code != "" && !codes[r.Code] {
+			r.Code = CodeOther
 		}
 	}
-	if s.NeedsPerson != nil {
-		s.NeedsPerson.Reason = clip(s.NeedsPerson.Reason)
+	if n := s.NeedsPerson; n != nil {
+		if n.Kind != KindBlocked && n.Kind != KindManualUpgrade {
+			s.NeedsPerson = nil
+		} else if n.Code != "" && !codes[n.Code] {
+			n.Code = CodeOther
+		}
 	}
 }
 
-func clip(v string) string {
-	if len(v) <= maxText {
+func version(v string) string {
+	if IsVersion(v) {
 		return v
 	}
-	// Cut on a rune boundary.
-	r := []rune(v[:maxText])
-	return string(r[:len(r)-1]) + "…"
+	return ""
 }

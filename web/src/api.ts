@@ -819,23 +819,26 @@ export type BackupStatus = {
 
 export const backupPath = (workspace: number) => `${ws(workspace)}/backup`
 
-// The host's automatic updates (docs/install.md#automatic-updates), for admins: the version this
-// server runs, and what the updater (which runs on the host, never in the server) last wrote.
-// `status` is null while it hasn't written one, `stale` says it stopped writing, and `needs_person`
-// is set while the install waits for someone: a stop or an interrupted update (cleared with
-// `taskto-update --clear-block`) or a release that needs steps by hand.
+// The host's automatic updates (docs/install.md#automatic-updates), for the server's operators:
+// the version this server runs, and what the updater (which runs on the host, never in the
+// server) last wrote: results, reason codes and versions only, never a path or a host.
+// `status` is null while it hasn't written one (`expects_status` says this server is a release
+// that should have one, so the host's updater is too old), `stale` says it stopped writing, and
+// `needs_person` is set while the install waits for someone: a stop or an interrupted update
+// (cleared with `taskto-update --clear-block`) or a release that needs steps by hand.
 export type UpdateRun = {
   at?: string
   finished?: string
   result: string
   from?: string
   to?: string
-  reason?: string
-  backup?: string
+  code?: string
+  backed_up?: boolean
 }
 export type UpdateStatus = {
   configured: boolean
   running_version: string
+  expects_status?: boolean
   stale?: boolean
   status: {
     checked?: string
@@ -844,7 +847,7 @@ export type UpdateStatus = {
     recorded_version?: string
     last_run: UpdateRun | null
     last_change: UpdateRun | null
-    needs_person: { kind: 'blocked' | 'manual-upgrade'; reason?: string } | null
+    needs_person: { kind: 'blocked' | 'manual-upgrade'; code?: string } | null
   } | null
 }
 
