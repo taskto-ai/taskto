@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Checks the web app's stylesheets (every .css file under src/: styles.css, and the design system's
-// files in src/ui/) against each other and against the components. CI runs it; so can anyone:
+// Checks the web app's stylesheets (every .css file under src/: the design system's files in src/ui/,
+// the screens' beside their components, and styles.css, the list that imports those) against each
+// other and against the components. CI runs it; so can anyone:
 // `pnpm --filter @taskto/web run css`.
 //
 // Fails on:
@@ -12,10 +13,24 @@
 // - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
 //   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
 //   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in;
-// - a rule in a stylesheet outside src/ui/ that can match an element wherever it is (by its name,
-//   a state, a pseudo-element, an attribute, `*`; not `.tt-x h2`) and doesn't leave the design
-//   system's elements out with OPT_OUT, unless EVERYWHERE lists its selector and every property it
-//   sets: such a rule is in no layer and would beat the components' own styles.
+// - under src/ui/, apart from the files that define the tokens (tokens.css, themes/, and the old
+//   names' aliases in legacy.css): a font size, a spacing value (margin, padding, gap), a radius, a
+//   shadow or a duration written as a literal, not as a token (var(--space-…), var(--text-…) …).
+//   A few literals are not on any scale and are allowed: SCALE_LITERALS, each with its reason. The
+//   screens' older stylesheets are not held to this until they are rebuilt.
+// - a rule in a stylesheet outside src/ui/, or in src/ui/base.css, that can match an element
+//   wherever it is (by its name, a state, a pseudo-element, an attribute, `*`; not `.tt-x h2`) and
+//   doesn't leave the design system's elements out with OPT_OUT, unless EVERYWHERE lists its
+//   selector and every property it sets: such a rule would beat the components' own styles (in no
+//   layer whatever their specificity; in base.css only if it left its layer);
+// - how the app loads its stylesheets, when the root has the app's entry (src/main.tsx): its first
+//   import is ui/index.css, which declares the layers' order before any stylesheet uses one; every
+//   .css under src/ is loaded exactly one way (listed in src/styles.css, imported by
+//   src/ui/index.css, or imported by a module); src/styles.css is nothing but OLD_STYLESHEETS, in
+//   that order, each a plain @import; those files declare no layer, apart from ui/base.css, which
+//   is one @layer base block, then in no layer only rules EVERYWHERE allows, and last the touch
+//   screen's @media (pointer: coarse) block, its rules opting out (docs/design.md, "Where styles
+//   live").
 //
 // Dependency-free: the stylesheet is read by a small scanner (comments and strings skipped), the
 // components by looking at what each className holds.
@@ -36,7 +51,7 @@
 // --root <dir> checks another web directory (its src/ and the stylesheets in it), for the script's
 // tests.
 
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -388,6 +403,390 @@ function stylesheets(dir, out = []) {
 // Where the colour literals live: the brand themes, and nowhere else.
 const THEMES = 'src/ui/themes/'
 
+// --- How the app loads its stylesheets -------------------------------------------------------
+
+// The rules of the one stylesheet the app had before its design system, now in files of their own,
+// as src/styles.css lists them: the order is the cascade (most are in no layer, where the later of
+// two equal rules wins), so it is pinned here. A screen's new stylesheet is not one of these: its
+// component imports it. Paths are under src/.
+export const OLD_STYLESHEETS = [
+  'ui/base.css',
+  'legacy-shared.css',
+  'auth/auth.legacy.css',
+  'shell/shell.legacy.css',
+  'conversations/conversations.legacy.css',
+  'knowledge/knowledge.legacy.css',
+  'boards/boards.legacy.css',
+  'markdown.legacy.css',
+  'search/search.legacy.css',
+  'apps/apps.legacy.css',
+  'settings/settings.legacy.css',
+  'browser/browser.legacy.css',
+  'pwa/pwa.legacy.css',
+  'home/home.legacy.css',
+  'offline/offline.legacy.css',
+  'notifications/notifications.legacy.css',
+]
+const LIST = 'src/styles.css'
+// The cascade layers, in order, as ui/index.css and index.html declare them.
+export const LAYERS = ['tokens', 'themes', 'base', 'components', 'screens']
+const ENTRY = 'src/main.tsx'
+const DESIGN_ENTRY = 'src/ui/index.css'
+const BASE = 'src/ui/base.css'
+
+// A stylesheet's top-level statements: `@import`s with their url and what follows it, and blocks
+// with their prelude, comments left out.
+// The stylesheet with its comments blanked (newlines kept, so offsets and lines stay); a `/*`
+// inside a string is not a comment.
+export function blankCssComments(css) {
+  let out = ''
+  for (let i = 0; i < css.length; ) {
+    const c = css[i]
+    if (c === '"' || c === "'") {
+      let j = i + 1
+      while (j < css.length && css[j] !== c) j += css[j] === '\\' ? 2 : 1
+      out += css.slice(i, j + 1)
+      i = j + 1
+    } else if (c === '/' && css[i + 1] === '*') {
+      const close = css.indexOf('*/', i + 2)
+      const end = close < 0 ? css.length : close + 2
+      out += css.slice(i, end).replace(/[^\n]/g, ' ')
+      i = end
+    } else {
+      out += c
+      i++
+    }
+  }
+  return out
+}
+
+export function topLevel(css) {
+  const text = blankCssComments(css)
+  const out = []
+  let i = 0
+  while (i < text.length) {
+    if (/\s/.test(text[i])) {
+      i++
+      continue
+    }
+    let j = i
+    while (j < text.length && text[j] !== ';' && text[j] !== '{') {
+      if (text[j] === '"' || text[j] === "'") {
+        const q = text[j]
+        j++
+        while (j < text.length && text[j] !== q) j += text[j] === '\\' ? 2 : 1
+      }
+      j++
+    }
+    const prelude = text.slice(i, j).trim().replace(/\s+/g, ' ')
+    const line = text.slice(0, i).split('\n').length
+    if (text[j] === '{') {
+      // To the block's end: braces inside a string (`content: "}"`) or escaped are not the block's.
+      let depth = 0
+      for (; j < text.length; j++) {
+        const c = text[j]
+        if (c === '\\') j++
+        else if (c === '"' || c === "'") {
+          j++
+          while (j < text.length && text[j] !== c) j += text[j] === '\\' ? 2 : 1
+        } else if (c === '{') depth++
+        else if (c === '}' && --depth === 0) break
+      }
+      out.push({ kind: 'block', prelude, line, start: i, end: j + 1 })
+    } else {
+      const m = /^@import\s+(?:url\(\s*(?:["']([^"']+)["']|([^)\s"']+))\s*\)|["']([^"']+)["'])\s*(.*)$/i.exec(prelude)
+      out.push(
+        m
+          ? { kind: 'import', url: m[1] ?? m[2] ?? m[3], rest: m[4], line, start: i, end: j + 1 }
+          : { kind: 'statement', prelude, line, start: i, end: j + 1 },
+      )
+    }
+    i = j + 1
+  }
+  return out
+}
+
+// The .css files a module imports for their styles (`import './x.css'`), resolved under the root:
+// not `?raw` or `?url`, which load no style.
+// The modules the app reaches from its entry: static imports, re-exports and dynamic import(),
+// by relative path (with or without the extension, or a folder's index).
+function reachable(web) {
+  const seen = new Set()
+  const todo = [join(web, ENTRY)]
+  const resolveModule = (from, spec) => {
+    const base = join(dirname(from), spec)
+    for (const p of [base, `${base}.tsx`, `${base}.ts`, join(base, 'index.tsx'), join(base, 'index.ts')]) {
+      if (/\.tsx?$/.test(p) && existsSync(p)) return p
+    }
+    return undefined
+  }
+  while (todo.length > 0) {
+    const path = todo.pop()
+    if (seen.has(path)) continue
+    seen.add(path)
+    const source = blankComments(readFileSync(path, 'utf8'))
+    for (const m of source.matchAll(/(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+)["'](\.{1,2}\/[^"']+)["']/g)) {
+      if (m[1].endsWith('.css')) continue
+      const next = resolveModule(path, m[1].replace(/\?.*$/, ''))
+      if (next && !seen.has(next)) todo.push(next)
+    }
+    // import.meta.glob('./*.gallery.tsx'): every file in that folder its pattern matches.
+    for (const m of source.matchAll(/\bimport\.meta\.glob(?:<[^>]*>)?\(\s*["'](\.{1,2}\/[^"']*)["']/g)) {
+      const dir = join(dirname(path), dirname(m[1]))
+      const name = m[1].split('/').pop()
+      const pattern = new RegExp(`^${name.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}$`)
+      if (!existsSync(dir)) continue
+      for (const f of readdirSync(dir)) if (pattern.test(f) && /\.tsx?$/.test(f)) todo.push(join(dir, f))
+    }
+  }
+  return seen
+}
+
+function moduleImports(web) {
+  const out = new Map() // file → the modules that import it
+  const live = reachable(web)
+  for (const path of components(join(web, 'src'))) {
+    if (!live.has(path)) continue
+    const source = blankComments(readFileSync(path, 'utf8'))
+    for (const m of source.matchAll(/\bimport\s+["'](\.{1,2}\/[^"'?]+\.css)["']/g)) {
+      const file = relative(web, join(dirname(path), m[1]))
+        .split('\\')
+        .join('/')
+      if (!out.has(file)) out.set(file, [])
+      out.get(file).push(relative(web, path).split('\\').join('/'))
+    }
+  }
+  return out
+}
+
+// The files a stylesheet @imports, resolved under the root.
+function cssImports(web, file) {
+  if (!existsSync(join(web, file))) return []
+  return topLevel(readFileSync(join(web, file), 'utf8'))
+    .filter((s) => s.kind === 'import')
+    .map((s) => ({
+      ...s,
+      file: relative(web, join(web, dirname(file), s.url))
+        .split('\\')
+        .join('/'),
+    }))
+}
+
+// The old stylesheets as src/styles.css lists them, read, in order: what the tests of the old
+// rules read (the list itself holds no rule). Missing files are left out.
+export function oldStylesheets(web) {
+  return cssImports(web, LIST)
+    .filter((s) => existsSync(join(web, s.file)))
+    .map((s) => ({ file: s.file, css: readFileSync(join(web, s.file), 'utf8') }))
+}
+
+function loadingErrors(web, sheets) {
+  const errors = []
+  // The entry's first import: the layers are declared by the first stylesheet the build emits.
+  const entry = blankComments(readFileSync(join(web, ENTRY), 'utf8'))
+  const entryImports = [...entry.matchAll(/\bimport\s+(?:[^'"]*?\bfrom\s+)?["']([^"']+)["']/g)].map((m) => m[1])
+  const first = entryImports.length > 0 ? [null, entryImports[0]] : null
+  if (first?.[1] !== './ui/index.css') {
+    errors.push(
+      `${ENTRY}: its first import is ${first ? `'${first[1]}'` : 'missing'}, not './ui/index.css': the build emits CSS in import order, so a component's @layer block would come before the layers' order is declared, and @layer base would beat @layer components`,
+    )
+  }
+
+  // ui/index.css: the layers' order first, then its files, each imported with no condition.
+  const design = existsSync(join(web, DESIGN_ENTRY)) ? topLevel(readFileSync(join(web, DESIGN_ENTRY), 'utf8')) : []
+  if (design[0]?.kind !== 'statement' || design[0].prelude !== `@layer ${LAYERS.join(', ')}`) {
+    errors.push(
+      `${DESIGN_ENTRY}: its first statement is \`@layer ${LAYERS.join(', ')};\` (the order index.html declares too), not \`${design[0]?.prelude ?? design[0]?.url ?? 'nothing'}\``,
+    )
+  }
+  for (const s of design) {
+    if (s.kind === 'import' && s.rest) {
+      errors.push(
+        `${DESIGN_ENTRY}:${s.line}: imports ${s.url} with \`${s.rest}\`: the design system's files load on every page, unconditionally`,
+      )
+    }
+  }
+
+  // The list: plain @imports of OLD_STYLESHEETS, in order, and nothing else.
+  const list = existsSync(join(web, LIST)) ? topLevel(readFileSync(join(web, LIST), 'utf8')) : []
+  for (const s of list) {
+    if (s.kind !== 'import')
+      errors.push(`${LIST}:${s.line}: holds only @imports of the old stylesheets, not \`${s.prelude}\``)
+    else if (s.rest)
+      errors.push(
+        `${LIST}:${s.line}: imports ${s.url} with \`${s.rest}\`: the old stylesheets are imported plainly, their layering is in the files`,
+      )
+  }
+  const listed = cssImports(web, LIST).map((s) => s.file)
+  const expected = OLD_STYLESHEETS.map((f) => `src/${f}`)
+  if (listed.join('\n') !== expected.join('\n')) {
+    errors.push(
+      `${LIST}: lists ${listed.map((f) => f.slice(4)).join(', ') || 'nothing'}; the old stylesheets are, in this order: ${OLD_STYLESHEETS.join(', ')}. The order is the cascade: change it only with OLD_STYLESHEETS, after checking which rules meet (docs/design.md)`,
+    )
+  }
+  for (const f of listed) if (!sheets.includes(f)) errors.push(`${LIST}: lists ${f}, which is not there`)
+
+  // Every stylesheet is loaded, and one way only.
+  // Each way a stylesheet is loaded, by kind: listed in the list, imported by ui/index.css, or
+  // imported by modules (several modules importing one component's stylesheet are one way).
+  const ways = new Map(sheets.map((f) => [f, []]))
+  const add = (f, kind, way) => ways.get(f)?.push({ kind, way })
+  // The list itself counts as loaded only if the entry imports it.
+  if (!entryImports.includes('./styles.css')) {
+    errors.push(`${ENTRY}: doesn't import './styles.css', so no old stylesheet it lists is loaded`)
+  }
+  for (const f of listed) add(f, 'list', `listed in ${LIST}`)
+  for (const s of cssImports(web, DESIGN_ENTRY)) add(s.file, 'index', `imported by ${DESIGN_ENTRY}`)
+  for (const [f, modules] of moduleImports(web)) {
+    // The entry's own imports are of the list and of ui/index.css, which load in ways of their own.
+    const others = modules.filter((m) => m !== ENTRY)
+    if (others.length > 0) add(f, 'module', `imported by ${others.join(', ')}`)
+    else if (f !== LIST && f !== DESIGN_ENTRY) add(f, 'module', `imported by ${ENTRY}`)
+  }
+  ways.delete(LIST)
+  ways.delete(DESIGN_ENTRY)
+  for (const [f, list] of ways) {
+    const how = list.map((w) => w.way)
+    const kinds = new Set(list.map((w) => w.kind))
+    if (how.length === 0) {
+      errors.push(
+        `${f}: nothing loads it: an old screen's rules are listed in ${LIST} (OLD_STYLESHEETS); a component's or a new screen's stylesheet is imported by its module`,
+      )
+    } else if (kinds.size > 1 || list.filter((w) => w.kind !== 'module').length > 1) {
+      errors.push(`${f}: loaded more than one way (${how.join('; ')}): one is its place in the cascade`)
+    }
+  }
+
+  // The old stylesheets declare no layer, but base.css, which is one @layer base block and then
+  // one block in no layer.
+  for (const f of listed) {
+    if (f === BASE || !existsSync(join(web, f))) continue
+    const text = blankCssComments(readFileSync(join(web, f), 'utf8')).replace(
+      /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g,
+      (q) => q.replace(/[^\n]/g, ' '),
+    )
+    for (const m of text.matchAll(/@layer\b[^{;]*/g)) {
+      const line = text.slice(0, m.index).split('\n').length
+      errors.push(
+        `${f}:${line}: declares \`${m[0].trim()}\`: the old screens' rules are in no layer until the screen is rebuilt, and the move is checked rule by rule`,
+      )
+    }
+  }
+  if (existsSync(join(web, BASE))) errors.push(...baseErrors(readFileSync(join(web, BASE), 'utf8')))
+  return errors
+}
+
+// ui/base.css is three parts: one @layer base block; then, in no layer, only rules that reach every
+// element on purpose (EVERYWHERE, with only the properties it lists), which must keep winning over a
+// component's own rule; and last the touch screen's @media (pointer: coarse) block, in no layer,
+// every rule of it leaving the components' elements out.
+function baseErrors(css) {
+  const errors = []
+  const parts = topLevel(css)
+  const shape = parts.map((s) => s.prelude ?? `@import ${s.url}`)
+  const last = parts.at(-1)
+  if (
+    shape[0] !== '@layer base' ||
+    parts[0]?.kind !== 'block' ||
+    last?.kind !== 'block' ||
+    shape.filter((p) => /^@layer\b/.test(p)).length !== 1 ||
+    shape.at(-1) !== '@media (pointer: coarse)' ||
+    parts.length < 2
+  ) {
+    errors.push(
+      `${BASE}: is one \`@layer base\` block, then in no layer the rules that reach every element on purpose, then the touch screen's \`@media (pointer: coarse)\` block, not: ${shape.join(' | ')}`,
+    )
+    return errors
+  }
+  const lineOf = (offset) => css.slice(0, offset).split('\n').length - 1
+  const middle = css.slice(parts[0].end, last.start)
+  for (const rule of allRules(middle)) {
+    const listed = EVERYWHERE.get(rule.selector)
+    if (!listed || !rule.properties.every((p) => listed.properties.includes(p))) {
+      errors.push(
+        `${BASE}:${lineOf(parts[0].end) + rule.line}: \`${rule.selector}\` is in no layer: only what reaches every element on purpose (EVERYWHERE) is; put it in @layer base`,
+      )
+    }
+  }
+  for (const rule of allRules(css.slice(last.start, last.end))) {
+    if (!optsOut(compounds(rule.selector).at(-1) ?? '')) {
+      errors.push(
+        `${BASE}:${lineOf(last.start) + rule.line}: \`${rule.selector}\` is in no layer and doesn't leave the components' elements out: give it ${OPT_OUT}`,
+      )
+    }
+  }
+  return errors
+}
+
+// Where every size, space, radius, shadow and duration is a token: the design system's files,
+// except those that define the tokens.
+const TOKENS_ONLY = 'src/ui/'
+const DEFINE_TOKENS = ['src/ui/tokens.css', 'src/ui/legacy.css', THEMES]
+
+// Literals that are not on a scale and never will be, so they may be written as they are.
+export const SCALE_LITERALS = new Map([
+  ['0', 'nothing: no space, no radius, no time (with or without a unit)'],
+  ['1px', 'a hairline: a border-wide offset, finer than the smallest step'],
+  ['-1px', 'a hairline the other way: pulls a box back by a border, as the visually hidden pattern does'],
+  ['100%', 'the whole of the box'],
+  ['50%', 'half of the box: the radius of a circle'],
+])
+
+// The properties whose lengths and times are a scale's: a font size, a space, a radius, a shadow
+// and a duration.
+const SCALE_PROPERTY =
+  /^(font|font-size|margin(-.+)?|padding(-.+)?|scroll-margin(-.+)?|scroll-padding(-.+)?|gap|row-gap|column-gap|grid-gap|grid-row-gap|grid-column-gap|border(-.+)?-radius|(-webkit-)?box-shadow|text-shadow|(-webkit-)?transition(-duration|-delay)?|(-webkit-)?animation(-duration|-delay)?)$/i
+
+// Custom properties of the design system's own files that may hold a literal size, each with its
+// reason: what such a property holds is used through var() where the check can't see it, so a
+// literal there is held to the same rule as a declaration's.
+export const LOCAL_LITERALS = new Map([
+  [
+    '--a2ui-button-padding',
+    "the apps renderer's own variable: it takes a padding in its units, and the app's buttons are 0.4rem 1rem, off the space scale",
+  ],
+  [
+    '--a2ui-choicepicker-chip-padding',
+    "the apps renderer's own variable: a chip's padding as the app's chips have it, 0.3rem 0.85rem, off the space scale",
+  ],
+  [
+    '--a2ui-choicepicker-chip-font-size',
+    "the apps renderer's own variable: a chip's text as the app's chips have it, in rem so it follows the reader's text size",
+  ],
+])
+
+// The first literal length or time a declaration's value holds where a token belongs, if any.
+// A var() without a fallback is a token; a fallback is looked in. env() (the safe areas) is the
+// device's, but its fallback is looked in too; a unitless number (a line height, a weight, a factor
+// in calc()) is no length.
+export function scaleLiteral(value, property) {
+  // A registered property's initial value (@property) is a custom property's value.
+  if (property.toLowerCase() === 'initial-value') property = '--registered'
+  if (!property.startsWith('--') && !SCALE_PROPERTY.test(property)) return undefined
+  if (property.startsWith('--') && LOCAL_LITERALS.has(property)) return undefined
+  let bare = value
+    .replace(/url\((?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^)]*)\)/gi, 'url()')
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
+  // var(--a) and env(name) go; a fallback, var(--a, x) or env(name, x), stays, innermost first.
+  for (let prev = ''; prev !== bare; ) {
+    prev = bare
+    bare = bare.replace(
+      /(?<![\w-])(?:var\(\s*--[\w-]+|env\(\s*[\w-]+(?:\s+\d+)*)\s*(?:,([^()]*))?\)/gi,
+      (_, fallback) => ` ${fallback ?? ''} `,
+    )
+  }
+  for (const m of bare.matchAll(/(?<![\w.#-])-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?([a-z%]+)(?![\w-])/gi)) {
+    const literal = m[0].toLowerCase()
+    if (/^-?0*\.?0*[a-z%]+$/.test(literal)) continue // a zero, whatever its unit
+    // A custom property may hold a share of something (a slide's distance, a width): its sizes
+    // and times are what a token would be, not its percentages.
+    if (property.startsWith('--') && literal.endsWith('%')) continue
+    if (SCALE_LITERALS.has(literal)) continue
+    return m[0]
+  }
+  return undefined
+}
+
 // --- Rules that reach every element --------------------------------------------------------
 //
 // The old stylesheets (every one outside src/ui/) are in no cascade layer, so a rule of theirs
@@ -631,6 +1030,8 @@ export function check(web) {
   const errors = []
   const mentioned = new Set()
   const seen = new Map() // selector → { file, line }
+  const sheets = stylesheets(join(web, 'src')).map((p) => relative(web, p).split('\\').join('/'))
+  if (existsSync(join(web, ENTRY))) errors.push(...loadingErrors(web, sheets))
   for (const path of stylesheets(join(web, 'src'))) {
     const file = relative(web, path).split('\\').join('/')
     const sheet = scan(readFileSync(path, 'utf8'))
@@ -645,9 +1046,20 @@ export function check(web) {
         )
       } else seen.set(selector, { file, line })
     }
-    if (!file.startsWith('src/ui/')) errors.push(...everywhereErrors(file, readFileSync(path, 'utf8')))
+    if (!file.startsWith('src/ui/') || file === BASE) errors.push(...everywhereErrors(file, readFileSync(path, 'utf8')))
     if (file.startsWith(THEMES)) continue
+    // Under src/ui/, every declaration; in the files that define the tokens, a custom property is
+    // the definition of one and may hold a literal, but a rule's own declarations may not.
+    const tokensOnly = file.startsWith(TOKENS_ONLY)
+    const definesTokens = DEFINE_TOKENS.some((d) => file === d || (d.endsWith('/') && file.startsWith(d)))
     for (const { property, value, line } of sheet.declarations) {
+      const definition = property.startsWith('--') || property.toLowerCase() === 'initial-value'
+      const scale = tokensOnly && !(definesTokens && definition) && scaleLiteral(value, property)
+      if (scale) {
+        errors.push(
+          `${file}:${line}: ${property} has the literal ${scale}: use a token from src/ui/tokens.css (var(--space-…), var(--text-…), var(--radius-…), var(--shadow-…), var(--duration-…)), or add one`,
+        )
+      }
       const literal = colorLiteral(value, property)
       if (literal) {
         errors.push(
@@ -685,6 +1097,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exit(1)
   }
   console.log(
-    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, no colour is written outside the themes, and no old rule reaches into a component',
+    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, no colour is written outside the themes, no old rule reaches into a component, and src/ui/ takes its sizes, spaces, radii, shadows and durations from the tokens',
   )
 }
