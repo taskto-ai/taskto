@@ -67,7 +67,7 @@ const first: AuditPage = {
   ],
 }
 
-const log = () => within(screen.getByRole('list', { name: 'Audit log' }))
+const log = () => within(screen.getByRole('table', { name: 'Audit log' }))
 
 test('admins read the log: actions translated, names, dates in their format, and a former member by number', async () => {
   fakeFetch({
@@ -75,7 +75,7 @@ test('admins read the log: actions translated, names, dates in their format, and
     'GET /api/workspaces/1/audit?limit=50': { body: first },
   })
   render(<SettingsPage me={me} workspace={admin} tab="audit" />)
-  await screen.findByRole('list', { name: 'Audit log' })
+  await screen.findByRole('table', { name: 'Audit log' })
   expect(log().getByText('Shared space made')).toBeTruthy()
   expect(log().getByText('Member removed')).toBeTruthy()
   expect(screen.getAllByText('By Owner').length).toBe(2)
@@ -120,7 +120,7 @@ test('filters go to the server, and older events are asked for with the cursor',
     '/api/workspaces/1/audit?limit=50&action=member_removed&actor=2&target_type=user',
   )
   fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
-  await screen.findByRole('list', { name: 'Audit log' })
+  await screen.findByRole('table', { name: 'Audit log' })
   expect(log().getByText('Member removed')).toBeTruthy()
 })
 
@@ -144,7 +144,7 @@ test('an older page that was still on its way when the log was refreshed is drop
     release?.()
     await held
   })
-  await screen.findByRole('list', { name: 'Audit log' })
+  await screen.findByRole('table', { name: 'Audit log' })
   expect(log().queryByText('Invite sent')).toBeNull()
   expect(screen.getByRole('button', { name: 'Show older events' })).toBeTruthy()
 })
@@ -193,9 +193,9 @@ test('the tab and the events are in the admin language', async () => {
   })
   await act(() => setPreferences({ user: 'pt-BR' }))
   render(<SettingsPage me={me} workspace={admin} tab="audit" />)
-  await screen.findByRole('list', { name: 'Registro de auditoria' })
+  await screen.findByRole('table', { name: 'Registro de auditoria' })
   expect(
-    within(screen.getByRole('list', { name: 'Registro de auditoria' })).getByText('Espaço compartilhado criado'),
+    within(screen.getByRole('table', { name: 'Registro de auditoria' })).getByText('Espaço compartilhado criado'),
   ).toBeTruthy()
   expect(screen.getByText('Espaço compartilhado: Team')).toBeTruthy()
   expect(within(screen.getByRole('navigation')).getByText('Auditoria')).toBeTruthy()

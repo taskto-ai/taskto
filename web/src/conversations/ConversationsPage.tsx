@@ -7,9 +7,18 @@ import { api, type Conversation, errorText, ws } from '../api'
 import { builderPath } from '../apps/route'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Link, navigate, routePath } from '../router'
-import { Icon } from '../shell/Icon'
-import { ConversationView, conversationTitle } from './ConversationView'
+import { navigate, routePath } from '../router'
+import { Button, ButtonLink } from '../ui/Button'
+import { EmptyState } from '../ui/EmptyState'
+import { Heading } from '../ui/Heading'
+import { IconButton } from '../ui/IconButton'
+import { Notice } from '../ui/Notice'
+import { Row, Rows } from '../ui/Rows'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
+import { ConversationView } from './ConversationView'
+import './Conversations.css'
+import { conversationTitle } from './title'
 import type { EventSourceFactory } from './useConversationStream'
 
 export function ConversationsPage({
@@ -35,6 +44,7 @@ export function ConversationsPage({
   const [error, setError] = useState<string | null>(null)
   const openId = open && /^\d+$/.test(open) ? Number(open) : null
   const link = (id?: number) => routePath({ workspace, section: 'conversations', item: id ? String(id) : undefined })
+  const buildHref = builderPath(workspace)
 
   const create = async () => {
     setCreating(true)
@@ -51,54 +61,72 @@ export function ConversationsPage({
   }
 
   return (
-    <div className="tt-chat-layout" data-open={openId ? 'conversation' : 'list'}>
-      <section className="tt-chat-list" aria-label={t('shell.sections.conversations')}>
-        <div className="tt-pane-head">
-          <h1>{archived ? t('conversations.archived') : t('shell.sections.conversations')}</h1>
-          <button
-            type="button"
-            className="tt-icon-button"
+    <div className="ui-chat-layout" data-open={openId ? 'conversation' : 'list'}>
+      <section className="ui-chat-list" aria-label={t('shell.sections.conversations')}>
+        <div className="ui-chat-list-head">
+          <Heading level={1} size="title" className="ui-chat-list-title">
+            {archived ? t('conversations.archived') : t('shell.sections.conversations')}
+          </Heading>
+          <IconButton
+            icon="archive"
+            // A toggle: its name stays, and pressed says the archived ones are shown.
+            label={t('conversations.showArchivedTitle')}
             aria-pressed={archived}
-            aria-label={t('conversations.showArchived')}
-            title={archived ? t('conversations.showActiveTitle') : t('conversations.showArchivedTitle')}
             onClick={() => setArchived((a) => !a)}
-          >
-            <Icon name="archive" />
-          </button>
-          <button type="button" className="tt-button tt-primary" onClick={create} disabled={creating}>
-            <Icon name="plus" />
+          />
+          <Button variant="primary" size="sm" icon="plus" onClick={create} loading={creating}>
             {t('conversations.new')}
-          </button>
-          <Link className="tt-button" href={builderPath(workspace)}>
-            <Icon name="apps" />
-            {t('apps.builder.build')}
-          </Link>
+          </Button>
         </div>
-        {error && (
-          <p role="alert" className="tt-error">
-            {error}
-          </p>
+        {error && <Notice tone="danger">{error}</Notice>}
+        {list.error && <Notice tone="danger">{list.error}</Notice>}
+        {list.data === undefined && !list.error && (
+          <div className="ui-chat-list-loading" aria-busy="true">
+            <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+            <Skeleton width="70%" />
+            <Skeleton width="40%" />
+            <Skeleton width="80%" />
+            <Skeleton width="35%" />
+          </div>
         )}
-        {list.error && (
-          <p role="alert" className="tt-error">
-            {list.error}
-          </p>
-        )}
-        {list.data === undefined && !list.error && <p className="tt-muted">{t('app.loading')}</p>}
-        {list.data?.length === 0 && (
-          <p className="tt-muted">{archived ? t('conversations.nothingArchived') : t('conversations.none')}</p>
-        )}
+        {list.data?.length === 0 &&
+          (archived ? (
+            <EmptyState title={t('conversations.nothingArchived')} />
+          ) : (
+            <EmptyState
+              title={t('conversations.none')}
+              actions={
+                <ButtonLink href={buildHref} icon="apps" size="sm">
+                  {t('apps.builder.build')}
+                </ButtonLink>
+              }
+            />
+          ))}
         {list.data && list.data.length > 0 && (
-          <ul className="tt-list">
-            {list.data.map((c) => (
-              <li key={c.id}>
-                <Link href={link(c.id)} aria-current={c.id === openId ? 'page' : undefined}>
-                  <span className="tt-list-title">{conversationTitle(c)}</span>
-                  <span className="tt-muted tt-small">{f.dateTime(c.updated_at)}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <div className="ui-chat-rows">
+            <Rows label={archived ? t('conversations.archived') : t('shell.sections.conversations')}>
+              {list.data.map((c) => (
+                <Row
+                  key={c.id}
+                  href={link(c.id)}
+                  current={c.id === openId}
+                  title={conversationTitle(c)}
+                  detail={
+                    <time dateTime={c.updated_at} title={f.dateTime(c.updated_at)}>
+                      {f.relative(c.updated_at)}
+                    </time>
+                  }
+                />
+              ))}
+            </Rows>
+          </div>
+        )}
+        {list.data && list.data.length > 0 && !archived && (
+          <div className="ui-chat-list-foot">
+            <ButtonLink href={buildHref} icon="apps" variant="ghost" size="sm">
+              {t('apps.builder.build')}
+            </ButtonLink>
+          </div>
         )}
       </section>
       {openId ? (
@@ -112,8 +140,8 @@ export function ConversationsPage({
           buildHref={builderPath(workspace, { kind: 'conversation', conversation: openId })}
         />
       ) : (
-        <section className="tt-chat tt-chat-empty">
-          <p className="tt-muted">{t('conversations.pick')}</p>
+        <section className="ui-chat ui-chat-none">
+          <EmptyState title={t('conversations.pick')} />
         </section>
       )}
     </div>

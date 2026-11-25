@@ -5,6 +5,7 @@
 #   taskto-update [--dry-run] [--to VERSION]
 #   taskto-update --clear-block
 #   taskto-update --publish-status
+#   taskto-update --requested
 #
 # It does the safe common case and leaves the rest to a person. One run: choose a version,
 # resolve it to one commit and take every file and image from that commit, check it all before
@@ -63,6 +64,18 @@
 # else: it is what the first run of a newer updater needs to show admins at once, instead of at
 # the next timer (INSTALL.md step 16).
 #
+# --requested is what an operator's "Update now" (Settings → About) runs, started by
+# taskto-update-request.path when the server has put a request in $REQUEST. The request is no
+# more than its existence: it names no version, repository or flag, and the server is never
+# trusted with more (the directory is the one place of the updater's it can write, so what is in
+# it is hostile input: a link, a directory or a large file is removed and ignored, and its
+# content is only ever matched against a fixed pattern). The run is the nightly run, on the
+# configured channel, and every gate of it holds (a hold, manual-upgrade, a firewall change, a
+# stopped or interrupted update, the channel off); the request is taken and removed first, under
+# the lock, so it can't loop, and a second one within $REQUEST_MIN seconds of the last is ignored.
+# The status records that the run was requested, and its outcome (Settings → About, INSTALL.md
+# step 16).
+#
 # Every outside command and place is a variable (DOCKER, CURL, FLOCK, SYSTEMCTL, the
 # TASKTO_UPDATE_* paths and base URLs below), so cmd/taskto/update_test.go runs it against fakes.
 #
@@ -85,6 +98,17 @@ HOLD=${TASKTO_UPDATE_HOLD:-/etc/taskto/update.hold}
 STATE=${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}
 # The one directory the server may read (compose.yaml mounts it, read-only): the status for admins.
 PUBLIC=""  # set below, once `setting` is defined: the environment's, else install.env's, else $STATE/public
+# The one directory the server may write: an operator's "Update now" puts a request in it (the file
+# $REQUEST_FILE). The server's uid owns it; it is on the same filesystem as $STATE, so taking the
+# request is a rename, never a read of what the server controls.
+REQUEST=""  # set below, with PUBLIC
+REQUEST_FILE=update-now
+REQUEST_OWNER=${TASKTO_UPDATE_REQUEST_OWNER:-65532}
+REQUEST_MIN=${TASKTO_UPDATE_REQUEST_MIN_INTERVAL:-600}
+REQUEST_MAX_BYTES=512
+REQUEST_UNIT=${TASKTO_UPDATE_REQUEST_UNIT:-taskto-update-request.path}
+# How long a requested run waits for another run (the nightly one) to end, before it gives up.
+LOCK_WAIT=${TASKTO_UPDATE_LOCK_WAIT:-7200}
 # Who must own it and every directory above it, and where the check of those stops (the
 # directory above which nothing is checked): root and / on a host, other values for the tests.
 OWNER=${TASKTO_UPDATE_OWNER:-0}
@@ -123,9 +147,10 @@ setting() { local v=${!1:-}; [ -n "$v" ] || v=$(envget "$INSTALL_ENV" "$1"); pri
 # Where the status for the server goes: in install.env, so a run by hand, the timer's and the
 # runbook's all agree, with TASKTO_UPDATE_STATUS_SOURCE in .env saying the same to Compose.
 PUBLIC=$(setting TASKTO_UPDATE_PUBLIC "$STATE/public")
+REQUEST=$(setting TASKTO_UPDATE_REQUEST "$STATE/request")
 
 usage() {
-	echo "usage: taskto-update [--dry-run] [--to vMAJOR.MINOR.PATCH|FULL-SHA] | --clear-block | --publish-status" >&2
+	echo "usage: taskto-update [--dry-run] [--to vMAJOR.MINOR.PATCH|FULL-SHA] | --clear-block | --publish-status | --requested" >&2
 	exit "${1:-2}"
 }
 
@@ -143,12 +168,13 @@ semver_key() {
 }
 semver_gt() { [[ "$(semver_key "$1")" > "$(semver_key "$2")" ]]; }
 
-DRY=0 TO="" CLEAR=0 PUBLISH=0
+DRY=0 TO="" CLEAR=0 PUBLISH=0 REQUESTED=0 RUN_ON="" QUIET=""
 while [ $# -gt 0 ]; do
 	case $1 in
 	--dry-run) DRY=1 ;;
 	--clear-block) CLEAR=1 ;;
 	--publish-status) PUBLISH=1 ;;
+	--requested) REQUESTED=1 ;;
 	--to)
 		[ $# -ge 2 ] && [ -n "$2" ] || usage
 		TO=$2
@@ -161,6 +187,7 @@ while [ $# -gt 0 ]; do
 done
 if [ "$CLEAR" = 1 ] && { [ "$DRY" = 1 ] || [ -n "$TO" ]; }; then usage; fi
 if [ "$PUBLISH" = 1 ] && { [ "$CLEAR" = 1 ] || [ "$DRY" = 1 ] || [ -n "$TO" ]; }; then usage; fi
+if [ "$REQUESTED" = 1 ] && { [ "$CLEAR" = 1 ] || [ "$DRY" = 1 ] || [ -n "$TO" ] || [ "$PUBLISH" = 1 ]; }; then usage; fi
 if [ -n "$TO" ] && ! is_semver "$TO" && ! is_sha "$TO"; then
 	echo "taskto-update: --to takes a vMAJOR.MINOR.PATCH tag or a full commit SHA" >&2
 	exit 2
@@ -168,10 +195,19 @@ fi
 
 # Two runs never overlap: the second leaves the first's status alone.
 exec 9>"$LOCK"
-"$FLOCK" -n 9 || {
-	log "another update is already running: nothing to do"
-	exit 0
-}
+if [ "$REQUESTED" = 1 ]; then
+	# A request that comes while the nightly run is going waits for it (the path unit would start
+	# this again at once, and again, while the request is there), then is looked at.
+	"$FLOCK" -w "$LOCK_WAIT" 9 || {
+		log "another update was still running after ${LOCK_WAIT}s: the request stays for the next run"
+		exit 0
+	}
+else
+	"$FLOCK" -n 9 || {
+		log "another update is already running: nothing to do"
+		exit 0
+	}
+fi
 
 CHANNEL=$(setting TASKTO_UPDATE_CHANNEL release)
 REPO=$(setting TASKTO_UPDATE_REPO taskto-ai/taskto)
@@ -196,9 +232,10 @@ write_status() {
 	jq -n --arg at "$started" --arg end "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg result "$result" --arg channel "$CHANNEL" \
 		--arg from "$from" --arg to "$to" --arg sha "$sha" --arg reason "$reason" --arg backup "$backup" \
 		--arg code "$(reason_code "$result" "$reason")" \
-		--argjson digests "$digests" --argjson last "$last" --argjson change "$change" '
-		{at: $at, finished: $end, result: $result, channel: $channel, from: $from, to: $to, sha: $sha,
-		 reason: $reason, code: $code, backup: $backup, digests: $digests} as $s
+		--argjson digests "$digests" --argjson last "$last" --argjson change "$change" --argjson requested "$([ "$REQUESTED" = 1 ] && echo true || echo false)" '
+		({at: $at, finished: $end, result: $result, channel: $channel, from: $from, to: $to, sha: $sha,
+		  reason: $reason, code: $code, backup: $backup, digests: $digests}
+		 + (if $requested then {requested: true} else {} end)) as $s
 		| $s + {last_change: (if $change then $s else $last end)}' >"$f.new" || {
 		# A write that failed half way (a full disk) leaves the last status as it was.
 		rm -f "$f.new"
@@ -222,6 +259,8 @@ reason_code() {
 		;;
 	esac
 	case $2 in
+	"a requested update ran"*) echo rate-limited ;;
+	"the request wasn't"*) echo bad-request ;;
 	"automatic updates are off"*) echo off ;;
 	"updates are on hold"*) echo hold ;;
 	*"needs manual steps"* | *"worker firewall changed"*) echo manual-upgrade ;;
@@ -305,6 +344,135 @@ trusted_path() {
 	done
 }
 
+# request_dir_ok: the request directory is in place as the updater needs it: an absolute path of
+# plain characters, a real directory (never a link) of the server's uid (a directory Docker made
+# itself, as root's, is one the server can't write: not in place), on the same
+# filesystem as $STATE (so taking a request is a rename), and in a directory above it that is root's
+# and nobody else's to write (trusted_path), so the server can't swap it for another place.
+# The server can write inside it, and that is all it can do.
+request_dir_ok() {
+	local info t u
+	[[ $REQUEST =~ ^/[A-Za-z0-9_./-]+$ ]] || return 1
+	case $REQUEST/ in */../* | */./* | *//*) return 1 ;; esac
+	{ [ ! -L "$REQUEST" ] && [ -d "$REQUEST" ]; } || return 1
+	info=$(stat -c '%F|%u' -- "$REQUEST") || return 1
+	IFS='|' read -r t u <<<"$info"
+	[ "$t" = directory ] && [ "$u" = "$REQUEST_OWNER" ] || return 1
+	[ "$(stat -c %d -- "$REQUEST")" = "$(stat -c %d -- "$STATE")" ] || return 1
+	trusted_path "$(dirname "$REQUEST")"
+}
+# request_supported: this host can take an operator's request now: the directory is in place and
+# the path unit that watches it is on. What the page says, in the status.
+request_supported() {
+	request_dir_ok && "$SYSTEMCTL" is-active -q "$REQUEST_UNIT" 2>/dev/null
+}
+# record_request_outcome: what became of this run's request, in $STATE/request-outcome.json, for
+# the page to find: a run that ended, or a request turned away before one began.
+record_request_outcome() {
+	local f=$STATE/request-outcome.json tmp
+	install -d -m 755 "$STATE" || return 1
+	tmp=$(mktemp "$STATE/.request-outcome.XXXXXXXX") || return 1
+	if ! jq -n --arg at "$started" --arg end "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg result "$result" --arg code "$(reason_code "$result" "$reason")" \
+		'{at: $at, finished: $end, result: $result, code: $code}' >"$tmp" || ! chmod 644 "$tmp" || ! mv -f -T "$tmp" "$f"; then
+		rm -f "$tmp"
+		return 1
+	fi
+}
+
+# take_request: for --requested, under the lock: look at the request, remove it, and decide whether
+# this run goes on. It returns when the run goes on; it exits when there is nothing to do or the
+# request is turned away (neither changes the install or the last run's status). The request is
+# renamed out of the server's directory into $STATE first and looked at there, so what the server
+# can change in the directory (a link, a fifo, a huge file, a swap after a check) is never read or
+# followed; only a regular file of at most $REQUEST_MAX_BYTES is a request, and its whole content
+# must be one fixed line (a time and a nonce, which only tell requests apart), else it is ignored. The
+# request is gone before anything else is done, so a failed or refused run can't be started again
+# by it.
+take_request() {
+	local f=$REQUEST/$REQUEST_FILE taken=$STATE/request.taken t size content line nonce="" last_at=0 last_nonce="" now
+	if ! request_dir_ok; then
+		log "the request directory $REQUEST isn't in place as the updater needs it (a real directory of uid $REQUEST_OWNER, the server's, on the same filesystem as $STATE, in a directory only root writes): nothing is read or removed there (deploy/INSTALL.md step 16)"
+		QUIET=1
+		exit 0
+	fi
+	if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+		log "no request waits: nothing to do"
+		QUIET=1
+		exit 0
+	fi
+	install -d -m 755 "$STATE"
+	rm -rf -- "$taken"
+	if ! mv -T -- "$f" "$taken" 2>/dev/null; then
+		rm -rf -- "$f"
+		if [ -e "$f" ] || [ -L "$f" ]; then
+			log "the request can't be removed: it would start this again and again; look at $REQUEST"
+			exit 1
+		fi
+	fi
+	t=$(stat -c %F -- "$taken" 2>/dev/null) || t=""
+	size=$(stat -c %s -- "$taken" 2>/dev/null) || size=0
+	case $t in
+	"regular file" | "regular empty file") ;;
+	*)
+		rm -rf -- "$taken"
+		result=ignored reason="the request wasn't a regular file (${t:-gone}): removed, nothing done"
+		write_public || true
+		log "ignored: $reason"
+		exit 0
+		;;
+	esac
+	if [ "$size" -gt "$REQUEST_MAX_BYTES" ]; then
+		rm -f -- "$taken"
+		result=ignored reason="the request wasn't small ($size bytes, at most $REQUEST_MAX_BYTES): removed, nothing done"
+		write_public || true
+		log "ignored: $reason"
+		exit 0
+	fi
+	# At most one byte more than the limit is read, whatever the file has grown to meanwhile; and
+	# the whole of it must be the one fixed line the server writes, a time and a nonce. Anything
+	# else is not from the server's code: it is removed and ignored, never used.
+	# Bash strips NUL bytes from command substitutions. Replace each with a byte the
+	# grammar rejects before capture, so malformed raw input cannot become a valid line.
+	content=$(head -c $((REQUEST_MAX_BYTES + 1)) -- "$taken" | tr '\000' '?'; echo x) || content=x
+	content=${content%x}
+	rm -f -- "$taken"
+	line=${content%$'\n'}
+	if [ "${#content}" -gt "$REQUEST_MAX_BYTES" ] || [ "$line" = "$content" ] ||
+		! [[ $line =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\ ([0-9a-f]{32})$ ]]; then
+		result=ignored reason="the request wasn't in the fixed format (a time and a nonce, one line): removed, nothing done"
+		write_public || true
+		log "ignored: $reason"
+		exit 0
+	fi
+	nonce=${BASH_REMATCH[1]}
+	# One requested run per $REQUEST_MIN seconds, and never the same request twice.
+	now=$(date +%s)
+	if [ -s "$STATE/request-last-run" ]; then
+		read -r last_at last_nonce <"$STATE/request-last-run" || true
+		[[ $last_at =~ ^[0-9]+$ ]] || last_at=0
+	fi
+	if { [ "$REQUEST_MIN" -gt 0 ] && [ $((now - last_at)) -lt "$REQUEST_MIN" ]; } || { [ -n "$nonce" ] && [ "$nonce" = "$last_nonce" ]; }; then
+		result=ignored reason="a requested update ran less than ${REQUEST_MIN}s ago (or this request was handled): nothing done"
+		write_public || true
+		log "ignored: $reason"
+		exit 0
+	fi
+	# A request must not run without its rate-limit record: a full disk or a failed rename
+	# must never turn repeated requests into unrestricted update attempts.
+	if ! printf '%s %s\n' "$now" "$nonce" >"$STATE/request-last-run.new" ||
+		! mv -f -T "$STATE/request-last-run.new" "$STATE/request-last-run"; then
+		rm -f -- "$STATE/request-last-run.new" 2>/dev/null || true
+		result=failed reason="can't record the requested run: nothing done"
+		write_public || true
+		log "failed: $reason"
+		exit 1
+	fi
+	log "an operator requested an update: taken, and removed"
+	# From here the page shows the run as going on, until it ends.
+	RUN_ON=1
+	write_public || log "can't write $PUBLIC/status.json"
+}
+
 # write_public: the part of the status the server shows its admins (Settings → About), in $PUBLIC,
 # the one directory compose.yaml mounts, read-only, into the server. It is a copy made for that,
 # of codes and versions only: no digests, no path, host or volume name, nothing from the
@@ -324,7 +492,13 @@ trusted_path() {
 # never changes the outcome.
 write_public() {
 	[ "$DRY" = 0 ] || return 0
-	local f=$PUBLIC/status.json tmp priv=null kind="" code="" hold=false
+	local f=$PUBLIC/status.json tmp priv=null kind="" code="" hold=false reqsup=false reqlast=null running=false
+	# A requested run's outcome is kept apart from the last run's, so one that was turned away
+	# before it ran is answered too.
+	if [ "$REQUESTED" = 1 ] && [ -n "$result" ]; then record_request_outcome || log "can't write $STATE/request-outcome.json"; fi
+	if [ -s "$STATE/request-outcome.json" ]; then reqlast=$(jq -c '{at, finished, result, code: (.code // "")}' "$STATE/request-outcome.json" 2>/dev/null) || reqlast=null; fi
+	if request_supported; then reqsup=true; fi
+	if [ "$RUN_ON" = 1 ] && [ -z "$result" ]; then running=true; fi
 	[[ $PUBLIC == /* ]] || { log "$PUBLIC isn't an absolute path"; return 1; }
 	install -d -m 755 "$PUBLIC" || return 1
 	trusted_path "$PUBLIC" || {
@@ -350,12 +524,17 @@ write_public() {
 	[ ! -e "$HOLD" ] || hold=true
 	tmp=$(mktemp "$PUBLIC/.status.XXXXXXXX") || return 1
 	jq -n --argjson priv "$priv" --arg checked "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg channel "$CHANNEL" --argjson hold "$hold" \
-		--arg recorded "$(envget "$ROOT/.env" TASKTO_VERSION)" --arg kind "$kind" --arg code "$code" '
+		--arg recorded "$(envget "$ROOT/.env" TASKTO_VERSION)" --arg kind "$kind" --arg code "$code" \
+		--argjson reqsup "$reqsup" --argjson reqlast "$reqlast" --argjson running "$running" --arg started "$started" --arg to "$to" \
+		--argjson requested "$([ "$REQUESTED" = 1 ] && echo true || echo false)" '
 		def ver: if type == "string" and length <= 100 and test("^(v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)|[0-9a-f]{40})$") then . else null end;
-		def run: if . == null then null else {at, finished, result, from: (.from | ver), to: (.to | ver), code: (.code // null), backed_up: ((.backup // "") != "")} end;
+		def run: if . == null then null else {at, finished, result, from: (.from | ver), to: (.to | ver), code: (.code // null), backed_up: ((.backup // "") != "")}
+			+ (if .requested == true then {requested: true} else {} end) end;
 		{version: 1, checked: $checked, channel: $channel, hold: $hold, recorded_version: ($recorded | ver),
 		 last_run: ($priv | run), last_change: ($priv.last_change // null | run),
-		 needs_person: (if $kind == "" then null else {kind: $kind, code: $code} end)}' >"$tmp" || {
+		 needs_person: (if $kind == "" then null else {kind: $kind, code: $code} end),
+		 running: (if $running then {since: $started, to: ($to | ver), requested: $requested} else null end),
+		 requests: {supported: $reqsup, last: $reqlast}}' >"$tmp" || {
 		rm -f "$tmp"
 		return 1
 	}
@@ -413,7 +592,8 @@ finish() {
 
 cleanup() {
 	local rc=$?
-	if [ -z "$result" ]; then
+	# A quiet exit (a request that isn't there, a directory not in place) is nothing to report.
+	if [ -z "$result" ] && [ -z "$QUIET" ]; then
 		result=failed reason="unexpected error (exit $rc)"
 		write_status || true
 		log "result=failed reason=\"$reason\""
@@ -863,7 +1043,7 @@ preflight() {
 		new_images=$(jq -c --arg k "$ref" --arg v "$id" '. + {($k): $v}' <<<"$new_images")
 	done
 	# The safety rules, on the new settings, before anything of them starts.
-	if ! out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER TASKTO_UPDATE_STATE=$STATE TASKTO_UPDATE_PUBLIC=$PUBLIC bash "$stage/deploy/safety-check.sh" --static "$stage" 2>&1); then
+	if ! out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER TASKTO_UPDATE_STATE=$STATE TASKTO_UPDATE_PUBLIC=$PUBLIC TASKTO_UPDATE_REQUEST=$REQUEST bash "$stage/deploy/safety-check.sh" --static "$stage" 2>&1); then
 		reason="$to's Compose settings break a safety rule: $(printf '%s' "$out" | tail -n 1)"
 		return 1
 	fi
@@ -991,7 +1171,7 @@ verify() {
 		[ "$(compose ps --format '{{.State}}' "$svc")" = running ] || { reason="$svc isn't running"; return 1; }
 	done
 	firewall_ok || { reason="the worker's firewall isn't in place"; return 1; }
-	out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER TASKTO_UPDATE_STATE=$STATE TASKTO_UPDATE_PUBLIC=$PUBLIC bash "$2" 2>&1) || { reason="the safety rules: $(printf '%s' "$out" | tail -n 1)"; return 1; }
+	out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER TASKTO_UPDATE_STATE=$STATE TASKTO_UPDATE_PUBLIC=$PUBLIC TASKTO_UPDATE_REQUEST=$REQUEST bash "$2" 2>&1) || { reason="the safety rules: $(printf '%s' "$out" | tail -n 1)"; return 1; }
 }
 
 # created_match EXPECTED: every container of the project was made from the image that was
@@ -1157,7 +1337,7 @@ clear_block() {
 	firewall_ok || refuse "the worker's firewall isn't in place (its unit, or its rules): runbook step 8's check says what"
 	stage=$(mktemp -d) || refuse "no temporary directory"
 	sf=$(resolve_sha "$from") && fetch "$sf" deploy/safety-check.sh "$stage/safety.sh" || refuse "can't fetch deploy/safety-check.sh of $from to check the running containers with"
-	out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER TASKTO_UPDATE_STATE=$STATE TASKTO_UPDATE_PUBLIC=$PUBLIC bash "$stage/safety.sh" 2>&1) || refuse "the safety rules don't hold in the running containers: $(printf '%s' "$out" | tail -n 1)"
+	out=$(TASKTO_ROOT=$ROOT DOCKER=$DOCKER TASKTO_UPDATE_STATE=$STATE TASKTO_UPDATE_PUBLIC=$PUBLIC TASKTO_UPDATE_REQUEST=$REQUEST bash "$stage/safety.sh" 2>&1) || refuse "the safety rules don't hold in the running containers: $(printf '%s' "$out" | tail -n 1)"
 	if [ -e "$TX" ]; then
 		t_to=$(jq -r '.to // empty' "$TX" 2>/dev/null) || t_to=""
 		# The release the stop was for is recorded as failed already, unless it is what runs now.
@@ -1182,6 +1362,8 @@ clear_block() {
 }
 
 # --- one run -----------------------------------------------------------------------------------
+
+if [ "$REQUESTED" = 1 ]; then take_request; fi
 
 [ -r "$ROOT/.env" ] || finish failed "no $ROOT/.env: not an install from deploy/INSTALL.md" 1
 cd "$ROOT"
@@ -1291,6 +1473,9 @@ if [ "$DRY" = 1 ]; then
 	finish dry-run "would update from $from to $to: its files, images, safety rules, disk and Compose settings are fine"
 fi
 
+# The run is about to change the install: the page shows it as going on (the server restarts).
+RUN_ON=1
+write_public || log "can't write $PUBLIC/status.json"
 protect_old_images || finish failed "can't keep the old images under $KEEP_TAG: nothing was changed" 1
 make_backup || finish failed "the backup failed: nothing was changed" 1
 log "backed up to $backup"

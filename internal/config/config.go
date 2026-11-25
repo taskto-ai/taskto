@@ -38,6 +38,10 @@ type Config struct {
 	// the status it shows admins (docs/install.md#automatic-updates); the server only reads it.
 	// Empty means no updater is set up for this server.
 	UpdateStatusDir string
+	// UpdateRequestDir is the directory "Update now" (Settings → About) puts its request in, for
+	// the host's updater to take. It is the one place of the updater's that the server writes.
+	// Empty means the button is off.
+	UpdateRequestDir string
 	// InsecureCookies drops the Secure attribute from the session cookie, so a browser
 	// sends it over plain http. For local development only: on any other network the
 	// cookie would travel in clear text.
@@ -167,6 +171,13 @@ type Config struct {
 	SMTPPasswordFile string
 	SMTPEgress       string
 
+	// IntegrationEgress is the egress policy of the calls to integrations' providers (Stripe,
+	// Square; see internal/egress and docs/integrations.md). Empty means "public": addresses are
+	// checked after name resolution on every connection, so loopback, private, link-local and
+	// metadata addresses are refused. Each adapter pins its own hosts besides, so the policy
+	// never lists provider names.
+	IntegrationEgress string
+
 	// AuditRetentionDays is how many days the audit log's events are kept (docs/audit.md). Zero
 	// means the default, 365; -1, "off" in the settings, keeps them for ever.
 	AuditRetentionDays int
@@ -213,6 +224,18 @@ var settings = []setting{
 				return errors.New("want an absolute path")
 			}
 			c.UpdateStatusDir = v
+			return nil
+		},
+	},
+	{
+		flag: "update-request-dir", env: "TASKTO_UPDATE_REQUEST_DIR", key: "update_request_dir",
+		usage: "the directory where Update now (Settings > About) puts its request, for the host's updater to take (writable; an absolute path)",
+		get:   func(c Config) string { return c.UpdateRequestDir },
+		set: func(c *Config, v string) error {
+			if v != "" && !filepath.IsAbs(v) {
+				return errors.New("want an absolute path")
+			}
+			c.UpdateRequestDir = v
 			return nil
 		},
 	},
@@ -357,6 +380,12 @@ var settings = []setting{
 		usage: "where the SMTP connection may go: any, public, or a comma-separated list of public, hosts and CIDR prefixes (default any)",
 		get:   func(c Config) string { return c.SMTPEgress },
 		set:   setEgress(func(c *Config) *string { return &c.SMTPEgress }),
+	},
+	{
+		flag: "integration-egress", env: "TASKTO_INTEGRATION_EGRESS", key: "integration_egress",
+		usage: "where calls to integrations' providers may go: public, any, or a comma-separated list of public, hosts and CIDR prefixes (default public)",
+		get:   func(c Config) string { return c.IntegrationEgress },
+		set:   setIntegrationEgress(func(c *Config) *string { return &c.IntegrationEgress }),
 	},
 	{
 		flag: "agent", env: "TASKTO_AGENT", key: "agent", isBool: true,
@@ -607,6 +636,21 @@ func (c Config) SMTPEgressPolicy() egress.Policy {
 	return p
 }
 
+// IntegrationEgressPolicy is the egress policy of the calls to integrations' providers: what is
+// set, or "public" when nothing is. It fails closed: a value that is empty (egress.Parse reads an
+// empty policy as "any") or that doesn't parse is "public" too. Load has already checked it.
+func (c Config) IntegrationEgressPolicy() egress.Policy {
+	public := egress.MustParse("public")
+	if strings.TrimSpace(c.IntegrationEgress) == "" {
+		return public
+	}
+	p, err := egress.Parse(c.IntegrationEgress)
+	if err != nil {
+		return public
+	}
+	return p
+}
+
 // AuditRetention is how long the audit log's events are kept: a year when unset, and zero, for
 // ever, when turned off.
 func (c Config) AuditRetention() time.Duration {
@@ -692,6 +736,26 @@ func setEgress(field func(*Config) *string) func(*Config, string) error {
 			return fmt.Errorf("egress policy: %w", err)
 		}
 		*field(c) = p.String()
+		return nil
+	}
+}
+
+// setIntegrationEgress is setEgress for the integrations' policy, where nothing said is "public",
+// not "any": an empty value (an empty flag or file entry) is the default, so it can't open calls
+// that carry credentials to every address. The checked text is kept as it was written, not
+// as the parsed policy prints it: "any." is a host name, and printing it as "any" would read back
+// as the opt-out of every restriction.
+func setIntegrationEgress(field func(*Config) *string) func(*Config, string) error {
+	return func(c *Config, v string) error {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			*field(c) = "public"
+			return nil
+		}
+		if _, err := egress.Parse(v); err != nil {
+			return fmt.Errorf("egress policy: %w", err)
+		}
+		*field(c) = v
 		return nil
 	}
 }

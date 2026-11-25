@@ -15,5 +15,5 @@
     "allowImportingTsExtensions": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "pwa", "vite.config.ts"]
+  "include": ["src", "pwa", "vite.config.ts", "e2e/conversation/harness.tsx"]
 }

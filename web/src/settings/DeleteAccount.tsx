@@ -10,7 +10,12 @@ import { api, type DeletionReply, type DeletionStatus, exportPath, SESSION_LOST 
 import { rememberDeletion } from '../auth/deleted'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, useAction } from './parts'
+import { Button } from '../ui/Button'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Alert, FormActions, Loading, Section, useAction } from './parts'
 
 export function DeleteAccount({ workspace }: { workspace: number }) {
   const t = useT()
@@ -47,109 +52,103 @@ export function DeleteAccount({ workspace }: { workspace: number }) {
   const blocked = (s?.blockers.length ?? 0) > 0
   const needsFreshLogin = s?.method === 'fresh_login' && !s.fresh
   return (
-    <section className="tt-panel" aria-labelledby="tt-delete-account">
-      <h2 id="tt-delete-account">{t('settings.delete.title')}</h2>
-      <Alert error={status.error} />
-      {!asking && (
-        <>
-          <p className="tt-muted tt-small">{t('settings.delete.summary')}</p>
-          <p>
-            <button type="button" className="tt-button" onClick={() => setAsking(true)}>
-              {t('settings.delete.start')}
-            </button>
-          </p>
-        </>
-      )}
-      {asking && !s && !status.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {asking && !s && status.error && (
-        <p>
-          <button type="button" className="tt-button" onClick={() => setAsking(false)}>
-            {t('common.cancel')}
-          </button>
-        </p>
-      )}
-      {asking && s && (
-        <>
-          <p className="tt-muted tt-small">{t('settings.delete.intro', { days: f.number(s.grace_days) })}</p>
-          <p className="tt-small">{t('settings.delete.removed')}</p>
-          <ul className="tt-small">
-            <li>{t('settings.delete.removedPrivate')}</li>
-            <li>{t('settings.delete.removedConversations')}</li>
-            <li>{t('settings.delete.removedLogins')}</li>
-          </ul>
-          <p className="tt-small">{t('settings.delete.kept')}</p>
-          <p className="tt-muted tt-small">{t('settings.delete.cancel')}</p>
-          {blocked && (
-            <div role="alert" className="tt-error">
-              <p>{t('settings.delete.blocked')}</p>
-              <ul>
-                {s.blockers.map((b) => (
-                  <li key={b.workspace_id}>
-                    {t(b.operator ? 'settings.delete.blockedOperator' : 'settings.delete.blockedAdmin', {
-                      workspace: b.workspace,
-                    })}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <Alert error={exporting.error} />
-          <p>
-            <button type="button" className="tt-button" onClick={download} disabled={exporting.busy}>
-              {t('settings.delete.exportFirst')}
-            </button>
-          </p>
-          {needsFreshLogin && <p className="tt-notice">{t('settings.delete.signInAgain')}</p>}
-          {!needsFreshLogin && (
-            <form className="tt-form" onSubmit={submit} aria-label={t('settings.delete.formLabel')}>
-              <p>{t(s.method === 'password' ? 'settings.delete.confirmIntro' : 'settings.delete.confirmIntroFresh')}</p>
-              {s.method === 'password' && (
-                <>
-                  <label>
-                    {t('settings.delete.password')}
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                      autoComplete="current-password"
-                    />
-                  </label>
-                  {s.two_factor && (
-                    <label>
-                      {t('settings.delete.code')}
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={code}
-                        onChange={(e) => setCode(e.target.value)}
-                        required
-                        autoComplete="one-time-code"
+    <Section title={t('settings.delete.title')}>
+      <Panel padded className="settings-panel-body">
+        <Alert error={status.error} />
+        {!asking && (
+          <>
+            <p className="settings-muted">{t('settings.delete.summary')}</p>
+            <FormActions>
+              <Button variant="danger" onClick={() => setAsking(true)}>
+                {t('settings.delete.start')}
+              </Button>
+            </FormActions>
+          </>
+        )}
+        {asking && !s && !status.error && <Loading lines={2} />}
+        {asking && !s && status.error && (
+          <FormActions>
+            <Button onClick={() => setAsking(false)}>{t('common.cancel')}</Button>
+          </FormActions>
+        )}
+        {asking && s && (
+          <>
+            <p className="settings-muted">{t('settings.delete.intro', { days: f.number(s.grace_days) })}</p>
+            <p className="settings-text">{t('settings.delete.removed')}</p>
+            <ul className="settings-list">
+              <li>{t('settings.delete.removedPrivate')}</li>
+              <li>{t('settings.delete.removedConversations')}</li>
+              <li>{t('settings.delete.removedLogins')}</li>
+            </ul>
+            <p className="settings-text">{t('settings.delete.kept')}</p>
+            <p className="settings-muted">{t('settings.delete.cancel')}</p>
+            {blocked && (
+              <Notice tone="danger" title={t('settings.delete.blocked')}>
+                <ul className="settings-list">
+                  {s.blockers.map((b) => (
+                    <li key={b.workspace_id}>
+                      {t(b.operator ? 'settings.delete.blockedOperator' : 'settings.delete.blockedAdmin', {
+                        workspace: b.workspace,
+                      })}
+                    </li>
+                  ))}
+                </ul>
+              </Notice>
+            )}
+            <Alert error={exporting.error} />
+            <FormActions>
+              <Button icon="down" onClick={download} loading={exporting.busy}>
+                {t('settings.delete.exportFirst')}
+              </Button>
+            </FormActions>
+            {needsFreshLogin && <Notice tone="info">{t('settings.delete.signInAgain')}</Notice>}
+            {!needsFreshLogin && (
+              <form className="settings-form" onSubmit={submit} aria-label={t('settings.delete.formLabel')}>
+                <p className="settings-text">
+                  {t(s.method === 'password' ? 'settings.delete.confirmIntro' : 'settings.delete.confirmIntroFresh')}
+                </p>
+                {s.method === 'password' && (
+                  <>
+                    <Field label={t('settings.delete.password')} required>
+                      <Input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        autoComplete="current-password"
                       />
-                    </label>
-                  )}
-                </>
-              )}
-              <Alert error={deleting.error} />
-              <div className="tt-row-actions">
-                <button type="submit" className="tt-button tt-danger" disabled={deleting.busy || blocked}>
-                  {deleting.busy ? t('settings.delete.deleting') : t('settings.delete.confirm')}
-                </button>
-                <button type="button" className="tt-button" onClick={() => setAsking(false)} disabled={deleting.busy}>
-                  {t('common.cancel')}
-                </button>
-              </div>
-            </form>
-          )}
-          {needsFreshLogin && (
-            <p>
-              <button type="button" className="tt-button" onClick={() => setAsking(false)}>
-                {t('common.cancel')}
-              </button>
-            </p>
-          )}
-        </>
-      )}
-    </section>
+                    </Field>
+                    {s.two_factor && (
+                      <Field label={t('settings.delete.code')} required>
+                        <Input
+                          type="text"
+                          inputMode="numeric"
+                          value={code}
+                          onChange={(e) => setCode(e.target.value)}
+                          autoComplete="one-time-code"
+                        />
+                      </Field>
+                    )}
+                  </>
+                )}
+                <Alert error={deleting.error} />
+                <FormActions>
+                  <Button type="submit" variant="danger" loading={deleting.busy} disabled={blocked}>
+                    {deleting.busy ? t('settings.delete.deleting') : t('settings.delete.confirm')}
+                  </Button>
+                  <Button onClick={() => setAsking(false)} disabled={deleting.busy}>
+                    {t('common.cancel')}
+                  </Button>
+                </FormActions>
+              </form>
+            )}
+            {needsFreshLogin && (
+              <FormActions>
+                <Button onClick={() => setAsking(false)}>{t('common.cancel')}</Button>
+              </FormActions>
+            )}
+          </>
+        )}
+      </Panel>
+    </Section>
   )
 }

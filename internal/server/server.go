@@ -23,6 +23,7 @@ import (
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/dictation"
 	"taskto.ai/taskto/internal/export"
+	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/mail"
 	"taskto.ai/taskto/internal/mcpserver"
@@ -61,6 +62,8 @@ type Options struct {
 	CLIAccounts *cliaccounts.Service
 	// Dictation serves speech to text for the chat box; nil leaves it out.
 	Dictation *dictation.Service
+	// Integrations serves the workspaces' integrations with outside providers; nil leaves them out.
+	Integrations *integrations.Service
 	// Browser serves the agent browser (/api/me/browser and its live view); nil leaves it out.
 	Browser *agentbrowser.Service
 	// Notifications serves the notification inbox and Web Push subscriptions; nil leaves them out.
@@ -96,6 +99,10 @@ type Options struct {
 	// admins' update route reads (internal/updatestatus). Empty reports none. The server only
 	// reads it: it never runs the updater or touches Docker.
 	UpdateStatusDir string
+	// UpdateRequestDir is the directory "Update now" puts its request in, which the host's
+	// updater takes (internal/updatestatus, docs/install.md#update-now). Empty leaves the
+	// button off. It is the one place of the updater's the server may write.
+	UpdateRequestDir string
 }
 
 // New returns the root HTTP handler, backed by the database sqlDB, which must be
@@ -111,7 +118,8 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	}
 	accounts.Routes(mux)
 	mux.Handle("GET /api/workspaces/{workspace}/backup", accounts.RequireOperator(backupStatus(opts.BackupDataDir)))
-	mux.Handle("GET /api/workspaces/{workspace}/updates", accounts.RequireOperator(updateStatus(version, opts.UpdateStatusDir)))
+	mux.Handle("GET /api/workspaces/{workspace}/updates", accounts.RequireOperator(updateStatus(version, opts.UpdateStatusDir, opts.UpdateRequestDir)))
+	mux.Handle("POST /api/workspaces/{workspace}/updates/request", accounts.RequireOperator(updateRequest(version, opts.UpdateStatusDir, opts.UpdateRequestDir, sqlDB, time.Now)))
 	auditRoutes(mux, accounts, sqlDB)
 	mailRoutes(mux, accounts, opts.Mail, newMailTestGate(opts.MailTestCooldown, time.Now))
 	checklist.New(sqlDB, checklist.Options{
@@ -175,6 +183,9 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	}
 	if opts.Dictation != nil {
 		opts.Dictation.Routes(mux, accounts, spaces)
+	}
+	if opts.Integrations != nil {
+		opts.Integrations.Routes(mux, accounts, spaces)
 	}
 	if opts.Browser != nil {
 		opts.Browser.Routes(mux, accounts)

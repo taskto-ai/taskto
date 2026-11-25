@@ -20,7 +20,7 @@ Each event is one row of `audit_events` (`internal/db/migrations/0036_audit_even
 | `actor_id` | the user who did it; empty for an anonymous attempt (a login to an account that doesn't exist, a refused single sign-on) or once that user is deleted (`actor_deleted` then says which) |
 | `actor_deleted`, `target_deleted` | 1 when the actor's account, or the account the event is about, was [deleted](#deleted-accounts) |
 | `action` | a stable snake_case code, from the table below |
-| `target_type`, `target_id`, `target_created_at` | what it was done to: a `user`, `invite`, `space`, `access_token`, `provider_account`, `shared_cli_account` or `workspace`, and when that object was created (see below) |
+| `target_type`, `target_id`, `target_created_at` | what it was done to: a `user`, `invite`, `space`, `access_token`, `provider_account`, `shared_cli_account`, `integration` or `workspace`, and when that object was created (see below) |
 | `details` | a small JSON of facts the action declares: a role before and after, the names of the fields that changed, a provider's host. Never a name or other text a person typed |
 | `client_addr` | the address the request came from, found as the login limits find it (the direct peer, or the client behind a [trusted proxy](install.md)); empty for an event with no request |
 
@@ -81,13 +81,19 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `provider_account_created`, `_updated`, `_removed` | a model provider account, a workspace's or a person's own | the account's, none for a personal one | account | `kind`, `scope`, `base_host`, `fields`, `api_key_set` or `api_key_changed` |
 | `data_export_started` | a member starts the export of their own data (`GET …/export`); one event per export that began, none for one turned away by its limits | the workspace | user (the exporter) | |
 | `workspace_export_started` | an admin starts the export of the workspace's shared spaces they are a member of and its member list; one event per export that began, none for one turned away by its limits | the workspace | workspace | `spaces`: how many shared spaces it holds (never their names) |
+| `server_update_requested` | an operator presses "Update now" in Settings → About; one event per request that was written, none for one refused (a pending request, a running update, a channel that is off, a host that can't take one) | the workspace they asked in | workspace | `channel`: the updater's channel, `release` or `main` |
 | `shared_cli_account_created`, `_updated`, `_removed` | a workspace's shared CLI account | the workspace | account | `cli`, `base_host`, `fields`, `api_key_set` or `api_key_changed`; `members_signed_out` on removal |
 | `cli_account_modes_changed` | the default or members' modes for shared CLI accounts changed (a request that changes nothing records nothing) | the workspace | workspace | `default_mode` if it changed, `members_changed` |
 | `search_embeddings_changed` | the workspace's embeddings model is set or turned off, or its account is removed | the workspace | workspace | `enabled`, `account`; `cascade` when the account's removal turned it off |
 | `search_consent_changed` | a space is consented to, or withdrawn from, the embeddings endpoint, or its consent goes with the account | the space's | space | `enabled`; `cascade` |
 | `dictation_settings_changed` | an admin saves the workspace's dictation settings | the workspace | workspace | `engine`, `language`, `base_host`, `api_key_changed`, `api_key_set`, `notice_confirmed` |
+| `integration_created` | an admin connects an integration | the integration's | integration | `provider`, `kind`, `mode`, `api_key_set`, `webhook_secret_set` |
+| `integration_updated` | an admin changes an integration's display name, settings, ceiling, currencies or secrets (a request that changes nothing records nothing; a secret that is sent counts as changed, even if it is the one already stored) | the integration's | integration | `provider`, `mode`, `fields`, `api_key_changed`, `webhook_secret_changed` |
+| `integration_disabled`, `integration_enabled` | an admin switches an integration off or on | the integration's | integration | `provider` |
+| `integration_spaces_changed` | an admin changes which spaces may use an integration | the integration's | integration | `provider`, `added`, `removed` (counts, never the spaces) |
+| `integration_removed` | an admin deletes an integration | the integration's | integration | `provider`, `kind` |
 
-The names a person gives things (a token's, a space's, a shared account's label, a model's) are
+The names a person gives things (a token's, a space's, a shared account's label, an integration's name, a model's) are
 not recorded: they are free text, and people paste secrets into such boxes. The target's id
 says which object it was, and `fields` says what about it changed.
 

@@ -1,0 +1,68 @@
+@layer components {
+  .ui-icon-button {
+    position: relative;
+    box-sizing: border-box;
+    display: inline-grid;
+    place-items: center;
+    vertical-align: middle;
+    flex: none;
+    inline-size: var(--control-md);
+    block-size: var(--control-md);
+    padding: 0;
+    margin: 0;
+    border: var(--line-thin) solid transparent;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text-soft);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      background-color var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+
+  .ui-icon-button-sm {
+    inline-size: var(--control-sm);
+    block-size: var(--control-sm);
+    border-radius: var(--radius-sm);
+  }
+
+  .ui-icon-button:hover {
+    background: var(--color-hover);
+    color: var(--color-text);
+  }
+
+  .ui-icon-button:active,
+  .ui-icon-button[aria-pressed="true"] {
+    background: var(--color-selected);
+    color: var(--color-text);
+  }
+
+  .ui-icon-button:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
+  /* Disabled: muted and inert, with no ground on hover. */
+  .ui-icon-button:disabled,
+  .ui-icon-button:disabled:hover {
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: not-allowed;
+  }
+
+  /* Fingers: the touch size, either size. */
+  @media (pointer: coarse) {
+    .ui-icon-button,
+    .ui-icon-button-sm {
+      inline-size: var(--control-touch);
+      block-size: var(--control-touch);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-icon-button {
+      transition: none;
+    }
+  }
+}

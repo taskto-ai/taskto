@@ -1,3 +1,8 @@
+// First of all, before anything that imports a stylesheet: the design tokens and the cascade layers'
+// order (ui/index.css). Vite writes the CSS in the order the modules are imported, so a component's
+// `@layer components { … }` that came first would fix the layers' order before the statement that
+// declares it (src/ui/tokens.test.ts checks this import stays first).
+import './ui/index.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
@@ -12,10 +17,11 @@ import { trackKeyboard } from './pwa/viewport'
 import '@fontsource-variable/bricolage-grotesque/wght.css'
 import '@fontsource-variable/inter/wght.css'
 import '@fontsource-variable/jetbrains-mono/wght.css'
-// The design tokens first (scales, the brand's colour roles, the cascade layers), then the stylesheet.
-import './ui/index.css'
+// Then the old stylesheet, after the tokens (which are first, above).
 import './styles.css'
 import { applyTheme, storedTheme } from './theme'
+
+const GALLERY_PATH = '/_gallery'
 
 const root = document.getElementById('root')
 if (!root) throw new Error('index.html has no #root element')
@@ -31,12 +37,23 @@ await Promise.race([initLocale(), new Promise((resolve) => setTimeout(resolve, 1
 listenForInstall()
 trackKeyboard()
 
-createRoot(root).render(
-  <StrictMode>
-    <App />
-    <UpdateBanner />
-  </StrictMode>,
-)
+// The design system's gallery (ui/Gallery.tsx), on the dev server only: a production build drops
+// this branch and the chunk it would load, so the gallery is not in the app people get.
+if (import.meta.env.DEV && window.location.pathname === GALLERY_PATH) {
+  const { default: Gallery } = await import('./ui/Gallery')
+  createRoot(root).render(
+    <StrictMode>
+      <Gallery />
+    </StrictMode>,
+  )
+} else {
+  createRoot(root).render(
+    <StrictMode>
+      <App />
+      <UpdateBanner />
+    </StrictMode>,
+  )
 
-// Once drawn: the offline shell, and its updates (src/pwa/update.ts).
-registerServiceWorker()
+  // Once drawn: the offline shell, and its updates (src/pwa/update.ts).
+  registerServiceWorker()
+}

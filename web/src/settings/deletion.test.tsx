@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { type DeletionStatus, type Me, type Member, type PendingDeletion, SESSION_LOST, type Workspace } from '../api'
 import { takeDeletion } from '../auth/deleted'
 import { type Call, fakeFetch } from '../test/fakes'
+import { answer, chooseFromMenu } from '../test/ui'
 import { SettingsPage } from './SettingsPage'
 
 const me = (operator: boolean): Me => ({
@@ -150,19 +151,25 @@ test('an admin deletes a member after a question, and the row shows when it is p
     },
   })
   render(<SettingsPage me={me(false)} workspace={admin} tab="members" />)
-  const row = async () => (await screen.findByText('alice@example.com')).closest('li') as HTMLElement
+  const row = async () => (await screen.findByText('alice@example.com')).closest('tr') as HTMLElement
 
-  const own = (await screen.findByText('owner@example.com')).closest('li') as HTMLElement
-  expect(within(own).queryByRole('button', { name: /Delete account/ })).toBeNull()
+  // Not for yourself.
+  await screen.findByText('owner@example.com')
+  expect(screen.queryByRole('button', { name: 'More actions for Owner' })).toBeNull()
 
-  fireEvent.click(within(await row()).getByRole('button', { name: 'Delete account Alice' }))
+  await row()
+  chooseFromMenu('More actions for Alice', 'Delete account')
   expect(sent(calls, 'POST', '/api/workspaces/1/members/2/deletion')).toHaveLength(0)
-  screen.getByText(/shared spaces stays, as “Deleted user”/)
-  fireEvent.click(screen.getByRole('button', { name: 'Yes, delete the account' }))
+  within(await screen.findByRole('alertdialog', { name: 'Delete account Alice' })).getByText(
+    /shared spaces stays, as “Deleted user”/,
+  )
+  await answer('Yes, delete the account')
   await within(await row()).findByText(/Deleting on/)
-  // While it waits, the account has no other buttons that would act on it.
-  expect(within(await row()).queryByRole('button', { name: 'Delete account Alice' })).toBeNull()
-  expect(within(await row()).queryByRole('button', { name: 'Enable Alice' })).toBeNull()
+  // While it waits, the account has no menu entries that would act on it, but removing it.
+  fireEvent.click(screen.getByRole('button', { name: 'More actions for Alice' }))
+  expect(screen.queryByRole('menuitem', { name: 'Delete account' })).toBeNull()
+  expect(screen.queryByRole('menuitem', { name: 'Enable' })).toBeNull()
+  expect(screen.queryByRole('menuitem', { name: 'Disable' })).toBeNull()
   // A plain admin sees no list of waiting accounts: that is the operator's.
   expect(screen.queryByRole('heading', { name: 'Accounts waiting to be deleted' })).toBeNull()
   expect(sent(calls, 'GET', '/api/workspaces/1/account-deletions')).toHaveLength(0)
@@ -208,7 +215,7 @@ test('an operator sees every account waiting to be deleted and cancels one', asy
 
   fireEvent.click(within(alice).getByRole('button', { name: 'Cancel deletion Alice' }))
   expect(sent(calls, 'DELETE', '/api/workspaces/1/account-deletions/2')).toHaveLength(0)
-  fireEvent.click(screen.getByRole('button', { name: 'Yes, cancel it' }))
+  await answer('Yes, cancel it')
   await waitFor(() => expect(sent(calls, 'DELETE', '/api/workspaces/1/account-deletions/2')).toHaveLength(1))
   await waitFor(() => expect(within(list).queryByText('Alice')).toBeNull())
 })

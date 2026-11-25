@@ -111,6 +111,7 @@ var targetTables = map[string]string{
 	TargetSpace:         "spaces",
 	TargetProvider:      "provider_accounts",
 	TargetSharedAccount: "cli_shared_accounts",
+	TargetIntegration:   "integrations",
 }
 
 // Record adds e to the log through x, which should be the transaction of the change it

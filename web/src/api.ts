@@ -635,6 +635,59 @@ export type ProviderAccount = {
 // `code` and `params` are the failure's, for codeText().
 export type ProviderCheck = { ok: boolean; error?: string; code?: string; params?: Params; missing?: string[] }
 
+// An integration: a workspace's connection to an account at a payment provider. A secret is only
+// ever "set" or "not set": the API never returns one.
+export type Integration = {
+  id: number
+  provider: string
+  kind: string
+  name: string
+  display_name: string
+  mode: 'test' | 'live'
+  settings: Record<string, string>
+  // The admin's ceiling for one payment, in the smallest unit of each currency, and the currencies.
+  max_amount_minor: number
+  currencies: string[]
+  secrets: Record<string, string>
+  // The address to register at the provider; null when the server has no public URL.
+  webhook_url: string | null
+  disabled: boolean
+  disabled_at: string | null
+  // The ids of the spaces whose apps may use it that the caller manages (their own private space
+  // and the shared ones), and how many more are allowed that they can't see: other people's
+  // private spaces, which are never named.
+  spaces: number[]
+  other_spaces: number
+  created_at: string
+  updated_at: string
+  last_event_at: string | null
+}
+
+export type IntegrationSecretSpec = { name: string; required: boolean }
+export type IntegrationSettingSpec = { name: string; options: string[]; required: boolean }
+export type IntegrationProvider = {
+  id: string
+  kinds: string[]
+  secrets: IntegrationSecretSpec[]
+  settings: IntegrationSettingSpec[]
+}
+
+// What the connect form needs: the closed list of providers and currencies.
+export type IntegrationRegistry = {
+  providers: IntegrationProvider[]
+  currencies: string[]
+  // The server's number of decimals for each currency: the unit a ceiling is in.
+  exponents: Record<string, number>
+  max_amount_minor: number
+  webhooks_available: boolean
+}
+
+// The answer of a check: `code` and `params` are for codeText().
+export type IntegrationCheck = { ok: boolean; remote: boolean; code?: string; params?: Params }
+
+// What a space's readers see of an integration allowed there.
+export type SpaceIntegration = { id: number; name: string; display_name: string; kind: string; status: string }
+
 export type SearchSettings = {
   embeddings: { account: number; provider: string; model: string } | null
   documents: number
@@ -864,24 +917,40 @@ export type UpdateRun = {
   to?: string
   code?: string
   backed_up?: boolean
+  // The run was asked for with "Update now", not the nightly one.
+  requested?: boolean
 }
+// A run that is changing the install now (the server restarts during it).
+export type UpdateRunning = { since: string; to?: string; requested?: boolean }
+// What became of the last "Update now", also when the updater turned it away before a run.
+export type UpdateRequestRun = { at?: string; finished?: string; result: string; code?: string }
+// Whether "Update now" can be pressed, and if not why: not_configured, unsupported, off, pending or running.
+export type UpdateRequestState = { available: boolean; reason?: string; pending_since?: string }
 export type UpdateStatus = {
   configured: boolean
   running_version: string
   expects_status?: boolean
   stale?: boolean
   status: {
+    version: number
     checked?: string
     channel: string
     hold?: boolean
     recorded_version?: string
     last_run: UpdateRun | null
     last_change: UpdateRun | null
-    needs_person: { kind: 'blocked' | 'manual-upgrade'; code?: string } | null
+    needs_person: { kind: string; code?: string } | null
+    running: UpdateRunning | null
+    // Null from an updater that predates the button.
+    requests: { supported: boolean; last: UpdateRequestRun | null } | null
   } | null
+  request: UpdateRequestState
 }
+// "Update now": POST with no body. The host installs what its nightly run would, under its gates.
+export type UpdateRequested = { requested_at: string }
 
 export const updatesPath = (workspace: number) => `${ws(workspace)}/updates`
+export const updateRequestPath = (workspace: number) => `${ws(workspace)}/updates/request`
 
 // Storage quotas and what each space stores (docs/quotas.md), in bytes. A limit of 0 is none.
 export type StorageLimits = { workspace: number; user: number }
