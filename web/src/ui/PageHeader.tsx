@@ -15,15 +15,25 @@ export interface PageHeaderProps {
   path?: ReactNode
   // The title's heading level: 1 for a page, 2 where the page is inside another.
   level?: 1 | 2
+  // A control right after the title, outside the heading: a menu that switches what the title
+  // names (another board, another space).
+  titleAction?: ReactNode
 }
 
-export function PageHeader({ title, help, actions, path, level = 1 }: PageHeaderProps) {
+export function PageHeader({ title, help, actions, path, level = 1, titleAction }: PageHeaderProps) {
   const Heading = level === 1 ? 'h1' : 'h2'
   return (
     <header className="ui-page-header">
       <div className="ui-page-header-titles">
         {path && <div className="ui-page-header-path">{path}</div>}
-        <Heading className="ui-page-header-title">{title}</Heading>
+        {titleAction ? (
+          <div className="ui-page-header-title-row">
+            <Heading className="ui-page-header-title">{title}</Heading>
+            {titleAction}
+          </div>
+        ) : (
+          <Heading className="ui-page-header-title">{title}</Heading>
+        )}
         {help && <p className="ui-page-header-help">{help}</p>}
       </div>
       {actions && <div className="ui-page-header-actions">{actions}</div>}

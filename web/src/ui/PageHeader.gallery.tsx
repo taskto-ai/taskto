@@ -2,7 +2,7 @@ import { useT } from '../i18n'
 import { Button } from './Button'
 import { Specimen } from './GalleryParts'
 import { Icon } from './Icon'
-import { MenuItem, MoreMenu } from './Menu'
+import { Menu, MenuButton, MenuItem, MenuList, MoreMenu } from './Menu'
 import { PageHeader } from './PageHeader'
 
 export const title = 'PageHeader'
@@ -36,6 +36,17 @@ export default function PageHeaderGallery() {
               </>
             }
             title={t('gallery.layout.personal')}
+            titleAction={
+              <Menu align="start">
+                <MenuButton label={t('gallery.layout.switchBoard')} icon="chevron-updown" size="sm" />
+                <MenuList>
+                  <MenuItem icon="check" onSelect={() => {}}>
+                    {t('gallery.layout.personal')}
+                  </MenuItem>
+                  <MenuItem onSelect={() => {}}>{t('gallery.layout.boards')}</MenuItem>
+                </MenuList>
+              </Menu>
+            }
             actions={
               <>
                 <Button icon="filter">{t('gallery.layout.filter')}</Button>

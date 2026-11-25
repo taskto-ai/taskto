@@ -136,7 +136,7 @@ export const SCREENS = [
     name: 'empty-boards',
     phase: 'empty',
     show: (s) => s.go(s.path('boards')),
-    ready: (s) => [heading(s, 'Boards'), column(s, 'Backlog')],
+    ready: (s) => [heading(s, 'Personal'), column(s, 'Backlog')],
   },
   {
     name: 'empty-apps',
@@ -220,7 +220,7 @@ export const SCREENS = [
     name: 'boards',
     phase: 'seeded',
     show: (s) => s.go(s.path('boards')),
-    ready: (s) => [heading(s, 'Boards'), text(s, 'Write the launch post')],
+    ready: (s) => [heading(s, 'Personal'), text(s, 'Write the launch post')],
   },
   {
     name: 'board',
@@ -232,17 +232,31 @@ export const SCREENS = [
     name: 'board-shared',
     phase: 'seeded',
     show: (s) => s.go(s.path('boards', `${s.ids.team}:${s.ids.teamBoard}`)),
-    ready: (s) => [
-      column(s, 'Backlog'),
-      text(s, 'Quotas: design the usage view'),
-      s.page.locator('strong', { hasText: 'Launch' }),
-    ],
+    ready: (s) => [column(s, 'Backlog'), text(s, 'Quotas: design the usage view'), heading(s, 'Launch')],
   },
   {
     name: 'card-open',
     phase: 'seeded',
     show: (s) => s.go(s.path('boards', `${s.ids.space}:${s.ids.board}:${s.ids.card}`)),
     ready: (s) => [heading(s, 'Write the launch post'), text(s, 'Looks good. Can we add the pricing table?')],
+  },
+  {
+    name: 'card-blocked',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('boards', `${s.ids.space}:${s.ids.board}`))
+      await s.page.getByRole('button', { name: /^Audit log filters/ }).click()
+    },
+    ready: (s) => [heading(s, 'Audit log filters'), text(s, 'Blocked: waiting for the audit log API')],
+  },
+  {
+    name: 'card-move',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('boards', `${s.ids.space}:${s.ids.board}`))
+      await s.page.getByRole('button', { name: 'Move “Write the launch post”' }).click()
+    },
+    ready: (s) => [s.page.getByRole('menuitem', { name: 'To Doing' })],
   },
   {
     name: 'card-add',

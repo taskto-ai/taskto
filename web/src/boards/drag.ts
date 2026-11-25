@@ -3,9 +3,9 @@ import { ApiError, api, type Card, errorText } from '../api'
 import { useT } from '../i18n'
 import { dropPosition } from './move'
 
-// Dragging a card: which one, and the column it is over. The Column field of the open card
-// does the same from the keyboard, so dragging is only a quicker way for a pointer. A drop
-// moves the card with the version last read; onMoved gets the card as moved, and onError the
+// Dragging a card: which one, and the column it is over. Each card's Move menu does the same
+// from the keyboard and on touch, so dragging is only a quicker way for a mouse. A drop (or the
+// menu) moves the card with the version last read; onMoved gets the card as moved, and onError the
 // error to show (null when a move starts). The board is read again after every move.
 export function useCardDrag({
   url,
@@ -24,17 +24,12 @@ export function useCardDrag({
   const [over, setOver] = useState<Card['column'] | null>(null)
   const t = useT()
 
-  // Drops the dragged card in `column`, before `before` or last; position counts the column's
-  // cards without it, as the server does.
-  const drop = async (e: DragEvent, column: Card['column'], before?: Card) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const c = dragged
-    setDragged(null)
-    setOver(null)
-    if (!c) return
+  // Moves a card to `column`, before `before` or last; position counts the column's cards without
+  // it, as the server does. Answers whether a move was sent: none when it would leave the card
+  // where it is. A drop and the card's Move menu both move through it.
+  const move = async (c: Card, column: Card['column'], before?: Card): Promise<boolean> => {
     const position = dropPosition(cards ?? [], c, column, before)
-    if (position === null) return
+    if (position === null) return false
     onError(null)
     try {
       const updated = await api<Card>(`${url}/${c.id}/move`, {
@@ -48,6 +43,18 @@ export function useCardDrag({
       )
     }
     reload()
+    return true
+  }
+
+  // Drops the dragged card in `column`, before `before` or last.
+  const drop = async (e: DragEvent, column: Card['column'], before?: Card) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const c = dragged
+    setDragged(null)
+    setOver(null)
+    if (!c) return
+    await move(c, column, before)
   }
   const dragOver = (e: DragEvent, column: Card['column']) => {
     if (!dragged) return
@@ -65,7 +72,7 @@ export function useCardDrag({
     setDragged(null)
     setOver(null)
   }
-  return { dragged, over, drop, dragOver, start, end }
+  return { dragged, over, drop, dragOver, start, end, move }
 }
 
 export type CardDrag = ReturnType<typeof useCardDrag>

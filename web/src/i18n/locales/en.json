@@ -670,14 +670,10 @@
     "add": "Add",
     "card": "Card",
     "cardNumber": "Card {id}",
-    "back": "Back to the board",
-    "close": "Close",
     "cardChanged": "Someone changed this card since you opened it.",
     "takeTheirs": "Load their version",
     "redoMine": "Redo my change over it",
     "pollStopped": "This card's comments stopped updating: {error}",
-    "column": "Column",
-    "assignedTo": "Assigned to {name}",
     "restore": "Restore",
     "archive": "Archive",
     "noDescriptionYet": "No description yet.",
@@ -696,7 +692,6 @@
     "setBlocked": "Set blocked",
     "unblock": "Unblock",
     "reason": "Reason",
-    "reasonPlaceholder": "Waiting for legal",
     "waitingFor": "Waiting for",
     "assignee": "Assignee",
     "nobody": "Nobody",
@@ -730,7 +725,6 @@
     "labels": "Labels",
     "noLabels": "No labels.",
     "labelField": "New label",
-    "labelPlaceholder": "Add a label",
     "addLabel": "Add label",
     "removeLabel": "Remove the label {label}",
     "filters": "Filter the cards",
@@ -739,8 +733,22 @@
     "overdueOnly": "Overdue only",
     "noMatches": "No cards match.",
     "mention": "Mention someone",
-    "mentionPlaceholder": "Mention someone…",
-    "mentionUnknown": "Someone"
+    "mentionUnknown": "Someone",
+    "switchBoard": "Switch board",
+    "boardActions": "Board actions",
+    "hideArchived": "Hide archived boards",
+    "archiveBoardTitle": "Archive “{name}”?",
+    "archiveBoardBody": "It leaves the list of boards and becomes read-only for everyone in the space. You can find it among the archived boards and unarchive it.",
+    "noBoardsWriter": "A board holds the space's cards by column. Create the first one.",
+    "movedTo": "Moved “{title}” to {column}.",
+    "moveCard": "Move “{title}”",
+    "moveTop": "To the top of {column}",
+    "moveBottom": "To the bottom of {column}",
+    "moveTo": "To {column}",
+    "cardActions": "Card actions",
+    "status": "Status",
+    "newLabel": "Add a label",
+    "newComment": "New comment"
   },
   "errors": {
     "http": "The server answered {status}.",
@@ -2775,7 +2783,8 @@
       "addColumn": "Add a column",
       "headings": "Sizes from the type roles: the display face from 20px up, Inter below",
       "busyAsk": "Delete, then fail…",
-      "busyFailed": "The app could not be deleted. Nothing was changed; try again."
+      "busyFailed": "The app could not be deleted. Nothing was changed; try again.",
+      "switchBoard": "Switch board"
     }
   }
 }

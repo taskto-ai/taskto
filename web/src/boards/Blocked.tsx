@@ -1,9 +1,14 @@
 import { useState } from 'react'
 import type { Card } from '../api'
 import { useFormat, useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Checkbox } from '../ui/Checkbox'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
 import { blockedText } from './text'
 
-// Why the card is blocked: a reason, other cards of the board it waits for, or both.
+// Why the card is blocked: a reason, other cards of the board it waits for, or both. A writer
+// sets or changes it in a small form, or unblocks the card.
 export function Blocked({
   card,
   board,
@@ -27,62 +32,67 @@ export function Blocked({
 
   if (!editing) {
     return (
-      <section className="tt-blocked-section" aria-label={t('boards.blocked')}>
+      <div className="ui-board-blocked">
         {card.blocked ? (
-          <p className="tt-blocked">{blockedText(t, card.blocked_reason, f.list(card.blocked_by.map(title)))}</p>
+          <span className="ui-board-blocked-text">
+            {blockedText(t, card.blocked_reason, f.list(card.blocked_by.map(title)))}
+          </span>
         ) : (
-          <p className="tt-muted">{t('boards.notBlocked')}</p>
+          <span className="ui-board-muted">{t('boards.notBlocked')}</span>
         )}
         {canWrite && card.column !== 'archived' && (
-          <div className="tt-actions">
-            <button type="button" className="tt-button" disabled={busy} onClick={() => setEditing(true)}>
+          <span className="ui-board-actions">
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(true)}>
               {card.blocked ? t('boards.changeBlocked') : t('boards.setBlocked')}
-            </button>
+            </Button>
             {card.blocked && (
-              <button type="button" className="tt-button" disabled={busy} onClick={() => onSet(null, [])}>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => onSet(null, [])}>
                 {t('boards.unblock')}
-              </button>
+              </Button>
             )}
-          </div>
+          </span>
         )}
-      </section>
+      </div>
     )
   }
   return (
     <form
-      className="tt-panel tt-form"
+      className="ui-board-form"
       aria-label={t('boards.setBlocked')}
       onSubmit={(e) => {
         e.preventDefault()
         onSet(reason.trim() || null, by)
       }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setEditing(false)
+        }
+      }}
     >
-      <label>
-        {t('boards.reason')}
-        <input value={reason} placeholder={t('boards.reasonPlaceholder')} onChange={(e) => setReason(e.target.value)} />
-      </label>
+      <Field label={t('boards.reason')}>
+        <Input size="sm" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
+      </Field>
       {others.length > 0 && (
-        <fieldset className="tt-checks">
-          <legend>{t('boards.waitingFor')}</legend>
+        <fieldset className="ui-board-checks">
+          <legend className="ui-board-checks-legend">{t('boards.waitingFor')}</legend>
           {others.map((c) => (
-            <label key={c.id}>
-              <input
-                type="checkbox"
-                checked={by.includes(c.id)}
-                onChange={(e) => setBy((b) => (e.target.checked ? [...b, c.id] : b.filter((id) => id !== c.id)))}
-              />
-              {c.title}
-            </label>
+            <Checkbox
+              key={c.id}
+              label={c.title}
+              checked={by.includes(c.id)}
+              onChange={(e) => setBy((b) => (e.target.checked ? [...b, c.id] : b.filter((id) => id !== c.id)))}
+            />
           ))}
         </fieldset>
       )}
-      <div className="tt-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={busy || (!reason.trim() && by.length === 0)}>
+      <div className="ui-board-actions">
+        <Button type="submit" size="sm" disabled={busy || (!reason.trim() && by.length === 0)}>
           {t('boards.setBlocked')}
-        </button>
-        <button type="button" className="tt-button" onClick={() => setEditing(false)}>
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
           {t('common.cancel')}
-        </button>
+        </Button>
       </div>
     </form>
   )

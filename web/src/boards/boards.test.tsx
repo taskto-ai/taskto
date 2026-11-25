@@ -3,7 +3,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { fakeFetch } from '../test/fakes'
+import { hueClass, labelHue } from '../ui/Label'
 import { BoardsPage } from './BoardsPage'
+import { localToday } from './due'
 
 afterEach(() => {
   cleanup()
@@ -141,6 +143,9 @@ function server(access: 'write' | 'read', tweak?: (cards: TestCard[]) => void) {
         // The server's normalization of labels: trimmed, one space, lower case, no repeats.
         if (fields.labels)
           fields.labels = [...new Set(fields.labels.map((l) => l.trim().replace(/\s+/g, ' ').toLowerCase()))].sort()
+        // As the server answers: an assigned person with their name.
+        if (fields.assignee?.kind === 'user')
+          fields.assignee = { ...fields.assignee, name: { 2: 'Ann', 5: 'Bo', 6: 'Cy\\' }[fields.assignee.id ?? 0] }
         Object.assign(c, fields)
         c.blocked = Boolean(c.blocked_reason) || c.blocked_by.length > 0
       })
@@ -179,9 +184,39 @@ function server(access: 'write' | 'read', tweak?: (cards: TestCard[]) => void) {
 }
 
 async function openCard(title: string) {
-  fireEvent.click(await screen.findByRole('button', { name: new RegExp(title) }))
-  return screen.findByRole('article', { name: title })
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^${title}`) }))
+  return screen.findByRole('region', { name: title })
 }
+
+// Opens the menu behind the button named `button` inside `scope`, and chooses `item` in it.
+async function choose(scope: HTMLElement, button: string | RegExp, item: string | RegExp) {
+  fireEvent.click(await within(scope).findByRole('button', { name: button }))
+  fireEvent.click(await within(scope).findByRole('menuitem', { name: item }))
+}
+
+// The items of the menu behind the button named `button`, by name; the menu is closed again.
+async function menuItems(scope: HTMLElement, button: string | RegExp) {
+  const opener = await within(scope).findByRole('button', { name: button })
+  fireEvent.click(opener)
+  const items = within(scope).getAllByRole('menuitem')
+  // As read out: without what is hidden from screen readers (an avatar's initials).
+  const names = items.map((i) => {
+    const copy = i.cloneNode(true) as HTMLElement
+    for (const hidden of copy.querySelectorAll('[aria-hidden="true"]')) hidden.remove()
+    return copy.textContent
+  })
+  fireEvent.keyDown(items[0], { key: 'Escape' })
+  return { names, items }
+}
+
+// A click as a person makes it: the button takes the focus first (fireEvent.click alone doesn't).
+function press(el: HTMLElement) {
+  el.focus()
+  fireEvent.click(el)
+}
+
+// The board's own menu: renaming, a new board, the archived boards, archiving.
+const boardMenu = (item: string) => choose(document.body, 'Board actions', item)
 
 test('a viewer reads the board, its cards and their threads, but changes nothing', async () => {
   server('read')
@@ -195,26 +230,31 @@ test('a viewer reads the board, its cards and their threads, but changes nothing
   expect((await within(view).findByText('notes')).tagName).toBe('STRONG')
   expect(within(view).getByText('Started').parentElement?.textContent).toBe('Started it')
   expect(within(view).getByText(/Ann \(agent, laptop\)/)).toBeTruthy()
-  expect(within(view).queryByLabelText('Column')).toBeNull()
-  for (const name of ['Edit', 'Set blocked', 'Archive', 'Comment']) {
+  // Its properties are read, not changed: no menu for the status or the assignee.
+  expect(within(view).getByText('To do')).toBeTruthy()
+  expect(within(view).queryByRole('button', { name: /^Status/ })).toBeNull()
+  expect(within(view).queryByRole('button', { name: /^Assignee/ })).toBeNull()
+  for (const name of ['Edit', 'Set blocked', 'Card actions', 'Comment', 'Add a label']) {
     expect(within(view).queryByRole('button', { name })).toBeNull()
   }
   expect(within(view).queryByLabelText('Comment')).toBeNull()
 
   // The links: the viewer's own conversation opens, someone else's is only shown to be there.
-  const links = within(view).getByRole('region', { name: 'Links' })
-  expect(within(links).getByText('launch/post.md')).toBeTruthy()
-  const own = await within(links).findByRole('link', { name: 'Launch plans' })
+  expect(within(view).getByText('launch/post.md')).toBeTruthy()
+  const own = await within(view).findByRole('link', { name: 'Launch plans' })
   expect(own.getAttribute('href')).toBe('/w/1/conversations/7')
-  expect(within(links).getByText('A conversation only its owner can open')).toBeTruthy()
-  expect(within(links).queryByRole('button', { name: /Unlink/ })).toBeNull()
-  expect(within(links).queryByRole('form')).toBeNull()
-  expect(within(view).queryByLabelText('Assignee')).toBeNull()
-  expect(screen.queryByRole('button', { name: /Rename|Archive the board/ })).toBeNull()
+  expect(within(view).getByText('A conversation only its owner can open')).toBeTruthy()
+  expect(within(view).queryByRole('button', { name: /Unlink/ })).toBeNull()
+  expect(within(view).queryByRole('form')).toBeNull()
+  // The board's menu only lists the archived boards for a viewer.
+  expect((await menuItems(document.body, 'Board actions')).names).toEqual(['Show archived boards'])
+  // No card moves: not by dragging, and no Move menu.
   const item = within(todo)
-    .getByRole('button', { name: /Write the post/ })
+    .getByRole('button', { name: /^Write the post/ })
     .closest('li') as HTMLElement
   expect(item.draggable).toBe(false)
+  expect(screen.queryByRole('button', { name: /^Move/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Add a card' })).toBeNull()
 })
 
 test('adds a card to a column and opens it', async () => {
@@ -224,7 +264,7 @@ test('adds a card to a column and opens it', async () => {
   const form = screen.getByRole('form', { name: 'New card in Review' })
   fireEvent.change(within(form).getByLabelText('Title'), { target: { value: '  Proofread  ' } })
   fireEvent.click(within(form).getByRole('button', { name: 'Add' }))
-  await screen.findByRole('article', { name: 'Proofread' })
+  await screen.findByRole('region', { name: 'Proofread' })
   expect(sent('POST', C)).toEqual([{ title: 'Proofread', column: 'review' }])
   const review = screen.getByRole('region', { name: 'Review' })
   await within(review).findByText('Proofread')
@@ -237,12 +277,14 @@ test('edits a card, moves it to another column, and comments', async () => {
   fireEvent.click(await within(view).findByRole('button', { name: 'Edit' }))
   fireEvent.change(within(view).getByLabelText('Title'), { target: { value: 'Write the launch post' } })
   fireEvent.change(within(view).getByLabelText('Description'), { target: { value: 'Draft in `notes`' } })
-  fireEvent.click(within(view).getByRole('button', { name: 'Save' }))
-  await screen.findByRole('article', { name: 'Write the launch post' })
+  press(within(view).getByRole('button', { name: 'Save' }))
+  await screen.findByRole('region', { name: 'Write the launch post' })
   expect(sent('PATCH', `${C}/1`)).toEqual([{ version: 1, title: 'Write the launch post', body: 'Draft in `notes`' }])
+  // The editor closed: the focus is on its Edit button, not lost to the page.
+  await waitFor(() => expect(document.activeElement).toBe(within(view).getByRole('button', { name: 'Edit' })))
 
   // The next change goes with the version the last one returned.
-  fireEvent.change(within(view).getByLabelText('Column'), { target: { value: 'doing' } })
+  await choose(view, 'Status: To do', 'Doing')
   await within(screen.getByRole('region', { name: 'Doing' })).findByText('Write the launch post')
   expect(sent('POST', `${C}/1/move`)).toEqual([{ version: 2, column: 'doing' }])
 
@@ -258,13 +300,10 @@ test('mentions a person from the comment box, where the cursor is, by their ID',
   render(<BoardsPage workspace={1} />)
   const view = await openCard('Write the post')
   const field = (await within(view).findByLabelText('Comment')) as HTMLTextAreaElement
-  const picker = (await within(view).findByLabelText('Mention someone')) as HTMLSelectElement
-  await within(picker).findByRole('option', { name: 'Bo' })
   fireEvent.change(field, { target: { value: 'Thanks, please look' } })
   field.setSelectionRange(7, 7)
-  fireEvent.change(picker, { target: { value: '5' } })
+  await choose(view, 'Mention someone', 'Bo')
   await waitFor(() => expect(field.value).toBe('Thanks, @[Bo](user:5)  please look'))
-  expect(picker.value).toBe('')
   fireEvent.click(within(view).getByRole('button', { name: 'Comment' }))
   await waitFor(() => expect(sent('POST', `${C}/1/comments`)).toEqual([{ body: 'Thanks, @[Bo](user:5)  please look' }]))
   // The posted comment shows the name, not the token.
@@ -284,8 +323,9 @@ test('shows a mention by the name the server gives for its ID, never by the labe
   })
   fireEvent.click(within(view).getByRole('button', { name: 'Comment' }))
   await waitFor(() => expect(sent('POST', `${C}/1/comments`)).toHaveLength(1))
-  await waitFor(() => expect(view.querySelectorAll('.tt-comment')).toHaveLength(2))
-  const text = view.querySelectorAll('.tt-comment')[1].textContent ?? ''
+  const thread = within(view).getByRole('region', { name: 'Comments' })
+  await waitFor(() => expect(within(thread).getAllByRole('listitem')).toHaveLength(2))
+  const text = within(thread).getAllByRole('listitem')[1].textContent ?? ''
   expect(text).toContain('@Someone hi @Bo,')
   expect(text).toContain('@[Mal](user:5)') // in code, as typed
   // Escaped, it is no mention: only the first two are drawn as ones.
@@ -314,9 +354,7 @@ test('a name ending in a backslash is written into the mention without it', asyn
   const { sent } = server('write')
   render(<BoardsPage workspace={1} />)
   const view = await openCard('Write the post')
-  const picker = (await within(view).findByLabelText('Mention someone')) as HTMLSelectElement
-  await within(picker).findByRole('option', { name: 'Cy\\' })
-  fireEvent.change(picker, { target: { value: '6' } })
+  await choose(view, 'Mention someone', 'Cy\\')
   fireEvent.click(within(view).getByRole('button', { name: 'Comment' }))
   await waitFor(() => expect(sent('POST', `${C}/1/comments`)).toHaveLength(1))
   expect(sent('POST', `${C}/1/comments`)[0]).toEqual({ body: '@[Cy](user:6) ' })
@@ -339,13 +377,12 @@ test('a comment and a change in flight together both stay', async () => {
   fireEvent.change(await within(view).findByLabelText('Comment'), { target: { value: 'On my way' } })
   fireEvent.click(within(view).getByRole('button', { name: 'Comment' }))
   // While the comment is in flight, the card moves.
-  fireEvent.change(within(view).getByLabelText('Column'), { target: { value: 'doing' } })
+  await choose(view, 'Status: To do', 'Doing')
   await within(screen.getByRole('region', { name: 'Doing' })).findByText('Write the post')
   await act(async () => release())
   await within(view).findByText('On my way')
   // The comment didn't roll the card back: it is still in Doing, at the version the move made.
-  expect((within(view).getByLabelText('Column') as HTMLSelectElement).value).toBe('doing')
-  fireEvent.change(within(view).getByLabelText('Column'), { target: { value: 'review' } })
+  await choose(view, 'Status: Doing', 'Review')
   await within(screen.getByRole('region', { name: 'Review' })).findByText('Write the post')
   expect(sent('POST', `${C}/1/move`)).toEqual([
     { version: 1, column: 'doing' },
@@ -368,9 +405,12 @@ test('sets a card blocked by a reason and another card, then unblocks it', async
   expect((await within(view).findByText(/Blocked: waiting for legal/)).textContent).toBe(
     'Blocked: waiting for legal (waiting for Get approval)',
   )
-  // The board marks it too.
+  // The board marks it too, with its reason.
   const todo = screen.getByRole('region', { name: 'To do' })
-  await waitFor(() => expect(within(todo).getByRole('button', { name: /Write the post/ }).dataset.blocked).toBe('true'))
+  await waitFor(() =>
+    expect(within(todo).getByRole('button', { name: /^Write the post/ }).textContent).toContain('Blocked'),
+  )
+  expect(within(todo).getByRole('button', { name: /^Write the post/ }).textContent).toContain('waiting for legal')
 
   fireEvent.click(within(view).getByRole('button', { name: 'Unblock' }))
   await within(view).findByText('Not blocked.')
@@ -388,12 +428,14 @@ test('a stale change is shown, and redone over the current card only when asked'
   // Someone else renames it meanwhile.
   Object.assign(cards[0], { title: 'Their title', version: 5 })
 
-  fireEvent.change(within(view).getByLabelText('Column'), { target: { value: 'review' } })
+  await choose(view, 'Status: To do', 'Review')
   const alert = await within(view).findByRole('alert')
   expect(alert.textContent).toContain('Someone changed this card since you opened it.')
   expect(cards[0].column).toBe('todo')
   // Nothing else can be changed until the conflict is settled: it would replace it unasked.
-  expect((within(view).getByRole('button', { name: 'Archive' }) as HTMLButtonElement).disabled).toBe(true)
+  const { items } = await menuItems(view, 'Card actions')
+  expect(items.find((i) => i.textContent === 'Archive')?.getAttribute('aria-disabled')).toBe('true')
+  expect((within(view).getByRole('button', { name: /^Status/ }) as HTMLButtonElement).disabled).toBe(true)
 
   fireEvent.click(within(alert).getByRole('button', { name: 'Redo my change over it' }))
   await within(screen.getByRole('region', { name: 'Review' })).findByText('Their title')
@@ -409,14 +451,15 @@ test('a stale change is shown, and redone over the current card only when asked'
   fireEvent.change(within(view).getByLabelText('Title'), { target: { value: 'Mine' } })
   fireEvent.click(within(view).getByRole('button', { name: 'Save' }))
   fireEvent.click(await within(view).findByRole('button', { name: 'Load their version' }))
-  await screen.findByRole('article', { name: 'Newer title' })
+  await screen.findByRole('region', { name: 'Newer title' })
   expect(sent('PATCH', `${C}/1`)).toEqual([{ version: 6, title: 'Mine', body: 'Some **notes**' }])
 })
 
 test('creates a team board and shows it', async () => {
   const { sent } = server('write')
   render(<BoardsPage workspace={1} />)
-  fireEvent.click(await screen.findByRole('button', { name: /New board/ }))
+  await screen.findByRole('region', { name: 'To do' })
+  await boardMenu('New board')
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Ops' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create' }))
   await waitFor(() => expect(sent('POST', B)).toEqual([{ name: 'Ops' }]))
@@ -426,15 +469,14 @@ test('assigns a card to someone who can read the space, to the agent, and to nob
   const { sent } = server('write')
   render(<BoardsPage workspace={1} />)
   const view = await openCard('Write the post')
-  const assignee = (await within(view).findByLabelText('Assignee')) as HTMLSelectElement
-  // The space's members are the choices.
-  await within(assignee).findByRole('option', { name: 'Bo' })
-  fireEvent.change(assignee, { target: { value: 'user:5' } })
-  await waitFor(() => expect(assignee.value).toBe('user:5'))
-  fireEvent.change(assignee, { target: { value: 'agent' } })
-  await waitFor(() => expect(assignee.value).toBe('agent'))
-  fireEvent.change(assignee, { target: { value: '' } })
-  await waitFor(() => expect(assignee.value).toBe(''))
+  // The space's members are the choices, after nobody and the agent.
+  await waitFor(async () =>
+    expect((await menuItems(view, 'Assignee: Nobody')).names).toEqual(['Nobody', 'Agent', 'Ann', 'Bo', 'Cy\\']),
+  )
+  await choose(view, 'Assignee: Nobody', 'Bo')
+  await choose(view, 'Assignee: Bo', 'Agent')
+  await choose(view, 'Assignee: Agent', 'Nobody')
+  await within(view).findByRole('button', { name: 'Assignee: Nobody' })
   expect(sent('PATCH', `${C}/1`)).toEqual([
     { version: 1, assignee: { kind: 'user', id: 5 } },
     { version: 2, assignee: { kind: 'agent' } },
@@ -446,7 +488,7 @@ test("links documents and the writer's own conversations, and unlinks any", asyn
   const { cards, sent } = server('write')
   render(<BoardsPage workspace={1} />)
   const view = await openCard('Write the post')
-  const links = within(view).getByRole('region', { name: 'Links' })
+  const links = view
 
   const doc = within(links).getByRole('form', { name: 'Link a document' })
   fireEvent.change(within(doc).getByLabelText('Document path'), { target: { value: ' notes/plan.md ' } })
@@ -487,26 +529,39 @@ test("links documents and the writer's own conversations, and unlinks any", asyn
 test('renames and archives a team board, and finds it again among the archived', async () => {
   const { boards, sent } = server('write')
   render(<BoardsPage workspace={1} />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Rename' }))
+  await screen.findByRole('heading', { level: 1, name: 'Launch' })
+  await boardMenu('Rename')
   const form = screen.getByRole('form', { name: 'Rename the board' })
   fireEvent.change(within(form).getByLabelText('Name'), { target: { value: ' Launch day ' } })
-  fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
-  await screen.findByText('Launch day', { selector: 'strong' })
-  expect(screen.queryByRole('form', { name: 'Rename the board' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await screen.findByRole('heading', { level: 1, name: 'Launch day' })
+  await waitFor(() => expect(screen.queryByRole('form', { name: 'Rename the board' })).toBeNull())
+
+  // Archiving asks first, and sends nothing when cancelled.
+  await boardMenu('Archive the board')
+  const asked = await screen.findByRole('alertdialog')
+  expect(asked.textContent).toContain('Archive “Launch day”?')
+  fireEvent.click(within(asked).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(sent('PATCH', `${B}/7`)).toHaveLength(1)
 
   // Someone else changed it meanwhile: the board is read again, and the archive tried again.
   Object.assign(boards[0], { name: 'Launch week', version: 6 })
-  fireEvent.click(screen.getByRole('button', { name: 'Archive the board' }))
+  const archive = async () => {
+    await boardMenu('Archive the board')
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Archive the board' }))
+  }
+  await archive()
   expect((await screen.findByRole('alert')).textContent).toContain('Someone changed this board')
-  await screen.findByText('Launch week', { selector: 'strong' })
-  fireEvent.click(screen.getByRole('button', { name: 'Archive the board' }))
+  await screen.findByRole('heading', { level: 1, name: 'Launch week' })
+  await archive()
   await screen.findByText('This space has no boards yet.')
 
-  fireEvent.click(screen.getByLabelText('Show archived boards'))
+  await boardMenu('Show archived boards')
   await screen.findByText('This board is archived: it is read-only.')
   expect(screen.queryByRole('button', { name: /Add a card/ })).toBeNull()
-  expect(screen.queryByRole('button', { name: 'Rename' })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Unarchive the board' }))
+  expect((await menuItems(document.body, 'Board actions')).names).not.toContain('Rename')
+  await boardMenu('Unarchive the board')
   await screen.findAllByRole('button', { name: /Add a card/ })
 
   expect(sent('PATCH', `${B}/7`)).toEqual([
@@ -521,7 +576,8 @@ test('drags a card before another card, or to the end of a column', async () => 
   const { sent } = server('write')
   render(<BoardsPage workspace={1} />)
   const view = await openCard('Write the post')
-  const item = (title: string) => screen.getByRole('button', { name: new RegExp(title) }).closest('li') as HTMLElement
+  const item = (title: string) =>
+    screen.getByRole('button', { name: new RegExp(`^${title}`) }).closest('li') as HTMLElement
   expect(item('Write the post').draggable).toBe(true)
 
   // Before "Get approval", at the top of Doing.
@@ -531,7 +587,7 @@ test('drags a card before another card, or to the end of a column', async () => 
   const doing = screen.getByRole('region', { name: 'Doing' })
   await within(doing).findByText('Write the post')
   // The open card shows where it went.
-  await waitFor(() => expect((within(view).getByLabelText('Column') as HTMLSelectElement).value).toBe('doing'))
+  await within(view).findByRole('button', { name: 'Status: Doing' })
 
   // Onto a column, not a card: last in it.
   fireEvent.dragStart(item('Get approval'))
@@ -543,7 +599,7 @@ test('drags a card before another card, or to the end of a column', async () => 
   fireEvent.drop(screen.getByRole('region', { name: 'Done' }))
 
   // The next change in the card view goes with the version the drag made.
-  fireEvent.change(within(view).getByLabelText('Column'), { target: { value: 'review' } })
+  await choose(view, 'Status: Doing', 'Review')
   await within(screen.getByRole('region', { name: 'Review' })).findByText('Write the post')
   expect(sent('POST', `${C}/1/move`)).toEqual([
     { version: 1, column: 'doing', position: 0 },
@@ -589,7 +645,7 @@ test("the open card shows others' comments, read again only while the page is vi
 
   comments[1].push(comment(20, 'From **Bo**'))
   await act(() => vi.advanceTimersByTimeAsync(10_000))
-  expect((await within(view).findByText('Bo', { selector: 'strong' })).tagName).toBe('STRONG')
+  expect((await within(view).findByText('Bo', { selector: '.tt-markdown strong' })).tagName).toBe('STRONG')
 
   // Hidden, it isn't read.
   hide(true)
@@ -662,22 +718,22 @@ test('a link to a board archived since says so, and never opens another board in
   boards.push({ ...board, id: 9, name: 'Other board', archived_at: null })
   render(<BoardsPage workspace={1} open="3:7:1" />)
   expect((await screen.findByRole('status')).textContent).toContain('archived or no longer available')
-  expect(screen.queryByText('Other board', { selector: 'strong' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Other board' })).toBeNull()
   expect(screen.queryByText('Write the post')).toBeNull()
 
   // Looking among the archived boards finds it, and opens the card the link names.
   fireEvent.click(screen.getByRole('button', { name: 'Show archived boards' }))
   await screen.findByText('This board is archived: it is read-only.')
-  await screen.findByRole('article', { name: 'Write the post' })
+  await screen.findByRole('region', { name: 'Write the post' })
 })
 
 test('a link to a board that is gone says so even among the archived', async () => {
   server('write')
   render(<BoardsPage workspace={1} open="3:55:1" />)
   await screen.findByText(/archived or no longer available/)
-  fireEvent.click(screen.getByLabelText('Show archived boards'))
+  await boardMenu('Show archived boards')
   await screen.findByText('The board this link points to is no longer available.')
-  expect(screen.queryByText('Launch', { selector: 'strong' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Launch' })).toBeNull()
 })
 
 // Dates far enough from any test run's today: 2001 is always late, 2999 never.
@@ -694,17 +750,30 @@ test('the board shows due dates, late ones marked, and labels', async () => {
   server('read', withPlanning)
   render(<BoardsPage workspace={1} />)
   const todo = await screen.findByRole('region', { name: 'To do' })
-  // Late: marked, and says so. The date is that calendar day, not shifted by a time zone.
+  // Late: in the danger tone, and says so. The date is that calendar day, not shifted by a time zone.
   const late = within(todo).getByText('Overdue: Feb 3, 2001')
-  expect(late.getAttribute('data-overdue')).toBe('true')
-  expect(within(todo).getByText('design')).toBeTruthy()
+  expect(late.className).toContain('ui-badge-danger')
+  // Each label in the hue its name gives it.
+  expect(within(todo).getByText('design').className).toContain(hueClass(labelHue('design')))
+  // Later: quiet, not a badge.
   const doing = screen.getByRole('region', { name: 'Doing' })
   const far = within(doing).getByText('Due Dec 31, 2999')
-  expect(far.getAttribute('data-overdue')).toBeNull()
+  expect(far.className).not.toContain('ui-badge')
   // A finished card isn't late, however old its date.
   const done = screen.getByRole('region', { name: 'Done' })
-  expect(within(done).getByText('Due Feb 3, 2001').getAttribute('data-overdue')).toBeNull()
+  expect(within(done).getByText('Due Feb 3, 2001').className).not.toContain('ui-badge')
   expect(within(screen.getByRole('region', { name: 'Backlog' })).queryByText(/Due|Overdue/)).toBeNull()
+})
+
+test('a card due today or tomorrow is due soon, in the warning tone', async () => {
+  const today = localToday()
+  server('read', (cards) => {
+    cards[0].due = today
+  })
+  render(<BoardsPage workspace={1} />)
+  const todo = await screen.findByRole('region', { name: 'To do' })
+  const soon = within(todo).getByText(/^Due /)
+  expect(soon.className).toContain('ui-badge-warning')
 })
 
 test('filters the board by label, and to the overdue cards', async () => {
@@ -714,33 +783,28 @@ test('filters the board by label, and to the overdue cards', async () => {
   const filters = screen.getByRole('group', { name: 'Filter the cards' })
   const titlesShown = () =>
     screen
-      .getAllByRole('button', { name: /Write the post|Get approval|Ship it|Plain card/ })
+      .getAllByRole('button', { name: /^(Write the post|Get approval|Ship it|Plain card)/ })
       .map((b) => b.textContent?.slice(0, 8))
   expect(titlesShown()).toHaveLength(4)
 
-  const label = within(filters).getByLabelText('Label')
-  expect([...(label as HTMLSelectElement).options].map((o) => o.textContent)).toEqual([
-    'All labels',
-    'design',
-    'launch',
-  ])
-  fireEvent.change(label, { target: { value: 'design' } })
-  expect(screen.getByRole('button', { name: /Write the post/ })).toBeTruthy()
-  expect(screen.getByRole('button', { name: /Ship it/ })).toBeTruthy()
-  expect(screen.queryByRole('button', { name: /Get approval/ })).toBeNull()
-  expect(screen.queryByRole('button', { name: /Plain card/ })).toBeNull()
+  expect((await menuItems(filters, 'Label: All labels')).names).toEqual(['All labels', 'design', 'launch'])
+  await choose(filters, 'Label: All labels', 'design')
+  expect(screen.getByRole('button', { name: /^Write the post/ })).toBeTruthy()
+  expect(screen.getByRole('button', { name: /^Ship it/ })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /^Get approval/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Plain card/ })).toBeNull()
   // The count of a column is of the cards shown.
   expect(within(screen.getByRole('region', { name: 'Doing' })).getByText('0')).toBeTruthy()
   expect(within(screen.getByRole('region', { name: 'Doing' })).getByText('No cards match.')).toBeTruthy()
 
   // Together with "overdue only": the done card isn't late, so one card is left.
   fireEvent.click(within(filters).getByLabelText('Overdue only'))
-  expect(screen.getByRole('button', { name: /Write the post/ })).toBeTruthy()
-  expect(screen.queryByRole('button', { name: /Ship it/ })).toBeNull()
+  expect(screen.getByRole('button', { name: /^Write the post/ })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /^Ship it/ })).toBeNull()
 
-  fireEvent.change(label, { target: { value: '' } })
-  expect(screen.queryByRole('button', { name: /Get approval/ })).toBeNull()
-  expect(screen.getByRole('button', { name: /Write the post/ })).toBeTruthy()
+  await choose(filters, 'Label: design', 'All labels')
+  expect(screen.queryByRole('button', { name: /^Get approval/ })).toBeNull()
+  expect(screen.getByRole('button', { name: /^Write the post/ })).toBeTruthy()
 })
 
 test('a label filter stays, with no cards, when its last card loses the label', async () => {
@@ -750,21 +814,20 @@ test('a label filter stays, with no cards, when its last card loses the label', 
   })
   render(<BoardsPage workspace={1} />)
   await screen.findByRole('region', { name: 'To do' })
-  const label = screen.getByLabelText('Label') as HTMLSelectElement
-  fireEvent.change(label, { target: { value: 'design' } })
-  expect(screen.getByRole('button', { name: /Write the post/ })).toBeTruthy()
+  const filters = screen.getByRole('group', { name: 'Filter the cards' })
+  await choose(filters, 'Label: All labels', 'design')
+  expect(screen.getByRole('button', { name: /^Write the post/ })).toBeTruthy()
 
   // The card loses its only 'design' label, and the board reloads.
   const view = await openCard('Write the post')
   fireEvent.click(within(view).getByRole('button', { name: 'Remove the label design' }))
   await waitFor(() => expect(within(view).queryByText('design')).toBeNull())
-  await waitFor(() => expect(screen.queryByRole('button', { name: /Write the post/ })).toBeNull())
+  await waitFor(() => expect(screen.queryByRole('button', { name: /^Write the post/ })).toBeNull())
   // Still chosen, still listed, nothing shown, until it is cleared.
-  expect(label.value).toBe('design')
-  expect([...label.options].map((o) => o.textContent)).toContain('design')
-  expect(screen.queryByRole('button', { name: /Get approval/ })).toBeNull()
-  fireEvent.change(label, { target: { value: '' } })
-  expect(screen.getByRole('button', { name: /Get approval/ })).toBeTruthy()
+  expect((await menuItems(filters, 'Label: design')).names).toContain('design')
+  expect(screen.queryByRole('button', { name: /^Get approval/ })).toBeNull()
+  await choose(filters, 'Label: design', 'All labels')
+  expect(screen.getByRole('button', { name: /^Get approval/ })).toBeTruthy()
 })
 
 test('a board with no due dates or labels has no filters', async () => {
@@ -780,24 +843,30 @@ test('a writer sets and clears the due date, and adds and removes labels, each o
   const view = await openCard('Write the post')
   const due = within(view).getByLabelText('Due date') as HTMLInputElement
   expect(due.value).toBe(LATE)
-  expect(due.getAttribute('data-overdue')).toBe('true')
+  // The field isn't the warning: a badge beside it says the card is late.
+  expect(due.getAttribute('aria-invalid')).toBeNull()
+  expect(within(view).getByText('Overdue: Feb 3, 2001').className).toContain('ui-badge-danger')
 
   // Typing a date a part at a time saves nothing, disables nothing and keeps the same field;
-  // emptying it isn't clearing the date (the button is), and only Save sends it.
-  const save = within(view).getByRole('button', { name: 'Save the due date' }) as HTMLButtonElement
-  expect(save.disabled).toBe(true)
+  // emptying it isn't clearing the date (the button is), and only Save sends it. Save shows once
+  // the draft differs from the date saved.
+  const save = () => within(view).queryByRole('button', { name: 'Save the due date' }) as HTMLButtonElement | null
+  expect(save()).toBeNull()
   fireEvent.change(due, { target: { value: '' } })
+  expect(save()).toBeNull()
   fireEvent.change(due, { target: { value: '0002-01-02' } })
   fireEvent.change(due, { target: { value: '2999-01-02' } })
   expect(sent('PATCH', `${C}/1`)).toEqual([])
   expect(within(view).getByLabelText('Due date')).toBe(due)
   expect(due.disabled).toBe(false)
   expect(due.value).toBe('2999-01-02')
-  expect(save.disabled).toBe(false)
-  fireEvent.click(save)
+  expect(save()?.disabled).toBe(false)
+  press(save() as HTMLButtonElement)
   await waitFor(() => expect(sent('PATCH', `${C}/1`)).toEqual([{ version: 1, due: '2999-01-02' }]))
   await waitFor(() => expect((within(view).getByLabelText('Due date') as HTMLInputElement).value).toBe('2999-01-02'))
-  await waitFor(() => expect(save.disabled).toBe(true))
+  await waitFor(() => expect(save()).toBeNull())
+  // Saved, the button went: the focus is back on the field, not lost to the page.
+  await waitFor(() => expect(document.activeElement).toBe(due))
 
   fireEvent.click(within(view).getByRole('button', { name: 'Clear the due date' }))
   await waitFor(() => expect(sent('PATCH', `${C}/1`)[1]).toEqual({ version: 2, due: null }))
@@ -805,7 +874,9 @@ test('a writer sets and clears the due date, and adds and removes labels, each o
   // The cleared date empties the field, which held the saved date.
   await waitFor(() => expect((within(view).getByLabelText('Due date') as HTMLInputElement).value).toBe(''))
 
-  // Labels: sent as typed (the server normalizes them), and the card shows what it returns.
+  // Labels: sent as typed (the server normalizes them), and the card shows what it returns. The
+  // form opens behind the + button, and stays open for the next one.
+  fireEvent.click(within(view).getByRole('button', { name: 'Add a label' }))
   const add = async (text: string) => {
     fireEvent.change(within(view).getByLabelText('New label'), { target: { value: text } })
     fireEvent.click(within(view).getByRole('button', { name: 'Add label' }))
@@ -905,6 +976,7 @@ test('a label typed while a label is being added is kept', async () => {
   })
   render(<BoardsPage workspace={1} />)
   const view = await openCard('Write the post')
+  fireEvent.click(within(view).getByRole('button', { name: 'Add a label' }))
   const field = within(view).getByLabelText('New label') as HTMLInputElement
   fireEvent.change(field, { target: { value: 'first' } })
   fireEvent.click(within(view).getByRole('button', { name: 'Add label' }))
@@ -920,12 +992,137 @@ test('a viewer sees the due date and labels but cannot change them', async () =>
   render(<BoardsPage workspace={1} />)
   const view = await openCard('Write the post')
   const due = within(view).getByText('Overdue: Feb 3, 2001')
-  expect(due.getAttribute('data-overdue')).toBe('true')
+  expect(due.className).toContain('ui-badge-danger')
   expect(within(view).getByText('design')).toBeTruthy()
   expect(within(view).queryByLabelText('Due date')).toBeNull()
-  expect(within(view).queryByLabelText('New label')).toBeNull()
+  expect(within(view).queryByRole('button', { name: 'Add a label' })).toBeNull()
   expect(within(view).queryByRole('button', { name: /Remove the label/ })).toBeNull()
   const plain = await openCard('Plain card')
   expect(within(plain).getByText('No due date.')).toBeTruthy()
   expect(within(plain).getByText('No labels.')).toBeTruthy()
+})
+
+test('a card moves by its Move menu, without a mouse, as a drop there would, and the move is said', async () => {
+  const { sent } = server('write', (cards) => {
+    cards.push(card(3, 'Draft the email', 'todo'), card(4, 'Book the call', 'todo'))
+  })
+  render(<BoardsPage workspace={1} />)
+  const todo = await screen.findByRole('region', { name: 'To do' })
+
+  // The first card of a column can go to the bottom, not the top; the last, the other way round.
+  expect((await menuItems(todo, 'Move “Write the post”')).names).toEqual([
+    'To the bottom of To do',
+    'To Backlog',
+    'To Doing',
+    'To Review',
+    'To Done',
+  ])
+  expect((await menuItems(todo, 'Move “Book the call”')).names[0]).toBe('To the top of To do')
+  expect((await menuItems(todo, 'Move “Book the call”')).names).not.toContain('To the bottom of To do')
+
+  // To the top: before the column's first card, with its position, as a drop on that card.
+  await choose(todo, 'Move “Book the call”', 'To the top of To do')
+  await waitFor(() => expect(sent('POST', `${C}/4/move`)).toEqual([{ version: 1, column: 'todo', position: 0 }]))
+  expect((await screen.findByRole('status')).textContent).toBe('Moved “Book the call” to To do.')
+
+  // To another column: last there, as a drop on the column, with no position.
+  await choose(todo, 'Move “Draft the email”', 'To Review')
+  const review = screen.getByRole('region', { name: 'Review' })
+  const moved = await within(review).findByRole('button', { name: /^Draft the email/ })
+  expect(sent('POST', `${C}/3/move`)).toEqual([{ version: 1, column: 'review' }])
+  await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Moved “Draft the email” to Review.'))
+  // The card was drawn again in its new column: the focus went with it, not to the page.
+  await waitFor(() => expect(document.activeElement).toBe(moved))
+})
+
+test('closing the card gives the focus back to it on the board, wherever it moved', async () => {
+  server('write')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  await choose(view, 'Status: To do', 'Doing')
+  const doing = screen.getByRole('region', { name: 'Doing' })
+  await within(doing).findByRole('button', { name: /^Write the post/ })
+  // Escape closes the drawer.
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Write the post' })).toBeNull())
+  await waitFor(() =>
+    expect(document.activeElement).toBe(within(doing).getByRole('button', { name: /^Write the post/ })),
+  )
+})
+
+test('the card being viewed is marked on the board', async () => {
+  server('read')
+  render(<BoardsPage workspace={1} />)
+  await openCard('Write the post')
+  expect(screen.getByRole('button', { name: /^Write the post/ }).getAttribute('aria-current')).toBe('true')
+  expect(screen.getByRole('button', { name: /^Get approval/ }).getAttribute('aria-current')).toBeNull()
+})
+
+test("a column's add button opens its form, and Escape closes it with the focus back on the button", async () => {
+  const { sent } = server('write')
+  render(<BoardsPage workspace={1} />)
+  const add = await screen.findByRole('button', { name: 'Add a card to Done' })
+  press(add)
+  const form = screen.getByRole('form', { name: 'New card in Done' })
+  fireEvent.keyDown(within(form).getByLabelText('Title'), { key: 'Escape' })
+  expect(screen.queryByRole('form', { name: 'New card in Done' })).toBeNull()
+  await waitFor(() => expect(document.activeElement).toBe(add))
+  // The page's Add a card is the first column's.
+  fireEvent.click(screen.getByRole('button', { name: 'Add a card' }))
+  expect(screen.getByRole('form', { name: 'New card in Backlog' })).toBeTruthy()
+  expect(sent('POST', C)).toEqual([])
+})
+
+test('the board shows its shape while its cards load', async () => {
+  server('read')
+  let release = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const answered = globalThis.fetch
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === C) await held
+    return answered(input, init)
+  })
+  const { container } = render(<BoardsPage workspace={1} />)
+  await screen.findByRole('heading', { level: 1, name: 'Launch' })
+  expect(container.querySelector('[aria-busy="true"]')?.textContent).toBe('Loading…')
+  expect(screen.queryByRole('region', { name: 'To do' })).toBeNull()
+  await act(async () => release())
+  await screen.findByRole('region', { name: 'To do' })
+  expect(container.querySelector('[aria-busy="true"]')).toBeNull()
+})
+
+test('a shared space with no boards offers a writer to create one, and a viewer nothing', async () => {
+  server('write')
+  // No boards in the space.
+  const answered = globalThis.fetch
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input) === B ? Response.json({ boards: [] }) : answered(input, init),
+  )
+  render(<BoardsPage workspace={1} />)
+  await screen.findByText('This space has no boards yet.')
+  fireEvent.click(screen.getByRole('button', { name: 'New board' }))
+  expect(screen.getByRole('form', { name: 'New board' })).toBeTruthy()
+  cleanup()
+
+  server('read')
+  const readerFetch = globalThis.fetch
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input) === B ? Response.json({ boards: [] }) : readerFetch(input, init),
+  )
+  render(<BoardsPage workspace={1} />)
+  await screen.findByText('This space has no boards yet.')
+  expect(screen.queryByRole('button', { name: 'New board' })).toBeNull()
+})
+
+test("another board of the space is chosen from the menu beside the board's name", async () => {
+  const { boards } = server('write')
+  boards.push({ ...board, id: 8, name: 'Ops' })
+  render(<BoardsPage workspace={1} />)
+  await screen.findByRole('heading', { level: 1, name: 'Launch' })
+  expect((await menuItems(document.body, 'Switch board')).names).toEqual(['Launch', 'Ops'])
+  await choose(document.body, 'Switch board', 'Ops')
+  await screen.findByRole('heading', { level: 1, name: 'Ops' })
+  await screen.findByRole('region', { name: 'To do' })
 })

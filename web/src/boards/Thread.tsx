@@ -2,22 +2,57 @@ import { type FormEvent, useRef, useState } from 'react'
 import { api, type Comment, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
 import { Markdown } from '../markdown'
+import { AgentDot } from '../ui/AgentDot'
+import { Avatar } from '../ui/Avatar'
+import { Button } from '../ui/Button'
+import { Heading } from '../ui/Heading'
+import { Menu, MenuButton, MenuItem, MenuList } from '../ui/Menu'
+import { Textarea } from '../ui/Textarea'
 import { mentionNames, mentionOf } from './comments'
 import type { Person } from './people'
 import { authorLabel } from './text'
 
-// The card's thread: its comments, oldest first, and a writer's box for a new one, with
-// people to mention.
-export function Thread({
+// The card's thread: its comments, oldest first, each with who wrote it (the agent's marked by
+// its dot) and when.
+export function Thread({ comments }: { comments: Comment[] }) {
+  const t = useT()
+  const f = useFormat()
+  return (
+    <section className="ui-board-section" aria-label={t('boards.comments')}>
+      <Heading level={3} size="subsection">
+        {t('boards.comments')}
+      </Heading>
+      {comments.length === 0 && <p className="ui-board-muted">{t('boards.noComments')}</p>}
+      <ol className="ui-board-thread">
+        {comments.map((c) => (
+          <li key={c.id} className="ui-board-comment">
+            <span className="ui-board-comment-who">
+              {c.author?.agent ? <AgentDot /> : <Avatar size="sm" name={authorLabel(t, c.author)} decorative />}
+            </span>
+            <div className="ui-board-comment-body">
+              <p className="ui-board-comment-head">
+                <strong>{authorLabel(t, c.author)}</strong>
+                {' · '}
+                <time dateTime={c.created_at} title={f.dateTime(c.created_at)}>
+                  {f.relative(c.created_at)}
+                </time>
+              </p>
+              <Markdown text={c.body} mentions={mentionNames(c, t('boards.mentionUnknown'))} />
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+// A writer's box for a new comment, at the foot of the open card, with people to mention.
+export function Composer({
   url,
-  comments,
-  canWrite,
   people,
   onAdded,
 }: {
   url: string
-  comments: Comment[]
-  canWrite: boolean
   people: Person[] | undefined
   onAdded: (c: Comment) => void
 }) {
@@ -25,12 +60,9 @@ export function Thread({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const t = useT()
-  const f = useFormat()
   const field = useRef<HTMLTextAreaElement>(null)
   // Puts the person's mention where the cursor is, and the cursor after it.
-  const mention = (id: string) => {
-    const who = people?.find((p) => String(p.id) === id)
-    if (!who) return
+  const mention = (who: Person) => {
     const at = field.current
     const start = at?.selectionStart ?? body.length
     const end = at?.selectionEnd ?? start
@@ -57,55 +89,40 @@ export function Thread({
     }
   }
   return (
-    <section className="tt-thread" aria-label={t('boards.comments')}>
-      <h3>{t('boards.comments')}</h3>
-      {comments.length === 0 && <p className="tt-muted">{t('boards.noComments')}</p>}
-      <ol className="tt-list">
-        {comments.map((c) => (
-          <li key={c.id} className="tt-comment">
-            <span className="tt-muted tt-small">
-              {[authorLabel(t, c.author), f.dateTime(c.created_at)].join(' · ')}
-            </span>
-            <Markdown text={c.body} mentions={mentionNames(c, t('boards.mentionUnknown'))} />
-          </li>
-        ))}
-      </ol>
-      {canWrite && (
-        <form className="tt-form" onSubmit={submit}>
-          <textarea
-            ref={field}
-            aria-label={t('boards.commentField')}
-            rows={3}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-          />
-          {error && (
-            <p role="alert" className="tt-error">
-              {error}
-            </p>
-          )}
-          <div className="tt-actions">
-            {people && people.length > 0 && (
-              <select
-                aria-label={t('boards.mention')}
-                value=""
-                onChange={(e) => mention(e.target.value)}
-                disabled={busy}
-              >
-                <option value="">{t('boards.mentionPlaceholder')}</option>
-                {people.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            <button type="submit" className="tt-button tt-primary" disabled={busy || !body.trim()}>
-              {t('boards.commentSubmit')}
-            </button>
-          </div>
-        </form>
+    <form className="ui-board-composer" aria-label={t('boards.newComment')} onSubmit={submit}>
+      <Textarea
+        ref={field}
+        aria-label={t('boards.commentField')}
+        rows={2}
+        value={body}
+        invalid={Boolean(error)}
+        onChange={(e) => setBody(e.target.value)}
+      />
+      {error && (
+        <p role="alert" className="ui-board-error">
+          {error}
+        </p>
       )}
-    </section>
+      <div className="ui-board-actions">
+        {people && people.length > 0 && (
+          <Menu align="start">
+            <MenuButton size="sm" icon="at" label={t('boards.mention')} disabled={busy} />
+            <MenuList>
+              {people.map((p) => (
+                <MenuItem key={p.id} onSelect={() => mention(p)}>
+                  <span className="ui-board-value">
+                    <Avatar size="sm" name={p.name} decorative />
+                    {p.name}
+                  </span>
+                </MenuItem>
+              ))}
+            </MenuList>
+          </Menu>
+        )}
+        <Button type="submit" size="sm" loading={busy} disabled={!body.trim()} className="ui-board-send">
+          {t('boards.commentSubmit')}
+        </Button>
+      </div>
+    </form>
   )
 }
