@@ -72,6 +72,12 @@ export default function RowsGallery() {
               actions={<More />}
             />
             <Row
+              leading={<Icon name="search" />}
+              title={t('gallery.layout.inPlaceRow')}
+              detail={t('gallery.layout.inPlaceDetail')}
+              onOpen={() => {}}
+            />
+            <Row
               leading={<Icon name="file" />}
               title={t('gallery.layout.currentRow')}
               detail={t('gallery.layout.currentDetail')}

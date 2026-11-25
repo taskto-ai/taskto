@@ -5,7 +5,7 @@
 // the default) and `subsection` (14px, strong). The level is the document's outline, the size is
 // how it looks: pick them apart.
 
-import type { HTMLAttributes, ReactNode } from 'react'
+import type { HTMLAttributes, ReactNode, Ref } from 'react'
 import './Heading.css'
 
 export type HeadingSize = 'display' | 'title' | 'section' | 'subsection'
@@ -13,6 +13,8 @@ export type HeadingSize = 'display' | 'title' | 'section' | 'subsection'
 export interface HeadingProps extends HTMLAttributes<HTMLHeadingElement> {
   level: 1 | 2 | 3 | 4 | 5 | 6
   size?: HeadingSize
+  // To move the keyboard to the heading from a script (with tabIndex -1), when what had it is gone.
+  ref?: Ref<HTMLHeadingElement>
   children: ReactNode
 }
 

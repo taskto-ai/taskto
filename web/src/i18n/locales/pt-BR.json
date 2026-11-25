@@ -2051,7 +2051,13 @@
       "loadTheirs": "Carregar a versão da outra pessoa",
       "overwrite": "Substituir pela minha",
       "saveAgain": "Salvar a minha de novo",
-      "save": "Salvar"
+      "save": "Salvar",
+      "discardLabel": "Descartar as alterações",
+      "discardQuestion": "Você tem alterações que não foram salvas. Descartá-las?",
+      "discardDeleted": "Este documento foi excluído. Você tem alterações que não foram salvas. Descartá-las?",
+      "discardMoved": "Este documento foi movido. Você tem alterações que não foram salvas. Descartá-las?",
+      "discard": "Descartar minhas alterações",
+      "keepEditing": "Continuar editando"
     },
     "move": {
       "label": "Mover o documento",
@@ -2282,7 +2288,6 @@
   },
   "home": {
     "intro": "Widgets dos seus apps e os apps que você fixou no menu. Cada um mostra só o que você pode ver no app.",
-    "empty": "Nada no seu Início ainda. Escolha Personalizar para colocar aqui um widget de um dos seus apps ou para fixar um app no menu.",
     "widgets": "Widgets",
     "customize": "Personalizar",
     "done": "Concluir",
@@ -2295,12 +2300,6 @@
       "unpublished": "{name} ainda não foi publicado, então este widget não está disponível.",
       "removed": "{name} não oferece mais este widget."
     },
-    "unavailableShort": {
-      "offline": "· app fora do ar",
-      "unpublished": "· app não publicado",
-      "removed": "· não é mais oferecido"
-    },
-    "default": "· definido para o espaço",
     "moveEarlier": "Mover {name} para antes",
     "moveLater": "Mover {name} para depois",
     "removeNamed": "Remover {name}",
@@ -2325,7 +2324,37 @@
       "shortcut": "atalho",
       "pin": "fixação"
     },
-    "removePinNamed": "Remover {name} do menu"
+    "removePinNamed": "Remover {name} do menu",
+    "emptyTitle": "Nada no seu Início ainda",
+    "emptyHelp": "O Início reúne widgets dos seus apps, cada um mostrando só o que você pode ver no app. Adicione um para ver os números dele aqui ou fixe um app no menu.",
+    "emptyNoApps": "O Início reúne widgets dos seus apps, cada um mostrando só o que você pode ver no app. Crie ou instale um app primeiro e volte para colocá-lo aqui.",
+    "emptyAdd": "Adicionar widgets",
+    "emptyApps": "Abrir Apps",
+    "addShort": "Adicionar",
+    "added": "Adicionado",
+    "pin": "Fixar",
+    "unpin": "Desafixar",
+    "pinned": "Fixado",
+    "show": "Mostrar",
+    "defaultBadge": "Padrão do espaço",
+    "pinState": {
+      "offline": "App fora do ar",
+      "unpublished": "App não publicado",
+      "removed": "Não é mais oferecido"
+    },
+    "moreForWidget": "Mais ações para o widget {name}",
+    "moreForPin": "Mais ações para a fixação {name}",
+    "announce": {
+      "moved": "{name} movido para a posição {position} de {total}",
+      "removed": "{name} removido do Início",
+      "added": "{name} adicionado ao Início",
+      "hidden": "{name} ocultado",
+      "shown": "{name} mostrado de novo",
+      "pinned": "{name} fixado no menu",
+      "unpinned": "{name} removido do menu",
+      "defaultSet": "{name} agora é um padrão do espaço",
+      "defaultUnset": "{name} não é mais um padrão do espaço"
+    }
   },
   "checklist": {
     "title": "Configure seu workspace",
@@ -2659,7 +2688,9 @@
       "working": "Confirmando seu endereço…",
       "done": "Seu endereço está confirmado. As notificações que você escolheu agora podem ser enviadas por e-mail.",
       "settings": "Abrir as configurações de notificações"
-    }
+    },
+    "noneHelp": "Quando um cartão for atribuído a você, um comentário mencionar você ou um app precisar de você, isso aparece aqui.",
+    "in": "{where} ·"
   },
   "ui": {
     "loading": "Carregando",
@@ -2892,7 +2923,11 @@
       "addColumn": "Adicionar uma coluna",
       "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo",
       "busyAsk": "Excluir e falhar…",
-      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo."
+      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo.",
+      "inPlaceRow": "Um resultado de busca",
+      "inPlaceDetail": "Abre nesta página, no lugar",
+      "focusTarget": "Recebe o foco por script (uma ref e tabIndex -1)",
+      "focusIt": "Levar o teclado ao título"
     }
   }
 }
