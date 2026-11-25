@@ -5,6 +5,7 @@
 import type { ReactNode } from 'react'
 import type { Space } from '../api'
 import { useT } from '../i18n'
+import { NARROW, useMediaQuery } from '../media'
 import { spaceLabel } from '../spaces'
 import { Field } from '../ui/Field'
 import { SegmentedControl } from '../ui/SegmentedControl'
@@ -39,6 +40,7 @@ export function WhereChoice({
   const t = useT()
   const { mine, shared: sharedSpaces } = writableSpaces(spaces)
   const label = t('apps.builder.where')
+  const narrow = useMediaQuery(NARROW)
   return (
     <div className="apps-where">
       {/* The group is named by its own label; this is the same words, seen. */}
@@ -47,6 +49,9 @@ export function WhereChoice({
       </span>
       <SegmentedControl<Where>
         label={label}
+        // The two choices are a pill that can't wrap: on a phone it takes the small size, which
+        // fits the narrowest dialog.
+        size={narrow ? 'sm' : 'md'}
         value={where}
         onChange={(next) => {
           onWhere(next)

@@ -309,11 +309,17 @@ function BuilderSession({
   return (
     <div className="apps-builder" data-narrow={narrow || undefined} data-pane={pane}>
       <header className="apps-builder-bar">
-        <BackToApps workspace={workspace} />
-        <Heading level={1} size="title">
+        <span className="apps-builder-back">
+          <BackToApps workspace={workspace} />
+        </span>
+        <Heading level={1} size="title" className="apps-builder-title">
           {t('apps.builder.title')}
         </Heading>
-        {info.data && <DraftMarker app={info.data} />}
+        {info.data && (
+          <span className="apps-builder-state">
+            <DraftMarker app={info.data} />
+          </span>
+        )}
         {narrow && (
           <SegmentedControl<Pane>
             label={t('apps.builder.panes')}

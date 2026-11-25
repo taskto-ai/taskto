@@ -222,8 +222,31 @@
     gap: var(--space-2) var(--space-4);
   }
 
+  /* On a phone the bar is two rows, laid out rather than wrapped: the way back and the switch,
+     then the title and where the draft stands. */
   .apps-builder[data-narrow] .apps-builder-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "back switch"
+      "title state";
     padding-inline: var(--space-4);
+  }
+
+  .apps-builder[data-narrow] .apps-builder-back {
+    grid-area: back;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-switch {
+    grid-area: switch;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-title {
+    grid-area: title;
+  }
+
+  .apps-builder[data-narrow] .apps-builder-state {
+    grid-area: state;
   }
 
   .apps-builder[data-narrow] .apps-builder-panes {
