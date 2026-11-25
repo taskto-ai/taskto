@@ -102,6 +102,7 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 		Overdue    bool                `json:"overdue"`
 		Today      string              `json:"today"`
 		Sort       boards.Sort         `json:"sort"`
+		After      int64               `json:"after"`
 	}
 	if err := decode(args, &a); err != nil {
 		return nil, err
@@ -114,6 +115,9 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 		}
 	default:
 		return nil, errInvalid(`assignee must be "user" (with assignee_id), "agent" or "none"`)
+	}
+	if a.After < 0 {
+		return nil, errInvalid("after must be a card id from a previous next")
 	}
 	if utf8.RuneCountInString(a.Text) > maxTextFilter {
 		return nil, invalidf("text is at most %d characters", maxTextFilter)
@@ -128,17 +132,48 @@ func (s *Service) listCards(ctx context.Context, c *call, args json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
+	if a.After != 0 {
+		// The page after the card `after`, in the list's order.
+		i := slices.IndexFunc(cards, func(c boards.Card) bool { return c.ID == a.After })
+		if i < 0 {
+			return nil, errInvalid("after is not a card of this list: use the next of the previous page, with the same filters")
+		}
+		cards = cards[i+1:]
+	}
+	replies := make([]cardReply, len(cards))
 	for i := range cards {
 		cards[i].Body = cutText(cards[i].Body, listBodyLen)
+		replies[i] = cardReply{Card: cards[i]}
 	}
-	_, res, err := fitting(len(cards), func(n int) any {
-		if n == len(cards) {
-			return map[string]any{"cards": cards[:n]}
+	// page is the reply with the cards shown; when more is set, next is where it stopped.
+	page := func(shown []cardReply, next int64, more bool) any {
+		if !more {
+			return map[string]any{"cards": shown}
 		}
-		return map[string]any{"cards": cards[:n], "truncated": true,
-			"notice": "more cards than fit: narrow the list with column, assignee, blocked, labels, due dates, overdue or text"}
+		return map[string]any{"cards": shown, "truncated": true, "next": next,
+			"notice": "more cards than fit: continue with after set to next, or narrow the list with column, assignee, blocked, labels, due dates, overdue or text"}
+	}
+	// truncated and next are part of what is measured, so the page fits with them.
+	n, res, err := fitting(len(replies), func(n int) any {
+		next := a.After // nothing fit: the first card is cut below
+		if n > 0 {
+			next = replies[n-1].ID
+		}
+		return page(replies[:n], next, n < len(replies))
 	})
-	return res, err
+	if err != nil || n > 0 || len(replies) == 0 {
+		return res, err
+	}
+	// Not even the first card fits, with all its docs: it is cut as the other tools' cards
+	// are (the last docs, then the body, marked), so a page always has a card and next
+	// moves past it.
+	first, marks, err := fitCard(replies[0].Card, func(c boards.Card, m cutMarks) any {
+		return page([]cardReply{{c, m}}, c.ID, len(replies) > 1)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return page([]cardReply{{first, marks}}, first.ID, len(replies) > 1), nil
 }
 
 func (s *Service) showCard(ctx context.Context, c *call, args json.RawMessage) (any, error) {
