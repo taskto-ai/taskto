@@ -60,7 +60,8 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
                 scope="col"
                 className="ui-table-head"
                 data-numeric={c.numeric || undefined}
-                aria-sort={c.sort ? c.sort.direction : undefined}
+                // Only the column the rows are in order by says an order (WAI-ARIA: one header at a time).
+                aria-sort={c.sort && c.sort.direction !== 'none' ? c.sort.direction : undefined}
               >
                 {c.sort ? (
                   <SortButton sort={c.sort}>{c.header}</SortButton>

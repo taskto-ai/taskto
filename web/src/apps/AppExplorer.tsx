@@ -135,14 +135,21 @@ export function AppExplorer({
   // After a record left the list (deleted, restored), the keyboard goes to the list's count, which
   // says what the list holds now: the row it came from is gone.
   const count = useRef<HTMLParagraphElement>(null)
-  // Which record is open now, for a delete or a restore that finishes after the person moved on.
-  const openNow = useRef(open)
-  openNow.current = open
+  // Each opening of the drawer has a number of its own: a delete or a restore that finishes after the
+  // person moved on (to another record, or to the same record opened again) knows it isn't theirs.
+  const [opening, setOpening] = useState(0)
+  const openingNow = useRef(opening)
+  openingNow.current = opening
+  const show = (id: number | null) => {
+    setOpen(id)
+    if (id !== null) setOpening((n) => n + 1)
+  }
   const closeRecord = (how?: 'gone', from?: number) => {
     if (how === 'gone') {
-      // A record that left the list while another is open (deleted, then another opened before the
-      // answer came) closes nothing: the open one, and what was typed in it, stay.
-      if (from !== openNow.current) return
+      // A record that left the list after another opening of the drawer (deleted, then the same or
+      // another record opened before the answer came) closes nothing: what is open, and what was
+      // typed in it, stay.
+      if (from !== openingNow.current) return
       unsaved.current = false
       setOpen(null)
       setTimeout(() => count.current?.focus(), 0)
@@ -151,7 +158,7 @@ export function AppExplorer({
     leaving(() => setOpen(null))
   }
   const openRecord = (id: number) => {
-    if (id !== open) leaving(() => setOpen(id))
+    if (id !== open) leaving(() => show(id))
   }
 
   // A new question starts from its first page, and closes the record (asking first, as above).
@@ -331,7 +338,7 @@ export function AppExplorer({
       </div>
       {open !== null && (
         <RecordDetail
-          key={open}
+          key={`${open}-${opening}`}
           base={base}
           appId={appId}
           id={open}
@@ -342,7 +349,7 @@ export function AppExplorer({
           deleted={deleted}
           canChange={canChange}
           canRestore={canRestore}
-          onClose={(how) => closeRecord(how, open)}
+          onClose={(how) => closeRecord(how, opening)}
           onChanged={changed}
           onUnsaved={(now) => {
             unsaved.current = now

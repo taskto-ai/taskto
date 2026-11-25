@@ -745,3 +745,43 @@ test('a filter not added after all (the person kept a record’s changes) keeps 
   await screen.findByRole('list', { name: 'Filters in use' })
   expect((within(form).getByLabelText('Value') as HTMLInputElement).value).toBe('')
 })
+
+test('a delete that finishes after the same record was opened again closes nothing of the new opening', async () => {
+  let finish: (a: { body: unknown }) => void = () => {}
+  fakeFetch({
+    [`GET ${base}/records/query`]: {
+      body: page([record(4, 2, { description: 'Lunch' }), record(5, 1, { description: 'Taxi' })]),
+    },
+    [`GET ${base}/records/4/history`]: {
+      body: { record: record(4, 2, { description: 'Lunch' }), history: [], truncated: false },
+    },
+    [`GET ${base}/records/5/history`]: {
+      body: { record: record(5, 1, { description: 'Taxi' }), history: [], truncated: false },
+    },
+    [`POST ${base}/actions`]: () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  })
+  renderRecords()
+  openExplorer()
+  fireEvent.click(await screen.findByRole('button', { name: 'Open record 4' }))
+  await waitFor(() => field('description'))
+  fireEvent.click(within(drawer(4)).getByRole('button', { name: 'Delete' }))
+  fireEvent.click(
+    within(await screen.findByRole('alertdialog', { name: 'Delete record 4?' })).getByRole('button', {
+      name: 'Yes, delete this record',
+    }),
+  )
+  // While it is on its way: another record, then record 4 again, and a change typed in it.
+  fireEvent.click(screen.getByRole('button', { name: 'Open record 5' }))
+  await waitFor(() => within(drawer(5)).getByLabelText(/^description/))
+  fireEvent.click(screen.getByRole('button', { name: 'Open record 4' }))
+  const again = (await waitFor(() => within(drawer(4)).getByLabelText(/^description/))) as HTMLInputElement
+  fireEvent.change(again, { target: { value: 'Lunch with the team' } })
+  // The first opening's delete succeeds now: the new opening stays, with what was typed.
+  await act(async () => finish({ body: [] }))
+  await new Promise((r) => setTimeout(r, 0))
+  expect(screen.getByRole('region', { name: 'Record 4' })).toBeTruthy()
+  expect((within(drawer(4)).getByLabelText(/^description/) as HTMLInputElement).value).toBe('Lunch with the team')
+})
