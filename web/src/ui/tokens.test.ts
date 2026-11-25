@@ -351,7 +351,9 @@ describe('the old --tt-* names', () => {
     // Set by script at run time (pwa/viewport.ts), not by a stylesheet.
     const runtime = new Set(['--tt-viewport-h', '--tt-viewport-top'])
     // The screens' files, the base and the shared rules: not only the list that imports them.
-    expect(sheetPaths()).toEqual(expect.arrayContaining(['ui/base.css', 'legacy-shared.css', 'boards/boards.legacy.css']))
+    expect(sheetPaths()).toEqual(
+      expect.arrayContaining(['ui/base.css', 'legacy-shared.css', 'boards/boards.legacy.css']),
+    )
     const css = allSheets().join('\n')
     const missing = [...css.matchAll(/var\((--tt-[a-z0-9-]+)\s*\)/g)]
       .map((m) => m[1])

@@ -294,7 +294,9 @@ test("a selector one screen declares, declared again in another screen's stylesh
     'apps/apps.legacy.css': '\n\n.tt-card { padding: 0; }\n',
   })
   expect(r.code).toBe(1)
-  expect(r.err).toContain('src/boards/boards.legacy.css:1: .tt-card is declared again (first at src/apps/apps.legacy.css:3)')
+  expect(r.err).toContain(
+    'src/boards/boards.legacy.css:1: .tt-card is declared again (first at src/apps/apps.legacy.css:3)',
+  )
 })
 
 describe('in the design system, a size, a space, a radius, a shadow and a duration are tokens', () => {
