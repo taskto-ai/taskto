@@ -111,6 +111,8 @@ var schemas = map[string]map[string]kind{
 	TwoFactorRecoveryCodesReplaced: {},
 	TwoFactorCleared:               {},
 
+	PasswordResetRequested: {"emailed": boolean},
+
 	SSOLoginSucceeded: {"provider": tag},
 	SSOLoginFailed:    {"provider": tag, "reason": tag},
 	SSOIdentityLinked: {"provider": tag, "created_account": boolean},

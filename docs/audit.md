@@ -57,6 +57,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `two_factor_disabled` | a user turns it off, with their password and a code | | user | |
 | `two_factor_recovery_codes_replaced` | a user makes new recovery codes | | user | |
 | `two_factor_cleared` | an admin clears a member's, who lost both their app and their recovery codes | the admin's | the member | |
+| `password_reset_requested` | someone asked for a reset link by email from the login page, and an account with a password has the address (an address no account has records nothing, so the log can't be filled from outside) | | user | `emailed`: whether the SMTP server took the message (no actor, since whoever asked isn't known to be the account's owner) |
 | `sso_login_succeeded` | a single sign-on login | | user | `provider` |
 | `sso_login_failed` | a refused single sign-on login | | | `provider`, `reason` |
 | `sso_identity_linked` | an identity is linked to an account | | user | `provider`, `created_account` |

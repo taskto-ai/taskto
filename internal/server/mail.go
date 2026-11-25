@@ -84,23 +84,26 @@ func (g *mailTestGate) enter(user int64) (leave func(), ok bool, wait time.Durat
 // operators see it (auth.Service.RequireOperator), as they see the backups, and not the admins
 // of a workspace someone else made. svc may be nil: not configured.
 func mailRoutes(mux *http.ServeMux, accounts *auth.Service, svc *mail.Service, gate *mailTestGate) {
-	mux.Handle("GET /api/workspaces/{workspace}/mail", accounts.RequireOperator(mailStatus(svc)))
+	mux.Handle("GET /api/workspaces/{workspace}/mail", accounts.RequireOperator(mailStatus(svc, accounts)))
 	mux.Handle("POST /api/workspaces/{workspace}/mail/test", accounts.RequireOperator(mailTest(svc, accounts, gate)))
 }
 
 // mailStatus is GET /api/workspaces/{workspace}/mail: whether the server can send email, and
 // where. It never says the user name or the password, only whether the server signs in.
-func mailStatus(svc *mail.Service) http.Handler {
+func mailStatus(svc *mail.Service, accounts *auth.Service) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reply := struct {
-			Configured bool   `json:"configured"`
+			Configured bool `json:"configured"`
+			// SendsLinks is whether the server emails reset and invite links: it also needs the
+			// public address (docs/install.md#email), which a link is built on.
+			SendsLinks bool   `json:"sends_links"`
 			Host       string `json:"host,omitempty"`
 			Port       int    `json:"port,omitempty"`
 			Security   string `json:"security,omitempty"`
 			From       string `json:"from,omitempty"`
 			// Password is "set" or "not set", never the password.
 			Password string `json:"password,omitempty"`
-		}{}
+		}{SendsLinks: accounts.EmailLinks()}
 		if svc.Configured() {
 			info := svc.Info()
 			reply.Configured, reply.Host, reply.Port, reply.Security, reply.From = true, info.Host, info.Port, info.Security, info.From

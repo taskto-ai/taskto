@@ -140,6 +140,7 @@ make fmt          # format, and apply the linters' safe fixes
 make dev-server   # Go server on 127.0.0.1:8080, data in ./data, plain-http cookies and the agent runtime on
 make agent-it     # integration tests with the real agent sidecar (needs Node), as CI runs them
 make web-e2e      # the web app's end to end tests: Playwright's Chromium against the built server, on every pull request in CI (docs/web-e2e.md)
+make screens      # captures of every screen at three sizes, light and dark, into web/screens/ (git-ignored), for UI reviews; never in CI
 make dictation-e2e # dictation in a real Chromium with the real local model (~700 MB, ~11 min); never in CI
 make browser-handover-e2e # the browser's hand-over with a real model on a gateway, in Docker; never in CI
 make dev-web      # Vite dev server, proxies the API to the Go server

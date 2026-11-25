@@ -580,7 +580,18 @@
       "forgot": "Esqueceu sua senha? Peça um link de redefinição a um administrador do espaço de trabalho.",
       "title": "Entrar",
       "busy": "Entrando…",
-      "submit": "Entrar"
+      "submit": "Entrar",
+      "forgotByEmail": "Esqueceu sua senha?"
+    },
+    "forgot": {
+      "title": "Redefina sua senha",
+      "intro": "Informe o e-mail da sua conta. Se houver uma conta com ele, enviaremos um link para escolher uma nova senha.",
+      "submit": "Enviar o link por e-mail",
+      "busy": "Enviando…",
+      "sentTitle": "Veja seu e-mail",
+      "sent": "Se houver uma conta com {email}, um link para escolher uma nova senha está a caminho.",
+      "sentHelp": "O link funciona uma única vez e expira. Se nada chegar em alguns minutos, olhe a caixa de spam ou peça um link de redefinição a um administrador do espaço de trabalho.",
+      "back": "Voltar ao login"
     },
     "reset": {
       "title": "Defina uma nova senha",
@@ -1036,7 +1047,8 @@
     "offline_record_changed": "Este registro mudou neste dispositivo (em outra aba ou janela) depois que esta tela foi desenhada. Ele aparece como está agora: confira e tente de novo.",
     "notification_email_verification_invalid": "Esse link de confirmação não funciona: já foi usado, expirou ou foi substituído por um mais novo. Peça um novo em Configurações, Notificações.",
     "notification_email_verification_too_soon": "Um link foi enviado agora há pouco. Veja sua caixa de entrada ou tente de novo em {seconds} segundos.",
-    "notification_email_verification_unavailable": "Não foi possível enviar o e-mail de confirmação. Tente de novo."
+    "notification_email_verification_unavailable": "Não foi possível enviar o e-mail de confirmação. Tente de novo.",
+    "too_many_resets": "Muitos pedidos de redefinição: tente de novo mais tarde."
   },
   "language": {
     "label": "Idioma",
@@ -1608,6 +1620,7 @@
         "password_changed": "Senha alterada",
         "password_change_failed": "Troca de senha recusada (senha atual errada)",
         "password_reset_created": "Link de redefinição de senha criado",
+        "password_reset_requested": "Link de redefinição pedido por e-mail",
         "password_reset_used": "Senha definida com um link de redefinição",
         "sso_login_succeeded": "Entrou com login único",
         "sso_login_failed": "Login único recusado",
@@ -1667,6 +1680,7 @@
         "created_account": "Conta criada",
         "default_mode": "Modo padrão",
         "email": "Endereço",
+        "emailed": "Enviado por e-mail",
         "enabled": "Ativado",
         "engine": "Motor",
         "expires": "Expira",
