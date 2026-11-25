@@ -248,15 +248,53 @@ dark-mode badge ended up white on salmon.
 Every stylesheet under `web/src/` is global, so a class name is shared by the whole app: declaring a
 name a second time silently changes the first screen that used it (a code sample's grid once made
 every highlighted word of a search result a row of its own). `web/scripts/css-check.mjs`, run by
-`make check` and CI, reads every `.css` file under `web/src/` and fails when a `.tt-` selector is
-declared twice at the top level, in one file or in two (inside `@layer` blocks counts as the top
-level; a state or a screen size goes in another at-rule block; two different things get two
-names), when a `tt-` class a component's `className` uses has no rule, and when a colour literal is
+`make check` and CI, reads every `.css` file under `web/src/` and fails when a `.tt-` or `.ui-`
+selector is declared twice at the top level, in one file or in two (inside `@layer` blocks counts as
+the top level; a state or a screen size goes in another at-rule block; two different things get two
+names), when a `tt-` or `ui-` class a component's `className` uses has no rule, and when a colour literal is
 written outside `web/src/ui/themes/`. A class that is deliberately an unstyled hook goes in the
 script's `UNSTYLED` list, with the reason. It reads class selectors (not an attribute selector's
 value), a component's `className`, and the strings of a lookup table in capitals
 (`const HEALTH_CLASS = { ok: 'tt-ok' }`); a class built from pieces is not seen, and the header of
 the script says what else it can't.
+
+## Components
+
+The controls every screen uses are in `web/src/ui/`, one component per file with its stylesheet
+beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `ButtonLink`,
+`IconButton`, `Tooltip`, `Field` with `Input`, `Textarea` and `Select`, `Checkbox`, `Switch`,
+`SegmentedControl`, `Badge`, `Label` (and `labelHue`, the hue a label's name picks), `Avatar`,
+`AgentDot`, `Skeleton`, `Spinner` and `VisuallyHidden`. A screen imports each file directly
+(`../ui/Button`); there is no index file. A screen doesn't write a `<button>`, an `<input>` or a
+`<select>` of its own.
+
+- **One height per size.** Buttons, fields, selects and segmented controls of one size are one
+  height (36px regular, 28px small), so they line up in a row; on a touch screen every one of
+  them is 44px.
+- **States are designed.** Hover, focus (the ring), pressed, disabled (a look of its own on the
+  neutral ground, never half-opacity) and, where they apply, loading and invalid.
+- **The old element rules leave them alone.** `styles.css` is in no layer, so its rules that
+  style an element by its name (headings, `p`, `a`, `button`, the fields, a checkbox's or a
+  radio's label, also under `pointer: coarse`) would beat every component. Every element a
+  component draws has a class that starts with `ui-` (a control's native element also has
+  `ui-control`), and each of those rules skips such elements: its subject ends with
+  `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no specificity, and the
+  screens' own elements have no `ui-` class, so they are styled as before.
+  `web/src/ui/controlRules.test.tsx` draws every gallery and fails when a rule of `styles.css`
+  reaches one of these elements, or names a `ui-` class outside `:where()`.
+- **Two rules reach every field on purpose:** the caret's colour, and 16px text in a window under
+  48rem (it keeps iOS from zooming in on focus), with a mouse too. A field then has 16px text
+  beside 14px buttons; its height is set by the control scale, not by its text, so a row still
+  lines up. (On a touch screen a field's text is 16px in any window.)
+
+**The gallery.** `pnpm --filter @taskto/web run dev`, then `/_gallery` on the dev server: the colour
+and type roles and every component's specimens, with switches for light and dark, the sample second
+brand and the direction. It collects every `<Name>.gallery.tsx` beside the components
+(`import.meta.glob`), so a new component adds its own file. It exists on the dev server only:
+`main.tsx` opens it under `import.meta.env.DEV`, so a production build has none of its code. The
+query `?theme=dark&brand=harbor&dir=rtl` sets the switches, for captures. Its text goes through
+`t()` like every screen's (`gallery.*` in the locale files), so the gallery can be seen in each
+language.
 
 ## The buttons
 

@@ -255,6 +255,19 @@ test("a colour's name inside a function's arguments is a colour, even where name
   expect(stops.err).toContain('list-style has the colour literal red')
 })
 
+test("checks the design system's ui- classes as it checks tt- ones", () => {
+  const twice = run('.ui-button { color: inherit; }\n.ui-button { margin: 0; }\n')
+  expect(twice.code).toBe(1)
+  expect(twice.err).toContain('.ui-button is declared again')
+  const unstyled = run('.ui-button { color: inherit; }\n', { 'A.tsx': component('"ui-button ui-missing"') })
+  expect(unstyled.code).toBe(1)
+  expect(unstyled.err).toContain('ui-missing is used but no rule')
+  expect(unstyled.err).not.toContain('ui-button is used')
+  // A custom property that happens to start like a class is not one.
+  const prop = run('.ui-x { --ui-y: 0; }\n', { 'A.tsx': component('"ui-x"') })
+  expect(prop.code).toBe(0)
+})
+
 test('a system colour is a colour literal too, outside a theme', () => {
   for (const [value, literal] of [
     ['Canvas', 'Canvas'],
@@ -269,4 +282,29 @@ test('a system colour is a colour literal too, outside a theme', () => {
   const theme = runFiles({ 'ui/themes/brand.css': '@layer themes { :root { --color-bg: Canvas; } }\n' })
   expect(theme.err).toBe('')
   expect(theme.code).toBe(0)
+})
+
+test('sees the classes of an array a component builds its className from, whatever its name', () => {
+  const source = `export function A({ big }: { big: boolean }) {
+  const cls = ['ui-a', big ? 'ui-a-big' : '', 'ui-missing'].filter(Boolean).join(' ')
+  return <p className={cls}>x</p>
+}
+`
+  const r = run('.ui-a { color: inherit; }\n.ui-a-big { margin: 0; }\n', { 'A.tsx': source })
+  expect(r.code).toBe(1)
+  expect(r.err).toContain('ui-missing is used but no rule')
+  expect(r.err).not.toContain('ui-a is used')
+  expect(r.err).not.toContain('ui-a-big is used')
+  // With a type on the constant too.
+  const typed = run('.ui-a { color: inherit; }\n', {
+    'C.tsx':
+      "export function C() {\n  const cls: string[] = ['ui-a', 'ui-untyped']\n  return <p className={cls.join(' ')}>x</p>\n}\n",
+  })
+  expect(typed.code).toBe(1)
+  expect(typed.err).toContain('ui-untyped is used but no rule')
+  // An array of words that are not classes is not a problem.
+  const words = run('.ui-a { color: inherit; }\n', {
+    'B.tsx': "const names = ['launch', 'design']\nexport const B = () => <p className=\"ui-a\">{names[0]}</p>\n",
+  })
+  expect(words.code).toBe(0)
 })

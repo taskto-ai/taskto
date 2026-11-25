@@ -1,0 +1,54 @@
+/* A label, and the six hues that anything named may take (a label, an avatar): each sets the pair
+   of a hue's text and its soft ground, which contrast.ts holds to 4.5:1. */
+
+@layer components {
+  .ui-label {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    vertical-align: middle;
+    max-inline-size: 100%;
+    block-size: var(--space-5);
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--hue-soft);
+    color: var(--hue-text);
+    font: var(--type-caption);
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ui-hue-green {
+    --hue-text: var(--color-label-green);
+    --hue-soft: var(--color-label-green-soft);
+  }
+
+  .ui-hue-blue {
+    --hue-text: var(--color-label-blue);
+    --hue-soft: var(--color-label-blue-soft);
+  }
+
+  .ui-hue-violet {
+    --hue-text: var(--color-label-violet);
+    --hue-soft: var(--color-label-violet-soft);
+  }
+
+  .ui-hue-pink {
+    --hue-text: var(--color-label-pink);
+    --hue-soft: var(--color-label-pink-soft);
+  }
+
+  .ui-hue-amber {
+    --hue-text: var(--color-label-amber);
+    --hue-soft: var(--color-label-amber-soft);
+  }
+
+  .ui-hue-teal {
+    --hue-text: var(--color-label-teal);
+    --hue-soft: var(--color-label-teal-soft);
+  }
+}
