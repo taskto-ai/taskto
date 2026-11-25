@@ -8,12 +8,12 @@ CREATE INDEX app_rows_deleted_by_time ON app_rows (deleted_at) WHERE deleted_at 
 CREATE INDEX app_operations_by_record ON app_operations (record_id) WHERE record_id IS NOT NULL;
 CREATE INDEX app_effect_cards_by_record ON app_effect_cards (record_id);
 
--- The largest id a record of an app has had, kept apart from the rows. A record's id is a SQLite
--- rowid, which a new row takes as the largest id there is plus one, so once the sweep removes the
--- largest record, or a cascade removes whole apps, its id would be given to the next record, and a
--- stale change that names it (an offline edit that sends no expected revision) would land on
--- that one. The sweep raises the mark to the largest id before it removes records, and a new
--- record takes an id above it (internal/apps, apply).
+-- The largest id a record had when the retention sweep last removed records, kept apart from the
+-- rows. A record's id is a SQLite rowid, which a new row takes as the largest id there is plus
+-- one, so once the sweep removes the largest record, or a cascade removes whole apps after it, its
+-- id would be given to the next record, and a stale change that names it (an offline edit that
+-- sends no expected revision) would land on that one. The sweep raises the mark to the largest id
+-- before it removes records, and a new record takes an id above it (internal/apps, apply).
 CREATE TABLE app_row_ids (
     id   INTEGER PRIMARY KEY CHECK (id = 1),
     high INTEGER NOT NULL CHECK (high >= 0)

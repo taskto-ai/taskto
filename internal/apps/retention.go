@@ -27,11 +27,13 @@ import (
 //     outbox's own purge ages out by request (keepDone), so a device that replays an old request
 //     is answered with its receipt as ever. Only the link of a download's records to their
 //     operations is lost, and a purged record isn't in a download.
-//   - A removed record's id is never given to another: a record's id is a SQLite rowid, which a
-//     new row would take as the largest id plus one, so the sweep first raises a mark that is kept
-//     apart from the rows (app_row_ids) to the largest id, and new records take an id above it.
-//     A stale change that names a removed record (an offline edit, which sends no expected
-//     revision) finds nothing, whatever was inserted or cascaded away since.
+//   - The id of a record the sweep removes is never given to another: a record's id is a SQLite
+//     rowid, which a new row would take as the largest id plus one, so the sweep first raises a
+//     mark that is kept apart from the rows (app_row_ids) to the largest id, and new records take
+//     an id above it. A stale change that names a removed record in an app that is still there (an
+//     offline edit, which sends no expected revision) finds nothing, whatever was inserted or
+//     cascaded away since. The mark is not raised by every insert: a record that goes with its
+//     app (the app's deletion) takes the app, which the same change would need, with it.
 //   - A record with effects that wait or run is kept, so no effect is lost with its record. Its
 //     done entries, and the link to the card made for it, go with it.
 //   - Attachments are rows that refer to the record, so they go with it, and their files, which

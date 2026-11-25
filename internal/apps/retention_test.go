@@ -123,8 +123,11 @@ func TestAnInsertAndDeleteLoopDoesNotGrowWithoutBound(t *testing.T) {
 	a := w.editable(w.alice, s)
 	w.e.s.WithDeletedRetention(day(7))
 	const days = 40
+	// One base time, so the clock moves in exact days and the record deleted exactly seven days
+	// ago is exactly at the cutoff, which is kept (a record goes once strictly older).
+	base := time.Now()
 	for i := 0; i < days; i++ {
-		w.at(day(i))
+		w.e.s.clock = func() time.Time { return base.Add(day(i)) }
 		d := fmt.Sprintf("loop-%d", i)
 		w.add(w.alice, s, a, d, "1")
 		id, _ := w.idOf(w.alice, s, a, d)
@@ -136,10 +139,9 @@ func TestAnInsertAndDeleteLoopDoesNotGrowWithoutBound(t *testing.T) {
 		w.purge()
 		rows := w.count(`SELECT count(*) FROM app_rows WHERE app_id = ?`, a.ID)
 		history := w.count(`SELECT count(*) FROM app_row_history WHERE app_id = ?`, a.ID)
-		// A record goes once it is older than the window, and the clock is read afresh each day,
-		// so the one deleted exactly seven days ago is just past it: today's and the six before
-		// are kept, each with two history entries; before the window is full, all of them.
-		want := min(i+1, 7)
+		// Today's record and the seven days' before are kept, each with two history entries;
+		// before the window is full, all of them.
+		want := min(i+1, 8)
 		if rows != want || history != 2*want {
 			t.Fatalf("day %d: %d rows and %d history entries are kept, want %d and %d", i, rows, history, want, 2*want)
 		}
