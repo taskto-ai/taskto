@@ -126,3 +126,18 @@ test("coming back to the page shows the account's zone, not the one the app had 
   const select = screen.getByLabelText('Your time zone') as HTMLSelectElement
   await waitFor(() => expect(select.value).toBe('Asia/Tokyo'))
 })
+
+test("a pick that fails to save, made before the account answered, leaves the account's zone shown", async () => {
+  browserIn('Europe/Lisbon')
+  let answer: () => void = () => {}
+  fakeFetch({
+    'GET /api/me': () => new Promise((done) => (answer = () => done({ body: me('Asia/Tokyo') }))),
+    'PATCH /api/me': { status: 500, body: { error: 'internal error', code: 'internal' } },
+  })
+  render(<TimeZonePanel initial="UTC" />)
+  const select = screen.getByLabelText('Your time zone') as HTMLSelectElement
+  fireEvent.change(select, { target: { value: 'America/Sao_Paulo' } })
+  await screen.findByRole('alert')
+  answer()
+  await waitFor(() => expect(select.value).toBe('Asia/Tokyo'))
+})
