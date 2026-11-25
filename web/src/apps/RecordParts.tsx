@@ -6,9 +6,17 @@ import { type Format, type T, useFormat, useT } from '../i18n'
 import { coordinates, isLocation } from './capture'
 import { photoIds } from './photos'
 
-// The name of who did something, and that it was through the agent.
+// The name of who did something, and that it was through the agent. A change the server made on its
+// own is an integration's: named as far as the server can name it ("Stripe · payments").
 export function who(a: RecordAuthor | null, t: T): string {
   if (!a) return t('apps.records.unknownUser')
+  if (a.system) {
+    const { provider, name, removed } = a.system
+    if (removed) return t('apps.records.system.removed')
+    if (provider && name) return t('apps.records.system.providerNamed', { provider, name })
+    if (provider || name) return t('apps.records.system.named', { name: provider || name || '' })
+    return t('apps.records.system.generic')
+  }
   return a.agent ? t('apps.records.agent', { name: a.name }) : a.name
 }
 

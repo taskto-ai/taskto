@@ -62,6 +62,12 @@
       "version": "{operation} · revisão {revision} · {when} · {name}",
       "agent": "{name} (pelo agente)",
       "unknownUser": "uma conta removida",
+      "system": {
+        "generic": "uma integração",
+        "named": "{name} (integração)",
+        "providerNamed": "{provider} · {name}",
+        "removed": "uma integração que foi removida"
+      },
       "synthetic": "Criado antes de o histórico ser guardado: este é o registro como estava então.",
       "versionsTruncated": "Só as {count} versões mais recentes são mostradas."
     },
