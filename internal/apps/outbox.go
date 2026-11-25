@@ -336,9 +336,38 @@ func (s *Service) StartOutbox(ctx context.Context) (stop func()) {
 			}
 		}
 	}()
+	// Deleted records past their retention are removed on a worker of their own, so a long
+	// sweep never holds the effects back (retention.go).
+	retained := make(chan struct{})
+	go func() {
+		defer close(retained)
+		s.retain(ctx, retentionEvery)
+	}()
 	return func() {
 		cancel()
 		<-done
+		<-retained
+	}
+}
+
+// retentionEvery is how often the server looks for deleted records past their retention.
+const retentionEvery = 10 * time.Minute
+
+// retain runs PurgeDeleted at once and then every interval, until ctx is done.
+func (s *Service) retain(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		if n, err := s.PurgeDeleted(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("apps: purging deleted records failed", "err", err)
+		} else if n > 0 {
+			slog.Info("apps: purged deleted records past their retention", "records", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 	}
 }
 
