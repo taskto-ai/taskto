@@ -290,8 +290,8 @@ export function blankComments(source) {
 
 function tableClasses(source, used) {
   // A table in capitals (an object or an array), or an array a component builds its classes from,
-  // whatever its name: `const cls = ['ui-button', size === 'sm' ? 'ui-button-sm' : '']`.
-  for (const m of source.matchAll(/\bconst\s+(?:[A-Z][A-Z0-9_]*\b[^=\n]*=\s*(?=[{[])|[a-z]\w*\s*=\s*(?=\[))/g)) {
+  // whatever its name, typed or not: `const cls: string[] = ['ui-button', big ? 'ui-button-big' : '']`.
+  for (const m of source.matchAll(/\bconst\s+(?:[A-Z][A-Z0-9_]*\b[^=\n]*=\s*(?=[{[])|[a-z]\w*\b[^=\n]*=\s*(?=\[))/g)) {
     const start = m.index + m[0].length
     const end = tableEnd(source, start)
     for (const lit of source
