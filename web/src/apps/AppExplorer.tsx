@@ -130,8 +130,14 @@ export function AppExplorer({
   // After a record left the list (deleted, restored), the keyboard goes to the list's count, which
   // says what the list holds now: the row it came from is gone.
   const count = useRef<HTMLParagraphElement>(null)
-  const closeRecord = (how?: 'gone') => {
+  // Which record is open now, for a delete or a restore that finishes after the person moved on.
+  const openNow = useRef(open)
+  openNow.current = open
+  const closeRecord = (how?: 'gone', from?: number) => {
     if (how === 'gone') {
+      // A record that left the list while another is open (deleted, then another opened before the
+      // answer came) closes nothing: the open one, and what was typed in it, stay.
+      if (from !== openNow.current) return
       unsaved.current = false
       setOpen(null)
       setTimeout(() => count.current?.focus(), 0)
@@ -207,7 +213,12 @@ export function AppExplorer({
             <Field label={t('apps.explorer.sortBy')}>
               <Select
                 value={sort.by}
-                onChange={(e) => ask(() => setSort({ by: e.target.value, dir: firstDir(e.target.value) }))}
+                onChange={(e) => {
+                  // Read now: while the person is asked about unsaved changes, React puts the
+                  // controlled select back to the current sort.
+                  const by = e.target.value
+                  ask(() => setSort({ by, dir: firstDir(by) }))
+                }}
               >
                 <option value={deleted ? '_deleted' : UPDATED}>
                   {t(deleted ? 'apps.explorer.deletedAt' : 'apps.explorer.changedAt')}
@@ -317,7 +328,7 @@ export function AppExplorer({
           deleted={deleted}
           canChange={canChange}
           canRestore={canRestore}
-          onClose={closeRecord}
+          onClose={(how) => closeRecord(how, open)}
           onChanged={changed}
           onUnsaved={(now) => {
             unsaved.current = now

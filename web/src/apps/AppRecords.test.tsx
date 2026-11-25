@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { AppAccess, AppDefinition } from '../api'
@@ -678,4 +678,53 @@ test('the record’s form leaves required fields to the server: the browser neve
   expect(within(drawer()).getByText('description').closest('.ui-field')?.textContent).toContain('*')
   // A field that isn't required says nothing of it.
   expect(field('amount').getAttribute('aria-required')).toBeNull()
+})
+
+test('a delete that finishes after another record was opened closes nothing, and what was typed there stays', async () => {
+  let finish: (a: { body: unknown }) => void = () => {}
+  fakeFetch({
+    [`GET ${base}/records/query`]: {
+      body: page([record(4, 2, { description: 'Lunch' }), record(5, 1, { description: 'Taxi' })]),
+    },
+    [`GET ${base}/records/4/history`]: {
+      body: { record: record(4, 2, { description: 'Lunch' }), history: [], truncated: false },
+    },
+    [`GET ${base}/records/5/history`]: {
+      body: { record: record(5, 1, { description: 'Taxi' }), history: [], truncated: false },
+    },
+    // The delete's answer comes when the test says.
+    [`POST ${base}/actions`]: () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  })
+  renderRecords()
+  openExplorer()
+  fireEvent.click(await screen.findByRole('button', { name: 'Open record 4' }))
+  await waitFor(() => field('description'))
+  fireEvent.click(within(drawer(4)).getByRole('button', { name: 'Delete' }))
+  fireEvent.click(
+    within(await screen.findByRole('alertdialog', { name: 'Delete record 4?' })).getByRole('button', {
+      name: 'Yes, delete this record',
+    }),
+  )
+  // While it is on its way, the person opens another record and types in it.
+  fireEvent.click(screen.getByRole('button', { name: 'Open record 5' }))
+  const taxi = (await waitFor(() => within(drawer(5)).getByLabelText(/^description/))) as HTMLInputElement
+  fireEvent.change(taxi, { target: { value: 'Taxi to the station' } })
+  // The delete of record 4 succeeds now: record 5 stays open, with its text.
+  await act(async () => finish({ body: [] }))
+  await new Promise((r) => setTimeout(r, 0))
+  expect(screen.getByRole('region', { name: 'Record 5' })).toBeTruthy()
+  expect((within(drawer(5)).getByLabelText(/^description/) as HTMLInputElement).value).toBe('Taxi to the station')
+})
+
+test('on a phone, choosing a sort with a change not saved applies the sort chosen once discarded', async () => {
+  phone()
+  const { calls } = await editing()
+  fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'amount' } })
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() =>
+    expect(calls.some((c) => c.path.includes('/records/query') && params(c.path).get('sort') === 'amount')).toBe(true),
+  )
 })

@@ -154,6 +154,7 @@ export function LocationField({
               autoComplete="off"
               value={lat}
               invalid={invalid}
+              aria-describedby={invalid ? `${ids}-manual-error` : undefined}
               onChange={(e) => setLat(e.target.value)}
             />
           </Field>
@@ -163,11 +164,17 @@ export function LocationField({
               autoComplete="off"
               value={lon}
               invalid={invalid}
+              aria-describedby={invalid ? `${ids}-manual-error` : undefined}
               onChange={(e) => setLon(e.target.value)}
             />
           </Field>
           <Button onClick={applyManual}>{t('apps.location.useManual')}</Button>
-          {invalid && <Notice tone="danger">{t('apps.location.manualInvalid')}</Notice>}
+          {invalid && (
+            // Named by id: both coordinate inputs are described by it, not only announced once.
+            <div id={`${ids}-manual-error`} className="ui-capture-error">
+              <Notice tone="danger">{t('apps.location.manualInvalid')}</Notice>
+            </div>
+          )}
         </div>
       )}
       {!readOnly && (
