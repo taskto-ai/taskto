@@ -1,0 +1,35 @@
+@layer components {
+  /* The scroll container: it fills what the shell gives the page and scrolls on its own. */
+  .ui-page {
+    block-size: 100%;
+    min-block-size: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-block: var(--space-6) var(--space-10);
+    padding-inline: var(--space-8);
+  }
+
+  .ui-page-inner {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    inline-size: 100%;
+    max-inline-size: var(--width-list);
+    margin-inline: auto;
+  }
+
+  .ui-page[data-width="reading"] > .ui-page-inner {
+    max-inline-size: var(--width-reading);
+  }
+
+  .ui-page[data-width="full"] > .ui-page-inner {
+    max-inline-size: none;
+  }
+
+  @media (max-width: 640px) {
+    .ui-page {
+      padding-block: var(--space-4) var(--space-8);
+      padding-inline: var(--space-4);
+    }
+  }
+}

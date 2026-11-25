@@ -1,0 +1,47 @@
+@layer components {
+  .ui-page-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3) var(--space-4);
+    min-block-size: var(--control-md);
+  }
+
+  .ui-page-header-titles {
+    flex: 1 1 16rem;
+    min-inline-size: 0;
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .ui-page-header-path {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-page-header-title {
+    margin: 0;
+    font: var(--type-display);
+    letter-spacing: var(--tracking-display);
+    color: var(--color-text);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-page-header-help {
+    margin: 0;
+    font: var(--type-ui);
+    color: var(--color-text-muted);
+    max-inline-size: var(--width-reading);
+  }
+
+  .ui-page-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+}

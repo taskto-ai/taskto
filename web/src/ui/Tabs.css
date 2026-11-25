@@ -1,0 +1,79 @@
+@layer components {
+  .ui-tabs {
+    border-block-end: 1px solid var(--color-border);
+  }
+
+  /* On a narrow screen the tabs scroll sideways in their row; the page doesn't. */
+  .ui-tabs-list {
+    display: flex;
+    gap: var(--space-1);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .ui-tab {
+    position: relative;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-block-size: var(--control-md);
+    padding-inline: var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    background: none;
+    font: var(--type-ui);
+    color: var(--color-text-muted);
+    text-decoration: none;
+    cursor: pointer;
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      background-color var(--duration-fast) var(--ease-out);
+  }
+
+  .ui-tab:hover {
+    color: var(--color-text);
+    background: var(--color-hover);
+  }
+
+  .ui-tab:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: -2px;
+  }
+
+  /* The current tab: ink text and an ink rule under it, so it is marked by more than colour. */
+  .ui-tab[aria-current="page"],
+  .ui-tab[aria-selected="true"] {
+    color: var(--color-text);
+    font: var(--type-ui-strong);
+  }
+
+  .ui-tab[aria-current="page"]::after,
+  .ui-tab[aria-selected="true"]::after {
+    content: "";
+    position: absolute;
+    inset-inline: var(--space-2);
+    inset-block-end: -1px;
+    block-size: 2px;
+    border-radius: var(--radius-pill);
+    background: var(--color-text);
+  }
+
+  .ui-tab-count {
+    font: var(--type-caption);
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-muted);
+  }
+
+  @media (pointer: coarse) {
+    .ui-tab {
+      min-block-size: var(--control-touch);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-tab {
+      transition: none;
+    }
+  }
+}

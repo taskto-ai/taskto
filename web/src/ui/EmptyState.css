@@ -1,0 +1,40 @@
+@layer components {
+  .ui-empty {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-2);
+    padding: var(--space-8) var(--space-5);
+    border: 1px dashed var(--color-border-strong);
+    border-radius: var(--radius-lg);
+    text-align: center;
+    color: var(--color-text-muted);
+    font: var(--type-ui);
+  }
+
+  .ui-empty-icon {
+    display: inline-flex;
+    color: var(--color-text-muted);
+  }
+
+  .ui-empty-title {
+    margin: 0;
+    font: var(--type-ui-strong);
+    color: var(--color-text);
+  }
+
+  .ui-empty-body {
+    max-inline-size: 48ch;
+  }
+
+  .ui-empty-body > p {
+    margin: 0;
+  }
+
+  .ui-empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-2);
+    margin-block-start: var(--space-2);
+  }
+}

@@ -1,0 +1,20 @@
+@layer components {
+  .ui-panel {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+    color: var(--color-text);
+    /* Rows and tables inside keep to the rounded corners. */
+    overflow: clip;
+  }
+
+  .ui-panel[data-padded] {
+    padding: var(--space-4) var(--space-5);
+  }
+
+  .ui-panel[data-nested] {
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+}

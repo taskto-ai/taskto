@@ -1,0 +1,53 @@
+@layer components {
+  .ui-table-scroll {
+    max-inline-size: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+
+  .ui-table-scroll:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: -2px;
+  }
+
+  .ui-table {
+    inline-size: 100%;
+    border-collapse: collapse;
+    font: var(--type-ui);
+    color: var(--color-text);
+  }
+
+  .ui-table-caption {
+    padding: var(--space-3) var(--space-4);
+    font: var(--type-section);
+    text-align: start;
+  }
+
+  .ui-table td {
+    padding: var(--space-3) var(--space-4);
+    border-block-end: var(--line-thin) solid var(--color-border);
+    text-align: start;
+    vertical-align: middle;
+  }
+
+  .ui-table th {
+    padding: var(--space-3) var(--space-4);
+    border-block-end: var(--line-thin) solid var(--color-border);
+    text-align: start;
+    vertical-align: middle;
+    font: var(--type-small);
+    font-weight: 600;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+
+  .ui-table tbody tr:last-child td {
+    border-block-end: 0;
+  }
+
+  .ui-table [data-numeric] {
+    text-align: end;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}

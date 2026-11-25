@@ -58,6 +58,16 @@ export const TEXT_PAIRS: readonly PairSet[] = [
   { fg: ['label-pink'], on: onSoft('label-pink-soft'), min: 4.5 },
   { fg: ['label-amber'], on: onSoft('label-amber-soft'), min: 4.5 },
   { fg: ['label-teal'], on: onSoft('label-teal-soft'), min: 4.5 },
+  // A notice: its words (and a link in them) on its tone's full tint, on the page and in a panel.
+  {
+    fg: ['text', 'text-soft', 'link'],
+    on: (['info-soft', 'success-soft', 'warning-soft', 'danger-soft', 'neutral-soft'] as const).flatMap((soft) =>
+      (['bg', 'surface'] as const).map((g): Ground => [soft, g]),
+    ),
+    min: 4.5,
+  },
+  // A row in a panel: the current one, and one under the pointer.
+  { fg: ['text', 'text-muted', 'danger'], on: [['selected', 'surface']], min: 4.5 },
   // What sits on a fill: the primary button, a danger button.
   { fg: ['on-accent'], on: ['accent', 'accent-hover'], min: 4.5 },
   { fg: ['on-danger'], on: ['danger'], min: 4.5 },
@@ -81,6 +91,47 @@ export const TEXT_PAIRS: readonly PairSet[] = [
 export const NON_TEXT_PAIRS: readonly PairSet[] = [
   // The edge of a control, and the focus ring, on every ground.
   { fg: ['border-strong', 'focus'], on: PAGE_GROUNDS, min: 3 },
+  // A notice's icon on its tint, and the focus ring of a link or button in it.
+  {
+    fg: ['info', 'focus'],
+    on: [
+      ['info-soft', 'bg'],
+      ['info-soft', 'surface'],
+    ],
+    min: 3,
+  },
+  {
+    fg: ['success', 'focus'],
+    on: [
+      ['success-soft', 'bg'],
+      ['success-soft', 'surface'],
+    ],
+    min: 3,
+  },
+  {
+    fg: ['warning', 'focus'],
+    on: [
+      ['warning-soft', 'bg'],
+      ['warning-soft', 'surface'],
+    ],
+    min: 3,
+  },
+  {
+    fg: ['danger', 'focus'],
+    on: [
+      ['danger-soft', 'bg'],
+      ['danger-soft', 'surface'],
+    ],
+    min: 3,
+  },
+  {
+    fg: ['neutral', 'focus'],
+    on: [
+      ['neutral-soft', 'bg'],
+      ['neutral-soft', 'surface'],
+    ],
+    min: 3,
+  },
   // The primary button's outline against the page.
   { fg: ['accent-edge'], on: ['bg', 'bg-sunken', 'surface'], min: 3 },
   // A column's status dot, on the column and on the page.
