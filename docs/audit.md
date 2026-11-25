@@ -64,6 +64,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `workspace_created` | a person creates a workspace (`POST /api/workspaces`) | the new one (in its own log, not the first workspace's) | workspace | `allowed_by` (`admins` or `anyone`: the setting that let them) |
 | `workspace_updated` | an admin changes the workspace | the workspace | workspace | `fields`, `locale` |
 | `invite_created`, `invite_revoked` | an admin invites someone, or withdraws it | the invite's | invite | `email` (the full address), `role` |
+| `invite_emailed` | an admin had an invite's link emailed to its address, and the SMTP server took the message (the invite itself is `invite_created`) | the invite's | invite | |
 | `invite_accepted` | an invite is used, by a new account or an existing one | the invite's | invite | `role`, `already_member` |
 | `member_role_changed` | an admin changes a member's role | the workspace | user | `from`, `to` |
 | `member_disabled`, `member_enabled` | an admin switches a member's account off or on (one already in that state records nothing) | the workspace the admin asked in | user | `logins_ended` on a disable: the sessions it signed out |

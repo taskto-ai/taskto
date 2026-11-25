@@ -121,6 +121,7 @@ var schemas = map[string]map[string]kind{
 	WorkspaceUpdated:  {"fields": someOf("locale"), "locale": tag},
 	InviteCreated:     {"email": email, "role": roles},
 	InviteRevoked:     {"email": email, "role": roles},
+	InviteEmailed:     {},
 	InviteAccepted:    {"role": roles, "already_member": boolean},
 	MemberRoleChanged: {"from": roles, "to": roles},
 	MemberRemoved:     {"role": roles},

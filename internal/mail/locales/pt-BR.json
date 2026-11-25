@@ -53,6 +53,15 @@
         "Se não foi você, ignore esta mensagem: sua senha continua a mesma."
       ],
       "action": "Escolher uma nova senha"
+    },
+    "invite": {
+      "subject": "{inviter} convidou você para {workspace} no TaskTo.AI",
+      "title": "Você foi convidado para {workspace}",
+      "paragraphs": [
+        "{inviter} convidou você para o espaço de trabalho {workspace} no TaskTo.AI. Use o botão abaixo para aceitar. O convite é para este endereço de e-mail, funciona uma única vez e por {days} dias.",
+        "Se você não esperava por isto, ignore esta mensagem: nada acontece até que alguém aceite."
+      ],
+      "action": "Aceitar o convite"
     }
   }
 }
