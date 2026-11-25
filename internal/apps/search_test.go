@@ -107,3 +107,59 @@ func TestReadsRecordIsTheScopeOfTheRoles(t *testing.T) {
 		}
 	}
 }
+
+// Choices are indexed as people read them (the label, and the stored value too if it is another
+// text) and barcodes as they are; a location, a signature and attachments are never indexed.
+func TestSearchTextOfChoicesBarcodesAndCaptures(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	fields := `[
+		{"name":"description","type":"string"},
+		{"name":"category","type":"choice","options":["food","travel"],"option_labels":{"food":"Meals and snacks"}},
+		{"name":"sku","type":"barcode"},
+		{"name":"where","type":"location"},
+		{"name":"sign","type":"signature"},
+		{"name":"photos","type":"attachment"}]`
+	// A release can't be changed: a new one, with these fields, goes live.
+	if _, err := w.e.db.Exec(`INSERT INTO app_releases (app_id, number, definition, definition_version, requires)
+		SELECT rel.app_id, 99, json_set(rel.definition, '$.collection', json_object('fields', json(?))), rel.definition_version, rel.requires
+		FROM app_releases rel JOIN apps a ON a.id = rel.app_id AND rel.number = a.live_release WHERE a.id = ?`, fields, w.aliceApp.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.e.db.Exec(`UPDATE apps SET live_release = 99 WHERE id = ?`, w.aliceApp.ID); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := w.e.db.QueryRow(`SELECT id FROM app_rows WHERE app_id = ?`, w.aliceApp.ID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	set := func(data string) string {
+		t.Helper()
+		if _, err := w.e.db.Exec(`UPDATE app_rows SET data = ? WHERE id = ?`, data, id); err != nil {
+			t.Fatal(err)
+		}
+		text, indexed, err := SearchText(ctx, w.e.db, id)
+		if err != nil || !indexed {
+			t.Fatalf("SearchText = %q, %v, %v", text, indexed, err)
+		}
+		return text
+	}
+	// A labelled choice: its label, then the value it is stored as. A barcode as it is.
+	if got := set(`{"description":"lunch","category":"food","sku":"4006381333931"}`); got != "lunch\nMeals and snacks\nfood\n4006381333931" {
+		t.Fatalf("text = %q", got)
+	}
+	// An option with no label is shown, and stored, as it is: once.
+	if got := set(`{"category":"travel"}`); got != "travel" {
+		t.Fatalf("an unlabelled choice = %q", got)
+	}
+	// A location, a signature and photos hold ids and coordinates: nothing to search for.
+	got := set(`{"description":"visit","where":{"lat":-6.1,"lng":39.3,"captured_at":"2026-01-01T00:00:00.000Z"},"sign":"signature-id","photos":["photo-id-1","photo-id-2"]}`)
+	if got != "visit" {
+		t.Fatalf("a record with a location, a signature and photos = %q, want its description only", got)
+	}
+	for _, leak := range []string{"signature-id", "photo-id", "39.3", "-6.1", "where", "sign", "photos"} {
+		if strings.Contains(got, leak) {
+			t.Fatalf("the text %q holds %q", got, leak)
+		}
+	}
+}

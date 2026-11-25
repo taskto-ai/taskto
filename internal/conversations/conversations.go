@@ -212,8 +212,11 @@ func (s *Service) update(ctx context.Context, workspace, user, id int64, title *
 	return c, err
 }
 
-// touch marks conversation id updated, after a message.
-func (s *Service) touch(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, id)
+// touch marks conversation id updated, after a message. agentID is the agent runtime's ID of
+// the conversation the message was for: a conversation's ID can be taken by another once it is
+// removed, so a mark made late (markWhenSettled) is only ever made on the conversation it was
+// for, and never bumps, or queues for indexing, a newer one that has the ID now.
+func (s *Service) touch(ctx context.Context, id, agentID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND agent_id = ?`, id, agentID)
 	return err
 }

@@ -45,6 +45,8 @@ type fakeRuntime struct {
 	settle chan struct{}
 	// waited counts the submissions Wait was called for.
 	waited atomic.Int64
+	// waitErr, when set, is what Wait returns, whatever else works.
+	waitErr error
 }
 
 // setupToken is the first-run setup token the tests' server is given.
@@ -98,6 +100,9 @@ func (f *fakeRuntime) Wait(ctx context.Context, _ int64) (agentrt.Settled, error
 	f.waited.Add(1)
 	f.mu.Lock()
 	hold, err := f.settle, f.err
+	if f.waitErr != nil {
+		err = f.waitErr
+	}
 	f.mu.Unlock()
 	if hold != nil {
 		select {

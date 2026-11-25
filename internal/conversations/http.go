@@ -363,10 +363,10 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		conversationError(w, r, c, err)
 		return
 	}
-	if err := s.touch(context.WithoutCancel(r.Context()), c.ID); err != nil {
+	if err := s.touch(context.WithoutCancel(r.Context()), c.ID, c.agentID); err != nil {
 		slog.WarnContext(r.Context(), "conversations: marking a conversation updated", "conversation", c.ID, "err", err)
 	}
-	s.markWhenSettled(rt, c.ID, sub)
+	s.markWhenSettled(rt, c.ID, c.agentID, sub)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"submission_id": sub})
 }
 

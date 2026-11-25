@@ -106,11 +106,20 @@ const conversationOrderSQL = `CASE WHEN c.id IN (SELECT rowid FROM search_conver
 	c.updated_at DESC, c.id DESC`
 
 // conversationSnippetSQL is the snippet of what was said, matches marked: 24 words long, or
-// 64 in a text with an unspaced script (see snippetSQL). Empty if only the title matched.
-const conversationSnippetSQL = `CASE WHEN c.id IN (SELECT rowid FROM search_conversation_fts WHERE search_conversation_fts MATCH ?)
-	THEN snippet(search_conversation_fts, 1, char(2), char(3), '…',
-		CASE WHEN instr(search_conversation_fts.body, char(31)) THEN 64 ELSE 24 END)
-	ELSE '' END`
+// 64 in a text with an unspaced script (see snippetSQL). It is always computed, so a query whose
+// words are split between the title and the body marks the body's; one with no mark in it, which
+// is a title-only match, is shown as no snippet (bodySnippet).
+const conversationSnippetSQL = `snippet(search_conversation_fts, 1, char(2), char(3), '…',
+	CASE WHEN instr(search_conversation_fts.body, char(31)) THEN 64 ELSE 24 END)`
+
+// bodySnippet is the segments of a snippet of the conversation's text: none if no word of the
+// query is marked in it, since the passage then says nothing of why the conversation was found.
+func bodySnippet(snippet string) []Segment {
+	if !strings.ContainsRune(snippet, markStart) {
+		return []Segment{}
+	}
+	return segments(snippet)
+}
 
 // ownConversationSQL is the condition on a row c of conversations that makes it userID's, in
 // workspaceID, who must be a member there and whose account isn't disabled: the condition every
@@ -188,7 +197,6 @@ func (x *Index) SearchConversations(ctx context.Context, userID, workspaceID int
 // state of the database.
 func (x *Index) findConversations(ctx context.Context, userID, workspaceID int64, match string, q Query) ([]ConversationResult, bool, error) {
 	titleMatch := "{title} : (" + match + ")"
-	bodyMatch := "{body} : (" + match + ")"
 	rows, err := x.db.QueryContext(ctx, `SELECT st.behind, p.id, p.title, p.archived, p.updated_at, p.snippet, p.title_first
 		FROM (SELECT EXISTS (SELECT 1 FROM search_conversation_queue sq JOIN conversations c ON c.id = sq.conversation_id
 			WHERE `+ownConversationSQL+`) AS behind) st
@@ -202,7 +210,7 @@ func (x *Index) findConversations(ctx context.Context, userID, workspaceID int64
 				AND NOT EXISTS (SELECT 1 FROM search_conversation_queue WHERE conversation_id = c.id)
 			ORDER BY `+conversationOrderSQL+` LIMIT ? OFFSET ?) p ON true
 		ORDER BY p.title_first DESC, p.updated_at DESC, p.id DESC`,
-		workspaceID, userID, titleMatch, bodyMatch, match, workspaceID, userID, titleMatch, q.Limit+1, q.Offset)
+		workspaceID, userID, titleMatch, match, workspaceID, userID, titleMatch, q.Limit+1, q.Offset)
 	if err != nil {
 		return nil, false, err
 	}
@@ -220,7 +228,7 @@ func (x *Index) findConversations(ctx context.Context, userID, workspaceID int64
 			continue
 		}
 		found = append(found, ConversationResult{ConversationID: id.Int64, Title: title.String, Archived: archived.Bool,
-			UpdatedAt: updatedAt.String, Snippet: segments(snippet.String)})
+			UpdatedAt: updatedAt.String, Snippet: bodySnippet(snippet.String)})
 	}
 	return found, behind, rows.Err()
 }
@@ -240,21 +248,63 @@ func (x *Index) queueConversations(ctx context.Context) error {
 	})
 }
 
-// syncConversationsInBackground indexes the queue's conversations, everyone's, before anyone
-// searches them. An agent runtime that isn't there (off, or still starting) is no failure of
-// the index: the conversations stay queued, and a search finds them behind.
-func (x *Index) syncConversationsInBackground(ctx context.Context) {
+// conversationPassMax is the most transcripts one pass of the background sync reads, and
+// conversationPassBudget how long it spends: a large backlog (every conversation, after the
+// migration) is worked through in passes, one after another, never in one stretch.
+const (
+	conversationPassMax    = 200
+	conversationPassBudget = 2 * time.Minute
+)
+
+// conversationLoop is the background sync of conversations, on a goroutine of its own: it
+// looks at the queue every sweepEvery and, while a pass leaves conversations behind, again at
+// once.
+func (x *Index) conversationLoop(ctx context.Context) {
+	tick := time.NewTicker(sweepEvery)
+	defer tick.Stop()
+	for {
+		if x.syncConversationsInBackground(ctx) {
+			wake(x.convWake)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-x.convWake:
+		case <-tick.C:
+		}
+	}
+}
+
+// syncConversationsInBackground indexes one pass of the queue's conversations, everyone's,
+// before anyone searches them: at most conversationPassMax of them, for at most
+// conversationPassBudget. It says whether more are left to read, so the loop goes on at once. An
+// agent runtime that isn't there (off, or still starting) is no failure of the index: the
+// conversations stay queued, a search finds them behind, and the next sweep tries again.
+func (x *Index) syncConversationsInBackground(ctx context.Context) (more bool) {
 	src := x.conversationSource()
 	if src == nil {
-		return
+		return false
 	}
-	if _, err := x.syncConversations(ctx, src, 0, 0, 0); err != nil && ctx.Err() == nil {
+	passCtx, cancel := context.WithTimeout(ctx, conversationPassBudget)
+	defer cancel()
+	n, err := x.syncConversations(passCtx, src, 0, 0, x.conversationPassLimit)
+	if err != nil && ctx.Err() == nil {
 		if errors.Is(err, conversations.ErrNoTranscript) {
 			x.log.Debug("search: the agent runtime can't give conversations' transcripts now", "err", err)
-			return
+		} else {
+			x.log.Error("search: indexing conversations", "err", err)
 		}
-		x.log.Error("search: indexing conversations", "err", err)
+		// Whatever failed stays queued and is tried again by the next sweep, not at once.
+		return false
 	}
+	if ctx.Err() != nil || n == 0 {
+		return false
+	}
+	var left bool
+	if err := x.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM search_conversation_queue)`).Scan(&left); err != nil {
+		return false
+	}
+	return left
 }
 
 // queuedConversation is a conversation waiting to be indexed again.
@@ -353,16 +403,28 @@ func (x *Index) stillQueued(ctx context.Context, batch []queuedConversation) ([]
 	return out, rows.Err()
 }
 
-// queuedConversations reads the next conversations in the queue of the scope, newest first,
-// leaving out those in skip (a JSON array of IDs).
-func (x *Index) queuedConversations(ctx context.Context, everyone bool, userID, workspaceID int64, skip string) ([]queuedConversation, error) {
-	rows, err := x.db.QueryContext(ctx, `SELECT sq.conversation_id, c.agent_id, rv.revision
+// The queue's conversations, everyone's, or those ownConversationSQL makes a user's, newest first,
+// leaving out the IDs in a JSON array.
+const (
+	queuedConversationsHeadSQL = `SELECT sq.conversation_id, c.agent_id, rv.revision
 		FROM search_conversation_queue sq
 		JOIN conversations c ON c.id = sq.conversation_id
 		JOIN search_conversation_revisions rv ON rv.conversation_id = sq.conversation_id
-		WHERE (? OR (c.workspace_id = ? AND c.owner_id = ?))
-			AND sq.conversation_id NOT IN (SELECT value FROM json_each(?))
-		ORDER BY c.updated_at DESC, c.id DESC LIMIT ?`, everyone, workspaceID, userID, skip, conversationBatch)
+		WHERE `
+	queuedConversationsTailSQL = ` AND sq.conversation_id NOT IN (SELECT value FROM json_each(?))
+		ORDER BY c.updated_at DESC, c.id DESC LIMIT ?`
+	queuedEveryoneSQL = queuedConversationsHeadSQL + `1` + queuedConversationsTailSQL
+	queuedOwnSQL      = queuedConversationsHeadSQL + ownConversationSQL + queuedConversationsTailSQL
+)
+
+// queuedConversations reads the next conversations in the queue of the scope, newest first,
+// leaving out those in skip (a JSON array of IDs).
+func (x *Index) queuedConversations(ctx context.Context, everyone bool, userID, workspaceID int64, skip string) ([]queuedConversation, error) {
+	query, args := queuedEveryoneSQL, []any{}
+	if !everyone {
+		query, args = queuedOwnSQL, []any{workspaceID, userID}
+	}
+	rows, err := x.db.QueryContext(ctx, query, append(args, skip, conversationBatch)...)
 	if err != nil {
 		return nil, err
 	}

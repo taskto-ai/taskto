@@ -655,3 +655,39 @@ func TestRecordSearchLooksAgainWhenTheCallersAccessChanges(t *testing.T) {
 	}
 	wantRecords(t, "mallory, now a user", r, "zanzibar by mallory")
 }
+
+// An app archived while a search indexes returns none of its records, however the search ends:
+// what is read of the apps, the records and the access is of one snapshot, and nothing is asked
+// again after it.
+func TestRecordSearchLeavesOutAnAppArchivedWhileIndexing(t *testing.T) {
+	w := newWorld(t)
+	a := w.newApp(w.alice, w.team, "Team expenses", true)
+	w.addRecord(w.alice, w.team, a, "zanzibar lunch")
+	b := w.newApp(w.alice, w.team, "Team travel", true)
+	w.addRecord(w.alice, w.team, b, "zanzibar flights")
+	wantRecords(t, "before", w.searchRecords(w.alice, nil, "zanzibar"), "zanzibar lunch", "zanzibar flights")
+
+	// Every attempt: a record is queued in b (so the search is behind and tries again) and a is
+	// archived, as the last thing before the search finds.
+	n := 0
+	w.e.idx.afterRecordSync = func() {
+		n++
+		if _, err := w.e.db.Exec(`UPDATE apps SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, a.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.e.db.Exec(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, ?, ?)`,
+			b.ID, fmt.Sprintf(`{"description":"zanzibar later %d","amount":1}`, n), w.alice.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { w.e.idx.afterRecordSync = nil }()
+	r := w.searchRecords(w.alice, nil, "zanzibar")
+	for _, hit := range r.Results {
+		if hit.AppID == a.ID {
+			t.Fatalf("a record of an archived app was returned: %+v", r)
+		}
+	}
+	if !r.Incomplete {
+		t.Fatalf("a search that was behind on its last attempt = %+v, want incomplete", r)
+	}
+}

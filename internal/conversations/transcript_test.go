@@ -123,3 +123,55 @@ func TestSendMarksTheConversationAgainWhenTheTurnEnds(t *testing.T) {
 		t.Fatalf("after a turn cut short by shutdown: revision %d, %v (the send's mark only)", queued, err)
 	}
 }
+
+func revisionOf(t *testing.T, e *env, id int64) int {
+	t.Helper()
+	var rev int
+	if err := e.db.QueryRow(`SELECT revision FROM search_conversation_revisions WHERE conversation_id = ?`, id).Scan(&rev); err != nil {
+		t.Fatal(err)
+	}
+	return rev
+}
+
+// A mark made for a conversation never lands on another that has its ID now: a removed
+// conversation's ID can be taken again, and a turn that settles late must not bump, or queue for
+// indexing, the new one.
+func TestAMarkIsOnlyOfTheConversationItWasFor(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	var agentID int64
+	if err := e.db.QueryRow(`SELECT agent_id FROM conversations WHERE id = ?`, c.ID).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+	before := revisionOf(t, e, c.ID)
+	// The mark of a conversation that had this ID before, with another agent runtime ID.
+	if err := e.svc.touch(context.Background(), c.ID, agentID+1000); err != nil {
+		t.Fatal(err)
+	}
+	if got := revisionOf(t, e, c.ID); got != before {
+		t.Fatalf("a mark for another conversation moved the revision from %d to %d", before, got)
+	}
+	if err := e.svc.touch(context.Background(), c.ID, agentID); err != nil {
+		t.Fatal(err)
+	}
+	if got := revisionOf(t, e, c.ID); got != before+1 {
+		t.Fatalf("the conversation's own mark moved the revision from %d to %d", before, got)
+	}
+}
+
+// A wait that fails (the runtime doesn't have the submission, or doesn't answer) marks nothing:
+// the turn's end isn't known.
+func TestAFailedWaitMarksNothing(t *testing.T) {
+	e := newEnv(t, false)
+	owner, ws := e.setup()
+	c := owner.create(ws, nil)
+	e.rt.waitErr = &agentrt.StatusError{Code: http.StatusNotFound, Status: "404 Not Found", Message: "unknown submission"}
+	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), map[string]any{"content": "hello"})
+	waitFor(t, "the turn to be waited for", func() bool { return e.rt.waited.Load() == 1 })
+	sent := revisionOf(t, e, c.ID)
+	time.Sleep(100 * time.Millisecond)
+	if got := revisionOf(t, e, c.ID); got != sent {
+		t.Fatalf("a failed wait marked the conversation: revision %d, want the send's %d", got, sent)
+	}
+}

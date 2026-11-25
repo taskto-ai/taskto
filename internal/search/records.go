@@ -91,14 +91,21 @@ func (r recordReach) none() bool { return len(r.all) == 0 && len(r.own) == 0 }
 // ids are every app in reach.
 func (r recordReach) ids() []int64 { return append(append([]int64{}, r.all...), r.own...) }
 
-// reachOf asks access.Checker, for each live and unarchived app in the spaces in (a JSON array
-// of IDs), what userID may read of its records, as of now.
-func (x *Index) reachOf(ctx context.Context, checker *access.Checker, userID int64, in string) (recordReach, error) {
-	rows, err := x.db.QueryContext(ctx, `SELECT id, space_id FROM apps
+// queryer is what the reads of a search are made on: the database, or a snapshot of it.
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// reachOf asks checker, for each live and unarchived app in the spaces in (a JSON array of IDs),
+// what userID may read of its records, as of now, and returns the access it found for each app
+// in reach. Given a snapshot's checker and transaction (access.Checker.Snapshot), what it reads
+// of the apps and what the checker says of them are of one state.
+func (x *Index) reachOf(ctx context.Context, checker *access.Checker, db queryer, userID int64, in string) (recordReach, map[int64]access.AppAccess, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id, space_id FROM apps
 		WHERE space_id IN (SELECT value FROM json_each(?)) AND archived_at IS NULL AND live_release IS NOT NULL
 		ORDER BY id`, in)
 	if err != nil {
-		return recordReach{}, err
+		return recordReach{}, nil, err
 	}
 	type ref struct{ app, space int64 }
 	var refs []ref
@@ -106,30 +113,33 @@ func (x *Index) reachOf(ctx context.Context, checker *access.Checker, userID int
 		var r ref
 		if err := rows.Scan(&r.app, &r.space); err != nil {
 			_ = rows.Close()
-			return recordReach{}, err
+			return recordReach{}, nil, err
 		}
 		refs = append(refs, r)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return recordReach{}, err
+		return recordReach{}, nil, err
 	}
 	reach := recordReach{all: []int64{}, own: []int64{}}
+	accs := map[int64]access.AppAccess{}
 	for _, r := range refs {
 		acc, err := checker.App(ctx, userID, r.space, r.app)
 		switch {
 		case errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound):
 			continue
 		case err != nil:
-			return recordReach{}, err
+			return recordReach{}, nil, err
 		}
 		switch apps.RecordScope(acc) {
 		case access.ScopeAll:
 			reach.all = append(reach.all, r.app)
+			accs[r.app] = acc
 		case access.ScopeOwn:
 			reach.own = append(reach.own, r.app)
+			accs[r.app] = acc
 		}
 	}
-	return reach, nil
+	return reach, accs, nil
 }
 
 // SearchRecords finds the records matching q in the apps of spaces, which must be of
@@ -137,9 +147,11 @@ func (x *Index) reachOf(ctx context.Context, checker *access.Checker, userID int
 // user's Readable spaces. Of those apps, only the records userID may read are searched.
 //
 // Indexing takes time, and who may read what can change meanwhile, or an app can move to
-// another space: so after the records are found, the access of each result's app, in the space
-// it is in now, is asked again with checker, and a record the caller no longer reads is left
-// out.
+// another space or be archived: so after the records are indexed, what the caller reads, the
+// records found, whether any were behind and the names of their spaces are all read in one
+// snapshot of the database (access.Checker.Snapshot), and the answer is made from that alone.
+// Nothing is asked again after it, so nothing can have changed between a check and what it
+// checked.
 func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, userID, workspaceID int64, spaces []access.Space, q Query) (RecordResults, error) {
 	match, err := checkQuery(&q)
 	if err != nil {
@@ -161,34 +173,38 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 	if err != nil {
 		return RecordResults{}, err
 	}
-	reach, err := x.reachOf(ctx, checker, userID, string(spacesJSON))
+	// What the caller reads before indexing: which apps to index records of, and what a later
+	// page's offset counted.
+	before, _, err := x.reachOf(ctx, checker, x.db, userID, string(spacesJSON))
 	if err != nil {
 		return RecordResults{}, err
 	}
-	if reach.none() {
+	if before.none() {
 		return res, nil
 	}
-	// What the caller reads, as the statements ask for it: the apps of each kind, and the sync's.
-	scopeOf := func(r recordReach) (scope recordScope, appsJSON string, err error) {
+	// What the caller reads, as the statements ask for it: the apps of each kind.
+	scopeOf := func(r recordReach) (recordScope, error) {
 		all, err := json.Marshal(r.all)
 		if err != nil {
-			return scope, "", err
+			return recordScope{}, err
 		}
 		own, err := json.Marshal(r.own)
 		if err != nil {
-			return scope, "", err
+			return recordScope{}, err
 		}
-		both, err := json.Marshal(r.ids())
-		if err != nil {
-			return scope, "", err
-		}
-		return recordScope{spaces: string(spacesJSON), all: string(all), own: string(own), user: userID}, string(both), nil
+		return recordScope{spaces: string(spacesJSON), all: string(all), own: string(own), user: userID}, nil
 	}
-	scope, appsJSON, err := scopeOf(reach)
+	syncIn := func(r recordReach) (string, error) {
+		both, err := json.Marshal(r.ids())
+		return string(both), err
+	}
+	appsJSON, err := syncIn(before)
 	if err != nil {
 		return RecordResults{}, err
 	}
 	var found []RecordResult
+	var accs map[int64]access.AppAccess
+	names := map[int64]string{}
 	// One allowance of records and one deadline for all the search's attempts: what is left when
 	// they are used stays queued for the background sync, and the search says it is incomplete.
 	allowance := x.recordSyncLimit
@@ -211,37 +227,57 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 		if x.afterRecordSync != nil {
 			x.afterRecordSync()
 		}
-		var behind bool
-		if found, behind, err = x.findRecords(ctx, scope, match, q); err != nil {
-			return RecordResults{}, err
-		}
-		// What the caller reads is asked again: if it changed while the search ran, what was found,
-		// and whether records were behind, are of the old access, and the flag could say that a
-		// record the caller no longer reads has changed. Look again with the new.
-		now, err := x.reachOf(ctx, checker, userID, string(spacesJSON))
+		var behind, changed bool
+		var now recordReach
+		err := checker.Snapshot(ctx, func(snap *access.Checker, tx *sql.Tx) error {
+			var err error
+			if now, accs, err = x.reachOf(ctx, snap, tx, userID, string(spacesJSON)); err != nil {
+				return err
+			}
+			// A later page's offset counts the records read under the access of the first look:
+			// it can't be applied to other access, or the records between would be skipped and
+			// the page called complete.
+			if q.Offset > 0 && (!slices.Equal(now.all, before.all) || !slices.Equal(now.own, before.own)) {
+				changed = true
+				return nil
+			}
+			if now.none() {
+				found = nil
+				return nil
+			}
+			scope, err := scopeOf(now)
+			if err != nil {
+				return err
+			}
+			if found, behind, err = x.findRecords(ctx, tx, scope, match, q); err != nil {
+				return err
+			}
+			clear(names)
+			for _, r := range found {
+				if _, ok := names[r.SpaceID]; ok {
+					continue
+				}
+				sp, err := snap.Check(ctx, userID, r.SpaceID)
+				switch {
+				case errors.Is(err, access.ErrNotFound) || (err == nil && sp.WorkspaceID != workspaceID):
+					names[r.SpaceID] = "" // dropped below
+				case err != nil:
+					return err
+				default:
+					names[r.SpaceID] = sp.Name
+				}
+			}
+			return nil
+		})
 		if err != nil {
 			return RecordResults{}, err
 		}
-		if !slices.Equal(now.all, reach.all) || !slices.Equal(now.own, reach.own) {
-			// A later page's offset counts the records read under the old access: it can't be
-			// applied to the new, or the records between would be skipped and the page called
-			// complete. The caller starts again from the first page.
-			if q.Offset > 0 {
-				res.Incomplete = true
-				return res, nil
-			}
-			reach = now
-			if reach.none() {
-				return res, nil
-			}
-			if scope, appsJSON, err = scopeOf(reach); err != nil {
-				return RecordResults{}, err
-			}
-			if try == recordSyncTries {
-				res.Incomplete = true
-				break
-			}
-			continue
+		if changed {
+			res.Incomplete = true
+			return res, nil
+		}
+		if now.none() {
+			return res, nil
 		}
 		if !behind {
 			break
@@ -250,57 +286,32 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 			res.Incomplete = true
 			break
 		}
+		// Index again what the caller reads now, which may be more than before.
+		if appsJSON, err = syncIn(now); err != nil {
+			return RecordResults{}, err
+		}
 	}
 	// One more than asked for was read, to know whether a page follows: that one is never
-	// returned, whatever the access check leaves of the others, or the next page would
-	// repeat it.
+	// returned, whatever is left out of the others, or the next page would repeat it.
 	more := len(found) > q.Limit
 	if more {
 		found = found[:q.Limit]
 	}
-	// Who may read what is asked once more, for the app as it is now, in the space it is in
-	// now: an app moved to a space the caller can't read, or whose roles changed, takes its
-	// records from the results.
-	type appKey struct{ space, app int64 }
-	allowed := map[appKey]*access.AppAccess{}
-	names := map[int64]string{}
-	for _, r := range found {
-		k := appKey{r.SpaceID, r.AppID}
-		if _, ok := allowed[k]; ok {
-			continue
-		}
-		sp, err := checker.Check(ctx, userID, r.SpaceID)
-		switch {
-		case errors.Is(err, access.ErrNotFound) || (err == nil && sp.WorkspaceID != workspaceID):
-			allowed[k] = nil
-			continue
-		case err != nil:
-			return RecordResults{}, err
-		}
-		acc, err := checker.App(ctx, userID, r.SpaceID, r.AppID)
-		switch {
-		case errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound):
-			allowed[k] = nil
-		case err != nil:
-			return RecordResults{}, err
-		default:
-			allowed[k] = &acc
-			names[r.SpaceID] = sp.Name
-		}
-	}
+	// The snapshot already holds only what the caller reads; this is the same rule, applied to
+	// each record with the access the snapshot found, so a result is never one it would refuse.
 	dropped := false
 	for _, r := range found {
-		acc := allowed[appKey{r.SpaceID, r.AppID}]
-		if acc == nil || !apps.ReadsRecord(*acc, userID, r.creator) {
+		acc, ok := accs[r.AppID]
+		name := names[r.SpaceID]
+		if !ok || name == "" || !apps.ReadsRecord(acc, userID, r.creator) {
 			dropped = true
 			continue
 		}
-		r.SpaceName = names[r.SpaceID]
+		r.SpaceName = name
 		res.Results = append(res.Results, r)
 	}
-	// Access changed while the page was found: an offset counts the records the caller read when
-	// the search began, so one continued from here could skip a record. Say so instead, and let
-	// them search again.
+	// An offset counts the records the caller read when the search began: if any were left out, one
+	// continued from here could skip a record. Say so instead, and let them search again.
 	if dropped {
 		res.Incomplete = true
 	}
@@ -345,14 +356,13 @@ const recordSnippetSQL = `snippet(search_record_fts, 0, char(2), char(3), '…',
 // newest change first, and one more if a page follows; and whether any record scope allows was
 // in the queue. A record whose indexed text may be old, since it is in the queue, is left out
 // of the page, so a page found while some were queued may be short, or empty. Both come from
-// one statement, so they are of one state of the database (a plain read, never a transaction):
-// a record queued at the moment of the page is never missed by the flag, even when the page
-// has no rows.
-func (x *Index) findRecords(ctx context.Context, scope recordScope, match string, q Query) ([]RecordResult, bool, error) {
+// one statement, so they are of one state of the database: a record queued at the moment of the
+// page is never missed by the flag, even when the page has no rows.
+func (x *Index) findRecords(ctx context.Context, db queryer, scope recordScope, match string, q Query) ([]RecordResult, bool, error) {
 	args := append(scope.args(), match)
 	args = append(args, scope.args()...)
 	args = append(args, q.Limit+1, q.Offset)
-	rows, err := x.db.QueryContext(ctx, `SELECT st.behind, p.id, p.space_id, p.app_id, p.app_name, p.created_by, p.snippet, p.updated_at
+	rows, err := db.QueryContext(ctx, `SELECT st.behind, p.id, p.space_id, p.app_id, p.app_name, p.created_by, p.snippet, p.updated_at
 		FROM (SELECT EXISTS (SELECT 1 `+queuedRecordsSQL+`) AS behind) st
 		LEFT JOIN (
 			SELECT r.id AS id, a.space_id AS space_id, a.id AS app_id, a.name AS app_name, r.created_by AS created_by,

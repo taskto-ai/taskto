@@ -21,8 +21,8 @@ var ErrGone = errors.New("the agent runtime doesn't have this conversation")
 // conversation's (the runtime refused to give its messages), and others may still be read.
 var ErrRuntimeDown = errors.New("the agent runtime isn't answering")
 
-// settleWait is how long a message's turn is waited for before the conversation is marked
-// updated anyway: a turn that runs longer is found by the next message's, or by a restart.
+// settleWait is how long a message's turn is waited for: a turn that runs longer isn't marked
+// when it ends, and is found by the next message's mark, or by a restart.
 const settleWait = time.Hour
 
 // Transcript returns what was said in a conversation, as the agent runtime's transcript has it:
@@ -76,19 +76,25 @@ func (s *Service) Transcript(ctx context.Context, agentID int64) (string, error)
 	return b.String(), nil
 }
 
-// markWhenSettled marks conversation id updated again once the agent runtime has dealt with
-// submission sub, which is when the agent's reply to it is in the transcript: the send marked it
-// updated when the message was admitted, and that is all the server sees of what the agent
-// says after. Whatever follows the conversation's updates (the search index, which indexes the
-// transcript when a conversation is marked) then catches the reply too.
-func (s *Service) markWhenSettled(rt Runtime, id, sub int64) {
+// markWhenSettled marks conversation id (the agent runtime's agentID) updated again once the
+// agent runtime has dealt with submission sub, which is when the agent's reply to it is in the
+// transcript: the send marked it updated when the message was admitted, and that is all the
+// server sees of what the agent says after. Whatever follows the conversation's updates (the
+// search index, which indexes the transcript when a conversation is marked) then catches the
+// reply too.
+//
+// It marks only when the wait ended with the turn dealt with. If the wait failed, the server is
+// shutting down, the turn runs past settleWait, or the agent runtime doesn't answer or doesn't
+// have the submission (a 404, say, once the conversation is gone), nothing is marked: the turn's
+// end isn't known, and a mark then would bump a conversation for nothing.
+func (s *Service) markWhenSettled(rt Runtime, id, agentID, sub int64) {
 	go func() {
 		ctx, cancel := context.WithTimeout(s.closing, settleWait)
 		defer cancel()
-		if _, err := rt.Wait(ctx, sub); err != nil && ctx.Err() != nil {
-			return // the server is shutting down, or the turn runs on: its next mark catches up
+		if _, err := rt.Wait(ctx, sub); err != nil {
+			return
 		}
-		if err := s.touch(s.closing, id); err != nil && s.closing.Err() == nil {
+		if err := s.touch(s.closing, id, agentID); err != nil && s.closing.Err() == nil {
 			slog.Warn("conversations: marking a conversation updated after a reply", "conversation", id, "err", err)
 		}
 	}()

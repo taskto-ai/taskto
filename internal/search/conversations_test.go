@@ -711,3 +711,83 @@ func TestConversationSearchSharesItsAllowanceAcrossAttempts(t *testing.T) {
 		t.Fatalf("next search = %+v", r)
 	}
 }
+
+// A pass of the background sync reads a bounded number of transcripts and says more are left, so
+// a large backlog is worked through pass by pass; the loop runs it on a goroutine of its own, so
+// the sync of documents and records never waits for it.
+func TestConversationBackgroundSyncIsBoundedPerPass(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	for i := range 5 {
+		w.conversation(w.alice, w.ws, fmt.Sprintf("Trip %d", i), "words about quokkas", src)
+	}
+	w.e.idx.conversationPassLimit = 2
+	before := src.called()
+	if more := w.e.idx.syncConversationsInBackground(ctx); !more {
+		t.Fatal("a pass that left conversations queued said nothing was left")
+	}
+	if got := src.called() - before; got != 2 {
+		t.Fatalf("the first pass read %d transcripts, want 2", got)
+	}
+	for range 2 {
+		w.e.idx.syncConversationsInBackground(ctx)
+	}
+	if more := w.e.idx.syncConversationsInBackground(ctx); more {
+		t.Fatal("a pass that found nothing queued said more were left")
+	}
+	if got := src.called() - before; got != 5 {
+		t.Fatalf("the passes read %d transcripts, want each of the 5 once", got)
+	}
+	wantConversations(t, "alice", w.searchConversations(w.alice, w.ws, "quokkas"), "Trip 4", "Trip 3", "Trip 2", "Trip 1", "Trip 0")
+}
+
+// A query whose words are split between a conversation's title and its text still shows the
+// passage of the text where its words are.
+func TestConversationSnippetOfAQuerySplitAcrossTitleAndText(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	w.conversation(w.alice, w.ws, "Marsupial facts", "we talked about the quokka at length", src)
+	r := w.searchConversations(w.alice, w.ws, "marsupial quokka")
+	if len(r.Results) != 1 {
+		t.Fatalf("reply = %+v", r)
+	}
+	if !anyMatch(r.Results[0].Snippet) {
+		t.Fatalf("snippet = %+v, want the text's passage with the word quokka marked", r.Results[0].Snippet)
+	}
+}
+
+// A search's sync reads the transcripts of the conversations the search's own condition allows
+// and no others: not a disabled account's, not a former member's.
+func TestConversationSyncOfOneUserFollowsTheOwnershipCondition(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	w.conversation(w.alice, w.ws, "Alice's trip", "plan the zanzibar trip", src)
+	w.conversation(w.bob, w.ws, "Bob's trip", "plan the zanzibar trip", src)
+
+	queued := func(everyone bool, u *user) int {
+		t.Helper()
+		got, err := w.e.idx.queuedConversations(ctx, everyone, u.id, w.ws, "[]")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(got)
+	}
+	if got := queued(true, w.alice); got != 2 {
+		t.Fatalf("everyone's queue = %d, want 2", got)
+	}
+	if got := queued(false, w.alice); got != 1 {
+		t.Fatalf("alice's queue = %d, want 1", got)
+	}
+	if _, err := w.e.db.Exec(`UPDATE users SET disabled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, w.alice.id); err != nil {
+		t.Fatal(err)
+	}
+	if got := queued(false, w.alice); got != 0 {
+		t.Fatalf("a disabled account's queue = %d, want 0", got)
+	}
+	if got := queued(false, w.bob); got != 1 {
+		t.Fatalf("bob's queue = %d, want 1", got)
+	}
+}

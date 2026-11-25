@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -220,5 +222,61 @@ func TestSearchRepliesFitMaxResult(t *testing.T) {
 	hits := conv["results"].([]any)
 	if len(hits) == 0 || len(hits) >= 20 || conv["next_offset"] == nil {
 		t.Fatalf("conversations: %d hits, next_offset %v", len(hits), conv["next_offset"])
+	}
+}
+
+// A reply cut to fit never offers a next_offset a search would refuse (the schema's maximum).
+func TestFittedSearchReplyNextOffsetStaysWithinTheMaximum(t *testing.T) {
+	type hit struct {
+		Snippet string `json:"snippet"`
+	}
+	hitsOf := func() []hit {
+		var hs []hit
+		for range 20 {
+			hs = append(hs, hit{Snippet: strings.Repeat("<", 3000)})
+		}
+		return hs
+	}
+	next := func(offset int) (shown int, next any) {
+		t.Helper()
+		reply, err := fitSearchReply(hitsOf(), offset, false, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := reply.(map[string]any)
+		return reflectLen(m["results"]), m["next_offset"]
+	}
+	shown, got := next(0)
+	if shown == 0 || shown >= 20 || got != shown {
+		t.Fatalf("at offset 0: %d shown, next_offset %v", shown, got)
+	}
+	if _, got := next(1000 - shown); got != 1000 {
+		t.Fatalf("a next_offset of exactly the maximum = %v, want 1000", got)
+	}
+	if _, got := next(1000 - shown + 1); got != nil {
+		t.Fatalf("a next_offset past the maximum was offered: %v", got)
+	}
+}
+
+func reflectLen(v any) int { return reflect.ValueOf(v).Len() }
+
+// An offset reads as limit and space_id do: null is not a value, "10.0" is a whole number, and
+// what the schema forbids is refused.
+func TestSearchOffsetIsReadStrictly(t *testing.T) {
+	w := newWorld(t)
+	w.publishedApp(w.shared, "Team notes")
+	raw := func(offset string) int {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "/tools/search_records", strings.NewReader(`{"query":"zanzibar","offset":`+offset+`}`))
+		r.Header.Set("Authorization", "Bearer "+w.capability(w.aliceConv))
+		rec := httptest.NewRecorder()
+		w.tools.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	for offset, want := range map[string]int{"null": http.StatusBadRequest, `"3"`: http.StatusBadRequest, "-1": http.StatusBadRequest,
+		"1.5": http.StatusBadRequest, "1001": http.StatusBadRequest, "10.0": http.StatusOK, "0": http.StatusOK, "1000": http.StatusOK} {
+		if got := raw(offset); got != want {
+			t.Errorf("offset %s = %d, want %d", offset, got, want)
+		}
 	}
 }
