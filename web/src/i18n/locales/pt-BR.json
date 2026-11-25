@@ -1637,6 +1637,7 @@
         "search_consent_changed": "Consentimento da busca alterado",
         "dictation_settings_changed": "Configurações de ditado alteradas",
         "data_export_started": "Exportação de dados iniciada",
+        "workspace_export_started": "Exportação do espaço de trabalho iniciada",
         "two_factor_enabled": "Login em duas etapas ativado",
         "two_factor_disabled": "Login em duas etapas desativado",
         "two_factor_recovery_codes_replaced": "Códigos de recuperação substituídos",
@@ -1682,6 +1683,7 @@
         "reason": "Motivo",
         "role": "Papel",
         "scope": "Escopo",
+        "spaces": "Espaços compartilhados",
         "to": "Para",
         "user_id": "Número do membro"
       },

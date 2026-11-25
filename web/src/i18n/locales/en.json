@@ -1625,6 +1625,7 @@
         "search_consent_changed": "Search consent changed",
         "dictation_settings_changed": "Dictation settings changed",
         "data_export_started": "Data export started",
+        "workspace_export_started": "Workspace export started",
         "two_factor_enabled": "Two-factor login turned on",
         "two_factor_disabled": "Two-factor login turned off",
         "two_factor_recovery_codes_replaced": "Recovery codes replaced",
@@ -1670,6 +1671,7 @@
         "reason": "Reason",
         "role": "Role",
         "scope": "Scope",
+        "spaces": "Shared spaces",
         "to": "To",
         "user_id": "Member number"
       },
