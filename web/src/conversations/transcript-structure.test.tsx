@@ -9,6 +9,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import { afterEach, expect, test, vi } from 'vitest'
 import { appPath } from '../apps/route'
 import { fakeFetch, fakeStreams } from '../test/fakes'
+import { wholeText } from '../test/text'
 import { ConversationView } from './ConversationView'
 import stream from './testdata/stream.json'
 
@@ -148,7 +149,9 @@ test('every kind of entry shows as its own part, in order', async () => {
 
   // The agent's text as Markdown, and the app it saved as a line linking to the app.
   expect(within(plan).getByText('the plan').tagName).toBe('STRONG')
-  expect(within(plan).getByText(/Used create_app/)).toBeTruthy()
+  // The tool's line says what it used, the tool's name in the mono face.
+  expect(within(plan).getByText(wholeText('Used create_app'))).toBeTruthy()
+  expect(within(plan).getByText('create_app').tagName).toBe('CODE')
   expect(within(plan).getByRole('link', { name: 'Open the app' }).getAttribute('href')).toBe(appPath(1, 2, 5))
 
   // A CLI's turn as its work, its output as plain text, never markup.

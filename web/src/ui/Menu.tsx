@@ -34,6 +34,7 @@ import {
   useState,
 } from 'react'
 import { useT } from '../i18n'
+import { Link } from '../router'
 import { Button, type ButtonProps } from './Button'
 import { Icon, type IconName } from './Icon'
 import { IconButton } from './IconButton'
@@ -327,6 +328,30 @@ export function MenuItem({ children, onSelect, icon, tone, disabled }: MenuItemP
       {icon && <Icon name={icon} />}
       <span className="ui-menu-item-label">{children}</span>
     </button>
+  )
+}
+
+// An item that goes somewhere: a real link, so it opens in a new tab or is copied as any link is,
+// drawn as an item. Enter follows it, as it does any link, and so does Space, as for the other items.
+export function MenuLink({ href, children, icon }: { href: string; children: ReactNode; icon?: IconName }) {
+  const menu = useMenu('MenuLink')
+  return (
+    <Link
+      href={href}
+      role="menuitem"
+      tabIndex={-1}
+      className="ui-menu-item"
+      onClick={() => menu.closeMenu(false)}
+      onKeyDown={(e) => {
+        if (e.key === ' ') {
+          e.preventDefault()
+          e.currentTarget.click()
+        }
+      }}
+    >
+      {icon && <Icon name={icon} />}
+      <span className="ui-menu-item-label">{children}</span>
+    </Link>
   )
 }
 
