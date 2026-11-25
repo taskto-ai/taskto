@@ -534,6 +534,143 @@ test('a record opens in a drawer beside the list; deleting it asks first, and a 
   expect(sent.name).toBe('remove')
   expect(sent.context).toEqual({ id: 4 })
   expect(sent.expectedRevision).toBe(2)
-  // Deleted: the drawer is closed.
+  // Deleted: the drawer is closed, and the keyboard is on what the list holds now (its row is gone).
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Record 4' })).toBeNull())
+  await waitFor(() => expect(document.activeElement?.textContent).toMatch(/matching records/))
+})
+
+// Two records, the first open in the drawer with its description changed and not saved.
+async function editing(over: { conflict?: boolean } = {}) {
+  let revision = 2
+  const current = { description: 'Lunch', amount: 12.5, kind: 'food' }
+  const calls = fakeFetch({
+    [`GET ${base}/records/query`]: {
+      body: page([record(4, revision, current), record(5, 1, { description: 'Taxi', amount: 8 })]),
+    },
+    [`GET ${base}/records/4/history`]: () => ({
+      body: { record: record(4, revision, current), history: [], truncated: false },
+    }),
+    [`GET ${base}/records/5/history`]: {
+      body: { record: record(5, 1, { description: 'Taxi', amount: 8 }), history: [], truncated: false },
+    },
+    [`POST ${base}/actions`]: () => {
+      revision += 1
+      return {
+        status: 409,
+        body: {
+          error: 'the record changed since you read it',
+          code: 'app_record_conflict',
+          params: { id: 4 },
+          current: { id: 4, _revision: revision, ...current, description: 'Business lunch' },
+        },
+      }
+    },
+  })
+  renderRecords()
+  openExplorer()
+  fireEvent.click(await screen.findByRole('button', { name: 'Open record 4' }))
+  const description = (await waitFor(() => field('description'))) as HTMLInputElement
+  fireEvent.change(description, { target: { value: 'Team lunch' } })
+  if (over.conflict) {
+    fireEvent.click(within(drawer()).getByRole('button', { name: 'Save changes' }))
+    await within(drawer()).findByRole('region', { name: 'Someone else changed this record meanwhile' })
+  }
+  return { calls, description }
+}
+
+const leaving = () => screen.findByRole('alertdialog', { name: 'Discard your changes to this record?' })
+const escape = (el: Element) => fireEvent.keyDown(el, { key: 'Escape' })
+
+test('with a change not saved, Escape asks first; keeping is the default and keeps the text', async () => {
+  await editing()
+  // From the drawer's own buttons (Escape in a field is the field's, below).
+  const close = within(drawer()).getByRole('button', { name: 'Close' })
+  close.focus()
+  escape(close)
+  const ask = await leaving()
+  // Keeping is what the dialog starts on.
+  expect(document.activeElement).toBe(within(ask).getByRole('button', { name: 'Keep editing' }))
+  fireEvent.click(within(ask).getByRole('button', { name: 'Keep editing' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect((field('description') as HTMLInputElement).value).toBe('Team lunch')
+
+  // Discarding closes it.
+  escape(close)
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Record 4' })).toBeNull())
+})
+
+test('Escape in a field is the field’s (a text, a choice, the list’s search): it never closes the drawer', async () => {
+  const { description } = await editing()
+  for (const el of [description, field('kind'), screen.getByRole('searchbox')]) {
+    escape(el)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(drawer()).toBeTruthy()
+  }
+  expect((field('description') as HTMLInputElement).value).toBe('Team lunch')
+})
+
+test('closing the drawer with its button, with a change not saved, asks first', async () => {
+  await editing()
+  fireEvent.click(within(drawer()).getByRole('button', { name: 'Close' }))
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Keep editing' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect((field('description') as HTMLInputElement).value).toBe('Team lunch')
+})
+
+test('sorting the list with a change not saved asks first, and asks the server nothing until discarded', async () => {
+  const { calls } = await editing()
+  const before = calls.filter((c) => c.path.includes('/records/query')).length
+  fireEvent.click(screen.getByRole('button', { name: 'amount' }))
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Keep editing' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(calls.filter((c) => c.path.includes('/records/query')).length).toBe(before)
+  expect(drawer()).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('button', { name: 'amount' }))
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() => expect(calls.filter((c) => c.path.includes('/records/query')).length).toBe(before + 1))
+  expect(screen.queryByRole('region', { name: 'Record 4' })).toBeNull()
+})
+
+test('opening another record with a change not saved asks first', async () => {
+  await editing()
+  fireEvent.click(screen.getByRole('button', { name: 'Open record 5' }))
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Keep editing' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect((field('description') as HTMLInputElement).value).toBe('Team lunch')
+  expect(screen.queryByRole('region', { name: 'Record 5' })).toBeNull()
+})
+
+test('with a conflict on screen, Escape asks first: neither version is lost without a choice', async () => {
+  await editing({ conflict: true })
+  escape(drawer())
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Keep editing' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(within(drawer()).getByRole('region', { name: 'Someone else changed this record meanwhile' })).toBeTruthy()
+  expect((field('description') as HTMLInputElement).value).toBe('Team lunch')
+})
+
+test('with nothing changed, Escape closes the drawer at once', async () => {
+  fakeFetch({
+    [`GET ${base}/records/query`]: { body: page([record(4, 2, { description: 'Lunch' })]) },
+    [`GET ${base}/records/4/history`]: {
+      body: { record: record(4, 2, { description: 'Lunch' }), history: [], truncated: false },
+    },
+  })
+  renderRecords()
+  openExplorer()
+  fireEvent.click(await screen.findByRole('button', { name: 'Open record 4' }))
+  await waitFor(() => field('description'))
+  escape(drawer())
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Record 4' })).toBeNull())
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+})
+
+test('the record’s form leaves required fields to the server: the browser never blocks a save', async () => {
+  await editing()
+  // description is required in the definition; the mark says so, the input doesn't refuse.
+  expect((field('description') as HTMLInputElement).required).toBe(false)
+  expect(within(drawer()).getByText('description').closest('label')?.textContent).toContain('*')
 })

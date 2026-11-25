@@ -29,6 +29,10 @@
     text-align: start;
   }
 
+  .ui-table-rowhead {
+    font: var(--type-ui-strong);
+  }
+
   .ui-table-cell {
     padding: var(--space-3) var(--space-4);
     border-block-end: var(--line-thin) solid var(--color-border);

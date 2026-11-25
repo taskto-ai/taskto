@@ -913,3 +913,64 @@ test('nothing in the web app or the agent watches the device’s position', () =
   walk(join(import.meta.dirname, '../../../agent/src'))
   expect(hits).toEqual([])
 })
+
+test('on a screen, the typed signature’s name field is named by its own label, not the confirming box’s', async () => {
+  stubCanvas()
+  stubNavigator('onLine', true)
+  fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
+  render(
+    <AppView
+      surfaceId="app-9"
+      label="Inspection"
+      release={{ definition_version: DEFINITION_VERSION, requires: NEEDS }}
+      transport={{ load: async () => structuredClone(screenMessages), act: vi.fn(async () => []), files }}
+    />,
+  )
+  fireEvent.click(await screen.findByRole('radio', { name: 'Type your name' }))
+  // The screen's label linking runs on what was just drawn.
+  await new Promise((r) => setTimeout(r, 0))
+  const name = screen.getByRole('textbox', { name: 'Your full name' })
+  expect(name.getAttribute('aria-labelledby')).toBeNull()
+  expect(screen.getByRole('checkbox', { name: /typing my name here is my signature/ })).toBeTruthy()
+})
+
+test('while a submission is being made, a photo’s buttons are held, and only the fields that can be part of it are not', async () => {
+  stubCanvas()
+  stubNavigator('onLine', true)
+  const geo = { getCurrentPosition: vi.fn(), watchPosition: vi.fn(), clearWatch: vi.fn() }
+  stubNavigator('geolocation', geo)
+  fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
+  // The screen above, with a photo field holding one photo already.
+  const messages = structuredClone(screenMessages) as typeof screenMessages
+  const comps = (messages[1] as unknown as { updateComponents: { components: Record<string, unknown>[] } })
+    .updateComponents.components
+  ;(comps[0] as { children: string[] }).children.unshift('pics')
+  comps.push({ id: 'pics', component: 'PhotoInput', field: 'pics', label: 'Pictures', value: { path: '/draft/pics' } })
+  const model = (messages[2] as unknown as { updateDataModel: { value: Record<string, Record<string, unknown>> } })
+    .updateDataModel.value
+  model.draft.pics = ['0123456789abcdef0123456789abcdef']
+  model._files.pics = { max_files: 3, max_bytes: 1048576 }
+  render(
+    <AppView
+      surfaceId="app-9"
+      label="Inspection"
+      release={{
+        definition_version: DEFINITION_VERSION,
+        requires: [...NEEDS, 'component.PhotoInput', 'field.attachment'],
+      }}
+      transport={{ load: async () => messages, act: vi.fn(async () => []), files }}
+    />,
+  )
+  const save = await screen.findByRole('button', { name: 'Save' })
+  const remove = screen.getByRole('button', { name: 'Remove photo 1' }) as HTMLButtonElement
+  const byHand = screen.getByRole('button', { name: 'Enter coordinates by hand' }) as HTMLButtonElement
+  expect(remove.disabled).toBe(false)
+  // The location is taken as the form is submitted, and the answer doesn't come: the submission waits.
+  fireEvent.click(save)
+  await waitFor(() => expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(true))
+  // Removing a photo now would delete an upload the request names: held.
+  expect(remove.disabled).toBe(true)
+  // The location, part of what is being sent, stays usable.
+  expect(byHand.disabled).toBe(false)
+})

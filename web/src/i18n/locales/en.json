@@ -347,6 +347,12 @@
       "deleteConfirm": "Yes, delete this record",
       "deleteQuestion": "Delete record {id}?",
       "deleteBody": "It moves to Deleted with its history, where it can be restored.",
+      "leave": {
+        "title": "Discard your changes to this record?",
+        "body": "What you changed here isn’t saved. Keep editing to go back to it, or discard it.",
+        "discard": "Discard my changes",
+        "keep": "Keep editing"
+      },
       "cancel": "Cancel",
       "empty": "—",
       "unset": "Not set",
