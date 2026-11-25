@@ -23,14 +23,14 @@
     text-align: start;
   }
 
-  .ui-table td {
+  .ui-table-cell {
     padding: var(--space-3) var(--space-4);
     border-block-end: var(--line-thin) solid var(--color-border);
     text-align: start;
     vertical-align: middle;
   }
 
-  .ui-table th {
+  .ui-table-head {
     padding: var(--space-3) var(--space-4);
     border-block-end: var(--line-thin) solid var(--color-border);
     text-align: start;
@@ -41,7 +41,7 @@
     white-space: nowrap;
   }
 
-  .ui-table tbody tr:last-child td {
+  .ui-table-row:last-child > .ui-table-cell {
     border-block-end: 0;
   }
 

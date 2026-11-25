@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-// The page-structure components: Page, PageHeader, Toolbar, Panel, Rows, Table, EmptyState and
+// The page-structure components: Page, PageHeader, Heading, Toolbar, Panel, Rows, Table, EmptyState and
 // Notice.
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -8,6 +8,7 @@ import { createRef } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Button } from './Button'
 import { EmptyState } from './EmptyState'
+import { Heading } from './Heading'
 import { Notice, type NoticeTone } from './Notice'
 import { Page } from './Page'
 import { PageHeader } from './PageHeader'
@@ -204,5 +205,22 @@ describe('Notice', () => {
     expect(status.textContent).toContain('Offline')
     expect(status.textContent).toContain('2 records are waiting')
     expect(screen.getByRole('button', { name: 'Send now' })).toBeTruthy()
+  })
+})
+
+describe('Heading', () => {
+  test('its level is the outline and its size the look, a section by default', () => {
+    render(
+      <>
+        <Heading level={2}>Invites</Heading>
+        <Heading level={3} size="title">
+          Plans
+        </Heading>
+      </>,
+    )
+    const section = screen.getByRole('heading', { level: 2, name: 'Invites' })
+    expect(section.className).toBe('ui-heading')
+    expect(section.dataset.size).toBe('section')
+    expect(screen.getByRole('heading', { level: 3, name: 'Plans' }).dataset.size).toBe('title')
   })
 })

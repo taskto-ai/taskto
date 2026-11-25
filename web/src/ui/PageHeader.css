@@ -24,6 +24,7 @@
   }
 
   .ui-page-header-title {
+    text-wrap: balance;
     margin: 0;
     font: var(--type-display);
     letter-spacing: var(--tracking-display);
@@ -32,6 +33,7 @@
   }
 
   .ui-page-header-help {
+    text-wrap: pretty;
     margin: 0;
     font: var(--type-ui);
     color: var(--color-text-muted);

@@ -11,7 +11,11 @@
 // - a `tt-` or `ui-` class a component's className uses that no rule of any stylesheet mentions;
 // - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
 //   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
-//   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in.
+//   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in;
+// - a rule in a stylesheet outside src/ui/ that styles an element by its name wherever it is
+//   (`h2`, `p`, `button`, not `.tt-x h2`) and doesn't leave the design system's elements out
+//   with OPT_OUT, unless ELEMENT_RULES lists it with the reason: such a rule is in no layer and
+//   would beat the components' own styles.
 //
 // Dependency-free: the stylesheet is read by a small scanner (comments and strings skipped), the
 // components by looking at what each className holds.
@@ -38,7 +42,10 @@ import { fileURLToPath } from 'node:url'
 // and that deliberately have no rule. Each needs a reason; a class that is merely not styled yet
 // gets a rule, not an entry here.
 export const UNSTYLED = new Map([
-  // (none today)
+  [
+    'ui-control',
+    "marks a control's native element (Button, Input, Checkbox …); like every ui- class it keeps the old element rules off, and no rule needs it on its own",
+  ],
 ])
 
 // The app's own classes: `tt-` (the screens) and `ui-` (the design system's components, src/ui/).
@@ -377,6 +384,121 @@ function stylesheets(dir, out = []) {
 // Where the colour literals live: the brand themes, and nowhere else.
 const THEMES = 'src/ui/themes/'
 
+// --- Element rules -------------------------------------------------------------------------
+//
+// The old stylesheets (every one outside src/ui/) are in no cascade layer, so a rule of theirs
+// that styles an element by its name (`h2`, `p`, `a`, `button`, `input` …) and can match anywhere
+// beats every component of the design system, whatever the specificity of the component's own
+// rule. Each such rule leaves the design system's elements out: every element a component draws
+// has a class that starts with `ui-`, and the rule's subject ends with OPT_OUT, which adds no
+// specificity (docs/design.md, "The components"). A rule scoped by a class or an id (`.tt-x h2`)
+// reaches only inside that old container, and is left alone.
+
+export const OPT_OUT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
+
+// Element rules that deliberately reach every element, the design system's too, each with the
+// reason.
+export const ELEMENT_RULES = new Map([
+  ['html', 'the page itself: no component draws it'],
+  ['body', 'the page itself: no component draws it'],
+  ['html[data-keyboard="open"] body', 'the page itself: no component draws it'],
+  ['input', "every field: the caret in the text's colour, and 16px on a narrow screen so iOS doesn't zoom in"],
+  ['textarea', "every field: the caret in the text's colour, and 16px on a narrow screen so iOS doesn't zoom in"],
+  ['select', "every field: 16px on a narrow screen so iOS doesn't zoom in"],
+  ['input[type="search"]::-webkit-search-cancel-button', "every search field's clear button, in the palette"],
+  ['input[type="search"]::-webkit-search-cancel-button:hover', "every search field's clear button, in the palette"],
+])
+
+// Every rule's selectors at any depth (inside @media and @layer too, not inside @keyframes,
+// whose `from` and `to` are not elements), each with its line.
+export function allRules(css) {
+  const out = []
+  const blocks = [] // for each open block: 'keyframes', 'at' or 'rule'
+  let prelude = ''
+  let preludeLine = 1
+  let line = 1
+  for (let i = 0; i < css.length; i++) {
+    const c = css[i]
+    if (c === '\n') line++
+    if (c === '/' && css[i + 1] === '*') {
+      const end = css.indexOf('*/', i + 2)
+      const stop = end === -1 ? css.length : end + 2
+      for (const ch of css.slice(i, stop)) if (ch === '\n') line++
+      i = stop - 1
+      continue
+    }
+    if (c === '"' || c === "'") {
+      let j = i + 1
+      while (j < css.length && css[j] !== c) j += css[j] === '\\' ? 2 : 1
+      prelude += css.slice(i, j + 1)
+      i = j
+      continue
+    }
+    if (c === '{') {
+      const text = prelude.trim()
+      if (text.startsWith('@')) blocks.push(/^@(-[a-z]+-)?keyframes\b/.test(text) ? 'keyframes' : 'at')
+      else {
+        if (!blocks.includes('keyframes')) {
+          for (const selector of splitSelectors(text)) out.push({ selector, line: preludeLine })
+        }
+        blocks.push('rule')
+      }
+      prelude = ''
+      continue
+    }
+    if (c === '}' || c === ';') {
+      if (c === '}') blocks.pop()
+      prelude = ''
+      continue
+    }
+    if (prelude.trim() === '') preludeLine = line
+    prelude += c
+  }
+  return out
+}
+
+// A selector's compounds: "a > b:has(> c) d" → ["a", "b:has(> c)", "d"].
+function compounds(selector) {
+  const out = []
+  let depth = 0
+  let cur = ''
+  for (const c of selector) {
+    if (c === '(' || c === '[') depth++
+    if (c === ')' || c === ']') depth--
+    if (depth === 0 && /[\s>+~]/.test(c)) {
+      if (cur) out.push(cur)
+      cur = ''
+    } else cur += c
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
+// A compound without what is inside its parentheses and brackets: what it says of the element
+// itself.
+const own = (compound) => compound.replace(/\([^()]*\)|\[[^\]]*\]/g, '').replace(/\([^()]*\)/g, '')
+
+// Whether a selector styles an element by its name wherever the element is: its subject begins
+// with a type selector, and nothing in it is scoped by a class or an id.
+export function isElementRule(selector) {
+  const parts = compounds(selector)
+  const subject = parts.at(-1) ?? ''
+  if (!/^[a-z]/i.test(subject)) return false
+  return parts.every((p) => !/[.#]/.test(own(p)))
+}
+
+function elementRuleErrors(file, css) {
+  const errors = []
+  for (const { selector, line } of allRules(css)) {
+    if (!isElementRule(selector) || ELEMENT_RULES.has(selector)) continue
+    if (compounds(selector).at(-1)?.includes(OPT_OUT)) continue
+    errors.push(
+      `${file}:${line}: the element rule \`${selector}\` reaches into the design system's components: end it with ${OPT_OUT}, or list it in ELEMENT_RULES with the reason`,
+    )
+  }
+  return errors
+}
+
 export function check(web) {
   const errors = []
   const mentioned = new Set()
@@ -395,6 +517,7 @@ export function check(web) {
         )
       } else seen.set(selector, { file, line })
     }
+    if (!file.startsWith('src/ui/')) errors.push(...elementRuleErrors(file, readFileSync(path, 'utf8')))
     if (file.startsWith(THEMES)) continue
     for (const { property, value, line } of sheet.declarations) {
       const literal = colorLiteral(value, property)
@@ -434,6 +557,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exit(1)
   }
   console.log(
-    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, and no colour is written outside the themes',
+    'css-check: no selector is declared twice, every tt- and ui- class a component uses has a rule, no colour is written outside the themes, and no old element rule reaches into a component',
   )
 }

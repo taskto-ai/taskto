@@ -17,12 +17,14 @@
   }
 
   .ui-empty-title {
+    text-wrap: balance;
     margin: 0;
     font: var(--type-ui-strong);
     color: var(--color-text);
   }
 
   .ui-empty-body {
+    text-wrap: pretty;
     max-inline-size: 48ch;
   }
 

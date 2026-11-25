@@ -273,10 +273,24 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
   them is 44px.
 - **States are designed.** Hover, focus (the ring), pressed, disabled (a look of its own on the
   neutral ground, never half-opacity) and, where they apply, loading and invalid.
-- **The old element rules leave them alone.** `styles.css` is in no layer, so its rules for
-  `button`, `input`, `select`, `textarea` and `a` would beat every component. They skip elements
-  with the class `ui-control` (`:not(:where(.ui-control))`, which adds no specificity): a new
-  control puts that class on its native element.
+- **The old element rules leave them alone.** `styles.css` is in no layer, so its rules that
+  style an element by its name (`h1` to `h3`, `p`, `code`, `pre`, `kbd`, `samp`, `a`, `button`,
+  the fields, a checkbox's label, `fieldset`) would beat every component's own style. Every
+  element a component of `web/src/ui/` draws and styles has a class that starts with `ui-` (a
+  control's native element also has `ui-control`), and each of those rules skips such elements:
+  its subject ends with `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no
+  specificity, and the screens' own elements have no `ui-` class, so they are styled exactly as
+  before. `css-check` fails on an element rule outside `web/src/ui/` that can match anywhere and
+  lacks it, unless its `ELEMENT_RULES` list allows it with the reason (the page's `html` and
+  `body`, and what every field should have: the caret's colour, 16px against iOS's zoom, the
+  search field's clear button); `web/src/ui/elementRules.test.tsx` draws every component and checks
+  that no rule of `styles.css` reaches any of them. A rule scoped by an old container (`.tt-x h2`)
+  still reaches a component put inside that container: a rebuilt screen leaves the container behind.
+- **Headings.** The look of a heading comes from the type roles, not from the element: the display
+  face only from 20px up (`--type-display`, 24px: `PageHeader`'s title; `--type-title`, 20px: a
+  dialog's and a drawer's title) and Inter below. A screen's own heading is `Heading` (`level` for
+  the outline, `size` `display`, `title`, `section` (the default, 16px Inter) or `subsection`), never
+  a bare `<h2>`, which would get the old stylesheet's heavy display face.
 
 **The gallery.** `pnpm --filter @taskto/web run dev`, then `/_gallery` on the dev server: the colour
 and type roles and every component's specimens, with switches for light and dark, the sample second
