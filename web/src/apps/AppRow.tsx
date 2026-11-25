@@ -39,6 +39,7 @@ export function AppRow({
   spaceBase,
   change,
   move,
+  report,
   reload,
 }: {
   workspace: number
@@ -50,9 +51,11 @@ export function AppRow({
   // Where a copy of the app may go: every space the user may write.
   copyTo: Space[]
   spaceBase: string
-  // Both say whether the change was made.
-  change: (app: App, body: { name?: string; archived?: boolean }) => Promise<boolean>
-  move: (app: App, to: number) => Promise<boolean>
+  // Both answer what went wrong (null: it was done).
+  change: (app: App, body: { name?: string; archived?: boolean }) => Promise<string | null>
+  move: (app: App, to: number) => Promise<string | null>
+  // Shows an error on the page, for a change no dialog asked for.
+  report: (error: string | null) => void
   reload: () => void
 }) {
   const t = useT()
@@ -78,10 +81,12 @@ export function AppRow({
 
   const run = async (body: { name?: string; archived?: boolean }) => {
     setBusy(true)
-    const ok = await change(app, body)
+    const failed = await change(app, body)
     setBusy(false)
-    return ok
+    return failed
   }
+  // Taking offline and restoring have no dialog: what went wrong is said on the page.
+  const archive = async (archived: boolean) => report(await run({ archived }))
   const takeOffline = async () => {
     const yes = await confirm({
       title: t('apps.takeOfflineConfirm.title', { name: app.name }),
@@ -89,7 +94,7 @@ export function AppRow({
       confirmLabel: t('apps.takeOffline'),
       tone: 'danger',
     })
-    if (yes) await run({ archived: true })
+    if (yes) await archive(true)
   }
 
   const detail = [
@@ -157,7 +162,7 @@ export function AppRow({
         <Button
           size="sm"
           loading={busy}
-          onClick={() => run({ archived: false })}
+          onClick={() => archive(false)}
           aria-label={t('apps.restoreNamed', { name: app.name })}
         >
           {t('apps.restore')}
@@ -218,7 +223,10 @@ export function AppRow({
           app={app}
           onClose={close}
           onRename={async (name) => {
-            if (await run({ name })) close()
+            // Closed only once it is done; a refusal is said in the dialog, with what was typed.
+            const failed = await run({ name })
+            if (!failed) close()
+            return failed
           }}
         />
       )}
@@ -229,9 +237,10 @@ export function AppRow({
           onClose={close}
           onMove={async (to) => {
             setBusy(true)
-            const ok = await move(app, to)
+            const failed = await move(app, to)
             setBusy(false)
-            if (ok) close()
+            if (!failed) close()
+            return failed
           }}
         />
       )}
@@ -284,23 +293,29 @@ function RenameDialog({
 }: {
   app: App
   onClose: () => void
-  onRename: (name: string) => Promise<void>
+  // Answers what went wrong, or null once it is renamed.
+  onRename: (name: string) => Promise<string | null>
 }) {
   const t = useT()
   const formId = useId()
   const [name, setName] = useState(app.name)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     if (busy || !name.trim()) return
     setBusy(true)
-    await onRename(name)
+    setError(null)
+    const failed = await onRename(name)
     setBusy(false)
+    setError(failed)
   }
   return (
     <Dialog
       open
-      onClose={onClose}
+      onClose={() => {
+        if (!busy) onClose()
+      }}
       title={t('apps.renameNamed', { name: app.name })}
       size="sm"
       actions={
@@ -318,6 +333,7 @@ function RenameDialog({
         <Field label={t('apps.name')}>
           <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} required data-autofocus />
         </Field>
+        {error && <Notice tone="danger">{error}</Notice>}
       </form>
     </Dialog>
   )
@@ -332,23 +348,29 @@ function MoveDialog({
   app: App
   targets: Space[]
   onClose: () => void
-  onMove: (to: number) => Promise<void>
+  // Answers what went wrong, or null once it has moved.
+  onMove: (to: number) => Promise<string | null>
 }) {
   const t = useT()
   const formId = useId()
   const [to, setTo] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     if (busy || !to) return
     setBusy(true)
-    await onMove(Number(to))
+    setError(null)
+    const failed = await onMove(Number(to))
     setBusy(false)
+    setError(failed)
   }
   return (
     <Dialog
       open
-      onClose={onClose}
+      onClose={() => {
+        if (!busy) onClose()
+      }}
       title={t('apps.moveTitle', { name: app.name })}
       description={t('apps.moveNote')}
       size="sm"
@@ -374,6 +396,7 @@ function MoveDialog({
             ))}
           </Select>
         </Field>
+        {error && <Notice tone="danger">{error}</Notice>}
       </form>
     </Dialog>
   )

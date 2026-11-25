@@ -14,7 +14,7 @@ export function LoadingRows({ count = 3 }: { count?: number }) {
       {Array.from({ length: count }, (_, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: placeholders with nothing to tell them apart
         <div key={i} className="apps-loading-row">
-          <Skeleton shape="block" width="2.5rem" height="2.5rem" />
+          <Skeleton shape="block" width="var(--control-md)" height="var(--control-md)" />
           <span className="apps-loading-lines">
             <Skeleton width="40%" />
             <Skeleton width="25%" />

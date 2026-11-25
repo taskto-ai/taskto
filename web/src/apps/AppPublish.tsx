@@ -4,7 +4,7 @@
 // able to use the app and what it can read and change. The server decides every one of these (the app's roles, the space's, what
 // must be acknowledged); nothing here widens what it allows.
 
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import {
   ApiError,
   type App,
@@ -23,6 +23,7 @@ import { spaceLabel } from '../spaces'
 import { Button } from '../ui/Button'
 import { Checkbox } from '../ui/Checkbox'
 import { Dialog } from '../ui/Dialog'
+import { Heading } from '../ui/Heading'
 import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { effectLines } from './effectLines'
@@ -67,11 +68,14 @@ export async function publishDraft(
 export function MigrationDialog({
   changes,
   busy,
+  error,
   onPublish,
   onCancel,
 }: {
   changes: SchemaChange[]
   busy: boolean
+  // What went wrong with the last try: the dialog stays, for another.
+  error?: string | null
   onPublish: () => void
   onCancel: () => void
 }) {
@@ -111,6 +115,7 @@ export function MigrationDialog({
         onChange={(e) => setUnderstood(e.target.checked)}
         label={t('apps.migration.confirm')}
       />
+      {error && <Notice tone="danger">{error}</Notice>}
     </Dialog>
   )
 }
@@ -232,6 +237,7 @@ export function PublishPanel({
   space,
   onChanged,
   inDialog = false,
+  headingLevel = 3,
 }: {
   // …/spaces/{space}/apps/{app}, and …/spaces/{space}
   base: string
@@ -241,6 +247,8 @@ export function PublishPanel({
   // The app changed (published, or someone else changed it): the caller reads it again.
   onChanged: () => void
   inDialog?: boolean
+  // Where the panel's heading sits in the page's outline.
+  headingLevel?: 2 | 3
 }) {
   const t = useT()
   const [busy, setBusy] = useState(false)
@@ -254,6 +262,14 @@ export function PublishPanel({
   // The draft changed under a confirmation: it was closed, and the person confirms again.
   const [moved, setMoved] = useState(false)
   const seen = useRef(app.version)
+  // The step's main button, and the inline confirmation's: focus goes there when what it was on
+  // goes away (a cancelled schema dialog, a review that became its confirmation).
+  const actionButton = useRef<HTMLButtonElement>(null)
+  const [refocus, setRefocus] = useState(0)
+  useEffect(() => {
+    if (refocus > 0) actionButton.current?.focus()
+  }, [refocus])
+  const confirmTextId = useId()
   // biome-ignore lint/correctness/useExhaustiveDependencies: when the draft's version changes
   useEffect(() => {
     if (seen.current === app.version) return
@@ -285,8 +301,12 @@ export function PublishPanel({
       }
     } catch (e) {
       setError(appError(e, app.name))
-      setReviewed(null)
-      setMigration(null)
+      // A refusal after the acknowledgement keeps the schema dialog open, with the error in it, for
+      // another try; any other closes the step.
+      if (acknowledge.length === 0) {
+        setReviewed(null)
+        setMigration(null)
+      }
       onChanged()
     } finally {
       setBusy(false)
@@ -295,7 +315,13 @@ export function PublishPanel({
 
   const confirmText = t('apps.builder.publish.confirmShared', { space: spaceLabel(space) })
   const confirmButton = (
-    <Button variant="primary" loading={busy} onClick={() => run(reviewed ?? app.version, [])}>
+    <Button
+      ref={inDialog ? actionButton : undefined}
+      variant="primary"
+      loading={busy}
+      aria-describedby={inDialog ? confirmTextId : undefined}
+      onClick={() => run(reviewed ?? app.version, [])}
+    >
       {t('apps.builder.publish.confirm', { space: spaceLabel(space) })}
     </Button>
   )
@@ -316,7 +342,7 @@ export function PublishPanel({
   else if (personal)
     action = (
       <div className="apps-actions">
-        <Button variant="primary" loading={busy} onClick={() => run(app.version, [])}>
+        <Button ref={actionButton} variant="primary" loading={busy} onClick={() => run(app.version, [])}>
           {t('apps.builder.publish.now')}
         </Button>
       </div>
@@ -325,10 +351,16 @@ export function PublishPanel({
     // Already in a dialog: the confirmation is its next step, in place.
     action = (
       <div className="apps-stack">
-        <p>{confirmText}</p>
+        <p id={confirmTextId}>{confirmText}</p>
         <div className="apps-actions">
           {confirmButton}
-          <Button disabled={busy} onClick={cancelConfirm}>
+          <Button
+            disabled={busy}
+            onClick={() => {
+              cancelConfirm()
+              setRefocus((n) => n + 1)
+            }}
+          >
             {t('common.cancel')}
           </Button>
         </div>
@@ -338,11 +370,14 @@ export function PublishPanel({
     action = (
       <div className="apps-actions">
         <Button
+          ref={actionButton}
           variant="primary"
           disabled={confirming}
           onClick={() => {
             setMoved(false)
             setReviewed(app.version)
+            // In a dialog, the button gives way to the confirmation, which takes the focus.
+            if (inDialog) setRefocus((n) => n + 1)
           }}
         >
           {t('apps.builder.publish.review')}
@@ -370,15 +405,20 @@ export function PublishPanel({
           })}
         </Notice>
       )}
-      {error && <Notice tone="danger">{error}</Notice>}
+      {error && !migration && <Notice tone="danger">{error}</Notice>}
       {moved && <Notice tone="danger">{t('apps.builder.publish.moved')}</Notice>}
       {action}
       {migration && mayPublish && (
         <MigrationDialog
           changes={migration.changes}
           busy={busy}
+          error={error}
           onPublish={() => run(migration.version, migration.changes)}
-          onCancel={() => setMigration(null)}
+          onCancel={() => {
+            setMigration(null)
+            setError(null)
+            setRefocus((n) => n + 1)
+          }}
         />
       )}
       {confirming && !inDialog && !migration && (
@@ -405,9 +445,9 @@ export function PublishPanel({
   if (inDialog) return <div className="apps-stack">{body}</div>
   return (
     <Panel as="section" padded aria-labelledby="apps-publish-title" className="apps-stack">
-      <h3 id="apps-publish-title" className="apps-subtitle">
+      <Heading level={headingLevel} id="apps-publish-title">
         {t('apps.builder.publish.title')}
-      </h3>
+      </Heading>
       {body}
     </Panel>
   )

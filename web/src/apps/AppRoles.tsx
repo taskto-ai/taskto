@@ -77,7 +77,7 @@ function RolesForm({ base, grants, members }: { base: string; grants: AppGrant[]
   }
 
   const columns: Column<Who>[] = [
-    { key: 'who', header: t('apps.roles.member'), cell: (w) => w.name },
+    { key: 'who', header: t('apps.roles.member'), rowHeader: true, cell: (w) => w.name },
     ...ROLES.map((r) => ({
       key: r,
       header: t(`apps.roles.${r}`),

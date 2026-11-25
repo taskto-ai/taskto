@@ -786,3 +786,76 @@ test('a draft the agent saves for a published app leaves the live form as it is,
   expect(back.value).toBe('Half-typed lunch')
   expect(calls.length).toBeGreaterThan(0)
 })
+
+test('the builder’s bar says where the draft stands: never published, unpublished changes, live', async () => {
+  narrowScreen(false)
+  let shown = app()
+  builderRoutes({ [`GET ${apps}`]: () => ({ body: shown }), [`GET ${apps}/surface?release=1`]: { body: surface } })
+  await openBuilder()
+  const bar = () => screen.getByRole('heading', { name: 'Build an app', level: 1 }).parentElement as HTMLElement
+  await within(bar()).findByText('Not published')
+  cleanup()
+
+  shown = app({ live: release(), unpublished_changes: true })
+  streams = fakeStreams()
+  builderRoutes({ [`GET ${apps}`]: () => ({ body: shown }), [`GET ${apps}/surface?release=1`]: { body: surface } })
+  await openBuilder()
+  await within(bar()).findByText('Unpublished changes')
+  cleanup()
+
+  shown = app({ live: release(3), unpublished_changes: false })
+  streams = fakeStreams()
+  builderRoutes({ [`GET ${apps}`]: () => ({ body: shown }), [`GET ${apps}/surface?release=3`]: { body: surface } })
+  await openBuilder()
+  await within(bar()).findByText('Live · release 3')
+})
+
+test('a publish refused after the acknowledgement keeps the schema dialog, with why; cancelling it gives the focus back', async () => {
+  narrowScreen(false)
+  const changes = [{ change: 'field_removed', field: 'notes' }]
+  let refuse = true
+  builderRoutes({
+    [`GET ${apps}`]: { body: app({ live: release(), version: 5 }) },
+    [`POST ${apps}/surface?release=1`]: { body: surface },
+    [`POST ${apps}/publish`]: (call) => {
+      if ((call.body as { acknowledge: unknown[] }).acknowledge.length === 0)
+        return { status: 409, body: { code: 'app_migration_required', error: 'x', params: { changes } } }
+      if (refuse)
+        return {
+          status: 403,
+          body: { error: 'x', code: 'app_forbidden', params: { capability: 'publish' } },
+        }
+      return { body: app({ live: release(2), unpublished_changes: false, version: 6 }) }
+    },
+  })
+  await openBuilder()
+  const section = await within(panel('preview')).findByRole('region', { name: 'Publish' })
+  const publish = await within(section).findByRole('button', { name: 'Publish' })
+  fireEvent.click(publish)
+  const name = 'This publish may change how your app treats its data'
+  let dialog = await screen.findByRole('dialog', { name })
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: 'I understand these changes' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Publish with these changes' }))
+
+  // Refused: the dialog stays, says why, and keeps the acknowledgement for another try.
+  expect((await within(dialog).findByRole('alert')).textContent).toBe(
+    'You can’t publish this app: that needs the publisher role in it.',
+  )
+  expect(screen.getByRole('dialog', { name })).toBe(dialog)
+  expect(
+    (within(dialog).getByRole('checkbox', { name: 'I understand these changes' }) as HTMLInputElement).checked,
+  ).toBe(true)
+
+  // Cancelled: the focus is back on the button that started it, not lost on the page.
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name })).toBeNull())
+  const again = within(section).getByRole('button', { name: 'Publish' })
+  await waitFor(() => expect(document.activeElement).toBe(again))
+
+  refuse = false
+  fireEvent.click(again)
+  dialog = await screen.findByRole('dialog', { name })
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: 'I understand these changes' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Publish with these changes' }))
+  await within(section).findByText(/Published as release 2/)
+})

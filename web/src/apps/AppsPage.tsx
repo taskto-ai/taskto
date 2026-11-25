@@ -18,6 +18,7 @@ import { Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
 import { ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
+import { Heading } from '../ui/Heading'
 import { Notice } from '../ui/Notice'
 import { Page } from '../ui/Page'
 import { PageHeader } from '../ui/PageHeader'
@@ -133,39 +134,40 @@ function SpaceApps({
   const headingId = `apps-space-${space.id}`
 
   // change applies a change to an app, then shows the list as it is now: on a stale version
-  // too, so the next try is made against the current one. It says whether the change was made.
+  // too, so the next try is made against the current one. It answers what went wrong, if anything,
+  // for the row to show where the person is: in the dialog that asked, or on the page.
   const change = async (app: App, body: { name?: string; archived?: boolean }) => {
-    let ok = false
+    let failed: string | null = null
     try {
       await api<App>(`${base}/${app.id}`, { method: 'PATCH', body: { version: app.version, ...body } })
       setError(null)
-      ok = true
     } catch (e) {
-      setError(e instanceof ApiError && e.status === 409 ? t('apps.changed', { name: app.name }) : errorText(e))
+      failed = e instanceof ApiError && e.status === 409 ? t('apps.changed', { name: app.name }) : errorText(e)
     }
     apps.reload()
-    return ok
+    return failed
   }
-  // move moves an app, with its rows, to another space the user may write.
+  // move moves an app, with its rows, to another space the user may write. The app's row is gone
+  // then, so the focus goes to this space's heading.
   const move = async (app: App, to: number) => {
     try {
       await api<App>(`${base}/${app.id}/move`, { method: 'POST', body: { version: app.version, space_id: to } })
       setError(null)
+      document.getElementById(headingId)?.focus()
       moved()
-      return true
+      return null
     } catch (e) {
-      setError(errorText(e))
       apps.reload()
-      return false
+      return errorText(e)
     }
   }
 
   return (
     <section className="apps-group" aria-labelledby={headingId}>
       <header className="apps-group-head">
-        <h2 id={headingId} className="apps-group-title">
+        <Heading level={2} id={headingId} tabIndex={-1}>
           {spaceLabel(space)}
-        </h2>
+        </Heading>
         <span className="apps-note">
           {[
             ...(apps.data ? [t('apps.count', { count: apps.data.length })] : []),
@@ -192,6 +194,7 @@ function SpaceApps({
                 spaceBase={`${ws(workspace)}/spaces/${space.id}`}
                 change={change}
                 move={move}
+                report={setError}
                 reload={apps.reload}
               />
             ))}

@@ -389,6 +389,7 @@ export function InstalledApp({ workspace, space, app }: { workspace: number; spa
               app={info.data}
               space={where}
               onChanged={info.reload}
+              headingLevel={2}
             />
           )}
         </>

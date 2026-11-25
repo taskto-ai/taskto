@@ -293,6 +293,12 @@ test('a builder sets the roles of members of a shared space', async () => {
       .getAllByRole('columnheader')
       .map((h) => h.textContent),
   ).toEqual(['Member', 'Builder', 'Publisher', 'User', 'Data manager', 'Reader'])
+  // Each row is named by its person, read with every checkbox along it.
+  expect(
+    within(table)
+      .getAllByRole('rowheader')
+      .map((h) => h.textContent),
+  ).toEqual(['Everyone else', 'Ann'])
   const reader = within(table).getByRole('checkbox', { name: 'Reader: Everyone else' })
   expect((reader as HTMLInputElement).checked).toBe(true)
   fireEvent.click(within(table).getByRole('checkbox', { name: 'User: Ann' }))
@@ -625,4 +631,179 @@ test('an app nobody has published yet shows its draft to its builders, and a not
   })
   render(<Routed />)
   await screen.findByText(/This app isn’t published yet/)
+})
+
+test('a refused rename is said in its dialog, which keeps what was typed and closes only once it is done', async () => {
+  let refuse = true
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': () => ({
+      body: { apps: [app(refuse ? {} : { name: 'Spending', version: 2 })] },
+    }),
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [] } },
+    'PATCH /api/workspaces/1/spaces/2/apps/1': () => {
+      if (refuse) return { status: 409, body: { error: 'x' } }
+      return { body: app({ name: 'Spending', version: 2 }) }
+    },
+  })
+  render(<Routed />)
+  const mine = await screen.findByRole('region', { name: 'Private' })
+  await choose(mine, 'Expenses', 'Rename')
+  const dialog = await screen.findByRole('dialog', { name: 'Rename Expenses' })
+  fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Spending' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+
+  // The refusal is in the dialog, where the person is, and not on the page under it.
+  expect((await within(dialog).findByRole('alert')).textContent).toBe(
+    'Someone changed Expenses since the list was loaded. It is shown as it is now: try again.',
+  )
+  expect(screen.getByRole('dialog', { name: 'Rename Expenses' })).toBe(dialog)
+  expect((within(dialog).getByLabelText('Name') as HTMLInputElement).value).toBe('Spending')
+  expect(
+    within(mine)
+      .getAllByRole('alert')
+      .every((a) => dialog.contains(a)),
+  ).toBe(true)
+
+  refuse = false
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  await within(mine).findByText('Spending')
+  expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(2)
+})
+
+test('a rename being saved is not closed by Escape', async () => {
+  let release: () => void = () => undefined
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': { body: { apps: [app({})] } },
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [] } },
+    'PATCH /api/workspaces/1/spaces/2/apps/1': () =>
+      new Promise((resolve) => {
+        release = () => resolve({ body: app({ name: 'Spending', version: 2 }) })
+      }),
+  })
+  render(<Routed />)
+  const mine = await screen.findByRole('region', { name: 'Private' })
+  await choose(mine, 'Expenses', 'Rename')
+  const dialog = await screen.findByRole('dialog', { name: 'Rename Expenses' })
+  fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Spending' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(within(dialog).getByRole('button', { name: /Save/ }).getAttribute('aria-busy')).toBe('true'),
+  )
+  fireEvent(dialog, new Event('cancel', { cancelable: true }))
+  expect(screen.getByRole('dialog', { name: 'Rename Expenses' })).toBe(dialog)
+  release()
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+})
+
+test('a refused move is said in its dialog; a move that is done leaves the focus on the space it left', async () => {
+  const withTeam = {
+    spaces: [
+      ...spaces.spaces,
+      { id: 4, workspace_id: 1, kind: 'shared', name: 'Crew', archived_at: null, role: 'editor', access: 'write' },
+    ],
+  }
+  let refuse = true
+  let mine = [app({})]
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: withTeam },
+    'GET /api/workspaces/1/spaces/2/apps?archived=true': () => ({ body: { apps: mine } }),
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': { body: { apps: [] } },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': () => ({
+      body: { apps: refuse ? [] : [app({ space_id: 4 })] },
+    }),
+    'POST /api/workspaces/1/spaces/2/apps/1/move': () => {
+      if (refuse) return { status: 403, body: { error: 'x', code: 'forbidden' } }
+      mine = []
+      return { body: app({ space_id: 4, version: 2 }) }
+    },
+  })
+  render(<Routed />)
+  const private_ = await screen.findByRole('region', { name: 'Private' })
+  await choose(private_, 'Expenses', 'Move to a space…')
+  const dialog = await screen.findByRole('dialog', { name: 'Move Expenses to a space' })
+  fireEvent.change(within(dialog).getByRole('combobox', { name: 'Move Expenses to' }), { target: { value: '4' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
+  await within(dialog).findByRole('alert')
+  expect(screen.getByRole('dialog', { name: 'Move Expenses to a space' })).toBe(dialog)
+
+  refuse = false
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  await within(screen.getByRole('region', { name: 'Crew' })).findByText('Expenses')
+  expect(document.activeElement).toBe(within(private_).getByRole('heading', { name: 'Private' }))
+})
+
+test('Move is offered only to those who may design the app, and Duplicate only where a copy can go', async () => {
+  const noDesign = { ...everything, design: false, roles: ['publisher'], restricted: true }
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': {
+      body: {
+        spaces: [
+          // Only shared spaces this person views: nowhere to put a copy.
+          { id: 3, workspace_id: 1, kind: 'shared', name: 'Team', archived_at: null, role: 'viewer', access: 'read' },
+          crewSpace(4, 'Crew'),
+          crewSpace(5, 'Field'),
+        ],
+      },
+    },
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': {
+      body: { apps: [app({ id: 7, space_id: 3, name: 'Viewed' })] },
+    },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': { body: { apps: [app({ space_id: 4, access: noDesign })] } },
+    'GET /api/workspaces/1/spaces/5/apps?archived=true': { body: { apps: [] } },
+  })
+  render(<Routed />)
+  const crew = await screen.findByRole('region', { name: 'Crew' })
+  const items = await menuItems(crew, 'Expenses')
+  // A publisher who may not design it can't move or rename it, though there is a space to move to.
+  expect(items).not.toContain('Move to a space…')
+  expect(items).not.toContain('Rename')
+  expect(items).toContain('Duplicate as template')
+  cleanup()
+
+  // A viewer of the only space they can't write, with no other space to write: no copy, no menu.
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': {
+      body: {
+        spaces: [
+          { id: 3, workspace_id: 1, kind: 'shared', name: 'Team', archived_at: null, role: 'viewer', access: 'read' },
+        ],
+      },
+    },
+    'GET /api/workspaces/1/spaces/3/apps?archived=true': {
+      body: { apps: [app({ id: 7, space_id: 3, name: 'Viewed' })] },
+    },
+  })
+  render(<Routed />)
+  const team = await screen.findByRole('region', { name: 'Team' })
+  await within(team).findByRole('link', { name: 'Open Viewed' })
+  expect(within(team).queryByRole('button', { name: 'More actions for Viewed' })).toBeNull()
+})
+
+test('in the list’s publish dialog, the confirmation takes the focus, described by what it does', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces: [crewSpace(4, 'Crew')] } },
+    'GET /api/workspaces/1/spaces/4/apps?archived=true': {
+      body: { apps: [app({ space_id: 4, unpublished_changes: true, version: 5 })] },
+    },
+    'GET /api/workspaces/1/spaces/4/apps/1': { body: withEffects() },
+  })
+  render(<Routed />)
+  const crew = await screen.findByRole('region', { name: 'Crew' })
+  await choose(crew, 'Expenses', 'Publish…')
+  const dialog = await screen.findByRole('dialog', { name: 'Publish Expenses' })
+  fireEvent.click(await within(dialog).findByRole('button', { name: 'Review and publish…' }))
+  const confirm = within(dialog).getByRole('button', { name: 'Publish for Crew' })
+  await waitFor(() => expect(document.activeElement).toBe(confirm))
+  const described = document.getElementById(confirm.getAttribute('aria-describedby') ?? '')
+  expect(described?.textContent).toMatch(/live for everyone in Crew who may use it/)
+
+  // Cancelled, the focus goes back to the way in.
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() =>
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Review and publish…' })),
+  )
 })

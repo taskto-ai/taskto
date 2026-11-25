@@ -26,6 +26,7 @@ import { spaceLabel } from '../spaces'
 import { Badge } from '../ui/Badge'
 import { Button, ButtonLink } from '../ui/Button'
 import { Field } from '../ui/Field'
+import { Heading } from '../ui/Heading'
 import { Notice } from '../ui/Notice'
 import { Page } from '../ui/Page'
 import { PageHeader } from '../ui/PageHeader'
@@ -309,7 +310,9 @@ function BuilderSession({
     <div className="apps-builder" data-narrow={narrow || undefined} data-pane={pane}>
       <header className="apps-builder-bar">
         <BackToApps workspace={workspace} />
-        <h1 className="apps-builder-title">{t('apps.builder.title')}</h1>
+        <Heading level={1} size="title">
+          {t('apps.builder.title')}
+        </Heading>
         {info.data && <DraftMarker app={info.data} />}
         {narrow && (
           <SegmentedControl<Pane>
@@ -422,7 +425,7 @@ function BuilderPreview({
   return (
     <div className="apps-builder-preview">
       <div className="apps-builder-preview-head">
-        <h2 className="apps-subtitle">{t('apps.builder.tab.preview')}</h2>
+        <Heading level={2}>{t('apps.builder.tab.preview')}</Heading>
         {info.data && (
           <Link href={appPath(workspace, session.space, info.data.id)}>
             {t('apps.openNamedInApps', { name: info.data.name })}
@@ -436,7 +439,9 @@ function BuilderPreview({
       {info.data?.archived_at && <p className="apps-note">{t('apps.offlineNamed', { name: info.data.name })}</p>}
       {info.data && !info.data.archived_at && space && base && (
         <>
-          <h3 className="apps-builder-app">{info.data.name}</h3>
+          <Heading level={3} size="subsection">
+            {info.data.name}
+          </Heading>
           {info.data.access.design || info.data.access.publish ? (
             <AppStage key={base} base={base} app={info.data} builder />
           ) : (

@@ -400,6 +400,8 @@ test('the apps screens lay out with logical properties, in the screens layer', (
   // Everything is inside one @layer screens block, so the components' rules come first.
   expect(code.trim().startsWith('@layer screens {')).toBe(true)
   expect(code.match(/@layer/g)).toHaveLength(1)
+  // The dialogs' columns are as wide as the dialog, never as their content: a table scrolls in its box.
+  expect(code).toMatch(/\.apps-stack,[^{]*\{\s*grid-template-columns: minmax\(0, 1fr\);/)
   expect(code).not.toMatch(
     /(margin|padding)-(left|right)|\b(left|right):|text-align: (left|right)|border-(left|right)|\bwidth:|max-width:|\bheight:/,
   )

@@ -9,6 +9,15 @@
     color: var(--color-text-muted);
   }
 
+  /* A column whose width is the box's, never its content's: a wide table or a long word wraps or
+     scrolls in its own box instead of pushing a dialog's text past its edge. */
+  .apps-stack,
+  .apps-form,
+  .apps-where,
+  .apps-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .apps-stack,
   .apps-form {
     display: grid;
@@ -35,11 +44,6 @@
     gap: var(--space-1);
   }
 
-  .apps-subtitle {
-    margin: 0;
-    font: var(--type-section);
-  }
-
   /* The list: one group per space, its name and a count, then its apps. */
   .apps-group {
     display: grid;
@@ -51,11 +55,6 @@
     flex-wrap: wrap;
     align-items: baseline;
     gap: var(--space-1) var(--space-2);
-  }
-
-  .apps-group-title {
-    margin: 0;
-    font: var(--type-section);
   }
 
   .apps-detail-line {
@@ -166,12 +165,6 @@
     border-block-end: var(--line-thin) solid var(--color-border);
   }
 
-  .apps-builder-title {
-    margin: 0;
-    font: var(--type-title);
-    letter-spacing: var(--tracking-display);
-  }
-
   .apps-builder-switch {
     margin-inline-start: auto;
   }
@@ -189,7 +182,7 @@
   .apps-builder-panes {
     min-block-size: 0;
     display: grid;
-    grid-template-columns: minmax(20rem, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(min(var(--width-sidebar), 100%), 1fr) minmax(0, 1fr);
   }
 
   .apps-builder-pane {
@@ -213,17 +206,20 @@
     padding: var(--space-4) var(--space-6) calc(var(--space-6) + env(safe-area-inset-bottom));
   }
 
+  /* A launched app wider than the pane scrolls in its own frame, not the pane (the frame's old
+     class, and the library's). */
+  .apps-builder-preview .tt-app,
+  .apps-builder-preview .ui-app {
+    min-inline-size: 0;
+    overflow: auto;
+  }
+
   .apps-builder-preview-head {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     justify-content: space-between;
     gap: var(--space-2) var(--space-4);
-  }
-
-  .apps-builder-app {
-    margin: 0;
-    font: var(--type-ui-strong);
   }
 
   .apps-builder[data-narrow] .apps-builder-bar {

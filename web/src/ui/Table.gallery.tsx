@@ -21,7 +21,7 @@ export default function TableGallery() {
     { name: t('gallery.sample.personC'), role: t('gallery.sample.member'), docs: 5, storage: '960 kB' },
   ]
   const columns: Column<Member>[] = [
-    { key: 'name', header: t('gallery.layout.person'), cell: (r) => r.name },
+    { key: 'name', header: t('gallery.layout.person'), rowHeader: true, cell: (r) => r.name },
     { key: 'role', header: t('gallery.sample.role'), cell: (r) => r.role },
     { key: 'docs', header: t('gallery.layout.documents'), numeric: true, cell: (r) => r.docs },
     { key: 'storage', header: t('gallery.layout.storage'), numeric: true, cell: (r) => r.storage },
