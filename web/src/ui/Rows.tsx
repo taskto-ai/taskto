@@ -32,9 +32,12 @@ export interface RowProps {
   // The row opens this, in the app.
   href?: string
   current?: boolean
+  // What opens under the row, across its width (a form to settle it, its details): part of the row,
+  // in its list item, so what it says belongs to the row.
+  children?: ReactNode
 }
 
-export function Row({ title, detail, leading, status, actions, href, current }: RowProps) {
+export function Row({ title, detail, leading, status, actions, href, current, children }: RowProps) {
   return (
     <li className="ui-row" data-link={href ? true : undefined} data-current={current || undefined}>
       {leading && <span className="ui-row-leading">{leading}</span>}
@@ -50,6 +53,7 @@ export function Row({ title, detail, leading, status, actions, href, current }: 
       </span>
       {status && <span className="ui-row-status">{status}</span>}
       {actions && <span className="ui-row-actions">{actions}</span>}
+      {children && <div className="ui-row-more">{children}</div>}
     </li>
   )
 }

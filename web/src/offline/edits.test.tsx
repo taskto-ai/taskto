@@ -950,6 +950,12 @@ test('the screen: a deleted record leaves the list as pending, and a conflict sh
   const review = await within(list).findByRole('region', { name: /Review/ })
   // What the person saw, what they did, and what the server has.
   expect(within(review).getByText('When you started')).toBeTruthy()
+  // Each value names its column, so on a phone, where the values stack, each still says what it is.
+  expect(
+    within(review)
+      .getAllByRole('cell')
+      .map((c) => c.dataset.label),
+  ).toEqual(expect.arrayContaining(['When you started', 'On the server now']))
   expect(within(review).getByText('On the server now')).toBeTruthy()
   expect(within(review).getAllByText('(deleted)').length).toBeGreaterThan(0)
   expect(within(review).getByText('20')).toBeTruthy()

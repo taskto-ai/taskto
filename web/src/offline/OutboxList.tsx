@@ -7,12 +7,18 @@
 import { useState } from 'react'
 import { ApiError, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
+import { Badge, type BadgeTone } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { Heading } from '../ui/Heading'
+import { Notice } from '../ui/Notice'
+import { Row, Rows } from '../ui/Rows'
 import { DiscardButton } from './DiscardButton'
 import { useWriter } from './hooks'
 import { Resolve } from './Resolve'
 import type { Runtime } from './runtime'
 import { type Download, kindOf, NotWriter, type OutboxItem } from './store'
 import { RESOLVE, type SyncStatus, waitsForEarlier } from './sync'
+import './OutboxList.css'
 
 // What a record is called in the list: the app, and its first filled-in value (for a change to a
 // record, the one it is about: as it was downloaded, else what the change sets).
@@ -39,7 +45,7 @@ export function SyncNotice({ status, waiting }: { status: SyncStatus; waiting: n
   const t = useT()
   if (waiting === 0 && !status.paused) return null
   return (
-    <p className="tt-muted tt-small" role="status">
+    <p className="ui-outbox-note" role="status">
       {status.paused === 'session'
         ? t('offline.sync.paused')
         : status.paused === 'account'
@@ -86,162 +92,167 @@ export function OutboxList({
   const waiting = items.filter((i) => i.state !== 'synced')
 
   return (
-    <section className="tt-outbox" aria-label={t('offline.queue.title')}>
-      <div className="tt-pane-head">
-        <h2>{t('offline.queue.title')}</h2>
+    <section className="ui-outbox" aria-label={t('offline.queue.title')}>
+      <header className="ui-outbox-head">
+        <Heading level={2} size="subsection">
+          {t('offline.queue.title')}
+        </Heading>
         {waiting.length > 0 && (
-          <span className="tt-muted tt-small">{t('offline.queue.waiting', { count: waiting.length })}</span>
+          <span className="ui-outbox-note">{t('offline.queue.waiting', { count: waiting.length })}</span>
         )}
         {waiting.length > 0 && (
-          <button
-            type="button"
-            className="tt-button"
-            onClick={() => act(() => (writer ? runtime.engine.retry() : runtime.engine.run()))}
-          >
+          <Button size="sm" onClick={() => act(() => (writer ? runtime.engine.retry() : runtime.engine.run()))}>
             {t('offline.sync.now')}
-          </button>
+          </Button>
         )}
-      </div>
+      </header>
       <SyncNotice status={status} waiting={waiting.length} />
-      {notice && (
-        <p role="alert" className="tt-error tt-small">
-          {notice}
-        </p>
-      )}
-      {shown.length === 0 && <p className="tt-muted">{t('offline.queue.none')}</p>}
-      <ul className="tt-outbox-list">
-        {shown.map((item) => {
-          const app = apps[item.scopeKey] ?? ''
-          const summary = summaryOf(item)
-          const kind = kindOf(item)
-          const name =
-            kind === 'update'
-              ? summary
-                ? t('offline.queue.itemChange', { app, summary })
-                : t('offline.queue.itemChangeAny', { app })
-              : kind === 'delete'
+      {notice && <Notice tone="danger">{notice}</Notice>}
+      {shown.length === 0 && <p className="ui-outbox-note">{t('offline.queue.none')}</p>}
+      {shown.length > 0 && (
+        <Rows label={t('offline.queue.title')}>
+          {shown.map((item) => {
+            const app = apps[item.scopeKey] ?? ''
+            const summary = summaryOf(item)
+            const kind = kindOf(item)
+            const name =
+              kind === 'update'
                 ? summary
-                  ? t('offline.queue.itemDelete', { app, summary })
-                  : t('offline.queue.itemDeleteAny', { app })
-                : summary
-                  ? t('offline.queue.item', { app, summary })
-                  : t('offline.queue.itemNew', { app })
-          const settle = item.state === 'attention' && item.attention !== undefined && RESOLVE.has(item.attention)
-          // Offered for what can be looked at and settled: a conflict, a deleted record, what no
-          // longer fits, and a refusal of the server's.
-          const reviewable =
-            item.state === 'attention' &&
-            (settle || item.attention === 'refused' || item.attention === 'outdated') &&
-            !(kind === 'insert' && (item.attention === 'conflict' || item.attention === 'deleted'))
-          const uploaded = item.attachments.filter((a) => a.state === 'uploaded' && a.serverId).length
-          return (
-            <li key={item.id} className="tt-outbox-item" data-state={item.state}>
-              <span className="tt-outbox-name">{name}</span>
-              <span className="tt-stage-label" data-state={item.state}>
-                {t(`offline.state.${item.state}`)}
-              </span>
-              {item.attachments.length > 0 && (
-                <span className="tt-muted tt-small">
-                  {t('offline.queue.photos', { uploaded, total: item.attachments.length })}
-                </span>
-              )}
-              {item.state === 'synced' && <span className="tt-muted tt-small">{t('offline.queue.syncedNote')}</span>}
-              {item.state !== 'synced' && kind !== 'insert' && (
-                <span className="tt-muted tt-small">{t('offline.queue.pendingNote')}</span>
-              )}
-              {item.state === 'queued' && waitsForEarlier(item, items) && (
-                <span className="tt-muted tt-small">{t('offline.queue.waitsEarlier')}</span>
-              )}
-              {item.state === 'attention' && item.attention && (
-                <span role="alert" className="tt-error tt-small">
-                  {t(`offline.attention.${item.attention}`, {
-                    error: item.error
-                      ? errorText(
-                          new ApiError(item.error.status ?? 0, item.error.message, {
-                            code: item.error.code,
-                            params: item.error.params,
-                          }),
-                        )
-                      : '',
-                    count: item.attempts,
-                  })}
-                </span>
-              )}
-              {item.state === 'queued' && item.attempts > 0 && (
-                <span className="tt-muted tt-small">
-                  {t('offline.queue.attempts', { count: item.attempts })}
-                  {item.nextAttemptAt ? ` ${t('offline.queue.next', { when: f.relative(item.nextAttemptAt) })}` : ''}
-                </span>
-              )}
-              <span className="tt-row-actions">
-                {writer && reviewable && (
-                  <button
-                    type="button"
-                    className="tt-button tt-primary"
-                    aria-label={t('offline.queue.reviewNamed', { name })}
-                    aria-expanded={resolving === item.id}
-                    onClick={() => setResolving(resolving === item.id ? null : item.id)}
-                  >
-                    {t('offline.queue.review')}
-                  </button>
-                )}
-                {writer && (item.state === 'queued' || (item.state === 'attention' && !settle)) && (
-                  <button
-                    type="button"
-                    className="tt-button"
-                    aria-label={t('offline.queue.retryNamed', { name })}
-                    onClick={() => act(() => runtime.engine.retry(item.id))}
-                  >
-                    {t('offline.queue.retry')}
-                  </button>
-                )}
-                {writer && (item.state === 'queued' || item.state === 'attention') && (
-                  <button
-                    type="button"
-                    className="tt-button"
-                    aria-label={t('offline.queue.holdNamed', { name })}
-                    onClick={() => act(() => runtime.engine.hold(item.id))}
-                  >
-                    {t('offline.queue.hold')}
-                  </button>
-                )}
-                {writer && item.state === 'draft' && (
-                  <button
-                    type="button"
-                    className="tt-button tt-primary"
-                    aria-label={t('offline.queue.sendNamed', { name })}
-                    onClick={() => act(() => runtime.engine.release(item.id))}
-                  >
-                    {t('offline.queue.send')}
-                  </button>
-                )}
-                {writer && item.state !== 'synced' && item.state !== 'syncing' && (
-                  <DiscardButton
+                  ? t('offline.queue.itemChange', { app, summary })
+                  : t('offline.queue.itemChangeAny', { app })
+                : kind === 'delete'
+                  ? summary
+                    ? t('offline.queue.itemDelete', { app, summary })
+                    : t('offline.queue.itemDeleteAny', { app })
+                  : summary
+                    ? t('offline.queue.item', { app, summary })
+                    : t('offline.queue.itemNew', { app })
+            const settle = item.state === 'attention' && item.attention !== undefined && RESOLVE.has(item.attention)
+            // Offered for what can be looked at and settled: a conflict, a deleted record, what no
+            // longer fits, and a refusal of the server's.
+            const reviewable =
+              item.state === 'attention' &&
+              (settle || item.attention === 'refused' || item.attention === 'outdated') &&
+              !(kind === 'insert' && (item.attention === 'conflict' || item.attention === 'deleted'))
+            const uploaded = item.attachments.filter((a) => a.state === 'uploaded' && a.serverId).length
+            const lines = [
+              item.attachments.length > 0
+                ? t('offline.queue.photos', { uploaded, total: item.attachments.length })
+                : '',
+              item.state === 'synced' ? t('offline.queue.syncedNote') : '',
+              item.state !== 'synced' && kind !== 'insert' ? t('offline.queue.pendingNote') : '',
+              item.state === 'queued' && waitsForEarlier(item, items) ? t('offline.queue.waitsEarlier') : '',
+              item.state === 'queued' && item.attempts > 0
+                ? `${t('offline.queue.attempts', { count: item.attempts })}${
+                    item.nextAttemptAt ? ` ${t('offline.queue.next', { when: f.relative(item.nextAttemptAt) })}` : ''
+                  }`
+                : '',
+            ].filter(Boolean)
+            return (
+              <Row
+                key={item.id}
+                title={name}
+                status={
+                  <Badge tone={toneOf(item)} dot>
+                    {t(`offline.state.${item.state}`)}
+                  </Badge>
+                }
+                detail={
+                  <>
+                    {lines.map((line) => (
+                      <span key={line} className="ui-outbox-line">
+                        {line}
+                      </span>
+                    ))}
+                    {item.state === 'attention' && item.attention && (
+                      <span role="alert" className="ui-outbox-line" data-tone="danger">
+                        {t(`offline.attention.${item.attention}`, {
+                          error: item.error
+                            ? errorText(
+                                new ApiError(item.error.status ?? 0, item.error.message, {
+                                  code: item.error.code,
+                                  params: item.error.params,
+                                }),
+                              )
+                            : '',
+                          count: item.attempts,
+                        })}
+                      </span>
+                    )}
+                  </>
+                }
+                actions={
+                  writer && (
+                    <>
+                      {reviewable && (
+                        <Button
+                          size="sm"
+                          aria-label={t('offline.queue.reviewNamed', { name })}
+                          aria-expanded={resolving === item.id}
+                          onClick={() => setResolving(resolving === item.id ? null : item.id)}
+                        >
+                          {t('offline.queue.review')}
+                        </Button>
+                      )}
+                      {(item.state === 'queued' || (item.state === 'attention' && !settle)) && (
+                        <Button
+                          size="sm"
+                          aria-label={t('offline.queue.retryNamed', { name })}
+                          onClick={() => act(() => runtime.engine.retry(item.id))}
+                        >
+                          {t('offline.queue.retry')}
+                        </Button>
+                      )}
+                      {(item.state === 'queued' || item.state === 'attention') && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={t('offline.queue.holdNamed', { name })}
+                          onClick={() => act(() => runtime.engine.hold(item.id))}
+                        >
+                          {t('offline.queue.hold')}
+                        </Button>
+                      )}
+                      {item.state === 'draft' && (
+                        <Button
+                          size="sm"
+                          aria-label={t('offline.queue.sendNamed', { name })}
+                          onClick={() => act(() => runtime.engine.release(item.id))}
+                        >
+                          {t('offline.queue.send')}
+                        </Button>
+                      )}
+                      {item.state !== 'synced' && item.state !== 'syncing' && (
+                        <DiscardButton
+                          runtime={runtime}
+                          item={item}
+                          name={name}
+                          onDone={() => setNotice(null)}
+                          onError={setNotice}
+                        />
+                      )}
+                    </>
+                  )
+                }
+              >
+                {writer && resolving === item.id && reviewable && (
+                  <Resolve
                     runtime={runtime}
                     item={item}
+                    download={downloads.find((d) => d.key === item.scopeKey)}
                     name={name}
-                    onDone={() => setNotice(null)}
-                    onError={setNotice}
+                    onClose={() => setResolving(null)}
                   />
                 )}
-              </span>
-              {writer && resolving === item.id && reviewable && (
-                <Resolve
-                  runtime={runtime}
-                  item={item}
-                  download={downloads.find((d) => d.key === item.scopeKey)}
-                  name={name}
-                  onClose={() => setResolving(null)}
-                />
-              )}
-            </li>
-          )
-        })}
-      </ul>
+              </Row>
+            )
+          })}
+        </Rows>
+      )}
       {writer && synced.length > 0 && (
-        <button
-          type="button"
-          className="tt-button"
+        <Button
+          size="sm"
+          variant="ghost"
           onClick={() =>
             // Out of the list, not out of the queue: a deleted record would be shown again from the
             // copy, which doesn't know of the deletion, until a download does.
@@ -257,8 +268,23 @@ export function OutboxList({
           }
         >
           {t('offline.queue.clearSynced')}
-        </button>
+        </Button>
       )}
     </section>
   )
+}
+
+// The tone of each state: a draft and what is queued are neutral, sending informs, sent succeeded,
+// and what needs the person is a warning, or the danger when the server refused it.
+export function toneOf(item: OutboxItem): BadgeTone {
+  switch (item.state) {
+    case 'syncing':
+      return 'info'
+    case 'synced':
+      return 'success'
+    case 'attention':
+      return item.attention === 'refused' || item.attention === 'gave_up' ? 'danger' : 'warning'
+    default:
+      return 'neutral'
+  }
 }

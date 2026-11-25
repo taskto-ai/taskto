@@ -84,6 +84,13 @@
     margin-inline-start: auto;
   }
 
+  /* What opens under a row takes its whole width, under the title, the status and the actions. */
+  .ui-row-more {
+    position: relative;
+    flex: 1 1 100%;
+    min-inline-size: 0;
+  }
+
   .ui-row[data-current] {
     background: var(--color-selected);
   }

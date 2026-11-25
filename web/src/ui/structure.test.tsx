@@ -137,6 +137,25 @@ describe('Table', () => {
   })
 })
 
+describe('Row, opened', () => {
+  test('what opens under a row is inside its list item, after its actions', () => {
+    render(
+      <Rows label="Queue">
+        <Row title="Coffee" actions={<Button size="sm">Review</Button>}>
+          <section aria-label="Review Coffee">Choose a version</section>
+        </Row>
+        <Row title="Tea" />
+      </Rows>,
+    )
+    const [coffee, tea] = screen.getAllByRole('listitem')
+    const opened = screen.getByRole('region', { name: 'Review Coffee' })
+    expect(coffee.contains(opened)).toBe(true)
+    expect(coffee.lastElementChild?.contains(opened)).toBe(true)
+    // A row with nothing under it has no room for it.
+    expect(tea.querySelector('.ui-row-more')).toBeNull()
+  })
+})
+
 describe('Table, sorted', () => {
   test('a sortable header is a button named by the column, and its cell says the order', () => {
     const rows = [

@@ -4,6 +4,7 @@ import { Button } from './Button'
 import { Specimen } from './GalleryParts'
 import { Icon } from './Icon'
 import { MenuItem, MenuSeparator, MoreMenu } from './Menu'
+import { Notice } from './Notice'
 import { Panel } from './Panel'
 import { Row, Rows } from './Rows'
 
@@ -77,6 +78,17 @@ export default function RowsGallery() {
               detail={t('gallery.layout.currentDetail')}
               current
             />
+            <Row
+              leading={<Icon name="alert" />}
+              title={t('gallery.layout.expenses')}
+              status={
+                <Badge tone="danger" dot>
+                  {t('gallery.state.error')}
+                </Badge>
+              }
+            >
+              <Notice tone="warning">{t('gallery.layout.openedRow')}</Notice>
+            </Row>
           </Rows>
         </Panel>
       </div>

@@ -459,6 +459,17 @@ export const SCREENS = [
     ready: (s) => [text(s, 'Riverside depot', true).first(), text(s, /matching records/)],
   },
   {
+    // What its button set going: documents made, and a log the later visits couldn't make.
+    name: 'app-effects',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`))
+      await s.page.getByRole('button', { name: /^Effects/ }).click()
+      await s.page.getByRole('list', { name: 'The app’s effects' }).scrollIntoViewIfNeeded()
+    },
+    ready: (s) => [s.page.getByRole('list', { name: 'The app’s effects' })],
+  },
+  {
     // One record open, with its fields and its history.
     name: 'app-record',
     phase: 'seeded',
@@ -1072,7 +1083,17 @@ async function seed({ api, base, workspace, agent, say }) {
   // An app that uses every component of the renderer an app may (docs/design.md, "The apps
   // renderer"), with a few records through its own action, for its records and their history.
   {
-    const app = await api('POST', `${P}/apps`, { name: COMPONENTS_APP_NAME, definition: COMPONENTS_APP })
+    // What its button sets going: a document for each visit, and one log that only the first visit
+    // can make (a document is never written over), so the others' fail, with their retry.
+    const effects = [
+      { kind: 'create_document', space_id: mine.id, path: 'visits/{{id}}.md', content: 'Site: {{site}}\n' },
+      { kind: 'create_document', space_id: mine.id, path: 'visits/log.md', content: 'First visit: {{site}}\n' },
+    ]
+    const definition = {
+      ...COMPONENTS_APP,
+      actions: { ...COMPONENTS_APP.actions, add: { kind: 'insert', effects } },
+    }
+    const app = await api('POST', `${P}/apps`, { name: COMPONENTS_APP_NAME, definition })
     await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
     apps.componentsApp = app.id
     const visits = [

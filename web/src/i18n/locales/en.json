@@ -2672,6 +2672,7 @@
       "expensesDetail": "A row that is a link: a click anywhere on it opens it",
       "currentRow": "The current row",
       "currentDetail": "Marked as the one open",
+      "openedRow": "What opens under a row, such as a form to settle it, takes the row's whole width.",
       "tables": "Numbers aligned to the end; a narrow table scrolls in its own box",
       "members": "Members",
       "person": "Person",

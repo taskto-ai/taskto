@@ -2693,6 +2693,7 @@
       "expensesDetail": "Uma linha que é um link: um clique em qualquer ponto a abre",
       "currentRow": "A linha atual",
       "currentDetail": "Marcada como a aberta",
+      "openedRow": "O que se abre sob uma linha, como um formulário para resolvê-la, ocupa toda a largura da linha.",
       "tables": "Números alinhados ao fim; uma tabela estreita rola na própria caixa",
       "members": "Membros",
       "person": "Pessoa",

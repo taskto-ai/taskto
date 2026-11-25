@@ -7,6 +7,13 @@ import { useEffect, useId, useState } from 'react'
 import { ApiError, errorText } from '../api'
 import { optionLabel } from '../apps/RecordParts'
 import { type Format, useFormat, useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Checkbox } from '../ui/Checkbox'
+import { Field as LabelledField } from '../ui/Field'
+import { Heading } from '../ui/Heading'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Select } from '../ui/Select'
 import {
   type Deleted,
   findDeleted,
@@ -21,6 +28,7 @@ import {
   saveEdit,
 } from './choices'
 import { DiscardButton } from './DiscardButton'
+import './Resolve.css'
 import { fieldsOf, parseUpdate } from './local'
 import type { Runtime } from './runtime'
 import { type Download, kindOf, type OutboxItem, type Problem, seenOf, versionOf } from './store'
@@ -31,7 +39,7 @@ type Field = Download['definition']['collection']['fields'][number]
 function ValueText({ value, f, field }: { value: unknown; f: Format; field?: Field }) {
   const t = useT()
   if (value === undefined || value === null || value === '')
-    return <span className="tt-muted">{t('offline.resolve.empty')}</span>
+    return <span className="ui-resolve-empty">{t('offline.resolve.empty')}</span>
   if (typeof value === 'number') return <>{f.number(value)}</>
   if (typeof value === 'boolean') return <>{value ? t('offline.resolve.yes') : t('offline.resolve.no')}</>
   if (Array.isArray(value)) return <>{t('offline.resolve.photos', { count: value.length })}</>
@@ -151,67 +159,68 @@ export function Resolve({
     needsLive && live ? problemsOf(live.definition, kind, item.action.context, base) : (item.problems ?? [])
 
   return (
-    <section className="tt-resolve" aria-label={t('offline.resolve.title', { name })}>
-      {error && (
-        <p role="alert" className="tt-error tt-small">
-          {error}
-        </p>
-      )}
+    <section className="ui-resolve" aria-label={t('offline.resolve.title', { name })}>
+      {error && <Notice tone="danger">{error}</Notice>}
 
       {reason === 'conflict' && !editing && (
         <>
-          <h3>{kind === 'delete' ? t('offline.resolve.conflict.titleDelete') : t('offline.resolve.conflict.title')}</h3>
-          <p className="tt-muted tt-small">{t('offline.resolve.conflict.intro')}</p>
-          {server === 'loading' && <p className="tt-muted tt-small">{t('offline.resolve.conflict.checking')}</p>}
+          <Heading level={3} size="subsection">
+            {kind === 'delete' ? t('offline.resolve.conflict.titleDelete') : t('offline.resolve.conflict.title')}
+          </Heading>
+          <p className="ui-resolve-note">{t('offline.resolve.conflict.intro')}</p>
+          {server === 'loading' && <p className="ui-resolve-note">{t('offline.resolve.conflict.checking')}</p>}
           {current ? (
             <ConflictTable fields={fields} item={item} current={current} changed={changed} f={f} />
           ) : (
             loaded && (
-              <p role="status">
+              <p role="status" className="ui-resolve-text">
                 {loaded.deleted ? t('offline.resolve.conflict.nowDeleted') : t('offline.resolve.conflict.unreadable')}
               </p>
             )
           )}
-          <p className="tt-row-actions">
+          <div className="ui-resolve-actions">
             {current && (
-              <button
-                type="button"
-                className="tt-button tt-primary"
+              <Button
+                size="sm"
+                variant="primary"
                 disabled={busy}
                 onClick={() => void run(() => reapply(runtime, item, current, seenOf(item)))}
               >
                 {kind === 'delete' ? t('offline.resolve.deleteAnyway') : t('offline.resolve.reapply')}
-              </button>
+              </Button>
             )}
-            <button
-              type="button"
-              className="tt-button"
+            <Button
+              size="sm"
               disabled={busy || server === 'loading'}
               onClick={() => void run(() => keepServer(runtime, item, seenOf(item)))}
             >
               {t('offline.resolve.keepServer')}
-            </button>
+            </Button>
             {current && kind === 'update' && def && (
-              <button type="button" className="tt-button" disabled={busy} onClick={() => setEditing(true)}>
+              <Button size="sm" disabled={busy} onClick={() => setEditing(true)}>
                 {t('offline.resolve.edit')}
-              </button>
+              </Button>
             )}
-            <button type="button" className="tt-button" onClick={onClose}>
+            <Button size="sm" variant="ghost" onClick={onClose}>
               {t('offline.resolve.close')}
-            </button>
-          </p>
+            </Button>
+          </div>
         </>
       )}
 
       {reason === 'deleted' && (
         <>
-          <h3>{t('offline.resolve.deleted.title')}</h3>
-          <p>{kind === 'delete' ? t('offline.resolve.deleted.bodyDelete') : t('offline.resolve.deleted.body')}</p>
+          <Heading level={3} size="subsection">
+            {t('offline.resolve.deleted.title')}
+          </Heading>
+          <p className="ui-resolve-text">
+            {kind === 'delete' ? t('offline.resolve.deleted.bodyDelete') : t('offline.resolve.deleted.body')}
+          </p>
           {kind === 'update' && deleted === 'loading' && !error && (
-            <p className="tt-muted tt-small">{t('offline.resolve.deleted.checking')}</p>
+            <p className="ui-resolve-note">{t('offline.resolve.deleted.checking')}</p>
           )}
           {kind === 'update' && deleted && deleted !== 'loading' && (
-            <p className="tt-muted tt-small">
+            <p className="ui-resolve-note">
               {deleted.by && deleted.at
                 ? t('offline.resolve.deleted.byAt', { by: deleted.by, when: f.dateTime(deleted.at) })
                 : deleted.at
@@ -220,42 +229,39 @@ export function Resolve({
             </p>
           )}
           {kind === 'update' && deleted === null && !error && (
-            <p className="tt-muted tt-small">{t('offline.resolve.deleted.unknown')}</p>
+            <p className="ui-resolve-note">{t('offline.resolve.deleted.unknown')}</p>
           )}
           <ChangeSummary fields={fields} changed={changed} f={f} />
-          <p className="tt-row-actions">
+          <div className="ui-resolve-actions">
             {kind === 'update' && deleted && deleted !== 'loading' && (
-              <button
-                type="button"
-                className="tt-button tt-primary"
+              <Button
+                size="sm"
+                variant="primary"
                 disabled={busy}
                 onClick={() => void run(() => restoreAndApply(runtime, item, deleted, seenOf(item)))}
               >
                 {t('offline.resolve.deleted.restore')}
-              </button>
+              </Button>
             )}
-            <button
-              type="button"
-              className="tt-button"
-              disabled={busy}
-              onClick={() => void run(() => keepServer(runtime, item, seenOf(item)))}
-            >
+            <Button size="sm" disabled={busy} onClick={() => void run(() => keepServer(runtime, item, seenOf(item)))}>
               {kind === 'delete' ? t('offline.resolve.deleted.clear') : t('offline.resolve.deleted.discard')}
-            </button>
-            <button type="button" className="tt-button" onClick={onClose}>
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onClose}>
               {t('offline.resolve.close')}
-            </button>
-          </p>
+            </Button>
+          </div>
         </>
       )}
 
       {needsLive && kind !== 'delete' && !editing && (
         <>
-          <h3>{t('offline.resolve.schema.title')}</h3>
-          <p className="tt-muted tt-small">{t('offline.resolve.schema.intro')}</p>
-          {!live && !error && <p className="tt-muted tt-small">{t('offline.resolve.schema.checking')}</p>}
+          <Heading level={3} size="subsection">
+            {t('offline.resolve.schema.title')}
+          </Heading>
+          <p className="ui-resolve-note">{t('offline.resolve.schema.intro')}</p>
+          {!live && !error && <p className="ui-resolve-note">{t('offline.resolve.schema.checking')}</p>}
           {problems.length > 0 && (
-            <ul className="tt-resolve-problems">
+            <ul className="ui-resolve-problems">
               {problems.map((p) => (
                 <li key={`${p.field}:${p.code}`}>
                   <strong>{p.field}</strong>{' '}
@@ -265,28 +271,30 @@ export function Resolve({
             </ul>
           )}
           <ChangeSummary fields={fields} changed={kind === 'insert' ? stripId(item.action.context) : changed} f={f} />
-          <p className="tt-row-actions">
+          <div className="ui-resolve-actions">
             {live && (
-              <button type="button" className="tt-button tt-primary" disabled={busy} onClick={() => setEditing(true)}>
+              <Button size="sm" variant="primary" disabled={busy} onClick={() => setEditing(true)}>
                 {t('offline.resolve.schema.fix')}
-              </button>
+              </Button>
             )}
-            <button type="button" className="tt-button" onClick={onClose}>
+            <Button size="sm" variant="ghost" onClick={onClose}>
               {t('offline.resolve.close')}
-            </button>
-          </p>
+            </Button>
+          </div>
         </>
       )}
 
       {needsLive && kind === 'delete' && (
         <>
-          <h3>{t('offline.resolve.refusedDelete.title')}</h3>
-          <p className="tt-muted tt-small">{t('offline.resolve.refusedDelete.body')}</p>
-          <p className="tt-row-actions">
-            <button type="button" className="tt-button" onClick={onClose}>
+          <Heading level={3} size="subsection">
+            {t('offline.resolve.refusedDelete.title')}
+          </Heading>
+          <p className="ui-resolve-note">{t('offline.resolve.refusedDelete.body')}</p>
+          <div className="ui-resolve-actions">
+            <Button size="sm" variant="ghost" onClick={onClose}>
               {t('offline.resolve.close')}
-            </button>
-          </p>
+            </Button>
+          </div>
         </>
       )}
 
@@ -315,9 +323,9 @@ export function Resolve({
         />
       )}
 
-      <p className="tt-row-actions">
+      <div className="ui-resolve-actions">
         <DiscardButton runtime={runtime} item={item} name={name} onDone={onClose} onError={setError} />
-      </p>
+      </div>
     </section>
   )
 }
@@ -348,7 +356,7 @@ function ConflictTable({
   const del = kindOf(item) === 'delete'
   const shown = fields.filter((field) => field.name in changed || !same(original[field.name], server[field.name]))
   return (
-    <table className="tt-resolve-table">
+    <table className="ui-resolve-table">
       <thead>
         <tr>
           <th scope="col">{t('offline.resolve.column.field')}</th>
@@ -361,12 +369,12 @@ function ConflictTable({
         {shown.map((field) => (
           <tr key={field.name}>
             <th scope="row">{field.name}</th>
-            <td>
+            <td data-label={t('offline.resolve.column.original')}>
               <ValueText value={original[field.name]} f={f} field={field} />
             </td>
-            <td>
+            <td data-label={del ? t('offline.resolve.column.deleted') : t('offline.resolve.column.mine')}>
               {del ? (
-                <span className="tt-muted">{t('offline.resolve.deletedMark')}</span>
+                <span className="ui-resolve-empty">{t('offline.resolve.deletedMark')}</span>
               ) : (
                 <ValueText
                   value={field.name in changed ? changed[field.name] : original[field.name]}
@@ -375,7 +383,7 @@ function ConflictTable({
                 />
               )}
             </td>
-            <td>
+            <td data-label={t('offline.resolve.column.server')}>
               <ValueText value={server[field.name]} f={f} field={field} />
             </td>
           </tr>
@@ -393,13 +401,13 @@ function ChangeSummary({ fields, changed, f }: { fields: Field[]; changed: Recor
   if (names.length === 0) return null
   const known = new Set(fields.map((x) => x.name))
   return (
-    <dl className="tt-resolve-mine" aria-label={t('offline.resolve.mine')}>
+    <dl className="ui-resolve-mine" aria-label={t('offline.resolve.mine')}>
       {names.map((n) => (
         <div key={n}>
           <dt>{n}</dt>
           <dd>
             <ValueText value={changed[n]} f={f} field={fields.find((x) => x.name === n)} />
-            {!known.has(n) && <span className="tt-muted tt-small"> {t('offline.resolve.notInApp')}</span>}
+            {!known.has(n) && <span className="ui-resolve-note"> {t('offline.resolve.notInApp')}</span>}
           </dd>
         </div>
       ))}
@@ -435,61 +443,59 @@ function EditForm({
   const set = (name: string, value: unknown) => setEdits((prev) => ({ ...prev, [name]: value }))
   return (
     <form
-      className="tt-resolve-form"
+      className="ui-resolve-form"
       aria-label={t('offline.resolve.edit')}
       onSubmit={(e) => {
         e.preventDefault()
         onSave(form, Object.keys(edits))
       }}
     >
-      <h3>{t('offline.resolve.edit')}</h3>
+      <Heading level={3} size="subsection">
+        {t('offline.resolve.edit')}
+      </Heading>
       {fields
         .filter((x) => x.type !== 'attachment')
-        .map((x) => (
-          <div key={x.name} className="tt-field">
-            <label htmlFor={`${uid}-${x.name}`}>{x.name}</label>
-            {x.type === 'boolean' ? (
-              <input
-                id={`${uid}-${x.name}`}
-                type="checkbox"
-                checked={form[x.name] === true}
-                onChange={(e) => set(x.name, e.target.checked)}
-              />
-            ) : x.type === 'choice' ? (
-              <select
-                id={`${uid}-${x.name}`}
-                value={String(form[x.name] ?? '')}
-                onChange={(e) => set(x.name, e.target.value)}
-              >
-                <option value="" />
-                {(x.options ?? []).map((o) => (
-                  <option key={o} value={o}>
-                    {optionLabel(x, o)}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                id={`${uid}-${x.name}`}
-                type={x.type === 'date' ? 'date' : x.type === 'time' ? 'time' : 'text'}
-                inputMode={x.type === 'number' ? 'decimal' : undefined}
-                value={String(form[x.name] ?? '')}
-                onChange={(e) => set(x.name, e.target.value)}
-              />
-            )}
-          </div>
-        ))}
+        .map((x) =>
+          x.type === 'boolean' ? (
+            <Checkbox
+              key={x.name}
+              label={x.name}
+              checked={form[x.name] === true}
+              onChange={(e) => set(x.name, e.target.checked)}
+            />
+          ) : (
+            <LabelledField key={x.name} id={`${uid}-${x.name}`} label={x.name}>
+              {x.type === 'choice' ? (
+                <Select value={String(form[x.name] ?? '')} onChange={(e) => set(x.name, e.target.value)}>
+                  <option value="" />
+                  {(x.options ?? []).map((o) => (
+                    <option key={o} value={o}>
+                      {optionLabel(x, o)}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <Input
+                  type={x.type === 'date' ? 'date' : x.type === 'time' ? 'time' : 'text'}
+                  inputMode={x.type === 'number' ? 'decimal' : undefined}
+                  value={String(form[x.name] ?? '')}
+                  onChange={(e) => set(x.name, e.target.value)}
+                />
+              )}
+            </LabelledField>
+          ),
+        )}
       {fields.some((x) => x.type === 'attachment') && (
-        <p className="tt-muted tt-small">{t('offline.resolve.photosKept')}</p>
+        <p className="ui-resolve-note">{t('offline.resolve.photosKept')}</p>
       )}
-      <p className="tt-row-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={busy}>
+      <div className="ui-resolve-actions">
+        <Button size="sm" variant="primary" type="submit" disabled={busy}>
           {t('offline.resolve.save')}
-        </button>
-        <button type="button" className="tt-button" disabled={busy} onClick={onCancel}>
+        </Button>
+        <Button size="sm" disabled={busy} onClick={onCancel}>
           {t('offline.resolve.cancel')}
-        </button>
-      </p>
+        </Button>
+      </div>
     </form>
   )
 }
