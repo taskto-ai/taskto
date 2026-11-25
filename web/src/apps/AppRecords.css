@@ -1,0 +1,22 @@
+/* The records panel under a launched app (AppRecords). */
+
+@layer screens {
+  .ui-records {
+    display: grid;
+    gap: var(--space-4);
+    scroll-margin-block-start: var(--space-4);
+  }
+
+  .ui-records-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .ui-records-title:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+    border-radius: var(--radius-sm);
+  }
+}
