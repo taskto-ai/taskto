@@ -333,3 +333,93 @@ func TestAPurgedRecordsIDIsNeverGivenAgain(t *testing.T) {
 		t.Fatalf("the new record is at revision %d, was %d", now, rev)
 	}
 }
+
+// A sweep that stops after any batch (the server stopping, or its time budget) leaves nothing
+// dangling, and the next one finishes: each batch is one transaction that takes the record's
+// history, attachments, effects and search entries with it, and what a stop between the commit
+// and the removal of files leaves is files no row knows, which the file sweep removes.
+func TestAnInterruptedSweepLeavesNothingDanglingAndTheNextFinishes(t *testing.T) {
+	w := newWorld(t)
+	s := w.shared
+	a := w.createPhotos(w.alice, s, "Photos")
+	total := retentionBatch + 30
+	var last int64
+	for i := 0; i < total; i++ {
+		res, err := w.e.db.Exec(`INSERT INTO app_rows (app_id, data, created_by, deleted_at) VALUES (?, '{}', ?, ?)`,
+			a.ID, w.alice.id, "2020-01-01T00:00:00.000Z")
+		if err != nil {
+			t.Fatal(err)
+		}
+		last, _ = res.LastInsertId()
+		if _, err := w.e.db.Exec(`INSERT INTO search_records (row_id, text_format) VALUES (?, 1)`, last); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.e.db.Exec(`INSERT INTO search_record_fts (rowid, body) VALUES (?, 'words')`, last); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A photo on the record deleted last, so its file is left when the sweep stops after the commit.
+	id := w.upload(w.alice, s, a, "photos", testPNG(t, 40, 30), 4096)
+	row := w.recordWith(w.alice, s, a, id)
+	expect(t, w.alice.do(http.MethodPost, appPath(s, a.ID, "/actions"), ClientAction{
+		Name: "remove_note", SurfaceID: SurfaceID(a.ID), Context: map[string]any{"id": row}}), http.StatusOK)
+	w.recordWith(w.alice, s, a)
+	live := w.count(`SELECT count(*) FROM app_rows WHERE app_id = ? AND deleted_at IS NULL`, a.ID)
+	w.at(day(91))
+
+	dangling := func() {
+		t.Helper()
+		if n := w.count(`SELECT count(*) FROM pragma_foreign_key_check`); n != 0 {
+			t.Fatalf("%d dangling references", n)
+		}
+		if n := w.count(`SELECT count(*) FROM search_record_fts WHERE rowid NOT IN (SELECT row_id FROM search_records)`); n != 0 {
+			t.Fatalf("%d search entries of removed records", n)
+		}
+	}
+
+	// A sweep that is already stopped removes nothing.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if n, err := w.e.s.PurgeDeleted(ctx); err != nil || n != 0 {
+		t.Fatalf("a stopped sweep removed %d records: %v", n, err)
+	}
+
+	// One batch committed, then the server stopped.
+	cutoff := w.e.s.stamp(w.e.s.clock().Add(-w.e.s.DeletedRetention()))
+	if n, err := w.e.s.purgeBatch(context.Background(), cutoff); err != nil || n != retentionBatch {
+		t.Fatalf("a batch removed %d records: %v", n, err)
+	}
+	dangling()
+	if n := w.count(`SELECT count(*) FROM app_rows WHERE deleted_at IS NOT NULL`); n != total+1-retentionBatch {
+		t.Fatalf("%d deleted records remain after one batch", n)
+	}
+
+	// The next sweep finishes, and removes only what was deleted.
+	if _, err := w.e.s.PurgeDeleted(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	dangling()
+	if n := w.count(`SELECT count(*) FROM app_rows WHERE deleted_at IS NOT NULL`); n != 0 {
+		t.Fatalf("%d deleted records remain", n)
+	}
+	if n := w.count(`SELECT count(*) FROM app_rows WHERE app_id = ? AND deleted_at IS NULL`, a.ID); n != live {
+		t.Fatalf("%d live records remain, want %d", n, live)
+	}
+	if n := w.count(`SELECT count(*) FROM app_attachments WHERE id = ?`, id); n != 0 {
+		t.Fatal("the attachment's row remains")
+	}
+
+	// The files, which the sweep stopped before removing, are removed by the file sweep, and
+	// running it twice is harmless.
+	if len(w.files(s, a)) == 0 {
+		t.Fatal("the files went before the sweep of files")
+	}
+	for range 2 {
+		if err := w.e.s.Sweep(context.Background(), time.Now().Add(AttachmentTTL+time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := w.files(s, a); len(got) != 0 {
+		t.Fatalf("files remain: %v", got)
+	}
+}
