@@ -224,6 +224,7 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
           report={u}
           reload={updates.reload}
           settled={updates.settled ?? 0}
+          loading={updates.loading ?? false}
           loadError={updates.error}
           label={label}
           reasonText={reasonText}
@@ -291,6 +292,7 @@ function UpdateNow({
   report,
   reload,
   settled,
+  loading,
   loadError,
   label,
   reasonText,
@@ -300,6 +302,7 @@ function UpdateNow({
   reload: () => void
   // How many reads have ended: the next one is asked for after the last ended, not on a clock.
   settled: number
+  loading: boolean
   loadError: string | null
   label: (result: string) => string
   reasonText: (code: string) => string
@@ -327,13 +330,13 @@ function UpdateNow({
   // Ask again a moment after the last answer (or failure) came, never while one is on its way: the
   // server restarts during an update, and a read that is cut off by the next one shows nothing.
   useEffect(() => {
-    if (!busy || settled === 0) return
+    if (!busy || loading || settled === 0) return
     const timer = setTimeout(() => {
       setNow(Date.now())
       reload()
     }, POLL_MS)
     return () => clearTimeout(timer)
-  }, [busy, settled, reload])
+  }, [busy, loading, settled, reload])
   const press = async () => {
     const ok = await action.run(async () => {
       const r = await api<UpdateRequested>(updateRequestPath(workspace), { method: 'POST', body: {} })

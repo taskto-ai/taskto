@@ -431,7 +431,9 @@ take_request() {
 	# At most one byte more than the limit is read, whatever the file has grown to meanwhile; and
 	# the whole of it must be the one fixed line the server writes, a time and a nonce. Anything
 	# else is not from the server's code: it is removed and ignored, never used.
-	content=$(head -c $((REQUEST_MAX_BYTES + 1)) -- "$taken"; echo x) || content=x
+	# Bash strips NUL bytes from command substitutions. Replace each with a byte the
+	# grammar rejects before capture, so malformed raw input cannot become a valid line.
+	content=$(head -c $((REQUEST_MAX_BYTES + 1)) -- "$taken" | tr '\000' '?'; echo x) || content=x
 	content=${content%x}
 	rm -f -- "$taken"
 	line=${content%$'\n'}

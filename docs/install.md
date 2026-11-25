@@ -1454,7 +1454,7 @@ The request directory is **the one place of the updater's the server may write.*
 `deploy/safety-check.sh` fails an install where the server mounts it in any other way, any other
 path of the updater's, or where any service but the server (the CLI worker above all) mounts it or
 a directory that holds it or is inside it, however the path is spelled. The updater reads it only
-if it is a real directory (never a link), owned by the server's uid (65532) or root, on the same
+if it is a real directory (never a link), owned by the server's uid (65532), on the same
 filesystem as the updater's state, and under directories only root can write. A host that doesn't
 have it (installed before the button) keeps working: the button says the host can't take a
 request yet, and **runbook step 16, run again**, installs the path unit and makes the directory.

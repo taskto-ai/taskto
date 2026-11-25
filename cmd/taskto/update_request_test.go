@@ -288,6 +288,9 @@ func TestUpdateRequestedContentIsNeverUsed(t *testing.T) {
 		"a line without its end": func(e *updEnv) string { return strings.TrimSuffix(requestLine, "\n") },
 		"a nonce of capitals":    func(e *updEnv) string { return "2026-11-24T12:00:00Z 0123456789ABCDEF0123456789ABCDEF\n" },
 		"empty":                  func(e *updEnv) string { return "" },
+		"NUL before the line":    func(e *updEnv) string { return "\x00" + requestLine },
+		"NUL inside the line":    func(e *updEnv) string { return strings.Replace(requestLine, "Z ", "Z \x00", 1) },
+		"NUL after the line":     func(e *updEnv) string { return requestLine + "\x00" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, dir := requestEnv(t)

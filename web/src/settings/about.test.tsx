@@ -19,6 +19,7 @@ const member: Workspace = { id: 1, name: 'Home', role: 'member' }
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -324,6 +325,36 @@ test('while an update runs the page says so, and the failed reads of its restart
     ),
   }
 }, 15000)
+
+test('the first status read after Update now may take longer than the polling interval', async () => {
+  let reads = 0
+  let finish!: (reply: { body: UpdateStatus }) => void
+  const slow = new Promise<{ body: UpdateStatus }>((resolve) => {
+    finish = resolve
+  })
+  fakeFetch({
+    ...noBackups,
+    'GET /api/workspaces/1/updates': () => {
+      reads++
+      return reads === 1 ? { body: updates() } : slow
+    },
+    [requestRoute]: { status: 202, body: { requested_at: new Date().toISOString() } },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="about" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Update now' }))
+  vi.useFakeTimers()
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, update now' }))
+  })
+  expect(reads).toBe(2)
+  await act(() => vi.advanceTimersByTimeAsync(4000))
+  expect(reads).toBe(2)
+  await act(async () => {
+    const at = new Date().toISOString()
+    finish({ body: updates({}, { requests: { supported: true, last: { at, finished: at, result: 'updated' } } }) })
+  })
+  expect(screen.getByText(/The update you asked for: Updated/)).toBeTruthy()
+})
 
 test("Update now's refusals are said in words, with the way on for the host", async () => {
   fakeFetch({
