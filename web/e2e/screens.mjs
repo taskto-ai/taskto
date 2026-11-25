@@ -78,6 +78,7 @@ export const SETTINGS_HEADINGS = {
   general: 'General',
   members: 'Members',
   spaces: 'Shared spaces',
+  audit: 'Audit log',
   providers: "This workspace's accounts",
   'cli-accounts': 'Your CLI accounts',
   search: 'Semantic search',
