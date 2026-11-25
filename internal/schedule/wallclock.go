@@ -9,22 +9,31 @@ import "time"
 //
 // time.Date says an hour inside a gap (the clocks skip it) is one of two moments around it,
 // whichever it picks; this is always the later: the first moment the wall clock shows the hour or
-// more. An hour that happens twice (the clocks go back) is its first time.
+// more, wherever the gap ends (a change of 30 minutes, or of 3 hours from 00:01, included). An
+// hour that happens twice (the clocks go back) is its first time.
+//
+// It walks the periods in which loc's offset from UTC is constant, from before the hour could
+// have come to the first one whose wall clock gets there, so the answer is the exact instant of a
+// transition when the hour falls in a gap.
 func LocalHour(year int, month time.Month, day, hour int, loc *time.Location) time.Time {
-	at := time.Date(year, month, day, hour, 0, 0, 0, loc)
-	want := time.Date(year, month, day, hour, 0, 0, 0, time.UTC)
-	wall := func(t time.Time) time.Time {
-		y, m, d := t.In(loc).Date()
-		h, mi, sec := t.In(loc).Clock()
-		return time.Date(y, m, d, h, mi, sec, 0, time.UTC)
+	want := time.Date(year, month, day, hour, 0, 0, 0, time.UTC) // the wall clock's reading, as if in UTC
+	// No offset is more than 14 hours from UTC, so the wall clock at this instant is before want.
+	t := want.Add(-15 * time.Hour)
+	for range 16 {
+		local := t.In(loc)
+		_, offset := local.Zone()
+		// In this period, the wall clock shows want at this instant, or from its start if it
+		// began after that (the clocks jumped over want).
+		at := want.Add(-time.Duration(offset) * time.Second)
+		if at.Before(t) {
+			at = t
+		}
+		_, end := local.ZoneBounds()
+		if end.IsZero() || at.Before(end) {
+			return at
+		}
+		t = end
 	}
-	// Back to before the gap if the pick was after it (so the walk below finds its start), then
-	// forward until the wall clock has reached the hour.
-	for i := 0; i < 8 && wall(at.Add(-15*time.Minute)).Compare(want) >= 0; i++ {
-		at = at.Add(-15 * time.Minute)
-	}
-	for i := 0; i < 4*48 && wall(at).Before(want); i++ {
-		at = at.Add(15 * time.Minute)
-	}
-	return at
+	// Not reached for any zone in the database; the standard library's pick is a fair answer.
+	return time.Date(year, month, day, hour, 0, 0, 0, loc)
 }

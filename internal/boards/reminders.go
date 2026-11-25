@@ -307,9 +307,11 @@ func (s *Service) SyncWorkspaceMember(ctx context.Context, tx *sql.Tx, workspace
 
 // SyncTimeZone follows a person whose time zone changed: the jobs of the open cards assigned to
 // them are timed again, by the new zone (a job that is as it should be is left alone). It is the
-// auth package's TimeZoneHook (auth.Service.OnTimeZoneChanged).
+// auth package's TimeZoneHook (auth.Service.OnTimeZoneChanged). It walks every card: a card the
+// scheduler has no room for says nothing of the cards after it, whose existing jobs still need
+// their new time.
 func (s *Service) SyncTimeZone(ctx context.Context, tx *sql.Tx, userID int64) error {
-	return s.syncCards(ctx, tx, userID, `
+	return s.syncCards(ctx, tx, 0, `
 		SELECT c.id FROM cards c WHERE c.assignee_id = ? AND `+dated+` AND `+open+` ORDER BY c.id`, userID)
 }
 
@@ -418,7 +420,11 @@ func (s *Service) remind(notice string) schedule.Handler {
 				if err != nil {
 					return err
 				}
-				if s.sched.Now().In(loc).Format(dateLayout) > p.Due {
+				// The day of the reminder is the local date of the time it was made for, which is the due
+				// date unless that morning never came (the clocks skipped the whole day): then the date
+				// they skipped to.
+				day := job.RunAt.In(loc).Format(dateLayout)
+				if s.sched.Now().In(loc).Format(dateLayout) > max(day, p.Due) {
 					return nil // the day passed (the server was away): the overdue notice is the one that is true
 				}
 			}

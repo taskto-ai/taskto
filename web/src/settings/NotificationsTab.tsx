@@ -38,6 +38,7 @@ export function NotificationsTab({
   // The person closed the browser's prompt without answering: push stays off, and they are told so.
   const [dismissed, setDismissed] = useState(false)
   const action = useAction()
+  const [zoneSaves, setZoneSaves] = useState(0)
 
   const { platform, installed } = install
   const refresh = useCallback(() => pushState({ platform, installed }).then(setState), [platform, installed])
@@ -109,8 +110,10 @@ export function NotificationsTab({
         <Alert error={action.error} />
         <p className="tt-muted tt-small">{t('notifications.settings.caveat')}</p>
       </section>
-      <TimeZonePanel initial={timeZone} />
-      <EmailNotifications workspace={workspace} />
+      {/* The summary follows the time zone until a zone is chosen for it: it loads its choices again
+          when the zone changes, so what it shows (and sends back with a new hour) is the server's. */}
+      <TimeZonePanel initial={timeZone} onSaved={() => setZoneSaves((n) => n + 1)} />
+      <EmailNotifications key={zoneSaves} workspace={workspace} />
     </div>
   )
 }

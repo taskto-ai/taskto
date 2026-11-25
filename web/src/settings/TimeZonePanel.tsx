@@ -8,7 +8,8 @@ import { useT } from '../i18n'
 import { browserTimeZone, timeZones } from '../timezone'
 import { Alert, useAction } from './parts'
 
-export function TimeZonePanel({ initial }: { initial: string }) {
+// `onSaved`: called when the account has the new zone, for what shows what follows it (the summary's).
+export function TimeZonePanel({ initial, onSaved }: { initial: string; onSaved?: () => void }) {
   const t = useT()
   const [zone, setZone] = useState(initial)
   const [saved, setSaved] = useState(false)
@@ -21,6 +22,7 @@ export function TimeZonePanel({ initial }: { initial: string }) {
     const ok = await action.run(async () => {
       const me = await api<Me>('/api/me', { method: 'PATCH', body: { time_zone: next } })
       setZone(me.user.time_zone ?? next)
+      onSaved?.()
     })
     setSaved(ok)
   }

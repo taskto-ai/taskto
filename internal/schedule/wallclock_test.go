@@ -36,6 +36,10 @@ func TestLocalHourIsCountedOnTheCalendar(t *testing.T) {
 		{"the 31st of March plus one day, Lisbon", "Europe/Lisbon", 2030, 3, 31 + 1, 8, utc(2030, 4, 1, 7, 0), 8},
 		{"past the end of a month", "UTC", 2030, 1, 32, 8, utc(2030, 2, 1, 8, 0), 8},
 		{"past the end of a year", "UTC", 2030, 12, 32, 8, utc(2031, 1, 1, 8, 0), 8},
+		// A gap that doesn't end on the hour: Casey's clocks went from 00:01 to 03:01 on 2020-10-04,
+		// and Lord Howe's from 02:00 to 02:30 on 2030-10-06.
+		{"a gap that ends at 03:01", "Antarctica/Casey", 2020, 10, 4, 1, utc(2020, 10, 3, 16, 1), 3},
+		{"a gap of half an hour", "Australia/Lord_Howe", 2030, 10, 6, 2, utc(2030, 10, 5, 15, 30), 2},
 		// Samoa skipped 2011-12-30 whole.
 		{"a day that is skipped", "Pacific/Apia", 2011, 12, 30, 8, utc(2011, 12, 30, 10, 0), 0},
 	} {

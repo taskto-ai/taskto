@@ -791,3 +791,34 @@ test("a time zone the person picked for the summary is not replaced by their pro
   expect(puts[puts.length - 1]).toEqual({ kinds: { card_assigned: 'digest' } })
   expect(saved.digest.timezone).toBe('UTC')
 })
+
+test("a new time zone is shown by the summary, which follows it, and not sent back as the summary's own", async () => {
+  pushBrowser({ permission: 'denied' })
+  // The summary is on, and follows the profile's zone (Lisbon) until one is chosen for it.
+  let profile = 'Europe/Lisbon'
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({
+      body: emailChoices({
+        kinds: { ...emailChoices().kinds, card_assigned: 'digest' },
+        digest: { hour: 8, timezone: profile, chosen: false },
+      }),
+    }),
+    'PATCH /api/me': (call) => {
+      profile = (call.body as { time_zone: string }).time_zone
+      return { body: { ...me, user: { ...me.user, time_zone: profile } } }
+    },
+    'PUT /api/workspaces/1/notification-email': (call) => ({
+      body: emailChoices({ digest: { ...(call.body as { digest: object }).digest, chosen: true } }),
+    }),
+  })
+  render(<NotificationsTab me={1} workspace={1} timeZone="Europe/Lisbon" />)
+  const summaryZone = (await screen.findByLabelText('Time zone')) as HTMLSelectElement
+  expect(summaryZone.value).toBe('Europe/Lisbon')
+
+  fireEvent.change(screen.getByLabelText('Your time zone'), { target: { value: 'Asia/Tokyo' } })
+  await waitFor(() => expect((screen.getByLabelText('Time zone') as HTMLSelectElement).value).toBe('Asia/Tokyo'))
+  // Changing the hour now keeps the zone the server reported, Tokyo, not the one from before.
+  fireEvent.change(screen.getByLabelText('Send the daily summary at'), { target: { value: '18' } })
+  await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+  expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ digest: { hour: 18, timezone: 'Asia/Tokyo' } })
+})

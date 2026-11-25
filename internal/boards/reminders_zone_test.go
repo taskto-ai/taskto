@@ -2,11 +2,13 @@ package boards
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
 
 	"taskto.ai/taskto/internal/notifications"
+	"taskto.ai/taskto/internal/schedule"
 )
 
 // The morning of a reminder is the assignee's own: 08:00 in their time zone, counted on the calendar.
@@ -237,4 +239,57 @@ func TestOnlyTheCallerSetsTheirOwnZone(t *testing.T) {
 	// A bad zone changes nothing, and no one's jobs.
 	expect(t, w.alice.do(http.MethodPatch, "/api/me", map[string]any{"time_zone": "Mars/Olympus"}), http.StatusBadRequest)
 	wantJobs(t, w, w.alice, c, at("2030-01-10", 8), at("2030-01-11", 8))
+}
+
+func TestAZoneChangeRetimesEveryCardEvenWhereTheSchedulerIsFull(t *testing.T) {
+	w := newRemindWorld(t)
+	ctx := context.Background()
+	// Alice's scheduler is full of other jobs when the first card is dated: it has none.
+	fill := func(from, to int) {
+		t.Helper()
+		for i := from; i < to; i++ {
+			_, err := w.sch.Schedule(ctx, w.e.db, schedule.Job{
+				Kind: KindOverdue, UserID: w.alice.id, WorkspaceID: w.ws, SpaceID: w.shared.ID,
+				DedupeKey: fmt.Sprintf("filler:%d", i), Payload: []byte(`{}`), RunAt: at("2031-01-01", 8),
+			})
+			if err != nil {
+				t.Fatalf("filler %d: %v", i, err)
+			}
+		}
+	}
+	fill(0, schedule.MaxPerUser)
+	first := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	wantJobs(t, w, w.alice, first, time.Time{}, time.Time{})
+	// Room for one card's two jobs is made, and the second card takes it.
+	for _, i := range []int{0, 1} {
+		if _, err := w.sch.Cancel(ctx, w.e.db, w.alice.id, KindOverdue, fmt.Sprintf("filler:%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	second := w.newCard(map[string]any{"due": "2030-01-10", "assignee": asUser(w.alice.id)})
+	wantJobs(t, w, w.alice, second, at("2030-01-10", 8), at("2030-01-11", 8))
+
+	// The change reaches the second card although the first could not be given jobs.
+	w.setZone(w.alice, "Asia/Tokyo")
+	wantJobs(t, w, w.alice, second, utc(2030, 1, 9, 23, 0), utc(2030, 1, 10, 23, 0))
+	wantJobs(t, w, w.alice, first, time.Time{}, time.Time{})
+}
+
+// A day that the clocks skip whole has its reminder at the start of the date they jump to, and it is
+// delivered there, not dropped as a reminder of a day that is over.
+func TestReminderOfASkippedDayIsDeliveredWhenTheClocksJump(t *testing.T) {
+	w := newRemindWorld(t)
+	w.clock.set(utc(2011, 12, 1, 0, 0))
+	w.setZone(w.alice, "Pacific/Apia")
+	c := w.newCard(map[string]any{"due": "2011-12-30", "assignee": asUser(w.alice.id)})
+	// 2011-12-31 00:00 in Samoa (UTC+14), and the overdue notice at 08:00 that day.
+	wantJobs(t, w, w.alice, c, utc(2011, 12, 30, 10, 0), utc(2011, 12, 30, 18, 0))
+	w.run(utc(2011, 12, 30, 9, 59))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 0 {
+		t.Fatalf("a reminder before the clocks jumped: %d", n)
+	}
+	w.run(utc(2011, 12, 30, 10, 0))
+	if n := w.notices(w.alice, notifications.KindCardDue); n != 1 {
+		t.Fatalf("reminders at the start of the date the clocks jumped to = %d, want 1", n)
+	}
 }
