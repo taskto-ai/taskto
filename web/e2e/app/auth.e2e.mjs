@@ -33,7 +33,7 @@ scenario('first-run setup creates the owner, and the owner can log out and back 
   assert.equal((await fetch(`${base}/api/me`, { headers: { cookie } })).status, 200)
 
   // Logging out shows the login screen; a wrong password is refused and the right one gets in.
-  await page.getByLabel(`Account: ${owner.name}`).click()
+  await page.getByRole('button', { name: `Account: ${owner.name}` }).click()
   await page.getByRole('menuitem', { name: 'Log out' }).click()
   await page.getByRole('heading', { name: 'Log in' }).waitFor()
   assert.equal((await fetch(`${base}/api/me`, { headers: { cookie } })).status, 401)

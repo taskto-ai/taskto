@@ -365,18 +365,19 @@
       overflow: hidden;
     }
 
-    /* The switcher and the account are named by their own labels (aria-label), and the pins' group
-       by its heading even hidden, so these can go. */
-    .ui-shell-switcher-name,
+    /* The chevron says nothing, and the pins' group is named by its heading even hidden, so these
+       can go. */
     .ui-shell-switcher-button .ui-menu-button-text > svg,
-    .ui-shell-account-text,
     .ui-shell-group-title {
       display: none;
     }
 
-    /* A link's label is its accessible name: hidden from sight only (VisuallyHidden's way), never
-       with display: none, which would leave the link unnamed. */
-    .ui-shell-link-label {
+    /* A link's label is its name, and the workspace's and the person's names are the second half of
+       the switcher's and the account's ("Workspace: …", "Account: …"): hidden from sight only
+       (VisuallyHidden's way), never with display: none, which would take them out of the names. */
+    .ui-shell-link-label,
+    .ui-shell-switcher-name,
+    .ui-shell-account-text {
       position: absolute;
       inline-size: 1px;
       block-size: 1px;

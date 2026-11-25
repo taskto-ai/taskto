@@ -1,11 +1,11 @@
 // The shell in a real browser, where only layout and the accessibility tree tell: on a tablet the
-// sidebar is a rail of icons, and each of its links must still have a name.
+// sidebar is a rail of icons, and each of its links and buttons must still have its whole name.
 
 import assert from 'node:assert/strict'
-import { api, installExpenseTracker, scenario, setUp } from '../support.mjs'
+import { api, installExpenseTracker, owner, scenario, setUp } from '../support.mjs'
 
 scenario(
-  'in the rail every sidebar link has a name, the pinned apps too',
+  'in the rail every sidebar link and button has its name, the pinned apps too',
   async (s) => {
     const { page, context } = s
     await setUp(s)
@@ -32,6 +32,12 @@ scenario(
       assert.equal(await nav.getByRole('link', { name, exact: true }).count(), 1, name)
     }
     assert.equal(await nav.getByRole('region', { name: 'Pinned apps' }).getByRole('link').count(), 1)
+
+    // The switcher and the account, which show only their avatars here, still name what they
+    // hold: "Workspace: …" and "Account: …", not the label alone.
+    const exact = true
+    assert.equal(await page.getByRole('button', { name: `Workspace: ${owner.workspace}`, exact }).count(), 1)
+    assert.equal(await page.getByRole('button', { name: `Account: ${owner.name} ${owner.email}`, exact }).count(), 1)
   },
   { viewport: { width: 820, height: 1100 } },
 )
