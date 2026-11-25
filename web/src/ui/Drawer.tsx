@@ -25,6 +25,8 @@ export interface DrawerProps {
   headerActions?: ReactNode
   // A bar at the bottom: the main actions, a composer.
   footer?: ReactNode
+  // A class of the screen's own on the drawer, for its layout (where it takes the whole window).
+  className?: string
 }
 
 // A field that may have a use for Escape of its own.
@@ -41,7 +43,7 @@ export function Drawer(props: DrawerProps) {
   return createPortal(<OpenDrawer {...props} />, document.body)
 }
 
-function OpenDrawer({ onClose, title, children, headerActions, footer }: DrawerProps) {
+function OpenDrawer({ onClose, title, children, headerActions, footer, className }: DrawerProps) {
   const t = useT()
   const ref = useRef<HTMLElement>(null)
   const id = useId()
@@ -71,7 +73,12 @@ function OpenDrawer({ onClose, title, children, headerActions, footer }: DrawerP
   }, [])
 
   return (
-    <section ref={ref} className="ui-drawer" aria-labelledby={`${id}-title`} tabIndex={-1}>
+    <section
+      ref={ref}
+      className={['ui-drawer', className].filter(Boolean).join(' ')}
+      aria-labelledby={`${id}-title`}
+      tabIndex={-1}
+    >
       <header className="ui-drawer-header">
         <h2 id={`${id}-title`} className="ui-drawer-title">
           {title}
