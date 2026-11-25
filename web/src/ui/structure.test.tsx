@@ -146,6 +146,12 @@ describe('EmptyState', () => {
     )
     expect(screen.getByText('No apps in Product team yet')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Build an app' })).toBeTruthy()
+    expect(screen.queryByRole('heading')).toBeNull()
+  })
+
+  test('its title can be the page’s heading, of the level asked for', () => {
+    render(<EmptyState title="You aren't a member of any workspace" level={1} />)
+    expect(screen.getByRole('heading', { level: 1, name: "You aren't a member of any workspace" })).toBeTruthy()
   })
 })
 

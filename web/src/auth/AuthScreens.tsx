@@ -63,7 +63,13 @@ function placed(failure: Failure | null, fields: readonly string[]) {
   const onField = field !== undefined && fields.includes(field)
   return {
     field: (name: string) => (failure && onField && field === name ? said(failure.text) : undefined),
-    form: failure && !onField ? <Notice tone="danger">{failure.text}</Notice> : null,
+    // It takes the focus after a failed submit (AuthForm), so it can be focused, but isn't a tab stop.
+    form:
+      failure && !onField ? (
+        <div className="ui-auth-error" tabIndex={-1}>
+          <Notice tone="danger">{failure.text}</Notice>
+        </div>
+      ) : null,
   }
 }
 
@@ -279,7 +285,7 @@ export function SetupScreen({ onDone }: { onDone: (me: Me) => void }) {
   const errors = placed(failure, ['setup_token', 'name', 'email', 'password', 'workspace_name'])
   return (
     <AuthLayout title={t('auth.setup.title')} help={<p>{t('auth.setup.lede')}</p>}>
-      <AuthForm onSubmit={submit}>
+      <AuthForm key="setup" failure={failure} onSubmit={submit}>
         <Field
           label={t('auth.setup.token')}
           hint={t.rich('auth.setup.tokenHint', { code: (text) => <code className="ui-auth-mono">{text}</code> })}
@@ -384,7 +390,7 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
       <SsoButtons providers={methods.sso} next={here()} />
       {methods.password && methods.sso.length > 0 && <AuthDivider>{t('auth.sso.or')}</AuthDivider>}
       {methods.password && (
-        <AuthForm onSubmit={submit}>
+        <AuthForm key="login" failure={failure} onSubmit={submit}>
           <EmailField value={email} onChange={setEmail} error={errors.field('email')} />
           <Field label={t('auth.password')} error={errors.field('password')}>
             <PasswordInput
@@ -452,7 +458,7 @@ function TwoFactorStep({
         </Button>
       }
     >
-      <AuthForm onSubmit={submit}>
+      <AuthForm key="two-factor" failure={failure} onSubmit={submit}>
         <Field label={t('auth.twoFactor.code')} hint={t('auth.twoFactor.lost')} error={errors.field('code')}>
           <Input
             name="code"
@@ -517,7 +523,7 @@ function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; 
   const errors = placed(failure, ['email'])
   return (
     <AuthLayout title={t('auth.forgot.title')} help={<p>{t('auth.forgot.intro')}</p>} links={back}>
-      <AuthForm onSubmit={submit}>
+      <AuthForm key="forgot" failure={failure} onSubmit={submit}>
         <EmailField value={email} onChange={setEmail} error={errors.field('email')} />
         {errors.form}
         <Button type="submit" variant="primary" loading={busy}>
@@ -572,7 +578,7 @@ export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: 
   const errors = placed(failure, ['password'])
   return (
     <AuthLayout title={t('auth.reset.title')} help={<p>{t('auth.reset.intro')}</p>}>
-      <AuthForm onSubmit={(e) => (mismatch ? e.preventDefault() : submit(e))}>
+      <AuthForm key="reset" failure={failure} onSubmit={(e) => (mismatch ? e.preventDefault() : submit(e))}>
         <Field label={t('auth.reset.password')} hint={t('auth.reset.hint')} error={errors.field('password')}>
           <PasswordInput
             name="password"
@@ -690,7 +696,7 @@ export function InviteScreen({
           </Button>
         }
       >
-        <AuthForm onSubmit={submit}>
+        <AuthForm key="invite-join" failure={failure} onSubmit={submit}>
           {errors.form}
           <Button type="submit" variant="primary" loading={busy}>
             {t('auth.invite.join')}
@@ -717,7 +723,7 @@ export function InviteScreen({
       <AuthLayout title={t('auth.invite.loginTitle')} help={<p>{t('auth.invite.loginIntro')}</p>}>
         {sso}
         {or}
-        <AuthForm onSubmit={submit}>
+        <AuthForm key="invite-login" failure={failure} onSubmit={submit}>
           <EmailField
             value={form.email}
             onChange={(email) => setForm((f) => ({ ...f, email }))}
@@ -745,7 +751,7 @@ export function InviteScreen({
     <AuthLayout title={t('auth.invite.title')} help={<p>{t('auth.invite.newIntro')}</p>}>
       {sso}
       {or}
-      <AuthForm onSubmit={submit}>
+      <AuthForm key="invite-new" failure={failure} onSubmit={submit}>
         <Field label={t('auth.yourName')} error={errors.field('name')}>
           <Input name="name" value={form.name} onChange={set('name')} required maxLength={100} autoComplete="name" />
         </Field>

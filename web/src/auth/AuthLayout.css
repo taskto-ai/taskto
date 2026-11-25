@@ -34,17 +34,6 @@
     gap: var(--space-2);
   }
 
-  .ui-auth-title {
-    margin: 0;
-    color: var(--color-text);
-    text-wrap: balance;
-  }
-
-  .ui-auth-title-text {
-    font: var(--type-display);
-    letter-spacing: var(--tracking-display);
-  }
-
   .ui-auth-help {
     color: var(--color-text-soft);
   }
@@ -76,6 +65,13 @@
   .ui-auth-form > .ui-button-primary,
   .ui-auth-stack > .ui-button {
     inline-size: 100%;
+  }
+
+  /* The form's error, focused after a failed submit so the person lands on it; it is no control,
+     so it shows no ring: the danger notice is what marks it. */
+  .ui-auth-error {
+    display: grid;
+    outline: none;
   }
 
   .ui-auth-divider {

@@ -1,0 +1,7 @@
+@layer screens {
+  /* The new workspace's form, in its dialog. */
+  .ui-new-workspace-form {
+    display: grid;
+    gap: var(--space-4);
+  }
+}

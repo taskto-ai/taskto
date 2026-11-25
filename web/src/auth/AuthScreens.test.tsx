@@ -592,3 +592,95 @@ test('an invite for someone signed in names the account, joins with one button, 
   await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(joined, owner))
   expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ token: 'fake-invite-token' })
 })
+
+// --- A password is never carried over shown, and the form's guards each hold on their own.
+
+test('a password shown on the invite’s new-account form is not shown on the log-in form that follows', async () => {
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/invites/accept': { status: 409, body: { error: 'exists', code: 'invite_account_exists' } },
+  })
+  render(invite())
+  fireEvent.change(await screen.findByLabelText('Your name'), { target: { value: 'Owner' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Show password' }))
+  expect((screen.getByLabelText('Password') as HTMLInputElement).type).toBe('text')
+  fireEvent.click(screen.getByRole('button', { name: 'Create the account' }))
+  await screen.findByRole('heading', { name: 'Log in to join' })
+  const password = screen.getByLabelText('Password') as HTMLInputElement
+  expect(password.type).toBe('password')
+  expect(password.value).toBe('')
+  expect(password.autocomplete).toBe('current-password')
+  screen.getByRole('button', { name: 'Show password' })
+})
+
+test('back from the two-factor step, the password is empty and hidden', async () => {
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: challenged },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  fireEvent.click(screen.getByRole('button', { name: 'Show password' }))
+  fillLogin()
+  await screen.findByRole('heading', { name: 'Two-factor login' })
+  fireEvent.click(screen.getByRole('button', { name: 'Back to the password' }))
+  const password = (await screen.findByLabelText('Password')) as HTMLInputElement
+  expect(password.value).toBe('')
+  expect(password.type).toBe('password')
+})
+
+test('Show is not a submit button: pressing it in a form sends nothing', async () => {
+  const calls = fakeFetch({ 'GET /api/login/methods': { body: { password: true, sso: [] } } })
+  render(<LoginScreen onDone={() => {}} />)
+  fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'owner@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  const show = screen.getByRole('button', { name: 'Show password' }) as HTMLButtonElement
+  expect(show.type).toBe('button')
+  fireEvent.click(show)
+  expect(calls.some((c) => c.method === 'POST')).toBe(false)
+})
+
+test('a shown password keeps what it is to a password manager', async () => {
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  render(<ResetPasswordScreen token="fake-reset-token" onDone={() => {}} />)
+  const password = (await screen.findByLabelText('New password')) as HTMLInputElement
+  fireEvent.click(screen.getAllByRole('button', { name: 'Show password' })[0])
+  expect(password.type).toBe('text')
+  expect(password.autocomplete).toBe('new-password')
+  expect(password.name).toBe('password')
+})
+
+test('a reset whose passwords differ: its button is off, and the form refuses on its own too', async () => {
+  const calls = fakeFetch({ 'GET /api/login/methods': { body: both } })
+  render(<ResetPasswordScreen token="fake-reset-token" onDone={() => {}} />)
+  fireEvent.change(await screen.findByLabelText('New password'), { target: { value: 'fake-new-password-123' } })
+  fireEvent.change(screen.getByLabelText('New password again'), { target: { value: 'fake-new-password-124' } })
+  // The button can't be pressed…
+  expect((screen.getByRole('button', { name: 'Set the password' }) as HTMLButtonElement).disabled).toBe(true)
+  // …and a submit that comes another way (Enter in a browser that ignores a disabled default) sends nothing.
+  const form = screen.getByLabelText('New password').closest('form')
+  if (!form) throw new Error('no form')
+  fireEvent.submit(form)
+  await Promise.resolve()
+  expect(calls.some((c) => c.method === 'POST')).toBe(false)
+})
+
+test('after a failed submit the focus goes to the field the error is about, or else to the form’s error', async () => {
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': (call) =>
+      (call.body as { password: string }).password === 'short'
+        ? { status: 400, body: { error: 'too short', code: 'password_too_short', params: { min: 12 } } }
+        : { status: 401, body: { error: 'wrong email or password', code: 'wrong_credentials' } },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  fillLogin()
+  const alert = await screen.findByRole('alert')
+  await vi.waitFor(() => expect(alert.closest('[tabindex="-1"]')).toBe(document.activeElement))
+
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'short' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Password')))
+})

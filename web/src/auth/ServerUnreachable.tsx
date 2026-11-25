@@ -14,6 +14,7 @@ export function ServerUnreachable({ error, onRetry }: { error: string; onRetry: 
       <div role="alert">
         <EmptyState
           icon={<Icon name="offline" size={24} />}
+          level={1}
           title={t('app.unreachableTitle')}
           actions={
             <Button variant="primary" onClick={onRetry}>

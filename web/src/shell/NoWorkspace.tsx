@@ -1,30 +1,31 @@
 // A signed-in person who is a member of no workspace: what that means, a new workspace if the
-// server lets them make one, and Log out.
+// server lets them make one (a dialog, which fits a phone), and Log out.
 
+import { useState } from 'react'
 import type { Me } from '../api'
 import { AuthLayout } from '../auth/AuthLayout'
 import { useT } from '../i18n'
 import { navigate, routePath } from '../router'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
-import { NewWorkspace } from './NewWorkspace'
+import { NewWorkspaceDialog } from './NewWorkspace'
+import './NoWorkspace.css'
 
 export function NoWorkspace({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   const t = useT()
+  const [creating, setCreating] = useState(false)
+  const canCreate = Boolean(me.can_create_workspace && onMe)
   return (
     <AuthLayout>
       <EmptyState
+        level={1}
         title={t('shell.noWorkspaceTitle')}
         actions={
           <>
-            {me.can_create_workspace && onMe && (
-              <NewWorkspace
-                user={me.user.id}
-                onCreated={(next, created) => {
-                  onMe(next)
-                  navigate(routePath({ workspace: created.id, section: 'conversations' }))
-                }}
-              />
+            {canCreate && (
+              <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>
+                {t('shell.newWorkspace')}
+              </Button>
             )}
             <Button onClick={onLogout}>{t('shell.logOut')}</Button>
           </>
@@ -32,6 +33,17 @@ export function NoWorkspace({ me, onLogout, onMe }: { me: Me; onLogout: () => vo
       >
         <p>{t('shell.noWorkspaceHelp')}</p>
       </EmptyState>
+      {canCreate && onMe && (
+        <NewWorkspaceDialog
+          open={creating}
+          onClose={() => setCreating(false)}
+          user={me.user.id}
+          onCreated={(next, created) => {
+            onMe(next)
+            navigate(routePath({ workspace: created.id, section: 'conversations' }))
+          }}
+        />
+      )}
     </AuthLayout>
   )
 }

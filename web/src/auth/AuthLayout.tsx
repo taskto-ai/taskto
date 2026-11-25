@@ -4,8 +4,9 @@
 // forgot the password) are quieter, under it. It keeps clear of the status and home bars of an
 // installed app, and fits a 320px screen.
 
-import type { FormEvent, ReactNode } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useRef } from 'react'
 import { BrandLogo } from '../BrandLogo'
+import { Heading } from '../ui/Heading'
 import './AuthLayout.css'
 
 // The product's name, the same in every language.
@@ -35,11 +36,9 @@ export function AuthLayout({
         {(title || help) && (
           <div className="ui-auth-head">
             {title && (
-              // The type is the span's: styles.css sets h1's outside the cascade layers, which
-              // would win over any rule in one.
-              <h1 className="ui-auth-title">
-                <span className="ui-auth-title-text">{title}</span>
-              </h1>
+              <Heading level={1} size="display">
+                {title}
+              </Heading>
             )}
             {help && <div className="ui-auth-help">{help}</div>}
           </div>
@@ -51,10 +50,31 @@ export function AuthLayout({
   )
 }
 
-// A form on an auth screen: its fields, then the one primary button, full width.
-export function AuthForm({ onSubmit, children }: { onSubmit: (e: FormEvent) => void; children: ReactNode }) {
+// A form on an auth screen: its fields, then the one primary button, full width. Each is drawn with
+// a key of its own (the step it is): two forms drawn at the same place, such as an invite's new
+// account and its log-in, would otherwise share their fields, and a password shown in one would
+// start shown in the next.
+export function AuthForm({
+  onSubmit,
+  failure,
+  children,
+}: {
+  onSubmit: (e: FormEvent) => void
+  // The form's last failure: when one comes, the focus goes to the first field it marked
+  // invalid, or else to the form's error, so the person lands where there is something to do.
+  failure?: object | null
+  children: ReactNode
+}) {
+  const ref = useRef<HTMLFormElement>(null)
+  useEffect(() => {
+    const form = ref.current
+    if (!failure || !form) return
+    const target =
+      form.querySelector<HTMLElement>('[aria-invalid="true"]') ?? form.querySelector<HTMLElement>('.ui-auth-error')
+    target?.focus()
+  }, [failure])
   return (
-    <form className="ui-auth-form" onSubmit={onSubmit}>
+    <form ref={ref} className="ui-auth-form" onSubmit={onSubmit}>
       {children}
     </form>
   )

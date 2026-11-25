@@ -111,9 +111,19 @@ describe('Dialog', () => {
   test('one that is not dismissible has no close button, and neither Escape nor the browser closes it', async () => {
     const onClose = vi.fn()
     render(
-      <Dialog open onClose={onClose} title="The account changed" role="alertdialog" dismissible={false}>
-        <Button>Reload this page</Button>
-      </Dialog>,
+      <Dialog
+        open
+        onClose={onClose}
+        title="The account changed"
+        role="alertdialog"
+        dismissible={false}
+        actions={
+          <>
+            <Button variant="danger">Discard</Button>
+            <Button data-autofocus>Reload this page</Button>
+          </>
+        }
+      />,
     )
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
     const cancel = new Event('cancel', { cancelable: true })
@@ -121,12 +131,16 @@ describe('Dialog', () => {
       dialog().dispatchEvent(cancel)
     })
     expect(cancel.defaultPrevented).toBe(true)
+    // A real browser that reopens a dialog focuses the first button in it (here the destructive
+    // one); jsdom moves no focus, so the test puts it there.
+    screen.getByRole('button', { name: 'Discard' }).focus()
     await act(async () => {
       dialog().close()
       await new Promise((r) => setTimeout(r))
     })
     expect(onClose).not.toHaveBeenCalled()
     expect(dialog().open).toBe(true)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reload this page' }))
     expect(screen.getByRole('alertdialog', { name: 'The account changed' })).toBeTruthy()
   })
 })

@@ -8,6 +8,8 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { AccountChanged } from './AccountChanged'
 import { ForeignGuard } from './ForeignGuard'
 import { LogoutGuard } from './LogoutGuard'
+import type { Runtime } from './runtime'
+import { soleWriter } from './writer.testing'
 
 afterEach(cleanup)
 
@@ -52,7 +54,7 @@ test('the account changed: one answer, reloading, focused, and nothing closes it
   expect(screen.getByRole('alertdialog', { name: 'The account changed' })).toBe(dialog)
 })
 
-test('signing out with unsent records: Sync now is focused, Escape is Cancel, discarding is asked again', () => {
+test('signing out with no database open here: Sync is off, Escape is Cancel, discarding is asked again', () => {
   const onSignOut = vi.fn()
   const onCancel = vi.fn()
   render(<LogoutGuard runtime={null} count={3} onSignOut={onSignOut} onCancel={onCancel} />)
@@ -85,4 +87,23 @@ test('a database that can’t be checked offers to keep it, focused, before disc
   expect(document.activeElement).toBe(keep)
   fireEvent.click(keep)
   expect(onKeep).toHaveBeenCalledOnce()
+})
+
+test('signing out with unsent records and the database open: Sync now is the focused answer, and sends them', async () => {
+  const onSignOut = vi.fn()
+  const retry = vi.fn(async () => {})
+  const runtime = {
+    user: 7,
+    writer: soleWriter,
+    engine: { retry },
+    store: { unsynced: async () => [] },
+    stop: () => {},
+  } as unknown as Runtime
+  render(<LogoutGuard runtime={runtime} count={1} onSignOut={onSignOut} onCancel={() => {}} />)
+  const sync = screen.getByRole('button', { name: 'Sync now' }) as HTMLButtonElement
+  expect(sync.disabled).toBe(false)
+  expect(document.activeElement).toBe(sync)
+  fireEvent.click(sync)
+  await vi.waitFor(() => expect(onSignOut).toHaveBeenCalledOnce())
+  expect(retry).toHaveBeenCalledOnce()
 })

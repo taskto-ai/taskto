@@ -791,13 +791,29 @@ test('a workspace made after the person logged out does not bring the shell back
 
 test('someone with no workspace is offered "New workspace" when the server lets them', async () => {
   window.history.replaceState(null, '', '/')
-  fakeFetch({
+  const calls = fakeFetch({
     'GET /api/setup': { body: { needed: false } },
     'GET /api/me': { body: { user: me.user, workspaces: [], can_create_workspace: true } },
+    'POST /api/workspaces': {
+      status: 201,
+      body: {
+        workspace: { id: 9, name: 'Mine', role: 'admin' },
+        user: me.user,
+        workspaces: [{ id: 9, name: 'Mine', role: 'admin' }],
+      },
+    },
+    ...pages,
   })
   render(<App />)
-  await screen.findByText(/member of any workspace/)
-  expect(screen.getByLabelText('New workspace')).toBeTruthy()
+  // The screen is the page's heading, and the form opens in a dialog, which fits a phone.
+  await screen.findByRole('heading', { level: 1, name: /member of any workspace/ })
+  fireEvent.click(screen.getByRole('button', { name: 'New workspace' }))
+  const dialog = screen.getByRole('dialog', { name: 'New workspace' })
+  fireEvent.change(within(dialog).getByLabelText(/Name of the new workspace/), { target: { value: ' Mine ' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create workspace' }))
+  await screen.findByRole('navigation', { name: 'Sections' })
+  expect(calls.find((c) => c.method === 'POST' && c.path === '/api/workspaces')?.body).toEqual({ name: 'Mine' })
+  expect(window.location.pathname).toBe('/w/9/conversations')
 
   cleanup()
   fakeFetch({
@@ -806,5 +822,5 @@ test('someone with no workspace is offered "New workspace" when the server lets 
   })
   render(<App />)
   await screen.findByText(/member of any workspace/)
-  expect(screen.queryByLabelText('New workspace')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'New workspace' })).toBeNull()
 })

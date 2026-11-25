@@ -31,6 +31,22 @@ export interface DialogProps {
   dismissible?: boolean
 }
 
+// What takes the focus when the dialog opens: the element marked data-autofocus, else the first
+// that takes it in the body, then in the actions, else the dialog. Not the close button, which
+// comes first: what the dialog is for.
+function focusFirst(dialog: HTMLDialogElement) {
+  const firstIn = (selector: string) => {
+    const part = dialog.querySelector(selector)
+    return part ? focusables(part)[0] : undefined
+  }
+  const first =
+    dialog.querySelector<HTMLElement>('[data-autofocus]') ??
+    firstIn('.ui-dialog-body') ??
+    firstIn('.ui-dialog-actions') ??
+    dialog
+  first.focus()
+}
+
 export function Dialog(props: DialogProps) {
   if (!props.open) return null
   return <OpenDialog {...props} />
@@ -61,17 +77,7 @@ function OpenDialog({
     const before = document.activeElement
     dialog.showModal()
     modalOpened(dialog)
-    // Not the close button, which comes first: what the dialog is for.
-    const firstIn = (selector: string) => {
-      const part = dialog.querySelector(selector)
-      return part ? focusables(part)[0] : undefined
-    }
-    const first =
-      dialog.querySelector<HTMLElement>('[data-autofocus]') ??
-      firstIn('.ui-dialog-body') ??
-      firstIn('.ui-dialog-actions') ??
-      dialog
-    first.focus()
+    focusFirst(dialog)
     return () => {
       if (dialog.open) dialog.close()
       modalClosed(dialog)
@@ -95,7 +101,11 @@ function OpenDialog({
     const closed = () => {
       if (dialog.open) return
       if (canClose.current) close.current()
-      else if (dialog.isConnected) dialog.showModal()
+      else if (dialog.isConnected) {
+        dialog.showModal()
+        // The browser would focus the first button it finds, which may be the destructive one.
+        focusFirst(dialog)
+      }
     }
     dialog.addEventListener('cancel', cancel)
     dialog.addEventListener('close', closed)
