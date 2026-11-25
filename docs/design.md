@@ -281,14 +281,18 @@ never nest, or both set the same value).
   a component's class can't restyle it: a screen moves onto a component by taking the old class
   off the element (and its rule out of the file), not by adding a component's class beside it. When
   a screen is rebuilt, what stays its own goes into `@layer screens`, which comes after
-  `components` and so still wins over a component on that screen, now by layer order.
+  `components` and so still wins over a component on that screen, now by layer order. All of this
+  is for normal declarations: for `!important` ones the order turns round (an earlier layer wins
+  over a later one, and a layered one over one in no layer), which is one more reason the app
+  writes none.
 - The apps renderer's styles are in no layer, so the rules that override them (`.tt-app .a2ui-…`,
   in `apps/apps.css`) stay in no layer, even when the rest of that file moves into `screens`.
 
 **Changing the order.** Moving a rule to another file, or into a layer, can change which rule wins
 on an element. Before such a change, list the pairs of rules that could meet on one element with a
 property in common and the same specificity whose order changes, and the rules a new layer would
-make lose to one in no layer; then compare `make screens` before and after.
+make lose to one in no layer (or, for an `!important` declaration, win over it); then compare
+`make screens` before and after.
 
 **Tokens only, in the design system.** Under `web/src/ui/`, apart from the files that define the
 tokens (`tokens.css`, `themes/` and `legacy.css`), a font size, a spacing value (`margin`,
@@ -296,7 +300,7 @@ tokens (`tokens.css`, `themes/` and `legacy.css`), a font size, a spacing value 
 fails on `padding: 0.5rem` there and passes `padding: var(--space-2)`. The few literals no scale
 has (`0`, a `1px` hairline, `100%`, `50%` for a circle) are allowed, each with its reason in the
 script's `SCALE_LITERALS`; `env()` (the safe areas) and unitless numbers (a line height, a factor)
-are not lengths. A value off the scales that `base.css` had is an alias in `legacy.css`
+are not lengths, but a fallback, in `var()` or `env()`, is checked like the rest. A value off the scales that `base.css` had is an alias in `legacy.css`
 (`--tt-text-body: 15px`). The screens' older files are not held to this until they are rebuilt.
 
 ## The stylesheets

@@ -8,6 +8,11 @@ import { BRANDS, COLOR_ROLES, DEFAULT_BRAND } from './roles'
 
 const dir = __dirname
 const read = (name: string) => readFileSync(join(dir, name), 'utf8')
+// Every stylesheet under src/, by its path there: the screens' files, the base, the shared rules and
+// the design system's, not only styles.css, which only lists the screens' files.
+const sheetPaths = () =>
+  readdirSync(join(dir, '..'), { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.css'))
+const allSheets = () => sheetPaths().map((f) => readFileSync(join(dir, '..', f), 'utf8'))
 const themeFiles = readdirSync(join(dir, 'themes')).filter((f) => f.endsWith('.css'))
 
 const selectorOf = (brand: string) => (brand === DEFAULT_BRAND ? ':root' : `:root[data-brand="${brand}"]`)
@@ -167,9 +172,10 @@ describe('the tokens', () => {
       levels.every((v, i) => Number.isInteger(v) && (i === 0 || v > levels[i - 1])),
       levels.join(' < '),
     ).toBe(true)
-    const css = readFileSync(join(dir, '../styles.css'), 'utf8')
-    const highest = Math.max(...[...css.matchAll(/z-index:\s*(\d+)/g)].map((m) => Number(m[1])))
-    expect(levels.at(-1)).toBeGreaterThanOrEqual(highest)
+    const found = allSheets().flatMap((css) => [...css.matchAll(/z-index:\s*(\d+)/g)].map((m) => Number(m[1])))
+    // The scan reads the stylesheets that declare them (the skip link's is in shell/shell.css).
+    expect(found.length).toBeGreaterThan(0)
+    expect(levels.at(-1)).toBeGreaterThanOrEqual(Math.max(...found))
   })
 
   test('every scale resolves', () => {
@@ -325,11 +331,9 @@ describe('the old --tt-* names', () => {
   test('every --tt-* name the stylesheets use without a fallback is defined', () => {
     // Set by script at run time (pwa/viewport.ts), not by a stylesheet.
     const runtime = new Set(['--tt-viewport-h', '--tt-viewport-top'])
-    const src = join(dir, '..')
-    const sheets = readdirSync(src, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.css'))
     // The screens' files, the base and the shared rules: not only the list that imports them.
-    expect(sheets).toEqual(expect.arrayContaining(['ui/base.css', 'legacy-shared.css', 'boards/boards.css']))
-    const css = sheets.map((f) => readFileSync(join(src, f), 'utf8')).join('\n')
+    expect(sheetPaths()).toEqual(expect.arrayContaining(['ui/base.css', 'legacy-shared.css', 'boards/boards.css']))
+    const css = allSheets().join('\n')
     const missing = [...css.matchAll(/var\((--tt-[a-z0-9-]+)\s*\)/g)]
       .map((m) => m[1])
       .filter((n) => !runtime.has(n) && !props.has(n))

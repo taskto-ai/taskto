@@ -291,6 +291,8 @@ describe('in the design system, a size, a space, a radius, a shadow and a durati
       ['margin-block-start', 'var(--space-2) 0.5rem', '0.5rem'],
       ['padding', 'max(1rem, env(safe-area-inset-top))', '1rem'],
       ['gap', 'var(--space-gap, 6px)', '6px'],
+      ['padding-block-start', 'env(safe-area-inset-top, 0.5rem)', '0.5rem'],
+      ['padding-inline', 'max(var(--space-2), env(safe-area-inset-left, var(--x, 3px)))', '3px'],
       ['border-start-start-radius', '8px', '8px'],
       ['box-shadow', '0 2px 0 var(--color-accent-edge)', '2px'],
       ['transition', 'transform 0.14s ease', '0.14s'],

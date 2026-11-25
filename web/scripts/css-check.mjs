@@ -402,17 +402,20 @@ const SCALE_PROPERTY =
 
 // The first literal length or time a declaration's value holds where a token belongs, if any.
 // A var() without a fallback is a token; a fallback is looked in. env() (the safe areas) is the
-// device's, and a unitless number (a line height, a weight, a factor in calc()) is no length.
+// device's, but its fallback is looked in too; a unitless number (a line height, a weight, a factor
+// in calc()) is no length.
 export function scaleLiteral(value, property) {
   if (property.startsWith('--') || !SCALE_PROPERTY.test(property)) return undefined
   let bare = value
     .replace(/url\((?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^)]*)\)/gi, 'url()')
     .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
-    .replace(/(?<![\w-])env\([^)]*\)/gi, ' ')
-  // var(--a) goes; var(--a, fallback) leaves its fallback, innermost first.
+  // var(--a) and env(name) go; a fallback, var(--a, x) or env(name, x), stays, innermost first.
   for (let prev = ''; prev !== bare; ) {
     prev = bare
-    bare = bare.replace(/var\(\s*--[\w-]+\s*(?:,([^()]*))?\)/gi, (_, fallback) => ` ${fallback ?? ''} `)
+    bare = bare.replace(
+      /(?<![\w-])(?:var\(\s*--[\w-]+|env\(\s*[\w-]+(?:\s+\d+)*)\s*(?:,([^()]*))?\)/gi,
+      (_, fallback) => ` ${fallback ?? ''} `,
+    )
   }
   for (const m of bare.matchAll(/(?<![\w.#-])-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?([a-z%]+)(?![\w-])/gi)) {
     const literal = m[0].toLowerCase()
