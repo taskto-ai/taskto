@@ -37,6 +37,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -125,6 +126,28 @@ func (s Space) access() Access {
 // callers must not tell the two apart.
 var ErrNotFound = errors.New("space not found")
 
+// ErrDisabled is the answer, in place of ErrNotFound, when the user's account is disabled
+// (docs/api.md#disabling-a-member): it has no access to anything while it is off, and gets it
+// back, as it was, when it is enabled. It wraps ErrNotFound, so every caller that treats the
+// space as not found stays closed to a disabled account; the work that acts for a person later
+// (a scheduled job, an app's outbox) tells it from a real loss of access, and holds its item for
+// when the account is enabled again, instead of failing it for good.
+var ErrDisabled = fmt.Errorf("%w: the account is disabled", ErrNotFound)
+
+// Disabled reports whether userID's account is disabled.
+func (c *Checker) Disabled(ctx context.Context, userID int64) (bool, error) {
+	return disabledIn(ctx, c.db, userID)
+}
+
+func disabledIn(ctx context.Context, q Querier, userID int64) (bool, error) {
+	var off bool
+	err := q.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM users WHERE id = ?`, userID).Scan(&off)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return off, err
+}
+
 // Checker answers access questions from the database.
 type Checker struct {
 	db *sql.DB
@@ -171,11 +194,13 @@ const spaceColumns = `s.id, s.workspace_id, s.kind, s.name, s.archived_at, s.cre
 	CASE WHEN s.kind = 'private' AND s.owner_id = m.user_id THEN 'owner' ELSE coalesce(sm.role, '') END`
 
 // fromSpaceFor joins a space to userID's workspace membership and space membership: a
-// space in a workspace the user doesn't belong to yields no row at all. The user's ID is
-// its only parameter.
+// space in a workspace the user doesn't belong to yields no row at all, nor does any space for a
+// disabled account, which has no access to anything while it is off (what a scheduled job or an
+// agent finds when it asks on a person's behalf). The user's ID is its only parameter.
 const fromSpaceFor = `
 	FROM spaces s
 	JOIN memberships m ON m.workspace_id = s.workspace_id AND m.user_id = ?
+	JOIN users du ON du.id = m.user_id AND du.disabled_at IS NULL
 	LEFT JOIN space_members sm ON sm.space_id = s.id AND sm.user_id = m.user_id`
 
 type scanner interface{ Scan(dest ...any) error }
@@ -209,13 +234,27 @@ func lookupIn(ctx context.Context, q Querier, userID, spaceID int64) (Space, err
 	s, err := scanSpace(q.QueryRowContext(ctx,
 		`SELECT `+spaceColumns+fromSpaceFor+` WHERE s.id = ?`, userID, spaceID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return Space{}, ErrNotFound
+		// A disabled account sees no space at all; say so, so that what acts for it later can wait.
+		off, derr := disabledIn(ctx, q, userID)
+		if derr != nil {
+			return Space{}, derr // not "not found": the caller may try again
+		}
+		if off {
+			return Space{}, ErrDisabled
+		}
+		// The account may have been enabled between the two reads: look at the space once more,
+		// so a person who has access again is never told they have none.
+		s, err = scanSpace(q.QueryRowContext(ctx,
+			`SELECT `+spaceColumns+fromSpaceFor+` WHERE s.id = ?`, userID, spaceID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return Space{}, ErrNotFound
+		}
 	}
 	return s, err
 }
 
 // Check returns spaceID as userID sees it, if they may at least read it, and ErrNotFound
-// otherwise.
+// otherwise (ErrDisabled, which is one, for a disabled account).
 func (c *Checker) Check(ctx context.Context, userID, spaceID int64) (Space, error) {
 	return checkIn(ctx, c.reads, userID, spaceID)
 }

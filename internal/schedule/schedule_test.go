@@ -1053,3 +1053,83 @@ func TestNextOccurrence(t *testing.T) {
 		}
 	}
 }
+
+// A job whose owner's account is disabled waits: no handler is called, nothing is recorded as a
+// failure, no try is used up and a recurring job isn't ended, however long the account stays off.
+// Enabling the account lets it run.
+func TestAJobOfADisabledOwnerWaitsForTheAccount(t *testing.T) {
+	w := newWorld(t)
+	h := w.register(remind)
+	inSpace := w.job("in-space", time.Minute)
+	noSpace := w.job("no-space", time.Minute)
+	noSpace.SpaceID = 0
+	recurring := w.job("recurring", time.Minute)
+	recurring.Every = time.Hour
+	bobs := w.job("bobs", time.Minute)
+	bobs.UserID, bobs.SpaceID = w.bob, w.team
+	for _, j := range []Job{inSpace, noSpace, recurring, bobs} {
+		w.schedule(j)
+	}
+	exec(t, w.db, `UPDATE users SET disabled_at = '2030-01-02T08:00:00.000Z' WHERE id = ?`, w.alice)
+
+	// Far more rounds than a job has tries, over more time than any failure's backoff.
+	for range 3 * defaultMaxAttempts {
+		w.clock.advance(holdDelay + time.Second)
+		w.run()
+	}
+	for _, key := range []string{"in-space", "no-space", "recurring"} {
+		j := w.find(w.alice, key)
+		if j.State != StatePending || j.Attempts != 0 || j.LastError != "" {
+			t.Fatalf("%s while disabled = %+v, want pending, no try used, no error", key, j)
+		}
+	}
+	if j := w.find(w.alice, "recurring"); j.Every != time.Hour {
+		t.Fatalf("recurring = %+v", j)
+	}
+	for _, c := range h.calls {
+		if c.UserID == w.alice {
+			t.Fatalf("a handler ran for a disabled owner: %+v", c)
+		}
+	}
+	if j := w.find(w.bob, "bobs"); j.State != StateDone {
+		t.Fatalf("another person's job = %+v, want done", j)
+	}
+
+	exec(t, w.db, `UPDATE users SET disabled_at = NULL WHERE id = ?`, w.alice)
+	w.clock.advance(holdDelay + time.Second)
+	w.run()
+	for _, key := range []string{"in-space", "no-space"} {
+		if j := w.find(w.alice, key); j.State != StateDone {
+			t.Fatalf("%s after enabling = %+v, want done", key, j)
+		}
+	}
+	if j := w.find(w.alice, "recurring"); j.State != StatePending || !j.RunAt.After(w.clock.now()) {
+		t.Fatalf("recurring after enabling = %+v, want it to have run and moved on", j)
+	}
+	if got := h.count(); got != 4 {
+		t.Fatalf("calls = %d, want 4 (bob's, and alice's three)", got)
+	}
+}
+
+// A handler's own check, refused because the account was disabled after the worker's, holds the job
+// the same way.
+func TestAHandlerRefusedForADisabledAccountHoldsTheJob(t *testing.T) {
+	w := newWorld(t)
+	h := w.register(remind)
+	h.answer = func(n int, _ Job) error {
+		if n == 1 {
+			return fmt.Errorf("checking the space: %w", access.ErrDisabled)
+		}
+		return nil
+	}
+	w.schedule(w.job("a", 0))
+	w.run()
+	if j := w.find(w.alice, "a"); j.State != StatePending || j.Attempts != 0 || j.LastError != "" {
+		t.Fatalf("job = %+v, want held", j)
+	}
+	w.clock.advance(holdDelay + time.Second)
+	w.run()
+	if j := w.find(w.alice, "a"); j.State != StateDone || h.count() != 2 {
+		t.Fatalf("job = %+v, calls %d", j, h.count())
+	}
+}

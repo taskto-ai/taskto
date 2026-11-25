@@ -229,6 +229,46 @@ func TestEventsEndWhenAccessEnds(t *testing.T) {
 	waitFor(t, "the watch to close", w.isClosed)
 }
 
+// A member disabled while a stream is open loses it at the next heartbeat, as one removed does.
+func TestEventsEndWhenOwnerDisabled(t *testing.T) {
+	e, srv, owner, ws, _ := newStreamEnv(t)
+	member := e.invite(owner, ws, "member@example.com")
+	conv := member.create(ws, nil)
+	e.svc.heartbeat = 20 * time.Millisecond
+	s := member.openEvents(srv, ws, conv.ID)
+	w := e.rt.watch(t, 0)
+	if got := s.next(); got.comment != "heartbeat" {
+		t.Fatalf("event = %+v, want a heartbeat", got)
+	}
+	owner.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/disable", ws, member.id), nil)
+	for {
+		got := s.next()
+		if got.comment == "heartbeat" {
+			continue
+		}
+		if got.data != interruptedLine {
+			t.Fatalf("event = %+v, want the end", got)
+		}
+		break
+	}
+	waitFor(t, "the watch to close", w.isClosed)
+}
+
+// A stream ends with the login that opened it, at once, even if the account is enabled again
+// before the next heartbeat looks at it.
+func TestEventsEndWithTheirLogin(t *testing.T) {
+	e, srv, owner, ws, _ := newStreamEnv(t)
+	member := e.invite(owner, ws, "member@example.com")
+	conv := member.create(ws, nil)
+	e.svc.heartbeat = time.Hour // the heartbeat's check can't be what ends it
+	s := member.openEvents(srv, ws, conv.ID)
+	w := e.rt.watch(t, 0)
+	owner.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/disable", ws, member.id), nil)
+	owner.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/enable", ws, member.id), nil)
+	s.expectEnd(interruptedLine)
+	waitFor(t, "the watch to close", w.isClosed)
+}
+
 // An open stream ends with the login that opened it: at once when the login is signed out
 // (the heartbeat is too slow to be the cause), and at the next heartbeat when it ended some
 // other way.

@@ -33,6 +33,8 @@ export const AUDIT_ACTIONS = [
   'invite_accepted',
   'member_role_changed',
   'member_removed',
+  'member_disabled',
+  'member_enabled',
   'access_token_created',
   'access_token_revoked',
   'access_token_used',

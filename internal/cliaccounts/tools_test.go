@@ -270,6 +270,20 @@ func TestToolsTokenRefusals(t *testing.T) {
 	if _, status := caller(replayed); status != http.StatusOK {
 		t.Fatalf("back: %d", status)
 	}
+	// Disabled: the turn that is running loses TaskTo's tools at its next call, and gets them back
+	// when its owner is enabled.
+	if _, err := e.db.Exec(`UPDATE users SET disabled_at = '2026-01-02T03:04:05.000Z' WHERE id = ?`, e.owner.id); err != nil {
+		t.Fatal(err)
+	}
+	if _, status := caller(replayed); status != http.StatusForbidden {
+		t.Errorf("its owner disabled: %d", status)
+	}
+	if _, err := e.db.Exec(`UPDATE users SET disabled_at = NULL WHERE id = ?`, e.owner.id); err != nil {
+		t.Fatal(err)
+	}
+	if _, status := caller(replayed); status != http.StatusOK {
+		t.Fatalf("its owner enabled again: %d", status)
+	}
 	if _, err := e.db.Exec(`DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?`, e.ws, e.owner.id); err != nil {
 		t.Fatal(err)
 	}

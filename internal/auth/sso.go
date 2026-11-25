@@ -579,6 +579,8 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 			code = apierr.CodeSSONoAccount
 		case errors.Is(err, errSSOLinkedElsewhere):
 			code = apierr.CodeSSOAccountLinkedElsewhere
+		case errors.Is(err, errAccountDisabled):
+			code = apierr.CodeAccountDisabled
 		}
 		if code == apierr.CodeSSOFailed {
 			slog.ErrorContext(r.Context(), "sso: the login failed", "provider", c.cfg.ID, "err", err)

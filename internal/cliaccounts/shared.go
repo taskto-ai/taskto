@@ -430,6 +430,9 @@ func (s *Service) handleSharedCreate(w http.ResponseWriter, r *http.Request) {
 	ws := workspaceOf(r)
 	var id int64
 	err := s.inTx(r.Context(), func(tx *sql.Tx) error {
+		if err := auth.EnsureActorEnabled(r.Context(), tx); err != nil {
+			return err
+		}
 		var n int
 		if err := tx.QueryRowContext(r.Context(), `SELECT count(*) FROM cli_shared_accounts WHERE workspace_id = ?`, ws).Scan(&n); err != nil {
 			return err
@@ -453,6 +456,10 @@ func (s *Service) handleSharedCreate(w http.ResponseWriter, r *http.Request) {
 		return audit.Record(r.Context(), tx, audit.Event{Workspace: ws, Action: audit.SharedCLIAccountCreated,
 			TargetType: audit.TargetSharedAccount, Target: id, Details: sharedDetails(*d.CLI, *d.BaseURL, audit.Details{"api_key_set": true})})
 	})
+	if errors.Is(err, auth.ErrAccountDisabled) {
+		auth.WriteAccountDisabled(w)
+		return
+	}
 	if errors.Is(err, errTooMany) {
 		writeError(w, http.StatusConflict, apierr.CodeTooManySharedAccounts, fmt.Sprintf("a workspace has at most %d shared CLI accounts", maxShared),
 			apierr.Params{"max": maxShared})
@@ -535,6 +542,9 @@ func (s *Service) handleSharedUpdate(w http.ResponseWriter, r *http.Request, a s
 	// another workspace's account since.
 	var changed sharedRow
 	err := s.inTx(r.Context(), func(tx *sql.Tx) error {
+		if err := auth.EnsureActorEnabled(r.Context(), tx); err != nil {
+			return err
+		}
 		cur, err := scanShared(tx.QueryRowContext(r.Context(), `SELECT `+sharedColumns+` FROM cli_shared_accounts
 			WHERE id = ? AND workspace_id = ?`, a.ID, a.workspace))
 		if errors.Is(err, sql.ErrNoRows) {
@@ -582,6 +592,9 @@ func (s *Service) handleSharedUpdate(w http.ResponseWriter, r *http.Request, a s
 			Details: sharedDetails(cur.CLI, baseURL, audit.Details{"fields": fields, "api_key_changed": d.APIKey != nil})})
 	})
 	switch {
+	case errors.Is(err, auth.ErrAccountDisabled):
+		auth.WriteAccountDisabled(w)
+		return
 	case errors.Is(err, errSharedGone):
 		writeError(w, http.StatusNotFound, apierr.CodeSharedAccountNotFound, "no such shared account")
 		return
@@ -626,6 +639,9 @@ func (s *Service) handleSharedDelete(w http.ResponseWriter, r *http.Request, a s
 	// another workspace's now) records nothing, so two deletes make one removal.
 	var users []int64
 	err := s.inTx(r.Context(), func(tx *sql.Tx) error {
+		if err := auth.EnsureActorEnabled(r.Context(), tx); err != nil {
+			return err
+		}
 		var cli, created string
 		err := tx.QueryRowContext(r.Context(), `SELECT cli, created_at FROM cli_shared_accounts WHERE id = ? AND workspace_id = ?`,
 			a.ID, a.workspace).Scan(&cli, &created)
@@ -665,6 +681,10 @@ func (s *Service) handleSharedDelete(w http.ResponseWriter, r *http.Request, a s
 			TargetType: audit.TargetSharedAccount, Target: a.ID, TargetCreated: created,
 			Details: audit.Details{"cli": cli, "members_signed_out": len(users)}})
 	})
+	if errors.Is(err, auth.ErrAccountDisabled) {
+		auth.WriteAccountDisabled(w)
+		return
+	}
 	if errors.Is(err, errSharedGone) {
 		writeError(w, http.StatusNotFound, apierr.CodeSharedAccountNotFound, "no such shared account")
 		return
@@ -818,6 +838,9 @@ func (s *Service) handleSetModes(w http.ResponseWriter, r *http.Request) {
 	}
 	ws := workspaceOf(r)
 	err := s.inTx(r.Context(), func(tx *sql.Tx) error {
+		if err := auth.EnsureActorEnabled(r.Context(), tx); err != nil {
+			return err
+		}
 		// What is recorded is what changed: a request that sets the modes they already are
 		// changes, and records, nothing.
 		defaultChanged, membersChanged := false, 0
@@ -880,6 +903,9 @@ func (s *Service) handleSetModes(w http.ResponseWriter, r *http.Request) {
 			TargetType: audit.TargetWorkspace, Target: ws, Details: details})
 	})
 	switch {
+	case errors.Is(err, auth.ErrAccountDisabled):
+		auth.WriteAccountDisabled(w)
+		return
 	case errors.Is(err, errBadMode):
 		writeError(w, http.StatusBadRequest, apierr.CodeBadRequest, "members: user IDs, each with own_else_shared, own, shared or null")
 		return

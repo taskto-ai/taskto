@@ -35,17 +35,20 @@ type Principal struct {
 }
 
 // ErrInactive is PrincipalOf's answer for a conversation that doesn't exist, is archived, or
-// whose owner isn't a member of its workspace any more.
-var ErrInactive = errors.New("this conversation can't use tools: it is archived, or its owner left the workspace")
+// whose owner isn't a member of its workspace any more or has been disabled.
+var ErrInactive = errors.New("this conversation can't use tools: it is archived, or its owner left the workspace or was disabled")
 
 // PrincipalOf returns whom conversation id's agent works for, now: ErrInactive unless it
-// exists, isn't archived, and its owner is still a member of its workspace. Ask again for
+// exists, isn't archived, and its owner is still a member of its workspace and not disabled. It is
+// the check behind the agent's tools, the CLI turns' starts, their tools and their proxy, so a
+// disabled owner's agents and CLIs stop at their next call. Ask again for
 // every action, so a change takes effect at once.
 func PrincipalOf(ctx context.Context, q Querier, id int64) (Principal, error) {
 	p := Principal{Conversation: id}
 	err := q.QueryRowContext(ctx, `SELECT c.agent_id, c.workspace_id, c.owner_id FROM conversations c
 		WHERE c.id = ? AND c.archived_at IS NULL
-		AND EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = c.workspace_id AND m.user_id = c.owner_id)`,
+		AND EXISTS (SELECT 1 FROM memberships m JOIN users u ON u.id = m.user_id
+		            WHERE m.workspace_id = c.workspace_id AND m.user_id = c.owner_id AND u.disabled_at IS NULL)`,
 		id).Scan(&p.AgentConversation, &p.Workspace, &p.User)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Principal{}, ErrInactive

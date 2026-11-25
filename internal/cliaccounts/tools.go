@@ -116,7 +116,7 @@ var (
 	errToolsToken = &agenttools.Refusal{Status: http.StatusUnauthorized,
 		Message: "this token isn't valid: TaskTo's tools work only during the turn they were given to"}
 	errToolsConversation = &agenttools.Refusal{Status: http.StatusForbidden,
-		Message: "this conversation can't use TaskTo's tools: it is archived, or its owner left the workspace"}
+		Message: "this conversation can't use TaskTo's tools: it is archived, or its owner left the workspace or was disabled"}
 )
 
 // ToolsCaller returns whom a request to the endpoint for turns acts for: the owner of the
