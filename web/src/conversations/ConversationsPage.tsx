@@ -9,7 +9,8 @@ import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Link, navigate, routePath } from '../router'
 import { Icon } from '../shell/Icon'
-import { ConversationView, conversationTitle } from './ConversationView'
+import { ConversationView } from './ConversationView'
+import { conversationTitle } from './title'
 import type { EventSourceFactory } from './useConversationStream'
 
 export function ConversationsPage({
