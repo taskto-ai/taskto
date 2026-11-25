@@ -116,6 +116,18 @@ describe('Tooltip', () => {
     expect(isOpen()).toBe(false)
   })
 
+  test('a hover on its way still opens it when the focus leaves first', () => {
+    const b = setup()
+    act(() => b.focus())
+    fireEvent.keyDown(b, { key: 'Escape' })
+    expect(isOpen()).toBe(false)
+    // The control still has the focus; the pointer comes, and the focus leaves before the delay.
+    fireEvent.pointerEnter(b, { pointerType: 'mouse' })
+    act(() => b.blur())
+    act(() => vi.advanceTimersByTime(OPEN_DELAY_MS))
+    expect(isOpen()).toBe(true)
+  })
+
   test('follows the control when the page scrolls', () => {
     const b = setup()
     let top = 200

@@ -77,11 +77,11 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
     if (delay === 0) setOpen(false)
     else timer.current = setTimeout(() => setOpen(false), delay)
   }, [])
-  // Closes it unless something still holds it open.
+  // Closes it unless something still holds it open. A hold leaves the timer alone: it can only be
+  // an opening on its way (a hold never leaves a closing pending), which must still happen.
   const release = useCallback(
     (delay: number) => {
-      if (hovered.current || focused.current) clearTimeout(timer.current)
-      else hide(delay)
+      if (!hovered.current && !focused.current) hide(delay)
     },
     [hide],
   )
