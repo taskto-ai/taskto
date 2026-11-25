@@ -32,12 +32,15 @@ type env struct {
 	h  http.Handler
 	// dataDir is where the spaces' files are.
 	dataDir string
+	// dbHooks run what a test sets at chosen moments of the database's use.
+	dbHooks *db.Hooks
 }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := context.Background()
-	sqlDB, err := db.Open(ctx, filepath.Join(t.TempDir(), db.FileName))
+	dbHooks := &db.Hooks{}
+	sqlDB, err := db.OpenHooked(ctx, filepath.Join(t.TempDir(), db.FileName), dbHooks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +58,7 @@ func newEnv(t *testing.T) *env {
 	s.Routes(mux)
 	s.HomeRoutes(mux, accounts)
 	s.TemplateRoutes(mux, accounts)
-	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux, RawBodyRoutes...), dataDir: dataDir}
+	return &env{t: t, db: sqlDB, s: s, h: auth.CSRF(mux, RawBodyRoutes...), dataDir: dataDir, dbHooks: dbHooks}
 }
 
 // user is a logged-in browser.

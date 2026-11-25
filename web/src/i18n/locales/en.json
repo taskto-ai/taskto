@@ -1190,7 +1190,14 @@
       "scope": "What goes in is decided by where it is and who owns it as of now. Everything in your private space comes with you, including a document or an app moved there from a shared space, and the records in that app, teammates' too. Your own conversations come with you whole, and can hold text of shared documents the agent read for you.",
       "never": "Content that stays in a shared space is never in it, even where you can read it, and neither is anyone else's data. A manifest in the zip lists what it holds and anything it had to leave out.",
       "download": "Download my data",
-      "limit": "You can export a few times an hour, one at a time. If the download fails, wait a little and try again."
+      "limit": "You can export a few times an hour, one at a time. If the download fails, wait a little and try again.",
+      "workspace": {
+        "title": "Export the workspace",
+        "intro": "Download a zip of this workspace's shared spaces: their documents, boards with cards and comments, and apps with their records, and the list of the workspace's members with their names, emails and roles.",
+        "scope": "Only the shared spaces you are a member of are in it, archived ones included and marked, because it never shows you more than the app does. To export another shared space, join it first: its members see that you did. Nobody's private space, no conversation and nothing from other workspaces is ever in it. A manifest in the zip lists what it holds and anything it had to leave out.",
+        "download": "Download the workspace",
+        "limit": "It counts toward the same few exports an hour as your own data, one at a time. Each one is recorded in the audit log."
+      }
     },
     "spaces": {
       "title": "Shared spaces",
@@ -1726,6 +1733,7 @@
         "search_consent_changed": "Search consent changed",
         "dictation_settings_changed": "Dictation settings changed",
         "data_export_started": "Data export started",
+        "workspace_export_started": "Workspace export started",
         "two_factor_enabled": "Two-factor login turned on",
         "two_factor_disabled": "Two-factor login turned off",
         "two_factor_recovery_codes_replaced": "Recovery codes replaced",
@@ -1772,6 +1780,7 @@
         "reason": "Reason",
         "role": "Role",
         "scope": "Scope",
+        "spaces": "Shared spaces",
         "to": "To",
         "user_id": "Member number"
       },
