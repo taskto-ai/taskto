@@ -233,13 +233,21 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 			names[r.SpaceID] = sp.Name
 		}
 	}
+	dropped := false
 	for _, r := range found {
 		acc := allowed[appKey{r.SpaceID, r.AppID}]
 		if acc == nil || !apps.ReadsRecord(*acc, userID, r.creator) {
+			dropped = true
 			continue
 		}
 		r.SpaceName = names[r.SpaceID]
 		res.Results = append(res.Results, r)
+	}
+	// Access changed while the page was found: an offset counts the records the caller read when
+	// the search began, so one continued from here could skip a record. Say so instead, and let
+	// them search again.
+	if dropped {
+		res.Incomplete = true
 	}
 	// No next page past the deepest offset asked for: it would be refused. And none after an
 	// incomplete one: an offset counts the records indexed now, and once the queued ones are
@@ -289,10 +297,11 @@ func (x *Index) findRecords(ctx context.Context, scope recordScope, match string
 	args := append(scope.args(), match)
 	args = append(args, scope.args()...)
 	args = append(args, q.Limit+1, q.Offset)
-	rows, err := x.db.QueryContext(ctx, `SELECT st.behind, p.id, p.space_id, p.app_id, p.app_name, p.created_by, p.snippet
+	rows, err := x.db.QueryContext(ctx, `SELECT st.behind, p.id, p.space_id, p.app_id, p.app_name, p.created_by, p.snippet, p.updated_at
 		FROM (SELECT EXISTS (SELECT 1 `+queuedRecordsSQL+`) AS behind) st
 		LEFT JOIN (
 			SELECT r.id AS id, a.space_id AS space_id, a.id AS app_id, a.name AS app_name, r.created_by AS created_by,
+				r.updated_at AS updated_at,
 				`+recordSnippetSQL+` AS snippet
 			FROM search_record_fts
 			JOIN app_rows r ON r.id = search_record_fts.rowid
@@ -300,7 +309,8 @@ func (x *Index) findRecords(ctx context.Context, scope recordScope, match string
 			WHERE search_record_fts MATCH ? AND r.deleted_at IS NULL AND a.archived_at IS NULL AND a.live_release IS NOT NULL
 				AND `+recordScopeSQL+`
 				AND NOT EXISTS (SELECT 1 FROM search_record_queue WHERE row_id = r.id)
-			ORDER BY r.updated_at DESC, r.id DESC LIMIT ? OFFSET ?) p ON true`,
+			ORDER BY r.updated_at DESC, r.id DESC LIMIT ? OFFSET ?) p ON true
+		ORDER BY p.updated_at DESC, p.id DESC`,
 		// The flag's scope, then the page's match and scope, limit and offset.
 		args...)
 	if err != nil {
@@ -311,8 +321,8 @@ func (x *Index) findRecords(ctx context.Context, scope recordScope, match string
 	var behind bool
 	for rows.Next() {
 		var id, space, app, creator sql.NullInt64
-		var appName, snippet sql.NullString
-		if err := rows.Scan(&behind, &id, &space, &app, &appName, &creator, &snippet); err != nil {
+		var appName, snippet, updatedAt sql.NullString
+		if err := rows.Scan(&behind, &id, &space, &app, &appName, &creator, &snippet, &updatedAt); err != nil {
 			return nil, false, err
 		}
 		if !id.Valid {
@@ -332,7 +342,7 @@ const queuedRecordIDsSQL = `SELECT sq.row_id
 	WHERE sq.row_id > ? AND (? OR r.app_id IN (SELECT value FROM json_each(?)))
 	ORDER BY sq.row_id LIMIT ?`
 
-// queueRecords puts in the queue the live records of apps with a live release that were never
+// queueRecords puts in the queue the live records of unarchived apps with a live release that were never
 // indexed, or in an older textFormat: what the migration, or a change of the format, leaves.
 func (x *Index) queueRecords(ctx context.Context) error {
 	return x.write(ctx, func(tx *sql.Tx) error {
@@ -340,7 +350,7 @@ func (x *Index) queueRecords(ctx context.Context) error {
 			SELECT r.id FROM app_rows r
 			JOIN apps a ON a.id = r.app_id
 			LEFT JOIN search_records s ON s.row_id = r.id
-			WHERE (s.row_id IS NULL AND r.deleted_at IS NULL AND a.live_release IS NOT NULL) OR s.text_format != ?`, textFormat)
+			WHERE (s.row_id IS NULL AND r.deleted_at IS NULL AND a.archived_at IS NULL AND a.live_release IS NOT NULL) OR s.text_format != ?`, textFormat)
 		return err
 	})
 }

@@ -176,3 +176,49 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+// A page of hits whose snippets JSON writes out at six bytes a character is cut to what fits in a
+// reply, and says where the next page starts, rather than being refused whole.
+func TestSearchRepliesFitMaxResult(t *testing.T) {
+	w := newWorld(t)
+	app := w.publishedApp(w.shared, "Team notes")
+	// A word, then 3000 characters that are escaped as six bytes each: snippets of that
+	// size, twenty of them, are over a reply.
+	body := "zanzibar " + strings.Repeat("<", 3000)
+	for range 20 {
+		w.record(app, w.alice, body)
+	}
+	out := w.ok(w.aliceConv, "search_records", map[string]any{"query": "zanzibar", "limit": 20})
+	got := out["results"].([]any)
+	if len(got) == 0 || len(got) >= 20 {
+		t.Fatalf("%d hits: want some, but not all twenty", len(got))
+	}
+	next, ok := out["next_offset"].(float64)
+	if !ok || int(next) != len(got) {
+		t.Fatalf("next_offset = %v after %d hits", out["next_offset"], len(got))
+	}
+	// The next page starts with the first hit left out.
+	rest := w.ok(w.aliceConv, "search_records", map[string]any{"query": "zanzibar", "limit": 20, "offset": int(next)})["results"].([]any)
+	if len(rest) == 0 {
+		t.Fatalf("the next page has %d hits", len(rest))
+	}
+
+	// The same for conversations.
+	src := &fakeTranscripts{text: map[int64]string{}}
+	w.tools.o.Search.SetConversations(src)
+	// The conversations the world made have text too, or the agent runtime would be unable to
+	// answer for them, which is an incomplete search.
+	for _, conv := range []int64{w.aliceConv, w.bobConv, w.aliceConv2, w.aliceConv} {
+		src.text[w.insert(`SELECT agent_id FROM conversations WHERE id = ?`, conv)] = "nothing"
+	}
+	for range 20 {
+		c := w.conversation(w.one, w.alice)
+		w.exec(`UPDATE conversations SET title = ? WHERE id = ?`, "Zanzibar", c)
+		src.text[w.insert(`SELECT agent_id FROM conversations WHERE id = ?`, c)] = body
+	}
+	conv := w.ok(w.aliceConv, "search_conversations", map[string]any{"query": "zanzibar", "limit": 20})
+	hits := conv["results"].([]any)
+	if len(hits) == 0 || len(hits) >= 20 || conv["next_offset"] == nil {
+		t.Fatalf("conversations: %d hits, next_offset %v", len(hits), conv["next_offset"])
+	}
+}

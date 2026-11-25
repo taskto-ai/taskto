@@ -43,24 +43,25 @@ func ReadsRecord(acc access.AppAccess, userID int64, creator sql.NullInt64) bool
 // name, and never anything the collection doesn't declare (stored under another release, or of
 // another type than its field's), as no read of the record shows it either.
 //
-// indexed is false for a record that is gone, is deleted, or belongs to an app with no live
-// release (only a draft: no record is shown), whose text the index must not hold.
+// indexed is false for a record that is gone, is deleted, or belongs to an app that is archived
+// (taken offline) or has no live release (only a draft: no record is shown), whose text the
+// index must not hold.
 func SearchText(ctx context.Context, q queryer, id int64) (text string, indexed bool, err error) {
 	var data string
-	var deleted, definition, requires sql.NullString
+	var deleted, archived, definition, requires sql.NullString
 	var number, version sql.NullInt64
-	err = q.QueryRowContext(ctx, `SELECT r.data, r.deleted_at, rel.number, rel.definition_version, rel.requires, rel.definition
+	err = q.QueryRowContext(ctx, `SELECT r.data, r.deleted_at, a.archived_at, rel.number, rel.definition_version, rel.requires, rel.definition
 		FROM app_rows r
 		JOIN apps a ON a.id = r.app_id
 		LEFT JOIN app_releases rel ON rel.app_id = a.id AND rel.number = a.live_release
-		WHERE r.id = ?`, id).Scan(&data, &deleted, &number, &version, &requires, &definition)
+		WHERE r.id = ?`, id).Scan(&data, &deleted, &archived, &number, &version, &requires, &definition)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
 		return "", false, err
 	}
-	if deleted.Valid || !number.Valid {
+	if deleted.Valid || archived.Valid || !number.Valid {
 		return "", false, nil
 	}
 	rel, err := newRelease(number.Int64, int(version.Int64), requires.String, "", sql.NullInt64{}, "")

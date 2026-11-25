@@ -47,6 +47,15 @@ BEGIN
     INSERT OR IGNORE INTO search_record_queue (row_id) SELECT id FROM app_rows WHERE app_id = NEW.id;
 END;
 
+-- An archived app's records are not indexed (it is taken offline), and are again when it is
+-- restored: so every record of the app is indexed again when it is archived or restored.
+CREATE TRIGGER search_apps_archived
+AFTER UPDATE OF archived_at ON apps
+WHEN (NEW.archived_at IS NULL) IS NOT (OLD.archived_at IS NULL)
+BEGIN
+    INSERT OR IGNORE INTO search_record_queue (row_id) SELECT id FROM app_rows WHERE app_id = NEW.id;
+END;
+
 -- Full text: the values of each search_records row's fields (rowid = row_id), split into words
 -- as the documents' text is.
 CREATE VIRTUAL TABLE search_record_fts USING fts5(body,
@@ -68,16 +77,25 @@ CREATE TABLE search_conversations (
     text_format     INTEGER NOT NULL
 ) STRICT;
 
--- The conversations whose indexed text may differ from the conversation's now: one is here
--- from the moment it is created, renamed, archived or marked updated (which is what a message
--- does, and the end of the agent's reply to it), until the index has been written from the
--- agent runtime's transcript again. A search never quotes a conversation in the queue.
--- Reading the transcript takes a call to the agent runtime, which no transaction waits for:
--- the revision counts the marks, so the index takes a conversation off the queue only if no
--- mark came while it was reading.
-CREATE TABLE search_conversation_queue (
+-- How many times each conversation has been marked (created, renamed, archived, or marked
+-- updated, which is what a message and the end of its reply do). It only goes up and lives as
+-- long as the conversation, so no two marks of one conversation ever have the same number, even
+-- when the queue's entry for it was removed in between.
+CREATE TABLE search_conversation_revisions (
     conversation_id INTEGER PRIMARY KEY REFERENCES conversations (id) ON DELETE CASCADE,
-    revision        INTEGER NOT NULL DEFAULT 1
+    revision        INTEGER NOT NULL
+) STRICT;
+
+INSERT INTO search_conversation_revisions (conversation_id, revision) SELECT id, 1 FROM conversations;
+
+-- The conversations whose indexed text may differ from the conversation's now: one is here
+-- from the moment it is marked until the index has been written from the agent runtime's
+-- transcript again. A search never quotes a conversation in the queue. Reading the transcript
+-- takes a call to the agent runtime, which no transaction waits for: the index reads the
+-- conversation's revision first, and writes what it read, and takes the conversation off the
+-- queue, only if the revision is still the same.
+CREATE TABLE search_conversation_queue (
+    conversation_id INTEGER PRIMARY KEY REFERENCES conversations (id) ON DELETE CASCADE
 ) STRICT;
 
 INSERT INTO search_conversation_queue (conversation_id) SELECT id FROM conversations;
@@ -85,6 +103,7 @@ INSERT INTO search_conversation_queue (conversation_id) SELECT id FROM conversat
 CREATE TRIGGER search_conversations_added
 AFTER INSERT ON conversations
 BEGIN
+    INSERT INTO search_conversation_revisions (conversation_id, revision) VALUES (NEW.id, 1);
     INSERT OR IGNORE INTO search_conversation_queue (conversation_id) VALUES (NEW.id);
 END;
 
@@ -93,8 +112,8 @@ END;
 CREATE TRIGGER search_conversations_updated
 AFTER UPDATE OF updated_at, title ON conversations
 BEGIN
-    INSERT INTO search_conversation_queue (conversation_id) VALUES (NEW.id)
-    ON CONFLICT (conversation_id) DO UPDATE SET revision = revision + 1;
+    UPDATE search_conversation_revisions SET revision = revision + 1 WHERE conversation_id = NEW.id;
+    INSERT OR IGNORE INTO search_conversation_queue (conversation_id) VALUES (NEW.id);
 END;
 
 -- Full text: each search_conversations row's title and what was said in it (rowid =

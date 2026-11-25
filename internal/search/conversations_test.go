@@ -379,3 +379,78 @@ func TestConversationsAreIndexedInTheBackground(t *testing.T) {
 		t.Fatalf("queued old, indexed conversations = %d, %v", queued, err)
 	}
 }
+
+// An older read never replaces a newer one's text: two syncs read the same conversation, a mark
+// comes between, the newer sync writes the text after it and takes the conversation off the
+// queue, and only then does the older one finish: its text is dropped, the index keeps the newer
+// text, and nothing is left in the queue to say otherwise.
+func TestAnOlderTranscriptReadNeverReplacesANewerOne(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	c := w.conversation(w.alice, w.ws, "Trip", "old words about quokkas", src)
+	agent := w.agentID(c)
+
+	// The first sync reads the old text and is held, while a mark comes and a second sync reads
+	// the new text and finishes; then the first goes on with what it read.
+	held := &holdingSource{fakeTranscripts: src, text: "old words about quokkas"}
+	held.during = func() {
+		src.set(agent, "new words about numbats")
+		w.mark(c)
+		if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0, 0); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := w.e.idx.syncConversations(ctx, held, w.alice.id, w.ws, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	wantConversations(t, "the newer text", w.searchConversations(w.alice, w.ws, "numbats"), "Trip")
+	wantConversations(t, "the older text", w.searchConversations(w.alice, w.ws, "quokkas"))
+	var queued int
+	if err := w.e.db.QueryRow(`SELECT count(*) FROM search_conversation_queue`).Scan(&queued); err != nil || queued != 0 {
+		t.Fatalf("queue = %d, %v", queued, err)
+	}
+}
+
+// holdingSource answers with a fixed text it read before running during, as a read that is
+// slow, and finishes late.
+type holdingSource struct {
+	*fakeTranscripts
+	text   string
+	during func()
+	once   sync.Once
+}
+
+func (h *holdingSource) Transcript(_ context.Context, _ int64) (string, error) {
+	text := h.text
+	h.once.Do(h.during)
+	return text, nil
+}
+
+// A mark of a conversation always has a number nobody had before, also after the queue's entry
+// was taken off: an older read can't take for its own a mark that came later.
+func TestConversationMarksAreNeverReused(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	c := w.conversation(w.alice, w.ws, "Trip", "words", src)
+	revision := func() int64 {
+		var n int64
+		if err := w.e.db.QueryRow(`SELECT revision FROM search_conversation_revisions WHERE conversation_id = ?`, c).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	seen := map[int64]bool{revision(): true}
+	for range 4 {
+		w.mark(c)
+		if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+		n := revision()
+		if seen[n] {
+			t.Fatalf("revision %d came twice", n)
+		}
+		seen[n] = true
+	}
+}

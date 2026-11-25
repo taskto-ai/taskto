@@ -165,7 +165,7 @@ most 128 KiB of a reply:
   shortened with `"truncated": true`, a thread to its newest comments with
   `older_comments_omitted`; a page of `list_docs` to fewer paths, its `next` where it
   stopped;
-- `search_docs`, `search_cards`, `search_records` and `search_conversations` return at most 20 results, each passage at most 1000 bytes;
+- `search_docs`, `search_cards`, `search_records` and `search_conversations` return at most 20 results, each passage at most 1000 bytes; `search_records` and `search_conversations` leave out the last hits of a page that would not fit a reply once JSON-encoded, and their `next_offset` is then the first one left out;
 - an app's definition is at most 48 KiB, so `show_app` returns one whole; `list_apps`
   and `list_app_rows` shorten a list that doesn't fit, with `"truncated": true`, and
   `query_app_rows` a page, whose `next_cursor` then continues after the last row sent;

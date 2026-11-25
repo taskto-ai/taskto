@@ -469,3 +469,63 @@ func TestRecordSearchPagesNewestChangeFirst(t *testing.T) {
 	}
 	expect(t, w.alice.do(http.MethodGet, fmt.Sprintf("/api/workspaces/%d/search/records", w.ws), nil), http.StatusBadRequest)
 }
+
+// An archived app's records are out of the index, not only out of the results, and come back into
+// it when the app does, with no record changing.
+func TestArchivedAppsRecordsAreNotIndexed(t *testing.T) {
+	w := newWorld(t)
+	a := w.newApp(w.alice, w.team, "Expenses", true)
+	w.addRecord(w.alice, w.team, a, "zanzibar lunch")
+	wantRecords(t, "alice", w.searchRecords(w.alice, nil, "zanzibar"), "zanzibar lunch")
+	indexed := func() int {
+		var n int
+		if err := w.e.db.QueryRow(`SELECT count(*) FROM search_record_fts`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if indexed() != 1 {
+		t.Fatalf("indexed = %d", indexed())
+	}
+	if _, err := w.e.db.Exec(`UPDATE apps SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Indexed again by the next sync, which the archive queued: nothing is held.
+	if err := w.e.idx.syncRecords(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	if indexed() != 0 {
+		t.Fatalf("an archived app's records are indexed: %d", indexed())
+	}
+	if _, err := w.e.db.Exec(`UPDATE apps SET archived_at = NULL WHERE id = ?`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	wantRecords(t, "alice, restored", w.searchRecords(w.alice, nil, "zanzibar"), "zanzibar lunch")
+	if indexed() != 1 {
+		t.Fatalf("indexed after restoring = %d", indexed())
+	}
+}
+
+// A hit the last access check drops leaves no offset to continue from: it would count the records
+// the caller read when the search began.
+func TestRecordSearchSaysIncompleteWhenAHitIsDropped(t *testing.T) {
+	w := newWorld(t)
+	a := w.newApp(w.alice, w.team, "Team expenses", true)
+	w.addRecord(w.alice, w.team, a, "zanzibar one")
+	w.addRecord(w.alice, w.team, a, "zanzibar two")
+	spaces, err := w.e.spaces.Readable(ctx, w.bob.id, w.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bob loses the team after the apps were listed, before the page is checked.
+	w.e.idx.afterRecordSync = func() {
+		if _, err := w.e.db.Exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, w.team.ID, w.bob.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { w.e.idx.afterRecordSync = nil }()
+	res, err := w.e.idx.SearchRecords(ctx, w.e.spaces, w.bob.id, w.ws, spaces, Query{Text: "zanzibar", Limit: 1})
+	if err != nil || len(res.Results) != 0 || !res.Incomplete || res.NextOffset != nil {
+		t.Fatalf("after losing the space: %+v, %v", res, err)
+	}
+}

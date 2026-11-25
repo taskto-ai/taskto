@@ -26,8 +26,8 @@ import (
 // search_records_conversations) queue a conversation, in the transaction that marks it, and a
 // search first indexes again the caller's queued conversations (syncConversations), newest
 // first, each from a call to the agent runtime made outside any transaction, and written
-// together with its taking off the queue only if no other mark came meanwhile (the queue's
-// revision). A conversation in the queue is never quoted, since its indexed text may be old: a
+// together with its taking off the queue only if no other mark came meanwhile (the conversation's
+// revision, which only goes up, checked in the same transaction). A conversation in the queue is never quoted, since its indexed text may be old: a
 // search that finds some behind tries once more, and says its results may be incomplete if it
 // still does. A conversation that is removed takes its index with it, by the schema; one the
 // agent runtime no longer has leaves the index too, and is found by its title no more.
@@ -171,18 +171,20 @@ func (x *Index) SearchConversations(ctx context.Context, userID, workspaceID int
 // state of the database.
 func (x *Index) findConversations(ctx context.Context, userID, workspaceID int64, match string, q Query) ([]ConversationResult, bool, error) {
 	titleMatch := "{title} : (" + match + ")"
-	rows, err := x.db.QueryContext(ctx, `SELECT st.behind, p.id, p.title, p.archived, p.updated_at, p.snippet
+	rows, err := x.db.QueryContext(ctx, `SELECT st.behind, p.id, p.title, p.archived, p.updated_at, p.snippet, p.title_first
 		FROM (SELECT EXISTS (SELECT 1 FROM search_conversation_queue sq JOIN conversations c ON c.id = sq.conversation_id
 			WHERE `+ownConversationSQL+`) AS behind) st
 		LEFT JOIN (
 			SELECT c.id AS id, c.title AS title, c.archived_at IS NOT NULL AS archived, c.updated_at AS updated_at,
+				c.id IN (SELECT rowid FROM search_conversation_fts WHERE search_conversation_fts MATCH ?) AS title_first,
 				`+conversationSnippetSQL+` AS snippet
 			FROM search_conversation_fts
 			JOIN conversations c ON c.id = search_conversation_fts.rowid
 			WHERE search_conversation_fts MATCH ? AND `+ownConversationSQL+`
 				AND NOT EXISTS (SELECT 1 FROM search_conversation_queue WHERE conversation_id = c.id)
-			ORDER BY `+conversationOrderSQL+` LIMIT ? OFFSET ?) p ON true`,
-		workspaceID, userID, match, workspaceID, userID, titleMatch, q.Limit+1, q.Offset)
+			ORDER BY `+conversationOrderSQL+` LIMIT ? OFFSET ?) p ON true
+		ORDER BY p.title_first DESC, p.updated_at DESC, p.id DESC`,
+		workspaceID, userID, titleMatch, match, workspaceID, userID, titleMatch, q.Limit+1, q.Offset)
 	if err != nil {
 		return nil, false, err
 	}
@@ -192,8 +194,8 @@ func (x *Index) findConversations(ctx context.Context, userID, workspaceID int64
 	for rows.Next() {
 		var id sql.NullInt64
 		var title, updatedAt, snippet sql.NullString
-		var archived sql.NullBool
-		if err := rows.Scan(&behind, &id, &title, &archived, &updatedAt, &snippet); err != nil {
+		var archived, titleFirst sql.NullBool
+		if err := rows.Scan(&behind, &id, &title, &archived, &updatedAt, &snippet, &titleFirst); err != nil {
 			return nil, false, err
 		}
 		if !id.Valid {
@@ -299,9 +301,10 @@ func (x *Index) syncConversations(ctx context.Context, src ConversationSource, u
 // queuedConversations reads the next conversations in the queue of the scope, newest first,
 // leaving out those in skip (a JSON array of IDs).
 func (x *Index) queuedConversations(ctx context.Context, everyone bool, userID, workspaceID int64, skip string) ([]queuedConversation, error) {
-	rows, err := x.db.QueryContext(ctx, `SELECT sq.conversation_id, c.agent_id, sq.revision
+	rows, err := x.db.QueryContext(ctx, `SELECT sq.conversation_id, c.agent_id, rv.revision
 		FROM search_conversation_queue sq
 		JOIN conversations c ON c.id = sq.conversation_id
+		JOIN search_conversation_revisions rv ON rv.conversation_id = sq.conversation_id
 		WHERE (? OR (c.workspace_id = ? AND c.owner_id = ?))
 			AND sq.conversation_id NOT IN (SELECT value FROM json_each(?))
 		ORDER BY c.updated_at DESC, c.id DESC LIMIT ?`, everyone, workspaceID, userID, skip, conversationBatch)
@@ -321,17 +324,24 @@ func (x *Index) queuedConversations(ctx context.Context, everyone bool, userID, 
 }
 
 // indexConversation puts the conversation, with the text read from the transcript, in the
-// index, and takes it off the queue if it hasn't been marked since it was read (its revision
-// is still qc's). A conversation the agent runtime no longer has (gone) leaves the index. One
-// that was removed meanwhile is left alone.
+// index, and takes it off the queue, only if it hasn't been marked since the transcript was read:
+// its revision, which only goes up, is still qc's, checked in this transaction before anything is
+// written. If it was marked, what was read is old, and whoever read after the mark (or the next
+// sync) writes the index: an older read never replaces a newer one's text. A conversation the
+// agent runtime no longer has (gone) leaves the index. One that was removed meanwhile is left alone.
 func indexConversation(ctx context.Context, tx *sql.Tx, qc queuedConversation, text string, gone bool) error {
 	var title string
-	err := tx.QueryRowContext(ctx, `SELECT title FROM conversations WHERE id = ?`, qc.id).Scan(&title)
+	var revision int64
+	err := tx.QueryRowContext(ctx, `SELECT c.title, rv.revision FROM conversations c
+		JOIN search_conversation_revisions rv ON rv.conversation_id = c.id WHERE c.id = ?`, qc.id).Scan(&title, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if revision != qc.revision {
+		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM search_conversation_fts WHERE rowid = ?`, qc.id); err != nil {
 		return err
@@ -350,7 +360,7 @@ func indexConversation(ctx context.Context, tx *sql.Tx, qc queuedConversation, t
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM search_conversation_queue WHERE conversation_id = ? AND revision = ?`, qc.id, qc.revision)
+	_, err = tx.ExecContext(ctx, `DELETE FROM search_conversation_queue WHERE conversation_id = ?`, qc.id)
 	return err
 }
 

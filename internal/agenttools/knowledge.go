@@ -468,14 +468,7 @@ func (s *Service) searchRecords(ctx context.Context, c *call, args json.RawMessa
 		hits = append(hits, recordHit{SpaceID: r.SpaceID, SpaceName: r.SpaceName, AppID: r.AppID, AppName: r.AppName,
 			RecordID: r.RecordID, Snippet: text})
 	}
-	reply := map[string]any{"results": hits}
-	if res.Incomplete {
-		reply["incomplete"] = true
-	}
-	if res.NextOffset != nil {
-		reply["next_offset"] = *res.NextOffset
-	}
-	return reply, nil
+	return fitSearchReply(hits, a.Offset, res.Incomplete, res.NextOffset)
 }
 
 type conversationHit struct {
@@ -521,14 +514,7 @@ func (s *Service) searchConversations(ctx context.Context, c *call, args json.Ra
 		hits = append(hits, conversationHit{ConversationID: r.ConversationID, Title: r.Title, Archived: r.Archived,
 			UpdatedAt: r.UpdatedAt, Snippet: text})
 	}
-	reply := map[string]any{"results": hits}
-	if res.Incomplete {
-		reply["incomplete"] = true
-	}
-	if res.NextOffset != nil {
-		reply["next_offset"] = *res.NextOffset
-	}
-	return reply, nil
+	return fitSearchReply(hits, a.Offset, res.Incomplete, res.NextOffset)
 }
 
 // snippetText is a snippet's text, without its marks.
@@ -550,4 +536,27 @@ func searchLimit(raw json.RawMessage) (int, error) {
 		return 0, invalidf("limit must be 1 to %d", maxSearchLimit)
 	}
 	return int(n), nil
+}
+
+// fitSearchReply is a search's reply, with as many of its hits as fit in MaxResult once encoded
+// (JSON escapes some characters of a snippet as six bytes): when it has to leave hits out, its
+// next_offset is the first of them, so the next page returns them. An incomplete reply has no
+// next_offset, whatever fits: it is searched again instead.
+func fitSearchReply[H any](hits []H, offset int, incomplete bool, next *int) (any, error) {
+	build := func(n int) any {
+		reply := map[string]any{"results": hits[:n]}
+		if incomplete {
+			reply["incomplete"] = true
+		}
+		switch {
+		case incomplete:
+		case n < len(hits):
+			reply["next_offset"] = offset + n
+		case next != nil:
+			reply["next_offset"] = *next
+		}
+		return reply
+	}
+	_, reply, err := fitting(len(hits), build)
+	return reply, err
 }

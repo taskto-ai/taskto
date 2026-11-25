@@ -83,6 +83,13 @@ func TestSendMarksTheConversationAgainWhenTheTurnEnds(t *testing.T) {
 	if _, err := e.db.Exec(`DELETE FROM search_conversation_queue`); err != nil {
 		t.Fatal(err)
 	}
+	inQueue := func() bool {
+		var n int
+		if err := e.db.QueryRow(`SELECT count(*) FROM search_conversation_queue WHERE conversation_id = ?`, c.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
 
 	e.rt.settle = make(chan struct{})
 	owner.expect(http.StatusAccepted, http.MethodPost, path(ws, fmt.Sprintf("/%d/messages", c.ID)), map[string]any{"content": "hello"})
@@ -91,14 +98,14 @@ func TestSendMarksTheConversationAgainWhenTheTurnEnds(t *testing.T) {
 	if updated() == "2020-01-01T00:00:00.000Z" {
 		t.Fatal("the send didn't mark the conversation")
 	}
-	if err := e.db.QueryRow(`SELECT revision FROM search_conversation_queue WHERE conversation_id = ?`, c.ID).Scan(&queued); err != nil || queued != 1 {
-		t.Fatalf("queued after the send: revision %d, %v", queued, err)
+	if err := e.db.QueryRow(`SELECT revision FROM search_conversation_revisions WHERE conversation_id = ?`, c.ID).Scan(&queued); err != nil || queued != 3 || !inQueue() {
+		t.Fatalf("queued after the send: revision %d (queued %v), %v: want 1 for the creation, 2 for the test's reset and 3 for the send", queued, inQueue(), err)
 	}
 
 	// The turn ends: marked again, which is a new revision of the queue's entry.
 	close(e.rt.settle)
 	waitFor(t, "the turn's end to mark the conversation", func() bool {
-		return e.db.QueryRow(`SELECT revision FROM search_conversation_queue WHERE conversation_id = ?`, c.ID).Scan(&queued) == nil && queued == 2
+		return e.db.QueryRow(`SELECT revision FROM search_conversation_revisions WHERE conversation_id = ?`, c.ID).Scan(&queued) == nil && queued == 4
 	})
 
 	// A turn that never ends marks nothing more, and the server's shutdown stops waiting for it.
@@ -107,7 +114,7 @@ func TestSendMarksTheConversationAgainWhenTheTurnEnds(t *testing.T) {
 	waitFor(t, "the second turn to be waited for", func() bool { return e.rt.waited.Load() == 2 })
 	e.svc.EndStreams()
 	time.Sleep(50 * time.Millisecond)
-	if err := e.db.QueryRow(`SELECT revision FROM search_conversation_queue WHERE conversation_id = ?`, c.ID).Scan(&queued); err != nil || queued != 3 {
+	if err := e.db.QueryRow(`SELECT revision FROM search_conversation_revisions WHERE conversation_id = ?`, c.ID).Scan(&queued); err != nil || queued != 5 {
 		t.Fatalf("after a turn cut short by shutdown: revision %d, %v (the send's mark only)", queued, err)
 	}
 }

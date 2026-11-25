@@ -1793,7 +1793,9 @@ of an app whose live release changes (a publish, a rollback), is queued in the s
 a search indexes the queued records of the apps it looks in before it answers, so it never
 quotes text older than the record. As for cards, a search that still finds some behind says
 `"incomplete": true`, leaves them out, and has no `next_offset`; only the records the caller
-may read can make it so. An app that moves to another space is searched under the access to
+may read can make it so, and so can a change of the caller's access while the search runs (a hit
+that the last access check takes out leaves no `next_offset`, since it would count what the caller
+read when the search began). An app that moves to another space is searched under the access to
 the space it is in then, and who may read what is checked again, through the same checks, after the
 records are found.
 
