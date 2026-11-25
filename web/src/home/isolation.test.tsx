@@ -119,9 +119,10 @@ test('a page that fails to draw leaves the shell usable, and another page is dra
     'GET /api/workspaces/1/conversations': { body: { conversations: [] } },
   })
   render(<Shell me={me} onLogout={() => {}} />)
-  expect((await screen.findByRole('alert')).textContent).toBe(
-    'This page couldn’t be shown. The menu and your settings still work.',
-  )
+  const failed = await screen.findByRole('alert')
+  expect(failed.textContent).toContain('This page couldn’t be shown')
+  expect(failed.textContent).toContain('The menu and your settings still work.')
+  within(failed).getByRole('button', { name: 'Reload' })
   const nav = screen.getByRole('navigation', { name: 'Sections' })
   expect(within(nav).getAllByRole('link')).toHaveLength(6)
   fireEvent.click(within(nav).getByRole('link', { name: 'Conversations' }))

@@ -1,0 +1,16 @@
+@layer screens {
+  /* The offline shell's frame: the whole window, its page scrolling inside, clear of an installed
+     app's status and home bars. */
+  .ui-offline {
+    block-size: 100%;
+    display: grid;
+    padding-block: env(safe-area-inset-top) env(safe-area-inset-bottom);
+    background: var(--color-bg);
+  }
+
+  .ui-offline-who {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+}

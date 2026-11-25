@@ -7,10 +7,13 @@
 // there and that this version can't check, and chooses to keep the database (sign out without
 // deleting it) or to discard it.
 
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
-import { ConfirmButton } from '../settings/parts'
+import { Button } from '../ui/Button'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { Dialog } from '../ui/Dialog'
+import { Notice } from '../ui/Notice'
 import type { Runtime } from './runtime'
 import { NotWriter } from './store'
 
@@ -39,13 +42,8 @@ export function LogoutGuard({
   const [left, setLeft] = useState(count)
   const [stuck, setStuck] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
-  const first = useRef<HTMLButtonElement>(null)
-  useEffect(() => first.current?.focus(), [])
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onCancel()
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onCancel])
+  // Discarding is a second, explicit step.
+  const [discarding, setDiscarding] = useState(false)
 
   const sync = async () => {
     setBusy(true)
@@ -78,52 +76,56 @@ export function LogoutGuard({
   }
 
   return (
-    <div className="tt-guard">
-      <div className="tt-guard-box" role="alertdialog" aria-modal="true" aria-labelledby="tt-guard-title">
-        <h2 id="tt-guard-title">{t('offline.logout.title')}</h2>
+    <>
+      <Dialog
+        open
+        // Escape, as Cancel: nothing is signed out and nothing is deleted.
+        onClose={onCancel}
+        role="alertdialog"
+        size="sm"
+        title={t('offline.logout.title')}
+        actions={
+          <>
+            <Button variant="danger" disabled={busy} onClick={() => setDiscarding(true)}>
+              {t('offline.logout.discard')}
+            </Button>
+            <Button disabled={busy} onClick={onCancel}>
+              {t('offline.logout.cancel')}
+            </Button>
+            {/* The safe way out takes the focus: keeping or sending the records. */}
+            {unreadable ? (
+              <Button variant="primary" disabled={busy} onClick={onKeep} data-autofocus>
+                {t('offline.logout.keep')}
+              </Button>
+            ) : (
+              <Button variant="primary" loading={busy} disabled={!runtime} onClick={() => void sync()} data-autofocus>
+                {t('offline.logout.sync')}
+              </Button>
+            )}
+          </>
+        }
+      >
         {unreadable ? (
           <p>{t(unreadable === 'schema' ? 'offline.logout.unreadableSchema' : 'offline.logout.unreadableStorage')}</p>
         ) : (
           <p>{t('offline.logout.body', { count: left })}</p>
         )}
-        {stuck && (
-          <p role="alert" className="tt-error">
-            {t('offline.logout.stillWaiting')}
-          </p>
-        )}
-        {failure && (
-          <p role="alert" className="tt-error">
-            {failure}
-          </p>
-        )}
-        <div className="tt-row-actions">
-          {unreadable ? (
-            <button ref={first} type="button" className="tt-button tt-primary" disabled={busy} onClick={onKeep}>
-              {t('offline.logout.keep')}
-            </button>
-          ) : (
-            <button
-              ref={first}
-              type="button"
-              className="tt-button tt-primary"
-              disabled={busy || !runtime}
-              onClick={() => void sync()}
-            >
-              {busy ? t('offline.logout.syncing') : t('offline.logout.sync')}
-            </button>
-          )}
-          <ConfirmButton
-            label={t('offline.logout.discard')}
-            question={t('offline.queue.discardQuestion')}
-            confirm={t('offline.queue.discardConfirm')}
-            disabled={busy}
-            onConfirm={onSignOut}
-          />
-          <button type="button" className="tt-button" disabled={busy} onClick={onCancel}>
-            {t('offline.logout.cancel')}
-          </button>
-        </div>
-      </div>
-    </div>
+        {stuck && <Notice tone="danger">{t('offline.logout.stillWaiting')}</Notice>}
+        {failure && <Notice tone="danger">{failure}</Notice>}
+      </Dialog>
+      <ConfirmDialog
+        open={discarding}
+        title={t('offline.logout.discard')}
+        confirmLabel={t('offline.queue.discardConfirm')}
+        tone="danger"
+        onConfirm={() => {
+          setDiscarding(false)
+          onSignOut()
+        }}
+        onCancel={() => setDiscarding(false)}
+      >
+        {t('offline.queue.discardQuestion')}
+      </ConfirmDialog>
+    </>
   )
 }

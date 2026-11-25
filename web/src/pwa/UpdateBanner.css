@@ -1,0 +1,59 @@
+@layer screens {
+  /* The update prompt: a toast's look at the window's bottom, over the page, clear of the home
+     bar; with the on-screen keyboard up (html[data-keyboard], src/pwa/viewport.ts) the page is the
+     part above it, and so is this. */
+  .ui-update {
+    position: fixed;
+    z-index: var(--z-toast);
+    inset-block-end: calc(var(--space-4) + env(safe-area-inset-bottom));
+    inset-inline: var(--space-4);
+    margin-inline: auto;
+    inline-size: min(calc(100vw - 2 * var(--space-4)), calc(var(--width-reading) * 0.6));
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: var(--shadow-pop);
+    font: var(--type-ui);
+    animation: ui-update-in var(--duration-base) var(--ease-out);
+  }
+
+  @keyframes ui-update-in {
+    from {
+      opacity: 0;
+      transform: translateY(var(--space-2));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-update {
+      animation: none;
+    }
+  }
+
+  :root[data-keyboard="open"] .ui-update {
+    inset-block-end: var(--space-4);
+  }
+
+  .ui-update-icon {
+    flex: none;
+    display: inline-flex;
+    color: var(--color-info);
+  }
+
+  .ui-update-message {
+    flex: 1 1 16ch;
+    margin: 0;
+  }
+
+  .ui-update-actions {
+    display: flex;
+    gap: var(--space-2);
+    margin-inline-start: auto;
+  }
+}

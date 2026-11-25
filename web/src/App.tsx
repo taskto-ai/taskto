@@ -6,8 +6,9 @@
 
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { ApiError, api, errorText, forAccount, type Me, SESSION_LOST } from './api'
-import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
-import { setPreferences, useT } from './i18n'
+import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen, StartingScreen } from './auth/AuthScreens'
+import { ServerUnreachable } from './auth/ServerUnreachable'
+import { setPreferences } from './i18n'
 import { leavePush } from './notifications/push'
 import { useOpenFromWorker } from './notifications/usePushSync'
 import { AccountChanged } from './offline/AccountChanged'
@@ -42,7 +43,6 @@ type Leaving = { user: number; next: Session }
 type Asked = Leaving & Unsent
 
 export function App() {
-  const t = useT()
   const [session, setSession] = useState<Session>({ state: 'loading' })
   const { runtime, foreign, problem } = useRuntime()
   // Unsent drafts kept in this browser belong to whoever is signed in: they are claimed before
@@ -218,7 +218,7 @@ export function App() {
 
   switch (session.state) {
     case 'loading':
-      return <p className="tt-center tt-muted">{t('app.loading')}</p>
+      return <StartingScreen />
     case 'setup':
       return <SetupScreen onDone={logIn} />
     case 'login':
@@ -241,19 +241,10 @@ export function App() {
     case 'reset':
       return <ResetPasswordScreen token={window.location.hash.slice(1)} onDone={resetDone} />
     case 'error':
-      return (
-        <div className="tt-center">
-          <p role="alert" className="tt-error">
-            {t('app.unreachable', { error: session.error })}
-          </p>
-          <button type="button" className="tt-button" onClick={load}>
-            {t('app.tryAgain')}
-          </button>
-        </div>
-      )
+      return <ServerUnreachable error={session.error} onRetry={load} />
     case 'offline':
       return (
-        <Suspense fallback={<p className="tt-center tt-muted">{t('app.loading')}</p>}>
+        <Suspense fallback={<StartingScreen />}>
           <OfflineShell user={session.name} onReconnect={load} />
         </Suspense>
       )

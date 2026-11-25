@@ -1,0 +1,154 @@
+@layer screens {
+  /* The page: the brand's ground, the card centred on it. Clear of an installed app's status and
+     home bars, and of the notch on its sides. */
+  .ui-auth {
+    min-block-size: 100%;
+    display: grid;
+    place-items: center;
+    padding-block: max(var(--space-6), env(safe-area-inset-top)) max(var(--space-6), env(safe-area-inset-bottom));
+    padding-inline: max(var(--space-4), env(safe-area-inset-left)) max(var(--space-4), env(safe-area-inset-right));
+    background: var(--color-bg);
+    color: var(--color-text);
+    font: var(--type-ui);
+  }
+
+  .ui-auth-card {
+    inline-size: min(100%, calc(var(--width-reading) / 2 + 2 * var(--space-8)));
+    display: grid;
+    gap: var(--space-6);
+    padding: var(--space-8);
+    background: var(--color-surface);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+  }
+
+  /* The brand speaks a little louder here than in the app: the logo at a confident size. */
+  .ui-auth-brand {
+    display: flex;
+    color: var(--color-text);
+  }
+
+  .ui-auth-head {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .ui-auth-title {
+    margin: 0;
+    color: var(--color-text);
+    text-wrap: balance;
+  }
+
+  .ui-auth-title-text {
+    font: var(--type-display);
+    letter-spacing: var(--tracking-display);
+  }
+
+  .ui-auth-help {
+    color: var(--color-text-soft);
+  }
+
+  .ui-auth-help p {
+    margin: 0;
+  }
+
+  .ui-auth-help p:not(:first-child) {
+    margin-block-start: var(--space-2);
+  }
+
+  .ui-auth-help code,
+  .ui-auth-mono {
+    font: var(--type-code);
+    padding-inline: var(--space-1);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-sunken);
+    color: var(--color-text);
+  }
+
+  .ui-auth-form,
+  .ui-auth-stack {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  /* The one primary button of the screen, the width of the form. */
+  .ui-auth-form > .ui-button-primary,
+  .ui-auth-stack > .ui-button {
+    inline-size: 100%;
+  }
+
+  .ui-auth-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: 0;
+    color: var(--color-text-muted);
+    font: var(--type-small);
+  }
+
+  .ui-auth-divider::before,
+  .ui-auth-divider::after {
+    content: "";
+    flex: 1;
+    border-block-start: var(--line-thin) solid var(--color-rule);
+  }
+
+  .ui-auth-note {
+    margin: 0;
+    color: var(--color-text-muted);
+    font: var(--type-small);
+  }
+
+  /* The other paths, quieter than the form: under it, centred. */
+  .ui-auth-links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-2) var(--space-4);
+    padding-block-start: var(--space-4);
+    border-block-start: var(--line-thin) solid var(--color-rule);
+    color: var(--color-text-muted);
+    font: var(--type-small);
+    text-align: center;
+  }
+
+  .ui-auth-links p {
+    margin: 0;
+  }
+
+  /* The password and its Show button, inside the field's edge. */
+  .ui-auth-password {
+    position: relative;
+    display: grid;
+  }
+
+  .ui-auth-password > .ui-textbox {
+    padding-inline-end: calc(var(--space-16) + var(--space-4));
+  }
+
+  .ui-auth-password > .ui-button {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: var(--space-1);
+    margin-block: auto;
+  }
+
+  /* Before the app knows who is signed in: the logo and the shape of a form, still. */
+  .ui-auth-skeleton {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  @media (max-width: 30rem) {
+    .ui-auth {
+      place-items: start center;
+    }
+
+    .ui-auth-card {
+      padding: var(--space-6) var(--space-5);
+      gap: var(--space-5);
+      box-shadow: none;
+    }
+  }
+}

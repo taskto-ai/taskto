@@ -4,7 +4,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
-import { InviteScreen, LoginScreen, ResetPasswordScreen } from './AuthScreens'
+import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './AuthScreens'
+import { ServerUnreachable } from './ServerUnreachable'
 
 afterEach(async () => {
   cleanup()
@@ -439,4 +440,155 @@ test('forgotten password: too many requests is said in words', async () => {
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ana@example.com' } })
   fireEvent.click(screen.getByRole('button', { name: 'Email me a link' }))
   expect((await screen.findByRole('alert')).textContent).toBe('Too many reset requests: try again later.')
+})
+
+// --- The rework on the component library: what it adds to the screens.
+
+test('the password can be shown and hidden again, and the button says which it does', async () => {
+  fakeFetch({ 'GET /api/login/methods': { body: { password: true, sso: [] } } })
+  render(<LoginScreen onDone={() => {}} />)
+  const password = (await screen.findByLabelText('Password')) as HTMLInputElement
+  expect(password.type).toBe('password')
+  expect(password.autocomplete).toBe('current-password')
+  fireEvent.click(screen.getByRole('button', { name: 'Show password' }))
+  expect(password.type).toBe('text')
+  fireEvent.click(screen.getByRole('button', { name: 'Hide password' }))
+  expect(password.type).toBe('password')
+})
+
+test('the fields say what they are to the browser and to password managers', async () => {
+  fakeFetch({ 'GET /api/login/methods': { body: { password: true, sso: [] } } })
+  render(<LoginScreen onDone={() => {}} />)
+  const email = (await screen.findByLabelText('Email')) as HTMLInputElement
+  expect(email.type).toBe('email')
+  expect(email.autocomplete).toBe('username')
+  expect(email.required).toBe(true)
+})
+
+test('the button shows it is working while the login is sent, and a second press sends nothing', async () => {
+  let answer: (v: { body: unknown }) => void = () => {}
+  const calls = fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': () => new Promise((resolve) => (answer = resolve)),
+  })
+  const onDone = vi.fn()
+  render(<LoginScreen onDone={onDone} />)
+  await screen.findByLabelText('Password')
+  fillLogin()
+  const button = screen.getByRole('button', { name: /^Log in/ })
+  await vi.waitFor(() => expect(button.getAttribute('aria-busy')).toBe('true'))
+  fireEvent.click(button)
+  expect(calls.filter((c) => c.path === '/api/login')).toHaveLength(1)
+  answer({ body: owner })
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(owner))
+})
+
+test('a wrong code is said under the code field, which is marked invalid', async () => {
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { body: challenged },
+    'POST /api/login/two-factor': { status: 401, body: { error: 'wrong', code: 'wrong_two_factor_code' } },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  fillLogin()
+  const code = (await screen.findByLabelText(codeLabel)) as HTMLInputElement
+  expect(code.autocomplete).toBe('one-time-code')
+  fireEvent.change(code, { target: { value: '000000' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  const alert = await screen.findByRole('alert')
+  expect(code.getAttribute('aria-invalid')).toBe('true')
+  // The message is the field's description, so it is said with the field.
+  const described = (code.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id))
+  expect(described.some((el) => el?.contains(alert))).toBe(true)
+})
+
+test('a failure that is not about one field is said for the form, and no field is marked', async () => {
+  fakeFetch({
+    'GET /api/login/methods': { body: { password: true, sso: [] } },
+    'POST /api/login': { status: 401, body: { error: 'wrong email or password', code: 'wrong_credentials' } },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  fillLogin()
+  await screen.findByRole('alert')
+  expect(screen.getByLabelText('Email').getAttribute('aria-invalid')).toBeNull()
+  expect(screen.getByLabelText('Password').getAttribute('aria-invalid')).toBeNull()
+})
+
+test('setup: where the token is found is the field’s help, with the log line’s marker as code', async () => {
+  const onDone = vi.fn()
+  const calls = fakeFetch({
+    'POST /api/setup': (call) =>
+      (call.body as { setup_token: string }).setup_token === 'right-token'
+        ? { body: owner }
+        : { status: 403, body: { error: 'wrong token', code: 'setup_token' } },
+  })
+  render(<SetupScreen onDone={onDone} />)
+  const token = screen.getByLabelText('Setup token') as HTMLInputElement
+  const hint = document.getElementById((token.getAttribute('aria-describedby') ?? '').split(' ')[0])
+  expect(hint?.textContent).toContain('setup_token=')
+  expect(hint?.querySelector('code')?.textContent).toBe('setup_token=')
+  expect((screen.getByLabelText('Password') as HTMLInputElement).autocomplete).toBe('new-password')
+  screen.getByText('At least 12 characters.')
+
+  fireEvent.change(token, { target: { value: ' wrong-token ' } })
+  fireEvent.change(screen.getByLabelText('Your name'), { target: { value: 'Owner' } })
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.com' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'fake-password-123' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create the owner' }))
+  await screen.findByRole('alert')
+  expect(token.getAttribute('aria-invalid')).toBe('true')
+  expect(onDone).not.toHaveBeenCalled()
+
+  fireEvent.change(token, { target: { value: ' right-token ' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create the owner' }))
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(owner))
+  // The token is sent trimmed, as before.
+  expect(calls.at(-1)?.body).toMatchObject({ setup_token: 'right-token', workspace_name: 'Home' })
+})
+
+test('a reset whose two passwords differ says so under the second, and sends nothing', async () => {
+  const calls = fakeFetch({ 'GET /api/login/methods': { body: both } })
+  render(<ResetPasswordScreen token="fake-reset-token" onDone={() => {}} />)
+  fireEvent.change(await screen.findByLabelText('New password'), { target: { value: 'fake-new-password-123' } })
+  const again = screen.getByLabelText('New password again')
+  fireEvent.change(again, { target: { value: 'fake-new-password-124' } })
+  expect((await screen.findByRole('alert')).textContent).toBe("The passwords don't match.")
+  expect(again.getAttribute('aria-invalid')).toBe('true')
+  fireEvent.click(screen.getByRole('button', { name: 'Set the password' }))
+  expect(calls.some((c) => c.method === 'POST')).toBe(false)
+})
+
+test('before the login methods are known, the logo and a still form are shown, not a word alone', async () => {
+  fakeFetch({ 'GET /api/login/methods': () => new Promise(() => {}) })
+  render(<LoginScreen onDone={() => {}} />)
+  expect(screen.getByRole('img', { name: 'TaskTo.AI' })).toBeTruthy()
+  expect(screen.getByRole('main').getAttribute('aria-busy')).toBe('true')
+  expect(screen.queryByRole('heading')).toBeNull()
+  expect(screen.queryByLabelText('Password')).toBeNull()
+})
+
+test('the server unreachable says what happened, and Try again tries again', () => {
+  const retry = vi.fn()
+  render(<ServerUnreachable error="Failed to fetch" onRetry={retry} />)
+  const alert = screen.getByRole('alert')
+  expect(alert.textContent).toContain("Can't reach the server")
+  expect(alert.textContent).toContain('Failed to fetch')
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(retry).toHaveBeenCalledOnce()
+})
+
+test('an invite for someone signed in names the account, joins with one button, and offers to log out', async () => {
+  const onLogout = vi.fn()
+  const joined = { ...owner, workspaces: [{ id: 7 }] }
+  const onDone = vi.fn()
+  const calls = fakeFetch({ 'POST /api/invites/accept': { body: joined } })
+  render(<InviteScreen token="fake-invite-token" me={owner as never} onDone={onDone} onLogout={onLogout} />)
+  screen.getByText('owner@example.com')
+  fireEvent.click(screen.getByRole('button', { name: 'Log out, to use another account' }))
+  expect(onLogout).toHaveBeenCalledOnce()
+  fireEvent.click(screen.getByRole('button', { name: 'Join the workspace' }))
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(joined, owner))
+  expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ token: 'fake-invite-token' })
 })

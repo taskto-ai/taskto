@@ -1,7 +1,9 @@
 {
   "app": {
     "loading": "Loading…",
-    "unreachable": "Can't reach the server: {error}",
+    "unreachableTitle": "Can't reach the server",
+    "unreachableHelp": "Check your connection, or ask whoever runs this server whether it is up, then try again.",
+    "unreachableDetail": "What went wrong: {error}",
     "tryAgain": "Try again"
   },
   "apps": {
@@ -565,7 +567,6 @@
       "intro": "Your password was right. Enter the code from your authenticator app to finish logging in.",
       "introReset": "Your new password is set. Enter the code from your authenticator app to finish logging in.",
       "code": "Code from your app, or a recovery code",
-      "busy": "Checking…",
       "submit": "Log in",
       "back": "Back to the password",
       "toLogin": "Go to the login",
@@ -575,7 +576,6 @@
     "login": {
       "forgot": "Forgot your password? Ask a workspace admin for a reset link.",
       "title": "Log in",
-      "busy": "Logging in…",
       "submit": "Log in",
       "forgotByEmail": "Forgot your password?"
     },
@@ -583,7 +583,6 @@
       "title": "Reset your password",
       "intro": "Enter your account's email address. If an account has it, we'll email a link to choose a new password.",
       "submit": "Email me a link",
-      "busy": "Sending…",
       "sentTitle": "Check your email",
       "sent": "If an account has {email}, a link to choose a new password is on its way.",
       "sentHelp": "The link works once and expires. If nothing arrives in a few minutes, look in the spam folder, or ask a workspace admin for a reset link.",
@@ -598,27 +597,29 @@
       "hint": "At least 12 characters.",
       "again": "New password again",
       "mismatch": "The passwords don't match.",
-      "setting": "Setting…",
       "submit": "Set the password"
     },
     "email": "Email",
     "password": "Password",
     "yourName": "Your name",
     "passwordHint": "At least {min} characters.",
+    "show": "Show",
+    "hide": "Hide",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
     "setup": {
       "title": "Set up this server",
-      "intro": "Create the owner's account. The setup token is in the server's log, on the line with <code>setup_token=</code>, printed while no account exists. It changes at every start.",
+      "lede": "Create the owner's account and the first workspace.",
       "token": "Setup token",
+      "tokenHint": "It's in the server's log, on the line with <code>setup_token=</code>, printed while no account exists. It changes at every start.",
       "workspaceName": "Workspace name",
       "defaultWorkspace": "Home",
-      "busy": "Setting up…",
       "submit": "Create the owner"
     },
     "invite": {
       "title": "Join a workspace",
       "incomplete": "This invite link is incomplete: open the whole link you were sent.",
       "loggedInAs": "You're logged in as {email}. The invite works for the address it was sent to.",
-      "joining": "Joining…",
       "join": "Join the workspace",
       "logOut": "Log out, to use another account",
       "ssoIntro": "You were invited. Sign in with your provider, using the address the invite was sent to.",
@@ -626,7 +627,6 @@
       "loginIntro": "Log in to the account of the address the invite was sent to.",
       "loginSubmit": "Log in and join",
       "newIntro": "You were invited. Create your account: your email is the address the invite was sent to.",
-      "creating": "Creating…",
       "create": "Create the account"
     }
   },
@@ -1853,7 +1853,8 @@
       "home": "Home",
       "notifications": "Notifications"
     },
-    "noWorkspace": "You aren't a member of any workspace. Ask an admin for an invite.",
+    "noWorkspaceTitle": "You aren't a member of any workspace",
+    "noWorkspaceHelp": "Ask an admin for an invite.",
     "logOut": "Log out",
     "openMenu": "Open the menu",
     "closeMenu": "Close the menu",
@@ -1872,7 +1873,8 @@
     "skipToContent": "Skip to the content",
     "installApp": "Install the app",
     "pinned": "Pinned apps",
-    "pageFailed": "This page couldn’t be shown. The menu and your settings still work.",
+    "pageFailedTitle": "This page couldn’t be shown",
+    "pageFailedHelp": "The menu and your settings still work.",
     "reload": "Reload"
   },
   "common": {
@@ -2377,7 +2379,6 @@
       "body_one": "{count} record on this device hasn’t reached the server. Signing out now would lose it unless you sync or discard it.",
       "body_other": "{count} records on this device haven’t reached the server. Signing out now would lose them unless you sync or discard them.",
       "sync": "Sync now",
-      "syncing": "Syncing…",
       "discard": "Discard and sign out",
       "cancel": "Cancel",
       "stillWaiting": "Some records are still waiting: the server couldn’t take them yet. Try again, or discard them.",
@@ -2702,6 +2703,10 @@
       "duplicateDisabled": "Duplicate (disabled)",
       "dialog": "Modal: the page behind is inert; Escape closes it",
       "openDialog": "Open a dialog",
+      "openGuard": "Open one that must be answered",
+      "guardTitle": "The account changed",
+      "guardHelp": "No close button, and Escape does nothing: only its answer closes it.",
+      "guardAnswer": "Reload this page",
       "renameApp": "Rename the app",
       "renameHelp": "The new name shows in the menu and on Home.",
       "showToastOver": "Show a toast over it",

@@ -26,6 +26,9 @@ export interface DialogProps {
   size?: 'sm' | 'md' | 'lg'
   // The dialog's role: `alertdialog` for a question that must be answered (ConfirmDialog).
   role?: 'dialog' | 'alertdialog'
+  // False for a question that has no way out but its answers (a guard before anything else is
+  // shown): no close button, and Escape does nothing. onClose is then never called.
+  dismissible?: boolean
 }
 
 export function Dialog(props: DialogProps) {
@@ -33,13 +36,24 @@ export function Dialog(props: DialogProps) {
   return <OpenDialog {...props} />
 }
 
-function OpenDialog({ onClose, title, description, children, actions, size = 'md', role }: DialogProps) {
+function OpenDialog({
+  onClose,
+  title,
+  description,
+  children,
+  actions,
+  size = 'md',
+  role,
+  dismissible = true,
+}: DialogProps) {
   const t = useT()
   const ref = useRef<HTMLDialogElement>(null)
   const id = useId()
   // The latest onClose, for the listeners set up once.
   const close = useRef(onClose)
   close.current = onClose
+  const canClose = useRef(dismissible)
+  canClose.current = dismissible
 
   useLayoutEffect(() => {
     const dialog = ref.current
@@ -71,14 +85,17 @@ function OpenDialog({ onClose, title, description, children, actions, size = 'md
     // Escape: the screen decides (it may be saving).
     const cancel = (e: Event) => {
       e.preventDefault()
-      close.current()
+      if (canClose.current) close.current()
     }
     // The browser closed it itself (a second Escape it doesn't let a page refuse).
     // A close event comes in a task of its own, so it can be the late echo of a close this
     // component made and has already undone (StrictMode's second mount opens it again): only a
     // dialog that is still closed tells the screen.
+    // One that can't be dismissed is opened again: what it guards stays behind it.
     const closed = () => {
-      if (!dialog.open) close.current()
+      if (dialog.open) return
+      if (canClose.current) close.current()
+      else if (dialog.isConnected) dialog.showModal()
     }
     dialog.addEventListener('cancel', cancel)
     dialog.addEventListener('close', closed)
@@ -99,7 +116,8 @@ function OpenDialog({ onClose, title, description, children, actions, size = 'md
       // Focus that lands on the dialog itself shows no ring.
       tabIndex={-1}
     >
-      <header className="ui-dialog-header">
+      {/* Not a <header>: that would be a banner, a landmark of the page, which a dialog's top is not. */}
+      <div className="ui-dialog-header">
         <div className="ui-dialog-titles">
           <h2 id={`${id}-title`} className="ui-dialog-title">
             {title}
@@ -110,8 +128,8 @@ function OpenDialog({ onClose, title, description, children, actions, size = 'md
             </p>
           )}
         </div>
-        <IconButton icon="close" label={t('ui.close')} onClick={() => close.current()} />
-      </header>
+        {dismissible && <IconButton icon="close" label={t('ui.close')} onClick={() => close.current()} />}
+      </div>
       {children && <div className="ui-dialog-body">{children}</div>}
       {actions && <footer className="ui-dialog-actions">{actions}</footer>}
     </dialog>

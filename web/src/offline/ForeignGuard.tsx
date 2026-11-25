@@ -2,9 +2,12 @@
 // has just signed in. Nothing of them is shown, and nothing else is either until the person
 // chooses: sign in as that account to send them, or discard them (docs/offline.md).
 
-import { useEffect, useRef } from 'react'
+import { useState } from 'react'
+import { AuthLayout } from '../auth/AuthLayout'
 import { useT } from '../i18n'
-import { ConfirmButton } from '../settings/parts'
+import { Button } from '../ui/Button'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { Dialog } from '../ui/Dialog'
 
 export function ForeignGuard({
   count,
@@ -16,25 +19,45 @@ export function ForeignGuard({
   onSignOut: () => void
 }) {
   const t = useT()
-  const first = useRef<HTMLButtonElement>(null)
-  useEffect(() => first.current?.focus(), [])
+  const [discarding, setDiscarding] = useState(false)
   return (
-    <main className="tt-center" id="main">
-      <div className="tt-guard-box" role="alertdialog" aria-modal="true" aria-labelledby="tt-foreign-title">
-        <h2 id="tt-foreign-title">{t('offline.foreign.title')}</h2>
+    // Behind it, the logo only: nothing of either account.
+    <AuthLayout>
+      <Dialog
+        open
+        // Only an answer closes it: nothing else is shown until the person chooses.
+        dismissible={false}
+        onClose={() => undefined}
+        role="alertdialog"
+        size="sm"
+        title={t('offline.foreign.title')}
+        actions={
+          <>
+            <Button variant="danger" onClick={() => setDiscarding(true)}>
+              {t('offline.foreign.discard')}
+            </Button>
+            {/* The safe answer takes the focus: their records are kept for them. */}
+            <Button variant="primary" onClick={onSignOut} data-autofocus>
+              {t('offline.foreign.signOut')}
+            </Button>
+          </>
+        }
+      >
         <p>{t('offline.foreign.body', { count })}</p>
-        <div className="tt-row-actions">
-          <button ref={first} type="button" className="tt-button tt-primary" onClick={onSignOut}>
-            {t('offline.foreign.signOut')}
-          </button>
-          <ConfirmButton
-            label={t('offline.foreign.discard')}
-            question={t('offline.foreign.discardQuestion', { count })}
-            confirm={t('offline.queue.discardConfirm')}
-            onConfirm={onDiscard}
-          />
-        </div>
-      </div>
-    </main>
+      </Dialog>
+      <ConfirmDialog
+        open={discarding}
+        title={t('offline.foreign.discard')}
+        confirmLabel={t('offline.queue.discardConfirm')}
+        tone="danger"
+        onConfirm={() => {
+          setDiscarding(false)
+          onDiscard()
+        }}
+        onCancel={() => setDiscarding(false)}
+      >
+        {t('offline.foreign.discardQuestion', { count })}
+      </ConfirmDialog>
+    </AuthLayout>
   )
 }

@@ -9,12 +9,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { type AppTransport, AppView } from '../apps/AppView'
 import { useFormat, useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { EmptyState } from '../ui/EmptyState'
+import { Icon } from '../ui/Icon'
+import { Notice } from '../ui/Notice'
+import { Page } from '../ui/Page'
+import { PageHeader } from '../ui/PageHeader'
+import { Row, Rows } from '../ui/Rows'
 import { useOfflineData, useRuntime } from './hooks'
 import { OutboxList, SyncNotice } from './OutboxList'
 import type { Runtime } from './runtime'
 import { type Download, kindOf, type OutboxItem, scopeKey } from './store'
 import { type OfflineTransport, offlineTransport } from './transport'
 import { WriterNotice } from './WriterNotice'
+import './OfflineShell.css'
 
 export function OfflineShell({ user, onReconnect }: { user: string; onReconnect: () => void }) {
   const t = useT()
@@ -31,59 +39,84 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
 
   const apps = Object.fromEntries(data.downloads.map((d) => [d.key, d.name]))
   return (
-    <main className="tt-section" id="main">
-      <div className="tt-pane-head">
-        <h1>{t('offline.shell.title')}</h1>
-        <span className="tt-muted">{user}</span>
-        <button type="button" className="tt-button" onClick={onReconnect}>
-          {t('offline.shell.reconnect')}
-        </button>
-      </div>
-      <p className="tt-muted">{t('offline.shell.intro')}</p>
-      {problem === 'schema' && (
-        <div role="alert" className="tt-error">
-          <p>{t('offline.schemaNewer')}</p>
-          <button type="button" className="tt-button tt-primary" onClick={() => window.location.reload()}>
-            {t('offline.reload')}
-          </button>
-        </div>
-      )}
-      {problem === 'unavailable' && <p className="tt-muted">{t('offline.unavailable')}</p>}
-      {runtime && <WriterNotice runtime={runtime} />}
-      {runtime && !download && (
-        <>
-          {data.loaded && data.downloads.length === 0 && <p className="tt-muted">{t('offline.shell.none')}</p>}
-          <ul className="tt-list" aria-label={t('offline.title')}>
-            {data.downloads.map((d) => (
-              <li key={d.key}>
-                <button
-                  type="button"
-                  aria-label={t('offline.shell.openNamed', { name: d.name })}
-                  onClick={() => setOpen(d.key)}
-                >
-                  <span className="tt-list-title">{d.name}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      {runtime && download && (
-        <>
-          <button type="button" className="tt-button" onClick={() => setOpen(null)}>
-            {t('offline.shell.back')}
-          </button>
-          <OfflineApp
+    <main className="ui-offline" id="main">
+      <Page width="list">
+        <PageHeader
+          path={
+            <span className="ui-offline-who">
+              <Icon name="offline" size={16} />
+              {user}
+            </span>
+          }
+          title={t('offline.shell.title')}
+          help={t('offline.shell.intro')}
+          actions={<Button onClick={onReconnect}>{t('offline.shell.reconnect')}</Button>}
+        />
+        {problem === 'schema' && (
+          <Notice
+            tone="danger"
+            action={
+              <Button variant="primary" onClick={() => window.location.reload()}>
+                {t('offline.reload')}
+              </Button>
+            }
+          >
+            {t('offline.schemaNewer')}
+          </Notice>
+        )}
+        {problem === 'unavailable' && <Notice tone="neutral">{t('offline.unavailable')}</Notice>}
+        {runtime && <WriterNotice runtime={runtime} />}
+        {runtime &&
+          !download &&
+          (data.loaded && data.downloads.length === 0 ? (
+            <EmptyState icon={<Icon name="apps" size={24} />} title={t('offline.title')}>
+              <p>{t('offline.shell.none')}</p>
+            </EmptyState>
+          ) : (
+            <Rows label={t('offline.title')}>
+              {data.downloads.map((d) => (
+                <Row
+                  key={d.key}
+                  leading={<Icon name="apps" />}
+                  title={d.name}
+                  actions={
+                    <Button
+                      size="sm"
+                      aria-label={t('offline.shell.openNamed', { name: d.name })}
+                      onClick={() => setOpen(d.key)}
+                    >
+                      {t('offline.shell.open')}
+                    </Button>
+                  }
+                />
+              ))}
+            </Rows>
+          ))}
+        {runtime && download && (
+          <>
+            <div>
+              <Button variant="ghost" size="sm" icon="back" onClick={() => setOpen(null)}>
+                {t('offline.shell.back')}
+              </Button>
+            </div>
+            <OfflineApp
+              runtime={runtime}
+              download={download}
+              items={data.items.filter((i) => i.scopeKey === download.key)}
+            />
+          </>
+        )}
+        {runtime && (
+          <OutboxList
             runtime={runtime}
-            download={download}
-            items={data.items.filter((i) => i.scopeKey === download.key)}
+            items={data.items}
+            status={data.status}
+            apps={apps}
+            downloads={data.downloads}
           />
-        </>
-      )}
-      {runtime && (
-        <OutboxList runtime={runtime} items={data.items} status={data.status} apps={apps} downloads={data.downloads} />
-      )}
-      {runtime && data.items.length === 0 && <SyncNotice status={data.status} waiting={0} />}
+        )}
+        {runtime && data.items.length === 0 && <SyncNotice status={data.status} waiting={0} />}
+      </Page>
     </main>
   )
 }

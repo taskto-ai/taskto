@@ -61,6 +61,12 @@ describe('Dialog', () => {
     expect(modalOpen()).toBe(true)
   })
 
+  test('its top is not a banner of the page', () => {
+    render(<Harness />)
+    open()
+    expect(screen.queryByRole('banner')).toBeNull()
+  })
+
   test('puts the focus on the first thing in its body, not on the close button', () => {
     render(<Harness />)
     open()
@@ -100,6 +106,28 @@ describe('Dialog', () => {
       await new Promise((r) => setTimeout(r))
     })
     expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  test('one that is not dismissible has no close button, and neither Escape nor the browser closes it', async () => {
+    const onClose = vi.fn()
+    render(
+      <Dialog open onClose={onClose} title="The account changed" role="alertdialog" dismissible={false}>
+        <Button>Reload this page</Button>
+      </Dialog>,
+    )
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    const cancel = new Event('cancel', { cancelable: true })
+    act(() => {
+      dialog().dispatchEvent(cancel)
+    })
+    expect(cancel.defaultPrevented).toBe(true)
+    await act(async () => {
+      dialog().close()
+      await new Promise((r) => setTimeout(r))
+    })
+    expect(onClose).not.toHaveBeenCalled()
+    expect(dialog().open).toBe(true)
+    expect(screen.getByRole('alertdialog', { name: 'The account changed' })).toBeTruthy()
   })
 })
 

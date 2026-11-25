@@ -33,6 +33,8 @@ import { type Theme, useTheme } from '../theme'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Icon } from './Icon'
 import { NewWorkspace } from './NewWorkspace'
+import { NoWorkspace } from './NoWorkspace'
+import { PageFailed } from './PageFailed'
 
 // The A2UI renderer is most of the app's code: loaded when Apps is opened.
 const AppsPage = lazy(() => import('../apps/AppsPage').then((m) => ({ default: m.AppsPage })))
@@ -156,25 +158,7 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
     return () => document.removeEventListener('keydown', onKey)
   }, [drawer])
 
-  if (!route) {
-    return (
-      <div className="tt-center">
-        <p>{t('shell.noWorkspace')}</p>
-        {me.can_create_workspace && onMe && (
-          <NewWorkspace
-            user={me.user.id}
-            onCreated={(next, created) => {
-              onMe(next)
-              navigate(routePath({ workspace: created.id, section: 'conversations' }))
-            }}
-          />
-        )}
-        <button type="button" className="tt-button" onClick={onLogout}>
-          {t('shell.logOut')}
-        </button>
-      </div>
-    )
-  }
+  if (!route) return <NoWorkspace me={me} onLogout={onLogout} onMe={onMe} />
 
   const workspace = me.workspaces.find((w) => w.id === route.workspace) ?? me.workspaces[0]
   const section = NAV.find((n) => n.section === route.section)
@@ -310,20 +294,6 @@ function Page({ route, me, workspace }: { route: Route; me: Me; workspace: Works
     case 'notifications':
       return <NotificationsPage workspace={route.workspace} />
   }
-}
-
-function PageFailed() {
-  const t = useT()
-  return (
-    <div className="tt-section">
-      <p role="alert" className="tt-error">
-        {t('shell.pageFailed')}
-      </p>
-      <button type="button" className="tt-button" onClick={() => window.location.reload()}>
-        {t('shell.reload')}
-      </button>
-    </div>
-  )
 }
 
 function Loading() {
