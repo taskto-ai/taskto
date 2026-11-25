@@ -44,6 +44,7 @@ const (
 	CodeInviteOtherEmail    Code = "invite_other_email"
 	CodeInviteAccountExists Code = "invite_account_exists"
 	CodeLocaleInvalid       Code = "locale_invalid"
+	CodeTimeZoneInvalid     Code = "time_zone_invalid"
 	CodeTokenNotFound       Code = "token_not_found"
 	CodeTokenExpiryInvalid  Code = "token_expiry_invalid" //nolint:gosec // G101: an error code, not a credential
 	CodeTooManyTokens       Code = "too_many_tokens"      // params: max

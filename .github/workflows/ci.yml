@@ -16,6 +16,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The merge queue builds each entry on a temporary gh-readonly-queue/main/... branch (the
+  # pull request merged onto the latest main, and onto the entries ahead of it) and waits for
+  # every required check on it, so every job here must run for this event too. No job reads
+  # the pull_request event's fields (head_ref, base_ref), which are empty for a merge group.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -266,7 +272,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history: gitleaks scans commits, so a secret committed and later removed
-          # is still reported.
+          # is still reported. The queue's gh-readonly-queue/main/... branches come along
+          # with the other branches; they share main's history, so each commit is scanned
+          # once and the extra cost is the few commits of the entries being merged.
           fetch-depth: 0
       - name: Gitleaks
         # Pinned by tag and digest (multi-arch index) so an upstream change can't alter or

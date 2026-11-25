@@ -1,0 +1,268 @@
+/* The records explorer (AppExplorer) and one record in its drawer (RecordDetail). */
+
+@layer screens {
+  .ui-explorer {
+    display: grid;
+    gap: var(--space-4);
+    min-inline-size: 0;
+  }
+
+  .ui-explorer-intro,
+  .ui-explorer-note,
+  .ui-explorer-count {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-explorer-panel {
+    display: grid;
+    gap: var(--space-4);
+    min-inline-size: 0;
+  }
+
+  .ui-explorer-panel:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+    border-radius: var(--radius-sm);
+  }
+
+  /* Search, then the filter's three controls and its button, in one line that wraps. */
+  .ui-explorer-search,
+  .ui-explorer-filter-form,
+  .ui-explorer-sort {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-2);
+    margin: 0;
+  }
+
+  .ui-explorer-search > .ui-textbox {
+    flex: 1 1 calc(var(--space-16) * 3);
+    inline-size: auto;
+  }
+
+  .ui-explorer-filter-form > .ui-textbox {
+    flex: 1 1 calc(var(--space-16) * 2);
+    inline-size: auto;
+  }
+
+  .ui-explorer-sort > .ui-field {
+    flex: 1 1 calc(var(--space-16) * 2);
+  }
+
+  .ui-explorer-filters {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .ui-explorer-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ui-explorer-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding-inline: var(--space-3) var(--space-1);
+    border: var(--line-thin) solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    background: var(--color-bg-sunken);
+    font: var(--type-small);
+  }
+
+  .ui-explorer-loading {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .ui-explorer-when {
+    font: var(--type-small);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+
+  .ui-explorer-card-fields {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+
+  /* The foot: how many, the pages, then the totals. */
+  .ui-explorer-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .ui-explorer-pager {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .ui-explorer-totals {
+    flex: 1 1 100%;
+    display: grid;
+    gap: var(--space-3);
+    padding-block-start: var(--space-3);
+    border-block-start: var(--line-thin) solid var(--color-border);
+  }
+
+  .ui-explorer-totals-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .ui-explorer-aggregates {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(calc(var(--space-16) * 2), 1fr));
+    gap: var(--space-2);
+    margin: 0;
+  }
+
+  /* One record, in the drawer. */
+  .ui-record {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .ui-record-meta {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-record-form {
+    display: grid;
+    gap: var(--space-4);
+    margin: 0;
+  }
+
+  /* A field shown as it is, not edited: Field's label over its value. */
+  .ui-record-readonly {
+    display: grid;
+    gap: var(--space-2);
+    min-inline-size: 0;
+  }
+
+  .ui-record-label {
+    font: var(--type-small);
+    font-weight: 500;
+    color: var(--color-text);
+  }
+
+  .ui-record-value {
+    margin: 0;
+    font: var(--type-ui);
+    color: var(--color-text);
+    overflow-wrap: anywhere;
+  }
+
+  .ui-record-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  /* After a conflict: each field that differs, what was typed beside the record as it is now on a
+     wide screen, one under the other on a phone. */
+  .ui-conflict-fields {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  .ui-conflict-field {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-1) var(--space-3);
+    padding: var(--space-3);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+  }
+
+  .ui-conflict-field > dt {
+    grid-column: 1 / -1;
+    font: var(--type-ui-strong);
+  }
+
+  .ui-conflict-field > dd {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-conflict-side {
+    font: var(--type-caption);
+    color: var(--color-text-muted);
+  }
+
+  @media (max-width: 640px) {
+    .ui-conflict-field {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* A record's history: a timeline, newest first, a node on a line for each version. */
+  .ui-timeline {
+    display: grid;
+    gap: var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ui-timeline-item {
+    position: relative;
+    display: grid;
+    gap: var(--space-1);
+    padding-inline-start: var(--space-6);
+  }
+
+  .ui-timeline-item::before {
+    content: "";
+    position: absolute;
+    inset-block-start: var(--space-1);
+    inset-inline-start: var(--space-1);
+    inline-size: var(--mark-node);
+    block-size: var(--mark-node);
+    border: var(--line-strong) solid var(--color-node-edge);
+    border-radius: var(--radius-pill);
+    background: var(--color-node);
+  }
+
+  .ui-timeline-item:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    inset-block: calc(var(--space-1) + var(--mark-node) + var(--space-1)) calc(var(--space-4) * -1 + var(--space-1));
+    inset-inline-start: calc(var(--space-1) + var(--mark-node) / 2 - var(--line-thin) / 2);
+    inline-size: var(--line-thin);
+    background: var(--color-border);
+  }
+
+  .ui-timeline-title {
+    margin: 0;
+    font: var(--type-small);
+    font-weight: 500;
+    color: var(--color-text);
+  }
+
+  .ui-timeline-detail {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+}

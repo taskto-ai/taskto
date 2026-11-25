@@ -1,16 +1,29 @@
+/* The offline shell (OfflineShell): the page shown without the server, with the apps downloaded on
+   this device, one of them open, and what waits to be sent. */
+
 @layer screens {
-  /* The offline shell's frame: the whole window, its page scrolling inside, clear of an installed
-     app's status and home bars. */
   .ui-offline-shell {
     block-size: 100%;
-    display: grid;
-    padding-block: env(safe-area-inset-top) env(safe-area-inset-bottom);
-    background: var(--color-bg);
+    min-block-size: 0;
   }
 
-  .ui-offline-who {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
+  .ui-offline-shell-user {
+    font-weight: 500;
+    color: var(--color-text);
+  }
+
+  .ui-offline-shell-back {
+    align-self: start;
+  }
+
+  .ui-offline-app {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .ui-offline-app-note {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
   }
 }

@@ -3,6 +3,8 @@
 // The page-structure components: Page, PageHeader, Heading, Toolbar, Panel, Rows, Table, EmptyState and
 // Notice.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Button } from './Button'
@@ -171,6 +173,81 @@ describe('Table', () => {
     // It doesn't overflow here (jsdom lays nothing out): no tab stop of its own.
     expect(table.parentElement?.getAttribute('tabindex')).toBeNull()
     expect(table.parentElement?.getAttribute('role')).toBeNull()
+  })
+})
+
+describe('Row, actions below', () => {
+  test('its actions go on a line of their own that wraps, and other rows keep theirs beside the title', () => {
+    render(
+      <Rows label="Queue">
+        <Row title="Coffee" actionsBelow actions={<Button size="sm">Try again</Button>} />
+        <Row title="Tea" actions={<Button size="sm">Open</Button>} />
+      </Rows>,
+    )
+    const [coffee, tea] = screen.getAllByRole('listitem')
+    expect(coffee.dataset.actionsBelow).toBe('true')
+    expect(tea.dataset.actionsBelow).toBeUndefined()
+    // jsdom lays nothing out: the stylesheet is what puts them below and lets them wrap.
+    const css = readFileSync(join(__dirname, 'Rows.css'), 'utf8')
+    const rule = /\.ui-row\[data-actions-below\] > \.ui-row-actions \{([^}]*)\}/.exec(css)?.[1] ?? ''
+    expect(rule).toMatch(/flex: 1 1 100%/)
+    expect(rule).toMatch(/flex-wrap: wrap/)
+  })
+})
+
+describe('Row, opened', () => {
+  test('what opens under a row is inside its list item, after its actions', () => {
+    render(
+      <Rows label="Queue">
+        <Row title="Coffee" actions={<Button size="sm">Review</Button>}>
+          <section aria-label="Review Coffee">Choose a version</section>
+        </Row>
+        <Row title="Tea" />
+      </Rows>,
+    )
+    const [coffee, tea] = screen.getAllByRole('listitem')
+    const opened = screen.getByRole('region', { name: 'Review Coffee' })
+    expect(coffee.contains(opened)).toBe(true)
+    expect(coffee.lastElementChild?.contains(opened)).toBe(true)
+    // A row with nothing under it has no room for it.
+    expect(tea.querySelector('.ui-row-more')).toBeNull()
+  })
+})
+
+describe('Table, sorted', () => {
+  test('a sortable header is a button named by the column, and its cell says the order', () => {
+    const rows = [
+      { plan: 'Solo', seats: 1 },
+      { plan: 'Team', seats: 10 },
+    ]
+    const onSort = vi.fn()
+    render(
+      <Table
+        caption="Plans"
+        rows={rows}
+        rowKey={(r) => r.plan}
+        columns={[
+          { key: 'plan', header: 'Plan', sort: { direction: 'none', onSort }, cell: (r) => r.plan },
+          {
+            key: 'seats',
+            header: 'Seats',
+            numeric: true,
+            sort: { direction: 'descending', onSort: () => {} },
+            cell: (r) => r.seats,
+          },
+          { key: 'note', header: 'Note', cell: () => '' },
+        ]}
+      />,
+    )
+    expect(screen.getByRole('columnheader', { name: 'Seats' }).getAttribute('aria-sort')).toBe('descending')
+    // A sortable column the rows aren't in order by says no order: only one header does.
+    expect(screen.getByRole('columnheader', { name: 'Plan' }).hasAttribute('aria-sort')).toBe(false)
+    expect(screen.getByRole('button', { name: 'Plan' })).toBeTruthy()
+    // A column that can't be sorted says nothing of an order, and has no button.
+    expect(screen.getByRole('columnheader', { name: 'Note' }).hasAttribute('aria-sort')).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Note' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Plan' }))
+    expect(onSort).toHaveBeenCalledTimes(1)
   })
 })
 

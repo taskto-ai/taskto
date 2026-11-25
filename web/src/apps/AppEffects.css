@@ -1,0 +1,69 @@
+/* What an app's actions set going (AppEffects): a quiet line under the app, opening on a list of
+   rows, each with its status as a badge, what it makes, why it failed and its retry. */
+
+@layer screens {
+  .ui-effects {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .ui-effects-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .ui-effects-summary {
+    margin: 0;
+  }
+
+  .ui-effects-panel {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: stretch;
+  }
+
+  .ui-effects-panel > .ui-button {
+    justify-self: start;
+  }
+
+  .ui-effects-note {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-effect-what {
+    margin-inline-start: var(--space-2);
+    font-weight: 400;
+    color: var(--color-text-muted);
+  }
+
+  .ui-effect-line {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-effect-line[data-tone="danger"] {
+    color: var(--color-danger);
+    font-weight: 500;
+  }
+
+  .ui-effect-link {
+    color: var(--color-link);
+    font: var(--type-small);
+    font-weight: 500;
+  }
+
+  .ui-effect-link:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+    border-radius: var(--radius-sm);
+  }
+
+  .ui-effects-preview {
+    display: grid;
+    gap: var(--space-3);
+  }
+}

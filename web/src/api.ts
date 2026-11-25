@@ -115,12 +115,14 @@ export function codeText(code: string | undefined, params: Params | undefined, s
 // `locale`: the workspace's default language, a BCP 47 tag, or "" for English.
 export type Workspace = { id: number; name: string; role: 'admin' | 'member'; locale?: string }
 // `user.locale`: the language they picked, or "" for their browser's.
+// `user.time_zone`: their IANA time zone, or "" for none yet (the server uses UTC, and the web app
+// sends the browser's once); older servers don't send it.
 // `can_create_workspace`: whether this server lets them make a workspace (-workspace-creation); older
 // servers don't send it.
 // `is_operator`: whether they run the server (an admin of the workspace setup made), who alone see what
 // belongs to the whole server: its backups and its outgoing email.
 export type Me = {
-  user: { id: number; email: string; name: string; locale?: string }
+  user: { id: number; email: string; name: string; locale?: string; time_zone?: string }
   workspaces: Workspace[]
   can_create_workspace: boolean
   is_operator: boolean
@@ -439,8 +441,13 @@ export type AvailableApp = {
   defaults: { id: number; kind: 'widget' | 'pin'; widget?: string }[]
 }
 
-// Who made a change to an app's record, through the agent or an access token if so.
-export type RecordAuthor = { id: number; name: string; agent: boolean; via?: string }
+// The server acting on its own, as a record's history shows it: an integration. `provider` and
+// `name` label it once the server can name it, `removed` says it no longer exists.
+export type RecordSystemAuthor = { kind: string; id: number; provider?: string; name?: string; removed?: boolean }
+
+// Who made a change to an app's record, through the agent or an access token if so. A change the
+// server made on its own has `system` and no name.
+export type RecordAuthor = { id: number; name: string; agent: boolean; via?: string; system?: RecordSystemAuthor }
 
 // One record of an app, with its revision and who made, changed and deleted it. `data` holds
 // the fields the app's collection declares.

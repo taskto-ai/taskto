@@ -1,12 +1,26 @@
 // The data explorer of one launched app: its records a page at a time, which the server sorts,
 // filters and searches, with the totals of everything that matches (never of the page alone). A table
-// on a wide screen, cards on a phone; opening a record edits it, shows its history and, for a deleted
-// one, restores it. The server decides what each person reads and may change: this only asks.
+// on a wide screen, rows on a phone; opening a record shows it in a drawer beside the list, where it
+// is edited, its history read and, for a deleted one, restored. The server decides what each person
+// reads and may change: this only asks.
 
-import { useId, useMemo, useState, useSyncExternalStore } from 'react'
+import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { type AppDefinition, type AppField, type AppRecord, api, type RecordPage } from '../api'
 import { type Format, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { EmptyState } from '../ui/EmptyState'
+import { Field } from '../ui/Field'
+import { IconButton } from '../ui/IconButton'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Row, Rows } from '../ui/Rows'
+import { Select } from '../ui/Select'
+import { Skeleton } from '../ui/Skeleton'
+import { type Column, Table } from '../ui/Table'
+import { Tabs, tabPanelProps } from '../ui/Tabs'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import {
   actionOf,
   defaultSort,
@@ -25,10 +39,9 @@ import {
 } from './explorer'
 import { RecordDetail } from './RecordDetail'
 import { optionLabel, shown, who } from './RecordParts'
+import './AppExplorer.css'
 
 const NARROW = '(max-width: 48rem)'
-// On the button that removes a filter, which is named for assistive technology by its label.
-const REMOVE_MARK = '×'
 
 // Whether the screen is a phone's: the explorer draws cards there and a table elsewhere.
 export function useNarrow(): boolean {
@@ -53,6 +66,7 @@ export function AppExplorer({
   canChange,
   canRestore,
   onChanged,
+  leaveRef,
 }: {
   // …/spaces/{space}/apps/{app}
   base: string
@@ -65,10 +79,14 @@ export function AppExplorer({
   canRestore: boolean
   // A record was changed, deleted or restored: the app's screen is loaded again.
   onChanged: () => void
+  // Given the explorer's way out (ask first while the open record holds unsaved changes, then go),
+  // for what closes the explorer from outside it: the records panel's close and the header's toggle.
+  leaveRef?: { current: ((go: () => void) => void) | null }
 }) {
   const t = useT()
   const f = useFormat()
   const narrow = useNarrow()
+  const tabsId = useId()
   const fields = definition?.collection.fields ?? []
   const [tab, setTab] = useState<Tab>('live')
   const [filters, setFilters] = useState<Filter[]>([])
@@ -91,12 +109,65 @@ export function AppExplorer({
   const qs = queryString(query)
   const list = useLoad(() => api<RecordPage>(`${base}/records/query?${qs}`), [base, qs])
 
-  // A new question starts from its first page.
-  const ask = (change: () => void) => {
-    change()
-    setCursors([''])
-    setOpen(null)
+  // The record open in the drawer holds what isn't saved (a changed field, a conflict on screen):
+  // read when something would close it, so the person is asked first and keeping is the default.
+  const unsaved = useRef(false)
+  const [leaveDialog, confirmLeave] = useConfirm()
+  const askToLeave = () =>
+    confirmLeave({
+      title: t('apps.explorer.leave.title'),
+      body: t('apps.explorer.leave.body'),
+      confirmLabel: t('apps.explorer.leave.discard'),
+      cancelLabel: t('apps.explorer.leave.keep'),
+      tone: 'danger',
+    })
+  // Does `go` at once when nothing is unsaved (as before: the list asks the server straight away),
+  // and only after the person chose to discard when something is.
+  const leaving = (go: () => void) => {
+    if (!unsaved.current) return go()
+    void askToLeave().then((discard) => {
+      if (!discard) return
+      unsaved.current = false
+      go()
+    })
   }
+  if (leaveRef) leaveRef.current = leaving
+  // After a record left the list (deleted, restored), the keyboard goes to the list's count, which
+  // says what the list holds now: the row it came from is gone.
+  const count = useRef<HTMLParagraphElement>(null)
+  // Each opening of the drawer has a number of its own: a delete or a restore that finishes after the
+  // person moved on (to another record, or to the same record opened again) knows it isn't theirs.
+  const [opening, setOpening] = useState(0)
+  const openingNow = useRef(opening)
+  openingNow.current = opening
+  const show = (id: number | null) => {
+    setOpen(id)
+    if (id !== null) setOpening((n) => n + 1)
+  }
+  const closeRecord = (how?: 'gone', from?: number) => {
+    if (how === 'gone') {
+      // A record that left the list after another opening of the drawer (deleted, then the same or
+      // another record opened before the answer came) closes nothing: what is open, and what was
+      // typed in it, stay.
+      if (from !== openingNow.current) return
+      unsaved.current = false
+      setOpen(null)
+      setTimeout(() => count.current?.focus(), 0)
+      return
+    }
+    leaving(() => setOpen(null))
+  }
+  const openRecord = (id: number) => {
+    if (id !== open) leaving(() => show(id))
+  }
+
+  // A new question starts from its first page, and closes the record (asking first, as above).
+  const ask = (change: () => void) =>
+    leaving(() => {
+      change()
+      setCursors([''])
+      setOpen(null)
+    })
   const chooseTab = (next: Tab) =>
     ask(() => {
       setTab(next)
@@ -113,167 +184,179 @@ export function AppExplorer({
     list.reload()
     onChanged()
   }
-
-  if (open !== null) {
-    return (
-      <RecordDetail
-        base={base}
-        appId={appId}
-        id={open}
-        fields={fields}
-        updateAction={actionOf(definition?.actions, 'update')}
-        deleteAction={actionOf(definition?.actions, 'delete')}
-        release={release}
-        deleted={tab === 'deleted'}
-        canChange={canChange}
-        canRestore={canRestore}
-        onClose={() => setOpen(null)}
-        onChanged={changed}
-      />
-    )
-  }
+  const deleted = tab === 'deleted'
 
   return (
-    <div className="tt-explorer">
-      <p className="tt-muted tt-small">{t('apps.records.intro')}</p>
-      <nav className="tt-records-tabs" aria-label={t('apps.records.tabs')}>
-        {(['live', 'deleted'] as const).map((k) => (
-          <button
-            key={k}
-            type="button"
-            className={`tt-button${tab === k ? ' tt-primary' : ''}`}
-            aria-pressed={tab === k}
-            onClick={() => chooseTab(k)}
+    <div className="ui-explorer">
+      <p className="ui-explorer-intro">{t('apps.records.intro')}</p>
+      <Tabs
+        id={tabsId}
+        label={t('apps.records.tabs')}
+        items={(['live', 'deleted'] as const).map((k) => ({ id: k, label: t(`apps.records.${k}`) }))}
+        value={tab}
+        onChange={(k) => chooseTab(k as Tab)}
+      />
+      <div className="ui-explorer-panel" {...tabPanelProps(tabsId, tab)}>
+        <search>
+          <form
+            className="ui-explorer-search"
+            onSubmit={(e) => {
+              e.preventDefault()
+              ask(() => setSearch(searchDraft))
+            }}
           >
-            {t(`apps.records.${k}`)}
-          </button>
-        ))}
-      </nav>
+            <Input
+              type="search"
+              aria-label={t('apps.explorer.search')}
+              placeholder={t('apps.explorer.search')}
+              value={searchDraft}
+              onChange={(e) => setSearchDraft(e.target.value)}
+            />
+            <Button type="submit" icon="search">
+              {t('apps.explorer.searchGo')}
+            </Button>
+          </form>
+        </search>
 
-      <search>
-        <form
-          className="tt-explorer-search"
-          onSubmit={(e) => {
-            e.preventDefault()
-            ask(() => setSearch(searchDraft))
-          }}
-        >
-          <input
-            type="search"
-            aria-label={t('apps.explorer.search')}
-            placeholder={t('apps.explorer.search')}
-            value={searchDraft}
-            onChange={(e) => setSearchDraft(e.target.value)}
-          />
-          <button type="submit" className="tt-button">
-            {t('apps.explorer.searchGo')}
-          </button>
-        </form>
-      </search>
+        <FilterBar
+          fields={filterable(fields)}
+          filters={filters}
+          onChange={(next, applied) =>
+            ask(() => {
+              setFilters(next)
+              applied?.()
+            })
+          }
+        />
 
-      <FilterBar fields={filterable(fields)} filters={filters} onChange={(next) => ask(() => setFilters(next))} />
-
-      {narrow && (
-        <div className="tt-explorer-sort">
-          <label>
-            {t('apps.explorer.sortBy')}
-            <select
-              value={sort.by}
-              onChange={(e) => ask(() => setSort({ by: e.target.value, dir: firstDir(e.target.value) }))}
-            >
-              <option value={tab === 'deleted' ? '_deleted' : UPDATED}>
-                {t(tab === 'deleted' ? 'apps.explorer.deletedAt' : 'apps.explorer.changedAt')}
-              </option>
-              {sortable(fields).map((field) => (
-                <option key={field.name} value={field.name}>
-                  {field.name}
+        {narrow && (
+          <div className="ui-explorer-sort">
+            <Field label={t('apps.explorer.sortBy')}>
+              <Select
+                value={sort.by}
+                onChange={(e) => {
+                  // Read now: while the person is asked about unsaved changes, React puts the
+                  // controlled select back to the current sort.
+                  const by = e.target.value
+                  ask(() => setSort({ by, dir: firstDir(by) }))
+                }}
+              >
+                <option value={deleted ? '_deleted' : UPDATED}>
+                  {t(deleted ? 'apps.explorer.deletedAt' : 'apps.explorer.changedAt')}
                 </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            className="tt-button"
-            onClick={() => ask(() => setSort({ ...sort, dir: sort.dir === 'asc' ? 'desc' : 'asc' }))}
-          >
-            {t(sort.dir === 'asc' ? 'apps.explorer.ascending' : 'apps.explorer.descending')}
-          </button>
-        </div>
-      )}
+                {sortable(fields).map((field) => (
+                  <option key={field.name} value={field.name}>
+                    {field.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Button
+              icon={sort.dir === 'asc' ? 'up' : 'down'}
+              onClick={() => ask(() => setSort({ ...sort, dir: sort.dir === 'asc' ? 'desc' : 'asc' }))}
+            >
+              {t(sort.dir === 'asc' ? 'apps.explorer.ascending' : 'apps.explorer.descending')}
+            </Button>
+          </div>
+        )}
 
-      {list.error && (
-        <p role="alert" className="tt-error">
-          {list.error}
-        </p>
-      )}
-      {!page && !list.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {page && page.records.length === 0 && (
-        <p className="tt-muted">
-          {t(
-            filters.length > 0 || search
-              ? 'apps.explorer.noMatch'
-              : tab === 'deleted'
-                ? 'apps.records.noneDeleted'
-                : 'apps.records.none',
-          )}
-        </p>
-      )}
-      {page && page.records.length > 0 && !narrow && (
-        <RecordTable
-          records={page.records}
+        {list.error && <Notice tone="danger">{list.error}</Notice>}
+        {!page && !list.error && (
+          <div className="ui-explorer-loading" role="status">
+            <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} shape="block" height="var(--control-md)" />
+            ))}
+          </div>
+        )}
+        {page && page.records.length === 0 && (
+          <EmptyState
+            title={t(
+              filters.length > 0 || search
+                ? 'apps.explorer.noMatch'
+                : deleted
+                  ? 'apps.records.noneDeleted'
+                  : 'apps.records.none',
+            )}
+          />
+        )}
+        {page && page.records.length > 0 && !narrow && (
+          <RecordTable
+            records={page.records}
+            fields={fields}
+            sort={sort}
+            deleted={deleted}
+            onSort={sortBy}
+            onOpen={openRecord}
+          />
+        )}
+        {page && page.records.length > 0 && narrow && (
+          <RecordCards records={page.records} fields={fields} deleted={deleted} onOpen={openRecord} />
+        )}
+
+        {page && (
+          <footer className="ui-explorer-foot">
+            <p role="status" className="ui-explorer-count" ref={count} tabIndex={-1}>
+              {page.records.length > 0
+                ? t('apps.explorer.showing', {
+                    from: f.number(first),
+                    to: f.number(first + page.records.length - 1),
+                    total: f.number(page.total),
+                  })
+                : t('apps.explorer.total', { total: f.number(page.total) })}
+            </p>
+            <div className="ui-explorer-pager">
+              {cursors.length > 1 && (
+                <Button size="sm" variant="ghost" onClick={() => setCursors([''])}>
+                  {t('apps.explorer.first')}
+                </Button>
+              )}
+              <Button
+                size="sm"
+                icon="chevron-start"
+                disabled={cursors.length === 1}
+                onClick={() => setCursors((c) => c.slice(0, -1))}
+              >
+                {t('apps.explorer.previous')}
+              </Button>
+              <Button
+                size="sm"
+                disabled={!page.next_cursor}
+                onClick={() => page.next_cursor && setCursors((c) => [...c, page.next_cursor as string])}
+              >
+                {t('apps.explorer.next')}
+              </Button>
+            </div>
+            <Totals
+              page={page}
+              numbers={numbers}
+              field={totalsField}
+              onField={(name) => ask(() => setTotalsField(name))}
+            />
+          </footer>
+        )}
+      </div>
+      {open !== null && (
+        <RecordDetail
+          key={`${open}-${opening}`}
+          base={base}
+          appId={appId}
+          id={open}
           fields={fields}
-          sort={sort}
-          deleted={tab === 'deleted'}
-          onSort={sortBy}
-          onOpen={setOpen}
+          updateAction={actionOf(definition?.actions, 'update')}
+          deleteAction={actionOf(definition?.actions, 'delete')}
+          release={release}
+          deleted={deleted}
+          canChange={canChange}
+          canRestore={canRestore}
+          onClose={(how) => closeRecord(how, opening)}
+          onChanged={changed}
+          onUnsaved={(now) => {
+            unsaved.current = now
+          }}
         />
       )}
-      {page && page.records.length > 0 && narrow && (
-        <RecordCards records={page.records} fields={fields} deleted={tab === 'deleted'} onOpen={setOpen} />
-      )}
-
-      {page && (
-        <footer className="tt-explorer-foot">
-          <p role="status" className="tt-small">
-            {page.records.length > 0
-              ? t('apps.explorer.showing', {
-                  from: f.number(first),
-                  to: f.number(first + page.records.length - 1),
-                  total: f.number(page.total),
-                })
-              : t('apps.explorer.total', { total: f.number(page.total) })}
-          </p>
-          <div className="tt-record-actions">
-            <button
-              type="button"
-              className="tt-button"
-              disabled={cursors.length === 1}
-              onClick={() => setCursors((c) => c.slice(0, -1))}
-            >
-              {t('apps.explorer.previous')}
-            </button>
-            <button
-              type="button"
-              className="tt-button"
-              disabled={!page.next_cursor}
-              onClick={() => page.next_cursor && setCursors((c) => [...c, page.next_cursor as string])}
-            >
-              {t('apps.explorer.next')}
-            </button>
-            {cursors.length > 1 && (
-              <button type="button" className="tt-button" onClick={() => setCursors([''])}>
-                {t('apps.explorer.first')}
-              </button>
-            )}
-          </div>
-          <Totals
-            page={page}
-            numbers={numbers}
-            field={totalsField}
-            onField={(name) => ask(() => setTotalsField(name))}
-          />
-        </footer>
-      )}
+      {leaveDialog}
     </div>
   )
 }
@@ -292,7 +375,6 @@ function Totals({
 }) {
   const t = useT()
   const f = useFormat()
-  const id = useId()
   if (numbers.length === 0) return null
   const by = (kind: string) => page.aggregates.find((a) => a.kind === kind && a.field === field)
   const number = (kind: string) => {
@@ -300,28 +382,29 @@ function Totals({
     return typeof v === 'number' ? f.number(v) : t('apps.explorer.empty')
   }
   return (
-    <section className="tt-explorer-totals" aria-label={t('apps.explorer.totalsLabel')}>
-      <label htmlFor={id}>{t('apps.explorer.totalsOf')}</label>
-      <select id={id} value={field ?? ''} onChange={(e) => onField(e.target.value || null)}>
-        <option value="">{t('apps.explorer.totalsNone')}</option>
-        {numbers.map((n) => (
-          <option key={n.name} value={n.name}>
-            {n.name}
-          </option>
-        ))}
-      </select>
-      {field && (
-        <>
-          <p className="tt-small tt-muted">{t('apps.explorer.totalsScope', { total: f.number(page.total) })}</p>
-          <dl className="tt-explorer-aggregates">
-            {(['sum', 'avg', 'min', 'max'] as const).map((kind) => (
-              <div key={kind}>
-                <dt>{t(`apps.explorer.agg.${kind}`)}</dt>
-                <dd>{number(kind)}</dd>
-              </div>
+    <section className="ui-explorer-totals" aria-label={t('apps.explorer.totalsLabel')}>
+      <div className="ui-explorer-totals-head">
+        <Field label={t('apps.explorer.totalsOf')}>
+          <Select value={field ?? ''} onChange={(e) => onField(e.target.value || null)}>
+            <option value="">{t('apps.explorer.totalsNone')}</option>
+            {numbers.map((n) => (
+              <option key={n.name} value={n.name}>
+                {n.name}
+              </option>
             ))}
-          </dl>
-        </>
+          </Select>
+        </Field>
+        {field && <p className="ui-explorer-note">{t('apps.explorer.totalsScope', { total: f.number(page.total) })}</p>}
+      </div>
+      {field && (
+        <dl className="ui-explorer-aggregates">
+          {(['sum', 'avg', 'min', 'max'] as const).map((kind) => (
+            <div key={kind} className="ui-stat">
+              <dt className="ui-stat-label">{t(`apps.explorer.agg.${kind}`)}</dt>
+              <dd className="ui-stat-value">{number(kind)}</dd>
+            </div>
+          ))}
+        </dl>
       )}
     </section>
   )
@@ -334,7 +417,8 @@ function FilterBar({
 }: {
   fields: AppField[]
   filters: Filter[]
-  onChange: (next: Filter[]) => void
+  // `applied` runs once the change is made: not when the person keeps a record's unsaved changes.
+  onChange: (next: Filter[], applied?: () => void) => void
 }) {
   const t = useT()
   const f = useFormat()
@@ -350,52 +434,49 @@ function FilterBar({
   const add = (e: React.FormEvent) => {
     e.preventDefault()
     if (value === '' || !type) return
-    onChange([...filters, { field, op, value }])
-    setValue('')
+    // The typed value goes only once the filter is in use: kept when it isn't added after all.
+    onChange([...filters, { field, op, value }], () => setValue(''))
   }
   const opLabel = (o: string) => t(`apps.explorer.op.${o}` as 'apps.explorer.op.eq')
   return (
-    <div className="tt-explorer-filters">
-      <form className="tt-explorer-filter-form" aria-label={t('apps.explorer.filters')} onSubmit={add}>
-        <select aria-label={t('apps.explorer.filterField')} value={field} onChange={(e) => setField(e.target.value)}>
+    <div className="ui-explorer-filters">
+      <form className="ui-explorer-filter-form" aria-label={t('apps.explorer.filters')} onSubmit={add}>
+        <Select aria-label={t('apps.explorer.filterField')} value={field} onChange={(e) => setField(e.target.value)}>
           {fields.map((x) => (
             <option key={x.name} value={x.name}>
               {x.name}
             </option>
           ))}
-        </select>
-        <select aria-label={t('apps.explorer.filterOp')} value={op} onChange={(e) => setOp(e.target.value)}>
+        </Select>
+        <Select aria-label={t('apps.explorer.filterOp')} value={op} onChange={(e) => setOp(e.target.value)}>
           {ops.map((o) => (
             <option key={o} value={o}>
               {opLabel(o)}
             </option>
           ))}
-        </select>
+        </Select>
         <FilterValue id={`${id}-value`} field={type} value={value} onChange={setValue} />
-        <button type="submit" className="tt-button" disabled={value === ''}>
+        <Button type="submit" icon="filter" disabled={value === ''}>
           {t('apps.explorer.addFilter')}
-        </button>
+        </Button>
       </form>
       {filters.length > 0 && (
-        <ul className="tt-explorer-chips" aria-label={t('apps.explorer.activeFilters')}>
-          {filters.map((fl, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: filters have no identity but their place
-            <li key={i}>
-              <span>
-                {fl.field} {opLabel(fl.op)} {chipValue(fl, fields, f, t)}
-              </span>
-              <button
-                type="button"
-                className="tt-button"
-                aria-label={t('apps.explorer.removeFilter', {
-                  filter: `${fl.field} ${opLabel(fl.op)} ${chipValue(fl, fields, f, t)}`,
-                })}
-                onClick={() => onChange(filters.filter((_, j) => j !== i))}
-              >
-                {REMOVE_MARK}
-              </button>
-            </li>
-          ))}
+        <ul className="ui-explorer-chips" aria-label={t('apps.explorer.activeFilters')}>
+          {filters.map((fl, i) => {
+            const text = `${fl.field} ${opLabel(fl.op)} ${chipValue(fl, fields, f, t)}`
+            return (
+              // biome-ignore lint/suspicious/noArrayIndexKey: filters have no identity but their place
+              <li key={i} className="ui-explorer-chip">
+                <span>{text}</span>
+                <IconButton
+                  size="sm"
+                  icon="close"
+                  label={t('apps.explorer.removeFilter', { filter: text })}
+                  onClick={() => onChange(filters.filter((_, j) => j !== i))}
+                />
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>
@@ -432,19 +513,19 @@ function FilterValue({
           ]
         : (field.options ?? []).map((o) => [o, optionLabel(field, o)])
     return (
-      <select id={id} aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
+      <Select id={id} aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{label}</option>
         {options.map(([v, l]) => (
           <option key={v} value={v}>
             {l}
           </option>
         ))}
-      </select>
+      </Select>
     )
   }
   const type = field?.type === 'number' || field?.type === 'date' || field?.type === 'time' ? field.type : 'text'
   return (
-    <input
+    <Input
       id={id}
       type={type}
       step={type === 'number' ? 'any' : undefined}
@@ -474,69 +555,53 @@ function RecordTable({
   const t = useT()
   const f = useFormat()
   const timeKey = deleted ? '_deleted' : UPDATED
-  return (
-    <div className="tt-table-scroll">
-      <table className="tt-explorer-table">
-        <thead>
-          <tr>
-            <th scope="col">{t('apps.explorer.id')}</th>
-            {fields.map((field) =>
-              sortable([field]).length > 0 ? (
-                <Head key={field.name} by={field.name} text={field.name} sort={sort} onSort={onSort} />
-              ) : (
-                // What can't be put in order is a heading only: the server refuses to sort by it.
-                <th key={field.name} scope="col">
-                  {field.name}
-                </th>
-              ),
-            )}
-            <Head
-              by={timeKey}
-              text={t(deleted ? 'apps.explorer.deletedAt' : 'apps.explorer.changedAt')}
-              sort={sort}
-              onSort={onSort}
-            />
-          </tr>
-        </thead>
-        <tbody>
-          {records.map((rec) => (
-            <tr key={rec.id}>
-              <th scope="row">
-                <button
-                  type="button"
-                  className="tt-button"
-                  aria-label={t('apps.explorer.openRecord', { id: String(rec.id) })}
-                  onClick={() => onOpen(rec.id)}
-                >
-                  {rec.id}
-                </button>
-              </th>
-              {fields.map((field) => (
-                <td key={field.name} className={field.type === 'number' ? 'tt-num' : undefined}>
-                  {shown(rec.data[field.name], field.type, f, t, field)}
-                </td>
-              ))}
-              <td className="tt-small">{f.dateTime(deleted ? (rec.deleted_at ?? rec.updated_at) : rec.updated_at)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
+  // What can't be put in order is a heading only: the server refuses to sort by it.
+  const sortOf = (by: string) => ({
+    direction:
+      sort.by === by ? (sort.dir === 'asc' ? ('ascending' as const) : ('descending' as const)) : ('none' as const),
+    onSort: () => onSort(by),
+  })
+  const columns: Column<AppRecord>[] = [
+    {
+      key: '_id',
+      header: t('apps.explorer.id'),
+      // The record's number names its row.
+      rowHeader: true,
+      cell: (rec) => (
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={t('apps.explorer.openRecord', { id: String(rec.id) })}
+          onClick={() => onOpen(rec.id)}
+        >
+          {rec.id}
+        </Button>
+      ),
+    },
+    ...fields.map(
+      (field): Column<AppRecord> => ({
+        key: field.name,
+        header: field.name,
+        numeric: field.type === 'number',
+        sort: sortable([field]).length > 0 ? sortOf(field.name) : undefined,
+        cell: (rec) => shown(rec.data[field.name], field.type, f, t, field),
+      }),
+    ),
+    {
+      key: timeKey,
+      header: t(deleted ? 'apps.explorer.deletedAt' : 'apps.explorer.changedAt'),
+      sort: sortOf(timeKey),
+      cell: (rec) => (
+        <span className="ui-explorer-when">
+          {f.dateTime(deleted ? (rec.deleted_at ?? rec.updated_at) : rec.updated_at)}
+        </span>
+      ),
+    },
+  ]
+  return <Table caption={t('apps.records.open')} columns={columns} rows={records} rowKey={(rec) => rec.id} />
 }
 
-function Head({ by, text, sort, onSort }: { by: string; text: string; sort: Sort; onSort: (by: string) => void }) {
-  return (
-    <th scope="col" aria-sort={sort.by === by ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-      <button type="button" className="tt-sort" onClick={() => onSort(by)}>
-        {text}
-        {sort.by === by && <span aria-hidden="true">{sort.dir === 'asc' ? ' ▲' : ' ▼'}</span>}
-      </button>
-    </th>
-  )
-}
-
-// A phone's records: one card each, the first field its title, then the rest.
+// A phone's records: a row each, the first field its title, then the rest, and who changed it last.
 function RecordCards({
   records,
   fields,
@@ -551,42 +616,44 @@ function RecordCards({
   const t = useT()
   const f = useFormat()
   return (
-    <ul className="tt-record-list">
+    <Rows label={t('apps.records.open')}>
       {records.map((rec) => {
         const [lead, ...rest] = fields
         const title = lead ? shown(rec.data[lead.name], lead.type, f, t, lead) : ''
+        const values = rest
+          .map((field) => [field.name, shown(rec.data[field.name], field.type, f, t, field)] as const)
+          .filter(([, v]) => v !== '')
         return (
-          <li key={rec.id} className="tt-record">
-            <button
-              type="button"
-              className="tt-record-open"
-              aria-label={t('apps.explorer.openRecord', { id: String(rec.id) })}
-              onClick={() => onOpen(rec.id)}
-            >
-              <strong>{title || t('apps.records.record', { id: String(rec.id) })}</strong>
-            </button>
-            <dl className="tt-record-fields">
-              {rest.map((field) => {
-                const v = shown(rec.data[field.name], field.type, f, t, field)
-                return v === '' ? null : (
-                  <div key={field.name}>
-                    <dt>{field.name}</dt>
-                    <dd>{v}</dd>
-                  </div>
-                )
-              })}
-            </dl>
-            <div className="tt-muted tt-small">
-              {deleted
-                ? t('apps.records.deletedBy', {
-                    when: f.dateTime(rec.deleted_at ?? rec.updated_at),
-                    name: who(rec.deleted_by, t),
-                  })
-                : t('apps.records.changed', { when: f.dateTime(rec.updated_at), name: who(rec.updated_by, t) })}
-            </div>
-          </li>
+          <Row
+            key={rec.id}
+            title={title || t('apps.records.record', { id: String(rec.id) })}
+            detail={
+              <>
+                {values.length > 0 && (
+                  <span className="ui-explorer-card-fields">
+                    {values.map(([name, v]) => `${name}: ${v}`).join(' · ')}
+                  </span>
+                )}
+                <span className="ui-explorer-when">
+                  {deleted
+                    ? t('apps.records.deletedBy', {
+                        when: f.dateTime(rec.deleted_at ?? rec.updated_at),
+                        name: who(rec.deleted_by, t),
+                      })
+                    : t('apps.records.changed', { when: f.dateTime(rec.updated_at), name: who(rec.updated_by, t) })}
+                </span>
+              </>
+            }
+            actions={
+              <IconButton
+                icon="chevron-end"
+                label={t('apps.explorer.openRecord', { id: String(rec.id) })}
+                onClick={() => onOpen(rec.id)}
+              />
+            }
+          />
         )
       })}
-    </ul>
+    </Rows>
   )
 }

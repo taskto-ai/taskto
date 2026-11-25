@@ -15,6 +15,7 @@ import { Icon } from '../ui/Icon'
 import { Notice } from '../ui/Notice'
 import { Page } from '../ui/Page'
 import { PageHeader } from '../ui/PageHeader'
+import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { useOfflineData, useRuntime } from './hooks'
 import { OutboxList, SyncNotice } from './OutboxList'
@@ -42,15 +43,17 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
     <main className="ui-offline-shell" id="main">
       <Page width="list">
         <PageHeader
-          path={
-            <span className="ui-offline-who">
-              <Icon name="offline" size={16} />
-              {user}
-            </span>
-          }
           title={t('offline.shell.title')}
-          help={t('offline.shell.intro')}
-          actions={<Button onClick={onReconnect}>{t('offline.shell.reconnect')}</Button>}
+          help={
+            <>
+              {t('offline.shell.intro')} <span className="ui-offline-shell-user">{user}</span>
+            </>
+          }
+          actions={
+            <Button icon="offline" onClick={onReconnect}>
+              {t('offline.shell.reconnect')}
+            </Button>
+          }
         />
         {problem === 'schema' && (
           <Notice
@@ -66,39 +69,40 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
         )}
         {problem === 'unavailable' && <Notice tone="neutral">{t('offline.unavailable')}</Notice>}
         {runtime && <WriterNotice runtime={runtime} />}
-        {runtime &&
-          !download &&
-          (data.loaded && data.downloads.length === 0 ? (
-            <EmptyState icon={<Icon name="apps" size={24} />} title={t('offline.title')}>
-              <p>{t('offline.shell.none')}</p>
-            </EmptyState>
-          ) : (
-            <Rows label={t('offline.title')}>
-              {data.downloads.map((d) => (
-                <Row
-                  key={d.key}
-                  leading={<Icon name="apps" />}
-                  title={d.name}
-                  actions={
-                    <Button
-                      size="sm"
-                      aria-label={t('offline.shell.openNamed', { name: d.name })}
-                      onClick={() => setOpen(d.key)}
-                    >
-                      {t('offline.shell.open')}
-                    </Button>
-                  }
-                />
-              ))}
-            </Rows>
-          ))}
+        {runtime && !download && (
+          <>
+            {data.loaded && data.downloads.length === 0 && (
+              <EmptyState title={t('offline.title')}>{t('offline.shell.none')}</EmptyState>
+            )}
+            {data.downloads.length > 0 && (
+              <Panel>
+                <Rows label={t('offline.title')}>
+                  {data.downloads.map((d) => (
+                    <Row
+                      key={d.key}
+                      leading={<Icon name="apps" />}
+                      title={d.name}
+                      actions={
+                        <Button
+                          size="sm"
+                          aria-label={t('offline.shell.openNamed', { name: d.name })}
+                          onClick={() => setOpen(d.key)}
+                        >
+                          {t('offline.shell.open')}
+                        </Button>
+                      }
+                    />
+                  ))}
+                </Rows>
+              </Panel>
+            )}
+          </>
+        )}
         {runtime && download && (
           <>
-            <div>
-              <Button variant="ghost" size="sm" icon="back" onClick={() => setOpen(null)}>
-                {t('offline.shell.back')}
-              </Button>
-            </div>
+            <Button variant="ghost" icon="back" className="ui-offline-shell-back" onClick={() => setOpen(null)}>
+              {t('offline.shell.back')}
+            </Button>
             <OfflineApp
               runtime={runtime}
               download={download}
@@ -167,8 +171,8 @@ export function OfflineApp({
   }, [signature])
 
   return (
-    <div className="tt-stage" data-stage="offline">
-      <p className="tt-muted tt-small" role="note">
+    <div className="ui-offline-app">
+      <p className="ui-offline-app-note" role="note">
         {t('offline.localCopy', {
           when: f.dateTime(download.capturedAt),
           records: f.number(download.records),
@@ -178,12 +182,8 @@ export function OfflineApp({
           ? ` ${t('offline.localTruncated', { records: f.number(download.records), total: f.number(download.total) })}`
           : ''}
       </p>
-      {changes > 0 && <p className="tt-muted tt-small">{t('offline.pendingChanges', { count: changes })}</p>}
-      {saved && (
-        <p role="status" className="tt-offline-saved">
-          {t('offline.saved')}
-        </p>
-      )}
+      {changes > 0 && <p className="ui-offline-app-note">{t('offline.pendingChanges', { count: changes })}</p>}
+      {saved && <Notice tone="success">{t('offline.saved')}</Notice>}
       <AppView
         // A screen is drawn from one release of the app, and a button on it is resolved in that one: a
         // download that brought another release is drawn again, a fresh screen with its own buttons,
