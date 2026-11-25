@@ -58,6 +58,11 @@ const (
 	CodeResetOwn                Code = "reset_own"
 	CodeResetElsewhere          Code = "reset_elsewhere"
 
+	// Your own sessions (internal/auth/sessions.go).
+
+	CodeSessionNotFound Code = "session_not_found"
+	CodeSessionCurrent  Code = "session_current"
+
 	// Two-factor login (internal/auth/twofactor.go).
 
 	CodeWrongTwoFactorCode      Code = "wrong_two_factor_code"

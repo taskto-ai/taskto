@@ -8,6 +8,8 @@ const (
 	LoginSucceeded       = "login_succeeded"
 	LoginFailed          = "login_failed"
 	Logout               = "logout"
+	SessionRevoked       = "session_revoked"
+	OtherSessionsRevoked = "other_sessions_revoked"
 	PasswordChanged      = "password_changed"
 	PasswordChangeFailed = "password_change_failed"
 	PasswordResetCreated = "password_reset_created"

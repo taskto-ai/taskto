@@ -252,6 +252,9 @@ func (s *Service) changePassword(ctx context.Context, userID int64, current, new
 		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.PasswordChanged,
 			TargetType: audit.TargetUser, Target: userID})
 	})
+	if err == nil {
+		s.endLive(userID, "") // the sessions that were open are gone, and their open connections go
+	}
 	return token, err
 }
 
@@ -366,5 +369,8 @@ func (s *Service) useReset(ctx context.Context, token, passwordHash string) (Use
 		out, err = s.issueSignIn(ctx, tx, u.ID)
 		return err
 	})
+	if err == nil {
+		s.endLive(u.ID, "")
+	}
 	return u, out, err
 }
