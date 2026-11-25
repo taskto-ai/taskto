@@ -62,10 +62,11 @@ that needs one (a shadow, the lift) takes it from a role. **No colour literal is
 named colour in any other stylesheet's declarations.
 
 **The older names.** What is left of the old stylesheets (the screens outside the shell, the
-base's element rules, Markdown outside the knowledge base) still uses `--tt-surface`, `--tt-fg` and a
-few others. `legacy.css` keeps each such name as an alias of its role or scale (`--tt-surface:
-var(--color-surface)`), and only those: an alias nothing reads is deleted, and a test checks that
-every one left still resolves, to the value it had. New CSS uses the roles and scales; the file goes
+base's element rules in `ui/base.css`, Markdown outside the knowledge base, and the rules a screen
+still in the middle of its move keeps) still uses `--tt-surface`, `--tt-fg`, `--tt-radius` and a few
+others. `legacy.css` keeps each such name as an alias of its role or scale (`--tt-surface:
+var(--color-surface)`), and only those: `css-check` fails on an alias nothing reads (so a deleted one
+can't come back unread), and a test checks that every one left still resolves, to the value it had. New CSS uses the roles and scales; the file goes
 with the last old rule.
 
 ### The scales
@@ -74,7 +75,7 @@ with the last old rule.
 |---|---|
 | Space | `--space-1` 4px, `-2` 8, `-3` 12, `-4` 16, `-5` 20, `-6` 24, `-8` 32, `-10` 40, `-12` 48, `-16` 64 |
 | Type sizes | `--text-xs` 12px, `-sm` 13, `-md` 14 (the interface), `-lg` 16 (reading), `-xl` 20, `-2xl` 24 |
-| Radius | `--radius-sm` 6px (a tag), `-md` 10 (a control, a card), `-lg` 14 (a dialog), `-pill`. The old rules' 8px lives on only as `--tt-radius`, for the screens outside the shell |
+| Radius | `--radius-sm` 6px (a tag), `-md` 10 (a control, a card), `-lg` 14 (a dialog), `-pill`. The old rules' 8px lives on only as `--tt-radius`, for what the old stylesheets still draw (the base's fields, Markdown, the screens outside the shell) |
 | Control height | `--control-sm` 28px, `--control-md` 36, `--control-touch` 44 (the touch target) |
 | Elevation | `--shadow-lift` and `--shadow-lift-hover` (the primary button's hard lift), `--shadow-pop` (a menu, a popover), `--shadow-dialog` |
 | Motion | `--duration-fast` 120ms, `-base` 160, `-slow` 240; `--ease-out`, `--ease-in-out`; all of it stops under `prefers-reduced-motion` |
@@ -135,7 +136,7 @@ The old name each replaces is in brackets.
 | `bg` (`--tt-canvas`) | cream `#faf8f4` | night `#111110` | the page |
 | `bg-sunken` (`--tt-stone`) | stone `#f1efe9` | `#181816` | the sidebar, a board's columns, quiet bands |
 | `surface` (`--tt-surface`) | white | `#1b1b19` | cards, inputs, menus |
-| `surface-own` (`--tt-user`) | stone | `#262624` | the person's own message |
+| `surface-own` | stone | `#262624` | the person's own message |
 | `paper`, `media` | white, black | the same | a QR code or a signature (dark on light to be read); the ground behind a camera's picture |
 | `hover`, `selected` | ink at 5% / 8% | cream at 7% / 12% | tints laid over a ground |
 | `scrim`, `shadow` | ink at 42% / 35% | black at 60% / 80% | under a dialog; the colour of the shadows |
@@ -183,7 +184,7 @@ sides, and nothing else: no scale, no other property. Its attribute selector out
 
 `themes/harbor.css` (cool paper, navy ink, a signal yellow) is the proof that a swap changes the
 roles and nothing else: the app doesn't import it and has no brand picker; the tests load it, and
-the gallery of components will. `THEME_COLOR` in `theme.ts`, the `theme-color` metas and the
+so does the gallery, whose brand switch shows every component in it. `THEME_COLOR` in `theme.ts`, the `theme-color` metas and the
 manifest are the default brand's ground.
 
 ### How the mint is used
@@ -343,7 +344,10 @@ names), when a `tt-` or `ui-` class a component's `className` uses has no rule, 
 written outside `web/src/ui/themes/`, and when a size, a space, a radius, a shadow or a duration is
 a literal under `web/src/ui/` ([above](#where-styles-live)), and, the other way round, when a rule
 names an old `tt-` class that no module mentions (a rule left behind when its screen moved: it goes;
-only the old classes, since a component's `ui-` class can be built from pieces the check can't see).
+the app's modules and the end-to-end harnesses under `web/e2e/` count; only the old classes, since a
+component's `ui-` class can be built from pieces the check can't see, and an old class a module
+builds from pieces goes in `BUILT_FROM_PIECES`, with where), and when an old `--tt-*` alias in
+`ui/legacy.css` is read by nothing.
 A class that is deliberately an unstyled hook goes in the script's `UNSTYLED` list, with the
 reason. It reads class selectors (not an attribute selector's
 value), a component's `className`, and the strings of a lookup table in capitals
@@ -352,12 +356,21 @@ the script says what else it can't.
 
 ## Components
 
-The controls every screen uses are in `web/src/ui/`, one component per file with its stylesheet
-beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `ButtonLink`,
-`IconButton`, `Tooltip`, `Field` with `Input`, `Textarea` and `Select`, `Checkbox`, `Switch`,
-`SegmentedControl`, `Badge`, `Label` (and `labelHue`, the hue a label's name picks), `Avatar`,
-`AgentDot`, `Skeleton`, `Spinner` and `VisuallyHidden`. A screen imports each file directly
-(`../ui/Button`); there is no index file. A screen doesn't write a `<button>`, an `<input>` or a
+The components every screen uses are in `web/src/ui/`, a file per component (with the few parts
+that only make sense with it: `ButtonLink` in `Button.tsx`, `Row` in `Rows.tsx`, `MoreMenu` and the
+menu's items in `Menu.tsx`, `useConfirm` in `ConfirmDialog.tsx`), its stylesheet beside it in
+`@layer components`, and `ui-` class names.
+
+- Controls: `Icon`, `Button` and `ButtonLink`, `IconButton`, `Tooltip`, `Field` with `Input`,
+  `Textarea` and `Select`, `Checkbox`, `Switch`, `SegmentedControl`, `Badge`, `Label` (and
+  `labelHue`, the hue a label's name picks), `Avatar`, `AgentDot`, `Skeleton`, `Spinner` and
+  `VisuallyHidden`.
+- Structure: `Page`, `PageHeader`, `Heading`, `Toolbar`, `Panel`, `Rows` and `Row`, `Table`,
+  `Tabs`, `EmptyState` and `Notice`.
+- Overlays: `Menu`, `MenuButton` and `MoreMenu`, `Dialog`, `ConfirmDialog` with `useConfirm()`,
+  `Drawer`, and `toast()` with its `Toaster`.
+
+A screen imports each file directly (`../ui/Button`); there is no index file. A screen doesn't write a `<button>`, an `<input>` or a
 `<select>` of its own.
 
 - **One height per size.** Buttons, fields, selects and segmented controls of one size are one
@@ -370,7 +383,7 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
   element's name (`h1` to `h3`, `p`, `code`, `pre`, `kbd`, `samp`, `a`, `button`, the fields, a
   checkbox's or a radio's label, also under `pointer: coarse`, `fieldset`), by a state or a
   pseudo-element alone (`:focus-visible`, `::placeholder`), by an attribute alone, by `*` or by
-  `:is()`, or under what wraps every page (`#root`, `.tt-shell`, `.tt-body`, `.tt-page`). Every
+  `:is()`, or under what wraps every page (`#root`, `#tt-main`). Every
   element a component draws has a class that starts with `ui-` (a control's native element also
   has `ui-control`), and each of those rules skips such elements: its subject carries
   `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no specificity, and the
@@ -419,8 +432,8 @@ knowledge base, settings) is two panes, the detail a `Page` of its own.
 
 - **One header.** `PageHeader`: where the page is (`path`, above), the title in the display face,
   a line of help, and the page's actions at the end, which wrap under the title on a phone. A list
-  pane's head (conversations, the knowledge base, settings) is the smaller `title` size, as in the
-  prototype. One `h1` per page; a section's heading is `Heading` at level 2.
+  pane's head (conversations, the knowledge base, settings) is the smaller `title` size: the pane is
+  beside its detail, whose own title is the display one. One `h1` per page; a section's heading is `Heading` at level 2.
 - **One primary button per screen.** The thing the screen asks you to do is `variant="primary"`;
   everything else is a plain button, a ghost button, or, past three actions on one object, a
   `MoreMenu`. In a dialog the actions are at its foot, the primary last; in a form on the page they
@@ -456,7 +469,7 @@ Pills, as on the website. A plain button is white with a 1px control edge. **The
 (the one thing a screen asks you to press) is mint with ink on it, outlined in 1.5px ink and lifted
 on a hard 2px ink shadow that rises to 3px on hover and is pressed flat on click (in the dark, the
 outline and the lift are the mint edge). The motion stops under `prefers-reduced-motion`. Icon
-buttons, fields and cards take `--radius-md` (10px, as in the approved prototype).
+buttons, fields and cards take `--radius-md` (10px).
 
 ## Fonts
 
@@ -465,7 +478,7 @@ The website's three families, each in the role the app needs:
 | Family | Role in the app | Website's role |
 |---|---|---|
 | Inter | all text, labels, the controls: a dense interface wants its plain, even forms | running text |
-| Bricolage Grotesque | headings (`h1` to `h3`, set heavy and tight), the apps' titles | headlines, and the site's default sans |
+| Bricolage Grotesque | titles of 20px and up only (a page's, a dialog's and a drawer's: `--type-display`, `--type-title`), set tight; smaller headings are Inter ([The type roles](#the-type-roles)) | headlines, and the site's default sans |
 | JetBrains Mono | paths, commands, ids and code, never labels or prose | eyebrows, paths, commands |
 
 The website sets its body in Bricolage; the app doesn't, because forms, tables and long lists in a

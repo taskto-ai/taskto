@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, expect, test } from 'vitest'
-import { unusedClassErrors } from '../scripts/css-check.mjs'
+import { unusedAliasErrors, unusedClassErrors } from '../scripts/css-check.mjs'
 
 // css-check's reverse check: a rule naming an old `tt-` class that nothing in the app uses is dead
 // (its screen moved onto the components), and fails, so the old stylesheets only shrink.
@@ -32,7 +32,7 @@ test('a rule whose class no module uses fails, once per class, with its line', (
     'src/Live.tsx': 'export const L = () => <p className="tt-live" />\n',
   })
   expect(unusedClassErrors(root)).toEqual([
-    'src/old.legacy.css:3: .tt-gone has a rule but nothing in the app uses the class: delete its rules',
+    'src/old.legacy.css:3: .tt-gone has a rule but nothing in the app uses the class: delete its rules (or, if a module builds the name from pieces, add it to BUILT_FROM_PIECES with where)',
   ])
 })
 
@@ -61,7 +61,7 @@ test('a name in a declaration’s value, an attribute selector or a comment is n
       '/* .tt-in-a-comment { margin: 0; } */\n.ui-x::before { content: ".tt-in-a-string"; }\n[data-kind="tt-in-an-attribute"] { margin: 0; }\n@media (width > 1px) {\n  .tt-nested { margin: 0; }\n}\n',
   })
   expect(unusedClassErrors(root)).toEqual([
-    'src/old.legacy.css:5: .tt-nested has a rule but nothing in the app uses the class: delete its rules',
+    'src/old.legacy.css:5: .tt-nested has a rule but nothing in the app uses the class: delete its rules (or, if a module builds the name from pieces, add it to BUILT_FROM_PIECES with where)',
   ])
 })
 
@@ -71,6 +71,34 @@ test('a class only in an HTML comment of index.html keeps no rule alive', () => 
     'index.html': '<!-- <div class="tt-commented"></div> -->\n<body class="tt-real"></body>\n',
   })
   expect(unusedClassErrors(root)).toEqual([
-    'src/old.legacy.css:1: .tt-commented has a rule but nothing in the app uses the class: delete its rules',
+    'src/old.legacy.css:1: .tt-commented has a rule but nothing in the app uses the class: delete its rules (or, if a module builds the name from pieces, add it to BUILT_FROM_PIECES with where)',
   ])
+})
+
+test('a class an end-to-end harness draws keeps its rule; a class built from pieces can be named', () => {
+  const root = web({
+    'src/old.legacy.css': '.tt-harness { margin: 0; }\n.tt-built { margin: 0; }\n',
+    'e2e/conversation/harness.tsx': 'export const H = () => <main className="tt-harness" />\n',
+  })
+  expect(unusedClassErrors(root, new Map([['tt-built', 'src/A.tsx builds it']]))).toEqual([])
+  expect(unusedClassErrors(root)[0]).toContain('.tt-built has a rule but nothing in the app uses the class')
+  expect(unusedClassErrors(root, new Map([['tt-gone', 'no longer']]))).toContain(
+    'tt-gone is in BUILT_FROM_PIECES but no rule names it: remove it from the list',
+  )
+})
+
+test('an old --tt-* alias nothing reads fails, and one read by a stylesheet or a module passes', () => {
+  const root = web({
+    'src/ui/legacy.css':
+      '@layer tokens {\n  :root {\n    --tt-read: var(--color-bg);\n    --tt-scripted: 1px;\n    --tt-own-message: var(--color-surface-own);\n    /* --tt-in-a-comment: 0; */\n  }\n}\n',
+    'src/old.legacy.css': '.tt-a { color: var(--tt-read); }\n',
+    'src/A.tsx': "document.documentElement.style.setProperty('--tt-scripted', '2px')\n// --tt-own-message\n",
+  })
+  expect(unusedAliasErrors(root)).toEqual([
+    'src/ui/legacy.css:5: --tt-own-message is defined but nothing reads it: delete it',
+  ])
+})
+
+test('the app as it is reads every alias it keeps', () => {
+  expect(unusedAliasErrors(resolve(__dirname, '..'))).toEqual([])
 })

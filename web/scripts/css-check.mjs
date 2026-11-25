@@ -795,8 +795,10 @@ export function scaleLiteral(value, property) {
 
 export const OPT_OUT = ':not(:where([class^="ui-"], [class*=" ui-"]))'
 
-// What wraps every page: a rule scoped by one of these still reaches every component.
-export const WRAPPERS = new Set(['#root', '.tt-shell', '.tt-body', '.tt-page', '#tt-main'])
+// What wraps every page: a rule scoped by one of these still reaches every component. (The old
+// shell's wrappers, `.tt-shell`, `.tt-body` and `.tt-page`, are gone with their rules; a rule naming
+// one fails as a rule nothing uses.)
+export const WRAPPERS = new Set(['#root', '#tt-main'])
 
 // Rules that deliberately reach every element, the design system's too: the selector, the only
 // properties it may set, and the reason. A rule that sets anything else is not allowed by it.
@@ -1081,15 +1083,21 @@ export function check(web) {
   return errors
 }
 
-// --- Old rules nothing uses ------------------------------------------------------------------
+// --- Old rules and names nothing uses ---------------------------------------------------------
 
 // A rule that names a `tt-` class (the old stylesheet's) that no module of the app mentions can
 // match nothing: it was left behind when its screen moved onto the components, and it goes. A
 // module mentions a class when the name is anywhere in its code (a className, a lookup table, a
-// string a class is built from), its comments left out; tests and the gallery's specimens don't
-// count, nor does a name that is only the start of a longer one. Only the old classes are held to
-// it: a component's `ui-` class can be built from pieces (`ui-button-${variant}`), which a search
-// for the name doesn't see.
+// string a class is built from), its comments left out; the app's modules under src/ and the
+// end-to-end harnesses under e2e/ count (a harness draws a screen as the app would), tests and the
+// gallery's specimens don't, nor does a name that is only the start of a longer one. Only the old
+// classes are held to it: a component's `ui-` class can be built from pieces
+// (`ui-button-${variant}`), which a search for the name doesn't see.
+
+// Old classes a module builds from pieces (`'tt-' + kind`), so no search finds their names: each with
+// where it is built. None today; a class goes here only when it can't be written out.
+export const BUILT_FROM_PIECES = new Map([])
+
 // The text of an HTML page outside its comments (`<!-- … -->`); an unclosed one runs to the end.
 function outsideHtmlComments(html) {
   let out = ''
@@ -1104,16 +1112,23 @@ function outsideHtmlComments(html) {
   }
 }
 
-export function unusedClassErrors(web) {
-  const src = join(web, 'src')
-  const code = components(src)
+// The code that may use an old class or an old name: the app's modules and the end-to-end
+// harnesses (not tests, not the gallery), comments left out, and the page's markup.
+function usersCode(web) {
+  const dirs = [join(web, 'src'), join(web, 'e2e')].filter((d) => existsSync(d))
+  const code = dirs
+    .flatMap((d) => components(d))
     .filter((f) => !/\.gallery\.tsx?$/.test(f))
     .map((f) => blankComments(readFileSync(f, 'utf8')))
-  // The page's own markup, its comments left out as a module's are.
   const html = join(web, 'index.html')
   if (existsSync(html)) code.push(outsideHtmlComments(readFileSync(html, 'utf8')))
+  return code
+}
+
+export function unusedClassErrors(web, built = BUILT_FROM_PIECES) {
+  const src = join(web, 'src')
   const used = new Set(
-    code.flatMap((c) => [...c.matchAll(/(?<![\w-])tt-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g)].map((m) => m[0])),
+    usersCode(web).flatMap((c) => [...c.matchAll(/(?<![\w-])tt-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g)].map((m) => m[0])),
   )
   const errors = []
   for (const path of stylesheets(src)) {
@@ -1123,20 +1138,61 @@ export function unusedClassErrors(web) {
     const reported = new Set()
     for (const { selector, line } of allRules(readFileSync(path, 'utf8'))) {
       for (const cls of classSelectors(selector)) {
-        if (!cls.startsWith('tt-') || used.has(cls) || reported.has(cls)) continue
+        if (!cls.startsWith('tt-') || used.has(cls) || built.has(cls) || reported.has(cls)) continue
         reported.add(cls)
-        errors.push(`${file}:${line}: .${cls} has a rule but nothing in the app uses the class: delete its rules`)
+        errors.push(
+          `${file}:${line}: .${cls} has a rule but nothing in the app uses the class: delete its rules (or, if a module builds the name from pieces, add it to BUILT_FROM_PIECES with where)`,
+        )
       }
     }
   }
+  for (const cls of built.keys()) {
+    if (!used.has(cls) && ![...stylesheets(src)].some((p) => readFileSync(p, 'utf8').includes(`.${cls}`))) {
+      errors.push(`${cls} is in BUILT_FROM_PIECES but no rule names it: remove it from the list`)
+    }
+  }
   return errors
+}
+
+// The old `--tt-*` names (src/ui/legacy.css) are aliases kept only while something reads them: one
+// that no stylesheet (legacy.css itself aside) and no module reads is gone, and fails if it comes
+// back. Read means written as `var(--tt-name…`, or the name in a module's code (a script that reads
+// or sets it).
+export const ALIASES = 'src/ui/legacy.css'
+
+export function unusedAliasErrors(web) {
+  const path = join(web, ALIASES)
+  if (!existsSync(path)) return []
+  const defined = allDeclarations(readFileSync(path, 'utf8'))
+  const readers = [
+    ...stylesheets(join(web, 'src'))
+      .filter((p) => relative(web, p).split('\\').join('/') !== ALIASES)
+      .map((p) => blankCssComments(readFileSync(p, 'utf8'))),
+    ...usersCode(web),
+  ].join('\n')
+  const errors = []
+  for (const { name, line } of defined) {
+    const read = new RegExp(`${name.replace(/[-]/g, '\\-')}(?![\\w-])`)
+    if (!read.test(readers)) errors.push(`${ALIASES}:${line}: ${name} is defined but nothing reads it: delete it`)
+  }
+  return errors
+}
+
+// The custom properties a stylesheet defines (`--tt-x: …`), with their lines, comments left out.
+function allDeclarations(css) {
+  const text = blankCssComments(css)
+  const out = []
+  for (const m of text.matchAll(/(?<![\w-])(--tt-[a-z0-9-]+)\s*:/g)) {
+    out.push({ name: m[1], line: text.slice(0, m.index).split('\n').length })
+  }
+  return out
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const at = process.argv.indexOf('--root')
   const web = at > 0 ? process.argv[at + 1] : join(dirname(fileURLToPath(import.meta.url)), '..')
   // The app's own tree (not a test's): its old rules nothing uses any more, too.
-  const errors = [...check(web), ...(at > 0 ? [] : unusedClassErrors(web))]
+  const errors = [...check(web), ...(at > 0 ? [] : [...unusedClassErrors(web), ...unusedAliasErrors(web)])]
   if (errors.length > 0) {
     console.error(`css-check: ${errors.length} problem${errors.length === 1 ? '' : 's'}\n`)
     for (const e of errors) console.error(`  ${e}`)

@@ -1,5 +1,5 @@
 /* The base: what every page starts from. The elements (the page, headings, links, the focus ring,
-   form fields) and the few utilities (tt-sr-only, tt-muted, tt-small, tt-error, tt-center-text).
+   form fields) and the few utilities (tt-muted, tt-small, tt-error).
    docs/design.md, "Where styles live". Three parts, in this order (css-check pins it):
 
    1. @layer base: a component's rule (@layer components) wins over these whatever their
@@ -156,8 +156,7 @@
 /* In no layer: what reaches every element on purpose, the design system's too (css-check's
    EVERYWHERE): border-box sizing, the selection's and the scrollbars' colours, the caret, the search
    field's clear button, and 16px text by default in a field in a narrow window, which keeps iOS
-   from zooming in on focus (a default: a more specific old rule, such as `.tt-editor textarea`,
-   still sets its own size). In @layer base a component's own rule would win over them; here they win, as
+   from zooming in on focus (a default: a more specific old rule still sets its own size). In @layer base a component's own rule would win over them; here they win, as
    they did when they were in the one stylesheet. */
 *,
 *::before,
@@ -208,9 +207,8 @@ input[type="search"]::-webkit-search-cancel-button:hover {
 }
 
 /* Not in a layer, yet: on a touch screen a checkbox or a radio is the box alone and its label is
-   the target. These rules won over single-class rules of the screens by specificity
-   (`.tt-checks label`, `.tt-capture-check`, `.tt-file-input` …), and a layered rule would lose to
-   them. They move into @layer base once those screens' rules are in a layer too. Being in no
+   the target. These rules won over single-class rules of the old screens by specificity (such as
+   `.tt-checks label`), and a layered rule would lose to them. They move into @layer base once those screens' rules are in a layer too. Being in no
    layer, they would beat every component: the opt-out is what keeps them off the design system's
    switch and checkbox, so it is not optional here. */
 @media (pointer: coarse) {
