@@ -18,7 +18,8 @@ import { SpacePicker, useSpaces } from '../spaces'
 import { Deleted } from './Delete'
 import { DocList } from './DocList'
 import { DocView } from './DocView'
-import { useDocs } from './docs'
+import { useDocs, useLatest } from './docs'
+import { GuardContext, useGuard } from './guard'
 import { NewDoc } from './NewDoc'
 import { Upload } from './Upload'
 
@@ -44,14 +45,32 @@ export function KnowledgePage({
   // Each search counts, so asking the same again searches again rather than showing the last.
   const [query, setQuery] = useState<(SearchQuery & { n: number }) | null>(null)
   const [adding, setAdding] = useState<'new' | 'upload' | null>(null)
-  const [deleted, setDeleted] = useState<{ path: string; versioned: boolean } | null>(null)
+  // The notice after a delete belongs to the space and document it was made for.
+  const [deleted, setDeleted] = useState<{ base: string; path: string; versioned: boolean } | null>(null)
   const canWrite = space?.access === 'write'
   const t = useT()
+  // Opening another document, or going back, asks first when a draft would be lost.
+  const guard = useGuard()
+  const { ask } = guard
+  // What is shown now: a delete or a restore that finishes after the person went to another
+  // space or document is not theirs to show there.
+  const now = useLatest({ base, path: open?.path })
 
   const show = (path: string, editing = false) => {
     setOpen({ path, editing })
     setAdding(null)
     setDeleted(null)
+  }
+  // The list of a space is read again when something changed in it, if it is the one shown.
+  const listChanged = (changed: string) => {
+    if (now.current.base === changed) docs.reload()
+  }
+  // A form or the notice has done its work: it closes, and its document opens unless the person
+  // chooses to keep the draft they are writing.
+  const finished = (path: string, editing = false) => {
+    setAdding(null)
+    setDeleted(null)
+    ask(() => show(path, editing))
   }
 
   return (
@@ -62,12 +81,14 @@ export function KnowledgePage({
           <SpacePicker
             spaces={spaces.data}
             space={space}
-            choose={(id) => {
-              setOpen(null)
-              setAdding(null)
-              setDeleted(null)
-              choose(id)
-            }}
+            choose={(id) =>
+              ask(() => {
+                setOpen(null)
+                setAdding(null)
+                setDeleted(null)
+                choose(id)
+              })
+            }
           />
         )}
         {base && canWrite && (
@@ -94,77 +115,87 @@ export function KnowledgePage({
       {base && adding === 'new' && (
         <NewDoc
           base={base}
-          onCreated={(path) => {
-            docs.reload()
-            show(path, true)
-          }}
+          onCreated={(path) => finished(path, true)}
+          onChanged={() => listChanged(base)}
           onCancel={() => setAdding(null)}
         />
       )}
       {base && adding === 'upload' && (
         <Upload
           base={base}
-          onDone={(path) => {
-            docs.reload()
-            show(path)
-          }}
+          onDone={(path) => finished(path)}
+          onChanged={() => listChanged(base)}
           onCancel={() => setAdding(null)}
         />
       )}
-      {base && deleted && (
+      {base && deleted && deleted.base === base && (
         <Deleted
-          base={base}
+          key={`${deleted.base}/${deleted.path}`}
+          base={deleted.base}
           path={deleted.path}
           versioned={deleted.versioned}
           canWrite={canWrite}
+          onChanged={() => listChanged(deleted.base)}
           onRestored={(path) => {
-            docs.reload()
-            show(path)
+            if (now.current.base === deleted.base) finished(path)
           }}
         />
       )}
-      <div className="tt-split" data-open={open ? 'doc' : 'list'}>
-        <div className="tt-kb-side">
-          {query ? (
-            <SearchResults
-              key={query.n}
-              workspace={workspace}
-              space={space}
-              query={query}
-              onOpen={(r) => {
-                if (r.space_id !== space?.id) choose(r.space_id)
-                show(r.path)
-              }}
-              onClose={() => setQuery(null)}
-            />
-          ) : (
-            <DocList
-              docs={docs.data}
-              loading={(spaces.data === undefined || !!base) && docs.data === undefined && !docs.error && !spaces.error}
-              current={open?.path}
+      <GuardContext.Provider value={guard}>
+        <div className="tt-split" data-open={open ? 'doc' : 'list'}>
+          <div className="tt-kb-side">
+            {query ? (
+              <SearchResults
+                key={query.n}
+                workspace={workspace}
+                space={space}
+                query={query}
+                onOpen={(r) => {
+                  ask(() => {
+                    if (r.space_id !== space?.id) choose(r.space_id)
+                    show(r.path)
+                  })
+                }}
+                onClose={() => setQuery(null)}
+              />
+            ) : (
+              <DocList
+                docs={docs.data}
+                loading={
+                  (spaces.data === undefined || !!base) && docs.data === undefined && !docs.error && !spaces.error
+                }
+                current={open?.path}
+                onOpen={(path) => ask(() => show(path))}
+              />
+            )}
+          </div>
+          {base && open && (
+            <DocView
+              key={`${base}/${open.path}`}
+              base={base}
+              path={open.path}
+              canWrite={canWrite}
+              admin={admin && canWrite}
+              editing={open.editing ?? false}
+              onBack={() => setOpen(null)}
               onOpen={(path) => show(path)}
+              onChanged={docs.reload}
+              onDeleted={(doc) => {
+                // The delete finished after the person went to another space: nothing to show.
+                if (now.current.base !== base) return
+                docs.reload()
+                // Another document may be open by now; that one stays.
+                if (now.current.path === doc.path) {
+                  ask(() => {
+                    if (now.current.base === base && now.current.path === doc.path) setOpen(null)
+                  }, 'deleted')
+                }
+                setDeleted({ base, path: doc.path, versioned: doc.versioned !== false })
+              }}
             />
           )}
         </div>
-        {base && open && (
-          <DocView
-            key={`${base}/${open.path}`}
-            base={base}
-            path={open.path}
-            canWrite={canWrite}
-            admin={admin && canWrite}
-            editing={open.editing ?? false}
-            onBack={() => setOpen(null)}
-            onOpen={(path) => show(path)}
-            onChanged={docs.reload}
-            onDeleted={(doc) => {
-              docs.reload()
-              setOpen(null)
-              setDeleted({ path: doc.path, versioned: doc.versioned !== false })
-            }}
-          />
-        )}
-      </div>
+      </GuardContext.Provider>
     </div>
   )
 }
