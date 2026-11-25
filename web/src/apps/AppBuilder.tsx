@@ -21,6 +21,7 @@ import type { EventSourceFactory } from '../conversations/useConversationStream'
 import { browserLocale, useT } from '../i18n'
 import { useLoad } from '../load'
 import { NARROW, useMediaQuery } from '../media'
+import { useMounted } from '../mounted'
 import { Link, navigate, routePath } from '../router'
 import { spaceLabel } from '../spaces'
 import { Badge } from '../ui/Badge'
@@ -139,6 +140,9 @@ function BuilderStart({
       ? mine
       : sharedSpaces.find((s) => String(s.id) === shared)
   const mayEdit = !editing || (target.data?.access.design && chosen?.access === 'write')
+  // A build that starts after the page went (the session ended) keeps no draft and opens nothing:
+  // the drafts are the person's, and this browser may be someone else's by then.
+  const mounted = useMounted()
 
   const start = async (e: FormEvent) => {
     e.preventDefault()
@@ -180,15 +184,16 @@ function BuilderStart({
         const title = (app?.name ?? content).replace(/\s+/g, ' ').slice(0, 60)
         await api(`${ws(workspace)}/conversations/${id}`, { method: 'PATCH', body: { title } }).catch(() => undefined)
       }
+      if (!mounted.current) return
       writeDraft(textKey, null)
       const session: Session = { space: chosen.id, since, ...(app ? { app: app.id } : {}) }
       writeDraft(sessionKey(workspace, id), JSON.stringify(session))
       writeDraft(lastKey(workspace), String(id))
       onStarted(id, session)
     } catch (err) {
-      setError(appError(err))
+      if (mounted.current) setError(appError(err))
     } finally {
-      setBusy(false)
+      if (mounted.current) setBusy(false)
     }
   }
 

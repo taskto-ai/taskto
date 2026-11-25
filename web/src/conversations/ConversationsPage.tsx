@@ -7,6 +7,7 @@ import { api, type Conversation, errorText, ws } from '../api'
 import { builderPath } from '../apps/route'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
+import { useMounted } from '../mounted'
 import { navigate, routePath } from '../router'
 import { Button, ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -41,6 +42,8 @@ export function ConversationsPage({
     [workspace, archived],
   )
   const [creating, setCreating] = useState(false)
+  // A conversation made after the page went (another workspace, the session ended) isn't opened.
+  const mounted = useMounted()
   const [error, setError] = useState<string | null>(null)
   const openId = open && /^\d+$/.test(open) ? Number(open) : null
   const link = (id?: number) => routePath({ workspace, section: 'conversations', item: id ? String(id) : undefined })
@@ -51,12 +54,13 @@ export function ConversationsPage({
     setError(null)
     try {
       const c = await api<Conversation>(`${ws(workspace)}/conversations`, { method: 'POST', body: {} })
+      if (!mounted.current) return
       list.reload()
       navigate(link(c.id))
     } catch (e) {
-      setError(errorText(e))
+      if (mounted.current) setError(errorText(e))
     } finally {
-      setCreating(false)
+      if (mounted.current) setCreating(false)
     }
   }
 

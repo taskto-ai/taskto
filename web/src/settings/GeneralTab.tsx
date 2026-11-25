@@ -66,11 +66,13 @@ function MailPanel({ workspace, email }: { workspace: number; email: string }) {
   const t = useT()
   const status = useLoad(() => api<MailStatus>(mailPath(workspace)), [workspace])
   const { busy, error, run } = useAction()
-  const send = () =>
-    run(async () => {
-      const r = await api<{ sent_to: string }>(`${mailPath(workspace)}/test`, { method: 'POST', body: {} })
-      toast({ message: t('settings.general.mail.sent', { email: r.sent_to }), tone: 'success' })
+  const send = async () => {
+    let to = ''
+    const ok = await run(async () => {
+      to = (await api<{ sent_to: string }>(`${mailPath(workspace)}/test`, { method: 'POST', body: {} })).sent_to
     })
+    if (ok) toast({ message: t('settings.general.mail.sent', { email: to }), tone: 'success' })
+  }
   const m = status.data
   return (
     <Section

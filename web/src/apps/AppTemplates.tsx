@@ -9,6 +9,7 @@ import { type FormEvent, useId, useState } from 'react'
 import { type App, type AppRole, type AppTemplate, api, type Board, errorText, type Space, ws } from '../api'
 import { has, type Key, useT } from '../i18n'
 import { useLoad } from '../load'
+import { useMounted } from '../mounted'
 import { navigate, routePath } from '../router'
 import { spaceLabel } from '../spaces'
 import { Avatar } from '../ui/Avatar'
@@ -208,6 +209,8 @@ function InstallDialog({
   const [shared, setShared] = useState('')
   const [board, setBoard] = useState('')
   const [busy, setBusy] = useState(false)
+  // An app made after the dialog went (the session ended) isn't opened.
+  const mounted = useMounted()
   const [error, setError] = useState<string | null>(null)
   const boards = useWritableBoards(workspace, template.needs_board ? spaces : undefined)
   const space = where === 'private' ? mine : sharedSpaces.find((s) => String(s.id) === shared)
@@ -224,8 +227,10 @@ function InstallDialog({
         method: 'POST',
         body: { name: name.trim(), ...(template.needs_board && target ? { board: target } : {}) },
       })
+      if (!mounted.current) return
       navigate(installedPath(workspace, space.id, made.id))
     } catch (err) {
+      if (!mounted.current) return
       setError(appError(err))
       setBusy(false)
     }
@@ -420,6 +425,8 @@ export function DuplicateDialog({
   const [name, setName] = useState(t('apps.duplicate.defaultName', { name: app.name }))
   const [to, setTo] = useState(String((mine ?? spaces[0])?.id ?? space.id))
   const [busy, setBusy] = useState(false)
+  // An app made after the dialog went (the session ended) isn't opened.
+  const mounted = useMounted()
   const [error, setError] = useState<string | null>(null)
 
   const duplicate = async (e: FormEvent) => {
@@ -432,8 +439,10 @@ export function DuplicateDialog({
         method: 'POST',
         body: { name: name.trim(), space_id: Number(to) },
       })
+      if (!mounted.current) return
       navigate(installedPath(workspace, made.space_id, made.id))
     } catch (err) {
+      if (!mounted.current) return
       setError(errorText(err))
       setBusy(false)
     }

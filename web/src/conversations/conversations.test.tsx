@@ -59,6 +59,24 @@ test('lists conversations, creates one and opens it', async () => {
   await waitFor(() => expect(sources.at(-1)?.url).toBe('/api/workspaces/1/conversations/7/events'))
 })
 
+test('a conversation made after the page went (the session ended) is not opened', async () => {
+  let answer: () => void = () => {}
+  fakeFetch({
+    'GET /api/workspaces/1/conversations': { body: { conversations: [] } },
+    'POST /api/workspaces/1/conversations': () =>
+      new Promise((done) => {
+        answer = () => done({ status: 201, body: conversation(7, '') })
+      }),
+  })
+  const { factory } = fakeStreams()
+  const { unmount } = render(<Page streams={factory} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'New' }))
+  unmount()
+  window.history.replaceState(null, '', '/')
+  await act(async () => answer())
+  expect(window.location.pathname).toBe('/')
+})
+
 test('shows the stream as it comes, and sends a message', async () => {
   window.history.replaceState(null, '', '/w/1/conversations/7')
   const calls = fakeFetch({
