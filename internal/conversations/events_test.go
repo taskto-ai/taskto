@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -267,6 +268,44 @@ func TestEventsEndWithTheirLogin(t *testing.T) {
 	owner.expect(http.StatusNoContent, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/enable", ws, member.id), nil)
 	s.expectEnd(interruptedLine)
 	waitFor(t, "the watch to close", w.isClosed)
+}
+
+// A stream watches its login once: each watch looks the session up on every heartbeat, so a
+// second one would double the lookups of every open stream. It releases its watch when it ends.
+func TestEventsWatchTheirSessionOnce(t *testing.T) {
+	e, srv, owner, ws, conv := newStreamEnv(t)
+	var started, stopped atomic.Int32
+	watch := e.svc.watchSession
+	e.svc.watchSession = func(r *http.Request, every time.Duration) (context.Context, context.CancelFunc) {
+		started.Add(1)
+		ctx, stop := watch(r, every)
+		return ctx, func() {
+			stopped.Add(1)
+			stop()
+		}
+	}
+	e.svc.heartbeat = 10 * time.Millisecond
+	s := owner.openEvents(srv, ws, conv.ID)
+	e.rt.watch(t, 0)
+	// Several heartbeats in, the stream has still started one watch.
+	for range 3 {
+		if got := s.next(); got.comment != "heartbeat" {
+			t.Fatalf("event = %+v, want a heartbeat", got)
+		}
+	}
+	if n := started.Load(); n != 1 {
+		t.Fatalf("the stream started %d session watches, want 1", n)
+	}
+	if n := stopped.Load(); n != 0 {
+		t.Fatalf("%d session watches released while the stream is open", n)
+	}
+	owner.expect(http.StatusNoContent, http.MethodPost, "/api/logout", nil)
+	for {
+		if got := s.next(); got.data == interruptedLine {
+			break
+		}
+	}
+	waitFor(t, "the watch to be released", func() bool { return stopped.Load() == 1 })
 }
 
 // An open stream ends with the login that opened it: at once when the login is signed out
