@@ -248,4 +248,9 @@ test("a colour's name inside a function's arguments is a colour, even where name
   const gradient = runFiles({ 'ui/list.css': '.tt-a { list-style: linear-gradient(red, blue); }\n' })
   expect(gradient.code).toBe(1)
   expect(gradient.err).toContain('list-style has the colour literal red')
+  const stops = runFiles({
+    'ui/list.css': '.tt-a { list-style: linear-gradient(var(--start, red), var(--end, blue)); }\n',
+  })
+  expect(stops.code).toBe(1)
+  expect(stops.err).toContain('list-style has the colour literal red')
 })

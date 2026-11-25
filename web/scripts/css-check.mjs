@@ -172,15 +172,16 @@ const IDENTIFIER_PROPERTIES = new Set([
   'will-change',
 ])
 
-// What is inside the parentheses of a value's functions; the rest is blanked. A var()'s fallback
-// is blanked too: it stands where the var() is, so it is an identifier there as well.
+// What is inside the parentheses of a value's functions; the rest is blanked. The fallback of a
+// var() at the value's top level is blanked too: it stands where an identifier would. A var()
+// inside another function (a gradient's colour stop) keeps its fallback looked in.
 function functionArguments(value) {
   const stack = [] // for each open parenthesis: is it a var()'s?
   let out = ''
   for (let i = 0; i < value.length; i++) {
     const c = value[i]
     if (c === ')') stack.pop()
-    const inside = stack.length > 0 && !stack.includes(true)
+    const inside = stack.length > 0 && !stack[0]
     out += inside && c !== '(' ? c : ' '
     if (c === '(') stack.push(/(?<![\w-])var$/i.test(value.slice(0, i)))
   }
