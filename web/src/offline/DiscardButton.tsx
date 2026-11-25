@@ -6,7 +6,7 @@
 import { useRef } from 'react'
 import { errorText } from '../api'
 import { useT } from '../i18n'
-import { ConfirmButton } from '../settings/parts'
+import { ConfirmButton } from './ConfirmButton'
 import { discard } from './choices'
 import type { Runtime } from './runtime'
 import { type OutboxItem, type SeenAs, seenAs } from './store'

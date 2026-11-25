@@ -6,7 +6,20 @@ import { type FormEvent, useState } from 'react'
 import { api, type Member, type Space, type SpaceMember, ws } from '../api'
 import { type T, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, ConfirmButton, useAction } from './parts'
+import { Avatar } from '../ui/Avatar'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Dialog } from '../ui/Dialog'
+import { EmptyState } from '../ui/EmptyState'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { Select } from '../ui/Select'
+import { Switch } from '../ui/Switch'
+import { Alert, Loading, Section, SettingsTab, useAction } from './parts'
 
 type SpaceRole = SpaceMember['role']
 
@@ -28,9 +41,8 @@ export function SpacesTab({ workspace }: { workspace: number }) {
   const t = useT()
 
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-spaces">
-        <h2 id="tt-spaces">{t('settings.spaces.title')}</h2>
+    <SettingsTab title={t('settings.spaces.title')} help={t('settings.help.spaces')}>
+      <Panel padded>
         <CreateSpace
           base={base}
           onCreated={(id) => {
@@ -38,29 +50,42 @@ export function SpacesTab({ workspace }: { workspace: number }) {
             spaces.reload()
           }}
         />
-        <Alert error={spaces.error} />
-        {!spaces.data && !spaces.error && <p className="tt-muted">{t('app.loading')}</p>}
-        {spaces.data?.length === 0 && <p className="tt-muted">{t('settings.spaces.none')}</p>}
-        {spaces.data && spaces.data.length > 0 && (
-          <ul className="tt-list" aria-label={t('settings.spaces.title')}>
-            {spaces.data.map((s) => (
-              <li key={s.id}>
-                <button type="button" aria-current={s.id === open || undefined} onClick={() => setOpen(s.id)}>
-                  <span className="tt-list-title">{s.name}</span>
-                  <span className="tt-muted tt-small">
-                    {s.archived_at ? `${t('settings.spaces.archived')} · ` : ''}
-                    {s.role ? yourRole(t, s.role) : t('settings.spaces.notMember')}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-      {space && (
-        <SpaceSettings key={space.id} base={base} workspace={workspace} space={space} onChange={spaces.reload} />
+      </Panel>
+      <Alert error={spaces.error} />
+      {!spaces.data && !spaces.error && <Loading />}
+      {spaces.data?.length === 0 && (
+        <EmptyState title={t('settings.spaces.none')}>{t('settings.spaces.noneHelp')}</EmptyState>
       )}
-    </div>
+      {spaces.data && spaces.data.length > 0 && (
+        <Panel>
+          <Rows label={t('settings.spaces.title')}>
+            {spaces.data.map((s) => (
+              <Row
+                key={s.id}
+                leading={<Avatar name={s.name} size="sm" shape="square" decorative />}
+                title={s.name}
+                detail={s.role ? yourRole(t, s.role) : t('settings.spaces.notMember')}
+                status={s.archived_at && <Badge>{t('settings.spaces.archived')}</Badge>}
+                actions={
+                  <Button
+                    size="sm"
+                    aria-label={t('common.labelFor', { label: t('settings.spaces.manage'), name: s.name })}
+                    onClick={() => setOpen(s.id)}
+                  >
+                    {t('settings.spaces.manage')}
+                  </Button>
+                }
+              />
+            ))}
+          </Rows>
+        </Panel>
+      )}
+      {space && (
+        <Dialog open onClose={() => setOpen(null)} title={space.name} size="lg">
+          <SpaceSettings key={space.id} base={base} workspace={workspace} space={space} onChange={spaces.reload} />
+        </Dialog>
+      )}
+    </SettingsTab>
   )
 }
 
@@ -77,18 +102,17 @@ function CreateSpace({ base, onCreated }: { base: string; onCreated: (id: number
     }
   }
   return (
-    <>
-      <form className="tt-form tt-form-row" onSubmit={submit}>
-        <label>
-          {t('settings.spaces.new')}
-          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={100} />
-        </label>
-        <button type="submit" className="tt-button tt-primary" disabled={action.busy}>
+    <form className="settings-form" onSubmit={submit}>
+      <div className="settings-form-row">
+        <Field label={t('settings.spaces.new')} required>
+          <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
+        </Field>
+        <Button type="submit" variant="primary" icon="plus" loading={action.busy}>
           {t('settings.spaces.create')}
-        </button>
-      </form>
+        </Button>
+      </div>
       <Alert error={action.error} />
-    </>
+    </form>
   )
 }
 
@@ -107,53 +131,58 @@ function SpaceSettings({
   const t = useT()
   const [name, setName] = useState(space.name)
   const action = useAction()
+  const [confirmDialog, confirm] = useConfirm()
   const patch = (body: object) => action.run(() => api(url, { method: 'PATCH', body })).then(onChange)
   const rename = (e: FormEvent) => {
     e.preventDefault()
     patch({ name })
   }
+  const archive = async () => {
+    const yes = await confirm({
+      title: t('settings.spaces.archiveQuestion', { name: space.name }),
+      confirmLabel: t('settings.spaces.archiveConfirm'),
+      tone: 'danger',
+    })
+    if (yes) patch({ archived: true })
+  }
 
   return (
-    <section className="tt-panel" aria-label={space.name}>
-      <h2>{space.name}</h2>
-      {space.archived_at && <p className="tt-muted">{t('settings.spaces.archivedHelp')}</p>}
-      <form className="tt-form tt-form-row" onSubmit={rename}>
-        <label>
-          {t('settings.spaces.name')}
-          <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={100} />
-        </label>
-        <button type="submit" className="tt-button" disabled={action.busy || name.trim() === space.name}>
-          {t('settings.spaces.rename')}
-        </button>
+    <div className="settings-panel-body">
+      {space.archived_at && <Notice tone="neutral">{t('settings.spaces.archivedHelp')}</Notice>}
+      <form className="settings-form" onSubmit={rename}>
+        <div className="settings-form-row">
+          <Field label={t('settings.spaces.name')} required>
+            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
+          </Field>
+          <Button type="submit" disabled={action.busy || name.trim() === space.name}>
+            {t('settings.spaces.rename')}
+          </Button>
+        </div>
       </form>
-      <div className="tt-row-actions">
-        {space.archived_at ? (
-          <button type="button" className="tt-button" disabled={action.busy} onClick={() => patch({ archived: false })}>
-            {t('settings.spaces.unarchive')}
-          </button>
-        ) : (
-          <ConfirmButton
-            label={t('settings.spaces.archive')}
-            question={t('settings.spaces.archiveQuestion', { name: space.name })}
-            confirm={t('settings.spaces.archiveConfirm')}
-            disabled={action.busy}
-            onConfirm={() => patch({ archived: true })}
-          />
-        )}
-      </div>
-      <label>
-        <input
-          type="checkbox"
+      <div className="settings-switch-row">
+        <Switch
+          label={t('settings.spaces.offlineDownloads')}
           checked={space.offline_downloads !== false}
           disabled={action.busy}
           onChange={(e) => patch({ offline_downloads: e.target.checked })}
         />
-        {t('settings.spaces.offlineDownloads')}
-      </label>
-      <p className="tt-muted tt-small">{t('settings.spaces.offlineHelp')}</p>
+        <p className="settings-muted">{t('settings.spaces.offlineHelp')}</p>
+      </div>
+      <div className="settings-actions">
+        {space.archived_at ? (
+          <Button icon="archive" disabled={action.busy} onClick={() => patch({ archived: false })}>
+            {t('settings.spaces.unarchive')}
+          </Button>
+        ) : (
+          <Button variant="danger" icon="archive" disabled={action.busy} onClick={archive}>
+            {t('settings.spaces.archive')}
+          </Button>
+        )}
+      </div>
       <Alert error={action.error} />
       <SpaceMembers workspace={workspace} url={`${url}/members`} onChange={onChange} />
-    </section>
+      {confirmDialog}
+    </div>
   )
 }
 
@@ -166,6 +195,7 @@ function SpaceMembers({ workspace, url, onChange }: { workspace: number; url: st
   const [adding, setAdding] = useState<{ user: string; role: SpaceRole }>({ user: '', role: 'editor' })
   const t = useT()
   const action = useAction()
+  const [confirmDialog, confirm] = useConfirm()
   // The caller's own role shows in the space list: it changes with these.
   const done = () => {
     members.reload()
@@ -174,7 +204,14 @@ function SpaceMembers({ workspace, url, onChange }: { workspace: number; url: st
 
   const setRole = (m: SpaceMember, role: SpaceRole) =>
     action.run(() => api(`${url}/${m.id}`, { method: 'PATCH', body: { role } })).then(done)
-  const remove = (m: SpaceMember) => action.run(() => api(`${url}/${m.id}`, { method: 'DELETE' })).then(done)
+  const remove = async (m: SpaceMember) => {
+    const yes = await confirm({
+      title: t('settings.spaces.removeQuestion', { name: m.name }),
+      confirmLabel: t('settings.members.removeConfirm'),
+      tone: 'danger',
+    })
+    if (yes) action.run(() => api(`${url}/${m.id}`, { method: 'DELETE' })).then(done)
+  }
   const add = async (e: FormEvent) => {
     e.preventDefault()
     const ok = await action.run(() =>
@@ -186,72 +223,77 @@ function SpaceMembers({ workspace, url, onChange }: { workspace: number; url: st
   const outside = everyone.data?.filter((p) => !members.data?.some((m) => m.id === p.id)) ?? []
 
   return (
-    <>
-      <h3>{t('settings.spaces.members')}</h3>
+    <Section title={t('settings.spaces.members')} help={t('settings.spaces.rolesHelp')} level={3}>
       <Alert error={members.error ?? everyone.error ?? action.error} />
-      {members.data?.length === 0 && <p className="tt-muted">{t('settings.spaces.nobody')}</p>}
+      {!members.data && !members.error && <Loading lines={2} />}
+      {members.data?.length === 0 && <p className="settings-muted">{t('settings.spaces.nobody')}</p>}
       {members.data && members.data.length > 0 && (
-        <ul className="tt-rows" aria-label={t('settings.spaces.spaceMembers')}>
-          {members.data.map((m) => (
-            <li key={m.id} className="tt-row">
-              <div className="tt-row-main">
-                <strong>{m.name}</strong>
-                <span className="tt-muted tt-small">{m.email}</span>
-              </div>
-              <div className="tt-row-actions">
-                <label>
-                  <span className="tt-sr-only">{t('settings.spaces.roleOf', { name: m.name })}</span>
-                  <select
-                    value={m.role}
-                    disabled={action.busy}
-                    onChange={(e) => setRole(m, e.target.value as SpaceRole)}
-                  >
-                    <option value="editor">{t('settings.spaces.roles.editor')}</option>
-                    <option value="viewer">{t('settings.spaces.roles.viewer')}</option>
-                  </select>
-                </label>
-                <ConfirmButton
-                  label={t('settings.members.remove')}
-                  name={m.name}
-                  question={t('settings.spaces.removeQuestion', { name: m.name })}
-                  confirm={t('settings.members.removeConfirm')}
-                  disabled={action.busy}
-                  onConfirm={() => remove(m)}
-                />
-              </div>
-            </li>
-          ))}
-        </ul>
+        <Panel>
+          <Rows label={t('settings.spaces.spaceMembers')}>
+            {members.data.map((m) => (
+              <Row
+                key={m.id}
+                leading={<Avatar name={m.name} size="sm" decorative />}
+                title={m.name}
+                detail={m.email}
+                actions={
+                  <>
+                    <Select
+                      size="sm"
+                      className="settings-role"
+                      aria-label={t('settings.spaces.roleOf', { name: m.name })}
+                      value={m.role}
+                      disabled={action.busy}
+                      onChange={(e) => setRole(m, e.target.value as SpaceRole)}
+                    >
+                      <option value="editor">{t('settings.spaces.roles.editor')}</option>
+                      <option value="viewer">{t('settings.spaces.roles.viewer')}</option>
+                    </Select>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t('common.labelFor', { label: t('settings.members.remove'), name: m.name })}
+                      disabled={action.busy}
+                      onClick={() => remove(m)}
+                    >
+                      {t('settings.members.remove')}
+                    </Button>
+                  </>
+                }
+              />
+            ))}
+          </Rows>
+        </Panel>
       )}
       {members.data && outside.length > 0 && (
-        <form className="tt-form tt-form-row" onSubmit={add}>
-          <label>
-            {t('settings.spaces.addMember')}
-            <select value={adding.user} onChange={(e) => setAdding((a) => ({ ...a, user: e.target.value }))} required>
-              <option value="">{t('settings.spaces.choose')}</option>
-              {outside.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {t('settings.spaces.person', { name: p.name, email: p.email })}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t('settings.spaces.as')}
-            <select
-              value={adding.role}
-              onChange={(e) => setAdding((a) => ({ ...a, role: e.target.value as SpaceRole }))}
-            >
-              <option value="editor">{t('settings.spaces.roles.editor')}</option>
-              <option value="viewer">{t('settings.spaces.roles.viewer')}</option>
-            </select>
-          </label>
-          <button type="submit" className="tt-button" disabled={action.busy}>
-            {t('settings.spaces.add')}
-          </button>
+        <form className="settings-form" onSubmit={add}>
+          <div className="settings-form-row">
+            <Field label={t('settings.spaces.addMember')} required>
+              <Select value={adding.user} onChange={(e) => setAdding((a) => ({ ...a, user: e.target.value }))}>
+                <option value="">{t('settings.spaces.choose')}</option>
+                {outside.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {t('settings.spaces.person', { name: p.name, email: p.email })}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label={t('settings.spaces.as')} className="settings-field-narrow">
+              <Select
+                value={adding.role}
+                onChange={(e) => setAdding((a) => ({ ...a, role: e.target.value as SpaceRole }))}
+              >
+                <option value="editor">{t('settings.spaces.roles.editor')}</option>
+                <option value="viewer">{t('settings.spaces.roles.viewer')}</option>
+              </Select>
+            </Field>
+            <Button type="submit" icon="plus" loading={action.busy}>
+              {t('settings.spaces.add')}
+            </Button>
+          </div>
         </form>
       )}
-      <p className="tt-muted tt-small">{t('settings.spaces.rolesHelp')}</p>
-    </>
+      {confirmDialog}
+    </Section>
   )
 }
