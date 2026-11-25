@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The install (the image, the Compose file, the proxy config and the install guide) is
@@ -333,5 +334,31 @@ func TestCLIWorkerNetwork(t *testing.T) {
 				t.Errorf("%s doesn't run the worker's network test (%q)", name, want)
 			}
 		}
+	}
+}
+
+// TestServerHasTimeToShutDown: Docker kills a container that is still running when its stop grace
+// period ends, and the default is 10 s. The server's own bounded shutdown (requests, emails, the
+// proxy, the scheduler and the agent runtime, shutdownBudget) must fit in it with room to spare,
+// or the drain that keeps the database consistent is cut off.
+func TestServerHasTimeToShutDown(t *testing.T) {
+	compose := readRepoFile(t, "compose.yaml")
+	i, j := strings.Index(compose, "\n  taskto:\n"), strings.Index(compose, "\n  cli-worker:\n")
+	if i < 0 || j < i {
+		t.Fatal("no taskto service before the cli-worker one")
+	}
+	m := regexp.MustCompile(`(?m)^    stop_grace_period: (\S+)\s*$`).FindStringSubmatch(compose[i:j])
+	if m == nil {
+		t.Fatal("the taskto service has no stop_grace_period: Docker would kill it after 10 s")
+	}
+	grace, err := time.ParseDuration(m[1])
+	if err != nil {
+		t.Fatalf("stop_grace_period %q: %v", m[1], err)
+	}
+	if want := shutdownBudget + 15*time.Second; grace < want {
+		t.Errorf("stop_grace_period is %s, less than the %s shutdown budget plus 15 s", grace, shutdownBudget)
+	}
+	if !strings.Contains(readRepoFile(t, "docs/install.md"), "stop_grace_period") {
+		t.Error("docs/install.md doesn't explain the server's stop_grace_period")
 	}
 }

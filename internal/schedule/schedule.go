@@ -596,9 +596,11 @@ func scanJob(row scanner, extra ...any) (Job, error) {
 
 // Start starts the worker and returns the function that stops it and waits for it, for at most
 // Options.StopWait: a handler that ignores its context is not waited for longer, and its job is
-// left running for its lease to end. It closes the registry. The data directory has one server, so
+// left running for its lease to end. The function says whether the worker returned: false means a
+// handler may still be using the database, and the caller must not close it. It closes the
+// registry. The data directory has one server, so
 // one worker.
-func (s *Service) Start(ctx context.Context) (stop func()) {
+func (s *Service) Start(ctx context.Context) (stop func() bool) {
 	s.freeze()
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -629,12 +631,14 @@ func (s *Service) Start(ctx context.Context) (stop func()) {
 			}
 		}
 	}()
-	return func() {
+	return func() bool {
 		cancel()
 		select {
 		case <-done:
+			return true
 		case <-time.After(s.stopWait):
 			slog.Warn("schedule: a handler did not return when the worker was stopped; its job is left to its lease", "wait", s.stopWait)
+			return false
 		}
 	}
 }
