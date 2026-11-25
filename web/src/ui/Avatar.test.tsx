@@ -19,8 +19,12 @@ describe('initialsAmong', () => {
   test('names whose first two letters match take a later letter, each one its own', () => {
     const letters = initialsAmong(['Expenses', 'Export', 'Expo'])
     expect(new Set(letters).size).toBe(3)
-    expect(letters[0]).toBe('EX')
     for (const l of letters) expect(l.startsWith('E')).toBe(true)
+  })
+
+  test("a short name's only letters stay its own, in either order", () => {
+    expect(initialsAmong(['Exports', 'Ex'])).toEqual(['EP', 'EX'])
+    expect(initialsAmong(['Ex', 'Exports'])).toEqual(['EX', 'EP'])
   })
 
   test('whole characters, never half of one', () => {

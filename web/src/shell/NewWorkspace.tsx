@@ -43,20 +43,25 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Whether the dialog is still open when a save ends: a save outlives a Cancel.
-  const shown = useRef(open)
-  shown.current = open
+  // Which opening of the dialog this is: each opening and each closing counts one more. A save
+  // belongs to the opening it was started in, and outlives a Cancel: when it ends, it acts on the
+  // dialog only if that same opening is still there (not one opened again since).
+  const opening = useRef(0)
 
-  // Each opening starts clean: no name, and no error left from a save before.
+  // Each opening starts clean: no name, no error and no save left from one before.
   useEffect(() => {
+    opening.current += 1
     if (!open) return
     setName('')
     setError(null)
+    setBusy(false)
   }, [open])
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     if (busy || name.trim() === '') return
+    const mine = opening.current
+    const still = () => opening.current === mine
     setBusy(true)
     setError(null)
     try {
@@ -66,7 +71,7 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
         body: { name: name.trim() },
       })
       onMe(me)
-      if (shown.current) {
+      if (still()) {
         onClose()
         openWorkspace(workspace.id)
       } else {
@@ -77,9 +82,9 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
         })
       }
     } catch (err) {
-      if (shown.current) setError(errorText(err))
+      if (still()) setError(errorText(err))
     } finally {
-      setBusy(false)
+      if (still()) setBusy(false)
     }
   }
 

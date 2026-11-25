@@ -169,6 +169,36 @@ describe('Tooltip', () => {
     expect(isOpen()).toBe(true)
   })
 
+  test('placed again when its words change while it is open', () => {
+    const draw = (content: string) => (
+      <Tooltip content={content}>
+        <button type="button">Share</button>
+      </Tooltip>
+    )
+    const { rerender } = render(draw('Short'))
+    const b = screen.getByRole('button', { name: 'Share' })
+    // At the window's end (jsdom's window is 1024 wide).
+    b.getBoundingClientRect = () => ({
+      top: 200,
+      bottom: 236,
+      left: 960,
+      right: 1000,
+      width: 40,
+      height: 36,
+      x: 960,
+      y: 200,
+      toJSON: () => ({}),
+    })
+    let width = 40
+    Object.defineProperty(tip(), 'offsetWidth', { configurable: true, get: () => width })
+    act(() => b.focus())
+    const before = tip().style.left
+    width = 200
+    rerender(draw('A much longer line of words'))
+    expect(tip().style.left).not.toBe(before)
+    expect(Number.parseFloat(tip().style.left) + width).toBeLessThanOrEqual(1024)
+  })
+
   test('follows the control when the page scrolls', () => {
     const b = setup()
     let top = 200

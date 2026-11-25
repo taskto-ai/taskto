@@ -135,7 +135,9 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
   }, [open, hide])
 
   // Into the top layer and next to the control, and kept there while the page or any box around
-  // the control scrolls, or the window changes size.
+  // the control scrolls, or the window changes size, or its words change while it is open (a new
+  // size, placed again).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `content` isn't read here, but new words give the tooltip a new size, which must be placed again.
   useLayoutEffect(() => {
     const el = tip.current
     const target = anchor.current?.firstElementChild
@@ -183,7 +185,7 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
       window.removeEventListener('scroll', place, { capture: true })
       window.removeEventListener('resize', place)
     }
-  }, [open, side])
+  }, [open, side, content])
 
   const pointerIn = (e: ReactPointerEvent) => {
     if (e.pointerType === 'touch') return

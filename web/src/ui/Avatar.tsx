@@ -40,15 +40,25 @@ export function initialsAmong(names: readonly string[]): string[] {
     if (words.length > 1) return initials(name)
     return chars(name).slice(0, 2).join('').toUpperCase()
   })
-  // The letters taken so far: every name's own that is unique, then each one given out.
-  const used = new Set(base.filter((letters) => base.indexOf(letters) === base.lastIndexOf(letters)))
-  return base.map((letters, i) => {
-    if (base.indexOf(letters) === base.lastIndexOf(letters)) return letters
-    const own = chars(names[i])
-    const pick = [letters, ...own.slice(2).map((c) => (own[0] + c).toUpperCase())].find((tried) => !used.has(tried))
-    used.add(pick ?? letters)
-    return pick ?? letters
+  const unique = (letters: string) => base.indexOf(letters) === base.lastIndexOf(letters)
+  // What each name may show: its usual letters, then its first with each later one.
+  const choices = names.map((name, i) => {
+    const own = chars(name)
+    return [...new Set([base[i], ...own.slice(2).map((c) => (own[0] + c).toUpperCase())])]
   })
+  // The letters taken so far: every name's own that is unique, then each one given out. The names
+  // with the fewest choices choose first (in their order when equal), so a short name's only
+  // letters stay its own; the answer keeps the names' order.
+  const used = new Set(base.filter(unique))
+  const out = base.slice()
+  const rest = names.map((_, i) => i).filter((i) => !unique(base[i]))
+  rest.sort((a, b) => choices[a].length - choices[b].length || a - b)
+  for (const i of rest) {
+    const pick = choices[i].find((tried) => !used.has(tried)) ?? base[i]
+    used.add(pick)
+    out[i] = pick
+  }
+  return out
 }
 
 export function Avatar({ name, size = 'md', shape = 'round', decorative = false, className, letters }: AvatarProps) {

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import type { Me } from '../api'
 import { setPreferences } from '../i18n'
-import { navigate } from '../router'
+import { type BeforeLeave, navigate, useBeforeLeave } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { resetToasts } from '../ui/Toast'
 import { Shell } from './Shell'
@@ -351,6 +351,34 @@ test('the sidebar and the workspace switcher change the page', async () => {
   window.history.back()
   await waitFor(() => expect(window.location.pathname).toBe('/w/1/knowledge'))
   await screen.findByRole('button', { name: 'Workspace: Home' })
+})
+
+// A page with a draft, which asks before it is left.
+function Draft({ ask }: { ask: BeforeLeave }) {
+  useBeforeLeave(ask)
+  return null
+}
+
+test('a page that asks before it is left is asked when another workspace is picked', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  // A page with a draft: it holds the move until the person answers.
+  let leave: (() => void) | null = null
+  const ask = vi.fn<BeforeLeave>((go) => {
+    leave = go
+  })
+  render(
+    <>
+      <Shell me={me as unknown as Me} onLogout={() => {}} />
+      <Draft ask={ask} />
+    </>,
+  )
+  fireEvent.click(within(await openSwitcher('Home')).getByRole('menuitemradio', { name: 'Team' }))
+  expect(ask).toHaveBeenCalledTimes(1)
+  expect(window.location.pathname).toBe('/w/1/conversations')
+  act(() => leave?.())
+  expect(window.location.pathname).toBe('/w/4/conversations')
+  await screen.findByRole('button', { name: 'Workspace: Team' })
 })
 
 test('the workspace switcher works by keyboard and gives the focus back', async () => {
@@ -854,6 +882,49 @@ test('a workspace made after Cancel is said, with a way to open it, and the page
   fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
   fireEvent.click(screen.getByRole('button', { name: 'Open it' }))
   await waitFor(() => expect(window.location.pathname).toBe('/w/9/conversations'))
+})
+
+test('a save that ends after Cancel and a new opening leaves the new opening alone', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held: ((answer: { status: number; body: unknown }) => void)[] = []
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: true } },
+    'POST /api/workspaces': () => new Promise((done) => held.push(done)),
+    ...pages,
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  const openDialog = async () => {
+    fireEvent.click(within(await openSwitcher()).getByRole('menuitem', { name: 'New workspace' }))
+    return screen.findByRole('dialog', { name: 'New workspace' })
+  }
+  const first = await openDialog()
+  fireEvent.change(within(first).getByLabelText(/^Name of the new workspace/), { target: { value: 'Late' } })
+  fireEvent.click(within(first).getByRole('button', { name: 'Create workspace' }))
+  await waitFor(() => expect(held).toHaveLength(1))
+  fireEvent.click(within(first).getByRole('button', { name: 'Cancel' }))
+
+  // Opened again before the first save answers: a fresh form, not busy.
+  const second = await openDialog()
+  expect((within(second).getByLabelText(/^Name of the new workspace/) as HTMLInputElement).value).toBe('')
+  expect(within(second).getByRole('button', { name: 'Create workspace' }).getAttribute('aria-busy')).toBeNull()
+
+  await act(async () =>
+    held.shift()?.({
+      status: 201,
+      body: {
+        workspace: { id: 9, name: 'Late', role: 'admin' },
+        user: me.user,
+        workspaces: [...me.workspaces, { id: 9, name: 'Late', role: 'admin' }],
+        can_create_workspace: true,
+      },
+    }),
+  )
+  // The first save says what it made; the opening that is there now stays, and so does the page.
+  expect(await screen.findByText('“Late” was created.')).toBeTruthy()
+  expect(screen.getByRole('dialog', { name: 'New workspace' })).toBeTruthy()
+  expect(window.location.pathname).toBe('/w/1/conversations')
 })
 
 test('an error from a save stays until the dialog is opened again', async () => {
