@@ -391,12 +391,15 @@ function formats(locale: string) {
     // A size in bytes: "512 B", "1.5 MB".
     bytes: (n: number) => {
       const [unit, size] = BYTE_UNITS.find(([, size]) => n >= size) ?? BYTE_UNITS[BYTE_UNITS.length - 1]
-      return new Intl.NumberFormat(locale, {
+      const parts = new Intl.NumberFormat(locale, {
         style: 'unit',
         unit,
         unitDisplay: 'short',
         maximumFractionDigits: unit === 'byte' ? 0 : 1,
-      }).format(n / size)
+      }).formatToParts(n / size)
+      // Intl's short name for the byte is a word ("41 byte", "1 bytes"), not a symbol like kB
+      // and MB: the symbol, in the locale's own number and spacing.
+      return parts.map((p) => (unit === 'byte' && p.type === 'unit' ? 'B' : p.value)).join('')
     },
     list: (items: readonly string[], type: 'conjunction' | 'disjunction' = 'conjunction') => lists[type].format(items),
   }
