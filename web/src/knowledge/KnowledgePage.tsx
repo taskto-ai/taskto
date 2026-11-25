@@ -100,7 +100,12 @@ export function KnowledgePage({
     setDeleted(null)
   }
   // Opening the document that is open replaces nothing: no question. Any other asks first.
-  const openDoc = (path: string, go: () => void) => (path === now.current.path ? go() : ask(go))
+  // It is the person's latest choice, so it also drops a navigation waiting for a save.
+  const openDoc = (path: string, go: () => void) => {
+    if (path !== now.current.path) return ask(go)
+    guard.forget()
+    go()
+  }
   // The list of a space is read again when something changed in it, if it is the one shown.
   const listChanged = (changed: string) => {
     if (now.current.base === changed) docs.reload()

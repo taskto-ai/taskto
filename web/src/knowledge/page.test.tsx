@@ -674,3 +674,55 @@ test('Try again on a document that failed keeps the keyboard in the document', a
   await within(article).findByRole('heading', { name: 'Ideas' })
   expect(document.activeElement).toBe(heading(article))
 })
+
+test('Try again on a history that failed keeps the keyboard in the history', async () => {
+  let fail = true
+  kb('read', {
+    [`GET ${S}/history/ideas.md`]: () =>
+      fail ? { status: 500, body: { error: 'disk on fire' } } : { body: { commits: [] } },
+  })
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  fireEvent.click(await within(article).findByRole('button', { name: 'History' }))
+  const history = within(article).getByRole('region', { name: 'History' })
+  const again = await within(history).findByRole('button', { name: 'Try again' })
+  again.focus()
+  fail = false
+  fireEvent.click(again)
+  expect(document.activeElement).toBe(history)
+  await waitFor(() => expect(within(history).queryByRole('button', { name: 'Try again' })).toBeNull())
+  expect(document.activeElement).toBe(history)
+})
+
+test('opening the open document while a save is in flight drops another opening waiting for the save', async () => {
+  let release: (v: unknown) => void = () => {}
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  kb('write', {
+    ...searchRoutes,
+    [`GET ${S}/search`]: {
+      body: { results: [{ ...ideasResult, path: 'notes/plan.md', title: 'Plan' }], mode: 'fulltext' },
+    },
+    [`PUT ${S}/docs/ideas.md`]: () =>
+      held.then(() => ({ body: { commit: 'c2', doc: { ...doc('ideas.md'), version: V2 } } })),
+  })
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  fireEvent.click(await within(article).findByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(article).getByLabelText('Text'), { target: { value: 'New words.' } })
+  fireEvent.click(within(article).getByRole('button', { name: 'Save' }))
+  // While it saves: another document from the results waits for the save...
+  searchFor('plan')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  fireEvent.click(await within(results).findByRole('button', { name: 'Plan' }))
+  // ...and then the person chooses the document that is open, which is their last choice.
+  fireEvent.click(screen.getByRole('button', { name: /^ideas\.md/ }))
+  release(undefined)
+  await waitFor(() => expect(within(article).queryByLabelText('Text')).toBeNull())
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(screen.getByRole('article', { name: 'ideas.md' })).toBe(article)
+  expect(screen.queryByRole('article', { name: 'notes/plan.md' })).toBeNull()
+})

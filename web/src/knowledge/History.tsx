@@ -60,6 +60,7 @@ export function History({
   const [error, setError] = useState<{ error: unknown; reload: () => void; reloadable?: boolean } | null>(null)
   const [confirmDialog, confirm] = useConfirm()
   useLoadingStatus(!first.data && !first.error)
+  const section = useRef<HTMLElement>(null)
   const unversioned = current.versioned === false
   const pages = first.data ? [first.data, ...older] : []
   const commits = pages.flatMap((p) => p.commits)
@@ -143,13 +144,20 @@ export function History({
   }
 
   return (
-    <section className="kb-history" aria-label={t('knowledge.history.label')}>
+    <section className="kb-history" aria-label={t('knowledge.history.label')} ref={section} tabIndex={-1}>
       {first.error && (
         <Notice
           tone="danger"
           title={t('knowledge.errors.history')}
           action={
-            <Button size="sm" onClick={first.reload}>
+            <Button
+              size="sm"
+              onClick={() => {
+                // The button goes while the history loads again: the keyboard waits on the section.
+                section.current?.focus()
+                first.reload()
+              }}
+            >
               {t('app.tryAgain')}
             </Button>
           }

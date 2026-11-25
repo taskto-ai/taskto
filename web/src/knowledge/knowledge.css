@@ -303,6 +303,18 @@
   }
 
   /* History. */
+  /* The history takes the keyboard while it loads again after Try again: the ring for the
+     keyboard's focus only. */
+  .kb-history:focus {
+    outline: none;
+  }
+
+  .kb-history:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+    border-radius: var(--radius-sm);
+  }
+
   .kb-history {
     display: grid;
     gap: var(--space-4);

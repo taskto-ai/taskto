@@ -29,6 +29,9 @@ export type Guard = {
   // It is gone, saved or not. The question about its draft goes with it, and so does what
   // waited for a save that never landed: a later choice of the person is not undone.
   dispose: (editor: string) => void
+  // A later choice that loses nothing (the document that is already open, opened again) replaces
+  // what was waiting for a save: when the save lands, nothing older goes on.
+  forget: () => void
   // The question about discarding the draft, when it is open, and its two answers.
   asking: Why | null
   discard: () => void
@@ -40,6 +43,7 @@ const nothing: Guard = {
   report: () => {},
   saved: () => {},
   dispose: () => {},
+  forget: () => {},
   asking: null,
   discard: () => {},
   keep: () => {},
@@ -104,6 +108,9 @@ export function useGuard(): Guard {
     setPending(null)
   }, [])
   const keep = useCallback(() => setPending(null), [])
+  const forget = useCallback(() => {
+    queued.current = null
+  }, [])
   const discard = useCallback(() => {
     setPending(null)
     pending?.go()
@@ -139,7 +146,7 @@ export function useGuard(): Guard {
   }, [ask])
 
   return useMemo(
-    () => ({ ask, report, saved, dispose, asking: pending?.why ?? null, discard, keep }),
-    [ask, report, saved, dispose, pending, discard, keep],
+    () => ({ ask, report, saved, dispose, forget, asking: pending?.why ?? null, discard, keep }),
+    [ask, report, saved, dispose, forget, pending, discard, keep],
   )
 }
