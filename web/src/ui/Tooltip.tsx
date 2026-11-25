@@ -76,6 +76,15 @@ function listenForInput() {
   document.addEventListener('pointerdown', () => (lastInput = 'pointer'), true)
 }
 
+// Whether the focus came back to the control from what it opened (its menu, closed by Escape or by
+// a choice): not a new arrival, so its tooltip doesn't open, and the next Escape is for what is
+// under it (a drawer), not for a tooltip that just came.
+function fromOwnPopup(control: Element, from: EventTarget | null): boolean {
+  const controlled = control.getAttribute('aria-controls')
+  const popup = controlled ? document.getElementById(controlled) : null
+  return from instanceof Node && popup !== null && popup.contains(from)
+}
+
 // Whether this focus came from the keyboard: the last input was a key, and the browser shows the
 // focus (:focus-visible), where it knows it.
 function focusVisible(el: Element): boolean {
@@ -177,10 +186,14 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
         const after = rtl ? r.left - gap - w : r.right + gap
         const before = rtl ? r.right + gap : r.left - gap - w
         const fits = (x: number) => x >= margin && x + w <= vw - margin
-        el.style.top = `${clamp(r.top + r.height / 2 - h / 2, h, vh)}px`
-        el.style.left = `${clamp(fits(after) || !fits(before) ? after : before, w, vw)}px`
-        el.dataset.side = 'inline-end'
-        return
+        // Room on neither side (a control as wide as a phone's drawer): above or below it, as a
+        // tooltip of the block side, rather than clamped onto the control it is about.
+        if (fits(after) || fits(before)) {
+          el.style.top = `${clamp(r.top + r.height / 2 - h / 2, h, vh)}px`
+          el.style.left = `${fits(after) ? after : before}px`
+          el.dataset.side = 'inline-end'
+          return
+        }
       }
       const above = r.top - gap - h
       const top = above >= margin || r.bottom + gap + h > vh - margin ? Math.max(margin, above) : r.bottom + gap
@@ -214,7 +227,7 @@ export function Tooltip({ content, children, describes = true, side = 'block' }:
     clearTimeout(timer.current)
   }
   const focus = (e: ReactFocusEvent) => {
-    if (!focusVisible(e.target)) return
+    if (!focusVisible(e.target) || fromOwnPopup(e.target, e.relatedTarget)) return
     focused.current = true
     show(0)
   }

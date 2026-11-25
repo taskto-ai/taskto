@@ -698,6 +698,33 @@ test('with the drawer and the account menu open, Escape closes the menu first an
   expect(document.activeElement).toBe(button)
 })
 
+test('with the drawer and the workspace switcher open, Escape closes the menu first and the next one the drawer', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  const { container } = render(<App />)
+  await screen.findByText('Pick a conversation, or start a new one.')
+  const button = screen.getByRole('button', { name: 'Open the menu' })
+  const shell = shellOf(container)
+  fireEvent.click(button)
+  const switcher = screen.getByRole('button', { name: 'Workspace: Home' })
+  fireEvent.keyDown(switcher, { key: 'Enter' })
+  fireEvent.click(switcher)
+  expect(screen.getByRole('menu')).toBeTruthy()
+
+  // The menu closes and the focus comes back to the switcher, whose tooltip stays shut: it isn't
+  // a new arrival, and the next Escape is the drawer's.
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+  expect(screen.queryByRole('menu')).toBeNull()
+  expect(document.activeElement).toBe(switcher)
+  expect(shell.dataset.drawer).toBe('open')
+  expect(switcher.closest('.ui-tooltip-anchor')?.querySelector('[role="tooltip"]')?.hasAttribute('data-open')).toBe(
+    false,
+  )
+
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+  expect(shell.dataset.drawer).toBe('closed')
+})
+
 test("an Escape in the new workspace's dialog, over the drawer, is the dialog's: the drawer stays", async () => {
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({
