@@ -1106,3 +1106,27 @@ test.each([
   expect(assign).not.toHaveBeenCalled()
   expect((screen.getByRole('button', { name: 'Download my data' }) as HTMLButtonElement).disabled).toBe(false)
 })
+
+test('an admin has a second export, for the workspace, and says it holds only the spaces they are in', async () => {
+  const assign = stubAssign()
+  const calls = fakeFetch({
+    'POST /api/workspaces/1/export/workspace': {
+      body: { download: '/api/workspaces/1/export/workspace/xyz', expires_in: 60 },
+    },
+  })
+  render(<SettingsPage me={me} workspace={admin} tab="data" />)
+  expect(screen.getByRole('heading', { name: 'Export the workspace' })).toBeTruthy()
+  expect(screen.getByText(/join it first/)).toBeTruthy()
+  // Looking at the tab starts nothing.
+  expect(calls).toEqual([])
+  fireEvent.click(screen.getByRole('button', { name: 'Download the workspace' }))
+  await waitFor(() => expect(assign).toHaveBeenCalledWith('/api/workspaces/1/export/workspace/xyz'))
+  expect(calls).toEqual([{ method: 'POST', path: '/api/workspaces/1/export/workspace', body: {} }])
+})
+
+test('a member has no workspace export on their data tab', () => {
+  fakeFetch({})
+  render(<SettingsPage me={me} workspace={member} tab="data" />)
+  expect(screen.queryByRole('heading', { name: 'Export the workspace' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Download the workspace' })).toBeNull()
+})

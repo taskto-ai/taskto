@@ -522,11 +522,20 @@ func (s *Service) getThread(ctx context.Context, sp access.Space, a Actor, board
 	if err := may(sp, access.Read); err != nil {
 		return Thread{}, err
 	}
-	c, err := card(ctx, s.db, sp.ID, boardID, cardID)
+	t, err := threadIn(ctx, s.db, sp.ID, boardID, cardID)
 	if err != nil {
 		return Thread{}, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+commentColumns+` WHERE cc.card_id = ? ORDER BY cc.id`, cardID)
+	return t, s.withMentions(ctx, sp, a.UserID, &t)
+}
+
+// threadIn reads a card and its comments from q, the card asked for in the space and board.
+func threadIn(ctx context.Context, q queryer, spaceID, boardID, cardID int64) (Thread, error) {
+	c, err := card(ctx, q, spaceID, boardID, cardID)
+	if err != nil {
+		return Thread{}, err
+	}
+	rows, err := q.QueryContext(ctx, `SELECT `+commentColumns+` WHERE cc.card_id = ? ORDER BY cc.id`, cardID)
 	if err != nil {
 		return Thread{}, err
 	}
@@ -539,16 +548,18 @@ func (s *Service) getThread(ctx context.Context, sp access.Space, a Actor, board
 		}
 		t.Comments = append(t.Comments, cm)
 	}
-	if err := rows.Err(); err != nil {
-		return Thread{}, err
-	}
-	if err := s.mentionedPeople(ctx, sp, a.UserID, t.Comments); err != nil {
+	return t, rows.Err()
+}
+
+// withMentions names the people the thread's comments mention, as viewer may see them.
+func (s *Service) withMentions(ctx context.Context, sp access.Space, viewer int64, t *Thread) error {
+	if err := s.mentionedPeople(ctx, sp, viewer, t.Comments); err != nil {
 		if errors.Is(err, access.ErrNotFound) {
-			return Thread{}, ErrNotFound // the reader lost the space meanwhile
+			return ErrNotFound // the reader lost the space meanwhile
 		}
-		return Thread{}, err
+		return err
 	}
-	return t, nil
+	return nil
 }
 
 const commentColumns = `cc.id, cc.card_id, cc.author_id, coalesce(u.name, ''), cc.by_agent, cc.via, cc.body, cc.created_at

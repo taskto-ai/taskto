@@ -56,6 +56,8 @@ type stack struct {
 	alicePrivate2      int64
 	alicePersonalBoard int64
 	setupToken, mcpURL string
+	// hooks run what a test sets at chosen moments of the database's use.
+	hooks *db.Hooks
 }
 
 type person struct {
@@ -80,7 +82,8 @@ func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
-	sqlDB, err := db.Open(ctx, filepath.Join(dir, db.FileName))
+	hooks := &db.Hooks{}
+	sqlDB, err := db.OpenHooked(ctx, filepath.Join(dir, db.FileName), hooks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +110,7 @@ func newStackDB(t *testing.T, mod func(*Options, *sql.DB)) *stack {
 		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: apps.New(sqlDB, spaces),
 		Knowledge: kb, Search: index,
 	})
-	s := &stack{t: t, db: sqlDB, dir: dir, sched: sched, setupToken: auth.NewSetupToken()}
+	s := &stack{t: t, db: sqlDB, dir: dir, sched: sched, setupToken: auth.NewSetupToken(), hooks: hooks}
 	opts := Options{
 		Scheduler:     sched,
 		Auth:          auth.Options{InsecureCookies: true, SetupToken: s.setupToken, HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}},
