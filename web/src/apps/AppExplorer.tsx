@@ -211,7 +211,16 @@ export function AppExplorer({
           </form>
         </search>
 
-        <FilterBar fields={filterable(fields)} filters={filters} onChange={(next) => ask(() => setFilters(next))} />
+        <FilterBar
+          fields={filterable(fields)}
+          filters={filters}
+          onChange={(next, applied) =>
+            ask(() => {
+              setFilters(next)
+              applied?.()
+            })
+          }
+        />
 
         {narrow && (
           <div className="ui-explorer-sort">
@@ -401,7 +410,8 @@ function FilterBar({
 }: {
   fields: AppField[]
   filters: Filter[]
-  onChange: (next: Filter[]) => void
+  // `applied` runs once the change is made: not when the person keeps a record's unsaved changes.
+  onChange: (next: Filter[], applied?: () => void) => void
 }) {
   const t = useT()
   const f = useFormat()
@@ -417,8 +427,8 @@ function FilterBar({
   const add = (e: React.FormEvent) => {
     e.preventDefault()
     if (value === '' || !type) return
-    onChange([...filters, { field, op, value }])
-    setValue('')
+    // The typed value goes only once the filter is in use: kept when it isn't added after all.
+    onChange([...filters, { field, op, value }], () => setValue(''))
   }
   const opLabel = (o: string) => t(`apps.explorer.op.${o}` as 'apps.explorer.op.eq')
   return (

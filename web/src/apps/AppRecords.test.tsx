@@ -728,3 +728,20 @@ test('on a phone, choosing a sort with a change not saved applies the sort chose
     expect(calls.some((c) => c.path.includes('/records/query') && params(c.path).get('sort') === 'amount')).toBe(true),
   )
 })
+
+test('a filter not added after all (the person kept a record’s changes) keeps its typed value', async () => {
+  await editing()
+  const form = screen.getByRole('form', { name: 'Filter the records' })
+  fireEvent.change(within(form).getByLabelText('Value'), { target: { value: 'Taxi' } })
+  fireEvent.click(within(form).getByRole('button', { name: 'Add filter' }))
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Keep editing' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect((within(form).getByLabelText('Value') as HTMLInputElement).value).toBe('Taxi')
+  expect(screen.queryByRole('list', { name: 'Filters in use' })).toBeNull()
+
+  // Added after all: the value goes, and the filter is in use.
+  fireEvent.click(within(form).getByRole('button', { name: 'Add filter' }))
+  fireEvent.click(within(await leaving()).getByRole('button', { name: 'Discard my changes' }))
+  await screen.findByRole('list', { name: 'Filters in use' })
+  expect((within(form).getByLabelText('Value') as HTMLInputElement).value).toBe('')
+})
