@@ -852,6 +852,7 @@
     "app_changed": "Alguém alterou este app enquanto isso: recarregue e tente de novo.",
     "app_name_length": "O nome do app precisa ter de 1 a {max} caracteres.",
     "too_many_apps": "Um espaço pode ter no máximo {max} apps.",
+    "app_token_rate_limited": "Seus tokens de acesso executaram {max} ações em um minuto aqui, o máximo permitido. Tente de novo em {seconds} segundos.",
     "app_full": "Este app está cheio: ele comporta no máximo {max_rows} linhas e {max_mib} MiB de dados.",
     "app_preview_full": "A prévia está cheia: ela comporta no máximo {max_rows} linhas de exemplo. Comece de novo.",
     "app_preview_too_large": "Os dados de exemplo da prévia são grandes demais (no máximo {max_mib} MiB). Comece de novo.",
@@ -2076,12 +2077,16 @@
       "light": "Claro",
       "dark": "Escuro"
     },
-    "account": "Conta: {name}",
     "skipToContent": "Pular para o conteúdo",
     "installApp": "Instalar o app",
     "pinned": "Apps fixados",
     "pageFailed": "Não foi possível mostrar esta página. O menu e as suas configurações continuam funcionando.",
-    "reload": "Recarregar"
+    "reload": "Recarregar",
+    "noWorkspaceTitle": "Nenhum espaço de trabalho ainda",
+    "workspaces": "Seus espaços de trabalho",
+    "workspaceCreated": "“{name}” foi criado.",
+    "openWorkspace": "Abrir",
+    "accountLabel": "Conta"
   },
   "common": {
     "cancel": "Cancelar",
@@ -2140,7 +2145,9 @@
       "move": "Mover",
       "delete": "Excluir",
       "empty": "Este documento está vazio.",
-      "download": "Baixar"
+      "download": "Baixar",
+      "backToResults": "Voltar aos resultados",
+      "separator": "/"
     },
     "editor": {
       "label": "Editar o documento",
@@ -2198,7 +2205,23 @@
       "removedCount_one": "{count} versão antiga removida do histórico.",
       "removedCount_other": "{count} versões antigas removidas do histórico.",
       "removedCount_many": "{count} de versões antigas removidas do histórico.",
-      "removedNone": "Não havia versões antigas para remover."
+      "removedNone": "Não havia versões antigas para remover.",
+      "restoreTitle": "Restaurar esta versão?",
+      "restoreQuestion": "{path} volta a ser o que era em {time}. A versão que tem agora fica no histórico.",
+      "changeBy": "{change} · {by}"
+    },
+    "emptyHelp": "Escreva um novo documento ou envie um arquivo.",
+    "pick": "Escolha um documento para lê-lo.",
+    "errors": {
+      "spaces": "Não foi possível carregar os espaços.",
+      "documents": "Não foi possível carregar os documentos.",
+      "document": "Não foi possível carregar este documento.",
+      "history": "Não foi possível carregar o histórico."
+    },
+    "tree": {
+      "count_one": "{count} documento",
+      "count_other": "{count} documentos",
+      "count_many": "{count} de documentos"
     }
   },
   "search": {
@@ -2457,7 +2480,14 @@
       "unpinned": "{name} removido do menu",
       "defaultSet": "{name} agora é um padrão do espaço",
       "defaultUnset": "{name} não é mais um padrão do espaço"
-    }
+    },
+    "empty": "Nada no seu Início ainda. Escolha Personalizar para colocar aqui um widget de um dos seus apps ou para fixar um app no menu.",
+    "unavailableShort": {
+      "offline": "· app fora do ar",
+      "unpublished": "· app não publicado",
+      "removed": "· não é mais oferecido"
+    },
+    "default": "· definido para o espaço"
   },
   "checklist": {
     "title": "Configure seu workspace",
@@ -2714,7 +2744,6 @@
   },
   "notifications": {
     "title": "Notificações",
-    "bell": "Notificações",
     "bellUnread": "Notificações, {count} não lidas",
     "intro": "O que aconteceu e que você pode querer ver. As notificações push são opcionais e servem só para avisar que há algo aqui.",
     "pushSettings": "Configurações de notificações",
@@ -2846,7 +2875,8 @@
       "sizes": "Tamanhos",
       "shapes": "Formas",
       "tones": "Tons",
-      "hues": "Matizes"
+      "hues": "Matizes",
+      "distinctInitials": "Vários lado a lado, cada um com as suas letras"
     },
     "sample": {
       "primary": "Principal",
@@ -2900,7 +2930,8 @@
       "personB": "Tomás Oliveira",
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
-      "workspaceName": "Acme Studio"
+      "workspaceName": "Acme Studio",
+      "tooltipEmpty": "Sem conteúdo: nenhuma dica"
     },
     "labels": {
       "onboarding": "integração",
@@ -3036,7 +3067,8 @@
       "inPlaceDetail": "Abre nesta página, no lugar",
       "focusTarget": "Recebe o foco por script (uma ref e tabIndex -1)",
       "focusIt": "Levar o teclado ao título",
-      "openPage": "Abrir uma página (um link)"
+      "openPage": "Abrir uma página (um link)",
+      "menuChoices": "Uma escolha entre várias, num grupo com nome"
     }
   }
 }

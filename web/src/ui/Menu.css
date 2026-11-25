@@ -102,6 +102,30 @@
     box-shadow: inset 0 0 0 var(--line-focus) var(--color-focus);
   }
 
+  /* A radio item's check mark, at the end; on the items that aren't checked it keeps its room. */
+  .ui-menu-item-check {
+    color: var(--color-text);
+  }
+
+  .ui-menu-item[aria-checked="false"] > .ui-menu-item-check {
+    visibility: hidden;
+  }
+
+  .ui-menu-group {
+    display: grid;
+    gap: 1px;
+  }
+
+  .ui-menu-group-label {
+    padding-block: var(--space-2) var(--space-1);
+    padding-inline: var(--space-3);
+    font: var(--type-caption);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+
   .ui-menu-item[data-tone="danger"],
   .ui-menu-item[data-tone="danger"] > svg {
     color: var(--color-danger);
