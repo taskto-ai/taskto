@@ -1,3 +1,4 @@
+import { isMainThread } from 'node:worker_threads'
 import { expect, test } from 'vitest'
 import { cleanSnippet, isMarkdownPath, type SnippetPiece } from './snippet'
 
@@ -113,28 +114,141 @@ test('a snippet is cut to a window around its first match, which survives the cu
 })
 
 // SQLite's FTS5 limits a snippet by tokens, not characters: brackets are no tokens, so a snippet
-// can be as long as the document. None of these may take long, with the bound or without it.
+// can be as long as the document. A cleaner that backtracks takes time that grows with the
+// square of that length, and once froze the page.
+//
+// The test shows the work is linear, not that it is quick: a clock bound fails on a busy machine
+// with the code right. Each input is cleaned at three sizes, in two stages, and the time of one
+// size is compared with the time of the one before it. Linear work takes about as many times as
+// long as the size grew (8 times, in each stage); quadratic work takes the square of that, 64
+// times. A quadratic step with a small constant (a native search for a closing bracket from each
+// opening one) hides under the linear work at the first sizes and takes over only at the last,
+// where the old test's 300,000 repeats caught it; so the second stage goes up to 320,000.
+//
+// What is measured is the process's CPU time, not the wall clock: on a machine with more work
+// than cores a short run can find a quiet moment while a long one is paused again and again,
+// which makes the long one look too slow. That relies on the process being this test file's
+// alone (Vitest's default pool, `forks`: a process per file, checked below): CPU time counts
+// every thread of the process, the compiler's and the garbage collector's too. A time below
+// FLOOR_MS counts as FLOOR_MS, so for an input whose smallest size is that quick, stage one is
+// really a bound of 40 × FLOOR_MS = 80 ms of CPU for 40,000 repeats.
+//
+// Each size is timed a few times after a warm-up and the fastest counts. A ratio over the limit
+// is measured again, but only while the larger run is short (under RETRY_MS), where a pause can
+// explain it; a run of seconds over the limit is a cleaner that is not linear, and it fails at
+// once, as does every input after it, so a regression is reported in seconds.
 const NASTY = ['[', '(', '*', '_', '`', '~', '](', '[](', '*a', '_a_', '`a', '![', '>', '- ']
-test.each(NASTY)('a snippet of 300,000 × %j between two words is cleaned in linear time', (unit) => {
-  const body = unit.repeat(300_000)
-  const pieces = [
+const SMALL = 5_000
+const MID = 40_000
+const BIG = 320_000
+// Linear is 8 and quadratic is 64 or more. Stage one is far from both; measured, an unmutated
+// cleaner is at most 11.4 here. Stage two: an unmutated cleaner is between 2 and 23.3 (the most
+// is for "- ", whose result is the biggest), and a cleaner that is quadratic in a small way
+// between 44 and 59; 30 is between them, and a ratio over it gets more attempts.
+const MAX_RATIO = { first: 40, second: 30 }
+// Below this, the timer's own noise is most of a run.
+const FLOOR_MS = 2
+// A run of CPU time longer than this is not noise (a linear cleaner takes at most a fifth of
+// it at 320,000 repeats): it stops the measuring, and fails if the ratio is over the limit.
+const RETRY_MS = 1000
+const ATTEMPTS = 3
+
+const snippetOf = (unit: string, times: number) => {
+  const body = unit.repeat(times)
+  return [
     { text: 'first ' },
     { text: body },
     { text: ' ' },
     { text: 'orchard', match: true },
     { text: ` ${body} last` },
   ]
-  const started = performance.now()
-  const bounded = cleanSnippet(pieces)
-  expect(performance.now() - started).toBeLessThan(2000)
-  expect(marked(bounded)).toEqual(['orchard'])
+}
 
-  // The scanner itself, on all of it (no window): a quadratic one would take minutes here.
-  const unbounded = performance.now()
-  const all = cleanSnippet(pieces, { limit: Number.POSITIVE_INFINITY })
-  expect(performance.now() - unbounded).toBeLessThan(5000)
-  expect(marked(all)).toEqual(['orchard'])
+// The fastest of a few runs of fn, in milliseconds of CPU time; it stops at once for a run over
+// RETRY_MS, which is then the answer's lower bound, however many more runs there would be.
+function fastest(fn: () => void, runs = 3): number {
+  let best = Number.POSITIVE_INFINITY
+  for (let i = 0; i < runs; i++) {
+    const started = process.cpuUsage()
+    fn()
+    const used = process.cpuUsage(started)
+    const took = (used.user + used.system) / 1000
+    best = Math.min(best, took)
+    if (took > RETRY_MS) break
+  }
+  return best
+}
+
+type Growth = { ok: boolean; decisive: boolean; message: string }
+
+// Whether the time of large is less than max times the time of small.
+function grows(small: () => void, large: () => void, max: number, sizes: string): Growth {
+  let message = ''
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    const smallMs = fastest(small)
+    if (smallMs > RETRY_MS)
+      return { ok: false, decisive: true, message: `${sizes}: ${smallMs.toFixed(0)} ms for the smaller` }
+    const largeMs = fastest(large)
+    const ratio = largeMs / Math.max(smallMs, FLOOR_MS)
+    message = `${sizes}: ${smallMs.toFixed(1)} ms and ${largeMs.toFixed(1)} ms, ${ratio.toFixed(1)} times, at most ${max}`
+    if (ratio < max) return { ok: true, decisive: false, message }
+    if (largeMs > RETRY_MS) return { ok: false, decisive: true, message }
+  }
+  return { ok: false, decisive: false, message }
+}
+
+// The input that failed beyond doubt: the others would only take longer to say the same.
+let decisiveFailure = ''
+
+test('the cleaner runs in a process of its own, which its timing relies on', () => {
+  expect(isMainThread).toBe(true)
 })
+
+test.for(NASTY)(
+  'a snippet of repeated %j between two words is cleaned in linear time',
+  // Vitest can't interrupt code that doesn't wait, so this bounds only a run that ends: what
+  // stops a cleaner that is far too slow is RETRY_MS above. It is long because a busy machine
+  // stretches the wall time of a test that is quick in CPU time.
+  { timeout: 60_000 },
+  (unit, { skip }) => {
+    if (decisiveFailure !== '') skip(`not linear for ${decisiveFailure}`)
+    const whole = { limit: Number.POSITIVE_INFINITY }
+    const small = snippetOf(unit, SMALL)
+    const mid = snippetOf(unit, MID)
+    const big = snippetOf(unit, BIG)
+    // The scanner itself, on all of it (no window).
+    cleanSnippet(snippetOf(unit, SMALL / 10), whole) // warm-up: the first run pays for compiling
+
+    const first = grows(
+      () => cleanSnippet(small, whole),
+      () => cleanSnippet(mid, whole),
+      MAX_RATIO.first,
+      `${unit} ${SMALL} to ${MID} repeats`,
+    )
+    if (first.decisive) decisiveFailure = JSON.stringify(unit)
+    expect(first.ok, first.message).toBe(true)
+    expect(marked(cleanSnippet(mid, whole))).toEqual(['orchard'])
+
+    // The last stage, only for a cleaner that passed the first.
+    const second = grows(
+      () => cleanSnippet(mid, whole),
+      () => cleanSnippet(big, whole),
+      MAX_RATIO.second,
+      `${unit} ${MID} to ${BIG} repeats`,
+    )
+    if (second.decisive) decisiveFailure = JSON.stringify(unit)
+    expect(second.ok, second.message).toBe(true)
+
+    // The window: by default only a piece around the first match is worked on, so the same input
+    // costs a fraction of all of it, and shows the match.
+    const wholeMs = fastest(() => cleanSnippet(mid, whole))
+    const windowMs = fastest(() => cleanSnippet(mid))
+    expect(windowMs).toBeLessThan(Math.max(wholeMs / 2, FLOOR_MS))
+    const bounded = cleanSnippet(mid)
+    expect(marked(bounded)).toEqual(['orchard'])
+    expect(plain(bounded).length).toBeLessThanOrEqual(1202)
+  },
+)
 
 test('code keeps its text, and a highlight at the ends of an identifier does not make its underscores marks', () => {
   expect(plain(cleanSnippet([{ text: 'Use `**kwargs` here' }]))).toBe('Use **kwargs here')
