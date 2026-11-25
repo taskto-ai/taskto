@@ -53,8 +53,16 @@ let generation = 0
 // `index` (undoing the person's Back or Forward), or on to the entry the page agreed to. A popstate
 // that lands on it is that move; one that lands elsewhere is the person's, made meanwhile.
 let flight: number | null = null
-// An agreed Back or Forward that waits for the undoing on its way to land first.
-let after: number | null = null
+// What waits for the undoing on its way to land first: an agreed Back or Forward, or an agreed new
+// page (a push then would number its entry from where the address isn't yet).
+let after: (() => void) | null = null
+// Each move of the app's own: one that never lands (out of the history's range, so no popstate)
+// is given up after a while, and what waited for it goes on.
+let trip = 0
+const GIVE_UP_MS = 1000
+// Whether the address is on an entry the app didn't number (Back past where it started): the next
+// numbered entry it comes to is where the app is, whatever its number.
+let unnumbered = false
 let watching = false
 
 function numbered(state: unknown): number | undefined {
@@ -68,10 +76,23 @@ function moved() {
   notify()
 }
 
+// What waited for the app's own move to land.
+function landed() {
+  const next = after
+  after = null
+  next?.()
+}
+
 // The app's own move to the entry `to`, from the one the address is at.
 function travel(from: number, to: number) {
   flight = to
+  const mine = ++trip
   window.history.go(to - from)
+  setTimeout(() => {
+    if (trip !== mine || flight !== to) return
+    flight = null
+    landed()
+  }, GIVE_UP_MS)
 }
 
 function watchHistory() {
@@ -84,7 +105,18 @@ function watchHistory() {
     const to = numbered(e.state)
     if (to === undefined) {
       // An entry from before the app numbered them: it can't be undone, so it goes on.
+      unnumbered = true
       flight = null
+      after = null
+      moved()
+      return
+    }
+    if (unnumbered) {
+      // Back on an entry the app numbered, from one it didn't: that is where the app is now.
+      unnumbered = false
+      flight = null
+      after = null
+      index = to
       moved()
       return
     }
@@ -97,11 +129,7 @@ function watchHistory() {
         return
       }
       // Back where the person was. An agreed move that waited for this goes now.
-      if (after !== null) {
-        const next = after
-        after = null
-        travel(index, next)
-      }
+      landed()
       return
     }
     // The person's own move (one made while the app's was on its way included).
@@ -125,7 +153,7 @@ function watchHistory() {
       }
       if (mine !== generation) return
       // The undoing may still be on its way: then this goes when it has landed.
-      if (flight === index) after = to
+      if (flight === index) after = () => travel(index, to)
       else travel(index, to)
     })
     now = false
@@ -162,14 +190,22 @@ export function navigate(path: string, { replace = false } = {}) {
   if (path === window.location.pathname) return
   watchHistory()
   if (replace) {
-    window.history.replaceState({ idx: index }, '', path)
+    // An entry the app didn't number keeps it so: giving it `index` would make two of one number.
+    window.history.replaceState(unnumbered ? window.history.state : { idx: index }, '', path)
     notify()
     return
   }
-  const go = () => {
+  const push = () => {
     index += 1
+    unnumbered = false
     window.history.pushState({ idx: index }, '', path)
     moved()
+  }
+  // While an undoing is on its way, the push waits for it to land, so it numbers its entry from
+  // where the address is.
+  const go = () => {
+    if (flight !== null) after = push
+    else push()
   }
   const ask = asker()
   if (!ask) return go()

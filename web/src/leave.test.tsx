@@ -102,11 +102,16 @@ test('an entry the app did not make (from before it started) goes on without the
   act(() => navigate('/w/1/boards'))
   cleanup()
   const ask = vi.fn()
-  render(<Page ask={ask} />)
+  const { getByTestId } = render(<Page ask={ask} />)
   await go(-1)
   await settled()
   expect(ask).not.toHaveBeenCalled()
   expect(window.location.pathname).toBe('/w/1/elsewhere')
+  // Forward again, onto the entry the app numbered: the page follows the address.
+  await go(1)
+  await settled()
+  expect(window.location.pathname).toBe('/w/1/boards')
+  expect(getByTestId('path').textContent).toBe('/w/1/boards')
 })
 
 test('a page that stops asking (it went, or its draft was saved) is asked no more', () => {
@@ -164,4 +169,46 @@ test('Back pressed twice while the page asks ends where the app says it is, and 
   })
   expect(getByTestId('path').textContent).toBe(window.location.pathname)
   expect(window.location.pathname).not.toBe('/w/1/c')
+})
+
+test('a new page agreed to while a Back is being undone waits for the undoing, and Back from it is undone right', async () => {
+  render(<Page ask={null} />)
+  act(() => navigate('/w/1/a'))
+  act(() => navigate('/w/1/b'))
+  act(() => navigate('/w/1/c'))
+  cleanup()
+  let hold = true
+  const answers: (() => void)[] = []
+  const ask = vi.fn((go: () => void) => {
+    if (hold) answers.push(go)
+    else go()
+  })
+  const { getByTestId } = render(<Page ask={ask} />)
+  // Right after the router heard of the Back (and started undoing it), the page agrees to a new
+  // page: its push must not be made from where the address is not yet.
+  window.addEventListener(
+    'popstate',
+    () => {
+      hold = false
+      navigate('/w/1/d')
+      hold = true
+    },
+    { once: true },
+  )
+  await act(async () => {
+    window.history.back()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  })
+  await settled()
+  expect(window.location.pathname).toBe('/w/1/d')
+  expect(getByTestId('path').textContent).toBe('/w/1/d')
+
+  // Back from it, held: undone onto d again, with the address and the page agreeing.
+  await act(async () => {
+    window.history.back()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  })
+  await settled()
+  expect(window.location.pathname).toBe('/w/1/d')
+  expect(getByTestId('path').textContent).toBe('/w/1/d')
 })
