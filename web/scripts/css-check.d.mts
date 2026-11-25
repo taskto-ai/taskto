@@ -1,4 +1,4 @@
-// The types of what src/ui/elementRules.test.tsx takes from css-check.mjs (a plain script).
+// The types of what the tests take from css-check.mjs (a plain script).
 
 export interface CssRule {
   selector: string
@@ -14,3 +14,11 @@ export function compounds(selector: string): string[]
 export function optsOut(compound: string): boolean
 export function reachesAnywhere(selector: string): boolean
 export function allowedEverywhere(rule: { selector: string; properties: string[] }): boolean
+export const OLD_STYLESHEETS: readonly string[]
+export function oldStylesheets(web: string): { file: string; css: string }[]
+export function topLevel(
+  css: string,
+): (
+  | { kind: 'import'; url: string; rest: string; line: number }
+  | { kind: 'block' | 'statement'; prelude: string; line: number }
+)[]
