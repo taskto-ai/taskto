@@ -46,7 +46,7 @@
     outline-offset: var(--line-focus-offset);
   }
 
-  .ui-textbox[aria-invalid="true"] {
+  .ui-textbox[aria-invalid]:not([aria-invalid="false"]) {
     border-color: var(--color-danger);
   }
 
