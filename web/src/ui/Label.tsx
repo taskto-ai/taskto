@@ -17,12 +17,29 @@ const HUE_CLASS = {
   teal: 'ui-hue-teal',
 } as const
 
-// The hue of a name: FNV-1a (32 bits) over the name's UTF-8 bytes, after Unicode normalisation
-// (NFC), trimming and lower-casing (toLowerCase, which doesn't depend on the locale), so "Launch",
-// "launch " and a name typed with a combining accent all get one hue. Pure: the same in every
-// browser, session and language.
+// A label's name as the server keeps it (normalizeLabel in internal/boards/validate.go): runs of
+// white space (Unicode's White_Space, Go's unicode.IsSpace) made one space and trimmed, then full
+// case folding between two NFC normalisations. JavaScript has no case folding: each character is
+// taken to upper case and back, twice ("ẞ" → "ß" → "ss"), one at a time so the final sigma stays
+// "σ" as folding has it, except the dotless "ı", which folding leaves alone and the round trip
+// would make "i". Neither step depends on the locale.
+export function normalizeLabelName(name: string): string {
+  const spaced = name
+    .normalize('NFC')
+    .split(/\p{White_Space}+/u)
+    .filter(Boolean)
+    .join(' ')
+  const folded = Array.from(spaced, (c) =>
+    c === 'ı' ? c : c.toUpperCase().toLowerCase().toUpperCase().toLowerCase(),
+  ).join('')
+  return folded.normalize('NFC')
+}
+
+// The hue of a name: FNV-1a (32 bits) over the UTF-8 bytes of the name as the server keeps it, so
+// "Launch", "launch ", "tech  debt" and a name typed with a combining accent each get the hue of
+// the label they are. Pure: the same in every browser, session and language.
 export function labelHue(name: string): LabelHue {
-  const bytes = new TextEncoder().encode(name.normalize('NFC').trim().toLowerCase())
+  const bytes = new TextEncoder().encode(normalizeLabelName(name))
   let h = 0x811c9dc5
   for (const b of bytes) {
     h ^= b

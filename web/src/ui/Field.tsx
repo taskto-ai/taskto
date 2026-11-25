@@ -59,12 +59,16 @@ export function Field({ label, hint, error, required = false, id, className, chi
           {hint}
         </p>
       )}
-      {invalid && (
-        <p className="ui-field-error" id={errorId}>
-          <Icon name="alert" size={14} />
-          <span>{error}</span>
-        </p>
-      )}
+      {/* Always there, so a screen reader hears an error when it appears, also while the focus is
+          elsewhere (a form's check on submit); polite, so it doesn't cut off what is being said. */}
+      <div className="ui-field-live" aria-live="polite">
+        {invalid && (
+          <p className="ui-field-error" id={errorId}>
+            <Icon name="alert" size={14} />
+            <span>{error}</span>
+          </p>
+        )}
+      </div>
     </div>
   )
 }
