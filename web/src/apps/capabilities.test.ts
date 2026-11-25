@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { existsSync, readFileSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, relative, resolve } from 'node:path'
 import { expect, test } from 'vitest'
 import { COMPONENTS, catalogCapabilities, FUNCTIONS } from './capabilities'
@@ -17,15 +18,24 @@ test('the names are the catalog’s components and functions', () => {
 
 const src = resolve(__dirname, '..')
 
-// The modules a module imports statically (not `import type`, not import()), comments left out, so
-// a quote in a comment inside a multi-line import can't hide it. A relative import that doesn't
-// resolve to a file is an error, not dropped.
-function staticImports(code: string): string[] {
-  // Block comments, then line comments (a `//` after a colon is a URL's, not one).
-  const text = code.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/.*$/gm, '$1')
-  return [...text.matchAll(/^\s*(?:import|export)\s+(?!type\b)(?:[^'"]*?\sfrom\s+)?['"]([^'"]+)['"]/gm)].map(
-    (m) => m[1],
-  )
+// The build's own parser (rolldown's, which Vite bundles with), reached through Vite: it tells a
+// comment from a string, so neither can hide an import or fake one.
+const fromVite = createRequire(createRequire(import.meta.url).resolve('vite/package.json'))
+const { parseAst } = (await import(fromVite.resolve('rolldown/parseAst'))) as {
+  parseAst: (code: string, options: { lang: 'ts' | 'tsx' }) => { body: Statement[] }
+}
+type Statement = { type: string; importKind?: string; exportKind?: string; source?: { value: string } | null }
+
+// The modules a module imports statically, and those it re-exports a value from: not `import type`
+// or `export type`, nor import(), which loads later.
+function staticImports(code: string, lang: 'ts' | 'tsx' = 'tsx'): string[] {
+  const out: string[] = []
+  for (const node of parseAst(code, { lang }).body) {
+    const typeOnly = node.importKind === 'type' || node.exportKind === 'type'
+    const kind = ['ImportDeclaration', 'ExportNamedDeclaration', 'ExportAllDeclaration'].includes(node.type)
+    if (kind && !typeOnly && node.source) out.push(node.source.value)
+  }
+  return out
 }
 
 function resolveImport(from: string, spec: string): string {
@@ -45,7 +55,7 @@ function reachedFrom(entry: string, read = (f: string) => readFileSync(f, 'utf8'
     const f = queue.shift() as string
     // A package, a stylesheet or an asset is a leaf.
     if (!f.startsWith('/') || !/\.tsx?$/.test(f)) continue
-    for (const spec of staticImports(read(f))) {
+    for (const spec of staticImports(read(f), f.endsWith('.tsx') ? 'tsx' : 'ts')) {
       const dep = resolveImport(f, spec)
       if (!from.has(dep)) {
         from.set(dep, relative(src, f))
@@ -84,6 +94,16 @@ test('the walk sees an import a comment with a quote sits in, and a package’s 
     `${join(src, 'apps/catalog.tsx')} (imported by offline/download.ts)`,
     'zod/v3 (imported by offline/download.ts)',
   ])
+})
+
+test('comment delimiters inside strings neither hide an import nor make one', () => {
+  expect(
+    staticImports("const open = '/*'\nimport { z } from 'zod'\nconst close = '*/'\nexport const schema = z.string()\n"),
+  ).toEqual(['zod'])
+  expect(staticImports("const s = \"import { z } from 'zod'\"\n// import { y } from 'redos-detector'\n")).toEqual([])
+  expect(
+    staticImports("import type { A } from 'zod'\nexport type { B } from 'zod'\nexport { c } from './c'\n"),
+  ).toEqual(['./c'])
 })
 
 test('a relative import that is no file fails the walk instead of being dropped', () => {
