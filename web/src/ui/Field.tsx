@@ -43,14 +43,18 @@ export function Field({ label, hint, error, required = false, id, className, chi
   const describedBy = [hint ? hintId : '', invalid ? errorId : ''].filter(Boolean).join(' ') || undefined
   return (
     <div className={['ui-field', className ?? ''].filter(Boolean).join(' ')} data-invalid={invalid ? '' : undefined}>
-      <label className="ui-field-label" htmlFor={controlId}>
-        {label}
+      {/* The mark is beside the label, not in it: the label's text, and so the control's name, is
+          the label alone, and the control's own `required` is what a screen reader says. */}
+      <span className="ui-field-label-row">
+        <label className="ui-field-label" htmlFor={controlId}>
+          {label}
+        </label>
         {required && (
           <span className="ui-field-required" aria-hidden="true">
             {t('ui.requiredMark')}
           </span>
         )}
-      </label>
+      </span>
       <FieldContext.Provider value={{ id: controlId, describedBy, invalid, required }}>
         {children}
       </FieldContext.Provider>

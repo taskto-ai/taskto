@@ -143,6 +143,7 @@ function EmbeddingsForm({
   }
   const chosen = accounts.find((a) => String(a.id) === account)
   const listId = useId()
+  const servedId = useId()
 
   if (accounts.length === 0) {
     return <Notice tone="neutral">{t('settings.search.accountsFirst')}</Notice>
@@ -160,12 +161,9 @@ function EmbeddingsForm({
               ))}
             </Select>
           </Field>
-          <Field
-            label={t('settings.actions.model')}
-            hint={chosen && t.rich('settings.search.servedAt', { url: <code>{`${chosen.base_url}/embeddings`}</code> })}
-          >
+          <Field label={t('settings.actions.model')} required>
             <Input
-              required
+              aria-describedby={chosen ? servedId : undefined}
               value={model}
               onChange={(e) => setModel(e.target.value)}
               maxLength={256}
@@ -180,6 +178,12 @@ function EmbeddingsForm({
             ))}
           </datalist>
         </div>
+        {/* Under the row rather than under the model, so the two fields' boxes line up. */}
+        {chosen && (
+          <p className="settings-muted" id={servedId}>
+            {t.rich('settings.search.servedAt', { url: <code>{`${chosen.base_url}/embeddings`}</code> })}
+          </p>
+        )}
         <Notice tone="warning">{t('settings.search.changeWarning')}</Notice>
         <Alert error={action.error} />
         <FormActions>

@@ -1445,7 +1445,8 @@
           "failed": "Failed",
           "blocked": "Needs a person",
           "manualUpgrade": "Manual upgrade"
-        }
+        },
+        "mismatchBadge": "Not the recorded version"
       }
     },
     "actions": {

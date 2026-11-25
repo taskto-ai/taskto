@@ -279,11 +279,9 @@ function InviteForm({ workspace, base, onInvited }: { workspace: number; base: s
   const [sendEmail, setSendEmail] = useState(true)
   const action = useAction()
   // Offered only where the server can email links; any failure to know says no, and the invite is
-  // made and copied by hand, as it always was.
-  const mail = useLoad(
-    () => api<MailStatus>(mailPath(workspace)).catch(() => ({ configured: false }) as MailStatus),
-    [workspace],
-  )
+  // made and copied by hand, as it always was. A failure (an admin who doesn't run the server is
+  // refused the mail status) is null: unknown, so nothing is said about the server's email.
+  const mail = useLoad(() => api<MailStatus>(mailPath(workspace)).catch(() => null), [workspace])
   const canEmail = mail.data?.sends_links === true
 
   const submit = async (e: FormEvent) => {
@@ -312,9 +310,8 @@ function InviteForm({ workspace, base, onInvited }: { workspace: number; base: s
     <div className="settings-invite">
       <form className="settings-form" onSubmit={submit}>
         <div className="settings-form-row">
-          <Field label={t('auth.email')}>
+          <Field label={t('auth.email')} required>
             <Input
-              required
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -340,7 +337,7 @@ function InviteForm({ workspace, base, onInvited }: { workspace: number; base: s
           />
         )}
       </form>
-      {mail.data && !canEmail && <Notice tone="neutral">{t('settings.members.noEmail')}</Notice>}
+      {mail.data && !mail.data.sends_links && <Notice tone="neutral">{t('settings.members.noEmail')}</Notice>}
       <Alert error={action.error} />
       {made && (
         <Notice tone={made.emailed === false ? 'warning' : 'success'} title={t('settings.members.inviteLink')}>

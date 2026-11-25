@@ -112,16 +112,19 @@ export function TokensTab({ workspace }: { workspace: number }) {
       <Section title={t('settings.tokens.connect')}>
         <Setup key={made?.id ?? 0} token={made?.token} />
       </Section>
-      <CreateToken
-        open={creating && !held}
-        base={base}
-        onClose={() => setCreating(false)}
-        onCreated={(token) => {
-          setCreating(false)
-          setMade(token)
-          tokens.reload()
-        }}
-      />
+      {/* Drawn only while open, so each opening starts with an empty form and no old error. */}
+      {creating && !held && (
+        <CreateToken
+          open
+          base={base}
+          onClose={() => setCreating(false)}
+          onCreated={(token) => {
+            setCreating(false)
+            setMade(token)
+            tokens.reload()
+          }}
+        />
+      )}
       {confirmDialog}
     </SettingsTab>
   )
@@ -177,9 +180,8 @@ function CreateToken({
       }
     >
       <form id={formId} className="settings-form" onSubmit={submit}>
-        <Field label={t('settings.tokens.name')}>
+        <Field label={t('settings.tokens.name')} required>
           <Input
-            required
             value={name}
             onChange={(e) => setName(e.target.value)}
             maxLength={100}

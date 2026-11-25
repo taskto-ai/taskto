@@ -215,6 +215,7 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
           <p className="settings-muted">{t('settings.about.updates.needs.where')}</p>
         </Panel>
       )}
+      {mismatch && <Notice tone="warning">{t('settings.about.updates.mismatch')}</Notice>}
       {u && (
         <Panel padded>
           <Facts
@@ -230,8 +231,8 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
                           <code>{st.recorded_version}</code>
                           {mismatch && (
                             <>
-                              <br />
-                              <Badge tone="warning">{t('settings.about.updates.mismatch')}</Badge>
+                              {' '}
+                              <Badge tone="warning">{t('settings.about.updates.mismatchBadge')}</Badge>
                             </>
                           )}
                         </>

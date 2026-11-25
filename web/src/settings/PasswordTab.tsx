@@ -44,18 +44,11 @@ export function PasswordTab() {
       <Section title={t('settings.password.title')} help={t('settings.password.intro')}>
         <Panel padded>
           <form className="settings-form" onSubmit={submit}>
-            <Field label={t('settings.password.current')}>
-              <Input
-                required
-                type="password"
-                value={form.current}
-                onChange={set('current')}
-                autoComplete="current-password"
-              />
+            <Field label={t('settings.password.current')} required>
+              <Input type="password" value={form.current} onChange={set('current')} autoComplete="current-password" />
             </Field>
-            <Field label={t('settings.password.new')} hint={t('settings.password.hint')}>
+            <Field label={t('settings.password.new')} hint={t('settings.password.hint')} required>
               <Input
-                required
                 type="password"
                 value={form.next}
                 onChange={set('next')}
@@ -63,8 +56,12 @@ export function PasswordTab() {
                 autoComplete="new-password"
               />
             </Field>
-            <Field label={t('settings.password.again')} error={mismatch ? t('settings.password.mismatch') : undefined}>
-              <Input required type="password" value={form.again} onChange={set('again')} autoComplete="new-password" />
+            <Field
+              label={t('settings.password.again')}
+              error={mismatch ? t('settings.password.mismatch') : undefined}
+              required
+            >
+              <Input type="password" value={form.again} onChange={set('again')} autoComplete="new-password" />
             </Field>
             <Alert error={action.error} />
             <FormActions>

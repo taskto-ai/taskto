@@ -68,6 +68,8 @@ export function TwoFactorPanel() {
           onCodes={(c) => {
             setSetup(null)
             setCodes(c)
+            // It is on now: the badge says so while the codes are on screen.
+            status.reload()
           }}
         />
       ) : (
@@ -96,9 +98,8 @@ function Start({ onStarted }: { onStarted: (s: Setup) => void }) {
     <Panel padded>
       <form className="settings-form" onSubmit={submit}>
         <p className="settings-text">{t('settings.twoFactor.off')}</p>
-        <Field label={t('settings.twoFactor.password')}>
+        <Field label={t('settings.twoFactor.password')} required>
           <Input
-            required
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -155,9 +156,8 @@ function Confirm({
           label={t('settings.twoFactor.secret')}
           name={t('settings.twoFactor.secretName')}
         />
-        <Field label={t('settings.twoFactor.step2')}>
+        <Field label={t('settings.twoFactor.step2')} required>
           <Input
-            required
             value={code}
             onChange={(e) => setCode(e.target.value)}
             inputMode="numeric"

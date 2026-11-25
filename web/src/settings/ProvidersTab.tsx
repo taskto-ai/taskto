@@ -281,9 +281,8 @@ function AccountForm({
     >
       <form id={formId} className="settings-form" onSubmit={submit} aria-label={label}>
         {!account && (
-          <Field label={t('settings.actions.name')} hint={t('settings.providers.nameHint')}>
+          <Field label={t('settings.actions.name')} hint={t('settings.providers.nameHint')} required>
             <Input
-              required
               value={form.name}
               onChange={set('name')}
               maxLength={40}
@@ -297,9 +296,8 @@ function AccountForm({
         <Field label={t('settings.providers.displayName')}>
           <Input value={form.display_name} onChange={set('display_name')} maxLength={100} placeholder={form.name} />
         </Field>
-        <Field label={t('settings.actions.baseUrl')} hint={t('settings.providers.urlHint')}>
+        <Field label={t('settings.actions.baseUrl')} hint={t('settings.providers.urlHint')} required>
           <Input
-            required
             type="url"
             value={form.base_url}
             onChange={set('base_url')}
@@ -328,9 +326,8 @@ function AccountForm({
             onChange={(e) => setForm((f) => ({ ...f, remove_key: e.target.checked }))}
           />
         )}
-        <Field label={t('settings.providers.models')} hint={t('settings.providers.modelsHint')}>
+        <Field label={t('settings.providers.models')} hint={t('settings.providers.modelsHint')} required>
           <Textarea
-            required
             value={form.models}
             onChange={set('models')}
             rows={3}

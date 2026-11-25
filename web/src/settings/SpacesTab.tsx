@@ -104,8 +104,8 @@ function CreateSpace({ base, onCreated }: { base: string; onCreated: (id: number
   return (
     <form className="settings-form" onSubmit={submit}>
       <div className="settings-form-row">
-        <Field label={t('settings.spaces.new')}>
-          <Input required value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
+        <Field label={t('settings.spaces.new')} required>
+          <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
         </Field>
         <Button type="submit" variant="primary" icon="plus" loading={action.busy}>
           {t('settings.spaces.create')}
@@ -151,8 +151,8 @@ function SpaceSettings({
       {space.archived_at && <Notice tone="neutral">{t('settings.spaces.archivedHelp')}</Notice>}
       <form className="settings-form" onSubmit={rename}>
         <div className="settings-form-row">
-          <Field label={t('settings.spaces.name')}>
-            <Input required value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
+          <Field label={t('settings.spaces.name')} required>
+            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
           </Field>
           <Button type="submit" disabled={action.busy || name.trim() === space.name}>
             {t('settings.spaces.rename')}
@@ -268,8 +268,8 @@ function SpaceMembers({ workspace, url, onChange }: { workspace: number; url: st
       {members.data && outside.length > 0 && (
         <form className="settings-form" onSubmit={add}>
           <div className="settings-form-row">
-            <Field label={t('settings.spaces.addMember')}>
-              <Select required value={adding.user} onChange={(e) => setAdding((a) => ({ ...a, user: e.target.value }))}>
+            <Field label={t('settings.spaces.addMember')} required>
+              <Select value={adding.user} onChange={(e) => setAdding((a) => ({ ...a, user: e.target.value }))}>
                 <option value="">{t('settings.spaces.choose')}</option>
                 {outside.map((p) => (
                   <option key={p.id} value={p.id}>

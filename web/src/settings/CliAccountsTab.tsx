@@ -446,7 +446,12 @@ function SignIn({ login, name }: { login: CliLogin; name: string }) {
         </p>
       ) : (
         <>
-          <Notice tone="warning">{t('settings.cliAccounts.untrusted', { name })}</Notice>
+          {/* A security warning: said at once, as an alert, in the warning's colour. */}
+          <div role="alert">
+            <Notice tone="warning" live={false}>
+              {t('settings.cliAccounts.untrusted', { name })}
+            </Notice>
+          </div>
           <p className="settings-text">
             <code>{url}</code>
           </p>
@@ -480,9 +485,8 @@ function CodeForm({ base, name, onSent }: { base: string; name: string; onSent: 
   return (
     <form className="settings-form" onSubmit={submit} aria-label={t('settings.cliAccounts.codeOf', { name })}>
       <div className="settings-form-row">
-        <Field label={t('settings.cliAccounts.pasteCode')}>
+        <Field label={t('settings.cliAccounts.pasteCode')} required>
           <Input
-            required
             value={code}
             onChange={(e) => setCode(e.target.value)}
             autoComplete="off"

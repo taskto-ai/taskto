@@ -328,9 +328,8 @@ function SharedForm({
             </Select>
           </Field>
         )}
-        <Field label={t('settings.actions.name')}>
+        <Field label={t('settings.actions.name')} required>
           <Input
-            required
             value={form.label}
             onChange={set('label')}
             maxLength={60}
@@ -358,9 +357,9 @@ function SharedForm({
         <Field
           label={account ? t('settings.actions.newApiKey') : t('settings.actions.apiKey')}
           hint={t('settings.sharedCli.keyHint')}
+          required={!account}
         >
           <Input
-            required={!account}
             type="password"
             value={form.api_key}
             onChange={set('api_key')}
@@ -405,31 +404,31 @@ function Modes({ base, onChanged }: { base: string; onChanged: () => void }) {
         </Select>
       </Field>
       <Panel>
-        <Rows>
+        <ul className="settings-modes">
           {modes.data.members.map((m) => (
-            <Row
-              key={m.user_id}
-              title={m.name}
-              detail={m.email}
-              actions={
-                <Select
-                  size="sm"
-                  aria-label={t('settings.sharedCli.accountsFor', { name: m.name })}
-                  value={m.mode ?? ''}
-                  disabled={action.busy}
-                  onChange={(e) => save({ members: { [m.user_id]: e.target.value || null } })}
-                >
-                  <option value="">{t('settings.sharedCli.theDefault')}</option>
-                  {(Object.keys(MODE_LABEL) as CliAccountMode[]).map((mode) => (
-                    <option key={mode} value={mode}>
-                      {t(MODE_LABEL[mode])}
-                    </option>
-                  ))}
-                </Select>
-              }
-            />
+            <li key={m.user_id} className="settings-mode">
+              <span className="settings-person-text">
+                <span className="settings-person-name">{m.name}</span>
+                <span className="settings-muted">{m.email}</span>
+              </span>
+              <Select
+                size="sm"
+                className="settings-mode-select"
+                aria-label={t('settings.sharedCli.accountsFor', { name: m.name })}
+                value={m.mode ?? ''}
+                disabled={action.busy}
+                onChange={(e) => save({ members: { [m.user_id]: e.target.value || null } })}
+              >
+                <option value="">{t('settings.sharedCli.theDefault')}</option>
+                {(Object.keys(MODE_LABEL) as CliAccountMode[]).map((mode) => (
+                  <option key={mode} value={mode}>
+                    {t(MODE_LABEL[mode])}
+                  </option>
+                ))}
+              </Select>
+            </li>
           ))}
-        </Rows>
+        </ul>
       </Panel>
       <Alert error={action.error} />
     </Section>

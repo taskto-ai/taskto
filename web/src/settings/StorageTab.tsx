@@ -3,8 +3,9 @@
 // a member sees their own private space and nothing of anyone else's, which the server
 // enforces. A quota of 0 is none.
 
+import type { ReactNode } from 'react'
 import { api, type MyStorage, type SpaceUsage, type StorageReport, usagePath } from '../api'
-import { useFormat, useT } from '../i18n'
+import { type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Badge } from '../ui/Badge'
 import { EmptyState } from '../ui/EmptyState'
@@ -32,7 +33,7 @@ function AdminStorage({ workspace }: { workspace: number }) {
           <div className="settings-storage-total">
             <span className="settings-person-name">
               {t('settings.storage.workspace')}
-              <Fullness used={r.total} limit={r.quota.workspace} />
+              {fullness(t, r.total, r.quota.workspace)}
             </span>
             <Meter
               label={t('settings.storage.workspace')}
@@ -102,7 +103,7 @@ function SpaceRow({ space, own }: { space: SpaceUsage; own?: boolean }) {
   return (
     <Row
       title={name}
-      status={<Fullness used={space.total} limit={space.limit} />}
+      status={fullness(t, space.total, space.limit)}
       detail={
         <span className="settings-row-extra">
           {space.owner && !own && <span>{space.owner.email}</span>}
@@ -129,9 +130,9 @@ function SpaceRow({ space, own }: { space: SpaceUsage; own?: boolean }) {
   )
 }
 
-// A space at or near its limit says so: nearly full from nine tenths, full at the limit.
-function Fullness({ used, limit }: { used: number; limit: number }) {
-  const t = useT()
+// A space at or near its limit says so: nearly full from nine tenths, full at the limit. Nothing
+// otherwise, so a row with room has no status at all.
+function fullness(t: T, used: number, limit: number): ReactNode {
   if (limit <= 0) return null
   if (used >= limit) return <Badge tone="danger">{t('settings.storage.full')}</Badge>
   if (used >= limit * 0.9) return <Badge tone="warning">{t('settings.storage.nearlyFull')}</Badge>
