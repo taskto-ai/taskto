@@ -20,8 +20,10 @@
 #   TASKTO_UPDATE_STATE  the updater's state directory (default /var/lib/taskto-update), which the
 #                        server may not see, except its public directory, read-only
 #   TASKTO_UPDATE_PUBLIC the updater's public directory, where it writes the status the server
-#                        reads (default $TASKTO_UPDATE_STATE/public): the server may mount it
-#                        read-only, never writable, whatever path or alias it is mounted by
+#                        reads (default: the setting of that name in TASKTO_UPDATE_INSTALL_ENV,
+#                        /etc/taskto/install.env, which the updater reads too, else
+#                        $TASKTO_UPDATE_STATE/public): the server may mount it read-only, never
+#                        writable, whatever path or alias it is mounted by
 #
 # Host paths are compared as the kernel reaches them: each path a container mounts (a bind
 # mount, a named volume's `device`, a file-backed config or secret) and the two above are
@@ -65,7 +67,13 @@ d() { "$DOCKER" "$@" </dev/null; }
 c() { d compose "${cargs[@]}" "$@"; }
 # The protected paths, resolved: the updater's state, and its public directory.
 state=$(realpath -m -- "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}") || fail "can't resolve the updater's state directory"
-public=$(realpath -m -- "${TASKTO_UPDATE_PUBLIC:-$state/public}") || fail "can't resolve the updater's public directory"
+# Where the updater publishes is its setting in install.env, which a run by hand (step 12) doesn't
+# have in its environment: the same source the updater reads, the environment first.
+public=${TASKTO_UPDATE_PUBLIC:-}
+if [ -z "$public" ]; then
+	public=$({ sed -n "s/^TASKTO_UPDATE_PUBLIC=//p" "${TASKTO_UPDATE_INSTALL_ENV:-/etc/taskto/install.env}" 2>/dev/null || true; } | tail -n 1 | sed "s/^'//; s/'\$//")
+fi
+public=$(realpath -m -- "${public:-$state/public}") || fail "can't resolve the updater's public directory"
 # jq: holds(PATH; READ_ONLY), on resolved paths (no `.`, `..` or links left in them): a mount of
 # host path PATH lets the server see what is in the updater's state directory $state, other than
 # its public directory read-only: the state itself, a directory above it, or anything under it; or

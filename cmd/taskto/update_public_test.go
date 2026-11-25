@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -484,5 +485,28 @@ func TestUpdatePublishStatusRefusesARelativeDirectory(t *testing.T) {
 	}
 	if e.exists("state/public") {
 		t.Error("a relative directory was made")
+	}
+}
+
+// Run by hand (runbook step 12), the safety check protects the directory install.env names, as
+// the updater does, not only the default one.
+func TestSafetyCheckReadsThePublicDirectoryFromInstallEnv(t *testing.T) {
+	e := newUpdEnv(t)
+	pub := filepath.Join(e.dir, "moved")
+	e.write("fake/config-edit-install", `.services.taskto.volumes += [{type: "bind", source: "`+pub+`", target: "/pub"}]`)
+	check := func() string {
+		cmd := exec.Command("bash", filepath.Join("..", "..", "deploy", "safety-check.sh"), "--static", e.srv)
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "FAKE_DIR=" + e.fake, "DOCKER=" + filepath.Join(e.dir, "bin/docker"),
+			"TASKTO_ROOT=" + e.srv, "TASKTO_UPDATE_STATE=" + e.state, "TASKTO_UPDATE_INSTALL_ENV=" + e.install}
+		out, _ := cmd.CombinedOutput()
+		return string(out)
+	}
+	// Nothing says the directory is the status's: it is only a writable path.
+	if out := check(); !strings.Contains(out, "OK") {
+		t.Fatalf("a writable mount of an unrelated path: %s", out)
+	}
+	e.write("etc/install.env", e.read("etc/install.env")+"TASKTO_UPDATE_PUBLIC='"+pub+"'\n")
+	if out := check(); !strings.Contains(out, "FAIL") || !strings.Contains(out, "can write where it publishes") {
+		t.Fatalf("a writable mount of the directory install.env names: %s", out)
 	}
 }
