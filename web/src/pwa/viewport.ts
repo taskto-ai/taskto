@@ -5,7 +5,7 @@
 // scrolls the page to the field, which can push the top bar off screen and leave the composer
 // under the keyboard. There the visual viewport is the part left visible: while it is much
 // shorter than the window, the app is sized to it and moved to its top (html[data-keyboard],
-// styles.css). Pinch-zoom shrinks it too, and isn't a keyboard.
+// ui/base.css). Pinch-zoom shrinks it too, and isn't a keyboard.
 
 const KEYBOARD_MIN_PX = 120
 

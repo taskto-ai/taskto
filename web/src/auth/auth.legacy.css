@@ -1,0 +1,43 @@
+/* Setup, login and the other pages before the shell: the card and single sign-on.
+
+   Its rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
+   and their order with the other files is styles.css's (docs/design.md, "Where styles live").
+   Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
+
+.tt-auth {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  /* Clear of the status and home bars, as .tt-center is. */
+  padding-block-start: max(1rem, env(safe-area-inset-top));
+  padding-block-end: max(1rem, env(safe-area-inset-bottom));
+}
+
+.tt-auth-card {
+  width: min(100%, 26rem);
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line);
+  border-radius: 12px;
+  padding: 1.5rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.tt-auth-card .tt-logo {
+  height: 2rem;
+}
+
+.tt-auth-card p {
+  margin: 0;
+}
+
+/* The sign-in buttons of single sign-on providers, above the password form. */
+.tt-sso {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tt-sso-or {
+  text-align: center;
+}
