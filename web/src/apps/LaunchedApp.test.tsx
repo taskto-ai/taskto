@@ -154,3 +154,26 @@ test('a person who sees only their own records is told so under the name', async
   await screen.findByRole('heading', { level: 1, name: 'Expenses' })
   expect(screen.getByText('You see only the records you added.')).toBeTruthy()
 })
+
+test('opening the records scrolls the page to the panel’s top, leaving the heading’s focus ring its room', async () => {
+  serve()
+  // A page that scrolls, around the launched app.
+  const { container } = render(
+    <div data-testid="page" style={{ overflowY: 'auto' }}>
+      <LaunchedApp workspace={1} space={2} app={1} writable />
+    </div>,
+  )
+  const page = container.firstElementChild as HTMLElement
+  Object.defineProperty(page, 'scrollHeight', { value: 2000 })
+  Object.defineProperty(page, 'clientHeight', { value: 800 })
+  const toggle = await screen.findByRole('button', { name: 'Records and history' })
+  const panelId = toggle.getAttribute('aria-controls') as string
+  // Where things are (jsdom lays nothing out): the panel 700px down, its heading 16px inside it.
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const top = this.id === panelId ? 700 : this.id === `${panelId}-title` ? 716 : 0
+    return { top, left: 0, right: 0, bottom: top, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+  })
+  fireEvent.click(toggle)
+  await screen.findByRole('region', { name: 'Records and history' })
+  await waitFor(() => expect(page.scrollTop).toBe(700))
+})
