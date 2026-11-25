@@ -346,6 +346,8 @@
   flex: none;
   min-block-size: var(--control-md);
   margin-block-end: 0;
+  /* The height is the control's; the label sits in it with no padding above and below. */
+  padding-block: 0;
   padding-inline: var(--space-3);
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   font: var(--type-ui);
