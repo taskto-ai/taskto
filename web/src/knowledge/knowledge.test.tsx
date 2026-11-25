@@ -47,9 +47,17 @@ function kb(access: 'write' | 'read', extra: Parameters<typeof fakeFetch>[0] = {
   })
 }
 
+// The tree's folder "notes" is closed until it is opened, then its document.
 async function openPlan() {
-  fireEvent.click(await screen.findByRole('button', { name: /notes\/plan\.md/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /^notes/ }))
+  fireEvent.click(screen.getByRole('button', { name: /^plan\.md/ }))
   return screen.findByRole('article', { name: 'notes/plan.md' })
+}
+
+// One of the document's actions in its "More actions" menu.
+function fromMenu(doc: HTMLElement, name: string) {
+  fireEvent.click(within(doc).getByRole('button', { name: 'More actions' }))
+  fireEvent.click(within(doc).getByRole('menuitem', { name }))
 }
 
 test('a viewer reads documents and their history, but gets no way to change them', async () => {
@@ -123,7 +131,7 @@ test('saving an edit sends the version it started from', async () => {
   const doc = await openPlan()
   fireEvent.click(await within(doc).findByRole('button', { name: 'Edit' }))
   fireEvent.change(within(doc).getByLabelText('Text'), { target: { value: '# Plan\n\nBetter.\n' } })
-  fireEvent.click(within(doc).getByRole('button', { name: 'Preview' }))
+  fireEvent.click(within(doc).getByRole('radio', { name: 'Preview' }))
   expect(within(doc).getByText('Better.').tagName).toBe('P')
   fireEvent.change(within(doc).getByLabelText('What changed (optional)'), { target: { value: 'Tighten' } })
   fireEvent.click(within(doc).getByRole('button', { name: 'Save' }))
@@ -204,10 +212,18 @@ test('creates a Markdown document and opens it to edit', async () => {
   })
   render(<KnowledgePage workspace={1} />)
   fireEvent.click(await screen.findByRole('button', { name: 'New' }))
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'ideas/launch' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+  const dialog = screen.getByRole('dialog', { name: 'New document' })
+  expect(document.activeElement).toBe(within(dialog).getByLabelText('Name'))
+  fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'ideas/launch' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }))
   const doc = await screen.findByRole('article', { name: 'ideas/launch.md' })
-  expect(((await within(doc).findByLabelText('Text')) as HTMLTextAreaElement).value).toBe('# launch\n')
+  const text = (await within(doc).findByLabelText('Text')) as HTMLTextAreaElement
+  expect(text.value).toBe('# launch\n')
+  // Opened to write: the keyboard is in the text, and Save is the page's one primary button.
+  expect(document.activeElement).toBe(text)
+  expect(screen.queryByRole('dialog')).toBeNull()
+  await waitFor(() => expect(document.querySelectorAll('.ui-button-primary')).toHaveLength(1))
+  expect(within(doc).getByRole('button', { name: 'Save' }).classList).toContain('ui-button-primary')
   // Creating never names a version: an existing document is a 409, not replaced.
   expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ content: '# launch\n' })
 })
@@ -219,11 +235,15 @@ test('moves a document, naming its version', async () => {
   })
   render(<KnowledgePage workspace={1} />)
   const doc = await openPlan()
-  fireEvent.click(await within(doc).findByRole('button', { name: 'Move' }))
-  fireEvent.change(within(doc).getByLabelText('New name'), { target: { value: 'archive/plan.md' } })
-  fireEvent.click(within(doc).getAllByRole('button', { name: 'Move' }).at(-1) as HTMLElement)
-  await screen.findByRole('article', { name: 'archive/plan.md' })
+  await within(doc).findByRole('button', { name: 'Edit' })
+  fromMenu(doc, 'Move')
+  const dialog = within(doc).getByRole('dialog', { name: 'Move the document' })
+  fireEvent.change(within(dialog).getByLabelText('New name'), { target: { value: 'archive/plan.md' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
+  const moved = await screen.findByRole('article', { name: 'archive/plan.md' })
   expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ to: 'archive/plan.md', base_version: V1 })
+  // The keyboard goes to the moved document, not to the top of the page.
+  await waitFor(() => expect(document.activeElement).toBe(within(moved).getByRole('heading', { level: 2 })))
 })
 
 test('deletes a document, then restores it from its history', async () => {
@@ -254,16 +274,21 @@ test('deletes a document, then restores it from its history', async () => {
   })
   render(<KnowledgePage workspace={1} />)
   const doc = await openPlan()
-  fireEvent.click(await within(doc).findByRole('button', { name: 'Delete' }))
+  await within(doc).findByRole('button', { name: 'Edit' })
+  fromMenu(doc, 'Delete')
   fireEvent.click(
-    within(screen.getByRole('group', { name: 'Delete the document' })).getByRole('button', { name: 'Delete' }),
+    within(screen.getByRole('alertdialog', { name: 'Delete the document' })).getByRole('button', { name: 'Delete' }),
   )
   await screen.findByText(/Deleted notes\/plan\.md/)
   expect(screen.queryByRole('article')).toBeNull()
   expect(calls.find((c) => c.method === 'DELETE')?.body).toEqual({ base_version: V1 })
+  // The keyboard is on the way back.
+  const restore = screen.getByRole('button', { name: 'Restore' })
+  expect(document.activeElement).toBe(restore)
 
-  fireEvent.click(screen.getByRole('button', { name: 'Restore' }))
-  await screen.findByRole('article', { name: 'notes/plan.md' })
+  fireEvent.click(restore)
+  const back = await screen.findByRole('article', { name: 'notes/plan.md' })
+  await waitFor(() => expect(document.activeElement).toBe(within(back).getByRole('heading', { level: 2 })))
   expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ commit: 'c2' })
   // It's back: the notice, and its Restore button, are gone.
   expect(screen.queryByText(/Deleted notes\/plan\.md/)).toBeNull()
@@ -307,13 +332,25 @@ test('restores an earlier version, and a stale restore says so with a reload', a
   fireEvent.click(within(doc).getAllByRole('button', { name: 'View' })[1])
   expect((await within(doc).findByText('old')).tagName).toBe('EM')
 
+  // Restoring asks first; cancelling sends nothing.
   fireEvent.click(within(doc).getByRole('button', { name: 'Restore this version' }))
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }))
+  expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
+  const confirmRestore = async () => {
+    fireEvent.click(await within(doc).findByRole('button', { name: 'Restore this version' }))
+    const ask = screen.getByRole('alertdialog', { name: 'Restore this version?' })
+    expect(ask.textContent).toContain('notes/plan.md becomes again what it was on')
+    fireEvent.click(within(ask).getByRole('button', { name: 'Restore this version' }))
+  }
+  await confirmRestore()
   const alert = await within(doc).findByRole('alert')
   expect(alert.textContent).toContain('changed since you opened it')
   stale = false
   fireEvent.click(within(alert).getByRole('button', { name: 'Reload' }))
-  fireEvent.click(await within(doc).findByRole('button', { name: 'Restore this version' }))
+  await confirmRestore()
   await waitFor(() => expect(within(doc).queryByRole('region', { name: 'History' })).toBeNull())
+  // Restored: the keyboard goes to the document.
+  expect(document.activeElement).toBe(within(doc).getByRole('heading', { level: 2 }))
   expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([
     { commit: 'c1', base_version: V1 },
     { commit: 'c1', base_version: V1 },
@@ -341,11 +378,11 @@ test('uploads a file as bytes, and replaces one only when asked', async () => {
   render(<KnowledgePage workspace={1} />)
   const upload = async (file: File) => {
     fireEvent.click(await screen.findByRole('button', { name: 'Upload' }))
-    const form = screen.getByRole('form', { name: 'Upload a file' })
-    fireEvent.change(within(form).getByLabelText('File'), { target: { files: [file] } })
-    expect((within(form).getByLabelText('Save as') as HTMLInputElement).value).toBe(file.name)
-    fireEvent.click(within(form).getByRole('button', { name: 'Upload' }))
-    return form
+    const dialog = screen.getByRole('dialog', { name: 'Upload a file' })
+    fireEvent.change(within(dialog).getByLabelText('File'), { target: { files: [file] } })
+    expect((within(dialog).getByLabelText('Save as') as HTMLInputElement).value).toBe(file.name)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Upload' }))
+    return dialog
   }
 
   await upload(new File([new Uint8Array([1, 2, 3])], 'logo.png'))
@@ -365,7 +402,7 @@ test('uploads a file as bytes, and replaces one only when asked', async () => {
   // A name that is taken is refused, until the user chooses to replace it.
   exists = true
   const form = await upload(new File([new Uint8Array([1, 2, 3])], 'logo.png'))
-  expect((await within(form).findByRole('alert')).textContent).toBe('logo.png already exists.')
+  expect(await within(form).findByText('logo.png already exists.')).toBeTruthy()
   fireEvent.click(within(form).getByRole('button', { name: 'Replace it' }))
   await screen.findByRole('article', { name: 'logo.png' })
   expect(lastPut()?.path).toBe(`${S}/docs/logo.png?base_version=${V2}`)
@@ -373,12 +410,12 @@ test('uploads a file as bytes, and replaces one only when asked', async () => {
 
   // Deleted between "already exists" and "Replace it": replacing it is creating it.
   const again = await upload(new File([new Uint8Array([1, 2, 3])], 'logo.png'))
-  expect((await within(again).findByRole('alert')).textContent).toBe('logo.png already exists.')
+  expect(await within(again).findByText('logo.png already exists.')).toBeTruthy()
   exists = false
   gone = true
   fireEvent.click(within(again).getByRole('button', { name: 'Replace it' }))
   await waitFor(() => expect(lastPut()?.path).toBe(`${S}/docs/logo.png`))
-  expect(screen.queryByRole('form', { name: 'Upload a file' })).toBeNull()
+  expect(screen.queryByRole('dialog', { name: 'Upload a file' })).toBeNull()
 })
 
 test('a link in a document resolves against its folder, and never leaves the space', () => {
@@ -399,17 +436,19 @@ test('a conflict the server names says what happened; another says what may have
   })
   render(<KnowledgePage workspace={1} />)
   const doc = await openPlan()
-  fireEvent.click(await within(doc).findByRole('button', { name: 'Move' }))
-  fireEvent.change(within(doc).getByLabelText('New name'), { target: { value: 'archive/plan.md' } })
-  const move = within(doc).getAllByRole('button', { name: 'Move' }).at(-1) as HTMLElement
+  await within(doc).findByRole('button', { name: 'Edit' })
+  fromMenu(doc, 'Move')
+  const dialog = within(doc).getByRole('dialog', { name: 'Move the document' })
+  fireEvent.change(within(dialog).getByLabelText('New name'), { target: { value: 'archive/plan.md' } })
+  const move = within(dialog).getByRole('button', { name: 'Move' })
   fireEvent.click(move)
-  const said = (await within(doc).findByRole('alert')).textContent
+  const said = (await within(dialog).findByRole('alert')).textContent
   expect(said).toContain('archive/plan.md already exists.')
   expect(said).not.toContain('may have changed')
   code = undefined
   fireEvent.click(move)
   await waitFor(() =>
-    expect(within(doc).getByRole('alert').textContent).toContain('It may have changed since you opened it'),
+    expect(within(dialog).getByRole('alert').textContent).toContain('It may have changed since you opened it'),
   )
 })
 
@@ -443,7 +482,8 @@ test('an unversioned file plays, says it is not versioned, and its history and d
     [`DELETE ${S}/docs/talks/intro.mp4`]: { body: { commit: 'c3' } },
   })
   render(<KnowledgePage workspace={1} />)
-  const item = await screen.findByRole('button', { name: /talks\/intro\.mp4/ })
+  fireEvent.click(await screen.findByRole('button', { name: /^talks/ }))
+  const item = screen.getByRole('button', { name: /^intro\.mp4/ })
   expect(item.textContent).toContain('80 MB · not versioned')
   fireEvent.click(item)
   const doc = await screen.findByRole('article', { name: 'talks/intro.mp4' })
@@ -460,12 +500,11 @@ test('an unversioned file plays, says it is not versioned, and its history and d
   expect(within(history).queryByRole('button', { name: 'Restore this version' })).toBeNull()
 
   // Deleting it says it can't come back, and offers no restore.
-  fireEvent.click(within(doc).getByRole('button', { name: 'Delete' }))
-  expect(within(doc).getByText("Delete talks/intro.mp4? It isn't versioned: it can't be restored.")).toBeTruthy()
-  fireEvent.click(
-    within(within(doc).getByRole('group', { name: 'Delete the document' })).getByRole('button', { name: 'Delete' }),
-  )
-  expect((await screen.findByRole('status')).textContent).toContain("It wasn't versioned, so it can't come back.")
+  fromMenu(doc, 'Delete')
+  const ask = within(doc).getByRole('alertdialog', { name: 'Delete the document' })
+  expect(within(ask).getByText("Delete talks/intro.mp4? It isn't versioned: it can't be restored.")).toBeTruthy()
+  fireEvent.click(within(ask).getByRole('button', { name: 'Delete' }))
+  expect(await screen.findByText("Deleted talks/intro.mp4. It wasn't versioned, so it can't come back.")).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull()
   expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(1)
 })
@@ -503,7 +542,7 @@ test("an admin removes a document's old versions from history, after a warning a
   expect(within(doc).getAllByRole('button', { name: 'View' })).toHaveLength(2)
 
   fireEvent.click(within(doc).getByRole('button', { name: 'Remove old versions from history…' }))
-  const panel = within(doc).getByRole('group', { name: 'Remove the old versions from history' })
+  const panel = within(doc).getByRole('alertdialog', { name: 'Remove the old versions from history' })
   expect(within(panel).getByText(/deleted for good/)).toBeTruthy()
   expect(within(panel).getByText(/Backups made before today still hold the older versions/)).toBeTruthy()
   fireEvent.click(within(panel).getByRole('button', { name: 'Remove old versions' }))

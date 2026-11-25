@@ -1,12 +1,21 @@
 // Editing a Markdown document: the text and its preview, what changed, and the choice a
-// conflict asks for (useDraft has the saving).
+// conflict asks for (useDraft has the saving). While the draft differs from what was loaded,
+// whatever would close the editor asks first (guard.ts), in a question drawn here.
 
-import { useContext, useEffect, useId, useRef, useState } from 'react'
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { Doc } from '../api'
 import { useT } from '../i18n'
 import { Markdown } from '../markdown'
+import { Button } from '../ui/Button'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { SegmentedControl } from '../ui/SegmentedControl'
+import { Textarea } from '../ui/Textarea'
 import { GuardContext } from './guard'
 import { useDraft } from './useDraft'
+import './prose.css'
 
 // What the question says, by why it is asked.
 const DISCARD_QUESTION = {
@@ -45,130 +54,112 @@ export function Editor({
   }, [me, dirty, busy, report])
   useEffect(() => () => dispose(me), [me, dispose])
 
-  // The question comes into view and takes the focus; "Keep editing", by button or Escape,
-  // gives the focus back to the text, with the cursor where it was.
-  const question = useRef<HTMLFieldSetElement>(null)
-  const keepButton = useRef<HTMLButtonElement>(null)
-  const textarea = useRef<HTMLTextAreaElement>(null)
-  const previewTab = useRef<HTMLButtonElement>(null)
+  // The editor was opened to write: the keyboard goes to the text.
+  const form = useRef<HTMLFormElement>(null)
+  const area = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    area.current?.focus()
+  }, [])
+
+  // The question (a dialog) takes the focus on "Keep editing" when it opens. "Keep editing", by
+  // its button or Escape, gives the focus back to the text with the cursor where it was (to
+  // the Preview choice when the preview is shown): after the dialog has closed, which would
+  // otherwise give it back to what opened the question.
   const cursor = useRef<[number, number]>([0, 0])
-  useEffect(() => {
-    if (!asking) return
-    const ta = textarea.current
-    if (ta) cursor.current = [ta.selectionStart, ta.selectionEnd]
-    question.current?.scrollIntoView?.({ block: 'nearest' })
-    keepButton.current?.focus()
-  }, [asking])
-  const keepEditing = () => {
-    keep()
-    const ta = textarea.current
+  const backToText = useRef(false)
+  useLayoutEffect(() => {
+    if (asking) {
+      const ta = area.current
+      if (ta) cursor.current = [ta.selectionStart, ta.selectionEnd]
+      return
+    }
+    if (!backToText.current) return
+    backToText.current = false
+    const ta = area.current
     if (ta) {
       ta.focus()
       ta.setSelectionRange(cursor.current[0], cursor.current[1])
-    } else previewTab.current?.focus()
+    } else form.current?.querySelector<HTMLElement>('input[type="radio"]:checked')?.focus()
+  }, [asking])
+  const keepEditing = () => {
+    backToText.current = true
+    keep()
   }
-  useEffect(() => {
-    if (!asking) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      keepEditing()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  })
 
   return (
     <form
-      className="tt-editor"
+      ref={form}
+      className="kb-editor"
       aria-label={t('knowledge.editor.label')}
       onSubmit={(e) => {
         e.preventDefault()
         save()
       }}
     >
-      <fieldset className="tt-view-tabs" aria-label={t('knowledge.editor.view')}>
-        <button type="button" aria-pressed={tab === 'write'} onClick={() => setTab('write')}>
-          {t('knowledge.editor.write')}
-        </button>
-        <button ref={previewTab} type="button" aria-pressed={tab === 'preview'} onClick={() => setTab('preview')}>
-          {t('knowledge.editor.preview')}
-        </button>
-      </fieldset>
+      <SegmentedControl
+        label={t('knowledge.editor.view')}
+        size="sm"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'write', label: t('knowledge.editor.write') },
+          { value: 'preview', label: t('knowledge.editor.preview') },
+        ]}
+      />
       {tab === 'write' ? (
-        <textarea
-          ref={textarea}
+        <Textarea
+          ref={area}
+          className="kb-editor-text"
           aria-label={t('knowledge.editor.text')}
           value={text}
           rows={18}
           onChange={(e) => setText(e.target.value)}
         />
       ) : (
-        <div className="tt-preview">
-          <Markdown text={text} />
+        <div className="kb-editor-preview">
+          <Markdown text={text} look="document" />
         </div>
       )}
-      <input
-        aria-label={t('knowledge.editor.message')}
-        placeholder={t('knowledge.editor.message')}
-        value={message}
-        maxLength={200}
-        onChange={(e) => setMessage(e.target.value)}
-      />
+      <Field label={t('knowledge.editor.message')}>
+        <Input value={message} maxLength={200} onChange={(e) => setMessage(e.target.value)} />
+      </Field>
       {conflict && (
-        <div role="alert" className="tt-conflict">
-          <span>{t(conflict.current ? 'knowledge.editor.changed' : 'knowledge.editor.gone')}</span>
-          {conflict.current && (
-            <button
-              type="button"
-              className="tt-button"
-              onClick={() => conflict.current && takeTheirs(conflict.current)}
-            >
-              {t('knowledge.editor.loadTheirs')}
-            </button>
-          )}
-          <button
-            type="button"
-            className="tt-button tt-danger"
-            disabled={busy}
-            onClick={() => overwrite(conflict.current)}
-          >
-            {t(conflict.current ? 'knowledge.editor.overwrite' : 'knowledge.editor.saveAgain')}
-          </button>
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
-      {asking && (
-        // The same question-and-two-buttons panel as deleting a document.
-        <fieldset
-          ref={question}
-          className="tt-panel"
-          role="alertdialog"
-          aria-label={t('knowledge.editor.discardLabel')}
+        <Notice
+          tone="danger"
+          action={
+            <span className="kb-actions">
+              {conflict.current && (
+                <Button size="sm" onClick={() => conflict.current && takeTheirs(conflict.current)}>
+                  {t('knowledge.editor.loadTheirs')}
+                </Button>
+              )}
+              <Button size="sm" variant="danger" disabled={busy} onClick={() => overwrite(conflict.current)}>
+                {t(conflict.current ? 'knowledge.editor.overwrite' : 'knowledge.editor.saveAgain')}
+              </Button>
+            </span>
+          }
         >
-          <p>{t(DISCARD_QUESTION[asking])}</p>
-          <div className="tt-actions">
-            <button type="button" className="tt-button tt-danger" onClick={guard.discard}>
-              {t('knowledge.editor.discard')}
-            </button>
-            <button ref={keepButton} type="button" className="tt-button" onClick={keepEditing}>
-              {t('knowledge.editor.keepEditing')}
-            </button>
-          </div>
-        </fieldset>
+          {t(conflict.current ? 'knowledge.editor.changed' : 'knowledge.editor.gone')}
+        </Notice>
       )}
-      <div className="tt-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={busy || conflict !== null}>
+      {error && <Notice tone="danger">{error}</Notice>}
+      <div className="kb-actions">
+        <Button type="submit" variant="primary" loading={busy} disabled={busy || conflict !== null}>
           {t('knowledge.editor.save')}
-        </button>
-        <button type="button" className="tt-button" onClick={() => guard.ask(onCancel)}>
-          {t('common.cancel')}
-        </button>
+        </Button>
+        <Button onClick={() => guard.ask(onCancel)}>{t('common.cancel')}</Button>
       </div>
+      <ConfirmDialog
+        open={asking !== null}
+        title={t('knowledge.editor.discardLabel')}
+        confirmLabel={t('knowledge.editor.discard')}
+        cancelLabel={t('knowledge.editor.keepEditing')}
+        tone="danger"
+        onConfirm={guard.discard}
+        onCancel={keepEditing}
+      >
+        {asking && t(DISCARD_QUESTION[asking])}
+      </ConfirmDialog>
     </form>
   )
 }
