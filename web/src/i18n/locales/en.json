@@ -7,21 +7,15 @@
   "apps": {
     "intro": "Personal apps are screens the agent builds for you: ask it in a conversation for one, such as “an expense tracker in my private space”. A shared space’s apps are its members’: move an app to one to share it.",
     "noSpaces": "You have no spaces in this workspace.",
-    "readOnly": "· read-only",
-    "none": "No apps here yet.",
     "rows_one": "{count} row",
     "rows_other": "{count} rows",
-    "offline": "offline",
     "changed": "Someone changed {name} since the list was loaded. It is shown as it is now: try again.",
     "name": "Name",
     "save": "Save",
-    "launch": "Launch",
-    "launchNamed": "Launch {name}",
     "rename": "Rename",
     "restore": "Restore",
     "restoreNamed": "Restore {name}",
     "takeOffline": "Take offline",
-    "takeOfflineNamed": "Take offline {name}",
     "moveNamed": "Move {name} to",
     "moveTo": "Move to…",
     "move": "Move",
@@ -118,7 +112,6 @@
     "roles": {
       "open": "Roles",
       "openNamed": "Roles of {name}",
-      "close": "Close",
       "saved": "Saved.",
       "intro": "Roles narrow what a member’s role in the space allows, never widen it. Once any roles are set, a member with no roles here (and no “Everyone else” row) can’t use or see the app. Clear every role to give the app back to the whole space.",
       "member": "Member",
@@ -134,14 +127,12 @@
       "data_managerHelp": "adds, sees and changes everyone’s records",
       "reader": "Reader",
       "readerHelp": "sees everyone’s records",
-      "line": "{role}: {help}"
+      "line": "{role}: {help}",
+      "caption": "Roles of each member in this app"
     },
     "notPublished": "Not published",
     "unpublishedChanges": "Unpublished changes",
-    "publish": "Publish",
     "publishNamed": "Publish {name}",
-    "closeReview": "Close review",
-    "closeReviewNamed": "Close the review of {name}",
     "previewDraft": "Preview draft",
     "previewDraftNamed": "Preview the draft of {name}",
     "stage": {
@@ -542,12 +533,36 @@
     },
     "duplicate": {
       "open": "Duplicate as template",
-      "openNamed": "Duplicate {name} as a template",
       "title": "Duplicate {name}",
       "note": "This copies the app’s definition only, into a new app of your own: no records, photos, history or roles come with it, and boards you can’t write to are cleared and chosen again before publishing.",
       "defaultName": "Copy of {name}",
       "space": "Put the copy in",
       "make": "Make the copy"
+    },
+    "noSpacesHelp": "Apps live in spaces. Once you have one, the apps you build appear here, grouped by space.",
+    "count_one": "{count} app",
+    "count_other": "{count} apps",
+    "sharedSpace": "Shared space",
+    "readOnlyShort": "read-only",
+    "empty": {
+      "title": "No apps in {space} yet",
+      "private": "Apps here are yours alone: trackers, checklists, forms. Build one with the agent, or start from a template.",
+      "shared": "Apps here belong to everyone in this space. Build one with the agent, start from a template, or move one of yours here to share it.",
+      "sharedReadOnly": "Apps here belong to everyone in this space. Its editors can build one."
+    },
+    "offlineBadge": "Offline",
+    "publishedOn": "published {date}",
+    "open": "Open",
+    "openNamed": "Open {name}",
+    "moreNamed": "More actions for {name}",
+    "publishItem": "Publish…",
+    "moveItem": "Move to a space…",
+    "moveTitle": "Move {name} to a space",
+    "moveNote": "The app moves with its records. Who can use it is then set by the space it moves to.",
+    "renameNamed": "Rename {name}",
+    "takeOfflineConfirm": {
+      "title": "Take {name} offline?",
+      "body": "Nobody can open it until someone who may publish it restores it. Its records are kept."
     }
   },
   "auth": {
