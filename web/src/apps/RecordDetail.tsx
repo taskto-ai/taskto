@@ -429,8 +429,13 @@ function FieldRow({
       if (text !== '' && !options.some((o) => o.value === text)) options.push({ value: text, label: text })
       return (
         <Field id={id} label={field.name} required={field.required}>
-          {/* The mark says it is required; the server checks it, as it always has, not the browser. */}
-          <Select required={false} value={text} onChange={(e) => onChange(e.target.value)}>
+          {/* The mark and aria-required say it is required; the server checks it, as it always has, not the browser. */}
+          <Select
+            required={false}
+            aria-required={field.required || undefined}
+            value={text}
+            onChange={(e) => onChange(e.target.value)}
+          >
             <option value="">{t('apps.explorer.unset')}</option>
             {options.map((o) => (
               <option key={o.value} value={o.value}>
@@ -446,6 +451,7 @@ function FieldRow({
         <Field id={id} label={field.name} required={field.required}>
           <Input
             required={false}
+            aria-required={field.required || undefined}
             type={field.type === 'string' || field.type === 'barcode' ? 'text' : field.type}
             step={field.type === 'number' ? 'any' : undefined}
             inputMode={field.type === 'number' ? 'decimal' : undefined}
