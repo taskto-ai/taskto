@@ -1,0 +1,10 @@
+@layer components {
+  .ui-icon {
+    flex: none;
+  }
+
+  /* An arrow or a chevron along the line points the other way right to left. */
+  .ui-icon-directional:dir(rtl) {
+    scale: -1 1;
+  }
+}

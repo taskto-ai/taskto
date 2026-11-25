@@ -1,0 +1,16 @@
+@layer components {
+  .ui-agent-dot {
+    display: inline-block;
+    flex: none;
+    vertical-align: middle;
+    inline-size: var(--mark-node);
+    block-size: var(--mark-node);
+    border-radius: var(--radius-pill);
+    background: var(--color-node);
+    box-shadow: 0 0 0 var(--line-focus-offset) var(--color-node-edge);
+  }
+
+  .ui-agent-dot-ringed {
+    box-shadow: 0 0 0 var(--line-focus-offset) var(--color-text);
+  }
+}

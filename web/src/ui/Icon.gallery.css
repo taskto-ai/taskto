@@ -1,0 +1,17 @@
+@layer components {
+  .ui-gallery-icon {
+    display: inline-grid;
+    justify-items: center;
+    gap: var(--space-1);
+    inline-size: calc(var(--space-16) + var(--space-8));
+    text-align: center;
+    overflow-wrap: anywhere;
+    color: var(--color-text);
+  }
+
+  .ui-gallery-icon code {
+    font: var(--type-caption);
+    font-family: var(--font-mono);
+    color: var(--color-text-muted);
+  }
+}
