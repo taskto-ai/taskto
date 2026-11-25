@@ -43,8 +43,20 @@
     text-overflow: ellipsis;
   }
 
-  .kb-side-head > .ui-heading:focus {
+  /* The headings the page moves the keyboard to (the page's title, the document's path, a
+     version): no ring for a pointer's focus, the focus ring for the keyboard's. */
+  .kb-side-head > .ui-heading:focus,
+  .kb-doc-path:focus,
+  .kb-version > .ui-heading:focus {
     outline: none;
+  }
+
+  .kb-side-head > .ui-heading:focus-visible,
+  .kb-doc-path:focus-visible,
+  .kb-version > .ui-heading:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+    border-radius: var(--radius-sm);
   }
 
   .kb-side > * {
@@ -176,10 +188,6 @@
     min-inline-size: 0;
   }
 
-  .kb-doc-path:focus {
-    outline: none;
-  }
-
   .kb-doc-crumbs {
     display: contents;
   }
@@ -286,10 +294,6 @@
     gap: var(--space-4);
     padding-block-start: var(--space-4);
     border-block-start: var(--line-thin) solid var(--color-border);
-  }
-
-  .kb-version > .ui-heading:focus {
-    outline: none;
   }
 
   /* The dialogs. */

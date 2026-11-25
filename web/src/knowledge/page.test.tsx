@@ -548,3 +548,25 @@ test('closing the upload dialog leaves the upload going; only its Cancel stops i
   await waitFor(() => expect(calls.filter((c) => c.path === `${S}/docs?limit=1000`)).toHaveLength(2))
   expect(screen.queryByRole('article')).toBeNull()
 })
+
+test('Back to the results finds every page of them that was loaded, without asking again', async () => {
+  const calls = kb('read', {
+    ...searchRoutes,
+    [`GET ${S}/search?q=ideas`]: { body: { results: [ideasResult], mode: 'fulltext', next_offset: 1 } },
+    [`GET ${S}/search?q=ideas&offset=1`]: {
+      body: { results: [{ ...ideasResult, path: 'notes/plan.md', title: 'Plan' }], mode: 'fulltext' },
+    },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByRole('list', { name: 'Documents' })
+  searchFor('ideas')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  fireEvent.click(await within(results).findByRole('button', { name: 'More results' }))
+  await within(results).findByRole('button', { name: 'Plan' })
+  fireEvent.click(within(results).getByRole('button', { name: 'Ideas' }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  fireEvent.click(within(article).getByRole('button', { name: 'Back to the results' }))
+  const again = await screen.findByRole('region', { name: 'Search results' })
+  expect(within(again).getByRole('button', { name: 'Plan' })).toBeTruthy()
+  expect(calls.filter((c) => c.path.startsWith(`${S}/search?`))).toHaveLength(2)
+})

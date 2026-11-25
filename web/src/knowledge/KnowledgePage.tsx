@@ -269,9 +269,11 @@ export function KnowledgePage({
             />
           </div>
           <div className="kb-main" ref={main}>
-            {query && showResults && (
-              <Page width="list" hidden={asking}>
-                {deletedNotice}
+            {/* Kept while a document is in front of them, so Back to the results finds every page
+                that was loaded, where it was. */}
+            {query && (
+              <Page width="list" hidden={!showResults || asking}>
+                {showResults && deletedNotice}
                 <SearchResults
                   key={query.n}
                   workspace={workspace}

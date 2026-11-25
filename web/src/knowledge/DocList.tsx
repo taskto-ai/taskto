@@ -110,7 +110,8 @@ export function DocList({
     const watch = new ResizeObserver(measure)
     watch.observe(el)
     return () => watch.disconnect()
-  }, [tree, open])
+    // The open document's name is drawn heavier, which can cut it: measured again when it changes.
+  }, [tree, open, current])
 
   if (loading) {
     return (

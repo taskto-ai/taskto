@@ -444,7 +444,8 @@ function ResultPages({
 // What a search shows while it waits: the shape of a few results, and its words for a screen reader.
 function Searching({ label }: { label: string }) {
   return (
-    <div className="search-loading" aria-busy="true">
+    // A status: said when the search starts waiting, as the old line of text was shown.
+    <div className="search-loading" role="status" aria-busy="true">
       <VisuallyHidden>{label}</VisuallyHidden>
       {['45%', '35%', '50%'].map((width, i) => (
         <span key={width} className="search-loading-row">
