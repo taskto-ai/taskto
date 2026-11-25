@@ -2161,9 +2161,7 @@
   },
   "conversations": {
     "archived": "Archived",
-    "showArchived": "Show archived",
     "showArchivedTitle": "Show archived conversations",
-    "showActiveTitle": "Show active conversations",
     "new": "New",
     "nothingArchived": "Nothing archived.",
     "none": "No conversations yet. Start one with New.",
@@ -2204,12 +2202,14 @@
     },
     "question": {
       "label": "{cli} asks to use {tool}",
-      "asks": "{cli} asks to use <tool>{tool}</tool>:",
+      "asks": "{cli} asks to use <b>{tool}</b>:",
       "allow": "Allow",
       "deny": "Deny"
     },
     "allowAll": {
       "confirm": "{cli} will run commands, edit files and fetch pages in this conversation without asking you first. A web page or file it reads could then make it do something you didn't ask for. Allow everything in this conversation?",
+      "title": "Let {cli} act without asking?",
+      "confirmButton": "Allow everything",
       "label": "Let {cli} act without asking in this conversation",
       "on": "It runs commands, edits files and fetches pages without asking. A change applies from the next message."
     },
@@ -2229,6 +2229,7 @@
     },
     "composer": {
       "archived": "This conversation is archived.",
+      "unreadable": "This conversation can't be read, so nothing can be sent to it.",
       "workingHint": "The agent is working. Send steers it at its next step, Queue waits until it's done.",
       "message": "Message",
       "placeholder": "Message the agent",
@@ -2251,9 +2252,7 @@
       "recorded": "Recorded",
       "elapsed": "{elapsed} / {max}",
       "stop": "Stop dictation",
-      "stopTitle": "Stop, and turn the speech into text",
       "dictate": "Dictate",
-      "dictateTitle": "Dictate: speak, then edit the text before sending",
       "transcribing": "Turning speech into text…",
       "cantRecord": "This browser can’t record here: it needs HTTPS, or localhost."
     }
@@ -2931,7 +2930,8 @@
       "inPlaceRow": "A search result",
       "inPlaceDetail": "Opens on this page, in place",
       "focusTarget": "Moved to by a script (a ref, and tabIndex -1)",
-      "focusIt": "Send the keyboard to the title"
+      "focusIt": "Send the keyboard to the title",
+      "openPage": "Open a page (a link)"
     }
   }
 }
