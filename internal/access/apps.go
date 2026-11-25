@@ -313,11 +313,17 @@ func (c *Checker) App(ctx context.Context, userID, spaceID, appID int64) (AppAcc
 // and its roles changed between them). It returns the space as the person sees it too. The errors
 // are App's.
 func (c *Checker) AppNamed(ctx context.Context, userID, spaceID, appID int64) (Space, AppAccess, string, error) {
-	tx, err := c.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return Space{}, AppAccess{}, "", err
+	// On a checker that already reads inside a transaction (Checker.On) that is the snapshot; a
+	// second transaction would wait for the one that holds the write lock.
+	tx, held := c.reads.(*sql.Tx)
+	if !held {
+		var err error
+		tx, err = c.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return Space{}, AppAccess{}, "", err
+		}
+		defer func() { _ = tx.Rollback() }() // nothing was written
 	}
-	defer func() { _ = tx.Rollback() }() // nothing was written
 	snap := &Checker{db: c.db, reads: tx, auth: c.auth}
 	sp, err := snap.Check(ctx, userID, spaceID)
 	if err != nil {

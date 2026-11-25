@@ -89,7 +89,7 @@ const (
 
 // EmailKinds are the kinds a person may choose email for.
 func EmailKinds() []string {
-	return []string{KindCardAssigned, KindAppEffectFailed}
+	return []string{KindCardAssigned, KindCardComment, KindCardMention, KindCardDue, KindCardOverdue, KindAppEffectFailed}
 }
 
 func emailKind(kind string) bool {
@@ -382,11 +382,24 @@ func (s *Service) usesDigest(ctx context.Context, q queryer, userID, workspaceID
 
 // recipientOf is who a mail goes to and in which language: the person's own, else their workspace's.
 func (s *Service) recipientOf(ctx context.Context, q queryer, userID, workspaceID int64) (address, locale string, err error) {
+	return s.recipient(ctx, q, userID, workspaceID, false)
+}
+
+// confirmedRecipientOf is recipientOf for a notification: read in one statement with the proof that
+// the address is the one the person confirmed, so no other is returned. sql.ErrNoRows is "nobody
+// may be mailed" (not a member, or no confirmed address).
+func (s *Service) confirmedRecipientOf(ctx context.Context, q queryer, userID, workspaceID int64) (address, locale string, err error) {
+	return s.recipient(ctx, q, userID, workspaceID, true)
+}
+
+func (s *Service) recipient(ctx context.Context, q queryer, userID, workspaceID int64, confirmed bool) (address, locale string, err error) {
 	var userLocale, workspaceLocale string
 	err = q.QueryRowContext(ctx, `
 		SELECT u.email, u.locale, w.locale FROM users u, workspaces w
-		WHERE u.id = ? AND w.id = ? AND EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = u.id AND m.workspace_id = w.id)`,
-		userID, workspaceID).Scan(&address, &userLocale, &workspaceLocale)
+		WHERE u.id = ? AND w.id = ? AND EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = u.id AND m.workspace_id = w.id)
+		  AND (NOT ? OR EXISTS (SELECT 1 FROM notification_email_verification v
+		                        WHERE v.user_id = u.id AND v.verified_at IS NOT NULL AND v.address = u.email))`,
+		userID, workspaceID, confirmed).Scan(&address, &userLocale, &workspaceLocale)
 	if userLocale != "" {
 		return address, userLocale, err
 	}
@@ -509,19 +522,32 @@ type digestPlan struct {
 	address, locale string
 }
 
-// digestPlanFor works out the summary of job's person: the unread notifications of the kinds they
-// chose for it, that came after the summary's cursor and after the kind was turned to a summary,
-// and that they may still read. ok is false when there is nothing to say, or nothing may be sent:
-// no mail, an unconfirmed address, no longer a member.
+// digestPlanFor works out the summary of job's person as it stands now, in a transaction of its
+// own (the whole plan is one state, and a notification with nothing to say is passed over). ok is
+// false when there is nothing to say, or nothing may be sent.
 func (s *Service) digestPlanFor(ctx context.Context, job schedule.Job) (p digestPlan, ok bool, err error) {
+	err = s.write(ctx, func(tx *sql.Tx) error {
+		p, ok, err = s.digestPlanIn(ctx, tx, job)
+		return err
+	})
+	return p, ok && err == nil, err
+}
+
+// digestPlanIn is digestPlanFor in tx, which the caller holds: the unread notifications of the
+// kinds the person chose for the summary that came after its cursor and after the kind was turned
+// to a summary, and that they may still read, are counted by one reader on tx, so the count, the
+// address and the choices are of one state; the caller acts on the plan in the same transaction.
+// ok is false when there is nothing to say, or nothing may be sent: no mail, an unconfirmed
+// address, no longer a member.
+func (s *Service) digestPlanIn(ctx context.Context, tx *sql.Tx, job schedule.Job) (p digestPlan, ok bool, err error) {
 	if !s.emailReady() {
 		return p, false, nil
 	}
-	if confirmed, err := s.verified(ctx, s.db, job.UserID); err != nil || !confirmed {
+	if confirmed, err := s.verified(ctx, tx, job.UserID); err != nil || !confirmed {
 		return p, false, err
 	}
 	var cursor int64
-	err = s.db.QueryRowContext(ctx, `SELECT digest_cursor FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
+	err = tx.QueryRowContext(ctx, `SELECT digest_cursor FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
 		job.UserID, job.WorkspaceID).Scan(&cursor)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, false, nil
@@ -529,7 +555,7 @@ func (s *Service) digestPlanFor(ctx context.Context, job schedule.Job) (p digest
 	if err != nil {
 		return p, false, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, `
 		SELECT `+storedColumns+` FROM notifications
 		WHERE user_id = ? AND workspace_id = ? AND id > ? AND read_at IS NULL AND created_at > ?
 		  AND EXISTS (SELECT 1 FROM notification_email_prefs p
@@ -555,8 +581,9 @@ func (s *Service) digestPlanFor(ctx context.Context, job schedule.Job) (p digest
 	if len(found) == 0 {
 		return p, false, nil
 	}
-	// Only what the person may read now is counted, and so told.
-	reader := s.readerFor(job.UserID)
+	// Only what the person may read now, and what is still true (a card that is due), is counted,
+	// and so told: the reader renders each as the inbox does, on this transaction.
+	reader := s.readerOn(s.access.On(tx), job.UserID)
 	for _, n := range found {
 		it, err := reader.item(ctx, n)
 		if err != nil {
@@ -569,9 +596,9 @@ func (s *Service) digestPlanFor(ctx context.Context, job schedule.Job) (p digest
 	p.upto = found[len(found)-1].id
 	if p.count == 0 {
 		// Nothing to tell, and nothing to count again: they are passed over.
-		return p, false, s.advanceDigest(ctx, job, p.upto)
+		return p, false, advanceDigestIn(ctx, tx, job, p.upto)
 	}
-	p.address, p.locale, err = s.recipientOf(ctx, s.db, job.UserID, job.WorkspaceID)
+	p.address, p.locale, err = s.confirmedRecipientOf(ctx, tx, job.UserID, job.WorkspaceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, false, nil
 	}
@@ -579,7 +606,13 @@ func (s *Service) digestPlanFor(ctx context.Context, job schedule.Job) (p digest
 }
 
 func (s *Service) advanceDigest(ctx context.Context, job schedule.Job, upto int64) error {
-	_, err := s.db.ExecContext(context.WithoutCancel(ctx), `
+	return advanceDigestIn(context.WithoutCancel(ctx), s.db, job, upto)
+}
+
+func advanceDigestIn(ctx context.Context, x interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}, job schedule.Job, upto int64) error {
+	_, err := x.ExecContext(ctx, `
 		UPDATE notification_email_settings SET digest_cursor = ? WHERE user_id = ? AND workspace_id = ? AND digest_cursor < ?`,
 		upto, job.UserID, job.WorkspaceID, upto)
 	return err
@@ -654,19 +687,32 @@ func (s *Service) digestOnce(ctx context.Context, job schedule.Job) error {
 	if cur, err := s.current(ctx, s.db, job); err != nil || !cur {
 		return errors.Join(err, s.settleLedger(ctx, key, ledgerCancelled, plan.upto))
 	}
-	plan, ok, err = s.digestPlanFor(ctx, job)
-	if err == nil && ok {
-		// The plan takes a moment: the occurrence is asked once more before anything is submitted.
-		ok, err = s.current(ctx, s.db, job)
-	}
-	if err != nil || !ok {
-		return errors.Join(err, s.settleLedger(ctx, key, ledgerCancelled, plan.upto))
-	}
-	// What the message covers is on the ledger before it is submitted, so an attempt that stops
-	// after the relay took it advances the cursor over everything it counted.
-	if _, err := s.db.ExecContext(ctx, `UPDATE notification_email_ledger SET upto = ?, updated_at = ? WHERE key = ? AND state = 'sending'`,
-		plan.upto, s.now(), key); err != nil {
-		return errors.Join(err, s.settleLedger(ctx, key, ledgerRefused, plan.upto))
+	// The final plan, the occurrence and what the message covers are one transaction: the writers
+	// wait while it is made, so what was counted is what the person may read when it is written to
+	// the ledger, before anything is submitted, and an attempt that stops after the relay took the
+	// mail advances the cursor over everything it counted.
+	cancelled := false
+	err = s.write(ctx, func(tx *sql.Tx) error {
+		if cur, err := s.current(ctx, tx, job); err != nil || !cur {
+			cancelled = true
+			return err
+		}
+		var err error
+		plan, ok, err = s.digestPlanIn(ctx, tx, job)
+		if err != nil || !ok {
+			cancelled = true
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE notification_email_ledger SET upto = ?, updated_at = ? WHERE key = ? AND state = 'sending'`,
+			plan.upto, s.now(), key)
+		return err
+	})
+	if err != nil || cancelled {
+		state := ledgerCancelled
+		if err != nil {
+			state = ledgerRefused
+		}
+		return errors.Join(err, s.settleLedger(ctx, key, state, plan.upto))
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, emailSendTimeout)
 	defer cancel()
@@ -751,14 +797,28 @@ type instantTarget struct {
 
 // instantEligible decides whether the mail of notification id may go out now: it drops what must not
 // be mailed (gone, read meanwhile, old, no longer chosen, an address that isn't confirmed, the person
-// gone from the workspace, something they may no longer read). An error is a failure to find out.
-func (s *Service) instantEligible(ctx context.Context, id int64) (instantTarget, bool, error) {
-	var t instantTarget
+// gone from the workspace, something they may no longer read or that is no longer true). An error is a
+// failure to find out. What is decided and where the mail goes are read in one transaction (the
+// writers wait while it is open), the confirmed address in one statement and what the person may
+// read last, so a mail goes to a confirmed address of someone who may read what it tells, as of
+// the moment it is submitted.
+func (s *Service) instantEligible(ctx context.Context, id int64) (t instantTarget, ok bool, err error) {
+	err = s.write(ctx, func(tx *sql.Tx) error {
+		t, ok, err = s.instantEligibleIn(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return instantTarget{}, false, err
+	}
+	return t, ok, nil
+}
+
+func (s *Service) instantEligibleIn(ctx context.Context, tx *sql.Tx, id int64) (t instantTarget, ok bool, err error) {
 	var n stored
 	var ref string
 	var mode sql.NullString
 	var member bool
-	err := s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT n.id, n.user_id, n.workspace_id, n.kind, n.ref, n.created_at, n.read_at IS NOT NULL,
 			(SELECT mode FROM notification_email_prefs p WHERE p.user_id = n.user_id AND p.workspace_id = n.workspace_id AND p.kind = n.kind),
 			EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = n.workspace_id AND m.user_id = n.user_id)
@@ -773,19 +833,24 @@ func (s *Service) instantEligible(ctx context.Context, id int64) (instantTarget,
 	if !readable || n.read || !member || mode.String != ModeInstant || s.clock().Sub(created) > emailTTL || !emailKind(n.kind) || !s.emailReady() {
 		return t, false, nil
 	}
-	if confirmed, err := s.verified(ctx, s.db, n.userID); err != nil || !confirmed {
-		return t, false, err
-	}
-	it, err := s.readerFor(n.userID).item(ctx, n)
-	if err != nil || it.Kind == KindChanged {
-		return t, false, err
-	}
+	// The confirmed address is read first, and what the person may read last: the last read is the
+	// one nearest the submission, and the one that revocation of access must be seen by.
 	t = instantTarget{userID: n.userID, kind: n.kind}
-	t.address, t.locale, err = s.recipientOf(ctx, s.db, n.userID, n.workspaceID)
+	t.address, t.locale, err = s.confirmedRecipientOf(ctx, tx, n.userID, n.workspaceID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return t, false, nil // not a member any more
+		return instantTarget{}, false, nil // not a member any more, or no confirmed address
 	}
-	return t, err == nil, err
+	if err != nil {
+		return instantTarget{}, false, err
+	}
+	if s.betweenReads != nil {
+		s.betweenReads(tx)
+	}
+	it, err := s.readerOn(s.access.On(tx), n.userID).item(ctx, n)
+	if err != nil || it.Kind == KindChanged {
+		return instantTarget{}, false, err
+	}
+	return t, true, nil
 }
 
 // readStored reads the reference and the time of a stored notification; a notification that can't

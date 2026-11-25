@@ -476,7 +476,7 @@ function RecordTable({
   const timeKey = deleted ? '_deleted' : UPDATED
   return (
     <div className="tt-table-scroll">
-      <table className="tt-table tt-explorer-table">
+      <table className="tt-explorer-table">
         <thead>
           <tr>
             <th scope="col">{t('apps.explorer.id')}</th>
@@ -551,7 +551,7 @@ function RecordCards({
   const t = useT()
   const f = useFormat()
   return (
-    <ul className="tt-record-list tt-explorer-cards">
+    <ul className="tt-record-list">
       {records.map((rec) => {
         const [lead, ...rest] = fields
         const title = lead ? shown(rec.data[lead.name], lead.type, f, t, lead) : ''

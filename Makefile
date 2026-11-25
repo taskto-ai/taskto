@@ -14,6 +14,7 @@ GOLANGCI_LINT = go tool -modfile=tools/go.mod golangci-lint
 check: lint
 	go test ./...
 	$(PNPM) --filter @taskto/web run i18n
+	$(PNPM) --filter @taskto/web run css
 	$(PNPM) run build
 	$(PNPM) run test
 

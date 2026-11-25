@@ -65,11 +65,18 @@ func scanStored(row interface{ Scan(...any) error }) (stored, error) {
 // reason.
 type reader struct {
 	s      *Service
+	access *access.Checker
 	userID int64
 }
 
 func (s *Service) readerFor(userID int64) *reader {
-	return &reader{s: s, userID: userID}
+	return &reader{s: s, access: s.access, userID: userID}
+}
+
+// readerOn is readerFor reading through snap, a checker on a transaction (access.Checker.On): what
+// it says about many notifications comes from the one state that transaction sees.
+func (s *Service) readerOn(snap *access.Checker, userID int64) *reader {
+	return &reader{s: s, access: snap, userID: userID}
 }
 
 // item renders n for its recipient as they may read things now.
@@ -92,11 +99,13 @@ func (r *reader) item(ctx context.Context, n stored) (Item, error) {
 func (r *reader) describe(ctx context.Context, n stored) (params map[string]string, target Target, ok bool, err error) {
 	switch n.kind {
 	case KindCardAssigned, KindCardComment, KindCardMention, KindCardDue, KindCardOverdue:
-		var title, due sql.NullString
-		sp, err := r.s.access.CheckWith(ctx, r.userID, n.ref.Space, `c.title, c.due`, `
+		var title, due, col, boardArchived sql.NullString
+		var assignee sql.NullInt64
+		var agent sql.NullBool
+		sp, err := r.access.CheckWith(ctx, r.userID, n.ref.Space, `c.title, c.due, c.col, c.assignee_id, c.assignee_agent, b.archived_at`, `
 			LEFT JOIN boards b ON b.id = ? AND b.space_id = s.id
 			LEFT JOIN cards c ON c.id = ? AND c.board_id = b.id`,
-			[]any{n.ref.Board, n.ref.Card}, &title, &due)
+			[]any{n.ref.Board, n.ref.Card}, &title, &due, &col, &assignee, &agent, &boardArchived)
 		if errors.Is(err, access.ErrNotFound) || err == nil && (sp.WorkspaceID != n.workspaceID || !title.Valid) {
 			return nil, Target{}, false, nil
 		}
@@ -107,9 +116,14 @@ func (r *reader) describe(ctx context.Context, n stored) (params map[string]stri
 		params := map[string]string{"title": title.String}
 		if n.kind == KindCardDue || n.kind == KindCardOverdue {
 			// The date the card is due, a calendar date: the web app formats it for the reader. A card
-			// whose date was cleared or moved since the notice was made says nothing of it (the notice
-			// would read "overdue since" a day that may be ahead): it is a plain mention of the card.
-			if !due.Valid || due.String != n.ref.Due {
+			// that is no longer what the notice was made for says nothing of it (the notice would read
+			// "overdue since" a day that may be ahead, or remind of a card that is finished): its date
+			// was cleared or moved, it is done or archived, it or its board or space is archived, or it
+			// is not the reader's any more. These are the checks the reminder's job makes when it runs
+			// (boards.remind), so the inbox, a push and an email tell the same.
+			if !due.Valid || due.String != n.ref.Due || sp.ArchivedAt != nil || boardArchived.Valid ||
+				agent.Bool || !assignee.Valid || assignee.Int64 != r.userID ||
+				col.String == "done" || col.String == "archived" {
 				return nil, Target{}, false, nil
 			}
 			params["due"] = due.String
@@ -117,7 +131,7 @@ func (r *reader) describe(ctx context.Context, n stored) (params map[string]stri
 		return params, Target{Section: "boards", Item: item}, true, nil
 	case KindAppEffectFailed:
 		// The right to view the app and its name come from one snapshot (access.Checker.AppNamed).
-		sp, acc, name, err := r.s.access.AppNamed(ctx, r.userID, n.ref.Space, n.ref.App)
+		sp, acc, name, err := r.access.AppNamed(ctx, r.userID, n.ref.Space, n.ref.App)
 		if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {
 			return nil, Target{}, false, nil
 		}

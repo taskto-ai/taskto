@@ -62,7 +62,7 @@ test('admins see every space, the biggest first, and each private space under it
   const rows = screen.getAllByRole('listitem')
   expect(within(rows[0]).getByText("Bob's private space")).toBeTruthy()
   expect(within(rows[0]).getByText('bob@example.com')).toBeTruthy()
-  expect(within(rows[0]).getByText('Documents 0 byte · Files 8 MB · Photos 3 MB')).toBeTruthy()
+  expect(within(rows[0]).getByText('Documents 0 B · Files 8 MB · Photos 3 MB')).toBeTruthy()
   expect(within(rows[0]).getByText('11 MB of 10 MB')).toBeTruthy()
   expect(within(rows[0]).getByRole('progressbar', { name: "Bob's private space" })).toBeTruthy()
   // A shared space has no limit of its own, so no bar.

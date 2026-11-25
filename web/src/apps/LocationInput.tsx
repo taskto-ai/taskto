@@ -91,7 +91,7 @@ export function LocationField({
 
   const heading = label ?? t('apps.location.label')
   return (
-    <fieldset className="tt-capture tt-location" aria-describedby={readOnly ? undefined : `${ids}-note`}>
+    <fieldset className="tt-capture" aria-describedby={readOnly ? undefined : `${ids}-note`}>
       <legend className="tt-capture-label">{heading}</legend>
       {value ? (
         <p className="tt-capture-value" role="status">

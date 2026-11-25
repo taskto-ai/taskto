@@ -14,6 +14,7 @@ import { type Key, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { boardItem, Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
+import { cleanSnippet, isMarkdownPath } from './snippet'
 
 export type SearchQuery = { q: string; scope: 'space' | 'workspace' }
 
@@ -276,7 +277,7 @@ function ResultPages({
                     ? t('search.results.inSpace', { space: r.space_name, path: r.path })
                     : r.path}
                 </span>
-                <Snippet pieces={r.snippet} />
+                <Snippet pieces={r.snippet} path={r.path} />
               </button>
             </li>
           ))}
@@ -424,12 +425,15 @@ function ResultPages({
   )
 }
 
-// A snippet: plain text in pieces, never markup: matches are marked by the element.
-function Snippet({ pieces }: { pieces: { text: string; match?: boolean }[] }) {
-  if (pieces.length === 0) return null
+// A snippet: plain text in pieces, never markup: matches are marked by the element. A document's
+// Markdown marks are left out for display (the server's result is unchanged); an upload's name
+// and a card's words, which have none to show, are shown as they are (path is set for documents).
+function Snippet({ pieces, path }: { pieces: SearchResult['snippet']; path?: string }) {
+  const shown = cleanSnippet(pieces, { markdown: path !== undefined && isMarkdownPath(path) })
+  if (shown.length === 0) return null
   return (
     <span className="tt-snippet tt-small">
-      {pieces.map((s, i) =>
+      {shown.map((s, i) =>
         // biome-ignore lint/suspicious/noArrayIndexKey: pieces have no identity but their place
         s.match ? <mark key={i}>{s.text}</mark> : <span key={i}>{s.text}</span>,
       )}
