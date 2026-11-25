@@ -32,6 +32,7 @@
     gap: var(--space-1);
     font: var(--type-small);
     font-weight: 500;
+    color: var(--color-link);
     border-radius: var(--radius-sm);
   }
 
