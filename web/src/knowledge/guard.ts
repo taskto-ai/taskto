@@ -19,16 +19,28 @@ type Wait = { go: () => void; why: Why }
 export type Guard = {
   // Runs `go`: at once if no draft would be lost, else after the question is answered yes.
   ask: (go: () => void, why?: Why) => void
-  // The editor's: whether its draft differs from what was loaded, and whether it is saving. A
-  // draft that goes away (saved, or closed) takes the question about it with it.
+  // The editor's: whether its draft differs from what was loaded, and whether it is saving.
   report: (dirty: boolean, saving: boolean) => void
+  // The editor's: its save landed, so what was waiting for it goes on.
+  saved: () => void
+  // The editor's: it is gone, saved or not. The question about its draft goes with it, and so
+  // does what waited for a save that never landed: a later choice of the person is not undone.
+  dispose: () => void
   // The question about discarding the draft, when it is open, and its two answers.
   asking: Why | null
   discard: () => void
   keep: () => void
 }
 
-const nothing: Guard = { ask: (go) => go(), report: () => {}, asking: null, discard: () => {}, keep: () => {} }
+const nothing: Guard = {
+  ask: (go) => go(),
+  report: () => {},
+  saved: () => {},
+  dispose: () => {},
+  asking: null,
+  discard: () => {},
+  keep: () => {},
+}
 
 export const GuardContext = createContext<Guard>(nothing)
 
@@ -39,28 +51,45 @@ export function useGuard(): Guard {
   open.current = pending
   const queued = useRef<Wait | null>(null)
 
+  const goOn = useCallback(() => {
+    const waiting = queued.current
+    queued.current = null
+    waiting?.go()
+  }, [])
   const ask = useCallback((go: () => void, why: Why = 'leave') => {
     if (state.current.saving) queued.current = { go, why }
     else if (state.current.dirty) setPending({ go, why })
     else go()
   }, [])
-  const report = useCallback((dirty: boolean, saving: boolean) => {
-    state.current = { dirty, saving }
-    if (saving) {
-      // Saving after being asked is an answer: the person keeps the text, and goes on after it.
-      if (open.current) {
-        queued.current = open.current
+  const report = useCallback(
+    (dirty: boolean, saving: boolean) => {
+      state.current = { dirty, saving }
+      if (saving) {
+        // Saving after being asked is an answer: the person keeps the text, and goes on after it.
+        if (open.current) {
+          queued.current = open.current
+          setPending(null)
+        }
+      } else if (!dirty) {
+        // Nothing left to lose (the text was put back, or the save changed nothing).
         setPending(null)
+        goOn()
+      } else if (queued.current) {
+        // The save did not land and the draft is still there: now it is asked.
+        setPending(queued.current)
+        queued.current = null
       }
-    } else if (!dirty) {
-      setPending(null)
-      const waiting = queued.current
-      queued.current = null
-      waiting?.go()
-    } else if (queued.current) {
-      setPending(queued.current)
-      queued.current = null
-    }
+    },
+    [goOn],
+  )
+  const saved = useCallback(() => {
+    setPending(null)
+    goOn()
+  }, [goOn])
+  const dispose = useCallback(() => {
+    state.current = { dirty: false, saving: false }
+    queued.current = null
+    setPending(null)
   }, [])
   const keep = useCallback(() => setPending(null), [])
   const discard = useCallback(() => {
@@ -98,7 +127,7 @@ export function useGuard(): Guard {
   }, [ask])
 
   return useMemo(
-    () => ({ ask, report, asking: pending?.why ?? null, discard, keep }),
-    [ask, report, pending, discard, keep],
+    () => ({ ask, report, saved, dispose, asking: pending?.why ?? null, discard, keep }),
+    [ask, report, saved, dispose, pending, discard, keep],
   )
 }

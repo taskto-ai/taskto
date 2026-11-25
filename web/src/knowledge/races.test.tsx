@@ -4,9 +4,10 @@
 // (or edits while one is on its way) and checks that nothing from the past is shown or done.
 // The fake fetch ends an aborted request as a real one does, so an abort is exercised too.
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { type Call, fakeFetch } from '../test/fakes'
+import { type Guard, useGuard } from './guard'
 import { KnowledgePage } from './KnowledgePage'
 
 afterEach(() => {
@@ -730,4 +731,45 @@ test('a restore whose history is still being searched is sent all the same when 
   // Opened nothing, but the list has the document again.
   expect(screen.getByRole('article', { name: 'notes/other.md' })).toBeTruthy()
   expect(reads(calls, LIST)).toBe(3)
+})
+
+// What waits for a save goes on when the save lands, and only then: not when the editor goes
+// away for another reason, which would undo a later choice of the person.
+test('what waits for a save goes on after it lands, and is dropped when the editor goes away instead', () => {
+  const guard = () => {
+    const h = renderHook(() => useGuard())
+    return { call: (f: (g: Guard) => void) => act(() => f(h.result.current)), h }
+  }
+
+  const landed = guard()
+  const go = vi.fn()
+  landed.call((g) => g.report(true, true))
+  landed.call((g) => g.ask(go))
+  expect(go).not.toHaveBeenCalled()
+  landed.call((g) => g.saved())
+  expect(go).toHaveBeenCalledOnce()
+
+  const gone = guard()
+  const stale = vi.fn()
+  gone.call((g) => g.report(true, true))
+  gone.call((g) => g.ask(stale))
+  gone.call((g) => g.dispose())
+  expect(stale).not.toHaveBeenCalled()
+  expect(gone.h.result.current.asking).toBeNull()
+
+  // A save that fails with the draft still there asks; one that leaves nothing to lose goes on.
+  const failed = guard()
+  const later = vi.fn()
+  failed.call((g) => g.report(true, true))
+  failed.call((g) => g.ask(later))
+  failed.call((g) => g.report(true, false))
+  expect(failed.h.result.current.asking).toBe('leave')
+  expect(later).not.toHaveBeenCalled()
+
+  const clean = guard()
+  const now = vi.fn()
+  clean.call((g) => g.report(false, true))
+  clean.call((g) => g.ask(now))
+  clean.call((g) => g.report(false, false))
+  expect(now).toHaveBeenCalledOnce()
 })

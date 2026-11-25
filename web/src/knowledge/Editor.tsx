@@ -26,20 +26,23 @@ export function Editor({
   onSaved: () => void
   onCancel: () => void
 }) {
+  // Whatever would close the editor asks first while the draft differs from what was loaded.
+  const guard = useContext(GuardContext)
+  const { report, saved, dispose, asking, keep } = guard
   const { text, setText, message, setMessage, dirty, busy, error, conflict, save, takeTheirs, overwrite } = useDraft(
     url,
     doc,
-    onSaved,
+    () => {
+      onSaved()
+      saved()
+    },
   )
   const [tab, setTab] = useState<'write' | 'preview'>('write')
   const t = useT()
-  // Whatever would close the editor asks first while the draft differs from what was loaded.
-  const guard = useContext(GuardContext)
-  const { report, asking, keep } = guard
   useEffect(() => {
     report(dirty, busy)
   }, [dirty, busy, report])
-  useEffect(() => () => report(false, false), [report])
+  useEffect(() => dispose, [dispose])
 
   // The question comes into view and takes the focus; "Keep editing", by button or Escape,
   // gives the focus back to the text, with the cursor where it was.
