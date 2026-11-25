@@ -3,6 +3,8 @@
 // The page-structure components: Page, PageHeader, Heading, Toolbar, Panel, Rows, Table, EmptyState and
 // Notice.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Button } from './Button'
@@ -171,6 +173,44 @@ describe('Table', () => {
     // It doesn't overflow here (jsdom lays nothing out): no tab stop of its own.
     expect(table.parentElement?.getAttribute('tabindex')).toBeNull()
     expect(table.parentElement?.getAttribute('role')).toBeNull()
+  })
+})
+
+describe('Row, actions below', () => {
+  test('its actions go on a line of their own that wraps, and other rows keep theirs beside the title', () => {
+    render(
+      <Rows label="Queue">
+        <Row title="Coffee" actionsBelow actions={<Button size="sm">Try again</Button>} />
+        <Row title="Tea" actions={<Button size="sm">Open</Button>} />
+      </Rows>,
+    )
+    const [coffee, tea] = screen.getAllByRole('listitem')
+    expect(coffee.dataset.actionsBelow).toBe('true')
+    expect(tea.dataset.actionsBelow).toBeUndefined()
+    // jsdom lays nothing out: the stylesheet is what puts them below and lets them wrap.
+    const css = readFileSync(join(__dirname, 'Rows.css'), 'utf8')
+    const rule = /\.ui-row\[data-actions-below\] > \.ui-row-actions \{([^}]*)\}/.exec(css)?.[1] ?? ''
+    expect(rule).toMatch(/flex: 1 1 100%/)
+    expect(rule).toMatch(/flex-wrap: wrap/)
+  })
+})
+
+describe('Row, opened', () => {
+  test('what opens under a row is inside its list item, after its actions', () => {
+    render(
+      <Rows label="Queue">
+        <Row title="Coffee" actions={<Button size="sm">Review</Button>}>
+          <section aria-label="Review Coffee">Choose a version</section>
+        </Row>
+        <Row title="Tea" />
+      </Rows>,
+    )
+    const [coffee, tea] = screen.getAllByRole('listitem')
+    const opened = screen.getByRole('region', { name: 'Review Coffee' })
+    expect(coffee.contains(opened)).toBe(true)
+    expect(coffee.lastElementChild?.contains(opened)).toBe(true)
+    // A row with nothing under it has no room for it.
+    expect(tea.querySelector('.ui-row-more')).toBeNull()
   })
 })
 

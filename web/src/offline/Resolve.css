@@ -1,0 +1,140 @@
+/* Settling a record that needs the person (Resolve), under its row in the queue: what happened,
+   the values side by side (when the person started, theirs, the server's) on a wide screen and one
+   under the other on a phone, and the choices. */
+
+@layer screens {
+  .ui-resolve {
+    display: grid;
+    gap: var(--space-3);
+    margin-block-start: var(--space-2);
+    padding: var(--space-4);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-sunken);
+  }
+
+  .ui-resolve-text {
+    margin: 0;
+    font: var(--type-ui);
+    color: var(--color-text);
+  }
+
+  .ui-resolve-note {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-resolve-empty {
+    color: var(--color-text-muted);
+  }
+
+  .ui-resolve-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .ui-resolve-problems {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding-inline-start: var(--space-5);
+    font: var(--type-small);
+    color: var(--color-danger);
+  }
+
+  .ui-resolve-mine {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--space-1) var(--space-3);
+    margin: 0;
+    font: var(--type-small);
+  }
+
+  .ui-resolve-mine > div {
+    display: contents;
+  }
+
+  .ui-resolve-mine dt {
+    font-weight: 500;
+    color: var(--color-text);
+  }
+
+  .ui-resolve-mine dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-resolve-form {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+  }
+
+  /* The values side by side. */
+  .ui-resolve-table {
+    inline-size: 100%;
+    border-collapse: collapse;
+    font: var(--type-ui);
+    background: var(--color-surface);
+    border-radius: var(--radius-md);
+  }
+
+  .ui-resolve-table th,
+  .ui-resolve-table td {
+    padding: var(--space-2) var(--space-3);
+    border-block-end: var(--line-thin) solid var(--color-border);
+    text-align: start;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-resolve-table thead th {
+    font: var(--type-small);
+    font-weight: 600;
+    color: var(--color-text-muted);
+  }
+
+  .ui-resolve-table tbody th {
+    font-weight: 600;
+  }
+
+  /* On a phone: each field a block, its values one under the other, each named by its column. */
+  @media (max-width: 640px) {
+    .ui-resolve-table thead {
+      position: absolute;
+      inline-size: 1px;
+      block-size: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .ui-resolve-table tr {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-3);
+      border-block-end: var(--line-thin) solid var(--color-border);
+    }
+
+    .ui-resolve-table th,
+    .ui-resolve-table td {
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+      gap: var(--space-2);
+      padding: 0;
+      border: 0;
+    }
+
+    .ui-resolve-table tbody th {
+      display: block;
+    }
+
+    .ui-resolve-table td::before {
+      content: attr(data-label);
+      font: var(--type-small);
+      color: var(--color-text-muted);
+    }
+  }
+}
