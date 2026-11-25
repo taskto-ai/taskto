@@ -42,6 +42,10 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
     action.run(() => api(`${base}/members/${m.id}`, { method: 'PATCH', body: { role } })).then(members.reload)
   const remove = (m: Member) =>
     action.run(() => api(`${base}/members/${m.id}`, { method: 'DELETE' })).then(members.reload)
+  const setDisabled = (m: Member, disabled: boolean) =>
+    action
+      .run(() => api(`${base}/members/${m.id}/${disabled ? 'disable' : 'enable'}`, { method: 'POST' }))
+      .then(members.reload)
   const withdraw = (i: Invite) =>
     action.run(() => api(`${base}/invites/${i.id}`, { method: 'DELETE' })).then(invites.reload)
   const clearTwoFactor = (m: Member) =>
@@ -71,6 +75,7 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                   <strong>
                     {m.name}
                     {m.id === me && <span className="tt-muted"> {t('settings.members.you')}</span>}
+                    {m.disabled && <span className="tt-badge"> {t('settings.members.disabled')}</span>}
                   </strong>
                   <span className="tt-muted tt-small">{m.email}</span>
                 </div>
@@ -97,6 +102,27 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                       {t('settings.members.resetLink')}
                     </button>
                   )}
+                  {m.id !== me &&
+                    (m.disabled ? (
+                      <button
+                        type="button"
+                        className="tt-button"
+                        aria-label={t('common.labelFor', { label: t('settings.members.enable'), name: m.name })}
+                        disabled={action.busy}
+                        onClick={() => setDisabled(m, false)}
+                      >
+                        {t('settings.members.enable')}
+                      </button>
+                    ) : (
+                      <ConfirmButton
+                        label={t('settings.members.disable')}
+                        name={m.name}
+                        question={t('settings.members.disableQuestion', { name: m.name })}
+                        confirm={t('settings.members.disableConfirm')}
+                        disabled={action.busy}
+                        onConfirm={() => setDisabled(m, true)}
+                      />
+                    ))}
                   {m.id !== me && m.two_factor && (
                     <ConfirmButton
                       label={t('settings.members.clearTwoFactor')}

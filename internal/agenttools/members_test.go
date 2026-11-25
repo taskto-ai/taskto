@@ -89,6 +89,16 @@ func TestListMembersCannotReachWhatTheOwnerCannotRead(t *testing.T) {
 	w.status(http.StatusForbidden, w.bobConv, "list_members", map[string]any{})
 }
 
+// A disabled account's conversations get no tools, for as long as it is disabled.
+func TestListMembersRefusesADisabledOwner(t *testing.T) {
+	w := newWorld(t)
+	w.ok(w.aliceConv, "list_members", map[string]any{})
+	w.exec(`UPDATE users SET disabled_at = '2026-01-02T03:04:05.000Z' WHERE id = ?`, w.alice)
+	w.status(http.StatusForbidden, w.aliceConv, "list_members", map[string]any{})
+	w.exec(`UPDATE users SET disabled_at = NULL WHERE id = ?`, w.alice)
+	w.ok(w.aliceConv, "list_members", map[string]any{})
+}
+
 func TestListMembersRefusesBadArguments(t *testing.T) {
 	w := newWorld(t)
 	for _, args := range []map[string]any{{"space_id": "x"}, {"user_id": 1}, {"space_id": w.shared, "extra": true},

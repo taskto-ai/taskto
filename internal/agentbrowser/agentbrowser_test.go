@@ -127,6 +127,7 @@ var setupToken = auth.NewSetupToken()
 const password = "fake-password-for-tests"
 
 type env struct {
+	ws  int64 // the workspace setup made
 	db  *sql.DB
 	t   *testing.T
 	b   *fakeBrowsers
@@ -222,6 +223,7 @@ func (e *env) setup() (owner, member *client) {
 	expect(e.t, rec, http.StatusCreated)
 	m := decode[me](e.t, rec)
 	owner.id = m.User.ID
+	e.ws = m.Workspaces[0].ID
 	rec = owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", m.Workspaces[0].ID), map[string]string{"email": "member@example.com", "role": "member"})
 	expect(e.t, rec, http.StatusCreated)
 	token := decode[struct {
@@ -486,6 +488,36 @@ func TestLiveViewEndsWithTheLogin(t *testing.T) {
 			t.Fatal("the live view outlived its login")
 		}
 	})
+}
+
+// A disabled member's open live view ends at once, with the look at the session so slow it can't
+// be the cause, and they can't open another; other people's views are untouched.
+func TestLiveViewEndsWhenTheMemberIsDisabled(t *testing.T) {
+	old := liveRecheck
+	liveRecheck = time.Hour
+	t.Cleanup(func() { liveRecheck = old })
+	e := newEnv(t, newFake(), nil)
+	owner, member := e.setup()
+	srv := httptest.NewServer(e.h)
+	defer srv.Close()
+	ws := openLive(t, srv, member)
+	defer ws.Close()
+	other := openLive(t, srv, owner)
+	defer other.Close()
+
+	expect(t, owner.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/members/%d/disable", e.ws, member.id), nil), http.StatusNoContent)
+	if !liveEnds(ws) {
+		t.Fatal("a disabled member's live view kept running")
+	}
+	if _, err := other.Write([]byte("ping\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := readLine(t, other); got != "ping" {
+		t.Fatalf("the owner's view: %q", got)
+	}
+	if _, err := liveView(t, srv, member, srv.URL, nil); err == nil {
+		t.Fatal("a disabled member opened a live view")
+	}
 }
 
 func TestSameOrigin(t *testing.T) {
