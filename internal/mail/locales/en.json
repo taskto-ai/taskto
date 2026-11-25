@@ -53,6 +53,15 @@
         "If it wasn't you, ignore this message: your password stays as it is."
       ],
       "action": "Choose a new password"
+    },
+    "invite": {
+      "subject": "{inviter} invited you to {workspace} on TaskTo.AI",
+      "title": "You're invited to {workspace}",
+      "paragraphs": [
+        "{inviter} invited you to join the workspace {workspace} on TaskTo.AI. Use the button below to accept. The invitation is for this email address, works once and for {days} days.",
+        "If you weren't expecting it, ignore this message: nothing happens until someone accepts."
+      ],
+      "action": "Accept the invitation"
     }
   }
 }
