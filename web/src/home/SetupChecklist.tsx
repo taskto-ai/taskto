@@ -179,7 +179,7 @@ export function SetupChecklist({
           </p>
         </div>
         {problem && <Notice tone="danger">{problem}</Notice>}
-        <Rows label={t('checklist.title')}>
+        <Rows ordered label={t('checklist.title')}>
           {data.items.map((item) => {
             const name = t(`checklist.steps.${item.id}.title` as Key)
             return (

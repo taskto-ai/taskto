@@ -2219,11 +2219,23 @@
     "pinned": "Fixado",
     "show": "Mostrar",
     "defaultBadge": "Padrão do espaço",
-    "moreFor": "Mais ações para {name}",
     "pinState": {
       "offline": "App fora do ar",
       "unpublished": "App não publicado",
       "removed": "Não é mais oferecido"
+    },
+    "moreForWidget": "Mais ações para o widget {name}",
+    "moreForPin": "Mais ações para a fixação {name}",
+    "announce": {
+      "moved": "{name} movido para a posição {position} de {total}",
+      "removed": "{name} removido do Início",
+      "added": "{name} adicionado ao Início",
+      "hidden": "{name} ocultado",
+      "shown": "{name} mostrado de novo",
+      "pinned": "{name} fixado no menu",
+      "unpinned": "{name} removido do menu",
+      "defaultSet": "{name} agora é um padrão do espaço",
+      "defaultUnset": "{name} não é mais um padrão do espaço"
     }
   },
   "checklist": {
@@ -2556,7 +2568,7 @@
       "settings": "Abrir as configurações de notificações"
     },
     "noneHelp": "Quando um cartão for atribuído a você, um comentário mencionar você ou um app precisar de você, isso aparece aqui.",
-    "where": "{where} · {when}"
+    "in": "{where} ·"
   },
   "ui": {
     "loading": "Carregando",

@@ -2205,11 +2205,23 @@
     "pinned": "Pinned",
     "show": "Show",
     "defaultBadge": "Space default",
-    "moreFor": "More actions for {name}",
     "pinState": {
       "offline": "App offline",
       "unpublished": "App not published",
       "removed": "No longer offered"
+    },
+    "moreForWidget": "More actions for the {name} widget",
+    "moreForPin": "More actions for the {name} pin",
+    "announce": {
+      "moved": "{name} moved to position {position} of {total}",
+      "removed": "{name} removed from Home",
+      "added": "{name} added to Home",
+      "hidden": "{name} hidden",
+      "shown": "{name} shown again",
+      "pinned": "{name} pinned to the menu",
+      "unpinned": "{name} removed from the menu",
+      "defaultSet": "{name} is now a default for the space",
+      "defaultUnset": "{name} is no longer a default for the space"
     }
   },
   "checklist": {
@@ -2535,7 +2547,7 @@
       "settings": "Open notification settings"
     },
     "noneHelp": "When a card is assigned to you, a comment mentions you or an app needs you, it shows here.",
-    "where": "{where} · {when}"
+    "in": "{where} ·"
   },
   "ui": {
     "loading": "Loading",

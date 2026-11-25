@@ -1,7 +1,9 @@
 // The notification inbox: what happened that the person may want to see, newest first, in the
 // workspace shown, as rows: what happened, where and when, an unread one in bold with a mark before
-// it (and "Unread:" said before it, so the mark is never the only sign). It works in every browser, whether or not it can push, and is what is true: a
-// push is only a prompt to come here. Each item is a link to where it leads, which checks access
+// it (and "Unread:" said before it, so the mark is never the only sign). When is "5 minutes ago"
+// for the last day, kept current while the page is open, with the date and time on hover and
+// focus; the date and time after that. It works in every browser, whether or not it can push, and
+// is what is true: a push is only a prompt to come here. Each item is a link to where it leads, which checks access
 // again when it opens; an item whose subject the person can no longer read says only that
 // something changed.
 
@@ -18,11 +20,47 @@ import { PageHeader } from '../ui/PageHeader'
 import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
 import { Skeleton } from '../ui/Skeleton'
+import { Tooltip } from '../ui/Tooltip'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { INBOX_CHANGED, inboxPath, type NotificationItem, type NotificationList } from './api'
 import './Inbox.css'
 
 const PAGE = 30
+// How long "how long ago" stays the way a time is said, and how often it is said again.
+const RECENT_MS = 24 * 60 * 60 * 1000
+const REFRESH_MS = 30 * 1000
+
+// The time now, again every `interval` while the page is open.
+function useNow(interval: number): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), interval)
+    return () => clearInterval(timer)
+  }, [interval])
+  return now
+}
+
+// When a notification arrived: relative for the last day, with the date and time a hover or the
+// keyboard shows (and a screen reader reads as its description); the date and time after that.
+function When({ at, now }: { at: string; now: number }) {
+  const f = useFormat()
+  const full = f.dateTime(at)
+  if (now - new Date(at).getTime() >= RECENT_MS) {
+    return (
+      <time className="ui-inbox-when" dateTime={at}>
+        {full}
+      </time>
+    )
+  }
+  return (
+    <Tooltip content={full}>
+      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the keyboard reaches it to show the date and time, as a hover does */}
+      <time className="ui-inbox-when" dateTime={at} tabIndex={0}>
+        {f.relative(at, now)}
+      </time>
+    </Tooltip>
+  )
+}
 
 // A due date is a calendar date, which the language's own format says; the rest is shown as it is.
 function shownParams(params: NotificationItem['params'], calendarDate: (ymd: string) => string) {
@@ -40,6 +78,7 @@ export function NotificationsPage({ workspace }: { workspace: number }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [older, setOlder] = useState(false)
+  const now = useNow(REFRESH_MS)
 
   const load = useCallback(
     async (before?: number) => {
@@ -126,10 +165,17 @@ export function NotificationsPage({ workspace }: { workspace: number }) {
                     {t(`notifications.kind.${item.kind}`, shownParams(item.params, f.calendarDate))}
                   </span>
                 }
-                detail={t('notifications.where', {
-                  where: t(`shell.sections.${item.target.section}` as Key),
-                  when: f.relative(item.created_at),
-                })}
+                detail={
+                  // A "changed" item says nothing of its subject, so not where it was either.
+                  item.kind === 'changed' ? (
+                    <When at={item.created_at} now={now} />
+                  ) : (
+                    <>
+                      {t('notifications.in', { where: t(`shell.sections.${item.target.section}` as Key) })}{' '}
+                      <When at={item.created_at} now={now} />
+                    </>
+                  )
+                }
               />
             ))}
           </Rows>

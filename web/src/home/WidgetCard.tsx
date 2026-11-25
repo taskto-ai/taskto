@@ -33,8 +33,8 @@ export function WidgetCard({
   workspace: number
   item: HomeItem
   customizing: boolean
-  onRemove: () => void
-  onHide: () => void
+  onRemove: (name: string) => void
+  onHide: (name: string) => void
   onMove?: (step: -1 | 1) => void
   first: boolean
   last: boolean
@@ -45,6 +45,7 @@ export function WidgetCard({
   const headingId = `ui-widget-${itemKey(item).replace(/\W/g, '-')}`
   const open = appPath(workspace, item.space_id, item.app_id)
   const ready = item.state === 'ready' && widget && item.release
+  const focus = (control: string) => `widget:${itemKey(item)}:${control}`
   const base = `${ws(workspace)}/spaces/${item.space_id}/apps/${item.app_id}`
   const transport = useMemo(
     () => httpTransport(base, item.release?.number, { widget: item.widget_id }),
@@ -76,6 +77,7 @@ export function WidgetCard({
                   size="sm"
                   icon="up"
                   label={t('home.moveEarlier', { name: title })}
+                  data-home-focus={focus('earlier')}
                   disabled={first}
                   onClick={() => onMove(-1)}
                 />
@@ -83,15 +85,28 @@ export function WidgetCard({
                   size="sm"
                   icon="down"
                   label={t('home.moveLater', { name: title })}
+                  data-home-focus={focus('later')}
                   disabled={last}
                   onClick={() => onMove(1)}
                 />
               </>
             )}
             {item.source === 'personal' ? (
-              <IconButton size="sm" icon="close" label={t('home.removeNamed', { name: title })} onClick={onRemove} />
+              <IconButton
+                size="sm"
+                icon="close"
+                label={t('home.removeNamed', { name: title })}
+                data-home-focus={focus('remove')}
+                onClick={() => onRemove(title)}
+              />
             ) : (
-              <IconButton size="sm" icon="close" label={t('home.hideNamed', { name: title })} onClick={onHide} />
+              <IconButton
+                size="sm"
+                icon="close"
+                label={t('home.hideNamed', { name: title })}
+                data-home-focus={focus('hide')}
+                onClick={() => onHide(title)}
+              />
             )}
           </div>
         )}
@@ -145,7 +160,7 @@ export function WidgetFailed({ item, onRemove }: { item: HomeItem; onRemove?: ()
   )
 }
 
-// While Home loads: the shape of a few widgets, and a word for screen readers.
+// While Home loads for the first time: the shape of a row of widgets, and a word for screen readers.
 export function WidgetSkeletons() {
   const t = useT()
   return (
@@ -153,15 +168,16 @@ export function WidgetSkeletons() {
       <VisuallyHidden>
         <span role="status">{t('app.loading')}</span>
       </VisuallyHidden>
-      {[0, 1, 2].map((n) => (
-        <div key={n} className="ui-home-cell" data-size={n === 0 ? 'medium' : 'small'}>
+      {/* One row of widgets, about the height of what usually follows: a widget or two, or the empty
+          state. The second is shown only where the grid has two columns. */}
+      {[0, 1].map((n) => (
+        <div key={n} className="ui-home-cell ui-home-cell-skeleton" data-size="small">
           <Panel className="ui-home-widget" aria-hidden="true">
             <div className="ui-home-widget-titles">
               <Skeleton width="45%" />
               <Skeleton width="30%" />
             </div>
-            <Skeleton shape="block" />
-            <Skeleton width="35%" />
+            <Skeleton shape="block" height="4rem" />
           </Panel>
         </div>
       ))}

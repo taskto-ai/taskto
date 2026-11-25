@@ -247,7 +247,7 @@ test('those who may publish an app set its widgets and pin as defaults of its sp
   render(<Shell me={me} onLogout={() => {}} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Customize' }))
   // Setting a default is in the row's "more" menu, named for what it acts on.
-  const more = () => screen.findByRole('button', { name: 'More actions for Spending' })
+  const more = () => screen.findByRole('button', { name: 'More actions for the Spending widget' })
   fireEvent.click(await more())
   fireEvent.click(await screen.findByRole('menuitem', { name: 'Set Spending as the space’s default' }))
   // Once set, the row says so.
@@ -284,7 +284,7 @@ test('the pins follow a change made elsewhere', async () => {
   await screen.findByRole('link', { name: 'Spend' })
 })
 
-test('in customize mode a widget of one’s own moves by keyboard, one step at a time, with named icon buttons', async () => {
+test('in customize mode a widget of one’s own has named move and remove buttons; a move sends the new order, and neither end can be passed', async () => {
   const view = home({
     widgets: [
       widgetItem({ id: 10, widget_id: 'a', widget: { id: 'a', title: 'First', kind: 'shortcut' } }),
@@ -374,4 +374,135 @@ test('an app’s offer says what is on Home already: Added, with a way to take i
   expect(take.textContent).toBe('Remove')
   expect(within(rows[1]).getByText('Pinned')).toBeTruthy()
   expect(within(rows[1]).getByRole('button', { name: 'Unpin Spend' }).textContent).toBe('Unpin')
+})
+
+// Two widgets of the person's own, that the server moves when asked.
+function movable() {
+  let order = [10, 11]
+  const make = (id: number, title: string) =>
+    widgetItem({ id, widget_id: `w${id}`, widget: { id: `w${id}`, title, kind: 'shortcut' } })
+  const byId: Record<number, HomeItem> = { 10: make(10, 'First'), 11: make(11, 'Second') }
+  // Every request for Home held while `hold` is on (the page's and the menu's pins), until released.
+  const held: (() => void)[] = []
+  let hold = false
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/home': async () => {
+      if (hold) await new Promise<void>((resolve) => held.push(resolve))
+      return { body: home({ widgets: order.map((id) => byId[id]) }) }
+    },
+    'GET /api/workspaces/1/home/available': { body: { apps: [] } },
+    'PUT /api/workspaces/1/home/order': (call) => {
+      order = (call.body as { ids: number[] }).ids
+      return { status: 204 }
+    },
+    'DELETE /api/workspaces/1/home/items/10': () => {
+      order = order.filter((id) => id !== 10)
+      return { status: 204 }
+    },
+  })
+  return {
+    calls,
+    holdNext: () => {
+      hold = true
+    },
+    release: () => {
+      hold = false
+      for (const go of held.splice(0)) go()
+    },
+  }
+}
+
+test('a move keeps Home shown while it reloads, keeps the keyboard on the button, and says where the widget went', async () => {
+  const server = movable()
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByRole('article', { name: 'First' })
+  fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+  const later = screen.getByRole('button', { name: 'Move First later' })
+  later.focus()
+  server.holdNext()
+  fireEvent.click(later)
+  // While Home loads again, what was shown stays: no skeleton, the customize panel still open.
+  const said = await screen.findByText('First moved to position 2 of 2')
+  expect(said.closest('[role="status"]')).toBeTruthy()
+  expect(screen.getByRole('article', { name: 'First' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Add from your apps' })).toBeTruthy()
+  expect(screen.queryByText('Loading…')).toBeNull()
+  server.release()
+  // Last now, so "later" is off: the keyboard is on its "earlier" button.
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Move First earlier' })))
+  expect(screen.getAllByRole('article').map((a) => a.querySelector('h2')?.textContent)).toEqual(['Second', 'First'])
+})
+
+test('a move that leaves the widget able to go the same way keeps the keyboard on the same button', async () => {
+  let order = [10, 11, 12]
+  const byId: Record<number, HomeItem> = Object.fromEntries(
+    ['First', 'Second', 'Third'].map((title, n) => [
+      10 + n,
+      widgetItem({ id: 10 + n, widget_id: `w${n}`, widget: { id: `w${n}`, title, kind: 'shortcut' } }),
+    ]),
+  )
+  fakeFetch({
+    'GET /api/workspaces/1/home': () => ({ body: home({ widgets: order.map((id) => byId[id]) }) }),
+    'GET /api/workspaces/1/home/available': { body: { apps: [] } },
+    'PUT /api/workspaces/1/home/order': (call) => {
+      order = (call.body as { ids: number[] }).ids
+      return { status: 204 }
+    },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByRole('article', { name: 'First' })
+  fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Move First later' }))
+  await screen.findByText('First moved to position 2 of 3')
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Move First later' })))
+})
+
+test('removing a widget puts the keyboard on the next one’s remove button, and says so', async () => {
+  movable()
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByRole('article', { name: 'First' })
+  fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Remove First' }))
+  await screen.findByText('First removed from Home')
+  await waitFor(() => expect(screen.queryByRole('article', { name: 'First' })).toBeNull())
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Remove Second' }))
+})
+
+test('someone who may not set a space’s defaults is not offered them', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/home': { body: home() },
+    'GET /api/workspaces/1/home/available': {
+      body: { apps: [{ ...offered, space_id: 3, space_name: 'Team', space_kind: 'shared', can_set_defaults: false }] },
+    },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Customize' }))
+  await screen.findByRole('button', { name: 'Add Spending to Home' })
+  expect(screen.queryByRole('button', { name: /^More actions for/ })).toBeNull()
+  expect(screen.queryByText(/Only people who may publish the app set one/)).toBeNull()
+})
+
+test('a widget and a pin of the same name have “more” menus named apart', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/home': { body: home() },
+    'GET /api/workspaces/1/home/available': {
+      body: {
+        apps: [
+          {
+            ...offered,
+            space_id: 3,
+            space_kind: 'shared',
+            space_name: 'Team',
+            can_set_defaults: true,
+            widgets: [{ id: 'eq', title: 'Equipment', kind: 'summaries' }],
+            pin: { label: 'Equipment' },
+          },
+        ],
+      },
+    },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Customize' }))
+  expect(await screen.findByRole('button', { name: 'More actions for the Equipment widget' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'More actions for the Equipment pin' })).toBeTruthy()
 })

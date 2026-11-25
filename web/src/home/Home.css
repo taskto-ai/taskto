@@ -12,19 +12,30 @@
     margin: 0;
     padding: 0;
     list-style: none;
+    /* The grid's own width says how many columns there are, not the window's: beside the sidebar
+       a tablet has room for one. */
+    container-type: inline-size;
   }
 
   .ui-home-cell {
     min-inline-size: 0;
   }
 
-  @media (min-width: 48rem) {
+  .ui-home-cell[data-size="large"] {
+    grid-column: 1 / -1;
+  }
+
+  /* A medium widget takes two columns where there are two: two 17rem columns and the gap. */
+  @container (min-width: 35rem) {
     .ui-home-cell[data-size="medium"] {
       grid-column: span 2;
     }
+  }
 
-    .ui-home-cell[data-size="large"] {
-      grid-column: 1 / -1;
+  /* While Home loads, a row of widgets: one where the grid has one column. */
+  @container (max-width: 34.99rem) {
+    .ui-home-cell-skeleton + .ui-home-cell-skeleton {
+      display: none;
     }
   }
 
@@ -74,6 +85,22 @@
     max-block-size: 22rem;
     overflow: auto;
     min-inline-size: 0;
+  }
+
+  /* The app's screen sits bare in the widget, which is its frame already: no edge, surface or
+     padding of its own. The app's root is `.tt-app` today, whose frame is in the old, unlayered
+     stylesheet (which only !important outweighs from a layer), and `.ui-app` with a frame of its
+     own once the apps' screens move to the library. */
+  .ui-home-widget-body > .tt-app,
+  .ui-home-widget-body > .ui-app {
+    /* biome-ignore lint/complexity/noImportantStyles: the old frame is unlayered; only this outweighs it from a layer */
+    padding: 0 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: as above */
+    border: 0 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: as above */
+    border-radius: 0 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: as above */
+    background: none !important;
   }
 
   .ui-home-widget-foot {

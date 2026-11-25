@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-// The places a screen moves the keyboard to from a script (a page's title, a heading), and what a
-// link row's onOpen does when the link is followed another way.
+// The places a screen moves the keyboard to from a script (a page's title, a heading), what a link
+// row's onOpen does when the link is followed another way, and rows whose order means something.
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { createRef } from 'react'
@@ -60,4 +60,19 @@ test('a link row’s onOpen runs however the link is followed: in this tab, or a
   fireEvent.click(link)
   expect(opened).toHaveBeenCalledTimes(3)
   expect(window.location.pathname).toBe('/w/1/boards/3')
+})
+
+test('rows whose order means something are an ordered list; others are not', () => {
+  const { rerender } = render(
+    <Rows label="Steps" ordered>
+      <Row title="Invite your team" />
+    </Rows>,
+  )
+  expect(screen.getByRole('list', { name: 'Steps' }).tagName).toBe('OL')
+  rerender(
+    <Rows label="Steps">
+      <Row title="Invite your team" />
+    </Rows>,
+  )
+  expect(screen.getByRole('list', { name: 'Steps' }).tagName).toBe('UL')
 })

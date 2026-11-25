@@ -4,9 +4,8 @@
 // row's "more" menu. Visible labels are short ("Add", "Pin"); each control's name says what it acts
 // on ("Add Spending to Home"), so a list of them heard one after another is still clear.
 
-import { type AvailableApp, api, type HomeItem, type HomeView, ws } from '../api'
+import { type AvailableApp, api, type HomeView, ws } from '../api'
 import { type Key, useT } from '../i18n'
-import { useLoad } from '../load'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { Heading } from '../ui/Heading'
@@ -15,9 +14,9 @@ import { MenuItem, MoreMenu } from '../ui/Menu'
 import { Notice } from '../ui/Notice'
 import { Panel } from '../ui/Panel'
 import { Row, Rows } from '../ui/Rows'
-import type { Move, Run } from './HomePage'
+import { type Act, focusName, type Move, neighbours, type Run } from './HomePage'
 import { ChecklistRestore } from './SetupChecklist'
-import { useHomeVersion } from './store'
+import { useHomeLoad } from './store'
 import { itemKey } from './WidgetCard'
 
 export function HomeCustomize({
@@ -36,38 +35,60 @@ export function HomeCustomize({
   home: HomeView
   run: Run
   move: Move
-  remove: (item: HomeItem) => Promise<void>
-  hide: (item: HomeItem) => Promise<void>
+  remove: Act
+  hide: Act
 }) {
   const t = useT()
-  const version = useHomeVersion()
   const base = ws(workspace)
-  const available = useLoad(
+  const available = useHomeLoad(
     () => api<{ apps: AvailableApp[] }>(`${base}/home/available`).then((r) => r.apps),
-    [base, version],
+    [base],
   )
+  // An offer's controls: the add or remove button, and its "more" menu.
+  const offer = (a: AvailableApp, what: string, control: string) =>
+    focusName('offer', `${a.space_id}:${a.app_id}:${what}`, control)
   const ownPins = home.pins.filter((p) => p.source === 'personal')
-  const place = (a: AvailableApp, kind: 'widget' | 'pin', widget?: string) =>
-    run(() =>
-      api(`${base}/home/items`, { method: 'POST', body: { kind, space_id: a.space_id, app_id: a.app_id, widget } }),
+  const place = (a: AvailableApp, kind: 'widget' | 'pin', name: string, widget?: string) =>
+    run(
+      () =>
+        api(`${base}/home/items`, { method: 'POST', body: { kind, space_id: a.space_id, app_id: a.app_id, widget } }),
+      {
+        message: t(kind === 'pin' ? 'home.announce.pinned' : 'home.announce.added', { name }),
+        focus: [offer(a, widget ?? 'pin', 'toggle')],
+      },
     )
-  const setDefault = (a: AvailableApp, kind: 'widget' | 'pin', widget?: string) =>
-    run(() =>
-      api(`${base}/spaces/${a.space_id}/home/defaults`, { method: 'POST', body: { kind, app_id: a.app_id, widget } }),
+  const setDefault = (a: AvailableApp, kind: 'widget' | 'pin', name: string, widget?: string) =>
+    run(
+      () =>
+        api(`${base}/spaces/${a.space_id}/home/defaults`, {
+          method: 'POST',
+          body: { kind, app_id: a.app_id, widget },
+        }),
+      // The menu gives the keyboard back to its button, which stays.
+      { message: t('home.announce.defaultSet', { name }) },
     )
-  const unsetDefault = (a: AvailableApp, id: number) =>
-    run(() => api(`${base}/spaces/${a.space_id}/home/defaults/${id}`, { method: 'DELETE' }))
+  const unsetDefault = (a: AvailableApp, id: number, name: string) =>
+    run(() => api(`${base}/spaces/${a.space_id}/home/defaults/${id}`, { method: 'DELETE' }), {
+      message: t('home.announce.defaultUnset', { name }),
+    })
   const space = (a: AvailableApp) => (a.space_kind === 'private' ? t('knowledge.spaces.private') : a.space_name)
   const placedWidget = (a: AvailableApp, id: string) =>
     home.widgets.find((i) => i.source === 'personal' && i.app_id === a.app_id && i.widget_id === id)
   const placedPin = (a: AvailableApp) => home.pins.find((i) => i.source === 'personal' && i.app_id === a.app_id)
 
   // The "more" menu of an offered widget or pin, for those who may set the space's defaults.
-  const defaults = (a: AvailableApp, name: string, def: { id: number } | undefined, set: () => Promise<void>) =>
+  // Its name says whether it is the widget's or the pin's, which may share a name.
+  const defaults = (
+    a: AvailableApp,
+    name: string,
+    what: string,
+    def: { id: number } | undefined,
+    set: () => Promise<void>,
+  ) =>
     a.can_set_defaults && (
-      <MoreMenu label={t('home.moreFor', { name })}>
+      <MoreMenu label={t(what === 'pin' ? 'home.moreForPin' : 'home.moreForWidget', { name })}>
         {def ? (
-          <MenuItem icon="close" onSelect={() => unsetDefault(a, def.id)}>
+          <MenuItem icon="close" onSelect={() => unsetDefault(a, def.id, name)}>
             {t('home.unsetDefaultNamed', { name })}
           </MenuItem>
         ) : (
@@ -118,6 +139,7 @@ export function HomeCustomize({
                             icon="up"
                             label={t('home.moveEarlier', { name })}
                             disabled={at <= 0}
+                            data-home-focus={focusName('pin', itemKey(p), 'earlier')}
                             onClick={() => move('pin', p, -1)}
                           />
                           <IconButton
@@ -125,13 +147,15 @@ export function HomeCustomize({
                             icon="down"
                             label={t('home.moveLater', { name })}
                             disabled={at === ownPins.length - 1}
+                            data-home-focus={focusName('pin', itemKey(p), 'later')}
                             onClick={() => move('pin', p, 1)}
                           />
                           <IconButton
                             size="sm"
                             icon="close"
                             label={t('home.removePinNamed', { name })}
-                            onClick={() => remove(p)}
+                            data-home-focus={focusName('pin', itemKey(p), 'remove')}
+                            onClick={() => remove(p, name)}
                           />
                         </>
                       ) : (
@@ -139,7 +163,8 @@ export function HomeCustomize({
                           size="sm"
                           icon="close"
                           label={t('home.hideNamed', { name })}
-                          onClick={() => hide(p)}
+                          data-home-focus={focusName('pin', itemKey(p), 'hide')}
+                          onClick={() => hide(p, name)}
                         />
                       )
                     }
@@ -169,7 +194,15 @@ export function HomeCustomize({
                       <Button
                         size="sm"
                         aria-label={t('home.showNamed', { name })}
-                        onClick={() => run(() => api(`${base}/home/hidden/${h.default_id}`, { method: 'DELETE' }))}
+                        data-home-focus={focusName('hidden', itemKey(h), 'show')}
+                        onClick={() =>
+                          run(() => api(`${base}/home/hidden/${h.default_id}`, { method: 'DELETE' }), {
+                            message: t('home.announce.shown', { name }),
+                            focus: neighbours('hidden', home.hidden, h).map((n) =>
+                              n.replace(/:(remove|hide)$/, ':show'),
+                            ),
+                          })
+                        }
                       >
                         {t('home.show')}
                       </Button>
@@ -223,7 +256,8 @@ export function HomeCustomize({
                               <Button
                                 size="sm"
                                 aria-label={t('home.removeNamed', { name: w.title })}
-                                onClick={() => remove(placed)}
+                                data-home-focus={offer(a, w.id, 'toggle')}
+                                onClick={() => remove(placed, w.title, [offer(a, w.id, 'toggle')])}
                               >
                                 {t('home.remove')}
                               </Button>
@@ -232,12 +266,13 @@ export function HomeCustomize({
                                 size="sm"
                                 icon="plus"
                                 aria-label={t('home.addNamed', { name: w.title })}
-                                onClick={() => place(a, 'widget', w.id)}
+                                data-home-focus={offer(a, w.id, 'toggle')}
+                                onClick={() => place(a, 'widget', w.title, w.id)}
                               >
                                 {t('home.addShort')}
                               </Button>
                             )}
-                            {defaults(a, w.title, def, () => setDefault(a, 'widget', w.id))}
+                            {defaults(a, w.title, w.id, def, () => setDefault(a, 'widget', w.title, w.id))}
                           </>
                         }
                       />
@@ -262,7 +297,8 @@ export function HomeCustomize({
                           <Button
                             size="sm"
                             aria-label={t('home.unpinNamed', { name: pinName })}
-                            onClick={() => remove(pin)}
+                            data-home-focus={offer(a, 'pin', 'toggle')}
+                            onClick={() => remove(pin, pinName, [offer(a, 'pin', 'toggle')])}
                           >
                             {t('home.unpin')}
                           </Button>
@@ -271,12 +307,13 @@ export function HomeCustomize({
                             size="sm"
                             icon="pin"
                             aria-label={t('home.pinNamed', { name: pinName })}
-                            onClick={() => place(a, 'pin')}
+                            data-home-focus={offer(a, 'pin', 'toggle')}
+                            onClick={() => place(a, 'pin', pinName)}
                           >
                             {t('home.pin')}
                           </Button>
                         )}
-                        {defaults(a, pinName, pinDefault, () => setDefault(a, 'pin'))}
+                        {defaults(a, pinName, 'pin', pinDefault, () => setDefault(a, 'pin', pinName))}
                       </>
                     }
                   />

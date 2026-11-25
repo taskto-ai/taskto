@@ -14,10 +14,9 @@
 // of a shared space, the widgets and pin it offers to all its members by default. While it is on,
 // each widget of the person's own carries its controls: move earlier, move later, remove.
 
-import { useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { type AvailableApp, api, errorText, type HomeItem, type HomeView, ws } from '../api'
-import { useT } from '../i18n'
-import { useLoad } from '../load'
+import { useFormat, useT } from '../i18n'
 import { routePath } from '../router'
 import { ErrorBoundary } from '../shell/ErrorBoundary'
 import { Button, ButtonLink } from '../ui/Button'
@@ -26,37 +25,90 @@ import { Icon } from '../ui/Icon'
 import { Notice } from '../ui/Notice'
 import { Page } from '../ui/Page'
 import { PageHeader } from '../ui/PageHeader'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { HomeCustomize } from './HomeCustomize'
 import { SetupChecklist } from './SetupChecklist'
-import { homeChanged, useHomeVersion } from './store'
+import { homeChanged, useHomeLoad, useHomeVersion } from './store'
 import { itemKey, WidgetCard, WidgetFailed, WidgetSkeletons } from './WidgetCard'
 import './Home.css'
 
 export type Move = (kind: 'widget' | 'pin', item: HomeItem, step: -1 | 1) => Promise<void>
-export type Run = (change: () => Promise<unknown>) => Promise<void>
+// What follows a change: the words a screen reader is told once it is made, and where the keyboard
+// goes once Home is shown again (the first of these controls that is there and enabled; the
+// Customize button when none is).
+export type After = { message?: string; focus?: string[] }
+export type Run = (change: () => Promise<unknown>, after?: After) => Promise<void>
+export type Act = (item: HomeItem, name: string, focus?: string[]) => Promise<void>
+
+// The name a control carries so the keyboard can be put back on it after Home is shown again:
+// what it acts on (a widget, a pin, an offer) and which control it is.
+export const focusName = (scope: string, key: string, control: string) => `${scope}:${key}:${control}`
+const focusSelector = (name: string) => `[data-home-focus="${name.replace(/"/g, '\\"')}"]`
+
+// Where the keyboard goes when a placement is taken off: the same control of the next one, or the
+// one before, of the same list.
+export function neighbours(scope: string, list: HomeItem[], item: HomeItem): string[] {
+  const at = list.findIndex((i) => itemKey(i) === itemKey(item))
+  return [list[at + 1], list[at - 1]]
+    .filter((i): i is HomeItem => !!i)
+    .flatMap((i) => ['remove', 'hide'].map((c) => focusName(scope, itemKey(i), c)))
+}
 
 export function HomePage({ workspace, admin = false }: { workspace: number; admin?: boolean }) {
   const t = useT()
+  const f = useFormat()
   const heading = useRef<HTMLHeadingElement>(null)
+  const customize = useRef<HTMLButtonElement>(null)
   const version = useHomeVersion()
-  const home = useLoad(() => api<HomeView>(`${ws(workspace)}/home`), [workspace, version])
+  const home = useHomeLoad(() => api<HomeView>(`${ws(workspace)}/home`), [workspace])
   const [customizing, setCustomizing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [said, setSaid] = useState('')
+  const pendingFocus = useRef<string[] | null>(null)
+
+  // Once Home is shown again after a change, the keyboard goes back where the change left it.
+  const settleFocus = useCallback(() => {
+    const names = pendingFocus.current
+    if (!names) return
+    pendingFocus.current = null
+    for (const name of names) {
+      const el = document.querySelector<HTMLElement>(focusSelector(name))
+      if (el && !(el as HTMLButtonElement).disabled) {
+        el.focus()
+        return
+      }
+    }
+    customize.current?.focus()
+  }, [])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Home shown again is when to settle
+  useLayoutEffect(settleFocus, [home.data, settleFocus])
 
   // Runs a change, then tells everything that shows Home to load it again, whether it worked or not:
-  // after a refusal the lists show what is true now.
-  const run: Run = async (change) => {
+  // after a refusal the lists show what is true now. What is shown stays while it loads.
+  const run: Run = async (change, after = {}) => {
+    pendingFocus.current = after.focus ?? null
     try {
       await change()
       setError(null)
+      if (after.message) setSaid(after.message)
     } catch (e) {
       setError(errorText(e))
     }
     homeChanged()
   }
   const base = ws(workspace)
-  const remove = (item: HomeItem) => run(() => api(`${base}/home/items/${item.id}`, { method: 'DELETE' }))
-  const hide = (item: HomeItem) => run(() => api(`${base}/home/hidden/${item.default_id}`, { method: 'PUT' }))
+  const scopeOf = (item: HomeItem) => (item.kind === 'pin' ? 'pin' : 'widget')
+  const listOf = (item: HomeItem) => (item.kind === 'pin' ? (home.data?.pins ?? []) : (home.data?.widgets ?? []))
+  const remove: Act = (item, name, focus) =>
+    run(() => api(`${base}/home/items/${item.id}`, { method: 'DELETE' }), {
+      message: t(item.kind === 'pin' ? 'home.announce.unpinned' : 'home.announce.removed', { name }),
+      focus: focus ?? neighbours(scopeOf(item), listOf(item), item),
+    })
+  const hide: Act = (item, name, focus) =>
+    run(() => api(`${base}/home/hidden/${item.default_id}`, { method: 'PUT' }), {
+      message: t('home.announce.hidden', { name }),
+      focus: focus ?? neighbours(scopeOf(item), listOf(item), item),
+    })
   // Moves one of the person's own placements among their own, one step.
   const move: Move = (kind, item, step) => {
     const own = (kind === 'widget' ? (home.data?.widgets ?? []) : (home.data?.pins ?? [])).filter(
@@ -67,7 +119,14 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
     if (from < 0 || to < 0 || to >= own.length) return Promise.resolve()
     const ids = own.map((i) => i.id)
     ;[ids[from], ids[to]] = [ids[to], ids[from]]
-    return run(() => api(`${base}/home/order`, { method: 'PUT', body: { kind, ids } }))
+    const name = kind === 'widget' ? (item.widget?.title ?? item.app_name) : item.label || item.app_name
+    const key = itemKey(item)
+    const [same, other] = step < 0 ? ['earlier', 'later'] : ['later', 'earlier']
+    return run(() => api(`${base}/home/order`, { method: 'PUT', body: { kind, ids } }), {
+      message: t('home.announce.moved', { name, position: f.number(to + 1), total: f.number(own.length) }),
+      // The same button, if the item can still go that way; the other one otherwise.
+      focus: [focusName(kind, key, same), focusName(kind, key, other)],
+    })
   }
 
   const widgets = home.data?.widgets ?? []
@@ -80,6 +139,7 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
         titleRef={heading}
         actions={
           <Button
+            ref={customize}
             icon={customizing ? 'check' : 'edit'}
             aria-expanded={customizing}
             aria-controls="ui-home-customize"
@@ -89,6 +149,10 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
           </Button>
         }
       />
+      {/* What a change in customize mode did, said once it is made. */}
+      <VisuallyHidden>
+        <span role="status">{said}</span>
+      </VisuallyHidden>
       {/* Where the keyboard goes when the checklist, which had it, is put away or finished. */}
       {admin && (
         <SetupChecklist
@@ -110,14 +174,16 @@ export function HomePage({ workspace, admin = false }: { workspace: number; admi
               <li key={itemKey(item)} className="ui-home-cell" data-size={sizeOf(item)}>
                 <ErrorBoundary
                   resetKey={`${version}:${itemKey(item)}`}
-                  fallback={<WidgetFailed item={item} onRemove={item.id ? () => remove(item) : undefined} />}
+                  fallback={
+                    <WidgetFailed item={item} onRemove={item.id ? () => remove(item, item.app_name) : undefined} />
+                  }
                 >
                   <WidgetCard
                     workspace={workspace}
                     item={item}
                     customizing={customizing}
-                    onRemove={() => remove(item)}
-                    onHide={() => hide(item)}
+                    onRemove={(name) => remove(item, name)}
+                    onHide={(name) => hide(item, name)}
                     onMove={item.source === 'personal' ? (step) => move('widget', item, step) : undefined}
                     first={at <= 0}
                     last={at === own.length - 1}
@@ -154,10 +220,9 @@ function sizeOf(item: HomeItem): string {
 // offers a widget; the apps otherwise, where one is built or installed.
 function EmptyHome({ workspace, onCustomize }: { workspace: number; onCustomize: () => void }) {
   const t = useT()
-  const version = useHomeVersion()
-  const available = useLoad(
+  const available = useHomeLoad(
     () => api<{ apps: AvailableApp[] }>(`${ws(workspace)}/home/available`).then((r) => r.apps),
-    [workspace, version],
+    [workspace],
   )
   const offers = available.data?.some((a) => a.widgets.length > 0)
   // Still asking: no step yet, rather than one that changes under the pointer.

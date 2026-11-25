@@ -48,6 +48,8 @@ test('an admin sees each step with its state and a link to the page where it is 
   const panel = await screen.findByRole('region', { name: 'Set up your workspace' })
   expect(within(panel).getByRole('status').textContent).toBe('1 of 4 steps handled')
 
+  // The steps have an order: an ordered list.
+  expect(within(panel).getByRole('list').tagName).toBe('OL')
   const steps = within(panel).getAllByRole('listitem')
   // Each step: its name, and its state in words (the mark before it is only a picture of it).
   const said = (step: HTMLElement, name: string) => {

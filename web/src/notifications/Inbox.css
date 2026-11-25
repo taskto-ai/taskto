@@ -23,6 +23,17 @@
     font: var(--type-ui-strong);
   }
 
+  /* Above the row's link, which covers the row, so a hover and the keyboard reach it. */
+  .ui-inbox-when {
+    position: relative;
+    border-radius: var(--radius-sm);
+  }
+
+  .ui-inbox-when:focus-visible {
+    outline: var(--line-focus) solid var(--color-focus);
+    outline-offset: var(--line-focus-offset);
+  }
+
   .ui-inbox-more {
     display: flex;
     justify-content: center;
