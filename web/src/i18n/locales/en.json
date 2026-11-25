@@ -2566,7 +2566,8 @@
     "close": "Close",
     "moreActions": "More actions",
     "dismiss": "Dismiss",
-    "notifications": "Notifications"
+    "notifications": "Notifications",
+    "menuButtonName": "{label}:"
   },
   "gallery": {
     "title": "Design system",
@@ -2789,6 +2790,8 @@
       "assignedToMe": "Assigned to me",
       "addColumn": "Add a column",
       "headings": "Sizes from the type roles: the display face from 20px up, Inter below",
+      "busyAsk": "Delete, then fail…",
+      "busyFailed": "The app could not be deleted. Nothing was changed; try again.",
       "inPlaceRow": "A search result",
       "inPlaceDetail": "Opens on this page, in place"
     }

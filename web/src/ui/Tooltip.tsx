@@ -3,7 +3,9 @@
 // does must be its name or the words beside it.
 //
 // - It opens after a short rest of a mouse or a pen, and at once on focus from the keyboard. It
-//   doesn't open on touch (there is no hover; a tap is a press), nor on a click's focus.
+//   doesn't open on touch (there is no hover; a tap is a press), nor on the focus a click or a tap
+//   gives, a text field's included (the browser counts every focus of a text field as
+//   :focus-visible, so the last input is asked as well: a key, or a pointer).
 // - The pointer can move onto it without closing it (WCAG 1.4.13); Escape closes it, and so does
 //   leaving, blurring or pressing the control.
 // - It is in the browser's top layer (a popover), so a dialog or an overflow never clips it, and it
@@ -33,9 +35,12 @@ import './Tooltip.css'
 export const OPEN_DELAY_MS = 400
 export const CLOSE_DELAY_MS = 120
 
-// The gap between the control and the tooltip, and the margin kept from the window's edges.
-const GAP = 6
-const MARGIN = 8
+// The gap between the control and the tooltip, and the margin kept from the window's edges: a step
+// of the space scale (tokens.css), read from the page, 8px when it has none.
+function spaceToken(name: string): number {
+  const v = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name))
+  return Number.isFinite(v) ? v : 8
+}
 
 type Describable = ReactElement<{ 'aria-describedby'?: string }>
 
@@ -47,8 +52,21 @@ export interface TooltipProps {
 
 const canPopover = () => typeof HTMLElement !== 'undefined' && 'showPopover' in HTMLElement.prototype
 
-// Whether this focus came from the keyboard: the browser's :focus-visible, where it knows it.
+// The last input on the page, a key or a pointer, heard once for every tooltip. Before any, focus
+// counts as the keyboard's (a page that moves the focus itself, on load, does it for a keyboard).
+let lastInput: 'keyboard' | 'pointer' = 'keyboard'
+let listening = false
+function listenForInput() {
+  if (listening || typeof document === 'undefined') return
+  listening = true
+  document.addEventListener('keydown', () => (lastInput = 'keyboard'), true)
+  document.addEventListener('pointerdown', () => (lastInput = 'pointer'), true)
+}
+
+// Whether this focus came from the keyboard: the last input was a key, and the browser shows the
+// focus (:focus-visible), where it knows it.
 function focusVisible(el: Element): boolean {
+  if (lastInput !== 'keyboard') return false
   try {
     return el.matches(':focus-visible')
   } catch {
@@ -86,7 +104,10 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
     [hide],
   )
 
-  useEffect(() => () => clearTimeout(timer.current), [])
+  useEffect(() => {
+    listenForInput()
+    return () => clearTimeout(timer.current)
+  }, [])
 
   // Escape closes it, wherever the focus is, until the control is entered or focused again.
   useEffect(() => {
@@ -113,15 +134,17 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
       }
     }
     if (!open) return
+    const gap = spaceToken('--space-2')
+    const margin = spaceToken('--space-2')
     const place = () => {
       const r = target.getBoundingClientRect()
       const w = el.offsetWidth
       const h = el.offsetHeight
       const vw = document.documentElement.clientWidth || window.innerWidth
       const vh = document.documentElement.clientHeight || window.innerHeight
-      const above = r.top - GAP - h
-      const top = above >= MARGIN || r.bottom + GAP + h > vh - MARGIN ? Math.max(MARGIN, above) : r.bottom + GAP
-      const left = Math.min(Math.max(MARGIN, r.left + r.width / 2 - w / 2), Math.max(MARGIN, vw - MARGIN - w))
+      const above = r.top - gap - h
+      const top = above >= margin || r.bottom + gap + h > vh - margin ? Math.max(margin, above) : r.bottom + gap
+      const left = Math.min(Math.max(margin, r.left + r.width / 2 - w / 2), Math.max(margin, vw - margin - w))
       el.style.top = `${top}px`
       el.style.left = `${left}px`
     }

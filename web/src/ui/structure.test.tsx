@@ -3,7 +3,7 @@
 // The page-structure components: Page, PageHeader, Heading, Toolbar, Panel, Rows, Table, EmptyState and
 // Notice.
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Button } from './Button'
 import { EmptyState } from './EmptyState'
@@ -225,5 +225,53 @@ describe('Heading', () => {
     expect(section.className).toBe('ui-heading')
     expect(section.dataset.size).toBe('section')
     expect(screen.getByRole('heading', { level: 3, name: 'Plans' }).dataset.size).toBe('title')
+  })
+})
+
+describe('Table that is wider than its place', () => {
+  test('scrolls in a named region the keyboard can reach, and stops being one when it fits', () => {
+    const observers: (() => void)[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private fn: () => void) {
+          observers.push(() => this.fn())
+        }
+        observe() {}
+        disconnect() {}
+      },
+    )
+    let wide = true
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(() => (wide ? 900 : 300))
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => 320)
+    render(
+      <Table
+        caption="Members"
+        rows={[{ id: 1 }]}
+        rowKey={(r) => r.id}
+        columns={[{ key: 'a', header: 'Person', cell: () => 'Ana' }]}
+      />,
+    )
+    const region = screen.getByRole('region', { name: 'Members' })
+    expect(region.tabIndex).toBe(0)
+    expect(region.contains(screen.getByRole('table'))).toBe(true)
+    wide = false
+    act(() => {
+      for (const fire of observers) fire()
+    })
+    expect(screen.queryByRole('region')).toBeNull()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('Notice that is part of the page', () => {
+  test('live={false} has no role, whatever its tone', () => {
+    const { container } = render(
+      <Notice tone="danger" live={false}>
+        The key was refused.
+      </Notice>,
+    )
+    expect((container.firstElementChild as HTMLElement).getAttribute('role')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

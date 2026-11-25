@@ -58,3 +58,17 @@ export function place(
     maxHeight: room,
   }
 }
+
+// Whether an element is out of sight in a box that scrolls or clips it, or in the window.
+export function scrolledAway(el: Element): boolean {
+  const r = el.getBoundingClientRect()
+  const outside = (b: { top: number; bottom: number; left: number; right: number }) =>
+    r.bottom <= b.top || r.top >= b.bottom || r.right <= b.left || r.left >= b.right
+  if (outside({ top: 0, left: 0, bottom: window.innerHeight, right: window.innerWidth })) return true
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const s = getComputedStyle(p)
+    if (s.overflowX === 'visible' && s.overflowY === 'visible') continue
+    if (outside(p.getBoundingClientRect())) return true
+  }
+  return false
+}
