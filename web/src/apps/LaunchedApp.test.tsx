@@ -97,6 +97,8 @@ test('opening the records shows them under the app and takes the keyboard there;
   fireEvent.click(within(panel).getByRole('button', { name: 'Hide records and history' }))
   expect(screen.queryByRole('region', { name: 'Records and history' })).toBeNull()
   expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  // The panel the keyboard was in is gone: the keyboard is back on the header's way to it.
+  expect(document.activeElement).toBe(toggle)
 })
 
 test('a reader without records sees no way to them, and a viewer no way to edit', async () => {
@@ -116,4 +118,39 @@ test('an offline app says so, and its restore is the one primary action', async 
   expect(restore.className).toContain('ui-button-primary')
   expect(screen.getByText(/This app is offline/)).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Records and history' })).toBeNull()
+})
+
+test('editing with the agent takes both a space to write in and the right to design the app', async () => {
+  // Design but no write access to the space.
+  serve()
+  const { unmount } = render(<LaunchedApp workspace={1} space={2} app={1} writable={false} />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  expect(screen.queryByRole('link', { name: /with AI/ })).toBeNull()
+  unmount()
+  cleanup()
+
+  // Write access, but no right to design.
+  serve({ access: { ...everything, design: false } })
+  render(<LaunchedApp workspace={1} space={2} app={1} writable />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  expect(screen.queryByRole('link', { name: /with AI/ })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Records and history' })).toBeTruthy()
+})
+
+test('only someone who may publish the app restores it; nobody sees an offline app or its offline use', async () => {
+  const calls = serve({ archived_at: '2026-11-18T00:00:00.000Z', access: { ...everything, publish: false } })
+  render(<LaunchedApp workspace={1} space={2} app={1} writable />)
+  await screen.findByText(/This app is offline/)
+  expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull()
+  // Neither the app nor its offline use is drawn.
+  expect(screen.queryByRole('region', { name: 'Expenses' })).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Offline use' })).toBeNull()
+  expect(calls.some((c) => c.path.includes('/surface'))).toBe(false)
+})
+
+test('a person who sees only their own records is told so under the name', async () => {
+  serve({ access: { ...everything, read_records: 'own' } })
+  render(<LaunchedApp workspace={1} space={2} app={1} writable />)
+  await screen.findByRole('heading', { level: 1, name: 'Expenses' })
+  expect(screen.getByText('You see only the records you added.')).toBeTruthy()
 })

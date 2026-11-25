@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 import { AgentDot } from './AgentDot'
 import { Avatar, initials } from './Avatar'
 import { Badge } from './Badge'
-import { Label, labelHue } from './Label'
+import { Label, labelHue, normalizeLabelName } from './Label'
 import { LABEL_HUES } from './roles'
 import { Skeleton } from './Skeleton'
 
@@ -75,6 +75,43 @@ describe('labelHue', () => {
     // Every hue is used, and none takes more than about twice its share.
     expect([...counts.keys()].sort()).toEqual([...LABEL_HUES].sort())
     for (const [hue, count] of counts) expect(count, hue).toBeLessThanOrEqual((names.length / LABEL_HUES.length) * 2)
+  })
+})
+
+describe('normalizeLabelName', () => {
+  // What the server's normalizeLabel (internal/boards/validate.go) keeps for each name, from Go.
+  const SERVER: [string, string][] = [
+    [' Tech\u0009Debt\u000a', 'tech debt'],
+    ['K', 'k'],
+    ['STRASSE', 'strasse'],
+    ['Stra\u00dfe', 'strasse'],
+    ['cafe\u0301', 'caf\u00e9'],
+    ['caf\u00e9', 'caf\u00e9'],
+    ['tech  debt', 'tech debt'],
+    ['tech\u00a0debt', 'tech debt'],
+    ['tech\u3000debt', 'tech debt'],
+    ['\u00b5', '\u03bc'],
+    ['\u0130stanbul', 'i\u0307stanbul'],
+    ['\u0131i', '\u0131i'],
+    ['\u017f', 's'],
+    ['\u01c4', '\u01c6'],
+    ['\u03a3\u038a\u03a3\u03a5\u03a6\u039f\u03a3', '\u03c3\u03af\u03c3\u03c5\u03c6\u03bf\u03c3'],
+    ['\u03c3\u03af\u03c3\u03c5\u03c6\u03bf\u03c2', '\u03c3\u03af\u03c3\u03c5\u03c6\u03bf\u03c3'],
+    ['\u1e9e', 'ss'],
+    ['\ufb03', 'ffi'],
+  ]
+
+  test('is what the server keeps: white space, full case folding, NFC', () => {
+    for (const [name, kept] of SERVER) expect(normalizeLabelName(name), JSON.stringify(name)).toBe(kept)
+  })
+
+  test('names the server keeps as one label get one hue', () => {
+    expect(labelHue('tech  debt')).toBe(labelHue('tech debt'))
+    expect(labelHue('tech\u00a0debt')).toBe(labelHue('tech debt'))
+    expect(labelHue('Stra\u00dfe')).toBe(labelHue('STRASSE'))
+    expect(labelHue('\u03c3\u03af\u03c3\u03c5\u03c6\u03bf\u03c2')).toBe(
+      labelHue('\u03a3\u038a\u03a3\u03a5\u03a6\u039f\u03a3'),
+    )
   })
 })
 

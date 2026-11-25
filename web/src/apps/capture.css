@@ -312,4 +312,28 @@
     align-items: center;
     gap: var(--space-2);
   }
+
+  /* While recording: the time so far, in figures that line up, in the danger colour as a recording
+     light is. */
+  .ui-dictate-clock {
+    font: var(--type-small);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-danger);
+  }
+
+  .ui-dictate-error {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    font: var(--type-small);
+    font-weight: 500;
+    color: var(--color-danger);
+  }
+
+  .ui-dictate .ui-icon-button {
+    min-block-size: var(--control-touch);
+    min-inline-size: var(--control-touch);
+  }
 }

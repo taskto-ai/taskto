@@ -645,6 +645,20 @@ test('online, the microphone says in its title where the speech goes', async () 
   expect(mic.title).toMatch(/sent to this server.*needs a connection/)
 })
 
+test('the microphone is the same button online and offline: the library’s, never the chat box’s old one', async () => {
+  stubNavigator('onLine', true)
+  fakeFetch({ 'GET /api/workspaces/1/dictation': { body: status() } })
+  const { unmount } = render(<FieldDictation workspace={1} field="Notes" onText={() => {}} />)
+  const online = await screen.findByRole('button', { name: 'Dictate into Notes' })
+  expect(online.className).toContain('ui-icon-button')
+  expect(online.className).not.toContain('tt-button')
+  unmount()
+  stubNavigator('onLine', false)
+  render(<FieldDictation workspace={1} field="Notes" onText={() => {}} />)
+  const offline = screen.getByRole('button', { name: 'Dictate into Notes' })
+  expect(offline.className).toBe(online.className)
+})
+
 test('where the workspace has dictation off, the reason and the keyboard’s own dictation are said', async () => {
   fakeFetch({
     'GET /api/workspaces/1/dictation': { body: status({ engine: '', reason: 'Dictation is off for this workspace.' }) },

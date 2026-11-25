@@ -228,3 +228,38 @@ describe('aria-invalid', () => {
     expect(screen.getByRole('textbox', { name: 'd' }).hasAttribute('aria-invalid')).toBe(false)
   })
 })
+
+describe('Checkbox, controlled, with no redraw', () => {
+  test('stays mixed and unchecked when its change draws nothing again', () => {
+    render(<Checkbox label="All" checked={false} indeterminate onChange={() => {}} />)
+    const box = screen.getByRole('checkbox', { name: 'All' }) as HTMLInputElement
+    fireEvent.click(box)
+    expect(box.checked).toBe(false)
+    expect(box.indeterminate).toBe(true)
+  })
+})
+
+describe('Field error', () => {
+  test('appears in a polite live region that is there before it, so it is said when it appears', () => {
+    const { rerender } = render(
+      <Field label="Email">
+        <Input />
+      </Field>,
+    )
+    const input = screen.getByRole('textbox', { name: 'Email' })
+    const live = input.closest('.ui-field')?.querySelector('[aria-live="polite"]')
+    expect(live).toBeTruthy()
+    expect(live?.textContent).toBe('')
+    rerender(
+      <Field label="Email" error="Enter a full email address.">
+        <Input />
+      </Field>,
+    )
+    // The same region, now with the error, which the control is still described by.
+    expect(input.closest('.ui-field')?.querySelector('[aria-live="polite"]')).toBe(live)
+    expect(live?.textContent).toBe('Enter a full email address.')
+    expect(input.getAttribute('aria-describedby')).toContain(live?.firstElementChild?.id)
+    // Not an alert as well: it is said once.
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+  })
+})
