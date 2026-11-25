@@ -149,9 +149,10 @@ instead of choosing a password.
 
 Everyone changes their own password in **Settings → Password**, with their current one;
 that signs them out everywhere else. Someone who lost theirs asks an admin for a reset link
-(**Settings → Members → Reset link**), which works once, for 24 hours. There is no email:
-the admin sends the link. An admin can make one only for a member whose every workspace
-they administer ([API](api.md#passwords)).
+(**Settings → Members → Reset link**), which works once, for 24 hours; the admin sends the
+link. An admin can make one only for a member whose every workspace they administer
+([API](api.md#passwords)). Once [email](#email) is set up, the login page also offers
+**Forgot your password?**, which emails the person the same kind of link.
 
 ## 3. HTTPS
 
@@ -386,6 +387,12 @@ invitations and notifications that later features add. It is **off until the ope
 server**, and works the same for one person or a company: there is one SMTP server for the whole
 server, set here, never per workspace, and nothing in the database. Without it nothing changes:
 reset and invite links are still passed on by hand.
+
+**The links in a message are built on `public_url`** (`-public-url`, `TASKTO_PUBLIC_URL`: the
+server's external address, `https://taskto.example.com`), never on the address a request came
+to, which someone asking for a reset email could choose. Without `public_url` the server
+doesn't email links: it says so in its log at startup, the login page doesn't offer **Forgot
+your password?**, and the invite dialog doesn't offer to email.
 
 | Setting | Flag / environment | |
 |---|---|---|

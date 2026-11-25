@@ -72,6 +72,45 @@ func (l *limiter) sweep(now time.Time) {
 	}
 }
 
+// bucket is a token bucket: burst starts at once, then one more every `every`, in memory. What it
+// counts is requests taken in, never work still running, so whether it refuses depends only on
+// the requests that came before and the clock.
+type bucket struct {
+	burst int
+	every time.Duration
+	now   func() time.Time
+
+	mu     sync.Mutex
+	tokens int
+	last   time.Time // when the last token was added, while not full
+}
+
+func newBucket(burst int, every time.Duration, now func() time.Time) *bucket {
+	return &bucket{burst: burst, every: every, now: now, tokens: burst, last: now()}
+}
+
+// take uses a token. It reports false, and how long until the next one, if there is none.
+func (b *bucket) take() (bool, time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now()
+	if now.Before(b.last) { // the clock went back
+		b.last = now
+	}
+	if n := int(now.Sub(b.last) / b.every); n > 0 {
+		b.tokens = min(b.burst, b.tokens+n)
+		b.last = b.last.Add(time.Duration(n) * b.every)
+	}
+	if b.tokens == b.burst {
+		b.last = now // full: the next token is a whole interval after this one is used
+	}
+	if b.tokens == 0 {
+		return false, b.last.Add(b.every).Sub(now)
+	}
+	b.tokens--
+	return true, 0
+}
+
 // clientIP is the key for a request's client address. It is the direct peer, unless the
 // peer is a trusted proxy (Options.TrustedProxies): then it is the right-most address in
 // X-Forwarded-For that isn't a trusted proxy. Each proxy appends the address it received

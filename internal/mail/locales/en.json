@@ -80,6 +80,15 @@
         "The link works once and expires in {hours} hours. If you didn't ask for this, ignore this message and nothing will be sent."
       ],
       "action": "Confirm this address"
+    },
+    "password_reset": {
+      "subject": "Reset your TaskTo.AI password",
+      "title": "Reset your password",
+      "paragraphs": [
+        "Hello {name}, someone asked to reset the password of your TaskTo.AI account. Use the button below to choose a new one. The link works once and for {hours} hours.",
+        "If it wasn't you, ignore this message: your password stays as it is."
+      ],
+      "action": "Choose a new password"
     }
   }
 }
