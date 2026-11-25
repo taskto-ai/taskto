@@ -18,6 +18,10 @@ export function linkLabels(root: ParentNode): void {
     for (const control of controls) {
       if (control.id && label.htmlFor === control.id) continue
       if (control.hasAttribute('aria-label') || control.hasAttribute('aria-labelledby')) continue
+      // A control with a label of its own (one of TaskTo.AI's fields, such as a typed signature's
+      // name beside its confirming check box) is named already: another label in the same parent
+      // isn't its name.
+      if ((control as HTMLInputElement).labels?.length) continue
       control.setAttribute('aria-labelledby', label.id)
     }
     // A set of chips or checkboxes is one group, named by the label above it.

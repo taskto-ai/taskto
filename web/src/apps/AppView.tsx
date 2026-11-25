@@ -175,12 +175,15 @@ export function AppView({
   const dictation = transport.files?.uploads ? workspaceOf(transport.files.base) : null
   // A submission is being made (a location taken as the form is submitted, the request on its way):
   // its buttons are off until it has an answer, and a press that gets through (a key) is that submission.
+  // Only the capture fields that can be part of it (a location, a signature, a barcode: each marked
+  // data-submit-free) keep theirs; a photo's are off, since removing one would delete an upload the
+  // request names.
   const [busy, setBusy] = useState(false)
   useEffect(() => captures.current.subscribe(() => setBusy(captures.current.busy)), [])
   useEffect(() => {
     if (!busy || !section) return
     const off = [...section.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')].filter(
-      (b) => !b.closest('.tt-capture'),
+      (b) => !b.closest('[data-submit-free]'),
     )
     for (const b of off) b.disabled = true
     return () => {

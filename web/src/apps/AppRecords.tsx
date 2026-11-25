@@ -61,6 +61,7 @@ export function AppRecords({
   definition,
   release,
   onRestored,
+  leaveRef,
 }: {
   // The panel's id, which RecordsButton names.
   id: string
@@ -77,6 +78,8 @@ export function AppRecords({
   release?: number
   // Called after a record was changed, deleted or restored, so the screen shows it again.
   onRestored: () => void
+  // The explorer's way out, which asks first while a record holds unsaved changes.
+  leaveRef?: { current: ((go: () => void) => void) | null }
 }) {
   const t = useT()
   // Opened from the header, which may be a screen away: the panel is brought into view and the
@@ -109,6 +112,7 @@ export function AppRecords({
         canChange={canChange}
         canRestore={canChange}
         onChanged={onRestored}
+        leaveRef={leaveRef}
       />
     </Panel>
   )

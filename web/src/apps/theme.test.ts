@@ -108,6 +108,31 @@ describe("the renderer's theme", () => {
   })
 })
 
+describe('the capture fields', () => {
+  const capture = rules(readFileSync(join(__dirname, 'capture.css'), 'utf8'))
+  const ruleOf = (selector: string) => capture.find((r) => r.selector.split(',').some((s) => s.trim() === selector))
+  const declares = (selector: string, value: RegExp) => {
+    const css = readFileSync(join(__dirname, 'capture.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const at = css.indexOf(`${selector} {`)
+    return at >= 0 && value.test(css.slice(at, css.indexOf('}', at)))
+  }
+
+  test('their buttons are a finger’s size whatever the pointer', () => {
+    expect(declares('.ui-capture .ui-button', /min-block-size: var\(--control-touch\)/)).toBe(true)
+    expect(declares('.ui-capture .ui-icon-button', /min-inline-size: var\(--control-touch\)/)).toBe(true)
+    expect(declares('.ui-photo-add > label', /min-block-size: var\(--control-touch\)/)).toBe(true)
+    // The dictation's text buttons (Cancel, Try again) as well as its microphone.
+    expect(declares('.ui-dictate .ui-button', /min-block-size: var\(--control-touch\)/)).toBe(true)
+  })
+
+  test('the pad and the saved signature are on paper, and the camera on media, in every theme', () => {
+    expect(declares('.ui-signature-canvas', /background: var\(--color-paper\)/)).toBe(true)
+    expect(declares('.ui-signature-image', /background: var\(--color-paper\)/)).toBe(true)
+    expect(declares('.ui-capture-camera video', /background: var\(--color-media\)/)).toBe(true)
+    expect(ruleOf('.ui-signature-canvas')?.layer).toBe('screens')
+  })
+})
+
 // The declarations of the rule whose selector list holds exactly this selector, outside any at-rule,
 // as text, for a check of what a rule sets.
 function declarationsOf(source: string, selector: string): string {

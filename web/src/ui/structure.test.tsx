@@ -174,6 +174,43 @@ describe('Table', () => {
   })
 })
 
+describe('Table, sorted', () => {
+  test('a sortable header is a button named by the column, and its cell says the order', () => {
+    const rows = [
+      { plan: 'Solo', seats: 1 },
+      { plan: 'Team', seats: 10 },
+    ]
+    const onSort = vi.fn()
+    render(
+      <Table
+        caption="Plans"
+        rows={rows}
+        rowKey={(r) => r.plan}
+        columns={[
+          { key: 'plan', header: 'Plan', sort: { direction: 'none', onSort }, cell: (r) => r.plan },
+          {
+            key: 'seats',
+            header: 'Seats',
+            numeric: true,
+            sort: { direction: 'descending', onSort: () => {} },
+            cell: (r) => r.seats,
+          },
+          { key: 'note', header: 'Note', cell: () => '' },
+        ]}
+      />,
+    )
+    expect(screen.getByRole('columnheader', { name: 'Seats' }).getAttribute('aria-sort')).toBe('descending')
+    // A sortable column the rows aren't in order by says no order: only one header does.
+    expect(screen.getByRole('columnheader', { name: 'Plan' }).hasAttribute('aria-sort')).toBe(false)
+    expect(screen.getByRole('button', { name: 'Plan' })).toBeTruthy()
+    // A column that can't be sorted says nothing of an order, and has no button.
+    expect(screen.getByRole('columnheader', { name: 'Note' }).hasAttribute('aria-sort')).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Note' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Plan' }))
+    expect(onSort).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('EmptyState', () => {
   test('says what the place is for and offers the action', () => {
     render(
