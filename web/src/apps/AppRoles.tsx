@@ -1,12 +1,21 @@
 // The roles of one app: who may build it, publish it, add records to it and read or change
 // its records, among the members of its space. Roles only narrow what a member's role in the
 // space allows. An app with no roles set is unrestricted, as it was before roles existed.
-// Shown to whoever may manage the app's roles; the server checks it again on every change.
+// Shown to whoever may manage the app's roles, in a dialog the Apps page opens; the server checks
+// it again on every change.
 
 import { useState } from 'react'
 import { type AppGrant, type AppRole, api, errorText, type SpaceMember } from '../api'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
+import { Button } from '../ui/Button'
+import { Checkbox } from '../ui/Checkbox'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { type Column, Table } from '../ui/Table'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
+import { LoadingRows } from './AppsLoading'
+import './Apps.css'
 
 const ROLES: AppRole[] = ['builder', 'publisher', 'user', 'data_manager', 'reader']
 const DEFAULT = 'default'
@@ -14,8 +23,7 @@ const DEFAULT = 'default'
 // Who the roles are for: a member of the space, or everyone without roles of their own.
 type Who = { key: string; name: string }
 
-export function AppRoles({ base, spaceBase, onClose }: { base: string; spaceBase: string; onClose: () => void }) {
-  const t = useT()
+export function AppRoles({ base, spaceBase }: { base: string; spaceBase: string }) {
   const loaded = useLoad(
     () =>
       Promise.all([
@@ -24,29 +32,13 @@ export function AppRoles({ base, spaceBase, onClose }: { base: string; spaceBase
       ]),
     [base, spaceBase],
   )
-  if (loaded.error) {
-    return (
-      <p role="alert" className="tt-error">
-        {loaded.error}
-      </p>
-    )
-  }
-  if (!loaded.data) return <p className="tt-muted">{t('app.loading')}</p>
+  if (loaded.error) return <Notice tone="danger">{loaded.error}</Notice>
+  if (!loaded.data) return <LoadingRows count={3} />
   const [roles, members] = loaded.data
-  return <RolesForm base={base} grants={roles.grants} members={members.members} onClose={onClose} />
+  return <RolesForm base={base} grants={roles.grants} members={members.members} />
 }
 
-function RolesForm({
-  base,
-  grants,
-  members,
-  onClose,
-}: {
-  base: string
-  grants: AppGrant[]
-  members: SpaceMember[]
-  onClose: () => void
-}) {
+function RolesForm({ base, grants, members }: { base: string; grants: AppGrant[]; members: SpaceMember[] }) {
   const t = useT()
   const who: Who[] = [
     { key: DEFAULT, name: t('apps.roles.everyoneElse') },
@@ -84,60 +76,44 @@ function RolesForm({
     setBusy(false)
   }
 
+  const columns: Column<Who>[] = [
+    { key: 'who', header: t('apps.roles.member'), rowHeader: true, cell: (w) => w.name },
+    ...ROLES.map((r) => ({
+      key: r,
+      header: t(`apps.roles.${r}`),
+      cell: (w: Who) => (
+        <Checkbox
+          checked={(chosen[w.key] ?? []).includes(r)}
+          onChange={() => toggle(w.key, r)}
+          label={
+            <VisuallyHidden>{t('apps.roles.checkbox', { role: t(`apps.roles.${r}`), name: w.name })}</VisuallyHidden>
+          }
+        />
+      ),
+    })),
+  ]
+
   return (
-    <div className="tt-app-roles">
-      <p className="tt-muted tt-small">{t('apps.roles.intro')}</p>
-      <ul className="tt-muted tt-small">
+    <div className="apps-stack">
+      <p className="apps-note">{t('apps.roles.intro')}</p>
+      <ul className="apps-list apps-note">
         {ROLES.map((r) => (
           <li key={r}>{t('apps.roles.line', { role: t(`apps.roles.${r}`), help: t(`apps.roles.${r}Help`) })}</li>
         ))}
       </ul>
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">{t('apps.roles.member')}</th>
-            {ROLES.map((r) => (
-              <th key={r} scope="col">
-                {t(`apps.roles.${r}`)}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {who.map((w) => (
-            <tr key={w.key}>
-              <th scope="row">{w.name}</th>
-              {ROLES.map((r) => (
-                <td key={r}>
-                  <input
-                    type="checkbox"
-                    checked={(chosen[w.key] ?? []).includes(r)}
-                    onChange={() => toggle(w.key, r)}
-                    aria-label={t('apps.roles.checkbox', { role: t(`apps.roles.${r}`), name: w.name })}
-                  />
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
-      {saved && (
-        <p role="status" className="tt-muted tt-small">
-          {t('apps.roles.saved')}
-        </p>
-      )}
-      <div className="tt-app-actions">
-        <button type="button" className="tt-button tt-primary" disabled={busy} onClick={save}>
+      <Panel>
+        <Table caption={t('apps.roles.caption')} columns={columns} rows={who} rowKey={(w) => w.key} />
+      </Panel>
+      {error && <Notice tone="danger">{error}</Notice>}
+      <div className="apps-actions">
+        <Button variant="primary" loading={busy} onClick={save}>
           {t('apps.save')}
-        </button>
-        <button type="button" className="tt-button" onClick={onClose}>
-          {t('apps.roles.close')}
-        </button>
+        </Button>
+        {saved && (
+          <p role="status" className="apps-note">
+            {t('apps.roles.saved')}
+          </p>
+        )}
       </div>
     </div>
   )

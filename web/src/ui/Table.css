@@ -43,6 +43,11 @@
     vertical-align: middle;
   }
 
+  /* A row's header: a data cell's box, in the strong weight. */
+  .ui-table-rowhead {
+    font: var(--type-ui-strong);
+  }
+
   .ui-table-head {
     padding: var(--space-3) var(--space-4);
     border-block-end: var(--line-thin) solid var(--color-border);
