@@ -30,7 +30,7 @@ const component = (cls: string) => `export const A = () => <p className=${cls}>x
 test('passes when every selector is declared once and every class used has a rule', () => {
   const r = run(
     `/* a comment mentioning .tt-card { } is not a rule */
-.tt-card { color: red; }
+.tt-card { color: inherit; }
 .tt-card h2 { margin: 0; }
 @media (max-width: 48rem) { .tt-card { padding: 0; } }
 @keyframes spin { from { opacity: 0; } to { opacity: 1; } }
@@ -42,11 +42,11 @@ test('passes when every selector is declared once and every class used has a rul
 })
 
 test('fails when a selector is declared twice at the top level, alone or in a group', () => {
-  const twice = run('.tt-snippet { color: red; }\n.tt-other { color: red; }\n.tt-snippet { display: grid; }\n')
+  const twice = run('.tt-snippet { color: inherit; }\n.tt-other { color: inherit; }\n.tt-snippet { display: grid; }\n')
   expect(twice.code).toBe(1)
   expect(twice.err).toContain('src/styles.css:3: .tt-snippet is declared again (first at line 1)')
 
-  const grouped = run('.tt-a, .tt-b { color: red; }\n.tt-b { margin: 0; }\n')
+  const grouped = run('.tt-a, .tt-b { color: inherit; }\n.tt-b { margin: 0; }\n')
   expect(grouped.code).toBe(1)
   expect(grouped.err).toContain('.tt-b is declared again')
   expect(grouped.err).not.toContain('.tt-a is declared again')
@@ -54,14 +54,14 @@ test('fails when a selector is declared twice at the top level, alone or in a gr
 
 test('a selector in an at-rule block, or with another selector in front of it, is not the same one', () => {
   const r = run(
-    '.tt-a { color: red; }\n.tt-a:hover { color: blue; }\n.tt-x .tt-a { margin: 0; }\n@media print { .tt-a { color: black; } }\n',
+    '.tt-a { color: inherit; }\n.tt-a:hover { color: currentColor; }\n.tt-x .tt-a { margin: 0; }\n@media print { .tt-a { color: initial; } }\n',
   )
   expect(r.err).toBe('')
   expect(r.code).toBe(0)
 })
 
 test('fails on a tt- class a component uses that has no rule, in a string, a template or a conditional', () => {
-  const css = '.tt-known { color: red; }\n'
+  const css = '.tt-known { color: inherit; }\n'
   for (const [expr, missing] of [
     ['"tt-known tt-missing"', 'tt-missing'],
     // biome-ignore lint/suspicious/noTemplateCurlyInString: the component's source, not this file's
@@ -76,7 +76,7 @@ test('fails on a tt- class a component uses that has no rule, in a string, a tem
 })
 
 test('only className counts: ids, test files and custom properties are not classes', () => {
-  const r = run('.tt-known { color: red; }\n', {
+  const r = run('.tt-known { color: inherit; }\n', {
     'A.tsx': `export const A = () => <p id="tt-anchor" style={{ color: 'var(--tt-fg)' }} className="tt-known">x</p>\n`,
     'A.test.tsx': 'export const B = () => <p className="tt-only-in-a-test">x</p>\n',
   })
@@ -109,7 +109,7 @@ test('the settings code sample keeps the colour and the wrapping the shared snip
 
 test('a class a lookup table holds counts as used; an attribute selector is not a rule for a class', () => {
   const css =
-    '.tt-known { color: red; }\n[data-state="tt-missing"] { color: blue; }\n.tt-other[data-x=\'tt-also\'] { color: red; }\n'
+    '.tt-known { color: inherit; }\n[data-state="tt-missing"] { color: currentColor; }\n.tt-other[data-x=\'tt-also\'] { color: inherit; }\n'
   const table = `const HEALTH: Record<string, string | undefined> = { none: 'tt-known', bad: 'tt-missing' }
 export const A = ({ h }: { h: string }) => <p className={HEALTH[h]}>x</p>
 `
@@ -119,7 +119,7 @@ export const A = ({ h }: { h: string }) => <p className={HEALTH[h]}>x</p>
   expect(r.err).not.toContain('tt-known is used')
 
   // An id in the same file, and a table not in capitals, are not classes it reads.
-  const quiet = run('.tt-known { color: red; }\n', {
+  const quiet = run('.tt-known { color: inherit; }\n', {
     'A.tsx': `const lower = { a: 'tt-nothing' }\nexport const A = () => <p id="tt-anchor" className="tt-known">{lower.a}</p>\n`,
   })
   expect(quiet.err).toBe('')
@@ -127,19 +127,19 @@ export const A = ({ h }: { h: string }) => <p className={HEALTH[h]}>x</p>
 })
 
 test('a class is a whole name: `.not-tt-x` is no rule for tt-x, and `not-tt-x` is no use of it', () => {
-  const r = run('.not-tt-missing { color: red; }\n.tt-known { color: red; }\n', {
+  const r = run('.not-tt-missing { color: inherit; }\n.tt-known { color: inherit; }\n', {
     'A.tsx': component('"tt-known tt-missing"'),
   })
   expect(r.code).toBe(1)
   expect(r.err).toContain('tt-missing is used but no rule')
 
-  const quiet = run('.tt-known { color: red; }\n', { 'A.tsx': component('"tt-known not-tt-else"') })
+  const quiet = run('.tt-known { color: inherit; }\n', { 'A.tsx': component('"tt-known not-tt-else"') })
   expect(quiet.err).toBe('')
   expect(quiet.code).toBe(0)
 })
 
 test('a className in a comment uses nothing, and a // in a string is not a comment', () => {
-  const r = run('.tt-known { color: red; }\n', {
+  const r = run('.tt-known { color: inherit; }\n', {
     'A.tsx': [
       '// <p className="tt-old">x</p>',
       '/* className="tt-older" */',
@@ -156,4 +156,65 @@ test('a className in a comment uses nothing, and a // in a string is not a comme
   expect(r.err).not.toMatch(/tt-old\b|tt-older|tt-oldest/)
   // The class after a URL's // is still read, and reported at its own line.
   expect(r.err).toContain('src/A.tsx:6: tt-after-url is used but no rule')
+})
+
+// More stylesheets than styles.css: the design system's files under src/ui/.
+function runFiles(files: Record<string, string>) {
+  const root = mkdtempSync(join(tmpdir(), 'css-check-'))
+  dirs.push(root)
+  for (const [name, css] of Object.entries({ 'styles.css': '', ...files })) {
+    mkdirSync(join(root, 'src', name, '..'), { recursive: true })
+    writeFileSync(join(root, 'src', name), css)
+  }
+  const r = spawnSync(process.execPath, [script, '--root', root], { encoding: 'utf8' })
+  return { code: r.status, out: r.stdout, err: r.stderr }
+}
+
+test('a selector declared again in another stylesheet, or inside @layer blocks, is declared twice', () => {
+  const across = runFiles({ 'styles.css': '.tt-a { color: inherit; }\n', 'ui/button.css': '\n.tt-a { margin: 0; }\n' })
+  expect(across.code).toBe(1)
+  expect(across.err).toContain('src/ui/button.css:2: .tt-a is declared again (first at src/styles.css:1)')
+
+  const layered = runFiles({
+    'ui/button.css': '@layer components {\n  .tt-b { margin: 0; }\n}\n@layer screens { .tt-b { padding: 0; } }\n',
+  })
+  expect(layered.code).toBe(1)
+  expect(layered.err).toContain('src/ui/button.css:4: .tt-b is declared again (first at line 2)')
+
+  const media = runFiles({
+    'ui/button.css': '@layer components {\n.tt-c { margin: 0; }\n@media print { .tt-c { margin: 1px; } }\n}\n',
+  })
+  expect(media.err).toBe('')
+  expect(media.code).toBe(0)
+})
+
+test('a colour is written only in a theme: a literal anywhere else fails', () => {
+  for (const [value, literal] of [
+    ['#fff', '#fff'],
+    ['1px solid #11111080', '#11111080'],
+    ['rgba(0, 0, 0, 0.5)', 'rgba()'],
+    ['0 2px 4px oklch(0.5 0.1 200)', 'oklch()'],
+    ['white', 'white'],
+    ['light-dark(var(--color-bg), Black)', 'Black'],
+  ]) {
+    const r = runFiles({ 'ui/box.css': `.tt-box {\n  background: ${value};\n}\n` })
+    expect(r.code, value).toBe(1)
+    expect(r.err, value).toContain(`src/ui/box.css:2: background has the colour literal ${literal}`)
+  }
+  const prop = runFiles({ 'ui/tokens.css': ':root { --space-1: 4px; --color-bg: #faf8f4; }\n' })
+  expect(prop.err).toContain('--color-bg has the colour literal #faf8f4')
+})
+
+test('a theme may write colours, and comments, strings, urls, names and ids are not colours', () => {
+  const r = runFiles({
+    'ui/themes/brand.css':
+      '@layer themes { :root { --color-bg: light-dark(#faf8f4, #111110); --color-paper: white; } }\n',
+    'styles.css': `/* the page is #faf8f4, cream; white on red */
+#root { display: block; }
+.tt-a { content: "#fff white"; white-space: nowrap; background: var(--color-bg) url("data:image/svg+xml,%3Csvg fill='red'%3E"); }
+.tt-b { color: var(--tt-red-text, currentColor); border-color: transparent; transition: background-color 0.1s; }
+`,
+  })
+  expect(r.err).toBe('')
+  expect(r.code).toBe(0)
 })

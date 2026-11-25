@@ -47,9 +47,10 @@ test('a page without theme-color metas still takes a theme', () => {
   expect(document.documentElement.dataset.theme).toBe('dark')
 })
 
-test("the colours are the page's: --tt-canvas, index.html's metas and the manifest", () => {
-  const css = read('./styles.css')
-  expect(css).toContain(`--tt-canvas: light-dark(${THEME_COLOR.light}, ${THEME_COLOR.dark});`)
+test("the colours are the page's: the ground role, index.html's metas and the manifest", () => {
+  // The default brand's ground, which the old name still points at.
+  expect(read('./ui/themes/mint.css')).toContain(`--color-bg: light-dark(${THEME_COLOR.light}, ${THEME_COLOR.dark});`)
+  expect(read('./ui/legacy.css')).toContain('--tt-canvas: var(--color-bg);')
 
   const html = read('../index.html')
   expect(html).toContain(`name="theme-color" content="${THEME_COLOR.light}" media="(prefers-color-scheme: light)"`)
