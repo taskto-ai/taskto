@@ -16,7 +16,8 @@
 //
 // Requests a browser marks as cross-origin are refused, and a body must be JSON: no web
 // page can use a token it doesn't already have, and the endpoint never reads a cookie.
-// docs/mcp.md says how to set up clients. The tests are internal/server's tokens_test.go,
+// docs/mcp.md says how to set up clients. The tests are this package's, for what the endpoint
+// itself does (its tool lists and hints, its refusals), and internal/server's tokens_test.go,
 // through the whole server.
 //
 // ForTurns is the same endpoint for the CLIs of conversations' turns (docs/cli-tools.md), on
