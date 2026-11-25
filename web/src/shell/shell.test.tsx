@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
 import type { Me } from '../api'
 import { setPreferences } from '../i18n'
+import { navigate } from '../router'
 import { fakeFetch } from '../test/fakes'
 import { Shell } from './Shell'
 
@@ -354,8 +355,6 @@ test('the top bar gives way to a long workspace name: the mark stands for the lo
 })
 
 test('the menu button opens the sidebar as a drawer, and a link closes it', async () => {
-  // Opened at a page's own URL: from /, the shell first goes to the default page, and that
-  // change of page closes the drawer, so a click before it lands would be undone.
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
   const { container } = render(<App />)
@@ -369,10 +368,9 @@ test('the menu button opens the sidebar as a drawer, and a link closes it', asyn
   expect(shell.dataset.drawer).toBe('closed')
 })
 
-test("a click on the menu button as soon as the shell is drawn isn't undone by the shell's first effects", async () => {
-  // In a browser a person can click before React has run the effects of the first draw (they run
-  // after it, in a task of their own); a draw inside act() runs them at once, so draw outside it.
-  window.history.replaceState(null, '', '/w/1/conversations')
+// In a browser a person can click before React has run the effects of the first draw (they run
+// after it, in a task of their own); a draw inside act() runs them at once, so draw outside it.
+async function clickMenuAtFirstDraw(): Promise<string> {
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
   const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   const before = env.IS_REACT_ACT_ENVIRONMENT
@@ -392,12 +390,70 @@ test("a click on the menu button as soon as the shell is drawn isn't undone by t
     })
     host.querySelector<HTMLButtonElement>('.tt-menu-button')?.click()
     await new Promise((resolve) => setTimeout(resolve, 50))
-    expect((host.querySelector('.tt-shell') as HTMLElement).dataset.drawer).toBe('open')
+    return (host.querySelector('.tt-shell') as HTMLElement).dataset.drawer ?? ''
   } finally {
     root.unmount()
     host.remove()
     env.IS_REACT_ACT_ENVIRONMENT = before
   }
+}
+
+test("a click on the menu button as soon as the shell is drawn isn't undone by the shell's first effects", async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  expect(await clickMenuAtFirstDraw()).toBe('open')
+})
+
+test('nor is it when the shell rewrites the address to its canonical form: a trailing slash, no page, an unknown workspace', async () => {
+  for (const [opened, canonical] of [
+    ['/w/1/conversations/', '/w/1/conversations'],
+    ['/', '/w/1/conversations'],
+    ['/w/9/boards', '/w/1/boards'],
+  ]) {
+    window.history.replaceState(null, '', opened)
+    expect(await clickMenuAtFirstDraw(), opened).toBe('open')
+    expect(window.location.pathname).toBe(canonical)
+  }
+})
+
+test('a change of page closes the drawer: a link, back and forward; a hash or a query does not', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: me },
+    ...pages,
+    'GET /api/workspaces/1/spaces': { body: { spaces: [] } },
+  })
+  const { container } = render(<App />)
+  const menu = await screen.findByRole('button', { name: 'Open the menu' })
+  const shell = container.querySelector('.tt-shell') as HTMLElement
+  const go = (path: string) => act(() => navigate(path))
+  const back = (delta: number) =>
+    act(async () => {
+      // jsdom traverses the history in a task of its own and then fires popstate: wait for that.
+      const traversed = new Promise<void>((resolve) =>
+        window.addEventListener('popstate', () => resolve(), { once: true }),
+      )
+      window.history.go(delta)
+      await traversed
+    })
+
+  await go('/w/1/boards')
+  fireEvent.click(menu)
+  expect(shell.dataset.drawer).toBe('open')
+  await act(async () => {
+    window.history.replaceState(null, '', '/w/1/boards?x=1#top')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
+  expect(shell.dataset.drawer).toBe('open')
+  await back(-1)
+  expect(window.location.pathname).toBe('/w/1/conversations')
+  expect(shell.dataset.drawer).toBe('closed')
+
+  fireEvent.click(menu)
+  expect(shell.dataset.drawer).toBe('open')
+  await back(1)
+  expect(window.location.pathname).toBe('/w/1/boards')
+  expect(shell.dataset.drawer).toBe('closed')
 })
 
 test('the drawer takes focus, makes the page inert, and Escape closes it back to its button', async () => {
