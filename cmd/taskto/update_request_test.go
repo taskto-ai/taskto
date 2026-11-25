@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,7 +26,7 @@ func requestEnv(t *testing.T) (*updEnv, string) {
 	e := newUpdEnv(t)
 	e.release(updNew, "", false, false)
 	dir := e.sub("state/request")
-	e.extra = []string{"TASKTO_UPDATE_REQUEST=" + dir, "TASKTO_UPDATE_REQUEST_MIN_INTERVAL=0"}
+	e.extra = []string{"TASKTO_UPDATE_REQUEST=" + dir, "TASKTO_UPDATE_REQUEST_MIN_INTERVAL=0", "TASKTO_UPDATE_REQUEST_OWNER=" + strconv.Itoa(os.Getuid())}
 	return e, dir
 }
 
@@ -296,7 +297,7 @@ func TestUpdateRequestedContentIsNeverUsed(t *testing.T) {
 // answered, and the last run's status stays as it was.
 func TestUpdateRequestedIsRateLimited(t *testing.T) {
 	e, dir := requestEnv(t)
-	e.extra = []string{"TASKTO_UPDATE_REQUEST=" + dir} // the default interval
+	e.extra = []string{"TASKTO_UPDATE_REQUEST=" + dir, "TASKTO_UPDATE_REQUEST_OWNER=" + strconv.Itoa(os.Getuid())} // the default interval
 	e.request(dir, requestLine)
 	if code, out := e.run("--requested"); code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -326,7 +327,7 @@ func TestUpdateRequestedIsRateLimited(t *testing.T) {
 	}
 
 	// Without the limit, the same request is still handled once.
-	e.extra = []string{"TASKTO_UPDATE_REQUEST=" + dir, "TASKTO_UPDATE_REQUEST_MIN_INTERVAL=0"}
+	e.extra = []string{"TASKTO_UPDATE_REQUEST=" + dir, "TASKTO_UPDATE_REQUEST_MIN_INTERVAL=0", "TASKTO_UPDATE_REQUEST_OWNER=" + strconv.Itoa(os.Getuid())}
 	e.request(dir, requestLine)
 	if code, out := e.run("--requested"); code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -391,8 +392,8 @@ func TestUpdateRequestedNeedsTheDirectoryInPlace(t *testing.T) {
 	t.Run("another owner", func(t *testing.T) {
 		e, dir := requestEnv(t)
 		e.request(dir, requestLine)
-		// Neither root's (here: uid+1) nor the server's.
-		e.extra = append(e.extra, "TASKTO_UPDATE_OWNER="+strconv.Itoa(os.Getuid()+1), "TASKTO_UPDATE_REQUEST_OWNER="+strconv.Itoa(os.Getuid()+2))
+		// Not the server's uid (a directory Docker made as root's is this case).
+		e.extra = append(e.extra, "TASKTO_UPDATE_REQUEST_OWNER="+strconv.Itoa(os.Getuid()+2))
 		code, out := e.run("--requested")
 		if code != 0 || !strings.Contains(out, "isn't in place") || !e.exists("state/request/update-now") {
 			t.Fatalf("exit %d\n%s", code, out)
@@ -435,3 +436,84 @@ func TestUpdateStatusSaysTheHostCanTakeARequest(t *testing.T) {
 		t.Errorf("requests = %+v, running = %+v", s.Requests, s.Running)
 	}
 }
+
+// The server may mount exactly the request directory, read-write, and nothing else of the
+// updater's; no other service may have it. An update whose new settings break that is refused
+// before anything starts.
+func TestUpdateSafetyChecksTheRequestDirectory(t *testing.T) {
+	refused := func(t *testing.T, e *updEnv, edit, want string) {
+		t.Helper()
+		e.write("fake/config-edit", e.paths().Replace(edit))
+		if code, out := e.run(); code != 1 {
+			t.Fatalf("exit %d, want 1\n%s", code, out)
+		}
+		st := e.wantStatus("failed", "break a safety rule")
+		if want != "" && !strings.Contains(strings.ToLower(fmtReason(st)), strings.ToLower(want)) {
+			t.Errorf("reason = %v, want %q", st["reason"], want)
+		}
+		e.wantUntouched()
+		if e.count(`^compose start`) != 0 {
+			t.Error("a candidate that breaks the rule was started")
+		}
+	}
+	t.Run("the default one is fine", func(t *testing.T) {
+		e := newUpdEnv(t)
+		e.release(updNew, "", false, false)
+		if code, out := e.run(); code != 0 {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		e.wantStatus("updated", "")
+	})
+	t.Run("a request directory beside the state is fine, and the server may write only that", func(t *testing.T) {
+		e := newUpdEnv(t)
+		e.release(updNew, "", false, false)
+		req := filepath.Join(e.dir, "requests")
+		e.extra = []string{"TASKTO_UPDATE_REQUEST=" + req}
+		e.write("fake/config-edit", `(.services.taskto.volumes[] | select(.target == "/update-request") | .source) = "`+req+`"`)
+		if code, out := e.run(); code != 0 {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		e.wantStatus("updated", "")
+	})
+	t.Run("a directory above a request directory beside the state, writable", func(t *testing.T) {
+		e := newUpdEnv(t)
+		e.release(updNew, "", false, false)
+		req := filepath.Join(e.dir, "requests")
+		e.extra = []string{"TASKTO_UPDATE_REQUEST=" + req}
+		refused(t, e, `(.services.taskto.volumes[] | select(.target == "/update-request") | .source) = "`+req+`"
+			| .services.taskto.volumes += [{type: "bind", source: "`+e.dir+`", target: "/above"}]`, "")
+	})
+	for name, tc := range map[string]struct{ edit, want string }{
+		"the worker mounts it":                                                 {`.services["cli-worker"].volumes += [{type: "bind", source: "STATE/request", target: "/r"}]`, "host path"},
+		"a service other than the server mounts it":                            {`.services.caddy.volumes += [{type: "bind", source: "STATE/request", target: "/r"}]`, "other than the server"},
+		"a service other than the server mounts it by a link":                  {`.services.caddy.volumes += [{type: "bind", source: "{linkstate}/request", target: "/r", read_only: true}]`, "other than the server"},
+		"a service other than the server mounts the state":                     {`.services.caddy.volumes += [{type: "bind", source: "STATE", target: "/r", read_only: true}]`, "other than the server"},
+		"the server mounts another path of the updater's":                      {`.services.taskto.volumes += [{type: "bind", source: "STATE/previous", target: "/p"}]`, "holds the updater's state"},
+		"the server mounts the transaction":                                    {`.services.taskto.volumes += [{type: "bind", source: "STATE/transaction", target: "/t", read_only: true}]`, "holds the updater's state"},
+		"the server mounts the state, read-only":                               {`.services.taskto.volumes += [{type: "bind", source: "STATE", target: "/s", read_only: true}]`, "holds the updater's state"},
+		"the server mounts a directory inside it":                              {`.services.taskto.volumes += [{type: "bind", source: "STATE/request/inner", target: "/i"}]`, "holds the updater's state"},
+		"the server mounts the request directory by a link and a path with ..": {`.services.taskto.volumes += [{type: "bind", source: "{linkstate}/request/../previous", target: "/i"}]`, "holds the updater's state"},
+		"the server mounts the public directory writable":                      {`(.services.taskto.volumes[] | select(.target == "/update-status") | .read_only) = false`, "can write where it publishes"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newUpdEnv(t)
+			e.release(updNew, "", false, false)
+			refused(t, e, tc.edit, tc.want)
+		})
+	}
+	t.Run("the request directory is the public directory", func(t *testing.T) {
+		e := newUpdEnv(t)
+		e.release(updNew, "", false, false)
+		e.extra = []string{"TASKTO_UPDATE_REQUEST=" + filepath.Join(e.state, "public")}
+		refused(t, e, `.`, "place of its own")
+	})
+	t.Run("the request directory is the state", func(t *testing.T) {
+		e := newUpdEnv(t)
+		e.release(updNew, "", false, false)
+		e.extra = []string{"TASKTO_UPDATE_REQUEST=" + e.state}
+		refused(t, e, `.services.taskto.volumes += [{type: "bind", source: "STATE", target: "/s"}]`, "place of its own")
+	})
+}
+
+// fmtReason is a status's reason, as text.
+func fmtReason(st map[string]any) string { return fmt.Sprint(st["reason"]) }

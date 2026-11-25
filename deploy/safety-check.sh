@@ -24,6 +24,12 @@
 #                        /etc/taskto/install.env, which the updater reads too, else
 #                        $TASKTO_UPDATE_STATE/public): the server may mount it read-only, never
 #                        writable, whatever path or alias it is mounted by
+#   TASKTO_UPDATE_REQUEST the directory where an operator's "Update now" puts its request (default:
+#                        the setting of that name in install.env, else $TASKTO_UPDATE_STATE/request):
+#                        the one place of the updater's that the server may write, and so the one
+#                        host path it may mount read-write besides the public directory's read-only
+#                        mount. Exactly that directory: not one above it or inside it, and no other
+#                        service (the worker least of all) may mount it or anything that holds it
 #
 # Host paths are compared as the kernel reaches them: each path a container mounts (a bind
 # mount, a named volume's `device`, a file-backed config or secret) and the two above are
@@ -74,17 +80,33 @@ if [ -z "$public" ]; then
 	public=$({ sed -n "s/^TASKTO_UPDATE_PUBLIC=//p" "${TASKTO_UPDATE_INSTALL_ENV:-/etc/taskto/install.env}" 2>/dev/null || true; } | tail -n 1 | sed "s/^'//; s/'\$//")
 fi
 public=$(realpath -m -- "${public:-$state/public}") || fail "can't resolve the updater's public directory"
+request=${TASKTO_UPDATE_REQUEST:-}
+if [ -z "$request" ]; then
+	request=$({ sed -n "s/^TASKTO_UPDATE_REQUEST=//p" "${TASKTO_UPDATE_INSTALL_ENV:-/etc/taskto/install.env}" 2>/dev/null || true; } | tail -n 1 | sed "s/^'//; s/'\$//")
+fi
+request=$(realpath -m -- "${request:-$state/request}") || fail "can't resolve the updater's request directory"
 # jq: holds(PATH; READ_ONLY), on resolved paths (no `.`, `..` or links left in them): a mount of
 # host path PATH lets the server see what is in the updater's state directory $state, other than
 # its public directory read-only: the state itself, a directory above it, or anything under it; or
 # lets it write the public directory $public, which may be outside the state: that directory, one
 # above it, or one inside it, writable. Paths are compared by their parts.
-HOLDS='def parts: split("/") | map(select(. != ""));
-	def within($a; $b): ($a | length) <= ($b | length) and $b[0:($a | length)] == $a;
-	def holds($p; $ro): ($p | parts) as $p | ($state | parts) as $s | ($public | parts) as $u
-		| within($p; $s)
+# The request directory is the one exception: it is the server's to write, so a mount of exactly it
+# holds nothing (whether it is inside the state or beside it); one above it that can write, or one
+# inside it, does.
+PARTS='def parts: split("/") | map(select(. != ""));
+	def within($a; $b): ($a | length) <= ($b | length) and $b[0:($a | length)] == $a; '
+HOLDS="$PARTS"'def holds($p; $ro): ($p | parts) as $p | ($state | parts) as $s | ($public | parts) as $u | ($request | parts) as $q
+		| if $p == $q then false else
+		  within($p; $s)
 		or (within($s; $p) and ($p != $u or $ro != true))
-		or ($ro != true and (within($p; $u) or within($u; $p))); '
+		or ($ro != true and (within($p; $u) or within($u; $p)))
+		or within($q; $p)
+		or ($ro != true and within($p; $q)) end; '
+# The request directory has to be a place of its own: not the state, the public directory, one above
+# either, or inside the public directory (the server may write it, and may not write those).
+jq -en --arg state "$state" --arg public "$public" --arg request "$request" "$PARTS"'($request | parts) as $q | ($state | parts) as $s | ($public | parts) as $u
+	| (within($q; $s) | not) and (within($q; $u) | not) and (within($u; $q) | not)' >/dev/null ||
+	fail "the updater's request directory ($request) is, holds or is inside the updater's state or its public directory: it must be a place of its own"
 
 # resolved: the host paths on standard input, a JSON array of {p, ro}, with each p resolved (a
 # path that is empty is a mount that has none, and is dropped).
@@ -103,12 +125,13 @@ resolved() {
 	printf '%s' "$out"
 }
 # only_public_readonly: the host paths on standard input, a JSON array of {p, ro}, are the
-# server's: it may see the updater's public directory, read-only, and nothing else of its state.
+# server's: it may see the updater's public directory, read-only, write its request directory, and
+# nothing else of its state.
 only_public_readonly() {
 	local r
 	r=$(resolved) || fail "a host path of the server's mounts can't be resolved: it isn't absolute, or isn't a path"
-	jq -e --arg state "$state" --arg public "$public" "$HOLDS"'[.[] | select(holds(.p; .ro))] | length == 0' <<<"$r" >/dev/null ||
-		fail "the server has a host path that holds the updater's state, or can write where it publishes its status (only $public, read-only, may be mounted)"
+	jq -e --arg state "$state" --arg public "$public" --arg request "$request" "$HOLDS"'[.[] | select(holds(.p; .ro))] | length == 0' <<<"$r" >/dev/null ||
+		fail "the server has a host path that holds the updater's state, or can write where it publishes its status (only $public, read-only, and the request directory $request may be mounted)"
 }
 # volume_device NAME: the host path a named volume binds, as Docker has it (its effective options,
 # whatever the Compose file says: a volume that exists keeps the options it was made with, an
@@ -198,6 +221,15 @@ if [ "$mode" = static ]; then
 		hostpaths=$(jq -c --arg p "$dev" --argjson m "$m" '. + [{p: $p, ro: $m.ro}]' <<<"$hostpaths") || fail "can't read the options of the server's volume $vn"
 	done < <(jq -c '. as $c | .services.taskto.volumes[]? | select(.type == "volume") | {n: ($c.volumes[.source // ""].name // .source), ro: (.read_only == true)}' <<<"$cfg")
 	only_public_readonly <<<"$hostpaths"
+	# The request directory is the server's alone: no other service mounts it, or a directory that
+	# holds it or is inside it, as a bind mount or as a named volume's `device`.
+	others=$(jq -c '. as $c | [.services | to_entries[] | select(.key != "taskto") | .value.volumes[]?
+		| if .type == "bind" then {p: (.source // ""), ro: (.read_only == true)}
+		  elif .type == "volume" then {p: ($c.volumes[.source // ""].driver_opts.device // ""), ro: false} else empty end]' <<<"$cfg") ||
+		fail "can't read the other services' mounts"
+	r=$(resolved <<<"$others") || fail "a host path of another service's mounts can't be resolved: it isn't absolute, or isn't a path"
+	jq -e --arg request "$request" "$PARTS"'($request | parts) as $q | [.[] | (.p | parts) as $p | select(within($q; $p) or within($p; $q))] | length == 0' <<<"$r" >/dev/null ||
+		fail "a service other than the server has the updater's request directory ($request), or one above or inside it, mounted"
 
 	# The worker is on one network, its own, which the server isn't on, and the firewall's bridge.
 	t cli-worker '(.services[$s].networks // {default: null}) | length == 1' || fail "the worker isn't on one network only"

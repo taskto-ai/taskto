@@ -151,6 +151,8 @@ container() {
 		fi
 		# The updater's status for admins, read-only, as compose.yaml mounts it.
 		mounts=$(jq -c --arg src "${TASKTO_UPDATE_PUBLIC:-${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}/public}" '. + [{Type: "bind", Source: $src, Destination: "/update-status", RW: false}]' <<<"$mounts")
+		# And the directory it puts an update request in, read-write, which is the server's alone.
+		mounts=$(jq -c --arg src "${TASKTO_UPDATE_REQUEST:-${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}/request}" '. + [{Type: "bind", Source: $src, Destination: "/update-request", RW: true}]' <<<"$mounts")
 		mutated updaterwrite && mounts=$(jq -c '(.[] | select(.Destination == "/update-status") | .RW) = true' <<<"$mounts")
 		mutated updatervolume && mounts=$(jq -c '. + [{Type: "volume", Name: "taskto_statevol", Destination: "/state", RW: false}]' <<<"$mounts")
 		# The same volume, which binds the state, twice: the read-only mount first, a writable one after.
@@ -187,7 +189,7 @@ config_json() {
 	case " $profs " in *" backup "*) backup=1 ;; esac
 	case " $profs " in *" backup-schedule "*) schedule=1 ;; esac
 	cvol=$(cat "$d/config-volname" 2>/dev/null || echo "$vol")
-	out=$(jq -cn --arg v "$ver" --arg vol "$cvol" --arg caddy "$CADDY_REF" --argjson https "$https" --argjson backup "$backup" --argjson schedule "$schedule" --arg state "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}" --arg pub "${TASKTO_UPDATE_PUBLIC:-${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}/public}" '
+	out=$(jq -cn --arg v "$ver" --arg vol "$cvol" --arg caddy "$CADDY_REF" --argjson https "$https" --argjson backup "$backup" --argjson schedule "$schedule" --arg state "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}" --arg pub "${TASKTO_UPDATE_PUBLIC:-${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}/public}" --arg req "${TASKTO_UPDATE_REQUEST:-${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}/request}" '
 		"ghcr.io/taskto-ai/" as $p
 		| {type: "volume", source: "data", target: "/data", volume: {}} as $data
 		| {type: "bind", source: "/srv/taskto/backup", target: "/run/taskto-backup", read_only: true} as $keys
@@ -196,7 +198,8 @@ config_json() {
 		     taskto: {image: ($p + "taskto:" + $v), cap_drop: ["ALL"], security_opt: ["no-new-privileges:true"],
 		              environment: {TASKTO_CLI_WORKERS: "container", TASKTO_DISABLE_PASSWORD_LOGIN: ""},
 		              volumes: [$data, {type: "volume", source: "cli-run", target: "/run/taskto-cli", volume: {}},
-		                        {type: "bind", source: $pub, target: "/update-status", read_only: true}],
+		                        {type: "bind", source: $pub, target: "/update-status", read_only: true},
+			                        {type: "bind", source: $req, target: "/update-request"}],
 		              networks: {default: null}},
 		     "cli-worker": {image: ($p + "taskto-cli-worker:" + $v), cap_drop: ["ALL"], cap_add: ["SETUID", "SETGID", "CHOWN", "KILL"],
 		              security_opt: ["no-new-privileges:true"],

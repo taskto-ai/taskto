@@ -345,7 +345,8 @@ trusted_path() {
 }
 
 # request_dir_ok: the request directory is in place as the updater needs it: an absolute path of
-# plain characters, a real directory (never a link) of the server's uid or root's, on the same
+# plain characters, a real directory (never a link) of the server's uid (a directory Docker made
+# itself, as root's, is one the server can't write: not in place), on the same
 # filesystem as $STATE (so taking a request is a rename), and in a directory above it that is root's
 # and nobody else's to write (trusted_path), so the server can't swap it for another place.
 # The server can write inside it, and that is all it can do.
@@ -356,7 +357,7 @@ request_dir_ok() {
 	{ [ ! -L "$REQUEST" ] && [ -d "$REQUEST" ]; } || return 1
 	info=$(stat -c '%F|%u' -- "$REQUEST") || return 1
 	IFS='|' read -r t u <<<"$info"
-	[ "$t" = directory ] && { [ "$u" = "$REQUEST_OWNER" ] || [ "$u" = "$OWNER" ]; } || return 1
+	[ "$t" = directory ] && [ "$u" = "$REQUEST_OWNER" ] || return 1
 	[ "$(stat -c %d -- "$REQUEST")" = "$(stat -c %d -- "$STATE")" ] || return 1
 	trusted_path "$(dirname "$REQUEST")"
 }
@@ -390,7 +391,7 @@ record_request_outcome() {
 take_request() {
 	local f=$REQUEST/$REQUEST_FILE taken=$STATE/request.taken t size line nonce="" last_at=0 last_nonce="" now
 	if ! request_dir_ok; then
-		log "the request directory $REQUEST isn't in place as the updater needs it (a real directory of uid $REQUEST_OWNER on the same filesystem as $STATE, in a directory only root writes): nothing is read or removed there (deploy/INSTALL.md step 16)"
+		log "the request directory $REQUEST isn't in place as the updater needs it (a real directory of uid $REQUEST_OWNER, the server's, on the same filesystem as $STATE, in a directory only root writes): nothing is read or removed there (deploy/INSTALL.md step 16)"
 		QUIET=1
 		exit 0
 	fi
