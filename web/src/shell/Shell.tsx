@@ -149,8 +149,23 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
       setDrawer(false)
       menuButton.current?.focus()
     }
+    // A link of the drawer that is followed closes it at once, before the page hears of the click:
+    // a page that asks before it is left (a draft) shows its question in the page, which is inert
+    // while the drawer is open. On the window, in the capture phase, so it comes before a handler
+    // on the document that stops the click. A click that opens a new tab leaves it open.
+    const onClick = (e: MouseEvent) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      const link = e.target instanceof Element ? e.target.closest('a[href]') : null
+      if (!link || !sidebar.current?.contains(link)) return
+      focusPage.current = true
+      setDrawer(false)
+    }
     document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
+    window.addEventListener('click', onClick, true)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('click', onClick, true)
+    }
   }, [drawer])
 
   if (!route) return <NoWorkspace me={me} onLogout={onLogout} onMe={onMe} />

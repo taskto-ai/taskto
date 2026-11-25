@@ -686,6 +686,28 @@ test("an Escape in the new workspace's dialog, over the drawer, is the dialog's:
   expect(shellOf(container).dataset.drawer).toBe('open')
 })
 
+test('a link of the drawer that a page stops (to ask first) still closes the drawer, so its question can be answered', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  const { container } = render(<App />)
+  await screen.findByText('Pick a conversation, or start a new one.')
+  fireEvent.click(screen.getByRole('button', { name: 'Open the menu' }))
+  // A page with a draft takes the click on the document, in the capture phase, to ask first.
+  const stop = (e: MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+  document.addEventListener('click', stop, true)
+  try {
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('link', { name: 'Boards' }))
+    expect(window.location.pathname).toBe('/w/1/conversations')
+    expect(shellOf(container).dataset.drawer).toBe('closed')
+    expect((container.querySelector('main') as HTMLElement).hasAttribute('inert')).toBe(false)
+  } finally {
+    document.removeEventListener('click', stop, true)
+  }
+})
+
 test('picking a page in the drawer moves focus to the page', async () => {
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
