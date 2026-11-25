@@ -52,6 +52,14 @@ export type Contract = [
   Is<Check<Gen.HomeItem, Api.HomeItem>>,
   Is<Check<Gen.HomeView, Api.HomeView>>,
   Is<Check<Gen.AvailableApp, Api.AvailableApp>>,
+  // Integrations.
+  Is<Check<Gen.Integration, Api.Integration>>,
+  Is<Check<Gen.IntegrationsSecretSpec, Api.IntegrationSecretSpec>>,
+  Is<Check<Gen.IntegrationsSettingSpec, Api.IntegrationSettingSpec>>,
+  Is<Check<Gen.IntegrationsProviderInfo, Api.IntegrationProvider>>,
+  Is<Check<Gen.IntegrationRegistry, Api.IntegrationRegistry>>,
+  Is<Check<Gen.IntegrationCheck, Api.IntegrationCheck>>,
+  Is<Check<Gen.SpaceIntegration, Api.SpaceIntegration>>,
   // The host's updates, for the server's operators.
   Is<Check<Gen.UpdateReport, Api.UpdateStatus>>,
   Is<Check<Gen.UpdateRequested, Api.UpdateRequested>>,

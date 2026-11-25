@@ -188,6 +188,7 @@ export const SETTINGS_HEADINGS = {
   spaces: 'Shared spaces',
   audit: 'Audit log',
   providers: 'Model providers',
+  integrations: 'Integrations',
   'cli-accounts': 'CLI accounts',
   search: 'Search',
   dictation: 'Dictation',
