@@ -8,7 +8,6 @@ import { type App, api, type Space, ws } from '../api'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
 import { OfflinePanel } from '../offline/OfflinePanel'
-import { Link, routePath } from '../router'
 import { Button, ButtonLink } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { Page } from '../ui/Page'
@@ -18,6 +17,7 @@ import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { AppEffects } from './AppEffects'
 import { AppRecords, RecordsButton } from './AppRecords'
 import { AppStage } from './AppStage'
+import { BackToApps } from './AppTemplates'
 import { builderPath } from './route'
 import './LaunchedApp.css'
 
@@ -58,7 +58,6 @@ export function LaunchedApp({
     if (leaveRecords.current) leaveRecords.current(go)
     else go()
   }
-  const back = routePath({ workspace, section: 'apps' })
   const t = useT()
   const data = info.data
   const restore = async () => {
@@ -83,11 +82,7 @@ export function LaunchedApp({
   return (
     <Page width="list">
       <PageHeader
-        path={
-          <Link className="ui-launched-back" href={back}>
-            {t('apps.all')}
-          </Link>
-        }
+        path={<BackToApps workspace={workspace} />}
         title={data?.name ?? t('apps.app')}
         help={notes.length > 0 ? notes.join(' ') : undefined}
         actions={

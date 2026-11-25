@@ -1586,6 +1586,7 @@
     },
     "integrations": {
       "title": "Integrações",
+      "accounts": "Contas conectadas",
       "intro": "Conecte uma conta de um provedor de pagamentos. As credenciais ficam criptografadas no servidor e nunca são mostradas de novo, e nenhum app, agente ou membro consegue lê-las. Você escolhe quais espaços podem usar a conta, o maior valor e as moedas de um pagamento.",
       "backupHint": "Um backup guarda a chave do servidor junto das credenciais, então é tão sensível quanto elas. Depois de restaurar um backup em outra máquina, troque cada credencial no provedor e aqui.",
       "webhooksUnavailable": "Webhooks indisponíveis: defina a URL pública do servidor (-public-url). A conferência de pagamentos sem webhooks ainda não foi construída.",
@@ -2058,7 +2059,8 @@
       "password": "Sua senha e o login em duas etapas.",
       "cliAccounts": "Os logins do Claude Code, Codex e Grok Build em que suas conversas rodam.",
       "providers": "Os endpoints de modelos que as conversas podem usar.",
-      "search": "Como a busca encontra documentos e quais espaços consentem com a busca semântica."
+      "search": "Como a busca encontra documentos e quais espaços consentem com a busca semântica.",
+      "integrations": "Contas em provedores de pagamento que os apps podem usar."
     },
     "actionsColumn": "Ações"
   },

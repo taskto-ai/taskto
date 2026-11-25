@@ -1579,6 +1579,7 @@
     },
     "integrations": {
       "title": "Integrations",
+      "accounts": "Connected accounts",
       "intro": "Connect an account at a payment provider. The credentials are stored encrypted on the server and never shown again, and no app, agent or member can read them. You choose which spaces may use an account and the largest amount and the currencies one payment may have.",
       "backupHint": "A backup holds the server's key next to the stored credentials, so it is as sensitive as they are. After restoring a backup on another machine, replace each credential at its provider and here.",
       "webhooksUnavailable": "Webhooks unavailable: set the server's public URL (-public-url). Reconciling payments without webhooks isn't built yet.",
@@ -2044,7 +2045,8 @@
       "password": "Your password and two-factor login.",
       "cliAccounts": "The Claude Code, Codex and Grok Build logins your conversations run on.",
       "providers": "The model endpoints conversations can use.",
-      "search": "How search finds documents, and which spaces consent to semantic search."
+      "search": "How search finds documents, and which spaces consent to semantic search.",
+      "integrations": "Accounts at payment providers that apps may use."
     },
     "actionsColumn": "Actions"
   },

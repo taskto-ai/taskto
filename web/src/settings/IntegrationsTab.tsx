@@ -4,7 +4,7 @@
 // an integration and the largest amount and the currencies one payment may have; no app can change
 // either (docs/integrations.md).
 
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useId, useState } from 'react'
 import {
   api,
   codeText,
@@ -17,8 +17,20 @@ import {
 } from '../api'
 import { type Format, has, type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { useConfirm } from '../ui/ConfirmDialog'
-import { Alert, CopyButton, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { Checkbox } from '../ui/Checkbox'
+import { type ConfirmOptions, useConfirm } from '../ui/ConfirmDialog'
+import { Dialog } from '../ui/Dialog'
+import { EmptyState } from '../ui/EmptyState'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { MenuItem, MenuSeparator, MoreMenu } from '../ui/Menu'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { Select } from '../ui/Select'
+import { Alert, CopyButton, Loading, Section, SettingsTab, useAction } from './parts'
 
 type Translate = ReturnType<typeof useT>
 
@@ -61,49 +73,34 @@ export function IntegrationsTab({ workspace }: { workspace: number }) {
     [workspace],
   )
   const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [confirmDialog, confirm] = useConfirm()
   const done = () => {
     setEditing(null)
     list.reload()
   }
+  const add = registry.data && (
+    <Button icon="plus" onClick={() => setEditing('new')}>
+      {t('settings.integrations.add')}
+    </Button>
+  )
+  const empty = list.data?.length === 0
+  const integration = typeof editing === 'number' ? list.data?.find((i) => i.id === editing) : undefined
+  const title = t('settings.integrations.accounts')
 
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-label={t('settings.integrations.title')}>
-        <div className="tt-pane-head">
-          <h2>{t('settings.integrations.title')}</h2>
-          {registry.data && editing !== 'new' && (
-            <button type="button" className="tt-button" onClick={() => setEditing('new')}>
-              {t('settings.integrations.add')}
-            </button>
-          )}
-        </div>
-        <p className="tt-muted tt-small">{t('settings.integrations.intro')}</p>
-        <p className="tt-muted tt-small">{t('settings.integrations.backupHint')}</p>
-        {registry.data && !registry.data.webhooks_available && (
-          <p className="tt-muted tt-small" role="status">
-            {t('settings.integrations.webhooksUnavailable')}
-          </p>
-        )}
+    <SettingsTab title={t('settings.integrations.title')} help={t('settings.help.integrations')}>
+      <Section title={title} help={t('settings.integrations.intro')} actions={!empty && add}>
         <Alert error={registry.error ?? list.error ?? spaces.error} />
-        {registry.data && editing === 'new' && (
-          <IntegrationForm base={base} registry={registry.data} onDone={done} onCancel={() => setEditing(null)} />
+        {!list.data && !list.error && <Loading lines={2} />}
+        {empty && (
+          <Panel>
+            <EmptyState title={t('settings.integrations.none')} actions={add} />
+          </Panel>
         )}
-        {!list.data && !list.error && <p className="tt-muted">{t('app.loading')}</p>}
-        {list.data?.length === 0 && editing !== 'new' && <p className="tt-muted">{t('settings.integrations.none')}</p>}
         {list.data && list.data.length > 0 && registry.data && (
-          <ul className="tt-rows">
-            {list.data.map((i) =>
-              editing === i.id ? (
-                <li key={i.id} className="tt-row tt-row-open">
-                  <IntegrationForm
-                    base={base}
-                    registry={registry.data as IntegrationRegistry}
-                    integration={i}
-                    onDone={done}
-                    onCancel={() => setEditing(null)}
-                  />
-                </li>
-              ) : (
+          <Panel>
+            <Rows label={title}>
+              {list.data.map((i) => (
                 <IntegrationRow
                   key={i.id}
                   base={base}
@@ -112,15 +109,37 @@ export function IntegrationsTab({ workspace }: { workspace: number }) {
                   spaces={spaces.data ?? []}
                   onEdit={() => setEditing(i.id)}
                   onChanged={list.reload}
+                  confirm={confirm}
                 />
-              ),
-            )}
-          </ul>
+              ))}
+            </Rows>
+          </Panel>
         )}
-      </section>
-    </div>
+        <Notice tone="neutral" live={false}>
+          {t('settings.integrations.backupHint')}
+        </Notice>
+        {registry.data && !registry.data.webhooks_available && (
+          <Notice tone="neutral" live={false}>
+            {t('settings.integrations.webhooksUnavailable')}
+          </Notice>
+        )}
+      </Section>
+      {registry.data && (editing === 'new' || integration) && (
+        <IntegrationForm
+          key={integration?.id ?? 'new'}
+          base={base}
+          registry={registry.data}
+          integration={integration}
+          onDone={done}
+          onCancel={() => setEditing(null)}
+        />
+      )}
+      {confirmDialog}
+    </SettingsTab>
   )
 }
+
+type Confirm = (options: ConfirmOptions) => Promise<boolean>
 
 function IntegrationRow({
   base,
@@ -129,6 +148,7 @@ function IntegrationRow({
   spaces,
   onEdit,
   onChanged,
+  confirm,
 }: {
   base: string
   integration: Integration
@@ -136,11 +156,11 @@ function IntegrationRow({
   spaces: Space[]
   onEdit: () => void
   onChanged: () => void
+  confirm: Confirm
 }) {
   const t = useT()
   const f = useFormat()
   const action = useAction()
-  const [confirmDialog, confirm] = useConfirm()
   const [check, setCheck] = useState<IntegrationCheck | null>(null)
   const [checking, setChecking] = useState(false)
   const [choosing, setChoosing] = useState(false)
@@ -169,121 +189,116 @@ function IntegrationRow({
   }
 
   return (
-    <li className="tt-row" aria-label={i.display_name}>
-      <div className="tt-row-main">
-        <strong>{i.display_name}</strong>
-        <span className="tt-muted tt-small">
-          {label(t, 'provider', i.provider)}
-          {' · '}
-          {label(t, 'kind', i.kind)}
-          {' · '}
-          {label(t, 'mode', i.mode)}
-          {i.disabled && ` · ${t('settings.integrations.switchedOff')}`}
-        </span>
-        <span className="tt-muted tt-small">
-          {i.secrets.api_key === 'set'
-            ? t('settings.integrations.secretSet', { name: label(t, 'secret', 'api_key') })
-            : t('settings.integrations.secretNotSet', { name: label(t, 'secret', 'api_key') })}
-          {' · '}
-          {i.secrets.webhook_secret === 'set'
-            ? t('settings.integrations.secretSet', { name: label(t, 'secret', 'webhook_secret') })
-            : t('settings.integrations.secretNotSet', { name: label(t, 'secret', 'webhook_secret') })}
-        </span>
-        <span className="tt-muted tt-small">
-          {t('settings.integrations.limits', {
-            amounts: amounts(f, exponents, i.max_amount_minor, i.currencies),
-          })}
-        </span>
-        <span className="tt-muted tt-small">
-          {names.length > 0 && t('settings.integrations.allowedIn', { spaces: f.list(names) })}
-          {names.length === 0 && i.other_spaces === 0 && t('settings.integrations.allowedNowhere')}
-          {i.other_spaces > 0 &&
-            `${names.length > 0 ? ' ' : ''}${t('settings.integrations.otherSpaces', { count: i.other_spaces })}`}
-        </span>
-        <span className="tt-muted tt-small">
-          {i.webhook_url ? (
-            <>
-              {t('settings.integrations.webhookAddress')} <code>{i.webhook_url}</code>
-            </>
-          ) : (
-            t('settings.integrations.polling')
+    <Row
+      title={i.display_name}
+      status={
+        <>
+          {check?.ok && (
+            <Badge tone="success" dot>
+              {t('settings.providers.answered')}
+            </Badge>
+          )}
+          {check && !check.ok && (
+            <Badge tone="danger" dot>
+              {t('settings.providers.failing')}
+            </Badge>
+          )}
+          {i.disabled && <Badge>{t('settings.integrations.switchedOff')}</Badge>}
+        </>
+      }
+      detail={
+        <span className="settings-row-extra">
+          <span>
+            {label(t, 'provider', i.provider)}
+            {' · '}
+            {label(t, 'kind', i.kind)}
+            {' · '}
+            {label(t, 'mode', i.mode)}
+          </span>
+          <span>
+            {i.secrets.api_key === 'set'
+              ? t('settings.integrations.secretSet', { name: label(t, 'secret', 'api_key') })
+              : t('settings.integrations.secretNotSet', { name: label(t, 'secret', 'api_key') })}
+            {' · '}
+            {i.secrets.webhook_secret === 'set'
+              ? t('settings.integrations.secretSet', { name: label(t, 'secret', 'webhook_secret') })
+              : t('settings.integrations.secretNotSet', { name: label(t, 'secret', 'webhook_secret') })}
+          </span>
+          <span>
+            {t('settings.integrations.limits', {
+              amounts: amounts(f, exponents, i.max_amount_minor, i.currencies),
+            })}
+          </span>
+          <span>
+            {names.length > 0 && t('settings.integrations.allowedIn', { spaces: f.list(names) })}
+            {names.length === 0 && i.other_spaces === 0 && t('settings.integrations.allowedNowhere')}
+            {i.other_spaces > 0 &&
+              `${names.length > 0 ? ' ' : ''}${t('settings.integrations.otherSpaces', { count: i.other_spaces })}`}
+          </span>
+          <span>
+            {i.webhook_url ? (
+              <>
+                {t('settings.integrations.webhookAddress')} <code>{i.webhook_url}</code>
+              </>
+            ) : (
+              t('settings.integrations.polling')
+            )}
+          </span>
+          {checking && <span>{t('settings.integrations.checking')}</span>}
+          {check?.ok && <span role="status">{t('settings.integrations.checkOk')}</span>}
+          {check && !check.ok && (
+            <span role="alert" className="settings-error-text">
+              {codeText(check.code, check.params, '')}
+            </span>
+          )}
+          {action.error && (
+            <span role="alert" className="settings-error-text">
+              {action.error}
+            </span>
           )}
         </span>
-        {checking && <span className="tt-muted tt-small">{t('settings.integrations.checking')}</span>}
-        {check?.ok && (
-          <span className="tt-ok tt-small" role="status">
-            {t('settings.integrations.checkOk')}
-          </span>
-        )}
-        {check && !check.ok && (
-          <span className="tt-error tt-small" role="alert">
-            {codeText(check.code, check.params, '')}
-          </span>
-        )}
-        <Alert error={action.error} />
-        {choosing && (
-          <SpacesForm
-            url={url}
-            integration={i}
-            spaces={spaces.filter((s) => !s.archived_at || i.spaces.includes(s.id))}
-            onDone={() => {
-              setChoosing(false)
-              onChanged()
-            }}
-            onCancel={() => setChoosing(false)}
-          />
-        )}
-      </div>
-      <div className="tt-row-actions">
-        {i.webhook_url && <CopyButton text={i.webhook_url} name={i.display_name} />}
-        <button
-          type="button"
-          className="tt-button"
-          aria-label={t('settings.actions.testNamed', { name: i.display_name })}
-          disabled={action.busy}
-          onClick={runCheck}
-        >
-          {t('settings.actions.test')}
-        </button>
-        <button
-          type="button"
-          className="tt-button"
-          aria-label={t('settings.integrations.spacesNamed', { name: i.display_name })}
-          onClick={() => setChoosing(true)}
-        >
-          {t('settings.integrations.spaces')}
-        </button>
-        <button
-          type="button"
-          className="tt-button"
-          aria-label={t('settings.actions.editNamed', { name: i.display_name })}
-          onClick={onEdit}
-        >
-          {t('settings.actions.edit')}
-        </button>
-        <button
-          type="button"
-          className="tt-button"
-          aria-label={t(i.disabled ? 'settings.integrations.switchOnNamed' : 'settings.integrations.switchOffNamed', {
-            name: i.display_name,
-          })}
-          disabled={action.busy}
-          onClick={toggle}
-        >
-          {i.disabled ? t('settings.integrations.switchOn') : t('settings.integrations.switchOff')}
-        </button>
-        <button
-          type="button"
-          className="tt-button"
-          aria-label={t('common.labelFor', { label: t('settings.actions.remove'), name: i.display_name })}
-          disabled={action.busy}
-          onClick={remove}
-        >
-          {t('settings.actions.remove')}
-        </button>
-      </div>
-      {confirmDialog}
-    </li>
+      }
+      actions={
+        <>
+          {i.webhook_url && <CopyButton size="sm" text={i.webhook_url} name={i.display_name} />}
+          <Button
+            size="sm"
+            aria-label={t('settings.actions.testNamed', { name: i.display_name })}
+            loading={checking}
+            disabled={action.busy}
+            onClick={runCheck}
+          >
+            {t('settings.actions.test')}
+          </Button>
+          <MoreMenu label={t('settings.moreFor', { name: i.display_name })}>
+            <MenuItem icon="edit" onSelect={onEdit}>
+              {t('settings.actions.edit')}
+            </MenuItem>
+            <MenuItem onSelect={() => setChoosing(true)}>{t('settings.integrations.spaces')}</MenuItem>
+            <MenuItem disabled={action.busy} onSelect={toggle}>
+              {i.disabled ? t('settings.integrations.switchOn') : t('settings.integrations.switchOff')}
+            </MenuItem>
+            <MenuSeparator />
+            <MenuItem tone="danger" disabled={action.busy} onSelect={remove}>
+              {t('settings.actions.remove')}
+            </MenuItem>
+          </MoreMenu>
+        </>
+      }
+    >
+      {choosing && (
+        <SpacesForm
+          url={url}
+          integration={i}
+          spaces={spaces.filter((s) => !s.archived_at || i.spaces.includes(s.id))}
+          onDone={() => {
+            setChoosing(false)
+            onChanged()
+          }}
+          onCancel={() => setChoosing(false)}
+        />
+      )}
+    </Row>
   )
 }
 
@@ -312,6 +327,7 @@ function SpacesForm({
 }) {
   const t = useT()
   const action = useAction()
+  const formId = useId()
   const [chosen, setChosen] = useState<number[]>(integration.spaces)
   const flip = (id: number) => setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))
   const submit = async (e: FormEvent) => {
@@ -319,32 +335,32 @@ function SpacesForm({
     const ok = await action.run(() => api(`${url}/spaces`, { method: 'PUT', body: { spaces: chosen } }))
     if (ok) onDone()
   }
+  const name = t('settings.integrations.spacesNamed', { name: integration.display_name })
   return (
-    <form
-      className="tt-form"
-      onSubmit={submit}
-      aria-label={t('settings.integrations.spacesNamed', { name: integration.display_name })}
+    <Dialog
+      open
+      onClose={onCancel}
+      title={name}
+      actions={
+        <>
+          <Button onClick={onCancel}>{t('common.cancel')}</Button>
+          <Button type="submit" form={formId} variant="primary" loading={action.busy}>
+            {t('settings.actions.save')}
+          </Button>
+        </>
+      }
     >
-      <p className="tt-hint">{t('settings.integrations.spacesHint')}</p>
-      <fieldset className="tt-checks">
-        <legend className="tt-small">{t('settings.integrations.spaces')}</legend>
-        {spaces.map((s) => (
-          <label key={s.id}>
-            <input type="checkbox" checked={chosen.includes(s.id)} onChange={() => flip(s.id)} />
-            {spaceName(t, s)}
-          </label>
-        ))}
-      </fieldset>
-      <Alert error={action.error} />
-      <div className="tt-row-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={action.busy}>
-          {t('settings.actions.save')}
-        </button>
-        <button type="button" className="tt-button" onClick={onCancel}>
-          {t('common.cancel')}
-        </button>
-      </div>
-    </form>
+      <form id={formId} className="settings-form" onSubmit={submit} aria-label={name}>
+        <p className="settings-text">{t('settings.integrations.spacesHint')}</p>
+        <fieldset className="settings-fieldset">
+          <legend>{t('settings.integrations.spaces')}</legend>
+          {spaces.map((s) => (
+            <Checkbox key={s.id} label={spaceName(t, s)} checked={chosen.includes(s.id)} onChange={() => flip(s.id)} />
+          ))}
+        </fieldset>
+        <Alert error={action.error} />
+      </form>
+    </Dialog>
   )
 }
 
@@ -364,6 +380,7 @@ function IntegrationForm({
   const t = useT()
   const f = useFormat()
   const action = useAction()
+  const formId = useId()
   const [form, setForm] = useState({
     provider: integration?.provider ?? registry.providers[0]?.id ?? '',
     name: integration?.name ?? '',
@@ -417,93 +434,95 @@ function IntegrationForm({
     if (ok) onDone()
   }
 
+  const name = integration
+    ? t('settings.actions.editNamed', { name: integration.display_name })
+    : t('settings.integrations.newIntegration')
   return (
-    <form
-      className="tt-form"
-      onSubmit={submit}
-      aria-label={
-        integration
-          ? t('settings.actions.editNamed', { name: integration.display_name })
-          : t('settings.integrations.newIntegration')
+    <Dialog
+      open
+      onClose={onCancel}
+      title={name}
+      actions={
+        <>
+          <Button onClick={onCancel}>{t('common.cancel')}</Button>
+          <Button
+            type="submit"
+            form={formId}
+            variant="primary"
+            loading={action.busy}
+            disabled={currencies.length === 0}
+          >
+            {integration ? t('settings.actions.save') : t('settings.actions.add')}
+          </Button>
+        </>
       }
     >
-      {!integration && (
-        <>
-          <label>
-            {t('settings.integrations.providerLabel')}
-            <select value={form.provider} onChange={pickProvider} required>
-              {registry.providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {label(t, 'provider', p.id)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t('settings.actions.name')}
-            <input
-              value={form.name}
-              onChange={set('name')}
-              required
-              maxLength={40}
-              pattern="[a-z0-9][a-z0-9._\-]*"
-              autoComplete="off"
-              spellCheck={false}
-              aria-describedby="tt-integration-name-hint"
-            />
-          </label>
-          <span id="tt-integration-name-hint" className="tt-hint">
-            {t('settings.providers.nameHint')}
-          </span>
-        </>
-      )}
-      <label>
-        {t('settings.providers.displayName')}
-        <input value={form.display_name} onChange={set('display_name')} maxLength={100} placeholder={form.name} />
-      </label>
-      {provider?.settings.map((spec) => (
-        <div key={spec.name} className="tt-field">
-          <label htmlFor={`tt-integration-setting-${spec.name}`}>{label(t, 'setting', spec.name)}</label>
-          {spec.options.length > 0 ? (
-            <select
-              id={`tt-integration-setting-${spec.name}`}
-              value={settings[spec.name] ?? ''}
-              required={spec.required}
-              onChange={(e) => setSettings((x) => ({ ...x, [spec.name]: e.target.value }))}
+      <form id={formId} className="settings-form" onSubmit={submit} aria-label={name}>
+        {!integration && (
+          <>
+            <Field label={t('settings.integrations.providerLabel')} required>
+              <Select value={form.provider} onChange={pickProvider} data-autofocus>
+                {registry.providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {label(t, 'provider', p.id)}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label={t('settings.actions.name')} hint={t('settings.providers.nameHint')} required>
+              <Input
+                value={form.name}
+                onChange={set('name')}
+                maxLength={40}
+                pattern="[a-z0-9][a-z0-9._\-]*"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </Field>
+          </>
+        )}
+        <Field label={t('settings.providers.displayName')}>
+          <Input value={form.display_name} onChange={set('display_name')} maxLength={100} placeholder={form.name} />
+        </Field>
+        {provider?.settings.map((spec) => (
+          <Field key={spec.name} label={label(t, 'setting', spec.name)} required={spec.required}>
+            {spec.options.length > 0 ? (
+              <Select
+                value={settings[spec.name] ?? ''}
+                onChange={(e) => setSettings((x) => ({ ...x, [spec.name]: e.target.value }))}
+              >
+                <option value="" />
+                {spec.options.map((o) => (
+                  <option key={o} value={o}>
+                    {label(t, 'settingOption', o)}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <Input
+                value={settings[spec.name] ?? ''}
+                maxLength={64}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setSettings((x) => ({ ...x, [spec.name]: e.target.value }))}
+              />
+            )}
+          </Field>
+        ))}
+        {provider?.secrets.map((spec) => {
+          const stored = integration?.secrets[spec.name] === 'set'
+          const name = label(t, 'secret', spec.name)
+          return (
+            <Field
+              key={spec.name}
+              label={stored ? t('settings.integrations.newSecret', { name }) : name}
+              hint={stored ? t('settings.integrations.secretHintStored') : t('settings.integrations.secretHint')}
+              required={spec.required && !stored}
             >
-              <option value="" />
-              {spec.options.map((o) => (
-                <option key={o} value={o}>
-                  {label(t, 'settingOption', o)}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              id={`tt-integration-setting-${spec.name}`}
-              value={settings[spec.name] ?? ''}
-              required={spec.required}
-              maxLength={64}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(e) => setSettings((x) => ({ ...x, [spec.name]: e.target.value }))}
-            />
-          )}
-        </div>
-      ))}
-      {provider?.secrets.map((spec) => {
-        const stored = integration?.secrets[spec.name] === 'set'
-        const name = label(t, 'secret', spec.name)
-        const hint = `tt-integration-hint-${spec.name}`
-        return (
-          <div key={spec.name} className="tt-field">
-            <label>
-              {stored ? t('settings.integrations.newSecret', { name }) : name}
-              <input
+              <Input
                 type="password"
                 value={secrets[spec.name] ?? ''}
                 onChange={(e) => setSecrets((x) => ({ ...x, [spec.name]: e.target.value }))}
-                required={spec.required && !stored}
                 autoComplete="new-password"
                 spellCheck={false}
                 placeholder={
@@ -513,55 +532,43 @@ function IntegrationForm({
                       ? undefined
                       : t('settings.actions.optional')
                 }
-                aria-describedby={hint}
               />
-            </label>
-            <span id={hint} className="tt-hint">
-              {stored ? t('settings.integrations.secretHintStored') : t('settings.integrations.secretHint')}
-            </span>
-          </div>
-        )
-      })}
-      <label>
-        {t('settings.integrations.ceiling')}
-        <input
-          type="number"
-          inputMode="numeric"
-          min={1}
-          max={registry.max_amount_minor}
-          step={1}
-          value={form.max_amount_minor}
-          onChange={set('max_amount_minor')}
+            </Field>
+          )
+        })}
+        <Field
+          label={t('settings.integrations.ceiling')}
+          hint={
+            <>
+              {t('settings.integrations.ceilingHint')}
+              {preview && ` ${t('settings.integrations.ceilingPreview', { amounts: preview })}`}
+            </>
+          }
           required
-          aria-describedby="tt-integration-ceiling-hint"
-        />
-      </label>
-      <span id="tt-integration-ceiling-hint" className="tt-hint">
-        {t('settings.integrations.ceilingHint')}
-        {preview && ` ${t('settings.integrations.ceilingPreview', { amounts: preview })}`}
-      </span>
-      <fieldset className="tt-checks">
-        <legend className="tt-small">{t('settings.integrations.currencies')}</legend>
-        {registry.currencies.map((c) => (
-          <label key={c}>
-            <input
-              type="checkbox"
+        >
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={registry.max_amount_minor}
+            step={1}
+            value={form.max_amount_minor}
+            onChange={set('max_amount_minor')}
+          />
+        </Field>
+        <fieldset className="settings-fieldset">
+          <legend>{t('settings.integrations.currencies')}</legend>
+          {registry.currencies.map((c) => (
+            <Checkbox
+              key={c}
+              label={c}
               checked={currencies.includes(c)}
               onChange={() => setCurrencies((cs) => (cs.includes(c) ? cs.filter((x) => x !== c) : [...cs, c]))}
             />
-            {c}
-          </label>
-        ))}
-      </fieldset>
-      <Alert error={action.error} />
-      <div className="tt-row-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={action.busy || currencies.length === 0}>
-          {integration ? t('settings.actions.save') : t('settings.actions.add')}
-        </button>
-        <button type="button" className="tt-button" onClick={onCancel}>
-          {t('common.cancel')}
-        </button>
-      </div>
-    </form>
+          ))}
+        </fieldset>
+        <Alert error={action.error} />
+      </form>
+    </Dialog>
   )
 }

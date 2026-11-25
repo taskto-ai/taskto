@@ -237,15 +237,27 @@ export function OpenNotification({ id, fallbackWorkspace }: { id: number; fallba
       live = false
     }
   }, [id])
-  if (!gone) return <p className="tt-center tt-muted">{t('app.loading')}</p>
+  if (!gone)
+    return (
+      <Page width="list">
+        <InboxSkeleton />
+      </Page>
+    )
   return (
-    <div className="tt-center">
-      <p role="alert">{t('notifications.unavailable')}</p>
-      {fallbackWorkspace !== null && (
-        <ButtonLink href={routePath({ workspace: fallbackWorkspace, section: 'notifications' })}>
-          {t('notifications.openInbox')}
-        </ButtonLink>
-      )}
-    </div>
+    <Page width="list">
+      <Panel>
+        <EmptyState
+          icon={<Icon name="bell" />}
+          title={<span role="alert">{t('notifications.unavailable')}</span>}
+          actions={
+            fallbackWorkspace !== null && (
+              <ButtonLink href={routePath({ workspace: fallbackWorkspace, section: 'notifications' })}>
+                {t('notifications.openInbox')}
+              </ButtonLink>
+            )
+          }
+        />
+      </Panel>
+    </Page>
   )
 }
