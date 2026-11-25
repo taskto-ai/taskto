@@ -1168,7 +1168,10 @@ after it lets go of it:
 | The scheduler's running jobs | 10 s |
 | The agent runtime: SIGTERM, then SIGKILL after 15 s, and its tools calls | 20 s |
 
-That is 65 s in the worst case, and a quiet server stops in well under a second. Docker kills a
+The bounded steps add up to 65 s at most, and a quiet server stops in well under a second. The
+server also waits, with no time limit, for the audit cleanup and the attachment sweep to return
+after they are cancelled; both return as soon as they are, but if either one did not, the stop
+would take longer than 65 s. Docker kills a
 container that is still running when its stop grace period ends, and its default is 10 s, so
 `compose.yaml` sets `stop_grace_period: 90s` for the server. Keep it at least that long if you
 override it in `compose.override.yaml`; the update script takes the setting as it is.
