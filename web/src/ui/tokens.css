@@ -122,10 +122,12 @@
     --z-skip: 100;
 
     /* Widths: a page of reading or a form, a page of lists, and the sidebar. A board is the
-       window's full width. */
+       window's full width; its columns are never narrower than a board column (room for a
+       card's title and its labels on two lines), and scroll sideways when they don't fit. */
     --width-reading: 760px;
     --width-list: 1040px;
     --width-sidebar: 232px;
+    --width-board-column: 248px;
 
     /* Widths of what floats over a page: a menu (at least, at most), a toast, a side drawer, and
        a dialog (a question, a form, more). Each is also kept inside a narrow window. */

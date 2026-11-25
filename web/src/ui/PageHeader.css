@@ -23,6 +23,13 @@
     color: var(--color-text-muted);
   }
 
+  .ui-page-header-title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-inline-size: 0;
+  }
+
   .ui-page-header-title {
     text-wrap: balance;
     margin: 0;
