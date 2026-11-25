@@ -38,10 +38,7 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
   const choices = saved ?? loaded.data
   const zoneList = useMemo(() => zones(choices?.digest.timezone ?? 'UTC'), [choices?.digest.timezone])
 
-  const label = (kind: EmailKind) =>
-    kind === 'card_assigned'
-      ? t('notifications.settings.email.card_assigned')
-      : t('notifications.settings.email.app_effect_failed')
+  const label = (kind: EmailKind) => t(`notifications.settings.email.${kind}`)
 
   const save = async (next: {
     kinds?: Partial<Record<EmailKind, EmailMode>>
