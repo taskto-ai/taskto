@@ -6,6 +6,7 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { api, type MailStatus, mailPath, type Workspace } from '../api'
 import { DEFAULT_LOCALE, LOCALES, localeName, setPreferences, t as translate, useT } from '../i18n'
 import { useLoad } from '../load'
+import { sameSession } from '../session'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
@@ -27,9 +28,12 @@ export function GeneralTab({ workspace, email, operator }: { workspace: Workspac
     e.preventDefault()
     // English, the default, is stored as "": no default picked.
     const body = { locale: locale === DEFAULT_LOCALE ? '' : locale }
+    const session = sameSession()
     const ok = await run(() => api(`/api/workspaces/${workspace.id}`, { method: 'PATCH', body }))
     if (ok) {
       await setPreferences({ workspace: body.locale })
+      // The session may have ended while the language's file was loading.
+      if (!session()) return
       // In the language the page is in now, which the change may have made another.
       toast({ message: translate('settings.general.saved'), tone: 'success' })
     }

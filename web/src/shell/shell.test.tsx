@@ -1260,3 +1260,44 @@ test('a language save refused on the login screen writes nothing and says nothin
   expect(document.documentElement.lang).toBe(lang)
   await act(() => setPreferences({ user: null }))
 })
+
+// --- The shell going while the session stays (a push's notification opened) ----------------
+
+test('a language picked while another is saved is still sent when the shell goes within the session', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held: (() => void)[] = []
+  const calls = fakeFetch({
+    'PATCH /api/me': () => new Promise((done) => held.push(() => done({ status: 200, body: {} }))),
+    ...pages,
+  })
+  const { unmount } = render(<Shell me={me as Me} onLogout={() => {}} />)
+  const patches = () => calls.filter((c) => c.method === 'PATCH').map((c) => c.body)
+  await pickInAccount('Português (Brasil)')
+  await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }]))
+  await pickInAccount('English')
+  unmount()
+  await act(async () => held.shift()?.())
+  await waitFor(() => expect(patches()).toEqual([{ locale: 'pt-BR' }, { locale: 'en' }]))
+  await act(async () => held.shift()?.())
+  await act(() => setPreferences({ user: null }))
+})
+
+test('a workspace made while the shell is gone within the session still reaches the account, and opens nothing', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held: ((answer: { status: number; body: unknown }) => void)[] = []
+  fakeFetch({
+    'POST /api/workspaces': () => new Promise((done) => held.push(done)),
+    ...pages,
+  })
+  const onMe = vi.fn()
+  const { unmount } = render(<Shell me={{ ...me, can_create_workspace: true } as Me} onLogout={() => {}} onMe={onMe} />)
+  const dialog = await submitNewWorkspace('Late')
+  await waitFor(() => expect(held).toHaveLength(1))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  unmount()
+  await act(async () => held.shift()?.(created(9, 'Late')))
+  expect(onMe).toHaveBeenCalledWith(
+    expect.objectContaining({ workspaces: expect.arrayContaining([expect.objectContaining({ id: 9 })]) }),
+  )
+  expect(window.location.pathname).toBe('/w/1/conversations')
+})

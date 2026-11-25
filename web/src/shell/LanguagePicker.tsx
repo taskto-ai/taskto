@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { automaticLocale, LOCALES, localeName, setPreferences, type T, useLocale } from '../i18n'
-import { useMounted } from '../mounted'
+import { sameSession } from '../session'
 import { MenuGroup, MenuItem } from '../ui/Menu'
 
 export interface LanguagePick {
@@ -31,9 +31,10 @@ export function useLanguagePick(initial: string, onRefused: (error: unknown) => 
   const saved = useRef(initial)
   const wanted = useRef(initial)
   const saving = useRef(false)
-  // The menu goes with the session: a save that ends after that (logged out, the session lost)
-  // changes nothing in this browser and says nothing, as the language is the next person's now.
-  const mounted = useMounted()
+  // The picks belong to the session they were made in: the queue goes on while it lasts, even if
+  // the menu goes and comes back (opening a push's notification), and stops when it ends (logged
+  // out, the session lost). A save that ends after that changes nothing in this browser and says
+  // nothing, as the language is the next person's now.
   // A new value from the server (the account's /api/me again) is the one to show and to go
   // back to, unless a pick is still being saved: that value is from before the pick, which
   // stays the one wanted and shown. A value the account already has (this effect's first run,
@@ -46,21 +47,21 @@ export function useLanguagePick(initial: string, onRefused: (error: unknown) => 
     wanted.current = initial
     setChoice(initial)
   }, [initial])
-  const save = async () => {
+  const save = async (still: () => boolean) => {
     saving.current = true
     try {
-      while (mounted.current && wanted.current !== saved.current) {
+      while (still() && wanted.current !== saved.current) {
         const tag = wanted.current
         try {
           await api('/api/me', { method: 'PATCH', body: { locale: tag } })
           saved.current = tag
         } catch (e) {
-          if (!mounted.current) return
+          if (!still()) return
           if (wanted.current !== tag) continue // a later pick replaced it: send that one
           wanted.current = saved.current
           setChoice(saved.current)
           await setPreferences({ user: saved.current || null })
-          if (mounted.current) refused.current(e)
+          if (still()) refused.current(e)
         }
       }
     } finally {
@@ -68,10 +69,11 @@ export function useLanguagePick(initial: string, onRefused: (error: unknown) => 
     }
   }
   const pick = async (tag: string) => {
+    const still = sameSession()
     wanted.current = tag
     setChoice(tag)
     await setPreferences({ user: tag || null })
-    if (mounted.current && !saving.current) await save()
+    if (still() && !saving.current) await save(still)
   }
   return { choice, pick }
 }

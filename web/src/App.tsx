@@ -19,6 +19,7 @@ import { approvalOf } from './offline/store'
 import { navigate } from './router'
 import { Shell } from './shell/Shell'
 import { reportTimeZone } from './timezone'
+import { sessionChanged } from './session'
 import { clearToasts } from './ui/Toast'
 import { claimDrafts, forgetDrafts } from './uiState'
 
@@ -112,6 +113,7 @@ export function App() {
   useEffect(() => {
     if (shown.current === account) return
     shown.current = account
+    sessionChanged()
     clearToasts()
   }, [account])
   // A click on a push in a window that is open already: heard here, not in the shell, so it isn't
