@@ -2,7 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { Menu, MenuButton, MenuGroup, MenuItem, MenuList, MenuSeparator, MoreMenu } from './Menu'
+import { Menu, MenuButton, MenuGroup, MenuItem, MenuLink, MenuList, MenuSeparator, MoreMenu } from './Menu'
 
 afterEach(cleanup)
 
@@ -233,6 +233,24 @@ describe('Menu', () => {
     expect(button.getAttribute('aria-label')).toBeNull()
     act(() => button.click())
     expect(focused()).toBe('Oldest')
+  })
+  test('a link item is a real link: followed by a click, Enter or Space, and the menu closes', () => {
+    window.history.replaceState(null, '', '/start')
+    render(
+      <MoreMenu>
+        <MenuLink href="/elsewhere">Open the page</MenuLink>
+      </MoreMenu>,
+    )
+    const button = screen.getByRole('button', { name: 'More actions' })
+    fireEvent.click(button)
+    const link = screen.getByRole('menuitem', { name: 'Open the page' })
+    // An anchor with its address, so it can be opened in a new tab.
+    expect(link.tagName).toBe('A')
+    expect(link.getAttribute('href')).toBe('/elsewhere')
+    expect(document.activeElement).toBe(link)
+    fireEvent.keyDown(link, { key: ' ' })
+    expect(window.location.pathname).toBe('/elsewhere')
+    expect(button.getAttribute('aria-expanded')).toBe('false')
   })
 
   test('radio items in a named group say which is checked, and the keys move through them', () => {

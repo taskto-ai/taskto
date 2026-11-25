@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useT } from '../i18n'
 import { Specimen } from './GalleryParts'
-import { Menu, MenuButton, MenuGroup, MenuItem, MenuList, MenuSeparator, MoreMenu } from './Menu'
+import { Menu, MenuButton, MenuGroup, MenuItem, MenuLink, MenuList, MenuSeparator, MoreMenu } from './Menu'
 
 export const title = 'Menu'
 
@@ -15,6 +15,9 @@ function Items() {
       <MenuItem icon="edit" onSelect={() => {}}>
         {t('gallery.sample.edit')}
       </MenuItem>
+      <MenuLink icon="apps" href="/_gallery">
+        {t('gallery.layout.openPage')}
+      </MenuLink>
       <MenuItem icon="copy" onSelect={() => {}} disabled>
         {t('gallery.layout.duplicateDisabled')}
       </MenuItem>

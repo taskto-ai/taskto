@@ -2,6 +2,11 @@ import { useState } from 'react'
 import { api, BROWSER, type BrowserStatus, codeText, errorText } from '../api'
 import { useT } from '../i18n'
 import type { Loaded } from '../load'
+import { Button } from '../ui/Button'
+import { Heading } from '../ui/Heading'
+import { IconButton } from '../ui/IconButton'
+import { Notice } from '../ui/Notice'
+import './Browser.css'
 import { LiveView } from './LiveView'
 import type { RFBConstructor } from './novnc'
 
@@ -40,41 +45,40 @@ export function BrowserPanel({
   }
 
   return (
-    <section className="tt-browser" aria-label={t('browser.yours')}>
-      <div className="tt-browser-head">
-        <h3>{t('browser.yours')}</h3>
+    <section className="ui-browser" aria-label={t('browser.yours')}>
+      <div className="ui-browser-head">
+        <Heading level={3} size="subsection" className="ui-browser-title">
+          {t('browser.yours')}
+        </Heading>
         {personal?.running && (
           <>
-            <button type="button" className="tt-button" onClick={() => onInteractive(!interactive)}>
+            <Button size="sm" variant="ghost" onClick={() => onInteractive(!interactive)}>
               {interactive ? t('browser.justWatch') : t('browser.takeOver')}
-            </button>
-            <button type="button" className="tt-button" disabled={busy} onClick={() => act('stop')}>
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => act('stop')}>
               {t('browser.stop')}
-            </button>
+            </Button>
           </>
         )}
-        <button type="button" className="tt-button" onClick={onClose}>
-          {t('browser.close')}
-        </button>
+        <IconButton icon="close" size="sm" label={t('browser.close')} onClick={onClose} />
       </div>
-      {(error ?? status.error) && (
-        <p role="alert" className="tt-error">
-          {error ?? status.error}
-        </p>
+      {(error ?? status.error) && <Notice tone="danger">{error ?? status.error}</Notice>}
+      {st && !st.enabled && (
+        <p className="ui-browser-note">{st.reason && codeText(st.reason_code, undefined, st.reason)}</p>
       )}
-      {st && !st.enabled && <p className="tt-muted">{st.reason && codeText(st.reason_code, undefined, st.reason)}</p>}
-      {st?.enabled && !personal?.available && <p className="tt-muted">{t('browser.notInstalled')}</p>}
+      {st?.enabled && !personal?.available && <p className="ui-browser-note">{t('browser.notInstalled')}</p>}
       {st?.enabled && personal?.available && !personal.running && (
-        <p>
-          {t('browser.notRunning')}{' '}
-          <button type="button" className="tt-button" disabled={busy} onClick={() => act('start')}>
+        <div className="ui-browser-start">
+          <p className="ui-browser-note">{t('browser.notRunning')}</p>
+          <Button size="sm" disabled={busy} onClick={() => act('start')}>
             {t('browser.start')}
-          </button>
-        </p>
+          </Button>
+        </div>
       )}
       {personal?.running && (
         <>
-          {interactive && <p className="tt-muted tt-small">{t('browser.youHaveIt')}</p>}
+          {/* Part of the panel, not news: the live view's own status line is the one that comes and goes. */}
+          {interactive && <Notice tone="neutral">{t('browser.youHaveIt')}</Notice>}
           <LiveView interactive={interactive} load={load} onClosed={status.reload} />
         </>
       )}
