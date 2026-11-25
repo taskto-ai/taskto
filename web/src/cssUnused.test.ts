@@ -102,3 +102,13 @@ test('an old --tt-* alias nothing reads fails, and one read by a stylesheet or a
 test('the app as it is reads every alias it keeps', () => {
   expect(unusedAliasErrors(resolve(__dirname, '..'))).toEqual([])
 })
+
+test('an alias another stylesheet only sets again is not read', () => {
+  const root = web({
+    'src/ui/legacy.css': '@layer tokens {\n  :root {\n    --tt-overridden: 0;\n  }\n}\n',
+    'src/old.legacy.css': '.tt-a { --tt-overridden: 1px; }\n',
+  })
+  expect(unusedAliasErrors(root)).toEqual([
+    'src/ui/legacy.css:3: --tt-overridden is defined but nothing reads it: delete it',
+  ])
+})

@@ -1164,18 +1164,19 @@ export function unusedAliasErrors(web) {
   const path = join(web, ALIASES)
   if (!existsSync(path)) return []
   const defined = allDeclarations(readFileSync(path, 'utf8'))
-  const readers = [
-    ...stylesheets(join(web, 'src'))
-      .filter((p) => relative(web, p).split('\\').join('/') !== ALIASES)
-      .map((p) => blankCssComments(readFileSync(p, 'utf8'))),
-    ...usersCode(web),
-  ].join('\n')
-  const errors = []
-  for (const { name, line } of defined) {
-    const read = new RegExp(`${name.replace(/[-]/g, '\\-')}(?![\\w-])`)
-    if (!read.test(readers)) errors.push(`${ALIASES}:${line}: ${name} is defined but nothing reads it: delete it`)
+  const name = /--tt-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g
+  // Read by a stylesheet: only through var() (an override, `--tt-x: …`, defines it again and reads
+  // nothing). Read by a module: any mention (a script that reads or sets it).
+  const read = new Set()
+  for (const p of stylesheets(join(web, 'src'))) {
+    if (relative(web, p).split('\\').join('/') === ALIASES) continue
+    const css = blankCssComments(readFileSync(p, 'utf8'))
+    for (const m of css.matchAll(/var\(\s*(--tt-[a-z0-9]+(?:-[a-z0-9]+)*)(?![\w-])/g)) read.add(m[1])
   }
-  return errors
+  for (const code of usersCode(web)) for (const m of code.matchAll(name)) read.add(m[0])
+  return defined
+    .filter(({ name }) => !read.has(name))
+    .map(({ name, line }) => `${ALIASES}:${line}: ${name} is defined but nothing reads it: delete it`)
 }
 
 // The custom properties a stylesheet defines (`--tt-x: …`), with their lines, comments left out.
