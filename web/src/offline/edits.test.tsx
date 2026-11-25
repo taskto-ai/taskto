@@ -950,6 +950,12 @@ test('the screen: a deleted record leaves the list as pending, and a conflict sh
   const review = await within(list).findByRole('region', { name: /Review/ })
   // What the person saw, what they did, and what the server has.
   expect(within(review).getByText('When you started')).toBeTruthy()
+  // Each value names its column, so on a phone, where the values stack, each still says what it is.
+  expect(
+    within(review)
+      .getAllByRole('cell')
+      .map((c) => c.dataset.label),
+  ).toEqual(expect.arrayContaining(['When you started', 'On the server now']))
   expect(within(review).getByText('On the server now')).toBeTruthy()
   expect(within(review).getAllByText('(deleted)').length).toBeGreaterThan(0)
   expect(within(review).getByText('20')).toBeTruthy()
@@ -2028,4 +2034,35 @@ test('discarding the earlier change wakes the queue: the change that waited for 
   await discard(runtime, first, seenAs(first))
   expect(actionCalls(calls)).toHaveLength(1)
   expect((await store.listItems()).map((i) => i.state)).toEqual(['synced'])
+})
+
+test('the discard question names its record; cancelling or Escape keeps it, and confirming discards that one only', async () => {
+  const { store, runtime, transport } = await setup()
+  await transport.act(press('edit_expense', { id: 1, amount: '9' }, 1))
+  await transport.act(press('add_expense', { description: 'Tea', amount: '2' }))
+  render(<Harness runtime={runtime} />)
+  const entry = await screen.findByText(/Expenses: change to Coffee/)
+  const row = () => entry.closest('li') as HTMLElement
+  const question = () => screen.findByRole('alertdialog', { name: /Discard Expenses: change to Coffee/ })
+  expect(await store.listItems()).toHaveLength(2)
+
+  // Cancel keeps it.
+  fireEvent.click(within(row()).getByRole('button', { name: /Discard/ }))
+  fireEvent.click(within(await question()).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(await store.listItems()).toHaveLength(2)
+
+  // Escape keeps it (the dialog's own cancel).
+  fireEvent.click(within(row()).getByRole('button', { name: /Discard/ }))
+  const asked = await question()
+  fireEvent(asked, new Event('cancel', { cancelable: true }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(await store.listItems()).toHaveLength(2)
+
+  // Confirming discards that record, and only it.
+  fireEvent.click(within(row()).getByRole('button', { name: /Discard/ }))
+  fireEvent.click(within(await question()).getByRole('button', { name: 'Yes, discard' }))
+  await waitFor(async () => expect(await store.listItems()).toHaveLength(1))
+  const [left] = await store.listItems()
+  expect(left.action.context).toMatchObject({ description: 'Tea' })
 })

@@ -8,23 +8,28 @@
 // records can't rename, publish or move it), and the server's answer for the app, `access`, says
 // what the caller may do.
 
-import { type FormEvent, useState } from 'react'
+import { useState } from 'react'
 import { ApiError, type App, api, errorText, type Space, ws } from '../api'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
-import { OfflinePanel } from '../offline/OfflinePanel'
-import { Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
+import { ButtonLink } from '../ui/Button'
+import { EmptyState } from '../ui/EmptyState'
+import { Heading } from '../ui/Heading'
+import { modalOpen, onModalChange } from '../ui/layers'
+import { Notice } from '../ui/Notice'
+import { Page } from '../ui/Page'
+import { PageHeader } from '../ui/PageHeader'
+import { Panel } from '../ui/Panel'
+import { Rows } from '../ui/Rows'
 import { AppBuilder, lastBuilderConversation } from './AppBuilder'
-import { AppEffects } from './AppEffects'
-import { appError, PublishPanel } from './AppPublish'
-import { AppRecords } from './AppRecords'
-import { AppReleases } from './AppReleases'
-import { AppRoles } from './AppRoles'
-import { AppStage } from './AppStage'
-import { DuplicateForm, InstalledApp, TemplatesPage } from './AppTemplates'
-import { appPath, builderPath, isTemplates, parseBuilder, parseInstalled, parseItem, templatesPath } from './route'
+import { AppRow } from './AppRow'
+import { LoadingRows } from './AppsLoading'
+import { InstalledApp, TemplatesPage } from './AppTemplates'
+import { LaunchedApp } from './LaunchedApp'
+import { builderPath, isTemplates, parseBuilder, parseInstalled, parseItem, templatesPath } from './route'
+import './Apps.css'
 
 const appsBase = (workspace: number, space: number) => `${ws(workspace)}/spaces/${space}/apps`
 
@@ -63,29 +68,34 @@ export function AppsPage({
     )
   }
   return (
-    <div className="tt-section">
-      <div className="tt-pane-head">
-        <h1>{t('shell.sections.apps')}</h1>
-        <Link className="tt-button tt-primary" href={builderPath(workspace)}>
-          {t('apps.builder.build')}
-        </Link>
-        <Link className="tt-button" href={templatesPath(workspace)}>
-          {t('apps.templates.start')}
-        </Link>
-        {continuing && (
-          <Link className="tt-button" href={builderPath(workspace, { kind: 'conversation', conversation: continuing })}>
-            {t('apps.builder.continue')}
-          </Link>
-        )}
-      </div>
-      <p className="tt-muted">{t('apps.intro')}</p>
-      {spaces.error && (
-        <p role="alert" className="tt-error">
-          {spaces.error}
-        </p>
+    <Page width="list">
+      <PageHeader
+        title={t('shell.sections.apps')}
+        help={t('apps.intro')}
+        actions={
+          <>
+            {continuing && (
+              <ButtonLink
+                variant="ghost"
+                href={builderPath(workspace, { kind: 'conversation', conversation: continuing })}
+              >
+                {t('apps.builder.continue')}
+              </ButtonLink>
+            )}
+            <ButtonLink href={templatesPath(workspace)}>{t('apps.templates.start')}</ButtonLink>
+            <ButtonLink variant="primary" icon="plus" href={builderPath(workspace)}>
+              {t('apps.builder.build')}
+            </ButtonLink>
+          </>
+        }
+      />
+      {spaces.error && <Notice tone="danger">{spaces.error}</Notice>}
+      {!spaces.data && !spaces.error && <LoadingRows count={3} />}
+      {spaces.data?.length === 0 && (
+        <EmptyState title={t('apps.noSpaces')}>
+          <p>{t('apps.noSpacesHelp')}</p>
+        </EmptyState>
       )}
-      {!spaces.data && !spaces.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {spaces.data?.length === 0 && <p className="tt-muted">{t('apps.noSpaces')}</p>}
       {spaces.data?.map((s) => (
         <SpaceApps
           key={s.id}
@@ -96,7 +106,7 @@ export function AppsPage({
           moved={() => setMoves((n) => n + 1)}
         />
       ))}
-    </div>
+    </Page>
   )
 }
 
@@ -118,437 +128,125 @@ function SpaceApps({
   const [error, setError] = useState<string | null>(null)
   const writable = space.access === 'write'
   const t = useT()
+  const headingId = `apps-space-${space.id}`
 
   // change applies a change to an app, then shows the list as it is now: on a stale version
-  // too, so the next try is made against the current one.
+  // too, so the next try is made against the current one. It answers what went wrong, if anything,
+  // for the row to show where the person is: in the dialog that asked, or on the page.
   const change = async (app: App, body: { name?: string; archived?: boolean }) => {
+    let failed: string | null = null
     try {
       await api<App>(`${base}/${app.id}`, { method: 'PATCH', body: { version: app.version, ...body } })
       setError(null)
     } catch (e) {
-      setError(e instanceof ApiError && e.status === 409 ? t('apps.changed', { name: app.name }) : errorText(e))
+      failed = e instanceof ApiError && e.status === 409 ? t('apps.changed', { name: app.name }) : errorText(e)
     }
     apps.reload()
+    return failed
   }
-  // move moves an app, with its rows, to another space the user may write.
+  // move moves an app, with its rows, to another space the user may write. The app's row is gone
+  // then, so the focus goes to this space's heading.
   const move = async (app: App, to: number) => {
     try {
       await api<App>(`${base}/${app.id}/move`, { method: 'POST', body: { version: app.version, space_id: to } })
       setError(null)
+      focusHeadingWhenUncovered(headingId)
       moved()
+      return null
     } catch (e) {
-      setError(errorText(e))
       apps.reload()
+      return errorText(e)
     }
   }
 
   return (
-    <section className="tt-app-space" aria-label={spaceLabel(space)}>
-      <h2>
-        {spaceLabel(space)}
-        {!writable && <span className="tt-muted tt-small"> {t('apps.readOnly')}</span>}
-      </h2>
-      {(apps.error || error) && (
-        <p role="alert" className="tt-error">
-          {error ?? apps.error}
-        </p>
-      )}
-      {!apps.data && !apps.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {apps.data?.length === 0 && <p className="tt-muted">{t('apps.none')}</p>}
+    <section className="apps-group" aria-labelledby={headingId}>
+      <header className="apps-group-head">
+        <Heading level={2} id={headingId} tabIndex={-1}>
+          {spaceLabel(space)}
+        </Heading>
+        <span className="apps-note">
+          {[
+            ...(apps.data ? [t('apps.count', { count: apps.data.length })] : []),
+            ...(space.kind === 'shared' ? [t('apps.sharedSpace')] : []),
+            ...(!writable ? [t('apps.readOnlyShort')] : []),
+          ].join(' · ')}
+        </span>
+      </header>
+      {(apps.error || error) && <Notice tone="danger">{error ?? apps.error}</Notice>}
+      {!apps.data && !apps.error && <LoadingRows count={2} />}
+      {apps.data?.length === 0 && <NoApps workspace={workspace} space={space} />}
       {apps.data && apps.data.length > 0 && (
-        <ul className="tt-app-list">
-          {apps.data.map((a) => (
-            <AppRow
-              key={a.id}
-              workspace={workspace}
-              space={space}
-              app={a}
-              writable={writable}
-              targets={targets}
-              copyTo={writable ? [space, ...targets] : targets}
-              spaceBase={`${ws(workspace)}/spaces/${space.id}`}
-              change={change}
-              move={move}
-              reload={apps.reload}
-            />
-          ))}
-        </ul>
+        <Panel>
+          <Rows label={spaceLabel(space)}>
+            {apps.data.map((a) => (
+              <AppRow
+                key={a.id}
+                workspace={workspace}
+                space={space}
+                app={a}
+                writable={writable}
+                targets={targets}
+                copyTo={writable ? [space, ...targets] : targets}
+                spaceBase={`${ws(workspace)}/spaces/${space.id}`}
+                change={change}
+                move={move}
+                report={setError}
+                reload={apps.reload}
+              />
+            ))}
+          </Rows>
+        </Panel>
       )}
     </section>
   )
 }
 
-function AppRow({
-  workspace,
-  space,
-  app,
-  writable,
-  targets,
-  copyTo,
-  spaceBase,
-  change,
-  move,
-  reload,
-}: {
-  workspace: number
-  space: Space
-  app: App
-  writable: boolean
-  targets: Space[]
-  // Where a copy of the app may go: every space the user may write.
-  copyTo: Space[]
-  spaceBase: string
-  change: (app: App, body: { name?: string; archived?: boolean }) => Promise<void>
-  move: (app: App, to: number) => Promise<void>
-  reload: () => void
-}) {
-  const [renaming, setRenaming] = useState(false)
-  const [to, setTo] = useState('')
-  const [name, setName] = useState(app.name)
-  const [busy, setBusy] = useState(false)
-  const [rolesOpen, setRolesOpen] = useState(false)
-  const [releasesOpen, setReleasesOpen] = useState(false)
-  const [duplicating, setDuplicating] = useState(false)
-  // The app as its publisher reviews it before publishing: with its draft and where its effects go,
-  // which the list doesn't carry. Publishing is only from there, so what the draft does is seen first.
-  const [reviewing, setReviewing] = useState<App | null>(null)
-  const [reviewError, setReviewError] = useState<string | null>(null)
-  const offline = app.archived_at !== null
-  // Those who may design or publish the app see what isn't live: its draft and its releases.
-  const reviewer = writable && (app.access.design || app.access.publish)
-  const t = useT()
-  const appBase = `${spaceBase}/apps/${app.id}`
-  const review = async () => {
-    setBusy(true)
-    setReviewError(null)
-    try {
-      setReviewing(await api<App>(appBase))
-    } catch (e) {
-      setReviewError(appError(e, app.name))
-    }
-    setBusy(false)
-  }
-  // The panel published the app, or found that it changed: the list and the panel read it again.
-  const reviewed = async () => {
-    reload()
-    try {
-      setReviewing(await api<App>(appBase))
-    } catch (e) {
-      setReviewing(null)
-      setReviewError(appError(e, app.name))
-    }
-  }
-  const run = async (body: { name?: string; archived?: boolean }) => {
-    setBusy(true)
-    await change(app, body)
-    setBusy(false)
-  }
-  const rename = async (e: FormEvent) => {
-    e.preventDefault()
-    await run({ name })
-    setRenaming(false)
-  }
-
-  return (
-    <li className="tt-app-row" data-offline={offline || undefined}>
-      {renaming ? (
-        <form className="tt-app-rename" onSubmit={rename}>
-          <label className="tt-inline-field">
-            {t('apps.name')}
-            <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} required />
-          </label>
-          <button type="submit" className="tt-button tt-primary" disabled={busy}>
-            {t('apps.save')}
-          </button>
-          <button
-            type="button"
-            className="tt-button"
-            onClick={() => {
-              setName(app.name)
-              setRenaming(false)
-            }}
-          >
-            {t('common.cancel')}
-          </button>
-        </form>
-      ) : (
-        <div className="tt-app-name">
-          <span className="tt-list-title">{app.name}</span>
-          <span className="tt-muted tt-small">
-            {[t('apps.rows', { count: app.rows }), ...(offline ? [t('apps.offline')] : [])].join(' · ')}
-          </span>
-          <span className="tt-app-status">
-            {app.live ? (
-              <span className="tt-stage-label" data-stage="live">
-                {t('apps.stage.live', { number: app.live.number })}
-              </span>
-            ) : (
-              <span className="tt-stage-label" data-stage="draft">
-                {t('apps.notPublished')}
-              </span>
-            )}
-            {app.live && app.unpublished_changes && (
-              <span className="tt-stage-label" data-stage="draft">
-                {t('apps.unpublishedChanges')}
-              </span>
-            )}
-          </span>
-        </div>
-      )}
-      {!renaming && (
-        <div className="tt-app-actions">
-          {!offline && app.live && (
-            <Link
-              className="tt-button tt-primary"
-              href={appPath(workspace, space.id, app.id)}
-              aria-label={t('apps.launchNamed', { name: app.name })}
-            >
-              {t('apps.launch')}
-            </Link>
-          )}
-          {!offline && !app.live && reviewer && (
-            <Link
-              className="tt-button"
-              href={appPath(workspace, space.id, app.id)}
-              aria-label={t('apps.previewDraftNamed', { name: app.name })}
-            >
-              {t('apps.previewDraft')}
-            </Link>
-          )}
-          {writable && app.access.publish && app.unpublished_changes && (
-            <button
-              type="button"
-              className="tt-button tt-primary"
-              disabled={busy || reviewing !== null}
-              onClick={review}
-              aria-label={t('apps.publishNamed', { name: app.name })}
-            >
-              {t('apps.publish')}
-            </button>
-          )}
-          {reviewer && app.live && (
-            <button
-              type="button"
-              className="tt-button"
-              aria-expanded={releasesOpen}
-              onClick={() => setReleasesOpen((o) => !o)}
-              aria-label={t('apps.releases.openNamed', { name: app.name })}
-            >
-              {t('apps.releases.open')}
-            </button>
-          )}
-          {!offline && writable && app.access.design && (
-            <Link
-              className="tt-button"
-              href={builderPath(workspace, { kind: 'edit', space: space.id, app: app.id })}
-              aria-label={t('apps.builder.editNamed', { name: app.name })}
-            >
-              {t('apps.builder.edit')}
-            </Link>
-          )}
-          {writable && app.access.design && (
-            <button type="button" className="tt-button" disabled={busy} onClick={() => setRenaming(true)}>
-              {t('apps.rename')}
-            </button>
-          )}
-          {writable && app.access.publish && (
-            <button
-              type="button"
-              className="tt-button"
-              disabled={busy}
-              onClick={() => run({ archived: !offline })}
-              aria-label={t(offline ? 'apps.restoreNamed' : 'apps.takeOfflineNamed', { name: app.name })}
-            >
-              {offline ? t('apps.restore') : t('apps.takeOffline')}
-            </button>
-          )}
-          {writable && app.access.manage_roles && space.kind === 'shared' && (
-            <button
-              type="button"
-              className="tt-button"
-              aria-expanded={rolesOpen}
-              onClick={() => setRolesOpen((o) => !o)}
-              aria-label={t('apps.roles.openNamed', { name: app.name })}
-            >
-              {t('apps.roles.open')}
-            </button>
-          )}
-          {copyTo.length > 0 && (
-            <button
-              type="button"
-              className="tt-button"
-              aria-expanded={duplicating}
-              onClick={() => setDuplicating((d) => !d)}
-              aria-label={t('apps.duplicate.openNamed', { name: app.name })}
-            >
-              {t('apps.duplicate.open')}
-            </button>
-          )}
-          {writable && app.access.design && targets.length > 0 && (
-            <form
-              className="tt-app-move"
-              onSubmit={async (e) => {
-                e.preventDefault()
-                setBusy(true)
-                await move(app, Number(to))
-                setBusy(false)
-              }}
-            >
-              <select
-                aria-label={t('apps.moveNamed', { name: app.name })}
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-                required
-              >
-                <option value="">{t('apps.moveTo')}</option>
-                {targets.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {spaceLabel(t)}
-                  </option>
-                ))}
-              </select>
-              <button type="submit" className="tt-button" disabled={busy || !to}>
-                {t('apps.move')}
-              </button>
-            </form>
-          )}
-        </div>
-      )}
-      {reviewError && (
-        <p role="alert" className="tt-error">
-          {reviewError}
-        </p>
-      )}
-      {reviewing && (
-        <>
-          <PublishPanel base={appBase} spaceBase={spaceBase} app={reviewing} space={space} onChanged={reviewed} />
-          <button
-            type="button"
-            className="tt-button"
-            aria-label={t('apps.closeReviewNamed', { name: app.name })}
-            onClick={() => setReviewing(null)}
-          >
-            {t('apps.closeReview')}
-          </button>
-        </>
-      )}
-      {releasesOpen && (
-        <AppReleases
-          base={`${spaceBase}/apps/${app.id}`}
-          app={app}
-          canRollBack={writable && app.access.publish}
-          changed={reload}
-        />
-      )}
-      {duplicating && (
-        <DuplicateForm
-          workspace={workspace}
-          space={space}
-          app={app}
-          spaces={copyTo}
-          onCancel={() => setDuplicating(false)}
-        />
-      )}
-      {rolesOpen && (
-        <AppRoles base={`${spaceBase}/apps/${app.id}`} spaceBase={spaceBase} onClose={() => setRolesOpen(false)} />
-      )}
-    </li>
-  )
+// After a move the app's row is gone: the focus goes to the heading of the space it left. The
+// move's dialog is still open now, and everything under a modal dialog is inert, so the heading
+// takes the focus once no modal is open: just after, since a closing dialog gives the focus back
+// to what opened it first.
+function focusHeadingWhenUncovered(id: string) {
+  const focus = () => document.getElementById(id)?.focus()
+  if (!modalOpen()) return focus()
+  const stop = onModalChange(() => {
+    if (modalOpen()) return
+    stop()
+    queueMicrotask(focus)
+  })
 }
 
-function LaunchedApp({
-  workspace,
-  space,
-  app,
-  writable,
-  screen,
-  spaceInfo,
-}: {
-  workspace: number
-  space: number
-  app: number
-  writable: boolean
-  screen?: string
-  spaceInfo?: Space
-}) {
-  const base = `${appsBase(workspace, space)}/${app}`
-  const info = useLoad(() => api<App>(base), [base])
-  // Bumped when a record is restored, so the screen is loaded again with it.
-  const [restored, setRestored] = useState(0)
-  // How many actions ran on the screen: each may have set effects going.
-  const [actions, setActions] = useState(0)
-  const back = routePath({ workspace, section: 'apps' })
+// A space with no apps: what apps there are for, and the two ways to start one (only where the
+// person may add one).
+function NoApps({ workspace, space }: { workspace: number; space: Space }) {
   const t = useT()
-  const restore = async () => {
-    if (!info.data) return
-    try {
-      await api<App>(base, { method: 'PATCH', body: { version: info.data.version, archived: false } })
-    } finally {
-      info.reload()
-    }
-  }
-
+  const writable = space.access === 'write' && !space.archived_at
+  const name = spaceLabel(space)
   return (
-    <div className="tt-section">
-      <div className="tt-pane-head">
-        <h1>{info.data?.name ?? t('apps.app')}</h1>
-        {info.data && !info.data.archived_at && writable && info.data.access.design && (
-          <Link
-            className="tt-button"
-            href={builderPath(workspace, { kind: 'edit', space, app })}
-            aria-label={t('apps.builder.editNamed', { name: info.data.name })}
-          >
-            {t('apps.builder.edit')}
-          </Link>
+    <EmptyState
+      title={t('apps.empty.title', { space: name })}
+      actions={
+        writable && (
+          <>
+            <ButtonLink size="sm" href={templatesPath(workspace)}>
+              {t('apps.templates.start')}
+            </ButtonLink>
+            <ButtonLink size="sm" href={builderPath(workspace)}>
+              {t('apps.builder.build')}
+            </ButtonLink>
+          </>
+        )
+      }
+    >
+      <p>
+        {t(
+          space.kind === 'private'
+            ? 'apps.empty.private'
+            : writable
+              ? 'apps.empty.shared'
+              : 'apps.empty.sharedReadOnly',
         )}
-        <Link className="tt-button" href={back}>
-          {t('apps.all')}
-        </Link>
-      </div>
-      {info.error && (
-        <p role="alert" className="tt-error">
-          {info.error}
-        </p>
-      )}
-      {!info.data && !info.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {info.data?.archived_at && (
-        <div className="tt-app-offline">
-          <p>{t('apps.offlineNotice')}</p>
-          {writable && info.data.access.publish && (
-            <button type="button" className="tt-button tt-primary" onClick={restore}>
-              {t('apps.restore')}
-            </button>
-          )}
-        </div>
-      )}
-      {info.data && !info.data.archived_at && (
-        <>
-          {!writable && <p className="tt-muted tt-small">{t('apps.viewOnly')}</p>}
-          {writable && !info.data.access.submit && info.data.access.modify_records === 'none' && (
-            <p className="tt-muted tt-small">{t('apps.noDataChanges')}</p>
-          )}
-          {info.data.access.read_records === 'own' && <p className="tt-muted tt-small">{t('apps.ownRecords')}</p>}
-          <AppStage
-            key={screen ?? ''}
-            base={base}
-            app={info.data}
-            reloadKey={restored}
-            screen={screen}
-            onAction={() => setActions((n) => n + 1)}
-          />
-          <AppEffects workspace={workspace} base={base} writable={writable} reloadKey={actions} />
-          <AppRecords
-            base={base}
-            appId={app}
-            access={info.data.access}
-            writable={writable}
-            definition={info.data.live?.definition}
-            release={info.data.live?.number}
-            onRestored={() => setRestored((n) => n + 1)}
-          />
-          <OfflinePanel workspace={workspace} space={space} app={info.data} spaceInfo={spaceInfo} />
-        </>
-      )}
-    </div>
+      </p>
+    </EmptyState>
   )
 }

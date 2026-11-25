@@ -130,3 +130,13 @@ describe('Drawer', () => {
     expect(region()).toBeNull()
   })
 })
+
+test("a screen's own class goes on the drawer, beside its own", () => {
+  render(
+    <Drawer open onClose={() => {}} title="A card" className="ui-test-drawer">
+      <p>Body</p>
+    </Drawer>,
+  )
+  const drawer = screen.getByRole('region', { name: 'A card' })
+  expect(drawer.className).toBe('ui-drawer ui-test-drawer')
+})

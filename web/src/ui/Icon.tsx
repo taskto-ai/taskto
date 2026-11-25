@@ -43,6 +43,8 @@ const PATHS = {
   edit: 'M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4',
   archive: 'M3 4h18v4H3zM5 8v12h14V8M10 12h4',
   copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
+  // A mention of someone.
+  at: 'M16 12a4 4 0 1 0-1.17 2.83M16 8v5a2.5 2.5 0 0 0 5 0v-1a9 9 0 1 0-3.6 7.2',
   search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4',
   filter: 'M4 6h16M7 12h10M10 18h4',
   // Three dots, drawn as small rings that the stroke fills.

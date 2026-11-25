@@ -10,6 +10,12 @@ import { type AppEffect, type AppEffectList, api, codeText, errorText } from '..
 import { type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { boardItem, documentItem, Link, routePath } from '../router'
+import { Badge, type BadgeTone } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { Checkbox } from '../ui/Checkbox'
+import { Notice } from '../ui/Notice'
+import { Row, Rows } from '../ui/Rows'
+import './AppEffects.css'
 
 // How often the list is asked for again while some effect waits or runs.
 const POLL_MS = 3000
@@ -92,40 +98,38 @@ export function AppEffects({
     }
     setLoadingOlder(false)
   }
+  const summary = t('apps.effects.summary', { active: data.active, failed: data.failed })
   return (
-    <div className="tt-effects">
-      <button
-        type="button"
-        className="tt-button"
-        aria-expanded={open}
-        aria-controls="tt-effects-panel"
-        onClick={() => setOpen((o) => !o)}
-      >
-        {open ? t('apps.effects.close') : t('apps.effects.open')}
+    <section className="ui-effects" aria-label={t('apps.effects.open')}>
+      <div className="ui-effects-head">
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={open ? 'chevron-up' : 'chevron-down'}
+          aria-expanded={open}
+          aria-controls="ui-effects-panel"
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? t('apps.effects.close') : t('apps.effects.open')}
+        </Button>
         {(data.active > 0 || data.failed > 0) && (
-          <span className="tt-effects-badge" data-failed={data.failed > 0}>
-            {t('apps.effects.summary', { active: data.active, failed: data.failed })}
-          </span>
+          <p role="status" className="ui-effects-summary">
+            <Badge tone={data.failed > 0 ? 'danger' : 'info'} dot>
+              {summary}
+            </Badge>
+          </p>
         )}
-      </button>
-      {!open && data.failed > 0 && (
-        <p role="status" className="tt-error tt-small">
-          {t('apps.effects.summary', { active: data.active, failed: data.failed })}
-        </p>
-      )}
+      </div>
       {open && (
-        <div id="tt-effects-panel" className="tt-effects-panel">
-          <p className="tt-muted tt-small">{t('apps.effects.intro')}</p>
-          {list.error && (
-            <p role="alert" className="tt-error">
-              {list.error}
-            </p>
-          )}
+        <div id="ui-effects-panel" className="ui-effects-panel">
+          <p className="ui-effects-note">{t('apps.effects.intro')}</p>
+          {list.error && <Notice tone="danger">{list.error}</Notice>}
           {(data.failed > 0 || failedOnly) && (
-            <label className="tt-inline-field">
-              <input type="checkbox" checked={failedOnly} onChange={(e) => setFailedOnly(e.target.checked)} />
-              {t('apps.effects.failedOnly', { count: data.failed })}
-            </label>
+            <Checkbox
+              label={t('apps.effects.failedOnly', { count: data.failed })}
+              checked={failedOnly}
+              onChange={(e) => setFailedOnly(e.target.checked)}
+            />
           )}
           <EffectItems
             workspace={workspace}
@@ -134,19 +138,15 @@ export function AppEffects({
             onRetry={writable ? (e) => retry(base, e) : undefined}
             changed={changed}
           />
-          {olderError && (
-            <p role="alert" className="tt-error">
-              {olderError}
-            </p>
-          )}
+          {olderError && <Notice tone="danger">{olderError}</Notice>}
           {more && (
-            <button type="button" className="tt-button" disabled={loadingOlder} onClick={showOlder}>
+            <Button size="sm" loading={loadingOlder} disabled={loadingOlder} onClick={showOlder}>
               {t('apps.effects.older')}
-            </button>
+            </Button>
           )}
         </div>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -191,71 +191,89 @@ export function EffectItems({
     changed?.()
   }
 
-  if (effects.length === 0) return <p className="tt-muted">{t('apps.effects.none')}</p>
+  if (effects.length === 0) return <p className="ui-effects-note">{t('apps.effects.none')}</p>
   return (
     <>
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
-      {notice && (
-        <p role="status" className="tt-muted tt-small">
-          {notice}
-        </p>
-      )}
-      <ul className="tt-effect-list" aria-label={label}>
-        {effects.map((e) => (
-          <li key={e.id || `${e.kind}-${e.position}`} className="tt-effect" data-status={e.status}>
-            <div className="tt-effect-head">
-              <strong>{t(`apps.effects.kind.${e.kind}` as Key)}</strong>
-              <span className="tt-effect-status" data-status={e.status}>
-                {t(`apps.effects.status.${e.status}` as Key)}
-              </span>
-            </div>
-            <div className="tt-effect-detail">{detail(e, t)}</div>
-            <div className="tt-muted tt-small">
-              {[
-                e.id > 0 ? t('apps.effects.recordAction', { id: e.record, action: e.action }) : e.action,
-                e.attempts > 0 ? t('apps.effects.tries', { count: e.attempts }) : '',
-                e.next_attempt_at ? t('apps.effects.nextTry', { when: f.dateTime(e.next_attempt_at) }) : '',
-              ]
-                .filter(Boolean)
-                .join(' · ')}
-            </div>
-            {e.error && (
-              <p
-                className={e.status === 'failed' ? 'tt-error tt-small' : 'tt-muted tt-small'}
-                role={e.status === 'failed' ? 'alert' : undefined}
-              >
-                {e.status === 'simulated'
-                  ? t('apps.effects.preview.wouldFail', { error: codeText(e.error.code, e.error.params, e.error.code) })
-                  : codeText(e.error.code, e.error.params, e.error.code)}
-              </p>
-            )}
-            {e.status === 'done' && e.result && workspace !== undefined && (
-              <ResultLink workspace={workspace} effect={e} />
-            )}
-            {e.can_retry && onRetry && (
-              <div className="tt-effect-actions">
-                <button
-                  type="button"
-                  className="tt-button tt-primary"
-                  disabled={busy !== null}
-                  aria-label={t('apps.effects.retryNamed', {
-                    what: detail(e, t) || t(`apps.effects.kind.${e.kind}` as Key),
-                  })}
-                  onClick={() => doRetry(e)}
-                >
-                  {t('apps.effects.retry')}
-                </button>
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
+      {error && <Notice tone="danger">{error}</Notice>}
+      {notice && <Notice tone="success">{notice}</Notice>}
+      <Rows label={label}>
+        {effects.map((e) => {
+          const what = detail(e, t)
+          const meta = [
+            e.id > 0 ? t('apps.effects.recordAction', { id: e.record, action: e.action }) : e.action,
+            e.attempts > 0 ? t('apps.effects.tries', { count: e.attempts }) : '',
+            e.next_attempt_at ? t('apps.effects.nextTry', { when: f.dateTime(e.next_attempt_at) }) : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+          return (
+            <Row
+              key={e.id || `${e.kind}-${e.position}`}
+              title={
+                <>
+                  {t(`apps.effects.kind.${e.kind}` as Key)}
+                  {what && <span className="ui-effect-what">{what}</span>}
+                </>
+              }
+              status={
+                <Badge tone={STATUS_TONE[e.status] ?? 'neutral'} dot>
+                  {t(`apps.effects.status.${e.status}` as Key)}
+                </Badge>
+              }
+              detail={
+                <>
+                  <span className="ui-effect-line">{meta}</span>
+                  {e.error && (
+                    <span
+                      className="ui-effect-line"
+                      data-tone={e.status === 'failed' ? 'danger' : undefined}
+                      role={e.status === 'failed' ? 'alert' : undefined}
+                    >
+                      {e.status === 'simulated'
+                        ? t('apps.effects.preview.wouldFail', {
+                            error: codeText(e.error.code, e.error.params, e.error.code),
+                          })
+                        : codeText(e.error.code, e.error.params, e.error.code)}
+                    </span>
+                  )}
+                  {e.status === 'done' && e.result && workspace !== undefined && (
+                    <span className="ui-effect-line">
+                      <ResultLink workspace={workspace} effect={e} />
+                    </span>
+                  )}
+                </>
+              }
+              actions={
+                e.can_retry && onRetry ? (
+                  <Button
+                    size="sm"
+                    loading={busy === e.id}
+                    disabled={busy !== null}
+                    aria-label={t('apps.effects.retryNamed', {
+                      what: what || t(`apps.effects.kind.${e.kind}` as Key),
+                    })}
+                    onClick={() => doRetry(e)}
+                  >
+                    {t('apps.effects.retry')}
+                  </Button>
+                ) : undefined
+              }
+            />
+          )
+        })}
+      </Rows>
     </>
   )
+}
+
+// The tone of each status: what waits is neutral, what runs informs, what is done succeeded, what
+// failed is the danger; a preview's effects are only simulated.
+const STATUS_TONE: Record<string, BadgeTone> = {
+  pending: 'neutral',
+  running: 'info',
+  done: 'success',
+  failed: 'danger',
+  simulated: 'neutral',
 }
 
 // What an effect makes, in a line: a card's title, a document's path, where a card goes.
@@ -304,7 +322,7 @@ function ResultLink({ workspace, effect }: { workspace: number; effect: AppEffec
     const href = boards(w)
     if (!href || w.card === undefined) return null
     return (
-      <Link className="tt-small" href={href}>
+      <Link className="ui-effect-link" href={href}>
         {t('apps.effects.result.card', { id: w.card })}
       </Link>
     )
@@ -313,7 +331,7 @@ function ResultLink({ workspace, effect }: { workspace: number; effect: AppEffec
     const path = typeof result.path === 'string' ? result.path : ''
     const href = document(where(result), path)
     return href ? (
-      <Link className="tt-small" href={href}>
+      <Link className="ui-effect-link" href={href}>
         {t('apps.effects.result.document', { path })}
       </Link>
     ) : null
@@ -322,7 +340,7 @@ function ResultLink({ workspace, effect }: { workspace: number; effect: AppEffec
   if (route.kind === 'document') {
     const href = document(w, route.path)
     return href ? (
-      <Link className="tt-small" href={href}>
+      <Link className="ui-effect-link" href={href}>
         {t('apps.effects.result.documentRoute')}
       </Link>
     ) : null
@@ -330,7 +348,7 @@ function ResultLink({ workspace, effect }: { workspace: number; effect: AppEffec
   if (route.kind === 'board' || route.kind === 'card') {
     const href = boards(w)
     return href ? (
-      <Link className="tt-small" href={href}>
+      <Link className="ui-effect-link" href={href}>
         {t('apps.effects.result.board')}
       </Link>
     ) : null
@@ -342,13 +360,10 @@ function ResultLink({ workspace, effect }: { workspace: number; effect: AppEffec
 export function EffectPreview({ workspace, effects }: { workspace?: number; effects: AppEffect[] }) {
   const t = useT()
   return (
-    <section className="tt-effects-preview" aria-label={t('apps.effects.preview.title')}>
-      <p role="status">
-        <strong>{t('apps.effects.preview.title')}</strong>
-      </p>
-      <p className="tt-muted tt-small">
+    <section className="ui-effects-preview" aria-label={t('apps.effects.preview.title')}>
+      <Notice tone="info" title={t('apps.effects.preview.title')}>
         {t(effects.length > 0 ? 'apps.effects.preview.intro' : 'apps.effects.preview.none')}
-      </p>
+      </Notice>
       {effects.length > 0 && (
         <EffectItems workspace={workspace} effects={effects} label={t('apps.effects.preview.title')} />
       )}

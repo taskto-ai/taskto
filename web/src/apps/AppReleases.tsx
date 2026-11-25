@@ -1,12 +1,21 @@
 // An app's release history: every release, newest first, which one is live, who published it and
 // when. Those who may publish the app can roll back to an earlier release, which points the app at
 // it and changes no data; the server refuses a release the app's data doesn't fit and says which
-// fields, and checks every change again. Shown to those who may design or publish the app.
+// fields, and checks every change again. Shown to those who may design or publish the app, in a
+// dialog the Apps page opens.
 
 import { useState } from 'react'
 import { ApiError, type App, type AppRelease, api, errorText } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { LoadingRows } from './AppsLoading'
+import './Apps.css'
 
 export function AppReleases({
   base,
@@ -30,8 +39,15 @@ export function AppReleases({
   )
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [confirmDialog, confirm] = useConfirm()
 
   const rollBack = async (release: AppRelease) => {
+    const yes = await confirm({
+      title: t('apps.releases.rollBackNamed', { number: release.number }),
+      body: t('apps.releases.rollBackNote'),
+      confirmLabel: t('apps.releases.rollBack'),
+    })
+    if (!yes) return
     setBusy(true)
     try {
       await api<App>(`${base}/rollback`, { method: 'POST', body: { version: app.version, release: release.number } })
@@ -48,48 +64,49 @@ export function AppReleases({
   }
 
   return (
-    <div className="tt-app-releases">
-      <h3>{t('apps.releases.title')}</h3>
-      {(loaded.error || error) && (
-        <p role="alert" className="tt-error">
-          {error ?? loaded.error}
-        </p>
-      )}
-      {!loaded.data && !loaded.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {loaded.data && loaded.data.length === 0 && <p className="tt-muted">{t('apps.releases.none')}</p>}
+    <div className="apps-stack">
+      {(loaded.error || error) && <Notice tone="danger">{error ?? loaded.error}</Notice>}
+      {!loaded.data && !loaded.error && <LoadingRows count={2} />}
+      {loaded.data && loaded.data.length === 0 && <p className="apps-note">{t('apps.releases.none')}</p>}
       {loaded.data && loaded.data.length > 0 && (
-        <ul className="tt-release-list">
-          {loaded.data.map((r) => (
-            <li key={r.number} className="tt-release" data-live={r.live || undefined}>
-              <span className="tt-release-name">
-                <strong>{t('apps.releases.number', { number: r.number })}</strong>
-                {r.live && (
-                  <span className="tt-stage-label" data-stage="live">
-                    {t('apps.releases.live')}
-                  </span>
-                )}
-              </span>
-              <span className="tt-muted tt-small">
-                {r.published_by
-                  ? t('apps.releases.publishedBy', { name: r.published_by.name, date: f.dateTime(r.published_at) })
-                  : t('apps.releases.published', { date: f.dateTime(r.published_at) })}
-              </span>
-              {canRollBack && !r.live && (
-                <button
-                  type="button"
-                  className="tt-button"
-                  disabled={busy}
-                  onClick={() => rollBack(r)}
-                  aria-label={t('apps.releases.rollBackNamed', { number: r.number })}
-                >
-                  {t('apps.releases.rollBack')}
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
+        <Panel>
+          <Rows label={t('apps.releases.title')}>
+            {loaded.data.map((r) => (
+              <Row
+                key={r.number}
+                title={t('apps.releases.number', { number: r.number })}
+                detail={
+                  r.published_by
+                    ? t('apps.releases.publishedBy', { name: r.published_by.name, date: f.dateTime(r.published_at) })
+                    : t('apps.releases.published', { date: f.dateTime(r.published_at) })
+                }
+                status={
+                  r.live && (
+                    <Badge tone="success" dot>
+                      {t('apps.releases.live')}
+                    </Badge>
+                  )
+                }
+                actions={
+                  canRollBack &&
+                  !r.live && (
+                    <Button
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => rollBack(r)}
+                      aria-label={t('apps.releases.rollBackNamed', { number: r.number })}
+                    >
+                      {t('apps.releases.rollBack')}
+                    </Button>
+                  )
+                }
+              />
+            ))}
+          </Rows>
+        </Panel>
       )}
-      {canRollBack && <p className="tt-muted tt-small">{t('apps.releases.rollBackNote')}</p>}
+      {canRollBack && <p className="apps-note">{t('apps.releases.rollBackNote')}</p>}
+      {confirmDialog}
     </div>
   )
 }

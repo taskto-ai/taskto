@@ -7,21 +7,15 @@
   "apps": {
     "intro": "Personal apps are screens the agent builds for you: ask it in a conversation for one, such as “an expense tracker in my private space”. A shared space’s apps are its members’: move an app to one to share it.",
     "noSpaces": "You have no spaces in this workspace.",
-    "readOnly": "· read-only",
-    "none": "No apps here yet.",
     "rows_one": "{count} row",
     "rows_other": "{count} rows",
-    "offline": "offline",
     "changed": "Someone changed {name} since the list was loaded. It is shown as it is now: try again.",
     "name": "Name",
     "save": "Save",
-    "launch": "Launch",
-    "launchNamed": "Launch {name}",
     "rename": "Rename",
     "restore": "Restore",
     "restoreNamed": "Restore {name}",
     "takeOffline": "Take offline",
-    "takeOfflineNamed": "Take offline {name}",
     "moveNamed": "Move {name} to",
     "moveTo": "Move to…",
     "move": "Move",
@@ -118,7 +112,6 @@
     "roles": {
       "open": "Roles",
       "openNamed": "Roles of {name}",
-      "close": "Close",
       "saved": "Saved.",
       "intro": "Roles narrow what a member’s role in the space allows, never widen it. Once any roles are set, a member with no roles here (and no “Everyone else” row) can’t use or see the app. Clear every role to give the app back to the whole space.",
       "member": "Member",
@@ -134,14 +127,12 @@
       "data_managerHelp": "adds, sees and changes everyone’s records",
       "reader": "Reader",
       "readerHelp": "sees everyone’s records",
-      "line": "{role}: {help}"
+      "line": "{role}: {help}",
+      "caption": "Roles of each member in this app"
     },
     "notPublished": "Not published",
     "unpublishedChanges": "Unpublished changes",
-    "publish": "Publish",
     "publishNamed": "Publish {name}",
-    "closeReview": "Close review",
-    "closeReviewNamed": "Close the review of {name}",
     "previewDraft": "Preview draft",
     "previewDraftNamed": "Preview the draft of {name}",
     "stage": {
@@ -345,6 +336,14 @@
       "save": "Save changes",
       "delete": "Delete",
       "deleteConfirm": "Yes, delete this record",
+      "deleteQuestion": "Delete record {id}?",
+      "deleteBody": "It moves to Deleted with its history, where it can be restored.",
+      "leave": {
+        "title": "Discard your changes to this record?",
+        "body": "What you changed here isn’t saved. Keep editing to go back to it, or discard it.",
+        "discard": "Discard my changes",
+        "keep": "Keep editing"
+      },
       "cancel": "Cancel",
       "empty": "—",
       "unset": "Not set",
@@ -542,12 +541,36 @@
     },
     "duplicate": {
       "open": "Duplicate as template",
-      "openNamed": "Duplicate {name} as a template",
       "title": "Duplicate {name}",
       "note": "This copies the app’s definition only, into a new app of your own: no records, photos, history or roles come with it, and boards you can’t write to are cleared and chosen again before publishing.",
       "defaultName": "Copy of {name}",
       "space": "Put the copy in",
       "make": "Make the copy"
+    },
+    "noSpacesHelp": "Apps live in spaces. Once you have one, the apps you build appear here, grouped by space.",
+    "count_one": "{count} app",
+    "count_other": "{count} apps",
+    "sharedSpace": "Shared space",
+    "readOnlyShort": "read-only",
+    "empty": {
+      "title": "No apps in {space} yet",
+      "private": "Apps here are yours alone: trackers, checklists, forms. Build one with the agent, or start from a template.",
+      "shared": "Apps here belong to everyone in this space. Build one with the agent, start from a template, or move one of yours here to share it.",
+      "sharedReadOnly": "Apps here belong to everyone in this space. Its editors can build one."
+    },
+    "offlineBadge": "Offline",
+    "publishedOn": "published {date}",
+    "open": "Open",
+    "openNamed": "Open {name}",
+    "moreNamed": "More actions for {name}",
+    "publishItem": "Publish…",
+    "moveItem": "Move to a space…",
+    "moveTitle": "Move {name} to a space",
+    "moveNote": "The app moves with its records. Who can use it is then set by the space it moves to.",
+    "renameNamed": "Rename {name}",
+    "takeOfflineConfirm": {
+      "title": "Take {name} offline?",
+      "body": "Nobody can open it until someone who may publish it restores it. Its records are kept."
     }
   },
   "auth": {
@@ -670,14 +693,10 @@
     "add": "Add",
     "card": "Card",
     "cardNumber": "Card {id}",
-    "back": "Back to the board",
-    "close": "Close",
     "cardChanged": "Someone changed this card since you opened it.",
     "takeTheirs": "Load their version",
     "redoMine": "Redo my change over it",
     "pollStopped": "This card's comments stopped updating: {error}",
-    "column": "Column",
-    "assignedTo": "Assigned to {name}",
     "restore": "Restore",
     "archive": "Archive",
     "noDescriptionYet": "No description yet.",
@@ -696,7 +715,6 @@
     "setBlocked": "Set blocked",
     "unblock": "Unblock",
     "reason": "Reason",
-    "reasonPlaceholder": "Waiting for legal",
     "waitingFor": "Waiting for",
     "assignee": "Assignee",
     "nobody": "Nobody",
@@ -730,7 +748,6 @@
     "labels": "Labels",
     "noLabels": "No labels.",
     "labelField": "New label",
-    "labelPlaceholder": "Add a label",
     "addLabel": "Add label",
     "removeLabel": "Remove the label {label}",
     "filters": "Filter the cards",
@@ -739,8 +756,35 @@
     "overdueOnly": "Overdue only",
     "noMatches": "No cards match.",
     "mention": "Mention someone",
-    "mentionPlaceholder": "Mention someone…",
-    "mentionUnknown": "Someone"
+    "mentionUnknown": "Someone",
+    "switchBoard": "Switch board",
+    "boardActions": "Board actions",
+    "hideArchived": "Hide archived boards",
+    "archiveBoardTitle": "Archive “{name}”?",
+    "archiveBoardBody": "It leaves the list of boards and becomes read-only for everyone in the space. You can find it among the archived boards and unarchive it.",
+    "noBoardsWriter": "A board holds the space's cards by column. Create the first one.",
+    "moveCard": "Move “{title}”",
+    "moveTop": "To the top of {column}",
+    "moveBottom": "To the bottom of {column}",
+    "moveTo": "To {column}",
+    "cardActions": "Card actions",
+    "status": "Status",
+    "newLabel": "Add a label",
+    "newComment": "New comment",
+    "discardTitle": "Discard what you haven’t saved?",
+    "discardBody": "This card holds something you haven’t saved or sent yet: a description, a comment, a label, a reason, a date or a path. Closing it throws that away.",
+    "discard": "Discard",
+    "movedTop": "Moved “{title}” to the top of {column}.",
+    "movedBefore": "Moved “{title}” before “{before}” in {column}.",
+    "movedBottom": "Moved “{title}” to the bottom of {column}.",
+    "dueToday": "Due today",
+    "dueTomorrow": "Due tomorrow",
+    "cardName": "{title}: {details}",
+    "nameBlocked": "blocked",
+    "nameOverdue": "overdue since {date}",
+    "nameDueToday": "due today",
+    "nameDueTomorrow": "due tomorrow",
+    "nameDue": "due {date}"
   },
   "errors": {
     "http": "The server answered {status}.",
@@ -841,6 +885,7 @@
     "app_changed": "Someone changed this app meanwhile: reload and try again.",
     "app_name_length": "An app name needs 1 to {max} characters.",
     "too_many_apps": "A space can have at most {max} apps.",
+    "app_token_rate_limited": "Your access tokens ran {max} actions in a minute here, which is the most allowed. Try again in {seconds} seconds.",
     "app_full": "This app is full: it holds at most {max_rows} rows and {max_mib} MiB of data.",
     "app_preview_full": "The preview is full: it holds at most {max_rows} sample rows. Start it again.",
     "app_preview_too_large": "The preview’s sample data is too large (at most {max_mib} MiB). Start it again.",
@@ -2056,12 +2101,16 @@
       "light": "Light",
       "dark": "Dark"
     },
-    "account": "Account: {name}",
     "skipToContent": "Skip to the content",
     "installApp": "Install the app",
     "pinned": "Pinned apps",
     "pageFailed": "This page couldn’t be shown. The menu and your settings still work.",
-    "reload": "Reload"
+    "reload": "Reload",
+    "noWorkspaceTitle": "No workspace yet",
+    "workspaces": "Your workspaces",
+    "workspaceCreated": "“{name}” was created.",
+    "openWorkspace": "Open it",
+    "accountLabel": "Account"
   },
   "common": {
     "cancel": "Cancel",
@@ -2120,7 +2169,9 @@
       "move": "Move",
       "delete": "Delete",
       "empty": "This document is empty.",
-      "download": "Download"
+      "download": "Download",
+      "backToResults": "Back to the results",
+      "separator": "/"
     },
     "editor": {
       "label": "Edit the document",
@@ -2177,7 +2228,22 @@
       "removeSubmit": "Remove old versions",
       "removedCount_one": "Removed {count} old version from the history.",
       "removedCount_other": "Removed {count} old versions from the history.",
-      "removedNone": "There were no old versions to remove."
+      "removedNone": "There were no old versions to remove.",
+      "restoreTitle": "Restore this version?",
+      "restoreQuestion": "{path} becomes again what it was on {time}. The version it has now stays in its history.",
+      "changeBy": "{change} · {by}"
+    },
+    "emptyHelp": "Write a new document, or upload a file.",
+    "pick": "Choose a document to read it.",
+    "errors": {
+      "spaces": "The spaces couldn't be loaded.",
+      "documents": "The documents couldn't be loaded.",
+      "document": "This document couldn't be loaded.",
+      "history": "The history couldn't be loaded."
+    },
+    "tree": {
+      "count_one": "{count} document",
+      "count_other": "{count} documents"
     }
   },
   "search": {
@@ -2435,7 +2501,14 @@
       "unpinned": "{name} removed from the menu",
       "defaultSet": "{name} is now a default for the space",
       "defaultUnset": "{name} is no longer a default for the space"
-    }
+    },
+    "empty": "Nothing on your Home yet. Choose Customize to put a widget from one of your apps here, or to pin an app to the menu.",
+    "unavailableShort": {
+      "offline": "· app offline",
+      "unpublished": "· app not published",
+      "removed": "· no longer offered"
+    },
+    "default": "· set for the space"
   },
   "checklist": {
     "title": "Set up your workspace",
@@ -2553,6 +2626,8 @@
       "discard": "Discard",
       "discardNamed": "Discard {name}",
       "discardQuestion": "Discard this record? It is deleted from this device and never sent.",
+      "discardTitle": "Discard {name}?",
+      "discardBody": "It is deleted from this device and never sent.",
       "discardConfirm": "Yes, discard",
       "clearSynced": "Clear synced records",
       "waiting_one": "{count} record waiting to sync",
@@ -2683,7 +2758,6 @@
   },
   "notifications": {
     "title": "Notifications",
-    "bell": "Notifications",
     "bellUnread": "Notifications, {count} unread",
     "intro": "What happened that you may want to see. Push notifications are optional and only a prompt to look here.",
     "pushSettings": "Notification settings",
@@ -2821,7 +2895,8 @@
       "sizes": "Sizes",
       "shapes": "Shapes",
       "tones": "Tones",
-      "hues": "Hues"
+      "hues": "Hues",
+      "distinctInitials": "Several side by side, each with letters of its own"
     },
     "sample": {
       "primary": "Primary",
@@ -2875,7 +2950,8 @@
       "personB": "Tomás Oliveira",
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
-      "workspaceName": "Acme Studio"
+      "workspaceName": "Acme Studio",
+      "tooltipEmpty": "Without content: no tooltip"
     },
     "labels": {
       "onboarding": "onboarding",
@@ -2919,6 +2995,8 @@
       "expensesDetail": "A row that is a link: a click anywhere on it opens it",
       "currentRow": "The current row",
       "currentDetail": "Marked as the one open",
+      "openedRow": "What opens under a row, such as a form to settle it, takes the row's whole width.",
+      "actionsBelow": "Several actions: on a line of their own, wrapping on a phone.",
       "tables": "Numbers aligned to the end; a narrow table scrolls in its own box",
       "members": "Members",
       "person": "Person",
@@ -2928,6 +3006,7 @@
       "resetPassword": "Reset password",
       "remove": "Remove",
       "narrowTable": "A narrow table",
+      "sortableTable": "A sortable table",
       "tabsButtons": "Buttons over panels: arrow keys, Home and End",
       "tabsLinks": "Links to pages, the current one marked",
       "people": "People",
@@ -3008,7 +3087,9 @@
       "inPlaceDetail": "Opens on this page, in place",
       "focusTarget": "Moved to by a script (a ref, and tabIndex -1)",
       "focusIt": "Send the keyboard to the title",
-      "openPage": "Open a page (a link)"
+      "openPage": "Open a page (a link)",
+      "menuChoices": "One choice of several, in a named group",
+      "switchBoard": "Switch board"
     }
   }
 }

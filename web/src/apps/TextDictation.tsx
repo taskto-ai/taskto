@@ -45,7 +45,7 @@ function scan(root: HTMLElement, known: Target[]): Target[] {
       continue
     }
     const slot = document.createElement('div')
-    slot.className = 'tt-dictate-slot'
+    slot.className = 'ui-dictate-slot'
     host.appendChild(slot)
     next.push({ id: ++ids, host, input, slot })
   }

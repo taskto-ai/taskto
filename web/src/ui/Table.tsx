@@ -3,6 +3,7 @@
 // and scrolled with the keyboard. Put it in a Panel for an edge.
 
 import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { Icon } from './Icon'
 import { VisuallyHidden } from './VisuallyHidden'
 import './Table.css'
 import './VisuallyHidden.css'
@@ -14,7 +15,19 @@ export interface Column<T> {
   numeric?: boolean
   // The header is read by a screen reader but not shown (a column of actions).
   hiddenHeader?: boolean
+  // The column that names each row (a person, a plan): its cells are the rows' headers, so a screen
+  // reader says which row a cell further along is in.
+  rowHeader?: boolean
   cell: (row: T) => ReactNode
+  // A column the rows can be put in order by: the order it is in now ('none' when the rows are in
+  // another column's), and what choosing it does. Its header is then a button, and the header cell
+  // says the order to assistive technology (aria-sort).
+  sort?: ColumnSort
+}
+
+export interface ColumnSort {
+  direction: 'ascending' | 'descending' | 'none'
+  onSort: () => void
 }
 
 export interface TableProps<T> {
@@ -42,8 +55,21 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
         <thead className="ui-table-header">
           <tr className="ui-table-row">
             {columns.map((c) => (
-              <th key={c.key} scope="col" className="ui-table-head" data-numeric={c.numeric || undefined}>
-                {c.hiddenHeader ? <VisuallyHidden>{c.header}</VisuallyHidden> : c.header}
+              <th
+                key={c.key}
+                scope="col"
+                className="ui-table-head"
+                data-numeric={c.numeric || undefined}
+                // Only the column the rows are in order by says an order (WAI-ARIA: one header at a time).
+                aria-sort={c.sort && c.sort.direction !== 'none' ? c.sort.direction : undefined}
+              >
+                {c.sort ? (
+                  <SortButton sort={c.sort}>{c.header}</SortButton>
+                ) : c.hiddenHeader ? (
+                  <VisuallyHidden>{c.header}</VisuallyHidden>
+                ) : (
+                  c.header
+                )}
               </th>
             ))}
           </tr>
@@ -51,11 +77,22 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
         <tbody className="ui-table-body">
           {rows.map((row) => (
             <tr key={rowKey(row)} className="ui-table-row">
-              {columns.map((c) => (
-                <td key={c.key} className="ui-table-cell" data-numeric={c.numeric || undefined}>
-                  {c.cell(row)}
-                </td>
-              ))}
+              {columns.map((c) =>
+                c.rowHeader ? (
+                  <th
+                    key={c.key}
+                    scope="row"
+                    className="ui-table-cell ui-table-rowhead"
+                    data-numeric={c.numeric || undefined}
+                  >
+                    {c.cell(row)}
+                  </th>
+                ) : (
+                  <td key={c.key} className="ui-table-cell" data-numeric={c.numeric || undefined}>
+                    {c.cell(row)}
+                  </td>
+                ),
+              )}
             </tr>
           ))}
         </tbody>
@@ -65,6 +102,23 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
 }
 
 // Whether an element's content is wider than it, kept up to date as either changes size.
+// A sortable column's header: its name, and a mark of the order it is in (the mark is not read out:
+// the cell's aria-sort says it).
+function SortButton({ sort, children }: { sort: ColumnSort; children: ReactNode }) {
+  const icon = sort.direction === 'ascending' ? 'chevron-up' : sort.direction === 'descending' ? 'chevron-down' : null
+  return (
+    <button
+      type="button"
+      className="ui-table-sort ui-control"
+      data-sorted={icon ? true : undefined}
+      onClick={sort.onSort}
+    >
+      <span>{children}</span>
+      <Icon name={icon ?? 'chevron-updown'} size={14} />
+    </button>
+  )
+}
+
 function useOverflows(ref: React.RefObject<HTMLElement | null>): boolean {
   const [overflows, setOverflows] = useState(false)
   useEffect(() => {

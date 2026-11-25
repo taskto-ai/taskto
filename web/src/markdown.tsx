@@ -4,6 +4,11 @@
 // mailto and relative targets, and
 // images show as links rather than loading from anywhere. It covers the common syntax, not
 // all of CommonMark. Shared by every page that shows Markdown (documents, cards, comments).
+//
+// A document of the knowledge base is read with `look="document"`: the same elements, each with a
+// ui-prose class, styled from the tokens by knowledge/prose.css (the old stylesheet's element
+// rules leave an element with a ui- class alone). Its tables also align a column of numbers to
+// the end. Every other page keeps the old look.
 
 import { createContext, Fragment, type MouseEvent, type ReactNode, useContext } from 'react'
 
@@ -238,7 +243,7 @@ export function inline(text: string, onLink?: LinkHandler, depth = 0): ReactNode
       const run = /^`+/.exec(rest)?.[0] ?? '`'
       const end = text.indexOf(run, i + run.length)
       if (end > 0) {
-        push(<code key={out.length}>{text.slice(i + run.length, end).replace(/\n/g, ' ')}</code>)
+        push(<InlineCode key={out.length}>{text.slice(i + run.length, end).replace(/\n/g, ' ')}</InlineCode>)
         i = end + run.length
         continue
       }
@@ -390,11 +395,12 @@ function parseLink(text: string, at: number): { label: string; href: string; end
 export type LinkHandler = (href: string) => (() => void) | null
 
 function A({ href, label, onLink }: { href: string; label: ReactNode; onLink?: LinkHandler }) {
+  const className = useContext(Prose) ? 'ui-prose-link' : undefined
   const safe = safeHref(href)
   if (safe === null) return <span>{label}</span>
   if (external(safe)) {
     return (
-      <a href={safe} target="_blank" rel="noopener noreferrer">
+      <a className={className} href={safe} target="_blank" rel="noopener noreferrer">
         {label}
       </a>
     )
@@ -407,19 +413,32 @@ function A({ href, label, onLink }: { href: string; label: ReactNode; onLink?: L
     open()
   }
   return (
-    <a href={safe} onClick={click}>
+    <a className={className} href={safe} onClick={click}>
       {label}
     </a>
   )
 }
 
 // Blocks have no identity but their place, so each is keyed by it.
-function render(list: Block[], onLink?: LinkHandler, tight = false): ReactNode[] {
+function render(list: Block[], onLink?: LinkHandler, tight = false, prose = false): ReactNode[] {
   // biome-ignore lint/suspicious/noArrayIndexKey: see above
-  return list.map((b, k) => <Fragment key={k}>{block(b, onLink, tight)}</Fragment>)
+  return list.map((b, k) => <Fragment key={k}>{block(b, onLink, tight, prose)}</Fragment>)
 }
 
-function block(b: Block, onLink: LinkHandler | undefined, tight: boolean): ReactNode {
+// A column of numbers (every cell that has something is a number, an amount or a share) is set
+// to the end in a document, unless its rule aligns it.
+const NUMBER = /^[-+−]?[$€£¥]?\s?\d[\d\s.,]*\s?(%|[$€£¥])?$/
+
+function numericColumns(b: Extract<Block, { kind: 'table' }>): boolean[] {
+  return b.head.map((_, j) => {
+    if (b.align[j]) return false
+    const cells = b.rows.map((r) => (r[j] ?? '').trim()).filter(Boolean)
+    return cells.length > 0 && cells.every((c) => NUMBER.test(c))
+  })
+}
+
+function block(b: Block, onLink: LinkHandler | undefined, tight: boolean, prose: boolean): ReactNode {
+  const cls = (name: string) => (prose ? `ui-prose-${name}` : undefined)
   switch (b.kind) {
     case 'heading':
       return <Heading level={b.level}>{inline(b.text, onLink)}</Heading>
@@ -427,25 +446,29 @@ function block(b: Block, onLink: LinkHandler | undefined, tight: boolean): React
       return <Paragraph text={b.text} onLink={onLink} tight={tight} />
     case 'code':
       return (
-        <pre>
-          <code data-lang={b.lang}>{b.text}</code>
+        <pre className={cls('pre')}>
+          <code className={cls('code')} data-lang={b.lang}>
+            {b.text}
+          </code>
         </pre>
       )
     case 'quote':
-      return <blockquote>{render(b.blocks, onLink)}</blockquote>
+      return <blockquote className={cls('quote')}>{render(b.blocks, onLink, false, prose)}</blockquote>
     case 'rule':
-      return <hr />
+      return <hr className={cls('rule')} />
     case 'table': {
+      const numeric = prose ? numericColumns(b) : []
       // Each row has the head's cells: missing ones are empty, extra ones are dropped.
       const row = (cells: string[], Cell: 'th' | 'td') =>
         b.head.map((_, j) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: cells have no identity but their place
-          <Cell key={j} style={{ textAlign: b.align[j] }}>
+          <Cell key={j} style={{ textAlign: b.align[j] }} data-numeric={numeric[j] || undefined}>
             {inline(cells[j] ?? '', onLink)}
           </Cell>
         ))
       return (
-        <div className="tt-md-table">
+        // A wide table scrolls sideways in its own box.
+        <div className={prose ? 'ui-prose-table' : 'tt-md-table'}>
           <table>
             <thead>
               <tr>{row(b.head, 'th')}</tr>
@@ -467,21 +490,27 @@ function block(b: Block, onLink: LinkHandler | undefined, tight: boolean): React
         const task = taskItem(item)
         return task ? (
           // biome-ignore lint/suspicious/noArrayIndexKey: items have no identity but their place
-          <li key={n} className="tt-task-item">
+          <li key={n} className={prose ? 'ui-prose-task' : 'tt-task-item'}>
             {/* Read-only: a document's checkboxes are its text, changed by editing it. The item's
                 own words are the label. */}
-            <label>
-              <input type="checkbox" checked={task.checked} disabled />
+            <label className={cls('task-label')}>
+              <input className={cls('check')} type="checkbox" checked={task.checked} disabled />
               <Paragraph text={task.text} onLink={onLink} tight />
             </label>
-            {render(task.rest, onLink, tight)}
+            {render(task.rest, onLink, tight, prose)}
           </li>
         ) : (
           // biome-ignore lint/suspicious/noArrayIndexKey: items have no identity but their place
-          <li key={n}>{render(item, onLink, tight)}</li>
+          <li key={n}>{render(item, onLink, tight, prose)}</li>
         )
       })
-      return b.ordered ? <ol start={b.start === 1 ? undefined : b.start}>{items}</ol> : <ul>{items}</ul>
+      return b.ordered ? (
+        <ol className={cls('list')} start={b.start === 1 ? undefined : b.start}>
+          {items}
+        </ol>
+      ) : (
+        <ul className={cls('list')}>{items}</ul>
+      )
     }
   }
 }
@@ -516,39 +545,51 @@ function Mention({ id, label }: { id: string; label: string }) {
 // and whether a single line break in a paragraph is one (as a model means it in a reply).
 const HeadingShift = createContext(0)
 const LineBreaks = createContext(false)
+// A document read in the knowledge base (`look="document"`).
+const Prose = createContext(false)
+
+function InlineCode({ children }: { children: ReactNode }) {
+  return <code className={useContext(Prose) ? 'ui-prose-code' : undefined}>{children}</code>
+}
 
 function Paragraph({ text, onLink, tight }: { text: string; onLink?: LinkHandler; tight: boolean }) {
   // As a hard break ("  \n"), which inline() draws: only in a paragraph, never in code.
   const shown = useContext(LineBreaks) ? text.replace(/ *\n/g, '  \n') : text
-  return tight ? <span>{inline(shown, onLink)}</span> : <p>{inline(shown, onLink)}</p>
+  const className = useContext(Prose) ? 'ui-prose-p' : undefined
+  return tight ? <span>{inline(shown, onLink)}</span> : <p className={className}>{inline(shown, onLink)}</p>
 }
 
 function Heading({ level, children }: { level: number; children: ReactNode }) {
   const H = `h${Math.min(6, level + useContext(HeadingShift))}` as 'h1'
-  return <H>{children}</H>
+  return <H className={useContext(Prose) ? 'ui-prose-heading' : undefined}>{children}</H>
 }
 
 // headingShift lowers every heading by that many levels (to h6 at most): 2 makes "#" an h3.
 // lineBreaks makes each line break in a paragraph a break, as in a chat reply. mentions says how
-// the people a comment mentions are named.
+// the people a comment mentions are named. look="document" is a document's own look, for reading.
 export function Markdown({
   text,
   onLink,
   headingShift = 0,
   lineBreaks = false,
   mentions,
+  look,
 }: {
   text: string
   onLink?: LinkHandler
   headingShift?: number
   lineBreaks?: boolean
   mentions?: MentionNames
+  look?: 'document'
 }) {
+  const prose = look === 'document'
   return (
     <HeadingShift.Provider value={headingShift}>
       <LineBreaks.Provider value={lineBreaks}>
         <Mentions.Provider value={mentions ?? null}>
-          <div className="tt-markdown">{render(parseBlocks(text), onLink)}</div>
+          <Prose.Provider value={prose}>
+            <div className={prose ? 'ui-prose' : 'tt-markdown'}>{render(parseBlocks(text), onLink, false, prose)}</div>
+          </Prose.Provider>
         </Mentions.Provider>
       </LineBreaks.Provider>
     </HeadingShift.Provider>

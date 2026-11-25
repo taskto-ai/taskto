@@ -35,7 +35,7 @@ const effect = (id: number, over: Partial<AppEffect> = {}): AppEffect => ({
 test('an app that set nothing going shows nothing of effects', async () => {
   fakeFetch({ [`GET ${base}/effects?limit=50`]: { body: { effects: [], active: 0, failed: 0 } } })
   const { container } = render(<AppEffects workspace={1} base={base} writable />)
-  await waitFor(() => expect(container.querySelector('.tt-effects')).toBeNull())
+  await waitFor(() => expect(container.querySelector('.ui-effects')).toBeNull())
   expect(screen.queryByRole('button', { name: 'Effects' })).toBeNull()
 })
 
@@ -340,8 +340,10 @@ test('retrying an effect on an older page shows it retried there, not still fail
   // The older page is read again: the row is no longer failed, and offers no retry.
   await waitFor(() => expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull())
   expect(calls.some((c) => c.path.endsWith('before=41'))).toBe(true)
+  // Its status, said by its badge: waiting, not failed.
   const old = screen
     .getAllByRole('listitem')
-    .find((li) => li.textContent?.includes('Fix East gate') && li.getAttribute('data-status') !== 'done')
-  expect(old?.getAttribute('data-status')).toBe('pending')
+    .find((li) => li.textContent?.includes('Fix East gate') && !li.textContent?.includes('Done'))
+  expect(old?.textContent).toContain('Waiting')
+  expect(old?.textContent).not.toContain('Failed')
 })

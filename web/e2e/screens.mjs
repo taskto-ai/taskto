@@ -62,6 +62,165 @@ const owner = {
 const colleague = { name: 'Bruno Costa', password: 'sample-colleague-password-for-screens' }
 const INBOX_CARD = 'Review the launch checklist'
 
+// An app whose one screen uses every component of the renderer the server's catalog allows (the
+// renderer's theme is web/src/ui/a2ui.css): numbers, every kind of field, choices as chips and as
+// boxes, a check box, a slider, dates, tabs, a card, a divider, a list, an icon, a modal and the
+// three kinds of button, one of them disabled until the form is valid.
+const COMPONENTS_APP_NAME = 'Every component'
+const C = (id, component, props = {}) => ({ id, component, ...props })
+const label = (id, text) => C(id, 'Text', { text })
+const COMPONENTS_APP = {
+  screens: [
+    {
+      name: 'main',
+      root: 'main-root',
+      components: [
+        C('main-root', 'Column', {
+          children: ['title', 'intro', 'stats', 'form-card', 'tabs', 'divider', 'list', 'more', 'actions'],
+        }),
+        C('title', 'Text', { text: 'Field visit', variant: 'h2' }),
+        C('intro', 'Text', { text: 'Every control an app can draw, as the library draws it.', variant: 'caption' }),
+        C('stats', 'Row', { children: ['stat-count', 'stat-total', 'stat-latest'] }),
+        C('stat-count', 'Stat', { label: 'Visits', value: { path: '/count' } }),
+        C('stat-total', 'Stat', { label: 'Hours logged', value: { path: '/total_hours' } }),
+        C('stat-latest', 'Stat', { label: 'Status', value: 'On track' }),
+        C('form-card', 'Card', { child: 'form' }),
+        C('form', 'Column', {
+          children: ['f-site', 'f-hours', 'f-notes', 'f-code', 'f-dates', 'f-kind', 'f-tools', 'f-urgent', 'f-effort'],
+        }),
+        C('f-site', 'TextField', {
+          label: 'Site',
+          value: { path: '/draft/site' },
+          checks: [{ condition: { call: 'required', args: { value: { path: '/draft/site' } } }, message: 'Say where' }],
+        }),
+        C('f-hours', 'TextField', { label: 'Hours', variant: 'number', value: { path: '/draft/hours' } }),
+        C('f-notes', 'TextField', { label: 'Notes', variant: 'longText', value: { path: '/draft/notes' } }),
+        C('f-code', 'TextField', { label: 'Access code', variant: 'obscured', value: { path: '/draft/code' } }),
+        C('f-dates', 'Row', { children: ['f-day', 'f-time'] }),
+        C('f-day', 'DateTimeInput', { label: 'Day', enableDate: true, value: { path: '/draft/day' } }),
+        C('f-time', 'DateTimeInput', { label: 'Start', enableTime: true, value: { path: '/draft/start' } }),
+        C('f-kind', 'ChoicePicker', {
+          label: 'Kind',
+          variant: 'mutuallyExclusive',
+          displayStyle: 'chips',
+          options: [
+            { label: 'Inspection', value: 'inspection' },
+            { label: 'Repair', value: 'repair' },
+            { label: 'Delivery', value: 'delivery' },
+          ],
+          value: { path: '/draft/kind' },
+        }),
+        C('f-tools', 'ChoicePicker', {
+          label: 'Tools',
+          variant: 'multipleSelection',
+          displayStyle: 'checkbox',
+          filterable: true,
+          options: [
+            { label: 'Ladder', value: 'ladder' },
+            { label: 'Drill', value: 'drill' },
+            { label: 'Meter', value: 'meter' },
+          ],
+          value: { path: '/draft/tools' },
+        }),
+        C('f-urgent', 'CheckBox', { label: 'Urgent', value: { path: '/draft/urgent' } }),
+        C('f-effort', 'Slider', { label: 'Effort', min: 0, max: 10, value: { path: '/draft/effort' } }),
+        C('tabs', 'Tabs', {
+          tabs: [
+            { title: 'Checklist', child: 'tab-checklist' },
+            { title: 'History', child: 'tab-history' },
+          ],
+        }),
+        C('tab-checklist', 'Text', { text: 'Check the meter, then the valves.' }),
+        C('tab-history', 'Text', { text: 'No earlier visits.', variant: 'caption' }),
+        C('divider', 'Divider'),
+        C('list', 'List', { children: ['list-one', 'list-two'] }),
+        C('list-one', 'Row', { align: 'center', children: ['list-icon', 'list-text'] }),
+        C('list-icon', 'Icon', { name: { svgPath: 'M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z' } }),
+        C('list-text', 'Text', { text: 'Meter read' }),
+        C('list-two', 'Text', { text: 'Valves to check', variant: 'caption' }),
+        C('more', 'Modal', { trigger: 'more-open', content: 'more-text' }),
+        C('more-open', 'Button', { child: 'more-open-label', action: { event: { name: 'noop' } } }),
+        label('more-open-label', 'Safety notes'),
+        C('more-text', 'Text', { text: 'Wear gloves near the valves.' }),
+        C('actions', 'Row', { children: ['a-help', 'a-clear', 'a-save'] }),
+        C('a-help', 'Button', { variant: 'borderless', child: 'a-help-label', action: { event: { name: 'noop' } } }),
+        label('a-help-label', 'Help'),
+        C('a-clear', 'Button', { child: 'a-clear-label', action: { event: { name: 'noop' } } }),
+        label('a-clear-label', 'Clear'),
+        C('a-save', 'Button', {
+          variant: 'primary',
+          child: 'a-save-label',
+          action: {
+            event: { name: 'add', context: { site: { path: '/draft/site' }, hours: { path: '/draft/hours' } } },
+          },
+          checks: [{ condition: { call: 'required', args: { value: { path: '/draft/site' } } }, message: 'Say where' }],
+        }),
+        label('a-save-label', 'Submit'),
+      ],
+    },
+  ],
+  entry: 'main',
+  collection: {
+    fields: [
+      { name: 'site', type: 'string', required: true },
+      { name: 'hours', type: 'number' },
+    ],
+  },
+  actions: {
+    add: { kind: 'insert' },
+    edit: { kind: 'update' },
+    remove: { kind: 'delete' },
+    noop: { kind: 'navigate', screen: 'main' },
+  },
+  summaries: { count: { kind: 'count' }, total_hours: { kind: 'sum', field: 'hours' } },
+}
+
+// An app whose one form holds every capture field TaskTo.AI's catalog has: photos, a location, a
+// signature and a barcode, each with its own field in the collection.
+const CAPTURE_APP_NAME = 'Every capture field'
+const CAPTURE_APP = {
+  screens: [
+    {
+      name: 'main',
+      root: 'main-root',
+      components: [
+        C('main-root', 'Column', { children: ['title', 'photos', 'place', 'signed', 'code', 'save'] }),
+        C('title', 'Text', { text: 'Site visit', variant: 'h2' }),
+        C('photos', 'PhotoInput', { field: 'photos', label: 'Photos of the site', value: { path: '/draft/photos' } }),
+        C('place', 'LocationInput', { field: 'place', label: 'Where you are', value: { path: '/draft/place' } }),
+        C('signed', 'SignatureInput', { field: 'signed', label: 'Your signature', value: { path: '/draft/signed' } }),
+        C('code', 'BarcodeInput', { field: 'code', label: 'Asset tag', value: { path: '/draft/code' } }),
+        C('save', 'Button', {
+          variant: 'primary',
+          child: 'save-label',
+          action: {
+            event: {
+              name: 'add',
+              context: {
+                photos: { path: '/draft/photos' },
+                place: { path: '/draft/place' },
+                signed: { path: '/draft/signed' },
+                code: { path: '/draft/code' },
+              },
+            },
+          },
+        }),
+        label('save-label', 'Save the visit'),
+      ],
+    },
+  ],
+  entry: 'main',
+  collection: {
+    fields: [
+      { name: 'photos', type: 'attachment', max_files: 3 },
+      { name: 'place', type: 'location' },
+      { name: 'signed', type: 'signature' },
+      { name: 'code', type: 'barcode' },
+    ],
+  },
+  actions: { add: { kind: 'insert' } },
+}
+
 // What a screen needs, in the order the run goes: before any account exists, with an account and
 // nothing in it, with the sample data, and signed out again.
 export const PHASES = ['first-run', 'empty', 'seeded', 'signed-out']
@@ -137,13 +296,14 @@ export const SCREENS = [
     name: 'empty-boards',
     phase: 'empty',
     show: (s) => s.go(s.path('boards')),
-    ready: (s) => [heading(s, 'Boards'), column(s, 'Backlog')],
+    ready: (s) => [heading(s, 'Personal'), column(s, 'Backlog')],
   },
   {
     name: 'empty-apps',
     phase: 'empty',
     show: (s) => s.go(s.path('apps')),
-    ready: (s) => [heading(s, 'Apps'), text(s, 'No apps here yet.')],
+    // Every space is empty and says so: the first one's will do.
+    ready: (s) => [heading(s, 'Apps'), text(s, /^No apps in .+ yet$/).first()],
   },
   {
     name: 'empty-inbox',
@@ -221,7 +381,7 @@ export const SCREENS = [
     name: 'boards',
     phase: 'seeded',
     show: (s) => s.go(s.path('boards')),
-    ready: (s) => [heading(s, 'Boards'), text(s, 'Write the launch post')],
+    ready: (s) => [heading(s, 'Personal'), text(s, 'Write the launch post')],
   },
   {
     name: 'board',
@@ -233,17 +393,31 @@ export const SCREENS = [
     name: 'board-shared',
     phase: 'seeded',
     show: (s) => s.go(s.path('boards', `${s.ids.team}:${s.ids.teamBoard}`)),
-    ready: (s) => [
-      column(s, 'Backlog'),
-      text(s, 'Quotas: design the usage view'),
-      s.page.locator('strong', { hasText: 'Launch' }),
-    ],
+    ready: (s) => [column(s, 'Backlog'), text(s, 'Quotas: design the usage view'), heading(s, 'Launch')],
   },
   {
     name: 'card-open',
     phase: 'seeded',
     show: (s) => s.go(s.path('boards', `${s.ids.space}:${s.ids.board}:${s.ids.card}`)),
     ready: (s) => [heading(s, 'Write the launch post'), text(s, 'Looks good. Can we add the pricing table?')],
+  },
+  {
+    name: 'card-blocked',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('boards', `${s.ids.space}:${s.ids.board}`))
+      await s.page.getByRole('button', { name: /^Audit log filters/ }).click()
+    },
+    ready: (s) => [heading(s, 'Audit log filters'), text(s, 'Blocked: waiting for the audit log API')],
+  },
+  {
+    name: 'card-move',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('boards', `${s.ids.space}:${s.ids.board}`))
+      await s.page.getByRole('button', { name: 'Move “Write the launch post”' }).click()
+    },
+    ready: (s) => [s.page.getByRole('menuitem', { name: 'To Doing' })],
   },
   {
     name: 'card-add',
@@ -264,13 +438,85 @@ export const SCREENS = [
     name: 'apps-templates',
     phase: 'seeded',
     show: (s) => s.go(s.path('apps', 'templates')),
-    ready: (s) => [heading(s, 'Start from a template'), heading(s, 'Expense tracker')],
+    ready: (s) => [
+      heading(s, 'Start from a template'),
+      s.page.getByRole('button', { name: 'Use the template Expense tracker', exact: true }),
+    ],
   },
   {
     name: 'app-open',
     phase: 'seeded',
     show: (s) => s.go(s.path('apps', `${s.ids.space}-${s.ids.app}`)),
     ready: (s) => heading(s, s.ids.appName),
+  },
+  {
+    name: 'app-components',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`)),
+    ready: (s) => [heading(s, COMPONENTS_APP_NAME), text(s, 'Submit')],
+  },
+  {
+    // The same app scrolled to its end: the choices, the check box, the slider, the tabs, the list,
+    // the modal's button and the row of buttons.
+    name: 'app-components-end',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`))
+      await text(s, 'Submit', true).scrollIntoViewIfNeeded()
+    },
+    ready: (s) => [text(s, 'Submit', true), text(s, 'Safety notes', true)],
+  },
+  {
+    // Its records, opened from the app's header: the explorer (a table, or rows on a phone).
+    name: 'app-records',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`))
+      await s.page.getByRole('button', { name: 'Records and history' }).click()
+      await text(s, 'Riverside depot', true).first().waitFor()
+    },
+    ready: (s) => [text(s, 'Riverside depot', true).first(), text(s, /matching records/)],
+  },
+  {
+    // What its button set going: documents made, and a log the later visits couldn't make.
+    name: 'app-effects',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`))
+      await s.page.getByRole('button', { name: /^Effects/ }).click()
+      await s.page.getByRole('list', { name: 'The app’s effects' }).scrollIntoViewIfNeeded()
+    },
+    ready: (s) => [s.page.getByRole('list', { name: 'The app’s effects' })],
+  },
+  {
+    // One record open, with its fields and its history.
+    name: 'app-record',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.componentsApp}`))
+      await s.page.getByRole('button', { name: 'Records and history' }).click()
+      await s.page
+        .getByRole('button', { name: /^Open record \d+$/ })
+        .first()
+        .click()
+    },
+    ready: (s) => [heading(s, /^Record \d+$/), text(s, /^History$/)],
+  },
+  // The capture fields: a photo, a location, a signature and a barcode, at the form's top and end.
+  {
+    name: 'app-capture',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('apps', `${s.ids.space}-${s.ids.captureApp}`)),
+    ready: (s) => [heading(s, CAPTURE_APP_NAME), text(s, 'Take a photo', true)],
+  },
+  {
+    name: 'app-capture-end',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.captureApp}`))
+      await text(s, 'Save the visit', true).scrollIntoViewIfNeeded()
+    },
+    ready: (s) => [text(s, 'Save the visit', true), s.page.getByLabel(/Code \(type it/)],
   },
   {
     name: 'app-builder',
@@ -295,9 +541,12 @@ export const SCREENS = [
     phase: 'seeded',
     show: async (s) => {
       await s.go(s.path('home'))
-      await s.page.locator('.tt-account summary').click()
+      // On a phone the account is in the sidebar's drawer.
+      const drawer = s.page.getByRole('button', { name: 'Open the menu' })
+      if (await drawer.isVisible()) await drawer.click()
+      await s.page.getByRole('button', { name: `Account: ${owner.name}` }).click()
     },
-    ready: (s) => [heading(s, 'Home'), s.page.getByRole('button', { name: 'Log out' })],
+    ready: (s) => [heading(s, 'Home'), s.page.getByRole('menuitem', { name: 'Log out' })],
   },
   {
     name: 'drawer',
@@ -305,7 +554,7 @@ export const SCREENS = [
     only: 'phone',
     show: async (s) => {
       await s.go(s.path('home'))
-      await s.page.locator('.tt-menu-button').click()
+      await s.page.getByRole('button', { name: 'Open the menu' }).click()
     },
     ready: (s) => [
       heading(s, 'Home'),
@@ -853,6 +1102,44 @@ async function seed({ api, base, workspace, agent, say }) {
     await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
     apps.push(app)
   }
+  // An app that uses every component of the renderer an app may (docs/design.md, "The apps
+  // renderer"), with a few records through its own action, for its records and their history.
+  {
+    // What its button sets going: a document for each visit, and one log that only the first visit
+    // can make (a document is never written over), so the others' fail, with their retry.
+    const effects = [
+      { kind: 'create_document', space_id: mine.id, path: 'visits/{{id}}.md', content: 'Site: {{site}}\n' },
+      { kind: 'create_document', space_id: mine.id, path: 'visits/log.md', content: 'First visit: {{site}}\n' },
+    ]
+    const definition = {
+      ...COMPONENTS_APP,
+      actions: { ...COMPONENTS_APP.actions, add: { kind: 'insert', effects } },
+    }
+    const app = await api('POST', `${P}/apps`, { name: COMPONENTS_APP_NAME, definition })
+    await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
+    apps.componentsApp = app.id
+    const visits = [
+      ['North pumping station', 3.5],
+      ['Riverside depot', 1.25],
+      ['Old mill substation', 6],
+    ]
+    for (const [i, [site, hours]] of visits.entries()) {
+      await api('POST', `${P}/apps/${app.id}/actions`, {
+        name: 'add',
+        surfaceId: `app-${app.id}`,
+        sourceComponentId: 'a-save',
+        timestamp: new Date().toISOString(),
+        context: { site, hours },
+        operation: `screens-visit-${i}`,
+      })
+    }
+  }
+  // An app whose form holds every capture field.
+  {
+    const app = await api('POST', `${P}/apps`, { name: CAPTURE_APP_NAME, definition: CAPTURE_APP })
+    await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
+    apps.captureApp = app.id
+  }
   const available = (await api('GET', `${W}/home/available`)).apps ?? []
   let homeApp
   for (const app of available.slice(0, 3)) {
@@ -903,6 +1190,8 @@ async function seed({ api, base, workspace, agent, say }) {
     app: apps[0].id,
     appName: apps[0].name,
     homeApp: homeApp ?? apps[0].name,
+    componentsApp: apps.componentsApp,
+    captureApp: apps.captureApp,
     conversation: talk?.id,
   }
 }

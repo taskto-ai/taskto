@@ -196,6 +196,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_template_board` | 400 | The template needs a board and none was given, or takes none and one was. |
 | `app_operation_invalid` | 422 | An action's `operation` isn't 8 to 64 letters, digits, `-` or `_`. |
 | `app_operation_reused` | 409 | The `operation` was used before for a different request. |
+| `app_token_rate_limited` | 429 | The caller's access tokens ran their budget of actions in this workspace (60 a minute); `Retry-After` says when to try again (params: `max`, `seconds`). |
 | `app_effects_backlog` | 409 | The app has `max` effects waiting: the action changed nothing. |
 | `app_effect_not_failed` | 409 | Only a failed effect is retried. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
@@ -403,10 +404,16 @@ workspace, and acts with exactly that user's access there, checked again on ever
   | `…/spaces/{space}/docs…`, `GET …/history…`, `…/restore/…` | the [knowledge base](#knowledge-base), all of it but removing old versions from history |
   | `GET …/search`, `GET …/spaces/{space}/search` | [searching](#search) |
   | `…/spaces/{space}/boards…` | the [boards](#boards), all of it |
+  | `GET …/apps`, `GET …/apps/{app}`, `GET …/apps/{app}/surface`, `GET …/apps/{app}/releases[/{release}]`, `GET …/apps/{app}/records…` (the list, `deleted`, `query` and a record's `history` and `effects`), `GET …/apps/{app}/effects`, `POST …/apps/{app}/actions` | [personal apps](#personal-apps): reading an app and its rows, and running its actions, as the token's user: the space's access and the app's roles are checked as for a session, and rows a token adds or changes are marked with its name |
 
-  Personal apps are not here: a personal access token reaches them only through the
-  [MCP tools](mcp.md) at `/mcp` (such as `list_apps` and `create_app`). The apps' REST routes
-  need a session and answer `403` to a token.
+  The rest of the apps' routes take a session only (`403` with a token): creating, changing,
+  moving, copying, previewing, publishing and rolling back an app, its roles, installing a
+  template, restoring a record, retrying an effect, a device's [offline
+  download](#get-appsappoffline) and the photo uploads and attachments. They are the web
+  app's own (the builder, a device's queue, bytes that aren't JSON), and a token builds and
+  changes apps through the [MCP tools](mcp.md) (`create_app`, `update_app`), which check the
+  same rules. A request to an apps route that names an account (`X-Taskto-Expected-User`, the
+  offline outbox's) is a session's: with a token it is `403` too.
 
   Every other route answers `403` to a request carrying a token, whatever else it carries
   (a session cookie too): logging in and out, setup, `GET /api/me`, invites, managing
@@ -2512,8 +2519,9 @@ their rows; its **writers** create and change apps and run their actions (which 
 rows). A viewer's action is `403`. **Sharing** an app is moving it to a shared space,
 with its rows (`…/move`); a whole workspace shares an app through a shared space everyone
 is a member of. Every route below is under
-`/api/workspaces/{workspace}/spaces/{space}/apps`, needs a session (`401`), goes through
-the [CSRF guard](#csrf) unless it is a `GET`, and answers `404` for a space or app the
+`/api/workspaces/{workspace}/spaces/{space}/apps`, needs a session (`401`), or an
+[access token](#access-tokens) on the routes that read an app and run its actions (the others
+answer a token `403`), goes through the [CSRF guard](#csrf) unless it is a `GET`, and answers `404` for a space or app the
 caller can't read, or that isn't where the path says (an app of another space), and `403`
 for a write the caller may only read: a viewer, or an archived space. Besides, `403` with
 the code `app_forbidden` is for something the space allows but the caller's **roles in the
@@ -2669,7 +2677,7 @@ last digits.
 ### `GET …/apps/{app}/records/{record}/history`
 
 A record's versions, newest first, at most 200 (`truncated` says if older ones were left
-out): `{"record": {…}, "history": [{"revision": 3, "operation": "update", "data": {…},
+out; a record's history holds its newest 500 versions, and drops the oldest as new ones are made): `{"record": {…}, "history": [{"revision": 3, "operation": "update", "data": {…},
 "at": "…", "by": {"id", "name", "agent", "via"}, "action": "edit_expense"}, …],
 "truncated": false}`. `record` is the record as it is now, with its `revision`, `data`,
 who created, changed and deleted it, and `deleted_at` if it is deleted (its history can
@@ -2680,7 +2688,9 @@ for a role that reads no record.
 ### `GET …/apps/{app}/records/deleted`
 
 The app's deleted records the caller may read, most recently deleted first, at most 1,000
-(`truncated`), in the same shape as `GET …/records`.
+(`truncated`), in the same shape as `GET …/records`. A deleted record is kept for **90 days** by
+default (the operator's `-app-deleted-retention`, or for ever with `off`); after that it is
+removed with its history and its photos, and is no longer listed or restorable.
 
 ### `POST …/apps/{app}/records/{record}/restore`
 
@@ -2691,7 +2701,10 @@ record back, with its history, as a new revision, and answers with it. `409` wit
 the app has no room for it; `400` if it no longer fits the live release's collection, which
 changed since (the field's code, such as `app_field_required`; a draft that isn't published
 doesn't count); `409` with `app_offline` while the app is offline, `409 app_not_published`
-before the first release. The history and deleted routes work for an offline app, whose data is kept.
+before the first release. A record deleted longer ago than the retention window (see
+[the deleted ones](#get-appsapprecordsdeleted)) has been removed, and restoring it is `404`, as for
+a record that never was; restoring inside the window works as ever. The history and deleted routes
+work for an offline app, whose data is kept.
 
 ### `GET …/apps/{app}/roles`
 
@@ -3166,6 +3179,22 @@ with, for an update or a delete, the optional `"expectedRevision"` (see
 [Records](#records-revisions-history-and-deleting); `422` if it isn't a revision, or the
 action inserts, `409` `app_record_conflict` if the record has another one). A delete marks
 the record deleted: it can be restored.
+
+With an [access token](#access-tokens) the action runs as the token's user, the changes are marked
+with the token's name, and the user's tokens together (with `run_app_action` over MCP) have a
+**budget of 60 actions a minute** in a workspace, with a burst of 60: over it the answer is
+`429 app_token_rate_limited` with `Retry-After`, in seconds, and nothing is done, except that a
+request that already committed (the same `operation` and `release`) is answered with its receipt, for
+a client that lost the answer. A session is never limited. Deleted rows and their history are kept until a retention rule removes them, and none purges them yet, so a token's insert and delete cycles keep growing storage within its action budget. A token's `operation` keys are in the same scope as the browser's: **the key belongs to the
+user and the app, not to the credential**, so a token and a session (or two tokens) of one user who
+send the same key meet. A client should make a random key for each change (8 to 64 letters, digits,
+`-`, `_`) and never reuse one for another: the same key with the same request replays it, and the
+same key with a different request is `409 app_operation_reused`. The effects such an action sets going
+(a card, a document) are done by the server's worker, as the user and not through the token: a
+document's commit says it was made by "TaskTo app" for the user, whichever credential asked (the
+commit is found again by that name after a crash, so it doesn't carry the token's name), while a
+card made by an effect is marked with the token's name, like the record.
+
 The server checks it against the app (`422` for an event the app doesn't declare,
 another surface, a context field the collection doesn't have, a value that doesn't fit
 its field, or a row the app doesn't have), applies it, and answers with the
@@ -3352,6 +3381,8 @@ complete or fail, so one slow after its lease ran out can't end a retry made sin
 right to change that record, in the scope their roles give now); `409 app_effect_not_failed` for one
 that didn't fail; `409 app_effects_backlog` when the app already has 500 effects waiting (a retry is
 waiting work like any other); `404` for an effect of a record the caller can't read. The worker checks access again when it runs, so a retry never widens what anyone may do.
+A session only: an effect read with an [access token](#access-tokens) says `"can_retry": false`,
+since the route is not one a token reaches.
 
 #### `POST …/apps/{app}/actions/preview`
 
