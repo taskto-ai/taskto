@@ -18,8 +18,15 @@ Every value the app's stylesheets use comes from a token, in two layers, in `web
    never what it looks like, each written once as `light-dark(light, dark)`. Their values are a
    brand's: `themes/mint.css` is the default and the only one the app ships.
 
-`web/src/ui/index.css`, which `web/src/main.tsx` imports before anything else that styles the page,
-declares the cascade layers and imports the files:
+`web/src/ui/index.css` declares the cascade layers and imports the files. The first `@layer` a
+browser meets fixes that layer's place, so the order holds only if the statement comes before any
+rule in a layer. Two things guarantee it. `web/index.html` declares the same order in a `<style>` in
+its head, ahead of every stylesheet: a production build links the stylesheets of shared chunks (a
+component's `@layer components { … }`) before the entry's, so no import order alone can put
+`index.css` first. And `index.css` is the first import of `web/src/main.tsx`, so that within the
+entry's own stylesheet the tokens come before anything else. `web/src/ui/tokens.test.ts` fails when
+the page's statement is missing, comes after a stylesheet or differs from `index.css`'s, and when
+anything else is `main.tsx`'s first import.
 
 | File | Layer | What |
 |---|---|---|
