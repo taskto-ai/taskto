@@ -861,6 +861,7 @@
     "app_changed": "Someone changed this app meanwhile: reload and try again.",
     "app_name_length": "An app name needs 1 to {max} characters.",
     "too_many_apps": "A space can have at most {max} apps.",
+    "app_token_rate_limited": "Your access tokens ran {max} actions in a minute here, which is the most allowed. Try again in {seconds} seconds.",
     "app_full": "This app is full: it holds at most {max_rows} rows and {max_mib} MiB of data.",
     "app_preview_full": "The preview is full: it holds at most {max_rows} sample rows. Start it again.",
     "app_preview_too_large": "The preview’s sample data is too large (at most {max_mib} MiB). Start it again.",
@@ -2076,12 +2077,16 @@
       "light": "Light",
       "dark": "Dark"
     },
-    "account": "Account: {name}",
     "skipToContent": "Skip to the content",
     "installApp": "Install the app",
     "pinned": "Pinned apps",
     "pageFailed": "This page couldn’t be shown. The menu and your settings still work.",
-    "reload": "Reload"
+    "reload": "Reload",
+    "noWorkspaceTitle": "No workspace yet",
+    "workspaces": "Your workspaces",
+    "workspaceCreated": "“{name}” was created.",
+    "openWorkspace": "Open it",
+    "accountLabel": "Account"
   },
   "common": {
     "cancel": "Cancel",
@@ -2703,7 +2708,6 @@
   },
   "notifications": {
     "title": "Notifications",
-    "bell": "Notifications",
     "bellUnread": "Notifications, {count} unread",
     "intro": "What happened that you may want to see. Push notifications are optional and only a prompt to look here.",
     "pushSettings": "Notification settings",
@@ -2835,7 +2839,8 @@
       "sizes": "Sizes",
       "shapes": "Shapes",
       "tones": "Tones",
-      "hues": "Hues"
+      "hues": "Hues",
+      "distinctInitials": "Several side by side, each with letters of its own"
     },
     "sample": {
       "primary": "Primary",
@@ -3023,6 +3028,7 @@
       "focusTarget": "Moved to by a script (a ref, and tabIndex -1)",
       "focusIt": "Send the keyboard to the title",
       "openPage": "Open a page (a link)",
+      "menuChoices": "One choice of several, in a named group",
       "switchBoard": "Switch board"
     }
   }
