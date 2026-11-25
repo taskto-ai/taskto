@@ -303,7 +303,12 @@ func (s *Service) recheck(ctx context.Context, a Actor, ids ...int64) error {
 // as unseen as one of a space they can't open). It asks package access, which answers for
 // requests and the agent alike.
 func (s *Service) appAccess(ctx context.Context, a Actor, spaceID, appID int64) (access.AppAccess, error) {
-	acc, err := s.access.App(ctx, a.UserID, spaceID, appID)
+	return appAccessBy(ctx, s.access, a, spaceID, appID)
+}
+
+// appAccessBy is appAccess asked of checker, which may read inside a snapshot (access.Snapshot).
+func appAccessBy(ctx context.Context, checker *access.Checker, a Actor, spaceID, appID int64) (access.AppAccess, error) {
+	acc, err := checker.App(ctx, a.UserID, spaceID, appID)
 	if errors.Is(err, access.ErrNotFound) || errors.Is(err, access.ErrAppNotFound) {
 		return access.AppAccess{}, ErrNotFound
 	}

@@ -1,8 +1,10 @@
 package server
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -464,5 +466,168 @@ func TestWorkspaceExportLeavesOutAnAppTheAdminHasNoRoleIn(t *testing.T) {
 		if bytes.Contains(b, []byte("closed-expense")) {
 			t.Errorf("%s holds a record of an app the admin can't open", name)
 		}
+	}
+}
+
+// onNth runs fn just before the nth statement from now that contains fragment.
+func (s *stack) onNth(fragment string, n int, fn func()) {
+	count := 0
+	var arm func()
+	arm = func() {
+		count++
+		if count == n {
+			fn()
+			return
+		}
+		s.hooks.BeforeQuery(fragment, arm)
+	}
+	s.hooks.BeforeQuery(fragment, arm)
+}
+
+// countStatements counts, until the returned stop is called, the statements that contain fragment.
+func (s *stack) countStatements(fragment string) (count func() int) {
+	n := 0
+	var arm func()
+	arm = func() {
+		n++
+		s.hooks.BeforeQuery(fragment, arm)
+	}
+	s.hooks.BeforeQuery(fragment, arm)
+	return func() int { return n }
+}
+
+// aborted serves the download and says whether the connection was cut: the zip then has no end.
+func aborted(s *stack, r *http.Request) (*httptest.ResponseRecorder, bool) {
+	rec := httptest.NewRecorder()
+	var got any
+	func() {
+		defer func() { got = recover() }()
+		s.h.ServeHTTP(rec, r)
+	}()
+	err, _ := got.(error)
+	return rec, errors.Is(err, http.ErrAbortHandler)
+}
+
+func (s *stack) demote(user int64) {
+	s.t.Helper()
+	s.exec(`UPDATE memberships SET role = 'member' WHERE workspace_id = ? AND user_id = ?`, s.one, user)
+}
+
+// A document is added to the zip only if the admin is still in the space once it is open: the
+// membership is checked again after the file was opened, not only before.
+func TestWorkspaceExportChecksTheSpaceAgainAfterOpeningADocument(t *testing.T) {
+	s := exportStack(t, nil, func(o *Options) { o.Export = export.Options{PerPerson: -1} })
+	s.put(s.bob.cookie, s.one, s.team, "plans/roadmap.md", "team-roadmap")
+	r := s.startWorkspaceExport(s.alice.cookie, s.one)
+	// The space is read for its row, its documents' listing and page, and the document's own check
+	// (the fourth) before the file is opened: the next check of the admin after it is the one that
+	// has to end the document's part in the zip.
+	s.onNth("FROM spaces s", 4, func() {
+		s.hooks.BeforeQuery("AND role = ?", func() {
+			s.exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, s.team, s.alice.id)
+		})
+	})
+	rec := serve(s, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("download = %d %s", rec.Code, rec.Body)
+	}
+	files := unzip(t, rec)
+	for name, b := range files {
+		if bytes.Contains(b, []byte("team-roadmap")) || strings.HasSuffix(name, "roadmap.md") {
+			t.Errorf("%s holds a document opened after the admin left the space", name)
+		}
+	}
+	if !bytes.Contains(files["manifest.json"], []byte("access_lost")) {
+		t.Errorf("the manifest doesn't say the space was left out: %s", files["manifest.json"])
+	}
+}
+
+// An admin demoted while the export runs ends it at the next card or app, not only at the end: the
+// export reads no more of a space's content once it knows the exporter is no admin.
+func TestWorkspaceExportStopsReadingWhenTheAdminIsDemoted(t *testing.T) {
+	for _, tt := range []struct{ name, fragment string }{
+		{"cards", "FROM card_comments cc"},
+		{"apps", "r.revision, r.data FROM app_rows r"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newWorkspaceFixture(t, func(o *Options) { o.Export = export.Options{PerPerson: -1} })
+			board := f.boardOf(f.team)
+			f.card(f.bob.cookie, f.one, f.team, board, "second-card", "second-comment")
+			f.card(f.bob.cookie, f.one, f.team, board, "third-card", "third-comment")
+			f.app(f.bob.cookie, f.team, "second-expense")
+			f.app(f.bob.cookie, f.team, "third-expense")
+
+			r := f.startWorkspaceExport(f.alice.cookie, f.one)
+			var after func() int
+			// The first read of the content is in flight when the exporter is demoted: nothing is read
+			// after it.
+			f.onNth(tt.fragment, 1, func() {
+				f.demote(f.alice.id)
+				after = f.countStatements(tt.fragment)
+			})
+			rec, cut := aborted(f.stack, r)
+			if !cut {
+				t.Fatalf("the export of a demoted admin went on to the end (%d bytes)", rec.Body.Len())
+			}
+			if after == nil || after() != 0 {
+				t.Errorf("%d reads of %s after the admin was demoted, want none", after(), tt.name)
+			}
+			if _, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len())); err == nil {
+				t.Error("the zip of a demoted admin is whole")
+			}
+		})
+	}
+}
+
+// The members are listed once each, in one order, however many pages there are.
+func TestWorkspaceExportListsEveryMemberOnceAcrossPages(t *testing.T) {
+	f := newWorkspaceFixture(t, func(o *Options) { o.Export = export.Options{PerPerson: -1} })
+	const extra = 503 // more than a page, with names that sort the other way from their IDs
+	for i := range extra {
+		uid := f.scalar(`INSERT INTO users (email, name, password_hash) VALUES (?, ?, 'x') RETURNING id`,
+			fmt.Sprintf("member-%d@example.com", i), fmt.Sprintf("Member %04d", extra-i))
+		f.exec(`INSERT INTO memberships (workspace_id, user_id, role) VALUES (?, ?, 'member')`, f.one, uid)
+	}
+	files := unzip(t, f.workspaceExport(f.alice.cookie, f.one))
+	var list struct {
+		Members []struct {
+			ID int64 `json:"id"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal(files["members.json"], &list); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int64]bool{}
+	for _, m := range list.Members {
+		seen[m.ID] = true
+	}
+	want := 3 + extra
+	if len(list.Members) != want || len(seen) != want {
+		t.Errorf("members.json has %d entries, %d different, want %d once each", len(list.Members), len(seen), want)
+	}
+}
+
+// An app an admin can open only to set its roles right (it has roles and no builder, and none is
+// theirs) is not exported: its records are for the people its roles name.
+func TestWorkspaceExportLeavesOutAnAppTheAdminSeesOnlyToRecoverIt(t *testing.T) {
+	f := newWorkspaceFixture(t, func(o *Options) { o.Export = export.Options{PerPerson: -1} })
+	stranded := f.app(f.bob.cookie, f.team, "stranded-expense")
+	f.exec(`INSERT INTO app_roles (app_id, user_id, role) VALUES (?, ?, 'data_manager')`, stranded, f.bob.id)
+	if code, body := f.browser(f.alice.cookie, http.MethodGet, fmt.Sprintf("%s/%d", f.apps(f.one, f.team), stranded), nil); code != http.StatusOK {
+		t.Fatalf("the admin opens the stranded app = %d %v: the test needs the way back open to them", code, body)
+	}
+	files := unzip(t, f.workspaceExport(f.alice.cookie, f.one))
+	for name, b := range files {
+		if strings.Contains(name, fmt.Sprintf("/apps/%d-", stranded)) || (bytes.Contains(b, []byte("stranded-expense")) && name != "manifest.json") {
+			t.Errorf("%s holds an app the admin can only open to recover it", name)
+		}
+	}
+	// The other app of the space, which they hold roles in, is there.
+	found := false
+	for name := range files {
+		found = found || strings.Contains(name, fmt.Sprintf("/apps/%d-", f.scalar(`SELECT id FROM apps WHERE space_id = ? AND id != ? ORDER BY id LIMIT 1`, f.team, stranded)))
+	}
+	if !found {
+		t.Errorf("the app the admin holds a role in is missing: %v", names(files))
 	}
 }

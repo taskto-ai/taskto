@@ -14,6 +14,7 @@ package export
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -83,7 +84,17 @@ func (ex *run) members(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		page, err := auth.Roster(ctx, ex.svc.db, ex.ws.WorkspaceID, auth.RosterPage{AfterID: after, Limit: membersPage})
+		// Each page is read in a snapshot that begins with the check that the exporter is still an
+		// admin, and in the order of IDs from the first page on: the cursor is an ID, so a first
+		// page by name would repeat some members and leave others out.
+		var page []auth.Member
+		err := ex.readAsAdmin(ctx, func(tx *sql.Tx) (err error) {
+			page, err = auth.Roster(ctx, tx, ex.ws.WorkspaceID, auth.RosterPage{ByID: true, AfterID: after, Limit: membersPage})
+			return err
+		})
+		if errors.Is(err, errNotAdmin) {
+			return err
+		}
 		if err != nil {
 			return fmt.Errorf("reading the members: %w", err)
 		}

@@ -412,6 +412,13 @@ func (ex *run) write(ctx context.Context, out io.Writer) error {
 			return err
 		}
 	}
+	// A workspace export that ends after its exporter was demoted is not whole: the zip is left
+	// without its end, as for any other failure.
+	if ex.mf.Scope == "workspace" {
+		if err := ex.checkAdmin(ctx); err != nil {
+			return err
+		}
+	}
 	// The manifest is last, once it knows the counts.
 	if err := ex.json("manifest.json", ex.mf); err != nil {
 		return err
@@ -451,16 +458,48 @@ var errLostAccess = errors.New("the space isn't readable any more")
 // checkAdmin is the check that the exporter is still an admin of the workspace, for a workspace
 // export: an error (which ends the export) if not.
 func (ex *run) checkAdmin(ctx context.Context) error {
+	return ex.adminIn(ctx, ex.svc.db)
+}
+
+func (ex *run) adminIn(ctx context.Context, q interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}) error {
 	var admin int
-	err := ex.svc.db.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE workspace_id = ? AND user_id = ? AND role = ?`,
+	err := q.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE workspace_id = ? AND user_id = ? AND role = ?`,
 		ex.ws.WorkspaceID, ex.user.ID, string(auth.RoleAdmin)).Scan(&admin)
 	if err != nil {
 		return fmt.Errorf("checking the admin: %w", err)
 	}
 	if admin == 0 {
-		return errors.New("the exporter isn't an admin of the workspace any more")
+		return errNotAdmin
 	}
 	return nil
+}
+
+// errNotAdmin ends a workspace export: the exporter was demoted while it ran.
+var errNotAdmin = errors.New("the exporter isn't an admin of the workspace any more")
+
+// checkWho is checkAdmin for a shared place, asked before each bounded read of a workspace
+// export, so a demotion ends it at the next one; a person's own export has no such check.
+func (ex *run) checkWho(ctx context.Context, p place) error {
+	if !p.shared {
+		return nil
+	}
+	return ex.checkAdmin(ctx)
+}
+
+// readAsAdmin runs fn in one read snapshot that begins with the check that the exporter is an
+// admin, so what fn reads is of the state that said so.
+func (ex *run) readAsAdmin(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := ex.svc.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // nothing was written
+	if err := ex.adminIn(ctx, tx); err != nil {
+		return err
+	}
+	return fn(tx)
 }
 
 // current is the space of a shared place as the admin sees it now: errLostAccess if they may not
@@ -590,6 +629,11 @@ func (ex *run) document(ctx context.Context, p place, e knowledge.Entry, at stri
 		return fmt.Errorf("opening document: %w", err)
 	}
 	defer f.Close()
+	// The file is open: the membership is asked once more, so a file opened after the admin lost
+	// the space is never added to the zip.
+	if err := ex.check(ctx, p); err != nil {
+		return err
+	}
 
 	// Files git doesn't version are large or already compressed: audio, video, archives.
 	w, err := ex.entry(ex.names.claim(p.path(append([]string{"documents"}, strings.Split(e.Path, "/")...)...)...), !e.Versioned)
@@ -628,15 +672,11 @@ func (ex *run) privateBoards(ctx context.Context) error {
 }
 
 func (ex *run) boards(ctx context.Context, p place) error {
-	list, err := ex.svc.boards.ExportBoards(ctx, ex.user.ID, p.space.ID)
-	if errors.Is(err, boards.ErrNotFound) {
-		return ex.lost(ctx, p, fmt.Errorf("exporting boards: %w", err))
-	}
-	if err != nil {
-		return fmt.Errorf("exporting boards: %w", err)
-	}
-	for _, b := range list {
+	err := ex.svc.boards.ExportBoards(ctx, ex.user.ID, p.space.ID, func(b boards.Board) error {
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := ex.checkWho(ctx, p); err != nil {
 			return err
 		}
 		base := cleanElem(strconv.FormatInt(b.ID, 10)+"-"+slug(b.Name), maxElemBytes)
@@ -647,6 +687,13 @@ func (ex *run) boards(ctx context.Context, p place) error {
 			return err
 		}
 		ex.mf.Counts["boards"]++
+		return nil
+	})
+	if errors.Is(err, boards.ErrNotFound) {
+		return ex.lost(ctx, p, fmt.Errorf("exporting boards: %w", err))
+	}
+	if err != nil {
+		return fmt.Errorf("exporting boards: %w", err)
 	}
 	return nil
 }
@@ -667,6 +714,9 @@ func (ex *run) boardJSON(ctx context.Context, p place, b boards.Board, base stri
 	}
 	n := 0
 	err = ex.svc.boards.ExportCards(ctx, ex.user.ID, p.space.ID, b.ID, func(t boards.Thread) error {
+		if err := ex.checkWho(ctx, p); err != nil {
+			return err
+		}
 		sep := ",\n    "
 		if n == 0 {
 			sep = "\n    "
@@ -716,6 +766,9 @@ func (ex *run) boardMarkdown(ctx context.Context, p place, b boards.Board, base 
 		return err
 	}
 	err = ex.svc.boards.ExportCards(ctx, ex.user.ID, p.space.ID, b.ID, func(t boards.Thread) error {
+		if err := ex.checkWho(ctx, p); err != nil {
+			return err
+		}
 		if err := writeCardMarkdown(w, t); err != nil {
 			return err
 		}
@@ -869,18 +922,13 @@ func (ex *run) apps(ctx context.Context, p place) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		file := appFile{App: appInfo{ID: ap.ID, Name: ap.Name, ArchivedAt: ap.ArchivedAt, CreatedAt: ap.CreatedAt, UpdatedAt: ap.UpdatedAt}}
-		err := func() error {
-			if p.shared {
-				full, err := ex.svc.apps.ExportApp(ctx, actor, p.space.ID, ap.ID)
-				if err != nil {
-					return err
-				}
-				file.Live = full.Live
-			}
-			file.Rows, err = ex.svc.apps.ListRows(ctx, actor, p.space.ID, ap.ID)
+		if err := ex.checkWho(ctx, p); err != nil {
 			return err
-		}()
+		}
+		// The app, its definition and its records come from one snapshot of the caller's access:
+		// a role taken away, or a publish, while the export runs can't mix them. A workspace export
+		// also asks for a role held in the app, not the way back an admin has into a stranded one.
+		got, err := ex.svc.apps.ExportApp(ctx, actor, p.space.ID, ap.ID, p.shared)
 		if errors.Is(err, apps.ErrNotFound) {
 			// The app moved out of the space since the listing (it is another space's now), or the
 			// caller lost their place in it: its records stay out. If it is the space the caller
@@ -894,10 +942,14 @@ func (ex *run) apps(ctx context.Context, p place) error {
 		if err != nil {
 			return fmt.Errorf("reading an app's records: %w", err)
 		}
+		file := appFile{App: appInfo{ID: got.App.ID, Name: got.App.Name, ArchivedAt: got.App.ArchivedAt, CreatedAt: got.App.CreatedAt, UpdatedAt: got.App.UpdatedAt}, Rows: got.Rows}
+		if p.shared {
+			file.Live = got.Live
+		}
 		if file.Rows == nil {
 			file.Rows = []map[string]any{}
 		}
-		name := ex.names.claim(p.path("apps", cleanElem(strconv.FormatInt(ap.ID, 10)+"-"+slug(ap.Name), maxElemBytes)+".json")...)
+		name := ex.names.claim(p.path("apps", cleanElem(strconv.FormatInt(got.App.ID, 10)+"-"+slug(got.App.Name), maxElemBytes)+".json")...)
 		if err := ex.json(name, file); err != nil {
 			return err
 		}

@@ -1067,8 +1067,8 @@ admin again, so one who was demoted since gets `403`.
 | `members.json` | `{"members": [{"id", "name", "email", "role", "joined_at"}, …]}`: every member of the workspace, which every member sees in the app too. Read a page at a time. |
 | `spaces/<id>-<name>/space.json` | The space: `{"id", "name", "archived_at", "created_at", "role"}`, where `role` is the admin's own (`editor` or `viewer`) and `archived_at` is set for an archived space. |
 | `spaces/<id>-<name>/documents/…` | The space's documents, as in the personal export: the current version of every file at one commit, large files from the space's own storage, never as a Git LFS pointer. |
-| `spaces/<id>-<name>/boards/<id>-<name>.json`, `.md` | Each board of the space, archived ones too, with every card and its comments, as in the personal export. |
-| `spaces/<id>-<name>/apps/<id>-<name>.json` | Each app the admin may open: `{"app": {id, name, archived_at, created_at, updated_at}, "live": {…the live release, with its `definition`…}, "records": […]}`. The records are those the admin may read in the app (all of them, or only their own, by their role in it), as the agent's `list_app_rows` tool gives them; an attachment field holds each photo's metadata, not its bytes. The draft and earlier releases aren't included, and an app the admin holds no role in isn't listed, as in the app list. |
+| `spaces/<id>-<name>/boards/<id>-<name>.json`, `.md` | Each board of the space, archived ones too, with every card and its comments, as in the personal export. Boards come a page at a time, in the order of their IDs. |
+| `spaces/<id>-<name>/apps/<id>-<name>.json` | Each app the admin may open: `{"app": {id, name, archived_at, created_at, updated_at}, "live": {…the live release, with its `definition`…}, "records": […]}`. The records are those the admin may read in the app (all of them, or only their own, by their role in it), as the agent's `list_app_rows` tool gives them; an attachment field holds each photo's metadata, not its bytes. The app, its `live` definition and its records are read in one snapshot of the admin's access, so a publish or a change of roles while the export runs never mixes two states. The draft and earlier releases aren't included. An app the admin holds no role in isn't exported, even if it is listed to them because it has roles and no builder (the way back an admin has to set its roles right): that gives no records, and an export holds what the admin's roles give them. |
 | `manifest.json` | As the personal export's, with `"scope": "workspace"`, `"user"` the exporter, `counts` (`members`, `spaces`, `documents`, `boards`, `cards`, `comments`, `apps`, `records`), `spaces` (`id`, `name`, `dir`, the folder it is in, and `archived_at`) and `skipped`, which adds `"space"` (the shared space an item was in) and the kind `space` with the reason `access_lost` for a space the admin stopped being a member of while the export ran. |
 
 **A space the admin leaves meanwhile is left out from then on.** The spaces are those the admin is a
@@ -1076,7 +1076,11 @@ member of when the export starts, and each is read as the admin: before each spa
 and each app, and again whenever the boards or apps say the space isn't there, the admin's
 membership of it, and of the workspace as an admin, is checked. A space whose membership was lost
 stops there and is listed in the manifest as `access_lost`; what was read while the admin was a
-member stays in the zip, as whole files. An admin who is no longer an admin ends the export.
+member stays in the zip, as whole files. The membership is read in the same snapshot as each page
+of boards, each page of a board's cards and each card, and checked again once a document is open,
+before it goes into the zip. An admin who is no longer an admin ends the export: that is checked
+before each page of members, board, card, app and document, and once more before the zip is
+closed, so what is left is a truncated zip that doesn't open, as for any export that fails.
 
 **Names, memory and limits are the personal export's**: the same cleaning and uniqueness of names,
 one page, one card's thread or one app's records in memory at a time, two minutes for each write

@@ -3,6 +3,7 @@ package apps
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -150,44 +151,57 @@ func (s *Service) AppRoles(ctx context.Context, a Actor, spaceID, appID int64) (
 // app's rows are kept, so they are read too. An attachment field holds each attachment's
 // metadata, not its bytes.
 func (s *Service) ListRows(ctx context.Context, a Actor, spaceID, appID int64) ([]map[string]any, error) {
-	sp, err := s.space(ctx, a, spaceID)
+	_, _, items, err := s.snapshotRows(ctx, a, spaceID, appID, nil)
+	return items, err
+}
+
+// snapshotRows reads an app and its rows as a's user may read them, all of one snapshot: the
+// space's access, the app's roles (and so the scope of the rows), the app, its live or draft
+// definition, the rows and their attachments' metadata. A demotion, a removal or a publish
+// that happens meanwhile is therefore either all in what comes back or not at all: never rows
+// of a scope the person no longer has, nor rows shaped by another release than the definition
+// that is returned. If allow is set and says no for the person's access, the app is ErrNotFound.
+func (s *Service) snapshotRows(ctx context.Context, a Actor, spaceID, appID int64, allow func(access.AppAccess) bool) (App, access.AppAccess, []map[string]any, error) {
+	var ap App
+	var acc access.AppAccess
+	var items []map[string]any
+	err := s.access.Snapshot(ctx, func(snap *access.Checker, tx *sql.Tx) error {
+		sp, err := snap.Check(ctx, a.UserID, spaceID)
+		if errors.Is(err, access.ErrNotFound) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if acc, err = appAccessBy(ctx, snap, a, sp.ID, appID); err != nil {
+			return err
+		}
+		if allow != nil && !allow(acc) {
+			return ErrNotFound
+		}
+		// The app and its rows are read asking for the app to be in this space: an app that
+		// moved before the snapshot began is ErrNotFound, never its rows read from the space it left.
+		if ap, err = app(ctx, tx, sp.ID, appID); err != nil {
+			return err
+		}
+		rows, err := loadSpaceRows(ctx, tx, sp.ID, ap.ID, readable(acc, a.UserID))
+		if err != nil {
+			return err
+		}
+		// As the app shows them: by the live release (an unpublished app has no rows).
+		def := ap.draftDef
+		if ap.liveDef != nil {
+			def = *ap.liveDef
+		}
+		items = Items(def, rows)
+		// An attachment field shows what each attachment is (id, type, size, pixels), never its bytes:
+		// the agent has no tool to read or to upload a file.
+		return describeAttachments(ctx, tx, sp.ID, ap.ID, def, items)
+	})
 	if err != nil {
-		return nil, err
+		return App{}, access.AppAccess{}, nil, err
 	}
-	acc, err := s.appAccess(ctx, a, sp.ID, appID)
-	if err != nil {
-		return nil, err
-	}
-	// The app, its rows and its attachments' metadata are each read asking for the app to be in
-	// this space, and once more at the end: an app that moves meanwhile is ErrNotFound, never its
-	// rows read from the space it left.
-	ap, err := app(ctx, s.db, sp.ID, appID)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := loadSpaceRows(ctx, s.db, sp.ID, ap.ID, readable(acc, a.UserID))
-	if err != nil {
-		return nil, err
-	}
-	// As the app shows them: by the live release (an unpublished app has no rows).
-	def := ap.draftDef
-	if ap.liveDef != nil {
-		def = *ap.liveDef
-	}
-	items := Items(def, rows)
-	// An attachment field shows what each attachment is (id, type, size, pixels), never its bytes:
-	// the agent has no tool to read or to upload a file.
-	if err := describeAttachments(ctx, s.db, sp.ID, ap.ID, def, items); err != nil {
-		return nil, err
-	}
-	var still int
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM apps WHERE id = ? AND space_id = ?`, ap.ID, sp.ID).Scan(&still); err != nil {
-		return nil, err
-	}
-	if still == 0 {
-		return nil, ErrNotFound
-	}
-	return items, nil
+	return ap, acc, items, nil
 }
 
 // QueryRows is a page of an app's rows as the app shows them (Items), filtered, searched and
