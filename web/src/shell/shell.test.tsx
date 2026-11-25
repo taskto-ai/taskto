@@ -478,6 +478,37 @@ test('the drawer takes focus, makes the page inert, and Escape closes it back to
   expect(main.hasAttribute('inert')).toBe(false)
 })
 
+test('with the drawer and the account menu open, Escape closes the menu first and the next one the drawer', async () => {
+  const { menu, summary, container } = await openAccountMenu()
+  const button = screen.getByRole('button', { name: 'Open the menu' })
+  const shell = container.querySelector('.tt-shell') as HTMLElement
+  // The drawer first, then the menu (its listeners come after the drawer's).
+  await closeMenu(menu)
+  fireEvent.click(button)
+  expect(shell.dataset.drawer).toBe('open')
+  await openMenu(menu)
+
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(menu.open).toBe(false)
+  expect(document.activeElement).toBe(summary)
+  expect(shell.dataset.drawer).toBe('open')
+
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(shell.dataset.drawer).toBe('closed')
+  expect(document.activeElement).toBe(button)
+
+  // An open language list, in the menu, in the drawer: the list's Escape is neither's.
+  fireEvent.click(button)
+  await openMenu(menu)
+  const language = within(menu).getByRole('combobox', { name: 'Language' }) as HTMLSelectElement
+  language.focus()
+  const matches = language.matches.bind(language)
+  vi.spyOn(language, 'matches').mockImplementation((s) => s === ':open' || matches(s))
+  fireEvent.keyDown(language, { key: 'Escape' })
+  expect(menu.open).toBe(true)
+  expect(shell.dataset.drawer).toBe('open')
+})
+
 test('picking a page in the drawer moves focus to the page', async () => {
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })

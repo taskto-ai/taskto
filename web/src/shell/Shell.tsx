@@ -146,7 +146,9 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
       sidebar.current?.querySelector<HTMLElement>('a')
     )?.focus()
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
+      // An Escape the account menu or an open list has taken is theirs: the drawer stays.
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (e.target instanceof HTMLSelectElement && isOpen(e.target)) return
       setDrawer(false)
       menuButton.current?.focus()
     }
@@ -392,17 +394,21 @@ function AccountMenu({ me, workspace, onLogout, t }: { me: Me; workspace: number
       // A language list that is open takes this Escape to close itself: the menu stays, and the
       // next Escape closes it.
       if (e.target instanceof HTMLSelectElement && isOpen(e.target)) return
+      // Taken, so a drawer behind the menu stays open for this Escape, and the focus the
+      // drawer would take doesn't close the menu first.
+      e.preventDefault()
       close()
       summary.current?.focus()
     }
     const onOutside = (e: Event) => {
       if (menu.current?.open && e.target instanceof Node && !menu.current.contains(e.target)) close()
     }
-    document.addEventListener('keydown', onKey)
+    // In the capture phase, so it comes before the drawer's own Escape.
+    document.addEventListener('keydown', onKey, true)
     document.addEventListener('pointerdown', onOutside)
     document.addEventListener('focusin', onOutside)
     return () => {
-      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey, true)
       document.removeEventListener('pointerdown', onOutside)
       document.removeEventListener('focusin', onOutside)
     }
