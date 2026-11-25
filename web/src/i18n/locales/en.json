@@ -1858,7 +1858,6 @@
     "logOut": "Log out",
     "openMenu": "Open the menu",
     "closeMenu": "Close the menu",
-    "workspace": "Workspace",
     "workspaceCurrent": "Workspace: {name}",
     "workspaces": "Your workspaces",
     "newWorkspace": "New workspace",
@@ -1876,7 +1875,9 @@
     "installApp": "Install the app",
     "pinned": "Pinned apps",
     "pageFailed": "This page couldn’t be shown. The menu and your settings still work.",
-    "reload": "Reload"
+    "reload": "Reload",
+    "workspaceCreated": "“{name}” was created.",
+    "openWorkspace": "Open it"
   },
   "common": {
     "cancel": "Cancel",
@@ -2450,7 +2451,6 @@
   },
   "notifications": {
     "title": "Notifications",
-    "bell": "Notifications",
     "bellUnread": "Notifications, {count} unread",
     "intro": "What happened that you may want to see. Push notifications are optional and only a prompt to look here.",
     "pushSettings": "Notification settings",
@@ -2575,7 +2575,8 @@
       "sizes": "Sizes",
       "shapes": "Shapes",
       "tones": "Tones",
-      "hues": "Hues"
+      "hues": "Hues",
+      "distinctInitials": "Several side by side, each with letters of its own"
     },
     "sample": {
       "primary": "Primary",

@@ -27,14 +27,18 @@ export function WorkspaceSwitcher({ me, workspace, section, onMe, t }: Workspace
   return (
     <div className="ui-shell-switcher">
       <Menu align="start">
-        <Tooltip content={workspace.name} describes={false}>
+        <Tooltip content={workspace.name} describes={false} side="inline-end">
           <MenuButton
             label={t('shell.workspaceCurrent', { name: workspace.name })}
             indicator="chevron-updown"
             className="ui-shell-switcher-button"
           >
             <Avatar name={workspace.name} shape="square" size="sm" decorative />
-            <span className="ui-shell-switcher-name">{workspace.name}</span>
+            {/* A workspace's name keeps its own direction: a Latin one in a right-to-left page
+                loses its end, not its start, to the ellipsis. */}
+            <span className="ui-shell-switcher-name" dir="auto">
+              {workspace.name}
+            </span>
           </MenuButton>
         </Tooltip>
         <MenuList>
@@ -47,7 +51,7 @@ export function WorkspaceSwitcher({ me, workspace, section, onMe, t }: Workspace
                   if (w.id !== workspace.id) navigate(routePath({ workspace: w.id, section }))
                 }}
               >
-                {w.name}
+                <span dir="auto">{w.name}</span>
               </MenuItem>
             ))}
           </MenuGroup>
@@ -60,16 +64,7 @@ export function WorkspaceSwitcher({ me, workspace, section, onMe, t }: Workspace
         </MenuList>
       </Menu>
       {canCreate && onMe && (
-        <NewWorkspaceDialog
-          open={creating}
-          onClose={() => setCreating(false)}
-          user={me.user.id}
-          onCreated={(next, created) => {
-            // The account first, so the new workspace is one the shell knows when the address names it.
-            onMe(next)
-            navigate(routePath({ workspace: created.id, section: 'conversations' }))
-          }}
-        />
+        <NewWorkspaceDialog open={creating} onClose={() => setCreating(false)} user={me.user.id} onMe={onMe} />
       )}
     </div>
   )

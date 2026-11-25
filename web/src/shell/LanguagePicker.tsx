@@ -5,21 +5,22 @@
 // saved loses nothing.
 
 import { useEffect, useRef, useState } from 'react'
-import { api, errorText } from '../api'
+import { api } from '../api'
 import { automaticLocale, LOCALES, localeName, setPreferences, type T, useLocale } from '../i18n'
 import { MenuGroup, MenuItem } from '../ui/Menu'
 
 export interface LanguagePick {
   // The language shown as picked: a tag, or '' for automatic.
   choice: string
-  // Why the last pick wasn't saved, while it stands.
-  error: string | null
   pick: (tag: string) => Promise<void>
 }
 
-export function useLanguagePick(initial: string): LanguagePick {
+// `onRefused` is told once for each pick the server refused, after the pick was undone and the app
+// is in the language it went back to, so what it says is in that one language.
+export function useLanguagePick(initial: string, onRefused: (error: unknown) => void): LanguagePick {
   const [choice, setChoice] = useState(initial)
-  const [error, setError] = useState<string | null>(null)
+  const refused = useRef(onRefused)
+  refused.current = onRefused
   useLocale() // re-rendered on a change, so the automatic one's name follows the workspace's default
   // The pick the account has, and the latest pick asked for. One save is in flight at a
   // time: when it ends, the latest pick is sent if the account doesn't have it yet, so
@@ -52,9 +53,9 @@ export function useLanguagePick(initial: string): LanguagePick {
         } catch (e) {
           if (wanted.current !== tag) continue // a later pick replaced it: send that one
           wanted.current = saved.current
-          setError(errorText(e))
           setChoice(saved.current)
           await setPreferences({ user: saved.current || null })
+          refused.current(e)
         }
       }
     } finally {
@@ -64,11 +65,10 @@ export function useLanguagePick(initial: string): LanguagePick {
   const pick = async (tag: string) => {
     wanted.current = tag
     setChoice(tag)
-    setError(null)
     await setPreferences({ user: tag || null })
     if (!saving.current) await save()
   }
-  return { choice, error, pick }
+  return { choice, pick }
 }
 
 // The choices, as radio items of the account menu: automatic, then each language the app has,

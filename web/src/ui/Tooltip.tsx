@@ -43,6 +43,17 @@ export interface TooltipProps {
   content: ReactNode
   children: Describable
   describes?: boolean
+  // Where it goes: above the control (or below when there's no room), or beside it, after its end
+  // in the writing direction (before its start when there's no room), for a control in a column
+  // such as a sidebar's rail, where above would cover the control before it.
+  side?: 'block' | 'inline-end'
+}
+
+// Whether the tooltip can be seen: a stylesheet may hide one that is open (a sidebar's labels are
+// written out where it is wide). A browser without checkVisibility goes by the computed display.
+function visible(el: HTMLElement): boolean {
+  if (typeof el.checkVisibility === 'function') return el.checkVisibility()
+  return getComputedStyle(el).display !== 'none'
 }
 
 const canPopover = () => typeof HTMLElement !== 'undefined' && 'showPopover' in HTMLElement.prototype
@@ -56,7 +67,7 @@ function focusVisible(el: Element): boolean {
   }
 }
 
-export function Tooltip({ content, children, describes = true }: TooltipProps) {
+export function Tooltip({ content, children, describes = true, side = 'block' }: TooltipProps) {
   const id = useId()
   const anchor = useRef<HTMLSpanElement>(null)
   const tip = useRef<HTMLSpanElement>(null)
@@ -88,11 +99,15 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
 
   useEffect(() => () => clearTimeout(timer.current), [])
 
-  // Escape closes it, wherever the focus is, until the control is entered or focused again.
+  // Escape closes it, wherever the focus is, until the control is entered or focused again. One
+  // that can be seen takes that Escape (WCAG 1.4.13: dismissed without moving), so a drawer or a
+  // dialog under it stays open; the next Escape is theirs.
   useEffect(() => {
     if (!open) return
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') hide(0)
+      if (e.key !== 'Escape') return
+      if (tip.current && visible(tip.current)) e.preventDefault()
+      hide(0)
     }
     document.addEventListener('keydown', key, true)
     return () => document.removeEventListener('keydown', key, true)
@@ -119,11 +134,23 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
       const h = el.offsetHeight
       const vw = document.documentElement.clientWidth || window.innerWidth
       const vh = document.documentElement.clientHeight || window.innerHeight
+      const clamp = (v: number, size: number, room: number) =>
+        Math.min(Math.max(MARGIN, v), Math.max(MARGIN, room - MARGIN - size))
+      if (side === 'inline-end') {
+        const rtl = getComputedStyle(target).direction === 'rtl'
+        const after = rtl ? r.left - GAP - w : r.right + GAP
+        const before = rtl ? r.right + GAP : r.left - GAP - w
+        const fits = (x: number) => x >= MARGIN && x + w <= vw - MARGIN
+        el.style.top = `${clamp(r.top + r.height / 2 - h / 2, h, vh)}px`
+        el.style.left = `${clamp(fits(after) || !fits(before) ? after : before, w, vw)}px`
+        el.dataset.side = 'inline-end'
+        return
+      }
       const above = r.top - GAP - h
       const top = above >= MARGIN || r.bottom + GAP + h > vh - MARGIN ? Math.max(MARGIN, above) : r.bottom + GAP
-      const left = Math.min(Math.max(MARGIN, r.left + r.width / 2 - w / 2), Math.max(MARGIN, vw - MARGIN - w))
       el.style.top = `${top}px`
-      el.style.left = `${left}px`
+      el.style.left = `${clamp(r.left + r.width / 2 - w / 2, w, vw)}px`
+      delete el.dataset.side
     }
     place()
     // Scroll events don't bubble, but a listener capturing on the window hears every box's.
@@ -133,7 +160,7 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
       window.removeEventListener('scroll', place, { capture: true })
       window.removeEventListener('resize', place)
     }
-  }, [open])
+  }, [open, side])
 
   const pointerIn = (e: ReactPointerEvent) => {
     if (e.pointerType === 'touch') return

@@ -151,6 +151,53 @@ describe('Tooltip', () => {
     expect(tip().style.top).not.toBe(before)
   })
 
+  test('one that can be seen takes the Escape that closes it, so a drawer or a dialog under it stays', () => {
+    const b = setup()
+    act(() => b.focus())
+    const key = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    act(() => {
+      b.dispatchEvent(key)
+    })
+    expect(isOpen()).toBe(false)
+    expect(key.defaultPrevented).toBe(true)
+  })
+
+  test('one a stylesheet hides leaves the Escape to what is under it', () => {
+    const b = setup()
+    act(() => b.focus())
+    tip().style.display = 'none'
+    const key = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    act(() => {
+      b.dispatchEvent(key)
+    })
+    expect(isOpen()).toBe(false)
+    expect(key.defaultPrevented).toBe(false)
+  })
+
+  test('beside the control: after its end, or before its start right to left', () => {
+    const rect = { top: 100, bottom: 144, left: 8, right: 52, width: 44, height: 44, x: 8, y: 100, toJSON: () => ({}) }
+    const draw = (dir: 'ltr' | 'rtl') => {
+      render(
+        <div dir={dir}>
+          <Tooltip content="Boards" describes={false} side="inline-end">
+            <button type="button">B</button>
+          </Tooltip>
+        </div>,
+      )
+      const b = screen.getByRole('button', { name: 'B' })
+      b.getBoundingClientRect = () => ({ ...rect, left: dir === 'ltr' ? 8 : 960, right: dir === 'ltr' ? 52 : 1004 })
+      act(() => b.focus())
+      return tip()
+    }
+    const ltr = draw('ltr')
+    expect(ltr.dataset.side).toBe('inline-end')
+    // jsdom lays nothing out: the tooltip is 0 wide, so its start is the gap after the control.
+    expect(ltr.style.left).toBe('58px')
+    cleanup()
+    const rtl = draw('rtl')
+    expect(Number.parseFloat(rtl.style.left)).toBeLessThan(960)
+  })
+
   test('without describing, it is hidden from screen readers and adds no description', () => {
     const b = setup(false)
     expect(b.hasAttribute('aria-describedby')).toBe(false)

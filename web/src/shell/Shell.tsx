@@ -18,14 +18,13 @@ import { usePushSync } from '../notifications/usePushSync'
 import { navigate, parseRoute, type Route, routePath, usePath } from '../router'
 import { SettingsPage } from '../settings/SettingsPage'
 import { Button } from '../ui/Button'
-import { EmptyState } from '../ui/EmptyState'
 import { modalOpen } from '../ui/layers'
 import { Notice } from '../ui/Notice'
 import { Page as PageFrame } from '../ui/Page'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { ErrorBoundary } from './ErrorBoundary'
-import { NewWorkspaceDialog } from './NewWorkspace'
+import { NoWorkspace } from './NoWorkspace'
 import { MAIN_ID, SECTION_LABEL } from './nav'
 import { PhoneBar } from './PhoneBar'
 import { Sidebar } from './Sidebar'
@@ -184,44 +183,6 @@ function Frame({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (m
         </ErrorBoundary>
       </main>
     </div>
-  )
-}
-
-// Someone in no workspace: what to do next, which is to ask for an invite, or to make one when the
-// server lets them.
-function NoWorkspace({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
-  const t = useT()
-  const [creating, setCreating] = useState(false)
-  const canCreate = Boolean(me.can_create_workspace && onMe)
-  return (
-    <PageFrame width="reading" className="ui-shell-alone">
-      <EmptyState
-        title={t('shell.noWorkspaceTitle')}
-        actions={
-          <>
-            {canCreate && (
-              <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>
-                {t('shell.newWorkspace')}
-              </Button>
-            )}
-            <Button onClick={onLogout}>{t('shell.logOut')}</Button>
-          </>
-        }
-      >
-        {t('shell.noWorkspace')}
-      </EmptyState>
-      {canCreate && onMe && (
-        <NewWorkspaceDialog
-          open={creating}
-          onClose={() => setCreating(false)}
-          user={me.user.id}
-          onCreated={(next, created) => {
-            onMe(next)
-            navigate(routePath({ workspace: created.id, section: 'conversations' }))
-          }}
-        />
-      )}
-    </PageFrame>
   )
 }
 

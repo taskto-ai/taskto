@@ -12,6 +12,9 @@ export interface AvatarProps {
   shape?: 'round' | 'square'
   decorative?: boolean
   className?: string
+  // The letters to show in place of the name's initials: from initialsAmong, where several
+  // avatars side by side must not look alike.
+  letters?: string
 }
 
 const SIZE_CLASS = { sm: 'ui-avatar-sm', md: '', lg: 'ui-avatar-lg' } as const
@@ -26,7 +29,29 @@ export function initials(name: string): string {
   return letters.toUpperCase()
 }
 
-export function Avatar({ name, size = 'md', shape = 'round', decorative = false, className }: AvatarProps) {
+// Two letters for each of several names shown together (a sidebar's pinned apps), told apart by
+// their letters and not by hue alone: a name of several words, the first letters of its first and
+// last; a name of one word, its first two. Names that would still look alike take, after their
+// first letter, the first later one that sets each apart. Whole characters, as initials().
+export function initialsAmong(names: readonly string[]): string[] {
+  const chars = (name: string) => Array.from(name.replace(/\s+/g, ''))
+  const base = names.map((name) => {
+    const words = name.trim().split(/\s+/).filter(Boolean)
+    if (words.length > 1) return initials(name)
+    return chars(name).slice(0, 2).join('').toUpperCase()
+  })
+  // The letters taken so far: every name's own that is unique, then each one given out.
+  const used = new Set(base.filter((letters) => base.indexOf(letters) === base.lastIndexOf(letters)))
+  return base.map((letters, i) => {
+    if (base.indexOf(letters) === base.lastIndexOf(letters)) return letters
+    const own = chars(names[i])
+    const pick = [letters, ...own.slice(2).map((c) => (own[0] + c).toUpperCase())].find((tried) => !used.has(tried))
+    used.add(pick ?? letters)
+    return pick ?? letters
+  })
+}
+
+export function Avatar({ name, size = 'md', shape = 'round', decorative = false, className, letters }: AvatarProps) {
   const cls = [
     'ui-avatar',
     hueClass(labelHue(name)),
@@ -39,7 +64,7 @@ export function Avatar({ name, size = 'md', shape = 'round', decorative = false,
   const named = decorative ? { 'aria-hidden': true as const } : { role: 'img', 'aria-label': name }
   return (
     <span className={cls} {...named}>
-      {initials(name)}
+      {letters ?? initials(name)}
     </span>
   )
 }

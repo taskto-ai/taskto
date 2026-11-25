@@ -52,7 +52,11 @@
 
   /* The sidebar. */
 
+  /* Above the page beside it (a sticky header of the page is lower, --z-sticky); the drawer on a
+     phone takes --z-drawer below. */
   .ui-shell-sidebar {
+    position: relative;
+    z-index: var(--z-sidebar);
     grid-column: 1;
     grid-row: 1;
     box-sizing: border-box;
@@ -133,12 +137,14 @@
     gap: var(--space-2);
   }
 
+  /* The names people write have dir="auto" (their own direction, so the ellipsis takes their end).
+     Each is as wide as its words, up to the room there is, and the box around it, in the page's
+     direction, puts it at the page's start: text alignment would follow the name's own direction. */
   .ui-shell-switcher-name {
-    flex: 1;
+    flex: 0 1 auto;
     min-inline-size: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-align: start;
     font: var(--type-ui-strong);
   }
 
@@ -200,23 +206,27 @@
     color: var(--color-text);
   }
 
+  /* A pin's label has dir="auto": as wide as its words, as the switcher's name. */
   .ui-shell-link-label {
-    flex: 1;
+    flex: 0 1 auto;
     min-inline-size: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  /* The switcher's chevron (after the links' icons, which are less specific). */
+  /* The switcher's chevron, at the button's end (after the links' icons, which are less
+     specific). */
   .ui-shell-switcher-button .ui-menu-button-text > svg {
     flex: none;
+    margin-inline-start: auto;
     color: var(--color-text-muted);
   }
 
   /* The inbox's unread count: the one mint in the sidebar, since it asks for attention. */
   .ui-shell-count {
     flex: none;
+    margin-inline-start: auto;
     box-sizing: border-box;
     min-inline-size: var(--space-5);
     block-size: var(--space-5);
@@ -287,7 +297,11 @@
     text-align: start;
   }
 
+  /* Both have dir="auto": as wide as their words, put at the start by the grid, which is in the
+     page's direction. */
   .ui-shell-account-name {
+    justify-self: start;
+    max-inline-size: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     font: var(--type-small);
@@ -295,6 +309,8 @@
   }
 
   .ui-shell-account-email {
+    justify-self: start;
+    max-inline-size: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     font: var(--type-caption);
@@ -347,12 +363,24 @@
       overflow: hidden;
     }
 
+    /* The switcher and the account are named by their own labels (aria-label), and the pins' group
+       by its heading even hidden, so these can go. */
     .ui-shell-switcher-name,
     .ui-shell-switcher-button .ui-menu-button-text > svg,
-    .ui-shell-link-label,
     .ui-shell-account-text,
     .ui-shell-group-title {
       display: none;
+    }
+
+    /* A link's label is its accessible name: hidden from sight only (VisuallyHidden's way), never
+       with display: none, which would leave the link unnamed. */
+    .ui-shell-link-label {
+      position: absolute;
+      inline-size: 1px;
+      block-size: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
     }
 
     .ui-shell-switcher-button.ui-button,
@@ -402,10 +430,13 @@
       justify-content: center;
     }
 
+    /* A 44px target whatever the pointer, as the rail's links. */
     .ui-shell-account-button.ui-button {
       flex: none;
       justify-content: center;
-      padding: var(--space-1);
+      inline-size: var(--control-touch);
+      min-block-size: var(--control-touch);
+      padding: 0;
     }
   }
 

@@ -28,11 +28,26 @@ const pages = {
   'GET /api/workspaces/1/updates': { body: { configured: false, running_version: 'dev', status: null } },
 }
 
+// What Shell.css does on a phone and a wide screen, which jsdom has no stylesheet for: the
+// tooltips of the sidebar's links and of the account are hidden (only the rail shows them), so an
+// open one can't be seen. A test that wants one seen says so.
+let sidebarTooltipsSeen = false
+const hiddenByShellCss = (el: Element) =>
+  !sidebarTooltipsSeen && el.closest('.ui-shell-nav, .ui-shell-account') !== null
+
 beforeEach(() => {
   resetToasts()
   window.history.replaceState(null, '', '/')
   localStorage.clear()
   delete document.documentElement.dataset.theme
+  sidebarTooltipsSeen = false
+  // jsdom has no checkVisibility: this one, for these tests only, is the stylesheet's say.
+  HTMLElement.prototype.checkVisibility = function (this: HTMLElement) {
+    return !hiddenByShellCss(this)
+  }
+})
+afterEach(() => {
+  delete (HTMLElement.prototype as Partial<HTMLElement>).checkVisibility
 })
 afterEach(() => {
   cleanup()
@@ -190,6 +205,37 @@ test('a language picked for the agent that the app has no file for shows as pick
   const menu = await openAccount()
   expect(checked(within(menu).getByRole('group', { name: 'Language' }))).toEqual(['Deutsch'])
   expect(screen.getByRole('navigation', { name: 'Sections' })).toBeTruthy()
+  await act(() => setPreferences({ user: null }))
+})
+
+test('a refusal that goes back to a language loaded on demand is said once, all in that language', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, user: { ...me.user, locale: 'pt-BR' } } },
+    'PATCH /api/me': { status: 500, body: { error: 'internal error', code: 'internal' } },
+    ...pages,
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Seções' })
+  await pickInAccount('English')
+  // Back to Portuguese, whose file comes when it is asked for: the line and the server's reason
+  // are both in it, said once.
+  const said = await screen.findByText(/^Não foi salvo: /)
+  expect(said.textContent).toBe(
+    'Não foi salvo: Algo deu errado no servidor. Tente de novo; se continuar acontecendo, o log do servidor diz por quê.',
+  )
+  const toasts = () => screen.queryAllByText(/^(Não foi salvo|Not saved): /)
+  expect(toasts()).toHaveLength(1)
+  await screen.findByRole('navigation', { name: 'Seções' })
+
+  // The app's language changing again later (another workspace's default, the person's own pick
+  // elsewhere) says nothing more.
+  await act(() => setPreferences({ user: null }))
+  await screen.findByRole('navigation', { name: 'Sections' })
+  await act(() => setPreferences({ user: 'pt-BR' }))
+  await screen.findByRole('navigation', { name: 'Seções' })
+  expect(toasts()).toHaveLength(1)
   await act(() => setPreferences({ user: null }))
 })
 
@@ -552,6 +598,27 @@ test('the drawer takes focus, makes the page inert, and Escape closes it back to
   expect(main.hasAttribute('inert')).toBe(false)
 })
 
+test('with a tooltip showing in the drawer, the first Escape closes only the tooltip, the next one the drawer', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  const { container } = render(<App />)
+  await screen.findByText('Pick a conversation, or start a new one.')
+  // A tooltip that can be seen (a window between the phone's and the rail's widths, say).
+  sidebarTooltipsSeen = true
+  fireEvent.click(screen.getByRole('button', { name: 'Open the menu' }))
+  const link = within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('link', { name: 'Conversations' })
+  fireEvent.focus(link)
+  const tip = link.parentElement?.querySelector('[role="tooltip"]') as HTMLElement
+  await waitFor(() => expect(tip.hasAttribute('data-open')).toBe(true))
+
+  fireEvent.keyDown(link, { key: 'Escape' })
+  expect(tip.hasAttribute('data-open')).toBe(false)
+  expect(shellOf(container).dataset.drawer).toBe('open')
+
+  fireEvent.keyDown(link, { key: 'Escape' })
+  expect(shellOf(container).dataset.drawer).toBe('closed')
+})
+
 test('with the drawer and the account menu open, Escape closes the menu first and the next one the drawer', async () => {
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
@@ -632,6 +699,18 @@ test('the account menu shows who is signed in and leads to the install guidance'
   fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Install the app' }))
   await screen.findByRole('heading', { name: 'Install the app' })
   expect(window.location.pathname).toBe('/w/1/settings/about')
+})
+
+test('the focus leaving the account menu by Tab closes it', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
+  render(<App />)
+  await screen.findByText('Pick a conversation, or start a new one.')
+  const account = screen.getByRole('button', { name: 'Account: Owner' })
+  const menu = await openAccount()
+  fireEvent.keyDown(within(menu).getAllByRole('menuitemradio')[0], { key: 'Tab' })
+  expect(screen.queryByRole('menu')).toBeNull()
+  expect(account.getAttribute('aria-expanded')).toBe('false')
 })
 
 test('Escape closes the account menu and gives focus back to its button; a press outside closes it too', async () => {
@@ -721,6 +800,80 @@ test('"New workspace" says why a server refused, and is not offered to those it 
   render(<App />)
   await screen.findByRole('navigation', { name: 'Sections' })
   expect(within(await openSwitcher()).queryByRole('menuitem', { name: 'New workspace' })).toBeNull()
+})
+
+test('a workspace made after Cancel is said, with a way to open it, and the page stays; a failure after Cancel is not kept', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held: ((answer: { status: number; body: unknown }) => void)[] = []
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: true } },
+    'POST /api/workspaces': () => new Promise((done) => held.push(done)),
+    'GET /api/workspaces/9/conversations': { body: { conversations: [] } },
+    ...pages,
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  const create = async (name: string) => {
+    fireEvent.click(within(await openSwitcher()).getByRole('menuitem', { name: 'New workspace' }))
+    const dialog = await screen.findByRole('dialog', { name: 'New workspace' })
+    fireEvent.change(within(dialog).getByLabelText(/^Name of the new workspace/), { target: { value: name } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create workspace' }))
+    await waitFor(() => expect(held).toHaveLength(1))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  }
+
+  // A failure after Cancel made nothing: the next opening starts clean.
+  await create('Doomed')
+  await act(async () => held.shift()?.({ status: 500, body: { error: 'internal error', code: 'internal' } }))
+  fireEvent.click(within(await openSwitcher()).getByRole('menuitem', { name: 'New workspace' }))
+  const again = await screen.findByRole('dialog', { name: 'New workspace' })
+  expect(within(again).queryByRole('alert')).toBeNull()
+  expect((within(again).getByLabelText(/^Name of the new workspace/) as HTMLInputElement).value).toBe('')
+  fireEvent.click(within(again).getByRole('button', { name: 'Cancel' }))
+
+  // A success after Cancel: the workspace exists, the switcher lists it, a toast says so, and the
+  // person stays where they are until they open it.
+  await create('Late')
+  await act(async () =>
+    held.shift()?.({
+      status: 201,
+      body: {
+        workspace: { id: 9, name: 'Late', role: 'admin' },
+        user: me.user,
+        workspaces: [...me.workspaces, { id: 9, name: 'Late', role: 'admin' }],
+        can_create_workspace: true,
+      },
+    }),
+  )
+  expect(await screen.findByText('“Late” was created.')).toBeTruthy()
+  expect(window.location.pathname).toBe('/w/1/conversations')
+  const switcher = await openSwitcher()
+  expect(within(switcher).getByRole('menuitemradio', { name: 'Late' })).toBeTruthy()
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+  fireEvent.click(screen.getByRole('button', { name: 'Open it' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/9/conversations'))
+})
+
+test('an error from a save stays until the dialog is opened again', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: true } },
+    'POST /api/workspaces': { status: 403, body: { error: 'no', code: 'workspace_creation_refused' } },
+    ...pages,
+  })
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  fireEvent.click(within(await openSwitcher()).getByRole('menuitem', { name: 'New workspace' }))
+  fireEvent.change(screen.getByLabelText(/^Name of the new workspace/), { target: { value: 'X' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }))
+  await screen.findByRole('alert')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(within(await openSwitcher()).getByRole('menuitem', { name: 'New workspace' }))
+  await screen.findByRole('dialog', { name: 'New workspace' })
+  expect(screen.queryByRole('alert')).toBeNull()
 })
 
 test('a workspace made after the person logged out does not bring the shell back', async () => {

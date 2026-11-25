@@ -354,11 +354,16 @@ repeats the section's name over it, except in the phone's bar, where the page's 
 scrolled away.
 
 - **Wide** (over 56.25rem, 900px): the whole sidebar, `--width-sidebar` wide.
-- **Tablet** (48rem to 56.25rem): a rail of icons, about 60px. Each entry's tooltip is its label
-  (only here: wider, the tooltip would repeat what is written), the switcher is its avatar and the
-  account its avatar, and the inbox's count sits on the bell's corner. At 820px that gives a page
-  with its own list and detail (conversations, the knowledge base, settings) the room for both;
-  the labels would take a fifth of the width.
+- **Tablet** (48rem to 56.25rem): a rail of icons, about 60px, every target 44px. Each link's
+  label is hidden from sight only, so it stays the link's name, and its tooltip, shown beside the
+  rail (at its end; at its start right to left) and only here (wider, it would repeat what is
+  written), says the same. The switcher is its avatar and the account its avatar, both named by
+  their own labels, and the inbox's count sits on the bell's corner. A pinned app is its avatar,
+  with letters of its own (`initialsAmong`: "Equipment" and "Expenses" are EQ and EX), since a
+  touch screen shows no tooltip and two hues alone mustn't be the difference. At 820px the rail
+  gives a page with its own list and detail (conversations, the knowledge base, settings) the
+  room for both; the labels would take a fifth of the width. The end to end suite
+  (`web/e2e/app/shell.e2e.mjs`) checks in Chromium that every link of the rail has a name.
 - **Phone** (48rem and narrower): a slim bar with the menu button, the logo's mark and the current
   section's name. The sidebar is a drawer from the start edge, over a scrim: focus moves into it,
   the page behind it is inert, Escape (one no menu or dialog took) closes it, a press on the scrim
@@ -378,7 +383,9 @@ units.
 the menu button and the mark keep their size and the section's name gives way (`min-inline-size:
 0`, an ellipsis). In the sidebar, and so in the drawer, the switcher's avatar and chevron keep
 theirs and the workspace's name gives way the same way, with the whole name as the switcher's
-tooltip and in its accessible name; a long account name or email is cut the same way. A pinned
+tooltip and in its accessible name; a long account name or email is cut the same way. Names
+people write (a workspace's, a person's, a pin's) keep their own direction (`dir="auto"`), so a
+Latin name in a right-to-left page loses its end, not its start, to the ellipsis. A pinned
 app's label is cut too, its whole name its tooltip in the rail. `web/src/shell/shell.test.tsx`
 keeps the parts and the tooltip; check the look in a real browser at 320, 390, 820 and 1440px
 with a name such as "Operations and Field Services", in both themes.

@@ -1870,7 +1870,6 @@
     "logOut": "Sair",
     "openMenu": "Abrir o menu",
     "closeMenu": "Fechar o menu",
-    "workspace": "Espaço de trabalho",
     "workspaceCurrent": "Espaço de trabalho: {name}",
     "workspaces": "Seus espaços de trabalho",
     "newWorkspace": "Novo espaço de trabalho",
@@ -1888,7 +1887,9 @@
     "installApp": "Instalar o app",
     "pinned": "Apps fixados",
     "pageFailed": "Não foi possível mostrar esta página. O menu e as suas configurações continuam funcionando.",
-    "reload": "Recarregar"
+    "reload": "Recarregar",
+    "workspaceCreated": "“{name}” foi criado.",
+    "openWorkspace": "Abrir"
   },
   "common": {
     "cancel": "Cancelar",
@@ -2471,7 +2472,6 @@
   },
   "notifications": {
     "title": "Notificações",
-    "bell": "Notificações",
     "bellUnread": "Notificações, {count} não lidas",
     "intro": "O que aconteceu e que você pode querer ver. As notificações push são opcionais e servem só para avisar que há algo aqui.",
     "pushSettings": "Configurações de notificações",
@@ -2596,7 +2596,8 @@
       "sizes": "Tamanhos",
       "shapes": "Formas",
       "tones": "Tons",
-      "hues": "Matizes"
+      "hues": "Matizes",
+      "distinctInitials": "Vários lado a lado, cada um com as suas letras"
     },
     "sample": {
       "primary": "Principal",
