@@ -69,6 +69,9 @@ const (
 	SearchEmbeddingsChanged  = "search_embeddings_changed"
 	SearchConsentChanged     = "search_consent_changed"
 	DictationSettingsChanged = "dictation_settings_changed"
+
+	// An operator asks the host's updater to update the server now (Settings → About).
+	ServerUpdateRequested = "server_update_requested"
 )
 
 // Target types.

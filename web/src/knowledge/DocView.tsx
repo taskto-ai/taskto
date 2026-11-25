@@ -1,14 +1,15 @@
 // One open document: its heading and actions, and what the chosen action shows (the reader,
 // the editor, history, moving or deleting it). On a phone its back button returns to the list.
 
-import { useState } from 'react'
+import { useContext, useState } from 'react'
 import type { Doc } from '../api'
 import { useT } from '../i18n'
 import { Icon } from '../shell/Icon'
 import { Content } from './Content'
 import { ConfirmDelete } from './Delete'
-import { encodePath, resolveDocLink, useDoc } from './docs'
+import { encodePath, resolveDocLink, useDoc, useLatest, useMounted } from './docs'
 import { Editor } from './Editor'
+import { GuardContext } from './guard'
 import { History } from './History'
 import { Move } from './Move'
 
@@ -44,16 +45,31 @@ export function DocView({
     const target = resolveDocLink(path, href)
     return target === null ? null : () => onOpen(target)
   }
+  const { ask } = useContext(GuardContext)
+  const shown = useLatest(mode)
+  const mounted = useMounted()
   const changed = () => {
     doc.reload()
     onChanged()
     setMode('view')
   }
+  // A restore that finishes after the person went on to Edit (or Move) changes the document,
+  // but doesn't take the screen from them: the draft they are writing stays.
+  const restored = () => {
+    doc.reload()
+    onChanged()
+    if (shown.current === 'history') setMode('view')
+  }
 
   return (
     <article className="tt-doc" aria-label={path}>
       <div className="tt-pane-head">
-        <button type="button" className="tt-icon-button tt-back" aria-label={t('knowledge.doc.back')} onClick={onBack}>
+        <button
+          type="button"
+          className="tt-icon-button tt-back"
+          aria-label={t('knowledge.doc.back')}
+          onClick={() => ask(onBack)}
+        >
           <Icon name="back" />
         </button>
         <h2>{path}</h2>
@@ -102,7 +118,9 @@ export function DocView({
           doc={doc.data}
           onMoved={(to) => {
             onChanged()
-            onOpen(to)
+            // The person may have gone elsewhere, or on to edit, while it was moving: the moved
+            // document opens for someone who is still here, and asks before it replaces a draft.
+            if (mounted.current) ask(() => onOpen(to), 'moved')
           }}
           onReload={doc.reload}
           onCancel={() => setMode('view')}
@@ -125,7 +143,7 @@ export function DocView({
           canWrite={canWrite}
           admin={admin}
           onLink={onLink}
-          onRestored={changed}
+          onRestored={restored}
           onReload={doc.reload}
         />
       )}

@@ -3,17 +3,22 @@
 import { type FormEvent, useState } from 'react'
 import { api, errorText } from '../api'
 import { useT } from '../i18n'
-import { type Change, encodePath, isConflict, isMarkdown } from './docs'
+import { type Change, encodePath, isConflict, isMarkdown, useMounted } from './docs'
 
 export function NewDoc({
   base,
   onCreated,
+  onChanged,
   onCancel,
 }: {
   base: string
+  // The document is made: it opens, if the form is still there.
   onCreated: (path: string) => void
+  // The space's list of documents changed, whatever became of the form.
+  onChanged: () => void
   onCancel: () => void
 }) {
+  const mounted = useMounted()
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -29,7 +34,8 @@ export function NewDoc({
     setError(null)
     try {
       await api<Change>(`${base}/docs/${encodePath(path)}`, { method: 'PUT', body: { content: `# ${title}\n` } })
-      onCreated(path)
+      onChanged()
+      if (mounted.current) onCreated(path)
     } catch (err) {
       setError(isConflict(err) ? t('knowledge.newDoc.exists', { path }) : errorText(err))
     } finally {

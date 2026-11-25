@@ -11,8 +11,15 @@
     color: var(--color-text);
   }
 
+  .ui-field-label-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-1);
+    min-inline-size: 0;
+  }
+
   .ui-field-required {
-    margin-inline-start: var(--space-1);
+    font: var(--type-small);
     color: var(--color-danger);
   }
 

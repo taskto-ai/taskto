@@ -1061,8 +1061,17 @@ the stack, keeps the backup, and alerts**, and a person restores the backup by h
 [Rollback](#rollback) section): the updater never restores data or touches a volume. It never
 downgrades, and it leaves to a person a release whose notes say `manual-upgrade: true`, a
 version that changes the worker's firewall, and an update that was interrupted or stopped. It needs only what the earlier steps installed, and the server container never
-gets the Docker socket. With `TASKTO_UPDATE_CHANNEL=off` this step removes the timer and
-keeps the script, for `taskto-update --to`, when `TASKTO_VERSION` has one.
+gets the Docker socket. With `TASKTO_UPDATE_CHANNEL=off` this step removes the timer and the
+request path unit and keeps the script, for `taskto-update --to`, when `TASKTO_VERSION` has one.
+
+It also makes **Update now** work (Settings → About, for the server's operators; [docs/install.md](../docs/install.md#update-now)):
+a systemd path unit, `taskto-update-request.path`, starts `taskto-update --requested` when the
+server puts its request, one small file, in `/var/lib/taskto-update/request`, the one directory
+of the updater's that `compose.yaml` mounts into the server read-write (and that
+`deploy/safety-check.sh` lets only the server have). The request names no version and no
+argument; the run is the nightly run, with its gates (a hold, `manual-upgrade`, the channel off).
+This step makes that directory, owned by the server's uid (65532), on the same filesystem as
+`/var/lib/taskto-update`.
 
 **This step is required again on a VM set up before the release that added the update status
 to Settings → About.** The updater is a script of the VM, and its timer runs the copy that is
@@ -1075,6 +1084,10 @@ the first status at once (`taskto-update --publish-status` on the VM, which look
 update and changes nothing), so the page doesn't wait for the next night; to do only that by
 hand, run `sudo taskto-update --publish-status`. Afterwards each run writes it, and Settings →
 About (for the server's operators) shows it.
+
+**This step is required again, too, on a VM set up before the release that added Update now:** it
+installs the request path unit and makes the request directory, and until it is run the button
+says the host can't take a request yet.
 
 **Run**: every file is taken out of git and checked before anything is sent, so a version
 without the script never puts an empty file on the VM. Such a version is only for
@@ -1090,12 +1103,12 @@ else
   set -e
   d=$(mktemp -d)
   trap 'rm -rf "$d"' EXIT
-  for f in taskto-update.sh taskto-update.service taskto-update.timer; do
+  for f in taskto-update.sh taskto-update.service taskto-update.timer taskto-update-request.service taskto-update-request.path; do
     git show "${TASKTO_VERSION}:deploy/$f" > "$d/$f"
     [ -s "$d/$f" ] || { echo "FAIL: deploy/$f of $TASKTO_VERSION is empty"; exit 1; }
   done
   ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /usr/local/sbin/taskto-update.new && chmod 755 /usr/local/sbin/taskto-update.new && mv /usr/local/sbin/taskto-update.new /usr/local/sbin/taskto-update'" < "$d/taskto-update.sh"
-  for u in taskto-update.service taskto-update.timer; do
+  for u in taskto-update.service taskto-update.timer taskto-update-request.service taskto-update-request.path; do
     ssh -o BatchMode=yes "$TASKTO_SSH" "sudo -n sh -c 'cat > /etc/systemd/system/$u.new && chmod 644 /etc/systemd/system/$u.new && mv /etc/systemd/system/$u.new /etc/systemd/system/$u'" < "$d/$u"
   done
   )
@@ -1103,15 +1116,23 @@ else
 . /etc/taskto/install.env
 install -d -m 755 /var/lib/taskto-update /var/lib/taskto-update/public
 # The updater writes the status for the server there only while it and every directory above it are root's and nobody else's to write. A moved directory (TASKTO_UPDATE_PUBLIC) is set in /etc/taskto/install.env, which the updater reads on every run, this one too.
-/usr/local/sbin/taskto-update --publish-status || echo "WARN: the first status for Settings → About wasn't written (the lines above say why)"
+# The request directory: the server's uid owns it (Docker makes a missing one as root's, which the server can't write, and the updater then reports it as not in place), and it stays on the same filesystem as the updater's state. A moved one (TASKTO_UPDATE_REQUEST, with TASKTO_UPDATE_REQUEST_SOURCE in /srv/taskto/.env) is set in /etc/taskto/install.env, which the updater reads too.
+req=${TASKTO_UPDATE_REQUEST:-/var/lib/taskto-update/request}
+install -d -m 755 -o 65532 -g 65532 "$req"
 if [ "${TASKTO_UPDATE_CHANNEL:-release}" = off ]; then
-  systemctl disable --now taskto-update.timer >/dev/null 2>&1 || true
+  systemctl disable --now taskto-update.timer taskto-update-request.path >/dev/null 2>&1 || true
 else
   install -d -m 755 /etc/systemd/system/taskto-update.timer.d
   printf '[Timer]\nOnCalendar=\nOnCalendar=*-*-* %s:00 UTC\n' "${TASKTO_UPDATE_AT:-04:30}" > /etc/systemd/system/taskto-update.timer.d/at.conf
   systemctl daemon-reload
   systemctl enable --now taskto-update.timer >/dev/null 2>&1
+  install -d -m 755 /etc/systemd/system/taskto-update-request.path.d
+  printf '[Path]\nPathExists=\nPathExists=%s/update-now\n' "$req" > /etc/systemd/system/taskto-update-request.path.d/dir.conf
+  systemctl daemon-reload
+  systemctl enable --now taskto-update-request.path >/dev/null 2>&1
 fi
+# Last, so that it sees the path unit: the first status for Settings → About, which says whether this host can take a request.
+/usr/local/sbin/taskto-update --publish-status || echo "WARN: the first status for Settings → About wasn't written (the lines above say why)"
 EOF
 fi
 ```
@@ -1135,9 +1156,14 @@ else
 fail() { echo "FAIL: $*"; exit 1; }
 if [ "${TASKTO_UPDATE_CHANNEL:-release}" = off ]; then
   systemctl is-enabled -q taskto-update.timer 2>/dev/null && fail "the timer is on, and updates are off"
+  systemctl is-enabled -q taskto-update-request.path 2>/dev/null && fail "the request path unit is on, and updates are off"
   echo OK; exit 0
 fi
 systemctl is-active -q taskto-update.timer && systemctl is-enabled -q taskto-update.timer || fail "the timer"
+systemctl is-active -q taskto-update-request.path && systemctl is-enabled -q taskto-update-request.path || fail "the request path unit (Update now)"
+req=${TASKTO_UPDATE_REQUEST:-/var/lib/taskto-update/request}
+[ "$(stat -c %u "$req")" = 65532 ] && [ ! -L "$req" ] || fail "$req isn't a directory of uid 65532 (the server's)"
+jq -e '.requests.supported == true' /var/lib/taskto-update/public/status.json >/dev/null || fail "the host's status says it can't take an update request: the request directory or the path unit isn't in place"
 systemctl list-timers taskto-update.timer --no-pager | sed -n 1,2p
 /usr/local/sbin/taskto-update --dry-run || fail "the dry run: the lines above say why"
 echo OK
@@ -1161,6 +1187,15 @@ sudoedit /etc/taskto/update-notify-url   # the one line: https://ntfy.sh/your-to
 Use an `https://` address: an `http://` one (accepted, for a receiver on a network you trust)
 sends the address, secret included, and the message in the clear. It is optional, so no check here depends on it; the format is in
 [docs/install.md](../docs/install.md#when-an-update-fails).
+
+**Update now.** Settings → About has an Update now button for the server's operators. It asks
+the updater above for one run, now, with no version: the newest of the channel, under the same
+gates as the nightly run (a hold, `manual-upgrade`, an interrupted or stopped update, the
+channel off), with the same backup and the same way back. The server only writes a request file
+in `/var/lib/taskto-update/request`; `taskto-update-request.path` starts `taskto-update
+--requested`, whose journal is `journalctl -u taskto-update-request`. The page says why a request
+wasn't done, and `taskto-update --to VERSION` on the VM is how to install anyway. The server
+restarts during the update, and the page reconnects.
 
 To hold updates for a while, make `/etc/taskto/update.hold` on the VM (`touch`), and remove it
 to go on. The last run's result is in `/var/lib/taskto-update/status.json`, each run's line
