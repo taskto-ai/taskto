@@ -41,27 +41,37 @@ export function WhereChoice({
   const { mine, shared: sharedSpaces } = writableSpaces(spaces)
   const label = t('apps.builder.where')
   const narrow = useMediaQuery(NARROW)
+  const choose = (next: Where) => {
+    onWhere(next)
+    if (next === 'shared' && !shared) onShared(String(sharedSpaces[0]?.id ?? ''))
+  }
+  const options = [
+    { value: 'private' as const, label: t('apps.builder.wherePrivate'), disabled: !mine },
+    { value: 'shared' as const, label: t('apps.builder.whereShared'), disabled: sharedSpaces.length === 0 },
+  ]
   return (
     <div className="apps-where">
-      {/* The group is named by its own label; this is the same words, seen. */}
-      <span className="apps-where-label" aria-hidden="true">
-        {label}
-      </span>
-      <SegmentedControl<Where>
-        label={label}
-        // The two choices are a pill that can't wrap: on a phone it takes the small size, which
-        // fits the narrowest dialog.
-        size={narrow ? 'sm' : 'md'}
-        value={where}
-        onChange={(next) => {
-          onWhere(next)
-          if (next === 'shared' && !shared) onShared(String(sharedSpaces[0]?.id ?? ''))
-        }}
-        options={[
-          { value: 'private', label: t('apps.builder.wherePrivate'), disabled: !mine },
-          { value: 'shared', label: t('apps.builder.whereShared'), disabled: sharedSpaces.length === 0 },
-        ]}
-      />
+      {narrow ? (
+        // On a phone the two choices are a select: the pill of a segmented control can't wrap, and
+        // its labels are wider than a narrow dialog in some languages.
+        <Field label={label}>
+          <Select value={where} onChange={(e) => choose(e.target.value as Where)}>
+            {options.map((o) => (
+              <option key={o.value} value={o.value} disabled={o.disabled}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      ) : (
+        <>
+          {/* The group is named by its own label; this is the same words, seen. */}
+          <span className="apps-where-label" aria-hidden="true">
+            {label}
+          </span>
+          <SegmentedControl<Where> label={label} value={where} onChange={choose} options={options} />
+        </>
+      )}
       {where === 'shared' && (
         <Field label={t('apps.builder.sharedSpace')}>
           <Select value={shared} onChange={(e) => onShared(e.target.value)} required>

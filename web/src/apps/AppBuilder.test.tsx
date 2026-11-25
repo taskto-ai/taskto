@@ -205,8 +205,11 @@ test('a new app starts in the private space unless a shared one is chosen, and t
   })
   render(<Routed />)
   const what = await screen.findByLabelText('What should the app do?')
-  const priv = screen.getByRole('radio', { name: 'In my private space' }) as HTMLInputElement
-  expect(priv.checked).toBe(true)
+  // On a phone the choice is a select, which fits any width in any language.
+  const where = screen.getByRole('combobox', { name: 'Where should it live?' }) as HTMLSelectElement
+  expect(where.value).toBe('private')
+  expect([...where.options].map((o) => o.textContent)).toEqual(['In my private space', 'In a shared space'])
+  expect(screen.queryByRole('radio')).toBeNull()
   // The start needs a description.
   expect((screen.getByRole('button', { name: 'Start building' }) as HTMLButtonElement).disabled).toBe(true)
   fireEvent.change(what, { target: { value: 'An expense tracker' } })
@@ -858,4 +861,23 @@ test('a publish refused after the acknowledgement keeps the schema dialog, with 
   fireEvent.click(within(dialog).getByRole('checkbox', { name: 'I understand these changes' }))
   fireEvent.click(within(dialog).getByRole('button', { name: 'Publish with these changes' }))
   await within(section).findByText(/Published as release 2/)
+})
+
+test('on a phone a shared space is chosen with the select, then the shared space', async () => {
+  narrowScreen(true)
+  window.history.replaceState(null, '', '/w/1/apps/build')
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: spaces },
+    'POST /api/workspaces/1/conversations': { status: 201, body: conversation(9) },
+    'POST /api/workspaces/1/conversations/9/messages': { status: 202, body: { submission_id: 1 } },
+    'PATCH /api/workspaces/1/conversations/9': { body: conversation(9) },
+    'GET /api/workspaces/1/conversations/9': { body: conversation(9) },
+  })
+  render(<Routed />)
+  fireEvent.change(await screen.findByLabelText('What should the app do?'), { target: { value: 'A team roster' } })
+  fireEvent.change(screen.getByRole('combobox', { name: 'Where should it live?' }), { target: { value: 'shared' } })
+  expect((screen.getByLabelText('Shared space') as HTMLSelectElement).value).toBe('3')
+  fireEvent.click(screen.getByRole('button', { name: 'Start building' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/w/1/apps/build-9'))
+  expect(sentToAgent(calls)).toContain('the shared space “Team” (space id 3)')
 })

@@ -730,10 +730,15 @@ test('a refused move is said in its dialog; a move that is done leaves the focus
   expect(screen.getByRole('dialog', { name: 'Move Expenses to a space' })).toBe(dialog)
 
   refuse = false
+  // The heading takes the focus only once the dialog is gone: under an open modal it is inert.
+  const heading = within(private_).getByRole('heading', { name: 'Private' })
+  const dialogsWhenFocused: number[] = []
+  heading.addEventListener('focus', () => dialogsWhenFocused.push(document.querySelectorAll('dialog').length))
   fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   await within(screen.getByRole('region', { name: 'Crew' })).findByText('Expenses')
-  expect(document.activeElement).toBe(within(private_).getByRole('heading', { name: 'Private' }))
+  expect(document.activeElement).toBe(heading)
+  expect(dialogsWhenFocused).toEqual([0])
 })
 
 test('Move is offered only to those who may design the app, and Duplicate only where a copy can go', async () => {

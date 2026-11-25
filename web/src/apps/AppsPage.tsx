@@ -19,6 +19,7 @@ import { spaceLabel } from '../spaces'
 import { ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { Heading } from '../ui/Heading'
+import { modalOpen, onModalChange } from '../ui/layers'
 import { Notice } from '../ui/Notice'
 import { Page } from '../ui/Page'
 import { PageHeader } from '../ui/PageHeader'
@@ -153,7 +154,7 @@ function SpaceApps({
     try {
       await api<App>(`${base}/${app.id}/move`, { method: 'POST', body: { version: app.version, space_id: to } })
       setError(null)
-      document.getElementById(headingId)?.focus()
+      focusHeadingWhenUncovered(headingId)
       moved()
       return null
     } catch (e) {
@@ -203,6 +204,20 @@ function SpaceApps({
       )}
     </section>
   )
+}
+
+// After a move the app's row is gone: the focus goes to the heading of the space it left. The
+// move's dialog is still open now, and everything under a modal dialog is inert, so the heading
+// takes the focus once no modal is open: just after, since a closing dialog gives the focus back
+// to what opened it first.
+function focusHeadingWhenUncovered(id: string) {
+  const focus = () => document.getElementById(id)?.focus()
+  if (!modalOpen()) return focus()
+  const stop = onModalChange(() => {
+    if (modalOpen()) return
+    stop()
+    queueMicrotask(focus)
+  })
 }
 
 // A space with no apps: what apps there are for, and the two ways to start one (only where the
