@@ -1,5 +1,5 @@
 // The workspace's settings, a tab each, found in a side list of three groups: the workspace's
-// (general, members and invites, shared spaces, the audit log, model providers, CLI accounts,
+// (general, members and invites, shared spaces, the audit log, model providers, integrations (admins), CLI accounts,
 // search, dictation, storage), your own (notifications, your password, your sessions, your data,
 // access tokens) and the server's (about). On a phone the list is a choice at the top of the page.
 // Admins see them all; members see model providers (their own accounts, and the workspace's to
@@ -17,6 +17,7 @@ import { CliAccountsTab } from './CliAccountsTab'
 import { DataTab } from './DataTab'
 import { DictationTab } from './DictationTab'
 import { GeneralTab } from './GeneralTab'
+import { IntegrationsTab } from './IntegrationsTab'
 import { MembersTab } from './MembersTab'
 import { NotificationsTab } from './NotificationsTab'
 import { PasswordTab } from './PasswordTab'
@@ -34,6 +35,7 @@ type Tab =
   | 'spaces'
   | 'audit'
   | 'providers'
+  | 'integrations'
   | 'cli-accounts'
   | 'search'
   | 'dictation'
@@ -53,6 +55,7 @@ const TABS: { tab: Tab; label: Key; admin: boolean; group: Group }[] = [
   { tab: 'spaces', label: 'settings.tabs.spaces', admin: true, group: 'workspace' },
   { tab: 'audit', label: 'settings.tabs.audit', admin: true, group: 'workspace' },
   { tab: 'providers', label: 'settings.tabs.providers', admin: false, group: 'workspace' },
+  { tab: 'integrations', label: 'settings.tabs.integrations', admin: true, group: 'workspace' },
   { tab: 'cli-accounts', label: 'settings.tabs.cliAccounts', admin: false, group: 'workspace' },
   { tab: 'search', label: 'settings.tabs.search', admin: false, group: 'workspace' },
   { tab: 'dictation', label: 'settings.tabs.dictation', admin: false, group: 'workspace' },
@@ -149,6 +152,8 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
       return <StorageTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'providers':
       return <ProvidersTab workspace={workspace.id} admin={workspace.role === 'admin'} />
+    case 'integrations':
+      return <IntegrationsTab workspace={workspace.id} />
     case 'cli-accounts':
       return <CliAccountsTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'search':
