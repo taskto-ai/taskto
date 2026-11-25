@@ -548,13 +548,37 @@ func TestRecordSyncStopsAtItsLimit(t *testing.T) {
 	if queued() != 5 {
 		t.Fatalf("queued = %d", queued())
 	}
-	if err := w.e.idx.syncRecordsWithin(ctx, fmt.Sprintf("[%d]", a.ID), 2, 0); err != nil {
-		t.Fatal(err)
+	if n, err := w.e.idx.syncRecordsWithin(ctx, fmt.Sprintf("[%d]", a.ID), 2); err != nil || n != 2 {
+		t.Fatalf("indexed %d, %v", n, err)
 	}
 	if queued() != 3 {
 		t.Fatalf("queued after a sync of 2 = %d, want 3", queued())
 	}
 	if err := w.e.idx.syncRecords(ctx, ""); err != nil || queued() != 0 {
 		t.Fatalf("after the background sync: %d, %v", queued(), err)
+	}
+}
+
+// One search has one allowance of records to index, however many times it looks again: with more
+// queued than that, the rest stay queued, and the answer says it is incomplete.
+func TestRecordSearchSharesItsAllowanceAcrossAttempts(t *testing.T) {
+	w := newWorld(t)
+	a := w.newApp(w.alice, w.team, "Team expenses", true)
+	for i := range 6 {
+		w.addRecord(w.alice, w.team, a, fmt.Sprintf("zanzibar %d", i))
+	}
+	w.e.idx.recordSyncLimit = 4
+	r := w.searchRecords(w.alice, nil, "zanzibar")
+	var queued int
+	if err := w.e.db.QueryRow(`SELECT count(*) FROM search_record_queue`).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	// Two attempts of four each would have indexed all six.
+	if queued != 2 || !r.Incomplete || len(r.Results) != 4 {
+		t.Fatalf("queued %d, reply %+v: want 2 left over, 4 found, incomplete", queued, r)
+	}
+	// The next search has its own allowance and the rest.
+	if r := w.searchRecords(w.alice, nil, "zanzibar"); r.Incomplete || len(r.Results) != 6 {
+		t.Fatalf("next search = %+v", r)
 	}
 }

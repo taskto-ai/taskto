@@ -249,10 +249,12 @@ type queuedConversation struct {
 }
 
 // syncConversations indexes again queued conversations, newest first: userID's in workspaceID,
-// or everyone's if userID is 0, at most limit of them and for at most budget (0: no limit). It
-// stops at the first the agent runtime can't answer for (it isn't there, or it is starting),
-// whose error it returns: the others would not be answered either. leftOver is true if queued
-// conversations of the scope remain that it didn't index, which it left for the next sync.
+// or everyone's if userID is 0, at most limit of them and for at most budget (0: no limit). A
+// transcript the agent runtime can't give leaves its conversation queued and the sync goes on with
+// the others, since it may be that conversation's failure alone; after three in a row it is taken
+// for the agent runtime's (it isn't there, or it is starting) and the sync stops. The first error
+// is returned either way. leftOver is true if queued conversations of the scope remain that it
+// didn't index, which it left for the next sync.
 func (x *Index) syncConversations(ctx context.Context, src ConversationSource, userID, workspaceID int64, limit int, budget time.Duration) (leftOver bool, err error) {
 	if budget > 0 {
 		var cancel context.CancelFunc
@@ -261,6 +263,11 @@ func (x *Index) syncConversations(ctx context.Context, src ConversationSource, u
 	}
 	everyone := userID == 0
 	skip := []int64{}
+	// A transcript the agent runtime can't give is that conversation's own failure, or all of
+	// theirs: after this many in a row, it is taken for the agent runtime's, and the sync stops.
+	const runtimeDown = 3
+	var firstErr error
+	failures := 0
 	for done := 0; ; {
 		if limit > 0 && done >= limit {
 			return true, nil
@@ -274,7 +281,7 @@ func (x *Index) syncConversations(ctx context.Context, src ConversationSource, u
 			return false, err
 		}
 		if len(batch) == 0 {
-			return false, nil
+			return firstErr != nil, firstErr
 		}
 		for _, qc := range batch {
 			if limit > 0 && done >= limit {
@@ -288,8 +295,18 @@ func (x *Index) syncConversations(ctx context.Context, src ConversationSource, u
 				if ctx.Err() != nil && budget > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 					return true, nil // the time for it is up: the rest is for the next sync
 				}
-				return true, err
+				// This conversation stays queued, and the others are read: it may be its own failure.
+				// Never the same one again in this sync.
+				if firstErr == nil {
+					firstErr = err
+				}
+				if failures++; failures >= runtimeDown {
+					return true, firstErr
+				}
+				skip = append(skip, qc.id)
+				continue
 			}
+			failures = 0
 			if err := x.write(ctx, func(tx *sql.Tx) error { return indexConversation(ctx, tx, qc, text, gone) }); err != nil {
 				return true, err
 			}

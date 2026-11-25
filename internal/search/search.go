@@ -76,6 +76,9 @@ type Index struct {
 	afterCardSync func()
 	// afterRecordSync is the same for a search of app records.
 	afterRecordSync func()
+	// recordSyncLimit is the most records a search indexes before it answers (recordSyncMax);
+	// tests lower it.
+	recordSyncLimit int
 	// conversations is where the transcripts of conversations are read from (SetConversations).
 	conversations atomic.Pointer[ConversationSource]
 
@@ -99,7 +102,7 @@ func New(sqlDB *sql.DB, kb *knowledge.Store, prov *providers.Store, opts Options
 	x := &Index{
 		db: sqlDB, kb: kb, providers: prov, client: opts.HTTPClient, log: opts.Logger, now: time.Now,
 		vectors:    newVectorCache(opts.VectorCache),
-		batchFiles: syncBatch, batchBytes: syncBatchBytes, syncWait: searchSyncWait,
+		batchFiles: syncBatch, batchBytes: syncBatchBytes, syncWait: searchSyncWait, recordSyncLimit: recordSyncMax,
 		dirty:    map[int64]access.Space{},
 		syncWake: make(chan struct{}, 1), embedWake: make(chan struct{}, 1),
 	}

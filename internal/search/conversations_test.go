@@ -18,7 +18,8 @@ import (
 type fakeTranscripts struct {
 	mu    sync.Mutex
 	text  map[int64]string
-	err   error // what every call answers, when set
+	err   error           // what every call answers, when set
+	errOf map[int64]error // what the calls for one conversation answer, when set
 	gone  map[int64]bool
 	calls []int64
 	// during, when set, runs inside a call, after it read the text and before it answers.
@@ -32,6 +33,9 @@ func newFakeTranscripts() *fakeTranscripts {
 func (f *fakeTranscripts) Transcript(_ context.Context, agentID int64) (string, error) {
 	f.mu.Lock()
 	text, err, gone, during := f.text[agentID], f.err, f.gone[agentID], f.during
+	if err == nil {
+		err = f.errOf[agentID]
+	}
 	f.calls = append(f.calls, agentID)
 	f.mu.Unlock()
 	if during != nil {
@@ -543,5 +547,41 @@ func TestConversationDrainSkipsOnlyWhatStaysQueued(t *testing.T) {
 	}
 	if reads := src.called() - before; reads != 1 {
 		t.Fatalf("a conversation marked as it was read was read %d times by one drain", reads)
+	}
+}
+
+// One conversation whose transcript can't be read leaves it queued and the others are indexed; it
+// is the agent runtime's own failure only after several in a row, which stops the sync.
+func TestConversationSyncGoesOnPastOneFailure(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	good1 := w.conversation(w.alice, w.ws, "Good one", "words about quokkas", src)
+	bad := w.conversation(w.alice, w.ws, "Bad", "words about quokkas", src)
+	good2 := w.conversation(w.alice, w.ws, "Good two", "words about quokkas", src)
+	_ = []int64{good1, good2}
+	src.errOf = map[int64]error{w.agentID(bad): errors.New("this one's history can't be read")}
+	_, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0, 0)
+	if err == nil {
+		t.Fatal("the failure was not reported")
+	}
+	r := w.searchConversations(w.alice, w.ws, "quokkas")
+	wantConversations(t, "the others", r, "Good one", "Good two")
+	if !r.Incomplete {
+		t.Fatalf("the failed one is left out and the search says so: %+v", r)
+	}
+
+	// Three in a row are the agent runtime's: the sync stops, and doesn't read the rest.
+	src.errOf = nil
+	src.err = errors.New("starting")
+	for i := range 5 {
+		w.conversation(w.alice, w.ws, fmt.Sprintf("Later %d", i), "words", src)
+	}
+	before := src.called()
+	if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0, 0); err == nil {
+		t.Fatal("no error")
+	}
+	if reads := src.called() - before; reads != 3 {
+		t.Fatalf("the sync read %d transcripts after the agent runtime went away, want 3", reads)
 	}
 }
