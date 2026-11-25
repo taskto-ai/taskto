@@ -79,56 +79,58 @@ export function SettingsPage({ me, workspace, tab }: { me: Me; workspace: Worksp
   const href = (tab: Tab) => routePath({ workspace: workspace.id, section: 'settings', item: tab })
   return (
     <div className="settings-layout">
-      <nav className="settings-nav" aria-label={t('settings.title')}>
-        <p className="settings-nav-title">{t('settings.title')}</p>
-        {GROUPS.map((g) => {
-          const items = tabs.filter((x) => x.group === g.group)
-          if (items.length === 0) return null
-          const id = `settings-group-${g.group}`
-          return (
-            <div key={g.group}>
-              <p className="settings-nav-label" id={id}>
-                {t(g.label)}
-              </p>
-              <ul className="settings-nav-group" aria-labelledby={id}>
-                {items.map((x) => (
-                  <li key={x.tab}>
-                    <Link
-                      className="settings-nav-link"
-                      href={href(x.tab)}
-                      aria-current={x === current ? 'page' : undefined}
-                    >
-                      {t(x.label)}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )
-        })}
-      </nav>
-      <div className="settings-picker">
-        <Select
-          aria-label={t('settings.choose')}
-          value={current.tab}
-          onChange={(e) => navigate(href(e.target.value as Tab))}
-        >
+      <div className="settings-frame">
+        <nav className="settings-nav" aria-label={t('settings.title')}>
+          <p className="settings-nav-title">{t('settings.title')}</p>
           {GROUPS.map((g) => {
             const items = tabs.filter((x) => x.group === g.group)
             if (items.length === 0) return null
+            const id = `settings-group-${g.group}`
             return (
-              <optgroup key={g.group} label={t(g.label)}>
-                {items.map((x) => (
-                  <option key={x.tab} value={x.tab}>
-                    {t(x.label)}
-                  </option>
-                ))}
-              </optgroup>
+              <div key={g.group}>
+                <p className="settings-nav-label" id={id}>
+                  {t(g.label)}
+                </p>
+                <ul className="settings-nav-group" aria-labelledby={id}>
+                  {items.map((x) => (
+                    <li key={x.tab}>
+                      <Link
+                        className="settings-nav-link"
+                        href={href(x.tab)}
+                        aria-current={x === current ? 'page' : undefined}
+                      >
+                        {t(x.label)}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )
           })}
-        </Select>
+        </nav>
+        <div className="settings-picker">
+          <Select
+            aria-label={t('settings.choose')}
+            value={current.tab}
+            onChange={(e) => navigate(href(e.target.value as Tab))}
+          >
+            {GROUPS.map((g) => {
+              const items = tabs.filter((x) => x.group === g.group)
+              if (items.length === 0) return null
+              return (
+                <optgroup key={g.group} label={t(g.label)}>
+                  {items.map((x) => (
+                    <option key={x.tab} value={x.tab}>
+                      {t(x.label)}
+                    </option>
+                  ))}
+                </optgroup>
+              )
+            })}
+          </Select>
+        </div>
+        <Panel tab={current.tab} me={me} workspace={workspace} />
       </div>
-      <Panel tab={current.tab} me={me} workspace={workspace} />
     </div>
   )
 }

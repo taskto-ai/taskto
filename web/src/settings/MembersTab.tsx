@@ -145,6 +145,7 @@ export function MembersTab({ workspace, me }: { workspace: number; me: number })
                   cell: (m) => (
                     <Select
                       size="sm"
+                      className="settings-role"
                       aria-label={t('settings.members.roleOf', { name: m.name })}
                       value={m.role}
                       disabled={m.id === me || action.busy}

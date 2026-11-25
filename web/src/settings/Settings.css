@@ -1,6 +1,14 @@
 /* Settings: the side list of tabs in groups beside the tab's page, and what the tabs share. */
 @layer screens {
+  /* The layout follows the room the shell gives it, not the window: beside the shell's sidebar on a
+     tablet, the side list would leave the tab too narrow. */
   .settings-layout {
+    container-type: inline-size;
+    block-size: 100%;
+    min-block-size: 0;
+  }
+
+  .settings-frame {
     display: grid;
     grid-template-columns: 216px minmax(0, 1fr);
     block-size: 100%;
@@ -76,8 +84,8 @@
     display: none;
   }
 
-  @media (max-width: 48rem) {
-    .settings-layout {
+  @container (max-width: 44rem) {
+    .settings-frame {
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: auto minmax(0, 1fr);
     }
@@ -528,5 +536,12 @@
     display: block;
     inline-size: 100%;
     block-size: auto;
+  }
+}
+
+@layer screens {
+  /* A role in a row: wide enough for its longest name. */
+  .settings-role {
+    min-inline-size: 7.5rem;
   }
 }

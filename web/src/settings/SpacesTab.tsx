@@ -240,6 +240,7 @@ function SpaceMembers({ workspace, url, onChange }: { workspace: number; url: st
                   <>
                     <Select
                       size="sm"
+                      className="settings-role"
                       aria-label={t('settings.spaces.roleOf', { name: m.name })}
                       value={m.role}
                       disabled={action.busy}
