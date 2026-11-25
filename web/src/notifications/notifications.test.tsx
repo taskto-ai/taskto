@@ -283,7 +283,7 @@ test('signing out removes this device first, while the session can still say who
   })
   render(<App />)
   await screen.findByRole('heading', { name: 'Notifications' })
-  fireEvent.click(screen.getByRole('button', { name: 'Account: Owner' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Account: Owner/ }))
   await act(async () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }))
   })

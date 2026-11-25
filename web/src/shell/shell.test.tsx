@@ -58,7 +58,7 @@ const shellOf = (container: HTMLElement) => container.querySelector('.ui-shell')
 
 // The account menu, opened from its button at the sidebar's foot (named in either language).
 async function openAccount(): Promise<HTMLElement> {
-  fireEvent.click(await screen.findByRole('button', { name: /^(Account|Conta): Owner$/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /^(Account|Conta): Owner owner@example\.com$/ }))
   return screen.getByRole('menu')
 }
 
@@ -628,7 +628,7 @@ test('with the drawer and the account menu open, Escape closes the menu first an
   const shell = shellOf(container)
   fireEvent.click(button)
   expect(shell.dataset.drawer).toBe('open')
-  const account = screen.getByRole('button', { name: 'Account: Owner' })
+  const account = screen.getByRole('button', { name: /^Account: Owner/ })
   await openAccount()
 
   fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
@@ -694,7 +694,7 @@ test('the account menu shows who is signed in and leads to the install guidance'
   window.history.replaceState(null, '', '/w/1/conversations')
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
   render(<App />)
-  const account = await screen.findByRole('button', { name: 'Account: Owner' })
+  const account = await screen.findByRole('button', { name: /^Account: Owner/ })
   expect(account.textContent).toContain('owner@example.com')
   fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Install the app' }))
   await screen.findByRole('heading', { name: 'Install the app' })
@@ -706,7 +706,7 @@ test('the focus leaving the account menu by Tab closes it', async () => {
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
   render(<App />)
   await screen.findByText('Pick a conversation, or start a new one.')
-  const account = screen.getByRole('button', { name: 'Account: Owner' })
+  const account = screen.getByRole('button', { name: /^Account: Owner/ })
   const menu = await openAccount()
   fireEvent.keyDown(within(menu).getAllByRole('menuitemradio')[0], { key: 'Tab' })
   expect(screen.queryByRole('menu')).toBeNull()
@@ -718,7 +718,7 @@ test('Escape closes the account menu and gives focus back to its button; a press
   fakeFetch({ 'GET /api/setup': { body: { needed: false } }, 'GET /api/me': { body: me }, ...pages })
   const { container } = render(<App />)
   await screen.findByText('Pick a conversation, or start a new one.')
-  const account = screen.getByRole('button', { name: 'Account: Owner' })
+  const account = screen.getByRole('button', { name: /^Account: Owner/ })
   const menu = await openAccount()
   // The menu opens on its first item, which the keyboard moves from.
   expect(document.activeElement).toBe(within(menu).getAllByRole('menuitemradio')[0])

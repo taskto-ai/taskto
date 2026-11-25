@@ -36,7 +36,7 @@ export function AccountMenu({ me, workspace, onLogout, t }: { me: Me; workspace:
     <div className="ui-shell-account">
       <Menu align="start">
         <Tooltip content={name} describes={false} side="inline-end">
-          <MenuButton label={t('shell.account', { name })} indicator={null} className="ui-shell-account-button">
+          <MenuButton label={t('shell.accountLabel')} indicator={null} className="ui-shell-account-button">
             <Avatar name={name} decorative />
             <span className="ui-shell-account-text">
               {/* A person's name and address keep their own direction (a Latin one in a
@@ -44,6 +44,7 @@ export function AccountMenu({ me, workspace, onLogout, t }: { me: Me; workspace:
               <span className="ui-shell-account-name" dir="auto">
                 {name}
               </span>
+              {/* A space between the two in the button's name; the grid draws none. */}{' '}
               <span className="ui-shell-account-email" dir="auto">
                 {email}
               </span>

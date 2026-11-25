@@ -28,11 +28,7 @@ export function WorkspaceSwitcher({ me, workspace, section, onMe, t }: Workspace
     <div className="ui-shell-switcher">
       <Menu align="start">
         <Tooltip content={workspace.name} describes={false} side="inline-end">
-          <MenuButton
-            label={t('shell.workspaceCurrent', { name: workspace.name })}
-            indicator="chevron-updown"
-            className="ui-shell-switcher-button"
-          >
+          <MenuButton label={t('shell.workspace')} indicator="chevron-updown" className="ui-shell-switcher-button">
             <Avatar name={workspace.name} shape="square" size="sm" decorative />
             {/* A workspace's name keeps its own direction: a Latin one in a right-to-left page
                 loses its end, not its start, to the ellipsis. */}

@@ -1858,7 +1858,6 @@
     "logOut": "Log out",
     "openMenu": "Open the menu",
     "closeMenu": "Close the menu",
-    "workspaceCurrent": "Workspace: {name}",
     "workspaces": "Your workspaces",
     "newWorkspace": "New workspace",
     "newWorkspaceName": "Name of the new workspace",
@@ -1870,14 +1869,15 @@
       "light": "Light",
       "dark": "Dark"
     },
-    "account": "Account: {name}",
     "skipToContent": "Skip to the content",
     "installApp": "Install the app",
     "pinned": "Pinned apps",
     "pageFailed": "This page couldn’t be shown. The menu and your settings still work.",
     "reload": "Reload",
     "workspaceCreated": "“{name}” was created.",
-    "openWorkspace": "Open it"
+    "openWorkspace": "Open it",
+    "workspace": "Workspace",
+    "accountLabel": "Account"
   },
   "common": {
     "cancel": "Cancel",
@@ -2533,7 +2533,8 @@
     "close": "Close",
     "moreActions": "More actions",
     "dismiss": "Dismiss",
-    "notifications": "Notifications"
+    "notifications": "Notifications",
+    "menuButtonName": "{label}:"
   },
   "gallery": {
     "title": "Design system",
@@ -2757,7 +2758,9 @@
       "labels": "Labels",
       "assignedToMe": "Assigned to me",
       "addColumn": "Add a column",
-      "headings": "Sizes from the type roles: the display face from 20px up, Inter below"
+      "headings": "Sizes from the type roles: the display face from 20px up, Inter below",
+      "busyAsk": "Delete, then fail…",
+      "busyFailed": "The app could not be deleted. Nothing was changed; try again."
     }
   }
 }

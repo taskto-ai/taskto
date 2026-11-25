@@ -1870,7 +1870,6 @@
     "logOut": "Sair",
     "openMenu": "Abrir o menu",
     "closeMenu": "Fechar o menu",
-    "workspaceCurrent": "Espaço de trabalho: {name}",
     "workspaces": "Seus espaços de trabalho",
     "newWorkspace": "Novo espaço de trabalho",
     "newWorkspaceName": "Nome do novo espaço de trabalho",
@@ -1882,14 +1881,15 @@
       "light": "Claro",
       "dark": "Escuro"
     },
-    "account": "Conta: {name}",
     "skipToContent": "Pular para o conteúdo",
     "installApp": "Instalar o app",
     "pinned": "Apps fixados",
     "pageFailed": "Não foi possível mostrar esta página. O menu e as suas configurações continuam funcionando.",
     "reload": "Recarregar",
     "workspaceCreated": "“{name}” foi criado.",
-    "openWorkspace": "Abrir"
+    "openWorkspace": "Abrir",
+    "workspace": "Espaço de trabalho",
+    "accountLabel": "Conta"
   },
   "common": {
     "cancel": "Cancelar",
@@ -2554,7 +2554,8 @@
     "close": "Fechar",
     "moreActions": "Mais ações",
     "dismiss": "Dispensar",
-    "notifications": "Notificações"
+    "notifications": "Notificações",
+    "menuButtonName": "{label}:"
   },
   "gallery": {
     "title": "Sistema de design",
@@ -2778,7 +2779,9 @@
       "labels": "Etiquetas",
       "assignedToMe": "Atribuídos a mim",
       "addColumn": "Adicionar uma coluna",
-      "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo"
+      "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo",
+      "busyAsk": "Excluir e falhar…",
+      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo."
     }
   }
 }

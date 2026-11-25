@@ -22,6 +22,7 @@ import { modalOpen } from '../ui/layers'
 import { Notice } from '../ui/Notice'
 import { Page as PageFrame } from '../ui/Page'
 import { Skeleton } from '../ui/Skeleton'
+import { Toaster } from '../ui/Toast'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { ErrorBoundary } from './ErrorBoundary'
 import { NoWorkspace } from './NoWorkspace'
@@ -56,7 +57,20 @@ function rememberWorkspace(id: number) {
 // A push opens /notification/{id}: read as the signed-in person and followed to where it leads,
 // outside the shell, which would take that address for an unknown route.
 // `onMe` takes the account's new state when the shell changed it (a workspace was created).
+//
+// The toasts' stack is drawn here, once, before anything shows one: its live regions are then on
+// the page, empty, when the first toast comes, so that one is said too. Only the shell's screens
+// show toasts (the account menu, "New workspace"), the one for someone with no workspace included.
 export function Shell({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
+  return (
+    <>
+      <Toaster />
+      <ShellRoute me={me} onLogout={onLogout} onMe={onMe} />
+    </>
+  )
+}
+
+function ShellRoute({ me, onLogout, onMe }: { me: Me; onLogout: () => void; onMe?: (me: Me) => void }) {
   const path = usePath()
   const opening = parseNotificationPath(path)
   if (path === EMAIL_CONFIRM_PATH) {

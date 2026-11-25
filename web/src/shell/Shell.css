@@ -124,9 +124,11 @@
   .ui-shell-switcher-button .ui-button-content,
   .ui-shell-switcher-button .ui-button-label,
   .ui-shell-switcher-button .ui-menu-button-text,
+  .ui-shell-switcher-button .ui-menu-button-value,
   .ui-shell-account-button .ui-button-content,
   .ui-shell-account-button .ui-button-label,
-  .ui-shell-account-button .ui-menu-button-text {
+  .ui-shell-account-button .ui-menu-button-text,
+  .ui-shell-account-button .ui-menu-button-value {
     /* Each part a flex box down to the name, so the name is what gives way (with its ellipsis)
        and the avatar and the chevron keep their room: the button's label clips what overflows
        it, which would otherwise cut the name bare and hide the chevron. */
@@ -395,9 +397,11 @@
     .ui-shell-switcher-button .ui-button-content,
     .ui-shell-switcher-button .ui-button-label,
     .ui-shell-switcher-button .ui-menu-button-text,
+    .ui-shell-switcher-button .ui-menu-button-value,
     .ui-shell-account-button .ui-button-content,
     .ui-shell-account-button .ui-button-label,
-    .ui-shell-account-button .ui-menu-button-text {
+    .ui-shell-account-button .ui-menu-button-text,
+    .ui-shell-account-button .ui-menu-button-value {
       flex: none;
     }
 

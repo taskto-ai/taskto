@@ -17,6 +17,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { useT } from '../i18n'
 import { Button } from './Button'
 import { Dialog } from './Dialog'
+import './ConfirmDialog.css'
 
 export interface ConfirmDialogProps {
   open: boolean
@@ -67,7 +68,7 @@ export function ConfirmDialog({
         </>
       }
     >
-      {typeof children === 'string' ? <p>{children}</p> : children}
+      {typeof children === 'string' ? <p className="ui-confirm-text">{children}</p> : children}
     </Dialog>
   )
 }
