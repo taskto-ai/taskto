@@ -225,7 +225,7 @@ test('a file that can never be taken is refused without a request', async () => 
   const calls = fakeFetch({})
   render(<Field limits={{ max_files: 2, max_bytes: 100 }} />)
   fireEvent.change(library(), { target: { files: [picture('big.png', 101)] } })
-  expect((await screen.findByRole('alert')).textContent).toContain('big.png is too large: at most 100 byte')
+  expect((await screen.findByRole('alert')).textContent).toContain('big.png is too large: at most 100 B')
   fireEvent.change(library(), { target: { files: [picture('notes.pdf', 10, 'application/pdf')] } })
   await waitFor(() =>
     expect(screen.getByRole('alert').textContent).toContain('notes.pdf isn’t a JPEG, PNG or GIF picture'),
@@ -322,9 +322,9 @@ test('the renderer draws the photo input with the server’s limits and the thum
     />,
   )
   expect(await screen.findByRole('group', { name: 'Pictures' })).toBeTruthy()
-  // The limits came from the data model: two photos of at most 100 bytes.
+  // The limits came from the data model: two photos of at most 100 Bs.
   expect(screen.getAllByText(/At most 2 photos\./).length).toBeGreaterThan(0)
-  expect(screen.getByText(/Each up to 100 byte\./)).toBeTruthy()
+  expect(screen.getByText(/Each up to 100 B\./)).toBeTruthy()
   const img = await screen.findByRole('img', { name: 'Photo 1 of 1' })
   expect(img.getAttribute('src')).toBe(`${base}/attachments/${id}/thumbnail`)
 })

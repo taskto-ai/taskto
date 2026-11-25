@@ -31,7 +31,7 @@ export function OfflineShell({ user, onReconnect }: { user: string; onReconnect:
 
   const apps = Object.fromEntries(data.downloads.map((d) => [d.key, d.name]))
   return (
-    <main className="tt-section tt-offline-shell" id="main">
+    <main className="tt-section" id="main">
       <div className="tt-pane-head">
         <h1>{t('offline.shell.title')}</h1>
         <span className="tt-muted">{user}</span>

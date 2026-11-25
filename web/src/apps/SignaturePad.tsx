@@ -251,7 +251,7 @@ export function SignatureField({
 
   if (value && files) {
     return (
-      <fieldset className="tt-capture tt-signature">
+      <fieldset className="tt-capture">
         <legend className="tt-capture-label">{heading}</legend>
         {files.local ? (
           // Still on this device: nothing of it is on the server to link to.
@@ -273,7 +273,7 @@ export function SignatureField({
   }
   if (readOnly) {
     return (
-      <fieldset className="tt-capture tt-signature">
+      <fieldset className="tt-capture">
         <legend className="tt-capture-label">{heading}</legend>
         <p className="tt-muted">{t('apps.signature.none')}</p>
       </fieldset>
@@ -282,7 +282,7 @@ export function SignatureField({
 
   const typedReady = name.trim() !== '' && confirmed
   return (
-    <fieldset className="tt-capture tt-signature" aria-describedby={`${ids}-note`}>
+    <fieldset className="tt-capture" aria-describedby={`${ids}-note`}>
       <legend className="tt-capture-label">{heading}</legend>
       <fieldset className="tt-capture tt-capture-actions" aria-label={t('apps.signature.how')}>
         <button type="button" className="tt-button" aria-pressed={mode === 'draw'} onClick={() => setMode('draw')}>
