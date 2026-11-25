@@ -23,9 +23,10 @@ import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { useT } from '../i18n'
 import { Button } from './Button'
+import { focusVisible } from './focusInput'
 import { Icon } from './Icon'
 import { IconButton } from './IconButton'
-import { focusables, onModalChange, refocus, topModal } from './layers'
+import { onModalChange, refocus, topModal } from './layers'
 import './Toast.css'
 import './VisuallyHidden.css'
 
@@ -211,25 +212,32 @@ function ToastView({ item }: { item: ToastItem }) {
   const held = pointer || focus
   const ref = useRef<HTMLDivElement>(null)
 
-  // Going with the focus in it (its action or its dismiss button pressed, and the action didn't
-  // move the focus itself), it doesn't leave the focus to <body>: it goes to the toast beside
-  // this one, or else back to where it came from.
+  // Going with the keyboard's focus in it (its action or its dismiss button pressed, and the
+  // action didn't move the focus itself), it doesn't leave the focus to <body>: it goes to the
+  // dismiss button of the toast beside this one (never its action, which one more Enter would
+  // run), or else back to where it came from. After a press of the pointer, the focus is not
+  // the person's place, and is left alone.
   useLayoutEffect(() => {
     const el = ref.current
     return () => {
-      if (!el?.contains(document.activeElement)) return
+      const now = document.activeElement
+      if (!now || !el?.contains(now) || !focusVisible(now)) return
       const beside = [el.nextElementSibling, el.previousElementSibling].find((n) => n?.classList.contains('ui-toast'))
-      const next = beside ? focusables(beside)[0] : undefined
+      const next = beside?.querySelector<HTMLElement>('[data-toast-dismiss]')
       if (next) next.focus()
       else refocus(cameFrom)
     }
   }, [])
 
   // It leaves by itself, unless the pointer or the focus is on it: then the time starts again
-  // once both have left.
+  // once both have left. The focus is asked of the page too when the time is up: one handed to
+  // it by a toast that went came while React drew, and React heard no focus event.
   useEffect(() => {
     if (held) return
-    const timer = setTimeout(() => dismissToast(item.id), item.duration)
+    const timer = setTimeout(() => {
+      if (ref.current?.contains(document.activeElement)) setFocus(true)
+      else dismissToast(item.id)
+    }, item.duration)
     return () => clearTimeout(timer)
   }, [held, item.id, item.duration])
 
@@ -267,7 +275,13 @@ function ToastView({ item }: { item: ToastItem }) {
           {item.action.label}
         </Button>
       )}
-      <IconButton icon="close" size="sm" label={t('ui.dismiss')} onClick={() => dismissToast(item.id)} />
+      <IconButton
+        icon="close"
+        size="sm"
+        label={t('ui.dismiss')}
+        data-toast-dismiss=""
+        onClick={() => dismissToast(item.id)}
+      />
     </div>
   )
 }

@@ -198,6 +198,9 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
       const anchor = button.current
       if (!anchor) return
       const a = anchor.getBoundingClientRect()
+      // Measured at its full height, its height limit off for a moment: the browser would reset
+      // a long menu's scroll then, so it is kept and given back.
+      const scrolled = el.scrollTop
       el.style.maxBlockSize = ''
       const box = el.getBoundingClientRect()
       const p = place(
@@ -210,6 +213,7 @@ export function MenuList({ children, label }: { children: ReactNode; label?: str
       el.style.top = `${p.top}px`
       el.style.left = `${p.left}px`
       el.style.maxBlockSize = `${p.maxHeight}px`
+      el.scrollTop = scrolled
       el.dataset.side = p.side
     }
     position()

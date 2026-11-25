@@ -40,6 +40,9 @@ import { Toolbar, ToolbarSpacer } from './Toolbar'
 afterEach(() => {
   act(() => resetToasts())
   cleanup()
+  // One test writes the page's elements itself, which cleanup() doesn't know of: the next test,
+  // in whatever order they run, starts from an empty page.
+  document.body.innerHTML = ''
 })
 
 interface Rule {

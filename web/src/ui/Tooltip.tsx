@@ -28,6 +28,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { focusVisible, listenForInput } from './focusInput'
 import './Tooltip.css'
 
 // How long the pointer rests before it opens, and how long it may be away (on its way to the
@@ -64,28 +65,6 @@ function visible(el: HTMLElement): boolean {
 }
 
 const canPopover = () => typeof HTMLElement !== 'undefined' && 'showPopover' in HTMLElement.prototype
-
-// The last input on the page, a key or a pointer, heard once for every tooltip. Before any, focus
-// counts as the keyboard's (a page that moves the focus itself, on load, does it for a keyboard).
-let lastInput: 'keyboard' | 'pointer' = 'keyboard'
-let listening = false
-function listenForInput() {
-  if (listening || typeof document === 'undefined') return
-  listening = true
-  document.addEventListener('keydown', () => (lastInput = 'keyboard'), true)
-  document.addEventListener('pointerdown', () => (lastInput = 'pointer'), true)
-}
-
-// Whether this focus came from the keyboard: the last input was a key, and the browser shows the
-// focus (:focus-visible), where it knows it.
-function focusVisible(el: Element): boolean {
-  if (lastInput !== 'keyboard') return false
-  try {
-    return el.matches(':focus-visible')
-  } catch {
-    return true
-  }
-}
 
 export function Tooltip({ content, children, describes = true, side = 'block' }: TooltipProps) {
   const id = useId()

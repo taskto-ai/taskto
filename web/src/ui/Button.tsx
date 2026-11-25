@@ -130,7 +130,13 @@ export function ButtonLink({
   // would take the click over and open it here instead.
   if (plain || (rest.target && rest.target !== '_self'))
     return (
-      <a className={cls} {...rest}>
+      // A new browsing context gets no hold on this page (window.opener) nor its address as the
+      // referrer, unless the caller says otherwise with a rel of its own.
+      <a
+        className={cls}
+        rel={rest.target === '_blank' && rest.rel === undefined ? 'noopener noreferrer' : undefined}
+        {...rest}
+      >
         {content}
       </a>
     )

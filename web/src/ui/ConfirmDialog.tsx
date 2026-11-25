@@ -13,7 +13,7 @@
 //   …
 //   return <>{…}{confirmDialog}</>
 
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useT } from '../i18n'
 import { Button } from './Button'
 import { Dialog } from './Dialog'
@@ -50,6 +50,15 @@ export function ConfirmDialog({
   const cancel = () => {
     if (!busy) onCancel()
   }
+  // Busy, Cancel is disabled, and a disabled button can't hold the focus: the browser would drop
+  // it out of the dialog, onto a page that is inert. It goes to the action instead, which says
+  // it is busy.
+  const cancelButton = useRef<HTMLButtonElement>(null)
+  const confirmButton = useRef<HTMLButtonElement>(null)
+  useLayoutEffect(() => {
+    const now = document.activeElement
+    if (busy && (now === cancelButton.current || now === document.body || now === null)) confirmButton.current?.focus()
+  }, [busy])
   return (
     <Dialog
       open={open}
@@ -59,10 +68,10 @@ export function ConfirmDialog({
       role="alertdialog"
       actions={
         <>
-          <Button variant="secondary" onClick={cancel} disabled={busy} data-autofocus>
+          <Button ref={cancelButton} variant="secondary" onClick={cancel} disabled={busy} data-autofocus>
             {cancelLabel ?? t('common.cancel')}
           </Button>
-          <Button variant={tone} onClick={onConfirm} loading={busy}>
+          <Button ref={confirmButton} variant={tone} onClick={onConfirm} loading={busy}>
             {confirmLabel}
           </Button>
         </>

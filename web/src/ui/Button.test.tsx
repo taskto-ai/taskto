@@ -136,13 +136,22 @@ describe('ButtonLink', () => {
 
   test('opens in a new tab when it has a target: the router leaves the click to the browser', () => {
     render(
-      <ButtonLink href="/w/1/boards" target="_blank" rel="noopener">
+      <ButtonLink href="/w/1/boards" target="_blank">
         Boards
       </ButtonLink>,
     )
     const a = screen.getByRole('link', { name: 'Boards' })
     expect(a.getAttribute('target')).toBe('_blank')
+    // No hold on this page for the new tab, unless the caller gives a rel of its own.
+    expect(a.getAttribute('rel')).toBe('noopener noreferrer')
     expect(fireEvent.click(a)).toBe(true)
     expect(window.location.pathname).toBe('/')
+    cleanup()
+    render(
+      <ButtonLink href="https://example.com/" target="_blank" rel="noopener">
+        Example
+      </ButtonLink>,
+    )
+    expect(screen.getByRole('link', { name: 'Example' }).getAttribute('rel')).toBe('noopener')
   })
 })

@@ -2,6 +2,7 @@
 
 import { configure } from '@testing-library/react'
 import { afterEach } from 'vitest'
+import { closeQueued, resetCloses } from './dialogEvents'
 
 // How long findBy… and waitFor wait for what the page ends up showing. Testing Library's
 // default, 1 s, is tight on a CI runner shared with other jobs: there, a language switch that
@@ -50,8 +51,17 @@ if (typeof HTMLDialogElement !== 'undefined' && !HTMLDialogElement.prototype.sho
     const at = modals.lastIndexOf(this)
     if (at >= 0) modals.splice(at, 1)
     if (value !== undefined) this.returnValue = value
+    // The focus leaves a dialog that closes, as a browser's does: nothing inside it keeps it.
+    if (this.contains(document.activeElement)) (document.activeElement as HTMLElement).blur()
     // The browser fires close in a task of its own.
-    setTimeout(() => this.dispatchEvent(new Event('close')))
+    const delivered = closeQueued()
+    setTimeout(() => {
+      try {
+        this.dispatchEvent(new Event('close'))
+      } finally {
+        delivered()
+      }
+    })
   }
   const activate = () => {
     refusedSinceActivation = false
@@ -63,6 +73,7 @@ if (typeof HTMLDialogElement !== 'undefined' && !HTMLDialogElement.prototype.sho
   afterEach(() => {
     refusedSinceActivation = false
     modals.length = 0
+    resetCloses()
   })
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return activate()
