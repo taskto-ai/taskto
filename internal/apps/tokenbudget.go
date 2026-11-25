@@ -14,7 +14,8 @@ import (
 // The write budget of access tokens. A token runs actions as its user without a person at a
 // browser, so a script in a loop could insert and delete rows as fast as the server answers:
 // the app's quota counts the live rows only, and every row it deletes stays (with its history)
-// until a retention rule removes it. The budget bounds how fast that can grow. It is per user
+// until a retention rule removes it (none purges them yet, so insert and delete cycles keep
+// growing storage within the budget). The budget bounds how fast that can grow. It is per user
 // and workspace, whichever of the user's tokens (or MCP connections) acts, so making more
 // tokens buys nothing, and it counts every action a token runs, not only those that write,
 // since the server can't tell before it has run one. A session is never limited by it: it is a
