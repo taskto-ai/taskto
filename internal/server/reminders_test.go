@@ -151,3 +151,58 @@ func TestAPersonAddedBackHasTheirRemindersBack(t *testing.T) {
 	add()
 	want("added to the space again", true, true)
 }
+
+// A person's time zone, set on the web, times their reminders: the server gives the accounts the hook
+// that moves them, and each person's morning is their own.
+func TestAChangeOfTimeZoneOnTheWebMovesTheReminders(t *testing.T) {
+	s := newStack(t)
+	code, b := s.browser(s.bob.cookie, http.MethodPost, fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards", s.one, s.team), map[string]any{"name": "Work"})
+	if code != http.StatusCreated {
+		t.Fatalf("create board = %d %v", code, b)
+	}
+	cards := fmt.Sprintf("/api/workspaces/%d/spaces/%d/boards/%d/cards", s.one, s.team, id(b["id"]))
+	due := time.Now().UTC().AddDate(0, 0, 10).Format("2006-01-02")
+	day, err := time.Parse("2006-01-02", due)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, card := s.browser(s.bob.cookie, http.MethodPost, cards, map[string]any{
+		"title": "Pay the invoice", "due": due, "assignee": map[string]any{"kind": "user", "id": s.bob.id},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("create card = %d %v", code, card)
+	}
+	cardID := id(card["id"])
+	runAt := func(user int64, kind schedule.Kind) time.Time {
+		t.Helper()
+		j, err := s.sched.Find(context.Background(), s.db, user, kind, fmt.Sprintf("card:%d", cardID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j.RunAt
+	}
+	if got, want := runAt(s.bob.id, boards.KindDueReminder), day.Add(8*time.Hour); !got.Equal(want) {
+		t.Fatalf("reminder with no zone at %v, want %v", got, want)
+	}
+
+	if code, body := s.browser(s.bob.cookie, http.MethodPatch, "/api/me", map[string]any{"time_zone": "Asia/Tokyo"}); code != http.StatusOK {
+		t.Fatalf("set zone = %d %v", code, body)
+	}
+	if got, want := runAt(s.bob.id, boards.KindDueReminder), day.Add(-time.Hour); !got.Equal(want) {
+		t.Fatalf("reminder in Tokyo at %v, want %v (08:00 there, the evening before in UTC)", got, want)
+	}
+	if got, want := runAt(s.bob.id, boards.KindOverdue), day.Add(23*time.Hour); !got.Equal(want) {
+		t.Fatalf("overdue notice in Tokyo at %v, want %v", got, want)
+	}
+
+	// Alice's change reaches no one else's jobs, and a zone no one knows is refused.
+	if code, body := s.browser(s.alice.cookie, http.MethodPatch, "/api/me", map[string]any{"time_zone": "America/Sao_Paulo"}); code != http.StatusOK {
+		t.Fatalf("alice sets a zone = %d %v", code, body)
+	}
+	if got, want := runAt(s.bob.id, boards.KindDueReminder), day.Add(-time.Hour); !got.Equal(want) {
+		t.Fatalf("bob's reminder moved with alice's zone: %v", got)
+	}
+	if code, body := s.browser(s.bob.cookie, http.MethodPatch, "/api/me", map[string]any{"time_zone": "Mars/Olympus"}); code != http.StatusBadRequest {
+		t.Fatalf("a zone no one knows = %d %v", code, body)
+	}
+}

@@ -639,11 +639,9 @@ test('email is chosen per kind, as it happens or in a daily summary, and is off 
 
   const puts = calls.filter((c) => c.method === 'PUT').map((c) => c.body as Record<string, unknown>)
   expect(puts[0]).toEqual({ kinds: { card_assigned: 'instant' } })
-  // The first summary takes the person's own time zone along.
-  expect(puts[1]?.kinds).toEqual({ app_effect_failed: 'digest' })
-  const first = puts[1]?.digest as { hour: number; timezone: string } | undefined
-  expect(first?.hour).toBe(8)
-  expect(puts[2]).toEqual({ digest: { hour: 18, timezone: first?.timezone } })
+  // The first summary sends no time zone: the server uses the one of the person's profile.
+  expect(puts[1]).toEqual({ kinds: { app_effect_failed: 'digest' } })
+  expect(puts[2]).toEqual({ digest: { hour: 18, timezone: 'UTC' } })
 })
 
 test('every kind that can be mailed has a choice of its own, off until chosen', async () => {
@@ -757,12 +755,10 @@ test('a confirmation link that does not work says why', async () => {
   await screen.findByText(/That confirmation link doesn't work/)
 })
 
-test("a time zone the person picked is not replaced by the browser's when a summary is turned on again", async () => {
+test("a time zone the person picked for the summary is not replaced by their profile's when it is turned on again", async () => {
   pushBrowser({ permission: 'denied' })
-  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
-    timeZone: 'America/New_York',
-  } as Intl.ResolvedDateTimeFormatOptions)
-  let saved = emailChoices()
+  // The server says the summary is in the zone of the person's profile until they choose one for it.
+  let saved = emailChoices({ digest: { hour: 8, timezone: 'America/New_York', chosen: false } })
   const calls = fakeFetch({
     'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
     'PUT /api/workspaces/1/notification-email': (call) => {

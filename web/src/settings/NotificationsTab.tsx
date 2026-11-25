@@ -20,8 +20,18 @@ import { useInstall } from '../pwa/install'
 import { Link, routePath } from '../router'
 import { EmailNotifications } from './EmailNotifications'
 import { Alert, useAction } from './parts'
+import { TimeZonePanel } from './TimeZonePanel'
 
-export function NotificationsTab({ me, workspace }: { me: number; workspace: number }) {
+// `timeZone`: the person's own, "" for none yet.
+export function NotificationsTab({
+  me,
+  workspace,
+  timeZone = '',
+}: {
+  me: number
+  workspace: number
+  timeZone?: string
+}) {
   const t = useT()
   const install = useInstall()
   const [state, setState] = useState<PushState | null>(null)
@@ -99,6 +109,7 @@ export function NotificationsTab({ me, workspace }: { me: number; workspace: num
         <Alert error={action.error} />
         <p className="tt-muted tt-small">{t('notifications.settings.caveat')}</p>
       </section>
+      <TimeZonePanel initial={timeZone} />
       <EmailNotifications workspace={workspace} />
     </div>
   )

@@ -15,9 +15,13 @@ package boards
 // still saved: a reminder never fails a change to a card). A server that starts with cards that
 // were dated before reminders existed schedules theirs (ReconcileReminders).
 //
-// A card's due date is a calendar date with no time zone, and TaskTo knows no person's time zone,
-// so "the morning" is reminderHour:00 UTC on the date. That is the same instant for everyone, and
-// the morning of the due day in the Americas and Europe; it is early afternoon in east Asia.
+// A card's due date is a calendar date with no time zone, so "the morning" is the assignee's:
+// reminderHour:00 on the date in their time zone (package auth, timezone.go; UTC for a person who has
+// none yet). The time is computed from the calendar date and the zone, never as a number of hours
+// from midnight UTC, so it stays 08:00 on the wall clock across daylight saving time, and an hour
+// that a change of clocks skips is the first moment after the gap. A change of the person's zone
+// moves their jobs (SyncTimeZone), and so does giving the card to someone else, whose zone is the
+// one used.
 //
 // A job is only a prompt: when it runs, the handler reads the card again and the assignee's access
 // again, in the transaction that makes the notification, and makes nothing if the job is no longer
@@ -36,6 +40,7 @@ import (
 	"time"
 
 	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/schedule"
 )
@@ -46,7 +51,8 @@ const (
 	KindOverdue     schedule.Kind = "card.overdue"
 )
 
-// reminderHour is the hour, UTC, of the day a reminder or an overdue notice goes out.
+// reminderHour is the hour, in the assignee's time zone, of the day a reminder or an overdue notice
+// goes out.
 const reminderHour = 8
 
 // reminderPayload is a job's payload: IDs, and the date the job was made for.
@@ -79,14 +85,17 @@ func (s *Service) EnableReminders(sch *schedule.Service) error {
 
 func reminderKey(cardID int64) string { return fmt.Sprintf("card:%d", cardID) }
 
-// reminderTimes returns when the reminder and the overdue notice of a card due on due go out.
-func reminderTimes(due string) (remind, overdue time.Time, err error) {
+// reminderTimes returns when the reminder and the overdue notice of a card due on due go out for
+// someone in loc: reminderHour o'clock there on the due date and on the date after it.
+func reminderTimes(due string, loc *time.Location) (remind, overdue time.Time, err error) {
 	day, err := time.Parse(dateLayout, due)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
-	remind = day.Add(reminderHour * time.Hour)
-	return remind, remind.AddDate(0, 0, 1), nil
+	y, m, d := day.Date()
+	remind = schedule.LocalHour(y, m, d, reminderHour, loc).UTC()
+	overdue = schedule.LocalHour(y, m, d+1, reminderHour, loc).UTC()
+	return remind, overdue, nil
 }
 
 // syncReminders brings the jobs of a card in line with it, in tx, after a change of the card or of
@@ -159,7 +168,11 @@ func (s *Service) syncCard(ctx context.Context, tx *sql.Tx, cardID, previous int
 	if owner == 0 {
 		return nil
 	}
-	remind, overdue, err := reminderTimes(due.String)
+	loc, err := auth.UserLocation(ctx, tx, owner)
+	if err != nil {
+		return err
+	}
+	remind, overdue, err := reminderTimes(due.String, loc)
 	if err != nil {
 		return err
 	}
@@ -292,6 +305,14 @@ func (s *Service) SyncWorkspaceMember(ctx context.Context, tx *sql.Tx, workspace
 		WHERE sp.workspace_id = ? AND c.assignee_id = ? AND `+dated+` AND `+open+` ORDER BY c.id`, workspaceID, userID)
 }
 
+// SyncTimeZone follows a person whose time zone changed: the jobs of the open cards assigned to
+// them are timed again, by the new zone (a job that is as it should be is left alone). It is the
+// auth package's TimeZoneHook (auth.Service.OnTimeZoneChanged).
+func (s *Service) SyncTimeZone(ctx context.Context, tx *sql.Tx, userID int64) error {
+	return s.syncCards(ctx, tx, userID, `
+		SELECT c.id FROM cards c WHERE c.assignee_id = ? AND `+dated+` AND `+open+` ORDER BY c.id`, userID)
+}
+
 // reconcileBatch is how many cards ReconcileReminders brings in line in one transaction.
 const reconcileBatch = 200
 
@@ -303,8 +324,9 @@ func (s *Service) ReconcileReminders(ctx context.Context) error {
 	if s.sched == nil {
 		return nil
 	}
-	// A card due yesterday still has its overdue notice ahead of it.
-	from := s.sched.Now().UTC().AddDate(0, 0, -1).Format(dateLayout)
+	// A card due yesterday still has its overdue notice ahead of it, and in the west of the world the
+	// morning after a date is up to 20 hours past its end in UTC: two days back covers every zone.
+	from := s.sched.Now().UTC().AddDate(0, 0, -2).Format(dateLayout)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.id FROM cards c JOIN boards b ON b.id = c.board_id JOIN spaces s ON s.id = b.space_id
 		WHERE `+dated+` AND c.due >= ? AND c.col NOT IN ('done', 'archived')
@@ -389,8 +411,16 @@ func (s *Service) remind(notice string) schedule.Handler {
 				col == string(Done) || col == string(Archived) || !due.Valid || due.String != p.Due {
 				return nil // not what the job was made for
 			}
-			if notice == notifications.KindCardDue && s.sched.Now().UTC().Format(dateLayout) > p.Due {
-				return nil // the day passed (the server was away): the overdue notice is the one that is true
+			if notice == notifications.KindCardDue {
+				// The day is the person's own: the job was timed by their zone, which this transaction
+				// holds still (a change of it moves the jobs in its own commit).
+				loc, err := auth.UserLocation(ctx, tx, job.UserID)
+				if err != nil {
+					return err
+				}
+				if s.sched.Now().In(loc).Format(dateLayout) > p.Due {
+					return nil // the day passed (the server was away): the overdue notice is the one that is true
+				}
 			}
 			return notifications.Add(ctx, tx, notifications.Notice{
 				UserID: job.UserID, WorkspaceID: sp.WorkspaceID, Kind: notice,

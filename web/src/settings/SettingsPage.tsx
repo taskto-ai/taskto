@@ -107,7 +107,7 @@ function Panel({ tab, me, workspace }: { tab: Tab; me: Me; workspace: Workspace 
     case 'dictation':
       return <DictationTab workspace={workspace.id} admin={workspace.role === 'admin'} />
     case 'notifications':
-      return <NotificationsTab me={me.user.id} workspace={workspace.id} />
+      return <NotificationsTab me={me.user.id} workspace={workspace.id} timeZone={me.user.time_zone ?? ''} />
     case 'password':
       return <PasswordTab />
     case 'sessions':

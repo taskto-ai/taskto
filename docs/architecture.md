@@ -194,7 +194,11 @@ no extra process); it has no feature of its own.
   the space or workspace (`0038`) and hooks in the transaction that adds them back make them again
   (`access.Checker.OnMemberAdded` for a shared space, `auth.Service.OnMemberAdded` for a workspace;
   neither package knows the boards), and the server schedules the jobs of cards dated before
-  reminders existed when it starts (`boards.Service.ReconcileReminders`).
+  reminders existed when it starts (`boards.Service.ReconcileReminders`). Their time is 08:00 on the
+  wall clock of the assignee's time zone (`users.time_zone`, `0046`), worked out from the card's date
+  with `schedule.LocalHour`; a change of a person's zone reaches the jobs through a hook in the
+  transaction that stores it (`auth.Service.OnTimeZoneChanged`: `boards.Service.SyncTimeZone` and
+  `notifications.Service.SyncTimeZone`), so auth knows no feature that is timed by it.
 
 ## Agent safety
 

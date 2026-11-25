@@ -106,6 +106,33 @@ test('logs in, keeps the URL it was opened at, and logs out', async () => {
   expect(calls.some((c) => c.method === 'POST' && c.path === '/api/logout')).toBe(true)
 })
 
+test("signing in sends the browser's time zone once, to an account that has none", async () => {
+  window.history.replaceState(null, '', '/w/1/settings/about')
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+    timeZone: 'America/Sao_Paulo',
+  } as Intl.ResolvedDateTimeFormatOptions)
+  let zone = ''
+  const calls = fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': () => ({ body: { ...me, user: { ...me.user, time_zone: zone } } }),
+    'PATCH /api/me': (call) => {
+      zone = (call.body as { browser_time_zone: string }).browser_time_zone
+      return { body: { ...me, user: { ...me.user, time_zone: zone } } }
+    },
+    ...pages,
+  })
+  const first = render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  const patches = () => calls.filter((c) => c.method === 'PATCH' && c.path === '/api/me').map((c) => c.body)
+  expect(patches()).toEqual([{ browser_time_zone: 'America/Sao_Paulo' }])
+  // The next load finds the account has one, and sends nothing.
+  first.unmount()
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  expect(patches()).toHaveLength(1)
+  vi.restoreAllMocks()
+})
+
 test('each person picks their language in the account menu; it is saved and followed on the next load', async () => {
   window.history.replaceState(null, '', '/w/1/settings/about')
   const calls = fakeFetch({
