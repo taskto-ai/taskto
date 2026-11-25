@@ -3,12 +3,14 @@
 // a search is full text only (no embeddings model, no consent, the model didn't answer), or
 // what it can't find yet (documents still being embedded, an index catching up). The notice
 // is said from its codes, in the user's language; the server's words are the fallback.
-// The same words also search the cards of the boards, which come apart from the documents,
-// under their own heading, each linking to its card.
+// The same words also search the cards of the boards, the records of the apps and, when the
+// whole workspace is searched, the person's own conversations: each comes apart from the
+// documents, under a heading of its own, linking to its card, its app or its conversation.
 
 import { type FormEvent, useRef, useState } from 'react'
 import { api, errorText, type Space, ws } from '../api'
-import { type Key, type T, useT } from '../i18n'
+import { appPath } from '../apps/route'
+import { type Key, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { boardItem, routePath } from '../router'
 import { spaceLabel } from '../spaces'
@@ -53,6 +55,27 @@ export type CardResult = {
 }
 
 type CardPage = { results: CardResult[]; next_offset?: number; incomplete?: boolean }
+
+export type RecordResult = {
+  space_id: number
+  space_name: string
+  app_id: number
+  app_name: string
+  record_id: number
+  snippet: { text: string; match?: boolean }[]
+}
+
+type RecordPage = { results: RecordResult[]; next_offset?: number; incomplete?: boolean }
+
+export type ConversationResult = {
+  conversation_id: number
+  title: string
+  archived: boolean
+  updated_at: string
+  snippet: { text: string; match?: boolean }[]
+}
+
+type ConversationPage = { results: ConversationResult[]; next_offset?: number; incomplete?: boolean }
 
 type Notice = { code: string; count?: number }
 
@@ -136,12 +159,17 @@ export function SearchResults({
   const q = encodeURIComponent(query.q)
   const url = `${where}/search?q=${q}`
   const cardsUrl = `${where}/search/cards?q=${q}`
+  const recordsUrl = `${where}/search/records?q=${q}`
+  // Conversations belong to a person, not to a space: only a search of the whole workspace has them.
+  const conversationsUrl = query.scope === 'workspace' || !space ? `${ws(workspace)}/search/conversations?q=${q}` : null
   return (
     <ResultPages
       key={url}
       workspace={workspace}
       url={url}
       cardsUrl={cardsUrl}
+      recordsUrl={recordsUrl}
+      conversationsUrl={conversationsUrl}
       onOpen={onOpen}
       onClose={onClose}
       query={query}
@@ -151,16 +179,21 @@ export function SearchResults({
 
 // A search's pages: the first, and those "more" loads one at a time, also for two clicks in
 // the same tick (as the history's Older).
-function usePages<P extends { next_offset?: number }>(url: string) {
-  const first = useLoad(() => api<P>(url), [url])
+function usePages<P extends { next_offset?: number }>(url: string | null) {
+  const first = useLoad<P | undefined>(() => (url ? api<P>(url) : Promise.resolve(undefined)), [url])
   const [more, setMore] = useState<P[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const pages = first.data ? [first.data, ...more] : []
+  // Answered, or skipped (no url): what it found is all there is of it. A failed search is not
+  // answered, and is not "nothing found" either.
+  const answered = url === null || first.data !== undefined
+  // Answered or failed: nothing more is awaited of it.
+  const settled = answered || first.error !== null
   const last = pages.at(-1)
   const loadingMore = useRef(false)
   const loadMore = async () => {
-    if (last?.next_offset === undefined || loadingMore.current) return
+    if (url === null || last?.next_offset === undefined || loadingMore.current) return
     loadingMore.current = true
     setLoading(true)
     setError(null)
@@ -174,13 +207,15 @@ function usePages<P extends { next_offset?: number }>(url: string) {
       setLoading(false)
     }
   }
-  return { first, pages, last, loading, error, loadMore }
+  return { first, pages, last, loading, error, loadMore, answered, settled }
 }
 
 function ResultPages({
   workspace,
   url,
   cardsUrl,
+  recordsUrl,
+  conversationsUrl,
   query,
   onOpen,
   onClose,
@@ -188,21 +223,33 @@ function ResultPages({
   workspace: number
   url: string
   cardsUrl: string
+  recordsUrl: string
+  conversationsUrl: string | null
   query: SearchQuery
   onOpen: (result: SearchResult) => void
   onClose: () => void
 }) {
   const docs = usePages<SearchPage>(url)
   const cards = usePages<CardPage>(cardsUrl)
+  const records = usePages<RecordPage>(recordsUrl)
+  const conversations = usePages<ConversationPage>(conversationsUrl)
   const { first, pages, last, loading, error } = docs
   const results = pages.flatMap((p) => p.results)
   const cardResults = cards.pages.flatMap((p) => p.results)
+  const recordResults = records.pages.flatMap((p) => p.results)
+  const conversationResults = conversations.pages.flatMap((p) => p.results)
   const t = useT()
+  const format = useFormat()
   // The notice of the latest page: the index may have caught up meanwhile.
   const notice = last && noticeText(t, last)
-  // The cards are a search of their own: one that fails or is slow leaves the documents as
-  // they are, and says so beside them. Nothing is "not found" until both searches answered.
-  const cardsSettled = cards.first.data !== undefined
+  // The cards, the records and the conversations are searches of their own: one that fails or
+  // is slow leaves the documents as they are, and says so beside them. Nothing is "not found"
+  // until every search answered (one that failed hasn't).
+  const othersAnswered = cards.answered && records.answered && conversations.answered
+  // A records page with none to show may be followed by pages that have some.
+  const recordsMore = records.last?.next_offset !== undefined
+  const nothingElse =
+    cardResults.length === 0 && recordResults.length === 0 && conversationResults.length === 0 && !recordsMore
 
   return (
     <section className="search-results" aria-label={t('search.results.label')}>
@@ -222,7 +269,7 @@ function ResultPages({
       {notice && <NoticeBox tone="neutral">{notice}</NoticeBox>}
       {(first.error || error) && <NoticeBox tone="danger">{first.error ?? error}</NoticeBox>}
       {!first.data && !first.error && <Searching label={t('search.results.searching')} />}
-      {first.data && results.length === 0 && cardsSettled && cardResults.length === 0 && (
+      {first.data && results.length === 0 && othersAnswered && nothingElse && (
         <EmptyState icon={<Icon name="search" size={24} />} title={t('search.results.none')} />
       )}
       {results.length > 0 && (
@@ -256,9 +303,7 @@ function ResultPages({
           </Button>
         </div>
       )}
-      {(first.data || first.error) && !cards.first.data && !cards.first.error && (
-        <Searching label={t('search.cards.searching')} />
-      )}
+      {(first.data || first.error) && !cards.settled && <Searching label={t('search.cards.searching')} />}
       {cards.first.error && (
         <NoticeBox tone="danger">{t('search.cards.failed', { error: cards.first.error })}</NoticeBox>
       )}
@@ -302,6 +347,89 @@ function ResultPages({
             </div>
           )}
           {cards.error && <NoticeBox tone="danger">{cards.error}</NoticeBox>}
+        </>
+      )}
+      {(first.data || first.error) && !records.settled && <Searching label={t('search.records.searching')} />}
+      {records.first.error && (
+        <NoticeBox tone="danger">{t('search.records.failed', { error: records.first.error })}</NoticeBox>
+      )}
+      {records.pages.some((p) => p.incomplete) && <NoticeBox tone="info">{t('search.records.incomplete')}</NoticeBox>}
+      {recordResults.length > 0 && (
+        <>
+          <Heading level={3}>{t('search.records.title')}</Heading>
+          <Panel>
+            <Rows label={t('search.records.label')}>
+              {recordResults.map((r) => (
+                <Row
+                  key={`${r.app_id}/${r.record_id}`}
+                  leading={<Icon name="apps" size={18} />}
+                  title={r.app_name}
+                  href={appPath(workspace, r.space_id, r.app_id)}
+                  detail={
+                    <>
+                      <span className="search-where">
+                        {t('search.records.in', { space: r.space_name, app: r.app_name })}
+                      </span>
+                      <Snippet pieces={r.snippet} />
+                    </>
+                  }
+                />
+              ))}
+            </Rows>
+          </Panel>
+        </>
+      )}
+      {/* Also when this page held none the caller reads: the later ones may. */}
+      {recordsMore && (
+        <div className="search-more">
+          <Button size="sm" onClick={records.loadMore} loading={records.loading}>
+            {t('search.records.more')}
+          </Button>
+        </div>
+      )}
+      {records.error && <NoticeBox tone="danger">{records.error}</NoticeBox>}
+      {(first.data || first.error) && !conversations.settled && (
+        <Searching label={t('search.conversations.searching')} />
+      )}
+      {conversations.first.error && (
+        <NoticeBox tone="danger">{t('search.conversations.failed', { error: conversations.first.error })}</NoticeBox>
+      )}
+      {conversations.pages.some((p) => p.incomplete) && (
+        <NoticeBox tone="info">{t('search.conversations.incomplete')}</NoticeBox>
+      )}
+      {conversationResults.length > 0 && (
+        <>
+          <Heading level={3}>{t('search.conversations.title')}</Heading>
+          <Panel>
+            <Rows label={t('search.conversations.label')}>
+              {conversationResults.map((c) => (
+                <Row
+                  key={c.conversation_id}
+                  leading={<Icon name="conversations" size={18} />}
+                  title={c.title || t('search.conversations.untitled')}
+                  href={routePath({ workspace, section: 'conversations', item: String(c.conversation_id) })}
+                  detail={
+                    <>
+                      <span className="search-where">
+                        {t(c.archived ? 'search.conversations.archivedAt' : 'search.conversations.updated', {
+                          when: format.dateTime(c.updated_at),
+                        })}
+                      </span>
+                      <Snippet pieces={c.snippet} />
+                    </>
+                  }
+                />
+              ))}
+            </Rows>
+          </Panel>
+          {conversations.last?.next_offset !== undefined && (
+            <div className="search-more">
+              <Button size="sm" onClick={conversations.loadMore} loading={conversations.loading}>
+                {t('search.conversations.more')}
+              </Button>
+            </div>
+          )}
+          {conversations.error && <NoticeBox tone="danger">{conversations.error}</NoticeBox>}
         </>
       )}
     </section>
