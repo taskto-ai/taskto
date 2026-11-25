@@ -12,9 +12,22 @@ import { api, errorText, type Space, ws } from '../api'
 import { appPath } from '../apps/route'
 import { type Key, type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { boardItem, Link, routePath } from '../router'
+import { boardItem, routePath } from '../router'
 import { spaceLabel } from '../spaces'
+import { Button } from '../ui/Button'
+import { EmptyState } from '../ui/EmptyState'
+import { Heading } from '../ui/Heading'
+import { Icon } from '../ui/Icon'
+import { IconButton } from '../ui/IconButton'
+import { Input } from '../ui/Input'
+import { Notice as NoticeBox } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { Select } from '../ui/Select'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { cleanSnippet, isMarkdownPath } from './snippet'
+import './search.css'
 
 export type SearchQuery = { q: string; scope: 'space' | 'workspace' }
 
@@ -101,28 +114,29 @@ export function SearchBox({ space, onSearch }: { space: Space | undefined; onSea
   }
   return (
     <search>
-      <form className="tt-search" onSubmit={submit}>
-        <input
-          type="search"
-          aria-label={t('search.box.label')}
-          placeholder={t('search.box.placeholder')}
-          value={q}
-          maxLength={500}
-          onChange={(e) => setQ(e.target.value)}
-        />
+      <form className="search-box" onSubmit={submit}>
+        <span className="search-field">
+          <Input
+            type="search"
+            className="search-input"
+            aria-label={t('search.box.label')}
+            placeholder={t('search.box.placeholder')}
+            value={q}
+            maxLength={500}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          <IconButton type="submit" icon="search" size="sm" label={t('search.box.submit')} disabled={!q.trim()} />
+        </span>
         {space && (
-          <select
+          <Select
             aria-label={t('search.box.where')}
             value={scope}
             onChange={(e) => setScope(e.target.value as SearchQuery['scope'])}
           >
             <option value="space">{t('search.box.inSpace', { space: spaceLabel(space) })}</option>
             <option value="workspace">{t('search.box.everywhere')}</option>
-          </select>
+          </Select>
         )}
-        <button type="submit" className="tt-button" disabled={!q.trim()}>
-          {t('search.box.submit')}
-        </button>
       </form>
     </search>
   )
@@ -238,190 +252,208 @@ function ResultPages({
     cardResults.length === 0 && recordResults.length === 0 && conversationResults.length === 0 && !recordsMore
 
   return (
-    <section className="tt-search-results" aria-label={t('search.results.label')}>
-      <div className="tt-pane-head">
-        <h2>
+    <section className="search-results" aria-label={t('search.results.label')}>
+      <div className="search-results-head">
+        <Heading level={2} size="title" tabIndex={-1} data-results-title>
           {query.scope === 'workspace'
             ? t.rich('search.results.titleEverywhere', {
                 q: query.q,
-                muted: (text) => <span className="tt-muted">{text}</span>,
+                muted: (text) => <span className="search-muted">{text}</span>,
               })
             : t('search.results.title', { q: query.q })}
-        </h2>
-        <button type="button" className="tt-button" onClick={onClose}>
+        </Heading>
+        <Button variant="ghost" icon="close" onClick={onClose}>
           {t('search.results.close')}
-        </button>
+        </Button>
       </div>
+      {/* Something that is off, in the neutral tone, and said when it appears or changes. */}
       {notice && (
-        <p role="status" className="tt-notice">
-          {notice}
-        </p>
+        <div role="status">
+          <NoticeBox tone="neutral">{notice}</NoticeBox>
+        </div>
       )}
-      {(first.error || error) && (
-        <p role="alert" className="tt-error">
-          {first.error ?? error}
-        </p>
-      )}
-      {!first.data && !first.error && <p className="tt-muted">{t('search.results.searching')}</p>}
+      {(first.error || error) && <NoticeBox tone="danger">{first.error ?? error}</NoticeBox>}
+      {!first.data && !first.error && <Searching label={t('search.results.searching')} />}
       {first.data && results.length === 0 && othersAnswered && nothingElse && (
-        <p className="tt-muted">{t('search.results.none')}</p>
+        <EmptyState icon={<Icon name="search" size={24} />} title={t('search.results.none')} />
       )}
       {results.length > 0 && (
-        <ul className="tt-list">
-          {results.map((r) => (
-            <li key={`${r.space_id}/${r.path}`}>
-              <button type="button" onClick={() => onOpen(r)}>
-                <span className="tt-list-title">{r.title || r.path}</span>
-                <span className="tt-muted tt-small tt-list-title">
-                  {query.scope === 'workspace'
-                    ? t('search.results.inSpace', { space: r.space_name, path: r.path })
-                    : r.path}
-                </span>
-                <Snippet pieces={r.snippet} path={r.path} />
-              </button>
-            </li>
-          ))}
-        </ul>
+        <Panel>
+          <Rows>
+            {results.map((r) => (
+              <Row
+                key={`${r.space_id}/${r.path}`}
+                leading={<Icon name="file" size={18} />}
+                title={r.title || r.path}
+                onOpen={() => onOpen(r)}
+                detail={
+                  <>
+                    <span className="search-where">
+                      {query.scope === 'workspace'
+                        ? t('search.results.inSpace', { space: r.space_name, path: r.path })
+                        : r.path}
+                    </span>
+                    <Snippet pieces={r.snippet} path={r.path} />
+                  </>
+                }
+              />
+            ))}
+          </Rows>
+        </Panel>
       )}
       {last?.next_offset !== undefined && (
-        <button type="button" className="tt-button" onClick={docs.loadMore} disabled={loading}>
-          {t('search.results.more')}
-        </button>
+        <div className="search-more">
+          <Button size="sm" onClick={docs.loadMore} loading={loading}>
+            {t('search.results.more')}
+          </Button>
+        </div>
       )}
-      {(first.data || first.error) && !cards.settled && <p className="tt-muted">{t('search.cards.searching')}</p>}
+      {(first.data || first.error) && !cards.settled && <Searching label={t('search.cards.searching')} />}
       {cards.first.error && (
-        <p role="alert" className="tt-error">
-          {t('search.cards.failed', { error: cards.first.error })}
-        </p>
+        <NoticeBox tone="danger">{t('search.cards.failed', { error: cards.first.error })}</NoticeBox>
       )}
-      {cards.pages.some((p) => p.incomplete) && (
-        <p role="status" className="tt-notice">
-          {t('search.cards.incomplete')}
-        </p>
-      )}
+      {cards.pages.some((p) => p.incomplete) && <NoticeBox tone="info">{t('search.cards.incomplete')}</NoticeBox>}
       {cardResults.length > 0 && (
         <>
-          <h3>{t('search.cards.title')}</h3>
-          <ul className="tt-list" aria-label={t('search.cards.label')}>
-            {cardResults.map((c) => (
-              <li key={c.card_id}>
-                <Link
+          <Heading level={3}>{t('search.cards.title')}</Heading>
+          <Panel>
+            <Rows label={t('search.cards.label')}>
+              {cardResults.map((c) => (
+                <Row
+                  key={c.card_id}
+                  leading={<Icon name="boards" size={18} />}
+                  title={c.title}
                   href={routePath({
                     workspace,
                     section: 'boards',
                     item: boardItem(c.space_id, c.board_id, c.card_id),
                   })}
-                >
-                  <span className="tt-list-title">{c.title}</span>
-                  <span className="tt-muted tt-small tt-list-title">
-                    {t('search.cards.in', { space: c.space_name, board: c.board_name, column: t(COLUMNS[c.column]) })}
-                  </span>
-                  <Snippet pieces={c.snippet} />
-                </Link>
-              </li>
-            ))}
-          </ul>
+                  detail={
+                    <>
+                      <span className="search-where">
+                        {t('search.cards.in', {
+                          space: c.space_name,
+                          board: c.board_name,
+                          column: t(COLUMNS[c.column]),
+                        })}
+                      </span>
+                      <Snippet pieces={c.snippet} />
+                    </>
+                  }
+                />
+              ))}
+            </Rows>
+          </Panel>
           {cards.last?.next_offset !== undefined && (
-            <button type="button" className="tt-button" onClick={cards.loadMore} disabled={cards.loading}>
-              {t('search.cards.more')}
-            </button>
+            <div className="search-more">
+              <Button size="sm" onClick={cards.loadMore} loading={cards.loading}>
+                {t('search.cards.more')}
+              </Button>
+            </div>
           )}
-          {cards.error && (
-            <p role="alert" className="tt-error">
-              {cards.error}
-            </p>
-          )}
+          {cards.error && <NoticeBox tone="danger">{cards.error}</NoticeBox>}
         </>
       )}
-      {(first.data || first.error) && !records.settled && <p className="tt-muted">{t('search.records.searching')}</p>}
+      {(first.data || first.error) && !records.settled && <Searching label={t('search.records.searching')} />}
       {records.first.error && (
-        <p role="alert" className="tt-error">
-          {t('search.records.failed', { error: records.first.error })}
-        </p>
+        <NoticeBox tone="danger">{t('search.records.failed', { error: records.first.error })}</NoticeBox>
       )}
-      {records.pages.some((p) => p.incomplete) && (
-        <p role="status" className="tt-notice">
-          {t('search.records.incomplete')}
-        </p>
-      )}
+      {records.pages.some((p) => p.incomplete) && <NoticeBox tone="info">{t('search.records.incomplete')}</NoticeBox>}
       {recordResults.length > 0 && (
         <>
-          <h3>{t('search.records.title')}</h3>
-          <ul className="tt-list" aria-label={t('search.records.label')}>
-            {recordResults.map((r) => (
-              <li key={`${r.app_id}/${r.record_id}`}>
-                <Link href={appPath(workspace, r.space_id, r.app_id)}>
-                  <span className="tt-list-title">{r.app_name}</span>
-                  <span className="tt-muted tt-small tt-list-title">
-                    {t('search.records.in', { space: r.space_name, app: r.app_name })}
-                  </span>
-                  <Snippet pieces={r.snippet} />
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <Heading level={3}>{t('search.records.title')}</Heading>
+          <Panel>
+            <Rows label={t('search.records.label')}>
+              {recordResults.map((r) => (
+                <Row
+                  key={`${r.app_id}/${r.record_id}`}
+                  leading={<Icon name="apps" size={18} />}
+                  title={r.app_name}
+                  href={appPath(workspace, r.space_id, r.app_id)}
+                  detail={
+                    <>
+                      <span className="search-where">
+                        {t('search.records.in', { space: r.space_name, app: r.app_name })}
+                      </span>
+                      <Snippet pieces={r.snippet} />
+                    </>
+                  }
+                />
+              ))}
+            </Rows>
+          </Panel>
         </>
       )}
       {/* Also when this page held none the caller reads: the later ones may. */}
       {recordsMore && (
-        <button type="button" className="tt-button" onClick={records.loadMore} disabled={records.loading}>
-          {t('search.records.more')}
-        </button>
+        <div className="search-more">
+          <Button size="sm" onClick={records.loadMore} loading={records.loading}>
+            {t('search.records.more')}
+          </Button>
+        </div>
       )}
-      {records.error && (
-        <p role="alert" className="tt-error">
-          {records.error}
-        </p>
-      )}
+      {records.error && <NoticeBox tone="danger">{records.error}</NoticeBox>}
       {(first.data || first.error) && !conversations.settled && (
-        <p className="tt-muted">{t('search.conversations.searching')}</p>
+        <Searching label={t('search.conversations.searching')} />
       )}
       {conversations.first.error && (
-        <p role="alert" className="tt-error">
-          {t('search.conversations.failed', { error: conversations.first.error })}
-        </p>
+        <NoticeBox tone="danger">{t('search.conversations.failed', { error: conversations.first.error })}</NoticeBox>
       )}
       {conversations.pages.some((p) => p.incomplete) && (
-        <p role="status" className="tt-notice">
-          {t('search.conversations.incomplete')}
-        </p>
+        <NoticeBox tone="info">{t('search.conversations.incomplete')}</NoticeBox>
       )}
       {conversationResults.length > 0 && (
         <>
-          <h3>{t('search.conversations.title')}</h3>
-          <ul className="tt-list" aria-label={t('search.conversations.label')}>
-            {conversationResults.map((c) => (
-              <li key={c.conversation_id}>
-                <Link href={routePath({ workspace, section: 'conversations', item: String(c.conversation_id) })}>
-                  <span className="tt-list-title">{c.title || t('search.conversations.untitled')}</span>
-                  <span className="tt-muted tt-small tt-list-title">
-                    {t(c.archived ? 'search.conversations.archivedAt' : 'search.conversations.updated', {
-                      when: format.dateTime(c.updated_at),
-                    })}
-                  </span>
-                  <Snippet pieces={c.snippet} />
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <Heading level={3}>{t('search.conversations.title')}</Heading>
+          <Panel>
+            <Rows label={t('search.conversations.label')}>
+              {conversationResults.map((c) => (
+                <Row
+                  key={c.conversation_id}
+                  leading={<Icon name="conversations" size={18} />}
+                  title={c.title || t('search.conversations.untitled')}
+                  href={routePath({ workspace, section: 'conversations', item: String(c.conversation_id) })}
+                  detail={
+                    <>
+                      <span className="search-where">
+                        {t(c.archived ? 'search.conversations.archivedAt' : 'search.conversations.updated', {
+                          when: format.dateTime(c.updated_at),
+                        })}
+                      </span>
+                      <Snippet pieces={c.snippet} />
+                    </>
+                  }
+                />
+              ))}
+            </Rows>
+          </Panel>
           {conversations.last?.next_offset !== undefined && (
-            <button
-              type="button"
-              className="tt-button"
-              onClick={conversations.loadMore}
-              disabled={conversations.loading}
-            >
-              {t('search.conversations.more')}
-            </button>
+            <div className="search-more">
+              <Button size="sm" onClick={conversations.loadMore} loading={conversations.loading}>
+                {t('search.conversations.more')}
+              </Button>
+            </div>
           )}
-          {conversations.error && (
-            <p role="alert" className="tt-error">
-              {conversations.error}
-            </p>
-          )}
+          {conversations.error && <NoticeBox tone="danger">{conversations.error}</NoticeBox>}
         </>
       )}
     </section>
+  )
+}
+
+// What a search shows while it waits: the shape of a few results, and its words for a screen reader.
+function Searching({ label }: { label: string }) {
+  return (
+    // A status: said when the search starts waiting, as the old line of text was shown.
+    <div className="search-loading" role="status">
+      <VisuallyHidden>{label}</VisuallyHidden>
+      {['45%', '35%', '50%'].map((width, i) => (
+        <span key={width} className="search-loading-row">
+          <Skeleton width={width} />
+          <Skeleton width={i === 1 ? '80%' : '90%'} />
+        </span>
+      ))}
+    </div>
   )
 }
 
@@ -432,7 +464,7 @@ function Snippet({ pieces, path }: { pieces: SearchResult['snippet']; path?: str
   const shown = cleanSnippet(pieces, { markdown: path !== undefined && isMarkdownPath(path) })
   if (shown.length === 0) return null
   return (
-    <span className="tt-snippet tt-small">
+    <span className="search-snippet">
       {shown.map((s, i) =>
         // biome-ignore lint/suspicious/noArrayIndexKey: pieces have no identity but their place
         s.match ? <mark key={i}>{s.text}</mark> : <span key={i}>{s.text}</span>,
