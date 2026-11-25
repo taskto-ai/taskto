@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import afterAdd from '../../../internal/apps/testdata/expenses.after-add.json'
 import surface from '../../../internal/apps/testdata/expenses.surface.json'
 import { SESSION_LOST } from '../api'
@@ -19,6 +19,14 @@ const conversation = (id: number, title: string) => ({
   created_at: '2026-11-18T10:00:00.000Z',
   updated_at: '2026-11-18T10:00:00.000Z',
 })
+
+// A saved app's screen is a lazily loaded component, which the first test that shows one loads
+// (and vite compiles) on the spot: on a machine with more work than cores that took longer than
+// any wait for what the page shows. Load it once here, where the hook has a time of its own, so
+// the tests wait only for the page to draw it.
+beforeAll(async () => {
+  await import('../apps/AppPreview')
+}, 60_000)
 
 beforeEach(() => window.history.replaceState(null, '', '/w/1/conversations'))
 afterEach(() => {
@@ -620,17 +628,19 @@ test("a saved app's screen shows in the conversation, as the server has it", asy
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
   })
 
+  // The preview is a lazily loaded component that fetches the app and then its screen: wait for
+  // each thing it shows (findBy… waits as long as src/test/setup.ts says), never for a time.
   const app = await screen.findByRole('region', { name: 'Expenses' })
   await within(app).findByText('Expense tracker')
-  expect(within(app).getByText('Coffee')).toBeTruthy()
+  await within(app).findByText('Coffee')
+  // What it shows is labelled: the live release, which everyone uses.
+  await screen.findByText('Live · release 1')
   expect(screen.getByText('Used create_app')).toBeTruthy()
   expect(screen.queryByText('From the arguments')).toBeNull()
   expect(appCalls(calls).map((c) => c.path)).toEqual([
     '/api/workspaces/1/spaces/2/apps/1',
     '/api/workspaces/1/spaces/2/apps/1/surface?release=1',
   ])
-  // What it shows is labelled: the live release, which everyone uses.
-  expect(screen.getByText('Live · release 1')).toBeTruthy()
 })
 
 test("a live embed stays labelled Live and its buttons still act on the app's real rows", async () => {
@@ -641,7 +651,7 @@ test("a live embed stays labelled Live and its buttons still act on the app's re
   })
   await screen.findByText('Live · release 1')
   await screen.findByText('Coffee')
-  fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
   await waitFor(() => expect(appCalls(calls).some((c) => c.method === 'POST')).toBe(true))
   const posted = appCalls(calls).filter((c) => c.method === 'POST')
   // The live app's own actions, naming the release the screen was drawn from; never a preview.
@@ -668,9 +678,9 @@ test('the agent changed the app: the conversation shows the live release, and th
   })
   // The live release is what people use, and it is said so; the agent's changes aren't in it.
   await screen.findByText('Live · release 1')
-  expect(screen.getByText(/It has changes that aren’t published yet/)).toBeTruthy()
+  await screen.findByText(/It has changes that aren’t published yet/)
   expect(appCalls(calls).some((c) => c.path.endsWith('/preview'))).toBe(false)
-  fireEvent.click(screen.getByRole('button', { name: 'Preview the draft' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Preview the draft' }))
   await screen.findByText('Preview · sample data')
   await waitFor(() => expect(appCalls(calls).some((c) => c.path.endsWith('/preview'))).toBe(true))
 })
@@ -729,9 +739,9 @@ test('an app the user cannot read, or that was taken offline, is a note', async 
   expect(await screen.findByText(/This app isn’t available/)).toBeTruthy()
   expect(await screen.findByText('Old is offline: it can’t be launched.')).toBeTruthy()
   // Nothing is launched; the offline app can still be opened, to be restored there.
+  expect(await screen.findByRole('link', { name: 'Open Old in Apps' })).toBeTruthy()
   expect(appCalls(calls).filter((c) => c.path.includes('/surface'))).toEqual([])
   expect(screen.queryByRole('link', { name: 'Open the app in Apps' })).toBeNull()
-  expect(screen.getByRole('link', { name: 'Open Old in Apps' })).toBeTruthy()
 })
 
 test('each app shows once, at its latest save, and older apps only link', async () => {

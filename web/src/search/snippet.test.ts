@@ -113,28 +113,98 @@ test('a snippet is cut to a window around its first match, which survives the cu
 })
 
 // SQLite's FTS5 limits a snippet by tokens, not characters: brackets are no tokens, so a snippet
-// can be as long as the document. None of these may take long, with the bound or without it.
+// can be as long as the document. A cleaner that backtracks takes time that grows with the
+// square of that length, and once froze the page.
+//
+// The test shows the work is linear, not that it is quick: a clock bound fails on a busy machine
+// with the code right. Each input is cleaned at one size and at eight times it; linear work takes
+// about eight times as long, quadratic work sixty-four times or more, and the limit is between
+// them. What is measured is the process's CPU time, not the wall clock: on a machine with more
+// work than cores a short run can find a quiet moment while a long one is paused again and
+// again, which makes the long one look too slow, and the test's own time limit is long for the
+// same reason. Each size is timed a few times after a warm-up, the fastest counts, and a ratio
+// over the limit is measured again before it fails; a quadratic cleaner is over it every time.
 const NASTY = ['[', '(', '*', '_', '`', '~', '](', '[](', '*a', '_a_', '`a', '![', '>', '- ']
-test.each(NASTY)('a snippet of 300,000 × %j between two words is cleaned in linear time', (unit) => {
-  const body = unit.repeat(300_000)
-  const pieces = [
+const SMALL = 5_000
+const GROWTH = 8
+// Linear is 8 and quadratic is 64 or more; this is between them with room for noise: on a machine
+// with far more work than cores the larger run, which allocates more, took up to three times
+// as long as it should.
+const MAX_RATIO = 40
+// Below this, the timer's own noise is most of a run.
+const FLOOR_MS = 2
+// A very loose backstop, for a run that is far too slow to measure again: it only keeps a
+// quadratic cleaner from taking minutes to fail. A linear one is over a hundred times quicker.
+const GIVE_UP_MS = 1000
+
+const snippetOf = (unit: string, times: number) => {
+  const body = unit.repeat(times)
+  return [
     { text: 'first ' },
     { text: body },
     { text: ' ' },
     { text: 'orchard', match: true },
     { text: ` ${body} last` },
   ]
-  const started = performance.now()
-  const bounded = cleanSnippet(pieces)
-  expect(performance.now() - started).toBeLessThan(2000)
-  expect(marked(bounded)).toEqual(['orchard'])
+}
 
-  // The scanner itself, on all of it (no window): a quadratic one would take minutes here.
-  const unbounded = performance.now()
-  const all = cleanSnippet(pieces, { limit: Number.POSITIVE_INFINITY })
-  expect(performance.now() - unbounded).toBeLessThan(5000)
-  expect(marked(all)).toEqual(['orchard'])
-})
+// The fastest of a few runs of fn, in milliseconds of CPU time; it stops at once for a run over
+// giveUp, which is then the answer's lower bound, however many more runs there would be.
+function fastest(fn: () => void, giveUp: number, runs = 3): number {
+  let best = Number.POSITIVE_INFINITY
+  for (let i = 0; i < runs; i++) {
+    const started = process.cpuUsage()
+    fn()
+    const used = process.cpuUsage(started)
+    const took = (used.user + used.system) / 1000
+    best = Math.min(best, took)
+    if (took > giveUp) break
+  }
+  return best
+}
+
+test.each(NASTY)(
+  'a snippet of repeated %j between two words is cleaned in linear time',
+  (unit) => {
+    const small = snippetOf(unit, SMALL)
+    const large = snippetOf(unit, SMALL * GROWTH)
+    const whole = { limit: Number.POSITIVE_INFINITY }
+
+    // The scanner itself, on all of it (no window).
+    cleanSnippet(snippetOf(unit, SMALL / 10), whole) // warm-up: the first run pays for compiling
+    let ratio = 0
+    let smallMs = 0
+    let largeMs = 0
+    for (let attempt = 0; attempt < 3; attempt++) {
+      smallMs = fastest(() => cleanSnippet(small, whole), GIVE_UP_MS)
+      if (smallMs > GIVE_UP_MS) {
+        ratio = Number.POSITIVE_INFINITY // the larger would take sixty-four times as long
+        break
+      }
+      const base = Math.max(smallMs, FLOOR_MS)
+      largeMs = fastest(() => cleanSnippet(large, whole), base * MAX_RATIO * 2)
+      ratio = largeMs / base
+      // Under the limit it passes, and far over it the cleaner is quadratic: measuring again
+      // would only take longer. Just over it may be a pause that no run escaped.
+      if (ratio < MAX_RATIO || ratio > MAX_RATIO * 2) break
+    }
+    expect(
+      ratio,
+      `${smallMs.toFixed(1)} ms for ${SMALL} repeats, ${largeMs.toFixed(1)} ms for ${SMALL * GROWTH}`,
+    ).toBeLessThan(MAX_RATIO)
+    expect(marked(cleanSnippet(large, whole))).toEqual(['orchard'])
+
+    // The window: by default only a piece around the first match is worked on, so the same input
+    // costs a fraction of all of it, and shows the match.
+    const windowMs = fastest(() => cleanSnippet(large), GIVE_UP_MS)
+    expect(windowMs).toBeLessThan(Math.max(largeMs / 2, FLOOR_MS))
+    const bounded = cleanSnippet(large)
+    expect(marked(bounded)).toEqual(['orchard'])
+    expect(plain(bounded).length).toBeLessThanOrEqual(1202)
+    // What is measured is CPU time, which a busy machine doesn't stretch; its wall time it does.
+  },
+  60_000,
+)
 
 test('code keeps its text, and a highlight at the ends of an identifier does not make its underscores marks', () => {
   expect(plain(cleanSnippet([{ text: 'Use `**kwargs` here' }]))).toBe('Use **kwargs here')
