@@ -10,6 +10,23 @@ import { clock, encodeWav, type Recording, type StartRecording, startRecording, 
 
 type Phase = 'idle' | 'starting' | 'recording' | 'transcribing'
 
+// The dictation as it is, for a place that draws its own controls (an app's text field): what it is
+// doing, its clock, why it failed, and what can be done. The chat box uses `controls` and `message`.
+export interface DictationState {
+  phase: Phase
+  // Seconds recorded, and the most a recording may last.
+  elapsed: number
+  max: number
+  // Whether a recording can start now (not while one is on its way, nor where dictation is off).
+  canStart: boolean
+  start: () => void
+  stop: () => void
+  cancel: () => void
+  error: string | null
+  // Sends again what was recorded but not turned into text, when there is such a recording.
+  retry?: () => void
+}
+
 // The status of a workspace's dictation, shared by the many fields of an app's screen so they ask
 // once: kept for a few seconds, and forgotten when the server says it isn't ready.
 const SHARED_FOR = 5000
@@ -49,7 +66,7 @@ export function useDictation({
   record?: StartRecording
   shareStatus?: boolean
   name?: { label: string; title: string }
-}): { controls: ReactNode; message: ReactNode; unavailable?: string } {
+}): { controls: ReactNode; message: ReactNode; unavailable?: string; state?: DictationState } {
   const t = useT()
   const status = useLoad(
     () => (shareStatus ? sharedStatus(workspace) : api<DictationStatus>(dictationPath(workspace))),
@@ -212,5 +229,16 @@ export function useDictation({
         )}
       </p>
     )
-  return { controls, message, unavailable }
+  const state: DictationState = {
+    phase,
+    elapsed,
+    max,
+    canStart: !disabled && phase === 'idle' && unavailable === undefined,
+    start: () => void start(),
+    stop,
+    cancel,
+    error,
+    retry: unsent ? () => void transcribe(unsent) : undefined,
+  }
+  return { controls, message, unavailable, state }
 }

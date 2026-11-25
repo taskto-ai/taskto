@@ -13,8 +13,11 @@
 
 import { useSyncExternalStore } from 'react'
 import { useDictation } from '../conversations/Dictation'
+import { clock } from '../conversations/recorder'
 import { useT } from '../i18n'
+import { Button } from '../ui/Button'
 import { IconButton } from '../ui/IconButton'
+import { Spinner } from '../ui/Spinner'
 import './capture.css'
 
 function subscribe(onChange: () => void) {
@@ -47,37 +50,65 @@ export function FieldDictation({
 }) {
   const t = useT()
   const online = useOnline()
-  const dictation = useDictation({
+  const { state, unavailable } = useDictation({
     workspace,
     disabled: !online,
     onText,
     shareStatus: true,
-    name: {
-      label: t('apps.dictation.dictate', { field }),
-      title: t('apps.dictation.title'),
-    },
   })
-  if (!online) {
-    return (
-      <div className="ui-dictate">
-        <IconButton icon="mic" disabled label={t('apps.dictation.dictate', { field })} />
+  const label = t('apps.dictation.dictate', { field })
+  // A server without dictation, or that can't say, has nothing to offer online; offline the button
+  // is there, off, with why.
+  if (online && !state) return null
+  const phase = state?.phase ?? 'idle'
+  return (
+    <div className="ui-dictate">
+      {phase === 'recording' && state ? (
+        <>
+          <span className="ui-dictate-clock" role="timer" aria-label={t('conversations.dictation.recorded')}>
+            {t('conversations.dictation.elapsed', { elapsed: clock(state.elapsed), max: clock(state.max) })}
+          </span>
+          <Button size="sm" variant="ghost" onClick={state.cancel}>
+            {t('common.cancel')}
+          </Button>
+          <IconButton icon="stop" label={t('conversations.dictation.stop')} onClick={state.stop} />
+        </>
+      ) : (
+        <IconButton
+          icon="mic"
+          label={label}
+          disabled={!online || !state?.canStart}
+          // Where the speech goes, or why it can't be taken now.
+          title={!online ? t('apps.dictation.offline') : (unavailable ?? t('apps.dictation.title'))}
+          aria-busy={phase === 'starting' || phase === 'transcribing' || undefined}
+          onClick={() => state?.start()}
+        />
+      )}
+      {!online && (
         <span role="status" className="ui-dictate-note">
           {t('apps.dictation.offline')}
         </span>
-      </div>
-    )
-  }
-  // A server without dictation, or that can't say: nothing to offer.
-  if (!dictation.controls) return null
-  return (
-    <div className="ui-dictate">
-      {dictation.controls}
-      {dictation.unavailable !== undefined && (
+      )}
+      {online && unavailable !== undefined && (
         <span role="status" className="ui-dictate-note">
-          {t('apps.dictation.unavailable', { reason: dictation.unavailable })}
+          {t('apps.dictation.unavailable', { reason: unavailable })}
         </span>
       )}
-      {dictation.message}
+      {phase === 'transcribing' && (
+        <span className="ui-dictate-note">
+          <Spinner size="sm" /> {t('conversations.dictation.transcribing')}
+        </span>
+      )}
+      {state?.error && (
+        <span role="alert" className="ui-dictate-error">
+          {state.error}
+          {state.retry && (
+            <Button size="sm" onClick={state.retry}>
+              {t('app.tryAgain')}
+            </Button>
+          )}
+        </span>
+      )}
     </div>
   )
 }
