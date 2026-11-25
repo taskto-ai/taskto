@@ -254,3 +254,19 @@ test("a colour's name inside a function's arguments is a colour, even where name
   expect(stops.code).toBe(1)
   expect(stops.err).toContain('list-style has the colour literal red')
 })
+
+test('a system colour is a colour literal too, outside a theme', () => {
+  for (const [value, literal] of [
+    ['Canvas', 'Canvas'],
+    ['1px solid ButtonBorder', 'ButtonBorder'],
+    ['light-dark(CanvasText, var(--color-text))', 'CanvasText'],
+    ['highlighttext', 'highlighttext'],
+  ]) {
+    const r = runFiles({ 'ui/box.css': `.tt-box {\n  color: ${value};\n}\n` })
+    expect(r.code, value).toBe(1)
+    expect(r.err, value).toContain(`src/ui/box.css:2: color has the colour literal ${literal}`)
+  }
+  const theme = runFiles({ 'ui/themes/brand.css': '@layer themes { :root { --color-bg: Canvas; } }\n' })
+  expect(theme.err).toBe('')
+  expect(theme.code).toBe(0)
+})

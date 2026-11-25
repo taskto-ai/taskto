@@ -10,7 +10,7 @@
 //   blocks only is at the top level: a layer orders rules, it doesn't set them apart;
 // - a `tt-` class a component's className uses that no rule of any stylesheet mentions;
 // - a colour literal (a hex colour, rgb(), hsl() and the other colour functions, or a named colour
-//   such as `white`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
+//   such as `white`, or a system colour such as `Canvas`) in a declaration outside src/ui/themes/: a colour is a role a theme sets, used
 //   through var(--color-…) (docs/design.md). Comments, strings and url() are not looked in.
 //
 // Dependency-free: the stylesheet is read by a small scanner (comments and strings skipped), the
@@ -141,7 +141,15 @@ const NAMED_COLORS = new Set(
     'papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue ' +
     'saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey ' +
     'snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow ' +
-    'yellowgreen'
+    'yellowgreen ' +
+    // The system colours (CSS Color 4, and the deprecated ones browsers still take): the
+    // browser's or the OS's colours, which no theme sets, so they are literals here too.
+    'accentcolor accentcolortext activetext buttonborder buttonface buttontext canvas canvastext field ' +
+    'fieldtext graytext highlight highlighttext linktext mark marktext selecteditem selecteditemtext ' +
+    'visitedtext activeborder activecaption appworkspace background buttonhighlight buttonshadow ' +
+    'captiontext inactiveborder inactivecaption inactivecaptiontext infobackground infotext menu menutext ' +
+    'scrollbar threeddarkshadow threedface threedhighlight threedlightshadow threedshadow window ' +
+    'windowframe windowtext'
   ).split(' '),
 )
 const COLOR_FUNCTION = /(?<![\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i

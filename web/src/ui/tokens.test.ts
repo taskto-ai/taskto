@@ -74,7 +74,8 @@ describe('the brand themes', () => {
     test(`${brand} is one block in the themes layer that sets every colour role and nothing else`, () => {
       const all = rules(read(`themes/${brand}.css`))
       expect(all.map((r) => [r.selector, r.layer])).toEqual([[selectorOf(brand), 'themes']])
-      const declared = [...all[0].props.keys()]
+      // Every declaration, not only the custom properties: `color: red` in a brand is not a role.
+      const declared = all[0].declarations
       const expected = COLOR_ROLES.map((r) => `--color-${r}`)
       expect(
         expected.filter((name) => !declared.includes(name)),
@@ -110,6 +111,12 @@ describe('the brand themes', () => {
       expect(changed.length, `${brand} changes no role`).toBeGreaterThan(0)
       expect(changed.filter((k) => !k.startsWith('--color-'))).toEqual([])
       expect([...brandRoles(brand).keys()].sort()).toEqual(COLOR_ROLES.map((r) => `--color-${r}`).sort())
+      // Nor a property that is not a custom one, which props (custom properties only) can't show.
+      const roles = COLOR_ROLES.map((r) => `--color-${r}`) as string[]
+      const others = rules(read(`themes/${brand}.css`))
+        .flatMap((r) => r.declarations)
+        .filter((name) => !roles.includes(name))
+      expect(others, `${brand} sets more than colour roles`).toEqual([])
     }
   })
 
@@ -148,6 +155,21 @@ describe('the tokens', () => {
   test('the layers are declared once, in order, before anything is imported', () => {
     const index = read('index.css').replace(/\/\*[\s\S]*?\*\//g, '')
     expect(index.trim().split('\n')[0]).toBe('@layer tokens, themes, base, components, screens;')
+  })
+
+  test('the stacking levels are in their order, and the skip link is above every z-index there is', () => {
+    const order = ['sticky', 'sidebar', 'scrim', 'drawer', 'overlay', 'toast', 'skip']
+    const props = propsOf(rules(read('tokens.css')), ':root')
+    const declared = [...props.keys()].filter((k) => k.startsWith('--z-'))
+    expect(declared).toEqual(order.map((name) => `--z-${name}`))
+    const levels = order.map((name) => Number(props.get(`--z-${name}`)))
+    expect(
+      levels.every((v, i) => Number.isInteger(v) && (i === 0 || v > levels[i - 1])),
+      levels.join(' < '),
+    ).toBe(true)
+    const css = readFileSync(join(dir, '../styles.css'), 'utf8')
+    const highest = Math.max(...[...css.matchAll(/z-index:\s*(\d+)/g)].map((m) => Number(m[1])))
+    expect(levels.at(-1)).toBeGreaterThanOrEqual(highest)
   })
 
   test('every scale resolves', () => {
@@ -240,6 +262,27 @@ const OLD_COLORS: Record<string, [string, string]> = {
   scrim: ['rgba(17, 17, 16, 0.42)', 'rgba(0, 0, 0, 0.6)'],
 }
 
+// And the others, resolved as they were, light then dark: lengths, shadows, font stacks, the icon.
+const SANS = '"Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+const OLD_VALUES: Record<string, [string, string]> = {
+  'shadow-lift': ['0 2px 0 #111110', '0 2px 0 #1fc98a'],
+  'shadow-lift-hover': ['0 3px 0 #111110', '0 3px 0 #1fc98a'],
+  'shadow-pop': ['0 12px 32px -12px rgba(17, 17, 16, 0.35)', '0 12px 32px -12px rgba(0, 0, 0, 0.8)'],
+  font: [SANS, SANS],
+  display: [`"Bricolage Grotesque Variable", ${SANS}`, `"Bricolage Grotesque Variable", ${SANS}`],
+  mono: [
+    '"JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+    '"JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+  ],
+  radius: ['8px', '8px'],
+  'topbar-h': ['52px', '52px'],
+  'sidebar-w': ['232px', '232px'],
+  touch: ['44px', '44px'],
+  'clear-icon': Array(2).fill(
+    `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.1 8 6.6l4.5-4.5 1.4 1.4L9.4 8l4.5 4.5-1.4 1.4L8 9.4l-4.5 4.5-1.4-1.4L6.6 8 2.1 3.5z'/%3E%3C/svg%3E")`,
+  ) as [string, string],
+}
+
 describe('the old --tt-* names', () => {
   const props = pageProps(DEFAULT_BRAND)
 
@@ -258,6 +301,18 @@ describe('the old --tt-* names', () => {
     }
   })
 
+  test('the other values are the ones they were', () => {
+    for (const [name, [light, dark]] of Object.entries(OLD_VALUES)) {
+      expect(resolve(`var(--tt-${name})`, props, 'light'), `--tt-${name} light`).toBe(light)
+      expect(resolve(`var(--tt-${name})`, props, 'dark'), `--tt-${name} dark`).toBe(dark)
+    }
+  })
+
+  test('every old name is pinned, as a colour or as a value', () => {
+    const pinned = [...Object.keys(OLD_COLORS), ...Object.keys(OLD_VALUES)]
+    expect(OLD_NAMES.filter((name) => !pinned.includes(name))).toEqual([])
+  })
+
   test('every --tt-* name the stylesheet uses without a fallback is defined', () => {
     // Set by script at run time (pwa/viewport.ts), not by a stylesheet.
     const runtime = new Set(['--tt-viewport-h', '--tt-viewport-top'])
@@ -266,6 +321,14 @@ describe('the old --tt-* names', () => {
       .map((m) => m[1])
       .filter((n) => !runtime.has(n) && !props.has(n))
     expect([...new Set(missing)]).toEqual([])
+  })
+})
+
+describe('reading the token files', () => {
+  test('every declaration of a rule is recorded, not only the custom properties', () => {
+    const [rule] = rules(':root[data-brand="x"] { --color-bg: #ffffff; color: red; accent-color: blue }')
+    expect(rule.declarations).toEqual(['--color-bg', 'color', 'accent-color'])
+    expect([...rule.props.keys()]).toEqual(['--color-bg'])
   })
 })
 
