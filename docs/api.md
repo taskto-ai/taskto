@@ -299,6 +299,9 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_currency_invalid` | 400 | The currencies must be 1 to `max` distinct codes from the list the server knows. |
 | `too_many_integrations` | 409 | The workspace has `max` integrations. |
 | `integration_in_use` | 409 | Something still names the integration (an approval of an app): disable it instead. |
+| `integration_event_gave_up` | none | The last reason kept on a stored provider event whose tries ran out, or that failed in a way that may pass; it is never in a response. |
+| `webhook_rate_limited` | 429 | `POST /hooks/{public_id}`: too many requests from this client address or for this id lately. `Retry-After` says when to try again. |
+| `webhook_too_large` | 413 | `POST /hooks/{public_id}`: the body is over 256 KiB. |
 | `base_url_invalid` | 400 | Not an http or https URL of up to `max` characters, without a query or fragment (provider accounts, shared CLI accounts, dictation). |
 | `base_url_credentials` | 400 | The base URL has credentials in it: the key goes in `api_key`. |
 | `base_url_insecure` | 400 | A key would be sent over plain http to another machine: use https. |
@@ -3881,11 +3884,12 @@ An integration looks like this:
   refused without quoting it. A secret is replaced by sending a new one and can't be removed; to stop using
   an account, disable the integration or delete it. A replaced webhook secret keeps verifying
   events for a day (for the provider's own rotation overlap).
-- **`webhook_url`**: the address the provider's events will be sent to, `null` when the server has no
-  `-public-url`: webhooks are then unavailable. **Reserved:** no route serves it yet and events are
-  not processed, so don't register it at the provider until a later release says so; the same
-  holds for the webhook secret and its rotation. It holds a random 128-bit id and no
-  secret, and is made from the current `-public-url` each time, so it follows a change of it.
+- **`webhook_url`**: the address to register at the provider for its events
+  ([`POST /hooks/{public_id}`](#post-hookspublic_id)), `null` when the server has no
+  `-public-url`: webhooks are then unavailable. It holds a random 128-bit id and no secret, and
+  is made from the current `-public-url` each time, so it follows a change of it. The
+  integration's `webhook_secret` is what verifies what arrives there. `last_event_at` is when the
+  last verified event came.
 - **`spaces`**: ids of the spaces whose apps may use the integration **that the caller may
   manage**: their own private space and the workspace's shared spaces (archived ones too, so
   they can be taken out). Another person's private space is never in it: **`other_spaces`**
@@ -3957,6 +3961,46 @@ Anyone who can read the space. What may be used in the space:
 `{"integrations": [{"id", "name", "display_name", "kind", "status"}]}`, with `status` `active`
 or `disabled`. Nothing about the account: no secret, no webhook address, no limit, no
 provider.
+
+### `POST /hooks/{public_id}`
+
+The route a provider sends its events to, **outside `/api`**: there is no session, no cookie and
+no CSRF check (the guard wraps only `/api`), and no `Content-Type` is required. The provider's
+**signature over the exact body is the authentication**. Without a valid one, a request
+changes nothing and tells nothing. The route is for providers, not for the web app, and
+nothing else under `/hooks/` exists. The reverse proxy has to forward `POST /hooks/*`
+([install](install.md#webhooks-from-payment-providers)).
+
+In order:
+
+1. The client address and the id are counted against two limits, per minute, before anything is
+   looked up: 600 requests per client address (an IPv6 client counts as its /64) and 600 per
+   id. Over either: `429 webhook_rate_limited` with `Retry-After`. An id that isn't 32 lowercase
+   hex digits can't exist and is answered `404` without a lookup.
+2. The body is read up to 256 KiB (`413 webhook_too_large` over it, for every id alike, before
+   anything is looked up).
+3. The integration is found by `public_id`. The signature is verified **over the raw bytes,
+   before the body is parsed**, in constant time, against the integration's webhook secret and,
+   for a day after an admin replaces it, the one it replaced. The provider's tolerance applies
+   to the signed timestamp, in both directions (Stripe: five minutes).
+4. Every way of not getting this far is **one answer**, byte for byte: `404 not_found`, with
+   the same headers. An id that doesn't exist, one that is disabled or has no webhook secret,
+   an id of a provider that has no webhooks yet, a secret that doesn't open, a missing,
+   malformed, wrong, tampered or too old signature, and a valid signature of *another*
+   integration. The response never says which, and nothing about the workspaces or
+   integrations that exist.
+5. The body is normalized ([integrations.md](integrations.md#webhooks-and-the-public-url)).
+   An event the server doesn't act on, one of another mode than the integration's, or one that
+   isn't of the shape it relies on is answered `200` and **not stored** (providers disable
+   endpoints that answer errors). Otherwise it is stored once, by `(integration, provider event
+   id)` with `ON CONFLICT DO NOTHING`, and answered `200` whether it was new or a replay: the
+   provider can't tell which. **The body is never stored**, only its SHA-256 and closed, typed
+   fields.
+6. A failure of the server's own (the database) is a `500` with no detail, so the provider
+   retries.
+
+The answer to an accepted delivery is `200` with no body. A stored event is applied later by
+the integrations' worker, with leases and a bounded number of tries.
 
 ## Model providers
 

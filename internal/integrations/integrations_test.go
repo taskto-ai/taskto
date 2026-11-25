@@ -63,6 +63,7 @@ type env struct {
 	dir    string
 	key    *serverkey.Key
 	store  *Store
+	svc    *Service
 	h      http.Handler
 	logs   *logs
 	bodies bytes.Buffer
@@ -70,6 +71,12 @@ type env struct {
 }
 
 func newEnv(t *testing.T, publicURL string) *env {
+	t.Helper()
+	return newEnvWith(t, Options{PublicURL: publicURL})
+}
+
+// newEnvWith is newEnv with the service's options, for a test that moves the clock.
+func newEnvWith(t *testing.T, opts Options) *env {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -95,8 +102,10 @@ func newEnv(t *testing.T, publicURL string) *env {
 	a.Routes(mux)
 	spaces := access.New(sqlDB, a)
 	spaces.Routes(mux)
-	New(e.store, Options{PublicURL: publicURL}).Routes(mux, a, spaces)
-	e.h = auth.CSRF(mux)
+	e.svc = New(e.store, opts)
+	e.svc.Routes(mux, a, spaces)
+	e.svc.HookRoutes(mux)
+	e.h = a.ClientAddr(auth.CSRF(mux))
 	return e
 }
 

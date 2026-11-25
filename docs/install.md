@@ -226,6 +226,44 @@ A proxy on the host reaching a published port shows up with the address of Docke
 gateway, which can be shared with other local traffic; prefer running the proxy in the
 Compose project, as the bundled Caddy does.
 
+### Webhooks from payment providers
+
+A payment provider (Stripe) tells the server about a payment by calling an address of the
+integration's own, `https://<your domain>/hooks/<id>`, which Settings → Integrations shows
+(see [integrations.md](integrations.md#webhooks-and-the-public-url)). Two things make it work:
+
+- **`-public-url`** (`TASKTO_PUBLIC_URL`, the server's external https origin) is set. Without it
+  the settings page says webhooks are unavailable, and no address is shown.
+- **The reverse proxy forwards `POST /hooks/*`** to the server. The bundled Caddy and the nginx
+  block above forward every path, so nothing more is needed. A proxy that exposes only some
+  paths needs this one, and nothing else of the server has to be reachable for payments:
+
+  ```nginx
+  location /hooks/ {
+      limit_except POST { deny all; }
+      proxy_pass http://127.0.0.1:8080;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+  ```
+
+  Don't put a login, a client certificate or an IP allowlist other than the provider's own in
+  front of it: the provider can't answer one. The provider's **signature** is what
+  authenticates a delivery, and it is checked by the server.
+
+The route reads at most 256 KiB, answers `404` for everything that isn't an authentic delivery
+(a wrong id and a wrong signature look the same), and limits requests per client address and
+per id. The limit by address uses the address the server finds for the client, so set
+`TASKTO_TRUSTED_PROXIES` as [above](#the-clients-address-behind-a-proxy): behind a proxy that
+isn't trusted every request, the provider's and anyone's, counts against the proxy's address,
+and a flood of bad requests can hold back real deliveries.
+
+A server without a public address (a laptop, a home server) works without webhooks: the
+provider's events don't reach it and payments are reconciled by polling the provider, which
+arrives in a later release. A tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok) that forwards
+`POST /hooks/*` to the server gives the same instant updates without opening the server; give
+`-public-url` the tunnel's address.
+
 ### The app on phones and computers
 
 TaskTo.AI is an installable web app (a PWA): from the browser, a person can add it to a phone's
