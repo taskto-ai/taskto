@@ -177,8 +177,9 @@ works once, expires after 24 hours, is limited to one every 5 minutes, and holds
 the server stores only hashed and never logs. The settings show whether the address is confirmed,
 waiting for the link, or not, and can send another link.
 
-A mail says what a push says and no more: that a card was assigned to you, or that an app action
-needs you, in the person's language, and a link back to the notification (`/notification/{id}`), which
+A mail says what a push says and no more: that a card was assigned to you, has a new comment, mentions
+you, is due or is overdue, or that an app action needs you (the six kinds a person may choose email
+for, each off until chosen), in the person's language, and a link back to the notification (`/notification/{id}`), which
 the app opens only for the signed-in person and checks again. It never holds a title, a name, a
 comment or the ID of a card or an app. The summary says only how many notifications are unread and
 links to the inbox; it counts none the person may no longer read, and so does an instant mail:

@@ -2135,8 +2135,10 @@ kept in step with the card by the change that touches it:
 - **Once.** A person is told once per card, kind and due date, however many times a job runs (a
   retry, a clock that stepped back, a card given to someone else and back). Edits that change
   neither `due`, the assignee nor the card's column leave the jobs alone, a reminder that is ready
-  but hasn't run yet included. A new date is a new reminder. An old notice whose card has a
-  different date now (or none) is shown as a plain "something changed" mention of the card.
+  but hasn't run yet included. A new date is a new reminder. An old notice whose card is no longer
+  what it was made for (a different date now or none, done or archived, given to someone else or
+  to the agent, or in an archived board or space) is shown as a plain "something changed" mention
+  of the card, and is not mailed or counted in a summary, as the job itself would have made none.
 - **Where.** Every way of changing a card keeps the jobs: the web app's routes, the agent's tools,
   the MCP tools and the apps' effects. Archiving a board or a shared space cancels its cards' jobs
   and restoring it makes them again; a person who leaves a space or the workspace loses theirs, and
@@ -2186,7 +2188,10 @@ for the workspace's members, about the caller only.
 #### `GET /api/workspaces/{workspace}/notification-email`
 
 `{"available": true, "address": {"email": "ana@example.com", "state": "verified"}, "kinds":
-{"card_assigned": "off", "app_effect_failed": "digest"}, "digest": {"hour": 8, "timezone": "UTC"}}`.
+{"card_assigned": "off", "card_comment": "instant", "card_mention": "instant", "card_due": "off",
+"card_overdue": "off", "app_effect_failed": "digest"}, "digest": {"hour": 8, "timezone": "UTC"}}`.
+There is a choice for each of the six kinds a notification can have (`card_assigned`, `card_comment`,
+`card_mention`, `card_due`, `card_overdue`, `app_effect_failed`), every one `off` until chosen.
 `available` is false when the server has no SMTP server or no public URL (nothing can be turned on
 then, and everything can still be turned off). `address.state` is `unverified` (no link waits),
 `pending` (a link was sent and may still be opened) or `verified`; nothing is sent unless it is
