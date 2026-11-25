@@ -267,7 +267,7 @@ The page is never reloaded for anyone: they update when they have saved their wo
 
 ### Web Push notifications
 
-Notifications always appear in each person's **inbox** (the bell in the top bar). **Web Push**
+Notifications always appear in each person's **inbox** (in the sidebar, with its unread count). **Web Push**
 is an optional extra on top: a person turns it on, per device, in **Settings → Notifications**,
 and only then does that device get a prompt when something new arrives while TaskTo.AI is closed.
 Nothing about it is required: with push off, unavailable or blocked, every workflow works, and a

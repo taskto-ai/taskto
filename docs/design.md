@@ -82,7 +82,7 @@ what is positioned on the page.
 | Level | Value | What belongs there |
 |---|---|---|
 | `--z-sticky` | 10 | a header or a bar that sticks while its page scrolls |
-| `--z-sidebar` | 20 | the sidebar on a wide screen |
+| `--z-sidebar` | 20 | the sidebar on a wide screen or a tablet |
 | `--z-scrim` | 25 | the shade behind the drawer on a phone: over the page, under the drawer |
 | `--z-drawer` | 30 | the sidebar as a drawer on a phone |
 | `--z-overlay` | 40 | what floats over the page without the top layer: a menu or a popup placed by hand |
@@ -155,7 +155,7 @@ kind, the primary action and the agent. It is not decoration.
 ### Light, dark and the brand
 
 **Light or dark** is the page's `color-scheme`: the system's (`light dark`, with no script) unless
-the person picked one in the top bar, which sets `data-theme="light"` or `"dark"` on `<html>`
+the person picked one in the account menu, which sets `data-theme="light"` or `"dark"` on `<html>`
 (`web/src/theme.ts`, which keeps the choice in this browser only). Every role is written once as
 `light-dark()`, so the same block serves both.
 
@@ -464,21 +464,54 @@ offline too.
 The fonts' licence text and copyright lines go with the build, in `/assets/THIRD_PARTY_NOTICES.txt`
 (`web/pwa/notices.ts`, which a test covers), as the OFL asks.
 
+## The shell
+
+The frame around every page is led by the sidebar (`web/src/shell/`), with no top bar on a wide
+screen. From top to bottom: the logo; the workspace switcher (a menu: the current workspace with a
+square avatar, the person's workspaces, and "New workspace" when the server lets them); the
+sections (Home, Conversations, Knowledge base, Boards, Apps), the current one marked; the inbox with
+its unread count; the pinned apps, in a group of their own, each with a small avatar; then, at the
+foot, Settings and the account (avatar, name and email), whose menu has the theme, the language,
+"Install the app" while it isn't installed, and log out. The page owns its title: the shell never
+repeats the section's name over it, except in the phone's bar, where the page's own heading may be
+scrolled away.
+
+- **Wide** (over 56.25rem, 900px): the whole sidebar, `--width-sidebar` wide.
+- **Tablet** (48rem to 56.25rem): a rail of icons, about 60px, every target 44px. Each link's
+  label is hidden from sight only, so it stays the link's name, and its tooltip, shown beside the
+  rail (at its end; at its start right to left) and only here (wider, it would repeat what is
+  written), says the same. The switcher is its avatar and the account its avatar, both named by
+  their own labels, and the inbox's count sits on the bell's corner. A pinned app is its avatar,
+  with letters of its own (`initialsAmong`: "Equipment" and "Expenses" are EQ and EX), since a
+  touch screen shows no tooltip and two hues alone mustn't be the difference. At 820px the rail
+  gives a page with its own list and detail (conversations, the knowledge base, settings) the
+  room for both; the labels would take a fifth of the width. The end to end suite
+  (`web/e2e/app/shell.e2e.mjs`) checks in Chromium that every link of the rail has a name.
+- **Phone** (48rem and narrower): a slim bar with the menu button, the logo's mark and the current
+  section's name. The sidebar is a drawer from the start edge, over a scrim: focus moves into it,
+  the page behind it is inert, Escape (one no menu or dialog took) closes it, a press on the scrim
+  closes it, and focus goes back to the button, or to the page when a link in it was followed.
+
 ## The logo
 
-The top bar and the login screens show the website's logo (`web/src/BrandLogo.tsx`, drawn from its
-`/logo.svg`): an arrow handing off to a dot, then "taskto.ai". The website's rule is that the logo
-stands in for the name, so the app shows it too, with its own name as the image's label. The arrow
-and the name take the page's text colour (ink on cream, cream on night, as the website's
-`logo-dark.svg`); the dot and ".ai" are the logo's green. On a phone (48rem and narrower) the top
-bar shows the mark alone, the drawing cropped to its first 64 units.
+The sidebar, the phone's bar and the login screens show the website's logo
+(`web/src/BrandLogo.tsx`, drawn from its `/logo.svg`): an arrow handing off to a dot, then
+"taskto.ai". The website's rule is that the logo stands in for the name, so the app shows it too,
+with its own name as the image's label. The arrow and the name take the page's text colour (ink on
+cream, cream on night, as the website's `logo-dark.svg`); the dot and ".ai" are the logo's green.
+The rail and the phone's bar show the mark alone: a square box crops the drawing to its first 64
+units.
 
-**The top bar never overflows**, from 320px up, whatever the workspace is called. The menu, the
-mark, the bell, the theme and the account keep their size; the workspace's select is the part
-that gives way (`min-width: 0`, an ellipsis, the whole name as its tooltip). Under 30rem the theme
-picker is its icon alone, with the select laid over it unseen, so a name such as "Operations and
-Field Services" still leaves room for itself. Checked in a real browser at 320, 360 and 390px
-(and 768 and 1024) with "Acme", "Operations" and that name, in both themes.
+**The shell never overflows**, from 320px up, whatever the workspace is called. In the phone's bar
+the menu button and the mark keep their size and the section's name gives way (`min-inline-size:
+0`, an ellipsis). In the sidebar, and so in the drawer, the switcher's avatar and chevron keep
+theirs and the workspace's name gives way the same way, with the whole name as the switcher's
+tooltip and in its accessible name; a long account name or email is cut the same way. Names
+people write (a workspace's, a person's, a pin's) keep their own direction (`dir="auto"`), so a
+Latin name in a right-to-left page loses its end, not its start, to the ellipsis. A pinned
+app's label is cut too, its whole name its tooltip in the rail. `web/src/shell/shell.test.tsx`
+keeps the parts and the tooltip; check the look in a real browser at 320, 390, 820 and 1440px
+with a name such as "Operations and Field Services", in both themes.
 
 ## The apps renderer
 
@@ -501,14 +534,14 @@ label in a button inherits it in every variant, so a caption on a mint button is
 ## Installed app
 
 `web/public/manifest.webmanifest` (`theme_color` and `background_color` cream `#faf8f4`) and the
-`theme-color` metas in `web/index.html` (cream; night `#111110` in the dark) match the top bar and
-the page. The metas follow the OS through their media queries, which is right for the System theme;
-when the person picks Light or Dark in the top bar, `web/src/theme.ts` sets both metas to that
+`theme-color` metas in `web/index.html` (cream; night `#111110` in the dark) match the phone's bar
+and the page. The metas follow the OS through their media queries, which is right for the System theme;
+when the person picks Light or Dark in the account menu, `web/src/theme.ts` sets both metas to that
 theme's colour (and System puts back each one's own), so the browser's address bar and status bar
 follow the app's choice, not the OS's. The two colours are `THEME_COLOR` there, which a test keeps
 equal to the default brand's `--color-bg`, the metas and the manifest. The icons are the website's app tile (its `favicon.svg` and apple touch icon): a logo-green
 (`#00a86b`) square with the logo's arrow and dot in ink, drawn by `web/scripts/make-icons.mjs` from
-the same geometry as `icon.svg`. The top bar is light, so the iOS status bar is the default one (dark
+the same geometry as `icon.svg`. The phone's bar is light, so the iOS status bar is the default one (dark
 text), not `black-translucent`, whose white text it would hide.
 
 ## Capturing the screens

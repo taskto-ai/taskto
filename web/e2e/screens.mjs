@@ -295,10 +295,12 @@ export const SCREENS = [
     phase: 'seeded',
     show: async (s) => {
       await s.go(s.path('home'))
-      // By its name: the bar's "New workspace" button is a menu of the same kind, so the class matches both.
-      await s.page.getByLabel(`Account: ${owner.name}`, { exact: true }).click()
+      // On a phone the account is in the sidebar's drawer.
+      const drawer = s.page.getByRole('button', { name: 'Open the menu' })
+      if (await drawer.isVisible()) await drawer.click()
+      await s.page.getByRole('button', { name: `Account: ${owner.name}` }).click()
     },
-    ready: (s) => [heading(s, 'Home'), s.page.getByRole('button', { name: 'Log out' })],
+    ready: (s) => [heading(s, 'Home'), s.page.getByRole('menuitem', { name: 'Log out' })],
   },
   {
     name: 'drawer',
@@ -306,7 +308,7 @@ export const SCREENS = [
     only: 'phone',
     show: async (s) => {
       await s.go(s.path('home'))
-      await s.page.locator('.tt-menu-button').click()
+      await s.page.getByRole('button', { name: 'Open the menu' }).click()
     },
     ready: (s) => [
       heading(s, 'Home'),

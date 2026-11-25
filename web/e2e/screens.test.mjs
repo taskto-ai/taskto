@@ -192,25 +192,47 @@ describe('ready checks', () => {
     for (const tab of SETTINGS_TABS) expect(SETTINGS_HEADINGS[tab]).toBeTruthy()
   })
 
-  it("opens the account menu by the person's name, not by a class the New workspace menu shares", async () => {
-    const calls = []
-    const target = { click: async () => calls.push('click') }
-    const s = {
-      go: async () => {},
-      path: () => '/',
-      page: {
-        getByLabel: (label, options) => {
-          calls.push(['getByLabel', label, options])
-          return target
+  it("opens the account menu by the person's name, through the drawer only where there is one", async () => {
+    // A page that records what the screen asks of it; `drawer` says whether the phone's menu
+    // button is on screen.
+    const run = async (drawer) => {
+      const calls = []
+      const s = {
+        go: async () => {},
+        path: () => '/',
+        page: {
+          getByRole: (role, options) => {
+            calls.push(['getByRole', role, options.name])
+            return {
+              isVisible: async () => drawer,
+              click: async () => calls.push(['click', options.name]),
+            }
+          },
+          getByLabel: (label) => {
+            calls.push(['getByLabel', label])
+            return { click: async () => calls.push(['click', label]) }
+          },
+          locator: (selector) => {
+            calls.push(['locator', selector])
+            return { click: async () => calls.push(['click', selector]) }
+          },
         },
-        locator: (selector) => {
-          calls.push(['locator', selector])
-          return target
-        },
-      },
+      }
+      await SCREENS.find((x) => x.name === 'account-menu').show(s)
+      return calls
     }
-    await SCREENS.find((x) => x.name === 'account-menu').show(s)
-    expect(calls).toEqual([['getByLabel', 'Account: Ana Ribeiro', { exact: true }], 'click'])
+    // Never by a class: the New workspace menu once shared the account menu's.
+    for (const drawer of [false, true]) expect((await run(drawer)).some(([what]) => what === 'locator')).toBe(false)
+    // The account button is found and pressed by the person's name.
+    const wide = await run(false)
+    expect(wide).toContainEqual(['click', 'Account: Ana Ribeiro'])
+    expect(wide).not.toContainEqual(['click', 'Open the menu'])
+    // On a phone, the drawer is opened first.
+    const phone = await run(true)
+    expect(phone.filter(([what]) => what === 'click').map(([, name]) => name)).toEqual([
+      'Open the menu',
+      'Account: Ana Ribeiro',
+    ])
   })
 
   const locator = (shows, calls = []) => ({

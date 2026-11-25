@@ -124,7 +124,7 @@ test('a person pins an app and places a widget, and both show: the widget on Hom
     within(nav)
       .getAllByRole('link')
       .map((a) => a.textContent),
-  ).toEqual(['Home', 'Conversations', 'Knowledge base', 'Boards', 'Apps', 'Settings'])
+  ).toEqual(['Home', 'Conversations', 'Knowledge base', 'Boards', 'Apps', 'Notifications', 'Settings'])
   expect(within(nav).queryByText('Pinned apps')).toBeNull()
 
   fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
@@ -145,11 +145,12 @@ test('a person pins an app and places a widget, and both show: the widget on Hom
   const pinned = await screen.findByRole('region', { name: 'Pinned apps' })
   const link = within(pinned).getByRole('link', { name: 'Spend' })
   expect(link.getAttribute('href')).toBe('/w/1/apps/2-1')
-  // After the platform's pages, never among them.
-  expect(
-    nav.compareDocumentPosition(pinned) & Node.DOCUMENT_POSITION_CONTAINED_BY &&
-      within(nav).getAllByRole('link').at(-2)?.textContent,
-  ).toBe('Settings')
+  // After the sections and the inbox, in a group of their own, never among them; Settings stays at
+  // the sidebar's foot.
+  expect(nav.compareDocumentPosition(pinned) & Node.DOCUMENT_POSITION_CONTAINED_BY).toBeTruthy()
+  const links = within(nav).getAllByRole('link')
+  expect(links.indexOf(link)).toBe(links.findIndex((a) => a.getAttribute('href') === '/w/1/notifications') + 1)
+  expect(links.at(-1)?.getAttribute('href')).toBe('/w/1/settings')
   expect(calls.filter((c) => c.method === 'POST').at(-1)?.body).toEqual({ kind: 'pin', space_id: 2, app_id: 1 })
 
   // Unpinning takes it out of the menu again, in this page and the menu alike.

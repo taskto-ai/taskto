@@ -106,7 +106,7 @@ test('a pin with a malformed label can’t take the menu down', async () => {
   await screen.findByRole('heading', { name: 'Home', level: 1 })
   // The sections are all there, and no pins section.
   const nav = screen.getByRole('navigation', { name: 'Sections' })
-  expect(within(nav).getAllByRole('link')).toHaveLength(6)
+  expect(within(nav).getAllByRole('link')).toHaveLength(7)
   expect(within(nav).queryByRole('region')).toBeNull()
   fireEvent.click(settingsLink())
   expect(window.location.pathname).toBe('/w/1/settings')
@@ -119,17 +119,18 @@ test('a page that fails to draw leaves the shell usable, and another page is dra
     'GET /api/workspaces/1/conversations': { body: { conversations: [] } },
   })
   render(<Shell me={me} onLogout={() => {}} />)
-  expect((await screen.findByRole('alert')).textContent).toBe(
-    'This page couldn’t be shown. The menu and your settings still work.',
-  )
+  const failed = await screen.findByRole('alert')
+  expect(failed.textContent).toContain('This page couldn’t be shown. The menu and your settings still work.')
+  // And what to do: reload.
+  expect(within(failed).getByRole('button', { name: 'Reload' })).toBeTruthy()
   const nav = screen.getByRole('navigation', { name: 'Sections' })
-  expect(within(nav).getAllByRole('link')).toHaveLength(6)
+  expect(within(nav).getAllByRole('link')).toHaveLength(7)
   fireEvent.click(within(nav).getByRole('link', { name: 'Conversations' }))
   await screen.findByRole('heading', { name: 'Conversations' })
   expect(screen.queryByText(/This page couldn’t be shown/)).toBeNull()
 })
 
-test('a pin can’t stand in for a platform page: pins come after them, in a section of their own', async () => {
+test('a pin can’t stand in for a platform page: pins come after the sections and the inbox, in a group of their own', async () => {
   fakeFetch({
     'GET /api/workspaces/1/home': {
       body: view({
@@ -173,11 +174,12 @@ test('a pin can’t stand in for a platform page: pins come after them, in a sec
     'Knowledge base',
     'Boards',
     'Apps',
+    'Notifications',
     'Settings',
   ])
   // The real Settings link still goes to settings; the pin of that name goes to its app.
   expect(platform.at(-1)?.getAttribute('href')).toBe('/w/1/settings')
   expect(within(pins).getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/w/1/apps/2-1')
   expect(container.querySelector('img')).toBeNull()
-  expect(within(pins).getByText('<img src=x onerror=alert(1)>')).toBeTruthy()
+  expect(within(pins).getByRole('link', { name: '<img src=x onerror=alert(1)>' })).toBeTruthy()
 })
