@@ -60,15 +60,18 @@ function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
 // route (404) is an older one: passwords only. Any other failure, or an answer that isn't the
 // shape the route promises, is an error to retry: guessing "passwords only" would show a form
 // that a passwords-off server refuses, or hide the providers.
-type LoginMethods = { password: boolean; sso: { id: string; name: string }[] }
+type LoginMethods = { password: boolean; sso: { id: string; name: string }[]; resetByEmail: boolean }
+type MethodsAnswer = { password: boolean; sso: LoginMethods['sso']; reset_by_email?: boolean }
 
 type MethodsState = { kind: 'loading' } | { kind: 'ready'; methods: LoginMethods } | { kind: 'error' }
 
-function validMethods(v: unknown): v is LoginMethods {
+function validMethods(v: unknown): v is MethodsAnswer {
   if (typeof v !== 'object' || v === null) return false
-  const m = v as { password?: unknown; sso?: unknown }
+  const m = v as { password?: unknown; sso?: unknown; reset_by_email?: unknown }
   return (
     typeof m.password === 'boolean' &&
+    // Absent on a server from before the emailed reset link: it has none.
+    (m.reset_by_email === undefined || typeof m.reset_by_email === 'boolean') &&
     Array.isArray(m.sso) &&
     m.sso.every(
       (p) =>
@@ -88,13 +91,18 @@ function useLoginMethods(): { state: MethodsState; retry: () => void } {
     let live = true
     api<unknown>('/api/login/methods').then(
       (m) => {
-        if (live) setState(validMethods(m) ? { kind: 'ready', methods: m } : { kind: 'error' })
+        if (!live) return
+        setState(
+          validMethods(m)
+            ? { kind: 'ready', methods: { ...m, resetByEmail: m.reset_by_email === true } }
+            : { kind: 'error' },
+        )
       },
       (err) => {
         if (!live) return
         setState(
           err instanceof ApiError && err.status === 404
-            ? { kind: 'ready', methods: { password: true, sso: [] } }
+            ? { kind: 'ready', methods: { password: true, sso: [], resetByEmail: false } }
             : { kind: 'error' },
         )
       },
@@ -274,9 +282,13 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
     }
     return reply
   }, onDone)
+  const [forgot, setForgot] = useState(false)
   if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
   if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />
   const methods = loaded.state.methods
+  if (forgot && methods.password && methods.resetByEmail) {
+    return <ForgotPasswordScreen initialEmail={email} onBack={() => setForgot(false)} />
+  }
   return (
     <AuthFrame title={t('auth.login.title')}>
       {ssoError && (
@@ -316,7 +328,13 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
           <button type="submit" className="tt-button tt-primary" disabled={busy}>
             {busy ? t('auth.login.busy') : t('auth.login.submit')}
           </button>
-          <p className="tt-muted tt-small">{t('auth.login.forgot')}</p>
+          {methods.resetByEmail ? (
+            <button type="button" className="tt-button tt-small" onClick={() => setForgot(true)}>
+              {t('auth.login.forgotByEmail')}
+            </button>
+          ) : (
+            <p className="tt-muted tt-small">{t('auth.login.forgot')}</p>
+          )}
         </form>
       )}
     </AuthFrame>
@@ -390,6 +408,67 @@ function TwoFactorStep({
           </button>
         </div>
         <p className="tt-muted tt-small">{t('auth.twoFactor.lost')}</p>
+      </form>
+    </AuthFrame>
+  )
+}
+
+// Asking for a reset link by email, from the login page. The server answers the same whether or
+// not an account has the address, and so does this: it never says which.
+function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; onBack: () => void }) {
+  const t = useT()
+  const [email, setEmail] = useState(initialEmail)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [sentTo, setSentTo] = useState<string | null>(null)
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await api('/api/password-reset/request', { method: 'POST', body: { email } })
+      setSentTo(email.trim())
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (sentTo !== null) {
+    return (
+      <AuthFrame title={t('auth.forgot.sentTitle')}>
+        <p>{t.rich('auth.forgot.sent', { email: <strong>{sentTo}</strong> })}</p>
+        <p className="tt-muted tt-small">{t('auth.forgot.sentHelp')}</p>
+        <button type="button" className="tt-button" onClick={onBack}>
+          {t('auth.forgot.back')}
+        </button>
+      </AuthFrame>
+    )
+  }
+  return (
+    <AuthFrame title={t('auth.forgot.title')} intro={<p className="tt-muted">{t('auth.forgot.intro')}</p>}>
+      <form className="tt-form" onSubmit={submit}>
+        <label>
+          {t('auth.email')}
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoComplete="username"
+          />
+        </label>
+        {error && (
+          <p role="alert" className="tt-error">
+            {error}
+          </p>
+        )}
+        <button type="submit" className="tt-button tt-primary" disabled={busy}>
+          {busy ? t('auth.forgot.busy') : t('auth.forgot.submit')}
+        </button>
+        <button type="button" className="tt-button tt-small" onClick={onBack}>
+          {t('auth.forgot.back')}
+        </button>
       </form>
     </AuthFrame>
   )
