@@ -3794,9 +3794,11 @@ An integration looks like this:
   refused without quoting it. A secret is replaced by sending a new one and can't be removed; to stop using
   an account, disable the integration or delete it. A replaced webhook secret keeps verifying
   events for a day (for the provider's own rotation overlap).
-- **`webhook_url`**: the address to register at the provider, `null` when the server has no
-  `-public-url`: webhooks are then unavailable. It holds a random 128-bit id and no
-  secret. It is made from the current `-public-url` each time, so it follows a change of it.
+- **`webhook_url`**: the address the provider's events will be sent to, `null` when the server has no
+  `-public-url`: webhooks are then unavailable. **Reserved:** no route serves it yet and events are
+  not processed, so don't register it at the provider until a later release says so; the same
+  holds for the webhook secret and its rotation. It holds a random 128-bit id and no
+  secret, and is made from the current `-public-url` each time, so it follows a change of it.
 - **`spaces`**: ids of the spaces whose apps may use the integration **that the caller may
   manage**: their own private space and the workspace's shared spaces (archived ones too, so
   they can be taken out). Another person's private space is never in it: **`other_spaces`**

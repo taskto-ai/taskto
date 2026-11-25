@@ -181,6 +181,17 @@ func expect(t *testing.T, rec *httptest.ResponseRecorder, status int) {
 	}
 }
 
+// expectCodeNonFatal is expectCode that reports and goes on, for a loop over cases.
+func expectCodeNonFatal(t *testing.T, rec *httptest.ResponseRecorder, status int, code, label string) {
+	t.Helper()
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); rec.Code != status || err != nil || body.Code != code {
+		t.Errorf("%s = %d %q, want %d %q", label, rec.Code, rec.Body.String(), status, code)
+	}
+}
+
 func expectCode(t *testing.T, rec *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
 	expect(t, rec, status)
@@ -498,11 +509,13 @@ func TestSecretsNeverLeave(t *testing.T) {
 	owner.do(http.MethodGet, wsPath(ws, "integrations"), nil)
 	owner.do(http.MethodGet, one, nil)
 	owner.do(http.MethodPost, one+"/check", nil)
-	// Refused and invalid writes that carry secrets.
+	// Refused and invalid writes that carry secrets. badHook is refused for its shape, so an error
+	// that quoted it would be a leak: it is scanned for like the others.
+	const badHook = "not-a-hook-secret-zzzz" //nolint:gosec // G101: obviously fake
 	member.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey}})
 	member.do(http.MethodPost, wsPath(ws, "integrations"), stripeBody("sneaky"))
 	owner.do(http.MethodPost, wsPath(ws, "integrations"), map[string]any{"provider": "stripe", "name": "Bad Name", "secrets": map[string]string{"api_key": stripeOtherKey}})
-	owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey, "webhook_secret": "not-a-hook-secret-zzzz"}}) //nolint:gosec // G101: obviously fake
+	owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey, "webhook_secret": badHook}})
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey, "webhook_secret": stripeHookNew}}), http.StatusOK)
 	// A body that isn't JSON, with a secret in it: the error mustn't quote it.
 	rec := owner.do(http.MethodPatch, one, map[string]any{"secrets": []string{stripeLiveKey}})
@@ -527,7 +540,7 @@ func TestSecretsNeverLeave(t *testing.T) {
 	e.mu.Lock()
 	bodies := e.bodies.String()
 	e.mu.Unlock()
-	secrets := map[string]string{"test key": stripeTestKey, "rotated key": stripeOtherKey, "live key": stripeLiveKey, "webhook secret": stripeHook, "new webhook secret": stripeHookNew}
+	secrets := map[string]string{"test key": stripeTestKey, "rotated key": stripeOtherKey, "live key": stripeLiveKey, "webhook secret": stripeHook, "new webhook secret": stripeHookNew, "rejected webhook secret": badHook}
 	for name, text := range map[string]string{"a response": bodies, "the log": e.logs.String()} {
 		for what, s := range secrets {
 			if strings.Contains(text, s) {
@@ -856,6 +869,9 @@ func TestIsolation(t *testing.T) {
 	sharedHere := e.sharedSpace(owner, ws, "Shop")
 	expectCode(t, admin2.do(http.MethodPut, wsPath(ws2, fmt.Sprintf("integrations/%d/spaces", in2.ID)), map[string]any{"spaces": []int64{sharedHere}}),
 		http.StatusNotFound, "space_not_found")
+	if got := e.events(ws2, audit.IntegrationSpacesChanged); len(got) != 0 {
+		t.Fatalf("a refused grant recorded an event in the requested workspace: %+v", got)
+	}
 	// Nothing above changed a thing in the first workspace's log beyond its own creation.
 	for _, action := range []string{audit.IntegrationUpdated, audit.IntegrationSpacesChanged, audit.IntegrationRemoved, audit.IntegrationDisabled} {
 		if got := e.events(ws, action); len(got) != 0 {
@@ -915,11 +931,12 @@ func TestAudit(t *testing.T) {
 	if len(reordered) != 2 || fmt.Sprint(reordered[0].Details["fields"]) != "[currencies]" {
 		t.Fatalf("updated after a reorder = %+v", reordered)
 	}
-	expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments"}), http.StatusOK)
-	n := len(e.events(ws, audit.IntegrationUpdated))
-	expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments"}), http.StatusOK)
-	if len(e.events(ws, audit.IntegrationUpdated)) != n {
-		t.Fatal("an edit that changed nothing recorded an event")
+	n := len(e.events(ws, audit.IntegrationUpdated)) // the two events checked above
+	for range 2 {
+		expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments"}), http.StatusOK)
+		if got := len(e.events(ws, audit.IntegrationUpdated)); got != n {
+			t.Fatalf("an edit that changed nothing recorded an event: %d, was %d", got, n)
+		}
 	}
 
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"disabled": true}), http.StatusOK)
@@ -979,13 +996,17 @@ func TestImmutableColumnsCannotBeUpdated(t *testing.T) {
 		"name = 'x'", "provider = 'square'", "public_id = '" + strings.Repeat("a", 32) + "'",
 		fmt.Sprintf("workspace_id = %d", ws2), fmt.Sprintf("id = %d", in.ID+1000), "created_at = '2000-01-01T00:00:00.000Z'",
 	} {
-		if _, err := e.db.Exec(`UPDATE integrations SET `+set+` WHERE id = ?`, in.ID); err == nil { //nolint:gosec // G202: set is from the list above
-			t.Errorf("UPDATE integrations SET %s succeeded", set)
+		if _, err := e.db.Exec(`UPDATE integrations SET `+set+` WHERE id = ?`, in.ID); err == nil || !strings.Contains(err.Error(), "never change") { //nolint:gosec // G202: set is from the list above
+			t.Errorf("UPDATE integrations SET %s: %v, want the trigger's refusal", set, err)
 		}
 	}
+	// The other integration's own key is out of the way, so only the trigger can refuse a move.
+	if _, err := e.db.Exec(`DELETE FROM integration_secrets WHERE integration_id = ? AND name = 'api_key'`, other.ID); err != nil {
+		t.Fatal(err)
+	}
 	for _, set := range []string{"name = 'webhook_secret_previous'", fmt.Sprintf("integration_id = %d", other.ID)} {
-		if _, err := e.db.Exec(`UPDATE integration_secrets SET `+set+` WHERE integration_id = ? AND name = 'api_key'`, in.ID); err == nil { //nolint:gosec // G202: set is from the list above
-			t.Errorf("UPDATE integration_secrets SET %s succeeded", set)
+		if _, err := e.db.Exec(`UPDATE integration_secrets SET `+set+` WHERE integration_id = ? AND name = 'api_key'`, in.ID); err == nil || !strings.Contains(err.Error(), "never") { //nolint:gosec // G202: set is from the list above
+			t.Errorf("UPDATE integration_secrets SET %s: %v, want the trigger's refusal", set, err)
 		}
 	}
 	// What may change still does.
@@ -1124,11 +1145,11 @@ func TestSpacesAreScopedToTheCaller(t *testing.T) {
 	if len(got.Spaces) != 0 || got.OtherSpaces != 1 {
 		t.Fatalf("after emptying the first admin's spaces = %+v", got)
 	}
-	if ok, _ := e.store.usable(ctx, ws, in.ID, theirs); !ok {
-		t.Fatal("emptying the list removed another admin's private space")
+	if ok, err := e.store.usable(ctx, ws, in.ID, theirs); err != nil || !ok {
+		t.Fatalf("emptying the list removed another admin's private space: %v, %v", ok, err)
 	}
-	if ok, _ := e.store.usable(ctx, ws, in.ID, shared); ok {
-		t.Fatal("a shared space the admin took out is still allowed")
+	if ok, err := e.store.usable(ctx, ws, in.ID, shared); err != nil || ok {
+		t.Fatalf("a shared space the admin took out is still allowed: %v, %v", ok, err)
 	}
 	// And the other admin sees their own and counts the first admin's private space (none now).
 	got = decode[Integration](t, other.do(http.MethodGet, one, nil))
@@ -1137,8 +1158,8 @@ func TestSpacesAreScopedToTheCaller(t *testing.T) {
 	}
 	// An admin can take their own private space out too.
 	expect(t, other.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{}}), http.StatusOK)
-	if ok, _ := e.store.usable(ctx, ws, in.ID, theirs); ok {
-		t.Fatal("the other admin couldn't remove their own space")
+	if ok, err := e.store.usable(ctx, ws, in.ID, theirs); err != nil || ok {
+		t.Fatalf("the other admin couldn't remove their own space: %v, %v", ok, err)
 	}
 	// Nothing was added or removed beyond what each admin did: 2 + 1 added, and 1 + 1 + 1 removed.
 	var added, removed float64
@@ -1297,10 +1318,7 @@ func TestBodyMustBeAnObject(t *testing.T) {
 		for _, r := range []struct{ method, path string }{
 			{http.MethodPatch, one}, {http.MethodPost, wsPath(ws, "integrations")}, {http.MethodPut, one + "/spaces"},
 		} {
-			rec := owner.raw(r.method, r.path, body)
-			if rec.Code != http.StatusBadRequest {
-				t.Errorf("%s %s with %s = %d, want 400", r.method, r.path, body, rec.Code)
-			}
+			expectCodeNonFatal(t, owner.raw(r.method, r.path, body), http.StatusBadRequest, "invalid_json", r.method+" "+r.path+" with "+body)
 		}
 	}
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{}), http.StatusOK) // {} is still an empty change
