@@ -794,6 +794,41 @@ const result = await voz.transcribe(wav.buffer.slice(wav.byteOffset, wav.byteOff
 process.stdout.write(JSON.stringify({ text: result.text }));
 ```
 
+## Deleted records of apps
+
+Deleting a record of an [app](api.md#apps) is soft: the record stays, with its history, and
+whoever may change it can [restore it](api.md#post-appsapprecordsrecordrestore). To keep that from
+growing the database for ever (a loop of inserts and deletes, by a person, an access token or the
+agent, would), the server removes a deleted record, with its history and its photos, once it
+has been deleted longer than the retention window: **90 days** unless you set it.
+
+```sh
+taskto -app-deleted-retention 30     # or TASKTO_APP_DELETED_RETENTION=30, or app_deleted_retention = "30"
+taskto -app-deleted-retention off    # keep deleted records for ever
+```
+
+The setting is the server's, for every app of every workspace. A sweep runs when the server
+starts and every ten minutes, in batches of 200 records so that nobody's writes wait on it, and
+logs how many records it removed. What it does and doesn't touch:
+
+- Only records deleted before the window are removed. A live record is never touched, and
+  restoring a record inside the window starts its time again if it is deleted later.
+- A record with an effect (a card, a document) still waiting to run is kept until it has run.
+- The id of a record the sweep removes is never given to another, so a change still queued on a
+  phone for it can't land on a different record of the app.
+- The receipts of the operations that made a record, which let a phone that was offline send a
+  change again safely, are kept for their own 30 days whatever the window, so a late replay is
+  answered as it would be (its record may be gone: [docs/offline.md](offline.md)).
+- A removed record's photos are removed with it: their rows at once, their files by the next
+  sweep of files no row knows, within a day.
+- Backups made before a record was removed still hold it until they are pruned.
+- Independently of the window, a record's history keeps its newest 500 versions, so a record
+  edited in a loop is bounded as well; the oldest versions, the first, are dropped as new ones are
+  made. The record's own data is never affected.
+
+Deleted records are not counted against [storage quotas](quotas.md), which count files, photos
+and the knowledge base: the window is what bounds them.
+
 ## Backups
 
 `taskto backup` writes a snapshot of the data directory. It runs while the server does:
