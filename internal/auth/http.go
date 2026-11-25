@@ -46,6 +46,8 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/workspaces/{workspace}/tokens/{token}", s.RequireMember(http.HandlerFunc(s.handleDeleteToken)))
 
 	s.passwordRoutes(mux)
+	s.disableRoutes(mux)
+	s.sessionRoutes(mux)
 	s.twoFactorRoutes(mux)
 	s.ssoRoutes(mux)
 }
@@ -282,6 +284,19 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	refund()
 	s.at("password-verified")
 
+	// Only after the password matched, so the answer doesn't tell anyone else that an account
+	// exists, or is off.
+	disabled, err := s.isDisabled(r.Context(), s.db, u.ID)
+	if err != nil {
+		serverError(w, r, err)
+		return
+	}
+	if disabled {
+		s.loginFailed(r, u.ID, "account_disabled")
+		accountDisabled(w)
+		return
+	}
+
 	// What the password earns is decided in one transaction that checks the hash is still the
 	// one that matched (a change or reset meanwhile ended the sessions and challenges the old
 	// password could make) and reads the two-factor state: a user with it on gets no session
@@ -290,6 +305,12 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	out, err := s.passwordSignIn(r.Context(), u.ID, hash)
 	if errors.Is(err, errPasswordChanged) {
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongCredentials, "wrong email or password")
+		return
+	}
+	if errors.Is(err, errAccountDisabled) {
+		// Disabled since the check above.
+		s.loginFailed(r, u.ID, "account_disabled")
+		accountDisabled(w)
 		return
 	}
 	if err != nil {
@@ -559,11 +580,19 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, err error) {
 			"an account with this email exists: log in, then accept the invite"
 	case errors.Is(err, errInviteInvalid):
 		status, code, msg = http.StatusNotFound, apierr.CodeInviteInvalid, errInviteInvalid.Error()
+	case errors.Is(err, errAccountDisabled):
+		// The admin was disabled after the request was authenticated.
+		accountDisabled(w)
+		return
 	default:
 		serverError(w, r, err)
 		return
 	}
 	writeError(w, status, code, msg)
+}
+
+func accountDisabled(w http.ResponseWriter) {
+	writeError(w, http.StatusForbidden, apierr.CodeAccountDisabled, errAccountDisabled.Error())
 }
 
 func passwordLoginDisabled(w http.ResponseWriter) {

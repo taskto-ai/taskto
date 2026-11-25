@@ -445,6 +445,7 @@ export type Member = {
   name: string
   role: string
   joined_at: string
+  disabled: boolean
   two_factor?: boolean
 }
 

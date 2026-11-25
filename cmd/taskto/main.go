@@ -160,6 +160,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		info := mailer.Info()
 		slog.Info("outgoing email is on", "host", info.Host, "port", info.Port, "security", info.Security,
 			"sign_in", info.SignsIn, "egress", cfg.SMTPEgressPolicy().String())
+		if cfg.PublicURL == "" {
+			slog.Warn("reset and invite links aren't emailed: set public_url, the server's external address, which the links are built on")
+		}
 	}
 	// One server per data directory, enforced before anything in it is opened. Deferred
 	// first, so the lock goes last, after the sidecar has stopped and the database closed.
@@ -361,7 +364,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 		stopMaintain()
 		maintaining.Wait()
 	}()
+	var accounts *auth.Service
 	handler, err := server.New(version, sqlDB, server.Options{
+		AccountsReady: func(svc *auth.Service) { accounts = svc },
 		Notifications: notifier,
 		Scheduler:     scheduler,
 		Auth:          authOpts,
@@ -427,6 +432,16 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 			err = errors.Join(err, serveErr)
 		}
 		stuck.note("the server's requests", err)
+		// The emails the server accepted are made after its answer: end their sends and wait for
+		// them, with a deadline of its own so a slow shutdown above doesn't leave none, and
+		// whether or not that went well. The database closes (the deferred Close) only after this,
+		// and not at all if they are still running, as with a request.
+		idleCtx, stopIdle := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopIdle()
+		if err := accounts.Shutdown(idleCtx); err != nil {
+			slog.Warn("shutting down with emails still being made")
+			stuck.note("the emails being made", fmt.Errorf("%w: %w", drain.ErrBusy, err))
+		}
 		return nil
 	}
 }

@@ -28,6 +28,12 @@ The design in short:
 Both stop after a few idle minutes (default 5) and start again on the next request. An open
 live view counts as use.
 
+A live view lasts as long as the login that opened it. The session is checked when the
+WebSocket opens, and again every few seconds while it is open (`auth.Service.WatchSession`), and
+the auth service also ends the views of an account at once when it is disabled and of a login when
+it is signed out or replaced by a password change or reset: a closed login can't go on typing into
+the user's browser.
+
 ## Processes and the OS boundary
 
 ```
@@ -191,7 +197,9 @@ All under `/api/me/browser`, for the signed-in user's own browser only, like
   the tabs, and when it stops if idle;
 - `POST /api/me/browser/start` and `POST /api/me/browser/stop` (`{"browser": "personal"}`);
 - `GET /api/me/browser/live`: the live view's WebSocket (binary RFB). It checks the session,
-  checks that the Origin is this server, and needs the personal browser to be running.
+  checks that the Origin is this server, and needs the personal browser to be running. The view
+  lasts as long as the login that opened it: signing that login out, from any browser, closes it
+  at once, and a session that ended some other way closes it within seconds (`auth.WatchSession`).
 
 Every route has a test that one user can't see or reach another's browser. The isolation tests
 (root, Linux) cover what one user's process tries against another's:

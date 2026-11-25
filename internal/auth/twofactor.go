@@ -516,6 +516,12 @@ type signIn struct {
 // read here, in the transaction that inserts the session or the challenge, so enrolling
 // that commits meanwhile can't leave a password-only session behind.
 func (s *Service) issueSignIn(ctx context.Context, tx *sql.Tx, userID int64) (signIn, error) {
+	// A disabled account earns neither a session nor a challenge.
+	if off, err := s.isDisabled(ctx, tx, userID); err != nil {
+		return signIn{}, err
+	} else if off {
+		return signIn{}, errAccountDisabled
+	}
 	on, err := s.twoFactorOn(ctx, tx, userID)
 	if err != nil {
 		return signIn{}, err
@@ -695,6 +701,11 @@ func (s *Service) handleLoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errChallengeInvalid):
 		fail()
 		return
+	case errors.Is(err, errAccountDisabled):
+		// Disabled after the password step: no session, whatever the code was.
+		s.loginFailed(r, userID, "account_disabled")
+		accountDisabled(w)
+		return
 	case err == nil && wrong:
 		s.loginFailed(r, userID, "wrong_code")
 		writeError(w, http.StatusUnauthorized, apierr.CodeWrongTwoFactorCode, errWrongCode.Error())
@@ -780,23 +791,9 @@ func (s *Service) handleClearTwoFactor(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	s.endLive(userID, "") // their sessions ended, and their open connections go with them
 	slog.InfoContext(r.Context(), "a member's two-factor login cleared", "user_id", userID, "by", admin.ID, "workspace_id", m.WorkspaceID)
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// administersAll reports whether by is an admin of every workspace userID belongs to: the
-// rule for acting on someone's sign-in (a reset link, clearing their second factor), so that
-// an admin of one workspace can't take over an account that reaches another.
-func administersAll(ctx context.Context, tx *sql.Tx, by, userID int64) (bool, error) {
-	var elsewhere bool
-	err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM memberships t
-			WHERE t.user_id = ? AND NOT EXISTS (
-				SELECT 1 FROM memberships a
-				WHERE a.workspace_id = t.workspace_id AND a.user_id = ? AND a.role = ?))`,
-		userID, by, RoleAdmin).Scan(&elsewhere)
-	return !elsewhere, err
 }
 
 // markTwoFactor sets which of members have two-factor login on, for an admin to see.

@@ -39,6 +39,14 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, workspace := caller(r)
+	// The stream lasts as long as the login that opened it: signing the login out, from anywhere,
+	// ends it at once, and at the latest at the heartbeat's next look at the session.
+	sessionCtx, stopWatch := s.watchSession(r, s.heartbeat)
+	defer stopWatch()
+	if sessionCtx.Err() != nil {
+		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
+		return
+	}
 	closeStream, ok := s.openStream(user)
 	if !ok {
 		writeError(w, http.StatusTooManyRequests, apierr.CodeTooManyStreams,
@@ -46,9 +54,17 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer closeStream()
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithCancel(sessionCtx)
 	defer cancel()
 	defer context.AfterFunc(s.closing, cancel)()
+	if s.watchSession != nil {
+		// The stream lasts as long as the login that opened it, not only as long as its owner
+		// has access now: an account disabled and enabled again between two heartbeats has no
+		// session left, and its stream goes with it.
+		session, stop := s.watchSession(r, s.heartbeat)
+		defer stop()
+		defer context.AfterFunc(session, cancel)()
+	}
 	watch, err := rt.Watch(ctx, c.agentID)
 	if err != nil {
 		conversationError(w, r, c, err)
@@ -123,6 +139,11 @@ func (s *Service) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			case err != nil:
 				if ctx.Err() != nil {
+					// The stream ended while the check ran (the login was signed out, or the server
+					// is shutting down): say so as the end case does, so the client reconnects at once.
+					if r.Context().Err() == nil {
+						_ = out.event(interrupted)
+					}
 					return
 				}
 				failedChecks++

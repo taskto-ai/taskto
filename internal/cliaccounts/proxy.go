@@ -238,7 +238,7 @@ func (s *Service) handleProxy(w http.ResponseWriter, r *http.Request) {
 func (s *Service) proxyAccount(ctx context.Context, c proxyClaims) (sharedRow, string, error) {
 	p, err := conversations.PrincipalOf(ctx, s.db, c.Conversation)
 	if errors.Is(err, conversations.ErrInactive) || (err == nil && p.User != c.User) {
-		return sharedRow{}, "this conversation can't use the workspace's accounts: it is archived, or its owner left the workspace", nil
+		return sharedRow{}, "this conversation can't use the workspace's accounts: it is archived, or its owner left the workspace or was disabled", nil
 	}
 	if err != nil {
 		return sharedRow{}, "", err

@@ -63,7 +63,7 @@ func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	mux.Handle("GET "+base, me(s.handleStatus))
 	mux.Handle("POST "+base+"/start", me(s.handleStart))
 	mux.Handle("POST "+base+"/stop", me(s.handleStop))
-	mux.Handle("GET "+base+"/live", me(s.handleLive))
+	mux.Handle("GET "+base+"/live", me(s.handleLive(a)))
 }
 
 func caller(r *http.Request) int64 {
@@ -190,7 +190,22 @@ func (s *Service) handleStop(w http.ResponseWriter, r *http.Request) {
 // both ways, for noVNC in the page. The upgrade is a GET, which the CSRF guard leaves alone,
 // and a browser sends cookies with a cross-site WebSocket: so the request must come from this
 // server's own pages (sameOrigin) before anything is opened.
-func (s *Service) handleLive(w http.ResponseWriter, r *http.Request) {
+//
+// The session is checked when the view opens, and the view lasts as long as the login does: it
+// ends when the account is disabled or the login is signed out, revoked or replaced by a password
+// change, at once by the auth service's signal and at the latest at its next look every
+// liveRecheck (auth.Service.WatchSession), so a display someone can type into is never left
+// open to a person who no longer has access.
+func (s *Service) handleLive(a *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.live(a, w, r)
+	}
+}
+
+// liveRecheck is how often an open live view looks its login up again.
+var liveRecheck = 5 * time.Second
+
+func (s *Service) live(a *auth.Service, w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
 		writeError(w, http.StatusForbidden, apierr.CodeCrossOrigin, "cross-origin request refused")
 		return
@@ -199,7 +214,13 @@ func (s *Service) handleLive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := caller(r)
-	live, err := s.b.OpenLive(r.Context(), user)
+	ctx, stop := a.WatchSession(r, liveRecheck)
+	defer stop()
+	if ctx.Err() != nil {
+		writeError(w, http.StatusUnauthorized, apierr.CodeNotLoggedIn, "log in first")
+		return
+	}
+	live, err := s.b.OpenLive(ctx, user)
 	if err != nil {
 		browserError(w, r, err)
 		return
@@ -222,12 +243,26 @@ func (s *Service) handleLive(w http.ResponseWriter, r *http.Request) {
 			ws.MaxPayloadBytes = 4 << 20
 			slog.InfoContext(r.Context(), "browser live view opened", "user", user)
 			start := time.Now()
+			// Closing both ends makes the bridge's copies return, so the view ends with its login.
+			go func() {
+				<-ctx.Done()
+				_ = live.Close()
+				closeWS(ws)
+			}()
 			browser.Bridge(live, ws)
-			_ = ws.Close()
+			closeWS(ws)
 			slog.InfoContext(r.Context(), "browser live view closed", "user", user, "after", time.Since(start).Round(time.Second))
 		},
 	}
 	srv.ServeHTTP(w, r)
+}
+
+// closeWS closes ws, giving the close frame a second to be written: a client that has stopped
+// reading would otherwise hold the handler, and with it the session watch and the socket, for
+// as long as it likes.
+func closeWS(ws *websocket.Conn) {
+	_ = ws.SetWriteDeadline(time.Now().Add(time.Second))
+	_ = ws.Close()
 }
 
 // sameOrigin reports whether r comes from this server's own pages. A browser says where a

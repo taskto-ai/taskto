@@ -73,8 +73,18 @@
 // the check: a handler acts for the owner and must check, through access.Checker, every right
 // the work needs (write to a space, an app's role, the target of a card) at the moment it needs
 // it, as close to the write as it can, and return an error that wraps ErrAccessLost if it is
-// refused. Such a job isn't tried again. No handler acts with the authority of whoever scheduled
+// refused. Such a job isn't tried again. An owner whose account is disabled
+// (access.ErrDisabled) has not lost access for good: the job is held, not failed (below). No handler acts with the authority of whoever scheduled
 // it, or of the server.
+//
+// # A disabled owner's jobs wait
+//
+// An account an admin has disabled keeps everything it owns and gets its access back as it was when
+// it is enabled. Its jobs therefore neither run nor fail: the worker finds the owner disabled
+// (ErrOwnerDisabled, or access.ErrDisabled from a handler's own check), puts the job back to
+// pending to look again after holdDelay, without using up the try, recording nothing as a failure
+// (a recurring job's occurrences are not counted as failed runs), and calls no handler. Enabling the
+// account lets them run at the next look, a recurring one on its own grid from then on.
 package schedule
 
 import (
@@ -110,6 +120,10 @@ var (
 	// ErrAccessLost is what a job fails with when its owner may no longer do its work. A handler
 	// returns it (or an error wrapping it) when the owner's access is refused.
 	ErrAccessLost = errors.New("the job's owner no longer has access")
+	// ErrOwnerDisabled is what the worker finds when a job's owner's account is disabled: the job
+	// is held until it is enabled, not failed. A handler may return it, or an error wrapping
+	// access.ErrDisabled, for the same.
+	ErrOwnerDisabled = errors.New("the job's owner's account is disabled")
 	// ErrUnknownKind is a kind with no handler.
 	ErrUnknownKind = errors.New("no handler is registered for that kind")
 	// ErrInvalid is a job that can't be scheduled as it is.
@@ -164,6 +178,8 @@ const (
 	MaxFailedRuns = 10
 	backoffBase   = 5 * time.Second
 	backoffMax    = 5 * time.Minute
+	// holdDelay is how long a job of a disabled owner waits before the worker looks again.
+	holdDelay = time.Minute
 	// keepFinished is how long a job that is done or has failed is kept, for its dedupe key and its
 	// error to be seen.
 	keepFinished = 7 * 24 * time.Hour
@@ -901,6 +917,8 @@ func (s *Service) authorize(ctx context.Context, j Job) error {
 	if j.SpaceID != 0 {
 		sp, err := s.access.Check(ctx, j.UserID, j.SpaceID)
 		switch {
+		case errors.Is(err, access.ErrDisabled):
+			return ErrOwnerDisabled
 		case errors.Is(err, access.ErrNotFound):
 			return ErrAccessLost
 		case err != nil:
@@ -915,6 +933,12 @@ func (s *Service) authorize(ctx context.Context, j Job) error {
 		return err
 	}
 	if len(spaces) == 0 {
+		// A disabled account sees no spaces: that is no loss of access to fail the job for.
+		if off, err := s.access.Disabled(ctx, j.UserID); err != nil {
+			return err
+		} else if off {
+			return ErrOwnerDisabled
+		}
 		return ErrAccessLost
 	}
 	return nil
@@ -1003,6 +1027,8 @@ func (s *Service) succeed(ctx context.Context, j Job) error {
 func (s *Service) fail(ctx context.Context, j Job, cause error) error {
 	var perm permanent
 	switch {
+	case errors.Is(cause, ErrOwnerDisabled), errors.Is(cause, access.ErrDisabled):
+		return s.hold(ctx, j)
 	case errors.Is(cause, ErrAccessLost):
 		slog.Info("schedule: job's owner lost access", "job", j.ID, "kind", j.Kind)
 		return s.end(ctx, j, "access lost")
@@ -1020,6 +1046,19 @@ func (s *Service) fail(ctx context.Context, j Job, cause error) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE scheduled_jobs SET state = 'pending', retry_at = ?, lease_until = NULL, last_error = ?, updated_at = ?
 			WHERE id = ?`, stamp(t.Add(wait)), reason, stamp(t), j.ID)
+		return err
+	})
+}
+
+// hold puts a job whose owner is disabled back to pending, to be looked at again after holdDelay,
+// with the try it took given back, and nothing noted as a failure. Nothing changes if the worker no
+// longer holds the job.
+func (s *Service) hold(ctx context.Context, j Job) error {
+	slog.Info("schedule: job's owner is disabled; holding it", "job", j.ID, "kind", j.Kind)
+	return s.settle(ctx, j, func(tx *sql.Tx, t time.Time) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE scheduled_jobs SET state = 'pending', retry_at = ?, attempts = max(attempts - 1, 0), lease_until = NULL, updated_at = ?
+			WHERE id = ?`, stamp(t.Add(holdDelay)), stamp(t), j.ID)
 		return err
 	})
 }

@@ -529,13 +529,15 @@ export type CardWithThread = Card & { comments: Comment[] }
 
 export const ws = (workspace: number) => `/api/workspaces/${workspace}`
 
-// two_factor is the admins' view only: whether the member has two-factor login on.
+// two_factor is the admins' view only: whether the member has two-factor login on. disabled is
+// an admin having switched the account off: signed out, refused at login, everything kept.
 export type Member = {
   id: number
   email: string
   name: string
   role: 'admin' | 'member'
   joined_at: string
+  disabled?: boolean
   two_factor?: boolean
 }
 // One event of a workspace's audit log, with the names read when the log was (docs/audit.md).
@@ -570,6 +572,19 @@ export type Token = {
   created_at: string
   expires_at: string | null
   last_used_at: string | null
+}
+
+// One of your own sessions (a browser or device logged in as you), without its token, which the
+// server never sends. browser and os are the products' names, or "" when it couldn't tell.
+export type Session = {
+  // The session's public ID: random, never reused, and no way into the session.
+  id: string
+  browser: string
+  os: string
+  created_at: string
+  last_seen_at: string
+  expires_at: string
+  current: boolean
 }
 
 export type Model = { id: string; name?: string; context_window?: number; max_tokens?: number; reasoning?: boolean }
