@@ -1,6 +1,10 @@
 import { useT } from '../i18n'
+import { Checkbox } from '../ui/Checkbox'
+import { Label } from '../ui/Label'
+import { Menu, MenuButton, MenuItem, MenuList, MenuSeparator } from '../ui/Menu'
+import { Toolbar } from '../ui/Toolbar'
 
-// The board's filters: a label among the board's, and only the overdue cards.
+// The board's filters: a label among the board's (a menu), and only the overdue cards.
 export function BoardFilters({
   labels,
   label,
@@ -15,25 +19,30 @@ export function BoardFilters({
   onOverdueOnly: (overdueOnly: boolean) => void
 }) {
   const t = useT()
+  const name = t('boards.filterLabel')
   return (
-    <fieldset className="tt-board-filters" aria-label={t('boards.filters')}>
+    <Toolbar label={t('boards.filters')} className="ui-board-filters">
       {labels.length > 0 && (
-        <label className="tt-inline-field">
-          {t('boards.filterLabel')}
-          <select value={label} onChange={(e) => onLabel(e.target.value)}>
-            <option value="">{t('boards.allLabels')}</option>
+        <Menu align="start">
+          <MenuButton label={name}>{label || t('boards.allLabels')}</MenuButton>
+          <MenuList>
+            <MenuItem icon={label === '' ? 'check' : undefined} onSelect={() => onLabel('')}>
+              {t('boards.allLabels')}
+            </MenuItem>
+            <MenuSeparator />
             {labels.map((l) => (
-              <option key={l} value={l}>
-                {l}
-              </option>
+              <MenuItem key={l} icon={l === label ? 'check' : undefined} onSelect={() => onLabel(l)}>
+                <Label name={l} />
+              </MenuItem>
             ))}
-          </select>
-        </label>
+          </MenuList>
+        </Menu>
       )}
-      <label className="tt-inline-field">
-        <input type="checkbox" checked={overdueOnly} onChange={(e) => onOverdueOnly(e.target.checked)} />
-        {t('boards.overdueOnly')}
-      </label>
-    </fieldset>
+      <Checkbox
+        label={t('boards.overdueOnly')}
+        checked={overdueOnly}
+        onChange={(e) => onOverdueOnly(e.target.checked)}
+      />
+    </Toolbar>
   )
 }
