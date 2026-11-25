@@ -56,6 +56,15 @@ export interface TooltipProps {
   side?: 'block' | 'inline-end'
 }
 
+// Whether the focus came back to the control from what it opened (its menu, closed by Escape or by
+// a choice): not a new arrival, so its tooltip doesn't open, and the next Escape is for what is
+// under it (a drawer), not for a tooltip that just came.
+function fromOwnPopup(control: Element, from: EventTarget | null): boolean {
+  const controlled = control.getAttribute('aria-controls')
+  const popup = controlled ? document.getElementById(controlled) : null
+  return from instanceof Node && popup !== null && popup.contains(from)
+}
+
 // Whether the tooltip can be seen: a stylesheet may hide one that is open (a sidebar's labels are
 // written out where it is wide). A browser without checkVisibility goes by the computed display.
 function visible(el: HTMLElement): boolean {
@@ -74,15 +83,6 @@ function listenForInput() {
   listening = true
   document.addEventListener('keydown', () => (lastInput = 'keyboard'), true)
   document.addEventListener('pointerdown', () => (lastInput = 'pointer'), true)
-}
-
-// Whether the focus came back to the control from what it opened (its menu, closed by Escape or by
-// a choice): not a new arrival, so its tooltip doesn't open, and the next Escape is for what is
-// under it (a drawer), not for a tooltip that just came.
-function fromOwnPopup(control: Element, from: EventTarget | null): boolean {
-  const controlled = control.getAttribute('aria-controls')
-  const popup = controlled ? document.getElementById(controlled) : null
-  return from instanceof Node && popup !== null && popup.contains(from)
 }
 
 // Whether this focus came from the keyboard: the last input was a key, and the browser shows the
