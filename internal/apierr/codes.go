@@ -407,4 +407,11 @@ const (
 	CodeEmailVerifyInvalid       Code = "notification_email_verification_invalid"     // 400: the confirmation link is unknown, used, expired or for an address the person no longer has
 	CodeEmailVerifyTooSoon       Code = "notification_email_verification_too_soon"    // 429: a link was sent a moment ago; params: seconds to wait
 	CodeEmailVerifyUnavailable   Code = "notification_email_verification_unavailable" // 502: the confirmation mail couldn't be sent
+
+	// The operator's "Update now" (internal/server/updates.go, docs/api.md#update-now).
+
+	CodeUpdateRequestUnsupported Code = "update_request_unsupported" // 409: no request directory, or the host's updater or its path unit can't take one (deploy/INSTALL.md step 16)
+	CodeUpdateChannelOff         Code = "update_channel_off"         // 409: the updater's channel is off
+	CodeUpdateRequestPending     Code = "update_request_pending"     // 409: a request waits for the host to take it
+	CodeUpdateRunning            Code = "update_running"             // 409: a run is changing the install
 )

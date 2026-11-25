@@ -764,6 +764,10 @@
     "workspace_limit": "You have created {max} workspaces, the most one account can. Ask the person who runs this server.",
     "too_many_workspaces": "You created several workspaces just now. Try again in a while.",
     "operator_only": "Only the people who run this server can do this.",
+    "update_request_unsupported": "This server can't take an update request yet: its host's updater needs setting up again (step 16 of the install runbook).",
+    "update_channel_off": "Automatic updates are off on this server (the channel is off), so there is nothing to update to.",
+    "update_request_pending": "An update is already requested. The server's host takes it in a moment.",
+    "update_running": "An update is running now. This page follows it.",
     "workspace_name_length": "A workspace name needs 1 to {max} characters.",
     "password_too_short": "The password needs at least {min} characters.",
     "password_too_long": "The password can have at most {max} bytes.",
@@ -1342,7 +1346,23 @@
       },
       "updates": {
         "title": "Updates",
-        "intro": "The server's host updates it by itself (docs/install.md, Automatic updates). This is what its updater last reported; the server only reads it, and can't run or change the updater.",
+        "intro": "The server's host updates it by itself (docs/install.md, Automatic updates). This is what its updater last reported. The server can't run or change the updater: Update now only asks it, with a request that names no version.",
+        "now": {
+          "button": "Update now",
+          "question": "The host installs the newest version of its channel, with the same checks as the nightly run, after a backup. The server restarts, so this page reconnects in a few minutes. Update now?",
+          "confirm": "Yes, update now",
+          "requested": "Update requested. Waiting for the host to start it…",
+          "updating": "Updating. The server restarts during this; the page reconnects by itself and shows the result.",
+          "reconnecting": "The server isn't answering (it restarts during an update). Trying again…",
+          "gaveUp": "The host hasn't started the update. Check that its path unit is on (systemctl status taskto-update-request.path) and look at its journal (journalctl -u taskto-update-request).",
+          "outcome": "The update you asked for: {result}.",
+          "hint": "Once that is dealt with, to install anyway run {command} on the host.",
+          "unavailable": {
+            "not_configured": "This server isn't set up to take an update request (it has no request directory). The install guide (docs/install.md, Update now) says how.",
+            "unsupported": "The host can't take an update request yet: its updater, its request directory or its path unit is from before this button. Reinstall it as step 16 of the install runbook (deploy/INSTALL.md) says.",
+            "off": "Update now is off while automatic updates are off (the channel is off)."
+          }
+        },
         "notConfigured": "This server isn't set up to show the updater's status. The install guide (docs/install.md, Automatic updates) says how.",
         "noStatus": "The updater hasn't reported yet. It reports after each run, which is every night on the host; until it has run once there is nothing to show.",
         "health": {
@@ -1386,6 +1406,7 @@
           "blocked": "Refused to run",
           "interrupted": "Interrupted",
           "cleared": "A person cleared a stop",
+          "ignored": "Turned away",
           "unknown": "Unknown"
         },
         "channelHold": "{channel} (on hold)",
@@ -1416,7 +1437,9 @@
           "rollback-failed": "The update failed and the old version couldn't be put back.",
           "interrupted": "An update was interrupted and neither finished nor was undone.",
           "rolled-back": "The update failed and the old version was put back.",
-          "unrecorded-failure": "An update was rolled back, but the release couldn't be recorded as failed."
+          "unrecorded-failure": "An update was rolled back, but the release couldn't be recorded as failed.",
+          "rate-limited": "A requested update ran a few minutes ago, so this request was turned away. Try again later.",
+          "bad-request": "The request wasn't a small regular file, so the host removed it and did nothing."
         }
       }
     },
@@ -1734,6 +1757,7 @@
         "dictation_settings_changed": "Dictation settings changed",
         "data_export_started": "Data export started",
         "workspace_export_started": "Workspace export started",
+        "server_update_requested": "Update requested",
         "two_factor_enabled": "Two-factor login turned on",
         "two_factor_disabled": "Two-factor login turned off",
         "two_factor_recovery_codes_replaced": "Recovery codes replaced",
@@ -1757,6 +1781,7 @@
         "archived": "Archived",
         "base_host": "Server",
         "cascade": "Followed from another change",
+        "channel": "Channel",
         "cli": "CLI",
         "created_account": "Account created",
         "default_mode": "Default mode",
