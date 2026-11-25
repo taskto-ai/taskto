@@ -177,3 +177,48 @@ test('opening the records scrolls the page to the panel’s top, leaving the hea
   await screen.findByRole('region', { name: 'Records and history' })
   await waitFor(() => expect(page.scrollTop).toBe(700))
 })
+
+test('closing the records with an unsaved change in a record asks first, from the header and from the panel', async () => {
+  const lunch = {
+    id: 4,
+    revision: 2,
+    data: { description: 'Lunch' },
+    created_at: '2026-11-01T10:00:00.000Z',
+    created_by: null,
+    updated_at: '2026-11-02T10:00:00.000Z',
+    updated_by: null,
+    deleted_at: null,
+    deleted_by: null,
+  }
+  const editable = app({
+    live: { ...app().live, definition: { ...definition, actions: { edit: { kind: 'update' } } } },
+  })
+  fakeFetch({
+    [`GET ${base}`]: { body: editable },
+    [`GET ${base}/surface?release=1`]: { body: surface },
+    [`GET ${base}/effects`]: { body: { effects: [], active: 0, failed: 0 } },
+    [`GET ${base}/records/query`]: { body: { records: [lunch], next_cursor: null, total: 1, aggregates: [] } },
+    [`GET ${base}/records/4/history`]: { body: { record: lunch, history: [], truncated: false } },
+  })
+  render(<LaunchedApp workspace={1} space={2} app={1} writable />)
+  const toggle = await screen.findByRole('button', { name: 'Records and history' })
+  fireEvent.click(toggle)
+  fireEvent.click(await screen.findByRole('button', { name: 'Open record 4' }))
+  const drawer = await screen.findByRole('region', { name: 'Record 4' })
+  const description = (await waitFor(() => within(drawer).getByLabelText(/^description/))) as HTMLInputElement
+  fireEvent.change(description, { target: { value: 'Team lunch' } })
+  const ask = () => screen.findByRole('alertdialog', { name: 'Discard your changes to this record?' })
+
+  // The header's toggle: asked, kept.
+  fireEvent.click(toggle)
+  fireEvent.click(within(await ask()).getByRole('button', { name: 'Keep editing' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(screen.getByRole('region', { name: 'Records and history' })).toBeTruthy()
+  expect((within(drawer).getByLabelText(/^description/) as HTMLInputElement).value).toBe('Team lunch')
+
+  // The panel's own close: asked, and discarding closes it.
+  const panel = screen.getByRole('region', { name: 'Records and history' })
+  fireEvent.click(within(panel).getByRole('button', { name: 'Hide records and history' }))
+  fireEvent.click(within(await ask()).getByRole('button', { name: 'Discard my changes' }))
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Records and history' })).toBeNull())
+})
