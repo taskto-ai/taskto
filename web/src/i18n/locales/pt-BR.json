@@ -1633,6 +1633,7 @@
         "workspace_created": "Espaço de trabalho criado",
         "workspace_updated": "Configurações do espaço de trabalho alteradas",
         "invite_created": "Convite enviado",
+        "invite_emailed": "Convite enviado por e-mail",
         "invite_revoked": "Convite cancelado",
         "invite_accepted": "Convite aceito",
         "member_role_changed": "Papel de um membro alterado",

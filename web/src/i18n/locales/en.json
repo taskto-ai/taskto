@@ -1621,6 +1621,7 @@
         "workspace_created": "Workspace created",
         "workspace_updated": "Workspace settings changed",
         "invite_created": "Invite sent",
+        "invite_emailed": "Invite emailed",
         "invite_revoked": "Invite withdrawn",
         "invite_accepted": "Invite accepted",
         "member_role_changed": "Member role changed",
