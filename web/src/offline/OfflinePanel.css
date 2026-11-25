@@ -1,0 +1,45 @@
+/* "Offline use" under a launched app (OfflinePanel): quiet, after the app and its records, set off by
+   a rule rather than a panel of its own. Its one action is secondary. */
+
+@layer screens {
+  .ui-offline {
+    display: grid;
+    gap: var(--space-2);
+    padding-block-start: var(--space-4);
+    border-block-start: var(--line-thin) solid var(--color-border);
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-offline-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .ui-offline-state {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .ui-offline-ready {
+    display: grid;
+    gap: var(--space-1);
+    flex: 1 1 calc(var(--space-16) * 4);
+    min-inline-size: 0;
+  }
+
+  .ui-offline-status,
+  .ui-offline-note {
+    margin: 0;
+  }
+
+  .ui-offline-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+}
