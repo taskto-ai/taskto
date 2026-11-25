@@ -337,6 +337,13 @@ test('sees the classes of an array a component builds its className from, whatev
   expect(r.err).toContain('ui-missing is used but no rule')
   expect(r.err).not.toContain('ui-a is used')
   expect(r.err).not.toContain('ui-a-big is used')
+  // With a type on the constant too.
+  const typed = run('.ui-a { color: inherit; }\n', {
+    'C.tsx':
+      "export function C() {\n  const cls: string[] = ['ui-a', 'ui-untyped']\n  return <p className={cls.join(' ')}>x</p>\n}\n",
+  })
+  expect(typed.code).toBe(1)
+  expect(typed.err).toContain('ui-untyped is used but no rule')
   // An array of words that are not classes is not a problem.
   const words = run('.ui-a { color: inherit; }\n', {
     'B.tsx': "const names = ['launch', 'design']\nexport const B = () => <p className=\"ui-a\">{names[0]}</p>\n",
