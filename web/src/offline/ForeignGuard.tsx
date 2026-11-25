@@ -4,7 +4,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useT } from '../i18n'
-import { ConfirmButton } from '../settings/parts'
+import { ConfirmButton } from './ConfirmButton'
 
 export function ForeignGuard({
   count,

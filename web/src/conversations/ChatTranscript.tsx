@@ -3,6 +3,10 @@
 
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useT } from '../i18n'
+import { AgentDot } from '../ui/AgentDot'
+import { Button } from '../ui/Button'
+import { EmptyState } from '../ui/EmptyState'
+import { Notice } from '../ui/Notice'
 import { Message } from './Message'
 import type { ChatMessage, ToolUse } from './transcript'
 
@@ -62,26 +66,34 @@ export function ChatTranscript({
 
   return (
     <div
-      className="tt-transcript"
+      className="ui-chat-transcript"
       ref={scroller}
       onScroll={(e) => {
         const el = e.currentTarget
         atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_PX
       }}
     >
-      {truncated && (
-        <div className="tt-earlier">
-          <button type="button" className="tt-button" onClick={loadEarlier} disabled={loadingEarlier}>
-            {loadingEarlier ? t('app.loading') : t('conversations.loadEarlier')}
-          </button>
-          {earlierError && <p className="tt-error tt-small">{earlierError}</p>}
-        </div>
-      )}
-      {started && messages.length === 0 && <p className="tt-muted tt-center-text">{t('conversations.start')}</p>}
-      {messages.map((m) => (
-        <Message key={m.key} message={m} workspace={workspace} apps={apps} />
-      ))}
-      {running && !last?.pending && <p className="tt-muted tt-small">{t('conversations.agentWorkingLive')}</p>}
+      {/* At a reading width, in the middle of the pane. */}
+      <div className="ui-chat-column">
+        {truncated && (
+          <div className="ui-chat-earlier">
+            <Button size="sm" onClick={loadEarlier} disabled={loadingEarlier}>
+              {loadingEarlier ? t('app.loading') : t('conversations.loadEarlier')}
+            </Button>
+            {earlierError && <Notice tone="danger">{earlierError}</Notice>}
+          </div>
+        )}
+        {started && messages.length === 0 && <EmptyState title={t('conversations.start')} />}
+        {messages.map((m) => (
+          <Message key={m.key} message={m} workspace={workspace} apps={apps} />
+        ))}
+        {running && !last?.pending && (
+          <p className="ui-chat-working">
+            <AgentDot />
+            {t('conversations.agentWorkingLive')}
+          </p>
+        )}
+      </div>
     </div>
   )
 }

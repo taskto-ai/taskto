@@ -670,7 +670,12 @@ test('with nothing changed, Escape closes the drawer at once', async () => {
 
 test('the record’s form leaves required fields to the server: the browser never blocks a save', async () => {
   await editing()
-  // description is required in the definition; the mark says so, the input doesn't refuse.
-  expect((field('description') as HTMLInputElement).required).toBe(false)
-  expect(within(drawer()).getByText('description').closest('label')?.textContent).toContain('*')
+  // description is required in the definition: the mark shows it and aria-required says it, while the
+  // input itself doesn't refuse an empty value (the server answers that, as it always has).
+  const description = field('description') as HTMLInputElement
+  expect(description.required).toBe(false)
+  expect(description.getAttribute('aria-required')).toBe('true')
+  expect(within(drawer()).getByText('description').closest('.ui-field')?.textContent).toContain('*')
+  // A field that isn't required says nothing of it.
+  expect(field('amount').getAttribute('aria-required')).toBeNull()
 })

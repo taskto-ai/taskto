@@ -3,16 +3,28 @@
 // and never comes back: the API answers "set" or "not set", so the form only ever offers to
 // replace or remove it.
 
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useId, useState } from 'react'
 import { api, codeText, type Model, type ProviderAccount, type ProviderCheck, ws } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, ConfirmButton, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { Checkbox } from '../ui/Checkbox'
+import { type ConfirmOptions, useConfirm } from '../ui/ConfirmDialog'
+import { Dialog } from '../ui/Dialog'
+import { EmptyState } from '../ui/EmptyState'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { MenuItem, MenuSeparator, MoreMenu } from '../ui/Menu'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { Textarea } from '../ui/Textarea'
+import { Alert, Loading, Section, SettingsTab, useAction } from './parts'
 
 export function ProvidersTab({ workspace, admin }: { workspace: number; admin: boolean }) {
   const t = useT()
   return (
-    <div className="tt-settings">
+    <SettingsTab title={t('settings.tabs.providers')} help={t('settings.help.providers')}>
       <Accounts
         title={t('settings.providers.workspaceTitle')}
         base={`${ws(workspace)}/providers`}
@@ -25,41 +37,41 @@ export function ProvidersTab({ workspace, admin }: { workspace: number; admin: b
         editable
         intro={t('settings.providers.ownIntro')}
       />
-    </div>
+    </SettingsTab>
   )
 }
 
 function Accounts({ title, base, editable, intro }: { title: string; base: string; editable: boolean; intro: string }) {
   const accounts = useLoad(() => api<{ providers: ProviderAccount[] }>(base).then((r) => r.providers), [base])
   const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [confirmDialog, confirm] = useConfirm()
   const t = useT()
   const done = () => {
     setEditing(null)
     accounts.reload()
   }
+  const add = (
+    <Button icon="plus" onClick={() => setEditing('new')}>
+      {t('settings.providers.add')}
+    </Button>
+  )
+  const empty = accounts.data?.length === 0
+  const account = typeof editing === 'number' ? accounts.data?.find((a) => a.id === editing) : undefined
   return (
-    <section className="tt-panel" aria-label={title}>
-      <div className="tt-pane-head">
-        <h2>{title}</h2>
-        {editable && editing !== 'new' && (
-          <button type="button" className="tt-button" onClick={() => setEditing('new')}>
-            {t('settings.providers.add')}
-          </button>
-        )}
-      </div>
-      <p className="tt-muted tt-small">{intro}</p>
+    <Section title={title} help={intro} actions={editable && !empty && add}>
       <Alert error={accounts.error} />
-      {editing === 'new' && <AccountForm base={base} onDone={done} onCancel={() => setEditing(null)} />}
-      {!accounts.data && !accounts.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {accounts.data?.length === 0 && editing !== 'new' && <p className="tt-muted">{t('settings.actions.none')}</p>}
+      {!accounts.data && !accounts.error && <Loading lines={2} />}
+      {empty && (
+        <Panel>
+          <EmptyState title={t('settings.providers.none')} actions={editable && add}>
+            {editable && t('settings.providers.noneHelp')}
+          </EmptyState>
+        </Panel>
+      )}
       {accounts.data && accounts.data.length > 0 && (
-        <ul className="tt-rows">
-          {accounts.data.map((a) =>
-            editing === a.id ? (
-              <li key={a.id} className="tt-row tt-row-open">
-                <AccountForm base={base} account={a} onDone={done} onCancel={() => setEditing(null)} />
-              </li>
-            ) : (
+        <Panel>
+          <Rows label={title}>
+            {accounts.data.map((a) => (
               <AccountRow
                 key={a.id}
                 base={base}
@@ -67,12 +79,23 @@ function Accounts({ title, base, editable, intro }: { title: string; base: strin
                 editable={editable}
                 onEdit={() => setEditing(a.id)}
                 onRemoved={done}
+                confirm={confirm}
               />
-            ),
-          )}
-        </ul>
+            ))}
+          </Rows>
+        </Panel>
       )}
-    </section>
+      {(editing === 'new' || account) && (
+        <AccountForm
+          key={account?.id ?? 'new'}
+          base={base}
+          account={account}
+          onDone={done}
+          onCancel={() => setEditing(null)}
+        />
+      )}
+      {confirmDialog}
+    </Section>
   )
 }
 
@@ -82,12 +105,14 @@ function AccountRow({
   editable,
   onEdit,
   onRemoved,
+  confirm,
 }: {
   base: string
   account: ProviderAccount
   editable: boolean
   onEdit: () => void
   onRemoved: () => void
+  confirm: Confirm
 }) {
   const [check, setCheck] = useState<ProviderCheck | null>(null)
   const action = useAction()
@@ -97,69 +122,94 @@ function AccountRow({
     setCheck(null)
     action.run(async () => setCheck(await api<ProviderCheck>(`${base}/${a.id}/test`, { method: 'POST' })))
   }
-  const remove = () => action.run(() => api(`${base}/${a.id}`, { method: 'DELETE' })).then((ok) => ok && onRemoved())
+  const remove = async () => {
+    const yes = await confirm({
+      title: t('settings.providers.removeQuestion', { name: a.display_name }),
+      confirmLabel: t('settings.actions.removeConfirm'),
+      tone: 'danger',
+    })
+    if (yes) action.run(() => api(`${base}/${a.id}`, { method: 'DELETE' })).then((ok) => ok && onRemoved())
+  }
 
   return (
-    <li className="tt-row" aria-label={a.display_name}>
-      <div className="tt-row-main">
-        <strong>{a.display_name}</strong>
-        <span className="tt-muted tt-small">
-          <code>{a.provider}</code>
-          {' · '}
-          <code>{a.base_url}</code>
-        </span>
-        <span className="tt-muted tt-small">
-          {a.api_key === 'set' ? t('settings.providers.keySet') : t('settings.providers.keyNotSet')}
-          {' · '}
-          {f.list(a.models.map((m) => m.name || m.id))}
-        </span>
-        {action.busy && !check && <span className="tt-muted tt-small">{t('settings.providers.testing')}</span>}
-        {check?.ok && (
-          <span className="tt-ok tt-small" role="status">
-            {check.missing?.length
-              ? t('settings.providers.answeredMissing', { models: f.list(check.missing) })
-              : t('settings.providers.answeredAll')}
+    <Row
+      title={a.display_name}
+      status={
+        <>
+          {check?.ok && (
+            <Badge tone="success" dot>
+              {t('settings.providers.answered')}
+            </Badge>
+          )}
+          {check && !check.ok && (
+            <Badge tone="danger" dot>
+              {t('settings.providers.failing')}
+            </Badge>
+          )}
+          {a.api_key === 'set' ? (
+            <Badge>{t('settings.providers.keySet')}</Badge>
+          ) : (
+            <Badge>{t('settings.providers.keyNotSet')}</Badge>
+          )}
+        </>
+      }
+      detail={
+        <span className="settings-row-extra">
+          <span>
+            <code>{a.provider}</code>
+            {' · '}
+            <code>{a.base_url}</code>
           </span>
-        )}
-        {check && !check.ok && (
-          <span className="tt-error tt-small" role="alert">
-            {codeText(check.code, check.params, check.error ?? '')}
-          </span>
-        )}
-        <Alert error={action.error} />
-      </div>
-      {editable && (
-        <div className="tt-row-actions">
-          <button
-            type="button"
-            className="tt-button"
-            aria-label={t('settings.actions.testNamed', { name: a.display_name })}
-            disabled={action.busy}
-            onClick={test}
-          >
-            {t('settings.actions.test')}
-          </button>
-          <button
-            type="button"
-            className="tt-button"
-            aria-label={t('settings.actions.editNamed', { name: a.display_name })}
-            onClick={onEdit}
-          >
-            {t('settings.actions.edit')}
-          </button>
-          <ConfirmButton
-            label={t('settings.actions.remove')}
-            name={a.display_name}
-            question={t('settings.providers.removeQuestion', { name: a.display_name })}
-            confirm={t('settings.actions.removeConfirm')}
-            disabled={action.busy}
-            onConfirm={remove}
-          />
-        </div>
-      )}
-    </li>
+          <span>{f.list(a.models.map((m) => m.name || m.id))}</span>
+          {action.busy && !check && <span>{t('settings.providers.testing')}</span>}
+          {check?.ok && (
+            <span role="status">
+              {check.missing?.length
+                ? t('settings.providers.answeredMissing', { models: f.list(check.missing) })
+                : t('settings.providers.answeredAll')}
+            </span>
+          )}
+          {check && !check.ok && (
+            <span role="alert" className="settings-error-text">
+              {codeText(check.code, check.params, check.error ?? '')}
+            </span>
+          )}
+          {action.error && (
+            <span role="alert" className="settings-error-text">
+              {action.error}
+            </span>
+          )}
+        </span>
+      }
+      actions={
+        editable && (
+          <>
+            <Button
+              size="sm"
+              aria-label={t('settings.actions.testNamed', { name: a.display_name })}
+              loading={action.busy && !check}
+              disabled={action.busy}
+              onClick={test}
+            >
+              {t('settings.actions.test')}
+            </Button>
+            <MoreMenu label={t('settings.moreFor', { name: a.display_name })}>
+              <MenuItem icon="edit" onSelect={onEdit}>
+                {t('settings.actions.edit')}
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem tone="danger" onSelect={remove} disabled={action.busy}>
+                {t('settings.actions.remove')}
+              </MenuItem>
+            </MoreMenu>
+          </>
+        )
+      }
+    />
   )
 }
+
+type Confirm = (options: ConfirmOptions) => Promise<boolean>
 
 // One model ID per line; a model kept from before keeps its other settings.
 function parseModels(text: string, before: Model[]): Model[] {
@@ -191,6 +241,7 @@ function AccountForm({
   const action = useAction()
   const t = useT()
   const hasKey = account?.api_key === 'set'
+  const formId = useId()
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -211,103 +262,81 @@ function AccountForm({
     if (ok) onDone()
   }
 
+  const label = account
+    ? t('settings.actions.editNamed', { name: account.display_name })
+    : t('settings.providers.newAccount')
   return (
-    <form
-      className="tt-form"
-      onSubmit={submit}
-      aria-label={
-        account ? t('settings.actions.editNamed', { name: account.display_name }) : t('settings.providers.newAccount')
+    <Dialog
+      open
+      onClose={onCancel}
+      title={label}
+      actions={
+        <>
+          <Button onClick={onCancel}>{t('common.cancel')}</Button>
+          <Button type="submit" form={formId} variant="primary" loading={action.busy}>
+            {account ? t('settings.actions.save') : t('settings.actions.add')}
+          </Button>
+        </>
       }
     >
-      {!account && (
-        <>
-          <label>
-            {t('settings.actions.name')}
-            <input
+      <form id={formId} className="settings-form" onSubmit={submit} aria-label={label}>
+        {!account && (
+          <Field label={t('settings.actions.name')} hint={t('settings.providers.nameHint')} required>
+            <Input
               value={form.name}
               onChange={set('name')}
-              required
               maxLength={40}
               pattern="[a-z0-9][a-z0-9._\-]*"
               autoComplete="off"
               spellCheck={false}
-              aria-describedby="tt-name-hint"
+              data-autofocus
             />
-          </label>
-          <span id="tt-name-hint" className="tt-hint">
-            {t('settings.providers.nameHint')}
-          </span>
-        </>
-      )}
-      <label>
-        {t('settings.providers.displayName')}
-        <input value={form.display_name} onChange={set('display_name')} maxLength={100} placeholder={form.name} />
-      </label>
-      <label>
-        {t('settings.actions.baseUrl')}
-        <input
-          type="url"
-          value={form.base_url}
-          onChange={set('base_url')}
-          required
-          placeholder="http://localhost:11434/v1"
-          spellCheck={false}
-          aria-describedby="tt-url-hint"
-        />
-      </label>
-      <span id="tt-url-hint" className="tt-hint">
-        {t('settings.providers.urlHint')}
-      </span>
-      <label>
-        {hasKey ? t('settings.actions.newApiKey') : t('settings.actions.apiKey')}
-        <input
-          type="password"
-          value={form.api_key}
-          onChange={set('api_key')}
-          autoComplete="new-password"
-          spellCheck={false}
-          placeholder={hasKey ? t('settings.actions.keepKey') : t('settings.actions.optional')}
-          aria-describedby="tt-key-hint"
-        />
-      </label>
-      <span id="tt-key-hint" className="tt-hint">
-        {hasKey ? t('settings.providers.keyHintStored') : t('settings.providers.keyHint')}
-      </span>
-      {hasKey && (
-        <label className="tt-check">
-          <input
-            type="checkbox"
+          </Field>
+        )}
+        <Field label={t('settings.providers.displayName')}>
+          <Input value={form.display_name} onChange={set('display_name')} maxLength={100} placeholder={form.name} />
+        </Field>
+        <Field label={t('settings.actions.baseUrl')} hint={t('settings.providers.urlHint')} required>
+          <Input
+            type="url"
+            value={form.base_url}
+            onChange={set('base_url')}
+            placeholder="http://localhost:11434/v1"
+            spellCheck={false}
+          />
+        </Field>
+        <Field
+          label={hasKey ? t('settings.actions.newApiKey') : t('settings.actions.apiKey')}
+          hint={hasKey ? t('settings.providers.keyHintStored') : t('settings.providers.keyHint')}
+        >
+          <Input
+            type="password"
+            value={form.api_key}
+            onChange={set('api_key')}
+            autoComplete="new-password"
+            spellCheck={false}
+            placeholder={hasKey ? t('settings.actions.keepKey') : t('settings.actions.optional')}
+          />
+        </Field>
+        {hasKey && (
+          <Checkbox
+            label={t('settings.providers.removeKey')}
             checked={form.remove_key}
             disabled={form.api_key.trim() !== ''}
             onChange={(e) => setForm((f) => ({ ...f, remove_key: e.target.checked }))}
           />
-          {t('settings.providers.removeKey')}
-        </label>
-      )}
-      <label>
-        {t('settings.providers.models')}
-        <textarea
-          value={form.models}
-          onChange={set('models')}
-          required
-          rows={3}
-          spellCheck={false}
-          placeholder="llama3.1:8b"
-          aria-describedby="tt-models-hint"
-        />
-      </label>
-      <span id="tt-models-hint" className="tt-hint">
-        {t('settings.providers.modelsHint')}
-      </span>
-      <Alert error={action.error} />
-      <div className="tt-row-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={action.busy}>
-          {account ? t('settings.actions.save') : t('settings.actions.add')}
-        </button>
-        <button type="button" className="tt-button" onClick={onCancel}>
-          {t('common.cancel')}
-        </button>
-      </div>
-    </form>
+        )}
+        <Field label={t('settings.providers.models')} hint={t('settings.providers.modelsHint')} required>
+          <Textarea
+            value={form.models}
+            onChange={set('models')}
+            rows={3}
+            spellCheck={false}
+            placeholder="llama3.1:8b"
+          />
+        </Field>
+        <Alert error={action.error} />
+      </form>
+    </Dialog>
   )
 }

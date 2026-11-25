@@ -1,10 +1,14 @@
 // The conversation's model, chosen among what the caller may use, with the CLI workers as one
-// group and a hint when the chosen CLI's login isn't ready.
+// group and a hint when the chosen CLI's login isn't ready. It sits in the composer's box as a
+// quiet control (the browser's own select, so a phone's picker and the keyboard work as
+// everywhere), its hints and errors on a line of their own under the box's controls.
 
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useId, useState } from 'react'
 import { api, CLI_PRODUCTS, type CliAccounts, cliAccountFor, cliOfProvider, codeText, errorText } from '../api'
 import { useT } from '../i18n'
 import { Link, routePath } from '../router'
+import { Select } from '../ui/Select'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 
 export type ModelRef = { provider: string; model_id: string }
 export type ModelProvider = { provider: string; name: string; scope: string; models: { id: string; name: string }[] }
@@ -31,6 +35,8 @@ export function ModelPicker({
   disabled: boolean
 }) {
   const t = useT()
+  // Generated, as the view can be on a page twice (the builder).
+  const id = useId()
   const [chosen, setChosen] = useState<ModelRef | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -74,14 +80,20 @@ export function ModelPicker({
   const selectedCli = cliOfProvider(selected.provider)
   const selectedAccount = account(selected.provider)
   const settings = (text: ReactNode) => (
-    <Link href={routePath({ workspace, section: 'settings', item: 'cli-accounts' })}>{text}</Link>
+    <Link key="settings" href={routePath({ workspace, section: 'settings', item: 'cli-accounts' })}>
+      {text}
+    </Link>
   )
 
   return (
-    <div className="tt-model">
-      <label htmlFor="tt-model">{t('conversations.model.label')}</label>
-      <select
-        id="tt-model"
+    <div className="ui-chat-model">
+      <VisuallyHidden>
+        <label htmlFor={id}>{t('conversations.model.label')}</label>
+      </VisuallyHidden>
+      <Select
+        id={id}
+        size="sm"
+        className="ui-chat-model-select"
         value={modelKey(selected)}
         onChange={(e) => choose(e.target.value)}
         disabled={disabled || busy}
@@ -111,17 +123,17 @@ export function ModelPicker({
             </optgroup>
           ),
         )}
-      </select>
+      </Select>
       {error && (
-        <span role="alert" className="tt-error">
+        <span role="alert" className="ui-chat-model-note" data-tone="danger">
           {error}
         </span>
       )}
       {selectedCli && cli && !cli.enabled && cli.reason && (
-        <span className="tt-hint">{codeText(cli.reason_code, undefined, cli.reason)}</span>
+        <span className="ui-chat-model-note">{codeText(cli.reason_code, undefined, cli.reason)}</span>
       )}
       {selectedCli && cli?.enabled && selectedAccount?.state !== 'connected' && (
-        <span className="tt-hint">
+        <span className="ui-chat-model-note">
           {t.rich(
             selectedAccount?.state === 'reconnect'
               ? 'conversations.model.signInAgain'

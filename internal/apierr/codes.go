@@ -408,6 +408,22 @@ const (
 	CodeEmailVerifyTooSoon       Code = "notification_email_verification_too_soon"    // 429: a link was sent a moment ago; params: seconds to wait
 	CodeEmailVerifyUnavailable   Code = "notification_email_verification_unavailable" // 502: the confirmation mail couldn't be sent
 
+	// Integrations: a workspace's connections to outside providers (internal/integrations).
+
+	CodeIntegrationNotFound         Code = "integration_not_found"
+	CodeIntegrationNameInvalid      Code = "integration_name_invalid"         // params: max
+	CodeIntegrationNameTaken        Code = "integration_name_taken"           // 409
+	CodeIntegrationDisplayNameBad   Code = "integration_display_name_invalid" // params: max
+	CodeIntegrationProviderUnknown  Code = "integration_provider_unknown"
+	CodeIntegrationSecretRequired   Code = "integration_secret_required"   // params: secret
+	CodeIntegrationSecretInvalid    Code = "integration_secret_invalid"    // params: secret
+	CodeIntegrationSecretUnreadable Code = "integration_secret_unreadable" // in a check's answer: params: secret
+	CodeIntegrationSettingInvalid   Code = "integration_setting_invalid"   // params: setting
+	CodeIntegrationLimitInvalid     Code = "integration_limit_invalid"     // params: max
+	CodeIntegrationCurrencyInvalid  Code = "integration_currency_invalid"  // params: max
+	CodeTooManyIntegrations         Code = "too_many_integrations"         // params: max
+	CodeIntegrationInUse            Code = "integration_in_use"
+
 	// The operator's "Update now" (internal/server/updates.go, docs/api.md#update-now).
 
 	CodeUpdateRequestUnsupported Code = "update_request_unsupported" // 409: no request directory, or the host's updater or its path unit can't take one (deploy/INSTALL.md step 16)

@@ -86,7 +86,9 @@ export function AppRecords({
     const el = open ? document.getElementById(`${id}-title`) : null
     if (!el) return
     const box = scrollBox(el)
-    if (box) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top
+    // The panel's top, not the heading's: its padding leaves the heading's focus ring room above it.
+    const panel = document.getElementById(id) ?? el
+    if (box) box.scrollTop += panel.getBoundingClientRect().top - box.getBoundingClientRect().top
     el.focus({ preventScroll: true })
   }, [open, id])
   if (!open || !readsRecords(access)) return null

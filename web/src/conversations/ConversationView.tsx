@@ -6,8 +6,9 @@
 // the user's login to that CLI has expired, a banner to sign in again right here: the turn
 // waits for it and goes on by itself.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  ApiError,
   api,
   BROWSER,
   type BrowserStatus,
@@ -21,16 +22,23 @@ import { BrowserPanel } from '../browser/BrowserPanel'
 import { HelpCard } from '../browser/HelpCard'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
+import { Button } from '../ui/Button'
+import { Notice } from '../ui/Notice'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { ChatTranscript } from './ChatTranscript'
 import { CliPermissionsSwitch, CliQuestions } from './CliPermissions'
 import { Composer } from './Composer'
 import { ConversationHead } from './ConversationHead'
+import './Conversations.css'
 import { type History, useHistory } from './history'
 import { ModelPicker, type ModelProvider, type ModelRef } from './ModelPicker'
 import { ReconnectBanner, reconnectAccount } from './ReconnectBanner'
 import { lastSavedApp, liveApps } from './savedApps'
 import { type AppRef, pendingHelp, type ToolUse, transcript } from './transcript'
 import { type EventSourceFactory, useConversationStream } from './useConversationStream'
+
+// The answers that say the caller can't read this conversation.
+const REFUSED = new Set([403, 404, 410])
 
 export function ConversationView({
   workspace,
@@ -62,8 +70,35 @@ export function ConversationView({
 }) {
   const t = useT()
   const base = `${ws(workspace)}/conversations/${id}`
-  const meta = useLoad(() => api<Conversation>(base), [base])
+  // Whether the server refused the conversation (403, 404 or 410) on its last answer: then it
+  // can't be read. Any other failure (a server restarting, the network) is shown with a way to try
+  // again, and the composer stays usable.
+  // Only the latest read says so: an answer to a read since superseded is dropped, as useLoad drops it.
+  const [refused, setRefused] = useState(false)
+  const reads = useRef(0)
+  const meta = useLoad(() => {
+    const read = ++reads.current
+    return api<Conversation>(base).then(
+      (c) => {
+        if (read === reads.current) setRefused(false)
+        return c
+      },
+      (e: unknown) => {
+        if (read === reads.current) setRefused(e instanceof ApiError && REFUSED.has(e.status))
+        throw e
+      },
+    )
+  }, [base])
   const { view, status } = useConversationStream(`${base}/events`, streams)
+  // Nothing can be sent: the server refused it and nothing of it is shown, or the stream found it gone.
+  const unreadable = (refused && !meta.data) || status === 'gone'
+  // When the stream connects again after a failed read, the conversation is read again too.
+  const reloadMeta = meta.reload
+  const metaFailed = Boolean(meta.error)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read again when the stream comes back
+  useEffect(() => {
+    if (status === 'live' && metaFailed) reloadMeta()
+  }, [status])
   const loadPage = useCallback((before: number) => api<History>(`${base}/entries?before=${before}`), [base])
   const older = useHistory(view, loadPage)
   const { messages, running, truncated } = transcript(
@@ -124,11 +159,11 @@ export function ConversationView({
   const last = messages.at(-1)
 
   return (
-    <section className="tt-chat" aria-label={t('conversations.conversation')}>
+    <section className="ui-chat" aria-label={t('conversations.conversation')}>
       <ConversationHead
         backHref={backHref}
         conversation={meta.data}
-        failed={Boolean(meta.error)}
+        failed={Boolean(meta.error) && !meta.data}
         url={base}
         onChanged={changed}
         buildHref={buildHref}
@@ -141,52 +176,65 @@ export function ConversationView({
         }}
         status={status}
       />
-      {meta.error && (
-        <p role="alert" className="tt-error">
-          {meta.error}
-        </p>
-      )}
-      {reconnect && <ReconnectBanner account={reconnect} onConnected={cli.reload} />}
-      {cliName && <CliQuestions url={base} cli={cliName} trigger={`${questionLines}-${running}`} running={running} />}
-      {cliName && meta.data && !archived && (
-        <CliPermissionsSwitch conversation={meta.data} url={base} cli={cliName} onChanged={meta.reload} />
-      )}
-      {help && !archived && (
-        <HelpCard
-          help={help}
-          conversation={base}
-          canTakeOver={Boolean(browser.data?.enabled)}
-          onTakeOver={() => {
-            setBrowserOpen(true)
-            setTakeOver(true)
-            browser.reload()
-          }}
-          onAnswered={() => {
-            setTakeOver(false)
-            onChanged()
-          }}
-        />
-      )}
-      {browserOpen && (
-        <BrowserPanel
-          status={browser}
-          interactive={takeOver}
-          onInteractive={setTakeOver}
-          onClose={() => {
-            setBrowserOpen(false)
-            setTakeOver(false)
-          }}
-        />
-      )}
+      <div className="ui-chat-notices">
+        {meta.error && (
+          <Notice
+            tone="danger"
+            action={
+              !refused && (
+                <Button size="sm" onClick={meta.reload}>
+                  {t('app.tryAgain')}
+                </Button>
+              )
+            }
+          >
+            {meta.error}
+          </Notice>
+        )}
+        {reconnect && <ReconnectBanner account={reconnect} onConnected={cli.reload} />}
+        {cliName && <CliQuestions url={base} cli={cliName} trigger={`${questionLines}-${running}`} running={running} />}
+        {cliName && meta.data && !archived && (
+          <CliPermissionsSwitch conversation={meta.data} url={base} cli={cliName} onChanged={meta.reload} />
+        )}
+        {help && !archived && (
+          <HelpCard
+            help={help}
+            conversation={base}
+            canTakeOver={Boolean(browser.data?.enabled)}
+            onTakeOver={() => {
+              setBrowserOpen(true)
+              setTakeOver(true)
+              browser.reload()
+            }}
+            onAnswered={() => {
+              setTakeOver(false)
+              onChanged()
+            }}
+          />
+        )}
+        {browserOpen && (
+          <BrowserPanel
+            status={browser}
+            interactive={takeOver}
+            onInteractive={setTakeOver}
+            onClose={() => {
+              setBrowserOpen(false)
+              setTakeOver(false)
+            }}
+          />
+        )}
+      </div>
       {/* Screen readers hear when the agent starts and when it has replied, not each word of a
           reply as it streams in. */}
-      <p className="tt-sr-only" role="status">
-        {running
-          ? t('conversations.agentWorking')
-          : last?.role === 'assistant' && !last.pending
-            ? t('conversations.agentReplied')
-            : ''}
-      </p>
+      <VisuallyHidden>
+        <span role="status">
+          {running
+            ? t('conversations.agentWorking')
+            : last?.role === 'assistant' && !last.pending
+              ? t('conversations.agentReplied')
+              : ''}
+        </span>
+      </VisuallyHidden>
       <ChatTranscript
         workspace={workspace}
         messages={messages}
@@ -198,7 +246,14 @@ export function ConversationView({
         loadingEarlier={older.loading}
         earlierError={older.error}
       />
-      <Composer workspace={workspace} base={base} archived={archived} running={running} onSent={onChanged}>
+      <Composer
+        workspace={workspace}
+        base={base}
+        archived={archived}
+        unreadable={unreadable}
+        running={running}
+        onSent={onChanged}
+      >
         {providers.data && model && (
           <ModelPicker
             workspace={workspace}
@@ -207,7 +262,7 @@ export function ConversationView({
             current={model}
             cli={cli.data}
             onChosen={setPicked}
-            disabled={archived}
+            disabled={archived || unreadable}
           />
         )}
       </Composer>
