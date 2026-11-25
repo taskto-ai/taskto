@@ -606,7 +606,7 @@ func TestRunAppActionReplaysACommittedOperationOverTheBudget(t *testing.T) {
 		t.Fatalf("a new operation over the budget: %v", err)
 	}
 	res, err := call("op-first-0001")
-	if err != nil || res["replayed"] != true {
+	if err != nil || res["replayed"] != true || res["kind"] != "insert" {
 		t.Fatalf("the committed operation over the budget = %v, %v; want a replay", res, err)
 	}
 	var rows int

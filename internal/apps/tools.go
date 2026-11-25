@@ -377,14 +377,20 @@ func (s *Service) RunAction(ctx context.Context, a Actor, spaceID, appID int64, 
 			Release: &run.ExpectedRelease, ExpectedRevision: run.ExpectedRevision, Operation: run.Operation,
 		}
 		if s.committed(ctx, spaceID, a, appID, action) {
-			receipt := ActionResult{Action: run.Action, Replayed: true}
-			if rel, err := loadRelease(ctx, s.db, appID, run.ExpectedRelease, true); err == nil && rel.Definition != nil {
-				receipt.Kind = rel.Definition.Actions[run.Action].Kind
-			}
-			return receipt, nil
+			return s.actionReceipt(ctx, appID, run), nil
 		}
 	}
 	return res, err
+}
+
+// actionReceipt is the answer to a request that committed before: it names the action and its kind
+// (from the release the request was made against) and says it was replayed, and no record.
+func (s *Service) actionReceipt(ctx context.Context, appID int64, run ActionRun) ActionResult {
+	receipt := ActionResult{Action: run.Action, Replayed: true}
+	if rel, err := loadRelease(ctx, s.db, appID, run.ExpectedRelease, true); err == nil && rel.Definition != nil {
+		receipt.Kind = rel.Definition.Actions[run.Action].Kind
+	}
+	return receipt
 }
 
 func (s *Service) runAction(ctx context.Context, a Actor, spaceID, appID int64, run ActionRun) (ActionResult, error) {
@@ -413,7 +419,7 @@ func (s *Service) runAction(ctx context.Context, a Actor, spaceID, appID int64, 
 		// A request that committed before is answered over the budget too, as a replay, for an
 		// agent that lost the answer; only a new operation is refused.
 		if IsRateLimited(err) && s.committed(ctx, sp.ID, a, appID, action) {
-			return ActionResult{Action: run.Action, Replayed: true}, nil
+			return s.actionReceipt(ctx, appID, run), nil
 		}
 		return ActionResult{}, err
 	}
