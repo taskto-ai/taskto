@@ -17,9 +17,13 @@ import {
 } from '../notifications/push'
 import { pushStrings } from '../notifications/strings'
 import { useInstall } from '../pwa/install'
-import { Link, routePath } from '../router'
+import { routePath } from '../router'
+import { Badge } from '../ui/Badge'
+import { Button, ButtonLink } from '../ui/Button'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
 import { EmailNotifications } from './EmailNotifications'
-import { Alert, useAction } from './parts'
+import { Alert, FormActions, Loading, Section, SettingsTab, useAction } from './parts'
 
 export function NotificationsTab({ me, workspace }: { me: number; workspace: number }) {
   const t = useT()
@@ -61,45 +65,65 @@ export function NotificationsTab({ me, workspace }: { me: number; workspace: num
     await refresh()
   }
 
+  const badge =
+    state === 'on' ? (
+      <Badge tone="success" dot>
+        {t('notifications.settings.onBadge')}
+      </Badge>
+    ) : state === 'denied' ? (
+      <Badge tone="warning">{t('notifications.settings.blockedBadge')}</Badge>
+    ) : state === null ? undefined : (
+      <Badge tone="neutral">{t('notifications.settings.offBadge')}</Badge>
+    )
+
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-notifications">
-        <h2 id="tt-notifications">{t('notifications.settings.title')}</h2>
-        <p>
-          {t('notifications.settings.inbox')}{' '}
-          <Link href={routePath({ workspace, section: 'notifications' })}>{t('notifications.settings.openInbox')}</Link>
-        </p>
-      </section>
-      <section className="tt-panel" aria-labelledby="tt-push">
-        <h2 id="tt-push">{t('notifications.settings.pushTitle')}</h2>
-        <p className="tt-muted tt-small">{t('notifications.settings.pushIntro')}</p>
-        {state === null && <p className="tt-muted">{t('app.loading')}</p>}
-        {state === 'unsupported' && <p>{t('notifications.settings.unsupported')}</p>}
-        {state === 'ios-install' && <p>{t('notifications.settings.iosInstall')}</p>}
-        {state === 'denied' && <p role="status">{t('notifications.settings.denied')}</p>}
-        {state === 'off' && (
-          <>
-            {dismissed && <p role="status">{t('notifications.settings.dismissed')}</p>}
-            <p>{t('notifications.settings.off')}</p>
-            <button type="button" className="tt-button" disabled={action.busy} onClick={turnOn}>
-              {t('notifications.settings.turnOn')}
-            </button>
-          </>
-        )}
-        {state === 'on' && (
-          <>
-            <p role="status" className="tt-ok">
-              {t('notifications.settings.on')}
-            </p>
-            <button type="button" className="tt-button" disabled={action.busy} onClick={turnOff}>
-              {t('notifications.settings.turnOff')}
-            </button>
-          </>
-        )}
-        <Alert error={action.error} />
-        <p className="tt-muted tt-small">{t('notifications.settings.caveat')}</p>
-      </section>
+    <SettingsTab
+      title={t('settings.tabs.notifications')}
+      help={t('notifications.settings.inbox')}
+      actions={
+        <ButtonLink href={routePath({ workspace, section: 'notifications' })} icon="bell">
+          {t('notifications.settings.openInbox')}
+        </ButtonLink>
+      }
+    >
+      <Section
+        title={t('notifications.settings.pushTitle')}
+        help={t('notifications.settings.pushIntro')}
+        actions={badge}
+      >
+        <Panel padded className="settings-panel-body">
+          {state === null && <Loading lines={1} />}
+          {state === 'unsupported' && <Notice tone="neutral">{t('notifications.settings.unsupported')}</Notice>}
+          {state === 'ios-install' && <Notice tone="info">{t('notifications.settings.iosInstall')}</Notice>}
+          {state === 'denied' && <Notice tone="warning">{t('notifications.settings.denied')}</Notice>}
+          {state === 'off' && (
+            <>
+              {dismissed && <Notice tone="neutral">{t('notifications.settings.dismissed')}</Notice>}
+              <p className="settings-text">{t('notifications.settings.off')}</p>
+              <FormActions>
+                <Button loading={action.busy} onClick={turnOn}>
+                  {t('notifications.settings.turnOn')}
+                </Button>
+              </FormActions>
+            </>
+          )}
+          {state === 'on' && (
+            <>
+              <p className="settings-text" role="status">
+                {t('notifications.settings.on')}
+              </p>
+              <FormActions>
+                <Button loading={action.busy} onClick={turnOff}>
+                  {t('notifications.settings.turnOff')}
+                </Button>
+              </FormActions>
+            </>
+          )}
+          <Alert error={action.error} />
+          <p className="settings-muted">{t('notifications.settings.caveat')}</p>
+        </Panel>
+      </Section>
       <EmailNotifications workspace={workspace} />
-    </div>
+    </SettingsTab>
   )
 }

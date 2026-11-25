@@ -59,8 +59,11 @@ test('admins see every space, the biggest first, and each private space under it
   render(<SettingsPage me={me} workspace={admin} tab="storage" />)
   expect(await screen.findByText('14 MB of 100 MB')).toBeTruthy()
   expect(screen.getByText("Each member's private space may store up to 10 MB.")).toBeTruthy()
-  const rows = screen.getAllByRole('listitem')
+  const rows = within(screen.getByRole('list', { name: 'Spaces' })).getAllByRole('listitem')
   expect(within(rows[0]).getByText("Bob's private space")).toBeTruthy()
+  // Over its limit: said in words, not by the bar alone.
+  expect(within(rows[0]).getByText('Full')).toBeTruthy()
+  expect(within(rows[1]).queryByText('Full')).toBeNull()
   expect(within(rows[0]).getByText('bob@example.com')).toBeTruthy()
   expect(within(rows[0]).getByText('Documents 0 B · Files 8 MB · Photos 3 MB')).toBeTruthy()
   expect(within(rows[0]).getByText('11 MB of 10 MB')).toBeTruthy()

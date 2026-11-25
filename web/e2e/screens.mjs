@@ -73,22 +73,22 @@ const heading = (s, name) => s.page.getByRole('heading', { name, exact: true })
 const column = (s, name) => s.page.getByRole('heading', { name: new RegExp(`^${name} \\d+$`) })
 const text = (s, value, exact = false) => s.page.getByText(value, { exact })
 
-// The heading each Settings tab puts at the top of its panel.
+// The heading each Settings tab puts at the top of its page, in the order of the side list.
 export const SETTINGS_HEADINGS = {
   general: 'General',
   members: 'Members',
   spaces: 'Shared spaces',
   audit: 'Audit log',
-  providers: "This workspace's accounts",
-  'cli-accounts': 'Your CLI accounts',
-  search: 'Semantic search',
+  providers: 'Model providers',
+  'cli-accounts': 'CLI accounts',
+  search: 'Search',
   dictation: 'Dictation',
-  notifications: 'Your notifications',
+  storage: 'Storage',
+  notifications: 'Notifications',
   password: 'Password',
   sessions: 'Active sessions',
-  data: 'Export your data',
+  data: 'Your data',
   tokens: 'Access tokens',
-  storage: 'Storage',
   about: 'About TaskTo.AI',
 }
 export const SETTINGS_TABS = Object.keys(SETTINGS_HEADINGS)
@@ -291,7 +291,7 @@ export const SCREENS = [
     name: `settings-${tab}`,
     phase: 'seeded',
     show: (s) => s.go(s.path('settings', tab)),
-    ready: (s) => [heading(s, 'Settings'), heading(s, SETTINGS_HEADINGS[tab])],
+    ready: (s) => [heading(s, SETTINGS_HEADINGS[tab])],
   })),
   {
     name: 'account-menu',

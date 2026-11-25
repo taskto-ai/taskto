@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { Me, Workspace } from '../api'
 import { type Call, fakeFetch } from '../test/fakes'
+import { answer, chooseFromMenu } from '../test/ui'
 import { SettingsPage } from './SettingsPage'
 
 // The QR writer is a .wasm file the browser loads: the panel is tested with a drawing in its place,
@@ -82,6 +83,9 @@ test('turning it on: the password, then the secret as a QR code and as text, the
   fireEvent.click(screen.getByRole('button', { name: 'Confirm and turn on' }))
   const list = await screen.findByRole('list', { name: 'Your recovery codes' })
   expect(list.textContent).toBe('aaaa-bbbb-ccccdddd-eeee-ffff')
+  // It is on from this moment, while the codes are on screen: the badge says so.
+  expect(await screen.findByText('On')).toBeTruthy()
+  expect(screen.queryByText('Off')).toBeNull()
   expect(sent(calls, 'POST', '/api/me/two-factor/confirm').at(-1)).toEqual({
     enrolment: 'fake-enrolment',
     code: '123456',
@@ -129,10 +133,12 @@ test('with it on: new recovery codes and turning it off take the password and a 
   fireEvent.change(screen.getByLabelText('Code from your app, or a recovery code'), { target: { value: '000000' } })
   fireEvent.click(screen.getByRole('button', { name: 'Turn off…' }))
   expect(sent(calls, 'POST', '/api/me/two-factor/disable')).toEqual([])
-  fireEvent.click(screen.getByRole('button', { name: 'Yes, turn off' }))
+  expect(await screen.findByRole('alertdialog', { name: 'Turn off two-factor login?' })).toBeTruthy()
+  await answer('Yes, turn off')
   expect((await screen.findByRole('alert')).textContent).toContain('code is wrong')
   fireEvent.change(screen.getByLabelText('Code from your app, or a recovery code'), { target: { value: '654321' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Yes, turn off' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Turn off…' }))
+  await answer('Yes, turn off')
   await screen.findByText('Two-factor login is off.')
   expect(sent(calls, 'POST', '/api/me/two-factor/disable').at(-1)).toEqual({
     password: 'fake-password-123',
@@ -193,11 +199,13 @@ test("an admin clears a member's two-factor login, once asked, only where the me
   render(<SettingsPage me={me} workspace={admin} tab="members" />)
   await screen.findByText('alice@example.com')
   // Not for yourself (Settings has it), and not for a member who has none.
-  expect(screen.queryByRole('button', { name: 'Clear two-factor Owner' })).toBeNull()
-  expect(screen.queryByRole('button', { name: 'Clear two-factor Bob' })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Clear two-factor Alice' }))
+  expect(screen.queryByRole('button', { name: 'More actions for Owner' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'More actions for Bob' }))
+  expect(screen.queryByRole('menuitem', { name: 'Clear two-factor' })).toBeNull()
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+  chooseFromMenu('More actions for Alice', 'Clear two-factor')
   expect(sent(calls, 'DELETE', '/api/workspaces/1/members/2/two-factor')).toEqual([])
-  fireEvent.click(screen.getByRole('button', { name: 'Yes, clear it' }))
+  await answer('Yes, clear it')
   await waitFor(() => expect(sent(calls, 'DELETE', '/api/workspaces/1/members/2/two-factor')).toHaveLength(1))
 })
 
@@ -211,8 +219,9 @@ test('a refused clear says why', async () => {
     },
   })
   render(<SettingsPage me={me} workspace={admin} tab="members" />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Clear two-factor Alice' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Yes, clear it' }))
+  await screen.findByText('alice@example.com')
+  chooseFromMenu('More actions for Alice', 'Clear two-factor')
+  await answer('Yes, clear it')
   expect((await screen.findByRole('alert')).textContent).toContain("you don't administer")
 })
 

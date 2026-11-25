@@ -32,6 +32,23 @@ describe('Field', () => {
     expect(screen.getByText('*').getAttribute('aria-hidden')).toBe('true')
   })
 
+  test("a required field's mark is seen beside its label, never part of the label's text", () => {
+    render(
+      <Field label="Email" required>
+        <Input type="email" />
+      </Field>,
+    )
+    // Found by its label's exact text, as a person's words or a test would name it.
+    const input = screen.getByLabelText('Email')
+    expect((input as HTMLInputElement).required).toBe(true)
+    const label = document.querySelector('label') as HTMLLabelElement
+    expect(label.textContent).toBe('Email')
+    // The mark is drawn, hidden from a screen reader, outside the label.
+    const mark = screen.getByText('*')
+    expect(mark.getAttribute('aria-hidden')).toBe('true')
+    expect(label.contains(mark)).toBe(false)
+  })
+
   test('without an error the control is valid and described by the hint only', () => {
     render(
       <Field label="Name" hint="As your team knows you.">
