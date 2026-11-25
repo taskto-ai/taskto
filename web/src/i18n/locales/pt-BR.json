@@ -1077,7 +1077,6 @@
     "integration_amount_refused": "Não dá para pedir esse valor: ele precisa ser maior que zero e ter no máximo as casas decimais da moeda. Corrija o registro e tente de novo.",
     "integration_amount_above_max": "O valor está acima dos {max} {currency} que um administrador permite por pagamento.",
     "integration_currency_refused": "{currency} não é uma moeda que esta integração de pagamentos aceita.",
-    "integration_public_url_missing": "Links de pagamento precisam do endereço público do servidor, que não está definido. Peça a quem administra o servidor para defini-lo e tente de novo.",
     "integration_credentials_refused": "O provedor de pagamentos não aceitou a chave desta integração. Um administrador precisa informar uma chave válida; depois você pode tentar de novo.",
     "integration_provider_refused": "O provedor de pagamentos recusou criar o link de pagamento. Confira o valor e a moeda e tente de novo.",
     "integration_provider_unreachable": "O provedor de pagamentos não respondeu. Tente de novo em alguns minutos.",

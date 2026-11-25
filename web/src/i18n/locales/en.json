@@ -1072,7 +1072,6 @@
     "integration_amount_refused": "The amount can’t be asked for: it must be more than zero and have no more decimals than the currency. Fix the record, then retry.",
     "integration_amount_above_max": "The amount is above the {max} {currency} that an admin allows for one payment.",
     "integration_currency_refused": "{currency} isn’t a currency this payments integration allows.",
-    "integration_public_url_missing": "Payment links need the server’s public address, which isn’t set. Ask whoever runs the server to set it, then retry.",
     "integration_credentials_refused": "The payment provider didn’t accept this integration’s key. An admin needs to enter a valid one, then you can retry.",
     "integration_provider_refused": "The payment provider refused to make the payment link. Check the amount and currency, then retry.",
     "integration_provider_unreachable": "The payment provider didn’t answer. Try again in a few minutes.",

@@ -454,7 +454,6 @@ const (
 	CodeIntegrationAmountRefused       Code = "integration_amount_refused"       // the amount isn't more than zero, isn't a number, or has more decimals than the currency
 	CodeIntegrationAmountAboveMax      Code = "integration_amount_above_max"     // the amount is above the admin's ceiling; params: max, currency
 	CodeIntegrationCurrencyRefused     Code = "integration_currency_refused"     // the currency isn't one the integration allows; params: currency
-	CodeIntegrationPublicURLMissing    Code = "integration_public_url_missing"   // the server has no -public-url for the pages the payer returns to
 	CodeIntegrationCredentialsRefused  Code = "integration_credentials_refused"  // the provider didn't accept the integration's key
 	CodeIntegrationProviderRefused     Code = "integration_provider_refused"     // the provider refused the request, for good
 	CodeIntegrationProviderUnreachable Code = "integration_provider_unreachable" // the provider didn't answer, or answered with an error that may pass: tried again, then waits for a retry

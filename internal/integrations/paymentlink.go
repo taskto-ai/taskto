@@ -36,8 +36,9 @@ import (
 // leaves nothing behind. The key of the integration is opened here, for the call, and goes nowhere
 // else: not into an error, a log line, the ref or the record.
 
-// publicPaths are the server's own pages the payer returns to from the provider's hosted page
-// (the web app's routes): never a definition's, never a request's.
+// The server's own pages the payer returns to from the provider's hosted page (the web app's
+// routes), when the server has a public URL: never a definition's, never a request's. Without one
+// the payer stays on a confirmation page the provider hosts.
 const (
 	PaymentDonePath      = "/payment/done"
 	PaymentCancelledPath = "/payment/cancelled"
@@ -86,10 +87,9 @@ func (s *Service) OpenPaymentLink(ctx context.Context, req apps.PaymentLinkReque
 	if err != nil {
 		return apps.PaymentLink{}, err
 	}
+	// With no public URL there are no pages of ours: both are empty and the provider hosts the
+	// payer's confirmation (a link is made all the same).
 	success, cancel := s.pageURLs()
-	if success == "" {
-		return apps.PaymentLink{}, &apps.PaymentLinkError{Code: apierr.CodeIntegrationPublicURLMissing}
-	}
 	creds, err := s.store.credentials(ctx, req.WorkspaceID, req.IntegrationID)
 	if err != nil || creds.APIKey == "" {
 		var unreadable unreadableError

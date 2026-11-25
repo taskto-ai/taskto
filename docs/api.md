@@ -212,7 +212,6 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `integration_amount_refused` | — | A failed `create_payment_link` entry: the amount is zero or less, not a number, or has more decimals than the currency. |
 | `integration_amount_above_max` | — | A failed `create_payment_link` entry: the amount is above the admin's ceiling (params: `max`, `currency`). |
 | `integration_currency_refused` | — | A failed `create_payment_link` entry: the currency isn't one the integration allows (params: `currency`). |
-| `integration_public_url_missing` | — | A failed `create_payment_link` entry: the server has no `-public-url`. |
 | `integration_credentials_refused` | — | A failed `create_payment_link` entry: the provider didn't accept the integration's key. |
 | `integration_provider_refused` | — | A failed `create_payment_link` entry: the provider refused the request, for good. |
 | `integration_provider_unreachable` | — | A `create_payment_link` entry the provider didn't answer: tried again, then failed. |
@@ -3571,13 +3570,19 @@ none, it is asked again under the same key, which the provider answers with the 
 made. A failure the provider keeps under a key gets a key of its own on the next try. The link and its
 id are written to the record's `url_field` and `id_field` by the integration, not by a person: the
 record's history says so (`actor_system`), the revision goes up once, and writing the same link
-again changes nothing. A hosted page expires by itself within the provider's default of 24 hours; an
-admin's key is never in a reply, a record, an entry or a log.
+again changes nothing. A Checkout Session expires by itself within the provider's default of 24
+hours (a Payment Link doesn't, see below); an admin's key is never in a reply, a record, an entry or a
+log.
 
-**The pages the payer returns to** are the server's own, never a definition's: the web app's
-`/payment/done` and `/payment/cancelled` on the server's [public URL](install.md), which show a short
-message, call nothing and show nothing of the payment. Without a public URL no link is made
-(`integration_public_url_missing`).
+**The pages the payer returns to** depend on whether the server has a [public URL](install.md)
+(`-public-url`). With one they are the server's own, never a definition's: the web app's
+`/payment/done` and `/payment/cancelled`, which show a short message, call nothing and show nothing of
+the payment; the link is a Stripe Checkout Session (the entry's `id_field` gets its `cs_…` id) that
+expires within 24 hours. Without one the link is made all the same, and the payer stays on a
+confirmation page Stripe hosts after paying: the link is a Stripe Payment Link (`plink_…` id) that
+takes one payment and doesn't expire by itself, and the server's own pages are not used. Webhooks
+can't reach a server with no public URL, so there the paid status is to come from the server asking
+Stripe (reconciliation polling, not built yet); until then the record is not marked paid by itself.
 
 **Other failures**: `integration_credentials_refused` (the provider didn't accept the key),
 `integration_provider_refused` (it refused the request, for good) and

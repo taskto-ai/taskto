@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -239,6 +240,11 @@ func (p *pay) posts() []testprovider.Request {
 	return p.fake.RequestsTo(http.MethodPost, "/v1/checkout/sessions")
 }
 
+// linkPosts are the calls that made Payment Links (what a server without a public URL asks for).
+func (p *pay) linkPosts() []testprovider.Request {
+	return p.fake.RequestsTo(http.MethodPost, "/v1/payment_links")
+}
+
 type refRow struct {
 	id                  int64
 	token, state        string
@@ -303,6 +309,12 @@ func TestAnInvoiceSentMakesOneStripePaymentLinkWrittenBackBySystem(t *testing.T)
 	if call.Form.Get("line_items[0][price_data][unit_amount]") != "12010" || call.Form.Get("line_items[0][price_data][currency]") != "eur" ||
 		call.Form.Get("line_items[0][price_data][product_data][name]") != "Invoice A-1 for Acme" || call.Form.Get("mode") != "payment" {
 		t.Fatalf("form = %v", call.Form)
+	}
+	if n := len(p.linkPosts()); n != 0 || len(p.fake.Links()) != 0 {
+		t.Fatalf("a server with a public URL asked for %d payment links", n)
+	}
+	if call.Form.Get("restrictions[completed_sessions][limit]") != "" || call.Form.Has("after_completion[type]") {
+		t.Fatalf("a session got a link's parameters: %v", call.Form)
 	}
 	sessions := p.fake.Sessions()
 	if len(sessions) != 1 || sessions[0].ID != ref.object || sessions[0].AmountTotal != 12010 {
@@ -482,14 +494,169 @@ func floatNoise() float64 {
 	return a + b
 }
 
-func TestWithoutAPublicURLNoLinkIsMade(t *testing.T) {
+// ----- without a public URL: Stripe's own confirmation page -----
+
+// A server with no public URL still makes the link: a Payment Link whose payer stays on the page
+// Stripe hosts, which takes one payment, and which carries no address of ours.
+func TestWithoutAPublicURLTheLinkIsMadeWithStripesHostedConfirmation(t *testing.T) {
 	p := newPay(t, "")
-	record := p.invoice(10, "EUR")
+	record := p.invoice(120.1, "EUR")
 	p.startWorker()
-	p.send(record, "op-url-0001")
+	p.send(record, "op-hosted-0001")
+	e := p.settled(apps.StateDone)
+
+	if n := len(p.posts()); n != 0 || len(p.fake.Sessions()) != 0 {
+		t.Fatalf("%d Checkout Sessions made without a public URL", n)
+	}
+	reqs := p.linkPosts()
+	refs := p.refs()
+	if len(reqs) != 1 || len(refs) != 1 || refs[0].state != "open" || refs[0].effect.Int64 != e.id || refs[0].amount != 12010 || refs[0].currency != "EUR" {
+		t.Fatalf("calls %+v, refs %+v", reqs, refs)
+	}
+	ref, call := refs[0], reqs[0]
+	if call.IdempotencyKey != ref.token || call.APIVersion != StripeAPIVersion || call.Auth != "bearer" {
+		t.Fatalf("the call: %+v", call)
+	}
+	// Stripe's hosted confirmation, one payment, the token in the metadata, the exact amount.
+	want := map[string]string{
+		"after_completion[type]":                        "hosted_confirmation",
+		"restrictions[completed_sessions][limit]":       "1",
+		"metadata[taskto_ref]":                          ref.token,
+		"line_items[0][quantity]":                       "1",
+		"line_items[0][price_data][unit_amount]":        "12010",
+		"line_items[0][price_data][currency]":           "eur",
+		"line_items[0][price_data][product_data][name]": "Invoice A-1 for Acme",
+	}
+	for k, v := range want {
+		if call.Form.Get(k) != v {
+			t.Errorf("%s = %q, want %q", k, call.Form.Get(k), v)
+		}
+	}
+	// No address of ours is sent, and none of a Checkout Session's own parameters.
+	for _, k := range []string{"success_url", "cancel_url", "mode", "client_reference_id", "after_completion[redirect][url]"} {
+		if call.Form.Has(k) {
+			t.Errorf("the link was asked with %s", k)
+		}
+	}
+	for k, vs := range call.Form {
+		for _, v := range vs {
+			if strings.Contains(v, "http") || strings.Contains(v, PaymentDonePath) || strings.Contains(v, PaymentCancelledPath) {
+				t.Errorf("%s = %q holds an address", k, v)
+			}
+		}
+	}
+	links := p.fake.Links()
+	if len(links) != 1 || links[0].ID != ref.object || !strings.HasPrefix(ref.object, "plink_") || links[0].Restrictions == nil ||
+		links[0].AfterCompletion["type"] != "hosted_confirmation" || links[0].Metadata["taskto_ref"] != ref.token {
+		t.Fatalf("links = %+v, ref %+v", links, ref)
+	}
+	// The address is Stripe's, with the reference the payment echoes back, in the record.
+	if ref.url != links[0].URL+"?client_reference_id="+ref.token || !strings.HasPrefix(ref.url, "https://buy.stripe.com/") {
+		t.Fatalf("url = %q, link %q", ref.url, links[0].URL)
+	}
+	data, _ := p.record(record)
+	if !strings.Contains(data, `"payment_id":"`+ref.object+`"`) || !strings.Contains(data, ref.url) {
+		t.Fatalf("record = %s", data)
+	}
+	// The same send again makes no second link.
+	p.send(record, "op-hosted-0001")
+	time.Sleep(200 * time.Millisecond)
+	if n := len(p.linkPosts()); n != 1 {
+		t.Fatalf("a repeated request made %d calls", n)
+	}
+}
+
+// Money is as exact and as limited without a public URL.
+func TestWithoutAPublicURLAmountsAreStillExactOrRefused(t *testing.T) {
+	p := newPay(t, "")
+	record := p.invoice(10.005, "EUR")
+	p.startWorker()
+	p.send(record, "op-hosted-0002")
 	e := p.settled(apps.StateFailed)
-	if e.code != string(apierr.CodeIntegrationPublicURLMissing) || len(p.fake.Requests()) != 0 || p.count(`SELECT count(*) FROM integration_refs`) != 0 {
+	if e.code != string(apierr.CodeIntegrationAmountRefused) || len(p.fake.Requests()) != 0 || p.count(`SELECT count(*) FROM integration_refs`) != 0 {
 		t.Fatalf("entry = %+v, calls %d", e, len(p.fake.Requests()))
+	}
+}
+
+// The answer is lost after Stripe made the link: the entry asks again under the same key and
+// Stripe answers with the link it made, so the payee has one payable link.
+func TestWithoutAPublicURLACrashBeforeTheAnswerIsNotedMakesNoSecondLink(t *testing.T) {
+	p := newPay(t, "")
+	record := p.invoice(50, "EUR")
+	p.fake.Fail(testprovider.ConnectionReset().AfterExecuting().On(http.MethodPost, "/v1/payment_links"))
+	p.startWorker()
+	p.send(record, "op-hosted-0003")
+	p.waitFor("the first call", func() bool { return len(p.linkPosts()) == 1 })
+	p.waitFor("the entry waits", func() bool { es := p.entries(); return len(es) == 1 && es[0].state == "pending" && es[0].attempts == 1 })
+	if r := p.refs(); len(r) != 1 || r[0].object != "" || r[0].state != "creating" {
+		t.Fatalf("refs after the dropped answer = %+v", r)
+	}
+	p.later(time.Minute)
+	p.settled(apps.StateDone)
+
+	reqs := p.linkPosts()
+	if len(reqs) != 2 || reqs[0].IdempotencyKey != reqs[1].IdempotencyKey || !reqs[1].Replayed {
+		t.Fatalf("calls = %+v: the retry should be a replay under the same key", reqs)
+	}
+	links := p.fake.Links()
+	if len(links) != 1 || len(p.posts()) != 0 {
+		t.Fatalf("%d links, %d sessions at Stripe, want 1 and 0", len(links), len(p.posts()))
+	}
+	if refs := p.refs(); len(refs) != 1 || refs[0].state != "open" || refs[0].object != links[0].ID {
+		t.Fatalf("refs = %+v", refs)
+	}
+}
+
+// The link was noted and the entry crashed before it was done: it asks Stripe nothing; one that
+// crashed before it noted the answer asks again under the same key and gets the same link.
+func TestWithoutAPublicURLAnEntryDoneAgainDoesNotMakeASecondLink(t *testing.T) {
+	p := newPay(t, "")
+	record := p.invoice(99.99, "EUR")
+	p.send(record, "op-hosted-0004")
+	entry := p.entries()[0]
+	req := apps.PaymentLinkRequest{WorkspaceID: p.ws, IntegrationID: p.in.ID, SpaceID: p.space.ID, AppID: p.app.ID, RecordID: record, EffectID: entry.id,
+		Slot: "payments", Amount: "99.99", Currency: "EUR", Description: "Invoice"}
+	first, err := p.svc.OpenPaymentLink(context.Background(), req)
+	if err != nil || first.AmountMinor != 9999 || !strings.HasPrefix(first.ObjectID, "plink_") || first.URL == "" {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+	again, err := p.svc.OpenPaymentLink(context.Background(), req)
+	if err != nil || again != first || len(p.linkPosts()) != 1 {
+		t.Fatalf("again = %+v, %v, %d calls", again, err, len(p.linkPosts()))
+	}
+	if _, err := p.db.Exec(`UPDATE integration_refs SET provider_object_id = NULL, url = NULL, state = 'creating'`); err != nil {
+		t.Fatal(err)
+	}
+	third, err := p.svc.OpenPaymentLink(context.Background(), req)
+	if err != nil || third != first {
+		t.Fatalf("third = %+v, %v", third, err)
+	}
+	reqs := p.linkPosts()
+	if len(reqs) != 2 || reqs[0].IdempotencyKey != reqs[1].IdempotencyKey || !reqs[1].Replayed || len(p.fake.Links()) != 1 {
+		t.Fatalf("calls = %+v, links %d", reqs, len(p.fake.Links()))
+	}
+	if n := p.count(`SELECT count(*) FROM integration_refs`); n != 1 {
+		t.Fatalf("%d refs for one entry", n)
+	}
+}
+
+// An answer that isn't a payment link on Stripe's own address is not taken for one.
+func TestWithoutAPublicURLALinkOnAnotherAddressIsRefused(t *testing.T) {
+	for name, body := range map[string]string{
+		"another host":  `{"id":"plink_abc","object":"payment_link","url":"https://evil.example.com/pay"}`,
+		"a session":     `{"id":"cs_test_abc","object":"checkout.session","url":"https://buy.stripe.com/test_abc"}`,
+		"a query given": `{"id":"plink_abc","object":"payment_link","url":"https://buy.stripe.com/test_abc?x=1"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
+			defer srv.Close()
+			c := NewClient(Lookup("stripe"), nil, egress.MustParse("127.0.0.1"), WithTestEndpoint(strings.TrimPrefix(srv.URL, "http://")))
+			_, err := stripe{}.CreatePaymentLink(context.Background(), Credentials{APIKey: Secret("not-a-key")}, c,
+				NewLink{Token: strings.Repeat("a", 32), AmountMinor: 100, Currency: "EUR"})
+			if ce, ok := IsCall(err); !ok || ce.Kind != CallRefused {
+				t.Fatalf("err = %v", err)
+			}
+		})
 	}
 }
 

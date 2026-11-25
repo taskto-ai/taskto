@@ -26,7 +26,8 @@ type PaymentProvider interface {
 
 // NewLink is what a payment link is asked for. Everything in it is the server's: the amount is
 // exact, in the currency's smallest unit; the token is the ref's; the two addresses are the
-// server's own pages, never a definition's.
+// server's own pages, never a definition's, and both are empty when the server has no public
+// address: the payer then stays on a confirmation page the provider hosts.
 type NewLink struct {
 	// Token is the reference the provider echoes back with the payment and, with KeySeq, the
 	// idempotency key of the call.
@@ -39,8 +40,9 @@ type NewLink struct {
 	// Currency is the code, upper case.
 	Currency    string
 	Description string
-	SuccessURL  string
-	CancelURL   string
+	// SuccessURL and CancelURL are the server's own pages (both set), or both empty.
+	SuccessURL string
+	CancelURL  string
 }
 
 // IdempotencyKey is the key the call is sent with: the token on the first try.
@@ -55,7 +57,8 @@ func (l NewLink) IdempotencyKey() string {
 type Link struct {
 	// URL is the address the payer opens, on the provider's own domain.
 	URL string
-	// ObjectID is the provider's id of the object, which polling reads.
+	// ObjectID is the provider's id of the object, which polling reads: a Checkout Session's
+	// (cs_...) when the payer returns to the server's pages, a Payment Link's (plink_...) when not.
 	ObjectID string
 }
 
@@ -115,19 +118,57 @@ const (
 	fallbackProductName = "Payment"
 	// stripeUserAgent says what is calling, and nothing about who.
 	stripeUserAgent = "taskto"
+	// stripeRefMetadata is the key of a Payment Link's metadata that holds the ref's token.
+	stripeRefMetadata = "taskto_ref"
 )
 
 var (
 	// stripeSessionID is what the id of a Checkout Session looks like.
 	stripeSessionID = regexp.MustCompile(`^cs_(test|live)_[A-Za-z0-9]{1,200}$`)
-	// stripeCheckoutHost is the domain of the pages Stripe hosts, where a link must point.
+	// stripeLinkID is what the id of a Payment Link looks like.
+	stripeLinkID = regexp.MustCompile(`^plink_[A-Za-z0-9]{1,200}$`)
+	// stripeCheckoutHost is the domain of the pages Stripe hosts for a Checkout Session, and
+	// stripeLinkHost of a Payment Link's (the default submit_type, which is the one asked for, is
+	// buy.stripe.com), where a link must point.
 	stripeCheckoutHost = "checkout.stripe.com"
+	stripeLinkHost     = "buy.stripe.com"
 )
 
-// CreatePaymentLink makes a Checkout Session in payment mode: a hosted page for one payment, which
-// carries the ref's token as client_reference_id (what the event of the payment echoes back) and
-// expires by itself within Stripe's default of 24 hours. Its parameters are the same on every try
-// of one reference, so Stripe's idempotency (the token as the key) finds the first call's object.
+// CreatePaymentLink makes a hosted page for one payment of an exact amount, in one of two shapes
+// that the server's address decides.
+//
+// With the server's own pages (a public URL is set) it makes a Checkout Session in payment mode:
+// success_url and cancel_url are those pages, client_reference_id is the ref's token (what the
+// event of the payment echoes back), and the session expires by itself within Stripe's default of
+// 24 hours.
+//
+// Without a public URL the payer has no page of ours to return to. Stripe documents success_url
+// only as "required conditionally" and every hosted example sets one, so a hosted session
+// without one is not relied on. It makes a Payment Link instead, whose payer stays on a
+// confirmation page that Stripe hosts (after_completion[type]=hosted_confirmation) and which
+// takes one payment (restrictions[completed_sessions][limit]=1: an invoice's link can't be paid
+// twice). The token is in the link's metadata, which Stripe copies to the session of the payment,
+// and in the address as ?client_reference_id=, the documented way a link's sessions carry one. A
+// link doesn't expire by itself.
+//
+// Either way the parameters are the same on every try of one reference, so Stripe's idempotency
+// (the token as the key) finds the first call's object.
+//
+// Stripe's documentation relied on, at the pinned API version (StripeAPIVersion):
+//   - Create a Checkout Session, https://docs.stripe.com/api/checkout/sessions/create: success_url
+//     is "required conditionally" and not allowed for an embedded or elements ui_mode, cancel_url
+//     is optional, expires_at runs 30 minutes to 24 hours (default 24), client_reference_id has at
+//     most 200 characters;
+//   - Create a payment link, https://docs.stripe.com/api/payment-link/create: after_completion
+//     (type hosted_confirmation, "displays a message on the hosted surface after the purchase is
+//     complete", or redirect), restrictions[completed_sessions][limit], line_items with price_data
+//     (https://docs.stripe.com/payment-links/api), and metadata, "automatically copied to checkout
+//     sessions created by this payment link";
+//   - Track a payment link, https://docs.stripe.com/payment-links/url-parameters: client_reference_id
+//     in the link's address, alphanumeric, dashes or underscores, up to 200 characters, reaches
+//     checkout.session.completed;
+//   - List Checkout Sessions, https://docs.stripe.com/api/checkout/sessions/list: payment_link is a
+//     filter, which is how a later poll finds the payments of a link.
 func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Client, l NewLink) (Link, error) {
 	name := strings.TrimSpace(l.Description)
 	if name == "" {
@@ -136,17 +177,26 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 	if utf8.RuneCountInString(name) > maxProductName {
 		name = string([]rune(name)[:maxProductName])
 	}
+	hosted := l.SuccessURL == "" // no pages of ours: Stripe's own confirmation
 	form := url.Values{}
-	form.Set("mode", "payment")
-	form.Set("success_url", l.SuccessURL)
-	form.Set("cancel_url", l.CancelURL)
-	form.Set("client_reference_id", l.Token)
 	form.Set("line_items[0][quantity]", "1")
 	form.Set("line_items[0][price_data][currency]", strings.ToLower(l.Currency))
 	form.Set("line_items[0][price_data][unit_amount]", strconv.FormatInt(l.AmountMinor, 10))
 	form.Set("line_items[0][price_data][product_data][name]", name)
+	endpoint := "/v1/checkout/sessions"
+	if hosted {
+		endpoint = "/v1/payment_links"
+		form.Set("after_completion[type]", "hosted_confirmation")
+		form.Set("restrictions[completed_sessions][limit]", "1")
+		form.Set("metadata["+stripeRefMetadata+"]", l.Token)
+	} else {
+		form.Set("mode", "payment")
+		form.Set("success_url", l.SuccessURL)
+		form.Set("cancel_url", l.CancelURL)
+		form.Set("client_reference_id", l.Token)
+	}
 
-	req, err := c.NewRequest(ctx, http.MethodPost, c.BaseURL(stripeHost)+"/v1/checkout/sessions", strings.NewReader(form.Encode()))
+	req, err := c.NewRequest(ctx, http.MethodPost, c.BaseURL(stripeHost)+endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return Link{}, &CallError{Kind: CallRefused}
 	}
@@ -176,13 +226,29 @@ func (stripe) CreatePaymentLink(ctx context.Context, creds Credentials, c *Clien
 		URL    string `json:"url"`
 		Object string `json:"object"`
 	}
-	if err := json.Unmarshal(body, &out); err != nil || out.Object != "checkout.session" || !stripeSessionID.MatchString(out.ID) || len(out.ID) > maxLinkID {
+	object, idPattern, host := "checkout.session", stripeSessionID, stripeCheckoutHost
+	if hosted {
+		object, idPattern, host = "payment_link", stripeLinkID, stripeLinkHost
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.Object != object || !idPattern.MatchString(out.ID) || len(out.ID) > maxLinkID {
 		// An answer that isn't the object asked for: the call was made, and nothing says what became
 		// of it, so it is not tried again as if it had not been.
 		return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode}
 	}
-	if u, err := url.Parse(out.URL); err != nil || u.Scheme != "https" || u.Hostname() != stripeCheckoutHost || u.User != nil || len(out.URL) > maxLinkURL {
+	u, err := url.Parse(out.URL)
+	if err != nil || u.Scheme != "https" || u.Hostname() != host || u.User != nil || len(out.URL) > maxLinkURL {
 		return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode}
+	}
+	if hosted {
+		// The reference the payment of the link echoes back, as Stripe documents it: in the address.
+		if u.RawQuery != "" || u.Fragment != "" {
+			return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode}
+		}
+		u.RawQuery = "client_reference_id=" + l.Token
+		out.URL = u.String()
+		if len(out.URL) > maxLinkURL {
+			return Link{}, &CallError{Kind: CallRefused, Status: resp.StatusCode}
+		}
 	}
 	return Link{URL: out.URL, ObjectID: out.ID}, nil
 }

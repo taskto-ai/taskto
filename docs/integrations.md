@@ -237,14 +237,39 @@ the link at the provider with the integration's key, which is opened only for th
 the link and its id to the two fields the effect names through the system writer, in no way a user's
 write.
 
-- **Stripe's Checkout, in payment mode.** The link is a Checkout Session (`POST /v1/checkout/sessions`):
-  one line item with the exact amount, the description as the product's name,
-  `client_reference_id` set to the reference's token, and the server's own `success_url` and
-  `cancel_url`. The API version is pinned in code (`integrations.StripeAPIVersion`, sent in the
+- **Two shapes, by whether the server has a public URL.** Both are one line item with the exact
+  amount and the description as the product's name, made once under the reference's token.
+  - *With `-public-url`: a Checkout Session in payment mode* (`POST /v1/checkout/sessions`):
+    `client_reference_id` set to the reference's token, and the server's own `success_url` and
+    `cancel_url`. A session expires by itself after Stripe's default of 24 hours (its limit), so a
+    payer who comes later finds an expired page, and sending the invoice again makes a new link.
+  - *Without it: a Payment Link* (`POST /v1/payment_links`) with `after_completion[type]` set to
+    `hosted_confirmation`, so the payer stays on a confirmation page Stripe hosts and no URL of ours
+    is sent; `restrictions[completed_sessions][limit]` set to `1`, so an invoice's link can't be
+    paid twice; and the token in the link's `metadata` (`taskto_ref`), which Stripe copies to the
+    session of the payment. A Payment Link takes no `client_reference_id` in the API, so the token is
+    also in the link's address (`?client_reference_id=<token>`), the way Stripe documents for it,
+    which reaches `checkout.session.completed`. A link doesn't expire by itself, and the payments of
+    one are found at Stripe by listing Checkout Sessions with `payment_link=<plink id>`. The record's
+    `id_field` gets the link's `plink_…` id instead of a session's `cs_…`.
+
+  Stripe's documentation relied on (checked against the pinned version): Create a Checkout Session
+  (<https://docs.stripe.com/api/checkout/sessions/create>: `success_url` is "required conditionally",
+  and every hosted example sets one, so a session without one is not relied on), Create a payment link
+  (<https://docs.stripe.com/api/payment-link/create>: `after_completion`, `restrictions`,
+  `line_items[].price_data`, `metadata` copied to the link's sessions), the Payment Links API guide
+  (<https://docs.stripe.com/payment-links/api>), Track a payment link
+  (<https://docs.stripe.com/payment-links/url-parameters>: the `client_reference_id` URL parameter) and
+  List Checkout Sessions (<https://docs.stripe.com/api/checkout/sessions/list>: the `payment_link`
+  filter).
+
+  **Paid status without a public URL** can't come from a webhook, which Stripe can't deliver to such a
+  server. It is to come from reconciliation polling (a later change, not built yet): until then a
+  record made without a public URL is not marked paid by itself.
+
+  The API version is pinned in code (`integrations.StripeAPIVersion`, sent in the
   `Stripe-Version` header; the version Stripe's documentation lists as current when the adapter was
-  written) and is raised by a change of code with its tests, never by configuration. A session
-  expires by itself after Stripe's default of 24 hours (its limit), so a payer who comes later
-  finds an expired page, and sending the invoice again makes a new link.
+  written) and is raised by a change of code with its tests, never by configuration.
 - **Exact money.** Minor units from a closed currency table, never a rounded number: more decimals
   than the currency has, zero or less, above the integration's ceiling, or a currency the integration
   doesn't list are each refused, with a code that says which, before anything is made.
@@ -256,9 +281,10 @@ write.
   no object noted is the one case that can leave two payable links for one reference. A failure that
   Stripe keeps under a key (a `5xx`) would be answered to the same key for ever, so the next try has
   a key of its own.
-- **The server's own pages.** The payer comes back to `<public URL>/payment/done` or
-  `/payment/cancelled`, web app pages that show a short message and call nothing. A definition
-  can't name a URL, so no app can send a payer elsewhere. Without `-public-url` no link is made.
+- **The server's own pages, or none.** With `-public-url` the payer comes back to
+  `<public URL>/payment/done` or `/payment/cancelled`, web app pages that show a short message and
+  call nothing; without it the payer stays on Stripe's confirmation page and no URL of ours is sent.
+  A definition can't name a URL, so no app can send a payer elsewhere.
 - **A preview never calls the network**: it says what the link would ask and refuses an amount the
   currency can't hold, with no integration, key or reference.
 - **The key stays in the call.** It is not in a reply, a record, an entry's result, the reference,
