@@ -3,7 +3,7 @@
 // restoring them take the right to change them. The server decides what each person reads and
 // changes: this only asks.
 
-import { useEffect } from 'react'
+import { type Ref, useEffect } from 'react'
 import type { AppAccess, AppDefinition } from '../api'
 import { useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -31,17 +31,20 @@ export function RecordsButton({
   open,
   controls,
   onToggle,
+  ref,
 }: {
   access: AppAccess
   open: boolean
   // The id of the panel it opens.
   controls: string
   onToggle: () => void
+  // The button, for the panel to give the keyboard back to when it is closed from inside.
+  ref?: Ref<HTMLButtonElement>
 }) {
   const t = useT()
   if (!readsRecords(access)) return null
   return (
-    <Button icon="file" aria-expanded={open} aria-controls={controls} onClick={onToggle}>
+    <Button ref={ref} icon="file" aria-expanded={open} aria-controls={controls} onClick={onToggle}>
       {open ? t('apps.records.close') : t('apps.records.open')}
     </Button>
   )

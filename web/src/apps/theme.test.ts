@@ -89,7 +89,8 @@ describe("the renderer's theme", () => {
     )
     expect(colours.length).toBeGreaterThan(20)
     for (const [name, value] of colours) {
-      expect(value, name).toMatch(/var\(--color-[a-z-]+\)|currentColor/)
+      // `none`: a line the theme draws another way (the tabs' hairline is a shadow, below).
+      expect(value, name).toMatch(/var\(--color-[a-z-]+\)|currentColor|^none$/)
     }
   })
 
@@ -104,5 +105,75 @@ describe("the renderer's theme", () => {
   test('it is in no layer, so it can win over the renderer’s own rules, which are in none', () => {
     expect(all.every((r) => r.layer === undefined)).toBe(true)
     expect(css).not.toMatch(/@layer/)
+  })
+})
+
+// The declarations of the rule whose selector list holds exactly this selector, outside any at-rule,
+// as text, for a check of what a rule sets.
+function declarationsOf(source: string, selector: string): string {
+  const text = source.replace(/\/\*[\s\S]*?\*\//g, '')
+  const re = /([^{}]+)\{([^{}]*)\}/g
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    if (m[1].split(',').some((s) => s.trim() === selector)) return m[2]
+  }
+  return ''
+}
+
+describe('rings and what could cut them', () => {
+  // Every control of the renderer a person can focus: each draws the library's ring.
+  const RINGED = [
+    '.a2ui-button',
+    '.a2ui-textfield',
+    '.a2ui-date-time-input',
+    '.a2ui-filter-input',
+    '.a2ui-chip',
+    '.a2ui-tab-button',
+    '.a2ui-slider',
+    '.a2ui-modal-close',
+    'a2ui-checkbox input',
+    '.a2ui-option-input',
+  ]
+
+  test('every control the renderer draws has the ring', () => {
+    for (const control of RINGED) {
+      const rule = declarationsOf(css, `.ui-app ${control}:focus-visible`)
+      expect(rule, control).toMatch(/outline: var\(--line-focus\) solid var\(--color-focus\)/)
+    }
+  })
+
+  test('a tab’s ring is drawn inside it, and the row of tabs never scrolls up and down', () => {
+    // The row scrolls sideways, which makes it clip: a ring outside a tab would be cut.
+    expect(declarationsOf(css, '.ui-app .a2ui-tab-button:focus-visible')).toMatch(
+      /outline-offset: calc\(-1 \* var\(--line-focus\)\)/,
+    )
+    const bar = declarationsOf(css, '.ui-app .a2ui-tab-bar')
+    expect(bar).toMatch(/overflow-y: hidden/)
+    // Its hairline is inside it, so the picked tab's underline needs no overlap the row would cut.
+    expect(bar).toMatch(/box-shadow: inset/)
+    expect(declarationsOf(css, '.ui-app .a2ui-tab-button')).toMatch(/margin-block-end: 0/)
+  })
+
+  test('a screen on a Home widget doesn’t scroll itself and leaves room for a ring and the lift', () => {
+    const view = readFileSync(join(__dirname, 'AppView.css'), 'utf8')
+    const bare = declarationsOf(view, '.ui-app[data-frame="bare"]')
+    // 8px: more than the ring's reach (2.5px wide, 2px off) and the primary's 3px lift.
+    expect(bare).toMatch(/padding: var\(--space-2\)/)
+    for (const selector of ['.ui-app[data-frame="bare"]', '.ui-app[data-frame]']) {
+      expect(declarationsOf(view, selector), selector).not.toMatch(/overflow/)
+    }
+    // The panel scrolls sideways, inside the padding that leaves the same room.
+    const panel = declarationsOf(view, '.ui-app[data-frame="panel"]')
+    expect(panel).toMatch(/overflow-x: auto/)
+    expect(panel).toMatch(/padding: var\(--space-4\)/)
+  })
+
+  test('the old stylesheet’s minimum height of an input reaches no field or check box of an app', () => {
+    for (const selector of ['.ui-app .a2ui-textfield', '.ui-app a2ui-checkbox input']) {
+      expect(declarationsOf(css, selector), selector).toMatch(/min-block-size: 0/)
+    }
+  })
+
+  test('the modal’s close button keeps a colour of the theme on hover', () => {
+    expect(declarationsOf(css, '.ui-app .a2ui-modal-close:hover')).toMatch(/color: var\(--color-text\)/)
   })
 })

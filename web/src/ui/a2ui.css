@@ -97,7 +97,7 @@
   --a2ui-divider-spacing: var(--space-2);
 
   /* Tabs are the library's: muted until picked, an underline on the rule. */
-  --a2ui-tabs-border: var(--line-thin) solid var(--color-border);
+  --a2ui-tabs-border: none;
   --a2ui-tabs-header-color: var(--color-text-muted);
   --a2ui-tabs-content-padding: var(--space-4) 0;
 
@@ -217,6 +217,8 @@
   box-sizing: border-box;
   max-inline-size: 100%;
   block-size: var(--control-md);
+  /* The old stylesheet gives every input a minimum height a little taller than a control. */
+  min-block-size: 0;
   margin: 0;
   font: var(--type-ui);
   caret-color: var(--color-text);
@@ -254,9 +256,12 @@
 .ui-app .a2ui-button:focus-visible,
 .ui-app .a2ui-textfield:focus-visible,
 .ui-app .a2ui-date-time-input:focus-visible,
+/* A date's focus is in its own parts (day, month, year), inside the input: the input as a whole is
+   neither :focus nor :focus-visible then, only :focus-within. A typed field shows its ring whenever
+   it is focused, and so does a date. */
+.ui-app .a2ui-date-time-input:focus-within,
 .ui-app .a2ui-filter-input:focus-visible,
 .ui-app .a2ui-chip:focus-visible,
-.ui-app .a2ui-tab-button:focus-visible,
 .ui-app .a2ui-slider:focus-visible,
 .ui-app .a2ui-modal-close:focus-visible,
 .ui-app a2ui-checkbox input:focus-visible,
@@ -307,6 +312,7 @@
    seen on the page in both themes as the mint isn't. */
 .ui-app a2ui-checkbox input,
 .ui-app .a2ui-option-input {
+  min-block-size: 0;
   margin: 0;
   accent-color: var(--color-focus);
 }
@@ -323,20 +329,33 @@
 }
 
 /* Tabs: Tabs's look. The picked one in the text's colour on an underline of the focus colour (the
-   renderer would draw that underline mint). */
+   renderer would draw that underline mint). As the library's tabs: the row scrolls sideways on a
+   narrow screen and never up and down; its hairline is drawn inside it (a shadow, not a border the
+   underline would have to overlap), and a tab's focus ring is drawn inside the tab, so the row's
+   scrolling never cuts it. */
 .ui-app .a2ui-tab-bar {
   gap: var(--space-1);
   overflow-x: auto;
+  overflow-y: hidden;
+  box-shadow: inset 0 calc(-1 * var(--line-thin)) 0 var(--color-border);
+  scrollbar-width: none;
 }
 
 .ui-app .a2ui-tab-button {
+  flex: none;
   min-block-size: var(--control-md);
+  margin-block-end: 0;
   padding-inline: var(--space-3);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   font: var(--type-ui);
   font-weight: 500;
-  border-block-end-width: var(--line-strong);
-  margin-block-end: calc(var(--line-strong) * -1);
+  border-block-end-width: var(--line-focus);
   white-space: nowrap;
+}
+
+.ui-app .a2ui-tab-button:focus-visible {
+  outline: var(--line-focus) solid var(--color-focus);
+  outline-offset: calc(-1 * var(--line-focus));
 }
 
 .ui-app .a2ui-tab-button:hover {
@@ -382,6 +401,11 @@
   min-inline-size: var(--control-touch);
   border-radius: var(--radius-pill);
   color: var(--color-text-muted);
+}
+
+/* The renderer darkens it on hover with a grey of its own, too faint on night: the text's colour. */
+.ui-app .a2ui-modal-close:hover {
+  color: var(--color-text);
 }
 
 .ui-app .a2ui-modal-content {
