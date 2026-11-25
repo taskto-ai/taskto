@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 
-// The old global stylesheet (src/styles.css) is in no cascade layer, so any of its rules that
+// The old stylesheets (those src/styles.css lists) is in no cascade layer, so any of its rules that
 // matched an element a control draws would beat the control's own style (a checkbox rule under
 // `pointer: coarse` once made the switch a 20px square). This draws every gallery of the controls
 // and checks that no rule of that stylesheet styling an element by its name, in any media block,
 // reaches an element with a ui- class; and that the opt-out is spelled so it adds no specificity.
 
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cleanup, render } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import { afterEach, describe, expect, test } from 'vitest'
+import { oldStylesheets } from '../../scripts/css-check.mjs'
 import { Button } from './Button'
 import { Checkbox } from './Checkbox'
 import { rules } from './cssValues'
@@ -26,7 +26,10 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+// Every old stylesheet the app loads (src/styles.css lists them, ui/base.css first), not the list,
+// which holds no rule.
+const sheets = oldStylesheets(join(__dirname, '../..'))
+const css = sheets.map((s) => s.css).join('\n')
 
 // "a, b:not(:where(c, d))" → ["a", "b:not(:where(c, d))"]: commas inside parentheses stay.
 function split(list: string): string[] {
@@ -58,6 +61,13 @@ const elementSelectors = selectors.filter((s) => /^[a-z]/.test(s) && !s.includes
 const galleries = import.meta.glob<{ default: ComponentType; title: string }>('./*.gallery.tsx', { eager: true })
 
 describe('the old stylesheet and the controls', () => {
+  test("it reads the old stylesheets themselves: the base and every screen's file", () => {
+    expect(sheets.map((s) => s.file)).toEqual(
+      expect.arrayContaining(['src/ui/base.css', 'src/legacy-shared.css', 'src/boards/boards.legacy.css']),
+    )
+    expect(sheets.length).toBeGreaterThan(10)
+  })
+
   test('it has element rules, and they still reach the screens’ own elements', () => {
     expect(elementSelectors.length).toBeGreaterThan(10)
     document.body.innerHTML =

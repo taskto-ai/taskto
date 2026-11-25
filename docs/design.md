@@ -26,7 +26,9 @@ component's `@layer components { … }`) before the entry's, so no import order 
 `index.css` first. And `index.css` is the first import of `web/src/main.tsx`, so that within the
 entry's own stylesheet the tokens come before anything else. `web/src/ui/tokens.test.ts` fails when
 the page's statement is missing, comes after a stylesheet or differs from `index.css`'s, and when
-anything else is `main.tsx`'s first import.
+anything else is `main.tsx`'s first import; so does `css-check`. The order is written twice, in
+`web/index.html` and in `ui/index.css`: change the two together (the browser keeps the first one it
+meets).
 
 | File | Layer | What |
 |---|---|---|
@@ -39,11 +41,12 @@ anything else is `main.tsx`'s first import.
 | `roles.ts`, `contrast.ts` | | the list of colour roles and the pairs they allow, as data for the tests and the gallery |
 
 A later layer wins over an earlier one whatever the specificity, and a rule in no layer wins over
-every layer. `base` (elements), `components` (one file per component, plain CSS) and `screens` (what
-only one screen needs) are declared for the files that will fill them; `web/src/styles.css` is in
-no layer until its rules move there. Two things stay out of the layers on purpose: the apps
-renderer injects its defaults (`:where(:root) { color-scheme: light dark; --a2ui-… }`) in no
-layer, so the `color-scheme` switch and `a2ui.css` would lose to them from inside one.
+every layer. `base` holds the elements (`ui/base.css`), `components` one file per component (plain
+CSS), and `screens` what only one screen needs; the screens' stylesheets are in no layer until each
+screen is rebuilt ([Where styles live](#where-styles-live)). Two things stay out of the layers on
+purpose: the apps renderer injects its defaults (`:where(:root) { color-scheme: light dark;
+--a2ui-… }`) in no layer, so the `color-scheme` switch and `a2ui.css` would lose to them from
+inside one.
 
 **The naming rule.** `--<kind>-<name>`, with the kind one of `color`, `space`, `text` (a size),
 `type` (a role), `font`, `tracking`, `radius`, `control`, `shadow`, `duration`, `ease`, `z` and
@@ -52,7 +55,7 @@ that needs one (a shadow, the lift) takes it from a role. **No colour literal is
 `web/src/ui/themes/`**: `web/scripts/css-check.mjs` fails on a hex colour, a colour function or a
 named colour in any other stylesheet's declarations.
 
-**The older names.** `web/src/styles.css` still uses `--tt-canvas`, `--tt-fg` and the rest.
+**The older names.** The screens' stylesheets still use `--tt-canvas`, `--tt-fg` and the rest.
 `legacy.css` keeps each as an alias of its role or scale (`--tt-canvas: var(--color-bg)`), so the
 screens look as they did; a test checks that every one still resolves, to the colour it had. New
 CSS uses the roles and scales; the aliases go when the last screen has moved.
@@ -250,6 +253,102 @@ error's) shows it too: `.tt-app .a2ui-textfield:focus-visible`, 17.8 light and 1
 When you change a colour, the test checks the pairs again; a literal that "looks close" is how a
 dark-mode badge ended up white on salmon.
 
+## Where styles live
+
+| Where | Layer | What |
+|---|---|---|
+| `web/src/ui/index.css` | | the layers' order and the design system's files ([Tokens](#tokens)) |
+| `web/src/ui/base.css` | `base`, and two parts in none | the elements (the page, headings, links, the focus ring, form fields) and the few utilities (`tt-sr-only`, `tt-muted`, `tt-small`, `tt-error`, `tt-center-text`); in no layer, what reaches every element on purpose and the touch screen's checkbox rules (below) |
+| `web/src/ui/<Name>.css` | `components` | a component's rules, beside `<Name>.tsx`, which imports it |
+| a new screen's own stylesheet | `screens` | beside the screen's components, imported by them |
+| `web/src/legacy-shared.css` | none | what several screens share from before the components: buttons, lists, panels and rows, notices, labels, the editor and the form pattern. Each is what a component replaces; nothing new goes in |
+| `web/src/<screen>/<screen>.legacy.css` | none | an old screen's own rules, beside its components (named so a rebuilt screen's `<Screen>.css` can sit beside it, also on a file system that ignores case): `shell`, `auth`, `conversations`, `knowledge`, `boards`, `search`, `apps`, `settings`, `browser`, `pwa`, `home`, `offline`, `notifications` |
+| `web/src/markdown.legacy.css` | none | the Markdown renderer's, beside `markdown.tsx` |
+| `web/src/styles.css` | | the list of `@import`s of the old stylesheets (the rows from `base.css` to `markdown.legacy.css`), in the order of the cascade, and nothing else |
+
+`web/src/main.tsx` imports `ui/index.css` first and `styles.css` after the fonts; components import
+their own stylesheets. Nothing outside `index.css` declares a layer's place: `index.css` sets the
+order, `@layer tokens, themes, base, components, screens`, before any file uses one.
+
+**Which stylesheets go in the list.** Only the old ones: the rules of the one stylesheet the app had
+before its design system, which `css-check`'s `OLD_STYLESHEETS` names in their order. A component's
+stylesheet, and a new or rebuilt screen's, is not listed: the module that needs it imports it
+(`import './Home.css'`), and it puts its rules in a layer (`components`, `screens`). `css-check`
+fails when a stylesheet under `web/src/` is loaded no way or more than one way (listed, imported by
+`ui/index.css`, imported by a module), when the list is not exactly `OLD_STYLESHEETS` in that order
+as plain `@import`s, when an old stylesheet declares a layer, and when `base.css` is not its three
+parts in order. When a screen is rebuilt, its old file leaves the list (and `OLD_STYLESHEETS`) once
+its last old rule has gone.
+
+**How the cascade is ordered.** Most of the screens' rules were once one file and are still in no
+layer, where two rules of the same specificity on one element are settled by which comes later.
+The list in `styles.css` is in the order the old file had (base, the shared rules, then the
+screens), and each file keeps its rules in their old order, so a rule placed late on purpose is
+still after what it overrides: the phone's block (the sidebar a drawer, one pane at a time), split
+into a block per screen, each at its old place among that screen's rules (not at the end of the
+file), the coarse pointer's after the rules it overrides, and reduced motion after what it stops. The old file interleaved screens, so no order keeps every pair of rules in place: the ones
+that changed order were each checked to be unable to meet on one element (the two containers
+never nest, or both set the same value).
+
+**What is in a layer, and what isn't yet.**
+- `ui/base.css` is mostly in `base`, so a component wins over an element's defaults (a field's
+  border and padding, a button's font) by the layer alone, without fighting their specificity. Its
+  element rules leave the components' elements out all the same, with the opt-out below ([The
+  old stylesheets' rules leave them alone](#components)). The layer settles only the properties
+  both rules set: a field's `min-height` from the base would still stretch a component that sets
+  its height and no `min-height`, which the opt-out prevents; and it keeps a rule off the
+  components should it ever leave the layer. It costs nothing (`:where()` adds no specificity).
+- Two parts of `ui/base.css` stay in no layer. First, what reaches every element on purpose,
+  components included (`EVERYWHERE`): border-box sizing, the selection's and the scrollbars'
+  colours, the caret, the search field's clear button, and 16px text by default in a field in a
+  narrow window, which keeps iOS from zooming in on focus (`--tt-text-no-zoom`, an alias of its own,
+  not a step of the type scale, so a change to the scale can't bring the zoom back). It is a
+  default, not a guarantee: a more specific old rule still sets its own size (`.tt-editor textarea`
+  keeps its 0.9rem, as it did before). These win over a
+  component's own rule, as they did in the one stylesheet; in the layer they would lose to it.
+  Second, on a touch screen, the rules that make a checkbox or a radio the box alone and its label
+  the target: they beat single-class rules of the screens by specificity (`.tt-checks label`,
+  `.tt-capture-check`), which a layered rule can't. They move into `base` with those screens. Being
+  in no layer, they need the opt-out absolutely: without it, they made the design system's switch a
+  20px square on a touch screen.
+- The screens' files and `legacy-shared.css` are in no layer, and a rule of theirs that can match
+  anywhere (`input[data-overdue]` in `boards/boards.legacy.css`) carries the opt-out for that reason. In no
+  layer, a screen's rule beats
+  every component's rule whatever the specificity, so while a screen's old classes are on an element
+  a component's class can't restyle it: a screen moves onto a component by taking the old class
+  off the element (and its rule out of the file), not by adding a component's class beside it. When
+  a screen is rebuilt, what stays its own goes into `@layer screens`, which comes after
+  `components` and so still wins over a component on that screen, now by layer order. All of this
+  is for normal declarations: for `!important` ones the order turns round (an earlier layer wins
+  over a later one, and a layered one over one in no layer), which is one more reason the app
+  writes none.
+- The apps renderer's styles are in no layer, so the rules that override them (`.tt-app .a2ui-…`,
+  in `apps/apps.legacy.css`) stay in no layer, even when the rest of that file moves into `screens`.
+
+**Changing the order.** Moving a rule to another file, or into a layer, can change which rule wins
+on an element. Before such a change, list every pair of rules that could meet on one element and set
+a property in common, and work out each pair's winner before and after: first by layer (no layer
+over `screens` over `components` over `base` over `themes` over `tokens`; turned round for
+`!important`), then by specificity, then by order, which settles only rules of the same layer and
+specificity. A rule moved between named layers (from `base` to `screens`, say) can go from losing
+to winning against a rule in `components` whatever their specificities. Then compare `make screens`
+before and after.
+
+**Tokens only, in the design system.** Under `web/src/ui/`, apart from the files that define the
+tokens (`tokens.css`, `themes/` and `legacy.css`), a font size, a spacing value (`margin`,
+`padding`, `gap`), a radius, a shadow or a duration is a token, never a literal: `css-check.mjs`
+fails on `padding: 0.5rem` there and passes `padding: var(--space-2)`. The few literals no scale
+has (`0`, a `1px` hairline, `100%`, `50%` for a circle) are allowed, each with its reason in the
+script's `SCALE_LITERALS` (`-1px` too, a hairline the other way); `env()` (the safe areas) and
+unitless numbers (a line height, a factor) are not lengths, but a fallback, in `var()` or `env()`,
+is checked like the rest. A custom property a component sets is held to the same rule, since it is
+used where the check can't see (its sizes and times; a percentage, a share of something, is not on
+a scale); `LOCAL_LITERALS` names the few that may hold a literal, with the reason (the apps
+renderer's own padding and chip size, in `a2ui.css`). In the files that define the tokens only the
+definitions may hold a literal: a rule placed there is checked like any other. A value off the
+scales that `base.css` had is an alias in `legacy.css` (`--tt-text-body: 15px`). The screens' older
+files are not held to this until they are rebuilt.
+
 ## The stylesheets
 
 Every stylesheet under `web/src/` is global, so a class name is shared by the whole app: declaring a
@@ -258,8 +357,9 @@ every highlighted word of a search result a row of its own). `web/scripts/css-ch
 `make check` and CI, reads every `.css` file under `web/src/` and fails when a `.tt-` or `.ui-`
 selector is declared twice at the top level, in one file or in two (inside `@layer` blocks counts as
 the top level; a state or a screen size goes in another at-rule block; two different things get two
-names), when a `tt-` or `ui-` class a component's `className` uses has no rule, and when a colour literal is
-written outside `web/src/ui/themes/`. A class that is deliberately an unstyled hook goes in the
+names), when a `tt-` or `ui-` class a component's `className` uses has no rule, when a colour literal is
+written outside `web/src/ui/themes/`, and when a size, a space, a radius, a shadow or a duration is
+a literal under `web/src/ui/` ([above](#where-styles-live)). A class that is deliberately an unstyled hook goes in the
 script's `UNSTYLED` list, with the reason. It reads class selectors (not an attribute selector's
 value), a component's `className`, and the strings of a lookup table in capitals
 (`const HEALTH_CLASS = { ok: 'tt-ok' }`); a class built from pieces is not seen, and the header of
@@ -280,7 +380,7 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
   them is 44px.
 - **States are designed.** Hover, focus (the ring), pressed, disabled (a look of its own on the
   neutral ground, never half-opacity) and, where they apply, loading and invalid.
-- **The old stylesheet's rules leave them alone.** `styles.css` is in no layer, so a rule of it
+- **The old stylesheets' rules leave them alone.** The old stylesheets (those `styles.css` lists) are mostly in no layer, so a rule of theirs
   that can match an element wherever it is would beat every component's own style: one by an
   element's name (`h1` to `h3`, `p`, `code`, `pre`, `kbd`, `samp`, `a`, `button`, the fields, a
   checkbox's or a radio's label, also under `pointer: coarse`, `fieldset`), by a state or a
@@ -289,15 +389,18 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
   element a component draws has a class that starts with `ui-` (a control's native element also
   has `ui-control`), and each of those rules skips such elements: its subject carries
   `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no specificity, and the
-  screens' own elements have no `ui-` class, so they are styled exactly as before. Each component
+  screens' own elements have no `ui-` class, so they are styled exactly as before. In
+  `ui/base.css`'s `@layer base` a component wins where both set a property; the opt-out stays
+  there too, for what only the base sets ([Where styles live](#where-styles-live)). Each component
   draws its own focus ring (`--line-focus` in `--color-focus`, 3:1 on every ground). `css-check`
-  fails on such a rule outside `web/src/ui/` without it, unless its `EVERYWHERE` list allows the
+  fails on such a rule outside `web/src/ui/` or in `web/src/ui/base.css` without it, unless its `EVERYWHERE` list allows the
   selector, only for the properties it names, with the reason. `web/src/ui/elementRules.test.tsx`
   draws every component (each gallery, and the overlays open) and fails when an element a
-  component draws has no `ui-` class or a rule of `styles.css` reaches one;
+  component draws has no `ui-` class or a rule of an old stylesheet reaches one;
   `web/src/ui/controlRules.test.tsx` checks the controls the same way, and that no rule names a
   `ui-` class outside `:where()`. A rule scoped by an old container (`.tt-x h2`) still reaches a
-  component put inside that container: a rebuilt screen leaves the container behind.
+  component put inside that container: a rebuilt screen leaves the container behind. Both tests
+  read every old stylesheet (`oldStylesheets()`, the files `styles.css` lists), not the list.
 - **What reaches every element on purpose** (`EVERYWHERE`): the page's `html` and `body`, border-box
   sizing, the scrollbars' and the selection's colours, the search field's clear button, and two
   rules for every field: the caret's colour, and 16px text in a window under 48rem (it keeps iOS

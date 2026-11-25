@@ -1,0 +1,117 @@
+/* Markdown, as markdown.tsx renders it: documents, cards, comments and the chat.
+
+   Its rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
+   and their order with the other files is styles.css's (docs/design.md, "Where styles live").
+   Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
+
+/* A person mentioned in a comment: their name, set apart from the words around it. */
+.tt-mention {
+  padding: 0 0.2em;
+  border-radius: 0.25em;
+  background: var(--tt-accent-soft);
+  font-weight: 600;
+}
+
+/* Markdown, as previews show it. */
+
+.tt-markdown {
+  overflow-wrap: anywhere;
+}
+
+.tt-markdown > :first-child {
+  margin-top: 0;
+}
+
+.tt-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.tt-markdown h1 {
+  margin: 1rem 0 0.4rem;
+  font-size: 1.35rem;
+}
+
+.tt-markdown h2 {
+  margin: 1rem 0 0.4rem;
+}
+
+.tt-markdown h3,
+.tt-markdown h4,
+.tt-markdown h5,
+.tt-markdown h6 {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.95rem;
+}
+
+.tt-markdown p,
+.tt-markdown ul,
+.tt-markdown ol {
+  margin: 0 0 0.75rem;
+}
+
+.tt-markdown pre {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--tt-hover);
+  border-radius: var(--tt-radius);
+  overflow-x: auto;
+}
+
+.tt-markdown :not(pre) > code {
+  padding: 0.1rem 0.3rem;
+  background: var(--tt-hover);
+  border-radius: 4px;
+}
+
+.tt-markdown blockquote {
+  margin: 0 0 0.75rem;
+  padding-inline-start: 0.75rem;
+  border-inline-start: 3px solid var(--tt-line-strong);
+  color: var(--tt-muted);
+}
+
+/* A task list item: the box, then its words, in the place of the bullet. Read-only. */
+.tt-task-item {
+  list-style: none;
+  margin-inline-start: -1.4rem;
+}
+
+.tt-task-item > label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.tt-task-item input {
+  flex: none;
+  min-height: 0;
+  margin: 0;
+}
+
+.tt-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--tt-line);
+}
+
+.tt-markdown a {
+  color: var(--tt-link);
+}
+
+/* Markdown tables (GitHub's), which scroll sideways rather than widen the page. */
+
+.tt-markdown .tt-md-table {
+  margin: 0 0 0.75rem;
+  overflow-x: auto;
+}
+
+.tt-markdown table {
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.tt-markdown th,
+.tt-markdown td {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--tt-line);
+  text-align: start;
+}

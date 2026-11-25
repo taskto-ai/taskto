@@ -1,7 +1,7 @@
 // First of all, before anything that imports a stylesheet: the design tokens and the cascade layers'
 // order (ui/index.css). Vite writes the CSS in the order the modules are imported, so a component's
 // `@layer components { … }` that came first would fix the layers' order before the statement that
-// declares it (src/ui/tokens.test.ts checks this import stays first).
+// declares it (src/ui/tokens.test.ts and css-check check this import stays first).
 import './ui/index.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
