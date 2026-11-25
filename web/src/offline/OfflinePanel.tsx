@@ -8,6 +8,7 @@ import { unsupportedBy } from '../apps/catalog'
 import { useFormat, useT } from '../i18n'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
+import { Heading } from '../ui/Heading'
 import { Icon } from '../ui/Icon'
 import { Notice } from '../ui/Notice'
 import { downloadApp, type StorageStatus, storageStatus, UnsupportedRelease } from './download'
@@ -84,10 +85,10 @@ export function OfflinePanel({
 
   return (
     <section className="ui-offline" aria-label={t('offline.title')}>
-      <h2 className="ui-offline-title">
+      <Heading level={2} size="subsection" className="ui-offline-title">
         <Icon name="offline" size={16} />
         {t('offline.title')}
-      </h2>
+      </Heading>
       {problem === 'schema' && <Notice tone="danger">{t('offline.schemaNewer')}</Notice>}
       {problem === 'unavailable' && <p className="ui-offline-note">{t('offline.unavailable')}</p>}
       {disabled && <p className="ui-offline-note">{t('offline.disabled')}</p>}

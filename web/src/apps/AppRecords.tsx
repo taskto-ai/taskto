@@ -3,10 +3,11 @@
 // restoring them take the right to change them. The server decides what each person reads and
 // changes: this only asks.
 
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import type { AppAccess, AppDefinition } from '../api'
 import { useT } from '../i18n'
 import { Button } from '../ui/Button'
+import { Heading } from '../ui/Heading'
 import { IconButton } from '../ui/IconButton'
 import { Panel } from '../ui/Panel'
 import { AppExplorer } from './AppExplorer'
@@ -14,6 +15,15 @@ import './AppRecords.css'
 
 // Whether the caller may see the app's records at all.
 export const readsRecords = (access: AppAccess) => access.read_records !== 'none'
+
+// The nearest box around an element that scrolls up and down.
+function scrollBox(el: HTMLElement): HTMLElement | null {
+  for (let at = el.parentElement; at; at = at.parentElement) {
+    const overflow = getComputedStyle(at).overflowY
+    if ((overflow === 'auto' || overflow === 'scroll') && at.scrollHeight > at.clientHeight) return at
+  }
+  return null
+}
 
 // The way to the records, in the app's header: opens the panel, and closes it again.
 export function RecordsButton({
@@ -66,22 +76,24 @@ export function AppRecords({
   onRestored: () => void
 }) {
   const t = useT()
-  const heading = useRef<HTMLHeadingElement>(null)
   // Opened from the header, which may be a screen away: the panel is brought into view and the
-  // keyboard taken to it.
+  // keyboard taken to it. Only the page's own scroll box moves (scrollIntoView would scroll every
+  // box around it, the shell's too).
   useEffect(() => {
-    if (!open) return
-    heading.current?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
-    heading.current?.focus({ preventScroll: true })
-  }, [open])
+    const el = open ? document.getElementById(`${id}-title`) : null
+    if (!el) return
+    const box = scrollBox(el)
+    if (box) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top
+    el.focus({ preventScroll: true })
+  }, [open, id])
   if (!open || !readsRecords(access)) return null
   const canChange = writable && access.modify_records !== 'none'
   return (
     <Panel as="section" padded id={id} aria-labelledby={`${id}-title`} className="ui-records">
       <header className="ui-records-head">
-        <h2 id={`${id}-title`} ref={heading} tabIndex={-1} className="ui-records-title">
+        <Heading level={2} id={`${id}-title`} tabIndex={-1} className="ui-records-title">
           {t('apps.records.open')}
-        </h2>
+        </Heading>
         <IconButton icon="close" label={t('apps.records.close')} onClick={onClose} />
       </header>
       <AppExplorer

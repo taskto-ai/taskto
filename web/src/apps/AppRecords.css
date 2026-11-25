@@ -14,12 +14,6 @@
     gap: var(--space-3);
   }
 
-  .ui-records-title {
-    margin: 0;
-    font: var(--type-section);
-    color: var(--color-text);
-  }
-
   .ui-records-title:focus-visible {
     outline: var(--line-focus) solid var(--color-focus);
     outline-offset: var(--line-focus-offset);

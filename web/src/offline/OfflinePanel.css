@@ -15,9 +15,6 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    margin: 0;
-    font: var(--type-ui-strong);
-    color: var(--color-text);
   }
 
   .ui-offline-state {
