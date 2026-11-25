@@ -1,8 +1,11 @@
-// One entry of the transcript: the person's message or the agent's reply, with the tools the agent
-// used in it, and the error it ended on.
+// One entry of the transcript: the person's message, in a quiet bubble at the end side, or the
+// agent's reply, marked with its dot, with the tools the agent used in it and the error it ended on.
 
 import { useT } from '../i18n'
 import { Markdown } from '../markdown'
+import { AgentDot } from '../ui/AgentDot'
+import { Notice } from '../ui/Notice'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { ToolLine } from './ToolLine'
 import type { ChatMessage, ToolUse } from './transcript'
 
@@ -17,31 +20,34 @@ export function Message({
   apps: Set<ToolUse>
 }) {
   const t = useT()
+  if (message.role === 'user') {
+    return (
+      <article className="ui-chat-msg" data-role="user">
+        <VisuallyHidden>{t('conversations.you')}</VisuallyHidden>
+        {/* What the person typed shows as typed, never as Markdown. */}
+        {message.text && <div className="ui-chat-msg-text">{message.text}</div>}
+        {message.error && <Notice tone="danger">{message.error}</Notice>}
+      </article>
+    )
+  }
   return (
-    <article className="tt-message" data-role={message.role} aria-busy={message.pending || undefined}>
-      <span className="tt-sr-only">{message.role === 'user' ? t('conversations.you') : t('conversations.agent')}</span>
-      {message.text &&
-        (message.role === 'assistant' ? <AgentText text={message.text} /> : <UserText text={message.text} />)}
-      {message.tools.map((tool) => (
-        <ToolLine key={tool.id} tool={tool} workspace={workspace} launched={apps.has(tool)} />
-      ))}
-      {message.pending && !message.text && <span className="tt-muted">{'…'}</span>}
-      {message.error && <EntryError error={message.error} />}
+    <article className="ui-chat-msg" data-role="assistant" aria-busy={message.pending || undefined}>
+      <AgentDot className="ui-chat-msg-dot" />
+      <div className="ui-chat-msg-body">
+        <VisuallyHidden>{t('conversations.agent')}</VisuallyHidden>
+        {/* The agent's replies are Markdown. */}
+        {message.text && (
+          <div className="ui-chat-markdown">
+            <Markdown text={message.text} headingShift={2} lineBreaks />
+          </div>
+        )}
+        {message.tools.map((tool) => (
+          <ToolLine key={tool.id} tool={tool} workspace={workspace} launched={apps.has(tool)} />
+        ))}
+        {message.pending && !message.text && <span className="ui-chat-pending">{'…'}</span>}
+        {/* What the turn ended on: the provider's error, or that it was stopped. */}
+        {message.error && <Notice tone="danger">{message.error}</Notice>}
+      </div>
     </article>
   )
-}
-
-// What the user typed shows as typed.
-function UserText({ text }: { text: string }) {
-  return <div className="tt-message-text">{text}</div>
-}
-
-// The agent's replies are Markdown.
-function AgentText({ text }: { text: string }) {
-  return <Markdown text={text} headingShift={2} lineBreaks />
-}
-
-// What the agent's turn ended on: the provider's error, or that it was stopped.
-function EntryError({ error }: { error: string }) {
-  return <p className="tt-error">{error}</p>
 }
