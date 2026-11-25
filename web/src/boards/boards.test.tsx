@@ -150,12 +150,22 @@ function server(access: 'write' | 'read', tweak?: (cards: TestCard[]) => void) {
         c.blocked = Boolean(c.blocked_reason) || c.blocked_by.length > 0
       })
     }
+    // As the server orders a column: before its `position`-th other card, or last.
     routes[`POST ${C}/${id}/move`] = (call) => {
-      const { version, column } = call.body as { version: number; column: string }
+      const { version, column, position } = call.body as { version: number; column: string; position?: number }
       return update(id, version, (c) => {
+        cards.splice(cards.indexOf(c), 1)
         c.column = column
+        const others = cards.filter((x) => x.column === column)
+        const at = position === undefined || position >= others.length ? -1 : cards.indexOf(others[position])
+        if (at < 0) cards.push(c)
+        else cards.splice(at, 0, c)
       })
     }
+    routes[`POST ${C}/${id}/archive`] = (call) =>
+      update(id, (call.body as { version: number }).version, (c) => {
+        c.column = 'archived'
+      })
     routes[`POST ${C}/${id}/comments`] = (call) => {
       const comment = {
         id: 9,
@@ -446,7 +456,7 @@ test('a stale change is shown, and redone over the current card only when asked'
   expect(within(view).queryByRole('alert')).toBeNull()
 
   // Or the writer takes theirs, and their own change is dropped.
-  Object.assign(cards[0], { title: 'Newer title', version: 9 })
+  Object.assign(cards.find((c) => c.id === 1) as TestCard, { title: 'Newer title', version: 9 })
   fireEvent.click(within(view).getByRole('button', { name: 'Edit' }))
   fireEvent.change(within(view).getByLabelText('Title'), { target: { value: 'Mine' } })
   fireEvent.click(within(view).getByRole('button', { name: 'Save' }))
@@ -1023,14 +1033,16 @@ test('a card moves by its Move menu, without a mouse, as a drop there would, and
   // To the top: before the column's first card, with its position, as a drop on that card.
   await choose(todo, 'Move “Book the call”', 'To the top of To do')
   await waitFor(() => expect(sent('POST', `${C}/4/move`)).toEqual([{ version: 1, column: 'todo', position: 0 }]))
-  expect((await screen.findByRole('status')).textContent).toBe('Moved “Book the call” to To do.')
+  expect((await screen.findByRole('status')).textContent).toBe('Moved “Book the call” to the top of To do.')
 
   // To another column: last there, as a drop on the column, with no position.
   await choose(todo, 'Move “Draft the email”', 'To Review')
   const review = screen.getByRole('region', { name: 'Review' })
   const moved = await within(review).findByRole('button', { name: /^Draft the email/ })
   expect(sent('POST', `${C}/3/move`)).toEqual([{ version: 1, column: 'review' }])
-  await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Moved “Draft the email” to Review.'))
+  await waitFor(() =>
+    expect(screen.getByRole('status').textContent).toBe('Moved “Draft the email” to the bottom of Review.'),
+  )
   // The card was drawn again in its new column: the focus went with it, not to the page.
   await waitFor(() => expect(document.activeElement).toBe(moved))
 })
@@ -1125,4 +1137,260 @@ test("another board of the space is chosen from the menu beside the board's name
   await choose(document.body, 'Switch board', 'Ops')
   await screen.findByRole('heading', { level: 1, name: 'Ops' })
   await screen.findByRole('region', { name: 'To do' })
+})
+
+// The confirmation the open card asks before it closes over something unsaved.
+const discardAsked = () => screen.queryByRole('alertdialog', { name: 'Discard what you haven’t saved?' })
+
+test('Escape asks before it closes a card over an unsaved description, and Cancel keeps the draft', async () => {
+  const { sent } = server('write')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  fireEvent.click(await within(view).findByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(view).getByLabelText('Description'), { target: { value: 'Half-written' } })
+  const preview = within(view).getByRole('radio', { name: 'Preview' })
+  fireEvent.click(preview)
+  fireEvent.keyDown(preview, { key: 'Escape' })
+  const asked = await screen.findByRole('alertdialog', { name: 'Discard what you haven’t saved?' })
+  // Cancel is the default: the drawer stays, with the draft.
+  expect(document.activeElement).toBe(within(asked).getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(within(asked).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(discardAsked()).toBeNull())
+  expect(screen.getByRole('region', { name: 'Write the post' })).toBeTruthy()
+  fireEvent.click(within(view).getByRole('radio', { name: 'Write' }))
+  expect((within(view).getByLabelText('Description') as HTMLTextAreaElement).value).toBe('Half-written')
+
+  // Asked again and discarded: the drawer closes, and nothing was sent.
+  fireEvent.keyDown(within(view).getByRole('radio', { name: 'Write' }), { key: 'Escape' })
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }))
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Write the post' })).toBeNull())
+  expect(sent('PATCH', `${C}/1`)).toEqual([])
+})
+
+test('the close button and another card ask first over a comment being written; nothing unsaved closes at once', async () => {
+  server('write')
+  render(<BoardsPage workspace={1} />)
+  let view = await openCard('Write the post')
+  fireEvent.change(await within(view).findByLabelText('Comment'), { target: { value: 'Half a thought' } })
+
+  // Another card on the board: asked, and refused, the first stays open with its draft.
+  fireEvent.click(screen.getByRole('button', { name: /^Get approval/ }))
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(discardAsked()).toBeNull())
+  expect((within(view).getByLabelText('Comment') as HTMLTextAreaElement).value).toBe('Half a thought')
+  expect(screen.queryByRole('region', { name: 'Get approval' })).toBeNull()
+
+  // The close button: asked too.
+  fireEvent.click(within(view).getByRole('button', { name: 'Close' }))
+  expect(await screen.findByRole('alertdialog')).toBeTruthy()
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Discard' }))
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Write the post' })).toBeNull())
+
+  // With nothing unsaved, Escape closes it without a question.
+  view = await openCard('Get approval')
+  fireEvent.keyDown(within(view).getByRole('button', { name: 'Close' }), { key: 'Escape' })
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Get approval' })).toBeNull())
+  expect(discardAsked()).toBeNull()
+})
+
+test('a label typed into its form, or a reason into the blocked form, is asked about before the card closes', async () => {
+  server('write')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  fireEvent.click(within(view).getByRole('button', { name: 'Add a label' }))
+  fireEvent.change(within(view).getByLabelText('New label'), { target: { value: 'half' } })
+  fireEvent.click(within(view).getByRole('button', { name: 'Close' }))
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(discardAsked()).toBeNull())
+  fireEvent.click(within(view).getByRole('button', { name: 'Cancel' }))
+
+  fireEvent.click(within(view).getByRole('button', { name: 'Set blocked' }))
+  fireEvent.change(within(view).getByLabelText('Reason'), { target: { value: 'waiting' } })
+  fireEvent.click(within(view).getByRole('button', { name: 'Close' }))
+  expect(await screen.findByRole('alertdialog')).toBeTruthy()
+})
+
+test('moving a card to the top and then the bottom of its column says each place', async () => {
+  server('write', (cards) => {
+    cards.push(card(3, 'Draft the email', 'todo'), card(4, 'Book the call', 'todo'))
+  })
+  render(<BoardsPage workspace={1} />)
+  const todo = await screen.findByRole('region', { name: 'To do' })
+  await choose(todo, 'Move “Book the call”', 'To the top of To do')
+  await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Moved “Book the call” to the top of To do.'))
+  await choose(todo, 'Move “Book the call”', 'To the bottom of To do')
+  await waitFor(() =>
+    expect(screen.getByRole('status').textContent).toBe('Moved “Book the call” to the bottom of To do.'),
+  )
+})
+
+test('a drop onto a card in the middle of a column says before which card it went', async () => {
+  server('write', (cards) => {
+    cards.push(card(3, 'Draft the email', 'todo'), card(4, 'Book the call', 'todo'))
+  })
+  render(<BoardsPage workspace={1} />)
+  await screen.findByRole('region', { name: 'To do' })
+  const item = (title: string) =>
+    screen.getByRole('button', { name: new RegExp(`^${title}`) }).closest('li') as HTMLElement
+  fireEvent.dragStart(item('Book the call'))
+  fireEvent.drop(item('Draft the email'))
+  await waitFor(() =>
+    expect(screen.getByRole('status').textContent).toBe('Moved “Book the call” before “Draft the email” in To do.'),
+  )
+})
+
+test('with a filter hiding the first card of a column, its top is the top of what is shown, as a drop there', async () => {
+  const { sent } = server('write', (cards) => {
+    cards.push(
+      card(3, 'Draft the email', 'todo', { labels: ['x'] }),
+      card(4, 'Book the call', 'todo', { labels: ['x'] }),
+    )
+  })
+  render(<BoardsPage workspace={1} />)
+  const filters = await screen.findByRole('group', { name: 'Filter the cards' })
+  await choose(filters, 'Label: All labels', 'x')
+  const todo = screen.getByRole('region', { name: 'To do' })
+  // "Write the post" is hidden above them: the top of what is shown is before "Draft the email".
+  await choose(todo, 'Move “Book the call”', 'To the top of To do')
+  await waitFor(() => expect(sent('POST', `${C}/4/move`)).toEqual([{ version: 1, column: 'todo', position: 1 }]))
+  // The same as a drop on that card.
+  const item = (title: string) =>
+    screen.getByRole('button', { name: new RegExp(`^${title}`) }).closest('li') as HTMLElement
+  await waitFor(() => expect(within(todo).getAllByRole('listitem')[0].textContent).toContain('Book the call'))
+  fireEvent.dragStart(item('Draft the email'))
+  fireEvent.drop(item('Book the call'))
+  await waitFor(() => expect(sent('POST', `${C}/3/move`)).toEqual([{ version: 1, column: 'todo', position: 1 }]))
+})
+
+test('the Move menu moves a card into a column that has cards, last there, with no position', async () => {
+  const { sent } = server('write')
+  render(<BoardsPage workspace={1} />)
+  const todo = await screen.findByRole('region', { name: 'To do' })
+  await choose(todo, 'Move “Write the post”', 'To Doing')
+  const doing = screen.getByRole('region', { name: 'Doing' })
+  await waitFor(() =>
+    expect(
+      within(doing)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent?.slice(0, 12)),
+    ).toEqual(['Get approval', 'Write the po']),
+  )
+  expect(sent('POST', `${C}/1/move`)).toEqual([{ version: 1, column: 'doing' }])
+})
+
+test('after sending a comment the focus is back in the comment box', async () => {
+  const { sent } = server('write')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  const box = (await within(view).findByLabelText('Comment')) as HTMLTextAreaElement
+  fireEvent.change(box, { target: { value: 'Done' } })
+  press(within(view).getByRole('button', { name: 'Comment' }))
+  await waitFor(() => expect(sent('POST', `${C}/1/comments`)).toHaveLength(1))
+  await waitFor(() => expect(box.value).toBe(''))
+  expect(document.activeElement).toBe(box)
+})
+
+test('moving the open card with its Move menu on the board keeps the focus on it there', async () => {
+  server('write')
+  render(<BoardsPage workspace={1} />)
+  await openCard('Write the post')
+  const todo = screen.getByRole('region', { name: 'To do' })
+  await choose(todo, 'Move “Write the post”', 'To Review')
+  const review = screen.getByRole('region', { name: 'Review' })
+  const moved = await within(review).findByRole('button', { name: /^Write the post/ })
+  await waitFor(() => expect(document.activeElement).toBe(moved))
+})
+
+test('closing a card just archived gives the focus to the column it was in', async () => {
+  server('write')
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  await choose(view, 'Card actions', 'Archive')
+  const todo = screen.getByRole('region', { name: 'To do' })
+  await waitFor(() => expect(within(todo).queryByRole('button', { name: /^Write the post/ })).toBeNull())
+  fireEvent.click(within(view).getByRole('button', { name: 'Close' }))
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Write the post' })).toBeNull())
+  await waitFor(() => expect(todo.contains(document.activeElement)).toBe(true))
+})
+
+test('cancelling the label form, or removing a label, puts the focus on Add a label, not on a remove button', async () => {
+  server('write', withPlanning)
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  press(within(view).getByRole('button', { name: 'Add a label' }))
+  press(within(view).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(document.activeElement).toBe(within(view).getByRole('button', { name: 'Add a label' })))
+  press(within(view).getByRole('button', { name: 'Remove the label design' }))
+  await waitFor(() => expect(within(view).queryByRole('button', { name: 'Remove the label design' })).toBeNull())
+  await waitFor(() => expect(document.activeElement).toBe(within(view).getByRole('button', { name: 'Add a label' })))
+})
+
+test('opening a card brings its tile into view beside the drawer', async () => {
+  server('read')
+  const seen: Element[] = []
+  const scroll = vi.fn(function (this: Element) {
+    seen.push(this)
+  })
+  Element.prototype.scrollIntoView = scroll
+  try {
+    render(<BoardsPage workspace={1} />)
+    await openCard('Get approval')
+    await waitFor(() => expect(seen).toContain(screen.getByRole('button', { name: /^Get approval/ })))
+  } finally {
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  }
+})
+
+test("a private space's board menu has no New board and no archiving", async () => {
+  server('write')
+  const answered = globalThis.fetch
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input) === '/api/workspaces/1/spaces'
+      ? Response.json({ spaces: [{ ...space('write'), kind: 'private', name: 'Private' }] })
+      : String(input) === B
+        ? Response.json({ boards: [{ ...board, kind: 'personal', name: 'Personal' }] })
+        : answered(input, init),
+  )
+  render(<BoardsPage workspace={1} />)
+  await screen.findByRole('heading', { level: 1, name: 'Personal' })
+  expect((await menuItems(document.body, 'Board actions')).names).toEqual(['Rename'])
+})
+
+test("a card's name for a screen reader is short: its title, whether it is blocked, and when it is due", async () => {
+  server('read', (cards) => {
+    withPlanning(cards)
+    Object.assign(cards[0], { blocked: true, blocked_reason: 'a long reason that the open card says' })
+  })
+  render(<BoardsPage workspace={1} />)
+  await screen.findByRole('region', { name: 'To do' })
+  expect(screen.getByRole('button', { name: 'Write the post: blocked and overdue since Feb 3, 2001' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Plain card' })).toBeTruthy()
+})
+
+test('a card due tomorrow says so in words, in the warning tone', async () => {
+  const now = new Date()
+  const tomorrow = localToday(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1))
+  server('read', (cards) => {
+    cards[0].due = tomorrow
+    cards[1].due = localToday()
+  })
+  render(<BoardsPage workspace={1} />)
+  await screen.findByRole('region', { name: 'To do' })
+  expect(screen.getByText('Due tomorrow').className).toContain('ui-badge-warning')
+  expect(screen.getByText('Due today').className).toContain('ui-badge-warning')
+})
+
+test("a card opened from its address is brought into view once the board's cards arrive", async () => {
+  server('read')
+  const seen: Element[] = []
+  Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+    seen.push(this)
+  })
+  try {
+    render(<BoardsPage workspace={1} open="3:7:2" />)
+    await screen.findByRole('region', { name: 'Get approval' })
+    await waitFor(() => expect(seen).toContain(screen.getByRole('button', { name: /^Get approval/ })))
+  } finally {
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  }
 })

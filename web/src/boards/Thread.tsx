@@ -9,6 +9,7 @@ import { Heading } from '../ui/Heading'
 import { Menu, MenuButton, MenuItem, MenuList } from '../ui/Menu'
 import { Textarea } from '../ui/Textarea'
 import { mentionNames, mentionOf } from './comments'
+import { useDraft } from './drafts'
 import type { Person } from './people'
 import { authorLabel } from './text'
 
@@ -61,6 +62,7 @@ export function Composer({
   const [error, setError] = useState<string | null>(null)
   const t = useT()
   const field = useRef<HTMLTextAreaElement>(null)
+  useDraft(body.trim() !== '')
   // Puts the person's mention where the cursor is, and the cursor after it.
   const mention = (who: Person) => {
     const at = field.current
@@ -82,6 +84,9 @@ export function Composer({
     try {
       onAdded(await api<Comment>(url, { method: 'POST', body: { body } }))
       setBody('')
+      // Sent, the button can't be pressed again (the box is empty): the focus goes back to the box
+      // for the next comment, rather than to the page.
+      field.current?.focus()
     } catch (err) {
       setError(errorText(err))
     } finally {

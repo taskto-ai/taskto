@@ -5,6 +5,7 @@ import { Button } from '../ui/Button'
 import { Checkbox } from '../ui/Checkbox'
 import { Field } from '../ui/Field'
 import { Input } from '../ui/Input'
+import { useDraft } from './drafts'
 import { blockedText } from './text'
 
 // Why the card is blocked: a reason, other cards of the board it waits for, or both. A writer
@@ -25,6 +26,11 @@ export function Blocked({
   const [editing, setEditing] = useState(false)
   const [reason, setReason] = useState(card.blocked_reason ?? '')
   const [by, setBy] = useState<number[]>(card.blocked_by)
+  useDraft(
+    editing &&
+      (reason.trim() !== (card.blocked_reason ?? '').trim() ||
+        [...by].sort().join() !== [...card.blocked_by].sort().join()),
+  )
   const others = board.filter((c) => c.id !== card.id)
   const t = useT()
   const f = useFormat()
@@ -79,7 +85,7 @@ export function Blocked({
           {others.map((c) => (
             <Checkbox
               key={c.id}
-              label={c.title}
+              label={<span className="ui-board-check-title">{c.title}</span>}
               checked={by.includes(c.id)}
               onChange={(e) => setBy((b) => (e.target.checked ? [...b, c.id] : b.filter((id) => id !== c.id)))}
             />

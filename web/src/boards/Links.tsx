@@ -8,6 +8,7 @@ import { Button } from '../ui/Button'
 import { IconButton } from '../ui/IconButton'
 import { Input } from '../ui/Input'
 import { Select } from '../ui/Select'
+import { useDraft } from './drafts'
 
 type LinkChange = (fields: (base: Card) => Partial<Pick<Card, 'docs' | 'conversations'>>) => Promise<boolean>
 
@@ -24,6 +25,7 @@ export function Documents({
   onChange: LinkChange
 }) {
   const [path, setPath] = useState('')
+  useDraft(path.trim() !== '')
   const t = useT()
   const linkDoc = async (e: FormEvent) => {
     e.preventDefault()

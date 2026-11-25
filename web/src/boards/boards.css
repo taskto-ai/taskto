@@ -15,17 +15,39 @@
     border: 0;
   }
 
+  /* The board: its head, its notices and its columns. While a card is open beside a wide board,
+     it keeps the drawer's width free at its end, so the head's actions stay in reach and the
+     columns scroll out from under the drawer. */
+  .ui-board {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    min-inline-size: 0;
+  }
+
+  @media (min-width: 64.0625rem) {
+    .ui-board[data-drawer] {
+      padding-inline-end: var(--width-drawer);
+    }
+  }
+
+  /* Up to a small laptop, the open card takes the screen: beside it, only a sliver of the board
+     would be left. */
+  @media (max-width: 64rem) {
+    .ui-board-drawer {
+      inline-size: 100vw;
+      border-inline-start: 0;
+    }
+  }
+
   /* The columns side by side; on a narrow screen they scroll sideways in their own box, never
-     the page. */
+     the page. Every column is as tall as the tallest (its cards align to its start), so a card
+     dragged straight across from a long column lands in a short one, not between them. */
   .ui-board-columns {
-    /* The narrowest a column gets before the board scrolls: room for a card's title and its
-       labels on two lines (the drawer's width is set the same way, in Drawer.css). */
-    --ui-board-column-min: 248px;
     display: grid;
     grid-auto-flow: column;
-    grid-auto-columns: minmax(var(--ui-board-column-min), 1fr);
+    grid-auto-columns: minmax(var(--width-board-column), 1fr);
     gap: var(--space-3);
-    align-items: start;
     min-inline-size: 0;
     /* Its own width never widens the page: the columns scroll inside it. */
     contain: inline-size;
@@ -260,9 +282,12 @@
   }
 
   /* The open card's properties: a name and a value per row. */
+  /* The drawer's parts may be narrower than what is in them (a long word, a code block): they
+     wrap, or scroll in their own box, never widen the drawer. */
   .ui-board-props {
     display: grid;
     gap: var(--space-1);
+    min-inline-size: 0;
     margin: 0;
   }
 
@@ -274,6 +299,7 @@
   }
 
   .ui-board-prop > dt {
+    overflow-wrap: anywhere;
     padding-block-start: var(--space-1);
     font: var(--type-small);
     color: var(--color-text-muted);
@@ -285,6 +311,7 @@
     align-items: center;
     gap: var(--space-2);
     min-block-size: var(--control-sm);
+    min-inline-size: 0;
     margin: 0;
   }
 
@@ -357,14 +384,23 @@
     display: grid;
     gap: var(--space-3);
     inline-size: 100%;
+    min-inline-size: 0;
   }
 
   .ui-board-checks {
     display: grid;
     gap: var(--space-1);
+    /* A fieldset is as wide as its widest line unless told otherwise. */
+    min-inline-size: 0;
     margin: 0;
     padding: 0;
     border: 0;
+  }
+
+  /* A card's title beside its box, broken anywhere when it is one long word. */
+  .ui-board-check-title {
+    overflow-wrap: anywhere;
+    min-inline-size: 0;
   }
 
   .ui-board-checks-legend {
@@ -408,7 +444,9 @@
 
   .ui-board-section {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-3);
+    min-inline-size: 0;
     padding-block-start: var(--space-4);
     border-block-start: var(--line-thin) solid var(--color-border);
   }
@@ -423,6 +461,7 @@
 
   /* What people read: the description, at the reading size. */
   .ui-board-reading {
+    min-inline-size: 0;
     font: var(--type-reading);
     overflow-wrap: anywhere;
   }
@@ -435,7 +474,9 @@
 
   .ui-board-thread {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
+    min-inline-size: 0;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -445,6 +486,7 @@
     display: grid;
     grid-template-columns: var(--control-sm) minmax(0, 1fr);
     gap: var(--space-3);
+    min-inline-size: 0;
   }
 
   .ui-board-comment-who {
@@ -455,6 +497,7 @@
 
   .ui-board-comment-body {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-1);
     min-inline-size: 0;
     overflow-wrap: anywhere;

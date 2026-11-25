@@ -61,7 +61,7 @@ CSS uses the roles and scales; the aliases go when the last screen has moved.
 | Elevation | `--shadow-lift` and `--shadow-lift-hover` (the primary button's hard lift), `--shadow-pop` (a menu, a popover), `--shadow-dialog` |
 | Motion | `--duration-fast` 120ms, `-base` 160, `-slow` 240; `--ease-out`, `--ease-in-out`; all of it stops under `prefers-reduced-motion` |
 | Stacking | the `--z-*` levels, below |
-| Width | `--width-reading` 760px (reading and forms), `--width-list` 1,040px (lists), `--width-sidebar` 232px; a board is the window's width |
+| Width | `--width-reading` 760px (reading and forms), `--width-list` 1,040px (lists), `--width-sidebar` 232px; a board is the window's width, its columns at least `--width-board-column` 248px |
 
 ### Stacking
 

@@ -5,7 +5,7 @@ import { dropPosition } from './move'
 
 // Dragging a card: which one, and the column it is over. Each card's Move menu does the same
 // from the keyboard and on touch, so dragging is only a quicker way for a mouse. A drop (or the
-// menu) moves the card with the version last read; onMoved gets the card as moved, and onError the
+// menu) moves the card with the version last read; onMoved gets the card as moved and where it went, and onError the
 // error to show (null when a move starts). The board is read again after every move.
 export function useCardDrag({
   url,
@@ -16,7 +16,7 @@ export function useCardDrag({
 }: {
   url: string
   cards: Card[] | undefined
-  onMoved: (c: Card) => void
+  onMoved: (c: Card, place: MovedTo) => void
   onError: (error: string | null) => void
   reload: () => void
 }) {
@@ -36,7 +36,7 @@ export function useCardDrag({
         method: 'POST',
         body: { version: c.version, column, ...(before ? { position } : {}) },
       })
-      onMoved(updated)
+      onMoved(updated, { before, position })
     } catch (err) {
       onError(
         err instanceof ApiError && err.status === 409 ? t('boards.cardMoved', { title: c.title }) : errorText(err),
@@ -76,3 +76,6 @@ export function useCardDrag({
 }
 
 export type CardDrag = ReturnType<typeof useCardDrag>
+
+// Where a move put a card: before `before` (at `position` among the column's other cards), or last.
+export type MovedTo = { before?: Card; position: number }

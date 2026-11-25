@@ -24,8 +24,9 @@ export function useFocusBack<T extends HTMLElement>(open: boolean) {
 // Keeps the focus inside the element `scope` selects (the open card) when what held it goes (a
 // form closes, a label is removed) or is disabled while a change is sent, either of which drops
 // the focus to the page's body: after each change to its elements, the focus goes back to the element that had
-// it once it can take it again, or else to the first control of its group (the nearest
-// `data-focus-group` around it, found when it was focused), or else to the scope itself. Once the
+// it once it can take it again, or else to its group's default control (`data-focus-default`) or
+// first control (the group is the nearest `data-focus-group` around it, found when it was
+// focused), or else to the scope itself. Once the
 // person goes elsewhere (the focus or a press lands outside the scope) it is left alone.
 export function useFocusKeeper(scope: string) {
   const last = useRef<{ el: HTMLElement; group: Element | null } | null>(null)
@@ -56,7 +57,9 @@ export function useFocusKeeper(scope: string) {
         if (!held.el.matches(':disabled')) held.el.focus()
         return
       }
-      const inGroup = held.group?.isConnected ? focusables(held.group)[0] : undefined
+      const group = held.group?.isConnected ? held.group : null
+      const preferred = group?.querySelector<HTMLElement>('[data-focus-default]:not(:disabled)')
+      const inGroup = preferred ?? (group ? focusables(group)[0] : undefined)
       ;(inGroup ?? root).focus()
     }
     const observer = new MutationObserver(restore)

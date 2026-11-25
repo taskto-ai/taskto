@@ -8,6 +8,7 @@ import { Heading } from '../ui/Heading'
 import { Input } from '../ui/Input'
 import { SegmentedControl } from '../ui/SegmentedControl'
 import { Textarea } from '../ui/Textarea'
+import { useDraft } from './drafts'
 
 // The card's description, rendered as Markdown (a task list's boxes are checkboxes), and the
 // editor of its title and description.
@@ -75,6 +76,7 @@ function EditCard({
   const [title, setTitle] = useState(card.title)
   const [body, setBody] = useState(card.body)
   const [tab, setTab] = useState<'write' | 'preview'>('write')
+  useDraft(title !== card.title || body !== card.body)
   const t = useT()
   return (
     <form

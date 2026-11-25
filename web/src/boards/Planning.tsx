@@ -5,8 +5,9 @@ import { Button } from '../ui/Button'
 import { IconButton } from '../ui/IconButton'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
-import { DueBadge } from './BoardCard'
+import { DueBadge, dueWords } from './BoardCard'
 import type { Fields } from './card'
+import { useDraft } from './drafts'
 import { dueState, useToday } from './due'
 
 // The card's due date. A due date is a calendar day, so it reads the same wherever it is seen; it
@@ -39,12 +40,9 @@ export function Due({
   const f = useFormat()
   const today = useToday()
   const state = dueState(card, today)
-  const badge = state && card.due && (
-    <DueBadge
-      state={state}
-      text={t(state === 'overdue' ? 'boards.overdueOn' : 'boards.dueOn', { date: f.calendarDate(card.due) })}
-    />
-  )
+  // A date picked and not saved yet.
+  useDraft(canWrite && due !== '' && due !== (card.due ?? ''))
+  const badge = state && card.due && <DueBadge state={state} text={dueWords(t, state, card.due, today, f)} />
   if (!canWrite || card.column === 'archived')
     return badge || <span className="ui-board-muted">{t('boards.noDue')}</span>
 
@@ -102,6 +100,7 @@ export function Labels({
   const t = useT()
   const editable = canWrite && card.column !== 'archived'
   const typed = label.trim()
+  useDraft(adding && typed !== '')
   const add = async (e: FormEvent) => {
     e.preventDefault()
     if (!typed) return
@@ -128,7 +127,14 @@ export function Labels({
         </span>
       ))}
       {editable && !adding && (
-        <IconButton icon="plus" size="sm" label={t('boards.newLabel')} onClick={() => setAdding(true)} />
+        <IconButton
+          icon="plus"
+          size="sm"
+          label={t('boards.newLabel')}
+          // Where the focus goes when the form closes, or a label's remove button goes.
+          data-focus-default
+          onClick={() => setAdding(true)}
+        />
       )}
       {editable && adding && (
         <form

@@ -3,6 +3,7 @@ import { api, type Card, type Space } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { Button } from '../ui/Button'
+import { focusables } from '../ui/layers'
 import { Notice } from '../ui/Notice'
 import { Skeleton } from '../ui/Skeleton'
 import { VisuallyHidden } from '../ui/VisuallyHidden'
@@ -10,7 +11,7 @@ import { BoardColumn } from './BoardColumn'
 import { BoardFilters } from './BoardFilters'
 import { CardView } from './CardView'
 import { COLUMN_LABELS, COLUMNS } from './columns'
-import { useCardDrag } from './drag'
+import { type MovedTo, useCardDrag } from './drag'
 import { useToday } from './due'
 import { boardFilter } from './filters'
 import { focusLost } from './focus'
@@ -42,21 +43,33 @@ export function BoardView({
   // The open card as a drag moved it, for the card view to show.
   const [moved, setMoved] = useState<Card | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // What a screen reader is told after a move.
-  const [said, setSaid] = useState('')
+  // What a screen reader is told after a move; `n` makes a repeated message a new one.
+  const [said, setSaid] = useState({ text: '', n: 0 })
   // The column whose new-card form is open, if any.
   const [adding, setAdding] = useState<Card['column'] | null>(null)
   // The card to give the focus to once the board is drawn again: one that moved (and was drawn
   // anew in its column), or the one whose drawer closed. Only when the focus has nowhere else to be.
   const focusCard = useRef<number | null>(null)
+  // The open card's column as last seen on the board: where the focus goes when its drawer closes
+  // after it left the board (archived).
+  const openColumn = useRef<Card['column'] | null>(null)
+  // The open card's question before it goes (CardView): it may hold a draft.
+  const leave = useRef<(() => Promise<boolean>) | null>(null)
   const t = useT()
+  // Where a move put a card, in words: the top of a column, before a card, or the bottom.
+  const movedText = (c: Card, place: MovedTo) => {
+    const column = t(COLUMN_LABELS[c.column])
+    if (!place.before) return t('boards.movedBottom', { title: c.title, column })
+    if (place.position === 0) return t('boards.movedTop', { title: c.title, column })
+    return t('boards.movedBefore', { title: c.title, before: place.before.title, column })
+  }
   const drag = useCardDrag({
     url,
     cards: cards.data,
-    onMoved: (updated) => {
+    onMoved: (updated, place) => {
       if (updated.id === open) setMoved(updated)
       focusCard.current = updated.id
-      setSaid(t('boards.movedTo', { title: updated.title, column: t(COLUMN_LABELS[updated.column]) }))
+      setSaid((was) => ({ text: movedText(updated, place), n: was.n + 1 }))
     },
     onError: setError,
     reload: cards.reload,
@@ -67,38 +80,72 @@ export function BoardView({
   const today = useToday()
   const f = useFormat()
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: run again when the cards or the open card change
+  // Opens a card, once the open one (if another) may go.
+  const show = async (id: number) => {
+    if (open !== null && open !== id && leave.current && !(await leave.current())) return
+    setOpen(id)
+  }
+
   useEffect(() => {
     const id = focusCard.current
-    if (id === null || open === id) return
+    if (id === null || !cards.data) return
     const button = document.querySelector<HTMLElement>(`[data-card-open="${id}"]`)
-    if (!button) return
+    if (button) {
+      focusCard.current = null
+      if (focusLost()) button.focus()
+      return
+    }
+    // The card is no longer on the board (archived): the focus goes to the column it was in, or
+    // else to the board's first card.
+    if (open === id || cards.data.some((c) => c.id === id)) return
     focusCard.current = null
-    if (focusLost()) button.focus()
+    if (!focusLost()) return
+    const column = document.querySelector(`[data-column="${openColumn.current}"]`)
+    const board = document.querySelector('.ui-board-columns')
+    ;((column && focusables(column)[0]) ?? (board && focusables(board)[0]))?.focus()
   }, [cards.data, open])
 
+  // The open card's own tile, brought into view beside the drawer (the board made room for the
+  // drawer in the same commit), once per opening: when it opens, or when the board's cards arrive
+  // for a card opened from its address.
+  const shownTile = useRef<number | null>(null)
+  useEffect(() => {
+    if (open === null) {
+      shownTile.current = null
+      return
+    }
+    if (shownTile.current === open || !cards.data) return
+    const tile = document.querySelector(`[data-card-open="${open}"]`)
+    if (!tile) return
+    shownTile.current = open
+    tile.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [open, cards.data])
+
+  // The same element around the board whatever it shows, so its head isn't drawn anew (and its
+  // menu closed) when the cards arrive.
   if (cards.error && !cards.data)
     return (
-      <>
+      <div className="ui-board">
         {header()}
         {notices}
         <Notice tone="danger">{cards.error}</Notice>
-      </>
+      </div>
     )
   if (!cards.data)
     return (
-      <>
+      <div className="ui-board">
         {header()}
         {notices}
         <BoardSkeleton />
-      </>
+      </div>
     )
 
   const { allLabels, filtering, shown, filterable } = boardFilter(cards.data, label, overdueOnly, today)
   const all = cards.data
+  if (open !== null) openColumn.current = all.find((c) => c.id === open)?.column ?? openColumn.current
 
   return (
-    <>
+    <div className="ui-board" data-drawer={open !== null || undefined}>
       {header(
         filterable && (
           <BoardFilters
@@ -118,7 +165,7 @@ export function BoardView({
       {notices}
       {error && <Notice tone="danger">{error}</Notice>}
       <div role="status" className="ui-board-said">
-        <VisuallyHidden>{said}</VisuallyHidden>
+        <VisuallyHidden key={said.n}>{said.text}</VisuallyHidden>
       </div>
       <div className="ui-board-columns">
         {COLUMNS.map((col) => (
@@ -136,11 +183,11 @@ export function BoardView({
             drag={drag}
             adding={adding === col.id}
             onAdding={(on) => setAdding(on ? col.id : null)}
-            onOpen={setOpen}
+            onOpen={show}
             onAdded={(c) => {
               setAdding(null)
               cards.reload()
-              setOpen(c.id)
+              void show(c.id)
             }}
           />
         ))}
@@ -159,9 +206,10 @@ export function BoardView({
             focusCard.current = open
             setOpen(null)
           }}
+          leave={leave}
         />
       )}
-    </>
+    </div>
   )
 }
 

@@ -53,6 +53,7 @@ export function BoardColumn({
     <section
       className="ui-board-column"
       aria-label={name}
+      data-column={col.id}
       data-drop={(drag.dragged && drag.over === col.id) || undefined}
       onDragOver={(e) => drag.dragOver(e, col.id)}
       onDrop={(e) => drag.drop(e, col.id)}
@@ -80,6 +81,7 @@ export function BoardColumn({
               key={c.id}
               card={c}
               all={all}
+              shownInColumn={inColumn}
               canWrite={canWrite}
               current={c.id === open}
               dragged={drag.dragged?.id === c.id}
