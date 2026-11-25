@@ -4,6 +4,9 @@
 import { useState } from 'react'
 import { api, type Doc, errorText } from '../api'
 import { useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { Notice } from '../ui/Notice'
 import { type Change, type Commit, encodePath } from './docs'
 import { Problem } from './Problem'
 
@@ -35,30 +38,32 @@ export function ConfirmDelete({
     }
   }
   return (
-    <fieldset className="tt-panel" aria-label={t('knowledge.delete.label')}>
-      <p>
-        {t(doc.versioned === false ? 'knowledge.delete.questionUnversioned' : 'knowledge.delete.question', {
-          path: doc.path,
-        })}
-      </p>
-      {error !== null && (
-        <Problem
-          error={error}
-          onReload={() => {
-            setError(null)
-            onReload()
-          }}
-        />
-      )}
-      <div className="tt-actions">
-        <button type="button" className="tt-button tt-danger" onClick={remove} disabled={busy}>
-          {t('knowledge.delete.submit')}
-        </button>
-        <button type="button" className="tt-button" onClick={onCancel}>
-          {t('common.cancel')}
-        </button>
+    <ConfirmDialog
+      open
+      title={t('knowledge.delete.label')}
+      confirmLabel={t('knowledge.delete.submit')}
+      tone="danger"
+      busy={busy}
+      onConfirm={remove}
+      onCancel={onCancel}
+    >
+      <div className="kb-dialog-text">
+        <p>
+          {t(doc.versioned === false ? 'knowledge.delete.questionUnversioned' : 'knowledge.delete.question', {
+            path: doc.path,
+          })}
+        </p>
+        {error !== null && (
+          <Problem
+            error={error}
+            onReload={() => {
+              setError(null)
+              onReload()
+            }}
+          />
+        )}
       </div>
-    </fieldset>
+    </ConfirmDialog>
   )
 }
 
@@ -97,21 +102,21 @@ export function Deleted({
     }
   }
   if (!versioned) {
-    return (
-      <div className="tt-notice" role="status">
-        <span>{t('knowledge.deleted.unversioned', { path })}</span>
-      </div>
-    )
+    return <Notice tone="neutral">{t('knowledge.deleted.unversioned', { path })}</Notice>
   }
   return (
-    <div className="tt-notice" role="status">
-      <span>{t(canWrite ? 'knowledge.deleted.restorable' : 'knowledge.deleted.kept', { path })}</span>
-      {canWrite && (
-        <button type="button" className="tt-button" onClick={restore} disabled={busy}>
-          {t('knowledge.deleted.restore')}
-        </button>
-      )}
-      {error && <span className="tt-error">{error}</span>}
-    </div>
+    <Notice
+      tone="info"
+      action={
+        canWrite && (
+          <Button size="sm" onClick={restore} loading={busy}>
+            {t('knowledge.deleted.restore')}
+          </Button>
+        )
+      }
+    >
+      {t(canWrite ? 'knowledge.deleted.restorable' : 'knowledge.deleted.kept', { path })}
+      {error && <span className="kb-error">{error}</span>}
+    </Notice>
   )
 }

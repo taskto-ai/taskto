@@ -47,19 +47,29 @@
     text-decoration: none;
   }
 
+  /* A row that opens in place: its title is a button that looks like the title. */
+  .ui-row-open {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    text-align: start;
+    cursor: pointer;
+  }
+
   /* A row that is a link answers a click anywhere on it: the link's box covers the row, and the
      status and the actions sit above it. */
-  a.ui-row-title::after {
+  :is(a, button).ui-row-title::after {
     content: "";
     position: absolute;
     inset: 0;
   }
 
-  a.ui-row-title:focus-visible {
+  :is(a, button).ui-row-title:focus-visible {
     outline: none;
   }
 
-  .ui-row[data-link]:has(a.ui-row-title:focus-visible) {
+  .ui-row[data-link]:has(.ui-row-title:focus-visible) {
     outline: 2px solid var(--color-focus);
     outline-offset: -2px;
   }

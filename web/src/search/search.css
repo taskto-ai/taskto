@@ -1,0 +1,83 @@
+/* The search box above the documents, and the results, which take the page beside them. */
+@layer screens {
+  .search-box {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  /* The field and its button, one control: the button sits inside the field's end. */
+  .search-field {
+    position: relative;
+    display: block;
+  }
+
+  .search-input {
+    inline-size: 100%;
+    padding-inline-end: calc(var(--control-sm) + var(--space-2));
+  }
+
+  /* The button, not its tooltip's anchor, which draws no box of its own. */
+  .search-field .ui-icon-button {
+    position: absolute;
+    inset-block-start: 50%;
+    inset-inline-end: var(--space-1);
+    translate: 0 -50%;
+  }
+
+  .search-results {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .search-results-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .search-results-head > .ui-heading {
+    flex: 1;
+    min-inline-size: 0;
+  }
+
+  .search-muted {
+    color: var(--color-text-muted);
+  }
+
+  .search-where {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .search-snippet {
+    display: block;
+    margin-block-start: var(--space-1);
+    font: var(--type-ui);
+    color: var(--color-text-soft);
+  }
+
+  .search-snippet mark {
+    padding-inline: 1px;
+    border-radius: var(--radius-sm);
+    background: var(--color-accent-soft);
+    color: var(--color-text);
+    font-weight: 600;
+  }
+
+  .search-more {
+    display: flex;
+    justify-content: center;
+  }
+
+  .search-loading {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .search-loading-row {
+    display: grid;
+    gap: var(--space-2);
+  }
+}

@@ -1,8 +1,12 @@
-// A new document: a name, made Markdown, created with a heading and opened to edit.
+// A new document, in a dialog: a name, made Markdown, created with a heading and opened to edit.
 
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useId, useState } from 'react'
 import { api, errorText } from '../api'
 import { useT } from '../i18n'
+import { Button } from '../ui/Button'
+import { Dialog } from '../ui/Dialog'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
 import { type Change, encodePath, isConflict, isMarkdown } from './docs'
 
 export function NewDoc({
@@ -18,6 +22,7 @@ export function NewDoc({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const t = useT()
+  const form = useId()
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     const trimmed = name.trim().replace(/^\/+/, '')
@@ -37,31 +42,29 @@ export function NewDoc({
     }
   }
   return (
-    <form className="tt-panel tt-form" onSubmit={submit} aria-label={t('knowledge.newDoc.label')}>
-      <label>
-        {t('knowledge.newDoc.name')}
-        <input
-          value={name}
-          placeholder={t('knowledge.newDoc.placeholder')}
-          onChange={(e) => setName(e.target.value)}
-          // biome-ignore lint/a11y/noAutofocus: the form was opened to type this
-          autoFocus
-        />
-      </label>
-      <span className="tt-hint">{t('knowledge.newDoc.hint')}</span>
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
-      <div className="tt-actions">
-        <button type="submit" className="tt-button tt-primary" disabled={busy || !name.trim()}>
-          {t('knowledge.newDoc.create')}
-        </button>
-        <button type="button" className="tt-button" onClick={onCancel}>
-          {t('common.cancel')}
-        </button>
-      </div>
-    </form>
+    <Dialog
+      open
+      title={t('knowledge.newDoc.label')}
+      onClose={onCancel}
+      actions={
+        <>
+          <Button onClick={onCancel}>{t('common.cancel')}</Button>
+          <Button type="submit" form={form} variant="primary" loading={busy} disabled={busy || !name.trim()}>
+            {t('knowledge.newDoc.create')}
+          </Button>
+        </>
+      }
+    >
+      <form id={form} className="kb-form" onSubmit={submit} aria-label={t('knowledge.newDoc.label')}>
+        <Field label={t('knowledge.newDoc.name')} hint={t('knowledge.newDoc.hint')} error={error ?? undefined}>
+          <Input
+            data-autofocus
+            value={name}
+            placeholder={t('knowledge.newDoc.placeholder')}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Field>
+      </form>
+    </Dialog>
   )
 }

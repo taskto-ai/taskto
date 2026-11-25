@@ -1932,7 +1932,9 @@
       "move": "Move",
       "delete": "Delete",
       "empty": "This document is empty.",
-      "download": "Download"
+      "download": "Download",
+      "backToResults": "Back to the results",
+      "separator": "/"
     },
     "editor": {
       "label": "Edit the document",
@@ -1983,7 +1985,21 @@
       "removeSubmit": "Remove old versions",
       "removedCount_one": "Removed {count} old version from the history.",
       "removedCount_other": "Removed {count} old versions from the history.",
-      "removedNone": "There were no old versions to remove."
+      "removedNone": "There were no old versions to remove.",
+      "restoreTitle": "Restore this version?",
+      "restoreQuestion": "{path} becomes again what it was on {time}. The version it has now stays in its history."
+    },
+    "emptyHelp": "Write a new document, or upload a file.",
+    "pick": "Choose a document to read it.",
+    "errors": {
+      "spaces": "The spaces couldn't be loaded.",
+      "documents": "The documents couldn't be loaded.",
+      "document": "This document couldn't be loaded.",
+      "history": "The history couldn't be loaded."
+    },
+    "tree": {
+      "count_one": "{count} document",
+      "count_other": "{count} documents"
     }
   },
   "search": {
@@ -2741,7 +2757,9 @@
       "labels": "Labels",
       "assignedToMe": "Assigned to me",
       "addColumn": "Add a column",
-      "headings": "Sizes from the type roles: the display face from 20px up, Inter below"
+      "headings": "Sizes from the type roles: the display face from 20px up, Inter below",
+      "inPlaceRow": "A search result",
+      "inPlaceDetail": "Opens on this page, in place"
     }
   }
 }

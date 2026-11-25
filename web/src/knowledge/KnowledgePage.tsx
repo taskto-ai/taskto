@@ -4,23 +4,33 @@
 // or overwrite on purpose), never a silent overwrite. On a phone it is the list or the
 // document, with a way back.
 
-// The page composes the parts: the list (DocList) or search results beside the open document
-// (DocView: the reader, Editor, History, Move, ConfirmDelete), the forms that add a document
-// (NewDoc, Upload), and the notice after a delete (Deleted). docs.ts has the data.
+// The page composes the parts: beside the tree of documents (DocList), with the space and the
+// search box above it, the open document (DocView: the reader, Editor, History, Move,
+// ConfirmDelete) or the search results; the dialogs that add a document (NewDoc, Upload), and
+// the notice after a delete (Deleted). docs.ts has the data.
 
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { ws } from '../api'
 import { useT } from '../i18n'
 import { parseDocumentItem } from '../router'
 import { SearchBox, type SearchQuery, SearchResults } from '../search/Search'
-import { Icon } from '../shell/Icon'
-import { SpacePicker, useSpaces } from '../spaces'
+import { spaceLabel, useSpaces } from '../spaces'
+import { Button } from '../ui/Button'
+import { EmptyState } from '../ui/EmptyState'
+import { Heading } from '../ui/Heading'
+import { Icon } from '../ui/Icon'
+import { IconButton } from '../ui/IconButton'
+import { Notice } from '../ui/Notice'
+import { Page } from '../ui/Page'
+import { Select } from '../ui/Select'
 import { Deleted } from './Delete'
 import { DocList } from './DocList'
 import { DocView } from './DocView'
 import { useDocs } from './docs'
+import { focusLost } from './focus'
 import { NewDoc } from './NewDoc'
 import { Upload } from './Upload'
+import './knowledge.css'
 
 // admin: the user is an admin of the workspace, who may remove a file's old versions from
 // its history.
@@ -38,94 +48,165 @@ export function KnowledgePage({
   const { spaces, space, choose } = useSpaces(workspace, target?.space)
   const base = space ? `${ws(workspace)}/spaces/${space.id}` : null
   const docs = useDocs(base)
-  const [open, setOpen] = useState<{ path: string; editing?: boolean } | null>(
-    target?.path ? { path: target.path } : null,
+  // fromTree: opened from the tree, where the keyboard may stay; from anywhere else, the
+  // document takes it. One a link opens with the page leaves the keyboard where the page puts it.
+  const [open, setOpen] = useState<{ path: string; editing?: boolean; fromTree?: boolean } | null>(
+    target?.path ? { path: target.path, fromTree: true } : null,
   )
   // Each search counts, so asking the same again searches again rather than showing the last.
   const [query, setQuery] = useState<(SearchQuery & { n: number }) | null>(null)
   const [adding, setAdding] = useState<'new' | 'upload' | null>(null)
   const [deleted, setDeleted] = useState<{ path: string; versioned: boolean } | null>(null)
+  // A document is being edited: its Save is the page's one primary action, so New steps back.
+  const [editing, setEditing] = useState(false)
   const canWrite = space?.access === 'write'
   const t = useT()
 
-  const show = (path: string, editing = false) => {
-    setOpen({ path, editing })
+  const show = (path: string, editing = false, fromTree = false) => {
+    setOpen({ path, editing, fromTree })
     setAdding(null)
     setDeleted(null)
   }
 
+  // When the document closes (Back, a delete, the results closed), the keyboard goes somewhere
+  // that makes sense rather than to the top of the page: the notice of the delete, the results,
+  // the document in the tree it came from, or the page's title.
+  const side = useRef<HTMLDivElement>(null)
+  const main = useRef<HTMLDivElement>(null)
+  const backFrom = useRef<string | null>(null)
+  const mounted = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the notice of a delete is found in the page, so its coming is a reason to run
+  useLayoutEffect(() => {
+    const path = backFrom.current
+    backFrom.current = null
+    if (!mounted.current) {
+      mounted.current = true
+      return
+    }
+    if (open || !focusLost()) return
+    const notice = side.current?.querySelector<HTMLElement>('[data-deleted]')
+    const item = [...(side.current?.querySelectorAll<HTMLElement>('[data-path]') ?? [])].find(
+      (el) => el.dataset.path === path,
+    )
+    const to =
+      notice?.querySelector<HTMLElement>('button') ??
+      notice ??
+      (query ? main.current?.querySelector<HTMLElement>('[data-results-title]') : null) ??
+      item ??
+      side.current?.querySelector<HTMLElement>('h1')
+    to?.focus()
+  }, [open, query, deleted])
+
+  const loadingList = (spaces.data === undefined || !!base) && docs.data === undefined && !docs.error && !spaces.error
+  const empty = docs.data?.length === 0
+  // The empty space's own way in; the page's one primary New stays in the side's head.
+  const addButtons = (
+    <>
+      <Button icon="plus" onClick={() => setAdding('new')}>
+        {t('knowledge.new')}
+      </Button>
+      <Button icon="upload" onClick={() => setAdding('upload')}>
+        {t('knowledge.upload')}
+      </Button>
+    </>
+  )
+
   return (
-    <div className="tt-section">
-      <div className="tt-pane-head">
-        <h1>{t('shell.sections.knowledge')}</h1>
-        {spaces.data && (
-          <SpacePicker
-            spaces={spaces.data}
-            space={space}
-            choose={(id) => {
+    <div className="kb" data-open={open || query ? 'main' : 'list'}>
+      <div className="kb-side" ref={side}>
+        <div className="kb-side-head">
+          <Heading level={1} size="title" tabIndex={-1}>
+            {t('shell.sections.knowledge')}
+          </Heading>
+          {base && canWrite && (
+            <>
+              <IconButton icon="upload" size="sm" label={t('knowledge.upload')} onClick={() => setAdding('upload')} />
+              <Button
+                variant={editing ? 'secondary' : 'primary'}
+                size="sm"
+                icon="plus"
+                onClick={() => setAdding('new')}
+              >
+                {t('knowledge.new')}
+              </Button>
+            </>
+          )}
+        </div>
+        {spaces.data && spaces.data.length > 1 && (
+          <Select
+            aria-label={t('knowledge.spaces.label')}
+            value={space?.id}
+            onChange={(e) => {
               setOpen(null)
               setAdding(null)
               setDeleted(null)
-              choose(id)
+              choose(Number(e.target.value))
             }}
-          />
+          >
+            {spaces.data.map((s) => (
+              <option key={s.id} value={s.id}>
+                {spaceLabel(s)}
+              </option>
+            ))}
+          </Select>
         )}
-        {base && canWrite && (
-          <>
-            <button type="button" className="tt-button tt-primary" onClick={() => setAdding('new')}>
-              <Icon name="plus" />
-              {t('knowledge.new')}
-            </button>
-            <button type="button" className="tt-button" onClick={() => setAdding('upload')}>
-              {t('knowledge.upload')}
-            </button>
-          </>
+        {spaces.data && spaces.data.length > 0 && (
+          <SearchBox space={space} onSearch={(q) => setQuery((last) => ({ ...q, n: (last?.n ?? 0) + 1 }))} />
         )}
+        {spaces.error && (
+          <Notice
+            tone="danger"
+            title={t('knowledge.errors.spaces')}
+            action={
+              <Button size="sm" onClick={spaces.reload}>
+                {t('app.tryAgain')}
+              </Button>
+            }
+          >
+            {spaces.error}
+          </Notice>
+        )}
+        {docs.error && (
+          <Notice
+            tone="danger"
+            title={t('knowledge.errors.documents')}
+            action={
+              <Button size="sm" onClick={docs.reload}>
+                {t('app.tryAgain')}
+              </Button>
+            }
+          >
+            {docs.error}
+          </Notice>
+        )}
+        {spaces.data?.length === 0 && <EmptyState title={t('knowledge.noSpaces')} />}
+        {base && deleted && (
+          <div data-deleted tabIndex={-1} className="kb-deleted">
+            <Deleted
+              base={base}
+              path={deleted.path}
+              versioned={deleted.versioned}
+              canWrite={canWrite}
+              onRestored={(path) => {
+                docs.reload()
+                show(path)
+              }}
+            />
+          </div>
+        )}
+        <DocList
+          docs={docs.data}
+          loading={loadingList}
+          current={open?.path}
+          onOpen={(path) => {
+            setQuery(null)
+            show(path, false, true)
+          }}
+        />
       </div>
-      {spaces.data && spaces.data.length > 0 && (
-        <SearchBox space={space} onSearch={(q) => setQuery((last) => ({ ...q, n: (last?.n ?? 0) + 1 }))} />
-      )}
-      {(spaces.error || docs.error) && (
-        <p role="alert" className="tt-error">
-          {spaces.error ?? docs.error}
-        </p>
-      )}
-      {spaces.data?.length === 0 && <p className="tt-muted">{t('knowledge.noSpaces')}</p>}
-      {base && adding === 'new' && (
-        <NewDoc
-          base={base}
-          onCreated={(path) => {
-            docs.reload()
-            show(path, true)
-          }}
-          onCancel={() => setAdding(null)}
-        />
-      )}
-      {base && adding === 'upload' && (
-        <Upload
-          base={base}
-          onDone={(path) => {
-            docs.reload()
-            show(path)
-          }}
-          onCancel={() => setAdding(null)}
-        />
-      )}
-      {base && deleted && (
-        <Deleted
-          base={base}
-          path={deleted.path}
-          versioned={deleted.versioned}
-          canWrite={canWrite}
-          onRestored={(path) => {
-            docs.reload()
-            show(path)
-          }}
-        />
-      )}
-      <div className="tt-split" data-open={open ? 'doc' : 'list'}>
-        <div className="tt-kb-side">
-          {query ? (
+      <div className="kb-main" ref={main}>
+        {query && !open ? (
+          <Page width="list">
             <SearchResults
               key={query.n}
               workspace={workspace}
@@ -137,34 +218,71 @@ export function KnowledgePage({
               }}
               onClose={() => setQuery(null)}
             />
-          ) : (
-            <DocList
-              docs={docs.data}
-              loading={(spaces.data === undefined || !!base) && docs.data === undefined && !docs.error && !spaces.error}
-              current={open?.path}
-              onOpen={(path) => show(path)}
-            />
-          )}
-        </div>
-        {base && open && (
-          <DocView
-            key={`${base}/${open.path}`}
-            base={base}
-            path={open.path}
-            canWrite={canWrite}
-            admin={admin && canWrite}
-            editing={open.editing ?? false}
-            onBack={() => setOpen(null)}
-            onOpen={(path) => show(path)}
-            onChanged={docs.reload}
-            onDeleted={(doc) => {
-              docs.reload()
-              setOpen(null)
-              setDeleted({ path: doc.path, versioned: doc.versioned !== false })
-            }}
-          />
+          </Page>
+        ) : (
+          <Page width="reading">
+            {base && open ? (
+              <DocView
+                key={`${base}/${open.path}`}
+                base={base}
+                path={open.path}
+                space={space ? spaceLabel(space) : ''}
+                canWrite={canWrite}
+                admin={admin && canWrite}
+                editing={open.editing ?? false}
+                takeFocus={!open.fromTree}
+                onEditing={setEditing}
+                back={query ? 'results' : 'list'}
+                onBack={() => {
+                  backFrom.current = open.path
+                  setOpen(null)
+                }}
+                onOpen={(path) => show(path)}
+                onChanged={docs.reload}
+                onDeleted={(doc) => {
+                  docs.reload()
+                  setOpen(null)
+                  setDeleted({ path: doc.path, versioned: doc.versioned !== false })
+                }}
+              />
+            ) : empty ? (
+              <div className="kb-empty">
+                <EmptyState
+                  icon={<Icon name="knowledge" size={24} />}
+                  title={t('knowledge.empty')}
+                  actions={canWrite ? addButtons : undefined}
+                >
+                  {canWrite ? t('knowledge.emptyHelp') : null}
+                </EmptyState>
+              </div>
+            ) : (
+              docs.data && <EmptyState icon={<Icon name="file" size={24} />} title={t('knowledge.pick')} />
+            )}
+          </Page>
         )}
       </div>
+      {base && adding === 'new' && (
+        <NewDoc
+          base={base}
+          onCreated={(path) => {
+            docs.reload()
+            setQuery(null)
+            show(path, true)
+          }}
+          onCancel={() => setAdding(null)}
+        />
+      )}
+      {base && adding === 'upload' && (
+        <Upload
+          base={base}
+          onDone={(path) => {
+            docs.reload()
+            setQuery(null)
+            show(path)
+          }}
+          onCancel={() => setAdding(null)}
+        />
+      )}
     </div>
   )
 }

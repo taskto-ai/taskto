@@ -1,8 +1,17 @@
-import { useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { api, type Doc } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import type { LinkHandler } from '../markdown'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { ConfirmDialog, useConfirm } from '../ui/ConfirmDialog'
+import { Heading } from '../ui/Heading'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { Content } from './Content'
 import { type Change, type Commit, encodePath, useDoc } from './docs'
 import { Problem } from './Problem'
@@ -14,9 +23,9 @@ const CHANGE_LABEL = {
 } as const
 
 // The commits that changed a document, newest first; any version can be looked at, and
-// writers can make the document that version again. An unversioned file's history only says
-// who changed it: its older versions' bytes aren't kept, nor those of versions removed from
-// history, which an admin can do.
+// writers can make the document that version again, after a question. An unversioned file's
+// history only says who changed it: its older versions' bytes aren't kept, nor those of
+// versions removed from history, which an admin can do.
 export function History({
   base,
   url,
@@ -44,6 +53,7 @@ export function History({
   const [viewing, setViewing] = useState<Commit | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
+  const [confirmDialog, confirm] = useConfirm()
   const unversioned = current.versioned === false
   const pages = first.data ? [first.data, ...older] : []
   const commits = pages.flatMap((p) => p.commits)
@@ -88,16 +98,43 @@ export function History({
       setBusy(false)
     }
   }
+  const askRestore = async (c: Commit) => {
+    const time = f.dateTime(c.time)
+    if (
+      await confirm({
+        title: t('knowledge.history.restoreTitle'),
+        body: t('knowledge.history.restoreQuestion', { path: current.path, time }),
+        confirmLabel: t('knowledge.history.restore'),
+      })
+    )
+      restore(c)
+  }
 
   return (
-    <section className="tt-history" aria-label={t('knowledge.history.label')}>
+    <section className="kb-history" aria-label={t('knowledge.history.label')}>
       {first.error && (
-        <p role="alert" className="tt-error">
+        <Notice
+          tone="danger"
+          title={t('knowledge.errors.history')}
+          action={
+            <Button size="sm" onClick={first.reload}>
+              {t('app.tryAgain')}
+            </Button>
+          }
+        >
           {first.error}
-        </p>
+        </Notice>
       )}
-      {!first.data && !first.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {unversioned && <p className="tt-muted tt-small">{t('knowledge.history.unversioned')}</p>}
+      {!first.data && !first.error && (
+        <div className="kb-history-loading" aria-busy="true">
+          <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+          {['70%', '50%', '60%'].map((width, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no identity but their place
+            <Skeleton key={i} width={width} />
+          ))}
+        </div>
+      )}
+      {unversioned && <Notice tone="neutral">{t('knowledge.history.unversioned')}</Notice>}
       {error !== null && (
         <Problem
           error={error}
@@ -107,56 +144,76 @@ export function History({
           }}
         />
       )}
-      <ol className="tt-list">
-        {commits.map((c) => (
-          <li key={c.commit} className="tt-history-entry" aria-current={c === viewing || undefined}>
-            <span>
-              <strong>{t(c.change ? CHANGE_LABEL[c.change] : 'knowledge.history.changed')}</strong> {c.message}
-            </span>
-            <span className="tt-muted tt-small">
-              {c.agent
+      {commits.length > 0 && (
+        <Panel>
+          <Rows label={t('knowledge.history.label')}>
+            {commits.map((c) => {
+              const isCurrent = !!c.version && c.version === current.version
+              const viewable = !!c.version && !unversioned && (kept(c) || isCurrent)
+              const by = c.agent
                 ? t('knowledge.history.byWithAgent', { name: c.author.name, agent: c.agent, time: f.dateTime(c.time) })
-                : t('knowledge.history.by', { name: c.author.name, time: f.dateTime(c.time) })}
-            </span>
-            {c.version && unversioned && c.version === current.version && (
-              <span className="tt-muted tt-small">{t('knowledge.history.current')}</span>
-            )}
-            {c.version && !unversioned && !kept(c) && c.version !== current.version && (
-              <span className="tt-muted tt-small">{t('knowledge.history.removedVersion')}</span>
-            )}
-            {c.version && !unversioned && (kept(c) || c.version === current.version) && (
-              <span className="tt-actions">
-                <button type="button" className="tt-button" onClick={() => setViewing(c)}>
-                  {t('knowledge.history.view')}
-                </button>
-                {c.version === current.version ? (
-                  <span className="tt-muted tt-small">{t('knowledge.history.current')}</span>
-                ) : (
-                  canWrite && (
-                    <button type="button" className="tt-button" disabled={busy} onClick={() => restore(c)}>
-                      {t('knowledge.history.restore')}
-                    </button>
-                  )
-                )}
-              </span>
-            )}
-          </li>
-        ))}
-      </ol>
-      {next && (
-        <button type="button" className="tt-button" disabled={loadingMore} onClick={more}>
-          {t('knowledge.history.older')}
-        </button>
+                : t('knowledge.history.by', { name: c.author.name, time: f.dateTime(c.time) })
+              const removedVersion = !!c.version && !unversioned && !kept(c) && !isCurrent
+              return (
+                <Row
+                  key={c.commit}
+                  current={c === viewing}
+                  title={c.message || t(c.change ? CHANGE_LABEL[c.change] : 'knowledge.history.changed')}
+                  detail={
+                    <>
+                      {`${t(c.change ? CHANGE_LABEL[c.change] : 'knowledge.history.changed')} · ${by}`}
+                      {removedVersion && (
+                        <>
+                          <br />
+                          {t('knowledge.history.removedVersion')}
+                        </>
+                      )}
+                    </>
+                  }
+                  status={isCurrent ? <Badge tone="success">{t('knowledge.history.current')}</Badge> : undefined}
+                  actions={
+                    viewable ? (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-pressed={c === viewing}
+                          onClick={() => setViewing(c === viewing ? null : c)}
+                        >
+                          {t('knowledge.history.view')}
+                        </Button>
+                        {!isCurrent && canWrite && (
+                          <Button size="sm" disabled={busy} onClick={() => askRestore(c)}>
+                            {t('knowledge.history.restore')}
+                          </Button>
+                        )}
+                      </>
+                    ) : undefined
+                  }
+                />
+              )
+            })}
+          </Rows>
+        </Panel>
+      )}
+      {(next || canRemove) && (
+        <div className="kb-actions">
+          {next && (
+            <Button size="sm" loading={loadingMore} onClick={more}>
+              {t('knowledge.history.older')}
+            </Button>
+          )}
+          {canRemove && (
+            <Button size="sm" variant="danger" className="kb-push-end" onClick={() => setRemoving(true)}>
+              {t('knowledge.history.removeOld')}
+            </Button>
+          )}
+        </div>
       )}
       {removed !== null && (
-        <p role="status" className="tt-muted tt-small">
+        <Notice tone="success">
           {removed === 0 ? t('knowledge.history.removedNone') : t('knowledge.history.removedCount', { count: removed })}
-        </p>
-      )}
-      {canRemove && !removing && (
-        <button type="button" className="tt-button tt-danger" onClick={() => setRemoving(true)}>
-          {t('knowledge.history.removeOld')}
-        </button>
+        </Notice>
       )}
       {removing && (
         <ConfirmRemoveOld
@@ -175,6 +232,7 @@ export function History({
         />
       )}
       {viewing && <AtCommit key={viewing.commit} url={url} commit={viewing} onLink={onLink} />}
+      {confirmDialog}
     </section>
   )
 }
@@ -212,44 +270,56 @@ function ConfirmRemoveOld({
     }
   }
   return (
-    <fieldset className="tt-panel" aria-label={t('knowledge.history.removeLabel')}>
-      <p>{t('knowledge.history.removeQuestion', { path: doc.path })}</p>
-      <p className="tt-small">{t('knowledge.history.removeForGood')}</p>
-      <p className="tt-small">{t('knowledge.history.removeBackups')}</p>
-      {error !== null && (
-        <Problem
-          error={error}
-          onReload={() => {
-            setError(null)
-            onReload()
-          }}
-        />
-      )}
-      <div className="tt-actions">
-        <button type="button" className="tt-button tt-danger" onClick={remove} disabled={busy}>
-          {t('knowledge.history.removeSubmit')}
-        </button>
-        <button type="button" className="tt-button" onClick={onCancel}>
-          {t('common.cancel')}
-        </button>
+    <ConfirmDialog
+      open
+      title={t('knowledge.history.removeLabel')}
+      confirmLabel={t('knowledge.history.removeSubmit')}
+      tone="danger"
+      busy={busy}
+      onConfirm={remove}
+      onCancel={onCancel}
+    >
+      <div className="kb-dialog-text">
+        <p>{t('knowledge.history.removeQuestion', { path: doc.path })}</p>
+        <p>{t('knowledge.history.removeForGood')}</p>
+        <p>{t('knowledge.history.removeBackups')}</p>
+        {error !== null && (
+          <Problem
+            error={error}
+            onReload={() => {
+              setError(null)
+              onReload()
+            }}
+          />
+        )}
       </div>
-    </fieldset>
+    </ConfirmDialog>
   )
 }
 
+// A version as it was. Opening one moves the keyboard to it.
 function AtCommit({ url, commit, onLink }: { url: string; commit: Commit; onLink: LinkHandler }) {
   const at = `${url}?at=${commit.commit}`
   const doc = useDoc(at)
   const t = useT()
   const f = useFormat()
   const asOf = t('knowledge.history.asOf', { time: f.dateTime(commit.time) })
+  const section = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    section.current?.querySelector<HTMLElement>('h3')?.focus()
+  }, [])
   return (
-    <section className="tt-preview" aria-label={asOf}>
-      <p className="tt-muted tt-small">{asOf}</p>
-      {doc.error && (
-        <p role="alert" className="tt-error">
-          {doc.error}
-        </p>
+    <section className="kb-version" aria-label={asOf} ref={section}>
+      <Heading level={3} size="subsection" tabIndex={-1}>
+        {asOf}
+      </Heading>
+      {doc.error && <Notice tone="danger">{doc.error}</Notice>}
+      {!doc.data && !doc.error && (
+        <div className="kb-history-loading" aria-busy="true">
+          <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+          <Skeleton width="80%" />
+          <Skeleton width="60%" />
+        </div>
       )}
       {doc.data && <Content url={at} doc={doc.data} onLink={onLink} />}
     </section>

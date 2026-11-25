@@ -50,12 +50,13 @@ test('searches the space shown, and shows matches as marked text, never markup',
     '/api/workspaces/1/spaces/2/search?q=orchard%20plan',
     '/api/workspaces/1/spaces/2/search/cards?q=orchard%20plan',
   ])
-  const hit = await within(results).findByRole('button', { name: /Quarterly plan/ })
+  const hit = (await within(results).findByRole('button', { name: 'Quarterly plan' })).closest('li') as HTMLElement
+  expect(within(hit).getByText('notes/plan.md')).toBeTruthy()
   expect(within(hit).getByText('orchard').tagName).toBe('MARK')
   expect(hit.textContent).toContain('<b>next</b>')
   expect(hit.querySelector('b')).toBeNull()
   // A hybrid search with nothing to report shows no notice.
-  expect(within(results).queryByRole('status')).toBeNull()
+  expect(within(results).queryByText(/full-text|embedded|catching up/)).toBeNull()
 
   fireEvent.click(within(results).getByRole('button', { name: 'Close' }))
   expect(screen.queryByRole('region', { name: 'Search results' })).toBeNull()
@@ -78,7 +79,9 @@ test.each([
   await screen.findByText('No documents in this space yet.')
   search('orchard', 'In all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
-  expect((await within(results).findByRole('status')).textContent).toBe(notice)
+  // Something that is off is said in the neutral tone: a part of the page, not an alert.
+  const said = await within(results).findByText(notice)
+  expect(said.closest('[role="alert"], [role="status"]')).toBeNull()
   expect(within(results).getByText('Nothing found.')).toBeTruthy()
 })
 
@@ -100,10 +103,12 @@ test('says the notice from its codes, with the count in the plural it needs', as
   await screen.findByText('No documents in this space yet.')
   search('orchard', 'In all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
-  expect((await within(results).findByRole('status')).textContent).toBe(
-    'The index is catching up with recent changes: some results may be missing or out of date. ' +
-      '1 document is still being embedded; until it is, only its text is searched.',
-  )
+  expect(
+    await within(results).findByText(
+      'The index is catching up with recent changes: some results may be missing or out of date. ' +
+        '1 document is still being embedded; until it is, only its text is searched.',
+    ),
+  ).toBeTruthy()
 })
 
 test('searches every space, pages on, and opens a result in its own space', async () => {
@@ -132,18 +137,21 @@ test('searches every space, pages on, and opens a result in its own space', asyn
   search('orchard', 'In all spaces')
   const results = await screen.findByRole('region', { name: 'Search results' })
   await within(results).findByRole('button', { name: /Mine/ })
-  expect(within(results).getByRole('status')).toBeTruthy()
+  const embedding = /still being embedded/
+  expect(within(results).getByText(embedding)).toBeTruthy()
 
   fireEvent.click(within(results).getByRole('button', { name: 'More results' }))
   const team = await within(results).findByRole('button', { name: /Team notes/ })
-  expect(team.textContent).toContain('Team · team.md')
+  expect(team.closest('li')?.textContent).toContain('Team · team.md')
   // The latest page's notice: it is no longer embedding.
-  expect(within(results).queryByRole('status')).toBeNull()
+  expect(within(results).queryByText(embedding)).toBeNull()
   expect(within(results).queryByRole('button', { name: 'More results' })).toBeNull()
 
   fireEvent.click(team)
   const doc = await screen.findByRole('article', { name: 'team.md' })
-  expect(await within(doc).findByText('Team')).toBeTruthy()
+  // The document's text, under its path in the space it is in (Team).
+  expect(await within(doc).findByText('Team', { selector: 'p' })).toBeTruthy()
+  expect(within(doc).getByRole('heading', { level: 2 }).textContent).toBe('Team/team.md')
   expect((screen.getByLabelText('Space') as HTMLSelectElement).value).toBe('3')
   expect(calls.some((c) => c.path === '/api/workspaces/1/spaces/3/docs/team.md')).toBe(true)
   // Team is read-only for this user.
@@ -181,7 +189,7 @@ test("a result's snippet shows without the document's Markdown marks, its matche
   search('orchard')
   const results = await screen.findByRole('region', { name: 'Search results' })
   const shown = await within(results).findByRole('button', { name: /Quarterly plan/ })
-  const snippet = shown.querySelector('.tt-snippet')
+  const snippet = shown.closest('li')?.querySelector('mark')?.parentElement
   expect(snippet?.textContent).toBe('Plan The first orchard is small')
   expect([...(snippet?.querySelectorAll('mark') ?? [])].map((m) => m.textContent)).toEqual(['orchard'])
 })
@@ -218,12 +226,13 @@ test('shows cards apart from documents, each linking to its card', async () => {
   expect(within(results).getByRole('heading', { name: 'Cards', level: 3 })).toBeTruthy()
   const links = within(list).getAllByRole('link')
   expect(links.map((a) => a.getAttribute('href'))).toEqual(['/w/1/boards/3%3A7%3A11', '/w/1/boards/3%3A7%3A12'])
-  expect(links[0].textContent).toContain('Team · Roadmap · Doing')
-  expect(links[1].textContent).toContain('Team · Roadmap · Archived')
+  const [first, second] = links.map((a) => a.closest('li') as HTMLElement)
+  expect(first.textContent).toContain('Team · Roadmap · Doing')
+  expect(second.textContent).toContain('Team · Roadmap · Archived')
   // Matches are marked by the element, never as markup.
-  expect(within(links[0]).getByText('orchard').tagName).toBe('MARK')
-  expect(links[0].textContent).toContain('<i>release</i>')
-  expect(links[0].querySelector('i')).toBeNull()
+  expect(within(first).getByText('orchard').tagName).toBe('MARK')
+  expect(first.textContent).toContain('<i>release</i>')
+  expect(first.querySelector('i')).toBeNull()
 
   fireEvent.click(within(results).getByRole('button', { name: 'More cards' }))
   await within(list).findByRole('link', { name: /Orchard party/ })

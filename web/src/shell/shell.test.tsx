@@ -265,7 +265,9 @@ test('the sidebar and the workspace switcher change the page', async () => {
 
   fireEvent.click(within(nav).getByRole('link', { name: 'Knowledge base' }))
   expect(window.location.pathname).toBe('/w/1/knowledge')
-  fireEvent.click(await screen.findByRole('button', { name: /notes\/plan\.md/ }))
+  // The documents are a tree: the folder, then the document in it.
+  fireEvent.click(await screen.findByRole('button', { name: /^notes/ }))
+  fireEvent.click(screen.getByRole('button', { name: /^plan\.md/ }))
   expect((await screen.findByRole('heading', { name: 'Plan' })).tagName).toBe('H1')
 
   fireEvent.change(screen.getByLabelText('Workspace'), { target: { value: '4' } })
