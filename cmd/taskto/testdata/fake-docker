@@ -18,9 +18,15 @@
 #             nomount: it has none; config-volname: the one Compose's config names
 #   running-subpath, running-ro   the running server's /data mount has a subpath (the file's
 #             content) or is read-only
-#   missing-volumes     lines: a volume that `volume inspect` doesn't find
+#   missing-volumes     lines: a volume that `volume inspect` doesn't find (nor `volume ls`)
+#   volume-options      lines "NAME DEVICE": an existing volume that binds the host path DEVICE
+#                       (`volume inspect` shows it as its options, `volume ls` lists it)
 #   mutate    lines "VERSION KIND": that version's running containers break a safety rule (KIND
-#             is root, insecure, nomode, netadmin, suid or workerdata)
+#             is root, insecure, nomode, netadmin, suid, workerdata, extrabind (the server also
+#             mounts the host path in extra-bind, "PATH true|false" for writable), updaterstate (the server
+#             mounts the updater's whole state, read-write) or updaterwrite (its public status
+#             directory, read-write) or updatervolume (a named volume binding the state), updatervolumetwice (the public
+#             directory's volume, once read-only and once writable))
 #   upfail-after-start  a version whose `compose start` starts it and then fails
 #   config-edit         a jq filter applied to the rendered settings of the staged project
 #   config-edit-backup  the same, applied only when a backup profile is on (a render with
@@ -143,6 +149,15 @@ container() {
 			sub=$(cat "$d/running-subpath")
 			hostmounts=$(jq -cn --arg v "$vol" --arg s "$sub" '[{Type: "volume", Source: $v, Target: "/data", VolumeOptions: {Subpath: $s}}]')
 		fi
+		# The updater's status for admins, read-only, as compose.yaml mounts it.
+		mounts=$(jq -c --arg src "${TASKTO_UPDATE_PUBLIC:-${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}/public}" '. + [{Type: "bind", Source: $src, Destination: "/update-status", RW: false}]' <<<"$mounts")
+		mutated updaterwrite && mounts=$(jq -c '(.[] | select(.Destination == "/update-status") | .RW) = true' <<<"$mounts")
+		mutated updatervolume && mounts=$(jq -c '. + [{Type: "volume", Name: "taskto_statevol", Destination: "/state", RW: false}]' <<<"$mounts")
+		# The same volume, which binds the state, twice: the read-only mount first, a writable one after.
+		mutated updatervolumetwice && mounts=$(jq -c '. + [{Type: "volume", Name: "taskto_publicvol", Destination: "/a", RW: false}, {Type: "volume", Name: "taskto_publicvol", Destination: "/b", RW: true}]' <<<"$mounts")
+		# One more host path, from extra-bind ("PATH true|false": whether it is writable).
+		mutated extrabind && mounts=$(jq -c --arg src "$(awk '{print $1}' "$d/extra-bind")" --arg rw "$(awk '{print $2}' "$d/extra-bind")" '. + [{Type: "bind", Source: $src, Destination: "/extra", RW: ($rw == "true")}]' <<<"$mounts")
+		mutated updaterstate && mounts=$(jq -c --arg src "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}" '. + [{Type: "bind", Source: $src, Destination: "/state", RW: false}]' <<<"$mounts")
 		nets='{"taskto_default":{}}'
 		[ ! -s "$d/server-env" ] || env=$(jq -c --rawfile x "$d/server-env" '. + ($x | split("\n") | map(select(. != "")))' <<<"$env")
 		;;
@@ -172,7 +187,7 @@ config_json() {
 	case " $profs " in *" backup "*) backup=1 ;; esac
 	case " $profs " in *" backup-schedule "*) schedule=1 ;; esac
 	cvol=$(cat "$d/config-volname" 2>/dev/null || echo "$vol")
-	out=$(jq -cn --arg v "$ver" --arg vol "$cvol" --arg caddy "$CADDY_REF" --argjson https "$https" --argjson backup "$backup" --argjson schedule "$schedule" '
+	out=$(jq -cn --arg v "$ver" --arg vol "$cvol" --arg caddy "$CADDY_REF" --argjson https "$https" --argjson backup "$backup" --argjson schedule "$schedule" --arg state "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}" --arg pub "${TASKTO_UPDATE_PUBLIC:-${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}/public}" '
 		"ghcr.io/taskto-ai/" as $p
 		| {type: "volume", source: "data", target: "/data", volume: {}} as $data
 		| {type: "bind", source: "/srv/taskto/backup", target: "/run/taskto-backup", read_only: true} as $keys
@@ -180,7 +195,8 @@ config_json() {
 		   services: ({
 		     taskto: {image: ($p + "taskto:" + $v), cap_drop: ["ALL"], security_opt: ["no-new-privileges:true"],
 		              environment: {TASKTO_CLI_WORKERS: "container", TASKTO_DISABLE_PASSWORD_LOGIN: ""},
-		              volumes: [$data, {type: "volume", source: "cli-run", target: "/run/taskto-cli", volume: {}}],
+		              volumes: [$data, {type: "volume", source: "cli-run", target: "/run/taskto-cli", volume: {}},
+		                        {type: "bind", source: $pub, target: "/update-status", read_only: true}],
 		              networks: {default: null}},
 		     "cli-worker": {image: ($p + "taskto-cli-worker:" + $v), cap_drop: ["ALL"], cap_add: ["SETUID", "SETGID", "CHOWN", "KILL"],
 		              security_opt: ["no-new-privileges:true"],
@@ -214,7 +230,27 @@ pull)
 info) echo "$d/root" ;;
 volume)
 	case "$2" in
+	ls)
+		{
+			echo "$vol"
+			echo taskto_cli-run
+			echo taskto_cli-homes
+			echo taskto_statevol
+			echo taskto_publicvol
+			awk '{print $1}' "$d/volume-options" 2>/dev/null
+		} | sort -u | { if [ -s "$d/missing-volumes" ]; then grep -vxF -f "$d/missing-volumes" || true; else cat; fi; }
+		;;
 	inspect)
+		case "$*" in
+		*json*Options*)
+			dev=$(awk -v n="$last" '$1 == n {print $2}' "$d/volume-options" 2>/dev/null)
+			if [ -n "$dev" ]; then jq -cn --arg dev "$dev" '{device: $dev, o: "bind", type: "none"}'; exit 0; fi
+			# `volume inspect --format '{{json .Options}}' NAME`: null for a plain volume.
+			if [ "$last" = taskto_publicvol ]; then jq -cn --arg dev "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}/public" '{device: $dev, o: "bind", type: "none"}'; exit 0; fi
+			if [ "$last" = taskto_statevol ]; then jq -cn --arg dev "${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}" '{device: $dev, o: "bind", type: "none"}'; else echo null; fi
+			exit 0
+			;;
+		esac
 		if [ -s "$d/missing-volumes" ] && grep -qxF "$3" "$d/missing-volumes"; then exit 1; fi
 		echo "$d/volume"
 		;;

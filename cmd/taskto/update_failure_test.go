@@ -121,6 +121,8 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 	for name, tc := range map[string]struct {
 		edit, reason string
 		imageUser    string
+		// volumeOptions is a line of fake-docker's volume-options: an existing volume that binds a path.
+		volumeOptions string
 	}{
 		"the server runs as root":         {edit: `.services.taskto.user = "0"`, reason: "the server wouldn't run as 65532"},
 		"the server runs as root by name": {edit: `.services.taskto.user = "root:root"`, reason: "the server wouldn't run as 65532"},
@@ -130,35 +132,60 @@ func TestUpdateRefusesUnsafeCandidatesWithoutStartingThem(t *testing.T) {
 		"the server's user has another group": {edit: `.services.taskto.user = "65532:0"`, reason: "the server wouldn't run as 65532:65532"},
 		"the image's user has no group":       {imageUser: "65532", reason: "the server wouldn't run as 65532:65532"},
 		// Mounts inherited or made by Compose's other means.
-		"the worker takes the server's mounts":          {edit: `.services["cli-worker"].volumes_from = ["taskto"]`, reason: "volumes_from"},
-		"another service takes the server's mounts":     {edit: `.services.extra = {image: "caddy:2", volumes_from: ["taskto"]}`, reason: "volumes_from"},
-		"a config mounted into the worker":              {edit: `.services["cli-worker"].configs = [{source: "c", target: "/c"}]`, reason: "a config or a secret mounted"},
-		"a secret mounted into the worker":              {edit: `.services["cli-worker"].secrets = [{source: "s", target: "/run/secrets/s"}]`, reason: "a config or a secret mounted"},
-		"the server image's own user is root":           {imageUser: "root", reason: "the server wouldn't run as 65532"},
-		"a development switch in the server":            {edit: `.services.taskto.environment.TASKTO_INSECURE_COOKIES = "true"`, reason: "TASKTO_INSECURE_COOKIES"},
-		"a secret in the worker":                        {edit: `.services["cli-worker"].environment.OPENAI_API_KEY = "x"`, reason: "OPENAI_API_KEY"},
-		"the unsafe agents switch on the server":        {edit: `.services.taskto.command = ["-unsafe-privileged-agents"]`, reason: "a container's command has a development switch"},
-		"a capability added to the server":              {edit: `.services.taskto.cap_add = ["NET_BIND_SERVICE"]`, reason: "the server has capabilities added"},
-		"NET_ADMIN given to the worker":                 {edit: `.services["cli-worker"].cap_add += ["NET_ADMIN"]`, reason: "the worker has capabilities beyond"},
-		"the worker loses a capability it needs":        {edit: `.services["cli-worker"].cap_add -= ["KILL"]`, reason: "the worker has capabilities beyond"},
-		"a privileged worker":                           {edit: `.services["cli-worker"].privileged = true`, reason: "or is privileged"},
-		"a server that keeps its capabilities":          {edit: `del(.services.taskto.cap_drop)`, reason: "isn't capability-free"},
-		"a worker that can gain privileges":             {edit: `.services["cli-worker"].security_opt = []`, reason: "isn't capability-free"},
-		"the worker has the server's data":              {edit: `.services["cli-worker"].volumes += [{type: "volume", source: "data", target: "/data", volume: {}}]`, reason: "the worker can see the server's data"},
-		"the worker has the server's data under a name": {edit: `.services["cli-worker"].volumes += [{type: "volume", source: "alias", target: "/x", volume: {}}] | .volumes.alias = {name: "taskto_data"}`, reason: "the worker can see the server's data"},
-		"the worker has a host path":                    {edit: `.services["cli-worker"].volumes += [{type: "bind", source: "/etc", target: "/host"}]`, reason: "the worker can see the server's data, or has a host path"},
-		"the server has the Docker socket":              {edit: `.services.taskto.volumes += [{type: "bind", source: "/var/run/docker.sock", target: "/var/run/docker.sock"}]`, reason: "a container has the Docker socket"},
-		"the worker on the server's network":            {edit: `.services["cli-worker"].networks = {default: null}`, reason: "the server is on the worker's network"},
-		"the worker on two networks":                    {edit: `.services["cli-worker"].networks = {worker: null, default: null}`, reason: "the worker isn't on one network only"},
-		"a worker bridge the firewall doesn't know":     {edit: `.networks.worker.driver_opts["com.docker.network.bridge.name"] = "docker9"`, reason: "the worker's bridge isn't taskto-worker"},
-		"the CLI workers off in the server":             {edit: `.services.taskto.environment.TASKTO_CLI_WORKERS = "off"`, reason: "CLI workers aren't in container mode"},
-		"no worker at all":                              {edit: `del(.services["cli-worker"])`, reason: "the server or the CLI worker isn't in the Compose settings"},
+		"the worker takes the server's mounts":            {edit: `.services["cli-worker"].volumes_from = ["taskto"]`, reason: "volumes_from"},
+		"another service takes the server's mounts":       {edit: `.services.extra = {image: "caddy:2", volumes_from: ["taskto"]}`, reason: "volumes_from"},
+		"a config mounted into the worker":                {edit: `.services["cli-worker"].configs = [{source: "c", target: "/c"}]`, reason: "a config or a secret mounted"},
+		"a secret mounted into the worker":                {edit: `.services["cli-worker"].secrets = [{source: "s", target: "/run/secrets/s"}]`, reason: "a config or a secret mounted"},
+		"the server image's own user is root":             {imageUser: "root", reason: "the server wouldn't run as 65532"},
+		"a development switch in the server":              {edit: `.services.taskto.environment.TASKTO_INSECURE_COOKIES = "true"`, reason: "TASKTO_INSECURE_COOKIES"},
+		"a secret in the worker":                          {edit: `.services["cli-worker"].environment.OPENAI_API_KEY = "x"`, reason: "OPENAI_API_KEY"},
+		"the unsafe agents switch on the server":          {edit: `.services.taskto.command = ["-unsafe-privileged-agents"]`, reason: "a container's command has a development switch"},
+		"a capability added to the server":                {edit: `.services.taskto.cap_add = ["NET_BIND_SERVICE"]`, reason: "the server has capabilities added"},
+		"NET_ADMIN given to the worker":                   {edit: `.services["cli-worker"].cap_add += ["NET_ADMIN"]`, reason: "the worker has capabilities beyond"},
+		"the worker loses a capability it needs":          {edit: `.services["cli-worker"].cap_add -= ["KILL"]`, reason: "the worker has capabilities beyond"},
+		"a privileged worker":                             {edit: `.services["cli-worker"].privileged = true`, reason: "or is privileged"},
+		"a server that keeps its capabilities":            {edit: `del(.services.taskto.cap_drop)`, reason: "isn't capability-free"},
+		"a worker that can gain privileges":               {edit: `.services["cli-worker"].security_opt = []`, reason: "isn't capability-free"},
+		"the worker has the server's data":                {edit: `.services["cli-worker"].volumes += [{type: "volume", source: "data", target: "/data", volume: {}}]`, reason: "the worker can see the server's data"},
+		"the worker has the server's data under a name":   {edit: `.services["cli-worker"].volumes += [{type: "volume", source: "alias", target: "/x", volume: {}}] | .volumes.alias = {name: "taskto_data"}`, reason: "the worker can see the server's data"},
+		"the worker has a host path":                      {edit: `.services["cli-worker"].volumes += [{type: "bind", source: "/etc", target: "/host"}]`, reason: "the worker can see the server's data, or has a host path"},
+		"the server has the Docker socket":                {edit: `.services.taskto.volumes += [{type: "bind", source: "/var/run/docker.sock", target: "/var/run/docker.sock"}]`, reason: "a container has the Docker socket"},
+		"the server has the updater's whole state":        {edit: `.services.taskto.volumes += [{type: "bind", source: "STATE", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has the updater's backups under it":   {edit: `.services.taskto.volumes += [{type: "bind", source: "STATE/previous", target: "/previous", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has a host directory above it":        {edit: `.services.taskto.volumes += [{type: "bind", source: "PARENT", target: "/var-lib", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has the host's root":                  {edit: `.services.taskto.volumes += [{type: "bind", source: "/", target: "/host", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has the state as a named volume":      {edit: `.services.taskto.volumes += [{type: "volume", source: "statevol", target: "/state", read_only: true, volume: {}}] | .volumes.statevol = {name: "taskto_statevol", driver: "local", driver_opts: {type: "none", o: "bind", device: "STATE"}}`, reason: "a host path that holds the updater's state"},
+		"the server has the state by another spelling":    {edit: `.services.taskto.volumes += [{type: "bind", source: "STATE/./previous", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has the state by a path with ..":      {edit: `.services.taskto.volumes += [{type: "bind", source: "STATE/public/../previous", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has the state with doubled slashes":   {edit: `.services.taskto.volumes += [{type: "bind", source: "STATE//previous", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the server has a directory above it as a volume": {edit: `.services.taskto.volumes += [{type: "volume", source: "statevol", target: "/state", read_only: true, volume: {}}] | .volumes.statevol = {name: "taskto_statevol", driver: "local", driver_opts: {type: "none", o: "bind", device: "PARENT"}}`, reason: "a host path that holds the updater's state"},
+		"the server can write the updater's status":       {edit: `(.services.taskto.volumes[] | select(.target == "/update-status") | .read_only) = false`, reason: "a host path that holds the updater's state"},
+		"the worker on the server's network":              {edit: `.services["cli-worker"].networks = {default: null}`, reason: "the server is on the worker's network"},
+		"the worker on two networks":                      {edit: `.services["cli-worker"].networks = {worker: null, default: null}`, reason: "the worker isn't on one network only"},
+		"a worker bridge the firewall doesn't know":       {edit: `.networks.worker.driver_opts["com.docker.network.bridge.name"] = "docker9"`, reason: "the worker's bridge isn't taskto-worker"},
+		"the CLI workers off in the server":               {edit: `.services.taskto.environment.TASKTO_CLI_WORKERS = "off"`, reason: "CLI workers aren't in container mode"},
+		"no worker at all":                                {edit: `del(.services["cli-worker"])`, reason: "the server or the CLI worker isn't in the Compose settings"},
+
+		// The same paths, by other names: a symbolic link is the place it leads to.
+		"the state through a symbolic link":                  {edit: `.services.taskto.volumes += [{type: "bind", source: "{linkstate}", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"a link to a directory under the state":              {edit: `.services.taskto.volumes += [{type: "bind", source: "{linkprev}", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"a link followed by ..":                              {edit: `.services.taskto.volumes += [{type: "bind", source: "{linkstate}/..", target: "/state", read_only: true}]`, reason: "a host path that holds the updater's state"},
+		"the status directory writable through a link":       {edit: `.services.taskto.volumes += [{type: "bind", source: "{linkpub}", target: "/pub"}]`, reason: "a host path that holds the updater's state"},
+		"a volume whose device is a link to the state":       {edit: `.services.taskto.volumes += [{type: "volume", source: "statevol", target: "/state", read_only: true, volume: {}}] | .volumes.statevol = {name: "taskto_statevol", driver: "local", driver_opts: {type: "none", o: "bind", device: "{linkstate}"}}`, reason: "a host path that holds the updater's state"},
+		"a file of the state as a secret":                    {edit: `.services.taskto.secrets = [{source: "s", target: "/run/secrets/s"}] | .secrets.s = {file: "STATE/status.json"}`, reason: "a host path that holds the updater's state"},
+		"a file of the state as a config, through a link":    {edit: `.services.taskto.configs = [{source: "c", target: "/c"}] | .configs.c = {file: "{linkstate}/transaction"}`, reason: "a host path that holds the updater's state"},
+		"an existing volume that binds the state":            {edit: `.services.taskto.volumes += [{type: "volume", source: "statevol", target: "/state", read_only: true, volume: {}}] | .volumes.statevol = {name: "taskto_statevol"}`, volumeOptions: "taskto_statevol STATE", reason: "a host path that holds the updater's state"},
+		"an external volume that binds a directory above":    {edit: `.services.taskto.volumes += [{type: "volume", source: "statevol", target: "/state", read_only: true, volume: {}}] | .volumes.statevol = {name: "taskto_extvol", external: true}`, volumeOptions: "taskto_extvol PARENT", reason: "a host path that holds the updater's state"},
+		"an existing volume that binds the status, writable": {edit: `.services.taskto.volumes += [{type: "volume", source: "statevol", target: "/state", volume: {}}] | .volumes.statevol = {name: "taskto_statevol"}`, volumeOptions: "taskto_statevol {linkpub}", reason: "a host path that holds the updater's state"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newUpdEnv(t)
 			e.release(updNew, "", false, false)
 			if tc.edit != "" {
-				e.write("fake/config-edit", tc.edit)
+				e.write("fake/config-edit", e.paths().Replace(tc.edit))
+			}
+			if tc.volumeOptions != "" {
+				e.write("fake/volume-options", e.paths().Replace(tc.volumeOptions)+"\n")
 			}
 			if tc.imageUser != "" {
 				e.write("fake/image-user", tc.imageUser)
@@ -269,15 +296,22 @@ func TestUpdateRevertsBeforeTheNewServerStarts(t *testing.T) {
 // says which backup to restore.
 func TestUpdateStopsAfterTheNewServerStarted(t *testing.T) {
 	for name, setup := range map[string]func(e *updEnv){
-		"the server isn't healthy":                    func(e *updEnv) { e.write("fake/health-bad", updNew+"\n") },
-		"docker compose start fails after it started": func(e *updEnv) { e.write("fake/upfail-after-start", updNew) },
-		"the server runs as root":                     func(e *updEnv) { e.mutate(updNew, "root") },
-		"the server has a development switch":         func(e *updEnv) { e.mutate(updNew, "insecure") },
-		"the server isn't in container mode":          func(e *updEnv) { e.mutate(updNew, "nomode") },
-		"the worker is given NET_ADMIN":               func(e *updEnv) { e.mutate(updNew, "netadmin") },
-		"the worker has a setuid program":             func(e *updEnv) { e.mutate(updNew, "suid") },
-		"the worker can see the data":                 func(e *updEnv) { e.mutate(updNew, "workerdata") },
-		"the proxy still answers as the old version":  func(e *updEnv) { e.write("fake/proxy-version", updOld) },
+		"the server isn't healthy":                                     func(e *updEnv) { e.write("fake/health-bad", updNew+"\n") },
+		"docker compose start fails after it started":                  func(e *updEnv) { e.write("fake/upfail-after-start", updNew) },
+		"the server runs as root":                                      func(e *updEnv) { e.mutate(updNew, "root") },
+		"the server has a development switch":                          func(e *updEnv) { e.mutate(updNew, "insecure") },
+		"the server isn't in container mode":                           func(e *updEnv) { e.mutate(updNew, "nomode") },
+		"the worker is given NET_ADMIN":                                func(e *updEnv) { e.mutate(updNew, "netadmin") },
+		"the worker has a setuid program":                              func(e *updEnv) { e.mutate(updNew, "suid") },
+		"the worker can see the data":                                  func(e *updEnv) { e.mutate(updNew, "workerdata") },
+		"the server can see the updater's state":                       func(e *updEnv) { e.mutate(updNew, "updaterstate") },
+		"the server can write the updater's status":                    func(e *updEnv) { e.mutate(updNew, "updaterwrite") },
+		"the server mounts the state as a volume":                      func(e *updEnv) { e.mutate(updNew, "updatervolume") },
+		"the server mounts the public volume writable":                 func(e *updEnv) { e.mutate(updNew, "updatervolumetwice") },
+		"the server mounts the state through a link":                   func(e *updEnv) { e.extraBind(updNew, "{linkstate}", false) },
+		"the server mounts a link to the status dir, writable":         func(e *updEnv) { e.extraBind(updNew, "{linkpub}", true) },
+		"the server mounts a directory above the state through a link": func(e *updEnv) { e.extraBind(updNew, "{linkstate}/..", false) },
+		"the proxy still answers as the old version":                   func(e *updEnv) { e.write("fake/proxy-version", updOld) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newUpdEnv(t)
