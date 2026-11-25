@@ -180,6 +180,25 @@ test('an upload that fails is resumed from the server, not started again', async
   expect(screen.queryByRole('alert')).toBeNull()
 }, 20000)
 
+test('an upload refused for want of storage is not retried, and says so', async () => {
+  let puts = 0
+  fakeFetch({
+    [`POST ${base}/uploads`]: { status: 201, body: state({ size: 8 }) },
+    [`PUT ${base}/uploads/${id}?offset=0`]: () => {
+      puts++
+      return { status: 507, body: { error: 'full', code: 'quota_user', params: { max_mib: 10 } } }
+    },
+  })
+  const added = vi.fn()
+  render(<Field onValue={added} />)
+  fireEvent.change(library(), { target: { files: [picture('cat.png', 8)] } })
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('Your private space has used its storage (10 MiB)')
+  // Once: waiting and trying again only fails the same way.
+  expect(puts).toBe(1)
+  expect(added).not.toHaveBeenCalled()
+}, 20000)
+
 test('a chunk the server already has is not sent again: the client goes on from the server’s offset', async () => {
   const offsets: string[] = []
   fakeFetch({

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"taskto.ai/taskto/internal/notifications"
 	"taskto.ai/taskto/internal/privcheck"
 	"taskto.ai/taskto/internal/providers"
+	"taskto.ai/taskto/internal/quota"
 	"taskto.ai/taskto/internal/schedule"
 	"taskto.ai/taskto/internal/search"
 	"taskto.ai/taskto/internal/server"
@@ -153,6 +155,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		info := mailer.Info()
 		slog.Info("outgoing email is on", "host", info.Host, "port", info.Port, "security", info.Security,
 			"sign_in", info.SignsIn, "egress", cfg.SMTPEgressPolicy().String())
+		if cfg.PublicURL == "" {
+			slog.Warn("reset and invite links aren't emailed: set public_url, the server's external address, which the links are built on")
+		}
 	}
 	// One server per data directory, enforced before anything in it is opened. Deferred
 	// first, so the lock goes last, after the sidecar has stopped and the database closed.
@@ -201,6 +206,10 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		MaxFileSize: cfg.KBMaxFileSize, LargeFileSize: cfg.KBLargeFileSize,
 		MaxRepoSize: cfg.KBMaxRepoSize, MaxUnversionedSize: cfg.KBMaxUnversionedSize,
 	})
+	// The storage quotas: writes that would take a space or its workspace over one are refused.
+	// With none set (the default) the check does nothing.
+	quotas := quota.New(sqlDB, quota.Limits{Workspace: cfg.StorageQuotaWorkspace, User: cfg.StorageQuotaUser}, kb)
+	kb.SetQuota(quotas.KnowledgeCheck())
 	// A history rewrite a stopped process left half done is finished before anyone reads.
 	if err := kb.Recover(ctx); err != nil {
 		return err
@@ -299,8 +308,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	if cfg.InsecureCookies {
 		slog.Warn("the session cookie is sent over plain http (insecure_cookies): use this only on localhost")
 	}
-	authOpts := auth.Options{InsecureCookies: cfg.InsecureCookies, TrustedProxies: cfg.TrustedProxyPrefixes(),
-		PublicURL: cfg.PublicURL, DisablePasswordLogin: cfg.DisablePasswordLogin}
+	authOpts := auth.Options{InsecureCookies: cfg.InsecureCookies, TrustedProxies: cfg.TrustedProxyPrefixes(), Key: key,
+		PublicURL: cfg.PublicURL, DisablePasswordLogin: cfg.DisablePasswordLogin,
+		WorkspaceCreation: cfg.WorkspaceCreationMode()}
 	authOpts.SSO = ssoProviders
 	if len(ssoProviders) > 0 {
 		slog.Info("single sign-on is on", "providers", len(ssoProviders), "public_url", cfg.PublicURL,
@@ -329,7 +339,18 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		slog.Info("first-run setup: no account exists yet; set up the owner with this setup token (POST /api/setup, see docs/install.md); it works until setup is done or the server restarts",
 			"setup_token", authOpts.SetupToken)
 	}
+	// The apps' attachment sweep runs in the background, for as long as the server runs. It is
+	// waited for before the database closes: left running, its query's connection closes after
+	// run returned, and that last close checkpoints the database while its file is still locked.
+	maintainCtx, stopMaintain := context.WithCancel(ctx)
+	var maintaining sync.WaitGroup
+	defer func() {
+		stopMaintain()
+		maintaining.Wait()
+	}()
+	var accounts *auth.Service
 	handler, err := server.New(version, sqlDB, server.Options{
+		AccountsReady: func(svc *auth.Service) { accounts = svc },
 		Notifications: notifier,
 		Scheduler:     scheduler,
 		Auth:          authOpts,
@@ -343,10 +364,17 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		Browser:       browsers,
 		Dictation:     dictationService(cfg, sqlDB, key, kb),
 		BackupDataDir: cfg.DataDir,
+		Quota:         quotas,
 		Mail:          mailer,
 		// Photos that were never saved in a record are removed after a day, and an app moved to
 		// another space has its files follow it (internal/apps/attachments.go).
-		AppsReady: func(svc *apps.Service) { go svc.Maintain(ctx, 10*time.Minute) },
+		AppsReady: func(svc *apps.Service) {
+			maintaining.Add(1)
+			go func() {
+				defer maintaining.Done()
+				svc.Maintain(maintainCtx, 10*time.Minute)
+			}()
+		},
 	})
 	if err != nil {
 		return err
@@ -382,9 +410,21 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
+		shutdownErr := srv.Shutdown(shutdownCtx)
+		if shutdownErr != nil {
 			// Graceful shutdown timed out: drop the connections that are still open.
-			return errors.Join(err, srv.Close())
+			shutdownErr = errors.Join(shutdownErr, srv.Close())
+		}
+		// The emails the server accepted are made after its answer: end their sends and wait for
+		// them, with a deadline of its own so a slow shutdown above doesn't leave none, and
+		// whether or not that went well. The database closes (the deferred Close) only after this.
+		idleCtx, stopIdle := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopIdle()
+		if err := accounts.Shutdown(idleCtx); err != nil {
+			slog.Warn("shutting down with emails still being made")
+		}
+		if shutdownErr != nil {
+			return shutdownErr
 		}
 		if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
 			return err

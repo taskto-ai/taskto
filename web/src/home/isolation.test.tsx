@@ -20,6 +20,8 @@ vi.mock('../apps/AppView', () => ({
 const me: Me = {
   user: { id: 1, email: 'ann@example.com', name: 'Ann' },
   workspaces: [{ id: 1, name: 'Home', role: 'admin' }],
+  can_create_workspace: false,
+  is_operator: false,
 }
 const release = { number: 1, definition_version: 2, requires: [] }
 const widget = (id: number, title: string, over: Record<string, unknown> = {}): HomeItem =>

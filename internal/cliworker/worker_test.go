@@ -282,7 +282,12 @@ func backgroundPID(t *testing.T, configDir string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pid, _ := strconv.Atoi(string(b))
+	pid, err := strconv.Atoi(string(b))
+	// Not a process of the turn: kill(0, 0) and kill(1, 0) succeed, so `alive` would
+	// report one forever.
+	if err != nil || pid <= 1 {
+		t.Fatalf("background.pid = %q, want the background process's ID", b)
+	}
 	return pid
 }
 

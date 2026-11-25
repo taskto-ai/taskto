@@ -435,6 +435,8 @@ export type InviteCreated = {
 export type Me = {
   user: AuthMeUser
   workspaces: Workspace[]
+  can_create_workspace: boolean
+  is_operator: boolean
 }
 
 export type Member = {
@@ -443,6 +445,7 @@ export type Member = {
   name: string
   role: string
   joined_at: string
+  two_factor?: boolean
 }
 
 export type NotificationItem = {

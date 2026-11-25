@@ -69,6 +69,9 @@
   /* A cross, as a shape to mask with: its colour comes from the element that uses it. */
   --tt-clear-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.1 8 6.6l4.5-4.5 1.4 1.4L9.4 8l4.5 4.5-1.4 1.4L8 9.4l-4.5 4.5-1.4-1.4L6.6 8 2.1 3.5z'/%3E%3C/svg%3E");
 
+  /* A QR code is dark on light whatever the theme: a scanner reads it that way. */
+  --tt-qr-ground: light-dark(#ffffff, #ffffff);
+
   --tt-scrim: light-dark(rgba(17, 17, 16, 0.42), rgba(0, 0, 0, 0.6));
   /* Only what you are meant to press, and what floats, has a shadow: the buttons' short hard lift
      (the website's), and the soft one under a menu or a dialog. light-dark() takes colours only,
@@ -547,6 +550,7 @@ textarea {
 }
 
 .tt-topbar {
+  position: relative; /* the new-workspace form hangs from the bar */
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -669,6 +673,36 @@ textarea {
   box-shadow: var(--tt-shadow-pop);
   display: grid;
   gap: 0.6rem;
+}
+
+/* "New workspace" sits at the switcher's side, near the start of the bar, so its form is anchored
+   to the bar and not to its own button: from the bar's start edge, never wider than the screen,
+   in either text direction. On the screen for someone with no workspace, where there is no bar,
+   it hangs from the button, centred. */
+.tt-topbar .tt-new-workspace {
+  position: static;
+}
+
+.tt-new-workspace .tt-menu {
+  inset-inline-end: auto;
+  inset-inline-start: 0.5rem;
+  width: min(16rem, calc(100vw - 1rem));
+  box-sizing: border-box;
+}
+
+.tt-center .tt-new-workspace .tt-menu {
+  inset-inline-start: 50%;
+  translate: -50% 0;
+}
+
+[dir="rtl"] .tt-center .tt-new-workspace .tt-menu {
+  translate: 50% 0;
+}
+
+.tt-new-workspace summary {
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--tt-radius);
 }
 
 .tt-menu p {
@@ -2171,6 +2205,32 @@ fieldset {
 .tt-copy {
   display: flex;
   gap: 0.5rem;
+}
+
+.tt-qr {
+  display: grid;
+  place-items: center;
+  inline-size: 12.5rem;
+  block-size: 12.5rem;
+  max-inline-size: 100%;
+  border-radius: var(--tt-radius);
+  background: var(--tt-qr-ground);
+  color: var(--tt-muted);
+}
+
+.tt-qr img {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.tt-recovery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.35rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--tt-mono);
 }
 
 .tt-copy input {
@@ -3735,4 +3795,47 @@ html[data-keyboard="open"] .tt-composer {
 
 .tt-installed {
   max-inline-size: 42rem;
+}
+
+.tt-audit-filters {
+  margin-block-end: 0.75rem;
+}
+
+.tt-audit-when {
+  display: grid;
+  justify-items: end;
+  gap: 0.1rem;
+  text-align: end;
+}
+
+.tt-audit-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem 0.9rem;
+  margin: 0;
+}
+
+.tt-audit-details div {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.tt-audit-details dt::after {
+  content: ":";
+}
+
+.tt-audit-details dd {
+  margin: 0;
+}
+
+.tt-storage-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-block-start: 0.25rem;
+}
+
+.tt-storage-meter progress {
+  inline-size: 100%;
+  max-inline-size: 24rem;
 }

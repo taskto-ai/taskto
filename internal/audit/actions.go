@@ -8,10 +8,21 @@ const (
 	LoginSucceeded       = "login_succeeded"
 	LoginFailed          = "login_failed"
 	Logout               = "logout"
+	SessionRevoked       = "session_revoked"
+	OtherSessionsRevoked = "other_sessions_revoked"
 	PasswordChanged      = "password_changed"
 	PasswordChangeFailed = "password_change_failed"
 	PasswordResetCreated = "password_reset_created"
 	PasswordResetUsed    = "password_reset_used"
+	// PasswordResetRequested is a reset link someone asked for from the login page: it records the
+	// account's, and whether the email went.
+	PasswordResetRequested = "password_reset_requested"
+
+	// Two-factor login.
+	TwoFactorEnabled               = "two_factor_enabled"
+	TwoFactorDisabled              = "two_factor_disabled"
+	TwoFactorRecoveryCodesReplaced = "two_factor_recovery_codes_replaced"
+	TwoFactorCleared               = "two_factor_cleared"
 
 	// Single sign-on.
 	SSOLoginSucceeded = "sso_login_succeeded"
@@ -19,6 +30,7 @@ const (
 	SSOIdentityLinked = "sso_identity_linked"
 
 	// Workspaces, members and invites.
+	WorkspaceCreated  = "workspace_created"
 	WorkspaceUpdated  = "workspace_updated"
 	InviteCreated     = "invite_created"
 	InviteRevoked     = "invite_revoked"

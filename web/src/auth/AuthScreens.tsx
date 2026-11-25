@@ -31,7 +31,13 @@ function AuthLoading() {
   return <p className="tt-center tt-muted">{t('app.loading')}</p>
 }
 
-function useSubmit(send: () => Promise<Me>, onDone: (me: Me) => void) {
+// What a password step (a login, a reset link) answers for an account with two-factor login on:
+// no session, a challenge for POST /api/login/two-factor.
+type Challenged = { two_factor_required: true; challenge: string }
+const needsCode = (reply: Me | Challenged): reply is Challenged => 'two_factor_required' in reply
+
+// send may answer null: the step is done but nobody is logged in yet (a login that asks for a code).
+function useSubmit(send: () => Promise<Me | null>, onDone: (me: Me) => void) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const submit = async (e: FormEvent) => {
@@ -39,7 +45,9 @@ function useSubmit(send: () => Promise<Me>, onDone: (me: Me) => void) {
     setBusy(true)
     setError(null)
     try {
-      onDone(await send())
+      const me = await send()
+      if (me) onDone(me)
+      else setBusy(false)
     } catch (err) {
       setError(errorText(err))
       setBusy(false)
@@ -52,15 +60,18 @@ function useSubmit(send: () => Promise<Me>, onDone: (me: Me) => void) {
 // route (404) is an older one: passwords only. Any other failure, or an answer that isn't the
 // shape the route promises, is an error to retry: guessing "passwords only" would show a form
 // that a passwords-off server refuses, or hide the providers.
-type LoginMethods = { password: boolean; sso: { id: string; name: string }[] }
+type LoginMethods = { password: boolean; sso: { id: string; name: string }[]; resetByEmail: boolean }
+type MethodsAnswer = { password: boolean; sso: LoginMethods['sso']; reset_by_email?: boolean }
 
 type MethodsState = { kind: 'loading' } | { kind: 'ready'; methods: LoginMethods } | { kind: 'error' }
 
-function validMethods(v: unknown): v is LoginMethods {
+function validMethods(v: unknown): v is MethodsAnswer {
   if (typeof v !== 'object' || v === null) return false
-  const m = v as { password?: unknown; sso?: unknown }
+  const m = v as { password?: unknown; sso?: unknown; reset_by_email?: unknown }
   return (
     typeof m.password === 'boolean' &&
+    // Absent on a server from before the emailed reset link: it has none.
+    (m.reset_by_email === undefined || typeof m.reset_by_email === 'boolean') &&
     Array.isArray(m.sso) &&
     m.sso.every(
       (p) =>
@@ -80,13 +91,18 @@ function useLoginMethods(): { state: MethodsState; retry: () => void } {
     let live = true
     api<unknown>('/api/login/methods').then(
       (m) => {
-        if (live) setState(validMethods(m) ? { kind: 'ready', methods: m } : { kind: 'error' })
+        if (!live) return
+        setState(
+          validMethods(m)
+            ? { kind: 'ready', methods: { ...m, resetByEmail: m.reset_by_email === true } }
+            : { kind: 'error' },
+        )
       },
       (err) => {
         if (!live) return
         setState(
           err instanceof ApiError && err.status === 404
-            ? { kind: 'ready', methods: { password: true, sso: [] } }
+            ? { kind: 'ready', methods: { password: true, sso: [], resetByEmail: false } }
             : { kind: 'error' },
         )
       },
@@ -252,12 +268,27 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
   const ssoError = useSsoError()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const { busy, error, submit } = useSubmit(
-    () => api<Me>('/api/login', { method: 'POST', body: { email, password } }),
-    onDone,
-  )
+  // The challenge of a login whose password was right and that now asks for a code.
+  const [challenge, setChallenge] = useState<string | null>(null)
+  const { busy, error, submit } = useSubmit(async () => {
+    const reply = await api<Me | Challenged>('/api/login', {
+      method: 'POST',
+      body: { email, password },
+    })
+    if (needsCode(reply)) {
+      setPassword('')
+      setChallenge(reply.challenge)
+      return null
+    }
+    return reply
+  }, onDone)
+  const [forgot, setForgot] = useState(false)
   if (loaded.state.kind !== 'ready') return <MethodsPending state={loaded.state} retry={loaded.retry} />
+  if (challenge) return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => setChallenge(null)} />
   const methods = loaded.state.methods
+  if (forgot && methods.password && methods.resetByEmail) {
+    return <ForgotPasswordScreen initialEmail={email} onBack={() => setForgot(false)} />
+  }
   return (
     <AuthFrame title={t('auth.login.title')}>
       {ssoError && (
@@ -297,9 +328,148 @@ export function LoginScreen({ onDone }: { onDone: (me: Me) => void }) {
           <button type="submit" className="tt-button tt-primary" disabled={busy}>
             {busy ? t('auth.login.busy') : t('auth.login.submit')}
           </button>
-          <p className="tt-muted tt-small">{t('auth.login.forgot')}</p>
+          {methods.resetByEmail ? (
+            <button type="button" className="tt-button tt-small" onClick={() => setForgot(true)}>
+              {t('auth.login.forgotByEmail')}
+            </button>
+          ) : (
+            <p className="tt-muted tt-small">{t('auth.login.forgot')}</p>
+          )}
         </form>
       )}
+    </AuthFrame>
+  )
+}
+
+// The second step of a login for someone with two-factor login on: a code from the authenticator
+// app, or a recovery code. A challenge that ran out or was used up goes back to the password.
+// It is the step of a password login, of an invite taken with an account and of a reset link
+// (`reset`: the password is set, and going back means the login). `finish` is what is left to do
+// with the session the code made (accepting an invite); if it fails the code isn't asked for again,
+// since the challenge is used up and the person is signed in.
+function TwoFactorStep({
+  challenge,
+  onDone,
+  onBack,
+  reset = false,
+  finish,
+}: {
+  challenge: string
+  onDone: (me: Me) => void
+  onBack: () => void
+  reset?: boolean
+  finish?: (me: Me) => Promise<Me>
+}) {
+  const t = useT()
+  const [code, setCode] = useState('')
+  const [expired, setExpired] = useState(false)
+  const [verified, setVerified] = useState<Me | null>(null)
+  const { busy, error, submit } = useSubmit(async () => {
+    let me = verified
+    if (!me) {
+      try {
+        me = await api<Me>('/api/login/two-factor', { method: 'POST', body: { challenge, code } })
+      } catch (err) {
+        if (err instanceof ApiError && err.code === 'two_factor_challenge_invalid') setExpired(true)
+        throw err
+      }
+      setVerified(me)
+    }
+    return finish ? finish(me) : me
+  }, onDone)
+  return (
+    <AuthFrame
+      title={t('auth.twoFactor.title')}
+      intro={<p className="tt-muted">{t(reset ? 'auth.twoFactor.introReset' : 'auth.twoFactor.intro')}</p>}
+    >
+      <form className="tt-form" onSubmit={submit}>
+        <label>
+          {t('auth.twoFactor.code')}
+          <input
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            required
+            disabled={expired || verified !== null}
+            autoComplete="one-time-code"
+            spellCheck={false}
+          />
+        </label>
+        {error && (
+          <p role="alert" className="tt-error">
+            {error}
+          </p>
+        )}
+        <div className="tt-row-actions">
+          <button type="submit" className="tt-button tt-primary" disabled={busy || expired}>
+            {busy ? t('auth.twoFactor.busy') : t('auth.twoFactor.submit')}
+          </button>
+          <button type="button" className="tt-button" onClick={onBack}>
+            {reset ? t('auth.twoFactor.toLogin') : expired ? t('auth.twoFactor.again') : t('auth.twoFactor.back')}
+          </button>
+        </div>
+        <p className="tt-muted tt-small">{t('auth.twoFactor.lost')}</p>
+      </form>
+    </AuthFrame>
+  )
+}
+
+// Asking for a reset link by email, from the login page. The server answers the same whether or
+// not an account has the address, and so does this: it never says which.
+function ForgotPasswordScreen({ initialEmail, onBack }: { initialEmail: string; onBack: () => void }) {
+  const t = useT()
+  const [email, setEmail] = useState(initialEmail)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [sentTo, setSentTo] = useState<string | null>(null)
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await api('/api/password-reset/request', { method: 'POST', body: { email } })
+      setSentTo(email.trim())
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (sentTo !== null) {
+    return (
+      <AuthFrame title={t('auth.forgot.sentTitle')}>
+        <p>{t.rich('auth.forgot.sent', { email: <strong>{sentTo}</strong> })}</p>
+        <p className="tt-muted tt-small">{t('auth.forgot.sentHelp')}</p>
+        <button type="button" className="tt-button" onClick={onBack}>
+          {t('auth.forgot.back')}
+        </button>
+      </AuthFrame>
+    )
+  }
+  return (
+    <AuthFrame title={t('auth.forgot.title')} intro={<p className="tt-muted">{t('auth.forgot.intro')}</p>}>
+      <form className="tt-form" onSubmit={submit}>
+        <label>
+          {t('auth.email')}
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoComplete="username"
+          />
+        </label>
+        {error && (
+          <p role="alert" className="tt-error">
+            {error}
+          </p>
+        )}
+        <button type="submit" className="tt-button tt-primary" disabled={busy}>
+          {busy ? t('auth.forgot.busy') : t('auth.forgot.submit')}
+        </button>
+        <button type="button" className="tt-button tt-small" onClick={onBack}>
+          {t('auth.forgot.back')}
+        </button>
+      </form>
     </AuthFrame>
   )
 }
@@ -313,10 +483,22 @@ export function ResetPasswordScreen({ token, onDone }: { token: string; onDone: 
   const [password, setPassword] = useState('')
   const [again, setAgain] = useState('')
   const mismatch = again !== '' && password !== again
-  const { busy, error, submit } = useSubmit(
-    () => api<Me>('/api/password-reset', { method: 'POST', body: { token, password } }),
-    onDone,
-  )
+  // With two-factor login on the link sets the password and asks for a code: no session before.
+  const [challenge, setChallenge] = useState<string | null>(null)
+  const { busy, error, submit } = useSubmit(async () => {
+    const reply = await api<Me | Challenged>('/api/password-reset', { method: 'POST', body: { token, password } })
+    if (needsCode(reply)) {
+      setPassword('')
+      setAgain('')
+      setChallenge(reply.challenge)
+      return null
+    }
+    return reply
+  }, onDone)
+  // The link is used up, so there is no form to go back to: back is the login, with the new password.
+  if (challenge) {
+    return <TwoFactorStep challenge={challenge} onDone={onDone} onBack={() => window.location.assign('/')} reset />
+  }
   if (!token) {
     return (
       <AuthFrame title={t('auth.reset.title')}>
@@ -403,14 +585,23 @@ export function InviteScreen({
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm((f) => ({ ...f, [key]: e.target.value }))
   const accept = (body: object) => api<Me>('/api/invites/accept', { method: 'POST', body: { token, ...body } })
+  // An existing account with two-factor login on gets a challenge from the login, not a session:
+  // the code comes first, and the invite is accepted after it.
+  const [challenge, setChallenge] = useState<string | null>(null)
   const { busy, error, submit } = useSubmit(
     async () => {
       if (me) return accept({})
       if (mode === 'login') {
-        before.current = await api<Me>('/api/login', {
+        const reply = await api<Me | Challenged>('/api/login', {
           method: 'POST',
           body: { email: form.email, password: form.password },
         })
+        if (needsCode(reply)) {
+          setForm((f) => ({ ...f, password: '' }))
+          setChallenge(reply.challenge)
+          return null
+        }
+        before.current = reply
         return accept({})
       }
       try {
@@ -427,6 +618,19 @@ export function InviteScreen({
     (joined) => onDone(joined, before.current),
   )
 
+  if (challenge) {
+    return (
+      <TwoFactorStep
+        challenge={challenge}
+        onDone={(joined) => onDone(joined, before.current)}
+        onBack={() => setChallenge(null)}
+        finish={(loggedIn) => {
+          before.current = loggedIn
+          return accept({})
+        }}
+      />
+    )
+  }
   if (!token) {
     return (
       <AuthFrame title={t('auth.invite.title')}>

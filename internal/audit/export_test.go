@@ -39,3 +39,9 @@ func TargetTypes() []string {
 
 // TargetTable is the table of a target type.
 func TargetTable(typ string) string { return targetTables[typ] }
+
+// ListSQL is the statement and arguments ListWorkspace runs for a query.
+func ListSQL(workspace int64, q Query) (string, []any, error) {
+	stmt, args, _, err := listSQL(workspace, q)
+	return stmt, args, err
+}

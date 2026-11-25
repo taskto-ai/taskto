@@ -209,6 +209,12 @@ type Store struct {
 	spaces map[int64]*spaceState
 
 	onChange []func(access.Space) // see OnChange
+
+	// quota is the storage quotas' check (SetQuota); nil for none.
+	quota func(sp access.Space, adding int64) (release func(), err error)
+
+	// afterMeasure is for tests: it runs once a space's first measurement is made, before it is stored.
+	afterMeasure func(sp access.Space)
 }
 
 // spaceState is what the Store keeps per space while it runs.
@@ -217,6 +223,16 @@ type spaceState struct {
 	mu sync.RWMutex
 	// size is the bytes in .git, counted at the first write; -1 until then.
 	size int64
+	// anc is main's commits, which tell a read whether a commit is one of them.
+	anc ancestry
+	// unv is the bytes of the unversioned files, counted when a write needs them; -1 when
+	// unknown (usage.go). Only a writer, holding mu, reads or sets it.
+	unv int64
+
+	// cache is the usage the last write published, under cacheMu, which no one holds for
+	// long and a writer may take while holding mu.
+	cacheMu sync.Mutex
+	cache   usageCache
 }
 
 // New returns the knowledge base of the spaces under dataDir.
@@ -245,7 +261,7 @@ func (s *Store) state(spaceID int64) *spaceState {
 	defer s.mu.Unlock()
 	st, ok := s.spaces[spaceID]
 	if !ok {
-		st = &spaceState{size: -1}
+		st = &spaceState{size: -1, unv: -1}
 		s.spaces[spaceID] = st
 	}
 	return st
@@ -285,18 +301,65 @@ func (s *Store) ListAt(ctx context.Context, sp access.Space, at, prefix, after s
 }
 
 // Read returns the document name of sp, as it is now, or as it was at the commit at.
-func (s *Store) Read(_ context.Context, sp access.Space, name, at string) (Doc, error) {
+func (s *Store) Read(ctx context.Context, sp access.Space, name, at string) (Doc, error) {
 	if err := checkPath(name); err != nil {
 		return Doc{}, err
 	}
 	var doc Doc
 	err := s.read(sp, func(r *repo) error {
-		c, err := r.revision(at)
+		c, err := r.revision(ctx, at)
 		if err != nil {
 			return err
 		}
 		doc, err = r.readDoc(c, name)
 		return err
+	})
+	return doc, err
+}
+
+// ReadText returns the text file name of sp, as it is now or as it was at the commit at, for a
+// reader that wants text and nothing else (the agent's read_doc). What the file is is decided
+// from its metadata, under the same read lock as the read, before any content is loaded: an
+// unversioned file, and a file other than Markdown over maxSize bytes, are ErrInvalid without
+// their bytes being read. A file with a NUL byte or that isn't valid UTF-8 is ErrInvalid too,
+// whatever its name says, so what is returned is always text that reads back as it was written.
+func (s *Store) ReadText(ctx context.Context, sp access.Space, name, at string, maxSize int64) (Doc, error) {
+	if err := checkPath(name); err != nil {
+		return Doc{}, err
+	}
+	var doc Doc
+	err := s.read(sp, func(r *repo) error {
+		c, err := r.revision(ctx, at)
+		if err != nil {
+			return err
+		}
+		e, err := r.entryAt(c, name)
+		if err != nil {
+			return err
+		}
+		if e.Mode == filemode.Dir {
+			return fmt.Errorf("%w: %s is a folder", ErrNotFound, name)
+		}
+		entry, p, err := r.describe(name, e.Hash) // reads a blob only if it is small enough to be a pointer
+		if err != nil {
+			return err
+		}
+		switch {
+		case p != nil:
+			// Its bytes are on disk, not in git, and can be any size: only list_docs shows it.
+			return fmt.Errorf("%w: %s is an unversioned file (a large file, audio, video or an archive): it can't be read as text", ErrInvalid, name)
+		case !IsMarkdown(name) && entry.Size > maxSize:
+			return fmt.Errorf("%w: %s is %d bytes: only text files up to %d KiB can be read", ErrInvalid, name, entry.Size, maxSize>>10)
+		}
+		content, err := r.blobBytes(e.Hash)
+		if err != nil {
+			return err
+		}
+		if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
+			return fmt.Errorf("%w: %s isn't a text file: only Markdown documents and plain-text files can be read", ErrInvalid, name)
+		}
+		doc = Doc{Entry: entry, Content: content}
+		return nil
 	})
 	return doc, err
 }
@@ -410,7 +473,9 @@ func (s *Store) PutFile(ctx context.Context, sp access.Space, name string, src i
 // putUnversioned commits a pointer to the staged bytes at name, once they fit in the
 // space's unversioned size, and moves them into place.
 func (s *Store) putUnversioned(sp access.Space, name string, sg *staged, base string, by Author, message string) (Result, error) {
-	return s.put(sp, name, maxPointerSize, base, by, message, func(r *repo, cur *object.TreeEntry) (plumbing.Hash, error) {
+	// The quota is checked in here, once the bytes of the file it replaces are known: a replacement
+	// or a shrink near the cap is a change of its net size, not of the new file's.
+	return s.putCore(sp, name, maxPointerSize, false, base, by, message, nil, func(r *repo, cur *object.TreeEntry) (plumbing.Hash, error) {
 		r.collect = true
 		if !r.hasObject(sg.ptr.oid) {
 			used, err := r.unversionedSize()
@@ -418,19 +483,29 @@ func (s *Store) putUnversioned(sp access.Space, name string, sg *staged, base st
 				return plumbing.ZeroHash, err
 			}
 			// The bytes of the file it replaces are freed by this change.
+			var freed int64
 			if cur != nil {
 				if _, p, err := r.describe(name, cur.Hash); err != nil {
 					return plumbing.ZeroHash, err
 				} else if p != nil && r.hasObject(p.oid) {
+					freed = p.size
 					used -= p.size
 				}
 			}
 			if used+sg.ptr.size > s.opts.MaxUnversionedSize {
 				return plumbing.ZeroHash, fmt.Errorf("%w: its unversioned files would be over %d bytes", ErrRepoFull, s.opts.MaxUnversionedSize)
 			}
+			// What the change adds to the space: the file's bytes, the replaced file's taken off,
+			// and the commit and its trees.
+			if err := s.reserveQuota(r, sp, sg.ptr.size-freed+changeOverhead); err != nil {
+				return plumbing.ZeroHash, err
+			}
 			if err := r.adopt(sg); err != nil {
 				return plumbing.ZeroHash, err
 			}
+		} else if err := s.reserveQuota(r, sp, changeOverhead); err != nil {
+			// The bytes are in the space already (a path points to them): only the commit is new.
+			return plumbing.ZeroHash, err
 		}
 		return r.storeBlob(sg.ptr.encode())
 	})
@@ -445,8 +520,14 @@ func (s *Store) put(sp access.Space, name string, adding int64, base string, by 
 // putIf is put with a guard, run once the write lock is held and before anything is read or
 // committed: if it returns an error, nothing is written and the error is the result.
 func (s *Store) putIf(sp access.Space, name string, adding int64, base string, by Author, message string, guard func() error, store func(r *repo, cur *object.TreeEntry) (plumbing.Hash, error)) (Result, error) {
+	return s.putCore(sp, name, adding, true, base, by, message, guard, store)
+}
+
+// putCore is putIf; the storage quota is checked before store runs for adding bytes if
+// quotaFirst, and by store itself if not (an unversioned file, whose net size it knows).
+func (s *Store) putCore(sp access.Space, name string, adding int64, quotaFirst bool, base string, by Author, message string, guard func() error, store func(r *repo, cur *object.TreeEntry) (plumbing.Hash, error)) (Result, error) {
 	var res Result
-	err := s.write(sp, adding, true, func(r *repo) error {
+	err := s.writeQ(sp, adding, quotaFirst, true, func(r *repo) error {
 		if guard != nil {
 			if err := guard(); err != nil {
 				return err
@@ -507,14 +588,14 @@ func (s *Store) putIf(sp access.Space, name string, adding int64, base string, b
 // bytes to read: from git, or from disk for an unversioned file. The caller closes them;
 // they stay readable after a change replaces the file. An unversioned file's older
 // version whose bytes are gone is ErrNotKept.
-func (s *Store) Open(_ context.Context, sp access.Space, name, at string) (Entry, File, error) {
+func (s *Store) Open(ctx context.Context, sp access.Space, name, at string) (Entry, File, error) {
 	if err := checkPath(name); err != nil {
 		return Entry{}, nil, err
 	}
 	var entry Entry
 	var file File
 	err := s.read(sp, func(r *repo) error {
-		c, err := r.revision(at)
+		c, err := r.revision(ctx, at)
 		if err != nil {
 			return err
 		}
@@ -556,7 +637,19 @@ func (bytesFile) Close() error { return nil }
 
 // Move renames the document or folder from to to, which mustn't exist. base, if not
 // empty, must be the document's current version; it can't be given for a folder.
-func (s *Store) Move(_ context.Context, sp access.Space, from, to, base string, by Author, message string) (Result, error) {
+func (s *Store) Move(ctx context.Context, sp access.Space, from, to, base string, by Author, message string) (Result, error) {
+	return s.move(ctx, sp, from, to, base, by, message, false)
+}
+
+// MoveKept is Move for a caller that can't ask a person first (the agent's tools): it refuses,
+// under the same lock as the move, one that would change a file between versioned and
+// unversioned storage, as renaming draft.md to draft.zip would: the file's older versions leave
+// history. The error is ErrInvalid; a person does such a move in the web app.
+func (s *Store) MoveKept(ctx context.Context, sp access.Space, from, to, base string, by Author, message string) (Result, error) {
+	return s.move(ctx, sp, from, to, base, by, message, true)
+}
+
+func (s *Store) move(_ context.Context, sp access.Space, from, to, base string, by Author, message string, kept bool) (Result, error) {
 	if err := s.checkWrite(sp, from, nil, by, message); err != nil {
 		return Result{}, err
 	}
@@ -614,6 +707,10 @@ func (s *Store) Move(_ context.Context, sp access.Space, from, to, base string, 
 				return err
 			}
 			if p == nil && s.unversioned(to, entry.Size) {
+				if kept {
+					return fmt.Errorf("%w: moving %s to %s would make it an unversioned file, kept outside git, and take its older versions out of history for good; keep a name of the same kind (the same kind of extension), or ask the person to rename it in the web app",
+						ErrInvalid, from, to)
+				}
 				r.collect = true // the bytes it adopts, if the change fails
 				ptr, err := r.toLFS(cur.Hash, s.opts.MaxUnversionedSize)
 				if err != nil {
@@ -645,7 +742,18 @@ func (s *Store) Move(_ context.Context, sp access.Space, from, to, base string, 
 
 // Delete removes the document name. base, if not empty, must be its current version.
 // Its history stays.
-func (s *Store) Delete(_ context.Context, sp access.Space, name, base string, by Author, message string) (Result, error) {
+func (s *Store) Delete(ctx context.Context, sp access.Space, name, base string, by Author, message string) (Result, error) {
+	return s.delete(ctx, sp, name, base, by, message, false)
+}
+
+// DeleteKept is Delete for a caller that can't ask a person first (the agent's tools): it
+// refuses an unversioned file, whose bytes a delete removes for good, under the same lock as
+// the delete. A versioned document's history keeps it. The error is ErrInvalid.
+func (s *Store) DeleteKept(ctx context.Context, sp access.Space, name, base string, by Author, message string) (Result, error) {
+	return s.delete(ctx, sp, name, base, by, message, true)
+}
+
+func (s *Store) delete(_ context.Context, sp access.Space, name, base string, by Author, message string, kept bool) (Result, error) {
 	if err := s.checkWrite(sp, name, nil, by, message); err != nil {
 		return Result{}, err
 	}
@@ -667,6 +775,13 @@ func (s *Store) Delete(_ context.Context, sp access.Space, name, base string, by
 		}
 		if err := checkBase(cur, name, base); err != nil {
 			return err
+		}
+		if kept {
+			if _, p, err := r.describe(name, cur.Hash); err != nil {
+				return err
+			} else if p != nil {
+				return fmt.Errorf("%w: %s is an unversioned file (a large file, audio, video or an archive): deleting it removes its bytes for good and no tool can bring them back; ask the person to delete it in the web app", ErrInvalid, name)
+			}
 		}
 		r.collect = !IsMarkdown(name)
 		commit, err := r.change(head, []edit{{name: name}}, by, orDefault(message, "Delete "+name))
@@ -705,7 +820,21 @@ func (s *Store) History(ctx context.Context, sp access.Space, name, before strin
 
 // Restore makes the document name what it was at the commit at, as a new commit; it
 // also brings back a deleted document. base, if not empty, must be its current version.
-func (s *Store) Restore(_ context.Context, sp access.Space, name, at, base string, by Author, message string) (Result, error) {
+func (s *Store) Restore(ctx context.Context, sp access.Space, name, at, base string, by Author, message string) (Result, error) {
+	return s.restore(ctx, sp, name, at, base, by, message, false)
+}
+
+// RestoreKept is Restore for a caller that can't ask a person first (the agent's tools): under the
+// same lock as the restore, it refuses one that would throw bytes away or bring back what
+// shouldn't be. It won't replace an unversioned file with different content, since a restore
+// would leave the current bytes unreferenced and they would be removed for good, nor restore a
+// pointer where the file would be versioned (a Markdown document, or a name of a versioned kind).
+// The error is ErrInvalid; a person restores such a file in the web app.
+func (s *Store) RestoreKept(ctx context.Context, sp access.Space, name, at, base string, by Author, message string) (Result, error) {
+	return s.restore(ctx, sp, name, at, base, by, message, true)
+}
+
+func (s *Store) restore(ctx context.Context, sp access.Space, name, at, base string, by Author, message string, kept bool) (Result, error) {
 	if err := s.checkWrite(sp, name, nil, by, message); err != nil {
 		return Result{}, err
 	}
@@ -718,7 +847,7 @@ func (s *Store) Restore(_ context.Context, sp access.Space, name, at, base strin
 	// The old content's blob is already stored: restoring adds only trees and a commit.
 	var res Result
 	err := s.write(sp, 0, false, func(r *repo) error {
-		c, err := r.revision(at)
+		c, err := r.revision(ctx, at)
 		if err != nil {
 			return err
 		}
@@ -729,10 +858,15 @@ func (s *Store) Restore(_ context.Context, sp access.Space, name, at, base strin
 		if old.Mode == filemode.Dir {
 			return fmt.Errorf("%w: %s was a folder at %s", ErrInvalid, name, at)
 		}
-		if _, p, err := r.describe(name, old.Hash); err != nil {
+		oldEntry, oldPtr, err := r.describe(name, old.Hash)
+		if err != nil {
 			return err
-		} else if p != nil && !r.hasObject(p.oid) {
+		}
+		if oldPtr != nil && !r.hasObject(oldPtr.oid) {
 			return fmt.Errorf("%w: %s at %s", ErrNotKept, name, at)
+		}
+		if kept && oldPtr != nil && !s.unversioned(name, oldEntry.Size) {
+			return fmt.Errorf("%w: %s at %s was an unversioned file, and under this name it would be a versioned one; restoring it would make a document of a pointer", ErrInvalid, name, at)
 		}
 		r.collect = !IsMarkdown(name)
 		head, err := r.head()
@@ -748,6 +882,12 @@ func (s *Store) Restore(_ context.Context, sp access.Space, name, at, base strin
 			return err
 		} else if err := checkBase(cur, name, base); err != nil {
 			return err
+		} else if kept && cur.Hash != old.Hash {
+			if _, curPtr, err := r.describe(name, cur.Hash); err != nil {
+				return err
+			} else if curPtr != nil && (oldPtr == nil || oldPtr.oid != curPtr.oid) {
+				return fmt.Errorf("%w: %s is an unversioned file and restoring %s would replace it with different content, removing its current bytes for good; ask the person to restore it in the web app", ErrInvalid, name, at[:7])
+			}
 		}
 		commit, err := r.change(head, []edit{{name: name, hash: old.Hash}}, by,
 			orDefault(message, "Restore "+name+" from "+at[:7]))
@@ -790,12 +930,18 @@ const changeOverhead = 1 << 10
 // space, which a full repository still takes. The OnChange functions run
 // after it, once the space is unlocked.
 func (s *Store) write(sp access.Space, adding int64, create bool, fn func(*repo) error) error {
-	err := s.writeLocked(sp, adding, create, fn)
+	return s.writeQ(sp, adding, true, create, fn)
+}
+
+// writeQ is write; quotaFirst says whether the storage quotas are checked, for adding bytes,
+// before fn runs. A change that knows better what it adds checks them itself (Store.reserveQuota).
+func (s *Store) writeQ(sp access.Space, adding int64, quotaFirst, create bool, fn func(*repo) error) error {
+	err := s.writeLocked(sp, adding, quotaFirst, create, fn)
 	s.changed(sp)
 	return err
 }
 
-func (s *Store) writeLocked(sp access.Space, adding int64, create bool, fn func(*repo) error) error {
+func (s *Store) writeLocked(sp access.Space, adding int64, quotaFirst, create bool, fn func(*repo) error) error {
 	st := s.state(sp.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -816,6 +962,16 @@ func (s *Store) writeLocked(sp access.Space, adding int64, create bool, fn func(
 	if _, err := r.resumeRewrite(sp); err != nil {
 		slog.Warn("knowledge: taking a file's old versions out of history; it is retried at the next change", "space", sp.ID, "err", err)
 	}
+	// Whatever the change does (the repair above may have changed things already), the usage
+	// is published again once the write is over. What the change reserved of the quotas is held
+	// until then, so no other write counts the space as smaller than it is, and given back once
+	// it is published.
+	defer func() {
+		s.publishUsage(r)
+		for _, release := range r.releases {
+			release()
+		}
+	}()
 	size, err := r.size()
 	if err != nil {
 		return err
@@ -825,6 +981,14 @@ func (s *Store) writeLocked(sp access.Space, adding int64, create bool, fn func(
 	// those that only free space (adding < 0).
 	if adding >= 0 && size+adding+changeOverhead > s.opts.MaxRepoSize {
 		return fmt.Errorf("%w (limit %d bytes)", ErrRepoFull, s.opts.MaxRepoSize)
+	}
+	// The storage quotas: a change that adds content (not one that deletes or moves, which a
+	// full space must be able to do) must fit. The usage they read is this space's as the
+	// repair above left it.
+	if adding > 0 && quotaFirst {
+		if err := s.reserveQuota(r, sp, adding+changeOverhead); err != nil {
+			return err
+		}
 	}
 	err = fn(r)
 	// Whether it succeeded or not: a failed change can leave adopted bytes nothing points

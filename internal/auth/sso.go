@@ -374,7 +374,8 @@ func (s *Service) handleLoginMethods(w http.ResponseWriter, _ *http.Request) {
 	for _, c := range s.sso.providers {
 		list = append(list, method{c.cfg.ID, c.cfg.Name})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"password": !s.opts.DisablePasswordLogin, "sso": list})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"password": !s.opts.DisablePasswordLogin, "sso": list, "reset_by_email": s.ResetByEmail()})
 }
 
 func (s *Service) ssoCookieName() string {
@@ -926,7 +927,7 @@ func (s *Service) ssoInvitedUser(ctx context.Context, tx *sql.Tx, email, name st
 			return User{}, ssoJoined{}, err
 		}
 		// Two invites to one workspace: the first one's role stands.
-		if err := join(ctx, tx, inv, u.ID); err != nil && !errors.Is(err, errAlreadyMember) {
+		if err := s.join(ctx, tx, inv, u.ID); err != nil && !errors.Is(err, errAlreadyMember) {
 			return User{}, ssoJoined{}, err
 		}
 		joined.invites = append(joined.invites, inv.id)

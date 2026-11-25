@@ -342,6 +342,7 @@ func (r *repo) adopt(sg *staged) error {
 	if err := r.root.MkdirAll(path.Dir(dst), 0o700); err != nil {
 		return err
 	}
+	r.state.unv = -1
 	return r.root.Rename(sg.tmp, dst)
 }
 
@@ -366,8 +367,11 @@ func (r *repo) unversionedSize() (int64, error) {
 }
 
 // objects calls fn for every object file on disk, with its oid and size.
-func (r *repo) objects(fn func(oid string, size int64)) error {
-	err := fs.WalkDir(r.root.FS(), objectsDir, func(p string, d fs.DirEntry, err error) error {
+func (r *repo) objects(fn func(oid string, size int64)) error { return walkObjects(r.root.FS(), fn) }
+
+// walkObjects is objects for the space whose directory is fsys.
+func walkObjects(fsys fs.FS, fn func(oid string, size int64)) error {
+	err := fs.WalkDir(fsys, objectsDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() {
 			return err
 		}
@@ -403,6 +407,7 @@ func (r *repo) gc() error {
 				continue
 			}
 			p := objectPath(oid)
+			r.state.unv = -1
 			if err := r.root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				continue
 			}

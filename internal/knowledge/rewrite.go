@@ -658,6 +658,7 @@ func (r *repo) toLFS(h plumbing.Hash, limit int64) (pointer, error) {
 		_ = r.root.Remove(tmp)
 		return pointer{}, err
 	}
+	r.state.unv = -1
 	if err := r.root.Rename(tmp, dst); err != nil {
 		_ = r.root.Remove(tmp)
 		return pointer{}, err

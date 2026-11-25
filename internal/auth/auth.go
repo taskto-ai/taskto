@@ -21,11 +21,14 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"taskto.ai/taskto/internal/apierr"
 	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/mail"
+	"taskto.ai/taskto/internal/serverkey"
 )
 
 // Options are the account system's settings. Zero values take the defaults.
@@ -56,7 +59,25 @@ type Options struct {
 	// DisablePasswordLogin turns off logging in, setting up an account on an invite, and
 	// using a reset link with a password. Needs SSO, or nobody could log in.
 	DisablePasswordLogin bool
+	// WorkspaceCreation says who may create a workspace with POST /api/workspaces: "admins"
+	// (the default, and what any value other than the next two means: an admin of any existing
+	// workspace), "anyone" (every signed-in person) or "off" (nobody).
+	WorkspaceCreation string
+	// Key seals the secrets of two-factor login (internal/serverkey). Without one nobody can
+	// turn it on, and the routes that need it answer 500.
+	Key *serverkey.Key
+	// Mail is the server's outgoing email (docs/install.md#email); nil, or one that isn't
+	// configured, leaves every flow as it is without email. The links accounts email are built on
+	// PublicURL, never on a request's Host, so they are on only when both are set (EmailLinks).
+	Mail *mail.Service
 }
+
+// The values of Options.WorkspaceCreation.
+const (
+	CreateByAdmins = "admins"
+	CreateByAnyone = "anyone"
+	CreateByNobody = "off"
+)
 
 // Login limits, in failed attempts per window; a successful login counts against none.
 //
@@ -92,8 +113,57 @@ type Service struct {
 	perAccountIP *limiter
 	perAccount   *limiter
 
+	// The second step's limits (twofactor.go), apart from the login's: a wrong code is not a
+	// wrong password.
+	codePerIP        *limiter
+	codePerAccountIP *limiter
+	codePerAccount   *limiter
+
+	key *serverkey.Key
+	// The limits of the emailed reset link (mailer.go).
+	resetPerIP    *limiter
+	resetPerEmail *limiter
+	// resetStarts is the server's own limit on reset emails: how many it starts, never how many
+	// are running, so a refusal can't depend on how long the mail server takes for the accounts
+	// that exist.
+	resetStarts *bucket
+	// mailSlots bounds the emails being made at once, after the request was answered; mailWork
+	// waits for them. workCtx ends when the server stops (Shutdown), and so ends their sends.
+	mailSlots chan struct{}
+	mailWork  sync.WaitGroup
+	workCtx   context.Context
+	stopWork  context.CancelFunc
+
 	sso *sso
+
+	// live is the connections that end with their login (WatchSession).
+	live liveWatches
+
+	// hook is nil outside tests, which set it to make another request land at a named point
+	// of a login route, where a race would.
+	hook func(point string)
+
+	// memberHooks are told when a person is added to a workspace (OnMemberAdded).
+	memberHooks []MemberHook
 }
+
+// at calls the test hook, if there is one, at a named point.
+func (s *Service) at(point string) {
+	if s.hook != nil {
+		s.hook(point)
+	}
+}
+
+// MemberHook is told, in the transaction that adds a person to a workspace, that it did, with the
+// workspace's and the person's IDs; the membership is already there. What the hook writes is
+// committed with the change, and an error it returns undoes it. It lets a feature that keeps timed
+// work for a person's access (package boards' reminders, which the schema drops when the access
+// ends) take it up again without this package knowing the feature. It is not called for a person
+// who already was a member.
+type MemberHook func(ctx context.Context, tx *sql.Tx, workspaceID, userID int64) error
+
+// OnMemberAdded adds a hook. It is for startup, before the service serves requests.
+func (s *Service) OnMemberAdded(h MemberHook) { s.memberHooks = append(s.memberHooks, h) }
 
 // New returns the account system backed by sqlDB, which must be migrated.
 func New(sqlDB *sql.DB, opts Options) *Service {
@@ -115,6 +185,15 @@ func New(sqlDB *sql.DB, opts Options) *Service {
 	s.perIP = newLimiter(ipAttempts, attemptWindow, now)
 	s.perAccountIP = newLimiter(accountAndIPAttempts, attemptWindow, now)
 	s.perAccount = newLimiter(accountAttempts, attemptWindow, now)
+	s.codePerIP = newLimiter(codeIPAttempts, attemptWindow, now)
+	s.codePerAccountIP = newLimiter(codeAccountAndIPAttempts, attemptWindow, now)
+	s.codePerAccount = newLimiter(codeAccountAttempts, attemptWindow, now)
+	s.key = opts.Key
+	s.resetPerIP = newLimiter(resetIPAttempts, resetWindow, now)
+	s.resetPerEmail = newLimiter(resetEmailAttempts, resetWindow, now)
+	s.resetStarts = newBucket(resetStartBurst, resetStartEvery, now)
+	s.mailSlots = make(chan struct{}, mailConcurrency)
+	s.workCtx, s.stopWork = context.WithCancel(context.Background())
 	s.sso = newSSO(opts.SSO, now)
 	return s
 }
@@ -259,6 +338,42 @@ func (s *Service) RequireMember(next http.Handler) http.Handler {
 // RequireAdmin is RequireMember for admins only; it answers 403 to other members.
 func (s *Service) RequireAdmin(next http.Handler) http.Handler {
 	return s.requireRole(next, true)
+}
+
+// RequireOperator is RequireAdmin for what belongs to the whole server rather than to one
+// workspace (its backups, its outgoing email): it also answers 403 (operator_only) unless the
+// caller is an operator, an admin of the workspace the server's setup made. An admin of a
+// workspace someone made later is not.
+func (s *Service) RequireOperator(next http.Handler) http.Handler {
+	return s.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, _ := UserFrom(r.Context())
+		ok, err := s.IsOperator(r.Context(), u.ID)
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusForbidden, apierr.CodeOperatorOnly, "only the server's operator can do this")
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// IsOperator reports whether userID is an admin of the workspace the server's setup made
+// (workspaces.is_setup), which is how the server tells the people who run it from the admins
+// of the workspaces others create. See docs/api.md#operators.
+func (s *Service) IsOperator(ctx context.Context, userID int64) (bool, error) {
+	return isOperator(ctx, s.db, userID)
+}
+
+func isOperator(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, userID int64) (bool, error) {
+	var ok bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM memberships m JOIN workspaces w ON w.id = m.workspace_id
+		WHERE m.user_id = ? AND m.role = ? AND w.is_setup = 1)`, userID, RoleAdmin).Scan(&ok)
+	return ok, err
 }
 
 func (s *Service) requireRole(next http.Handler, admin bool) http.Handler {

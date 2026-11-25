@@ -16,8 +16,9 @@ import (
 //
 //   - A user changes their own password with the current one. The routes act on the caller
 //     only: there is no user in the path or the body.
-//   - An admin makes a reset link for a member, shown once, to send them. There is no email
-//     sending: the admin passes the link on, as with invites. Whoever has the link can set
+//   - An admin makes a reset link for a member, shown once, to send them: the admin passes the
+//     link on, as with invites. Where the server can send email, anyone can also ask for a
+//     link to their own address from the login page (mailer.go). Whoever has the link can set
 //     the password, so an admin may make one only for a member of nothing but workspaces they
 //     administer; an admin of one workspace can't take over an account that reaches another.
 //   - Either way the user's sessions all end, and the browser that set the new password gets
@@ -37,6 +38,7 @@ func (s *Service) passwordRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/workspaces/{workspace}/members/{user}/password-reset",
 		refuseTokens(s.RequireAdmin(http.HandlerFunc(s.handleCreateReset)).ServeHTTP))
 	mux.Handle("POST /api/password-reset", refuseTokens(s.handleUseReset))
+	mux.Handle("POST /api/password-reset/request", refuseTokens(s.handleRequestReset))
 }
 
 func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -186,19 +188,26 @@ func (s *Service) handleUseReset(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
-	u, token, err := s.useReset(r.Context(), req.Token, hash)
+	u, out, err := s.useReset(r.Context(), req.Token, hash)
 	if err != nil {
 		s.failReset(w, r, err)
 		return
 	}
 	slog.InfoContext(r.Context(), "password set with a reset link; the user's sessions are signed out", "user_id", u.ID)
+	// With two-factor login on, the link earns a challenge, not a session: the same second step
+	// as a password login's, which replaces the browser's session once it passes. Until then the
+	// browser keeps the one it had (the account's own sessions ended with the reset).
+	if out.challenge != "" {
+		writeChallenge(w, out)
+		return
+	}
 	// As at login: the browser's earlier session, whoever's it was, ends.
 	if old := s.sessionToken(r); old != "" {
 		if err := s.deleteSession(r.Context(), old); err != nil {
 			slog.WarnContext(r.Context(), "auth: deleting the replaced session", "err", err)
 		}
 	}
-	s.setSessionCookie(w, token)
+	s.setSessionCookie(w, out.session)
 	s.writeMe(w, r, http.StatusOK, u)
 }
 
@@ -245,19 +254,38 @@ func (s *Service) changePassword(ctx context.Context, userID int64, current, new
 		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.PasswordChanged,
 			TargetType: audit.TargetUser, Target: userID})
 	})
+	if err == nil {
+		s.endLive(userID, "") // the sessions that were open are gone, and their open connections go
+	}
 	return token, err
 }
 
 // signOutEverywhere ends userID's sessions and reset links within tx, and returns a new
 // session.
 func (s *Service) signOutEverywhere(ctx context.Context, tx *sql.Tx, userID int64) (string, error) {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID); err != nil {
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM password_resets WHERE user_id = ?`, userID); err != nil {
+	if err := s.endSignIns(ctx, tx, userID); err != nil {
 		return "", err
 	}
 	return s.insertSession(ctx, tx, userID)
+}
+
+// endSignIns ends userID's sessions, reset links and half-done logins, and a two-factor
+// enrolment that wasn't confirmed, within tx.
+func (s *Service) endSignIns(ctx context.Context, tx *sql.Tx, userID int64) error {
+	for _, q := range []string{
+		`DELETE FROM sessions WHERE user_id = ?`,
+		`DELETE FROM password_resets WHERE user_id = ?`,
+		// A login that had the old password and is waiting on its code doesn't survive the change.
+		`DELETE FROM login_challenges WHERE user_id = ?`,
+		// Nor does a secret shown to someone who may have had the old password and not been
+		// confirmed yet: whoever knows the new one enrols again.
+		`DELETE FROM user_totp WHERE user_id = ? AND enabled_at IS NULL`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, userID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // createReset makes a reset link for userID, a member of workspaceID, by the admin by, in
@@ -275,17 +303,9 @@ func (s *Service) createReset(ctx context.Context, workspaceID, by, userID int64
 		if userID == by {
 			return errResetOwn
 		}
-		var elsewhere bool
-		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM memberships t
-				WHERE t.user_id = ? AND NOT EXISTS (
-					SELECT 1 FROM memberships a
-					WHERE a.workspace_id = t.workspace_id AND a.user_id = ? AND a.role = ?))`,
-			userID, by, RoleAdmin).Scan(&elsewhere); err != nil {
+		if all, err := administersAll(ctx, tx, by, userID); err != nil {
 			return err
-		}
-		if elsewhere {
+		} else if !all {
 			return errResetElsewhere
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM password_resets WHERE user_id = ?`, userID); err != nil {
@@ -326,11 +346,13 @@ func (s *Service) resetUser(ctx context.Context, q querier, token string) (User,
 	return u, err
 }
 
-// useReset sets the password of the user a reset token is for, once: it ends their sessions
-// and reset links, this one included, and returns them with a new session.
-func (s *Service) useReset(ctx context.Context, token, passwordHash string) (User, string, error) {
+// useReset sets the password of the user a reset token is for, once: it ends their sessions,
+// half-done logins and reset links, this one included, and returns them with what the new
+// password earns: a session, or for a user with two-factor login on a challenge (a link is
+// no second factor, so it can't skip the code).
+func (s *Service) useReset(ctx context.Context, token, passwordHash string) (User, signIn, error) {
 	var u User
-	var session string
+	var out signIn
 	err := s.write(ctx, func(tx *sql.Tx) error {
 		var err error
 		if u, err = s.resetUser(ctx, tx, token); err != nil {
@@ -339,11 +361,18 @@ func (s *Service) useReset(ctx context.Context, token, passwordHash string) (Use
 		if _, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, u.ID); err != nil {
 			return err
 		}
-		if session, err = s.signOutEverywhere(ctx, tx, u.ID); err != nil {
+		if err := s.endSignIns(ctx, tx, u.ID); err != nil {
 			return err
 		}
-		return audit.Record(ctx, tx, audit.Event{Actor: u.ID, Action: audit.PasswordResetUsed,
-			TargetType: audit.TargetUser, Target: u.ID})
+		if err := audit.Record(ctx, tx, audit.Event{Actor: u.ID, Action: audit.PasswordResetUsed,
+			TargetType: audit.TargetUser, Target: u.ID}); err != nil {
+			return err
+		}
+		out, err = s.issueSignIn(ctx, tx, u.ID)
+		return err
 	})
-	return u, session, err
+	if err == nil {
+		s.endLive(u.ID, "")
+	}
+	return u, out, err
 }
