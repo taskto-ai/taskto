@@ -192,10 +192,10 @@ func (s *Service) handleStop(w http.ResponseWriter, r *http.Request) {
 // server's own pages (sameOrigin) before anything is opened.
 //
 // The session is checked when the view opens, and the view lasts as long as the login does: it
-// ends when the login is signed out, revoked or replaced by a password change, at once by the
-// auth service's signal and at the latest at its next look every liveRecheck
-// (auth.Service.WatchSession), so a display someone can type into is never left open to a
-// browser that was signed out.
+// ends when the account is disabled or the login is signed out, revoked or replaced by a password
+// change, at once by the auth service's signal and at the latest at its next look every
+// liveRecheck (auth.Service.WatchSession), so a display someone can type into is never left
+// open to a person who no longer has access.
 func (s *Service) handleLive(a *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.live(a, w, r)
@@ -247,14 +247,22 @@ func (s *Service) live(a *auth.Service, w http.ResponseWriter, r *http.Request) 
 			go func() {
 				<-ctx.Done()
 				_ = live.Close()
-				_ = ws.Close()
+				closeWS(ws)
 			}()
 			browser.Bridge(live, ws)
-			_ = ws.Close()
+			closeWS(ws)
 			slog.InfoContext(r.Context(), "browser live view closed", "user", user, "after", time.Since(start).Round(time.Second))
 		},
 	}
 	srv.ServeHTTP(w, r)
+}
+
+// closeWS closes ws, giving the close frame a second to be written: a client that has stopped
+// reading would otherwise hold the handler, and with it the session watch and the socket, for
+// as long as it likes.
+func closeWS(ws *websocket.Conn) {
+	_ = ws.SetWriteDeadline(time.Now().Add(time.Second))
+	_ = ws.Close()
 }
 
 // sameOrigin reports whether r comes from this server's own pages. A browser says where a

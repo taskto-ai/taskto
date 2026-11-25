@@ -374,7 +374,8 @@ func (s *Service) handleLoginMethods(w http.ResponseWriter, _ *http.Request) {
 	for _, c := range s.sso.providers {
 		list = append(list, method{c.cfg.ID, c.cfg.Name})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"password": !s.opts.DisablePasswordLogin, "sso": list})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"password": !s.opts.DisablePasswordLogin, "sso": list, "reset_by_email": s.ResetByEmail()})
 }
 
 func (s *Service) ssoCookieName() string {
@@ -578,6 +579,8 @@ func (s *Service) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 			code = apierr.CodeSSONoAccount
 		case errors.Is(err, errSSOLinkedElsewhere):
 			code = apierr.CodeSSOAccountLinkedElsewhere
+		case errors.Is(err, errAccountDisabled):
+			code = apierr.CodeAccountDisabled
 		}
 		if code == apierr.CodeSSOFailed {
 			slog.ErrorContext(r.Context(), "sso: the login failed", "provider", c.cfg.ID, "err", err)

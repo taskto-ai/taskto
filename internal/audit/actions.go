@@ -14,6 +14,9 @@ const (
 	PasswordChangeFailed = "password_change_failed"
 	PasswordResetCreated = "password_reset_created"
 	PasswordResetUsed    = "password_reset_used"
+	// PasswordResetRequested is a reset link someone asked for from the login page: it records the
+	// account's, and whether the email went.
+	PasswordResetRequested = "password_reset_requested"
 
 	// Two-factor login.
 	TwoFactorEnabled               = "two_factor_enabled"
@@ -34,6 +37,8 @@ const (
 	InviteAccepted    = "invite_accepted"
 	MemberRoleChanged = "member_role_changed"
 	MemberRemoved     = "member_removed"
+	MemberDisabled    = "member_disabled"
+	MemberEnabled     = "member_enabled"
 
 	// Access tokens.
 	AccessTokenCreated = "access_token_created"

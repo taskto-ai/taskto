@@ -57,6 +57,16 @@ const (
 	CodeResetInvalid            Code = "reset_invalid"
 	CodeResetOwn                Code = "reset_own"
 	CodeResetElsewhere          Code = "reset_elsewhere"
+	// CodeTooManyResets is a 429: too many reset emails asked for from this address or for this
+	// email, or the server is busy making them. Retry-After says when to try again.
+	CodeTooManyResets Code = "too_many_resets"
+
+	// Disabling a member (internal/auth/disable.go). account_disabled is also what a login, a
+	// single sign-on and a reset link answer for a disabled account.
+
+	CodeAccountDisabled  Code = "account_disabled"
+	CodeDisableOwn       Code = "disable_own"
+	CodeDisableElsewhere Code = "disable_elsewhere"
 
 	// Your own sessions (internal/auth/sessions.go).
 
