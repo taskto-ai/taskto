@@ -55,6 +55,7 @@ export const AUDIT_ACTIONS = [
   'search_consent_changed',
   'dictation_settings_changed',
   'data_export_started',
+  'workspace_export_started',
   'two_factor_enabled',
   'two_factor_disabled',
   'two_factor_recovery_codes_replaced',
@@ -104,6 +105,7 @@ export const AUDIT_DETAILS = [
   'reason',
   'role',
   'scope',
+  'spaces',
   'to',
   'user_id',
 ] as const
