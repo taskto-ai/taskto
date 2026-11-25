@@ -412,6 +412,11 @@
         "sort": {
           "enum": ["board", "due"],
           "description": "board (default): by column, then position; due: soonest due date first, cards without one last"
+        },
+        "after": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the next of the previous page: list the cards after this one, with the same filters"
         }
       },
       "required": ["space_id", "board_id"],

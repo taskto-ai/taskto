@@ -160,7 +160,9 @@ most 128 KiB of a reply:
 - `read_doc` returns 32 KiB pieces, cut at a character boundary;
 - `list_cards` cuts each card's body to 500 bytes, `show_card` the body to 16 KiB and each
   comment to 2 KiB (a cut text ends in ` […cut]`); a list that still doesn't fit is
-  shortened with `"truncated": true`, a thread to its newest comments with
+  shortened with `"truncated": true` and a `next` card id, which `after` continues from;
+  a page always has a card: one that alone doesn't fit loses its last docs, then the end
+  of its body, and says so (`docs_truncated`, `body_truncated`); a thread to its newest comments with
   `older_comments_omitted`; a page of `list_docs` to fewer paths, its `next` where it
   stopped;
 - `search_docs` and `search_cards` return at most 20 results, each passage at most 1000 bytes;

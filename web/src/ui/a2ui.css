@@ -1,0 +1,37 @@
+/* The apps renderer (A2UI) reads variables of its own; these hand it the roles, so an app's
+   buttons, fields and choices look like the rest of the page in every theme and brand.
+
+   Not in a layer, on purpose: the renderer injects its defaults as `:where(:root) { … }` with no
+   layer, and a rule with no layer beats every rule in one, whatever its specificity. */
+
+:root {
+  --a2ui-color-primary: var(--color-accent);
+  --a2ui-color-primary-hover: var(--color-accent-hover);
+  --a2ui-color-on-primary: var(--color-on-accent);
+  --a2ui-color-secondary-hover: var(--color-hover);
+  --a2ui-color-on-secondary: var(--color-text);
+  --a2ui-color-border: var(--color-border-strong);
+  --a2ui-color-surface: var(--color-surface);
+  --a2ui-color-input: var(--color-surface);
+  --a2ui-color-on-input: var(--color-text);
+  --a2ui-color-on-surface: var(--color-text);
+  --a2ui-color-on-background: var(--color-text);
+  --a2ui-text-caption-color: var(--color-text-muted);
+  --a2ui-textfield-color-error: var(--color-danger);
+  --a2ui-choicepicker-color-error: var(--color-danger);
+  --a2ui-datetimeinput-color-error: var(--color-danger);
+  /* Its buttons and choices are pills, as the app's are; its titles are the display face. */
+  --a2ui-button-border-radius: var(--radius-pill);
+  --a2ui-button-padding: 0.4rem 1rem;
+  --a2ui-button-font-weight: 600;
+  --a2ui-choicepicker-chip-font-size: 0.875rem;
+  --a2ui-choicepicker-chip-padding: 0.3rem 0.85rem;
+  --a2ui-choicepicker-chip-background-selected: var(--color-accent);
+  --a2ui-font-family-title: var(--font-display);
+  --a2ui-text-a-color: var(--color-link);
+  /* Whatever the renderer colours with its primary must still be seen when that is the mint:
+     a focused field, the picked tab, a slider's thumb take the focus colour (ink; mint on night). */
+  --a2ui-textfield-color-border-focus: var(--color-focus);
+  --a2ui-tabs-header-color-active: var(--color-text);
+  --a2ui-slider-thumb-color: var(--color-focus);
+}
