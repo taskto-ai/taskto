@@ -845,6 +845,7 @@
     "app_changed": "Alguém alterou este app enquanto isso: recarregue e tente de novo.",
     "app_name_length": "O nome do app precisa ter de 1 a {max} caracteres.",
     "too_many_apps": "Um espaço pode ter no máximo {max} apps.",
+    "app_token_rate_limited": "Seus tokens de acesso executaram {max} ações em um minuto aqui, o máximo permitido. Tente de novo em {seconds} segundos.",
     "app_full": "Este app está cheio: ele comporta no máximo {max_rows} linhas e {max_mib} MiB de dados.",
     "app_preview_full": "A prévia está cheia: ela comporta no máximo {max_rows} linhas de exemplo. Comece de novo.",
     "app_preview_too_large": "Os dados de exemplo da prévia são grandes demais (no máximo {max_mib} MiB). Comece de novo.",

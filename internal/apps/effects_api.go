@@ -112,7 +112,8 @@ func (s *Service) view(e effectRow, caller Actor, canRead func(int64) bool, live
 		ID: e.id, Operation: e.operation, Position: e.position, Kind: e.kind, Name: e.name, Action: e.action,
 		Record: e.recordID, RecordRevision: e.recordRevision, Status: e.state, Attempts: e.attempts,
 		CreatedAt: e.createdAt, UpdatedAt: e.updatedAt,
-		CanRetry: e.state == StateFailed && e.userID == caller.UserID,
+		// The retry route is the web app's: a token, which can't reach it, is not told it may.
+		CanRetry: e.state == StateFailed && e.userID == caller.UserID && caller.Via == "",
 	}
 	v.Detail = EffectDetail{Route: e.payload.Route}
 	if targetReadable {
