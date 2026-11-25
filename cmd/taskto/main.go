@@ -29,6 +29,7 @@ import (
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/dictation"
+	"taskto.ai/taskto/internal/drain"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/lockfile"
 	"taskto.ai/taskto/internal/notifications"
@@ -120,12 +121,16 @@ type agentRuntime struct {
 	state func() string                                  // for /healthz
 	ready func(context.Context) (*agentrt.Client, error) // waits until the sidecar answers
 	feed  *providers.Feed                                // keeps its providers in step with the accounts
-	stop  func()
+	stop  func() error                                   // stops the runtime; the error says a tools handler was still running
 }
 
 // run serves until ctx is done. If listening isn't nil, it is called with the
 // address once the server accepts connections.
-func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error {
+func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (result error) {
+	// What could not be stopped cleanly is told to stuck by the deferred stops below, and
+	// returned once they are all done (this defer runs last), after the database's close.
+	stuck := &shutdownReport{}
+	defer func() { result = errors.Join(result, stuck.err()) }()
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return fmt.Errorf("data directory: %w", err)
 	}
@@ -168,7 +173,13 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	if err != nil {
 		return err
 	}
-	defer sqlDB.Close()
+	defer func() {
+		if stuck.busy {
+			slog.Error("shutdown: not closing the database, work that uses it is still running; the process is exiting")
+			return
+		}
+		_ = sqlDB.Close()
+	}()
 	applied, err := db.Migrate(ctx, sqlDB)
 	if err != nil {
 		return err
@@ -225,7 +236,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	if err != nil {
 		return err
 	}
-	defer stopCLI()
+	defer func() { stuck.note("the CLI workers' proxy", stopCLI()) }()
 	// The agent browser, in the CLI worker (or with it, in local mode).
 	browsers, stopBrowsers := startBrowsers(cfg, cliAccounts)
 	defer stopBrowsers()
@@ -265,7 +276,12 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	stopPush := notifier.Start(ctx)
 	defer stopPush()
 	stopSchedule := scheduler.Start(ctx)
-	defer stopSchedule()
+	defer func() {
+		if !stopSchedule() {
+			// Its handler has to be told apart from a handler of a listener, which has its own error.
+			stuck.note("the scheduler", fmt.Errorf("%w: a job's handler did not return", drain.ErrBusy))
+		}
+	}()
 	tools := agenttools.New(agenttools.Options{
 		DB: sqlDB, Key: key, Access: spaces, Boards: boardSvc, Apps: appSvc,
 		Knowledge: kb, Search: index, Browser: browsers,
@@ -281,7 +297,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		if err != nil {
 			return err
 		}
-		defer agent.stop()
+		defer func() { stuck.note("the agent runtime's tools socket", agent.stop()) }()
 		// A turn that switches to another CLI shows it in the conversation's model.
 		cliAccounts.SetModelSetter(func(ctx context.Context, conversation int64, cli cliworker.CLI) error {
 			c, err := agent.ready(ctx)
@@ -377,8 +393,9 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 
 	// No server-wide ReadTimeout or WriteTimeout: agent replies stream for minutes and
 	// knowledge-base uploads can be large, so those limits belong on individual handlers.
+	inflight := drain.New()
 	srv := &http.Server{
-		Handler:           handler,
+		Handler:           inflight.Handler(wrapHandler(handler, sqlDB)),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
@@ -403,18 +420,23 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 	case err := <-errc:
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			// Graceful shutdown timed out: drop the connections that are still open.
-			return errors.Join(err, srv.Close())
+		// Every handler is done, or given up on and reported, before the deferred stops run and
+		// the database closes: a request still running then would find it closed.
+		err := inflight.Shutdown(srv, shutdownGrace, handlerWait)
+		if serveErr := <-errc; !errors.Is(serveErr, http.ErrServerClosed) {
+			err = errors.Join(err, serveErr)
 		}
-		if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
+		stuck.note("the server's requests", err)
 		return nil
 	}
 }
+
+// shutdownGrace is how long a shutdown lets requests finish before it ends their contexts, and
+// wrapHandler lets a test put a handler of its own beside the server's. Both are for tests.
+var (
+	shutdownGrace = 10 * time.Second
+	wrapHandler   = func(h http.Handler, _ *sql.DB) http.Handler { return h }
+)
 
 // egressOf is the provider accounts' egress policies of cfg.
 func egressOf(cfg config.Config) providers.Egress {

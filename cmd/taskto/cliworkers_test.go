@@ -40,7 +40,9 @@ func TestStartCLIWorkers(t *testing.T) {
 		if svc.Mode() != want {
 			t.Errorf("%q: mode %q", mode, svc.Mode())
 		}
-		stop()
+		if err := stop(); err != nil {
+			t.Errorf("%q: stop: %v", mode, err)
+		}
 	}
 	cfg := config.Default()
 	cfg.CLIWorkers = "everywhere"

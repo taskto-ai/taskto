@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -642,8 +643,13 @@ func TestSupervisorStopKillsAStubbornSidecar(t *testing.T) {
 	if took := time.Since(began); took < f.cfg.StopTimeout {
 		t.Fatalf("Stop returned after %s, before the %s SIGTERM grace", took, f.cfg.StopTimeout)
 	}
-	if got := fakeEvents(f.dir, "term"); len(got) == 0 {
-		t.Fatal("the sidecar never got SIGTERM")
+	// The supervisor says it sent SIGTERM and waited out the grace before it killed. What the
+	// sidecar did with the signal is not checked here: it is the child's to record, and a child
+	// that the machine doesn't schedule for StopTimeout after SIGTERM is killed before it has
+	// written anything, however correctly the supervisor behaved. That SIGTERM reaches a
+	// sidecar is checked where Stop waits for it to exit (TestSupervisorStartsAndStops).
+	if !strings.Contains(f.log.String(), "agent sidecar ignored SIGTERM; killing it") {
+		t.Fatalf("the supervisor never reported killing a sidecar that ignored SIGTERM; log:\n%s", f.log.String())
 	}
 	if !processGone(pid) {
 		t.Fatal("the sidecar survived Stop")
@@ -879,5 +885,50 @@ func TestDropEnvKeepsServerSecretsFromTheSidecar(t *testing.T) {
 				t.Fatalf("the sidecar saw %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// Stop waits for a call on the tools socket that is still running, after ending its context: the
+// call uses the server's database, which is closed once Stop returns.
+func TestStopJoinsAToolsCallInFlight(t *testing.T) {
+	f := newFake(t, "serve")
+	started := make(chan struct{})
+	var finished atomic.Bool
+	f.cfg.Tools = http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+		time.Sleep(300 * time.Millisecond) // winding down
+		finished.Store(true)
+	})
+	s := f.start(t)
+	go func() { _ = callTools(filepath.Join(f.cfg.SocketDir, toolsSocketName)) }()
+	<-started
+
+	if err := s.Stop(ctxFor(t)); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if !finished.Load() {
+		t.Fatal("Stop returned while a tools call was still running")
+	}
+}
+
+// A call that never returns is given up on after toolsWait, and Stop says so.
+func TestStopReportsAToolsCallThatNeverReturns(t *testing.T) {
+	old := toolsWait
+	toolsWait = 200 * time.Millisecond
+	t.Cleanup(func() { toolsWait = old })
+	f := newFake(t, "serve")
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	f.cfg.Tools = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(started)
+		<-release // deaf to its context
+	})
+	s := f.start(t)
+	go func() { _ = callTools(filepath.Join(f.cfg.SocketDir, toolsSocketName)) }()
+	<-started
+
+	if err := s.Stop(ctxFor(t)); !errors.Is(err, ErrToolsBusy) {
+		t.Fatalf("stop = %v, want ErrToolsBusy", err)
 	}
 }

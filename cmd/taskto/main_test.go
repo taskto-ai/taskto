@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,5 +93,80 @@ func TestRunFailsWithoutADataDirectory(t *testing.T) {
 	cfg.DataDir = file
 	if err := run(context.Background(), cfg, nil); err == nil {
 		t.Fatal("run started without a usable data directory")
+	}
+}
+
+// TestRunShutdownJoinsRequestsInFlight: a request still running when the server shuts down is
+// waited for, so it never finds the database closed. The handler here is slow to wind down, as
+// one that finishes a write after its client has gone is.
+func TestRunShutdownJoinsRequestsInFlight(t *testing.T) {
+	oldGrace, oldWrap := shutdownGrace, wrapHandler
+	t.Cleanup(func() { shutdownGrace, wrapHandler = oldGrace, oldWrap })
+	shutdownGrace = 100 * time.Millisecond
+
+	started := make(chan struct{})
+	var queryErr atomic.Value // error, stored once the handler has used the database
+	var finished atomic.Bool
+	wrapHandler = func(h http.Handler, sqlDB *sql.DB) http.Handler {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/test-slow", func(_ http.ResponseWriter, r *http.Request) {
+			close(started)
+			<-r.Context().Done() // the shutdown ended the request
+			time.Sleep(500 * time.Millisecond)
+			var n int
+			err := sqlDB.QueryRowContext(context.Background(), `SELECT count(*) FROM schema_migrations`).Scan(&n)
+			queryErr.Store(&err)
+			finished.Store(true)
+		})
+		mux.Handle("/", h)
+		return mux
+	}
+
+	cfg := config.Default()
+	cfg.Addr = "127.0.0.1:0"
+	cfg.DataDir = filepath.Join(t.TempDir(), "data")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addrc := make(chan net.Addr, 1)
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfg, func(a net.Addr) { addrc <- a }) }()
+	var addr net.Addr
+	select {
+	case addr = <-addrc:
+	case err := <-done:
+		t.Fatalf("run returned before listening: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("run didn't start listening")
+	}
+
+	go func() {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+addr.String()+"/test-slow", nil)
+		if err != nil {
+			return
+		}
+		if res, err := http.DefaultClient.Do(req); err == nil {
+			_ = res.Body.Close()
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the request never reached the handler")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run after cancel: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("run didn't stop after cancel")
+	}
+	if !finished.Load() {
+		t.Fatal("run returned, and so closed the database, while a request was still running")
+	}
+	if p, _ := queryErr.Load().(*error); p == nil || *p != nil {
+		t.Fatalf("the request's query during shutdown failed: %v", p)
 	}
 }

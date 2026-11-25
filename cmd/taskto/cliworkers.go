@@ -20,6 +20,7 @@ import (
 	"taskto.ai/taskto/internal/cliaccounts"
 	"taskto.ai/taskto/internal/cliworker"
 	"taskto.ai/taskto/internal/config"
+	"taskto.ai/taskto/internal/drain"
 	"taskto.ai/taskto/internal/mcpserver"
 	"taskto.ai/taskto/internal/serverkey"
 )
@@ -31,7 +32,7 @@ import (
 // own OS user, each TaskTo user in their own directories under <data>/cli/. That separates
 // sessions and settings, not secrets, which is why the service refuses the CLIs as soon as
 // a second user exists (unless the mode is local-unsafe).
-func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key *serverkey.Key) (*cliaccounts.Service, func(), error) {
+func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key *serverkey.Key) (*cliaccounts.Service, func() error, error) {
 	mode, err := cliaccounts.ParseMode(cfg.CLIWorkers)
 	if err != nil {
 		return nil, nil, err
@@ -39,7 +40,7 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 	if mode == cliaccounts.Off {
 		svc := cliaccounts.New(sqlDB, mode, nil)
 		svc.SetShared(cliaccounts.Shared{Key: key, Egress: egressOf(cfg).Workspace})
-		return svc, svc.Close, nil
+		return svc, func() error { svc.Close(); return nil }, nil
 	}
 	if mode == cliaccounts.Container {
 		// The worker is its own process, in its own container; the server only talks to it.
@@ -50,9 +51,10 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 			svc.Close()
 			return nil, nil, err
 		}
-		return svc, func() {
-			stopProxy()
+		return svc, func() error {
+			err := stopProxy()
 			svc.Close()
+			return err
 		}, nil
 	}
 	bins := map[cliworker.CLI]string{}
@@ -95,10 +97,11 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 		worker.Close()
 		return nil, nil, err
 	}
-	return svc, func() {
-		stopProxy()
+	return svc, func() error {
+		err := stopProxy()
 		svc.Close()
 		worker.Close()
+		return err
 	}, nil
 }
 
@@ -106,7 +109,7 @@ func startCLIWorkers(ctx context.Context, cfg config.Config, sqlDB *sql.DB, key 
 // (docs/account-switching.md), and turns shared accounts on with its address. In local mode it
 // listens on this machine, on a free port, unless told otherwise; in container mode only where
 // -cli-proxy-listen says (the Compose file: a Unix socket the worker relays), or not at all.
-func startCLIProxy(ctx context.Context, cfg config.Config, svc *cliaccounts.Service, key *serverkey.Key, mode cliaccounts.Mode) (func(), error) {
+func startCLIProxy(ctx context.Context, cfg config.Config, svc *cliaccounts.Service, key *serverkey.Key, mode cliaccounts.Mode) (func() error, error) {
 	shared := cliaccounts.Shared{Key: key, Egress: egressOf(cfg).Workspace}
 	listen := cfg.CLIProxyListen
 	if listen == "" && mode != cliaccounts.Container {
@@ -115,26 +118,28 @@ func startCLIProxy(ctx context.Context, cfg config.Config, svc *cliaccounts.Serv
 	if listen == "" {
 		svc.SetShared(shared)
 		slog.Info("no proxy for shared CLI accounts (-cli-proxy-listen, -cli-proxy-url): turns on them are refused")
-		return func() {}, nil
+		return func() error { return nil }, nil
 	}
-	srv := &http.Server{Handler: svc.ProxyHandler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
-	stop := func() {
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutdown); err != nil {
-			_ = srv.Close()
-		}
-	}
+	// The proxy's handlers (and the per-turn tools endpoint beside it) use the database, so
+	// stopping it waits for them, and the caller closes the database only after that.
+	inflight := drain.New()
+	srv := &http.Server{Handler: inflight.Handler(svc.ProxyHandler()), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	stop := func() error { return inflight.Shutdown(srv, 5*time.Second, handlerWait) }
 	if path, ok := strings.CutPrefix(listen, "unix:"); ok {
 		// Config made sure of the URL: the worker's relay, as the CLIs reach it.
 		shared.ProxyURL = cfg.CLIProxyURL
 		svc.SetShared(shared)
 		stopped := make(chan struct{})
 		go serveProxySocket(ctx, srv, path, stopped)
-		return sync.OnceFunc(func() {
-			close(stopped)
-			stop()
-		}), nil
+		var once sync.Once
+		var stopErr error
+		return func() error {
+			once.Do(func() {
+				close(stopped)
+				stopErr = stop()
+			})
+			return stopErr
+		}, nil
 	}
 	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", listen)
 	if err != nil {
