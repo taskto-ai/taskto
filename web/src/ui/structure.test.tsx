@@ -4,6 +4,7 @@
 // Notice.
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { createRef } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { Button } from './Button'
 import { EmptyState } from './EmptyState'
@@ -44,6 +45,19 @@ describe('Page and PageHeader', () => {
     const header = h1.closest('header') as HTMLElement
     expect(header.textContent).toBe('PrivatePersonalYour own cards.New card')
     expect(screen.getByRole('button', { name: 'New card' })).toBeTruthy()
+  })
+
+  test('a header given a title ref lets a script, not Tab, move the keyboard to its title', () => {
+    const ref = createRef<HTMLHeadingElement>()
+    const { rerender } = render(<PageHeader title="Home" titleRef={ref} />)
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Home' })
+    expect(ref.current).toBe(h1)
+    ref.current?.focus()
+    expect(document.activeElement).toBe(h1)
+    expect(h1.tabIndex).toBe(-1)
+    // Without one, the title is not a place for the keyboard at all.
+    rerender(<PageHeader title="Home" />)
+    expect(screen.getByRole('heading', { level: 1 }).hasAttribute('tabindex')).toBe(false)
   })
 
   test('a header inside another page is a level 2 heading', () => {
@@ -109,6 +123,18 @@ describe('Rows', () => {
     expect(open).toHaveBeenCalledOnce()
     expect(screen.getByText('Edited 2 hours ago')).toBeTruthy()
     expect(screen.getByText('Expenses').closest('li')?.dataset.current).toBe('true')
+  })
+
+  test('a row that is a link says it was opened before the app goes there', () => {
+    const opened = vi.fn()
+    render(
+      <Rows>
+        <Row title="A card was assigned to you" href="/w/1/boards/3" onOpen={opened} />
+      </Rows>,
+    )
+    fireEvent.click(screen.getByRole('link', { name: 'A card was assigned to you' }))
+    expect(opened).toHaveBeenCalledOnce()
+    expect(window.location.pathname).toBe('/w/1/boards/3')
   })
 })
 

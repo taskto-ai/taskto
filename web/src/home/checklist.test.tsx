@@ -49,14 +49,21 @@ test('an admin sees each step with its state and a link to the page where it is 
   expect(within(panel).getByRole('status').textContent).toBe('1 of 4 steps handled')
 
   const steps = within(panel).getAllByRole('listitem')
-  expect(steps.map((s) => within(s).getByRole('heading', { level: 3 }).textContent)).toEqual([
-    'Invite your teamTo do',
-    'Add a model providerDone',
-    'Create a shared spaceTo do',
-    'Install an app templateTo do',
-    'Set up emailTo doOptional',
-    'Set up backupsTo doOptional',
-  ])
+  // Each step: its name, and its state in words (the mark before it is only a picture of it).
+  const said = (step: HTMLElement, name: string) => {
+    expect(within(step).getByText(name)).toBeTruthy()
+    return within(step)
+      .getAllByText(/^(To do|Done|Skipped|Optional)$/)
+      .map((b) => b.textContent)
+  }
+  expect([
+    said(steps[0], 'Invite your team'),
+    said(steps[1], 'Add a model provider'),
+    said(steps[2], 'Create a shared space'),
+    said(steps[3], 'Install an app template'),
+    said(steps[4], 'Set up email'),
+    said(steps[5], 'Set up backups'),
+  ]).toEqual([['To do'], ['Done'], ['To do'], ['To do'], ['To do', 'Optional'], ['To do', 'Optional']])
   const link = (name: string) => within(panel).getByRole('link', { name }).getAttribute('href')
   expect(link('Invite people')).toBe('/w/1/settings/members')
   expect(link('Create a space')).toBe('/w/1/settings/spaces')
@@ -66,8 +73,8 @@ test('an admin sees each step with its state and a link to the page where it is 
   expect(within(steps[1]).queryByRole('link')).toBeNull()
   expect(within(steps[1]).queryByRole('button')).toBeNull()
   // The one thing to press next is the first step still to do.
-  expect(within(panel).getByRole('link', { name: 'Invite people' }).className).toContain('tt-primary')
-  expect(within(panel).getByRole('link', { name: 'Create a space' }).className).not.toContain('tt-primary')
+  expect(within(panel).getByRole('link', { name: 'Invite people' }).className).toContain('ui-button-primary')
+  expect(within(panel).getByRole('link', { name: 'Create a space' }).className).not.toContain('ui-button-primary')
 })
 
 test('a member never sees the checklist or asks for it', async () => {
@@ -158,7 +165,7 @@ test('dismissing puts it away, moves the keyboard to the page, and Customize bri
   fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
   fireEvent.click(await screen.findByRole('button', { name: 'Show the setup checklist' }))
   // The button that had the keyboard is gone, so the checklist's own heading has it.
-  await waitFor(() => expect(document.activeElement?.id).toBe('tt-checklist-title'))
+  await waitFor(() => expect(document.activeElement?.id).toBe('ui-checklist-title'))
   // Shown again, so there is nothing to bring back.
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Show the setup checklist' })).toBeNull())
   expect(calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`)).toEqual([

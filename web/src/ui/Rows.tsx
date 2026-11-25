@@ -31,16 +31,18 @@ export interface RowProps {
   actions?: ReactNode
   // The row opens this, in the app.
   href?: string
+  // Called when the row's link is followed, before the app goes there (to mark it read).
+  onOpen?: () => void
   current?: boolean
 }
 
-export function Row({ title, detail, leading, status, actions, href, current }: RowProps) {
+export function Row({ title, detail, leading, status, actions, href, onOpen, current }: RowProps) {
   return (
     <li className="ui-row" data-link={href ? true : undefined} data-current={current || undefined}>
       {leading && <span className="ui-row-leading">{leading}</span>}
       <span className="ui-row-main">
         {href ? (
-          <Link className="ui-row-title" href={href} aria-current={current ? 'page' : undefined}>
+          <Link className="ui-row-title" href={href} onClick={onOpen} aria-current={current ? 'page' : undefined}>
             {title}
           </Link>
         ) : (

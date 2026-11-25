@@ -1,14 +1,26 @@
 // The notification inbox: what happened that the person may want to see, newest first, in the
-// workspace shown. It works in every browser, whether or not it can push, and is what is true: a
+// workspace shown, as rows: what happened, where and when, an unread one in bold with a mark before
+// it (and "Unread:" said before it, so the mark is never the only sign). It works in every browser, whether or not it can push, and is what is true: a
 // push is only a prompt to come here. Each item is a link to where it leads, which checks access
 // again when it opens; an item whose subject the person can no longer read says only that
 // something changed.
 
 import { useCallback, useEffect, useState } from 'react'
 import { api, errorText } from '../api'
-import { useFormat, useT } from '../i18n'
+import { type Key, useFormat, useT } from '../i18n'
 import { Link, navigate, routePath } from '../router'
+import { Button, ButtonLink } from '../ui/Button'
+import { EmptyState } from '../ui/EmptyState'
+import { Icon } from '../ui/Icon'
+import { Notice } from '../ui/Notice'
+import { Page } from '../ui/Page'
+import { PageHeader } from '../ui/PageHeader'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { INBOX_CHANGED, inboxPath, type NotificationItem, type NotificationList } from './api'
+import './Inbox.css'
 
 const PAGE = 30
 
@@ -27,6 +39,7 @@ export function NotificationsPage({ workspace }: { workspace: number }) {
   const [unread, setUnread] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [older, setOlder] = useState(false)
 
   const load = useCallback(
     async (before?: number) => {
@@ -46,6 +59,11 @@ export function NotificationsPage({ workspace }: { workspace: number }) {
     setItems(null)
     void load()
   }, [load])
+  const loadOlder = async (before?: number) => {
+    setOlder(true)
+    await load(before)
+    setOlder(false)
+  }
 
   const changed = () => window.dispatchEvent(new Event(INBOX_CHANGED))
   const markRead = (item: NotificationItem) => {
@@ -69,51 +87,82 @@ export function NotificationsPage({ workspace }: { workspace: number }) {
   }
 
   return (
-    <div className="tt-section">
-      <div className="tt-pane-head">
-        <h1>{t('notifications.title')}</h1>
-        <button type="button" className="tt-button" disabled={busy || unread === 0} onClick={markAll}>
-          {t('notifications.markAllRead')}
-        </button>
-      </div>
-      <p className="tt-muted tt-small">
-        {t('notifications.intro')}{' '}
-        <Link href={routePath({ workspace, section: 'settings', item: 'notifications' })}>
-          {t('notifications.pushSettings')}
-        </Link>
-      </p>
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
+    <Page width="list">
+      <PageHeader
+        title={t('notifications.title')}
+        help={
+          <>
+            {t('notifications.intro')}{' '}
+            <Link href={routePath({ workspace, section: 'settings', item: 'notifications' })}>
+              {t('notifications.pushSettings')}
+            </Link>
+          </>
+        }
+        actions={
+          <Button icon="check" loading={busy} disabled={busy || unread === 0} onClick={markAll}>
+            {t('notifications.markAllRead')}
+          </Button>
+        }
+      />
+      {error && <Notice tone="danger">{error}</Notice>}
+      {items === null && !error && <InboxSkeleton />}
+      {items?.length === 0 && (
+        <EmptyState icon={<Icon name="bell" size={24} />} title={t('notifications.none')}>
+          <p>{t('notifications.noneHelp')}</p>
+        </EmptyState>
       )}
-      {items === null && !error && <p className="tt-muted">{t('app.loading')}</p>}
-      {items?.length === 0 && <p className="tt-muted">{t('notifications.none')}</p>}
       {items && items.length > 0 && (
-        <ul className="tt-rows tt-inbox" aria-label={t('notifications.title')}>
-          {items.map((item) => (
-            <li key={item.id} className="tt-row" data-unread={item.read ? undefined : ''}>
-              <div className="tt-row-main">
-                <Link
-                  href={routePath({ workspace: item.workspace_id, ...item.target })}
-                  onClick={() => markRead(item)}
-                  className="tt-inbox-link"
-                >
-                  {!item.read && <span className="tt-sr-only">{t('notifications.unread')} </span>}
-                  {t(`notifications.kind.${item.kind}`, shownParams(item.params, f.calendarDate))}
-                </Link>
-                <span className="tt-muted tt-small">{f.dateTime(item.created_at)}</span>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <Panel>
+          <Rows label={t('notifications.title')}>
+            {items.map((item) => (
+              <Row
+                key={item.id}
+                href={routePath({ workspace: item.workspace_id, ...item.target })}
+                onOpen={() => markRead(item)}
+                leading={<span className="ui-inbox-mark" data-unread={item.read ? undefined : true} />}
+                title={
+                  <span className="ui-inbox-title" data-unread={item.read ? undefined : true}>
+                    {!item.read && <VisuallyHidden>{`${t('notifications.unread')} `}</VisuallyHidden>}
+                    {t(`notifications.kind.${item.kind}`, shownParams(item.params, f.calendarDate))}
+                  </span>
+                }
+                detail={t('notifications.where', {
+                  where: t(`shell.sections.${item.target.section}` as Key),
+                  when: f.relative(item.created_at),
+                })}
+              />
+            ))}
+          </Rows>
+        </Panel>
       )}
       {more && items && (
-        <button type="button" className="tt-button" onClick={() => void load(items.at(-1)?.id)}>
-          {t('notifications.older')}
-        </button>
+        <div className="ui-inbox-more">
+          <Button loading={older} onClick={() => void loadOlder(items.at(-1)?.id)}>
+            {t('notifications.older')}
+          </Button>
+        </div>
       )}
-    </div>
+    </Page>
+  )
+}
+
+// While the inbox loads: the shape of a few rows, and a word for screen readers.
+function InboxSkeleton() {
+  const t = useT()
+  return (
+    <Panel aria-busy="true">
+      <VisuallyHidden>
+        <span role="status">{t('app.loading')}</span>
+      </VisuallyHidden>
+      <div className="ui-inbox-skeleton" aria-hidden="true">
+        {['70%', '55%', '80%', '45%'].map((w) => (
+          <div key={w} className="ui-inbox-skeleton-row">
+            <Skeleton width={w} />
+            <Skeleton width="25%" />
+          </div>
+        ))}
+      </div>
+    </Panel>
   )
 }
 
@@ -147,9 +196,9 @@ export function OpenNotification({ id, fallbackWorkspace }: { id: number; fallba
     <div className="tt-center">
       <p role="alert">{t('notifications.unavailable')}</p>
       {fallbackWorkspace !== null && (
-        <Link className="tt-button" href={routePath({ workspace: fallbackWorkspace, section: 'notifications' })}>
+        <ButtonLink href={routePath({ workspace: fallbackWorkspace, section: 'notifications' })}>
           {t('notifications.openInbox')}
-        </Link>
+        </ButtonLink>
       )}
     </div>
   )

@@ -246,9 +246,17 @@ test('those who may publish an app set its widgets and pin as defaults of its sp
   })
   render(<Shell me={me} onLogout={() => {}} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Customize' }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Set Spending as the space’s default' }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Stop Spending being the space’s default' }))
-  await screen.findByRole('button', { name: 'Set Spending as the space’s default' })
+  // Setting a default is in the row's "more" menu, named for what it acts on.
+  const more = () => screen.findByRole('button', { name: 'More actions for Spending' })
+  fireEvent.click(await more())
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Set Spending as the space’s default' }))
+  // Once set, the row says so.
+  await screen.findByText('Space default')
+  fireEvent.click(await more())
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Stop Spending being the space’s default' }))
+  await waitFor(() => expect(screen.queryByText('Space default')).toBeNull())
+  fireEvent.click(await more())
+  await screen.findByRole('menuitem', { name: 'Set Spending as the space’s default' })
   expect(calls.filter((c) => c.method !== 'GET').map((c) => [c.method, c.path, c.body])).toEqual([
     ['POST', '/api/workspaces/1/spaces/3/home/defaults', { kind: 'widget', app_id: 1, widget: 'spend' }],
     ['DELETE', '/api/workspaces/1/spaces/3/home/defaults/9', undefined],
@@ -274,4 +282,96 @@ test('the pins follow a change made elsewhere', async () => {
   view = home({ pins: [pinItem()] })
   act(() => homeChanged())
   await screen.findByRole('link', { name: 'Spend' })
+})
+
+test('in customize mode a widget of one’s own moves by keyboard, one step at a time, with named icon buttons', async () => {
+  const view = home({
+    widgets: [
+      widgetItem({ id: 10, widget_id: 'a', widget: { id: 'a', title: 'First', kind: 'shortcut' } }),
+      widgetItem({ id: 11, widget_id: 'b', widget: { id: 'b', title: 'Second', kind: 'shortcut' } }),
+    ],
+  })
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/home': { body: view },
+    'GET /api/workspaces/1/home/available': { body: { apps: [] } },
+    'PUT /api/workspaces/1/home/order': { status: 204 },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByRole('article', { name: 'First' })
+  // Out of customize mode, a widget has no controls.
+  expect(screen.queryByRole('button', { name: 'Move First later' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+  const first = screen.getByRole('article', { name: 'First' })
+  // The first can't go earlier, the last can't go later.
+  expect((within(first).getByRole('button', { name: 'Move First earlier' }) as HTMLButtonElement).disabled).toBe(true)
+  const second = screen.getByRole('article', { name: 'Second' })
+  expect((within(second).getByRole('button', { name: 'Move Second later' }) as HTMLButtonElement).disabled).toBe(true)
+  // A button, so Enter and Space press it; the name says which widget it moves.
+  const later = within(first).getByRole('button', { name: 'Move First later' })
+  later.focus()
+  fireEvent.click(later)
+  await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+  expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ kind: 'widget', ids: [11, 10] })
+  // The remove control is an icon with the widget's name.
+  expect(within(first).getByRole('button', { name: 'Remove First' })).toBeTruthy()
+})
+
+test('an empty Home offers the first step: adding a widget when an app offers one, the apps otherwise', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/home': { body: home() },
+    'GET /api/workspaces/1/home/available': { body: { apps: [offered] } },
+  })
+  const { unmount } = render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByText('Nothing on your Home yet')
+  fireEvent.click(await screen.findByRole('button', { name: 'Add widgets' }))
+  // That opens customize mode, where the app's widget is offered.
+  expect(await screen.findByRole('button', { name: 'Add Spending to Home' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Done' }).getAttribute('aria-expanded')).toBe('true')
+  unmount()
+
+  fakeFetch({
+    'GET /api/workspaces/1/home': { body: home() },
+    'GET /api/workspaces/1/home/available': { body: { apps: [] } },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  const apps = await screen.findByRole('link', { name: 'Open Apps' })
+  expect(apps.getAttribute('href')).toBe('/w/1/apps')
+  expect(screen.queryByRole('button', { name: 'Add widgets' })).toBeNull()
+})
+
+test('while Home loads it shows the shape of widgets, and says it is loading', async () => {
+  let answer: (() => void) | undefined
+  fakeFetch({
+    'GET /api/workspaces/1/home': async () => {
+      await new Promise<void>((resolve) => (answer = resolve))
+      return { body: home() }
+    },
+    'GET /api/workspaces/1/home/available': { body: { apps: [] } },
+  })
+  const { container } = render(<Shell me={me} onLogout={() => {}} />)
+  await screen.findByRole('heading', { name: 'Home', level: 1 })
+  await waitFor(() => expect(answer).toBeDefined())
+  expect(container.querySelector('[aria-busy="true"]')).toBeTruthy()
+  expect(screen.getByText('Loading…')).toBeTruthy()
+  answer?.()
+  await screen.findByText('Nothing on your Home yet')
+  expect(container.querySelector('[aria-busy="true"]')).toBeNull()
+})
+
+test('an app’s offer says what is on Home already: Added, with a way to take it off', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/home': { body: home({ widgets: [widgetItem()], pins: [pinItem()] }) },
+    'GET /api/workspaces/1/home/available': { body: { apps: [offered] } },
+    'GET /api/workspaces/1/spaces/2/apps/1/surface?widget=spend': { body: spendSurface },
+  })
+  render(<Shell me={me} onLogout={() => {}} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Customize' }))
+  const group = await screen.findByRole('list', { name: 'Expenses' })
+  const rows = within(group).getAllByRole('listitem')
+  expect(within(rows[0]).getByText('Added')).toBeTruthy()
+  // Short on screen, named in full: the visible word is the start of the name.
+  const take = within(rows[0]).getByRole('button', { name: 'Remove Spending' })
+  expect(take.textContent).toBe('Remove')
+  expect(within(rows[1]).getByText('Pinned')).toBeTruthy()
+  expect(within(rows[1]).getByRole('button', { name: 'Unpin Spend' }).textContent).toBe('Unpin')
 })

@@ -397,6 +397,50 @@ test('the inbox pages older notifications in, and says when there are none', asy
   await screen.findByText('No notifications yet.')
 })
 
+test('each notification says where it happened and how long ago, and an unread one is marked for the eye and the ear', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-03-01T12:00:00.000Z'))
+  try {
+    fakeFetch({
+      'GET /api/workspaces/1/notifications': {
+        body: {
+          notifications: [
+            item(2),
+            item(1, {
+              kind: 'app_effect_failed',
+              params: { app: 'Inspections' },
+              target: { section: 'apps' },
+              read: true,
+            }),
+          ],
+          more: false,
+          unread: 1,
+        },
+      },
+    })
+    render(<NotificationsPage workspace={1} />)
+    const list = await screen.findByRole('list', { name: 'Notifications' })
+    const [unread, read] = within(list).getAllByRole('listitem')
+    expect(within(unread).getByText('Boards · 2 hours ago')).toBeTruthy()
+    expect(within(read).getByText('Apps · 2 hours ago')).toBeTruthy()
+    // Bold with a mark, and "Unread:" for a screen reader, on the unread one only.
+    expect(within(unread).getByRole('link').textContent).toMatch(/^Unread: /)
+    expect(within(read).getByRole('link').textContent).not.toMatch(/Unread/)
+    expect(unread.querySelector('[data-unread]')).toBeTruthy()
+    expect(read.querySelector('[data-unread]')).toBeNull()
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('an empty inbox says what will show there', async () => {
+  fakeFetch({ 'GET /api/workspaces/1/notifications': { body: { notifications: [], more: false, unread: 0 } } })
+  render(<NotificationsPage workspace={1} />)
+  await screen.findByText('No notifications yet.')
+  expect(screen.getByText(/When a card is assigned to you/)).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Mark all as read' }) as HTMLButtonElement).disabled).toBe(true)
+})
+
 // --- The shell: the bell, and the address a push opens --------------------------------------
 
 test('the top bar has a bell with the unread count, which opens the inbox', async () => {
