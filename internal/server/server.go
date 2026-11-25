@@ -140,6 +140,13 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 		spaces.OnArchiveChange(boardSvc.SyncSpace)
 		spaces.OnMemberAdded(boardSvc.SyncSpaceMember)
 		accounts.OnMemberAdded(boardSvc.SyncWorkspaceMember)
+		// Reminders are at the morning of the assignee's own time zone: a change of it moves them.
+		accounts.OnTimeZoneChanged(boardSvc.SyncTimeZone)
+	}
+	if opts.Notifications != nil {
+		// So does the daily email summary, for the people who haven't chosen a zone for it (it
+		// schedules nothing on a service without the scheduler).
+		accounts.OnTimeZoneChanged(opts.Notifications.SyncTimeZone)
 	}
 	boardSvc.Routes(mux)
 	// The apps' routes list and retry their effects and check the targets they name; the

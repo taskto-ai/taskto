@@ -261,6 +261,7 @@ export type AuthMeUser = {
   email: string
   name: string
   locale: string
+  time_zone: string
 }
 
 export type AvailableApp = {

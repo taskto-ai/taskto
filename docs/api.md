@@ -110,6 +110,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `invite_other_email` | 403 | The invite is for another email address than the logged-in user's. |
 | `invite_account_exists` | 409 | An account with the invite's email exists: log in, then accept it. |
 | `locale_invalid` | 400 | Not a BCP 47 tag such as `pt-BR`, or `""`. |
+| `time_zone_invalid` | 400 | Not an IANA time zone name such as `Europe/Lisbon`, or `""`. |
 | `token_not_found` | 404 | No such access token of the caller's. |
 | `token_expiry_invalid` | 400 | `expires_at` isn't a future time in RFC 3339. |
 | `too_many_tokens` | 409 | The caller has `max` access tokens in the workspace: revoke one first. |
@@ -641,7 +642,7 @@ Revokes the session and clears the cookie. `204`, also without a session.
 
 ```json
 {
-  "user": {"id": 1, "email": "owner@example.com", "name": "Owner", "locale": "pt-BR"},
+  "user": {"id": 1, "email": "owner@example.com", "name": "Owner", "locale": "pt-BR", "time_zone": "Europe/Lisbon"},
   "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}],
   "can_create_workspace": true,
   "is_operator": true
@@ -674,6 +675,12 @@ then follows the browser). A workspace's `locale` is its default language, or `"
 English. Only `/api/me` shows a user's own locale; member lists show nobody's. See
 [i18n.md](i18n.md).
 
+`user.time_zone` is the user's own time zone, an IANA name such as `Europe/Lisbon`, or `""` for none
+yet (the server then uses UTC). It is theirs in every workspace, and `/api/me` is the only place it is
+shown. What the server times for a person is timed by it: [due-date reminders](#due-date-reminders), and
+the [daily email summary](#get-apiworkspacesworkspacenotification-email) until the person chooses a zone
+for the summary. The web app sends the browser's once, when the account has none.
+
 ### `PATCH /api/me`
 
 `{"locale": "pt-BR"}` → the new `GET /api/me`. Changes the caller's own settings; a field
@@ -681,6 +688,18 @@ left out stays as it is. `locale` is a BCP 47 tag of a language, optionally with
 and a region, in canonical case (`pt-BR`, `zh-Hant-TW`, `sr-Latn`, `es-419`), or `""` for
 none; anything else, variants and extensions included (`de-CH-1901`), is a `400`. Such a
 tag is stored also when the web app has no translation for it. Requires a login (a session, not an access token).
+
+`{"time_zone": "Europe/Lisbon"}` sets the caller's time zone: an IANA name that the server's time zone
+database knows (`America/Sao_Paulo`, `Asia/Kolkata`, `UTC`), or `""` to clear it (UTC again). Anything
+else, `Local` and names longer than 64 bytes included, is a `400` `time_zone_invalid`, and nothing in
+the same request is changed. A change moves, in the same transaction, what was timed by the old zone:
+the caller's reminders for the cards assigned to them, and their daily email summaries that follow it.
+Setting the zone it already is changes nothing.
+
+`{"browser_time_zone": "Europe/Lisbon"}` is the web app's first guess: it sets the zone only if the
+caller has none, and is ignored otherwise (so a browser on a trip never replaces a zone a person
+picked). A name the server doesn't know is ignored too, with a `200`, not an error. If both fields are
+sent, `time_zone` is applied first.
 
 ### `POST /api/workspaces`
 
@@ -2319,12 +2338,21 @@ that person by two notifications: `card_due` on the morning of the due day and `
 the morning after. They are made by jobs on the general scheduler ([architecture.md](architecture.md)),
 kept in step with the card by the change that touches it:
 
-- **When.** The morning is 08:00 UTC. A due date is a calendar date and TaskTo doesn't know a
-  person's time zone, so one instant is used for everyone (the morning of the day in the Americas
-  and Europe, the afternoon in east Asia). A job whose time has already passed when the date or
-  assignee is set is not made: setting a card due today after 08:00 gets no reminder but still the
-  overdue notice, and a date in the past gets none. A reminder that is delivered after its day (a
-  server that was off) is dropped, since the overdue notice says what is true then.
+- **When.** The morning is 08:00 in the assignee's [time zone](#get-apime) (UTC for someone who has
+  none): the reminder at 08:00 on the due date, the overdue notice at 08:00 on the date after it. A
+  due date is a calendar date, so the time is worked out from the date and the zone, not as hours
+  from midnight UTC: it is 08:00 on the wall clock on both sides of a change to or from daylight
+  saving time (the two times can be 23 or 25 hours apart), and an 08:00 that a change of clocks skips
+  is the first moment after the gap. For someone east of UTC the reminder can come the evening before
+  in UTC. A job whose time has already passed when the date, the assignee or the zone is set is not
+  made: setting a card due today after 08:00 (in the assignee's zone) gets no reminder but still the
+  overdue notice, and a date in the past gets none. A reminder that is delivered after its day in
+  the assignee's zone (a server that was off) is dropped, since the overdue notice says what is true
+  then.
+- **Zone.** The assignee's, so giving the card to someone else times it by their zone. When a person
+  changes their time zone (`PATCH /api/me`), the jobs of every open card assigned to them are timed
+  again, in that request's transaction: a time that has passed by the new zone is not made up for, and
+  a notification that was already made for the card and its date is not made again.
 - **Who.** Only the assignee. A card assigned to the agent, or to nobody, has none. Changing the
   assignee cancels the previous person's and makes the new person's; changing or clearing `due`
   moves or cancels them; moving the card to `done` or archiving it cancels them, and moving it
@@ -2342,8 +2370,9 @@ kept in step with the card by the change that touches it:
   gets them back, for the cards still assigned to them and dated, when they are added to the space
   again (a workspace's invite gives back those of their private space; a shared space's come with
   adding them to it); a server that starts with dated cards that have none (made before reminders existed) schedules them.
-  A date the scheduler can't hold (the overdue notice of `8999-12-31` would be in the year 9000)
-  has no notice for that part, and the card is saved all the same.
+  A time the scheduler can't hold (it runs until the end of the year 8999 UTC, so for a card due on
+  `8999-12-31` the overdue notice is out of range in most zones) is not made, and the card is saved all
+  the same.
 - **Access.** When a job runs, in the transaction that makes the notification, it checks that it is
   still the job that was claimed, that the assignee may read the card's space (a person who left it,
   or the workspace, gets nothing), that the space and board aren't archived and that the card still
@@ -2394,8 +2423,10 @@ then, and everything can still be turned off). `address.state` is `unverified` (
 `pending` (a link was sent and may still be opened) or `verified`; nothing is sent unless it is
 `verified`. Each kind is `off`, `instant` (a mail soon after, one for each notification) or `digest`
 (counted in the daily summary, sent at `hour` o'clock, 0 to 23, of the IANA `timezone`; the default
-is 8 o'clock UTC; `chosen` is false until the person has set the time themselves, so a client may
-offer its own zone then and never replaces one they chose).
+is 8 o'clock in the person's own [time zone](#get-apime), UTC if they have none; `chosen` is false
+until the person has set the time themselves, and until then `timezone` is the profile's and follows
+a change of it. A client never needs to send a zone for the first summary, and one it sends is the
+person's choice from then on).
 
 #### `PUT /api/workspaces/{workspace}/notification-email`
 

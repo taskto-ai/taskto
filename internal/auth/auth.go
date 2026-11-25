@@ -149,6 +149,8 @@ type Service struct {
 
 	// memberHooks are told when a person is added to a workspace (OnMemberAdded).
 	memberHooks []MemberHook
+	// zoneHooks are told when a person's time zone changes (OnTimeZoneChanged).
+	zoneHooks []TimeZoneHook
 }
 
 // at calls the test hook, if there is one, at a named point.
