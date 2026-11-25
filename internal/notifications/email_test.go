@@ -1161,3 +1161,92 @@ func TestTheSummarysZoneIsTheDefaultUntilThePersonSetsTheTime(t *testing.T) {
 		t.Fatalf("digest = %+v", got.Digest)
 	}
 }
+
+// ---- The person's own time zone ----
+
+func (w *world) setZone(u *user, zone string) {
+	w.t.Helper()
+	expect(w.t, u.do(http.MethodPatch, "/api/me", map[string]any{"time_zone": zone}), http.StatusOK)
+}
+
+func (w *world) summaryRunAt(u *user) string {
+	w.t.Helper()
+	var at string
+	if err := w.db.QueryRow(`SELECT run_at FROM scheduled_jobs WHERE user_id = ? AND kind = ?`, u.id, notifications.KindDigest).Scan(&at); err != nil {
+		w.t.Fatal(err)
+	}
+	return at
+}
+
+func TestTheSummaryFollowsTheProfilesTimeZoneUntilItsOwnIsChosen(t *testing.T) {
+	w := newMailWorld(t)
+	// 2027-10-30, 06:00 UTC: 07:00 in Lisbon (summer time still), 03:00 in São Paulo.
+	w.skew = time.Until(time.Date(2027, 10, 30, 6, 0, 0, 0, time.UTC))
+
+	// Before anything is saved, the choices show the hour in the zone of the profile.
+	w.setZone(w.bob, "Europe/Lisbon")
+	if got := w.put(w.bob, map[string]any{}); got.Digest.Timezone != "Europe/Lisbon" || got.Digest.Chosen {
+		t.Fatalf("digest before any choice = %+v, want Lisbon, not chosen", got.Digest)
+	}
+
+	// A summary with no zone of its own is at 08:00 there: 07:00 UTC.
+	got := w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
+	if got.Digest.Timezone != "Europe/Lisbon" || got.Digest.Chosen {
+		t.Fatalf("digest = %+v", got.Digest)
+	}
+	if at := w.summaryRunAt(w.bob); at != "2027-10-30T07:00:00.000Z" {
+		t.Fatalf("summary at %s, want 08:00 in Lisbon", at)
+	}
+
+	// A change of the profile's zone moves it, and the choices say so.
+	w.setZone(w.bob, "America/Sao_Paulo")
+	if at := w.summaryRunAt(w.bob); at != "2027-10-30T11:00:00.000Z" {
+		t.Fatalf("summary at %s after the zone changed, want 08:00 in São Paulo", at)
+	}
+	if got := w.put(w.bob, map[string]any{}); got.Digest.Timezone != "America/Sao_Paulo" {
+		t.Fatalf("digest = %+v", got.Digest)
+	}
+	// Saving another choice leaves it where it is.
+	w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardComment: "digest"}})
+	if at := w.summaryRunAt(w.bob); at != "2027-10-30T11:00:00.000Z" {
+		t.Fatalf("summary at %s after another choice", at)
+	}
+
+	// A zone chosen for the summary is theirs: the profile no longer moves it.
+	w.put(w.bob, map[string]any{"digest": map[string]any{"hour": 8, "timezone": "Asia/Tokyo"}})
+	// It is 15:00 in Tokyo now, so the next 08:00 there is tomorrow's: 23:00 UTC today.
+	if at := w.summaryRunAt(w.bob); at != "2027-10-30T23:00:00.000Z" {
+		t.Fatalf("summary at %s, want 08:00 in Tokyo", at)
+	}
+	chosen := w.summaryRunAt(w.bob)
+	w.setZone(w.bob, "Europe/Lisbon")
+	if at := w.summaryRunAt(w.bob); at != chosen {
+		t.Fatalf("a chosen zone followed the profile: %s then %s", chosen, at)
+	}
+	if got := w.put(w.bob, map[string]any{}); got.Digest.Timezone != "Asia/Tokyo" || !got.Digest.Chosen {
+		t.Fatalf("digest = %+v", got.Digest)
+	}
+}
+
+func TestAZoneChangeMakesNoSummaryForSomeoneWhoHasNone(t *testing.T) {
+	w := newMailWorld(t)
+	w.setZone(w.bob, "Asia/Tokyo")
+	w.setZone(w.mallory, "Asia/Tokyo")
+	var n int
+	if err := w.db.QueryRow(`SELECT count(*) FROM scheduled_jobs WHERE kind = ?`, notifications.KindDigest).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("summaries after zone changes = %d, %v; want none", n, err)
+	}
+	// Someone's change reaches only their own summary.
+	w.choose(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "digest"}})
+	bob := w.summaryRunAt(w.bob)
+	w.setZone(w.mallory, "America/Sao_Paulo")
+	if at := w.summaryRunAt(w.bob); at != bob {
+		t.Fatalf("bob's summary moved from %s to %s with mallory's zone", bob, at)
+	}
+	// And a summary of someone who turned theirs off isn't made again by a zone change.
+	w.put(w.bob, map[string]any{"kinds": map[string]string{notifications.KindCardAssigned: "off"}})
+	w.setZone(w.bob, "Europe/Lisbon")
+	if err := w.db.QueryRow(`SELECT count(*) FROM scheduled_jobs WHERE kind = ?`, notifications.KindDigest).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("summaries after turning it off and moving = %d, %v; want none", n, err)
+	}
+}

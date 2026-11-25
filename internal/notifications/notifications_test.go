@@ -141,6 +141,8 @@ func newEnvWith(t *testing.T, tls bool, change func(*env, *notifications.Options
 	if err := e.svc.AttachScheduler(e.sched); err != nil {
 		t.Fatal(err)
 	}
+	// As the server does: a change of a person's time zone moves the summaries that follow it.
+	accounts.OnTimeZoneChanged(e.svc.SyncTimeZone)
 	mux := http.NewServeMux()
 	accounts.Routes(mux)
 	spaces.Routes(mux)

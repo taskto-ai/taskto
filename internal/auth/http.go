@@ -88,6 +88,10 @@ func (s *Service) meOf(r *http.Request, u User) (Me, error) {
 	if err != nil {
 		return Me{}, err
 	}
+	zone, err := UserTimeZone(r.Context(), s.db, u.ID)
+	if err != nil {
+		return Me{}, err
+	}
 	can, err := s.mayCreateWorkspace(r.Context(), s.db, u.ID)
 	if err != nil {
 		return Me{}, err
@@ -96,7 +100,7 @@ func (s *Service) meOf(r *http.Request, u User) (Me, error) {
 	if err != nil {
 		return Me{}, err
 	}
-	return Me{User: MeUser{User: u, Locale: locale}, Workspaces: ws, CanCreateWorkspace: can, IsOperator: operator}, nil
+	return Me{User: MeUser{User: u, Locale: locale, TimeZone: zone}, Workspaces: ws, CanCreateWorkspace: can, IsOperator: operator}, nil
 }
 
 func (s *Service) handleSetupStatus(w http.ResponseWriter, r *http.Request) {

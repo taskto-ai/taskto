@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/mail"
 	"taskto.ai/taskto/internal/schedule"
 )
@@ -180,12 +181,67 @@ func (s *Service) EmailChoices(ctx context.Context, userID, workspaceID int64) (
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return EmailChoices{}, err
 	}
-	err = s.db.QueryRowContext(ctx, `SELECT digest_hour, timezone, timezone_chosen FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
-		userID, workspaceID).Scan(&out.Digest.Hour, &out.Digest.Timezone, &out.Digest.Chosen)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	err = s.db.QueryRowContext(ctx, digestSettingsSQL, userID, workspaceID).Scan(&out.Digest.Hour, &out.Digest.Timezone, &out.Digest.Chosen)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Nothing saved yet: the summary would go out at the default hour of the person's own zone.
+		err = nil
+		if zone, zerr := auth.UserTimeZone(ctx, s.db, userID); zerr != nil {
+			err = zerr
+		} else if zone != "" {
+			out.Digest.Timezone = zone
+		}
+	}
+	if err != nil {
 		return EmailChoices{}, err
 	}
 	return out, nil
+}
+
+// digestSettingsSQL reads a person's summary settings in a workspace (hour, zone, whether they
+// chose the time themselves; the arguments are the user and the workspace). The zone is the one they
+// chose for it, or until they do, the time zone of their profile (package auth) if they have one.
+const digestSettingsSQL = `
+	SELECT s.digest_hour,
+	       CASE WHEN s.timezone_chosen = 0 AND u.time_zone <> '' THEN u.time_zone ELSE s.timezone END,
+	       s.timezone_chosen
+	FROM notification_email_settings s JOIN users u ON u.id = s.user_id
+	WHERE s.user_id = ? AND s.workspace_id = ?`
+
+// SyncTimeZone moves the daily summaries of userID that follow their profile's time zone (those
+// whose zone they haven't chosen for the summary) to the new zone, in tx. It is auth's
+// TimeZoneHook (auth.Service.OnTimeZoneChanged).
+func (s *Service) SyncTimeZone(ctx context.Context, tx *sql.Tx, userID int64) error {
+	if s.sched == nil {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT workspace_id FROM notification_email_settings WHERE user_id = ? AND timezone_chosen = 0 ORDER BY workspace_id`, userID)
+	if err != nil {
+		return err
+	}
+	var workspaces []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		workspaces = append(workspaces, id)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, id := range workspaces {
+		if uses, err := s.usesDigest(ctx, tx, userID, id); err != nil {
+			return err
+		} else if !uses {
+			continue
+		}
+		if err := s.scheduleDigest(ctx, tx, userID, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SetEmailChoices changes what userID chose in the workspace, and schedules (or ends) the daily
@@ -227,8 +283,8 @@ func (s *Service) SetEmailChoices(ctx context.Context, userID, workspaceID int64
 		}
 		var prevHour int
 		var prevZone string
-		err := tx.QueryRowContext(ctx, `SELECT digest_hour, timezone FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
-			userID, workspaceID).Scan(&prevHour, &prevZone)
+		var prevChosen bool
+		err := tx.QueryRowContext(ctx, digestSettingsSQL, userID, workspaceID).Scan(&prevHour, &prevZone, &prevChosen)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -316,13 +372,18 @@ func digestKey(workspaceID int64) string { return "workspace:" + strconv.FormatI
 func (s *Service) scheduleDigest(ctx context.Context, q schedule.DBTX, userID, workspaceID int64) error {
 	var hour int
 	var zone string
-	if err := q.QueryRowContext(ctx, `SELECT digest_hour, timezone FROM notification_email_settings WHERE user_id = ? AND workspace_id = ?`,
-		userID, workspaceID).Scan(&hour, &zone); err != nil {
+	var chosen bool
+	if err := q.QueryRowContext(ctx, digestSettingsSQL, userID, workspaceID).Scan(&hour, &zone, &chosen); err != nil {
 		return err
 	}
 	loc, err := loadZone(zone)
 	if err != nil {
-		return err
+		if chosen {
+			return err
+		}
+		// A profile zone this machine's zone database doesn't know: the summary still goes out, in UTC.
+		slog.WarnContext(ctx, "notifications: a time zone is unknown here, using UTC for a summary", "user", userID, "zone", zone)
+		loc = time.UTC
 	}
 	_, err = s.sched.Reschedule(ctx, q, schedule.Job{
 		Kind: KindDigest, UserID: userID, WorkspaceID: workspaceID, DedupeKey: digestKey(workspaceID),
@@ -345,33 +406,11 @@ func loadZone(name string) (*time.Location, error) {
 // that happens twice (they go back) is its first time.
 func nextDigest(now time.Time, hour int, loc *time.Location) time.Time {
 	local := now.In(loc)
-	at := localHour(local.Year(), local.Month(), local.Day(), hour, loc)
+	at := schedule.LocalHour(local.Year(), local.Month(), local.Day(), hour, loc)
 	if !at.After(now) {
-		at = localHour(local.Year(), local.Month(), local.Day()+1, hour, loc)
+		at = schedule.LocalHour(local.Year(), local.Month(), local.Day()+1, hour, loc)
 	}
 	return at.UTC()
-}
-
-// localHour is hour o'clock of a date in loc. time.Date says an hour inside a gap is one of two
-// moments around it, whichever it picks; this is always the later: the first moment the wall clock
-// shows the hour or more.
-func localHour(year int, month time.Month, day, hour int, loc *time.Location) time.Time {
-	at := time.Date(year, month, day, hour, 0, 0, 0, loc)
-	want := time.Date(year, month, day, hour, 0, 0, 0, time.UTC)
-	wall := func(t time.Time) time.Time {
-		y, m, d := t.In(loc).Date()
-		h, mi, sec := t.In(loc).Clock()
-		return time.Date(y, m, d, h, mi, sec, 0, time.UTC)
-	}
-	// Back to before the gap if the pick was after it (so the walk below finds its start), then
-	// forward until the wall clock has reached the hour.
-	for i := 0; i < 8 && wall(at.Add(-15*time.Minute)).Compare(want) >= 0; i++ {
-		at = at.Add(-15 * time.Minute)
-	}
-	for i := 0; i < 4*48 && wall(at).Before(want); i++ {
-		at = at.Add(15 * time.Minute)
-	}
-	return at
 }
 
 func (s *Service) usesDigest(ctx context.Context, q queryer, userID, workspaceID int64) (bool, error) {
