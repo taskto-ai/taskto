@@ -280,6 +280,19 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `provider_models_count` | 400 | A provider account lists 1 to `max` models. |
 | `provider_model_invalid` | 400 | A model's ID must be 1 to `max` printable characters. |
 | `too_many_providers` | 409 | The workspace, or the user, has `max` provider accounts. |
+| `integration_not_found` | 404 | No such integration in the workspace. |
+| `integration_name_invalid` | 400 | An integration's name must be 1 to `max` characters of `a-z`, `0-9`, `.`, `_` or `-`, starting with a letter or digit. |
+| `integration_name_taken` | 409 | An integration with this name exists in the workspace. |
+| `integration_display_name_invalid` | 400 | An integration's display name may have up to `max` printable characters. |
+| `integration_provider_unknown` | 400 | The provider isn't one the server knows ([integrations.md](integrations.md#providers)). |
+| `integration_secret_required` | 400 | A secret the provider needs (`secret`) isn't given. In a check's answer: it isn't set. |
+| `integration_secret_invalid` | 400 | The value given for a secret (`secret`) isn't one the provider's credentials look like. It never quotes the value. |
+| `integration_secret_unreadable` | 200 | In a check's answer (`code`): a sealed secret (`secret`) doesn't open, usually because the server key changed since it was saved: set it again. |
+| `integration_setting_invalid` | 400 | A setting (`setting`) is unknown, missing, or not a value the provider accepts. |
+| `integration_limit_invalid` | 400 | The amount ceiling must be a whole number from 1 to `max`. |
+| `integration_currency_invalid` | 400 | The currencies must be 1 to `max` distinct codes from the list the server knows. |
+| `too_many_integrations` | 409 | The workspace has `max` integrations. |
+| `integration_in_use` | 409 | Something still names the integration (an approval of an app): disable it instead. |
 | `base_url_invalid` | 400 | Not an http or https URL of up to `max` characters, without a query or fragment (provider accounts, shared CLI accounts, dictation). |
 | `base_url_credentials` | 400 | The base URL has credentials in it: the key goes in `api_key`. |
 | `base_url_insecure` | 400 | A key would be sent over plain http to another machine: use https. |
@@ -3611,6 +3624,126 @@ reads the space may list them; they are seen only for the apps they may view.
   the app `403 app_forbidden` (`publish`), a private space `409 home_defaults_shared`.
 - `DELETE …/spaces/{space}/home/defaults/{default}`: `204`, with the same rights; `404` for a
   default of another space.
+
+## Integrations
+
+An integration is a workspace admin's connection to an account at an outside service. The
+first kind is `payments`, with Stripe and Square as providers. The providers are a closed list
+in the server's code; see [integrations.md](integrations.md). Every route below is **session
+only**: an access token, and with it MCP, is refused (`401`), and nothing here is offered to
+the agent. Every query is scoped to the workspace in the path, so another workspace's
+integration is a `404`.
+
+An integration looks like this:
+
+```json
+{
+  "id": 3,
+  "provider": "stripe",
+  "kind": "payments",
+  "name": "shop",
+  "display_name": "Shop",
+  "mode": "test",
+  "settings": {},
+  "max_amount_minor": 500000,
+  "currencies": ["EUR", "USD"],
+  "secrets": {"api_key": "set", "webhook_secret": "not set"},
+  "webhook_url": "https://taskto.example.com/hooks/0123456789abcdef0123456789abcdef",
+  "disabled": false,
+  "disabled_at": null,
+  "spaces": [12],
+  "created_at": "…",
+  "updated_at": "…",
+  "last_event_at": null
+}
+```
+
+- **`provider`**: a registry id, `stripe` or `square`. It can't change.
+- **`name`**: 1–40 characters of `a-z 0-9 . _ -`, starting with a letter or digit, unique per
+  workspace. It can't change. **`display_name`**: up to 100 printable characters; defaults to
+  `name`.
+- **`mode`**: `test` or `live`, never sent: it is read from the API key's prefix (Stripe's
+  `sk_test_` or `sk_live_`, and the restricted `rk_` keys) or from the `environment` setting
+  (Square), so it can't disagree with the credentials.
+- **`settings`**: what the provider needs that isn't secret, a flat object of short
+  identifiers or choices (Stripe has none; Square has `environment`, `sandbox` or
+  `production`, and `location_id`). Never a URL: a setting can't point a call anywhere.
+- **`max_amount_minor`**: the admin's ceiling for one payment, a whole number from 1 to
+  1 000 000 000 000, in the smallest unit of the currency. **`currencies`**: 1 to 20 distinct
+  ISO 4217 codes from the server's closed list ([`integration-providers`](#get-apiworkspacesworkspaceintegration-providers)).
+  An app's definition never sets either.
+- **`secrets`**: **write-only**. Each of `api_key` and `webhook_secret` is `"set"` or
+  `"not set"`, never the value. A secret is sent in `secrets` on create or `PATCH`, 8 to 4096
+  characters that look like the provider's own (a Stripe publishable key `pk_…` is refused as
+  an API key, with `integration_secret_invalid`); a value that doesn't fit is refused without
+  quoting it. A secret is replaced by sending a new one and can't be removed; to stop using
+  an account, disable the integration or delete it. A replaced webhook secret keeps verifying
+  events for a day (for the provider's own rotation overlap).
+- **`webhook_url`**: the address to register at the provider, `null` when the server has no
+  `-public-url`: payments are then found by polling. It holds a random 128-bit id and no
+  secret.
+- **`spaces`**: ids of the spaces whose apps may use the integration. A new integration has
+  none.
+
+### `GET /api/workspaces/{workspace}/integration-providers`
+
+Admin only. What a form needs to connect one: `{"providers": [{"id", "kinds", "secrets":
+[{"name", "required"}], "settings": [{"name", "options", "required"}]}], "currencies": […],
+"max_amount_minor": …, "webhooks_available": bool}`.
+
+### `GET /api/workspaces/{workspace}/integrations`
+
+Admin only. `{"integrations": [integration, …]}`, oldest first.
+
+### `POST /api/workspaces/{workspace}/integrations`
+
+Admin only. `provider`, `name`, `secrets` (with the provider's required ones), `settings`
+(the provider's required ones), `max_amount_minor` and `currencies` are required;
+`display_name` is optional. Unknown fields are refused. `201` with the integration; `400` for
+an invalid field (`integration_provider_unknown`, `integration_name_invalid`,
+`integration_secret_required`, `integration_secret_invalid`, `integration_setting_invalid`,
+`integration_limit_invalid`, `integration_currency_invalid`); `409` if the name is taken or
+the workspace has 20 integrations.
+
+### `GET /api/workspaces/{workspace}/integrations/{integration}`
+
+Admin only. The integration, or `404`.
+
+### `PATCH /api/workspaces/{workspace}/integrations/{integration}`
+
+Admin only. Any of `display_name`, `settings` and `currencies` (each replaces the whole
+value), `secrets` (replaces the ones named), `max_amount_minor` and `disabled`; the rest stay.
+`disabled: true` switches the integration off (nothing sends or receives through it, and its
+approvals and events are kept) and `false` back on. `200` with the integration; `400` for an
+invalid field or an attempt to change the name or provider; `404`.
+
+### `PUT /api/workspaces/{workspace}/integrations/{integration}/spaces`
+
+Admin only. `{"spaces": [id, …]}` replaces the allowed spaces. An admin may allow their own
+private space and the workspace's shared spaces, whether or not they are a member; any other
+space, another person's private space or another workspace's, is `404 space_not_found` and
+nothing changes. `200` with the integration.
+
+### `POST /api/workspaces/{workspace}/integrations/{integration}/check`
+
+Admin only, no body. Looks at what the server holds: the provider's required secrets are set,
+open with the server's key and the settings are the provider's. It doesn't call the
+provider in this version (`remote` is `false`). `200`, always, with
+`{"ok": true, "remote": false}` or `{"ok": false, "remote": false, "code": "…", "params": {…}}`
+(`integration_secret_required`, `integration_secret_unreadable`, `integration_setting_invalid`).
+It never carries a provider's reply or a secret. `404` for another workspace's integration.
+
+### `DELETE /api/workspaces/{workspace}/integrations/{integration}`
+
+Admin only. `204`, with its secrets and allowed spaces; `404`; `409 integration_in_use` while
+something names it (an app's approval): disable it instead.
+
+### `GET /api/workspaces/{workspace}/spaces/{space}/integrations`
+
+Anyone who can read the space. What may be used in the space:
+`{"integrations": [{"id", "name", "display_name", "kind", "status"}]}`, with `status` `active`
+or `disabled`. Nothing about the account: no secret, no webhook address, no limit, no
+provider.
 
 ## Model providers
 

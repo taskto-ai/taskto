@@ -23,6 +23,7 @@ import (
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/dictation"
 	"taskto.ai/taskto/internal/export"
+	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/mail"
 	"taskto.ai/taskto/internal/mcpserver"
@@ -61,6 +62,8 @@ type Options struct {
 	CLIAccounts *cliaccounts.Service
 	// Dictation serves speech to text for the chat box; nil leaves it out.
 	Dictation *dictation.Service
+	// Integrations serves the workspaces' integrations with outside providers; nil leaves them out.
+	Integrations *integrations.Service
 	// Browser serves the agent browser (/api/me/browser and its live view); nil leaves it out.
 	Browser *agentbrowser.Service
 	// Notifications serves the notification inbox and Web Push subscriptions; nil leaves them out.
@@ -175,6 +178,9 @@ func New(version string, sqlDB *sql.DB, opts Options) (http.Handler, error) {
 	}
 	if opts.Dictation != nil {
 		opts.Dictation.Routes(mux, accounts, spaces)
+	}
+	if opts.Integrations != nil {
+		opts.Integrations.Routes(mux, accounts, spaces)
 	}
 	if opts.Browser != nil {
 		opts.Browser.Routes(mux, accounts)

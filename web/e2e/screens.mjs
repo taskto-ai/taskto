@@ -80,6 +80,7 @@ export const SETTINGS_HEADINGS = {
   spaces: 'Shared spaces',
   audit: 'Audit log',
   providers: "This workspace's accounts",
+  integrations: 'Integrations',
   'cli-accounts': 'Your CLI accounts',
   search: 'Semantic search',
   dictation: 'Dictation',

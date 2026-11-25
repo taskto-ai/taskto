@@ -29,6 +29,8 @@ import (
 	"taskto.ai/taskto/internal/conversations"
 	"taskto.ai/taskto/internal/db"
 	"taskto.ai/taskto/internal/dictation"
+	"taskto.ai/taskto/internal/egress"
+	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/lockfile"
 	"taskto.ai/taskto/internal/notifications"
@@ -363,6 +365,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) error
 		CLIAccounts:   cliAccounts,
 		Browser:       browsers,
 		Dictation:     dictationService(cfg, sqlDB, key, kb),
+		Integrations:  integrations.New(integrations.NewStore(sqlDB, key), integrations.Options{PublicURL: cfg.PublicURL, Egress: integrationEgress(cfg)}),
 		BackupDataDir: cfg.DataDir,
 		// The host updater's status, read-only (docs/install.md#automatic-updates).
 		UpdateStatusDir: cfg.UpdateStatusDir,
@@ -468,4 +471,11 @@ func dictationService(cfg config.Config, sqlDB *sql.DB, key *serverkey.Key, kb *
 		slog.Info("dictation: add-on installed", "addon", a.ID, "path", a.Path)
 	}
 	return dictation.New(c)
+}
+
+// integrationEgress is the policy of calls to integrations' providers: what -integration-egress
+// says, which is "public" when it isn't set.
+func integrationEgress(cfg config.Config) *egress.Policy {
+	p := cfg.IntegrationEgressPolicy()
+	return &p
 }

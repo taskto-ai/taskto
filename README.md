@@ -110,6 +110,7 @@ the default.
 | `-smtp-username` | `TASKTO_SMTP_USERNAME` | `smtp_username` | | the user to sign in as; goes with `-smtp-password-file` |
 | `-smtp-password-file` | `TASKTO_SMTP_PASSWORD_FILE` | `smtp_password_file` | | the file the SMTP password is read from at startup (an absolute path); the password is never a setting |
 | `-smtp-egress` | `TASKTO_SMTP_EGRESS` | `smtp_egress` | `any` | where the SMTP connection may go, as the provider accounts' policy above |
+| `-integration-egress` | `TASKTO_INTEGRATION_EGRESS` | `integration_egress` | `public` | where calls to integrations' providers (Stripe, Square) may go: `public` (addresses checked on every connection), `any`, or a list as for the provider accounts' policy above ([docs/integrations.md](docs/integrations.md#egress)) |
 | `-update-status-dir` | `TASKTO_UPDATE_STATUS_DIR` | `update_status_dir` | | where the host's updater writes the status operators see in Settings → About (read-only; an absolute path; [docs/install.md](docs/install.md#automatic-updates)) |
 | `-agent` | `TASKTO_AGENT` | `agent` | `false` | run the agent runtime (see below) |
 | `-agent-node` | `TASKTO_AGENT_NODE` | `agent_node` | `node` | Node.js executable for the agent runtime, looked up in `PATH` unless it is a path |

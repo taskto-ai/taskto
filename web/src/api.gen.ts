@@ -415,6 +415,58 @@ export type HomeView = {
   }
 }
 
+export type Integration = {
+  id: number
+  provider: string
+  kind: string
+  name: string
+  display_name: string
+  mode: string
+  settings: Record<string, string>
+  max_amount_minor: number
+  currencies: string[]
+  secrets: Record<string, string>
+  webhook_url: string | null
+  disabled: boolean
+  disabled_at: string | null
+  spaces: number[]
+  created_at: string
+  updated_at: string
+  last_event_at: string | null
+}
+
+export type IntegrationCheck = {
+  ok: boolean
+  remote: boolean
+  code?: string
+  params?: Record<string, string | number>
+}
+
+export type IntegrationRegistry = {
+  providers: IntegrationsProviderInfo[]
+  currencies: string[]
+  max_amount_minor: number
+  webhooks_available: boolean
+}
+
+export type IntegrationsProviderInfo = {
+  id: string
+  kinds: string[]
+  secrets: IntegrationsSecretSpec[]
+  settings: IntegrationsSettingSpec[]
+}
+
+export type IntegrationsSecretSpec = {
+  name: string
+  required: boolean
+}
+
+export type IntegrationsSettingSpec = {
+  name: string
+  options: string[]
+  required: boolean
+}
+
 export type Invite = {
   id: number
   email: string
@@ -513,6 +565,14 @@ export type Space = {
   offline_downloads: boolean
   role?: string
   access: string
+}
+
+export type SpaceIntegration = {
+  id: number
+  name: string
+  display_name: string
+  kind: string
+  status: string
 }
 
 export type Token = {

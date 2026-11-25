@@ -164,6 +164,13 @@ type Config struct {
 	SMTPPasswordFile string
 	SMTPEgress       string
 
+	// IntegrationEgress is the egress policy of the calls to integrations' providers (Stripe,
+	// Square; see internal/egress and docs/integrations.md). Empty means "public": addresses are
+	// checked after name resolution on every connection, so loopback, private, link-local and
+	// metadata addresses are refused. Each adapter pins its own hosts besides, so the policy
+	// never lists provider names.
+	IntegrationEgress string
+
 	// AuditRetentionDays is how many days the audit log's events are kept (docs/audit.md). Zero
 	// means the default, 365; -1, "off" in the settings, keeps them for ever.
 	AuditRetentionDays int
@@ -354,6 +361,12 @@ var settings = []setting{
 		usage: "where the SMTP connection may go: any, public, or a comma-separated list of public, hosts and CIDR prefixes (default any)",
 		get:   func(c Config) string { return c.SMTPEgress },
 		set:   setEgress(func(c *Config) *string { return &c.SMTPEgress }),
+	},
+	{
+		flag: "integration-egress", env: "TASKTO_INTEGRATION_EGRESS", key: "integration_egress",
+		usage: "where calls to integrations' providers may go: public, any, or a comma-separated list of public, hosts and CIDR prefixes (default public)",
+		get:   func(c Config) string { return c.IntegrationEgress },
+		set:   setEgress(func(c *Config) *string { return &c.IntegrationEgress }),
 	},
 	{
 		flag: "agent", env: "TASKTO_AGENT", key: "agent", isBool: true,
@@ -583,6 +596,16 @@ func (c Config) SMTPPortNumber() int {
 // SMTPEgressPolicy is the egress policy of the SMTP connection. Load has already checked it.
 func (c Config) SMTPEgressPolicy() egress.Policy {
 	p, _ := egress.Parse(c.SMTPEgress)
+	return p
+}
+
+// IntegrationEgressPolicy is the egress policy of the calls to integrations' providers: what is
+// set, or "public" when nothing is. Load has already checked it.
+func (c Config) IntegrationEgressPolicy() egress.Policy {
+	if c.IntegrationEgress == "" {
+		return egress.MustParse("public")
+	}
+	p, _ := egress.Parse(c.IntegrationEgress)
 	return p
 }
 

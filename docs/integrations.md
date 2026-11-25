@@ -1,0 +1,170 @@
+# Integrations
+
+Design note: let a workspace connect an account at an outside service, so a personal app can
+one day ask for a payment link and be told the payment happened. An **integration** is the
+admin's connection to one provider account: its credentials, its limits and the spaces that
+may use it. The first kind of integration is **payments**; Stripe and Square are the first
+providers.
+
+This page describes what the server does today, the rules every later part keeps, and, marked
+as such, what is still to come. The routes are in [api.md](api.md#integrations).
+
+## What exists today
+
+- The **closed registry** of providers, in the server's code ([Providers](#providers)).
+- **Integrations**: an admin connects an account, changes it, switches it off and on, and
+  removes it, in Settings → Integrations or through the API.
+- **Sealed, write-only credentials** ([Secrets](#secrets)).
+- **Limits** the admin sets, never an app: the largest amount of one payment and the
+  currencies a payment may ask for.
+- **Allowed spaces**: which spaces' apps may use an integration. A new integration has none.
+- The **address of the webhook**, shown when the server has a public URL.
+- The **egress policy** for calls to providers and the **request builder** that pins each
+  adapter's hosts ([Egress](#egress)).
+- **Audit events** for every change ([audit.md](audit.md)).
+
+Nothing calls a provider yet: no payment link is made, no event is received and no app can
+name an integration. Those arrive as separate changes, in this order: the declaration in an
+app's definition with the admin's approval of its contract; the payment link; the webhook and
+its verification; applying a payment to a record; polling the provider for payments the
+webhook missed. The rules below are the ones those changes have to keep.
+
+## Concepts
+
+| Term | Meaning |
+|---|---|
+| **Provider** | An entry of the registry in Go (`stripe`, `square`): the secrets and settings it needs, its fixed API hosts, the kinds it implements. |
+| **Kind** | A closed class of operations an app may use. Today `payments`: create a payment link, and four normalized events (`payment.succeeded`, `payment.expired`, `payment.failed`, `payment.refunded`). |
+| **Integration** | A workspace admin's connection to one provider account: sealed secrets, settings, limits, the spaces that may use it, and a random `public_id` for its webhook address. |
+| **Slot** | (To come.) A name in an app's definition (`payments`) of a kind. It holds no id and no secret; the admin binds it to an integration when approving the app. |
+| **Contract** | (To come.) What the server derives from an app's draft for one slot: what it sends out and which fields the provider's events may write. An admin approves one by its hash. |
+
+An app will never name a provider or an integration, and nothing in a definition, an action or
+an effect will hold a URL, a header, a method, a body, a secret or a limit. The providers are a
+closed registry, not data: an operator, an admin or an app can't add one.
+
+## Providers
+
+The registry is the list in `internal/integrations/registry.go`. Each provider says:
+
+- its **kinds**: `payments` for both;
+- its **secrets**: Stripe takes an `api_key` (required) and a `webhook_secret`; Square takes
+  an `api_key` (required) and a `webhook_secret`. The webhook secret is optional because an
+  install without a public URL never receives a webhook and finds payments by polling;
+- its **settings**, which are short identifiers or choices, never a URL or free text: Stripe
+  has none; Square has `environment` (`sandbox` or `production`) and `location_id`;
+- how to **recognise its credentials**: a Stripe secret key starts with `sk_` or `rk_` (a
+  restricted key) and `test_` or `live_`, a webhook secret with `whsec_`. A publishable key
+  (`pk_`) is refused where a secret one is needed. The check is of the shape only, it never
+  asks Stripe, and an error never quotes the value;
+- its **mode**, `test` or `live`: read from the Stripe key's prefix and from Square's
+  `environment`, so the label can't disagree with the credentials;
+- its **API hosts**, constants of the adapter (`api.stripe.com`; Square's production host or
+  its sandbox host, by `environment`), and the **API version** it is written against, which
+  Stripe's adapter pins (`Stripe-Version`) and Square's adapter pins when it makes its first call.
+
+A new provider is a change of code and tests, never a migration: the `provider` column is
+validated in Go.
+
+## Secrets
+
+- Credentials are sealed with the server's key (`internal/serverkey`, AES-256-GCM) with
+  associated data that names the integration and the secret, so a sealed value copied to
+  another row or name doesn't open.
+- They are **write-only**. The API answers `"set"` or `"not set"` for each. A secret is
+  replaced by sending a new one and can't be read or removed; to stop using an account,
+  switch the integration off or remove it.
+- The clear value exists between the request and sealing, and between opening a sealed value
+  and a call to the provider. In code it is a `Secret`, which prints as `[redacted]` through
+  `fmt`, `slog`, JSON and `%#v`; the one way to the value is `Reveal()`. The audit log records
+  that a secret was set or changed, never what it is; errors carry codes, never a value or a
+  provider's text; a test greps the logs and every reply for the credentials it used.
+- A replaced webhook secret keeps verifying events for a day, so events the provider signed
+  before the change took effect there aren't refused.
+- **Backups.** A backup holds `server.key` next to the sealed values, so a backup is as
+  sensitive as the credentials. Restic encrypts it ([install.md](install.md#backups)). After
+  restoring to another machine, rotate each credential at its provider and here. If the key
+  is not the one that sealed a secret, a [check](#checking-a-connection) says so and the
+  admin sets it again.
+- Credentials never reach the agent, MCP, a record, a template, a log or an agent's
+  environment. No tool or route reads one.
+
+## Who may do what
+
+- Every route that manages integrations is **admin only** and **session only**. An access
+  token, and so MCP, is refused. The routes are all under the workspace of the request; an
+  integration of another workspace is `404`. Settings are the workspace's, not the server's,
+  so an admin of any workspace manages that workspace's integrations: there are no operator
+  routes.
+- An admin may allow their own private space and the workspace's shared spaces, whether or not
+  they are a member of them. Another person's private space, or another workspace's, is `404`
+  and nothing changes: the admin never needs to read it. The database refuses an allowance
+  across workspaces, too.
+- Anyone who can read a space sees which integrations are allowed there, with a name, kind and
+  status. No secret, no webhook address, no limit, no provider.
+- The name, provider and workspace of an integration, and its `public_id`, never change (the
+  database refuses it).
+
+## Limits
+
+The admin sets, on the integration, the largest amount of one payment (a whole number of the
+currency's smallest unit, up to a trillion) and 1 to 20 currencies from the server's closed list.
+The list has each currency's number of decimals, which is how a payment's amount is converted
+exactly, never rounded. These limits are not in a definition and no app can raise them.
+
+## Gates
+
+An integration is **usable** in a space when it exists in the workspace, isn't switched off and
+the space is allowed. `Service.Usable` is that question, and the code that calls a provider for
+an app asks it at every call, so switching an integration off or removing a space stops the
+app at once. Removing an integration is refused while an approval of an app names it.
+
+## Checking a connection
+
+`POST …/check` looks at what the server holds: the provider's required secrets are set and
+open with the server's key, and the settings are the provider's. It does **not** call the
+provider yet (`remote` is `false` in the answer). It answers `200` with `ok`, or with a code,
+and never with a provider's reply. The one harmless call that proves the credentials work
+comes with the first change that calls a provider.
+
+## Egress
+
+Calls to providers go through their own egress policy, `-integration-egress` /
+`TASKTO_INTEGRATION_EGRESS`, **`public` by default**: the address of every connection is
+checked after name resolution, so loopback, private, link-local and metadata addresses are
+refused, and a redirect is an answer, never followed.
+
+Besides, every adapter has constant API hosts, and the **request builder** (`Client`) refuses
+any URL whose host the adapter doesn't own (a look-alike, a sibling, a port, a plain `http`
+URL, an address, credentials in the URL) before the dialer is reached. Only the Go server
+calls providers; the agent runtime never does. Tests reach a fake provider through a
+constructor option that no setting can set.
+
+The policy never lists provider names: a listed name is trusted wherever it resolves, which
+would switch the address check off. `any` is there for a trusted network, and a server that
+reaches the internet only through a mandatory proxy needs it, since a restricted policy
+ignores the environment's proxy.
+
+## Webhooks and the public URL
+
+Each integration has a random 128-bit `public_id`, and its webhook address is
+`<public URL>/hooks/<public_id>`. The settings page shows it when the server has
+`-public-url`; without one it says that webhooks are unavailable and that payments are
+reconciled by polling. The id is the only thing in the path, and it holds no secret: the
+signature will be the authentication. The reverse proxy must forward `POST /hooks/*` (and
+nothing more has to be exposed for payments). Receiving, verifying and applying events is to come.
+
+## Testing against a real provider
+
+CI never calls a real provider. To try an integration by hand, use the provider's **test
+mode**, with test keys of your own that you create at the provider: connect them in Settings
+→ Integrations, allow a space, and run a check. Never use live keys to try the software, and
+never paste a key into an issue, a chat or a commit.
+
+## Not here, on purpose
+
+- **No model-authored HTTP call.** An app, an effect or an action never holds a URL.
+- **No card data in TaskTo.** Hosted checkout only; TaskTo will keep a link, a provider's
+  object id and the amount it asked for.
+- **No raw webhook bodies** will be stored, only normalized fields and a hash.
+- No refunds, payouts, subscriptions or customer records.

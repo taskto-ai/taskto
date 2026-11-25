@@ -474,6 +474,29 @@ func TestUpdateStatusDir(t *testing.T) {
 	}
 }
 
+// Integrations' providers are reached through addresses checked on every connection unless the
+// operator says otherwise: the default is "public", not "any".
+func TestIntegrationEgress(t *testing.T) {
+	cfg, err := Load(nil, env(nil), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := cfg.IntegrationEgressPolicy(); p.IsAny() || p.String() != "public" {
+		t.Fatalf("default policy = %q", p.String())
+	}
+	cfg, err = Load(nil, env(map[string]string{"TASKTO_INTEGRATION_EGRESS": "any"}), io.Discard)
+	if err != nil || !cfg.IntegrationEgressPolicy().IsAny() {
+		t.Fatalf("any: %v, %+v", err, cfg.IntegrationEgress)
+	}
+	cfg, err = Load([]string{"-integration-egress", "public"}, env(map[string]string{"TASKTO_INTEGRATION_EGRESS": "any"}), io.Discard)
+	if err != nil || cfg.IntegrationEgressPolicy().IsAny() {
+		t.Fatalf("the flag takes precedence: %v, %+v", err, cfg.IntegrationEgress)
+	}
+	if _, err := Load(nil, env(map[string]string{"TASKTO_INTEGRATION_EGRESS": "nonsense!"}), io.Discard); err == nil || !strings.Contains(err.Error(), "egress") {
+		t.Fatalf("a bad policy: %v", err)
+	}
+}
+
 func TestSMTPSettings(t *testing.T) {
 	cfg, err := Load(nil, env(map[string]string{ //nolint:gosec // G101: names of settings and a path, not credentials
 		"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "TaskTo <taskto@example.com>",

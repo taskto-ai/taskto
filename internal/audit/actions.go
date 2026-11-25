@@ -69,6 +69,14 @@ const (
 	SearchEmbeddingsChanged  = "search_embeddings_changed"
 	SearchConsentChanged     = "search_consent_changed"
 	DictationSettingsChanged = "dictation_settings_changed"
+
+	// Integrations: a workspace's connections to outside providers (internal/integrations).
+	IntegrationCreated       = "integration_created"
+	IntegrationUpdated       = "integration_updated"
+	IntegrationRemoved       = "integration_removed"
+	IntegrationDisabled      = "integration_disabled"
+	IntegrationEnabled       = "integration_enabled"
+	IntegrationSpacesChanged = "integration_spaces_changed"
 )
 
 // Target types.
@@ -80,4 +88,5 @@ const (
 	TargetSpace         = "space"
 	TargetProvider      = "provider_account"
 	TargetSharedAccount = "shared_cli_account"
+	TargetIntegration   = "integration"
 )

@@ -1,0 +1,918 @@
+package integrations
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"taskto.ai/taskto/internal/access"
+	"taskto.ai/taskto/internal/audit"
+	"taskto.ai/taskto/internal/audit/audittest"
+	"taskto.ai/taskto/internal/auth"
+	"taskto.ai/taskto/internal/db"
+	"taskto.ai/taskto/internal/serverkey"
+)
+
+var setupToken = auth.NewSetupToken()
+
+const password = "fake-password-for-tests"
+
+// The test credentials are made of parts, so no file holds a whole key-shaped string for a secret
+// scanner to find. They are obviously fake.
+var (
+	stripeTestKey  = "sk_" + "test_" + strings.Repeat("Fake", 6)
+	stripeOtherKey = "sk_" + "test_" + strings.Repeat("Rota", 6)
+	stripeLiveKey  = "sk_" + "live_" + strings.Repeat("Fake", 6)
+	stripeHook     = "whsec_" + strings.Repeat("Fake", 6)
+	stripeHookNew  = "whsec_" + strings.Repeat("Rota", 6)
+	squareToken    = "square-token-" + strings.Repeat("fake", 6)
+)
+
+type logs struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *logs) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *logs) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+type env struct {
+	t      *testing.T
+	db     *sql.DB
+	dir    string
+	key    *serverkey.Key
+	store  *Store
+	h      http.Handler
+	logs   *logs
+	bodies bytes.Buffer
+	mu     sync.Mutex
+}
+
+func newEnv(t *testing.T, publicURL string) *env {
+	t.Helper()
+	ctx := context.Background()
+	dir := t.TempDir()
+	sqlDB, err := db.Open(ctx, filepath.Join(dir, db.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if _, err := db.Migrate(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	key, err := serverkey.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &env{t: t, db: sqlDB, dir: dir, key: key, store: NewStore(sqlDB, key), logs: &logs{}}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	mux := http.NewServeMux()
+	a := auth.New(sqlDB, auth.Options{HashParams: auth.Params{Memory: 64, Time: 1, Threads: 1}, SetupToken: setupToken})
+	a.Routes(mux)
+	spaces := access.New(sqlDB, a)
+	spaces.Routes(mux)
+	New(e.store, Options{PublicURL: publicURL}).Routes(mux, a, spaces)
+	e.h = auth.CSRF(mux)
+	return e
+}
+
+type client struct {
+	e      *env
+	cookie *http.Cookie
+	id     int64
+	bearer string
+}
+
+func (c *client) do(method, path string, body any) *httptest.ResponseRecorder {
+	c.e.t.Helper()
+	var r *http.Request
+	if body == nil {
+		r = httptest.NewRequest(method, path, nil)
+		if method != http.MethodGet {
+			r.Header.Set("Content-Type", "application/json")
+		}
+	} else {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			c.e.t.Fatal(err)
+		}
+		r = httptest.NewRequest(method, path, bytes.NewReader(raw))
+		r.Header.Set("Content-Type", "application/json")
+	}
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	if c.bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+c.bearer)
+	} else if c.cookie != nil {
+		r.AddCookie(c.cookie)
+	}
+	rec := httptest.NewRecorder()
+	c.e.h.ServeHTTP(rec, r)
+	for _, ck := range rec.Result().Cookies() {
+		if ck.MaxAge >= 0 {
+			c.cookie = ck
+		}
+	}
+	c.e.mu.Lock()
+	c.e.bodies.Write(rec.Body.Bytes())
+	c.e.mu.Unlock()
+	return rec
+}
+
+func expect(t *testing.T, rec *httptest.ResponseRecorder, status int) {
+	t.Helper()
+	if rec.Code != status {
+		t.Fatalf("status = %d, want %d; body %s", rec.Code, status, rec.Body.String())
+	}
+}
+
+func expectCode(t *testing.T, rec *httptest.ResponseRecorder, status int, code string) {
+	t.Helper()
+	expect(t, rec, status)
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Code != code {
+		t.Fatalf("code = %q, want %q; body %s", body.Code, code, rec.Body.String())
+	}
+}
+
+func decode[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	return v
+}
+
+type me struct {
+	User       struct{ ID int64 } `json:"user"`
+	Workspaces []struct {
+		ID int64 `json:"id"`
+	} `json:"workspaces"`
+}
+
+// setup makes the owner (an operator: admin of the workspace setup made) and returns them and it.
+func (e *env) setup() (*client, int64) {
+	e.t.Helper()
+	c := &client{e: e}
+	rec := c.do(http.MethodPost, "/api/setup", map[string]string{
+		"email": "owner@example.com", "name": "Owner", "password": password, "workspace_name": "Home", "setup_token": setupToken,
+	})
+	expect(e.t, rec, http.StatusCreated)
+	m := decode[me](e.t, rec)
+	c.id = m.User.ID
+	return c, m.Workspaces[0].ID
+}
+
+func (e *env) invite(admin *client, ws int64, email, role string) *client {
+	e.t.Helper()
+	rec := admin.do(http.MethodPost, fmt.Sprintf("/api/workspaces/%d/invites", ws), map[string]string{"email": email, "role": role})
+	expect(e.t, rec, http.StatusCreated)
+	token := decode[struct {
+		Token string `json:"token"`
+	}](e.t, rec).Token
+	c := &client{e: e}
+	rec = c.do(http.MethodPost, "/api/invites/accept", map[string]string{"token": token, "name": email, "password": password})
+	expect(e.t, rec, http.StatusCreated)
+	c.id = decode[me](e.t, rec).User.ID
+	return c
+}
+
+// otherWorkspace is a second workspace with its own admin, who is not an operator: another
+// person's server-side tenant.
+func (e *env) otherWorkspace(owner *client) (*client, int64) {
+	e.t.Helper()
+	rec := owner.do(http.MethodPost, "/api/workspaces", map[string]string{"name": "Second"})
+	expect(e.t, rec, http.StatusCreated)
+	// The owner is that workspace's admin too; a stranger is a different account in it only.
+	return owner, decode[struct {
+		Workspace auth.Membership `json:"workspace"`
+	}](e.t, rec).Workspace.WorkspaceID
+}
+
+func wsPath(ws int64, rest string) string { return fmt.Sprintf("/api/workspaces/%d/%s", ws, rest) }
+
+// stripeBody is a valid create of a Stripe integration.
+func stripeBody(name string) map[string]any {
+	return map[string]any{
+		"provider": "stripe", "name": name, "display_name": "Stripe " + name,
+		"secrets":          map[string]string{"api_key": stripeTestKey, "webhook_secret": stripeHook},
+		"max_amount_minor": 500000, "currencies": []string{"eur", "USD"},
+	}
+}
+
+func squareBody(name string) map[string]any {
+	return map[string]any{
+		"provider": "square", "name": name,
+		"settings":         map[string]string{"environment": "sandbox", "location_id": "L123"},
+		"secrets":          map[string]string{"api_key": squareToken},
+		"max_amount_minor": 100000, "currencies": []string{"USD"},
+	}
+}
+
+func (e *env) create(c *client, ws int64, body map[string]any) Integration {
+	e.t.Helper()
+	rec := c.do(http.MethodPost, wsPath(ws, "integrations"), body)
+	expect(e.t, rec, http.StatusCreated)
+	return decode[Integration](e.t, rec)
+}
+
+func (e *env) events(ws int64, action string) []audit.Row {
+	e.t.Helper()
+	rows, err := audit.List(context.Background(), e.db, audit.Filter{Workspace: ws, Action: action, Limit: 100})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return rows
+}
+
+func TestCreateListGetAndLimits(t *testing.T) {
+	e := newEnv(t, "https://tasks.example.com/")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	if in.Provider != "stripe" || in.Kind != "payments" || in.Mode != "test" || in.Name != "main" || in.DisplayName != "Stripe main" ||
+		in.MaxAmountMinor != 500000 || strings.Join(in.Currencies, ",") != "EUR,USD" || in.Disabled || len(in.Spaces) != 0 {
+		t.Fatalf("created = %+v", in)
+	}
+	if in.Secrets["api_key"] != "set" || in.Secrets["webhook_secret"] != "set" {
+		t.Fatalf("secrets = %v", in.Secrets)
+	}
+	if in.WebhookURL == nil || !strings.HasPrefix(*in.WebhookURL, "https://tasks.example.com/hooks/") || len(*in.WebhookURL) != len("https://tasks.example.com/hooks/")+32 {
+		t.Fatalf("webhook_url = %v", in.WebhookURL)
+	}
+
+	sq := e.create(owner, ws, squareBody("shop"))
+	if sq.Mode != "test" || sq.Settings["location_id"] != "L123" || sq.Secrets["webhook_secret"] != "not set" {
+		t.Fatalf("square = %+v", sq)
+	}
+	live := squareBody("shop-live")
+	live["settings"] = map[string]string{"environment": "production", "location_id": "L9"}
+	if got := e.create(owner, ws, live); got.Mode != "live" {
+		t.Fatalf("production square mode = %q", got.Mode)
+	}
+
+	list := decode[struct {
+		Integrations []Integration `json:"integrations"`
+	}](t, owner.do(http.MethodGet, wsPath(ws, "integrations"), nil)).Integrations
+	if len(list) != 3 || list[0].ID != in.ID || list[1].ID != sq.ID {
+		t.Fatalf("list = %+v", list)
+	}
+	got := decode[Integration](t, owner.do(http.MethodGet, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), nil))
+	if got.ID != in.ID || got.Name != "main" {
+		t.Fatalf("get = %+v", got)
+	}
+	// The webhook address is the public URL's, and null without one.
+	e2 := newEnv(t, "")
+	owner2, ws2 := e2.setup()
+	if got := e2.create(owner2, ws2, stripeBody("main")); got.WebhookURL != nil {
+		t.Fatalf("webhook_url without a public URL = %v", got.WebhookURL)
+	}
+}
+
+func TestRegistryIsClosedAndListed(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	rec := owner.do(http.MethodGet, wsPath(ws, "integration-providers"), nil)
+	expect(t, rec, http.StatusOK)
+	reg := decode[Registry](t, rec)
+	if len(reg.Providers) != 2 || reg.Providers[0].ID != "stripe" || reg.Providers[1].ID != "square" ||
+		reg.WebhooksAvailable || reg.MaxAmountMinor != MaxAmountMinor || len(reg.Currencies) < 10 {
+		t.Fatalf("registry = %+v", reg)
+	}
+	expectCode(t, owner.do(http.MethodPost, wsPath(ws, "integrations"), map[string]any{
+		"provider": "paypal", "name": "x", "secrets": map[string]string{"api_key": stripeTestKey}, "max_amount_minor": 1, "currencies": []string{"USD"},
+	}), http.StatusBadRequest, "integration_provider_unknown")
+	// A provider id can't be changed afterwards, and the body is strict.
+	in := e.create(owner, ws, stripeBody("main"))
+	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+	expectCode(t, owner.do(http.MethodPatch, one, map[string]any{"provider": "square"}), http.StatusBadRequest, "invalid_json")
+	expectCode(t, owner.do(http.MethodPatch, one, map[string]any{"name": "other"}), http.StatusBadRequest, "invalid_json")
+	// Every registered provider is one the audit log can record, and a kind it has.
+	for _, p := range Providers() {
+		if err := audit.Record(context.Background(), e.db, audit.Event{Workspace: ws, Action: audit.IntegrationRemoved,
+			TargetType: audit.TargetIntegration, Details: audit.Details{"provider": p.ID(), "kind": p.Kinds()[0]}}); err != nil {
+			t.Errorf("the audit log can't record provider %s: %v", p.ID(), err)
+		}
+	}
+}
+
+func TestValidation(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	post := func(mutate func(map[string]any)) *httptest.ResponseRecorder {
+		body := stripeBody("main")
+		mutate(body)
+		return owner.do(http.MethodPost, wsPath(ws, "integrations"), body)
+	}
+	for name, tc := range map[string]struct {
+		mutate func(map[string]any)
+		status int
+		code   string
+	}{
+		"bad name":     {func(b map[string]any) { b["name"] = "Bad Name" }, 400, "integration_name_invalid"},
+		"empty name":   {func(b map[string]any) { b["name"] = "" }, 400, "integration_name_invalid"},
+		"long name":    {func(b map[string]any) { b["name"] = strings.Repeat("a", 41) }, 400, "integration_name_invalid"},
+		"display name": {func(b map[string]any) { b["display_name"] = strings.Repeat("a", 101) }, 400, "integration_display_name_invalid"},
+		"control name": {func(b map[string]any) { b["display_name"] = "a\x07b" }, 400, "integration_display_name_invalid"},
+		"no key":       {func(b map[string]any) { b["secrets"] = map[string]string{} }, 400, "integration_secret_required"},
+		"publishable key": {func(b map[string]any) {
+			b["secrets"] = map[string]string{"api_key": "pk_" + "test_" + strings.Repeat("Fake", 6)}
+		}, 400, "integration_secret_invalid"},
+		"bad hook secret": {func(b map[string]any) {
+			b["secrets"] = map[string]string{"api_key": stripeTestKey, "webhook_secret": "nope"}
+		}, 400, "integration_secret_invalid"},
+		"extra secret":    {func(b map[string]any) { b["secrets"] = map[string]string{"api_key": stripeTestKey, "password": "x"} }, 400, "bad_request"},
+		"extra setting":   {func(b map[string]any) { b["settings"] = map[string]string{"base_url": "https://evil.example"} }, 400, "integration_setting_invalid"},
+		"no ceiling":      {func(b map[string]any) { delete(b, "max_amount_minor") }, 400, "integration_limit_invalid"},
+		"negative":        {func(b map[string]any) { b["max_amount_minor"] = -5 }, 400, "integration_limit_invalid"},
+		"too big":         {func(b map[string]any) { b["max_amount_minor"] = MaxAmountMinor + 1 }, 400, "integration_limit_invalid"},
+		"no currencies":   {func(b map[string]any) { b["currencies"] = []string{} }, 400, "integration_currency_invalid"},
+		"unknown money":   {func(b map[string]any) { b["currencies"] = []string{"EUR", "XXX"} }, 400, "integration_currency_invalid"},
+		"duplicate money": {func(b map[string]any) { b["currencies"] = []string{"EUR", "eur"} }, 400, "integration_currency_invalid"},
+		"strict body":     {func(b map[string]any) { b["admin"] = true }, 400, "invalid_json"},
+	} {
+		t.Run(name, func(t *testing.T) { expectCode(t, post(tc.mutate), tc.status, tc.code) })
+	}
+	// Square needs its settings, as identifiers and choices: never a URL.
+	for name, settings := range map[string]map[string]string{
+		"none":          nil,
+		"no location":   {"environment": "sandbox"},
+		"bad choice":    {"environment": "moon", "location_id": "L1"},
+		"a url":         {"environment": "sandbox", "location_id": "https://evil.example/x"},
+		"a host":        {"environment": "sandbox", "location_id": "evil.example:8080"},
+		"unknown field": {"environment": "sandbox", "location_id": "L1", "base_url": "x"},
+	} {
+		t.Run("square "+name, func(t *testing.T) {
+			body := squareBody("shop")
+			body["settings"] = settings
+			expectCode(t, owner.do(http.MethodPost, wsPath(ws, "integrations"), body), http.StatusBadRequest, "integration_setting_invalid")
+		})
+	}
+	// A rejected request leaves nothing behind, and no event.
+	var n int
+	if err := e.db.QueryRow(`SELECT count(*) FROM integrations`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("integrations after refused creates = %d, %v", n, err)
+	}
+	if got := e.events(ws, audit.IntegrationCreated); len(got) != 0 {
+		t.Fatalf("events after refused creates = %+v", got)
+	}
+	// Names are unique per workspace, and the count is limited.
+	e.create(owner, ws, stripeBody("main"))
+	expectCode(t, owner.do(http.MethodPost, wsPath(ws, "integrations"), stripeBody("main")), http.StatusConflict, "integration_name_taken")
+	for i := 1; i < maxIntegrations; i++ {
+		e.create(owner, ws, stripeBody(fmt.Sprintf("n%d", i)))
+	}
+	expectCode(t, owner.do(http.MethodPost, wsPath(ws, "integrations"), stripeBody("one-more")), http.StatusConflict, "too_many_integrations")
+}
+
+func TestUpdateReplacesAndRotates(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+
+	rec := owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments", "max_amount_minor": 20000, "currencies": []string{"BRL"}})
+	expect(t, rec, http.StatusOK)
+	got := decode[Integration](t, rec)
+	if got.DisplayName != "Payments" || got.MaxAmountMinor != 20000 || strings.Join(got.Currencies, ",") != "BRL" || got.Mode != "test" {
+		t.Fatalf("updated = %+v", got)
+	}
+	// Replacing the key with a live one moves the integration to live mode.
+	rec = owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeLiveKey}})
+	expect(t, rec, http.StatusOK)
+	if got := decode[Integration](t, rec); got.Mode != "live" || got.Secrets["api_key"] != "set" {
+		t.Fatalf("after a live key = %+v", got)
+	}
+	// A refused edit changes nothing: the bad key doesn't half-apply the display name.
+	expectCode(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Half", "secrets": map[string]string{"api_key": "nope"}}),
+		http.StatusBadRequest, "integration_secret_invalid")
+	expectCode(t, owner.do(http.MethodPatch, one, map[string]any{"currencies": []string{}}), http.StatusBadRequest, "integration_currency_invalid")
+	expectCode(t, owner.do(http.MethodPatch, one, map[string]any{"max_amount_minor": 0}), http.StatusBadRequest, "integration_limit_invalid")
+	if got := decode[Integration](t, owner.do(http.MethodGet, one, nil)); got.DisplayName != "Payments" {
+		t.Fatalf("a refused edit changed the integration: %+v", got)
+	}
+
+	// A new webhook secret keeps the old one as the previous, for the overlap; both open.
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"webhook_secret": stripeHookNew}}), http.StatusOK)
+	creds, err := e.store.credentials(context.Background(), ws, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.WebhookSecret.Reveal() != stripeHookNew || creds.WebhookSecretPrevious.Reveal() != stripeHook || creds.APIKey.Reveal() != stripeLiveKey {
+		t.Fatal("the credentials aren't the ones set")
+	}
+	// After the overlap the previous secret is gone.
+	e.store.now = func() time.Time { return time.Now().Add(previousOverlap + time.Minute) }
+	creds, err = e.store.credentials(context.Background(), ws, in.ID)
+	if err != nil || creds.WebhookSecretPrevious != "" || creds.WebhookSecret.Reveal() != stripeHookNew {
+		t.Fatalf("after the overlap = %v, %v", creds.WebhookSecretPrevious, err)
+	}
+	e.store.now = time.Now
+
+	// Disabling and enabling.
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"disabled": true}), http.StatusOK)
+	if got := decode[Integration](t, owner.do(http.MethodGet, one, nil)); !got.Disabled || got.DisabledAt == nil {
+		t.Fatalf("disabled = %+v", got)
+	}
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"disabled": true}), http.StatusOK) // already: no event
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"disabled": false}), http.StatusOK)
+	if got := decode[Integration](t, owner.do(http.MethodGet, one, nil)); got.Disabled {
+		t.Fatalf("enabled = %+v", got)
+	}
+
+	// Square: changing the environment changes the mode, and the settings are replaced whole.
+	sq := e.create(owner, ws, squareBody("shop"))
+	rec = owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", sq.ID)),
+		map[string]any{"settings": map[string]string{"environment": "production", "location_id": "L2"}})
+	expect(t, rec, http.StatusOK)
+	if got := decode[Integration](t, rec); got.Mode != "live" || got.Settings["location_id"] != "L2" {
+		t.Fatalf("square updated = %+v", got)
+	}
+	expectCode(t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", sq.ID)), map[string]any{"settings": map[string]string{}}),
+		http.StatusBadRequest, "integration_setting_invalid")
+}
+
+func TestSecretsNeverLeave(t *testing.T) {
+	e := newEnv(t, "https://tasks.example.com")
+	owner, ws := e.setup()
+	member := e.invite(owner, ws, "member@example.com", "member")
+	in := e.create(owner, ws, stripeBody("main"))
+	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+	owner.do(http.MethodGet, wsPath(ws, "integrations"), nil)
+	owner.do(http.MethodGet, one, nil)
+	owner.do(http.MethodPost, one+"/check", nil)
+	// Refused and invalid writes that carry secrets.
+	member.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey}})
+	member.do(http.MethodPost, wsPath(ws, "integrations"), stripeBody("sneaky"))
+	owner.do(http.MethodPost, wsPath(ws, "integrations"), map[string]any{"provider": "stripe", "name": "Bad Name", "secrets": map[string]string{"api_key": stripeOtherKey}})
+	owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey, "webhook_secret": "not-a-hook-secret-zzzz"}}) //nolint:gosec // G101: obviously fake
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"api_key": stripeOtherKey, "webhook_secret": stripeHookNew}}), http.StatusOK)
+	// A body that isn't JSON, with a secret in it: the error mustn't quote it.
+	rec := owner.do(http.MethodPatch, one, map[string]any{"secrets": []string{stripeLiveKey}})
+	expect(t, rec, http.StatusBadRequest)
+
+	var stored []byte
+	rows, err := e.db.Query(`SELECT sealed FROM integration_secrets`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		if err := rows.Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range []string{stripeTestKey, stripeOtherKey, stripeHook, stripeHookNew} {
+			if bytes.Contains(stored, []byte(s)) {
+				t.Errorf("the database holds a secret in clear")
+			}
+		}
+	}
+	_ = rows.Close()
+	e.mu.Lock()
+	bodies := e.bodies.String()
+	e.mu.Unlock()
+	secrets := map[string]string{"test key": stripeTestKey, "rotated key": stripeOtherKey, "live key": stripeLiveKey, "webhook secret": stripeHook, "new webhook secret": stripeHookNew}
+	for name, text := range map[string]string{"a response": bodies, "the log": e.logs.String()} {
+		for what, s := range secrets {
+			if strings.Contains(text, s) {
+				t.Errorf("%s contains the %s", name, what)
+			}
+		}
+	}
+	audittest.NoSecrets(t, e.db, secrets)
+
+	// The opened credentials print, log and encode as redacted.
+	creds, err := e.store.credentials(context.Background(), ws, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(creds) //nolint:gosec // G117: the point of the test: a Credentials never encodes a secret
+	var out bytes.Buffer
+	l := slog.New(slog.NewTextHandler(&out, nil))
+	l.Info("credentials", "creds", creds, "key", creds.APIKey)
+	for how, text := range map[string]string{
+		"%v": fmt.Sprintf("%v", creds), "%+v": fmt.Sprintf("%+v", creds), "%#v": fmt.Sprintf("%#v", creds),
+		"%s": fmt.Sprintf("%s", creds.APIKey), "json": string(raw), "slog": out.String(),
+	} {
+		for what, s := range secrets {
+			if strings.Contains(text, s) {
+				t.Errorf("formatting credentials with %s shows the %s", how, what)
+			}
+		}
+	}
+	if creds.APIKey.Reveal() != stripeOtherKey {
+		t.Fatal("Reveal doesn't give the key")
+	}
+}
+
+func TestSealedSecretsAreBoundToTheirRow(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	a := e.create(owner, ws, stripeBody("a"))
+	b := e.create(owner, ws, stripeBody("b"))
+	// Copy a's sealed key over b's: it is sealed for a's row, so b's doesn't open.
+	if _, err := e.db.Exec(`UPDATE integration_secrets SET sealed = (SELECT sealed FROM integration_secrets WHERE integration_id = ? AND name = 'api_key')
+		WHERE integration_id = ? AND name = 'api_key'`, a.ID, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.credentials(context.Background(), ws, b.ID); err == nil {
+		t.Fatal("a sealed key copied to another integration opened")
+	}
+	rec := owner.do(http.MethodPost, wsPath(ws, fmt.Sprintf("integrations/%d/check", b.ID)), nil)
+	expect(t, rec, http.StatusOK)
+	if got := decode[CheckResult](t, rec); got.OK || got.Code != "integration_secret_unreadable" || got.Params["secret"] != "api_key" {
+		t.Fatalf("check = %+v", got)
+	}
+	// A key sealed by another server key doesn't open either (a backup restored elsewhere).
+	other, err := serverkey.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.store.key = other
+	if got := decode[CheckResult](t, owner.do(http.MethodPost, wsPath(ws, fmt.Sprintf("integrations/%d/check", a.ID)), nil)); got.OK || got.Code != "integration_secret_unreadable" {
+		t.Fatalf("check with another server key = %+v", got)
+	}
+}
+
+func TestCheck(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	rec := owner.do(http.MethodPost, wsPath(ws, fmt.Sprintf("integrations/%d/check", in.ID)), nil)
+	expect(t, rec, http.StatusOK)
+	if got := decode[CheckResult](t, rec); !got.OK || got.Remote {
+		t.Fatalf("check = %+v", got)
+	}
+	if _, err := e.db.Exec(`DELETE FROM integration_secrets WHERE integration_id = ? AND name = 'api_key'`, in.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := decode[CheckResult](t, owner.do(http.MethodPost, wsPath(ws, fmt.Sprintf("integrations/%d/check", in.ID)), nil)); got.OK || got.Code != "integration_secret_required" {
+		t.Fatalf("check without a key = %+v", got)
+	}
+}
+
+func TestRemove(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+	// Something that names the integration with ON DELETE RESTRICT (a later migration's
+	// approvals) makes the delete a 409 and keeps everything.
+	if _, err := e.db.Exec(`CREATE TABLE guard (integration_id INTEGER REFERENCES integrations (id) ON DELETE RESTRICT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`INSERT INTO guard VALUES (?)`, in.ID); err != nil {
+		t.Fatal(err)
+	}
+	expectCode(t, owner.do(http.MethodDelete, one, nil), http.StatusConflict, "integration_in_use")
+	expect(t, owner.do(http.MethodGet, one, nil), http.StatusOK)
+	if got := e.events(ws, audit.IntegrationRemoved); len(got) != 0 {
+		t.Fatalf("a refused removal recorded %+v", got)
+	}
+	if _, err := e.db.Exec(`DELETE FROM guard`); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, owner.do(http.MethodDelete, one, nil), http.StatusNoContent)
+	expectCode(t, owner.do(http.MethodGet, one, nil), http.StatusNotFound, "integration_not_found")
+	expectCode(t, owner.do(http.MethodDelete, one, nil), http.StatusNotFound, "integration_not_found")
+	var n int
+	if err := e.db.QueryRow(`SELECT (SELECT count(*) FROM integration_secrets) + (SELECT count(*) FROM integration_spaces)`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("secrets and spaces left after a removal = %d, %v", n, err)
+	}
+	expectCode(t, owner.do(http.MethodGet, wsPath(ws, "integrations/abc"), nil), http.StatusNotFound, "integration_not_found")
+}
+
+func (e *env) sharedSpace(c *client, ws int64, name string) int64 {
+	e.t.Helper()
+	rec := c.do(http.MethodPost, wsPath(ws, "spaces"), map[string]string{"name": name})
+	expect(e.t, rec, http.StatusCreated)
+	return decode[struct {
+		ID int64 `json:"id"`
+	}](e.t, rec).ID
+}
+
+func (e *env) privateSpace(c *client, ws int64) int64 {
+	e.t.Helper()
+	rec := c.do(http.MethodGet, wsPath(ws, "spaces"), nil)
+	expect(e.t, rec, http.StatusOK)
+	for _, s := range decode[struct {
+		Spaces []access.Space `json:"spaces"`
+	}](e.t, rec).Spaces {
+		if s.Kind == access.Private {
+			return s.ID
+		}
+	}
+	e.t.Fatal("no private space")
+	return 0
+}
+
+func TestSpacesAndUsable(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	member := e.invite(owner, ws, "member@example.com", "member")
+	in := e.create(owner, ws, stripeBody("main"))
+	shared := e.sharedSpace(owner, ws, "Shop")
+	mine := e.privateSpace(owner, ws)
+	theirs := e.privateSpace(member, ws)
+	spaces := wsPath(ws, fmt.Sprintf("integrations/%d/spaces", in.ID))
+	ctx := context.Background()
+
+	if ok, err := e.store.usable(ctx, ws, in.ID, shared); err != nil || ok {
+		t.Fatalf("usable before allowing = %v, %v", ok, err)
+	}
+	rec := owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared, mine, shared}})
+	expect(t, rec, http.StatusOK)
+	if got := decode[Integration](t, rec); len(got.Spaces) != 2 {
+		t.Fatalf("spaces = %v", got.Spaces)
+	}
+	if ok, err := e.store.usable(ctx, ws, in.ID, shared); err != nil || !ok {
+		t.Fatalf("usable after allowing = %v, %v", ok, err)
+	}
+	// An admin can't allow another person's private space: it is "not found", as it is everywhere.
+	expectCode(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{shared, theirs}}), http.StatusNotFound, "space_not_found")
+	expectCode(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{999999}}), http.StatusNotFound, "space_not_found")
+	expectCode(t, owner.do(http.MethodPut, spaces, map[string]any{}), http.StatusBadRequest, "bad_request")
+	if got := decode[Integration](t, owner.do(http.MethodGet, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), nil)); len(got.Spaces) != 2 {
+		t.Fatalf("a refused change moved the spaces: %v", got.Spaces)
+	}
+	// Disabling stops its use everywhere; removing a space stops it there.
+	expect(t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), map[string]any{"disabled": true}), http.StatusOK)
+	if ok, _ := e.store.usable(ctx, ws, in.ID, shared); ok {
+		t.Fatal("a disabled integration is usable")
+	}
+	expect(t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), map[string]any{"disabled": false}), http.StatusOK)
+	expect(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{mine}}), http.StatusOK)
+	if ok, _ := e.store.usable(ctx, ws, in.ID, shared); ok {
+		t.Fatal("an integration is usable in a space it was taken from")
+	}
+	if ok, _ := e.store.usable(ctx, ws+1000, in.ID, mine); ok {
+		t.Fatal("an integration is usable by another workspace's id")
+	}
+	// The schema keeps a space in the integration's workspace even if code didn't.
+	otherWs, err := e.db.Exec(`INSERT INTO workspaces (name) VALUES ('Other')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ow, _ := otherWs.LastInsertId()
+	sp, err := e.db.Exec(`INSERT INTO spaces (workspace_id, kind, name) VALUES (?, 'shared', 'x')`, ow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spID, _ := sp.LastInsertId()
+	if _, err := e.db.Exec(`INSERT INTO integration_spaces (integration_id, space_id) VALUES (?, ?)`, in.ID, spID); err == nil {
+		t.Fatal("the schema allowed a space of another workspace")
+	}
+}
+
+func TestSpaceReadersSeeNoSecrets(t *testing.T) {
+	e := newEnv(t, "https://tasks.example.com")
+	owner, ws := e.setup()
+	member := e.invite(owner, ws, "member@example.com", "member")
+	outsider := e.invite(owner, ws, "outsider@example.com", "member")
+	in := e.create(owner, ws, stripeBody("main"))
+	hidden := e.create(owner, ws, stripeBody("hidden"))
+	shared := e.sharedSpace(owner, ws, "Shop")
+	expect(t, owner.do(http.MethodPost, wsPath(ws, fmt.Sprintf("spaces/%d/members", shared)), map[string]any{"user_id": member.id, "role": "viewer"}), http.StatusNoContent)
+	expect(t, owner.do(http.MethodPut, wsPath(ws, fmt.Sprintf("integrations/%d/spaces", in.ID)), map[string]any{"spaces": []int64{shared}}), http.StatusOK)
+	expect(t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", hidden.ID)), map[string]any{"display_name": "Hidden"}), http.StatusOK)
+
+	path := wsPath(ws, fmt.Sprintf("spaces/%d/integrations", shared))
+	rec := member.do(http.MethodGet, path, nil)
+	expect(t, rec, http.StatusOK)
+	got := decode[struct {
+		Integrations []SpaceIntegration `json:"integrations"`
+	}](t, rec).Integrations
+	if len(got) != 1 || got[0].ID != in.ID || got[0].Kind != "payments" || got[0].Status != "active" || got[0].Name != "main" {
+		t.Fatalf("a member's list = %+v", got)
+	}
+	for _, leak := range []string{"secret", "webhook", "hooks", "public", "api_key", "mode", "currencies", "provider"} {
+		if strings.Contains(strings.ToLower(rec.Body.String()), leak) {
+			t.Errorf("the space's list shows %q: %s", leak, rec.Body.String())
+		}
+	}
+	// A disabled integration shows as such.
+	expect(t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), map[string]any{"disabled": true}), http.StatusOK)
+	if got := decode[struct {
+		Integrations []SpaceIntegration `json:"integrations"`
+	}](t, member.do(http.MethodGet, path, nil)).Integrations; got[0].Status != "disabled" {
+		t.Fatalf("status = %q", got[0].Status)
+	}
+	// Someone who can't read the space gets what everyone gets for a space they can't open: 404.
+	expectCode(t, outsider.do(http.MethodGet, path, nil), http.StatusNotFound, "space_not_found")
+	expectCode(t, (&client{e: e}).do(http.MethodGet, path, nil), http.StatusUnauthorized, "not_logged_in")
+	// Another workspace's admin can't read it through their own workspace's id either.
+	_, ws2 := e.otherWorkspace(owner)
+	expectCode(t, owner.do(http.MethodGet, wsPath(ws2, fmt.Sprintf("spaces/%d/integrations", shared)), nil), http.StatusNotFound, "space_not_found")
+}
+
+// Every admin route: who may use it. A member and an outsider are refused, an access token is
+// refused even for an admin, and another workspace's admin sees "not found".
+func TestIsolation(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	member := e.invite(owner, ws, "member@example.com", "member")
+	in := e.create(owner, ws, stripeBody("main"))
+	// A second workspace, with an admin who belongs to it only.
+	_, ws2 := e.otherWorkspace(owner)
+	admin2 := e.invite(owner, ws2, "admin2@example.com", "admin")
+	in2 := e.create(owner, ws2, stripeBody("main")) // the same name: names are per workspace
+
+	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+	routes := []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodGet, wsPath(ws, "integrations"), nil},
+		{http.MethodGet, wsPath(ws, "integration-providers"), nil},
+		{http.MethodPost, wsPath(ws, "integrations"), stripeBody("another")},
+		{http.MethodGet, one, nil},
+		{http.MethodPatch, one, map[string]any{"display_name": "Mine now"}},
+		{http.MethodDelete, one, nil},
+		{http.MethodPut, one + "/spaces", map[string]any{"spaces": []int64{}}},
+		{http.MethodPost, one + "/check", nil},
+	}
+	// An access token of an admin, which every route refuses.
+	rec := owner.do(http.MethodPost, wsPath(ws, "tokens"), map[string]any{"name": "t"})
+	expect(t, rec, http.StatusCreated)
+	token := &client{e: e, bearer: decode[auth.TokenCreated](t, rec).Secret}
+
+	for _, r := range routes {
+		label := r.method + " " + r.path
+		expectCode(t, member.do(r.method, r.path, r.body), http.StatusForbidden, "admin_only")
+		if rec := token.do(r.method, r.path, r.body); rec.Code != http.StatusForbidden {
+			t.Errorf("%s with an access token = %d, want 403", label, rec.Code)
+		}
+		if rec := (&client{e: e}).do(r.method, r.path, r.body); rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s without a session = %d, want 401", label, rec.Code)
+		}
+		// The other workspace's admin, who is no member here.
+		if rec := admin2.do(r.method, r.path, r.body); rec.Code != http.StatusNotFound {
+			t.Errorf("%s as another workspace's admin = %d, want 404", label, rec.Code)
+		}
+	}
+	// Reaching for an integration of this workspace through the other's path is "not found".
+	other := wsPath(ws2, fmt.Sprintf("integrations/%d", in.ID))
+	for _, r := range []struct{ method, path string }{
+		{http.MethodGet, other}, {http.MethodPatch, other}, {http.MethodDelete, other}, {http.MethodPut, other + "/spaces"}, {http.MethodPost, other + "/check"},
+	} {
+		var body any
+		switch r.method {
+		case http.MethodPatch:
+			body = map[string]any{"display_name": "stolen"}
+		case http.MethodPut:
+			body = map[string]any{"spaces": []int64{}}
+		}
+		expectCode(t, admin2.do(r.method, r.path, body), http.StatusNotFound, "integration_not_found")
+	}
+	if got := decode[Integration](t, owner.do(http.MethodGet, one, nil)); got.DisplayName != "Stripe main" {
+		t.Fatalf("another workspace changed the integration: %+v", got)
+	}
+	// Each workspace lists only its own.
+	list := decode[struct {
+		Integrations []Integration `json:"integrations"`
+	}](t, admin2.do(http.MethodGet, wsPath(ws2, "integrations"), nil)).Integrations
+	if len(list) != 1 || list[0].ID != in2.ID {
+		t.Fatalf("the other workspace's list = %+v", list)
+	}
+	// And can't allow this workspace's spaces for theirs.
+	sharedHere := e.sharedSpace(owner, ws, "Shop")
+	expectCode(t, admin2.do(http.MethodPut, wsPath(ws2, fmt.Sprintf("integrations/%d/spaces", in2.ID)), map[string]any{"spaces": []int64{sharedHere}}),
+		http.StatusNotFound, "space_not_found")
+	// Nothing above changed a thing in the first workspace's log beyond its own creation.
+	if got := e.events(ws, audit.IntegrationUpdated); len(got) != 0 {
+		t.Fatalf("refused requests recorded %+v", got)
+	}
+}
+
+// An admin of a workspace that setup didn't make is not an operator, and manages their own
+// workspace's integrations all the same: they belong to the workspace, not to the server.
+func TestAdminsNeedNotBeOperators(t *testing.T) {
+	e := newEnv(t, "")
+	owner, _ := e.setup()
+	_, ws2 := e.otherWorkspace(owner)
+	admin2 := e.invite(owner, ws2, "admin2@example.com", "admin")
+	// The server-wide routes are the operator's, which admin2 isn't; this one isn't.
+	in := e.create(admin2, ws2, stripeBody("main"))
+	expect(t, admin2.do(http.MethodPatch, wsPath(ws2, fmt.Sprintf("integrations/%d", in.ID)), map[string]any{"display_name": "Mine"}), http.StatusOK)
+	expect(t, admin2.do(http.MethodDelete, wsPath(ws2, fmt.Sprintf("integrations/%d", in.ID)), nil), http.StatusNoContent)
+}
+
+func TestAudit(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+
+	created := e.events(ws, audit.IntegrationCreated)
+	if len(created) != 1 {
+		t.Fatalf("created = %+v", created)
+	}
+	c := created[0]
+	if *c.ActorID != owner.id || *c.TargetID != in.ID || c.TargetType != audit.TargetIntegration || c.TargetCreatedAt == nil ||
+		c.Details["provider"] != "stripe" || c.Details["kind"] != "payments" || c.Details["mode"] != "test" ||
+		c.Details["api_key_set"] != true || c.Details["webhook_secret_set"] != true || len(c.Details) != 5 {
+		t.Fatalf("created = %+v", c)
+	}
+
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments", "max_amount_minor": 1000, "secrets": map[string]string{"api_key": stripeLiveKey}}), http.StatusOK)
+	updated := e.events(ws, audit.IntegrationUpdated)
+	if len(updated) != 1 {
+		t.Fatalf("updated = %+v", updated)
+	}
+	u := updated[0]
+	if fmt.Sprint(u.Details["fields"]) != "[api_key display_name max_amount]" || u.Details["api_key_changed"] != true ||
+		u.Details["webhook_secret_changed"] != false || u.Details["mode"] != "live" || u.Details["provider"] != "stripe" {
+		t.Fatalf("updated = %+v", u)
+	}
+	// A request that changes nothing records nothing.
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments", "currencies": []string{"USD", "EUR"}}), http.StatusOK)
+	if got := e.events(ws, audit.IntegrationUpdated); len(got) != 1 {
+		// The currency order is a change: [EUR USD] became [USD EUR]. Say so rather than hide it.
+		if len(got) != 2 || fmt.Sprint(got[0].Details["fields"]) != "[currencies]" {
+			t.Fatalf("updated after a reorder = %+v", got)
+		}
+	}
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments"}), http.StatusOK)
+	n := len(e.events(ws, audit.IntegrationUpdated))
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments"}), http.StatusOK)
+	if len(e.events(ws, audit.IntegrationUpdated)) != n {
+		t.Fatal("an edit that changed nothing recorded an event")
+	}
+
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"disabled": true}), http.StatusOK)
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"disabled": false}), http.StatusOK)
+	if d, en := e.events(ws, audit.IntegrationDisabled), e.events(ws, audit.IntegrationEnabled); len(d) != 1 || len(en) != 1 || *d[0].TargetID != in.ID {
+		t.Fatalf("disabled = %+v, enabled = %+v", d, en)
+	}
+
+	shared := e.sharedSpace(owner, ws, "Shop")
+	expect(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared}}), http.StatusOK)
+	expect(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared}}), http.StatusOK) // the same: no event
+	expect(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{}}), http.StatusOK)
+	sc := e.events(ws, audit.IntegrationSpacesChanged)
+	if len(sc) != 2 || sc[1].Details["added"] != float64(1) || sc[1].Details["removed"] != float64(0) || sc[0].Details["removed"] != float64(1) {
+		t.Fatalf("spaces changed = %+v", sc)
+	}
+
+	expect(t, owner.do(http.MethodDelete, one, nil), http.StatusNoContent)
+	removed := e.events(ws, audit.IntegrationRemoved)
+	if len(removed) != 1 || *removed[0].TargetID != in.ID || removed[0].Details["provider"] != "stripe" || removed[0].TargetCreatedAt == nil ||
+		*removed[0].TargetCreatedAt != *c.TargetCreatedAt {
+		t.Fatalf("removed = %+v", removed)
+	}
+	// None of it has a name or a secret in it.
+	audittest.NoSecrets(t, e.db, map[string]string{"key": stripeTestKey, "live key": stripeLiveKey, "webhook": stripeHook, "name": "Payments"})
+}
+
+func TestAuditShowsTheIntegrationByName(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	page, err := audit.ListWorkspace(context.Background(), e.db, ws, audit.Query{Action: audit.IntegrationCreated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 || page.Events[0].TargetName == nil || *page.Events[0].TargetName != "Stripe main" || *page.Events[0].TargetID != in.ID {
+		t.Fatalf("events = %+v", page.Events)
+	}
+	// Once removed, the name is gone from the log's view, not kept.
+	expect(t, owner.do(http.MethodDelete, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), nil), http.StatusNoContent)
+	page, err = audit.ListWorkspace(context.Background(), e.db, ws, audit.Query{Action: audit.IntegrationCreated})
+	if err != nil || page.Events[0].TargetName != nil {
+		t.Fatalf("after removal = %+v, %v", page.Events, err)
+	}
+}
+
+func TestMigrationHasNoLeftoverDefaults(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	// The name, provider, public id and workspace never change, whatever updates them.
+	for _, col := range []string{"name = 'x'", "provider = 'square'", "public_id = '" + strings.Repeat("a", 32) + "'", "workspace_id = workspace_id + 1"} {
+		if _, err := e.db.Exec(`UPDATE integrations SET `+col+` WHERE id = ?`, in.ID); err == nil { //nolint:gosec // G202: col is from the list above
+			t.Errorf("UPDATE integrations SET %s succeeded", col)
+		}
+	}
+}
