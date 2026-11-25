@@ -67,6 +67,7 @@
   }
 
   .ui-dialog-title {
+    text-wrap: balance;
     margin: 0;
     font: var(--type-title);
     letter-spacing: var(--tracking-display);
@@ -74,6 +75,7 @@
   }
 
   .ui-dialog-description {
+    text-wrap: pretty;
     margin: 0;
     color: var(--color-text-muted);
   }

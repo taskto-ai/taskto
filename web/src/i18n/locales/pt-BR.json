@@ -2761,7 +2761,8 @@
       "filters": "Filtros",
       "labels": "Etiquetas",
       "assignedToMe": "Atribuídos a mim",
-      "addColumn": "Adicionar uma coluna"
+      "addColumn": "Adicionar uma coluna",
+      "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo"
     }
   }
 }

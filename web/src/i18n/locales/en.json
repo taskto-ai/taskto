@@ -2740,7 +2740,8 @@
       "filters": "Filters",
       "labels": "Labels",
       "assignedToMe": "Assigned to me",
-      "addColumn": "Add a column"
+      "addColumn": "Add a column",
+      "headings": "Sizes from the type roles: the display face from 20px up, Inter below"
     }
   }
 }
