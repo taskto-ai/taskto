@@ -134,6 +134,10 @@ type Service struct {
 	workCtx   context.Context
 	stopWork  context.CancelFunc
 
+	// The limits of invitations sent by email (mailer.go): per admin, and per invited address.
+	invitePerAdmin     *limiter
+	invitePerRecipient *limiter
+
 	sso *sso
 
 	// live is the connections that end with their login (WatchSession).
@@ -194,6 +198,8 @@ func New(sqlDB *sql.DB, opts Options) *Service {
 	s.resetStarts = newBucket(resetStartBurst, resetStartEvery, now)
 	s.mailSlots = make(chan struct{}, mailConcurrency)
 	s.workCtx, s.stopWork = context.WithCancel(context.Background())
+	s.invitePerAdmin = newLimiter(inviteAdminAttempts, inviteWindow, now)
+	s.invitePerRecipient = newLimiter(inviteRecipientAttempts, inviteWindow, now)
 	s.sso = newSSO(opts.SSO, now)
 	return s
 }
