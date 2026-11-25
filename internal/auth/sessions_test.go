@@ -564,6 +564,29 @@ func TestWatchSessionEndedBeforeItIsRegistered(t *testing.T) {
 	}
 }
 
+// When the look after the registration fails for a reason other than "no such login", the new
+// connection is refused: a revocation committed just before it could not be ruled out.
+func TestWatchSessionRefusedWhenItsVerificationFails(t *testing.T) {
+	e := newEnv(t, Options{})
+	e.setup()
+	phone := e.loginAs("owner@example.com", ownerPassword, safariIOS)
+
+	e.svc.hook = func(point string) {
+		if point == "watch-session-looked-up" {
+			e.svc.hook = nil
+			if _, err := e.svc.db.Exec(`ALTER TABLE sessions RENAME TO sessions_gone`); err != nil {
+				t.Errorf("breaking the sessions lookup: %v", err)
+			}
+		}
+	}
+	t.Cleanup(func() { e.svc.hook = nil })
+	ctx, stop := e.svc.WatchSession(phone.req(http.MethodGet, "/api/me", nil), time.Hour)
+	defer stop()
+	if ctx.Err() == nil {
+		t.Fatal("a watch whose login could not be verified was admitted")
+	}
+}
+
 // A login that passes the second step is a session like any other: it names its browser and
 // system (from the second request's User-Agent), is listed, and can be signed out.
 func TestSessionAfterTheSecondStepRecordsItsDevice(t *testing.T) {

@@ -89,14 +89,14 @@ func (s *Service) WatchSession(r *http.Request, every time.Duration) (context.Co
 	// first look and before the registration sent its signal to nobody; every one ended after
 	// the registration is signalled, and this look finds the ones before it, so none is left
 	// to the next interval's look.
+	// When that look fails for another reason (the database is busy), the login can't be shown
+	// to still stand, so the connection is refused, not admitted: the client reconnects.
 	if _, err := s.sessionUser(ctx, token); err != nil {
-		if errors.Is(err, errNotFound) {
-			stop()
-			return ctx, stop
+		if !errors.Is(err, errNotFound) && ctx.Err() == nil {
+			slog.WarnContext(ctx, "auth: verifying a new live session", "err", err)
 		}
-		if ctx.Err() == nil {
-			slog.WarnContext(ctx, "auth: checking a live session", "err", err)
-		}
+		stop()
+		return ctx, stop
 	}
 	go func() {
 		t := time.NewTicker(every)
