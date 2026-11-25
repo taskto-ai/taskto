@@ -57,6 +57,14 @@ const (
 	CodeResetInvalid            Code = "reset_invalid"
 	CodeResetOwn                Code = "reset_own"
 	CodeResetElsewhere          Code = "reset_elsewhere"
+	// CodeTooManyResets is a 429: too many reset emails asked for from this address or for this
+	// email, or the server is busy making them. Retry-After says when to try again.
+	CodeTooManyResets Code = "too_many_resets"
+
+	// Your own sessions (internal/auth/sessions.go).
+
+	CodeSessionNotFound Code = "session_not_found"
+	CodeSessionCurrent  Code = "session_current"
 
 	// Two-factor login (internal/auth/twofactor.go).
 

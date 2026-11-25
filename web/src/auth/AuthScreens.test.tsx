@@ -386,3 +386,57 @@ test('an invite whose acceptance fails after the code retries the acceptance onl
   await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(joined, owner))
   expect(calls.filter((c) => c.path === '/api/login/two-factor')).toHaveLength(1)
 })
+
+test('without email on the server the login says to ask an admin, with no way to ask by email', async () => {
+  fakeFetch({ 'GET /api/login/methods': { body: both } })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  screen.getByText(/Ask a workspace admin for a reset link/)
+  expect(screen.queryByRole('button', { name: 'Forgot your password?' })).toBeNull()
+})
+
+test('an older server that sends no reset_by_email offers no email either', async () => {
+  fakeFetch({ 'GET /api/login/methods': { body: { password: true, sso: [] } } })
+  render(<LoginScreen onDone={() => {}} />)
+  await screen.findByLabelText('Password')
+  expect(screen.queryByRole('button', { name: 'Forgot your password?' })).toBeNull()
+})
+
+test('forgotten password: the address is asked for, and the answer never says whether an account has it', async () => {
+  const calls = fakeFetch({
+    'GET /api/login/methods': { body: { ...both, reset_by_email: true } },
+    'POST /api/password-reset/request': { status: 202, body: {} },
+  })
+  const done = vi.fn()
+  render(<LoginScreen onDone={done} />)
+  fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'ana@example.com' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Forgot your password?' }))
+  // The address typed on the login form carries over.
+  const email = screen.getByLabelText('Email') as HTMLInputElement
+  expect(email.value).toBe('ana@example.com')
+  fireEvent.click(screen.getByRole('button', { name: 'Email me a link' }))
+  await screen.findByText('Check your email')
+  expect(screen.getByText(/If an account has/).textContent).toContain('ana@example.com')
+  expect(calls.find((c) => c.method === 'POST')).toMatchObject({
+    path: '/api/password-reset/request',
+    body: { email: 'ana@example.com' },
+  })
+  expect(done).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Back to login' }))
+  await screen.findByLabelText('Password')
+})
+
+test('forgotten password: too many requests is said in words', async () => {
+  fakeFetch({
+    'GET /api/login/methods': { body: { ...both, reset_by_email: true } },
+    'POST /api/password-reset/request': {
+      status: 429,
+      body: { error: 'too many reset requests: try again later', code: 'too_many_resets' },
+    },
+  })
+  render(<LoginScreen onDone={() => {}} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Forgot your password?' }))
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ana@example.com' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Email me a link' }))
+  expect((await screen.findByRole('alert')).textContent).toBe('Too many reset requests: try again later.')
+})

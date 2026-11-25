@@ -23,6 +23,7 @@ import (
 // Routes mounts the conversation endpoints on mux, behind a's access checks.
 func (s *Service) Routes(mux *http.ServeMux, a *auth.Service) {
 	s.language = a.Language
+	s.watchSession = a.WatchSession
 	member := func(h http.HandlerFunc) http.Handler { return a.RequireMember(h) }
 	const base = "/api/workspaces/{workspace}/conversations"
 

@@ -47,6 +47,9 @@ func CSRF(next http.Handler, rawBody ...string) http.Handler {
 		next.ServeHTTP(w, r)
 	}))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Also the one place every request passes: a login made while serving it records the
+		// names of the browser and system (device.go).
+		r = withUserAgent(r)
 		if isAPI(r.URL.Path) && !safeMethod(r.Method) {
 			checked.ServeHTTP(w, r)
 			return

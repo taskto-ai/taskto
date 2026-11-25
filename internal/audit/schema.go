@@ -99,6 +99,8 @@ var schemas = map[string]map[string]kind{
 	LoginSucceeded:       {"method": oneOf("password")},
 	LoginFailed:          {"method": oneOf("password"), "reason": oneOf("unknown_account", "no_password", "wrong_password", "wrong_code")},
 	Logout:               {},
+	SessionRevoked:       {},
+	OtherSessionsRevoked: {"logins_ended": number},
 	PasswordChanged:      {},
 	PasswordChangeFailed: {},
 	PasswordResetCreated: {},
@@ -108,6 +110,8 @@ var schemas = map[string]map[string]kind{
 	TwoFactorDisabled:              {},
 	TwoFactorRecoveryCodesReplaced: {},
 	TwoFactorCleared:               {},
+
+	PasswordResetRequested: {"emailed": boolean},
 
 	SSOLoginSucceeded: {"provider": tag},
 	SSOLoginFailed:    {"provider": tag, "reason": tag},

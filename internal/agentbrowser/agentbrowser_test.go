@@ -3,6 +3,7 @@ package agentbrowser
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/net/websocket"
 
@@ -125,6 +127,7 @@ var setupToken = auth.NewSetupToken()
 const password = "fake-password-for-tests"
 
 type env struct {
+	db  *sql.DB
 	t   *testing.T
 	b   *fakeBrowsers
 	svc *Service
@@ -142,7 +145,7 @@ func newEnv(t *testing.T, b browser.Browsers, usable func(context.Context) error
 	if _, err := db.Migrate(ctx, sqlDB); err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, svc: New(b, usable)}
+	e := &env{t: t, db: sqlDB, svc: New(b, usable)}
 	if f, ok := b.(*fakeBrowsers); ok {
 		e.b = f
 	}
@@ -414,6 +417,75 @@ func TestLiveView(t *testing.T) {
 	if len(e.b.lives) != 2 {
 		t.Errorf("live views opened: %v", e.b.lives)
 	}
+}
+
+// liveEnds says whether ws is closed from the server's side within a few seconds: a read
+// returns an error that isn't the test's own deadline.
+func liveEnds(ws *websocket.Conn) bool {
+	_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 64)
+	for {
+		if _, err := ws.Read(buf); err != nil {
+			var ne net.Error
+			return !errors.As(err, &ne) || !ne.Timeout()
+		}
+	}
+}
+
+// openLive opens a live view of c's browser, past its banner lines.
+func openLive(t *testing.T, srv *httptest.Server, c *client) *websocket.Conn {
+	t.Helper()
+	expect(t, c.do(http.MethodPost, base+"/start", map[string]string{}), http.StatusOK)
+	ws, err := liveView(t, srv, c, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readLine(t, ws)
+	readLine(t, ws)
+	return ws
+}
+
+// An open live view ends with its login, not only when it opens: when the login is signed out
+// (with the look at the session so slow it can't be the cause), and when the session goes some
+// other way, at the next look.
+func TestLiveViewEndsWithTheLogin(t *testing.T) {
+	old := liveRecheck
+	t.Cleanup(func() { liveRecheck = old })
+
+	t.Run("signed out", func(t *testing.T) {
+		liveRecheck = time.Hour
+		e := newEnv(t, newFake(), nil)
+		owner, member := e.setup()
+		srv := httptest.NewServer(e.h)
+		defer srv.Close()
+		ws := openLive(t, srv, owner)
+		other := openLive(t, srv, member)
+		expect(t, owner.do(http.MethodPost, "/api/logout", nil), http.StatusNoContent)
+		if !liveEnds(ws) {
+			t.Fatal("the live view outlived its login")
+		}
+		// Another user's view is untouched.
+		if _, err := other.Write([]byte("ping\n")); err != nil {
+			t.Fatal(err)
+		}
+		if got := readLine(t, other); got != "ping" {
+			t.Fatalf("echo %q", got)
+		}
+	})
+	t.Run("revoked behind the signal", func(t *testing.T) {
+		liveRecheck = 20 * time.Millisecond
+		e := newEnv(t, newFake(), nil)
+		owner, _ := e.setup()
+		srv := httptest.NewServer(e.h)
+		defer srv.Close()
+		ws := openLive(t, srv, owner)
+		if _, err := e.db.Exec(`DELETE FROM sessions WHERE user_id = ?`, owner.id); err != nil {
+			t.Fatal(err)
+		}
+		if !liveEnds(ws) {
+			t.Fatal("the live view outlived its login")
+		}
+	})
 }
 
 func TestSameOrigin(t *testing.T) {

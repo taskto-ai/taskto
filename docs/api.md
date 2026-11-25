@@ -116,6 +116,8 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `reset_invalid` | 404 | The reset link is unknown, used or expired. |
 | `reset_own` | 400 | An admin changes their own password in Settings, not with a reset link. |
 | `reset_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `session_not_found` | 404 | No such session of the caller's (another user's sessions are never found). |
+| `session_current` | 400 | The session asked to be signed out is the one making the request: log out instead. |
 | `wrong_two_factor_code` | 401 / 403 | The code from the authenticator app (or the recovery code) is wrong, was used already, or is for another time. `401` at the second step of a login, `403` for a logged-in user's own settings. |
 | `too_many_two_factor_codes` | 429 | Too many wrong codes; `Retry-After` says when to try again. |
 | `two_factor_challenge_invalid` | 401 | The half-done login is unknown, used, expired (5 minutes) or had too many wrong codes: log in with the password again. |
@@ -125,6 +127,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `two_factor_no_password` | 403 | The account has no password (it signs in with a provider), so there is no password login to protect. |
 | `two_factor_clear_own` | 400 | An admin turns off their own two-factor login in Settings, not by clearing it. |
 | `two_factor_clear_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `too_many_resets` | 429 | Too many reset emails asked for from this address or for this email, or the server is busy taking in requests for them; `Retry-After` says when to try again. |
 | `password_login_disabled` | 403 | Passwords are turned off on this server ([sso.md](sso.md#turning-passwords-off)): logging in, a new account with a password, making a reset link and using one answer this. |
 | `sso_unknown_provider` | 404 | No such single sign-on provider. |
 | `sso_failed` | 502 | The provider didn't answer. As `?sso_error=`: the provider or the exchange failed, or the person declined (details are in the server's log). |
@@ -355,6 +358,11 @@ the cookie is called `taskto_session` and isn't `Secure`, since browsers refuse 
 
 A route that needs a login answers `401` without a valid session.
 
+Each session keeps what [your sessions](#your-sessions) list: when it was made, when it was last
+used (written at most once a minute) and the names of the browser and system its login was made
+with, read from the `User-Agent` header (for example `Firefox`, `macOS`). The header itself and
+the client's address are not stored.
+
 ### Access tokens
 
 Agents and scripts authenticate with a personal access token instead of a session:
@@ -531,10 +539,12 @@ alone. The login finishes at [`POST /api/login/two-factor`](#post-apilogintwo-fa
 No login needed. How people can sign in here, for the login screen:
 
 ```json
-{"password": true, "sso": [{"id": "google", "name": "Google"}, {"id": "authentik", "name": "Authentik"}]}
+{"password": true, "sso": [{"id": "google", "name": "Google"}, {"id": "authentik", "name": "Authentik"}], "reset_by_email": false}
 ```
 
-`password` is `false` when the operator turned passwords off; `sso` is `[]` without providers.
+`password` is `false` when the operator turned passwords off; `sso` is `[]` without providers;
+`reset_by_email` is `true` when a person can ask for a reset link by email
+([below](#post-apipassword-resetrequest)).
 
 ## Single sign-on
 
@@ -701,8 +711,8 @@ signing in with a provider). Wrong current passwords count against the
 
 Admin only, with no body. Makes a reset link's token for a member, in place of any earlier
 one. It works once, for 24 hours, and is shown only now; the database keeps its SHA-256.
-There is no email: the admin sends the link (`/reset-password#<token>`, the token in the
-fragment, like an invite's).
+The admin sends the link (`/reset-password#<token>`, the token in the fragment, like an
+invite's); a person can also ask for one by email themselves, [below](#post-apipassword-resetrequest).
 
 ```json
 {"token": "…", "expires_at": "…"}
@@ -726,6 +736,40 @@ cookie and no session, and the browser finishes at [`POST /api/login/two-factor`
 with a code. A reset also drops a two-factor enrolment that wasn't confirmed. `400` for a password that is too short or too long, which leaves the link
 usable. `404` if the token is unknown, used, replaced or expired. `403 password_login_disabled`
 when the operator turned passwords off.
+
+## Your sessions
+
+The browsers and devices logged in as you, to see and to sign out. These routes act on the
+caller's own sessions only, take a session and never an access token (`403`), and never return a
+session's token. A session is named by its `id`, a random 128-bit value in hex that is never reused (so a page that listed a session
+since signed out can't end a later login by it) and is no way into the session; another user's
+id, and anything that isn't an `id`, is `session_not_found`. A request whose own session has
+ended since it was authenticated is `401` `not_logged_in` and ends nothing. Connections that
+stay open with a session (an event stream of a conversation, the agent browser's live view) end
+with it, at once or at the latest within seconds.
+
+### `GET /api/me/sessions`
+
+`200` `{"sessions": [...]}` of the sessions that haven't expired, the current one first, then the
+most recently used:
+
+```json
+{"sessions": [{"id": "9f2c4e6a8b0d1f3a5c7e9b1d3f5a7c9e", "browser": "Firefox", "os": "macOS", "created_at": "2026-11-20T10:00:00.000Z",
+  "last_seen_at": "2026-11-24T09:30:00.000Z", "expires_at": "2026-12-20T10:00:00.000Z", "current": true}]}
+```
+
+`browser` and `os` are `""` when the `User-Agent` didn't say. `last_seen_at` is `created_at` for a
+session not used since its login.
+
+### `DELETE /api/me/sessions/{session}`
+
+Signs that session out at once, with its push subscriptions. `204`; `404` `session_not_found`; `400`
+`session_current` for the session making the request, which `POST /api/logout` ends.
+
+### `DELETE /api/me/sessions`
+
+Signs out every other session of the caller, keeping the one making the request. `200`
+`{"revoked": n}`, the number ended.
 
 ## Two-factor login
 
@@ -837,6 +881,32 @@ The rule is the password reset link's: the admin must administer every workspace
 belongs to (`403 two_factor_clear_elsewhere`), and can't use it on their own account
 (`400 two_factor_clear_own`). `404` if the user isn't a member of the workspace;
 `409 two_factor_not_on` if the member has none. `204`.
+
+### `POST /api/password-reset/request`
+
+No login needed; refuses access tokens. `{"email": "…"}` emails a reset link to that address,
+for someone who forgot their password and has no admin to ask. It is on only where the server
+can send email and knows its public address, which the link is built on
+([install.md](install.md#email)); `GET /api/login/methods` says so (`reset_by_email`), and the
+login page offers it only then.
+
+`202` with `{}`, **the same whether or not an account has the address, and in the same time**:
+the lookup and the send happen after the answer. A message goes only to an account that has a
+password (not one made by signing in with a provider), to its own address, in the language the
+person picked, else their workspace's default, else English. It holds `/reset-password#<token>`,
+which works as an admin's link does: once, for 24 hours, and a new request replaces the earlier
+link once the mail server has accepted the new email (a failed send leaves the earlier link as it was). The link is in the message and nowhere else: not in the answer, not in the log. A failed
+send is logged by its step and the SMTP reply's number, and the person is not told.
+
+`400 email_invalid` for something that isn't an email address. `409 mail_not_configured` where
+the server can't email links, and `403 password_login_disabled` with passwords off, for every
+address alike. `429 too_many_resets` with `Retry-After`: at most 5 requests per hour for one
+address (whether or not an account has it, so it never says which do) and 20 per hour from one
+client address (as for the [login limits](#post-apilogin), behind a trusted proxy the forwarded
+address), or the server is busy: it takes in at most 30 reset requests at once and then one a second,
+for everyone together, whatever addresses they ask for, never depending on how long sending takes. Emails
+are made 8 at a time after the answer, and on shutdown the server ends the ones still being made. Using the link logs the person in, as for an
+admin's link.
 
 ## Members
 
@@ -3769,13 +3839,15 @@ the workspace in the URL, with a browser session (not an access token); other ad
 Whether the server can send email, and where:
 
 ```json
-{"configured": true, "host": "smtp.example.com", "port": 587, "security": "starttls",
- "from": "\"TaskTo\" <taskto@example.com>", "password": "set"}
+{"configured": true, "sends_links": true, "host": "smtp.example.com", "port": 587,
+ "security": "starttls", "from": "\"TaskTo\" <taskto@example.com>", "password": "set"}
 ```
 
 `security` is `starttls`, `tls` or `none`. `password` is `"set"` or `"not set"`: whether the server
 signs in to the SMTP server. The user name and the password are never returned. Without an SMTP
-server the answer is `{"configured": false}`.
+server the answer is `{"configured": false, "sends_links": false}`. `sends_links` is whether the
+server emails reset and invite links, which needs `configured` and the server's `public_url`
+([install.md](install.md#email)).
 
 ### `POST /api/workspaces/{workspace}/mail/test`
 
@@ -4392,8 +4464,9 @@ from the agent runtime unchanged:
    server doesn't read them.
 3. `{"type": "end", "kind": "…"}`: the stream is over. `stopped`, `aborted`, `ended`,
    `listener_error` and `failed` come from the agent runtime; `interrupted` is the server's,
-   when the agent runtime restarted or broke the stream, the caller lost access, or the server
-   is shutting down.
+   when the agent runtime restarted or broke the stream, the caller lost access, the login that
+   opened the stream was signed out or revoked (a reconnect is then `401`), or the server is
+   shutting down.
 
 After an end, or any dropped connection, connect again: a new stream starts from the current
 view, so nothing is missed. The stream starts with `retry: 2000`, so `EventSource`

@@ -16,8 +16,9 @@ import (
 //
 //   - A user changes their own password with the current one. The routes act on the caller
 //     only: there is no user in the path or the body.
-//   - An admin makes a reset link for a member, shown once, to send them. There is no email
-//     sending: the admin passes the link on, as with invites. Whoever has the link can set
+//   - An admin makes a reset link for a member, shown once, to send them: the admin passes the
+//     link on, as with invites. Where the server can send email, anyone can also ask for a
+//     link to their own address from the login page (mailer.go). Whoever has the link can set
 //     the password, so an admin may make one only for a member of nothing but workspaces they
 //     administer; an admin of one workspace can't take over an account that reaches another.
 //   - Either way the user's sessions all end, and the browser that set the new password gets
@@ -37,6 +38,7 @@ func (s *Service) passwordRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/workspaces/{workspace}/members/{user}/password-reset",
 		refuseTokens(s.RequireAdmin(http.HandlerFunc(s.handleCreateReset)).ServeHTTP))
 	mux.Handle("POST /api/password-reset", refuseTokens(s.handleUseReset))
+	mux.Handle("POST /api/password-reset/request", refuseTokens(s.handleRequestReset))
 }
 
 func (s *Service) handleChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +254,9 @@ func (s *Service) changePassword(ctx context.Context, userID int64, current, new
 		return audit.Record(ctx, tx, audit.Event{Actor: userID, Action: audit.PasswordChanged,
 			TargetType: audit.TargetUser, Target: userID})
 	})
+	if err == nil {
+		s.endLive(userID, "") // the sessions that were open are gone, and their open connections go
+	}
 	return token, err
 }
 
@@ -366,5 +371,8 @@ func (s *Service) useReset(ctx context.Context, token, passwordHash string) (Use
 		out, err = s.issueSignIn(ctx, tx, u.ID)
 		return err
 	})
+	if err == nil {
+		s.endLive(u.ID, "")
+	}
 	return u, out, err
 }
