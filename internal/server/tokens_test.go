@@ -841,7 +841,7 @@ func TestMCPClient(t *testing.T) {
 	// happens in a conversation).
 	defs := map[string]agenttools.Definition{}
 	for _, d := range agenttools.Definitions() {
-		if !d.ConversationOnly {
+		if !d.ConversationOnly && !d.NoToken {
 			defs[d.Name] = d
 		}
 	}

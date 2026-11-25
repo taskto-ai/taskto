@@ -4,7 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, expect, test, vi } from 'vitest'
 import { BoardsPage } from '../boards/BoardsPage'
 import { fakeFetch } from '../test/fakes'
-import { KnowledgePage, resolveDocLink } from './KnowledgePage'
+import { resolveDocLink } from './docs'
+import { KnowledgePage } from './KnowledgePage'
 
 afterEach(() => {
   cleanup()
