@@ -1372,8 +1372,9 @@ server checks every word again when it reads. The server can't write there, run 
 or reach Docker, and `deploy/safety-check.sh` fails an install whose server can see anything
 else of `/var/lib/taskto-update`, or can write there, by whatever path or link.
 
-The directory is the updater's alone. If you move it (`TASKTO_UPDATE_PUBLIC`, with
-`TASKTO_UPDATE_STATUS_SOURCE` in `.env` set to the same path), it may be anywhere, but the
+The directory is the updater's alone. If you move it (`TASKTO_UPDATE_PUBLIC` in `/etc/taskto/install.env`, which every run of the
+updater reads, by hand or by the timer, with `TASKTO_UPDATE_STATUS_SOURCE` in `.env` set to
+the same path), it may be anywhere, but the
 updater writes there only if the directory is **owned by root, with every directory above it
 owned by root and not writable by its group or others** (a symbolic link on the way must be
 root's too, and where it leads is checked the same way); otherwise it logs why and publishes

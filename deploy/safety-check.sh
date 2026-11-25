@@ -83,6 +83,12 @@ HOLDS='def parts: split("/") | map(select(. != ""));
 resolved() {
 	local out='[]' p ro r
 	while IFS= read -r -d '' p && IFS= read -r -d '' ro; do
+		# Docker hands a relative `device` to the kernel as it is, which reads it from the daemon's
+		# own directory, not this one: where it leads can't be told here, so it is refused.
+		[[ $p == /* ]] || {
+			echo "the host path '$p' isn't absolute" >&2
+			return 1
+		}
 		r=$(realpath -m -- "$p") || return 1
 		out=$(jq -c --arg r "$r" --argjson ro "$ro" '. + [{p: $r, ro: $ro}]' <<<"$out") || return 1
 	done < <(jq -j '.[] | select(.p != "") | .p, "\u0000", (.ro | tostring), "\u0000"')
@@ -92,7 +98,7 @@ resolved() {
 # server's: it may see the updater's public directory, read-only, and nothing else of its state.
 only_public_readonly() {
 	local r
-	r=$(resolved) || fail "can't resolve a host path of the server's mounts"
+	r=$(resolved) || fail "a host path of the server's mounts can't be resolved: it isn't absolute, or isn't a path"
 	jq -e --arg state "$state" --arg public "$public" "$HOLDS"'[.[] | select(holds(.p; .ro))] | length == 0' <<<"$r" >/dev/null ||
 		fail "the server has a host path that holds the updater's state, or can write where it publishes its status (only $public, read-only, may be mounted)"
 }

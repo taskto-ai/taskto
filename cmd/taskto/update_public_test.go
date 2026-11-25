@@ -197,7 +197,6 @@ func TestUpdatePublishesOnlyToADirectoryNobodyElseCanWrite(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		"it is a relative path": {extra: func(e *updEnv) []string { return []string{"TASKTO_UPDATE_PUBLIC=state/public"} }},
 		"it has .. in it": {extra: func(e *updEnv) []string {
 			return []string{"TASKTO_UPDATE_PUBLIC=" + e.state + "/x/../public"}
 		}},
@@ -439,5 +438,51 @@ func TestRunbookRequiresReinstallingTheUpdaterForTheStatus(t *testing.T) {
 	}
 	if !strings.Contains(readRepoFile(t, "web/src/i18n/locales/en.json"), "The updater on this host is too old to report") {
 		t.Error("the page doesn't say the updater is too old to report")
+	}
+}
+
+// Where the updater publishes is a setting of install.env too, so a run by hand and the runbook's
+// agree with the timer's, and a relative `device` of a volume, which Docker reads from its own
+// directory, is refused.
+func TestUpdatePublicDirectoryIsAnInstallSettingAndRelativeDevicesAreRefused(t *testing.T) {
+	e := newUpdEnv(t)
+	e.release(updNew, "", false, false)
+	pub := filepath.Join(e.dir, "moved")
+	e.write("etc/install.env", e.read("etc/install.env")+"TASKTO_UPDATE_PUBLIC='"+pub+"'\n")
+	e.write("fake/config-edit", `(.services.taskto.volumes[] | select(.target == "/update-status") | .source) = "`+pub+`"`)
+	e.extra = []string{"TASKTO_UPDATE_PUBLIC="} // not in the environment: only install.env says
+	if code, out := e.run("--publish-status"); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if e.exists("state/public") {
+		t.Error("published to the default directory")
+	}
+	if !e.exists("moved/status.json") {
+		t.Error("nothing was published to the directory install.env names")
+	}
+
+	e = newUpdEnv(t)
+	e.release(updNew, "", false, false)
+	e.write("fake/config-edit", `.services.taskto.volumes += [{type: "volume", source: "relvol", target: "/rel", read_only: true, volume: {}}]
+		| .volumes.relvol = {name: "taskto_relvol", driver: "local", driver_opts: {type: "none", o: "bind", device: "var/lib/taskto-update"}}`)
+	if code, _ := e.run(); code != 1 {
+		t.Fatalf("a relative device: exit %d, want 1", code)
+	}
+	e.wantStatus("failed", "break a safety rule")
+	if st := e.status(); !strings.Contains(fmt.Sprint(st["reason"]), "can't be resolved") {
+		t.Errorf("reason = %v", st["reason"])
+	}
+	e.wantUntouched()
+}
+
+// A relative public path is never written to: --publish-status says so and fails.
+func TestUpdatePublishStatusRefusesARelativeDirectory(t *testing.T) {
+	e := newUpdEnv(t)
+	e.extra = []string{"TASKTO_UPDATE_PUBLIC=state/public"}
+	if code, out := e.run("--publish-status"); code != 1 || !strings.Contains(out, "isn't an absolute path") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if e.exists("state/public") {
+		t.Error("a relative directory was made")
 	}
 }

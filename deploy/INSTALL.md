@@ -1102,7 +1102,7 @@ else
   vm <<'EOF'
 . /etc/taskto/install.env
 install -d -m 755 /var/lib/taskto-update /var/lib/taskto-update/public
-# The updater writes the status for the server there only while it and every directory above it are root's and nobody else's to write.
+# The updater writes the status for the server there only while it and every directory above it are root's and nobody else's to write. A moved directory (TASKTO_UPDATE_PUBLIC) is set in /etc/taskto/install.env, which the updater reads on every run, this one too.
 /usr/local/sbin/taskto-update --publish-status || echo "WARN: the first status for Settings → About wasn't written (the lines above say why)"
 if [ "${TASKTO_UPDATE_CHANNEL:-release}" = off ]; then
   systemctl disable --now taskto-update.timer >/dev/null 2>&1 || true

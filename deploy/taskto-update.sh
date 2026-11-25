@@ -84,7 +84,7 @@ INSTALL_ENV=${TASKTO_UPDATE_INSTALL_ENV:-/etc/taskto/install.env}
 HOLD=${TASKTO_UPDATE_HOLD:-/etc/taskto/update.hold}
 STATE=${TASKTO_UPDATE_STATE:-/var/lib/taskto-update}
 # The one directory the server may read (compose.yaml mounts it, read-only): the status for admins.
-PUBLIC=${TASKTO_UPDATE_PUBLIC:-$STATE/public}
+PUBLIC=""  # set below, once `setting` is defined: the environment's, else install.env's, else $STATE/public
 # Who must own it and every directory above it, and where the check of those stops (the
 # directory above which nothing is checked): root and / on a host, other values for the tests.
 OWNER=${TASKTO_UPDATE_OWNER:-0}
@@ -120,6 +120,9 @@ log() { printf 'taskto-update: %s\n' "$*"; }
 envget() { { sed -n "s/^$2=//p" "$1" 2>/dev/null || true; } | tail -n 1 | sed "s/^'//; s/'\$//"; }
 # setting NAME DEFAULT: the environment's NAME, else install.env's, else DEFAULT.
 setting() { local v=${!1:-}; [ -n "$v" ] || v=$(envget "$INSTALL_ENV" "$1"); printf '%s' "${v:-$2}"; }
+# Where the status for the server goes: in install.env, so a run by hand, the timer's and the
+# runbook's all agree, with TASKTO_UPDATE_STATUS_SOURCE in .env saying the same to Compose.
+PUBLIC=$(setting TASKTO_UPDATE_PUBLIC "$STATE/public")
 
 usage() {
 	echo "usage: taskto-update [--dry-run] [--to vMAJOR.MINOR.PATCH|FULL-SHA] | --clear-block | --publish-status" >&2
