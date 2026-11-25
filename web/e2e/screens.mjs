@@ -175,6 +175,52 @@ const COMPONENTS_APP = {
   summaries: { count: { kind: 'count' }, total_hours: { kind: 'sum', field: 'hours' } },
 }
 
+// An app whose one form holds every capture field TaskTo.AI's catalog has: photos, a location, a
+// signature and a barcode, each with its own field in the collection.
+const CAPTURE_APP_NAME = 'Every capture field'
+const CAPTURE_APP = {
+  screens: [
+    {
+      name: 'main',
+      root: 'main-root',
+      components: [
+        C('main-root', 'Column', { children: ['title', 'photos', 'place', 'signed', 'code', 'save'] }),
+        C('title', 'Text', { text: 'Site visit', variant: 'h2' }),
+        C('photos', 'PhotoInput', { field: 'photos', label: 'Photos of the site', value: { path: '/draft/photos' } }),
+        C('place', 'LocationInput', { field: 'place', label: 'Where you are', value: { path: '/draft/place' } }),
+        C('signed', 'SignatureInput', { field: 'signed', label: 'Your signature', value: { path: '/draft/signed' } }),
+        C('code', 'BarcodeInput', { field: 'code', label: 'Asset tag', value: { path: '/draft/code' } }),
+        C('save', 'Button', {
+          variant: 'primary',
+          child: 'save-label',
+          action: {
+            event: {
+              name: 'add',
+              context: {
+                photos: { path: '/draft/photos' },
+                place: { path: '/draft/place' },
+                signed: { path: '/draft/signed' },
+                code: { path: '/draft/code' },
+              },
+            },
+          },
+        }),
+        label('save-label', 'Save the visit'),
+      ],
+    },
+  ],
+  entry: 'main',
+  collection: {
+    fields: [
+      { name: 'photos', type: 'attachment', max_files: 3 },
+      { name: 'place', type: 'location' },
+      { name: 'signed', type: 'signature' },
+      { name: 'code', type: 'barcode' },
+    ],
+  },
+  actions: { add: { kind: 'insert' } },
+}
+
 // What a screen needs, in the order the run goes: before any account exists, with an account and
 // nothing in it, with the sample data, and signed out again.
 export const PHASES = ['first-run', 'empty', 'seeded', 'signed-out']
@@ -425,6 +471,22 @@ export const SCREENS = [
         .click()
     },
     ready: (s) => [heading(s, /^Record \d+$/), text(s, /^History$/)],
+  },
+  // The capture fields: a photo, a location, a signature and a barcode, at the form's top and end.
+  {
+    name: 'app-capture',
+    phase: 'seeded',
+    show: (s) => s.go(s.path('apps', `${s.ids.space}-${s.ids.captureApp}`)),
+    ready: (s) => [heading(s, CAPTURE_APP_NAME), text(s, 'Take a photo', true)],
+  },
+  {
+    name: 'app-capture-end',
+    phase: 'seeded',
+    show: async (s) => {
+      await s.go(s.path('apps', `${s.ids.space}-${s.ids.captureApp}`))
+      await text(s, 'Save the visit', true).scrollIntoViewIfNeeded()
+    },
+    ready: (s) => [text(s, 'Save the visit', true), s.page.getByLabel(/Code \(type it/)],
   },
   {
     name: 'app-builder',
@@ -1029,6 +1091,12 @@ async function seed({ api, base, workspace, agent, say }) {
       })
     }
   }
+  // An app whose form holds every capture field.
+  {
+    const app = await api('POST', `${P}/apps`, { name: CAPTURE_APP_NAME, definition: CAPTURE_APP })
+    await api('POST', `${P}/apps/${app.id}/publish`, { version: app.version, acknowledge: [] })
+    apps.captureApp = app.id
+  }
   const available = (await api('GET', `${W}/home/available`)).apps ?? []
   let homeApp
   for (const app of available.slice(0, 3)) {
@@ -1080,6 +1148,7 @@ async function seed({ api, base, workspace, agent, say }) {
     appName: apps[0].name,
     homeApp: homeApp ?? apps[0].name,
     componentsApp: apps.componentsApp,
+    captureApp: apps.captureApp,
     conversation: talk?.id,
   }
 }

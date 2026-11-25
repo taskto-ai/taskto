@@ -269,6 +269,7 @@
   /* The add buttons are labels drawn as buttons, with the file input unseen over each. */
   .ui-photo-add > label {
     position: relative;
+    gap: var(--space-2);
     flex: 1 1 calc(var(--space-16) * 2 + var(--space-8));
     min-block-size: var(--control-touch);
   }
