@@ -14,7 +14,13 @@ import {
   emailPath,
   emailVerificationPath,
 } from '../notifications/api'
-import { Alert, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { Field } from '../ui/Field'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Select } from '../ui/Select'
+import { Alert, FormActions, Loading, Section, useAction } from './parts'
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 
@@ -74,64 +80,70 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
   const anyOn = choices ? EMAIL_KINDS.some((k) => choices.kinds[k] !== 'off') : false
   const usesDigest = choices ? EMAIL_KINDS.some((k) => choices.kinds[k] === 'digest') : false
 
+  const address = choices?.address
   return (
-    <section className="tt-panel" aria-labelledby="tt-email">
-      <h2 id="tt-email">{t('notifications.settings.emailTitle')}</h2>
-      <p className="tt-muted tt-small">{t('notifications.settings.emailIntro')}</p>
-      {!choices && !loaded.error && <p className="tt-muted">{t('app.loading')}</p>}
+    <Section title={t('notifications.settings.emailTitle')} help={t('notifications.settings.emailIntro')}>
+      {!choices && !loaded.error && <Loading lines={2} />}
       <Alert error={loaded.error} />
       {choices && !choices.available && (
-        <p role="status">
+        <Notice tone="neutral">
           {t(anyOn ? 'notifications.settings.emailUnavailableOff' : 'notifications.settings.emailUnavailable')}
-        </p>
+        </Notice>
       )}
       {choices && (choices.available || anyOn) && (
-        <>
-          <ul className="tt-list">
+        <Panel padded className="settings-panel-body">
+          <div className="settings-choices">
             {EMAIL_KINDS.map((kind) => (
-              <li key={kind} className="tt-inline-field">
-                <label>
-                  {label(kind)}
-                  <select
-                    value={choices.kinds[kind]}
-                    disabled={action.busy}
-                    onChange={(e) => setKind(kind, e.target.value as EmailMode)}
-                  >
-                    <option value="off">{t('notifications.settings.emailOff')}</option>
-                    <option value="instant" disabled={!choices.available}>
-                      {t('notifications.settings.emailInstant')}
-                    </option>
-                    <option value="digest" disabled={!choices.available}>
-                      {t('notifications.settings.emailDigest')}
-                    </option>
-                  </select>
-                </label>
-              </li>
+              <Field key={kind} label={label(kind)}>
+                <Select
+                  value={choices.kinds[kind]}
+                  disabled={action.busy}
+                  onChange={(e) => setKind(kind, e.target.value as EmailMode)}
+                >
+                  <option value="off">{t('notifications.settings.emailOff')}</option>
+                  <option value="instant" disabled={!choices.available}>
+                    {t('notifications.settings.emailInstant')}
+                  </option>
+                  <option value="digest" disabled={!choices.available}>
+                    {t('notifications.settings.emailDigest')}
+                  </option>
+                </Select>
+              </Field>
             ))}
-          </ul>
-          {choices.available && (
-            <div className="tt-field">
-              <p className="tt-small">
-                {t('notifications.settings.emailAddress', { email: choices.address.email })}{' '}
-                {choices.address.state === 'verified' && t('notifications.settings.emailAddressVerified')}
-                {choices.address.state === 'pending' && t('notifications.settings.emailAddressPending')}
-                {choices.address.state === 'unverified' && t('notifications.settings.emailAddressUnverified')}
+          </div>
+          {choices.available && address && (
+            <div className="settings-panel-body">
+              <p className="settings-text settings-person-name">
+                {t('notifications.settings.emailAddress', { email: address.email })}
+                {address.state === 'verified' ? (
+                  <Badge tone="success" dot>
+                    {t('notifications.settings.emailConfirmedBadge')}
+                  </Badge>
+                ) : (
+                  <Badge tone="warning">{t('notifications.settings.emailUnconfirmedBadge')}</Badge>
+                )}
               </p>
-              {choices.address.state !== 'verified' && (
-                <button type="button" className="tt-button" disabled={action.busy} onClick={() => void sendLink()}>
-                  {choices.address.state === 'pending'
-                    ? t('notifications.settings.emailResendLink')
-                    : t('notifications.settings.emailSendLink')}
-                </button>
+              <p className="settings-muted">
+                {address.state === 'verified' && t('notifications.settings.emailAddressVerified')}
+                {address.state === 'pending' && t('notifications.settings.emailAddressPending')}
+                {address.state === 'unverified' && t('notifications.settings.emailAddressUnverified')}
+              </p>
+              {address.state !== 'verified' && (
+                <FormActions>
+                  <Button loading={action.busy} onClick={() => void sendLink()}>
+                    {address.state === 'pending'
+                      ? t('notifications.settings.emailResendLink')
+                      : t('notifications.settings.emailSendLink')}
+                  </Button>
+                </FormActions>
               )}
-              {linkSent && <p role="status">{t('notifications.settings.emailLinkSent')}</p>}
+              {linkSent && <Notice tone="success">{t('notifications.settings.emailLinkSent')}</Notice>}
             </div>
           )}
           {usesDigest && choices.available && (
-            <div className="tt-inline-field">
-              <label>
-                {t('notifications.settings.emailHour')}
-                <select
+            <div className="settings-form-row">
+              <Field label={t('notifications.settings.emailHour')}>
+                <Select
                   value={choices.digest.hour}
                   disabled={action.busy}
                   onChange={(e) =>
@@ -143,11 +155,10 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
                       {f.time(new Date(2000, 0, 1, h))}
                     </option>
                   ))}
-                </select>
-              </label>
-              <label>
-                {t('notifications.settings.emailZone')}
-                <select
+                </Select>
+              </Field>
+              <Field label={t('notifications.settings.emailZone')}>
+                <Select
                   value={choices.digest.timezone}
                   disabled={action.busy}
                   onChange={(e) => void save({ digest: { hour: choices.digest.hour, timezone: e.target.value } })}
@@ -157,14 +168,14 @@ export function EmailNotifications({ workspace }: { workspace: number }) {
                       {z}
                     </option>
                   ))}
-                </select>
-              </label>
+                </Select>
+              </Field>
             </div>
           )}
           <Alert error={action.error} />
-          <p className="tt-muted tt-small">{t('notifications.settings.emailCaveat')}</p>
-        </>
+          <p className="settings-muted">{t('notifications.settings.emailCaveat')}</p>
+        </Panel>
       )}
-    </section>
+    </Section>
   )
 }
