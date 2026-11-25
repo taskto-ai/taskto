@@ -232,8 +232,9 @@ describe('Tooltip', () => {
     }
     const ltr = draw('ltr')
     expect(ltr.dataset.side).toBe('inline-end')
-    // jsdom lays nothing out: the tooltip is 0 wide, so its start is the gap after the control.
-    expect(ltr.style.left).toBe('58px')
+    // jsdom lays nothing out: the tooltip is 0 wide, so its start is the gap (--space-2, 8px) after
+    // the control's end, at 52px.
+    expect(ltr.style.left).toBe('60px')
     cleanup()
     const rtl = draw('rtl')
     expect(Number.parseFloat(rtl.style.left)).toBeLessThan(960)
