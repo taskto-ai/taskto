@@ -95,7 +95,7 @@ button.tt-card[aria-current] {
 }
 
 .tt-due[data-overdue],
-input[data-overdue] {
+input[data-overdue]:not(:where([class^="ui-"], [class*=" ui-"])) {
   color: var(--tt-danger);
   font-weight: 600;
 }

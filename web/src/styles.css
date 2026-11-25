@@ -7,8 +7,10 @@
    as they were when they were one file, so where two rules of the same specificity meet on one
    element the later file wins. The order keeps every winner the one file had: base, then the
    shared rules, then the screens in the order their rules came in it. A few blocks were placed
-   late in that file on purpose and are still last in theirs: the phone's (the sidebar a drawer,
-   one pane at a time), the coarse pointer's after the rules they override, and reduced motion.
+   late in that file on purpose, and each file keeps them at their old place among its rules, after
+   what they override: the phone's (the sidebar a drawer, one pane at a time), the coarse pointer's,
+   and reduced motion. Only the old rules are listed here (css-check's OLD_STYLESHEETS, which pins
+   this order): a component's or a new screen's stylesheet is imported by its module.
    Moving a rule to another file, or into a layer, can change which rule wins: check it as
    docs/design.md says. */
 

@@ -18,8 +18,11 @@ Every value the app's stylesheets use comes from a token, in two layers, in `web
    never what it looks like, each written once as `light-dark(light, dark)`. Their values are a
    brand's: `themes/mint.css` is the default and the only one the app ships.
 
-`web/src/ui/index.css`, which `web/src/main.tsx` imports before anything else that styles the page,
-declares the cascade layers and imports the files:
+`web/src/ui/index.css`, the first import of `web/src/main.tsx`, declares the cascade layers and
+imports the files. It has to be first: the build emits CSS in the order modules import it, and a
+layer's place is set where the layer is first named, so a component imported before it (through
+`App`) would put `@layer components` ahead of the declared order and make `@layer base` win over
+it. `css-check` fails when it is not the first import:
 
 | File | Layer | What |
 |---|---|---|
@@ -249,34 +252,58 @@ dark-mode badge ended up white on salmon.
 | Where | Layer | What |
 |---|---|---|
 | `web/src/ui/index.css` | | the layers' order and the design system's files ([Tokens](#tokens)) |
-| `web/src/ui/base.css` | `base` | the elements (box sizing, the body, headings, links, the selection, the focus ring, form fields) and the few utilities (`tt-sr-only`, `tt-muted`, `tt-small`, `tt-error`, `tt-center-text`); one block in no layer, below |
+| `web/src/ui/base.css` | `base`, and two parts in none | the elements (the page, headings, links, the focus ring, form fields) and the few utilities (`tt-sr-only`, `tt-muted`, `tt-small`, `tt-error`, `tt-center-text`); in no layer, what reaches every element on purpose and the touch screen's checkbox rules (below) |
 | `web/src/ui/<Name>.css` | `components` | a component's rules, beside `<Name>.tsx`, which imports it |
+| a new screen's own stylesheet | `screens` | beside the screen's components, imported by them |
 | `web/src/legacy-shared.css` | none | what several screens share from before the components: buttons, lists, panels and rows, notices, labels, the editor and the form pattern. Each is what a component replaces; nothing new goes in |
 | `web/src/<screen>/<screen>.css` | none | a screen's own rules, beside its components: `shell`, `auth`, `conversations`, `knowledge`, `boards`, `search`, `apps`, `settings`, `browser`, `pwa`, `home`, `offline`, `notifications` |
 | `web/src/markdown.css` | none | the Markdown renderer's, beside `markdown.tsx` |
-| `web/src/styles.css` | | the list of `@import`s of the files above (but the components'), and nothing else |
+| `web/src/styles.css` | | the list of `@import`s of the old stylesheets (the rows from `base.css` to `markdown.css`), in the order of the cascade, and nothing else |
 
-`web/src/main.tsx` imports `ui/index.css` and then `styles.css`; components import their own
-stylesheets. Nothing outside `index.css` declares a layer's place: `index.css` sets the order,
-`@layer tokens, themes, base, components, screens`, before any file uses one.
+`web/src/main.tsx` imports `ui/index.css` first and `styles.css` after the fonts; components import
+their own stylesheets. Nothing outside `index.css` declares a layer's place: `index.css` sets the
+order, `@layer tokens, themes, base, components, screens`, before any file uses one.
+
+**Which stylesheets go in the list.** Only the old ones: the rules of the one stylesheet the app had
+before its design system, which `css-check`'s `OLD_STYLESHEETS` names in their order. A component's
+stylesheet, and a new or rebuilt screen's, is not listed: the module that needs it imports it
+(`import './Home.css'`), and it puts its rules in a layer (`components`, `screens`). `css-check`
+fails when a stylesheet under `web/src/` is loaded no way or more than one way (listed, imported by
+`ui/index.css`, imported by a module), when the list is not exactly `OLD_STYLESHEETS` in that order
+as plain `@import`s, when an old stylesheet declares a layer, and when `base.css` is not its three
+parts in order. When a screen is rebuilt, its old file leaves the list (and `OLD_STYLESHEETS`) once
+its last old rule has gone.
 
 **How the cascade is ordered.** Most of the screens' rules were once one file and are still in no
 layer, where two rules of the same specificity on one element are settled by which comes later.
 The list in `styles.css` is in the order the old file had (base, the shared rules, then the
 screens), and each file keeps its rules in their old order, so a rule placed late on purpose is
-still late: the phone's block (the sidebar a drawer, one pane at a time) at the end of each
-screen's file, the coarse pointer's after the rules it overrides, and reduced motion after what it
-stops. The old file interleaved screens, so no order keeps every pair of rules in place: the ones
+still after what it overrides: the phone's block (the sidebar a drawer, one pane at a time), split
+into a block per screen, each at its old place among that screen's rules (not at the end of the
+file), the coarse pointer's after the rules it overrides, and reduced motion after what it stops. The old file interleaved screens, so no order keeps every pair of rules in place: the ones
 that changed order were each checked to be unable to meet on one element (the two containers
 never nest, or both set the same value).
 
 **What is in a layer, and what isn't yet.**
-- `ui/base.css` is in `base`, so a component (`components`, later) wins over an element's defaults
-  (a field's border and padding, a button's font) without fighting their specificity. On a touch
-  screen, its rules that make a checkbox or a radio the box alone and its label the target stay in
-  no layer: they beat single-class rules of the screens by specificity (`.tt-checks label`,
-  `.tt-capture-check`), which a layered rule can't. They move into `base` with those screens.
-- The screens' files and `legacy-shared.css` are in no layer. In no layer, a screen's rule beats
+- `ui/base.css` is mostly in `base`, so a component wins over an element's defaults (a field's
+  border and padding, a button's font) by the layer alone, without fighting their specificity. Its
+  element rules leave the components' elements out all the same, with the opt-out below ([The
+  old stylesheet's rules leave them alone](#components)): in the layer it is belt and braces,
+  costing nothing, and it keeps a rule off the components should it ever leave the layer.
+- Two parts of `ui/base.css` stay in no layer. First, what reaches every element on purpose,
+  components included (`EVERYWHERE`): border-box sizing, the selection's and the scrollbars'
+  colours, the caret, the search field's clear button, and 16px text in every field in a narrow
+  window, which keeps iOS from zooming in on focus (`--tt-text-no-zoom`, an alias of its own, not a
+  step of the type scale, so a change to the scale can't bring the zoom back). These win over a
+  component's own rule, as they did in the one stylesheet; in the layer they would lose to it.
+  Second, on a touch screen, the rules that make a checkbox or a radio the box alone and its label
+  the target: they beat single-class rules of the screens by specificity (`.tt-checks label`,
+  `.tt-capture-check`), which a layered rule can't. They move into `base` with those screens. Being
+  in no layer, they need the opt-out absolutely: without it, they made the design system's switch a
+  20px square on a touch screen.
+- The screens' files and `legacy-shared.css` are in no layer, and a rule of theirs that can match
+  anywhere (`input[data-overdue]` in `boards/boards.css`) carries the opt-out for that reason. In no
+  layer, a screen's rule beats
   every component's rule whatever the specificity, so while a screen's old classes are on an element
   a component's class can't restyle it: a screen moves onto a component by taking the old class
   off the element (and its rule out of the file), not by adding a component's class beside it. When
@@ -299,25 +326,88 @@ tokens (`tokens.css`, `themes/` and `legacy.css`), a font size, a spacing value 
 `padding`, `gap`), a radius, a shadow or a duration is a token, never a literal: `css-check.mjs`
 fails on `padding: 0.5rem` there and passes `padding: var(--space-2)`. The few literals no scale
 has (`0`, a `1px` hairline, `100%`, `50%` for a circle) are allowed, each with its reason in the
-script's `SCALE_LITERALS`; `env()` (the safe areas) and unitless numbers (a line height, a factor)
-are not lengths, but a fallback, in `var()` or `env()`, is checked like the rest. A value off the scales that `base.css` had is an alias in `legacy.css`
-(`--tt-text-body: 15px`). The screens' older files are not held to this until they are rebuilt.
+script's `SCALE_LITERALS` (`-1px` too, a hairline the other way); `env()` (the safe areas) and
+unitless numbers (a line height, a factor) are not lengths, but a fallback, in `var()` or `env()`,
+is checked like the rest. A custom property a component sets is held to the same rule, since it is
+used where the check can't see (its sizes and times; a percentage, a share of something, is not on
+a scale); `LOCAL_LITERALS` names the few that may hold a literal, with the reason (the apps
+renderer's own padding and chip size, in `a2ui.css`). In the files that define the tokens only the
+definitions may hold a literal: a rule placed there is checked like any other. A value off the
+scales that `base.css` had is an alias in `legacy.css` (`--tt-text-body: 15px`). The screens' older
+files are not held to this until they are rebuilt.
 
 ## The stylesheets
 
 Every stylesheet under `web/src/` is global, so a class name is shared by the whole app: declaring a
 name a second time silently changes the first screen that used it (a code sample's grid once made
 every highlighted word of a search result a row of its own). `web/scripts/css-check.mjs`, run by
-`make check` and CI, reads every `.css` file under `web/src/` and fails when a `.tt-` selector is
-declared twice at the top level, in one file or in two (inside `@layer` blocks counts as the top
-level; a state or a screen size goes in another at-rule block; two different things get two
-names), when a `tt-` class a component's `className` uses has no rule, when a colour literal is
+`make check` and CI, reads every `.css` file under `web/src/` and fails when a `.tt-` or `.ui-`
+selector is declared twice at the top level, in one file or in two (inside `@layer` blocks counts as
+the top level; a state or a screen size goes in another at-rule block; two different things get two
+names), when a `tt-` or `ui-` class a component's `className` uses has no rule, when a colour literal is
 written outside `web/src/ui/themes/`, and when a size, a space, a radius, a shadow or a duration is
 a literal under `web/src/ui/` ([above](#where-styles-live)). A class that is deliberately an unstyled hook goes in the
 script's `UNSTYLED` list, with the reason. It reads class selectors (not an attribute selector's
 value), a component's `className`, and the strings of a lookup table in capitals
 (`const HEALTH_CLASS = { ok: 'tt-ok' }`); a class built from pieces is not seen, and the header of
 the script says what else it can't.
+
+## Components
+
+The controls every screen uses are in `web/src/ui/`, one component per file with its stylesheet
+beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `ButtonLink`,
+`IconButton`, `Tooltip`, `Field` with `Input`, `Textarea` and `Select`, `Checkbox`, `Switch`,
+`SegmentedControl`, `Badge`, `Label` (and `labelHue`, the hue a label's name picks), `Avatar`,
+`AgentDot`, `Skeleton`, `Spinner` and `VisuallyHidden`. A screen imports each file directly
+(`../ui/Button`); there is no index file. A screen doesn't write a `<button>`, an `<input>` or a
+`<select>` of its own.
+
+- **One height per size.** Buttons, fields, selects and segmented controls of one size are one
+  height (36px regular, 28px small), so they line up in a row; on a touch screen every one of
+  them is 44px.
+- **States are designed.** Hover, focus (the ring), pressed, disabled (a look of its own on the
+  neutral ground, never half-opacity) and, where they apply, loading and invalid.
+- **The old stylesheets' rules leave them alone.** The old stylesheets (those `styles.css` lists) are mostly in no layer, so a rule of theirs
+  that can match an element wherever it is would beat every component's own style: one by an
+  element's name (`h1` to `h3`, `p`, `code`, `pre`, `kbd`, `samp`, `a`, `button`, the fields, a
+  checkbox's or a radio's label, also under `pointer: coarse`, `fieldset`), by a state or a
+  pseudo-element alone (`:focus-visible`, `::placeholder`), by an attribute alone, by `*` or by
+  `:is()`, or under what wraps every page (`#root`, `.tt-shell`, `.tt-body`, `.tt-page`). Every
+  element a component draws has a class that starts with `ui-` (a control's native element also
+  has `ui-control`), and each of those rules skips such elements: its subject carries
+  `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no specificity, and the
+  screens' own elements have no `ui-` class, so they are styled exactly as before. In
+  `ui/base.css`'s `@layer base` the layer alone already lets a component win; the opt-out stays
+  there too ([Where styles live](#where-styles-live)). Each component
+  draws its own focus ring (`--line-focus` in `--color-focus`, 3:1 on every ground). `css-check`
+  fails on such a rule outside `web/src/ui/` or in `web/src/ui/base.css` without it, unless its `EVERYWHERE` list allows the
+  selector, only for the properties it names, with the reason. `web/src/ui/elementRules.test.tsx`
+  draws every component (each gallery, and the overlays open) and fails when an element a
+  component draws has no `ui-` class or a rule of an old stylesheet reaches one;
+  `web/src/ui/controlRules.test.tsx` checks the controls the same way, and that no rule names a
+  `ui-` class outside `:where()`. A rule scoped by an old container (`.tt-x h2`) still reaches a
+  component put inside that container: a rebuilt screen leaves the container behind. Both tests
+  read every old stylesheet (`oldStylesheets()`, the files `styles.css` lists), not the list.
+- **What reaches every element on purpose** (`EVERYWHERE`): the page's `html` and `body`, border-box
+  sizing, the scrollbars' and the selection's colours, the search field's clear button, and two
+  rules for every field: the caret's colour, and 16px text in a window under 48rem (it keeps iOS
+  from zooming in on focus), with a mouse too. A field then has 16px text beside 14px buttons; its
+  height is set by the control scale, not by its text, so a row still lines up. (On a touch screen
+  a field's text is 16px in any window.)
+- **Headings.** The look of a heading comes from the type roles, not from the element: the display
+  face only from 20px up (`--type-display`, 24px: `PageHeader`'s title; `--type-title`, 20px: a
+  dialog's and a drawer's title) and Inter below. A screen's own heading is `Heading` (`level` for
+  the outline, `size` `display`, `title`, `section` (the default, 16px Inter) or `subsection`), never
+  a bare `<h2>`, which would get the old stylesheet's heavy display face.
+
+**The gallery.** `pnpm --filter @taskto/web run dev`, then `/_gallery` on the dev server: the colour
+and type roles and every component's specimens, with switches for light and dark, the sample second
+brand and the direction. It collects every `<Name>.gallery.tsx` beside the components
+(`import.meta.glob`), so a new component adds its own file. It exists on the dev server only:
+`main.tsx` opens it under `import.meta.env.DEV`, so a production build has none of its code. The
+query `?theme=dark&brand=harbor&dir=rtl` sets the switches, for captures. Its text goes through
+`t()` like every screen's (`gallery.*` in the locale files), so the gallery can be seen in each
+language.
 
 ## The buttons
 

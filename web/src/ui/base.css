@@ -1,19 +1,18 @@
-/* The base: what every page starts from. Elements (box sizing, the body, headings, links, the
-   selection, the focus ring, form fields) and the few utilities (tt-sr-only, tt-muted, tt-small,
-   tt-error, tt-center-text). docs/design.md, "Where styles live".
+/* The base: what every page starts from. The elements (the page, headings, links, the focus ring,
+   form fields) and the few utilities (tt-sr-only, tt-muted, tt-small, tt-error, tt-center-text).
+   docs/design.md, "Where styles live". Three parts, in this order (css-check pins it):
 
-   In @layer base, so a component's rule (@layer components) wins over these whatever their
-   specificity, and so does every screen's rule that is still in no layer. A value off the scales
-   is one of the old sizes, kept as an alias in legacy.css (--tt-text-body …), so this file holds
-   no literal size, space, radius, shadow or duration (css-check). */
+   1. @layer base: a component's rule (@layer components) wins over these whatever their
+      specificity, and so does every screen's rule that is still in no layer. Their element rules
+      leave the components' elements out all the same (see there).
+   2. In no layer, what reaches every element on purpose, the components' too (css-check's
+      EVERYWHERE): it wins over a component's own rule, as it did in the one stylesheet.
+   3. In no layer, the touch screen's checkbox, radio and label rules (see there).
+
+   A value off the scales is one of the old sizes, kept as an alias in legacy.css
+   (--tt-text-body …), so this file holds no literal size, space, radius, shadow or duration. */
 
 @layer base {
-  *,
-  *::before,
-  *::after {
-    box-sizing: border-box;
-  }
-
   html,
   body,
   #root {
@@ -29,120 +28,85 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* Every element a component of the design system draws has a class that starts with `ui-`, and
+     each element rule here that can match anywhere leaves those out with
+     `:not(:where([class^="ui-"], [class*=" ui-"]))`: `:where()` adds no specificity, so the screens'
+     own elements, which have no ui- class, are styled exactly as before. In this layer a component
+     already wins over these rules, so the opt-out is belt and braces: it keeps a rule off the
+     components should it ever leave the layer, as the block at the end of this file has. css-check
+     fails on an element rule here without it (docs/design.md, "The components"). */
+
   /* Headings are Bricolage Grotesque, heavy and tight as on the website, and break evenly. Text,
      labels and controls stay in Inter. */
-  h1,
-  h2,
-  h3 {
+  h1:not(:where([class^="ui-"], [class*=" ui-"])),
+  h2:not(:where([class^="ui-"], [class*=" ui-"])),
+  h3:not(:where([class^="ui-"], [class*=" ui-"])) {
     font-family: var(--tt-display);
     font-weight: 750;
     letter-spacing: -0.025em;
     text-wrap: balance;
   }
 
-  p {
+  p:not(:where([class^="ui-"], [class*=" ui-"])) {
     text-wrap: pretty;
   }
 
-  h1,
-  h2 {
+  h1:not(:where([class^="ui-"], [class*=" ui-"])),
+  h2:not(:where([class^="ui-"], [class*=" ui-"])) {
     margin: 0;
     font-size: var(--tt-text-h1);
     line-height: 1.3;
   }
 
-  h2 {
+  h2:not(:where([class^="ui-"], [class*=" ui-"])) {
     font-size: var(--tt-text-h2);
   }
 
-  h3 {
+  h3:not(:where([class^="ui-"], [class*=" ui-"])) {
     margin: 0;
     font-size: var(--tt-text-h3);
   }
 
-  code,
-  pre,
-  kbd,
-  samp {
+  code:not(:where([class^="ui-"], [class*=" ui-"])),
+  pre:not(:where([class^="ui-"], [class*=" ui-"])),
+  kbd:not(:where([class^="ui-"], [class*=" ui-"])),
+  samp:not(:where([class^="ui-"], [class*=" ui-"])) {
     font-family: var(--tt-mono);
     font-size: var(--tt-text-code);
   }
 
-  a {
+  a:not(:where([class^="ui-"], [class*=" ui-"])) {
     color: inherit;
     text-underline-offset: 0.2em;
     text-decoration-thickness: 1.5px;
   }
 
-  /* The parts of the browser nobody draws, drawn from the palette: a selection is mint with ink on
-     it, as on the website. */
-  ::selection {
-    background: var(--tt-accent);
-    color: var(--tt-on-accent);
-  }
-
-  input,
-  textarea {
-    caret-color: var(--tt-fg);
-  }
-
-  /* The search field's clear button is the browser's blue: drawn in the muted text colour, the
-     ink on hover (a mask, so the theme's colour fills it). */
-  input[type="search"]::-webkit-search-cancel-button {
-    -webkit-appearance: none;
-    appearance: none;
-    inline-size: 1rem;
-    block-size: 1rem;
-    cursor: pointer;
-    background-color: var(--tt-muted);
-    -webkit-mask: var(--tt-clear-icon) center / contain no-repeat;
-    mask: var(--tt-clear-icon) center / contain no-repeat;
-  }
-
-  input[type="search"]::-webkit-search-cancel-button:hover {
-    background-color: var(--tt-fg);
-  }
-
   /* A placeholder is text: the browser's own is a faded grey under 4.5:1 on a dark field. */
-  ::placeholder {
+  :not(:where([class^="ui-"], [class*=" ui-"]))::placeholder {
     color: var(--tt-muted);
     opacity: 1;
   }
 
-  * {
-    scrollbar-color: var(--tt-line-strong) transparent;
-  }
-
-  :focus-visible {
+  :focus-visible:not(:where([class^="ui-"], [class*=" ui-"])) {
     outline: 2.5px solid var(--tt-focus);
     outline-offset: 2px;
   }
 
-  input,
-  select,
-  textarea,
-  button {
+  button:not(:where([class^="ui-"], [class*=" ui-"])) {
     font: inherit;
     color: inherit;
   }
 
-  input,
-  select,
-  textarea {
+  input:not(:where([class^="ui-"], [class*=" ui-"])),
+  select:not(:where([class^="ui-"], [class*=" ui-"])),
+  textarea:not(:where([class^="ui-"], [class*=" ui-"])) {
+    font: inherit;
+    color: inherit;
     background: var(--tt-surface);
     border: 1px solid var(--tt-line-strong);
     border-radius: var(--tt-radius);
     padding: var(--tt-field-padding);
     min-height: 2.4rem;
-  }
-
-  /* Inputs under 16px make iOS zoom in on focus. */
-  @media (max-width: 48rem) {
-    input,
-    select,
-    textarea {
-      font-size: var(--text-lg);
-    }
   }
 
   .tt-sr-only {
@@ -173,13 +137,13 @@
 
   /* Fingers: every control is at least 44px each way (--tt-touch). */
   @media (pointer: coarse) {
-    input,
-    select {
+    input:not(:where([class^="ui-"], [class*=" ui-"])),
+    select:not(:where([class^="ui-"], [class*=" ui-"])) {
       min-height: var(--tt-touch);
     }
   }
 
-  fieldset {
+  fieldset:not(:where([class^="ui-"], [class*=" ui-"])) {
     margin: 0;
     padding: 0;
     border: 0;
@@ -210,20 +174,75 @@
   }
 }
 
+/* In no layer: what reaches every element on purpose, the design system's too (css-check's
+   EVERYWHERE): border-box sizing, the selection's and the scrollbars' colours, the caret, the search
+   field's clear button, and 16px text in every field in a narrow window, which keeps iOS from
+   zooming in on focus. In @layer base a component's own rule would win over them; here they win, as
+   they did when they were in the one stylesheet. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* The parts of the browser nobody draws, drawn from the palette: a selection is mint with ink on
+   it, as on the website. */
+::selection {
+  background: var(--tt-accent);
+  color: var(--tt-on-accent);
+}
+
+input,
+textarea {
+  caret-color: var(--tt-fg);
+}
+
+/* The search field's clear button is the browser's blue: drawn in the muted text colour, the
+   ink on hover (a mask, so the theme's colour fills it). */
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  inline-size: 1rem;
+  block-size: 1rem;
+  cursor: pointer;
+  background-color: var(--tt-muted);
+  -webkit-mask: var(--tt-clear-icon) center / contain no-repeat;
+  mask: var(--tt-clear-icon) center / contain no-repeat;
+}
+
+input[type="search"]::-webkit-search-cancel-button:hover {
+  background-color: var(--tt-fg);
+}
+
+* {
+  scrollbar-color: var(--tt-line-strong) transparent;
+}
+
+/* Inputs under 16px make iOS zoom in on focus. */
+@media (max-width: 48rem) {
+  input,
+  select,
+  textarea {
+    font-size: var(--tt-text-no-zoom);
+  }
+}
+
 /* Not in a layer, yet: on a touch screen a checkbox or a radio is the box alone and its label is
    the target. These rules won over single-class rules of the screens by specificity
    (`.tt-checks label`, `.tt-capture-check`, `.tt-file-input` …), and a layered rule would lose to
-   them. They move into @layer base once those screens' rules are in a layer too. */
+   them. They move into @layer base once those screens' rules are in a layer too. Being in no
+   layer, they would beat every component: the opt-out is what keeps them off the design system's
+   switch and checkbox, so it is not optional here. */
 @media (pointer: coarse) {
-  input[type="checkbox"],
-  input[type="radio"] {
+  input[type="checkbox"]:not(:where([class^="ui-"], [class*=" ui-"])),
+  input[type="radio"]:not(:where([class^="ui-"], [class*=" ui-"])) {
     min-height: 0;
     width: 1.25rem;
     height: 1.25rem;
   }
 
-  label:has(> input[type="checkbox"]),
-  label:has(> input[type="radio"]) {
+  label:has(> input[type="checkbox"]):not(:where([class^="ui-"], [class*=" ui-"])),
+  label:has(> input[type="radio"]):not(:where([class^="ui-"], [class*=" ui-"])) {
     min-height: var(--tt-touch);
     align-items: center;
   }
