@@ -32,6 +32,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"taskto.ai/taskto/internal/access"
@@ -73,6 +74,10 @@ type Index struct {
 	// afterCardSync, when set, is called by a card search after it has indexed the cards it
 	// looks in and before it finds them; tests change the world there.
 	afterCardSync func()
+	// afterRecordSync is the same for a search of app records.
+	afterRecordSync func()
+	// conversations is where the transcripts of conversations are read from (SetConversations).
+	conversations atomic.Pointer[ConversationSource]
 
 	locks sync.Map // space ID → chan struct{} of one slot: one sync of a space at a time
 	// syncWait is how long a search waits for a sync of a space already running before it
@@ -159,6 +164,16 @@ func (x *Index) syncLoop(ctx context.Context) {
 	if err := x.syncCards(ctx, ""); err != nil && ctx.Err() == nil {
 		x.log.Error("search: indexing cards at startup", "err", err)
 	}
+	// And every app record, in the same way.
+	if err := x.queueRecords(ctx); err != nil && ctx.Err() == nil {
+		x.log.Error("search: queueing app records at startup", "err", err)
+	}
+	if err := x.syncRecords(ctx, ""); err != nil && ctx.Err() == nil {
+		x.log.Error("search: indexing app records at startup", "err", err)
+	}
+	if err := x.queueConversations(ctx); err != nil && ctx.Err() == nil {
+		x.log.Error("search: queueing conversations at startup", "err", err)
+	}
 	tick := time.NewTicker(sweepEvery)
 	defer tick.Stop()
 	for {
@@ -176,6 +191,10 @@ func (x *Index) syncLoop(ctx context.Context) {
 			if _, err := x.Sync(ctx, sp); err != nil && ctx.Err() == nil {
 				x.log.Error("search: syncing a space", "space", sp.ID, "err", err)
 			}
+		}
+		x.syncConversationsInBackground(ctx)
+		if err := x.syncRecords(ctx, ""); err != nil && ctx.Err() == nil {
+			x.log.Error("search: indexing app records", "err", err)
 		}
 	}
 }

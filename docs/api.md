@@ -1642,6 +1642,111 @@ Read access to the space (`404` for one the caller can't read). Query: `q`, `lim
 Any member. The same, across the boards of every space of the workspace the caller can read.
 Both routes also take an access token.
 
+### Searching app records
+
+The records of personal apps are searched apart from documents and cards, by full text only,
+with the same words, phrases, scripts and limits. What is searched is the **values** of a
+record's text fields (strings, choices, with their labels as people read them, and barcodes)
+as the app's **live release** declares them: never a field's name, never a field the live
+release doesn't declare or a value of another type than its field's (no read of the record
+shows those), and nothing of a draft, so an app that was never published has no searched
+records, and one that is published has them from that moment. Deleted records, and the records of an archived app, are not
+searched. Records are never sent to an embeddings endpoint.
+
+Only the records the caller may read, in the apps they may open, are found, by the same rule
+every list of records goes by: the roles of the app decide whether they read every record or
+only the ones they made (a `user` role reads only its own; no role that reads records, none),
+inside the spaces they can read. Another member's private space, a shared space the caller isn't
+in, another workspace and an app whose roles leave the caller out are never searched, admins
+included. Results are newest change first, with no score: the order depends on the records the
+caller can read only, never on others'.
+
+The index follows the apps' rows: a record added, changed, deleted or restored, and every record
+of an app whose live release changes (a publish, a rollback), is queued in the same transaction, and
+a search indexes the queued records of the apps it looks in before it answers, so it never
+quotes text older than the record. As for cards, a search that still finds some behind says
+`"incomplete": true`, leaves them out, and has no `next_offset`; only the records the caller
+may read can make it so. An app that moves to another space is searched under the access to
+the space it is in then, and who may read what is checked again, through the same checks, after the
+records are found.
+
+### `GET /api/workspaces/{workspace}/spaces/{space}/search/records`
+
+Read access to the space (`404` for one the caller can't read). Query: `q`, `limit` and
+`offset`, as for a document search, with the same errors.
+
+```json
+{
+  "results": [
+    {
+      "space_id": 3,
+      "space_name": "Team",
+      "app_id": 9,
+      "app_name": "Expenses",
+      "record_id": 118,
+      "snippet": [{"text": "lunch at the "}, {"text": "orchard", "match": true}]
+    }
+  ],
+  "next_offset": 20
+}
+```
+
+- `snippet`: the passage of the record's values that matched, as plain text in pieces: never
+  markup.
+- `incomplete`, `next_offset`: as for cards.
+- The web app links a result to its app, `/w/{workspace}/apps/{space_id}-{app_id}`.
+
+### `GET /api/workspaces/{workspace}/search/records`
+
+Any member. The same, across the apps of every space of the workspace the caller can read.
+Both routes also take an access token.
+
+### Searching conversations
+
+A person's own conversations with the agent are searched apart too, by full text only: a
+conversation's title, and what was said in it (the person's messages and the agent's, as the
+agent runtime's transcript has them; not the system's instructions and not what a tool returned,
+and only the newest 256 KiB of a long conversation). Conversations are private to their owner:
+only the caller's own, in this workspace, as a member of it, are found, archived ones too, whoever
+else is in the workspace, and an administrator's included. They are never sent to an embeddings
+endpoint. A conversation whose title has every word of the query comes first, then the others, the
+conversation updated last first within each; no score is returned.
+
+The index follows the transcript, which the server doesn't see change as the agent writes. A
+conversation is marked updated, and so queued, when it is created, renamed or archived, when a
+message is sent to it, and when the agent runtime has dealt with that message (the end of the
+agent's reply); a search first reads again the transcripts of the caller's queued conversations,
+newest first, up to 60 of them and for at most 20 seconds, and never quotes a conversation that is
+queued. One that can't be read (the agent runtime is off or still starting, or the search ran out of
+time) is left out and the reply says `"incomplete": true`, with no `next_offset`; a later search finds
+it. A conversation the agent runtime has lost leaves the index, and one that is removed takes its
+index with it. The server also indexes them in the background, and at start the ones marked in the
+last day. What the agent said while a turn runs is found once the turn ends.
+
+### `GET /api/workspaces/{workspace}/search/conversations`
+
+Any member, with a session (an access token is not accepted: conversations are the person's, in
+their own browser). Query: `q`, `limit` and `offset`, as for a document search.
+
+```json
+{
+  "results": [
+    {
+      "conversation_id": 12,
+      "title": "Planning the trip",
+      "archived": false,
+      "updated_at": "2026-11-24T18:00:00.000Z",
+      "snippet": [{"text": "…a flight to "}, {"text": "Zanzibar", "match": true}]
+    }
+  ]
+}
+```
+
+- `snippet`: the passage of what was said that matched; empty if only the title matched.
+- `archived` and `title` are the conversation's now, not as it was indexed.
+- `incomplete`, `next_offset`: as for cards.
+- The web app links a result to `/w/{workspace}/conversations/{conversation_id}`.
+
 ### `GET /api/workspaces/{workspace}/search/settings`
 
 Any member. The workspace's embeddings model, or `null`, and how far the index is:

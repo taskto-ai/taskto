@@ -97,6 +97,68 @@
     }
   },
   {
+    "name": "search_records",
+    "description": "Search the records (rows) of the user's apps by their words, in the values of their text fields (strings, choices and barcodes the app's live release declares; never a field's name): every space the user can read, or one space. Only the records the user may read by their role in each app (all of an app's records, or only those they created) are searched; an app that is only a draft, an archived app and deleted records are not. Returns each record's space, app and id, and the passage that matched, newest change first; \"incomplete\": true means records that changed a moment ago were left out, so search again. Number, date and other non-text fields are not searched: use query_app_rows to filter on them. Read the record with query_app_rows or list_app_rows.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "the words to look for; at most 500 bytes of UTF-8 (500 characters if they are ASCII)"
+        },
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_conversations",
+    "description": "Search the user's own earlier conversations with the agent by their words, in their title and in what the user and the agent said in them. Only this user's conversations in this workspace, never anyone else's; the conversation you are in may be among the results. Returns each conversation's id, title, whether it is archived, when it was last updated and the passage that matched, best first; \"incomplete\": true means conversations that changed a moment ago were left out, so search again. Only the newest 256 KiB of a conversation are searched, so zero results do not prove a word is absent. Only what people and the agent said is searched, not what tools returned.",
+    "read_only": true,
+    "no_token": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "the words to look for; at most 500 bytes of UTF-8 (500 characters if they are ASCII)"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "list_docs",
     "description": "List the documents and files of a space, by path, a page at a time: pass the reply's \"next\" as \"after\" for the next page. Each has its size and \"versioned\": false for large files and audio and video, of which only the current version is kept.",
     "read_only": true,
