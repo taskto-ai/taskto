@@ -199,8 +199,14 @@ describe('ready checks', () => {
       go: async () => {},
       path: () => '/',
       page: {
-        getByLabel: (label, options) => (calls.push(['getByLabel', label, options]), target),
-        locator: (selector) => (calls.push(['locator', selector]), target),
+        getByLabel: (label, options) => {
+          calls.push(['getByLabel', label, options])
+          return target
+        },
+        locator: (selector) => {
+          calls.push(['locator', selector])
+          return target
+        },
       },
     }
     await SCREENS.find((x) => x.name === 'account-menu').show(s)

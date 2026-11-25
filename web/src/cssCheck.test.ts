@@ -274,7 +274,7 @@ test('a system colour is a colour literal too, outside a theme', () => {
   expect(theme.code).toBe(0)
 })
 
-test('a selector one screen declares, declared again in another screen\'s stylesheet, is declared twice', () => {
+test("a selector one screen declares, declared again in another screen's stylesheet, is declared twice", () => {
   const r = runFiles({
     'boards/boards.css': '.tt-card { margin: 0; }\n',
     'apps/apps.css': '\n\n.tt-card { padding: 0; }\n',
@@ -347,5 +347,10 @@ test("the app's stylesheets are the list styles.css imports, each file once", ()
     expect(listed(path), path).toBe(true)
   }
   // Nothing but the list: a rule here would be one more place every screen writes to.
-  expect(entry.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@import "[^"]+";/g, '').trim()).toBe('')
+  expect(
+    entry
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/@import "[^"]+";/g, '')
+      .trim(),
+  ).toBe('')
 })

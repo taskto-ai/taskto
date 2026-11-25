@@ -442,7 +442,8 @@ export function check(web) {
       } else seen.set(selector, { file, line })
     }
     if (file.startsWith(THEMES)) continue
-    const tokensOnly = file.startsWith(TOKENS_ONLY) && !DEFINE_TOKENS.some((d) => file === d || (d.endsWith('/') && file.startsWith(d)))
+    const tokensOnly =
+      file.startsWith(TOKENS_ONLY) && !DEFINE_TOKENS.some((d) => file === d || (d.endsWith('/') && file.startsWith(d)))
     for (const { property, value, line } of sheet.declarations) {
       const scale = tokensOnly && scaleLiteral(value, property)
       if (scale) {
