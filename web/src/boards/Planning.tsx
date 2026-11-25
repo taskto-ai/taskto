@@ -1,17 +1,21 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { Card } from '../api'
 import { useFormat, useT } from '../i18n'
-import { Icon } from '../shell/Icon'
+import { Button } from '../ui/Button'
+import { IconButton } from '../ui/IconButton'
+import { Input } from '../ui/Input'
+import { Label } from '../ui/Label'
+import { DueBadge, dueWords } from './BoardCard'
 import type { Fields } from './card'
-import { isOverdue, useToday } from './due'
+import { useDraft } from './drafts'
+import { dueState, useToday } from './due'
 
-// The card's due date and labels. A due date is a calendar day, so it reads the same wherever
-// it is seen; it is late from the day after, for a card that isn't done. Labels are free text
-// the server normalizes (Unicode form, case, spaces), so what people type is sent as it is and
-// the card shown is the server's. A label is added or removed over the latest card's, so
-// redoing the change keeps the labels others set. The due date is a draft until it is saved
-// (with Enter or the button), so typing a date a part at a time never saves the part.
-export function Planning({
+// The card's due date. A due date is a calendar day, so it reads the same wherever it is seen; it
+// is late from the day after, for a card that isn't done. The date is a draft until it is saved
+// (with Enter or the button, which shows once the draft differs), so typing a date a part at a
+// time never saves the part. The field itself never turns red: the badge beside it says the card
+// is late.
+export function Due({
   card,
   canWrite,
   busy,
@@ -23,7 +27,6 @@ export function Planning({
   onChange: (fields: Fields) => Promise<boolean>
 }) {
   const [due, setDue] = useState(card.due ?? '')
-  const [label, setLabel] = useState('')
   // The draft follows the card's date when that changes (a save, or someone else's edit),
   // unless it has been edited since: a date typed while a save was pending stays to be saved.
   const synced = useRef(card.due ?? '')
@@ -35,10 +38,69 @@ export function Planning({
   }, [card.due])
   const t = useT()
   const f = useFormat()
-  const editable = canWrite && card.column !== 'archived'
   const today = useToday()
-  const overdue = isOverdue(card, today)
+  const state = dueState(card, today)
+  // A date picked and not saved yet.
+  useDraft(canWrite && due !== '' && due !== (card.due ?? ''))
+  const badge = state && card.due && <DueBadge state={state} text={dueWords(t, state, card.due, today, f)} />
+  if (!canWrite || card.column === 'archived')
+    return badge || <span className="ui-board-muted">{t('boards.noDue')}</span>
+
+  const saveDue = (e: FormEvent) => {
+    e.preventDefault()
+    // Emptying a part of the field gives '': clearing is the button's.
+    if (due && due !== card.due) void onChange({ due })
+  }
+  return (
+    <form className="ui-board-inline" onSubmit={saveDue}>
+      <Input
+        type="date"
+        size="sm"
+        aria-label={t('boards.dueDate')}
+        value={due}
+        onChange={(e) => setDue(e.target.value)}
+        className="ui-board-date"
+      />
+      {due && due !== card.due && (
+        <Button type="submit" size="sm" disabled={busy} aria-label={t('boards.saveDue')}>
+          {t('boards.save')}
+        </Button>
+      )}
+      {card.due && (
+        <IconButton
+          icon="close"
+          size="sm"
+          label={t('boards.clearDue')}
+          disabled={busy}
+          onClick={() => onChange({ due: null })}
+        />
+      )}
+      {state !== 'later' && badge}
+    </form>
+  )
+}
+
+// The card's labels, each in the hue its name gives it. Labels are free text the server
+// normalizes (Unicode form, case, spaces), so what people type is sent as it is and the card
+// shown is the server's. A label is added or removed over the latest card's, so redoing the
+// change keeps the labels others set. A writer adds one with a small form behind the + button.
+export function Labels({
+  card,
+  canWrite,
+  busy,
+  onChange,
+}: {
+  card: Card
+  canWrite: boolean
+  busy: boolean
+  onChange: (fields: Fields) => Promise<boolean>
+}) {
+  const [adding, setAdding] = useState(false)
+  const [label, setLabel] = useState('')
+  const t = useT()
+  const editable = canWrite && card.column !== 'archived'
   const typed = label.trim()
+  useDraft(adding && typed !== '')
   const add = async (e: FormEvent) => {
     e.preventDefault()
     if (!typed) return
@@ -47,80 +109,62 @@ export function Planning({
     const sent = label
     if (await onChange((base) => ({ labels: [...base.labels, typed] }))) setLabel((now) => (now === sent ? '' : now))
   }
-  const saveDue = (e: FormEvent) => {
-    e.preventDefault()
-    // Emptying a part of the field gives '': clearing is the button's.
-    if (due && due !== card.due) void onChange({ due })
-  }
   return (
-    <>
-      <div className="tt-planning">
-        {editable ? (
-          <form className="tt-actions" onSubmit={saveDue}>
-            <label className="tt-inline-field">
-              {t('boards.dueDate')}
-              <input
-                type="date"
-                value={due}
-                data-overdue={overdue || undefined}
-                onChange={(e) => setDue(e.target.value)}
-              />
-            </label>
-            <button type="submit" className="tt-button" disabled={busy || !due || due === card.due}>
-              {t('boards.saveDue')}
-            </button>
-            {card.due && (
-              <button type="button" className="tt-button" disabled={busy} onClick={() => onChange({ due: null })}>
-                {t('boards.clearDue')}
-              </button>
-            )}
-          </form>
-        ) : card.due ? (
-          <p className="tt-due" data-overdue={overdue || undefined}>
-            {t(overdue ? 'boards.overdueOn' : 'boards.dueOn', { date: f.calendarDate(card.due) })}
-          </p>
-        ) : (
-          <p className="tt-muted">{t('boards.noDue')}</p>
-        )}
-      </div>
-      <section className="tt-planning" aria-label={t('boards.labels')}>
-        {card.labels.length > 0 ? (
-          <ul className="tt-labels">
-            {card.labels.map((l) => (
-              <li key={l} className="tt-label">
-                {l}
-                {editable && (
-                  <button
-                    type="button"
-                    className="tt-icon-button"
-                    aria-label={t('boards.removeLabel', { label: l })}
-                    disabled={busy}
-                    onClick={() => onChange((base) => ({ labels: base.labels.filter((x) => x !== l) }))}
-                  >
-                    <Icon name="close" />
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="tt-muted">{t('boards.noLabels')}</p>
-        )}
-        {editable && (
-          <form className="tt-actions" onSubmit={add}>
-            <input
-              aria-label={t('boards.labelField')}
-              value={label}
-              maxLength={30}
-              placeholder={t('boards.labelPlaceholder')}
-              onChange={(e) => setLabel(e.target.value)}
+    <div className="ui-board-labels">
+      {card.labels.length === 0 && !adding && <span className="ui-board-muted">{t('boards.noLabels')}</span>}
+      {card.labels.map((l) => (
+        <span key={l} className="ui-board-label">
+          <Label name={l} />
+          {editable && (
+            <IconButton
+              icon="close"
+              size="sm"
+              label={t('boards.removeLabel', { label: l })}
+              disabled={busy}
+              onClick={() => onChange((base) => ({ labels: base.labels.filter((x) => x !== l) }))}
             />
-            <button type="submit" className="tt-button" disabled={busy || !typed}>
-              {t('boards.addLabel')}
-            </button>
-          </form>
-        )}
-      </section>
-    </>
+          )}
+        </span>
+      ))}
+      {editable && !adding && (
+        <IconButton
+          icon="plus"
+          size="sm"
+          label={t('boards.newLabel')}
+          // Where the focus goes when the form closes, or a label's remove button goes.
+          data-focus-default
+          onClick={() => setAdding(true)}
+        />
+      )}
+      {editable && adding && (
+        <form
+          className="ui-board-inline"
+          aria-label={t('boards.newLabel')}
+          onSubmit={add}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              setAdding(false)
+            }
+          }}
+        >
+          <Input
+            size="sm"
+            className="ui-board-grow"
+            aria-label={t('boards.labelField')}
+            value={label}
+            maxLength={30}
+            onChange={(e) => setLabel(e.target.value)}
+            autoFocus
+          />
+          <Button type="submit" size="sm" disabled={busy || !typed}>
+            {t('boards.addLabel')}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
+            {t('common.cancel')}
+          </Button>
+        </form>
+      )}
+    </div>
   )
 }

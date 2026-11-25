@@ -17,18 +17,17 @@ scenario('a card is added to a board, moved between columns and commented on', a
   await page.getByRole('button', { name: 'Add', exact: true }).click()
   const column = (name) => page.getByRole('region', { name })
   await column('To do')
-    .getByRole('button', { name: /Write the release notes/ })
+    .getByRole('button', { name: /^Write the release notes/ })
     .waitFor()
 
-  // Open the card and move it to Doing.
+  // Open the card and move it to Doing with its status.
   await column('To do')
-    .getByRole('button', { name: /Write the release notes/ })
+    .getByRole('button', { name: /^Write the release notes/ })
     .click()
-  await page
-    .getByRole('article', { name: 'Write the release notes' })
-    .getByLabel('Column')
-    .selectOption({ label: 'Doing' })
-  await page.getByRole('article', { name: 'Write the release notes' }).getByLabel('Column').waitFor()
+  const card = page.getByRole('region', { name: 'Write the release notes' })
+  await card.getByRole('button', { name: 'Status: To do' }).click()
+  await card.getByRole('menuitem', { name: 'Doing' }).click()
+  await card.getByRole('button', { name: 'Status: Doing' }).waitFor()
 
   // A comment is kept with the card.
   await page.getByLabel('Comment', { exact: true }).fill('Started on the draft.')
@@ -38,29 +37,28 @@ scenario('a card is added to a board, moved between columns and commented on', a
   // Back on the board, the card is in Doing and no longer in To do; a reload keeps it there.
   await page.getByRole('button', { name: 'Close', exact: true }).click()
   await column('Doing')
-    .getByRole('button', { name: /Write the release notes/ })
+    .getByRole('button', { name: /^Write the release notes/ })
     .waitFor()
   await column('To do')
-    .getByRole('button', { name: /Write the release notes/ })
+    .getByRole('button', { name: /^Write the release notes/ })
     .waitFor({ state: 'detached' })
   await page.reload()
   await column('Doing')
-    .getByRole('button', { name: /Write the release notes/ })
+    .getByRole('button', { name: /^Write the release notes/ })
     .waitFor()
 
   // The comment was stored with the card, not only shown: the reopened card has it after the reload.
   await column('Doing')
-    .getByRole('button', { name: /Write the release notes/ })
+    .getByRole('button', { name: /^Write the release notes/ })
     .click()
   await page.getByText('Started on the draft.').waitFor()
 
-  // And on to Done.
-  await page
-    .getByRole('article', { name: 'Write the release notes' })
-    .getByLabel('Column')
-    .selectOption({ label: 'Done' })
+  // And on to Done, with the card's Move menu on the board (the way without a mouse).
   await page.getByRole('button', { name: 'Close', exact: true }).click()
+  await card.waitFor({ state: 'detached' })
+  await column('Doing').getByRole('button', { name: 'Move “Write the release notes”' }).click()
+  await page.getByRole('menuitem', { name: 'To Done' }).click()
   await column('Done')
-    .getByRole('button', { name: /Write the release notes/ })
+    .getByRole('button', { name: /^Write the release notes/ })
     .waitFor()
 })
