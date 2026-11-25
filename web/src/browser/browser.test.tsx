@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { BrowserStatus } from '../api'
 import { ConversationsPage } from '../conversations/ConversationsPage'
@@ -110,9 +110,9 @@ test('the help card shows the request as plain text, and Done answers the agent'
   const calls = await open(helpEntries(message))
   const card = await screen.findByRole('region', { name: 'The agent needs you in the browser' })
   expect(card.textContent).toContain('The agent needs you to sign in')
-  const said = card.querySelector('.tt-message-text')
-  expect(said?.textContent).toBe(message)
-  expect(said?.querySelector('img, strong')).toBeNull()
+  const said = within(card).getByText(message)
+  expect(said.textContent).toBe(message)
+  expect(said.querySelector('img, strong')).toBeNull()
   expect(card.querySelector('img')).toBeNull()
   expect(screen.getByText('Asked you to take over the browser')).toBeTruthy()
 
@@ -144,12 +144,16 @@ test("with the browser off, there is no browser button, and the card can't take 
   })
   const takeOver = await screen.findByRole('button', { name: 'Take over' })
   expect((takeOver as HTMLButtonElement).disabled).toBe(true)
-  expect(screen.queryByRole('button', { name: 'Show your browser' })).toBeNull()
+  // The conversation's menu has no browser switch.
+  fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+  expect(await screen.findByRole('menuitem', { name: 'Build an app in this conversation' })).toBeTruthy()
+  expect(screen.queryByRole('menuitem', { name: 'Show your browser' })).toBeNull()
 })
 
 test('no card when nothing is asked', async () => {
   await open(helpEntries('Sign in').slice(0, 1))
-  await screen.findByRole('button', { name: 'Show your browser' })
+  fireEvent.click(await screen.findByRole('button', { name: 'More actions' }))
+  await screen.findByRole('menuitem', { name: 'Show your browser' })
   expect(screen.queryByRole('region', { name: 'The agent needs you in the browser' })).toBeNull()
 })
 

@@ -5,6 +5,7 @@
 // button, which asks that updater for a run (docs/install.md#update-now).
 
 import { useEffect, useState } from 'react'
+
 import {
   ApiError,
   api,
@@ -22,7 +23,12 @@ import {
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
 import { InstallPanel } from '../pwa/InstallPanel'
-import { Alert, ConfirmButton, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Notice, type NoticeTone } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Alert, Facts, FormActions, Loading, Section, SettingsTab, useAction } from './parts'
 
 // `operator`: an admin who runs the server, the only one who sees its backups.
 export function AboutTab({ workspace, operator }: { workspace: number; operator: boolean }) {
@@ -38,30 +44,25 @@ export function AboutTab({ workspace, operator }: { workspace: number; operator:
   const credits = dictation.data?.credits ?? []
   const t = useT()
   return (
-    <div className="tt-settings">
+    <SettingsTab title={t('settings.about.title')} help={t('settings.about.licence')}>
       <InstallPanel />
-      <section className="tt-panel" aria-labelledby="tt-about">
-        <h2 id="tt-about">{t('settings.about.title')}</h2>
-        <p>{t('settings.about.licence')}</p>
-      </section>
-      <section className="tt-panel" aria-labelledby="tt-credits">
-        <h2 id="tt-credits">{t('settings.about.credits')}</h2>
+      <Section title={t('settings.about.credits')}>
         <Alert error={dictation.error} />
-        {dictation.data === undefined && !dictation.error && <p className="tt-muted">{t('app.loading')}</p>}
+        {dictation.data === undefined && !dictation.error && <Loading lines={2} />}
         {dictation.data !== undefined && credits.length === 0 && (
-          <p className="tt-muted">{t('settings.about.noCredits')}</p>
+          <p className="settings-muted">{t('settings.about.noCredits')}</p>
         )}
         {credits.length > 0 && (
-          <ul className="tt-credits">
+          <ul className="settings-list">
             {credits.map((c) => (
               <CreditItem key={`${c.name} ${c.by}`} credit={c} />
             ))}
           </ul>
         )}
-      </section>
+      </Section>
       {operator && <UpdatesPanel workspace={workspace} />}
       {operator && <BackupsPanel workspace={workspace} />}
-    </div>
+    </SettingsTab>
   )
 }
 
@@ -118,14 +119,14 @@ const isChannel = (c: string): c is (typeof CHANNELS)[number] => (CHANNELS as re
 
 type UpdateHealth = 'ok' | 'hold' | 'off' | 'stale' | 'failed' | 'blocked' | 'manualUpgrade'
 
-const UPDATE_CLASS: Record<UpdateHealth, string | undefined> = {
-  ok: 'tt-ok',
-  hold: 'tt-warning',
-  off: 'tt-muted',
-  stale: 'tt-warning',
-  failed: 'tt-warning',
-  blocked: 'tt-error',
-  manualUpgrade: 'tt-warning',
+const UPDATE_TONE: Record<UpdateHealth, NoticeTone> = {
+  ok: 'success',
+  hold: 'warning',
+  off: 'neutral',
+  stale: 'warning',
+  failed: 'warning',
+  blocked: 'danger',
+  manualUpgrade: 'warning',
 }
 
 // What the host's updater last did. The updater runs on the host, and the server only reads what
@@ -182,27 +183,33 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
     )
   }
   return (
-    <section className="tt-panel" aria-labelledby="tt-updates">
-      <h2 id="tt-updates">{t('settings.about.updates.title')}</h2>
-      <p className="tt-muted">{t('settings.about.updates.intro')}</p>
+    <Section
+      title={t('settings.about.updates.title')}
+      help={t('settings.about.updates.intro')}
+      actions={
+        health && (
+          <Badge tone={UPDATE_TONE[health]} dot={health === 'ok'}>
+            {t(`settings.about.updates.badge.${health}`)}
+          </Badge>
+        )
+      }
+    >
       {/* While an update goes on the server restarts, and a failed read is expected: UpdateNow says so. */}
       {!(st?.running || (st && u?.request.reason === 'pending')) && <Alert error={updates.error} />}
-      {!u && !updates.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {u && !u.configured && <p className="tt-muted">{t('settings.about.updates.notConfigured')}</p>}
-      {u?.configured && !st && !u.expects_status && <p className="tt-muted">{t('settings.about.updates.noStatus')}</p>}
+      {!u && !updates.error && <Loading lines={3} />}
+      {u && !u.configured && <Notice tone="neutral">{t('settings.about.updates.notConfigured')}</Notice>}
+      {u?.configured && !st && !u.expects_status && (
+        <Notice tone="neutral">{t('settings.about.updates.noStatus')}</Notice>
+      )}
       {u?.configured && !st && u.expects_status && (
-        <p className="tt-warning">
+        <Notice tone="warning">
           {t.rich('settings.about.updates.tooOld', { command: <code>{'taskto-update --publish-status'}</code> })}
-        </p>
+        </Notice>
       )}
-      {health && (
-        <p className={UPDATE_CLASS[health]} role={health === 'blocked' ? 'alert' : undefined}>
-          {t(`settings.about.updates.health.${health}`)}
-        </p>
-      )}
+      {health && <Notice tone={UPDATE_TONE[health]}>{t(`settings.about.updates.health.${health}`)}</Notice>}
       {needs && (
-        <>
-          <p>
+        <Panel padded className="settings-panel-body">
+          <p className="settings-text">
             {t.rich(
               needs.kind === 'blocked'
                 ? 'settings.about.updates.needs.blocked'
@@ -214,9 +221,11 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
               },
             )}
           </p>
-          {needs.code && <p>{t('settings.about.updates.why', { reason: reasonText(needs.code) })}</p>}
-          <p className="tt-muted">{t('settings.about.updates.needs.where')}</p>
-        </>
+          {needs.code && (
+            <p className="settings-text">{t('settings.about.updates.why', { reason: reasonText(needs.code) })}</p>
+          )}
+          <p className="settings-muted">{t('settings.about.updates.needs.where')}</p>
+        </Panel>
       )}
       {u?.configured && st && (
         <UpdateNow
@@ -230,51 +239,60 @@ function UpdatesPanel({ workspace }: { workspace: number }) {
           reasonText={reasonText}
         />
       )}
+      {mismatch && <Notice tone="warning">{t('settings.about.updates.mismatch')}</Notice>}
       {u && (
-        <dl className="tt-endpoint">
-          <dt>{t('settings.about.updates.running')}</dt>
-          <dd>
-            <code>{u.running_version}</code>
-          </dd>
-          {st?.recorded_version && (
-            <>
-              <dt>{t('settings.about.updates.recorded')}</dt>
-              <dd>
-                <code>{st.recorded_version}</code>
-                {mismatch && (
-                  <>
-                    <br />
-                    <span className="tt-warning">{t('settings.about.updates.mismatch')}</span>
-                  </>
-                )}
-              </dd>
-            </>
-          )}
-          {st && (
-            <>
-              <dt>{t('settings.about.updates.channel')}</dt>
-              <dd>
-                {t(st.hold ? 'settings.about.updates.channelHold' : 'settings.about.updates.channelName', {
-                  channel: isChannel(st.channel)
-                    ? t(`settings.about.updates.channelValue.${st.channel}`)
-                    : st.channel || '?',
-                })}
-              </dd>
-              <dt>{t('settings.about.updates.lastRun')}</dt>
-              <dd>{run(st.last_run)}</dd>
-              <dt>{t('settings.about.updates.lastChange')}</dt>
-              <dd>{run(st.last_change)}</dd>
-              {st.checked && (
-                <>
-                  <dt>{t('settings.about.updates.checked')}</dt>
-                  <dd>{`${f.dateTime(st.checked)} (${f.relative(st.checked)})`}</dd>
-                </>
-              )}
-            </>
-          )}
-        </dl>
+        <Panel padded>
+          <Facts
+            items={[
+              { key: 'running', term: t('settings.about.updates.running'), value: <code>{u.running_version}</code> },
+              ...(st?.recorded_version
+                ? [
+                    {
+                      key: 'recorded',
+                      term: t('settings.about.updates.recorded'),
+                      value: (
+                        <>
+                          <code>{st.recorded_version}</code>
+                          {mismatch && (
+                            <>
+                              {' '}
+                              <Badge tone="warning">{t('settings.about.updates.mismatchBadge')}</Badge>
+                            </>
+                          )}
+                        </>
+                      ),
+                    },
+                  ]
+                : []),
+              ...(st
+                ? [
+                    {
+                      key: 'channel',
+                      term: t('settings.about.updates.channel'),
+                      value: t(st.hold ? 'settings.about.updates.channelHold' : 'settings.about.updates.channelName', {
+                        channel: isChannel(st.channel)
+                          ? t(`settings.about.updates.channelValue.${st.channel}`)
+                          : st.channel || '?',
+                      }),
+                    },
+                    { key: 'lastRun', term: t('settings.about.updates.lastRun'), value: run(st.last_run) },
+                    { key: 'lastChange', term: t('settings.about.updates.lastChange'), value: run(st.last_change) },
+                    ...(st.checked
+                      ? [
+                          {
+                            key: 'checked',
+                            term: t('settings.about.updates.checked'),
+                            value: `${f.dateTime(st.checked)} (${f.relative(st.checked)})`,
+                          },
+                        ]
+                      : []),
+                  ]
+                : []),
+            ]}
+          />
+        </Panel>
       )}
-    </section>
+    </Section>
   )
 }
 
@@ -309,6 +327,7 @@ function UpdateNow({
 }) {
   const t = useT()
   const action = useAction()
+  const [confirmDialog, confirm] = useConfirm()
   const [requestedAt, setRequestedAt] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const st = report.status
@@ -338,6 +357,12 @@ function UpdateNow({
     return () => clearTimeout(timer)
   }, [busy, loading, settled, reload])
   const press = async () => {
+    const yes = await confirm({
+      title: t('settings.about.updates.now.title'),
+      body: t('settings.about.updates.now.question'),
+      confirmLabel: t('settings.about.updates.now.confirm'),
+    })
+    if (!yes) return false
     const ok = await action.run(async () => {
       const r = await api<UpdateRequested>(updateRequestPath(workspace), { method: 'POST', body: {} })
       setRequestedAt(r.requested_at)
@@ -348,50 +373,49 @@ function UpdateNow({
   }
   const outcome = answered && !busy && last
   return (
-    <div className="tt-update-now">
+    <>
       {busy && (
-        <p role="status">
+        <Notice tone="info">
           {t(running ? 'settings.about.updates.now.updating' : 'settings.about.updates.now.requested')}
-        </p>
+        </Notice>
       )}
-      {busy && loadError && <p className="tt-muted">{t('settings.about.updates.now.reconnecting')}</p>}
-      {gaveUp && <p className="tt-warning">{t('settings.about.updates.now.gaveUp')}</p>}
+      {busy && loadError && <p className="settings-muted">{t('settings.about.updates.now.reconnecting')}</p>}
+      {gaveUp && <Notice tone="warning">{t('settings.about.updates.now.gaveUp')}</Notice>}
       {outcome && (
-        <>
-          <p role="status" className={outcome.result === 'updated' ? 'tt-ok' : undefined}>
-            {t('settings.about.updates.now.outcome', { result: label(outcome.result) })}
-          </p>
-          {outcome.code && <p>{t('settings.about.updates.why', { reason: reasonText(outcome.code) })}</p>}
+        <Notice tone={outcome.result === 'updated' ? 'success' : 'neutral'}>
+          <p className="settings-text">{t('settings.about.updates.now.outcome', { result: label(outcome.result) })}</p>
+          {outcome.code && (
+            <p className="settings-text">{t('settings.about.updates.why', { reason: reasonText(outcome.code) })}</p>
+          )}
           {(outcome.result === 'skipped' || outcome.result === 'failed') && (
-            <p className="tt-muted">
+            <p className="settings-muted">
               {t.rich('settings.about.updates.now.hint', { command: <code>{'taskto-update --to VERSION'}</code> })}
             </p>
           )}
-        </>
+        </Notice>
       )}
       {!busy && req.available && (
-        <ConfirmButton
-          label={t('settings.about.updates.now.button')}
-          question={t('settings.about.updates.now.question')}
-          confirm={t('settings.about.updates.now.confirm')}
-          disabled={action.busy}
-          onConfirm={press}
-        />
+        <FormActions>
+          <Button disabled={action.busy} onClick={press}>
+            {t('settings.about.updates.now.button')}
+          </Button>
+        </FormActions>
       )}
       {!busy && !req.available && (reason === 'not_configured' || reason === 'unsupported' || reason === 'off') && (
-        <p className="tt-muted">{t(`settings.about.updates.now.unavailable.${reason}`)}</p>
+        <p className="settings-muted">{t(`settings.about.updates.now.unavailable.${reason}`)}</p>
       )}
       <Alert error={action.error} />
-    </div>
+      {confirmDialog}
+    </>
   )
 }
 
-const HEALTH_CLASS: Record<BackupStatus['health'], string | undefined> = {
-  none: 'tt-muted',
-  pending: undefined,
-  ok: 'tt-ok',
-  failing: 'tt-warning',
-  late: 'tt-error',
+const BACKUP_TONE: Record<BackupStatus['health'], NoticeTone> = {
+  none: 'neutral',
+  pending: 'info',
+  ok: 'success',
+  failing: 'warning',
+  late: 'danger',
 }
 
 function BackupsPanel({ workspace }: { workspace: number }) {
@@ -406,69 +430,92 @@ function BackupsPanel({ workspace }: { workspace: number }) {
   const failedSince =
     b?.last_error && b.last_error_at && (!b.last_success || Date.parse(b.last_error_at) > Date.parse(b.last_success))
   return (
-    <section className="tt-panel" aria-labelledby="tt-backups">
-      <h2 id="tt-backups">{t('settings.about.backups.title')}</h2>
+    <Section
+      title={t('settings.about.backups.title')}
+      actions={
+        b && (
+          <Badge tone={BACKUP_TONE[b.health]} dot={b.health === 'ok'}>
+            {t(`settings.about.backups.badge.${b.health}`)}
+          </Badge>
+        )
+      }
+    >
       <Alert error={backups.error} />
-      {!b && !backups.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {b && (
-        <p className={HEALTH_CLASS[b.health]} role={b.health === 'late' ? 'alert' : undefined}>
-          {t(`settings.about.backups.health.${b.health}`)}
-        </p>
-      )}
-      {running && <p>{t('settings.about.backups.running', { time: f.dateTime(attempt) })}</p>}
+      {!b && !backups.error && <Loading lines={3} />}
+      {b && <Notice tone={BACKUP_TONE[b.health]}>{t(`settings.about.backups.health.${b.health}`)}</Notice>}
+      {running && <p className="settings-text">{t('settings.about.backups.running', { time: f.dateTime(attempt) })}</p>}
       {b && b.health !== 'none' && (
-        <dl className="tt-endpoint">
-          <dt>{t('settings.about.backups.lastSuccess')}</dt>
-          <dd>
-            {b.last_success
-              ? `${f.dateTime(b.last_success)} (${f.relative(b.last_success)})`
-              : t('settings.about.backups.never')}
-          </dd>
-          {b.last_snapshot && (
-            <>
-              <dt>{t('settings.about.backups.snapshot')}</dt>
-              <dd>
-                <code>{b.last_snapshot.slice(0, 8)}</code>
-              </dd>
-            </>
-          )}
-          {failedSince && b.last_error_at && (
-            <>
-              <dt>{t('settings.about.backups.lastError')}</dt>
-              <dd>
-                {f.dateTime(b.last_error_at)}
-                <br />
-                <code>{b.last_error}</code>
-              </dd>
-            </>
-          )}
-          {b.next_attempt && (
-            <>
-              <dt>{t('settings.about.backups.nextAttempt')}</dt>
-              <dd>{f.dateTime(b.next_attempt)}</dd>
-            </>
-          )}
-          {b.at && (
-            <>
-              <dt>{t('settings.about.backups.schedule')}</dt>
-              <dd>
-                {t('settings.about.backups.scheduleAt', { at: b.at })}{' '}
-                {b.retries
-                  ? t('settings.about.backups.retries', {
-                      count: b.retries,
-                      every: f.number(Math.round((b.retry_every_seconds ?? 0) / 60), {
-                        style: 'unit',
-                        unit: 'minute',
-                        unitDisplay: 'long',
-                      }),
-                    })
-                  : t('settings.about.backups.noRetries')}
-              </dd>
-            </>
-          )}
-        </dl>
+        <Panel padded>
+          <Facts
+            items={[
+              {
+                key: 'lastSuccess',
+                term: t('settings.about.backups.lastSuccess'),
+                value: b.last_success
+                  ? `${f.dateTime(b.last_success)} (${f.relative(b.last_success)})`
+                  : t('settings.about.backups.never'),
+              },
+              ...(b.last_snapshot
+                ? [
+                    {
+                      key: 'snapshot',
+                      term: t('settings.about.backups.snapshot'),
+                      value: <code>{b.last_snapshot.slice(0, 8)}</code>,
+                    },
+                  ]
+                : []),
+              ...(failedSince && b.last_error_at
+                ? [
+                    {
+                      key: 'lastError',
+                      term: t('settings.about.backups.lastError'),
+                      value: (
+                        <>
+                          {f.dateTime(b.last_error_at)}
+                          <br />
+                          <code>{b.last_error}</code>
+                        </>
+                      ),
+                    },
+                  ]
+                : []),
+              ...(b.next_attempt
+                ? [
+                    {
+                      key: 'nextAttempt',
+                      term: t('settings.about.backups.nextAttempt'),
+                      value: f.dateTime(b.next_attempt),
+                    },
+                  ]
+                : []),
+              ...(b.at
+                ? [
+                    {
+                      key: 'schedule',
+                      term: t('settings.about.backups.schedule'),
+                      value: (
+                        <>
+                          {t('settings.about.backups.scheduleAt', { at: b.at })}{' '}
+                          {b.retries
+                            ? t('settings.about.backups.retries', {
+                                count: b.retries,
+                                every: f.number(Math.round((b.retry_every_seconds ?? 0) / 60), {
+                                  style: 'unit',
+                                  unit: 'minute',
+                                  unitDisplay: 'long',
+                                }),
+                              })
+                            : t('settings.about.backups.noRetries')}
+                        </>
+                      ),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </Panel>
       )}
-    </section>
+    </Section>
   )
 }
 
@@ -491,7 +538,7 @@ function CreditItem({ credit: c }: { credit: Credit }) {
           </a>
         ),
       })}
-      {c.note && <span className="tt-muted"> {c.note}</span>}
+      {c.note && <span className="settings-muted"> {c.note}</span>}
     </li>
   )
 }
