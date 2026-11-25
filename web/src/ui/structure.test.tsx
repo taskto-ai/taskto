@@ -240,7 +240,9 @@ describe('Table, sorted', () => {
       />,
     )
     expect(screen.getByRole('columnheader', { name: 'Seats' }).getAttribute('aria-sort')).toBe('descending')
-    expect(screen.getByRole('columnheader', { name: 'Plan' }).getAttribute('aria-sort')).toBe('none')
+    // A sortable column the rows aren't in order by says no order: only one header does.
+    expect(screen.getByRole('columnheader', { name: 'Plan' }).hasAttribute('aria-sort')).toBe(false)
+    expect(screen.getByRole('button', { name: 'Plan' })).toBeTruthy()
     // A column that can't be sorted says nothing of an order, and has no button.
     expect(screen.getByRole('columnheader', { name: 'Note' }).hasAttribute('aria-sort')).toBe(false)
     expect(screen.queryByRole('button', { name: 'Note' })).toBeNull()
