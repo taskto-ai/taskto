@@ -130,12 +130,9 @@ func (s *Service) Attach() error {
 	return s.o.Scheduler.RegisterServer(Kind, s.handle)
 }
 
+// handle runs a purge. A failure is logged, with its error, by the scheduler, and tried again.
 func (s *Service) handle(ctx context.Context, j schedule.Job) error {
-	err := s.Purge(ctx, j.UserID)
-	if err != nil {
-		slog.Warn("account deletion: the purge didn't finish; it is tried again", "user_id", j.UserID, "err", err)
-	}
-	return err
+	return s.Purge(ctx, j.UserID)
 }
 
 // SchedulePurge makes the purge of userID due at at, within tx (auth.DeletionScheduler). A purge
