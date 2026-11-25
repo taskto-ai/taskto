@@ -229,6 +229,11 @@ export async function activate(user: number, name?: string): Promise<RuntimeStat
       store = await OfflineStore.open(user)
       if (!current()) return abandon(store)
       const opened = store
+      // The tabs of the account tell each other when the database changed, so a list never stays as
+      // it was read when another tab changed the queue.
+      opened.connectTabs(
+        writerDeps.channel ?? ((name) => (typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(name))),
+      )
       const engine = new SyncEngine(opened, {
         // Who this browser says is signed in: a queue is sent only as its owner.
         signedIn: () => lastUser()?.id ?? null,

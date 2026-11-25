@@ -1044,6 +1044,7 @@
     "offline_nothing_to_change": "Nada é diferente, então não há o que alterar.",
     "offline_field_removed": "O app não tem mais o campo “{field}”.",
     "offline_item_changed": "Isto mudou em outra aba ou janela. Revise de novo.",
+    "offline_item_sending": "Este registro está a caminho do servidor (ou já está lá), então não pode ser descartado agora. A lista mostra em que pé ele está.",
     "offline_not_writer": "As alterações estão sendo feitas em outra aba. Assuma o controle aqui para alterar registros nesta aba.",
     "offline_copy_changed": "A cópia deste app neste dispositivo foi substituída durante a verificação. Ela aparece como está agora: revise de novo.",
     "offline_review_again": "O registro mudou de novo nesse meio tempo. Ele aparece como está agora: revise e escolha outra vez.",

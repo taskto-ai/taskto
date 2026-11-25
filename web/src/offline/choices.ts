@@ -100,7 +100,19 @@ async function stillShown(runtime: Runtime, item: OutboxItem, seen: Seen): Promi
 // asked (its version, its operation and its state): nothing else is removed.
 export async function discard(runtime: Runtime, item: OutboxItem, seen: SeenAs): Promise<void> {
   if (!runtime.writer.holds()) throw notWriter()
-  await chosen(() => runtime.store.discardItem(item.id, seen))
+  try {
+    await chosen(() => runtime.store.discardItem(item.id, seen))
+  } catch (e) {
+    // The store refused and every list of this tab reads again (`OfflineStore.keep`). When the
+    // item is on its way to the server (or the server has it), the person is told that, which is
+    // the truth, and not only that it changed.
+    if (e instanceof ApiError && e.code === 'offline_item_changed') {
+      const now = await runtime.store.getItem(item.id).catch(() => undefined)
+      if (now && (now.state === 'syncing' || now.state === 'synced' || now.unconfirmed))
+        throw new ApiError(409, 'the record is being sent', { code: 'offline_item_sending' })
+    }
+    throw e
+  }
   // A later change to the same record that waited for this one is sendable now.
   await runtime.engine.run()
 }

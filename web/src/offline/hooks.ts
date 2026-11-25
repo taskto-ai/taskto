@@ -51,9 +51,13 @@ export function useOfflineData(runtime: Runtime | null, scope?: Scope): OfflineD
     void read()
     const a = runtime.store.subscribe(() => void read())
     const b = runtime.engine.subscribe(() => void read())
+    // This tab becoming the writer (or ceasing to be) means the queue may have been changed by the
+    // tab that held the right meanwhile: what is shown is read again, never kept from before.
+    const c = runtime.writer.subscribe(() => void read())
     return () => {
       a()
       b()
+      c()
     }
   }, [runtime, read])
   return data

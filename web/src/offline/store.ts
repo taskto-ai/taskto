@@ -346,9 +346,19 @@ export class NotSaved extends Error {
 
 type Listener = () => void
 
+// The channel the tabs of an account tell each other on (a BroadcastChannel's shape).
+export type TabChannel = Pick<BroadcastChannel, 'postMessage' | 'close' | 'onmessage'>
+
+// A refusal that says the change was made on a view of the queue that is not what is stored.
+const staleView = (e: unknown) =>
+  e instanceof ItemChanged || e instanceof NotWriter || e instanceof RecordChanged || e instanceof CopyChanged
+
 export class OfflineStore {
   private listeners = new Set<Listener>()
   private closed = false
+  private tabs: TabChannel | null = null
+  // Told apart from the other tabs' on the channel.
+  private readonly tabId = Math.random().toString(36).slice(2)
   // The tab's identity as the offline writer, once the writer model is attached (writer.ts): the
   // changes only the writer makes are written only while the database says it is this one. Without
   // one nothing is checked (a tool or a test that has no competing tabs).
@@ -385,15 +395,59 @@ export class OfflineStore {
     return new OfflineStore(user, await openDatabase(name, SCHEMA_VERSION, MIGRATIONS))
   }
 
-  // Called after every change made through this store (another tab's are seen the next time
-  // its list is read).
+  // Called after every change made through this store, and when another tab of the account says it
+  // changed the database (`connectTabs`), or a refusal showed that what is on screen is stale
+  // (`refresh`): the lists read again.
   subscribe(fn: Listener): () => void {
     this.listeners.add(fn)
     return () => this.listeners.delete(fn)
   }
 
-  private changed() {
+  private notify() {
     for (const fn of [...this.listeners]) fn()
+  }
+
+  private changed() {
+    this.notify()
+    try {
+      this.tabs?.postMessage({ from: this.tabId })
+    } catch {
+      // The other tabs are not told: they read again the next time they are asked to.
+    }
+  }
+
+  // Joins the channel the tabs of this account tell each other on that the database changed: a
+  // tab's write is announced, and a tab that hears it tells its own subscribers (and does not
+  // announce it again). Without a channel (a browser that has none) a tab sees another's changes
+  // when its list is read again for another reason (a refusal, the writer role coming back).
+  connectTabs(channel: (name: string) => TabChannel | null) {
+    this.disconnectTabs()
+    try {
+      const chan = channel(`taskto-offline-changes-${this.user}`)
+      if (!chan) return
+      chan.onmessage = (e: MessageEvent) => {
+        const msg = e.data as { from?: string } | null
+        if (msg?.from !== this.tabId && !this.closed) this.notify()
+      }
+      this.tabs = chan
+    } catch {
+      this.tabs = null
+    }
+  }
+
+  private disconnectTabs() {
+    try {
+      this.tabs?.close()
+    } catch {
+      // Closed already.
+    }
+    this.tabs = null
+  }
+
+  // What is on screen was found to be stale (a change was refused as made on an older view of the
+  // item): every list of this tab reads the database again, at once.
+  refresh() {
+    if (!this.closed) this.notify()
   }
 
   // From now on the changes only the offline writer makes (a change to a record, a choice, a
@@ -477,8 +531,12 @@ export class OfflineStore {
       return out
     } catch (e) {
       // A refusal (the transaction is aborted, nothing is written) says so, rather than that the
-      // device could not keep it.
-      if (e instanceof Refused) throw e
+      // device could not keep it. One made on a stale view also makes every list of this tab read
+      // again, so the person's next attempt acts on what is really there.
+      if (e instanceof Refused) {
+        if (staleView(e)) this.refresh()
+        throw e
+      }
       throw asNotSaved(e)
     }
   }
@@ -811,6 +869,7 @@ export class OfflineStore {
 
   close() {
     this.closed = true
+    this.disconnectTabs()
     this.db.close()
   }
 

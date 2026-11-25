@@ -203,6 +203,18 @@ The rules:
   acknowledged (those leave with a download that holds their change, or are only cleared from the
   list). Discarding wakes the queue: a later change to the same record that waited for it is sent
   at once.
+- **A list is never left as it was read.** Every write to the database is announced on a
+  BroadcastChannel of the account (`OfflineStore.connectTabs`), and a tab that hears it reads its
+  lists again, so what another tab queued, sent or settled is shown without a reload. A tab that
+  becomes the writer (or stops being it) reads again too, since the tab that held the right
+  changed the queue meanwhile. And a change **refused** because it was made on an older view of
+  the queue (`ItemChanged`, `RecordChanged`, `CopyChanged`, `NotWriter`) makes the tab read again
+  at once, in the same step as the refusal, so the next press acts on what is really there: a
+  discard that was refused leaves the person with the record as it is now and the same question.
+  A discard of a record that has gone out meanwhile (it is syncing, or the server has it) says
+  that it is on its way to the server, rather than only that it changed; nothing is removed and
+  the record is sent as it always was. A browser without BroadcastChannel loses only the first
+  of these: the lists then read again for the other reasons.
 - **Signing out loses only what was shown.** The records the person is told they would lose are
   listed with their versions, and *Discard and sign out* approves exactly those: an item that was
   changed since (a newer edit coalesced into it) or made since is not agreed to, nothing is
