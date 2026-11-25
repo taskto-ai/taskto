@@ -110,6 +110,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `invite_other_email` | 403 | The invite is for another email address than the logged-in user's. |
 | `invite_account_exists` | 409 | An account with the invite's email exists: log in, then accept it. |
 | `locale_invalid` | 400 | Not a BCP 47 tag such as `pt-BR`, or `""`. |
+| `time_zone_invalid` | 400 | Not an IANA time zone name such as `Europe/Lisbon`, or `""`. |
 | `token_not_found` | 404 | No such access token of the caller's. |
 | `token_expiry_invalid` | 400 | `expires_at` isn't a future time in RFC 3339. |
 | `too_many_tokens` | 409 | The caller has `max` access tokens in the workspace: revoke one first. |
@@ -203,6 +204,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `app_template_board` | 400 | The template needs a board and none was given, or takes none and one was. |
 | `app_operation_invalid` | 422 | An action's `operation` isn't 8 to 64 letters, digits, `-` or `_`. |
 | `app_operation_reused` | 409 | The `operation` was used before for a different request. |
+| `app_token_rate_limited` | 429 | The caller's access tokens ran their budget of actions in this workspace (60 a minute); `Retry-After` says when to try again (params: `max`, `seconds`). |
 | `app_effects_backlog` | 409 | The app has `max` effects waiting: the action changed nothing. |
 | `app_effect_not_failed` | 409 | Only a failed effect is retried. |
 | `app_roles_invalid` | 400 | The role assignments name an unknown role, give a user no roles or twice, or are too many. |
@@ -410,10 +412,16 @@ workspace, and acts with exactly that user's access there, checked again on ever
   | `…/spaces/{space}/docs…`, `GET …/history…`, `…/restore/…` | the [knowledge base](#knowledge-base), all of it but removing old versions from history |
   | `GET …/search`, `GET …/spaces/{space}/search` | [searching](#search) |
   | `…/spaces/{space}/boards…` | the [boards](#boards), all of it |
+  | `GET …/apps`, `GET …/apps/{app}`, `GET …/apps/{app}/surface`, `GET …/apps/{app}/releases[/{release}]`, `GET …/apps/{app}/records…` (the list, `deleted`, `query` and a record's `history` and `effects`), `GET …/apps/{app}/effects`, `POST …/apps/{app}/actions` | [personal apps](#personal-apps): reading an app and its rows, and running its actions, as the token's user: the space's access and the app's roles are checked as for a session, and rows a token adds or changes are marked with its name |
 
-  Personal apps are not here: a personal access token reaches them only through the
-  [MCP tools](mcp.md) at `/mcp` (such as `list_apps` and `create_app`). The apps' REST routes
-  need a session and answer `403` to a token.
+  The rest of the apps' routes take a session only (`403` with a token): creating, changing,
+  moving, copying, previewing, publishing and rolling back an app, its roles, installing a
+  template, restoring a record, retrying an effect, a device's [offline
+  download](#get-appsappoffline) and the photo uploads and attachments. They are the web
+  app's own (the builder, a device's queue, bytes that aren't JSON), and a token builds and
+  changes apps through the [MCP tools](mcp.md) (`create_app`, `update_app`), which check the
+  same rules. A request to an apps route that names an account (`X-Taskto-Expected-User`, the
+  offline outbox's) is a session's: with a token it is `403` too.
 
   Every other route answers `403` to a request carrying a token, whatever else it carries
   (a session cookie too): logging in and out, setup, `GET /api/me`, invites, managing
@@ -642,7 +650,7 @@ Revokes the session and clears the cookie. `204`, also without a session.
 
 ```json
 {
-  "user": {"id": 1, "email": "owner@example.com", "name": "Owner", "locale": "pt-BR"},
+  "user": {"id": 1, "email": "owner@example.com", "name": "Owner", "locale": "pt-BR", "time_zone": "Europe/Lisbon"},
   "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}],
   "can_create_workspace": true,
   "is_operator": true
@@ -675,6 +683,12 @@ then follows the browser). A workspace's `locale` is its default language, or `"
 English. Only `/api/me` shows a user's own locale; member lists show nobody's. See
 [i18n.md](i18n.md).
 
+`user.time_zone` is the user's own time zone, an IANA name such as `Europe/Lisbon`, or `""` for none
+yet (the server then uses UTC). It is theirs in every workspace, and `/api/me` is the only place it is
+shown. What the server times for a person is timed by it: [due-date reminders](#due-date-reminders), and
+the [daily email summary](#get-apiworkspacesworkspacenotification-email) until the person chooses a zone
+for the summary. The web app sends the browser's once, when the account has none.
+
 ### `PATCH /api/me`
 
 `{"locale": "pt-BR"}` → the new `GET /api/me`. Changes the caller's own settings; a field
@@ -682,6 +696,18 @@ left out stays as it is. `locale` is a BCP 47 tag of a language, optionally with
 and a region, in canonical case (`pt-BR`, `zh-Hant-TW`, `sr-Latn`, `es-419`), or `""` for
 none; anything else, variants and extensions included (`de-CH-1901`), is a `400`. Such a
 tag is stored also when the web app has no translation for it. Requires a login (a session, not an access token).
+
+`{"time_zone": "Europe/Lisbon"}` sets the caller's time zone: an IANA name that the server's time zone
+database knows (`America/Sao_Paulo`, `Asia/Kolkata`, `UTC`), or `""` to clear it (UTC again). Anything
+else, `Local` and names longer than 64 bytes included, is a `400` `time_zone_invalid`, and nothing in
+the same request is changed. A change moves, in the same transaction, what was timed by the old zone:
+the caller's reminders for the cards assigned to them, and their daily email summaries that follow it.
+Setting the zone it already is changes nothing.
+
+`{"browser_time_zone": "Europe/Lisbon"}` is the web app's first guess: it sets the zone only if the
+caller has none, and is ignored otherwise (so a browser on a trip never replaces a zone a person
+picked). A name the server doesn't know is ignored too, with a `200`, not an error. If both fields are
+sent, `time_zone` is applied first.
 
 ### `POST /api/workspaces`
 
@@ -2423,12 +2449,21 @@ that person by two notifications: `card_due` on the morning of the due day and `
 the morning after. They are made by jobs on the general scheduler ([architecture.md](architecture.md)),
 kept in step with the card by the change that touches it:
 
-- **When.** The morning is 08:00 UTC. A due date is a calendar date and TaskTo doesn't know a
-  person's time zone, so one instant is used for everyone (the morning of the day in the Americas
-  and Europe, the afternoon in east Asia). A job whose time has already passed when the date or
-  assignee is set is not made: setting a card due today after 08:00 gets no reminder but still the
-  overdue notice, and a date in the past gets none. A reminder that is delivered after its day (a
-  server that was off) is dropped, since the overdue notice says what is true then.
+- **When.** The morning is 08:00 in the assignee's [time zone](#get-apime) (UTC for someone who has
+  none): the reminder at 08:00 on the due date, the overdue notice at 08:00 on the date after it. A
+  due date is a calendar date, so the time is worked out from the date and the zone, not as hours
+  from midnight UTC: it is 08:00 on the wall clock on both sides of a change to or from daylight
+  saving time (the two times can be 23 or 25 hours apart), and an 08:00 that a change of clocks skips
+  is the first moment after the gap. For someone east of UTC the reminder can come the evening before
+  in UTC. A job whose time has already passed when the date, the assignee or the zone is set is not
+  made: setting a card due today after 08:00 (in the assignee's zone) gets no reminder but still the
+  overdue notice, and a date in the past gets none. A reminder that is delivered after its day in
+  the assignee's zone (a server that was off) is dropped, since the overdue notice says what is true
+  then.
+- **Zone.** The assignee's, so giving the card to someone else times it by their zone. When a person
+  changes their time zone (`PATCH /api/me`), the jobs of every open card assigned to them are timed
+  again, in that request's transaction: a time that has passed by the new zone is not made up for, and
+  a notification that was already made for the card and its date is not made again.
 - **Who.** Only the assignee. A card assigned to the agent, or to nobody, has none. Changing the
   assignee cancels the previous person's and makes the new person's; changing or clearing `due`
   moves or cancels them; moving the card to `done` or archiving it cancels them, and moving it
@@ -2446,8 +2481,9 @@ kept in step with the card by the change that touches it:
   gets them back, for the cards still assigned to them and dated, when they are added to the space
   again (a workspace's invite gives back those of their private space; a shared space's come with
   adding them to it); a server that starts with dated cards that have none (made before reminders existed) schedules them.
-  A date the scheduler can't hold (the overdue notice of `8999-12-31` would be in the year 9000)
-  has no notice for that part, and the card is saved all the same.
+  A time the scheduler can't hold (it runs until the end of the year 8999 UTC, so for a card due on
+  `8999-12-31` the overdue notice is out of range in most zones) is not made, and the card is saved all
+  the same.
 - **Access.** When a job runs, in the transaction that makes the notification, it checks that it is
   still the job that was claimed, that the assignee may read the card's space (a person who left it,
   or the workspace, gets nothing), that the space and board aren't archived and that the card still
@@ -2498,8 +2534,10 @@ then, and everything can still be turned off). `address.state` is `unverified` (
 `pending` (a link was sent and may still be opened) or `verified`; nothing is sent unless it is
 `verified`. Each kind is `off`, `instant` (a mail soon after, one for each notification) or `digest`
 (counted in the daily summary, sent at `hour` o'clock, 0 to 23, of the IANA `timezone`; the default
-is 8 o'clock UTC; `chosen` is false until the person has set the time themselves, so a client may
-offer its own zone then and never replaces one they chose).
+is 8 o'clock in the person's own [time zone](#get-apime), UTC if they have none; `chosen` is false
+until the person has set the time themselves, and until then `timezone` is the profile's and follows
+a change of it. A client never needs to send a zone for the first summary, and one it sends is the
+person's choice from then on).
 
 #### `PUT /api/workspaces/{workspace}/notification-email`
 
@@ -2592,8 +2630,9 @@ their rows; its **writers** create and change apps and run their actions (which 
 rows). A viewer's action is `403`. **Sharing** an app is moving it to a shared space,
 with its rows (`…/move`); a whole workspace shares an app through a shared space everyone
 is a member of. Every route below is under
-`/api/workspaces/{workspace}/spaces/{space}/apps`, needs a session (`401`), goes through
-the [CSRF guard](#csrf) unless it is a `GET`, and answers `404` for a space or app the
+`/api/workspaces/{workspace}/spaces/{space}/apps`, needs a session (`401`), or an
+[access token](#access-tokens) on the routes that read an app and run its actions (the others
+answer a token `403`), goes through the [CSRF guard](#csrf) unless it is a `GET`, and answers `404` for a space or app the
 caller can't read, or that isn't where the path says (an app of another space), and `403`
 for a write the caller may only read: a viewer, or an archived space. Besides, `403` with
 the code `app_forbidden` is for something the space allows but the caller's **roles in the
@@ -2692,7 +2731,9 @@ The live records the caller may read, most recently changed first, at most 1,000
 "updated_by", "updated_action", "deleted_at", "deleted_by", "deleted_action"}`, data
 holding the fields the **live release's** collection declares (the draft's don't count until
 published); `created_by` and the others are
-`{"id", "name", "agent", "via"}` or `null`. Read scope and `403`/`404` as for the history.
+`{"id", "name", "agent", "via"}`, or `null` (the user's account is gone), or, for a change the
+server made on its own, `{"id": 0, "name": "", "agent": false, "system": {…}}` (see
+[a change made by the server](#a-change-made-by-the-server)). Read scope and `403`/`404` as for the history.
 
 ### `GET …/apps/{app}/records/query`
 
@@ -2749,18 +2790,43 @@ last digits.
 ### `GET …/apps/{app}/records/{record}/history`
 
 A record's versions, newest first, at most 200 (`truncated` says if older ones were left
-out): `{"record": {…}, "history": [{"revision": 3, "operation": "update", "data": {…},
+out; a record's history holds its newest 500 versions, and drops the oldest as new ones are made): `{"record": {…}, "history": [{"revision": 3, "operation": "update", "data": {…},
 "at": "…", "by": {"id", "name", "agent", "via"}, "action": "edit_expense"}, …],
 "truncated": false}`. `record` is the record as it is now, with its `revision`, `data`,
 who created, changed and deleted it, and `deleted_at` if it is deleted (its history can
 still be read). Data holds the fields the live release's collection declares. Needs reading the record:
 `404` for one the caller may not read or that doesn't exist, `403` with `read_records`
-for a role that reads no record.
+for a role that reads no record. `by` may be [a change made by the server](#a-change-made-by-the-server).
+
+#### A change made by the server
+
+Some changes to a record have no user: the server makes them itself, through the system writer,
+a Go API with no route, no tool and no way for an app's definition or a model to reach it (the
+integrations that write a payment link back to a record, or apply what a provider reported,
+use it). Its authority is only the fields an approved contract declares, checked when it writes
+against the live release; it has no roles, the record must still fit the collection, and it
+queues no effects. It is a change like any other: the revision goes up by one, a person's
+stale edit or an offline device's gets the usual `409 app_record_conflict` showing the
+server's value, and a write that sets what is already there changes nothing. In `by`,
+`updated_by` and the other authors of a record, such a change has no user:
+
+```json
+{"id": 0, "name": "", "agent": false,
+ "system": {"kind": "integration", "id": 7, "provider": "Stripe", "name": "payments"}}
+```
+
+`kind` is what acted (`integration`), `id` its id; `provider` and `name` are the integration's
+labels once the server can name it (absent until then), and `removed: true` stands in their place
+for an integration that no longer exists. The version's `action` is the normalized event that
+caused it (such as `payment.succeeded`). A `null` author still means only that an account was
+deleted, and `created_by` is never a system's: who may read their own records doesn't change.
 
 ### `GET …/apps/{app}/records/deleted`
 
 The app's deleted records the caller may read, most recently deleted first, at most 1,000
-(`truncated`), in the same shape as `GET …/records`.
+(`truncated`), in the same shape as `GET …/records`. A deleted record is kept for **90 days** by
+default (the operator's `-app-deleted-retention`, or for ever with `off`); after that it is
+removed with its history and its photos, and is no longer listed or restorable.
 
 ### `POST …/apps/{app}/records/{record}/restore`
 
@@ -2771,7 +2837,10 @@ record back, with its history, as a new revision, and answers with it. `409` wit
 the app has no room for it; `400` if it no longer fits the live release's collection, which
 changed since (the field's code, such as `app_field_required`; a draft that isn't published
 doesn't count); `409` with `app_offline` while the app is offline, `409 app_not_published`
-before the first release. The history and deleted routes work for an offline app, whose data is kept.
+before the first release. A record deleted longer ago than the retention window (see
+[the deleted ones](#get-appsapprecordsdeleted)) has been removed, and restoring it is `404`, as for
+a record that never was; restoring inside the window works as ever. The history and deleted routes
+work for an offline app, whose data is kept.
 
 ### `GET …/apps/{app}/roles`
 
@@ -3246,6 +3315,22 @@ with, for an update or a delete, the optional `"expectedRevision"` (see
 [Records](#records-revisions-history-and-deleting); `422` if it isn't a revision, or the
 action inserts, `409` `app_record_conflict` if the record has another one). A delete marks
 the record deleted: it can be restored.
+
+With an [access token](#access-tokens) the action runs as the token's user, the changes are marked
+with the token's name, and the user's tokens together (with `run_app_action` over MCP) have a
+**budget of 60 actions a minute** in a workspace, with a burst of 60: over it the answer is
+`429 app_token_rate_limited` with `Retry-After`, in seconds, and nothing is done, except that a
+request that already committed (the same `operation` and `release`) is answered with its receipt, for
+a client that lost the answer. A session is never limited. Deleted rows and their history are kept until a retention rule removes them, and none purges them yet, so a token's insert and delete cycles keep growing storage within its action budget. A token's `operation` keys are in the same scope as the browser's: **the key belongs to the
+user and the app, not to the credential**, so a token and a session (or two tokens) of one user who
+send the same key meet. A client should make a random key for each change (8 to 64 letters, digits,
+`-`, `_`) and never reuse one for another: the same key with the same request replays it, and the
+same key with a different request is `409 app_operation_reused`. The effects such an action sets going
+(a card, a document) are done by the server's worker, as the user and not through the token: a
+document's commit says it was made by "TaskTo app" for the user, whichever credential asked (the
+commit is found again by that name after a crash, so it doesn't carry the token's name), while a
+card made by an effect is marked with the token's name, like the record.
+
 The server checks it against the app (`422` for an event the app doesn't declare,
 another surface, a context field the collection doesn't have, a value that doesn't fit
 its field, or a row the app doesn't have), applies it, and answers with the
@@ -3432,6 +3517,8 @@ complete or fail, so one slow after its lease ran out can't end a retry made sin
 right to change that record, in the scope their roles give now); `409 app_effect_not_failed` for one
 that didn't fail; `409 app_effects_backlog` when the app already has 500 effects waiting (a retry is
 waiting work like any other); `404` for an effect of a record the caller can't read. The worker checks access again when it runs, so a retry never widens what anyone may do.
+A session only: an effect read with an [access token](#access-tokens) says `"can_retry": false`,
+since the route is not one a token reaches.
 
 #### `POST …/apps/{app}/actions/preview`
 

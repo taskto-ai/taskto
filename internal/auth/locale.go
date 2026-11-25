@@ -37,6 +37,8 @@ const errBadLocale = `locale must be a BCP 47 tag such as "pt-BR", or "" for non
 type MeUser struct {
 	User
 	Locale string `json:"locale"`
+	// TimeZone is their IANA time zone (timezone.go), or "" for none yet.
+	TimeZone string `json:"time_zone"`
 }
 
 // UserLocale returns the language userID picked: a BCP 47 tag, or "" for none.
@@ -46,20 +48,25 @@ func (s *Service) UserLocale(ctx context.Context, userID int64) (string, error) 
 	return locale, err
 }
 
-// handleUpdateMe changes the caller's own settings: for now, their language.
+// handleUpdateMe changes the caller's own settings: their language and their time zone.
 func (s *Service) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFrom(r.Context())
 	var req struct {
-		Locale *string `json:"locale"`
+		Locale          *string `json:"locale"`
+		TimeZone        *string `json:"time_zone"`
+		BrowserTimeZone *string `json:"browser_time_zone"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
+	if req.Locale != nil && !ValidLocale(*req.Locale) {
+		writeError(w, http.StatusBadRequest, apierr.CodeLocaleInvalid, errBadLocale)
+		return
+	}
+	if !s.updateTimeZone(w, r, u.ID, req.TimeZone, req.BrowserTimeZone) {
+		return
+	}
 	if req.Locale != nil {
-		if !ValidLocale(*req.Locale) {
-			writeError(w, http.StatusBadRequest, apierr.CodeLocaleInvalid, errBadLocale)
-			return
-		}
 		if _, err := s.db.ExecContext(r.Context(), `UPDATE users SET locale = ? WHERE id = ?`, *req.Locale, u.ID); err != nil {
 			serverError(w, r, err)
 			return

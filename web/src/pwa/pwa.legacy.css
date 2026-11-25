@@ -1,0 +1,39 @@
+/* The installed app: install steps and the update prompt (docs/pwa.md).
+
+   Its rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
+   and their order with the other files is styles.css's (docs/design.md, "Where styles live").
+   Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
+
+.tt-steps {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding-inline-start: 1.25rem;
+}
+
+/* The update prompt: at the bottom, over the page, clear of the home bar. */
+.tt-update {
+  position: fixed;
+  inset-inline: 0.75rem;
+  inset-block-end: calc(0.75rem + env(safe-area-inset-bottom));
+  z-index: 50;
+  margin-inline: auto;
+  max-width: 28rem;
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  background: var(--tt-surface);
+  border: 1px solid var(--tt-line-strong);
+  border-radius: 12px;
+  box-shadow: var(--tt-shadow-pop);
+}
+
+.tt-update p {
+  margin: 0;
+}
+
+.tt-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

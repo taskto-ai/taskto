@@ -1,52 +1,80 @@
 import type { Card } from '../api'
 import { useT } from '../i18n'
+import { AgentDot } from '../ui/AgentDot'
+import { Avatar } from '../ui/Avatar'
+import { Menu, MenuButton, MenuItem, MenuList } from '../ui/Menu'
 import type { Person } from './people'
 import { assigneeLabel } from './text'
 
-// Who the card is for: nobody, the agent, or someone who can read the space. Someone assigned
-// who has since lost access stays listed until the assignee is changed.
+// Who the card is for: nobody, the agent, or someone who can read the space. A writer picks from
+// a menu. Someone assigned who has since lost access stays listed until the assignee is changed;
+// an account that was deleted is shown as "Deleted user" and can't be picked.
 export function Assignee({
   card,
+  canWrite,
   people,
   busy,
   onSet,
 }: {
   card: Card
+  canWrite: boolean
   people: Person[] | undefined
   busy: boolean
   onSet: (assignee: Card['assignee']) => void
 }) {
   const a = card.assignee
   const t = useT()
+  const shown = a ? <Who assignee={a} /> : <span className="ui-board-muted">{t('boards.nobody')}</span>
+  if (!canWrite) return shown
+
   const value = !a ? '' : a.kind === 'deleted' ? 'deleted' : a.kind === 'agent' ? 'agent' : `user:${a.id}`
   const listed = people ?? []
   const others =
     a?.kind === 'user' && !listed.some((p) => p.id === a.id) ? [{ id: a.id, name: assigneeLabel(t, a) }] : []
+  const choose = (v: string, assignee: Card['assignee']) => {
+    if (v !== value) onSet(assignee)
+  }
+  const mark = (v: string) => (v === value ? ('check' as const) : undefined)
   return (
-    <label className="tt-inline-field">
-      {t('boards.assignee')}
-      <select
-        value={value}
-        disabled={busy}
-        onChange={(e) => {
-          const v = e.target.value
-          onSet(v === '' ? null : v === 'agent' ? { kind: 'agent' } : { kind: 'user', id: Number(v.slice(5)) })
-        }}
-      >
-        {/* The account that was assigned is gone: shown as it is, not pickable; choosing anyone else replaces it. */}
-        {a?.kind === 'deleted' && (
-          <option value="deleted" disabled>
-            {t('common.deletedUser')}
-          </option>
-        )}
-        <option value="">{t('boards.nobody')}</option>
-        <option value="agent">{t('boards.agent')}</option>
+    <Menu align="start">
+      <MenuButton size="sm" label={t('boards.assignee')} disabled={busy} className="ui-board-value-button">
+        {shown}
+      </MenuButton>
+      <MenuList>
+        <MenuItem icon={mark('')} onSelect={() => choose('', null)}>
+          {t('boards.nobody')}
+        </MenuItem>
+        <MenuItem icon={mark('agent')} onSelect={() => choose('agent', { kind: 'agent' })}>
+          <span className="ui-board-value">
+            <AgentDot />
+            {t('boards.agent')}
+          </span>
+        </MenuItem>
         {[...others, ...listed].map((p) => (
-          <option key={p.id} value={`user:${p.id}`}>
-            {p.name}
-          </option>
+          <MenuItem
+            key={p.id}
+            icon={mark(`user:${p.id}`)}
+            onSelect={() => choose(`user:${p.id}`, { kind: 'user', id: p.id })}
+          >
+            <span className="ui-board-value">
+              <Avatar size="sm" name={p.name} decorative />
+              {p.name}
+            </span>
+          </MenuItem>
         ))}
-      </select>
-    </label>
+      </MenuList>
+    </Menu>
+  )
+}
+
+// The person the card is for, or the agent, with their mark.
+function Who({ assignee }: { assignee: NonNullable<Card['assignee']> }) {
+  const t = useT()
+  const name = assigneeLabel(t, assignee)
+  return (
+    <span className="ui-board-value">
+      {assignee.kind === 'agent' ? <AgentDot /> : <Avatar size="sm" name={name} decorative />}
+      {name}
+    </span>
   )
 }

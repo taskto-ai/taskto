@@ -123,7 +123,9 @@ agent runtime (Node sidecar) ── Pi Durable: conversations, tasks, documents
   agent's tools, or the knowledge base and boards through the REST API. They authenticate
   with a personal access token: one user's in one workspace, with exactly their access,
   checked on every request, and never good for the account itself ([mcp.md](mcp.md),
-  [api.md](api.md#access-tokens)). The app routes take a session only, for now.
+  [api.md](api.md#access-tokens)). The routes that read an app and its rows, and `POST …/actions`, take a token too,
+  with a budget of actions; building, publishing, roles, the offline download and uploads stay
+  behind a session.
 - **CLI workers:** a conversation can run on the official Claude Code, Codex or Grok Build
   CLI, signed in with the user's own subscription. Go runs the CLIs: in a worker container
   where each user is a Unix user of their own, or, on a one-user install, in the server
@@ -194,7 +196,11 @@ no extra process); it has no feature of its own.
   the space or workspace (`0038`) and hooks in the transaction that adds them back make them again
   (`access.Checker.OnMemberAdded` for a shared space, `auth.Service.OnMemberAdded` for a workspace;
   neither package knows the boards), and the server schedules the jobs of cards dated before
-  reminders existed when it starts (`boards.Service.ReconcileReminders`).
+  reminders existed when it starts (`boards.Service.ReconcileReminders`). Their time is 08:00 on the
+  wall clock of the assignee's time zone (`users.time_zone`, `0047`), worked out from the card's date
+  with `schedule.LocalHour`; a change of a person's zone reaches the jobs through a hook in the
+  transaction that stores it (`auth.Service.OnTimeZoneChanged`: `boards.Service.SyncTimeZone` and
+  `notifications.Service.SyncTimeZone`), so auth knows no feature that is timed by it.
 
 ## Agent safety
 

@@ -283,8 +283,9 @@ test('signing out removes this device first, while the session can still say who
   })
   render(<App />)
   await screen.findByRole('heading', { name: 'Notifications' })
+  fireEvent.click(screen.getByRole('button', { name: /^Account: Owner/ }))
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Log out' }))
   })
   await screen.findByRole('heading', { name: 'Log in' })
   const order = calls
@@ -490,7 +491,7 @@ test('an empty inbox says what will show there', async () => {
 
 // --- The shell: the bell, and the address a push opens --------------------------------------
 
-test('the top bar has a bell with the unread count, which opens the inbox', async () => {
+test("the sidebar's inbox has the unread count, which opens it", async () => {
   window.history.replaceState(null, '', '/w/1/home')
   fakeFetch({
     'GET /api/workspaces/1/notifications/count': { body: { unread: 120 } },
@@ -500,7 +501,7 @@ test('the top bar has a bell with the unread count, which opens the inbox', asyn
   render(<Shell me={me} onLogout={() => {}} />)
   const bell = await screen.findByRole('link', { name: 'Notifications, 120 unread' })
   expect(bell.getAttribute('href')).toBe('/w/1/notifications')
-  expect(bell.textContent).toBe('99+')
+  expect(bell.textContent).toBe('Notifications99+')
   fireEvent.click(bell)
   await screen.findByRole('heading', { name: 'Notifications' })
 })
@@ -510,7 +511,7 @@ test('a server without an inbox, or one that fails, leaves the bell quiet and th
   fakeFetch({ 'GET /api/workspaces/1/spaces': { body: { spaces: [] } } })
   render(<Shell me={me} onLogout={() => {}} />)
   const bell = await screen.findByRole('link', { name: 'Notifications' })
-  expect(bell.textContent).toBe('')
+  expect(bell.textContent).toBe('Notifications')
 })
 
 test('the address a push opens reads the notification as the person, marks it read and goes where it leads', async () => {
@@ -730,11 +731,9 @@ test('email is chosen per kind, as it happens or in a daily summary, and is off 
 
   const puts = calls.filter((c) => c.method === 'PUT').map((c) => c.body as Record<string, unknown>)
   expect(puts[0]).toEqual({ kinds: { card_assigned: 'instant' } })
-  // The first summary takes the person's own time zone along.
-  expect(puts[1]?.kinds).toEqual({ app_effect_failed: 'digest' })
-  const first = puts[1]?.digest as { hour: number; timezone: string } | undefined
-  expect(first?.hour).toBe(8)
-  expect(puts[2]).toEqual({ digest: { hour: 18, timezone: first?.timezone } })
+  // The first summary sends no time zone: the server uses the one of the person's profile.
+  expect(puts[1]).toEqual({ kinds: { app_effect_failed: 'digest' } })
+  expect(puts[2]).toEqual({ digest: { hour: 18, timezone: 'UTC' } })
 })
 
 test('every kind that can be mailed has a choice of its own, off until chosen', async () => {
@@ -848,12 +847,10 @@ test('a confirmation link that does not work says why', async () => {
   await screen.findByText(/That confirmation link doesn't work/)
 })
 
-test("a time zone the person picked is not replaced by the browser's when a summary is turned on again", async () => {
+test("a time zone the person picked for the summary is not replaced by their profile's when it is turned on again", async () => {
   pushBrowser({ permission: 'denied' })
-  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
-    timeZone: 'America/New_York',
-  } as Intl.ResolvedDateTimeFormatOptions)
-  let saved = emailChoices()
+  // The server says the summary is in the zone of the person's profile until they choose one for it.
+  let saved = emailChoices({ digest: { hour: 8, timezone: 'America/New_York', chosen: false } })
   const calls = fakeFetch({
     'GET /api/workspaces/1/notification-email': () => ({ body: saved }),
     'PUT /api/workspaces/1/notification-email': (call) => {
@@ -885,4 +882,35 @@ test("a time zone the person picked is not replaced by the browser's when a summ
   const puts = calls.filter((c) => c.method === 'PUT').map((c) => c.body as { digest?: unknown })
   expect(puts[puts.length - 1]).toEqual({ kinds: { card_assigned: 'digest' } })
   expect(saved.digest.timezone).toBe('UTC')
+})
+
+test("a new time zone is shown by the summary, which follows it, and not sent back as the summary's own", async () => {
+  pushBrowser({ permission: 'denied' })
+  // The summary is on, and follows the profile's zone (Lisbon) until one is chosen for it.
+  let profile = 'Europe/Lisbon'
+  const calls = fakeFetch({
+    'GET /api/workspaces/1/notification-email': () => ({
+      body: emailChoices({
+        kinds: { ...emailChoices().kinds, card_assigned: 'digest' },
+        digest: { hour: 8, timezone: profile, chosen: false },
+      }),
+    }),
+    'PATCH /api/me': (call) => {
+      profile = (call.body as { time_zone: string }).time_zone
+      return { body: { ...me, user: { ...me.user, time_zone: profile } } }
+    },
+    'PUT /api/workspaces/1/notification-email': (call) => ({
+      body: emailChoices({ digest: { ...(call.body as { digest: object }).digest, chosen: true } }),
+    }),
+  })
+  render(<NotificationsTab me={1} workspace={1} timeZone="Europe/Lisbon" />)
+  const summaryZone = (await screen.findByLabelText('Time zone')) as HTMLSelectElement
+  expect(summaryZone.value).toBe('Europe/Lisbon')
+
+  fireEvent.change(screen.getByLabelText('Your time zone'), { target: { value: 'Asia/Tokyo' } })
+  await waitFor(() => expect((screen.getByLabelText('Time zone') as HTMLSelectElement).value).toBe('Asia/Tokyo'))
+  // Changing the hour now keeps the zone the server reported, Tokyo, not the one from before.
+  fireEvent.change(screen.getByLabelText('Send the daily summary at'), { target: { value: '18' } })
+  await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+  expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ digest: { hour: 18, timezone: 'Asia/Tokyo' } })
 })

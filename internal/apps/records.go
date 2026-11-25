@@ -78,7 +78,7 @@ const (
 	recordColumns = `
 	SELECT r.id, r.revision, r.data, r.created_by,
 		r.created_at, coalesce(cu.name, ''), r.created_by_agent, r.created_via, coalesce(r.created_action, ''),
-		r.updated_at, r.updated_by, coalesce(uu.name, ''), r.updated_by_agent, r.updated_via, coalesce(r.updated_action, ''),
+		r.updated_at, r.updated_by, coalesce(uu.name, ''), r.updated_by_agent, r.updated_via, coalesce(r.updated_action, ''), r.updated_system,
 		r.deleted_at, r.deleted_by, coalesce(du.name, ''), r.deleted_by_agent, r.deleted_via, coalesce(r.deleted_action, '')`
 	recordFrom = `
 	FROM app_rows r
@@ -95,10 +95,10 @@ func scanRecord(row scanner, def Definition) (Record, sql.NullInt64, error) {
 	var creator, updater, deleter sql.NullInt64
 	var data, createdName, updatedName, deletedName string
 	var createdAgent, updatedAgent, deletedAgent bool
-	var createdVia, updatedVia, deletedVia sql.NullString
+	var createdVia, updatedVia, deletedVia, updatedSystem sql.NullString
 	if err := row.Scan(&rec.ID, &rec.Revision, &data, &creator,
 		&rec.CreatedAt, &createdName, &createdAgent, &createdVia, &rec.CreatedAction,
-		&rec.UpdatedAt, &updater, &updatedName, &updatedAgent, &updatedVia, &rec.UpdatedAction,
+		&rec.UpdatedAt, &updater, &updatedName, &updatedAgent, &updatedVia, &rec.UpdatedAction, &updatedSystem,
 		&rec.DeletedAt, &deleter, &deletedName, &deletedAgent, &deletedVia, &rec.DeletedAction); err != nil {
 		return Record{}, sql.NullInt64{}, err
 	}
@@ -108,7 +108,7 @@ func scanRecord(row scanner, def Definition) (Record, sql.NullInt64, error) {
 	}
 	rec.Data = declared(def, fields)
 	rec.CreatedBy = author(creator, createdName, createdAgent, createdVia)
-	rec.UpdatedBy = author(updater, updatedName, updatedAgent, updatedVia)
+	rec.UpdatedBy = authorOrSystem(updater, updatedName, updatedAgent, updatedVia, updatedSystem)
 	rec.DeletedBy = author(deleter, deletedName, deletedAgent, deletedVia)
 	return rec, creator, nil
 }
@@ -154,7 +154,7 @@ func (s *Service) recordHistory(ctx context.Context, sp access.Space, a Actor, a
 		return History{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT h.revision, h.operation, h.data, h.at, h.actor, coalesce(u.name, ''), h.actor_agent, h.actor_via, coalesce(h.action, ''), h.synthetic
+		SELECT h.revision, h.operation, h.data, h.at, h.actor, coalesce(u.name, ''), h.actor_agent, h.actor_via, coalesce(h.action, ''), h.synthetic, h.actor_system
 		FROM app_row_history h LEFT JOIN users u ON u.id = h.actor
 		WHERE h.row_id = ? AND h.app_id = ?
 		ORDER BY h.revision DESC LIMIT ?`, id, appID, MaxHistory+1)
@@ -168,8 +168,8 @@ func (s *Service) recordHistory(ctx context.Context, sp access.Space, a Actor, a
 		var data, name string
 		var actor sql.NullInt64
 		var agent bool
-		var via sql.NullString
-		if err := rows.Scan(&ver.Revision, &ver.Operation, &data, &ver.At, &actor, &name, &agent, &via, &ver.Action, &ver.Synthetic); err != nil {
+		var via, system sql.NullString
+		if err := rows.Scan(&ver.Revision, &ver.Operation, &data, &ver.At, &actor, &name, &agent, &via, &ver.Action, &ver.Synthetic, &system); err != nil {
 			return History{}, err
 		}
 		var fields map[string]any
@@ -177,7 +177,7 @@ func (s *Service) recordHistory(ctx context.Context, sp access.Space, a Actor, a
 			return History{}, fmt.Errorf("row %d revision %d: %w", id, ver.Revision, err)
 		}
 		ver.Data = declared(def, fields)
-		ver.By = author(actor, name, agent, via)
+		ver.By = authorOrSystem(actor, name, agent, via, system)
 		out.History = append(out.History, ver)
 	}
 	if err := rows.Err(); err != nil {
@@ -294,7 +294,7 @@ func (s *Service) restoreRecord(ctx context.Context, sp access.Space, a Actor, a
 		at := now()
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE app_rows SET revision = ?, deleted_at = NULL, deleted_by = NULL, deleted_by_agent = 0, deleted_via = NULL, deleted_action = NULL,
-				updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?, updated_action = NULL
+				updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?, updated_action = NULL, updated_system = NULL
 			WHERE id = ? AND app_id = ?`,
 			revision+1, at, a.UserID, a.Agent, via(a), id, appID); err != nil {
 			return err

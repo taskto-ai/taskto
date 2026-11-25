@@ -6,7 +6,9 @@ and build apps and read their data. They get
 the same tools as the conversation agent ([agent-tools.md](agent-tools.md)), and act as
 you, with exactly your access, in one workspace.
 
-Scripts can use the [REST API](api.md#access-tokens) with the same token.
+Scripts can use the [REST API](api.md#access-tokens) with the same token: the knowledge base,
+boards, reading apps and their rows, and running their actions (`POST …/apps/{app}/actions`, what
+`run_app_action` does).
 
 ## 1. Make an access token
 

@@ -7,22 +7,16 @@
   "apps": {
     "intro": "Apps pessoais são telas que o agente cria para você: peça uma em uma conversa, como “um controle de despesas no meu espaço privado”. Os apps de um espaço compartilhado são de todos os membros: mova um app para lá para compartilhá-lo.",
     "noSpaces": "Você não tem espaços neste espaço de trabalho.",
-    "readOnly": "· somente leitura",
-    "none": "Ainda não há apps aqui.",
     "rows_one": "{count} linha",
     "rows_other": "{count} linhas",
     "rows_many": "{count} de linhas",
-    "offline": "fora do ar",
     "changed": "Alguém alterou {name} depois que a lista foi carregada. Ele aparece como está agora: tente de novo.",
     "name": "Nome",
     "save": "Salvar",
-    "launch": "Abrir",
-    "launchNamed": "Abrir {name}",
     "rename": "Renomear",
     "restore": "Restaurar",
     "restoreNamed": "Restaurar {name}",
     "takeOffline": "Tirar do ar",
-    "takeOfflineNamed": "Tirar do ar {name}",
     "moveNamed": "Mover {name} para",
     "moveTo": "Mover para…",
     "move": "Mover",
@@ -68,6 +62,12 @@
       "version": "{operation} · revisão {revision} · {when} · {name}",
       "agent": "{name} (pelo agente)",
       "unknownUser": "Usuário excluído",
+      "system": {
+        "generic": "uma integração",
+        "named": "{name} (integração)",
+        "providerNamed": "{provider} · {name}",
+        "removed": "uma integração que foi removida"
+      },
       "synthetic": "Criado antes de o histórico ser guardado: este é o registro como estava então.",
       "versionsTruncated": "Só as {count} versões mais recentes são mostradas."
     },
@@ -120,7 +120,6 @@
     "roles": {
       "open": "Papéis",
       "openNamed": "Papéis de {name}",
-      "close": "Fechar",
       "saved": "Salvo.",
       "intro": "Os papéis restringem o que o papel do membro no espaço permite, nunca ampliam. Depois que algum papel é definido, quem não tem papéis aqui (e não há linha “Todos os demais”) não vê nem usa o app. Remova todos os papéis para devolver o app a todo o espaço.",
       "member": "Membro",
@@ -136,13 +135,11 @@
       "data_managerHelp": "adiciona, vê e altera os registros de todos",
       "reader": "Leitor",
       "readerHelp": "vê os registros de todos",
-      "line": "{role}: {help}"
+      "line": "{role}: {help}",
+      "caption": "Papéis de cada membro neste app"
     },
     "notPublished": "Não publicado",
     "unpublishedChanges": "Alterações não publicadas",
-    "publish": "Publicar",
-    "closeReview": "Fechar revisão",
-    "closeReviewNamed": "Fechar a revisão de {name}",
     "publishNamed": "Publicar {name}",
     "previewDraft": "Ver o rascunho",
     "previewDraftNamed": "Ver o rascunho de {name}",
@@ -349,6 +346,14 @@
       "save": "Salvar alterações",
       "delete": "Excluir",
       "deleteConfirm": "Sim, excluir este registro",
+      "deleteQuestion": "Excluir o registro {id}?",
+      "deleteBody": "Ele vai para Excluídos com o seu histórico, onde pode ser restaurado.",
+      "leave": {
+        "title": "Descartar suas alterações neste registro?",
+        "body": "O que você alterou aqui não foi salvo. Continue editando para voltar a ele, ou descarte.",
+        "discard": "Descartar minhas alterações",
+        "keep": "Continuar editando"
+      },
       "cancel": "Cancelar",
       "empty": "—",
       "unset": "Sem valor",
@@ -546,12 +551,37 @@
     },
     "duplicate": {
       "open": "Duplicar como modelo",
-      "openNamed": "Duplicar {name} como modelo",
       "title": "Duplicar {name}",
       "note": "Isto copia só a definição do app, em um app novo, só seu: nenhum registro, foto, histórico ou papel vem junto, e os quadros em que você não pode escrever são limpos e escolhidos de novo antes de publicar.",
       "defaultName": "Cópia de {name}",
       "space": "Colocar a cópia em",
       "make": "Fazer a cópia"
+    },
+    "noSpacesHelp": "Os apps ficam em espaços. Assim que você tiver um, os apps que você criar aparecem aqui, agrupados por espaço.",
+    "count_one": "{count} app",
+    "count_other": "{count} apps",
+    "count_many": "{count} de apps",
+    "sharedSpace": "Espaço compartilhado",
+    "readOnlyShort": "somente leitura",
+    "empty": {
+      "title": "Ainda não há apps em {space}",
+      "private": "Os apps daqui são só seus: controles, checklists, formulários. Crie um com o agente ou comece por um modelo.",
+      "shared": "Os apps daqui são de todos neste espaço. Crie um com o agente, comece por um modelo ou mova um dos seus para cá para compartilhá-lo.",
+      "sharedReadOnly": "Os apps daqui são de todos neste espaço. Os editores dele podem criar um."
+    },
+    "offlineBadge": "Offline",
+    "publishedOn": "publicado em {date}",
+    "open": "Abrir",
+    "openNamed": "Abrir {name}",
+    "moreNamed": "Mais ações para {name}",
+    "publishItem": "Publicar…",
+    "moveItem": "Mover para um espaço…",
+    "moveTitle": "Mover {name} para um espaço",
+    "moveNote": "O app é movido com os registros. Quem pode usá-lo passa a ser definido pelo espaço de destino.",
+    "renameNamed": "Renomear {name}",
+    "takeOfflineConfirm": {
+      "title": "Tirar {name} do ar?",
+      "body": "Ninguém poderá abri-lo até que alguém que possa publicá-lo o restaure. Os registros são mantidos."
     }
   },
   "auth": {
@@ -675,14 +705,10 @@
     "add": "Adicionar",
     "card": "Cartão",
     "cardNumber": "Cartão {id}",
-    "back": "Voltar ao quadro",
-    "close": "Fechar",
     "cardChanged": "Alguém alterou este cartão depois que você o abriu.",
     "takeTheirs": "Carregar a versão da outra pessoa",
     "redoMine": "Refazer minha alteração sobre ela",
     "pollStopped": "Os comentários deste cartão pararam de atualizar: {error}",
-    "column": "Coluna",
-    "assignedTo": "Atribuído a {name}",
     "restore": "Restaurar",
     "archive": "Arquivar",
     "noDescriptionYet": "Ainda sem descrição.",
@@ -701,7 +727,6 @@
     "setBlocked": "Marcar como bloqueado",
     "unblock": "Desbloquear",
     "reason": "Motivo",
-    "reasonPlaceholder": "Aguardando o jurídico",
     "waitingFor": "Aguardando",
     "assignee": "Responsável",
     "nobody": "Ninguém",
@@ -735,7 +760,6 @@
     "labels": "Etiquetas",
     "noLabels": "Sem etiquetas.",
     "labelField": "Nova etiqueta",
-    "labelPlaceholder": "Adicionar uma etiqueta",
     "addLabel": "Adicionar etiqueta",
     "removeLabel": "Remover a etiqueta {label}",
     "filters": "Filtrar os cartões",
@@ -744,8 +768,35 @@
     "overdueOnly": "Só os atrasados",
     "noMatches": "Nenhum cartão corresponde.",
     "mention": "Mencionar alguém",
-    "mentionPlaceholder": "Mencionar alguém…",
-    "mentionUnknown": "Alguém"
+    "mentionUnknown": "Alguém",
+    "switchBoard": "Trocar de quadro",
+    "boardActions": "Ações do quadro",
+    "hideArchived": "Ocultar quadros arquivados",
+    "archiveBoardTitle": "Arquivar “{name}”?",
+    "archiveBoardBody": "Ele sai da lista de quadros e fica somente leitura para todos no espaço. Você o encontra entre os quadros arquivados e pode desarquivá-lo.",
+    "noBoardsWriter": "Um quadro reúne os cartões do espaço por coluna. Crie o primeiro.",
+    "moveCard": "Mover “{title}”",
+    "moveTop": "Para o topo de {column}",
+    "moveBottom": "Para o fim de {column}",
+    "moveTo": "Para {column}",
+    "cardActions": "Ações do cartão",
+    "status": "Status",
+    "newLabel": "Adicionar etiqueta",
+    "newComment": "Novo comentário",
+    "discardTitle": "Descartar o que você não salvou?",
+    "discardBody": "Este cartão tem algo que você ainda não salvou nem enviou: uma descrição, um comentário, uma etiqueta, um motivo, uma data ou um caminho. Fechá-lo descarta isso.",
+    "discard": "Descartar",
+    "movedTop": "“{title}” movido para o topo de {column}.",
+    "movedBefore": "“{title}” movido para antes de “{before}” em {column}.",
+    "movedBottom": "“{title}” movido para o fim de {column}.",
+    "dueToday": "Prazo: hoje",
+    "dueTomorrow": "Prazo: amanhã",
+    "cardName": "{title}: {details}",
+    "nameBlocked": "bloqueado",
+    "nameOverdue": "atrasado desde {date}",
+    "nameDueToday": "prazo hoje",
+    "nameDueTomorrow": "prazo amanhã",
+    "nameDue": "prazo {date}"
   },
   "errors": {
     "http": "O servidor respondeu {status}.",
@@ -787,6 +838,7 @@
     "invite_other_email": "Este convite é para outro endereço de e-mail.",
     "invite_account_exists": "Já existe uma conta com este e-mail: entre e depois aceite o convite.",
     "locale_invalid": "Esse não é um idioma que o TaskTo.AI conhece.",
+    "time_zone_invalid": "Esse não é um fuso horário que o TaskTo.AI conhece. Use um nome como Europe/Lisbon.",
     "token_not_found": "Token não encontrado.",
     "session_not_found": "Sessão não encontrada: ela pode já ter sido encerrada.",
     "session_current": "Esta é a sessão que você está usando: saia da conta.",
@@ -845,6 +897,7 @@
     "app_changed": "Alguém alterou este app enquanto isso: recarregue e tente de novo.",
     "app_name_length": "O nome do app precisa ter de 1 a {max} caracteres.",
     "too_many_apps": "Um espaço pode ter no máximo {max} apps.",
+    "app_token_rate_limited": "Seus tokens de acesso executaram {max} ações em um minuto aqui, o máximo permitido. Tente de novo em {seconds} segundos.",
     "app_full": "Este app está cheio: ele comporta no máximo {max_rows} linhas e {max_mib} MiB de dados.",
     "app_preview_full": "A prévia está cheia: ela comporta no máximo {max_rows} linhas de exemplo. Comece de novo.",
     "app_preview_too_large": "Os dados de exemplo da prévia são grandes demais (no máximo {max_mib} MiB). Comece de novo.",
@@ -2127,12 +2180,16 @@
       "light": "Claro",
       "dark": "Escuro"
     },
-    "account": "Conta: {name}",
     "skipToContent": "Pular para o conteúdo",
     "installApp": "Instalar o app",
     "pinned": "Apps fixados",
     "pageFailed": "Não foi possível mostrar esta página. O menu e as suas configurações continuam funcionando.",
-    "reload": "Recarregar"
+    "reload": "Recarregar",
+    "noWorkspaceTitle": "Nenhum espaço de trabalho ainda",
+    "workspaces": "Seus espaços de trabalho",
+    "workspaceCreated": "“{name}” foi criado.",
+    "openWorkspace": "Abrir",
+    "accountLabel": "Conta"
   },
   "common": {
     "cancel": "Cancelar",
@@ -2192,7 +2249,9 @@
       "move": "Mover",
       "delete": "Excluir",
       "empty": "Este documento está vazio.",
-      "download": "Baixar"
+      "download": "Baixar",
+      "backToResults": "Voltar aos resultados",
+      "separator": "/"
     },
     "editor": {
       "label": "Editar o documento",
@@ -2250,7 +2309,23 @@
       "removedCount_one": "{count} versão antiga removida do histórico.",
       "removedCount_other": "{count} versões antigas removidas do histórico.",
       "removedCount_many": "{count} de versões antigas removidas do histórico.",
-      "removedNone": "Não havia versões antigas para remover."
+      "removedNone": "Não havia versões antigas para remover.",
+      "restoreTitle": "Restaurar esta versão?",
+      "restoreQuestion": "{path} volta a ser o que era em {time}. A versão que tem agora fica no histórico.",
+      "changeBy": "{change} · {by}"
+    },
+    "emptyHelp": "Escreva um novo documento ou envie um arquivo.",
+    "pick": "Escolha um documento para lê-lo.",
+    "errors": {
+      "spaces": "Não foi possível carregar os espaços.",
+      "documents": "Não foi possível carregar os documentos.",
+      "document": "Não foi possível carregar este documento.",
+      "history": "Não foi possível carregar o histórico."
+    },
+    "tree": {
+      "count_one": "{count} documento",
+      "count_other": "{count} documentos",
+      "count_many": "{count} de documentos"
     }
   },
   "search": {
@@ -2509,7 +2584,14 @@
       "unpinned": "{name} removido do menu",
       "defaultSet": "{name} agora é um padrão do espaço",
       "defaultUnset": "{name} não é mais um padrão do espaço"
-    }
+    },
+    "empty": "Nada no seu Início ainda. Escolha Personalizar para colocar aqui um widget de um dos seus apps ou para fixar um app no menu.",
+    "unavailableShort": {
+      "offline": "· app fora do ar",
+      "unpublished": "· app não publicado",
+      "removed": "· não é mais oferecido"
+    },
+    "default": "· definido para o espaço"
   },
   "checklist": {
     "title": "Configure seu workspace",
@@ -2628,6 +2710,8 @@
       "discard": "Descartar",
       "discardNamed": "Descartar {name}",
       "discardQuestion": "Descartar este registro? Ele é apagado deste dispositivo e nunca será enviado.",
+      "discardTitle": "Descartar {name}?",
+      "discardBody": "Ele é apagado deste dispositivo e nunca é enviado.",
       "discardConfirm": "Sim, descartar",
       "clearSynced": "Limpar registros sincronizados",
       "waiting_one": "{count} registro aguardando sincronização",
@@ -2764,7 +2848,6 @@
   },
   "notifications": {
     "title": "Notificações",
-    "bell": "Notificações",
     "bellUnread": "Notificações, {count} não lidas",
     "intro": "O que aconteceu e que você pode querer ver. As notificações push são opcionais e servem só para avisar que há algo aqui.",
     "pushSettings": "Configurações de notificações",
@@ -2807,6 +2890,12 @@
       "turnOff": "Desativar o push neste dispositivo",
       "turnOffFailed": "O navegador deste dispositivo não encerrou a inscrição de push, então o push continua ativado. Tente de novo.",
       "caveat": "Um push diz apenas que há algo novo, nunca o quê, e abre o app, que confere o que você pode ver. Ele pode chegar atrasado ou nem chegar: a caixa de entrada é o registro. Sair da conta desativa o push naquele dispositivo.",
+      "timeZoneTitle": "Fuso horário e lembretes",
+      "timeZoneIntro": "O seu, em todos os espaços de trabalho. Um cartão atribuído a você lembra às 08:00 do dia do prazo neste fuso horário e avisa que está atrasado às 08:00 do dia seguinte. O resumo diário por e-mail também o segue, a menos que você escolha outro fuso horário para o resumo.",
+      "timeZoneLabel": "Seu fuso horário",
+      "timeZoneNone": "Não definido (UTC)",
+      "timeZoneUseBrowser": "Usar o deste navegador ({zone})",
+      "timeZoneSaved": "Seu fuso horário foi salvo.",
       "emailTitle": "E-mail",
       "emailIntro": "Opcional. Escolha quais notificações também são enviadas ao seu e-mail, neste espaço de trabalho. Nada é enviado até você escolher.",
       "emailUnavailable": "O e-mail não está configurado neste servidor, então as notificações não podem ser enviadas por e-mail. Quem administra o servidor pode ativá-lo.",
@@ -2896,7 +2985,8 @@
       "sizes": "Tamanhos",
       "shapes": "Formas",
       "tones": "Tons",
-      "hues": "Matizes"
+      "hues": "Matizes",
+      "distinctInitials": "Vários lado a lado, cada um com as suas letras"
     },
     "sample": {
       "primary": "Principal",
@@ -2950,7 +3040,8 @@
       "personB": "Tomás Oliveira",
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
-      "workspaceName": "Acme Studio"
+      "workspaceName": "Acme Studio",
+      "tooltipEmpty": "Sem conteúdo: nenhuma dica"
     },
     "labels": {
       "onboarding": "integração",
@@ -2994,6 +3085,8 @@
       "expensesDetail": "Uma linha que é um link: um clique em qualquer ponto a abre",
       "currentRow": "A linha atual",
       "currentDetail": "Marcada como a aberta",
+      "openedRow": "O que se abre sob uma linha, como um formulário para resolvê-la, ocupa toda a largura da linha.",
+      "actionsBelow": "Várias ações: numa linha própria, que quebra num celular.",
       "tables": "Números alinhados ao fim; uma tabela estreita rola na própria caixa",
       "members": "Membros",
       "person": "Pessoa",
@@ -3003,6 +3096,7 @@
       "resetPassword": "Redefinir a senha",
       "remove": "Remover",
       "narrowTable": "Uma tabela estreita",
+      "sortableTable": "Uma tabela ordenável",
       "tabsButtons": "Botões sobre painéis: setas, Home e End",
       "tabsLinks": "Links para páginas, a atual marcada",
       "people": "Pessoas",
@@ -3083,7 +3177,9 @@
       "inPlaceDetail": "Abre nesta página, no lugar",
       "focusTarget": "Recebe o foco por script (uma ref e tabIndex -1)",
       "focusIt": "Levar o teclado ao título",
-      "openPage": "Abrir uma página (um link)"
+      "openPage": "Abrir uma página (um link)",
+      "menuChoices": "Uma escolha entre várias, num grupo com nome",
+      "switchBoard": "Trocar de quadro"
     }
   }
 }

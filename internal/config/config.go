@@ -182,6 +182,11 @@ type Config struct {
 	// means the default, 365; -1, "off" in the settings, keeps them for ever.
 	AuditRetentionDays int
 
+	// AppDeletedRetentionDays is how many days an app's deleted records stay restorable before
+	// they, and their history, are removed (docs/api.md). Zero means the default, 90; -1, "off" in
+	// the settings, keeps them for ever.
+	AppDeletedRetentionDays int
+
 	// ConfigFile is the config file that was read, or "" if none was.
 	ConfigFile string
 	// ShowVersion asks the binary to print its version and exit (flag only).
@@ -587,6 +592,31 @@ var settings = []setting{
 		},
 	},
 	{
+		flag: "app-deleted-retention", env: "TASKTO_APP_DELETED_RETENTION", key: "app_deleted_retention",
+		usage: "days an app's deleted records stay restorable before they and their history are removed, or off to keep them for ever (default 90)",
+		get: func(c Config) string {
+			switch {
+			case c.AppDeletedRetentionDays < 0:
+				return "off"
+			case c.AppDeletedRetentionDays == 0:
+				return ""
+			}
+			return strconv.Itoa(c.AppDeletedRetentionDays)
+		},
+		set: func(c *Config, v string) error {
+			if v == "off" {
+				c.AppDeletedRetentionDays = -1
+				return nil
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 36500 {
+				return fmt.Errorf("want a number of days from 1 to 36500, or off, got %q", v)
+			}
+			c.AppDeletedRetentionDays = n
+			return nil
+		},
+	},
+	{
 		flag: "push-contact", env: "TASKTO_PUSH_CONTACT", key: "push_contact",
 		usage: "how browsers' push services can reach you, a mailto: or https: URL (default https://taskto.ai)",
 		get:   func(c Config) string { return c.PushContact },
@@ -661,6 +691,18 @@ func (c Config) AuditRetention() time.Duration {
 		return audit.DefaultRetention
 	}
 	return time.Duration(c.AuditRetentionDays) * 24 * time.Hour
+}
+
+// AppDeletedRetention is how long an app's deleted records are kept: 90 days when unset, and zero,
+// for ever, when turned off.
+func (c Config) AppDeletedRetention() time.Duration {
+	switch {
+	case c.AppDeletedRetentionDays < 0:
+		return 0
+	case c.AppDeletedRetentionDays == 0:
+		return 90 * 24 * time.Hour
+	}
+	return time.Duration(c.AppDeletedRetentionDays) * 24 * time.Hour
 }
 
 // LocalDictation is the local speech model, "off" included: parakeet-v3 when unset.

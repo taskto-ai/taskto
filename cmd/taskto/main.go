@@ -17,6 +17,10 @@ import (
 	"syscall"
 	"time"
 
+	// The time zone database, in the binary: a person's time zone (internal/auth, timezone.go) is
+	// found whatever the host or the image has. The standard library's, not a dependency.
+	_ "time/tzdata"
+
 	"taskto.ai/taskto/internal/access"
 	"taskto.ai/taskto/internal/accountdeletion"
 	"taskto.ai/taskto/internal/agentrt"
@@ -276,7 +280,7 @@ func run(ctx context.Context, cfg config.Config, listening func(net.Addr)) (resu
 	if err := boardSvc.ReconcileReminders(ctx); err != nil {
 		return err
 	}
-	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb})
+	appSvc := apps.New(sqlDB, spaces).WithPlatform(apps.Platform{Boards: boardSvc, Docs: kb}).WithDeletedRetention(cfg.AppDeletedRetention())
 	// The apps' effects (cards, documents) are done in the background, as the users who acted,
 	// so they go on when nobody has the app open. Stopped before the database closes.
 	stopEffects := appSvc.StartOutbox(ctx)

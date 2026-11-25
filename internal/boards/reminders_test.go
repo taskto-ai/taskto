@@ -68,6 +68,7 @@ func newRemindWorld(t *testing.T) *remindWorld {
 func followMembers(e *env) {
 	e.s.access.OnMemberAdded(e.s.SyncSpaceMember)
 	e.accounts.OnMemberAdded(e.s.SyncWorkspaceMember)
+	e.accounts.OnTimeZoneChanged(e.s.SyncTimeZone)
 }
 
 // card makes a card on the team board as the owner, with the given fields.

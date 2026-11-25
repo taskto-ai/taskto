@@ -1,0 +1,406 @@
+/* The shell: the top bar, the workspace switcher and the account menu, the sidebar (a drawer
+   below 48rem), the skip link and the page around every section.
+
+   Its rules are in no layer yet, as they were in the one stylesheet: they win over every layer,
+   and their order with the other files is styles.css's (docs/design.md, "Where styles live").
+   Moving a rule into @layer screens, or into a component, is that screen's rebuild. */
+
+/* The inbox's bell in the top bar, with the count of unread notifications. */
+.tt-bell {
+  position: relative;
+  text-decoration: none;
+}
+
+.tt-bell[aria-current="page"] {
+  background: var(--tt-hover);
+}
+
+/* Fingers: every control is at least 44px each way (--tt-touch). */
+@media (pointer: coarse) {
+  .tt-account summary {
+    min-height: var(--tt-touch);
+  }
+
+  .tt-account summary {
+    display: grid;
+    place-items: center;
+    min-width: var(--tt-touch);
+  }
+}
+
+.tt-language {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 500;
+}
+
+/* The shell. */
+
+.tt-shell {
+  height: 100%;
+  display: grid;
+  /* The top bar reaches under the status bar when the app is installed on a phone. */
+  grid-template-rows: calc(var(--tt-topbar-h) + env(safe-area-inset-top)) minmax(0, 1fr);
+}
+
+.tt-topbar {
+  position: relative; /* the new-workspace form hangs from the bar */
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  /* env()'s insets are the screen's left and right whatever the language's direction (a
+     notch in landscape), so these are physical, with the start and end padding swapped for
+     right-to-left below. */
+  padding-block-start: env(safe-area-inset-top);
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+  padding-right: max(0.5rem, env(safe-area-inset-right));
+  background: var(--tt-bar);
+  color: var(--tt-on-bar);
+  /* The website's nav is cream under a 1px ink rule. */
+  border-block-end: 1px solid var(--tt-rule);
+  min-width: 0;
+}
+
+[dir="rtl"] .tt-topbar {
+  padding-left: max(0.5rem, env(safe-area-inset-left));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
+}
+
+.tt-topbar select {
+  background: transparent;
+  color: inherit;
+  border-color: var(--tt-line-strong);
+  min-height: 2.2rem;
+  max-width: 12rem;
+  text-overflow: ellipsis;
+}
+
+/* The bar never overflows: what is fixed (the menu, the mark, the bell, the theme, the account)
+   keeps its size, and the workspace's name gives way, cut with an ellipsis. */
+.tt-topbar .tt-brand {
+  flex: none;
+}
+
+.tt-topbar .tt-workspace {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 12rem;
+}
+
+.tt-workspace select {
+  width: 100%;
+  max-width: 100%;
+}
+
+.tt-topbar option {
+  background: var(--tt-surface);
+  color: var(--tt-fg);
+}
+
+.tt-topbar-section {
+  color: var(--tt-on-bar-muted);
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tt-topbar-end {
+  flex: none;
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tt-theme {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.tt-menu-button {
+  flex: none;
+  display: none;
+}
+
+.tt-topbar .tt-icon-button:hover {
+  background: var(--tt-hover);
+}
+
+.tt-account {
+  position: relative;
+}
+
+.tt-account summary {
+  list-style: none;
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.tt-account summary::-webkit-details-marker {
+  display: none;
+}
+
+.tt-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 50%;
+  background: var(--tt-selected);
+  font-weight: 600;
+}
+
+.tt-menu {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + 0.4rem);
+  z-index: 30;
+  min-width: 14rem;
+  padding: 0.75rem;
+  background: var(--tt-surface);
+  color: var(--tt-fg);
+  border: 1px solid var(--tt-line);
+  border-radius: var(--tt-radius);
+  box-shadow: var(--tt-shadow-pop);
+  display: grid;
+  gap: 0.6rem;
+}
+
+/* "New workspace" sits at the switcher's side, near the start of the bar, so its form is anchored
+   to the bar and not to its own button: from the bar's start edge, never wider than the screen,
+   in either text direction. On the screen for someone with no workspace, where there is no bar,
+   it hangs from the button, centred. */
+.tt-topbar .tt-new-workspace {
+  position: static;
+}
+
+.tt-new-workspace .tt-menu {
+  inset-inline-end: auto;
+  inset-inline-start: 0.5rem;
+  width: min(16rem, calc(100vw - 1rem));
+  box-sizing: border-box;
+}
+
+.tt-center .tt-new-workspace .tt-menu {
+  inset-inline-start: 50%;
+  translate: -50% 0;
+}
+
+[dir="rtl"] .tt-center .tt-new-workspace .tt-menu {
+  translate: 50% 0;
+}
+
+.tt-new-workspace summary {
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--tt-radius);
+}
+
+.tt-menu p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tt-body {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+.tt-sidebar {
+  width: var(--tt-sidebar-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0.5rem;
+  background: var(--tt-stone);
+  border-inline-end: 1px solid var(--tt-line);
+  overflow-y: auto;
+}
+
+.tt-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 2.4rem;
+  padding: 0 0.6rem;
+  border-radius: var(--tt-radius);
+  color: var(--tt-muted);
+  text-decoration: none;
+}
+
+.tt-nav-link:hover {
+  background: var(--tt-hover);
+  color: var(--tt-fg);
+}
+
+.tt-nav-link[aria-current="page"] {
+  background: var(--tt-accent-soft);
+  color: var(--tt-fg);
+  font-weight: 600;
+}
+
+.tt-scrim {
+  display: none;
+}
+
+.tt-page {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* Phones: the sidebar is a drawer, and one pane at a time. */
+
+@media (max-width: 48rem) {
+  .tt-menu-button {
+    display: inline-grid;
+  }
+
+  .tt-topbar {
+    gap: 0.4rem;
+    padding-inline-start: 0.25rem;
+  }
+
+  .tt-topbar-section,
+  .tt-theme .tt-icon {
+    display: none;
+  }
+
+  .tt-topbar .tt-workspace {
+    max-width: 10rem;
+  }
+
+  /* The mark alone, from here down (a square box crops the drawing to the arrow and dot). */
+  .tt-topbar .tt-logo {
+    width: 1.5rem;
+    aspect-ratio: 1;
+  }
+
+  .tt-sidebar {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 20;
+    width: min(80vw, var(--tt-sidebar-w));
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition:
+      transform 0.18s ease-out,
+      visibility 0.18s;
+  }
+
+  /* Right to left, the drawer comes from the right. */
+  [dir="rtl"] .tt-sidebar {
+    transform: translateX(100%);
+  }
+
+  /* Opening shows it at once (no visibility transition), so it can take focus as it opens;
+     closing keeps it visible until it has slid out. */
+  .tt-shell[data-drawer="open"] .tt-sidebar {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.18s ease-out;
+  }
+
+  .tt-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    border: 0;
+    background: var(--tt-scrim);
+  }
+
+  .tt-nav-link {
+    min-height: var(--tt-touch);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tt-sidebar {
+    transition: none;
+  }
+}
+
+/* First stop for the keyboard: out of sight until focused. */
+.tt-skip {
+  position: absolute;
+  border: 1px solid var(--tt-line-strong);
+  font: inherit;
+  inset-inline-start: 0.5rem;
+  inset-block-start: 0.5rem;
+  z-index: 100;
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--tt-radius);
+  background: var(--tt-surface);
+  color: var(--tt-fg);
+  transform: translateY(-300%);
+}
+
+.tt-skip:focus {
+  transform: none;
+}
+
+.tt-page:focus {
+  outline: none; /* focused by the skip link and the drawer, not a control */
+}
+
+@media (max-width: 48rem) {
+  .tt-sidebar {
+    padding-block-end: calc(0.5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* A narrow phone has no room for the theme's word: the picker is its icon (the select lies over it,
+   unseen but pressable, and the ring shows on the icon's box), and the workspace's name gets what
+   is left. */
+@media (max-width: 30rem) {
+  .tt-topbar {
+    gap: 0.25rem;
+  }
+
+  .tt-topbar-end {
+    gap: 0.25rem;
+  }
+
+  .tt-topbar .tt-theme {
+    position: relative;
+    justify-content: center;
+    min-inline-size: var(--tt-touch);
+    min-block-size: var(--tt-touch);
+    border-radius: var(--tt-radius);
+  }
+
+  .tt-topbar .tt-theme .tt-icon {
+    display: block;
+  }
+
+  .tt-topbar .tt-theme select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    min-height: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .tt-topbar .tt-theme:has(select:focus-visible) {
+    outline: 2.5px solid var(--tt-focus);
+    outline-offset: 2px;
+  }
+}
+
+/* After the rules they override (the top bar's own controls are smaller). */
+@media (pointer: coarse) {
+  .tt-topbar select {
+    min-height: var(--tt-touch);
+  }
+}

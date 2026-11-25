@@ -835,6 +835,98 @@ func TestRecordRevisionsMigrationKeepsExistingRows(t *testing.T) {
 	}
 }
 
+// TestRecordSystemActorMigration upgrades a database with records and history from before the
+// system writer: nothing in it is a system change, the recreated immutability trigger protects the
+// new actor_system column like the others, and the actor is either a user or the system.
+func TestRecordSystemActorMigration(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := open(t, filepath.Join(t.TempDir(), FileName))
+	if _, err := migrate(ctx, sqlDB, upTo(t, 45)); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (id, email, name, password_hash) VALUES (1, 'a@example.com', 'A', 'x')`,
+		`INSERT INTO workspaces (id, name) VALUES (1, 'One')`,
+		`INSERT INTO memberships (workspace_id, user_id, role) VALUES (1, 1, 'admin')`,
+		`INSERT INTO spaces (id, workspace_id, kind, name) VALUES (10, 1, 'shared', 'Team')`,
+		`INSERT INTO apps (id, space_id, name, definition) VALUES (5, 10, 'Tracker', '{}')`,
+		`INSERT INTO app_rows (id, app_id, data, created_by, updated_by) VALUES (7, 5, '{"title":"Milk"}', 1, 1)`,
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor) VALUES (5, 7, 2, 'update', '{}', 1)`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Migrate(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	var updatedSystem, actorSystem sql.NullString
+	if err := sqlDB.QueryRowContext(ctx, `SELECT r.updated_system, h.actor_system FROM app_rows r JOIN app_row_history h ON h.row_id = r.id`).Scan(&updatedSystem, &actorSystem); err != nil {
+		t.Fatal(err)
+	}
+	if updatedSystem.Valid || actorSystem.Valid {
+		t.Fatalf("rows from before are system changes: %v, %v", updatedSystem, actorSystem)
+	}
+	for _, q := range []string{
+		`UPDATE app_rows SET revision = 3, updated_by = NULL, updated_system = 'integration:4' WHERE id = 7`,
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor_system, action) VALUES (5, 7, 3, 'update', '{}', 'integration:4', 'payment.succeeded')`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The history of a system change is as immutable as a user's: no column of it is rewritten,
+	// the actor_system one included, and it can't be cleared to pose as a deleted account.
+	for _, bad := range []string{
+		`UPDATE app_row_history SET actor_system = NULL WHERE revision = 3`,
+		`UPDATE app_row_history SET actor_system = 'integration:5' WHERE revision = 3`,
+		`UPDATE app_row_history SET actor_system = 'integration:4' WHERE revision = 2`,
+		`UPDATE app_row_history SET actor = 1 WHERE revision = 3`,
+		`UPDATE app_row_history SET action = 'other' WHERE revision = 3`,
+		// A change has one actor, a user or the system, and the system's has a known shape.
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor, actor_system) VALUES (5, 7, 4, 'update', '{}', 1, 'integration:4')`,
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor_system) VALUES (5, 7, 4, 'update', '{}', 'someone')`,
+		`UPDATE app_rows SET updated_system = 'a person' WHERE id = 7`,
+		// The id is only digits: a suffix after them is not an integration's.
+		`UPDATE app_rows SET updated_system = 'integration:7x' WHERE id = 7`,
+		`UPDATE app_rows SET updated_system = 'integration:7:8' WHERE id = 7`,
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor_system) VALUES (5, 7, 4, 'update', '{}', 'integration:7invalid')`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, bad); err == nil {
+			t.Fatalf("%s was accepted", bad)
+		}
+	}
+	// An account that goes still leaves its history unattributed, and a system change's history
+	// is not touched by it.
+	for _, q := range []string{
+		`INSERT INTO users (id, email, name, password_hash) VALUES (3, 'c@example.com', 'C', 'x')`,
+		`INSERT INTO app_row_history (app_id, row_id, revision, operation, data, actor) VALUES (5, 7, 5, 'update', '{}', 3)`,
+		`DELETE FROM users WHERE id = 3`,
+	} {
+		if _, err := sqlDB.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	rows, err := sqlDB.QueryContext(ctx, `SELECT revision, actor, actor_system FROM app_row_history WHERE revision >= 3 ORDER BY revision`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var revision int
+		var actor sql.NullInt64
+		var system sql.NullString
+		if err := rows.Scan(&revision, &actor, &system); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("r%d actor=%v system=%v", revision, actor.Valid, system.String))
+	}
+	if want := []string{"r3 actor=false system=integration:4", "r5 actor=false system="}; !slices.Equal(got, want) {
+		t.Fatalf("history after the user went = %q, want %q", got, want)
+	}
+}
+
 // TestAppAttachmentsKeepTheirAppFieldAndUploader checks the attachments table's triggers: an
 // attachment never moves to another app, field or uploader, but an account that goes leaves it
 // unattributed (owner ON DELETE SET NULL), so deleting a user who uploaded a photo works.

@@ -22,7 +22,8 @@ import (
 //     never reaches another workspace, so the data and model providers of a user's other
 //     workspaces stay out of an agent given access to one.
 //   - Only routes that take one accept it (AcceptTokens): the knowledge base, search,
-//     boards, and reading the workspace's spaces and members. Everything else refuses a
+//     boards, reading the workspace's spaces and members, and reading apps and running their
+//     actions (not building, publishing or sharing them). Everything else refuses a
 //     request carrying a token with 403, whatever else it carries: logging in, setup,
 //     invites, members, spaces' administration, provider accounts, conversations, and the
 //     tokens themselves. So a token never changes the account, and never makes another
