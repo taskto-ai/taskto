@@ -13,8 +13,6 @@ import { ApiError, type App, api, errorText, type Space, ws } from '../api'
 import type { EventSourceFactory } from '../conversations/useConversationStream'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
-import { OfflinePanel } from '../offline/OfflinePanel'
-import { Link, routePath } from '../router'
 import { spaceLabel } from '../spaces'
 import { ButtonLink } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -26,12 +24,10 @@ import { PageHeader } from '../ui/PageHeader'
 import { Panel } from '../ui/Panel'
 import { Rows } from '../ui/Rows'
 import { AppBuilder, lastBuilderConversation } from './AppBuilder'
-import { AppEffects } from './AppEffects'
-import { AppRecords } from './AppRecords'
 import { AppRow } from './AppRow'
-import { AppStage } from './AppStage'
 import { LoadingRows } from './AppsLoading'
 import { InstalledApp, TemplatesPage } from './AppTemplates'
+import { LaunchedApp } from './LaunchedApp'
 import { builderPath, isTemplates, parseBuilder, parseInstalled, parseItem, templatesPath } from './route'
 import './Apps.css'
 
@@ -252,102 +248,5 @@ function NoApps({ workspace, space }: { workspace: number; space: Space }) {
         )}
       </p>
     </EmptyState>
-  )
-}
-
-function LaunchedApp({
-  workspace,
-  space,
-  app,
-  writable,
-  screen,
-  spaceInfo,
-}: {
-  workspace: number
-  space: number
-  app: number
-  writable: boolean
-  screen?: string
-  spaceInfo?: Space
-}) {
-  const base = `${appsBase(workspace, space)}/${app}`
-  const info = useLoad(() => api<App>(base), [base])
-  // Bumped when a record is restored, so the screen is loaded again with it.
-  const [restored, setRestored] = useState(0)
-  // How many actions ran on the screen: each may have set effects going.
-  const [actions, setActions] = useState(0)
-  const back = routePath({ workspace, section: 'apps' })
-  const t = useT()
-  const restore = async () => {
-    if (!info.data) return
-    try {
-      await api<App>(base, { method: 'PATCH', body: { version: info.data.version, archived: false } })
-    } finally {
-      info.reload()
-    }
-  }
-
-  return (
-    <div className="tt-section">
-      <div className="tt-pane-head">
-        <h1>{info.data?.name ?? t('apps.app')}</h1>
-        {info.data && !info.data.archived_at && writable && info.data.access.design && (
-          <Link
-            className="tt-button"
-            href={builderPath(workspace, { kind: 'edit', space, app })}
-            aria-label={t('apps.builder.editNamed', { name: info.data.name })}
-          >
-            {t('apps.builder.edit')}
-          </Link>
-        )}
-        <Link className="tt-button" href={back}>
-          {t('apps.all')}
-        </Link>
-      </div>
-      {info.error && (
-        <p role="alert" className="tt-error">
-          {info.error}
-        </p>
-      )}
-      {!info.data && !info.error && <p className="tt-muted">{t('app.loading')}</p>}
-      {info.data?.archived_at && (
-        <div className="tt-app-offline">
-          <p>{t('apps.offlineNotice')}</p>
-          {writable && info.data.access.publish && (
-            <button type="button" className="tt-button tt-primary" onClick={restore}>
-              {t('apps.restore')}
-            </button>
-          )}
-        </div>
-      )}
-      {info.data && !info.data.archived_at && (
-        <>
-          {!writable && <p className="tt-muted tt-small">{t('apps.viewOnly')}</p>}
-          {writable && !info.data.access.submit && info.data.access.modify_records === 'none' && (
-            <p className="tt-muted tt-small">{t('apps.noDataChanges')}</p>
-          )}
-          {info.data.access.read_records === 'own' && <p className="tt-muted tt-small">{t('apps.ownRecords')}</p>}
-          <AppStage
-            key={screen ?? ''}
-            base={base}
-            app={info.data}
-            reloadKey={restored}
-            screen={screen}
-            onAction={() => setActions((n) => n + 1)}
-          />
-          <AppEffects workspace={workspace} base={base} writable={writable} reloadKey={actions} />
-          <AppRecords
-            base={base}
-            appId={app}
-            access={info.data.access}
-            writable={writable}
-            definition={info.data.live?.definition}
-            release={info.data.live?.number}
-            onRestored={() => setRestored((n) => n + 1)}
-          />
-          <OfflinePanel workspace={workspace} space={space} app={info.data} spaceInfo={spaceInfo} />
-        </>
-      )}
-    </div>
   )
 }
