@@ -1,5 +1,8 @@
 @layer components {
   .ui-table-scroll {
+    /* The box of what is out of sight inside (a hidden header, the caption): positioned against
+       the page it would widen the page on a phone; here it stays in the scrolling box. */
+    position: relative;
     max-inline-size: 100%;
     overflow-x: auto;
     overscroll-behavior-inline: contain;

@@ -590,10 +590,24 @@ export function reachesAnywhere(selector) {
   return parts.slice(0, -1).every((p) => scopes(p).every((s) => WRAPPERS.has(s)))
 }
 
+// Whether a compound leaves the design system's elements out: OPT_OUT is one of its own
+// pseudo-classes, at the top level, not inside another function (`:not(:not(…OPT_OUT…))` would
+// select exactly those elements).
+export function optsOut(compound) {
+  let depth = 0
+  for (let i = 0; i < compound.length; i++) {
+    if (depth === 0 && compound.startsWith(OPT_OUT, i)) return true
+    const c = compound[i]
+    if (c === '(' || c === '[') depth++
+    if (c === ')' || c === ']') depth--
+  }
+  return false
+}
+
 // Whether a rule that reaches anywhere is allowed: it leaves the design system's elements out,
 // or EVERYWHERE lists its selector and it sets only the properties listed there.
 export function allowedEverywhere({ selector, properties }) {
-  if (compounds(selector).at(-1)?.includes(OPT_OUT)) return true
+  if (optsOut(compounds(selector).at(-1) ?? '')) return true
   const allowed = EVERYWHERE.get(selector)
   return Boolean(allowed && properties.every((p) => allowed.properties.includes(p)))
 }
