@@ -768,6 +768,10 @@
     "workspace_limit": "Você já criou {max} espaços de trabalho, o máximo para uma conta. Fale com quem administra este servidor.",
     "too_many_workspaces": "Você acabou de criar vários espaços de trabalho. Tente de novo daqui a pouco.",
     "operator_only": "Só quem administra este servidor pode fazer isso.",
+    "update_request_unsupported": "Este servidor ainda não aceita um pedido de atualização: o atualizador do host precisa ser configurado de novo (passo 16 do roteiro de instalação).",
+    "update_channel_off": "As atualizações automáticas estão desligadas neste servidor (o canal está desligado), então não há nada para atualizar.",
+    "update_request_pending": "Já há uma atualização pedida. O host do servidor a pega em instantes.",
+    "update_running": "Uma atualização está em andamento. Esta página a acompanha.",
     "workspace_name_length": "O nome de um espaço de trabalho precisa ter de 1 a {max} caracteres.",
     "password_too_short": "A senha precisa ter pelo menos {min} caracteres.",
     "password_too_long": "A senha pode ter no máximo {max} bytes.",
@@ -907,6 +911,19 @@
     "provider_models_count": "Liste de 1 a {max} modelos.",
     "provider_model_invalid": "Cada ID de modelo precisa ter de 1 a {max} caracteres imprimíveis.",
     "too_many_providers": "Você pode ter no máximo {max} contas de provedor aqui: remova uma antes.",
+    "integration_not_found": "Integração não encontrada.",
+    "integration_name_invalid": "O nome precisa ter de 1 a {max} caracteres: letras minúsculas, dígitos, '.', '_' ou '-', começando com letra ou dígito.",
+    "integration_name_taken": "Já existe uma integração com esse nome.",
+    "integration_display_name_invalid": "O nome de exibição pode ter até {max} caracteres imprimíveis.",
+    "integration_provider_unknown": "Este provedor não é compatível.",
+    "integration_secret_required": "Informe o campo {secret}.",
+    "integration_secret_invalid": "O campo {secret} não parece ser deste provedor: confira se copiou o correto.",
+    "integration_secret_unreadable": "O campo {secret} salvo não pode ser lido, porque a chave do servidor mudou. Informe-o de novo.",
+    "integration_setting_invalid": "A configuração {setting} está faltando ou não é válida.",
+    "integration_limit_invalid": "O teto do valor deve ser um número inteiro de 1 a {max}.",
+    "integration_currency_invalid": "Escolha de 1 a {max} moedas da lista.",
+    "too_many_integrations": "Você pode ter no máximo {max} integrações em um espaço de trabalho: remova uma antes.",
+    "integration_in_use": "Um app ainda usa esta integração: desative-a em vez de removê-la.",
     "base_url_invalid": "Informe uma URL http ou https de até {max} caracteres, sem query nem fragmento.",
     "base_url_credentials": "A URL não pode conter usuário nem senha: coloque a chave no campo da chave de API.",
     "base_url_insecure": "Use https: uma chave só é enviada por http simples para esta máquina.",
@@ -1066,6 +1083,7 @@
       "audit": "Auditoria",
       "storage": "Armazenamento",
       "providers": "Provedores de modelos",
+      "integrations": "Integrações",
       "cliAccounts": "Contas de CLI",
       "search": "Busca",
       "dictation": "Ditado",
@@ -1083,7 +1101,6 @@
       "saved": "Salvo.",
       "mail": {
         "title": "E-mail",
-        "loading": "Carregando…",
         "off": "Este servidor ainda não consegue enviar e-mail. Quem o administra define um servidor SMTP, como explica o guia de instalação (docs/install.md, Email); até lá, os links de redefinição e de convite são repassados à mão.",
         "noLinks": "O servidor ainda não envia links de redefinição ou de convite por e-mail: quem o administra também precisa definir public_url, o endereço externo do servidor, em que os links são montados (docs/install.md, Email). Até lá, os links são repassados à mão.",
         "server": "Servidor SMTP",
@@ -1099,9 +1116,10 @@
         "signInSet": "Com usuário e senha",
         "signInNone": "Nenhum",
         "test": "Enviar e-mail de teste",
-        "testing": "Enviando…",
         "testHelp": "O teste vai para o seu próprio endereço, {email}, no seu idioma.",
-        "sent": "E-mail de teste enviado para {email}. Se não chegar, olhe a caixa de spam e o log de e-mail do servidor."
+        "sent": "E-mail de teste enviado para {email}. Se não chegar, olhe a caixa de spam e o log de e-mail do servidor.",
+        "on": "Configurado",
+        "offBadge": "Desligado"
       }
     },
     "twoFactor": {
@@ -1131,7 +1149,10 @@
       "code": "Código do app ou código de recuperação",
       "newCodes": "Gerar novos códigos de recuperação",
       "turnOff": "Desativar…",
-      "turnOffConfirm": "Sim, desativar"
+      "turnOffConfirm": "Sim, desativar",
+      "onBadge": "Ligado",
+      "offBadge": "Desligado",
+      "turnOffQuestion": "Desligar o login em duas etapas?"
     },
     "members": {
       "clearTwoFactor": "Limpar duas etapas",
@@ -1144,7 +1165,6 @@
       "resetLinkName": "o link de redefinição de senha",
       "help": "Remover alguém encerra o acesso dessa pessoa ao espaço de trabalho e aos espaços compartilhados dele na próxima requisição. O espaço privado dela é mantido, fechado para todos. Desativar alguém encerra todas as sessões e impede logins, tokens e agentes sem remover nada: ative a pessoa para devolver tudo; como o link de redefinição, exige que você administre todos os espaços de trabalho dela. Outro administrador pode mudar o seu próprio papel. Um link de redefinição permite que um membro que perdeu a senha defina uma nova; você pode criar um para um membro de quem você administra todos os espaços de trabalho.",
       "title": "Membros",
-      "you": "(você)",
       "roleOf": "Função de {name}",
       "role": "Função",
       "roles": {
@@ -1167,13 +1187,18 @@
       "inviteFor": "o convite para {email}",
       "withdrawQuestion": "Retirar o convite para {email}?",
       "withdrawConfirm": "Sim, retirar",
-      "inviting": "Convidando…",
       "invite": "Convidar",
       "inviteMade": "Envie este link para {email}. Ele só é mostrado agora, funciona uma vez e expira em {date}.",
       "inviteSendEmail": "Enviar o link do convite por e-mail para este endereço",
       "inviteEmailed": "O convite foi enviado por e-mail para {email}. Você também pode enviar este link a essa pessoa. Ele é mostrado só agora, funciona uma vez e expira em {date}.",
       "inviteEmailFailed": "O convite foi criado, mas não foi possível enviar o e-mail para {email}: o log do servidor diz por quê. Envie este link a essa pessoa. Ele é mostrado só agora, funciona uma vez e expira em {date}.",
-      "inviteLink": "Link do convite"
+      "inviteLink": "Link do convite",
+      "person": "Pessoa",
+      "youBadge": "Você",
+      "pending": "Pendente",
+      "invitesHelp": "Um convite é um link que funciona uma vez, até expirar.",
+      "emailPlaceholder": "nome@empresa.com",
+      "noEmail": "Este servidor não envia convites por e-mail; um convite é um link que você copia e envia."
     },
     "password": {
       "intro": "Mudar sua senha encerra suas sessões em todos os outros lugares. Este navegador continua conectado. Seus tokens de acesso continuam funcionando: revogue-os em Tokens de acesso.",
@@ -1182,9 +1207,9 @@
       "hint": "Pelo menos 12 caracteres.",
       "again": "Repita a nova senha",
       "mismatch": "As novas senhas não coincidem.",
-      "changing": "Alterando…",
       "change": "Alterar a senha",
-      "changed": "Sua senha foi alterada, e suas outras sessões foram encerradas."
+      "changed": "Sua senha foi alterada, e suas outras sessões foram encerradas.",
+      "title": "Alterar sua senha"
     },
     "data": {
       "title": "Exportar seus dados",
@@ -1241,7 +1266,9 @@
       "add": "Adicionar",
       "rolesHelp": "Editores leem e escrevem; leitores só leem. Uma mudança vale a partir da próxima solicitação do membro.",
       "offlineDownloads": "Permitir downloads offline",
-      "offlineHelp": "Os membros podem manter os apps e registros deste espaço nos próprios dispositivos para usar sem conexão. Desative para dados sensíveis: novos downloads são recusados, e o dispositivo remove a cópia na próxima vez que se conectar."
+      "offlineHelp": "Os membros podem manter os apps e registros deste espaço nos próprios dispositivos para usar sem conexão. Desative para dados sensíveis: novos downloads são recusados, e o dispositivo remove a cópia na próxima vez que se conectar.",
+      "noneHelp": "Crie um acima para uma equipe ou um projeto e adicione os membros.",
+      "manage": "Gerenciar"
     },
     "sessions": {
       "title": "Sessões ativas",
@@ -1272,10 +1299,11 @@
       "privateOf": "Espaço privado de {name}",
       "privateYours": "Seu espaço privado",
       "breakdown": "Documentos {documents} · Arquivos {files} · Fotos {photos}",
-      "yours": "Seu armazenamento",
       "yoursIntro": "O que o seu espaço privado guarda. Os documentos e as fotos que você adiciona contam aqui.",
       "noPrivate": "Você não tem espaço privado neste workspace.",
-      "workspaceQuota": "Todos os espaços deste workspace juntos podem guardar até {limit}."
+      "workspaceQuota": "Todos os espaços deste workspace juntos podem guardar até {limit}.",
+      "full": "Cheio",
+      "nearlyFull": "Quase cheio"
     },
     "tokens": {
       "title": "Tokens de acesso",
@@ -1301,7 +1329,6 @@
         "year": "Em um ano",
         "never": "Nunca"
       },
-      "creating": "Criando…",
       "create": "Criar token",
       "held": "Copie o novo token e escolha Concluído primeiro.",
       "made": "Seu novo token {name}. Copie agora: <b>ele não será mostrado de novo</b>, pois o servidor guarda só o hash dele. Guarde-o onde você guarda outros segredos e passe-o ao seu agente em uma variável de ambiente, não em um arquivo que você faz commit. A configuração abaixo o traz preenchido até você sair desta página.",
@@ -1317,7 +1344,10 @@
         "endpoint": "O endpoint MCP é {url}, autenticado com <code>Authorization: Bearer</code> e um token. Mais em docs/mcp.md do servidor.",
         "named": "Configuração do {name}",
         "theNamed": "a configuração do {name}"
-      }
+      },
+      "noneHelp": "Crie um para cada agente ou máquina que deve agir como você aqui.",
+      "expiredBadge": "Expirado",
+      "newTitle": "Novo token de acesso"
     },
     "about": {
       "title": "Sobre o TaskTo.AI",
@@ -1345,11 +1375,35 @@
         "retries_one": "Uma noite que falha é tentada de novo uma vez, {every} depois.",
         "retries_many": "Uma noite que falha é tentada de novo até {count} vezes, a cada {every}.",
         "retries_other": "Uma noite que falha é tentada de novo até {count} vezes, a cada {every}.",
-        "noRetries": "Uma noite que falha não é tentada de novo."
+        "noRetries": "Uma noite que falha não é tentada de novo.",
+        "badge": {
+          "none": "Não configurado",
+          "pending": "Aguardando",
+          "ok": "Em dia",
+          "failing": "Falhando",
+          "late": "Atrasado"
+        }
       },
       "updates": {
         "title": "Atualizações",
-        "intro": "O host do servidor o atualiza sozinho (docs/install.md, Atualizações automáticas). Isto é o que o atualizador informou por último; o servidor só lê, e não pode executar nem alterar o atualizador.",
+        "intro": "O host do servidor o atualiza sozinho (docs/install.md, Atualizações automáticas). Isto é o que o atualizador informou por último. O servidor não executa nem altera o atualizador: Atualizar agora apenas faz um pedido a ele, sem indicar versão.",
+        "now": {
+          "button": "Atualizar agora",
+          "question": "O host instala a versão mais nova do seu canal, com as mesmas verificações da execução da noite, depois de um backup. O servidor reinicia, então esta página reconecta em alguns minutos. Atualizar agora?",
+          "confirm": "Sim, atualizar agora",
+          "requested": "Atualização pedida. Aguardando o host iniciá-la…",
+          "updating": "Atualizando. O servidor reinicia durante isto; a página reconecta sozinha e mostra o resultado.",
+          "reconnecting": "O servidor não está respondendo (ele reinicia durante uma atualização). Tentando de novo…",
+          "gaveUp": "O host não iniciou a atualização. Confira se a unidade de caminho está ligada (systemctl status taskto-update-request.path) e veja o diário dele (journalctl -u taskto-update-request).",
+          "outcome": "A atualização que você pediu: {result}.",
+          "hint": "Depois de resolver isso, para instalar mesmo assim execute {command} no host.",
+          "unavailable": {
+            "not_configured": "Este servidor não está configurado para receber um pedido de atualização (não tem diretório de pedidos). O guia de instalação (docs/install.md, Atualizar agora) explica como.",
+            "unsupported": "O host ainda não pode receber um pedido de atualização: o atualizador, o diretório de pedidos ou a unidade de caminho dele é de antes deste botão. Reinstale como o passo 16 do roteiro de instalação (deploy/INSTALL.md) diz.",
+            "off": "Atualizar agora fica desligado enquanto as atualizações automáticas estiverem desligadas (o canal está desligado)."
+          },
+          "title": "Atualizar o servidor agora?"
+        },
         "notConfigured": "Este servidor não está configurado para mostrar o estado do atualizador. O guia de instalação (docs/install.md, Atualizações automáticas) explica como.",
         "noStatus": "O atualizador ainda não informou nada. Ele informa depois de cada execução, que é toda noite no host; até rodar uma vez, não há o que mostrar.",
         "health": {
@@ -1393,6 +1447,7 @@
           "blocked": "Recusou-se a rodar",
           "interrupted": "Interrompido",
           "cleared": "Uma pessoa liberou uma parada",
+          "ignored": "Recusada",
           "unknown": "Desconhecido"
         },
         "channelHold": "{channel} (em espera)",
@@ -1423,8 +1478,20 @@
           "rollback-failed": "A atualização falhou e a versão antiga não pôde ser recolocada.",
           "interrupted": "Uma atualização foi interrompida e não terminou nem foi desfeita.",
           "rolled-back": "A atualização falhou e a versão antiga foi recolocada.",
-          "unrecorded-failure": "Uma atualização foi desfeita, mas a versão não pôde ser registrada como falha."
-        }
+          "unrecorded-failure": "Uma atualização foi desfeita, mas a versão não pôde ser registrada como falha.",
+          "rate-limited": "Uma atualização pedida rodou há poucos minutos, então este pedido foi recusado. Tente de novo mais tarde.",
+          "bad-request": "O pedido não era um arquivo comum e pequeno, então o host o removeu e não fez nada."
+        },
+        "badge": {
+          "ok": "Funcionando",
+          "hold": "Em espera",
+          "off": "Desligado",
+          "stale": "Sem notícias",
+          "failed": "Falhou",
+          "blocked": "Precisa de uma pessoa",
+          "manualUpgrade": "Atualização manual"
+        },
+        "mismatchBadge": "Não é a versão registrada"
       }
     },
     "actions": {
@@ -1436,7 +1503,6 @@
       "removeConfirm": "Sim, remover",
       "test": "Testar",
       "testNamed": "Testar {name}",
-      "none": "Nenhuma ainda.",
       "optional": "Opcional",
       "keepKey": "Deixe vazio para manter a chave guardada",
       "apiKey": "Chave de API",
@@ -1467,7 +1533,75 @@
       "keyHintStored": "Guardada criptografada no servidor e nunca mais mostrada: já há uma chave guardada.",
       "removeKey": "Remover a chave guardada",
       "models": "Modelos",
-      "modelsHint": "Um ID de modelo por linha, como o servidor o chama."
+      "modelsHint": "Um ID de modelo por linha, como o servidor o chama.",
+      "answered": "Respondeu",
+      "failing": "Falhando",
+      "none": "Nenhuma conta ainda.",
+      "noneHelp": "Adicione uma para usar os modelos dela nas conversas."
+    },
+    "integrations": {
+      "title": "Integrações",
+      "intro": "Conecte uma conta de um provedor de pagamentos. As credenciais ficam criptografadas no servidor e nunca são mostradas de novo, e nenhum app, agente ou membro consegue lê-las. Você escolhe quais espaços podem usar a conta, o maior valor e as moedas de um pagamento.",
+      "backupHint": "Um backup guarda a chave do servidor junto das credenciais, então é tão sensível quanto elas. Depois de restaurar um backup em outra máquina, troque cada credencial no provedor e aqui.",
+      "webhooksUnavailable": "Webhooks indisponíveis: defina a URL pública do servidor (-public-url). A conferência de pagamentos sem webhooks ainda não foi construída.",
+      "add": "Conectar uma conta",
+      "none": "Nenhuma conta conectada ainda.",
+      "newIntegration": "Nova integração",
+      "providerLabel": "Provedor",
+      "provider": {
+        "stripe": "Stripe",
+        "square": "Square"
+      },
+      "kind": {
+        "payments": "Pagamentos"
+      },
+      "mode": {
+        "test": "Modo de teste",
+        "live": "Modo real: dinheiro de verdade"
+      },
+      "secret": {
+        "api_key": "Chave secreta",
+        "webhook_secret": "Segredo de assinatura do webhook"
+      },
+      "setting": {
+        "environment": "Ambiente",
+        "location_id": "ID do local"
+      },
+      "settingOption": {
+        "sandbox": "Sandbox",
+        "production": "Produção"
+      },
+      "secretSet": "{name} definido",
+      "secretNotSet": "{name} não definido",
+      "newSecret": "Novo valor de {name}",
+      "keepSecret": "Deixe vazio para manter o guardado",
+      "secretHint": "Guardado criptografado no servidor e nunca mostrado de novo.",
+      "secretHintStored": "Guardado criptografado no servidor e nunca mostrado de novo: há um guardado agora.",
+      "ceiling": "Maior valor de um pagamento",
+      "ceilingHint": "Na menor unidade da moeda: centavos para o euro, ienes inteiros para o iene.",
+      "ceilingPreview": "Isso dá {amounts}.",
+      "currencies": "Moedas que um pagamento pode pedir",
+      "limits": "Até {amounts} por pagamento",
+      "allowedIn": "Permitida em: {spaces}",
+      "allowedNowhere": "Ainda não permitida em nenhum espaço, então nenhum app pode usá-la.",
+      "webhookAddress": "Registre este endereço no provedor:",
+      "polling": "Sem URL pública: os webhooks ficam indisponíveis, e a conferência de pagamentos sem eles ainda não foi construída.",
+      "switchedOff": "desligada",
+      "switchOff": "Desligar",
+      "switchOn": "Ligar",
+      "switchOffNamed": "Desligar {name}",
+      "switchOnNamed": "Ligar {name}",
+      "checking": "Verificando…",
+      "checkOk": "As credenciais guardadas abrem e as configurações estão certas. O provedor não foi consultado.",
+      "spaces": "Espaços",
+      "spacesNamed": "Espaços de {name}",
+      "spacesHint": "Os apps dos espaços que você escolher podem usar esta conta, depois que você os aprovar. O espaço privado de outra pessoa não pode ser escolhido.",
+      "privateSpace": "{name} (privado)",
+      "archivedSpace": "{name} (arquivado)",
+      "otherSpaces_one": "E {count} espaço privado de outro membro, que você não pode ver.",
+      "otherSpaces_many": "E {count} de espaços privados de outros membros, que você não pode ver.",
+      "otherSpaces_other": "E {count} espaços privados de outros membros, que você não pode ver.",
+      "removeQuestion": "Remover {name}? As credenciais são apagadas junto."
     },
     "cliAccounts": {
       "title": "Suas contas de CLI",
@@ -1577,7 +1711,11 @@
       "modesTitle": "Quais contas as execuções dos membros usam",
       "defaultMode": "Padrão",
       "accountsFor": "Contas de {name}",
-      "theDefault": "O padrão"
+      "theDefault": "O padrão",
+      "accepted": "Chave aceita",
+      "refused": "Chave recusada",
+      "none": "Nenhuma conta compartilhada ainda.",
+      "noneHelp": "Adicione uma chave de API paga pelo espaço de trabalho, para os turnos dos membros."
     },
     "switching": {
       "title": "Troca automática",
@@ -1597,7 +1735,8 @@
       "choose": "Escolha uma conta…",
       "ownLabelled": "{name} ({label})",
       "ownNumbered": "{name} (conta {number})",
-      "shared": "{name} ({label}, {workspace})"
+      "shared": "{name} ({label}, {workspace})",
+      "limitedBadge": "No limite"
     },
     "dictation": {
       "intro": "O microfone na caixa de mensagem transforma fala em texto, que você edita antes de enviar. Os termos do {file} de um espaço (um por item de lista) são escritos do jeito que você os escreveu.",
@@ -1638,7 +1777,9 @@
       "keySetPlaceholder": "definida: digite para trocá-la",
       "keyNotSetPlaceholder": "não definida",
       "hostedNote": "A fala só vai para este endpoint quando o mecanismo acima é a API hospedada; definir uma chave não muda para ela. O glossário nunca vai: ele é aplicado neste servidor.",
-      "removeKey": "Remover a chave de API"
+      "removeKey": "Remover a chave de API",
+      "onBadge": "Ligado",
+      "offBadge": "Desligado"
     },
     "search": {
       "title": "Busca semântica",
@@ -1660,7 +1801,6 @@
       "provider": "Provedor",
       "servedAt": "Servido em {url}. O servidor pede um embedding a ele antes de salvar.",
       "changeWarning": "Mudar a conta, o modelo ou a URL base dessa conta interrompe a busca semântica em todos os espaços até que um membro de cada espaço consinta com o novo endpoint. Nada é enviado a ele antes disso. Escolha um endpoint em que o espaço de trabalho confie, como um Ollama local.",
-      "checking": "Verificando o endpoint…",
       "turnOff": "Desligar a busca semântica",
       "formerMember": "um ex-membro",
       "fullTextOnly": "Só busca por texto: o espaço de trabalho não tem modelo de embeddings. Nada sai deste servidor.",
@@ -1676,7 +1816,12 @@
       "consentFor": "Consentimento para {name}",
       "askPrivate": "Enviar os documentos Markdown do seu espaço privado, agora e conforme mudarem, e todas as buscas nele, para {url}, para o modelo {model}? Arquivos enviados que não são Markdown não vão. Se um administrador mudar este endpoint, o envio para até que alguém consinta de novo.",
       "askShared": "Enviar os documentos Markdown do espaço {name}, agora e conforme mudarem, e todas as buscas nele, para {url}, para o modelo {model}? Arquivos enviados que não são Markdown não vão. Se um administrador mudar este endpoint, o envio para até que alguém consinta de novo.",
-      "yes": "Sim, enviar para lá"
+      "yes": "Sim, enviar para lá",
+      "onBadge": "Ligada",
+      "offBadge": "Desligada neste servidor",
+      "consentOn": "Consentido",
+      "consentPaused": "Pausado",
+      "consentOff": "Só texto completo"
     },
     "audit": {
       "title": "Registro de auditoria",
@@ -1693,7 +1838,8 @@
         "to": "Até",
         "any": "Qualquer",
         "anyone": "Qualquer pessoa",
-        "clear": "Limpar filtros"
+        "clear": "Limpar filtros",
+        "title": "Filtros"
       },
       "by": "Por {name}",
       "byFormer": "Por um ex-membro (número {id})",
@@ -1745,8 +1891,15 @@
         "search_embeddings_changed": "Embeddings da busca alterados",
         "search_consent_changed": "Consentimento da busca alterado",
         "dictation_settings_changed": "Configurações de ditado alteradas",
+        "integration_created": "Integração conectada",
+        "integration_updated": "Integração alterada",
+        "integration_removed": "Integração removida",
+        "integration_disabled": "Integração desligada",
+        "integration_enabled": "Integração ligada",
+        "integration_spaces_changed": "Espaços da integração alterados",
         "data_export_started": "Exportação de dados iniciada",
         "workspace_export_started": "Exportação do espaço de trabalho iniciada",
+        "server_update_requested": "Atualização pedida",
         "two_factor_enabled": "Login em duas etapas ativado",
         "two_factor_disabled": "Login em duas etapas desativado",
         "two_factor_recovery_codes_replaced": "Códigos de recuperação substituídos",
@@ -1759,7 +1912,8 @@
         "space": "Espaço compartilhado",
         "access_token": "Token de acesso",
         "provider_account": "Conta de provedor de modelos",
-        "shared_cli_account": "Conta de CLI compartilhada"
+        "shared_cli_account": "Conta de CLI compartilhada",
+        "integration": "Integração"
       },
       "details": {
         "account": "Conta",
@@ -1770,6 +1924,7 @@
         "archived": "Arquivado",
         "base_host": "Servidor",
         "cascade": "Consequência de outra alteração",
+        "channel": "Canal",
         "cli": "CLI",
         "created_account": "Conta criada",
         "default_mode": "Modo padrão",
@@ -1795,7 +1950,12 @@
         "scope": "Escopo",
         "spaces": "Espaços compartilhados",
         "to": "Para",
-        "user_id": "Número do membro"
+        "user_id": "Número do membro",
+        "added": "Espaços adicionados",
+        "removed": "Espaços removidos",
+        "mode": "Modo",
+        "webhook_secret_set": "Segredo do webhook definido",
+        "webhook_secret_changed": "Segredo do webhook alterado"
       },
       "values": {
         "admin": "Administrador",
@@ -1825,9 +1985,37 @@
         "compat": "Compatibilidade",
         "models": "Modelos",
         "label": "Rótulo",
-        "model": "Modelo"
-      }
-    }
+        "model": "Modelo",
+        "settings": "Configurações",
+        "max_amount": "Valor máximo",
+        "currencies": "Moedas",
+        "webhook_secret": "Segredo do webhook",
+        "test": "Teste",
+        "live": "Real"
+      },
+      "event": "Evento",
+      "when": "Quando"
+    },
+    "groups": {
+      "workspace": "Espaço de trabalho",
+      "you": "Você",
+      "server": "Servidor"
+    },
+    "choose": "Página de configurações",
+    "moreFor": "Mais ações para {name}",
+    "help": {
+      "general": "O idioma do espaço de trabalho e o e-mail do servidor.",
+      "members": "Quem está neste espaço de trabalho e o que pode fazer.",
+      "spaces": "Espaços que a equipe compartilha e quem está em cada um.",
+      "audit": "Quem fez o quê neste espaço de trabalho, e quando.",
+      "data": "Baixe o que você guarda neste espaço de trabalho.",
+      "tokens": "Tokens para seus próprios agentes e scripts.",
+      "password": "Sua senha e o login em duas etapas.",
+      "cliAccounts": "Os logins do Claude Code, Codex e Grok Build em que suas conversas rodam.",
+      "providers": "Os endpoints de modelos que as conversas podem usar.",
+      "search": "Como a busca encontra documentos e quais espaços consentem com a busca semântica."
+    },
+    "actionsColumn": "Ações"
   },
   "pwa": {
     "update": {
@@ -1960,7 +2148,13 @@
       "loadTheirs": "Carregar a versão da outra pessoa",
       "overwrite": "Substituir pela minha",
       "saveAgain": "Salvar a minha de novo",
-      "save": "Salvar"
+      "save": "Salvar",
+      "discardLabel": "Descartar as alterações",
+      "discardQuestion": "Você tem alterações que não foram salvas. Descartá-las?",
+      "discardDeleted": "Este documento foi excluído. Você tem alterações que não foram salvas. Descartá-las?",
+      "discardMoved": "Este documento foi movido. Você tem alterações que não foram salvas. Descartá-las?",
+      "discard": "Descartar minhas alterações",
+      "keepEditing": "Continuar editando"
     },
     "move": {
       "label": "Mover o documento",
@@ -2061,9 +2255,7 @@
   },
   "conversations": {
     "archived": "Arquivadas",
-    "showArchived": "Mostrar arquivadas",
     "showArchivedTitle": "Mostrar as conversas arquivadas",
-    "showActiveTitle": "Mostrar as conversas ativas",
     "new": "Nova",
     "nothingArchived": "Nenhuma conversa arquivada.",
     "none": "Nenhuma conversa ainda. Comece uma em Nova.",
@@ -2104,12 +2296,14 @@
     },
     "question": {
       "label": "{cli} pede para usar {tool}",
-      "asks": "{cli} pede para usar <tool>{tool}</tool>:",
+      "asks": "{cli} pede para usar <b>{tool}</b>:",
       "allow": "Permitir",
       "deny": "Negar"
     },
     "allowAll": {
       "confirm": "{cli} vai executar comandos, editar arquivos e abrir páginas nesta conversa sem perguntar antes. Uma página ou arquivo que ele ler pode então levá-lo a fazer algo que você não pediu. Permitir tudo nesta conversa?",
+      "title": "Deixar {cli} agir sem perguntar?",
+      "confirmButton": "Permitir tudo",
       "label": "Deixar {cli} agir sem perguntar nesta conversa",
       "on": "Ele executa comandos, edita arquivos e abre páginas sem perguntar. Uma mudança vale a partir da próxima mensagem."
     },
@@ -2129,6 +2323,7 @@
     },
     "composer": {
       "archived": "Esta conversa está arquivada.",
+      "unreadable": "Esta conversa não pode ser lida, então nada pode ser enviado a ela.",
       "workingHint": "O agente está trabalhando. Enviar redireciona o agente no próximo passo; Enfileirar espera até ele terminar.",
       "message": "Mensagem",
       "placeholder": "Escreva para o agente",
@@ -2151,9 +2346,7 @@
       "recorded": "Gravado",
       "elapsed": "{elapsed} / {max}",
       "stop": "Parar o ditado",
-      "stopTitle": "Parar e transformar a fala em texto",
       "dictate": "Ditar",
-      "dictateTitle": "Ditar: fale e depois edite o texto antes de enviar",
       "transcribing": "Transformando a fala em texto…",
       "cantRecord": "Este navegador não consegue gravar aqui: é preciso HTTPS ou localhost."
     }
@@ -2191,7 +2384,6 @@
   },
   "home": {
     "intro": "Widgets dos seus apps e os apps que você fixou no menu. Cada um mostra só o que você pode ver no app.",
-    "empty": "Nada no seu Início ainda. Escolha Personalizar para colocar aqui um widget de um dos seus apps ou para fixar um app no menu.",
     "widgets": "Widgets",
     "customize": "Personalizar",
     "done": "Concluir",
@@ -2204,12 +2396,6 @@
       "unpublished": "{name} ainda não foi publicado, então este widget não está disponível.",
       "removed": "{name} não oferece mais este widget."
     },
-    "unavailableShort": {
-      "offline": "· app fora do ar",
-      "unpublished": "· app não publicado",
-      "removed": "· não é mais oferecido"
-    },
-    "default": "· definido para o espaço",
     "moveEarlier": "Mover {name} para antes",
     "moveLater": "Mover {name} para depois",
     "removeNamed": "Remover {name}",
@@ -2234,7 +2420,37 @@
       "shortcut": "atalho",
       "pin": "fixação"
     },
-    "removePinNamed": "Remover {name} do menu"
+    "removePinNamed": "Remover {name} do menu",
+    "emptyTitle": "Nada no seu Início ainda",
+    "emptyHelp": "O Início reúne widgets dos seus apps, cada um mostrando só o que você pode ver no app. Adicione um para ver os números dele aqui ou fixe um app no menu.",
+    "emptyNoApps": "O Início reúne widgets dos seus apps, cada um mostrando só o que você pode ver no app. Crie ou instale um app primeiro e volte para colocá-lo aqui.",
+    "emptyAdd": "Adicionar widgets",
+    "emptyApps": "Abrir Apps",
+    "addShort": "Adicionar",
+    "added": "Adicionado",
+    "pin": "Fixar",
+    "unpin": "Desafixar",
+    "pinned": "Fixado",
+    "show": "Mostrar",
+    "defaultBadge": "Padrão do espaço",
+    "pinState": {
+      "offline": "App fora do ar",
+      "unpublished": "App não publicado",
+      "removed": "Não é mais oferecido"
+    },
+    "moreForWidget": "Mais ações para o widget {name}",
+    "moreForPin": "Mais ações para a fixação {name}",
+    "announce": {
+      "moved": "{name} movido para a posição {position} de {total}",
+      "removed": "{name} removido do Início",
+      "added": "{name} adicionado ao Início",
+      "hidden": "{name} ocultado",
+      "shown": "{name} mostrado de novo",
+      "pinned": "{name} fixado no menu",
+      "unpinned": "{name} removido do menu",
+      "defaultSet": "{name} agora é um padrão do espaço",
+      "defaultUnset": "{name} não é mais um padrão do espaço"
+    }
   },
   "checklist": {
     "title": "Configure seu workspace",
@@ -2518,7 +2734,6 @@
       "changed": "Algo mudou"
     },
     "settings": {
-      "title": "Suas notificações",
       "inbox": "As notificações sempre aparecem na sua caixa de entrada, mesmo que este navegador não consiga mostrar notificações push.",
       "openInbox": "Abrir a caixa de entrada",
       "pushTitle": "Notificações push neste dispositivo",
@@ -2563,13 +2778,259 @@
       "emailAddressUnverified": "Este endereço não está confirmado, então nada é enviado por e-mail ainda. Envie um link de confirmação para você.",
       "emailSendLink": "Enviar o link de confirmação",
       "emailResendLink": "Enviar o link de novo",
-      "emailLinkSent": "O link foi enviado. Ele funciona uma vez e expira em 24 horas."
+      "emailLinkSent": "O link foi enviado. Ele funciona uma vez e expira em 24 horas.",
+      "onBadge": "Ligado",
+      "offBadge": "Desligado",
+      "blockedBadge": "Bloqueado",
+      "emailConfirmedBadge": "Confirmado",
+      "emailUnconfirmedBadge": "Não confirmado"
     },
     "confirmEmail": {
       "title": "Confirme seu endereço de e-mail",
       "working": "Confirmando seu endereço…",
       "done": "Seu endereço está confirmado. As notificações que você escolheu agora podem ser enviadas por e-mail.",
       "settings": "Abrir as configurações de notificações"
+    },
+    "noneHelp": "Quando um cartão for atribuído a você, um comentário mencionar você ou um app precisar de você, isso aparece aqui.",
+    "in": "{where} ·"
+  },
+  "ui": {
+    "loading": "Carregando",
+    "requiredMark": "*",
+    "close": "Fechar",
+    "moreActions": "Mais ações",
+    "dismiss": "Dispensar",
+    "notifications": "Notificações",
+    "menuButtonName": "{label}:"
+  },
+  "gallery": {
+    "title": "Sistema de design",
+    "lede": "Um conjunto de tokens e componentes. Toda tela é feita com eles, e um tema muda apenas os papéis.",
+    "hint": "Passar o mouse, focar e pressionar funcionam de verdade: experimente com o mouse e o teclado.",
+    "theme": "Tema",
+    "system": "Sistema",
+    "light": "Claro",
+    "dark": "Escuro",
+    "brand": "Marca",
+    "mint": "Menta",
+    "harbor": "Harbor (exemplo)",
+    "direction": "Direção",
+    "ltr": "Da esquerda para a direita",
+    "rtl": "Da direita para a esquerda",
+    "colours": "Papéis de cor",
+    "type": "Tipografia",
+    "typePage": "Planejar a semana de lançamento",
+    "typeSection": "As contas deste espaço de trabalho",
+    "typeBody": "Todo membro deste espaço de trabalho pode usá-las nas suas conversas.",
+    "typeSmall": "Membro · expira em 1º de dez.",
+    "typeLabel": "Apps fixados",
+    "typeCode": "lancamento/plano.md",
+    "state": {
+      "default": "Padrão",
+      "disabled": "Desativado",
+      "loading": "Carregando",
+      "error": "Erro",
+      "pressed": "Pressionado",
+      "checked": "Marcado",
+      "mixed": "Misto",
+      "small": "Pequeno",
+      "regular": "Normal",
+      "inARow": "Em linha: uma só altura",
+      "withIcon": "Com ícone",
+      "asLink": "Como link",
+      "readOnly": "Somente leitura",
+      "ringed": "Com anel",
+      "sizes": "Tamanhos",
+      "shapes": "Formas",
+      "tones": "Tons",
+      "hues": "Matizes"
+    },
+    "sample": {
+      "primary": "Principal",
+      "secondary": "Secundário",
+      "ghost": "Discreto",
+      "delete": "Excluir",
+      "save": "Salvar",
+      "newCard": "Novo cartão",
+      "open": "Abrir quadros",
+      "edit": "Renomear",
+      "more": "Mais ações",
+      "close": "Fechar",
+      "pin": "Fixar",
+      "archive": "Arquivar",
+      "search": "Buscar",
+      "tooltipButton": "Compartilhar",
+      "tooltipText": "Copia um link para este cartão",
+      "workspace": "Nome do espaço de trabalho",
+      "workspaceValue": "Acme Studio",
+      "email": "E-mail",
+      "emailValue": "ana@",
+      "emailError": "Digite um e-mail completo, como nome@empresa.com.",
+      "emailHint": "Para onde os convites são enviados.",
+      "role": "Papel",
+      "member": "Membro",
+      "admin": "Administrador",
+      "notes": "Notas",
+      "notesHint": "Só você vê estas notas.",
+      "notesPlaceholder": "Escreva uma nota",
+      "locked": "ID do espaço de trabalho",
+      "lockedValue": "ws-1042",
+      "overdue": "Só atrasados",
+      "all": "Selecionar tudo",
+      "archived": "Mostrar arquivados",
+      "semantic": "Busca semântica",
+      "push": "Notificações neste dispositivo",
+      "view": "Visualização",
+      "write": "Escrever",
+      "preview": "Pré-visualizar",
+      "list": "Lista",
+      "board": "Quadro",
+      "live": "No ar",
+      "draft": "Rascunho",
+      "overdueBadge": "Atrasado",
+      "syncing": "Sincronizando",
+      "offline": "Offline",
+      "agentSaid": "O agente atualizou lancamento/plano.md",
+      "agent": "O agente",
+      "unread": "Não lido",
+      "personA": "Ana Ribeiro",
+      "personB": "Tomás Oliveira",
+      "personC": "Kenji Watanabe",
+      "personD": "Priya Natarajan",
+      "workspaceName": "Acme Studio"
+    },
+    "labels": {
+      "onboarding": "integração",
+      "writing": "redação",
+      "copy": "texto",
+      "blocked": "bloqueado",
+      "launch": "lançamento",
+      "design": "design",
+      "i18n": "i18n",
+      "bug": "bug",
+      "urgent": "urgente"
+    },
+    "layout": {
+      "widths": "Larguras: leitura (760px), lista (1.040px), total",
+      "widthHelp": "O conteúdo fica centralizado na largura desta página.",
+      "headerBasic": "Um título, uma linha de ajuda e a única ação principal",
+      "headerPath": "Um caminho acima do título, e várias ações",
+      "headerLong": "Um título longo quebra a linha, com suas ações",
+      "appsTitle": "Apps",
+      "appsHelp": "Telas que o agente cria para você. Um app num espaço compartilhado pertence aos membros dele.",
+      "newApp": "Novo app",
+      "private": "Privado",
+      "boards": "Quadros",
+      "personal": "Pessoal",
+      "filter": "Filtrar",
+      "renameBoard": "Renomear o quadro",
+      "longTitle": "Um título longo o bastante para ocupar duas linhas num celular, com as ações embaixo",
+      "panels": "Com e sem espaçamento",
+      "panelPadded": "Um painel com espaçamento guarda um formulário ou um texto.",
+      "panelPlain": "Um painel de linhas ou uma tabela não tem espaçamento.",
+      "rows": "Um app com suas ações, uma linha que é um link, a linha atual",
+      "history": "Histórico",
+      "duplicate": "Duplicar como modelo",
+      "moveTo": "Mover para um espaço…",
+      "equipment": "Equipamentos",
+      "equipmentDetail": "Quem está com qual notebook, e quando ele volta",
+      "liveRelease": "No ar · versão 1",
+      "editWithAi": "Editar com IA",
+      "openApp": "Abrir",
+      "expenses": "Despesas",
+      "expensesDetail": "Uma linha que é um link: um clique em qualquer ponto a abre",
+      "currentRow": "A linha atual",
+      "currentDetail": "Marcada como a aberta",
+      "tables": "Números alinhados ao fim; uma tabela estreita rola na própria caixa",
+      "members": "Membros",
+      "person": "Pessoa",
+      "documents": "Documentos",
+      "storage": "Armazenamento",
+      "actions": "Ações",
+      "resetPassword": "Redefinir a senha",
+      "remove": "Remover",
+      "narrowTable": "Uma tabela estreita",
+      "tabsButtons": "Botões sobre painéis: setas, Home e End",
+      "tabsLinks": "Links para páginas, a atual marcada",
+      "people": "Pessoas",
+      "invites": "Convites",
+      "roles": "Papéis",
+      "tabPanel": "O painel desta aba.",
+      "settings": "Configurações",
+      "general": "Geral",
+      "searchTab": "Busca",
+      "empties": "Uma linha que diz para que serve o lugar, e a ação",
+      "noApps": "Ainda não há apps em Equipe de produto",
+      "noAppsHelp": "Crie um com o agente, ou mova um dos seus para cá para compartilhá-lo.",
+      "fromTemplate": "Começar de um modelo",
+      "buildApp": "Criar um app",
+      "noMatch": "Nada corresponde a “preços”",
+      "noMatchHelp": "Tente menos palavras, ou busque em todos os espaços.",
+      "notices": "Um tom inteiro por tipo, nunca uma barra lateral",
+      "noticeInfo": "A busca semântica está desligada. Estes são resultados de texto completo.",
+      "noticeSuccessTitle": "O e-mail funciona",
+      "noticeSuccess": "Uma mensagem de teste foi enviada para o seu endereço.",
+      "noticeWarning": "2 registros estão esperando para ser enviados deste dispositivo.",
+      "sendNow": "Enviar agora",
+      "noticeDanger": "A chave foi recusada. Confira e salve de novo.",
+      "noticeNeutral": "O e-mail não está configurado neste servidor, então os convites são links que você copia e envia.",
+      "howToSetUp": "Como configurar",
+      "menuClip": "Numa caixa que corta: o menu não é cortado",
+      "menuItems": "Ícones, um item desativado, um separador, um item perigoso",
+      "sortBy": "Ordenar por",
+      "newest": "Mais recentes primeiro",
+      "oldest": "Mais antigos primeiro",
+      "name": "Nome",
+      "duplicateDisabled": "Duplicar (desativado)",
+      "dialog": "Modal: a página atrás fica inerte; Esc fecha",
+      "openDialog": "Abrir um diálogo",
+      "renameApp": "Renomear o app",
+      "renameHelp": "O novo nome aparece no menu e no Início.",
+      "showToastOver": "Mostrar um aviso sobre ele",
+      "toastOverDialog": "Um aviso aparece acima do diálogo",
+      "confirms": "Diz o que vai acontecer e nomeia a ação; Cancelar recebe o foco primeiro",
+      "deleteAsk": "Excluir…",
+      "deleteTitle": "Excluir Equipamentos?",
+      "deleteBody": "Os 42 registros e as fotos são excluídos junto. Isso não pode ser desfeito.",
+      "deleteApp": "Excluir o app",
+      "publishAsk": "Publicar…",
+      "publishTitle": "Publicar o rascunho?",
+      "publishBody": "Todos em Equipe de produto veem a nova versão na hora.",
+      "publish": "Publicar",
+      "confirmed": "Confirmado",
+      "cancelled": "Cancelado",
+      "drawer": "Sobre a página, não modal: a página ao lado continua utilizável",
+      "openCard": "Abrir um cartão",
+      "cardTitle": "Escrever o post de lançamento",
+      "copyLink": "Copiar link",
+      "comment": "Comentar",
+      "done": "Concluído",
+      "cardBody": "Rascunhar o post da semana de lançamento.",
+      "threadLine": "Uma linha da conversa do cartão, para o corpo rolar sozinho.",
+      "toasts": "De qualquer lugar com toast(): empilham, saem sozinhos e podem ser dispensados",
+      "neutral": "Neutro",
+      "success": "Sucesso",
+      "danger": "Perigo",
+      "withAction": "Com uma ação",
+      "linkCopied": "Link copiado",
+      "appMoved": "O app foi movido para Equipe de produto",
+      "moveFailed": "Não foi possível mover o app. Tente de novo.",
+      "cardArchived": "Cartão arquivado",
+      "undo": "Desfazer",
+      "cardRestored": "Cartão restaurado",
+      "toolbar": "Filtros e ações que quebram a linha; um espaçador empurra o resto para o fim",
+      "filters": "Filtros",
+      "labels": "Etiquetas",
+      "assignedToMe": "Atribuídos a mim",
+      "addColumn": "Adicionar uma coluna",
+      "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo",
+      "busyAsk": "Excluir e falhar…",
+      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo.",
+      "inPlaceRow": "Um resultado de busca",
+      "inPlaceDetail": "Abre nesta página, no lugar",
+      "focusTarget": "Recebe o foco por script (uma ref e tabIndex -1)",
+      "focusIt": "Levar o teclado ao título",
+      "openPage": "Abrir uma página (um link)"
     }
   }
 }

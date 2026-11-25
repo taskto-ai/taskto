@@ -15,7 +15,16 @@ import { api, type Checklist, type ChecklistStep, errorText, ws } from '../api'
 import { templatesPath } from '../apps/route'
 import { type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Link, routePath } from '../router'
+import { routePath } from '../router'
+import { Badge } from '../ui/Badge'
+import { Button, ButtonLink } from '../ui/Button'
+import { Heading } from '../ui/Heading'
+import { Icon } from '../ui/Icon'
+import { IconButton } from '../ui/IconButton'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 
 // Where each step is done.
 function stepPath(workspace: number, step: ChecklistStep): string {
@@ -117,9 +126,9 @@ export function SetupChecklist({
 
   // Always there, so that what it says when the list is finished is announced.
   const status = (
-    <p role="status" className="tt-sr-only">
-      {finished ? t('checklist.completed') : ''}
-    </p>
+    <VisuallyHidden>
+      <span role="status">{finished ? t('checklist.completed') : ''}</span>
+    </VisuallyHidden>
   )
   if (!data || !shown) return status
 
@@ -148,69 +157,85 @@ export function SetupChecklist({
   const problem = error ?? list.error
   return (
     <>
-      <section className="tt-checklist" aria-labelledby="tt-checklist-title">
-        <div className="tt-checklist-head">
-          <div>
-            <h2 id="tt-checklist-title" ref={title} tabIndex={-1}>
+      <Panel as="section" padded className="ui-checklist" aria-labelledby="ui-checklist-title">
+        <div className="ui-checklist-head">
+          <div className="ui-checklist-titles">
+            <Heading level={2} id="ui-checklist-title" ref={title} tabIndex={-1}>
               {t('checklist.title')}
-            </h2>
-            <p className="tt-muted tt-small">{t('checklist.intro')}</p>
+            </Heading>
+            <p className="ui-home-help">{t('checklist.intro')}</p>
           </div>
-          <button type="button" className="tt-button" onClick={dismiss}>
-            {t('checklist.dismiss')}
-          </button>
+          <IconButton icon="close" label={t('checklist.dismiss')} onClick={dismiss} />
         </div>
-        <p role="status" className="tt-small">
-          {t('checklist.progress', { done: f.number(handled), total: f.number(required.length) })}
-        </p>
-        {problem && (
-          <p role="alert" className="tt-error">
-            {problem}
+        <div className="ui-checklist-progress">
+          <span className="ui-checklist-meter" aria-hidden="true">
+            <span
+              className="ui-checklist-meter-fill"
+              style={{ inlineSize: `${required.length ? (handled / required.length) * 100 : 100}%` }}
+            />
+          </span>
+          <p role="status" className="ui-checklist-count">
+            {t('checklist.progress', { done: f.number(handled), total: f.number(required.length) })}
           </p>
-        )}
-        <ol className="tt-checklist-steps">
+        </div>
+        {problem && <Notice tone="danger">{problem}</Notice>}
+        <Rows ordered label={t('checklist.title')}>
           {data.items.map((item) => {
             const name = t(`checklist.steps.${item.id}.title` as Key)
             return (
-              <li key={item.id} className="tt-checklist-step" data-state={item.state}>
-                <span className="tt-checklist-mark" data-state={item.state} aria-hidden="true" />
-                <div className="tt-checklist-text">
-                  <h3>
-                    {name}
-                    <span className="tt-checklist-state" data-state={item.state}>
+              <Row
+                key={item.id}
+                leading={<StepMark state={item.state} />}
+                title={name}
+                detail={t(`checklist.steps.${item.id}.text` as Key)}
+                status={
+                  <>
+                    <Badge tone={item.state === 'done' ? 'success' : 'neutral'} dot={item.state === 'done'}>
                       {t(`checklist.state.${item.state}` as Key)}
-                    </span>
-                    {item.optional && <span className="tt-checklist-state">{t('checklist.optional')}</span>}
-                  </h3>
-                  <p className="tt-muted tt-small">{t(`checklist.steps.${item.id}.text` as Key)}</p>
-                </div>
-                {item.state !== 'done' && (
-                  <div className="tt-checklist-actions">
-                    <Link
-                      className={item.id === first ? 'tt-button tt-primary' : 'tt-button'}
-                      href={stepPath(workspace, item.id)}
-                    >
-                      {t(`checklist.steps.${item.id}.action` as Key)}
-                    </Link>
-                    <button
-                      type="button"
-                      className="tt-button"
-                      aria-label={t(item.state === 'skipped' ? 'checklist.unskipNamed' : 'checklist.skipNamed', {
-                        name,
-                      })}
-                      onClick={() => toggleSkip(item.id, item.state === 'skipped')}
-                    >
-                      {t(item.state === 'skipped' ? 'checklist.unskip' : 'checklist.skip')}
-                    </button>
-                  </div>
-                )}
-              </li>
+                    </Badge>
+                    {item.optional && <Badge>{t('checklist.optional')}</Badge>}
+                  </>
+                }
+                actions={
+                  item.state !== 'done' && (
+                    <>
+                      <ButtonLink
+                        size="sm"
+                        variant={item.id === first ? 'primary' : 'secondary'}
+                        href={stepPath(workspace, item.id)}
+                      >
+                        {t(`checklist.steps.${item.id}.action` as Key)}
+                      </ButtonLink>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={t(item.state === 'skipped' ? 'checklist.unskipNamed' : 'checklist.skipNamed', {
+                          name,
+                        })}
+                        onClick={() => toggleSkip(item.id, item.state === 'skipped')}
+                      >
+                        {t(item.state === 'skipped' ? 'checklist.unskip' : 'checklist.skip')}
+                      </Button>
+                    </>
+                  )
+                }
+              />
             )
           })}
-        </ol>
-      </section>
+        </Rows>
+      </Panel>
       {status}
     </>
+  )
+}
+
+// A step's state as a mark before it: a tick when done, a dash when skipped, an empty ring to do.
+// The badge says it in words.
+function StepMark({ state }: { state: Checklist['items'][number]['state'] }) {
+  return (
+    <span className="ui-checklist-mark" data-state={state} aria-hidden="true">
+      {state === 'done' && <Icon name="check" size={14} />}
+    </span>
   )
 }
 
@@ -232,17 +257,17 @@ export function ChecklistRestore({ workspace }: { workspace: number }) {
     checklistChanged()
   }
   return (
-    <section aria-labelledby="tt-home-checklist">
-      <h2 id="tt-home-checklist">{t('checklist.title')}</h2>
-      <p className="tt-muted tt-small">{t('checklist.dismissedNote')}</p>
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
-        </p>
-      )}
-      <button type="button" className="tt-button" onClick={show}>
+    <Panel as="section" padded className="ui-home-restore" aria-labelledby="ui-home-checklist">
+      <div className="ui-home-restore-text">
+        <Heading level={2} id="ui-home-checklist">
+          {t('checklist.title')}
+        </Heading>
+        <p className="ui-home-help">{t('checklist.dismissedNote')}</p>
+      </div>
+      {error && <Notice tone="danger">{error}</Notice>}
+      <Button size="sm" onClick={show}>
         {t('checklist.show')}
-      </button>
-    </section>
+      </Button>
+    </Panel>
   )
 }

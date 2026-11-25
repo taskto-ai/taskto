@@ -416,6 +416,60 @@ export type HomeView = {
   }
 }
 
+export type Integration = {
+  id: number
+  provider: string
+  kind: string
+  name: string
+  display_name: string
+  mode: string
+  settings: Record<string, string>
+  max_amount_minor: number
+  currencies: string[]
+  secrets: Record<string, string>
+  webhook_url: string | null
+  disabled: boolean
+  disabled_at: string | null
+  spaces: number[]
+  other_spaces: number
+  created_at: string
+  updated_at: string
+  last_event_at: string | null
+}
+
+export type IntegrationCheck = {
+  ok: boolean
+  remote: boolean
+  code?: string
+  params?: Record<string, string | number>
+}
+
+export type IntegrationRegistry = {
+  providers: IntegrationsProviderInfo[]
+  currencies: string[]
+  exponents: Record<string, number>
+  max_amount_minor: number
+  webhooks_available: boolean
+}
+
+export type IntegrationsProviderInfo = {
+  id: string
+  kinds: string[]
+  secrets: IntegrationsSecretSpec[]
+  settings: IntegrationsSettingSpec[]
+}
+
+export type IntegrationsSecretSpec = {
+  name: string
+  required: boolean
+}
+
+export type IntegrationsSettingSpec = {
+  name: string
+  options: string[]
+  required: boolean
+}
+
 export type Invite = {
   id: number
   email: string
@@ -516,6 +570,14 @@ export type Space = {
   access: string
 }
 
+export type SpaceIntegration = {
+  id: number
+  name: string
+  display_name: string
+  kind: string
+  status: string
+}
+
 export type Token = {
   id: number
   workspace_id: number
@@ -533,6 +595,72 @@ export type TokenCreated = {
   expires_at: string | null
   last_used_at: string | null
   token: string
+}
+
+export type UpdateReport = {
+  configured: boolean
+  running_version: string
+  expects_status?: boolean
+  stale?: boolean
+  status: UpdatestatusStatus | null
+  request: UpdatestatusRequestState
+}
+
+export type UpdateRequested = {
+  requested_at: string
+}
+
+export type UpdatestatusNeedsPerson = {
+  kind: string
+  code?: string
+}
+
+export type UpdatestatusRequestRun = {
+  at?: string
+  finished?: string
+  result: string
+  code?: string
+}
+
+export type UpdatestatusRequestState = {
+  available: boolean
+  reason?: string
+  pending_since?: string
+}
+
+export type UpdatestatusRequests = {
+  supported: boolean
+  last: UpdatestatusRequestRun | null
+}
+
+export type UpdatestatusRun = {
+  at?: string
+  finished?: string
+  result: string
+  from?: string
+  to?: string
+  code?: string
+  backed_up?: boolean
+  requested?: boolean
+}
+
+export type UpdatestatusRunning = {
+  since: string
+  to?: string
+  requested?: boolean
+}
+
+export type UpdatestatusStatus = {
+  version: number
+  checked?: string
+  channel: string
+  hold?: boolean
+  recorded_version?: string
+  last_run: UpdatestatusRun | null
+  last_change: UpdatestatusRun | null
+  needs_person: UpdatestatusNeedsPerson | null
+  running: UpdatestatusRunning | null
+  requests: UpdatestatusRequests | null
 }
 
 export type Widget = {

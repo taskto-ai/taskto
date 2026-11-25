@@ -201,7 +201,9 @@ async function dictate(clip) {
 
     await page.goto(`${base}/w/${ws}/conversations`)
     await page.getByRole('button', { name: 'New', exact: true }).click()
-    const box = page.locator('#tt-message')
+    // The chat box by its label; its alerts are the conversation's (a new one has no others).
+    const box = page.getByRole('textbox', { name: 'Message', exact: true })
+    const alerts = page.getByRole('region', { name: 'Conversation' }).getByRole('alert')
     await page.getByRole('button', { name: 'Dictate' }).click()
     const stop = page.getByRole('button', { name: 'Stop dictation' })
     await stop.waitFor({ timeout: 30_000 })
@@ -219,21 +221,17 @@ async function dictate(clip) {
     }
     await stop.click()
     const started = Date.now()
-    const got = await page
-      .waitForFunction(
-        () => {
-          const text = document.querySelector('#tt-message')?.value ?? ''
-          if (text.trim()) return { text }
-          // The chat box's own alerts: the dictation's error, or the composer's.
-          const alert = [...document.querySelectorAll('.tt-composer [role=alert]')]
-            .map((e) => e.textContent)
-            .join(' | ')
-          return alert ? { alert } : false
-        },
-        null,
-        { timeout: 6 * 60_000, polling: 250 },
-      )
-      .then((h) => h.jsonValue())
+    // The text in the box, or an alert in the conversation: the dictation's error, or the composer's.
+    let got
+    for (const until = Date.now() + 6 * 60_000; !got; await page.waitForTimeout(250)) {
+      assert.ok(Date.now() < until, 'no text and no error after 6 minutes')
+      const text = await box.inputValue()
+      if (text.trim()) got = { text }
+      else {
+        const alert = (await alerts.allTextContents()).join(' | ')
+        if (alert) got = { alert }
+      }
+    }
     assert.equal(got.alert, undefined, `dictation failed: ${got.alert}`)
     console.log(`${clip.seconds.toFixed(1)} s of audio, text after ${Date.now() - started} ms: ${got.text}`)
 

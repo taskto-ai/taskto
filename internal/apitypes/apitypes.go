@@ -23,8 +23,10 @@ import (
 	"taskto.ai/taskto/internal/auth"
 	"taskto.ai/taskto/internal/boards"
 	"taskto.ai/taskto/internal/conversations"
+	"taskto.ai/taskto/internal/integrations"
 	"taskto.ai/taskto/internal/knowledge"
 	"taskto.ai/taskto/internal/notifications"
+	"taskto.ai/taskto/internal/updatestatus"
 )
 
 // Root is a reply's struct and the name its TypeScript type has in api.gen.ts.
@@ -83,5 +85,15 @@ func Roots() []Root {
 		root[apps.HomeItem]("HomeItem"),
 		root[apps.HomeView]("HomeView"),
 		root[apps.AvailableApp]("AvailableApp"),
+
+		// Integrations.
+		root[integrations.Integration]("Integration"),
+		root[integrations.SpaceIntegration]("SpaceIntegration"),
+		root[integrations.Registry]("IntegrationRegistry"),
+		root[integrations.CheckResult]("IntegrationCheck"),
+
+		// The host's updates, for the server's operators.
+		root[updatestatus.Report]("UpdateReport"),
+		root[updatestatus.Requested]("UpdateRequested"),
 	}
 }

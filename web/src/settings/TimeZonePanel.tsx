@@ -7,7 +7,12 @@ import { api, type Me } from '../api'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
 import { browserTimeZone, timeZones } from '../timezone'
-import { Alert, useAction } from './parts'
+import { Button } from '../ui/Button'
+import { Field } from '../ui/Field'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Select } from '../ui/Select'
+import { Alert, FormActions, Section, useAction } from './parts'
 
 // `onSaved`: called when the account has the new zone, for what shows what follows it (the summary's).
 // `initial`: the zone the app had when the person signed in, shown until the account's own is read: the app
@@ -40,29 +45,28 @@ export function TimeZonePanel({ initial, onSaved }: { initial: string; onSaved?:
   }
 
   return (
-    <section className="tt-panel" aria-labelledby="tt-time-zone">
-      <h2 id="tt-time-zone">{t('notifications.settings.timeZoneTitle')}</h2>
-      <p className="tt-muted tt-small">{t('notifications.settings.timeZoneIntro')}</p>
-      <div className="tt-inline-field">
-        <label>
-          {t('notifications.settings.timeZoneLabel')}
-          <select value={zone} disabled={action.busy} onChange={(e) => void save(e.target.value)}>
+    <Section title={t('notifications.settings.timeZoneTitle')} help={t('notifications.settings.timeZoneIntro')}>
+      <Panel padded className="settings-panel-body">
+        <Field label={t('notifications.settings.timeZoneLabel')}>
+          <Select value={zone} disabled={action.busy} onChange={(e) => void save(e.target.value)}>
             <option value="">{t('notifications.settings.timeZoneNone')}</option>
             {list.map((z) => (
               <option key={z} value={z}>
                 {z}
               </option>
             ))}
-          </select>
-        </label>
+          </Select>
+        </Field>
         {here && here !== zone && (
-          <button type="button" className="tt-button" disabled={action.busy} onClick={() => void save(here)}>
-            {t('notifications.settings.timeZoneUseBrowser', { zone: here })}
-          </button>
+          <FormActions>
+            <Button disabled={action.busy} onClick={() => void save(here)}>
+              {t('notifications.settings.timeZoneUseBrowser', { zone: here })}
+            </Button>
+          </FormActions>
         )}
-      </div>
-      <Alert error={action.error} />
-      {saved && <p role="status">{t('notifications.settings.timeZoneSaved')}</p>}
-    </section>
+        <Alert error={action.error} />
+        {saved && <Notice tone="success">{t('notifications.settings.timeZoneSaved')}</Notice>}
+      </Panel>
+    </Section>
   )
 }

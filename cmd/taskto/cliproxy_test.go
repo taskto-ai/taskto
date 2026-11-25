@@ -41,7 +41,11 @@ func TestCLIProxyOverTheWorkersRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stop()
+	defer func() {
+		if err := stop(); err != nil {
+			t.Errorf("stop: %v", err)
+		}
+	}()
 
 	// The worker starts later: it makes the directory, the server's, and starts its relay.
 	if err := prepareProxyDir(dir, os.Getuid(), os.Getgid()); err != nil {
@@ -88,12 +92,18 @@ func TestCLIProxyOverTheWorkersRelay(t *testing.T) {
 	}
 
 	// A restarted server replaces the socket the last one left.
-	stop()
+	if err := stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
 	stop2, err := startCLIProxy(context.Background(), cfg, svc, testKey(t), cliaccounts.Container)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stop2()
+	defer func() {
+		if err := stop2(); err != nil {
+			t.Errorf("stop: %v", err)
+		}
+	}()
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 		resp, err := http.Get(url + "/cli-proxy/v1/models") //nolint:noctx // a test
 		if err == nil {

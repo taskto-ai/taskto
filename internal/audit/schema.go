@@ -85,11 +85,16 @@ var (
 	// email is an address that has been through the same checks as an account's.
 	email = matching("email address", emailRe, 254)
 
-	roles       = oneOf("admin", "member")
-	spaceRoles  = oneOf("editor", "viewer")
-	modes       = oneOf("own_else_shared", "own", "shared")
-	clis        = oneOf("claude", "codex", "grok")
-	cascadeFlag = boolean
+	roles      = oneOf("admin", "member")
+	spaceRoles = oneOf("editor", "viewer")
+	modes      = oneOf("own_else_shared", "own", "shared")
+	clis       = oneOf("claude", "codex", "grok")
+	// The integration registry's providers, kinds and modes (internal/integrations); a test there
+	// checks that every registered provider is recordable.
+	integrationProviders = oneOf("stripe", "square")
+	integrationKinds     = oneOf("payments")
+	integrationModes     = oneOf("test", "live")
+	cascadeFlag          = boolean
 )
 
 // schemas says which details each action may carry, and of what type. An action that isn't here
@@ -138,6 +143,8 @@ var schemas = map[string]map[string]kind{
 	SpaceMemberRoleChanged: {"user_id": number, "from": spaceRoles, "to": spaceRoles},
 	SpaceMemberRemoved:     {"user_id": number, "role": spaceRoles, "cascade": cascadeFlag},
 
+	ServerUpdateRequested: {"channel": oneOf("release", "main")},
+
 	DataExportStarted:      {},
 	WorkspaceExportStarted: {"spaces": number},
 
@@ -159,4 +166,20 @@ var schemas = map[string]map[string]kind{
 		"engine": tag, "language": tag, "base_host": host, "api_key_changed": boolean, "api_key_set": boolean,
 		"notice_confirmed": boolean,
 	},
+
+	// An integration's secrets are said to be set or changed, never what they are; its name is not
+	// recorded (the target's id says which it was).
+	IntegrationCreated: {
+		"provider": integrationProviders, "kind": integrationKinds, "mode": integrationModes,
+		"api_key_set": boolean, "webhook_secret_set": boolean,
+	},
+	IntegrationUpdated: {
+		"provider": integrationProviders, "mode": integrationModes,
+		"fields":          someOf("display_name", "settings", "max_amount", "currencies", "api_key", "webhook_secret"),
+		"api_key_changed": boolean, "webhook_secret_changed": boolean,
+	},
+	IntegrationRemoved:       {"provider": integrationProviders, "kind": integrationKinds},
+	IntegrationDisabled:      {"provider": integrationProviders},
+	IntegrationEnabled:       {"provider": integrationProviders},
+	IntegrationSpacesChanged: {"provider": integrationProviders, "added": number, "removed": number},
 }
