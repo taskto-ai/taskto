@@ -83,7 +83,7 @@ millisecond could not be told apart, which needs a delete and a create within a 
 | `search_consent_changed` | a space is consented to, or withdrawn from, the embeddings endpoint, or its consent goes with the account | the space's | space | `enabled`; `cascade` |
 | `dictation_settings_changed` | an admin saves the workspace's dictation settings | the workspace | workspace | `engine`, `language`, `base_host`, `api_key_changed`, `api_key_set`, `notice_confirmed` |
 | `integration_created` | an admin connects an integration | the integration's | integration | `provider`, `kind`, `mode`, `api_key_set`, `webhook_secret_set` |
-| `integration_updated` | an admin changes an integration's display name, settings, ceiling, currencies or secrets (a request that changes nothing records nothing) | the integration's | integration | `provider`, `mode`, `fields`, `api_key_changed`, `webhook_secret_changed` |
+| `integration_updated` | an admin changes an integration's display name, settings, ceiling, currencies or secrets (a request that changes nothing records nothing; a secret that is sent counts as changed, even if it is the one already stored) | the integration's | integration | `provider`, `mode`, `fields`, `api_key_changed`, `webhook_secret_changed` |
 | `integration_disabled`, `integration_enabled` | an admin switches an integration off or on | the integration's | integration | `provider` |
 | `integration_spaces_changed` | an admin changes which spaces may use an integration | the integration's | integration | `provider`, `added`, `removed` (counts, never the spaces) |
 | `integration_removed` | an admin deletes an integration | the integration's | integration | `provider`, `kind` |

@@ -704,16 +704,22 @@ func setEgress(field func(*Config) *string) func(*Config, string) error {
 }
 
 // setIntegrationEgress is setEgress for the integrations' policy, where nothing said is "public",
-// not "any": an empty value (an empty flag, variable or file entry) is the default, so it can't
-// open calls that carry credentials to every address.
+// not "any": an empty value (an empty flag or file entry) is the default, so it can't open calls
+// that carry credentials to every address. The checked text is kept as it was written, not
+// as the parsed policy prints it: "any." is a host name, and printing it as "any" would read back
+// as the opt-out of every restriction.
 func setIntegrationEgress(field func(*Config) *string) func(*Config, string) error {
-	set := setEgress(field)
 	return func(c *Config, v string) error {
-		if strings.TrimSpace(v) == "" {
+		v = strings.TrimSpace(v)
+		if v == "" {
 			*field(c) = "public"
 			return nil
 		}
-		return set(c, v)
+		if _, err := egress.Parse(v); err != nil {
+			return fmt.Errorf("egress policy: %w", err)
+		}
+		*field(c) = v
+		return nil
 	}
 }
 

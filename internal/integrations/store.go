@@ -3,6 +3,7 @@ package integrations
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -210,11 +211,41 @@ func (s *Store) load(ctx context.Context, q querier, workspace, id int64) ([]rec
 	return recs, nil
 }
 
-func (s *Store) list(ctx context.Context, workspace int64) ([]record, error) {
-	return s.load(ctx, s.db, workspace, 0)
+// read runs fn in one read-only transaction: a single snapshot, so what it reads together (an
+// integration, its secrets and its spaces) is of one state, whatever commits meanwhile.
+func (s *Store) read(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() // nothing was written
+	return fn(tx)
 }
 
+func (s *Store) list(ctx context.Context, workspace int64) ([]record, error) {
+	var recs []record
+	err := s.read(ctx, func(tx *sql.Tx) (err error) {
+		recs, err = s.load(ctx, tx, workspace, 0)
+		return err
+	})
+	return recs, err
+}
+
+// getSnapshot is get in a transaction of its own, for a reader that isn't in one.
+func (s *Store) getSnapshot(ctx context.Context, workspace, id int64) (rec record, err error) {
+	err = s.read(ctx, func(tx *sql.Tx) (err error) {
+		rec, err = s.get(ctx, tx, workspace, id)
+		return err
+	})
+	return rec, err
+}
+
+// get reads one integration. An id that isn't positive is "not found": load's 0 means every
+// integration, which a lookup by id must never fall into.
 func (s *Store) get(ctx context.Context, q querier, workspace, id int64) (record, error) {
+	if id <= 0 {
+		return record{}, errNotFound
+	}
 	recs, err := s.load(ctx, q, workspace, id)
 	if err != nil {
 		return record{}, err
@@ -410,9 +441,11 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 
 		now := s.now()
 		ref := old.sealRef(workspace)
-		if webhook, ok := c.secrets[SecretWebhookSecret]; ok {
+		if webhook, ok := c.secrets[SecretWebhookSecret]; ok && !s.holds(ctx, tx, ref, SecretWebhookSecret, webhook) {
 			// The secret that is replaced keeps verifying for a day, so events the provider signed
-			// with it before the change took effect there aren't refused.
+			// with it before the change took effect there aren't refused. Sending the secret that
+			// is already current (a retry whose answer was lost) leaves both slots as they are:
+			// copying it into the previous slot would drop the one it replaced.
 			if err := s.keepPrevious(ctx, tx, ref, now); err != nil {
 				return err
 			}
@@ -469,6 +502,18 @@ func (s *Store) update(ctx context.Context, workspace, user, id int64, c change)
 		return err
 	})
 	return rec, err
+}
+
+// holds says whether the integration's stored secret called name is, once opened, value. A
+// secret that is missing or doesn't open is not.
+func (s *Store) holds(ctx context.Context, tx *sql.Tx, ref sealRef, name, value string) bool {
+	var sealed []byte
+	if err := tx.QueryRowContext(ctx, `SELECT sealed FROM integration_secrets WHERE integration_id = ? AND name = ?`,
+		ref.id, name).Scan(&sealed); err != nil {
+		return false
+	}
+	plain, err := s.key.Open(sealed, ref.ad(name))
+	return err == nil && subtle.ConstantTimeCompare(plain, []byte(value)) == 1
 }
 
 // keepPrevious moves the integration's current webhook secret to the previous one, valid for
@@ -591,13 +636,21 @@ func (s *Store) usable(ctx context.Context, workspace, integration, space int64)
 
 // credentials opens the integration's secrets. A previous webhook secret that has expired, or
 // doesn't open, is left out; the others failing to open is an unreadableError.
-func (s *Store) credentials(ctx context.Context, workspace, id int64) (Credentials, error) {
-	rec, err := s.get(ctx, s.db, workspace, id)
+func (s *Store) credentials(ctx context.Context, workspace, id int64) (creds Credentials, err error) {
+	err = s.read(ctx, func(tx *sql.Tx) error {
+		creds, err = s.openCredentials(ctx, tx, workspace, id)
+		return err
+	})
+	return creds, err
+}
+
+func (s *Store) openCredentials(ctx context.Context, tx *sql.Tx, workspace, id int64) (Credentials, error) {
+	rec, err := s.get(ctx, tx, workspace, id)
 	if err != nil {
 		return Credentials{}, err
 	}
 	creds := Credentials{Provider: rec.Provider, Mode: rec.Mode, Settings: rec.Settings}
-	rows, err := s.db.QueryContext(ctx, `SELECT name, sealed, expires_at FROM integration_secrets WHERE integration_id = ?`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT name, sealed, expires_at FROM integration_secrets WHERE integration_id = ?`, id)
 	if err != nil {
 		return Credentials{}, err
 	}

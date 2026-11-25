@@ -58,7 +58,9 @@ The registry is the list in `internal/integrations/registry.go`. Each provider s
   (`pk_`) is refused where a secret one is needed. The check is of the shape only, it never
   asks Stripe, and an error never quotes the value;
 - its **mode**, `test` or `live`: read from the Stripe key's prefix and from Square's
-  `environment`, so the label can't disagree with the credentials;
+  `environment`: Stripe's label can't disagree with its key, and Square's reflects the configured
+  environment, not a proof that the stored token belongs to it (nothing asks Square until its
+  first call), so replace the token when the environment changes;
 - its **API hosts**, constants of the adapter (`api.stripe.com`; Square's production host or
   its sandbox host, by `environment`), and the **API version** it is written against, which
   Stripe's adapter pins (`Stripe-Version`) and Square's adapter pins when it makes its first call.
@@ -135,8 +137,9 @@ comes with the first change that calls a provider.
 Calls to providers go through their own egress policy, `-integration-egress` /
 `TASKTO_INTEGRATION_EGRESS`, **`public` by default**: the address of every connection is
 checked after name resolution, so loopback, private, link-local and metadata addresses are
-refused, and a redirect is an answer, never followed. An empty value is `public` too, and so is
-one the server can't parse: the policy fails closed, never open.
+refused, and a redirect is an answer, never followed. An empty flag or file entry is `public` too (an empty
+environment variable is not set, so the file's value stays), and a value that can't be parsed
+stops the server at start: nothing falls back to a wider policy.
 
 Besides, every adapter has constant API hosts, and the **request builder** (`Client`) refuses
 any URL whose host the adapter doesn't own (a look-alike, a sibling, a port, a plain `http`

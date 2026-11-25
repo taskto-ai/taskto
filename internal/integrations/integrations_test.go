@@ -580,6 +580,18 @@ func TestRemove(t *testing.T) {
 	owner, ws := e.setup()
 	in := e.create(owner, ws, stripeBody("main"))
 	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+	shared := e.sharedSpace(owner, ws, "Shop")
+	expect(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{shared}}), http.StatusOK)
+	count := func() (n int) {
+		if err := e.db.QueryRow(`SELECT (SELECT count(*) FROM integration_secrets) + (SELECT count(*) FROM integration_spaces)`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := count()
+	if before < 3 {
+		t.Fatalf("secrets and an approval = %d rows", before)
+	}
 	// Something that names the integration with ON DELETE RESTRICT (a later migration's
 	// approvals) makes the delete a 409 and keeps everything.
 	if _, err := e.db.Exec(`CREATE TABLE guard (integration_id INTEGER REFERENCES integrations (id) ON DELETE RESTRICT)`); err != nil {
@@ -590,6 +602,9 @@ func TestRemove(t *testing.T) {
 	}
 	expectCode(t, owner.do(http.MethodDelete, one, nil), http.StatusConflict, "integration_in_use")
 	expect(t, owner.do(http.MethodGet, one, nil), http.StatusOK)
+	if got := count(); got != before {
+		t.Fatalf("a refused removal left %d secret and approval rows, want %d", got, before)
+	}
 	if got := e.events(ws, audit.IntegrationRemoved); len(got) != 0 {
 		t.Fatalf("a refused removal recorded %+v", got)
 	}
@@ -599,9 +614,8 @@ func TestRemove(t *testing.T) {
 	expect(t, owner.do(http.MethodDelete, one, nil), http.StatusNoContent)
 	expectCode(t, owner.do(http.MethodGet, one, nil), http.StatusNotFound, "integration_not_found")
 	expectCode(t, owner.do(http.MethodDelete, one, nil), http.StatusNotFound, "integration_not_found")
-	var n int
-	if err := e.db.QueryRow(`SELECT (SELECT count(*) FROM integration_secrets) + (SELECT count(*) FROM integration_spaces)`).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("secrets and spaces left after a removal = %d, %v", n, err)
+	if n := count(); n != 0 {
+		t.Fatalf("secrets and spaces left after a removal = %d", n)
 	}
 	expectCode(t, owner.do(http.MethodGet, wsPath(ws, "integrations/abc"), nil), http.StatusNotFound, "integration_not_found")
 }
@@ -661,16 +675,16 @@ func TestSpacesAndUsable(t *testing.T) {
 	}
 	// Disabling stops its use everywhere; removing a space stops it there.
 	expect(t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), map[string]any{"disabled": true}), http.StatusOK)
-	if ok, _ := e.store.usable(ctx, ws, in.ID, shared); ok {
-		t.Fatal("a disabled integration is usable")
+	if ok, err := e.store.usable(ctx, ws, in.ID, shared); err != nil || ok {
+		t.Fatalf("a disabled integration is usable: %v, %v", ok, err)
 	}
 	expect(t, owner.do(http.MethodPatch, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), map[string]any{"disabled": false}), http.StatusOK)
 	expect(t, owner.do(http.MethodPut, spaces, map[string]any{"spaces": []int64{mine}}), http.StatusOK)
-	if ok, _ := e.store.usable(ctx, ws, in.ID, shared); ok {
-		t.Fatal("an integration is usable in a space it was taken from")
+	if ok, err := e.store.usable(ctx, ws, in.ID, shared); err != nil || ok {
+		t.Fatalf("an integration is usable in a space it was taken from: %v, %v", ok, err)
 	}
-	if ok, _ := e.store.usable(ctx, ws+1000, in.ID, mine); ok {
-		t.Fatal("an integration is usable by another workspace's id")
+	if ok, err := e.store.usable(ctx, ws+1000, in.ID, mine); err != nil || ok {
+		t.Fatalf("an integration is usable by another workspace's id: %v, %v", ok, err)
 	}
 	// The schema keeps a space in the integration's workspace even if code didn't.
 	otherWs, err := e.db.Exec(`INSERT INTO workspaces (name) VALUES ('Other')`)
@@ -811,8 +825,10 @@ func TestIsolation(t *testing.T) {
 	expectCode(t, admin2.do(http.MethodPut, wsPath(ws2, fmt.Sprintf("integrations/%d/spaces", in2.ID)), map[string]any{"spaces": []int64{sharedHere}}),
 		http.StatusNotFound, "space_not_found")
 	// Nothing above changed a thing in the first workspace's log beyond its own creation.
-	if got := e.events(ws, audit.IntegrationUpdated); len(got) != 0 {
-		t.Fatalf("refused requests recorded %+v", got)
+	for _, action := range []string{audit.IntegrationUpdated, audit.IntegrationSpacesChanged, audit.IntegrationRemoved, audit.IntegrationDisabled} {
+		if got := e.events(ws, action); len(got) != 0 {
+			t.Fatalf("refused requests recorded %s: %+v", action, got)
+		}
 	}
 }
 
@@ -856,13 +872,12 @@ func TestAudit(t *testing.T) {
 		u.Details["webhook_secret_changed"] != false || u.Details["mode"] != "live" || u.Details["provider"] != "stripe" {
 		t.Fatalf("updated = %+v", u)
 	}
-	// A request that changes nothing records nothing.
+	// A reorder of the currencies is a change, and is said to be one; a request that changes nothing
+	// records nothing.
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments", "currencies": []string{"USD", "EUR"}}), http.StatusOK)
-	if got := e.events(ws, audit.IntegrationUpdated); len(got) != 1 {
-		// The currency order is a change: [EUR USD] became [USD EUR]. Say so rather than hide it.
-		if len(got) != 2 || fmt.Sprint(got[0].Details["fields"]) != "[currencies]" {
-			t.Fatalf("updated after a reorder = %+v", got)
-		}
+	reordered := e.events(ws, audit.IntegrationUpdated)
+	if len(reordered) != 2 || fmt.Sprint(reordered[0].Details["fields"]) != "[currencies]" {
+		t.Fatalf("updated after a reorder = %+v", reordered)
 	}
 	expect(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "Payments"}), http.StatusOK)
 	n := len(e.events(ws, audit.IntegrationUpdated))
@@ -1169,5 +1184,52 @@ func TestAllowedSpaceCannotMoveToAnotherWorkspace(t *testing.T) {
 	}
 	if ok, _ := e.store.usable(context.Background(), ws, in.ID, shared); !ok {
 		t.Fatal("a refused update changed the allowed space")
+	}
+}
+
+// A lookup by id never falls into the list's "every integration": 0 and negative ids are not found.
+func TestNonPositiveIDsAreNotFound(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	for _, id := range []string{"0", "-1"} {
+		one := wsPath(ws, "integrations/"+id)
+		expectCode(t, owner.do(http.MethodGet, one, nil), http.StatusNotFound, "integration_not_found")
+		expectCode(t, owner.do(http.MethodPatch, one, map[string]any{"display_name": "x", "secrets": map[string]string{"api_key": stripeOtherKey}}), http.StatusNotFound, "integration_not_found")
+		expectCode(t, owner.do(http.MethodDelete, one, nil), http.StatusNotFound, "integration_not_found")
+		expectCode(t, owner.do(http.MethodPut, one+"/spaces", map[string]any{"spaces": []int64{}}), http.StatusNotFound, "integration_not_found")
+		expectCode(t, owner.do(http.MethodPost, one+"/check", nil), http.StatusNotFound, "integration_not_found")
+	}
+	if _, err := e.store.credentials(context.Background(), ws, 0); !errors.Is(err, errNotFound) {
+		t.Fatalf("credentials of id 0: %v", err)
+	}
+	got := decode[Integration](t, owner.do(http.MethodGet, wsPath(ws, fmt.Sprintf("integrations/%d", in.ID)), nil))
+	if got.DisplayName != "Stripe main" {
+		t.Fatalf("a refused request changed the integration: %+v", got)
+	}
+}
+
+// Sending the webhook secret that is already current again (a retry whose answer was lost) keeps
+// the secret it replaced valid for its overlap, instead of copying itself over it.
+func TestWebhookSecretRetryKeepsThePrevious(t *testing.T) {
+	e := newEnv(t, "")
+	owner, ws := e.setup()
+	in := e.create(owner, ws, stripeBody("main"))
+	one := wsPath(ws, fmt.Sprintf("integrations/%d", in.ID))
+	rotate := map[string]any{"secrets": map[string]string{"webhook_secret": stripeHookNew}}
+	expect(t, owner.do(http.MethodPatch, one, rotate), http.StatusOK)
+	expect(t, owner.do(http.MethodPatch, one, rotate), http.StatusOK) // the retry
+	creds, err := e.store.credentials(context.Background(), ws, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.WebhookSecret.Reveal() != stripeHookNew || creds.WebhookSecretPrevious.Reveal() != stripeHook {
+		t.Fatalf("after a retried rotation the current is %q and the previous %q", creds.WebhookSecret, creds.WebhookSecretPrevious)
+	}
+	// A different secret still rotates again: the previous one becomes the one it replaced.
+	expect(t, owner.do(http.MethodPatch, one, map[string]any{"secrets": map[string]string{"webhook_secret": stripeHook}}), http.StatusOK)
+	creds, _ = e.store.credentials(context.Background(), ws, in.ID)
+	if creds.WebhookSecret.Reveal() != stripeHook || creds.WebhookSecretPrevious.Reveal() != stripeHookNew {
+		t.Fatal("a new secret didn't rotate")
 	}
 }

@@ -528,6 +528,23 @@ func TestIntegrationEgressEmptyIsPublic(t *testing.T) {
 	}
 }
 
+// "any." is a host name, not the opt-out: it must stay one when the policy is stored and read back.
+func TestIntegrationEgressKeepsWhatWasWritten(t *testing.T) {
+	for _, v := range []string{"any.", "ANY.", "public, any."} {
+		cfg, err := Load([]string{"-integration-egress", v}, env(nil), io.Discard)
+		if err != nil {
+			t.Fatalf("%q: %v", v, err)
+		}
+		if cfg.IntegrationEgressPolicy().IsAny() {
+			t.Errorf("%q was read as any", v)
+		}
+	}
+	cfg, err := Load([]string{"-integration-egress", "ANY"}, env(nil), io.Discard)
+	if err != nil || !cfg.IntegrationEgressPolicy().IsAny() {
+		t.Errorf("a literal any is the opt-out: %v", err)
+	}
+}
+
 func TestSMTPSettings(t *testing.T) {
 	cfg, err := Load(nil, env(map[string]string{ //nolint:gosec // G101: names of settings and a path, not credentials
 		"TASKTO_SMTP_HOST": "smtp.example.com", "TASKTO_SMTP_FROM": "TaskTo <taskto@example.com>",

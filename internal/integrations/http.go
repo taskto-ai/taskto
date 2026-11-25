@@ -205,7 +205,7 @@ func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rec, err := s.store.get(r.Context(), s.store.db, workspaceOf(r), id)
+	rec, err := s.store.getSnapshot(r.Context(), workspaceOf(r), id)
 	if err != nil {
 		fail(w, r, err)
 		return
@@ -348,7 +348,7 @@ func (s *Service) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws := workspaceOf(r)
-	rec, err := s.store.get(r.Context(), s.store.db, ws, id)
+	rec, err := s.store.getSnapshot(r.Context(), ws, id)
 	if err != nil {
 		fail(w, r, err)
 		return
