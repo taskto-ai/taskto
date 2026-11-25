@@ -1,5 +1,5 @@
-// One record of an app: its fields, which a person who may change it edits, its history, and for a
-// deleted one its restore. Edits go through the app's own update action with the revision the
+// One record of an app, in a drawer beside the records: its fields, which a person who may change it
+// edits, its history as a timeline, and for a deleted one its restore. Deleting asks first. Edits go through the app's own update action with the revision the
 // person saw (as the screen's buttons do), so someone else's change is a conflict and never a silent
 // overwrite. On a conflict nothing the person typed is lost: their input stays in the form, the
 // server's current values are shown beside it, and they choose to save theirs over them or to drop
@@ -9,6 +9,15 @@ import { useId, useState } from 'react'
 import { ApiError, type AppField, type AppRecord, api, errorText, type RecordVersion } from '../api'
 import { useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Drawer } from '../ui/Drawer'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { Notice } from '../ui/Notice'
+import { Select } from '../ui/Select'
+import { Skeleton } from '../ui/Skeleton'
+import { VisuallyHidden } from '../ui/VisuallyHidden'
 import { isLocation } from './capture'
 import { toText } from './explorer'
 import { LocationField } from './LocationInput'
@@ -18,8 +27,6 @@ import { HistoryList, optionLabel, shown, who } from './RecordParts'
 import { SignatureField } from './SignaturePad'
 
 const RECORD_CONFLICT = 'app_record_conflict'
-// Shown after the name of a field that must have a value.
-const REQUIRED_MARK = '*'
 
 type History = { record: AppRecord; history: RecordVersion[]; truncated: boolean }
 // The record as the server has it now, after a conflict: its revision and its fields.
@@ -67,24 +74,26 @@ export function RecordDetail({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmDialog, confirm] = useConfirm()
   const record = loaded.data?.record
   const editable = canChange && !deleted && !!updateAction && !record?.deleted_at
+  const title = t('apps.records.record', { id: String(id) })
 
   if (!record) {
     return (
-      <div className="tt-record-detail">
-        <button type="button" className="tt-button" onClick={onClose}>
-          {t('apps.explorer.back')}
-        </button>
+      <Drawer open title={title} onClose={onClose}>
         {loaded.error ? (
-          <p role="alert" className="tt-error">
-            {loaded.error}
-          </p>
+          <Notice tone="danger">{loaded.error}</Notice>
         ) : (
-          <p className="tt-muted">{t('app.loading')}</p>
+          <div className="ui-record" role="status">
+            <VisuallyHidden>{t('app.loading')}</VisuallyHidden>
+            <Skeleton width="60%" />
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} shape="block" height="var(--control-md)" />
+            ))}
+          </div>
         )}
-      </div>
+      </Drawer>
     )
   }
 
@@ -155,10 +164,20 @@ export function RecordDetail({
       return
     } catch (e) {
       setError(errorText(e))
-      setConfirmDelete(false)
       if (e instanceof ApiError && e.code === RECORD_CONFLICT) await adoptCurrent(e)
     }
     setBusy(false)
+  }
+  const askDelete = async () => {
+    if (
+      await confirm({
+        title: t('apps.explorer.deleteQuestion', { id: String(id) }),
+        body: t('apps.explorer.deleteBody'),
+        confirmLabel: t('apps.explorer.deleteConfirm'),
+        tone: 'danger',
+      })
+    )
+      await remove()
   }
 
   const restore = async () => {
@@ -189,130 +208,112 @@ export function RecordDetail({
         .map((name) => fields.find((x) => x.name === name))
     : []
 
-  return (
-    <div className="tt-record-detail">
-      <div className="tt-record-head">
-        <button type="button" className="tt-button" onClick={onClose}>
-          {t('apps.explorer.back')}
-        </button>
-        <h3>{t('apps.records.record', { id: String(id) })}</h3>
-        <span className="tt-muted tt-small">{t('apps.records.revision', { revision: String(revision) })}</span>
+  const restorable = (deleted || !!record.deleted_at) && canRestore
+  const footer =
+    editable && !conflict ? (
+      <div className="ui-record-footer">
+        <Button type="submit" form={formId} variant="primary" loading={busy} disabled={busy || touched.length === 0}>
+          {t('apps.explorer.save')}
+        </Button>
+        {deleteAction && (
+          <Button variant="danger" disabled={busy} onClick={() => void askDelete()}>
+            {t('apps.explorer.delete')}
+          </Button>
+        )}
       </div>
-      <p className="tt-muted tt-small">
-        {record.deleted_at
-          ? t('apps.records.deletedBy', { when: f.dateTime(record.deleted_at), name: who(record.deleted_by, t) })
-          : t('apps.records.changed', { when: f.dateTime(record.updated_at), name: who(record.updated_by, t) })}
-      </p>
-      {error && (
-        <p role="alert" className="tt-error">
-          {error}
+    ) : restorable ? (
+      <div className="ui-record-footer">
+        <Button
+          variant="primary"
+          icon="archive"
+          loading={busy}
+          disabled={busy}
+          aria-label={t('apps.records.restoreNamed', { id: String(id) })}
+          onClick={restore}
+        >
+          {t('apps.records.restore')}
+        </Button>
+      </div>
+    ) : undefined
+
+  return (
+    <Drawer open title={title} onClose={onClose} footer={footer}>
+      {confirmDialog}
+      <div className="ui-record">
+        <p className="ui-record-meta">
+          {t('apps.records.revision', { revision: String(revision) })}
+          {' · '}
+          {record.deleted_at
+            ? t('apps.records.deletedBy', { when: f.dateTime(record.deleted_at), name: who(record.deleted_by, t) })
+            : t('apps.records.changed', { when: f.dateTime(record.updated_at), name: who(record.updated_by, t) })}
         </p>
-      )}
-      {notice && (
-        <p role="status" className="tt-muted tt-small">
-          {notice}
-        </p>
-      )}
-      {conflict && (
-        <section className="tt-conflict" aria-label={t('apps.explorer.conflict.title')}>
-          <p>
-            <strong>{t('apps.explorer.conflict.title')}</strong>
-          </p>
-          <p className="tt-small">{t('apps.explorer.conflict.keep')}</p>
-          {clashes.length > 0 && (
-            <table className="tt-conflict-table">
-              <thead>
-                <tr>
-                  <th scope="col">{t('apps.explorer.conflict.field')}</th>
-                  <th scope="col">{t('apps.explorer.conflict.yours')}</th>
-                  <th scope="col">{t('apps.explorer.conflict.current')}</th>
-                </tr>
-              </thead>
-              <tbody>
+        {error && <Notice tone="danger">{error}</Notice>}
+        {notice && <Notice tone="success">{notice}</Notice>}
+        {conflict && (
+          <section className="ui-record" aria-label={t('apps.explorer.conflict.title')}>
+            <Notice tone="warning" title={t('apps.explorer.conflict.title')}>
+              {t('apps.explorer.conflict.keep')}
+            </Notice>
+            {clashes.length > 0 && (
+              <dl className="ui-conflict-fields">
                 {clashes.map(
                   (field) =>
                     field && (
-                      <tr key={field.name}>
-                        <th scope="row">{field.name}</th>
-                        <td>{shownText(edits[field.name], field, f, t) || t('apps.explorer.empty')}</td>
-                        <td>{shown(conflict.data[field.name], field.type, f, t, field) || t('apps.explorer.empty')}</td>
-                      </tr>
+                      <div key={field.name} className="ui-conflict-field">
+                        <dt>{field.name}</dt>
+                        <dd>
+                          <span className="ui-conflict-side">{t('apps.explorer.conflict.yours')}</span>
+                          <span>{shownText(edits[field.name], field, f, t) || t('apps.explorer.empty')}</span>
+                        </dd>
+                        <dd>
+                          <span className="ui-conflict-side">{t('apps.explorer.conflict.current')}</span>
+                          <span>
+                            {shown(conflict.data[field.name], field.type, f, t, field) || t('apps.explorer.empty')}
+                          </span>
+                        </dd>
+                      </div>
                     ),
                 )}
-              </tbody>
-            </table>
-          )}
-          <div className="tt-record-actions">
-            <button type="button" className="tt-button tt-primary" disabled={busy} onClick={save}>
-              {t('apps.explorer.conflict.reapply')}
-            </button>
-            <button type="button" className="tt-button" disabled={busy} onClick={discard}>
-              {t('apps.explorer.conflict.discard')}
-            </button>
-          </div>
-        </section>
-      )}
-      <form
-        className="tt-record-form"
-        aria-label={t('apps.explorer.fields', { id: String(id) })}
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (!conflict) save()
-        }}
-      >
-        {fields.map((field) => (
-          <FieldRow
-            key={field.name}
-            idPrefix={formId}
-            base={base}
-            field={field}
-            text={textOf(field.name)}
-            raw={base0[field.name]}
-            editable={editable}
-            onChange={(v) => setEdits((cur) => ({ ...cur, [field.name]: v }))}
-          />
-        ))}
-        {editable && !conflict && (
-          <div className="tt-record-actions">
-            <button type="submit" className="tt-button tt-primary" disabled={busy || touched.length === 0}>
-              {t('apps.explorer.save')}
-            </button>
-            {deleteAction &&
-              (confirmDelete ? (
-                <>
-                  <button type="button" className="tt-button tt-danger" disabled={busy} onClick={remove}>
-                    {t('apps.explorer.deleteConfirm')}
-                  </button>
-                  <button type="button" className="tt-button" onClick={() => setConfirmDelete(false)}>
-                    {t('apps.explorer.cancel')}
-                  </button>
-                </>
-              ) : (
-                <button type="button" className="tt-button" disabled={busy} onClick={() => setConfirmDelete(true)}>
-                  {t('apps.explorer.delete')}
-                </button>
-              ))}
-          </div>
+              </dl>
+            )}
+            <div className="ui-record-footer">
+              <Button variant="primary" disabled={busy} onClick={save}>
+                {t('apps.explorer.conflict.reapply')}
+              </Button>
+              <Button disabled={busy} onClick={discard}>
+                {t('apps.explorer.conflict.discard')}
+              </Button>
+            </div>
+          </section>
         )}
-      </form>
-      {(deleted || record.deleted_at) && canRestore && (
-        <div className="tt-record-actions">
-          <button
-            type="button"
-            className="tt-button tt-primary"
-            disabled={busy}
-            aria-label={t('apps.records.restoreNamed', { id: String(id) })}
-            onClick={restore}
-          >
-            {t('apps.records.restore')}
-          </button>
-        </div>
-      )}
-      <h4>{t('apps.records.history')}</h4>
-      {loaded.data && (
-        <HistoryList id={id} versions={loaded.data.history} truncated={loaded.data.truncated} fields={fields} />
-      )}
-    </div>
+        <form
+          id={formId}
+          className="ui-record-form"
+          aria-label={t('apps.explorer.fields', { id: String(id) })}
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (!conflict) save()
+          }}
+        >
+          {fields.map((field) => (
+            <FieldRow
+              key={field.name}
+              idPrefix={formId}
+              base={base}
+              field={field}
+              text={textOf(field.name)}
+              raw={base0[field.name]}
+              editable={editable}
+              onChange={(v) => setEdits((cur) => ({ ...cur, [field.name]: v }))}
+            />
+          ))}
+        </form>
+        <h3 className="ui-record-section">{t('apps.records.history')}</h3>
+        {loaded.data && (
+          <HistoryList id={id} versions={loaded.data.history} truncated={loaded.data.truncated} fields={fields} />
+        )}
+      </div>
+    </Drawer>
   )
 }
 
@@ -350,12 +351,6 @@ function FieldRow({
   const t = useT()
   const f = useFormat()
   const id = `${idPrefix}-${field.name}`
-  const label = (
-    <span className="tt-record-field-label">
-      <label htmlFor={id}>{field.name}</label>
-      {field.required ? <span aria-hidden="true">{REQUIRED_MARK}</span> : null}
-    </span>
-  )
   const known = ['string', 'number', 'boolean', 'date', 'time', 'choice', 'barcode'].includes(field.type)
   // A field this version doesn't know how to edit (captured evidence such as media, a location or a
   // signature) is shown as it was recorded, never as an input.
@@ -363,7 +358,7 @@ function FieldRow({
     // Captured evidence: shown as recorded, never an input. The server refuses a change to it (unless
     // the field says it is editable), so no control is offered.
     return (
-      <div className="tt-record-field">
+      <div className="ui-record-readonly">
         {field.type === 'location' ? (
           <LocationField
             field={field.name}
@@ -382,28 +377,24 @@ function FieldRow({
             readOnly
           />
         )}
-        {!field.editable && <span className="tt-muted tt-small">{t('apps.explorer.evidence')}</span>}
+        {!field.editable && <p className="ui-record-meta">{t('apps.explorer.evidence')}</p>}
       </div>
     )
   }
   if (!editable || !known) {
     // Photos are shown as thumbnails, through the viewer's own session.
     const photos = field.type === 'attachment' ? photoIds(text.split(',')) : []
-    if (photos.length > 0) {
-      return (
-        <div className="tt-record-field">
-          <span className="tt-record-field-name">{field.name}</span>
-          <PhotoStrip base={base} ids={photos} label={field.name} />
-        </div>
-      )
-    }
     return (
-      <div className="tt-record-field">
-        <span className="tt-record-field-name">{field.name}</span>
-        <span className="tt-record-data">
-          {(field.type === 'number' && text !== '' ? f.number(Number(text)) : shown(text, field.type, f, t, field)) ||
-            t('apps.explorer.empty')}
-        </span>
+      <div className="ui-record-readonly">
+        <span className="ui-record-label">{field.name}</span>
+        {photos.length > 0 ? (
+          <PhotoStrip base={base} ids={photos} label={field.name} />
+        ) : (
+          <p className="ui-record-value">
+            {(field.type === 'number' && text !== '' ? f.number(Number(text)) : shown(text, field.type, f, t, field)) ||
+              t('apps.explorer.empty')}
+          </p>
+        )}
       </div>
     )
   }
@@ -420,25 +411,24 @@ function FieldRow({
       // A stored choice the options no longer list stays selectable as it is.
       if (text !== '' && !options.some((o) => o.value === text)) options.push({ value: text, label: text })
       return (
-        <div className="tt-record-field">
-          {label}
-          <select id={id} value={text} onChange={(e) => onChange(e.target.value)}>
+        <Field id={id} label={field.name} required={field.required}>
+          {/* The mark says it is required; the server checks it, as it always has, not the browser. */}
+          <Select required={false} value={text} onChange={(e) => onChange(e.target.value)}>
             <option value="">{t('apps.explorer.unset')}</option>
             {options.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
             ))}
-          </select>
-        </div>
+          </Select>
+        </Field>
       )
     }
     default:
       return (
-        <div className="tt-record-field">
-          {label}
-          <input
-            id={id}
+        <Field id={id} label={field.name} required={field.required}>
+          <Input
+            required={false}
             type={field.type === 'string' || field.type === 'barcode' ? 'text' : field.type}
             step={field.type === 'number' ? 'any' : undefined}
             inputMode={field.type === 'number' ? 'decimal' : undefined}
@@ -446,7 +436,7 @@ function FieldRow({
             value={text}
             onChange={(e) => onChange(e.target.value)}
           />
-        </div>
+        </Field>
       )
   }
 }
