@@ -11,6 +11,8 @@ import { SettingsPage } from './SettingsPage'
 const me: Me = {
   user: { id: 1, email: 'owner@example.com', name: 'Owner' },
   workspaces: [{ id: 1, name: 'Home', role: 'admin' }],
+  can_create_workspace: false,
+  is_operator: false,
 }
 const admin: Workspace = { id: 1, name: 'Home', role: 'admin' }
 const member: Workspace = { id: 1, name: 'Home', role: 'member' }
@@ -68,6 +70,8 @@ test('an invite for an address with an account logs in, then joins', async () =>
       { id: 1, name: 'Home', role: 'member' },
       { id: 7, name: 'Team', role: 'member' },
     ],
+    can_create_workspace: false,
+    is_operator: false,
   }
   const calls = fakeFetch({
     'GET /api/setup': { body: { needed: false } },
@@ -112,7 +116,7 @@ test('signed in, an invite joins the new workspace and goes to it', async () => 
   expect(window.location.pathname).toBe('/w/9/conversations')
 })
 
-test('members see the providers, CLI accounts, search, dictation, notifications, password, data, tokens and about tabs only; admins see them all', async () => {
+test('members see the providers, CLI accounts, search, dictation, notifications, password, data, tokens, storage and about tabs only; admins see them all', async () => {
   fakeFetch({
     'GET /api/workspaces/1/providers': { body: { providers: [] } },
     'GET /api/me/providers': { body: { providers: [] } },
@@ -132,6 +136,7 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     'Password',
     'Your data',
     'Access tokens',
+    'Storage',
     'About',
   ])
   // A member asking for an admin's tab gets the first of theirs.
@@ -151,6 +156,7 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     ['General', '/w/1/settings/general'],
     ['Members', '/w/1/settings/members'],
     ['Shared spaces', '/w/1/settings/spaces'],
+    ['Audit log', '/w/1/settings/audit'],
     ['Model providers', '/w/1/settings/providers'],
     ['CLI accounts', '/w/1/settings/cli-accounts'],
     ['Search', '/w/1/settings/search'],
@@ -159,6 +165,7 @@ test('members see the providers, CLI accounts, search, dictation, notifications,
     ['Password', '/w/1/settings/password'],
     ['Your data', '/w/1/settings/data'],
     ['Access tokens', '/w/1/settings/tokens'],
+    ['Storage', '/w/1/settings/storage'],
     ['About', '/w/1/settings/about'],
   ])
   await screen.findByText('alice@example.com')
@@ -320,6 +327,7 @@ test("an admin's refused reset link says why", async () => {
 
 test('everyone changes their own password with the current one; a wrong one is said, not a sign-out', async () => {
   const calls = fakeFetch({
+    'GET /api/me/two-factor': { body: { enabled: false, recovery_codes_left: 0 } },
     'POST /api/me/password': (call) =>
       (call.body as { current_password: string }).current_password === 'fake-current-password'
         ? { status: 204 }

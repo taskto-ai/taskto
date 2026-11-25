@@ -211,7 +211,7 @@ func (s *Service) Skip(ctx context.Context, workspaceID, userID int64, item Item
 func (s *Service) Routes(mux *http.ServeMux, accounts *auth.Service) {
 	const base = "/api/workspaces/{workspace}/checklist"
 	admin := func(h http.HandlerFunc) http.Handler { return accounts.RequireAdmin(h) }
-	mux.Handle("GET "+base, admin(s.handleGet))
+	mux.Handle("GET "+base, admin(s.handleGet(accounts)))
 	mux.Handle("PUT "+base+"/dismissed", admin(s.handleDismiss(true)))
 	mux.Handle("DELETE "+base+"/dismissed", admin(s.handleDismiss(false)))
 	mux.Handle("PUT "+base+"/skipped/{item}", admin(s.handleSkip(true)))
@@ -238,14 +238,29 @@ func caller(r *http.Request) (workspaceID, userID int64) {
 	return m.WorkspaceID, u.ID
 }
 
-func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
-	ws, user := caller(r)
-	v, err := s.View(r.Context(), ws, user)
-	if err != nil {
-		fail(w, r, err)
-		return
+// serverWide are the steps about the whole server, not the workspace: whether it can send email and
+// whether its backups run. Only operators (auth.Service.IsOperator) are told; the admins of a
+// workspace someone else created have no say in either, so their checklist doesn't list them.
+func serverWide(i Item) bool { return i == Email || i == Backups }
+
+func (s *Service) handleGet(accounts *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ws, user := caller(r)
+		v, err := s.View(r.Context(), ws, user)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		operator, err := accounts.IsOperator(r.Context(), user)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		if !operator {
+			v.Items = slices.DeleteFunc(v.Items, func(e Entry) bool { return serverWide(e.ID) })
+		}
+		writeJSON(w, v)
 	}
-	writeJSON(w, v)
 }
 
 func (s *Service) handleDismiss(dismissed bool) http.HandlerFunc {

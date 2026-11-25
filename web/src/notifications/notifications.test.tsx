@@ -15,6 +15,8 @@ const SERVER_KEY = 'AQID' // the server's public key, as the push endpoint gives
 const me = {
   user: { id: 1, email: 'owner@example.com', name: 'Owner' },
   workspaces: [{ id: 1, name: 'Home', role: 'admin' as const }],
+  can_create_workspace: false,
+  is_operator: false,
 }
 
 type Sub = ReturnType<typeof fakeSub>
@@ -173,6 +175,8 @@ test('nothing is asked or subscribed until the person turns push on, and then on
       card_assigned: 'A card was assigned to you',
       card_due: 'A card of yours is due',
       card_overdue: 'A card of yours is overdue',
+      card_comment: 'A card of yours has a new comment',
+      card_mention: 'You were mentioned in a comment',
       app_effect_failed: 'An app action needs your attention',
       changed: 'Something changed',
     },

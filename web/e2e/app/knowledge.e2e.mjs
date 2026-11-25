@@ -13,7 +13,7 @@ scenario('a document is created, edited, shown in its history and restored', asy
 
   // A new document opens in the editor.
   await page.getByRole('button', { name: 'New', exact: true }).click()
-  await page.getByLabel('Name').fill('notes/plan.md')
+  await page.getByLabel('Name', { exact: true }).fill('notes/plan.md')
   await page.getByRole('button', { name: 'Create', exact: true }).click()
   const text = page.getByLabel('Edit the document').getByLabel('Text')
   await text.fill('# Plan\n\nFirst version of the plan.')

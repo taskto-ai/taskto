@@ -9,6 +9,8 @@ import { fakeFetch } from '../test/fakes'
 const admin: Me = {
   user: { id: 1, email: 'ann@example.com', name: 'Ann' },
   workspaces: [{ id: 1, name: 'Acme', role: 'admin' }],
+  can_create_workspace: false,
+  is_operator: false,
 }
 const member: Me = { ...admin, workspaces: [{ id: 1, name: 'Acme', role: 'member' }] }
 

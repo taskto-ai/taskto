@@ -40,7 +40,41 @@
         "query": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 500
+          "maxLength": 500,
+          "description": "the words to look for; at most 500 bytes of UTF-8 (500 characters if they are ASCII)"
+        },
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_cards",
+    "description": "Search the cards on boards by their words, in their title, body and comments: every space the user can read, or one space. Returns each card's space, board and id, its title, its column and the passage that matched, best first; \"incomplete\": true means cards that changed a moment ago were left out, so search again. Only a card's newest comments (up to 256 KiB) are searched, so a word only in an older comment is not found, and zero results do not prove a word is absent. Read a card with show_card.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "the words to look for; at most 500 bytes of UTF-8 (500 characters if they are ASCII)"
         },
         "space_id": {
           "type": "integer",
@@ -93,7 +127,7 @@
   },
   {
     "name": "read_doc",
-    "description": "Read a Markdown document (.md) or a plain-text file of up to 1 MiB (code, data, notes: not binaries, and not large files, audio, video or archives), as it is now or, with \"at\", as it was at an older commit (from doc_history). Long files come in pieces of 32 KiB: pass \"next_offset\" as \"offset\" for the next piece. \"version\" is what write_doc needs to change a document (only when read as it is now).",
+    "description": "Read a Markdown document (.md) or a plain-text file of up to 1 MiB (code, data, notes: not binaries, and not large files, audio, video or archives), as it is now or, with \"at\", as it was at an older commit (from doc_history). A file that isn't UTF-8 text (a binary, even under a .md name) is refused. Long files come in pieces of 32 KiB: pass \"next_offset\" as \"offset\" for the next piece (an offset inside a character is refused). \"version\" is what write_doc needs to change a document (only when read as it is now).",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -156,7 +190,7 @@
   },
   {
     "name": "move_doc",
-    "description": "Rename or move a document, a file or a whole folder in a space the user may write; the destination must not exist. To move a document, pass the version you read as base_version (not for a folder). The change is the user's, made by their agent, and kept in the history.",
+    "description": "Rename or move a document, a file or a whole folder in a space the user may write; the destination must not exist (nor a name that differs only in case or in how an accent is written). A move that would change a file between versioned storage and unversioned storage (draft.md to draft.zip, say) is refused, since it takes the file's older versions out of history: ask the user to rename it in the web app. To move a document, pass the version you read as base_version (not for a folder). The change is the user's, made by their agent, and kept in the history.",
     "read_only": false,
     "input_schema": {
       "type": "object",
@@ -192,7 +226,7 @@
   },
   {
     "name": "delete_doc",
-    "description": "Delete a document or file (not a folder: delete what is in it) in a space the user may write. A document's history stays: doc_history finds it and restore_doc brings it back. An unversioned file (a large file, audio, video, an archive) is gone for good: its bytes are not kept. Ask the user first unless they asked for it.",
+    "description": "Delete a document or file (not a folder: delete what is in it) in a space the user may write. A document's history stays: doc_history finds it and restore_doc brings it back. An unversioned file (a large file, audio, video, an archive) is refused, since its bytes would be gone for good: ask the user to delete it in the web app. Ask the user first unless they asked for it.",
     "read_only": false,
     "input_schema": {
       "type": "object",
@@ -222,7 +256,7 @@
   },
   {
     "name": "doc_history",
-    "description": "List the commits that changed a document, newest first, with who made each (and the agent, if one did), when, its message, what happened to the document (create, update or delete) and its version after. Without a path, the whole space's commits. A commit goes to read_doc as \"at\" and to restore_doc as \"commit\". \"next\" is the \"before\" of the next page. It doesn't follow renames: look for the old path too.",
+    "description": "List the commits that changed a document, newest first, with who made each (and the agent, if one did), when, its message, what happened to the document (create, update or delete) and its version after. Without a path, the whole space's commits. Only commits of the space's own history count. A commit goes to read_doc as \"at\" and to restore_doc as \"commit\". \"next\" is the \"before\" of the next page. It doesn't follow renames: look for the old path too.",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -288,7 +322,7 @@
   },
   {
     "name": "list_boards",
-    "description": "List a space's boards: its personal board, or its team boards.",
+    "description": "List a space's boards: its personal board, or its team boards. archived: true includes the archived ones (their archived_at is set), which come last. When there are more boards than fit, truncated is true and next is the after of the next page (send the same archived).",
     "read_only": true,
     "input_schema": {
       "type": "object",
@@ -297,6 +331,15 @@
           "type": "integer",
           "minimum": 1,
           "description": "the space, from list_spaces"
+        },
+        "archived": {
+          "type": "boolean",
+          "description": "include archived boards (default false)"
+        },
+        "after": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the next of the previous page: list the boards after this one"
         }
       },
       "required": ["space_id"],
@@ -684,7 +727,7 @@
   },
   {
     "name": "comment_card",
-    "description": "Add a comment to a card's thread.",
+    "description": "Add a comment to a card's thread. To tell a person, mention them with @[Name](user:ID), the ID from list_members and Name their name without any [, ] or \\ (leave those out, or the mention doesn't count); the card's assignee is told of every comment too, unless they wrote it or can't read the space.",
     "read_only": false,
     "input_schema": {
       "type": "object",
@@ -761,6 +804,131 @@
         }
       },
       "required": ["space_id", "board_id", "card_id", "version", "reason"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "create_board",
+    "description": "Add a team board to a shared space (a private space has only its personal board). Returns the board, with the id and version the other board tools take.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "a shared space, from list_spaces"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "the board's name"
+        }
+      },
+      "required": ["space_id", "name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "update_board",
+    "description": "Rename a board, or archive or unarchive it (archived: true takes it off list_boards and makes it read-only; archived: false brings it back). A personal board can be renamed but not archived. An archived board takes no change until it is unarchived, except a rename sent together with archived: false.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards (archived: true for archived ones)"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the board you last read; if it changed since, the call fails: read it again first"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": ["space_id", "board_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "archive_card",
+    "description": "Archive a card: it leaves the board's columns, remembering its column, and shows only in list_cards with column \"archived\". Undo it with restore_card.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the card you last read; if it changed since, the call fails: read it again first"
+        }
+      },
+      "required": ["space_id", "board_id", "card_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "restore_card",
+    "description": "Bring an archived card back, last in the column it was archived from, or in column if given. Find archived cards with list_cards and column \"archived\".",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "board_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the board, from list_boards"
+        },
+        "card_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the card, from list_cards"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the version of the card you last read; if it changed since, the call fails: read it again first"
+        },
+        "column": {
+          "enum": ["backlog", "todo", "doing", "review", "done"]
+        }
+      },
+      "required": ["space_id", "board_id", "card_id", "version"],
       "additionalProperties": false
     }
   },
@@ -1740,6 +1908,189 @@
         }
       },
       "required": ["space_id", "app_id", "version"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_app_templates",
+    "description": "List the bundled starter templates for apps: id, name, description, whether installing one needs a board (needs_board: its effects make cards on one), the phone hardware it uses (captures), the role assignments an install makes (roles) and the Home widgets it offers. Install one with install_app_template.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "install_app_template",
+    "description": "Install a starter template as a new app in a space the user may write. It is saved as a DRAFT only: nothing is published and no records come with it; a person who may publish the app launches it, in the Apps page. If the template has roles, the user gets them (and, if it says so, the space's other members its default) as the template defines; the agent cannot choose or change roles. A template with needs_board takes the board its effects make cards on, which the user must be able to write.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space the app is made in, from list_spaces"
+        },
+        "template_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "the template, from list_app_templates"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "the app's name; the template's if left out"
+        },
+        "board": {
+          "type": "object",
+          "properties": {
+            "space_id": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "the space of the board, from list_spaces"
+            },
+            "board_id": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "the board, from list_boards"
+            }
+          },
+          "required": ["space_id", "board_id"],
+          "additionalProperties": false,
+          "description": "required when the template has needs_board, refused when it doesn't: the board its effects make cards on"
+        }
+      },
+      "required": ["space_id", "template_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "duplicate_app",
+    "description": "Copy an app's definition into a new app, saved as a DRAFT: no rows, attachments, releases, role assignments or secrets come with it, nothing is published, and the copy is independent of the original. An effect that aims at a board the user can't write comes with no board chosen, and the copy can't be published until a person chooses one. The user must be able to see the source and write the destination.",
+    "read_only": false,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space of the app to copy, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app to copy, from list_apps"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "the copy's name; the original's if left out"
+        },
+        "destination_space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space of the copy, in the same workspace; the original's if left out"
+        },
+        "source": {
+          "enum": ["live", "draft"],
+          "description": "which definition to copy: the live release people use, or the draft being edited (for people who may design or publish the app). Left out: the draft for them, the live release for others"
+        }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_app_effects",
+    "description": "List an app's effects (the cards and documents its actions make on boards and in the knowledge base), newest first, for diagnosing: each has its status (pending, running, done, failed), attempts, why it failed (error code) and what it made. Only the effects of records the user may read are listed. active and failed count all that wait or failed. When more is true, pass the last id shown as before for older ones. Retrying a failed effect is for the person who acted, in the web app.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        },
+        "status": {
+          "enum": ["pending", "running", "done", "failed", "active"],
+          "description": "only effects in this state; active is pending and running"
+        },
+        "record": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "only the effects of this row"
+        },
+        "before": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "only effects older than this effect id, to read on past a page"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "at most this many (default 100); a reply too long is cut shorter"
+        }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_app_releases",
+    "description": "List an app's releases, newest first, without their definitions: number, when and by whom it was published, whether it is the live one, and what a client needs to draw it. For people who may design or publish the app. Rolling back is for a person, in the web app.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        },
+        "before": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the release number to page from: only older releases come back; use the next of a truncated reply"
+        }
+      },
+      "required": ["space_id", "app_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "show_app_roles",
+    "description": "Show who holds which role in an app: grants, each for one user (user_id, from list_members) or for everyone else in the space (user_id null), and every role there is. Read-only, and for people who manage the app's roles: the agent has no tool to change roles.",
+    "read_only": true,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "space_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the space, from list_spaces"
+        },
+        "app_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the app, from list_apps"
+        }
+      },
+      "required": ["space_id", "app_id"],
       "additionalProperties": false
     }
   },

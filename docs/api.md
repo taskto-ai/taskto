@@ -88,6 +88,10 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `setup_token` | 403 | The setup token is missing or wrong. |
 | `email_invalid` | 400 | Not a valid email address. |
 | `name_length` | 400 | A name must have 1 to `max` characters. |
+| `workspace_creation_refused` | 403 | This server doesn't let the caller create a workspace (`-workspace-creation`). |
+| `workspace_limit` | 403 | The caller has already created `max` workspaces, the most one account may. |
+| `too_many_workspaces` | 429 | The caller created 5 workspaces within the last hour; `Retry-After` says when to try again. |
+| `operator_only` | 403 | Only the server's operator (an admin of the workspace setup made) may do this. |
 | `workspace_name_length` | 400 | A workspace's name must have 1 to `max` characters. |
 | `password_too_short` | 400 | The password has fewer than `min` characters. |
 | `password_too_long` | 400 | The password has more than `max` bytes. |
@@ -112,6 +116,15 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `reset_invalid` | 404 | The reset link is unknown, used or expired. |
 | `reset_own` | 400 | An admin changes their own password in Settings, not with a reset link. |
 | `reset_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
+| `wrong_two_factor_code` | 401 / 403 | The code from the authenticator app (or the recovery code) is wrong, was used already, or is for another time. `401` at the second step of a login, `403` for a logged-in user's own settings. |
+| `too_many_two_factor_codes` | 429 | Too many wrong codes; `Retry-After` says when to try again. |
+| `two_factor_challenge_invalid` | 401 | The half-done login is unknown, used, expired (5 minutes) or had too many wrong codes: log in with the password again. |
+| `two_factor_already_on` | 409 | Two-factor login is on already. |
+| `two_factor_not_on` | 409 | Two-factor login isn't on, for this user. |
+| `two_factor_not_started` | 409 | No secret waits to be confirmed: start with `enrol`. |
+| `two_factor_no_password` | 403 | The account has no password (it signs in with a provider), so there is no password login to protect. |
+| `two_factor_clear_own` | 400 | An admin turns off their own two-factor login in Settings, not by clearing it. |
+| `two_factor_clear_elsewhere` | 403 | The member also belongs to a workspace the caller doesn't administer. |
 | `password_login_disabled` | 403 | Passwords are turned off on this server ([sso.md](sso.md#turning-passwords-off)): logging in, a new account with a password, making a reset link and using one answer this. |
 | `sso_unknown_provider` | 404 | No such single sign-on provider. |
 | `sso_failed` | 502 | The provider didn't answer. As `?sso_error=`: the provider or the exchange failed, or the person declined (details are in the server's log). |
@@ -161,6 +174,7 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `home_limit` | 409 | A person has at most `max` widgets (or pins) in a workspace, and a space at most `max` default widgets (or pins). |
 | `home_order_invalid` | 400 | The ids to put in order aren't all the caller's own placements of that kind, or one is listed twice. |
 | `home_defaults_shared` | 409 | Defaults are only for the apps of shared spaces. |
+| `audit_time_invalid` | 400 | The audit log's `from` or `to` is outside the years 1000 to 9999. |
 | `app_migration_required` | 409 | The publish changes the collection in ways stored rows are affected by; `changes` lists them, to acknowledge. |
 | `app_migration_unneeded` | 409 | The publish acknowledges changes it doesn't make; `changes` lists them. |
 | `app_migration_invalid` | 400 | An acknowledgement that is malformed: an unknown `change`, a field that is no name, or one twice. |
@@ -219,13 +233,16 @@ meaning once released. The web app has a message for each (`errors.<code>` in
 | `doc_changed` | 409 | `path` has changed since the version the change was based on. |
 | `doc_deleted` | 409 | `path` was deleted since the version the change was based on. |
 | `doc_exists` | 409 | `path` already exists: to replace it, send the version you edited as `base_version`. |
-| `doc_case_conflict` | 409 | `name` differs only by case from `other`, which exists. |
+| `doc_case_conflict` | 409 | `name` differs only by case, or by how an accent is written, from `other`, which exists. |
 | `doc_path_taken` | 409 | A folder is at `path`, or a file is where one of its folders would be. |
 | `doc_move_into_itself` | 400 | A folder can't be moved into itself (`path`). |
 | `doc_move_kind` | 400 | The unversioned file `path` can't become a Markdown document, or the other way round. |
 | `doc_delete_folder` | 400 | `path` is a folder: delete its documents. |
 | `file_too_large` | 413 | `path` is over the limit of `max` bytes. |
 | `knowledge_full` | 507 | The space's knowledge base is full. |
+| `quota_workspace` | 507 | The write would take the workspace over its storage quota of `max_mib` MiB. |
+| `quota_user` | 507 | The write would take the private space over its storage quota of `max_mib` MiB. |
+| `quota_unavailable` | 503 | The storage in use couldn't be measured; the write was refused, and trying again may work. |
 | `doc_not_kept` | 410 | Only the current version of an unversioned file is kept. |
 | `search_query_required` | 400 | A search needs something to search for. |
 | `search_query_too_long` | 400 | A search is at most `max` bytes of text. |
@@ -402,7 +419,10 @@ requests the same way.
 A user belongs to one or more workspaces, each with a role: `admin` or `member`. Admins
 manage members and invites. A solo install is a workspace with one admin; a team is the
 same workspace with more members. "Switching workspace" is using another workspace ID
-from `GET /api/me`.
+from `GET /api/me`. The first workspace is made by [setup](#post-apisetup); later ones by
+[`POST /api/workspaces`](#post-apiworkspaces), if the operator's `-workspace-creation`
+setting lets the caller ([install.md](install.md#who-may-create-a-workspace)). Workspaces
+share nothing: members, spaces, boards, apps, documents, tokens and settings belong to one.
 
 Workspace routes are `/api/workspaces/{workspace}/…`. A caller who isn't a member gets
 `404`, the same as for a workspace that doesn't exist, so outsiders can't tell which IDs
@@ -498,6 +518,14 @@ recommended setting), at most two at a time to bound memory.
 signing in with a provider has no password: it gets the same `401` as a wrong one, in the
 same time.
 
+A user with [two-factor login](#two-factor-login) on gets no session from the right
+password: `200` with a challenge instead, no cookie, and the existing session cookie left
+alone. The login finishes at [`POST /api/login/two-factor`](#post-apilogintwo-factor).
+
+```json
+{"two_factor_required": true, "challenge": "…", "expires_at": "…"}
+```
+
 ### `GET /api/login/methods`
 
 No login needed. How people can sign in here, for the login screen:
@@ -576,11 +604,32 @@ Revokes the session and clears the cookie. `204`, also without a session.
 ```json
 {
   "user": {"id": 1, "email": "owner@example.com", "name": "Owner", "locale": "pt-BR"},
-  "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}]
+  "workspaces": [{"id": 1, "name": "Home", "role": "admin", "locale": ""}],
+  "can_create_workspace": true,
+  "is_operator": true
 }
 ```
 
-Workspaces are listed oldest first. Requires a login.
+Workspaces are listed oldest first. Requires a login. `can_create_workspace` is whether
+[`POST /api/workspaces`](#post-apiworkspaces) would let this user in now, which the web
+app uses to offer "New workspace". `is_operator` is whether the user is an
+[operator](#operators), which the web app uses to show Settings' server-wide panels (the backups'
+status, outgoing email).
+
+#### Operators
+
+Some routes show or use what belongs to the whole server, not to one workspace: the backups'
+status (which can name the backup host) and the outgoing email (the SMTP server, and test
+messages sent through the operator's relay). Their callers must be admins of the workspace in the
+URL **and operators**: admins of the workspace the server's [setup](#post-apisetup) made. That
+workspace carries a stored marker (`workspaces.is_setup`, set by setup, or by the migration on a
+server that already ran it, for its oldest workspace); it is not "the lowest id", and no route
+can set it on another. Admins of workspaces created later with
+[`POST /api/workspaces`](#post-apiworkspaces) are not operators, so they get `403`
+`operator_only` there, and `is_operator` is `false` for them. The [setup checklist](#setup-checklist)
+lists its two server-wide steps (`email`, `backups`) to operators only. Other admin routes act only on
+their own workspace (its members, providers, search settings, dictation settings, shared CLI
+accounts), so any of its admins may use them.
 
 `user.locale` is the language the user picked, a BCP 47 tag, or `""` for none (the web app
 then follows the browser). A workspace's `locale` is its default language, or `""` for
@@ -595,6 +644,27 @@ and a region, in canonical case (`pt-BR`, `zh-Hant-TW`, `sr-Latn`, `es-419`), or
 none; anything else, variants and extensions included (`de-CH-1901`), is a `400`. Such a
 tag is stored also when the web app has no translation for it. Requires a login (a session, not an access token).
 
+### `POST /api/workspaces`
+
+`{"name": "Side project"}` → `201` with `GET /api/me`'s reply for the caller, now with the
+new workspace in it, and the new one's membership as `workspace`:
+`{"workspace": {"id", "name", "role": "admin", "locale": ""}, "user", "workspaces", "can_create_workspace"}`.
+
+Creates a workspace with the caller as its first admin, and nothing else in it but their
+own private space (with its personal board), as setup does for the first one, in one
+transaction. Who may is the operator's `-workspace-creation` setting: `admins` (the
+default: someone who is an admin of at least one workspace), `anyone` (every logged-in
+person) or `off` (nobody, so the server keeps the workspace setup made). Otherwise `403`
+`workspace_creation_refused`, which `can_create_workspace` told in advance. The name is 1
+to 100 characters (`400` `workspace_name_length`), after trimming, with no control
+character (NUL, a newline), line or paragraph separator, or bidirectional override or isolate
+(setup's names follow the same rule); names needn't be unique. Whatever the setting, one account
+can create at most 10 workspaces, ever (`403` `workspace_limit`), and 5 within an hour (`429`
+`too_many_workspaces`, with `Retry-After`; the check is in the database, so it holds across
+restarts and concurrent requests). Requires a login (a session, not an access token: `403` `token_refused`).
+Recorded as `workspace_created` in the [audit log](audit.md), on the new workspace (so
+it is in that workspace's log, which the person who made it admins, and not in the first's).
+
 ### `PATCH /api/workspaces/{workspace}`
 
 Admins. `{"locale": "pt-BR"}` → the workspace as in `GET /api/me`
@@ -606,7 +676,8 @@ get when their browser asks for none the web app has; `""` is English. Same tags
 
 A user changes their own password with the current one. An admin can make a reset link for
 a member who lost theirs. Either way, every session of the account ends, and so do its
-reset links; the browser that set the new password gets a new session. Access tokens keep
+reset links; the browser that set the new password gets a new session (with a reset link, only for an
+account without two-factor login: the others get a code to give first). Access tokens keep
 working: they are listed, and revoked, under [Tokens](#tokens). These routes take a
 session, never an access token (`403`). New passwords are 12 to 1024 characters, as at
 setup.
@@ -646,11 +717,126 @@ when the operator turned passwords off: a link nobody could use isn't made.
 ### `POST /api/password-reset`
 
 No login needed. `{"token": "…", "password": "…"}` sets the password of the account the
-link is for, ends its sessions and reset links, and logs it in here: `200` with the
+link is for, ends its sessions, half-done logins and reset links, and logs it in here: `200` with the
 `GET /api/me` body and the session cookie (a session the browser already had, anyone's,
-is revoked). `400` for a password that is too short or too long, which leaves the link
+is revoked). **For an account with [two-factor login](#two-factor-login) on, the link is no
+second factor**: the password is set and everything ends as above, but the answer is the login's
+challenge (`200`, `{"two_factor_required": true, "challenge": "…", "expires_at": "…"}`), no
+cookie and no session, and the browser finishes at [`POST /api/login/two-factor`](#post-apilogintwo-factor)
+with a code. A reset also drops a two-factor enrolment that wasn't confirmed. `400` for a password that is too short or too long, which leaves the link
 usable. `404` if the token is unknown, used, replaced or expired. `403 password_login_disabled`
 when the operator turned passwords off.
+
+## Two-factor login
+
+A user can ask for a code from an authenticator app (TOTP, RFC 6238: HMAC-SHA1, six digits,
+30-second steps) after the right password, on top of it. The routes under `/api/me/two-factor`
+take the caller's session, never an access token (`403`), and act on the caller only: none names a
+user, and none takes one in the body. `POST /api/login/two-factor` is the exception that needs
+no session (the password step gave a challenge, not a session), and an admin's clearing a member's
+is the other, both below.
+
+- **Where it applies.** The password login (`POST /api/login`). **Signing in with a provider
+  has no second step**: the identity provider's own sign-in, and its own two-factor login if
+  the operator asked it for one, is what vouches for the person
+  ([sso.md](sso.md#two-factor-login)). Access tokens and the CLI turns never had one and are
+  unaffected, and so is an invite's acceptance by a new person (they have none yet). A
+  password reset link's use is **not**: for an account with it on, the link sets the password and then
+  asks for a code, as a login does. An existing account that takes an invite logs in first, and
+  so is asked for its code too.
+- **The secret** is 160 random bits, kept sealed with the server's key
+  (`<data>/server.key`, AES-GCM, bound to the user) in `user_totp`, never in clear and never
+  returned again after the enrolment; losing the key makes it unreadable, as for the other
+  sealed secrets, and an admin then clears it. **Recovery codes** are ten of 60 random bits
+  (`xxxx-xxxx-xxxx`), shown once and kept as a keyed hash (HMAC under a key derived from the
+  server's); each works once.
+- **Codes.** A TOTP code is accepted for the current 30-second step and the one either side,
+  but only for a step later than the last one accepted for the user, so a code can't be
+  replayed (not in its own step, and not an earlier step's). A code is six digits; a recovery
+  code is twelve characters, with case, spaces and dashes not mattering.
+- **Limits.** The second step has limits of its own, in 15-minute windows, of wrong codes:
+  30 per client address, 10 per user from one address, and 30 per user from all addresses.
+  Over any of them, `429 too_many_two_factor_codes` with `Retry-After`, even with the right
+  code. One challenge also takes at most 5 wrong codes: they are counted, and the code
+  checked, in the transaction that uses the challenge up, so requests sent at once can't try
+  more. A wrong password in the routes below
+  counts against the [login limits](#post-apilogin), as at `POST /api/me/password`.
+
+### `POST /api/login/two-factor`
+
+The second step of a login that answered with a challenge. No session needed.
+
+```json
+{"challenge": "…", "code": "123456"}
+```
+
+`code` is the app's code or a recovery code. `200` with the `GET /api/me` body and the
+session cookie, as `POST /api/login` answers, and an existing session cookie on the request is
+revoked. The challenge is used up. `401 wrong_two_factor_code` for a wrong code, which leaves
+the challenge for another try (up to 5); `401 two_factor_challenge_invalid` for a challenge
+that is unknown, used, expired or used up. `400` without a code. Until this succeeds there is
+no session: the password step (a login, a reset link) makes the challenge in the transaction
+that checks the password hash is still the user's and reads whether two-factor login is on, so
+neither a concurrent enrolment nor a concurrent change of the password gets a session or a challenge it
+shouldn't; a change of the password ends every challenge. The challenge is a token only this route reads, stored as its SHA-256, and no
+other route accepts it, as a cookie or as an access token.
+
+### `GET /api/me/two-factor`
+
+```json
+{"enabled": true, "recovery_codes_left": 8}
+```
+
+### `POST /api/me/two-factor/enrol`
+
+`{"password": "…"}`: starts turning it on. `200`:
+
+```json
+{"enrolment": "…", "secret": "GEZDGNBVGY3TQOJQ…", "otpauth_uri": "otpauth://totp/TaskTo:me@example.com?secret=…&issuer=TaskTo&…"}
+```
+
+The web app draws `otpauth_uri` as a QR code in the browser (the secret goes nowhere else)
+and shows `secret` as text for typing in. Nothing is on yet: login asks for no code until
+[`confirm`](#post-apimetwo-factorconfirm), which needs `enrolment`, a random id for this
+enrolment that expires after 15 minutes. Asking again before that makes a new secret and a new
+id, and the earlier one can no longer be confirmed (another tab's code can't turn on a secret it
+didn't show). A change of the password, or a reset, drops an enrolment that wasn't confirmed.
+`403 wrong_password` (counted against the login limits); `409 two_factor_already_on`;
+`403 two_factor_no_password`; `403 password_login_disabled` when passwords are off, since
+two-factor login protects nothing then.
+
+### `POST /api/me/two-factor/confirm`
+
+`{"enrolment": "…", "code": "123456"}`: a code from the app for the secret `enrol` made,
+with the `enrolment` it answered, turns two-factor login on, and answers `200` with the recovery codes, this once:
+
+```json
+{"recovery_codes": ["k3m9-p0qz-7xaf", "…"]}
+```
+
+`403 wrong_two_factor_code`; `409 two_factor_not_started` without an `enrol` first, or with
+an `enrolment` that is missing, unknown, replaced by a later one or expired; `409 two_factor_already_on`.
+
+### `POST /api/me/two-factor/disable`
+
+`{"password": "…", "code": "…"}`: the password and a code (the app's, or a recovery code
+for someone who lost the phone). `204`; the secret, the recovery codes and any half-done
+logins are deleted. `403 wrong_password`, `403 wrong_two_factor_code`, `409 two_factor_not_on`.
+
+### `POST /api/me/two-factor/recovery-codes`
+
+Same body and errors as `disable`: makes ten new recovery codes, in place of all the old ones,
+and answers `200` with `{"recovery_codes": […]}` this once.
+
+### `DELETE /api/workspaces/{workspace}/members/{user}/two-factor`
+
+Admin only, no body. Clears a member's two-factor login: their secret, recovery codes and
+half-done logins are deleted and **their sessions end**, so a login of someone else's that
+got through is out too, and they log in with the password alone, to turn it on again.
+The rule is the password reset link's: the admin must administer every workspace the member
+belongs to (`403 two_factor_clear_elsewhere`), and can't use it on their own account
+(`400 two_factor_clear_own`). `404` if the user isn't a member of the workspace;
+`409 two_factor_not_on` if the member has none. `204`.
 
 ## Members
 
@@ -661,6 +847,9 @@ Any member. Members can see each other (boards need it to assign cards).
 ```json
 {"members": [{"id": 2, "email": "member@example.com", "name": "Member", "role": "member", "joined_at": "…"}]}
 ```
+
+An admin's list also has `"two_factor": true` or `false` for each member, which says whether
+they have [two-factor login](#two-factor-login) on, for the clear above; nobody else sees it.
 
 ### `PATCH /api/workspaces/{workspace}/members/{user}`
 
@@ -916,6 +1105,53 @@ Admin only. `{"role": "viewer"}`. `204`; `404` if the user isn't a member of the
 Admin only. Removes the member from the space; their access ends with their next request.
 `204`; `404` if the user isn't a member of the space.
 
+## Audit log
+
+### `GET /api/workspaces/{workspace}/audit`
+
+Admins only (`403 admin_only` to a member, `404 workspace_not_found` to anyone who isn't in the
+workspace). A browser session only: an access token is refused (`403 token_refused`). The
+workspace's own security and admin events, newest first, as [the audit log](audit.md) records
+them. The workspace is the one in the path that the caller administers; no parameter names
+another, and events that belong to no workspace (logins, password changes, a person's own
+provider accounts) are never in the reply.
+
+Query, all optional:
+
+| Parameter | What |
+|---|---|
+| `action` | one action code, such as `member_removed` ([the list](audit.md#what-is-recorded)) |
+| `actor` | the id of the user who did it |
+| `target_type` | `user`, `workspace`, `invite`, `space`, `access_token`, `provider_account` or `shared_cli_account` |
+| `from`, `to` | RFC 3339 times in the years 1000 to 9999; `from` is included, `to` is not |
+| `limit` | the page size, 1 to 200; 50 if omitted |
+| `cursor` | the `next` of the previous page |
+
+An unknown action or target type, or a malformed value, is `400 bad_request`; a `from` or `to` outside the years 1000 to 9999 is `400 audit_time_invalid`.
+
+```json
+{
+  "events": [{
+    "id": 41, "at": "2026-03-05T14:30:00.000Z", "workspace_id": 1,
+    "action": "member_removed",
+    "actor_id": 1, "actor": {"name": "Owner", "email": "owner@example.com"},
+    "target_type": "user", "target_id": 9, "target_created_at": "2026-02-01T10:00:00.000Z",
+    "target_user": null, "target_name": null,
+    "details": {"role": "member"}, "client_addr": "203.0.113.9"
+  }],
+  "next": "…"
+}
+```
+
+`next` is empty on the last page; pages follow each other without gaps or repeats while events
+are added. The names are read when the log is, not when the event was recorded, and only for
+what belongs to the workspace: `actor` and `target_user` are the user while they are a member
+of it (otherwise `null`, and `actor_id` and `target_id` still say who), and `target_name` is the
+name of the workspace, a shared space, a provider account or a shared CLI account the event is
+about, if it still exists (matched by its id **and** creation time, since ids are reused;
+`null` otherwise). An access token's or an invite's name is never resolved. `details` are the
+facts the action declares, never free text.
+
 ## Knowledge base
 
 Each space's documents are Markdown files (`.md`) and other uploaded files in a git
@@ -934,7 +1170,7 @@ the caller can't read is `404` on every route.
   backslash or a control character, or has a `.git` element in any spelling (`.GIT`,
   `.git.`, `git~1`, with ignorable Unicode): nothing in `.git` can be read or written
   through the API. A path has at most 16 levels and 1024 bytes, each name at most 255
-  bytes. Two names in a folder can't differ only by case (`409`).
+  bytes. Two names in a folder can't differ only by case, or by how an accent is written (é as one character or as e and a combining accent: the same file on macOS and Windows) (`409`).
 - **Versions.** A document's `version` is the git blob ID of its content (40 hex
   digits), or of its pointer for an unversioned file. A change to an existing document says which version it was based on, in
   `base_version`; if the document has changed since, the answer is `409` and nothing is
@@ -955,6 +1191,11 @@ the caller can't read is `404` on every route.
   (`kb_max_unversioned_size`, `507` over it); deleting or replacing one frees its bytes.
   A `.md` file whose bytes aren't UTF-8 (an upload renamed to `.md`) reads back in
   `content_base64`, like an upload.
+- **Storage quotas.** Besides these limits of a space, the operator may set a storage quota
+  for each workspace and for each member's private space ([Storage usage](#storage-usage),
+  [quotas.md](quotas.md)). A write that adds content and wouldn't fit is `507` with
+  `quota_workspace` or `quota_user`; deleting, moving and restoring add none, so they are
+  never refused for it.
 
 A document as listed:
 
@@ -1092,7 +1333,7 @@ files, neither for an unversioned file.
 {"path": "notes/plan.md", "version": "…", "size": 7, "versioned": true, "content": "# Plan\n"}
 ```
 
-- `?at=<commit>`: the document as it was at that commit (`404` if it didn't exist then).
+- `?at=<commit>`: the document as it was at that commit (`404` if it didn't exist then, or if the commit isn't in the space's history: one a failed change left behind is never read).
 - `?raw=true`: the bytes themselves, as a download: `application/octet-stream` (audio
   and video: their media type, such as `video/mp4`, so the web app can play them),
   `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff` and
@@ -1175,7 +1416,7 @@ read), or one [taken out of history](#taking-a-files-old-versions-out-of-history
 can't be viewed or restored; `agent` is absent when the user made the change, and
 `<name> (access token)` for a change made with an [access token](#access-tokens). `limit`
 is 1 to 200, default 50; `next`, when there are more, is the `before` of the next page
-(`?before=<commit>`).
+(`?before=<commit>`: `404` if the commit isn't in the space's history, as for `?at=`).
 
 ### `GET /api/workspaces/{workspace}/spaces/{space}/history`
 
@@ -1192,7 +1433,8 @@ deleted document.
 ```
 
 `base_version` is optional and checked as above (`409`). `200` with the change's result;
-`404` if the document didn't exist at that commit; `410` for an unversioned file whose
+`404` if the document didn't exist at that commit, or if `commit` isn't in the space's history
+(a commit a failed change left behind is never a source); `410` for an unversioned file whose
 bytes at that commit are gone.
 
 ### `DELETE /api/workspaces/{workspace}/spaces/{space}/history/{path}`
@@ -1338,6 +1580,67 @@ Searches one space: read access (`404` for a space the caller can't read). Query
 
 Any member. The same, across every space of the workspace the caller can read (their
 private space, and the shared spaces they are a member of, archived ones included).
+
+### Searching cards
+
+The cards of boards are searched apart from the documents, by full text only: a card's
+title, Markdown body and comments (a card's newest comments, up to 256 KiB of them), with
+the same words, phrases, scripts and limits as a document search. They are never sent to an
+embeddings endpoint, whatever a space has consented to. Only the cards of boards in
+spaces the caller can read are found: a personal board only by its owner, a team board by
+the members of its space, archived cards and boards, and boards of an archived space, too,
+since those stay readable; never another member's personal board or the board of a shared
+space the caller isn't in, admins included. Results come best first: a card with every word
+in its title, then one with every word in its title and body, then the rest, and the card
+changed last first within each. The order depends only on the cards the caller can read,
+never on others', and no score is returned.
+
+The index follows the boards: every change to a card's title or body, and every comment
+added, edited or deleted, queues the card in the same transaction, and a search indexes the
+queued cards of the spaces it looks in before it answers, so it never quotes text older than
+the card. A card that changes while the search runs is looked for once more; if the index
+still can't catch up, the reply has `"incomplete": true` and leaves those cards out, and a
+later search finds them. An incomplete reply has no `next_offset`: an offset counts the cards
+indexed at that moment, so it could repeat or skip a card once the others are indexed; search again
+instead. A card goes with its board or space when that is deleted, and every
+card is indexed when the server starts. Who may read a space is checked again after the
+indexing, so a member removed meanwhile gets none of its cards.
+
+### `GET /api/workspaces/{workspace}/spaces/{space}/search/cards`
+
+Read access to the space (`404` for one the caller can't read). Query: `q`, `limit` and
+`offset`, as for a document search, with the same errors.
+
+```json
+{
+  "results": [
+    {
+      "space_id": 3,
+      "space_name": "Team",
+      "board_id": 7,
+      "board_name": "Roadmap",
+      "card_id": 42,
+      "title": "Orchard rollout",
+      "column": "doing",
+      "snippet": [{"text": "ship the "}, {"text": "orchard", "match": true}, {"text": " release"}]
+    }
+  ],
+  "next_offset": 20
+}
+```
+
+- `column`: where the card is on its board, `archived` if it is off it. Open the card
+  with `GET .../boards/{board_id}/cards/{card_id}`; the web app links to
+  `/w/{workspace}/boards/{space_id}:{board_id}:{card_id}`.
+- `snippet`: the passage of the title, body or comments that matched, as plain text in
+  pieces, as for a document: never markup.
+- `incomplete`: `true` when cards that changed during the search were left out; then there is no `next_offset`.
+- `next_offset`: present when there are more results, and the reply is not incomplete.
+
+### `GET /api/workspaces/{workspace}/search/cards`
+
+Any member. The same, across the boards of every space of the workspace the caller can read.
+Both routes also take an access token.
 
 ### `GET /api/workspaces/{workspace}/search/settings`
 
@@ -1567,7 +1870,7 @@ place in its column; left out or past the end, the card goes last. `201` with th
 The card with its thread, oldest first:
 
 ```json
-{"id": 12, …, "comments": [{"id": 1, "card_id": 12, "author": {"id": 2, "name": "Member", "agent": false}, "body": "…", "created_at": "…"}]}
+{"id": 12, …, "comments": [{"id": 1, "card_id": 12, "author": {"id": 2, "name": "Member", "agent": false}, "body": "…", "created_at": "…", "mentions": []}]}
 ```
 
 ### `PATCH …/boards/{board}/cards/{card}`
@@ -1600,7 +1903,33 @@ last in the column it was archived from. `200` with the card; `400` if it isn't 
 ### `POST …/boards/{board}/cards/{card}/comments`
 
 Writers. `{"body": "Markdown…"}` (up to 32 KiB, not blank). Adds to the thread as the
-caller. `201` with the comment.
+caller. `201` with the comment. A comment tells people in their notifications
+([below](#notifications)): the card's assignee, and each person it mentions.
+
+#### Mentions
+
+A comment mentions a person with the token `@[Name](user:ID)`, where `ID` is their user ID (the
+`id` of the space's members, the agent's `list_members`). The web app's comment box writes it when
+you pick someone. The ID is what counts: a different or stale `Name` tells the person of that ID
+all the same, and `@name` typed as plain text is only text. A token counts only where Markdown
+shows it as a link in the text of a paragraph, heading or table cell: not in a fenced code block
+(also in a quote or a list item), not in a code span, not after a backslash (`\@[…](user:…)`), not
+in a link's address or an image's label, and its `Name` has no `[`, `]` or `\`. A comment mentions
+at most 20 people: the first 20 different IDs its tokens name, whether or not they exist or may
+read the space; each is told once.
+
+Every comment in an answer has `mentions`: the people its body mentions, as `[{"id": 5, "name":
+"Bo"}]`, with the name the server has for that ID, for those the reader may see in the space (its
+members). A token for anyone else, or an ID that doesn't exist, has no entry, so a comment can't be
+used to look up names. The web app shows a mention by this name, never by the `Name` in the text,
+and as a neutral placeholder when it has no entry.
+
+Who is told is decided in the transaction that writes the comment, with the card's assignee and
+everyone's access as they are then.
+
+A comment tells nobody who may not read the space at that moment, whether they are mentioned or
+assigned, and answers the same whether or not a mentioned ID exists, so it can't be used to find
+who is in a workspace. It never tells its author.
 
 ### The agent
 
@@ -1622,6 +1951,11 @@ workspace's home as its target, and a push for it says the same. Notifications a
 - `card_due`: a card assigned to you is due today (`params.title`, `params.due`; target: the
   card), and `card_overdue`: it was due yesterday and isn't done
   ([due-date reminders](#due-date-reminders));
+- `card_comment`: someone else commented on a card assigned to you (`params.title`; target: the
+  card). One per comment;
+- `card_mention`: someone else mentioned you in a comment on a card ([mentions](#mentions);
+  `params.title`; target: the card). One per comment: a person who is both the assignee and
+  mentioned in a comment is told of the mention only. No notification holds the comment's text;
 - `app_effect_failed`: an effect of an app you acted in failed for good and waits for you to retry
   it (`params.app`; target: the app). One per failure, so a retry that fails again is a new one.
 
@@ -1664,8 +1998,10 @@ kept in step with the card by the change that touches it:
   different date now (or none) is shown as a plain "something changed" mention of the card.
 - **Where.** Every way of changing a card keeps the jobs: the web app's routes, the agent's tools,
   the MCP tools and the apps' effects. Archiving a board or a shared space cancels its cards' jobs
-  and restoring it makes them again; a person who leaves a space or the workspace loses theirs; a
-  server that starts with dated cards that have none (made before reminders existed) schedules them.
+  and restoring it makes them again; a person who leaves a space or the workspace loses theirs, and
+  gets them back, for the cards still assigned to them and dated, when they are added to the space
+  again (a workspace's invite gives back those of their private space; a shared space's come with
+  adding them to it); a server that starts with dated cards that have none (made before reminders existed) schedules them.
   A date the scheduler can't hold (the overdue notice of `8999-12-31` would be in the year 9000)
   has no notice for that part, and the card is saved all the same.
 - **Access.** When a job runs, in the transaction that makes the notification, it checks that it is
@@ -2596,7 +2932,7 @@ close to the write as the data allows: inside the transaction that makes or move
 the write lock), and for a document **while the space's write lock is held**, right before the commit,
 so a right withdrawn while the entry waited for the lock stops it. Other
 failures with a code of their own (`app_effect_target_gone`, `app_effect_board_offline`,
-`app_effect_invalid`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
+`app_effect_invalid`, `app_effect_quota`, `app_effect_doc_exists`, `app_effect_no_card`, `app_effect_card_archived`,
 `app_effect_app_offline`) fail at once too; a failure that may pass (the database was busy, a card
 being changed) is tried again after 5 s, 10 s, 20 s…, at most 5 tries in all (a worker that died on
 the last try doesn't give an entry another: its lease running out fails it), and then is failed
@@ -3318,8 +3654,10 @@ over 5 minutes.
 ## Outgoing email
 
 The server's outgoing email ([install.md](install.md#email)) is one SMTP server for the whole
-server, set by its operator, so any workspace's admins see it, as they see the backups. Both routes
-are for admins, with a browser session (not an access token).
+server, set by its operator, so only [operators](#operators) see it, as they see the backups: not
+the admins of a workspace someone created later. Both routes are for operators who are admins of
+the workspace in the URL, with a browser session (not an access token); other admins get `403`
+`operator_only`.
 
 ### `GET /api/workspaces/{workspace}/mail`
 
@@ -3369,7 +3707,8 @@ backups are the whole server's, not a workspace's. `health` sums it up:
 
 ### `GET /api/workspaces/{workspace}/backup`
 
-Admins, with a browser session (not an access token). The status, error included:
+[Operators](#operators) who are admins of the workspace in the URL, with a browser session (not
+an access token); other admins get `403` `operator_only`. The status, error included:
 
 ```json
 {
@@ -3403,6 +3742,56 @@ backup host:
 
 ```json
 {"status": "ok", "last_success": "2026-03-10T03:16:40Z", "due_by": "2026-03-11T10:15:00Z"}
+```
+
+## Storage usage
+
+What each space stores, and the operator's storage quotas ([quotas.md](quotas.md)). Sizes
+are in bytes; a quota of `0` is none, which is what a server has until its operator sets
+one (`-storage-quota-workspace`, `-storage-quota-user`). Both routes take a browser session,
+not an access token. The figures are the ones the server keeps as it writes: reading them
+walks nothing in git.
+
+### `GET /api/workspaces/{workspace}/usage`
+
+Admins. Every space of the workspace, and only that workspace's: the shared spaces and each
+member's private space, with its owner.
+
+```json
+{
+  "quota": {"workspace": 107374182400, "user": 10737418240},
+  "total": 123456789,
+  "spaces": [
+    {
+      "id": 4, "kind": "private", "name": "Private",
+      "owner": {"id": 7, "name": "Bob", "email": "bob@example.com"},
+      "knowledge_versioned": 1048576,
+      "knowledge_unversioned": 52428800,
+      "attachments": 3145728,
+      "total": 56623104,
+      "limit": 10737418240
+    },
+    {"id": 2, "kind": "shared", "name": "Team", "knowledge_versioned": 2097152,
+     "knowledge_unversioned": 0, "attachments": 0, "total": 2097152, "limit": 0}
+  ]
+}
+```
+
+`knowledge_versioned` is what git keeps of the space's knowledge base, every version
+included; `knowledge_unversioned` the bytes of its [unversioned files](#unversioned-files);
+`attachments` the apps' photos, thumbnails included, with the uploads on their way at the
+size they declared. `limit` is the quota of the space itself: the private space's, and `0`
+for a shared one, which only the workspace's quota bounds. `total` is the sum over all the
+spaces, the figure the workspace's quota is checked against. A member gets `403 admin_only`;
+someone who isn't in the workspace, `404 workspace_not_found`.
+
+### `GET /api/workspaces/{workspace}/usage/me`
+
+Any member. Their own private space in the workspace, in the same shape (`space` is `null`
+if they have none), and the quotas. It says nothing of any other member's.
+
+```json
+{"quota": {"workspace": 0, "user": 10737418240}, "space": {"id": 4, "kind": "private", "…": "…"}}
 ```
 
 ## Setup checklist
@@ -3446,6 +3835,9 @@ workspace_not_found` for someone outside the workspace.
 `state` is `done`, `todo` or `skipped`; a step that is done is `done` even if it was skipped.
 `complete` is true when every step that isn't `optional` is `done` or `skipped`. The web app shows
 the checklist while it isn't `dismissed` and isn't `complete`.
+
+`email` and `backups` belong to the whole server, so only [operators](#operators) get them in `items`:
+for the admin of a workspace someone else created, the list is the first four.
 
 ### `PUT /api/workspaces/{workspace}/checklist/dismissed`, `DELETE …`
 

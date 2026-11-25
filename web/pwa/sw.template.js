@@ -103,7 +103,15 @@ self.addEventListener('message', (event) => {
 // again before it shows where it leads. A push may arrive late, twice or never; nothing relies on it.
 
 const BRAND = 'TaskTo.AI'
-const KINDS = ['card_assigned', 'card_due', 'card_overdue', 'app_effect_failed', 'changed']
+const KINDS = [
+  'card_assigned',
+  'card_comment',
+  'card_mention',
+  'card_due',
+  'card_overdue',
+  'app_effect_failed',
+  'changed',
+]
 // Not under PREFIX: an update of the app keeps what the person's language said.
 const STRINGS_CACHE = 'taskto-push-strings'
 const STRINGS_KEY = '/__taskto-push-strings'
@@ -150,7 +158,7 @@ async function showPush(event) {
   const kind = KINDS.includes(data?.kind) ? data.kind : 'changed'
   const strings = await readStrings()
   await self.registration.showNotification(BRAND, {
-    // A cache made before a kind existed lacks its words: the generic ones do.
+    // A kind the saved words don't have yet (after an update, before a page gives them): the generic line.
     body: strings[kind] || strings.changed || '',
     // One notification replaces its own earlier one, never another's.
     tag: id ? `taskto-notification-${id}` : 'taskto-notification',

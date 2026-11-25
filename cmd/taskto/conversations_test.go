@@ -108,8 +108,8 @@ func TestConversationsCommand(t *testing.T) {
 	}
 	if _, err := sqlDB.Exec(`INSERT INTO users (id, email, name, password_hash) VALUES (3, 'a@example.com', 'A', 'x');
 		INSERT INTO workspaces (id, name) VALUES (1, 'Home');
-		INSERT INTO conversations (id, workspace_id, owner_id, agent_id, title) VALUES
-			(7, 1, 3, 101, 'Private plans'), (8, 1, 3, 102, 'Kept')`); err != nil {
+		INSERT INTO conversations (id, workspace_id, owner_id, agent_id, title, created_at) VALUES
+			(7, 1, 3, 101, 'Private plans', '2026-11-19T10:20:30.151Z'), (8, 1, 3, 102, 'Kept', '2026-11-19T10:20:31.000Z')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -153,7 +153,9 @@ func TestConversationsCommand(t *testing.T) {
 			t.Errorf("check printed:\n%s\nwant %q", out, want)
 		}
 	}
-	if strings.Contains(out, "Private plans") || strings.Contains(out, "151") {
+	// The line an orphan is listed on, not just its digits: a lost conversation's creation
+	// time has milliseconds, and any three digits can be among them.
+	if strings.Contains(out, "Private plans") || strings.Contains(out, "agent runtime conversation 151,") {
 		t.Errorf("check printed:\n%s\nwant no titles and nothing created within the grace period", out)
 	}
 	if len(agent.retired()) != 0 {

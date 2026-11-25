@@ -217,6 +217,9 @@ export function inline(text: string, onLink?: LinkHandler, depth = 0): ReactNode
     out.push(node)
   }
   let i = 0
+  // Where the last "@" typed as itself ends: a mention is a link right after one, not after an
+  // escaped "@".
+  let atEnd = -1
   while (i < text.length) {
     const c = text[i]
     const rest = text.slice(i)
@@ -269,6 +272,14 @@ export function inline(text: string, onLink?: LinkHandler, depth = 0): ReactNode
     if (c === '[' || (c === '!' && text[i + 1] === '[')) {
       const image = c === '!'
       const link = parseLink(text, image ? i + 1 : i)
+      const who = !image && atEnd === i ? /^user:([0-9]{1,18})$/.exec(link?.href ?? '') : null
+      if (link && who) {
+        plain = plain.slice(0, -1) // the "@" is the mention's
+        // The ID as a number is written ("02" is 2), as the server reads it.
+        push(<Mention key={out.length} id={who[1].replace(/^0+(?=\d)/, '')} label={link.label} />)
+        i = link.end
+        continue
+      }
       if (link) {
         const label = image ? [link.label || link.href] : inline(link.label, onLink, depth + 1)
         push(<A key={out.length} href={link.href} onLink={onLink} label={label} />)
@@ -305,6 +316,7 @@ export function inline(text: string, onLink?: LinkHandler, depth = 0): ReactNode
     }
     plain += c
     i++
+    if (c === '@') atEnd = i
   }
   flush()
   return out
@@ -458,6 +470,20 @@ function block(b: Block, onLink: LinkHandler | undefined, tight: boolean): React
   }
 }
 
+// How a person mentioned in a comment is shown (`@[label](user:ID)`): by the name the server gives
+// for their ID, which is the only name the page trusts, never by the label in the text, which is
+// whatever its writer typed. An ID without a name shows `unknown`, a neutral placeholder. Without
+// this, a mention shows the label as a link without a target does.
+export type MentionNames = { names: ReadonlyMap<string, string>; unknown: string }
+const Mentions = createContext<MentionNames | null>(null)
+
+function Mention({ id, label }: { id: string; label: string }) {
+  const known = useContext(Mentions)
+  // As plain text, never a link: it is a name, and nothing it says is followed.
+  const name = known ? (known.names.get(id) ?? known.unknown) : label
+  return <span className="tt-mention">{`@${name}`}</span>
+}
+
 // How many levels a heading is lowered by (a chat reply's "#" shouldn't outshout the page),
 // and whether a single line break in a paragraph is one (as a model means it in a reply).
 const HeadingShift = createContext(0)
@@ -475,22 +501,27 @@ function Heading({ level, children }: { level: number; children: ReactNode }) {
 }
 
 // headingShift lowers every heading by that many levels (to h6 at most): 2 makes "#" an h3.
-// lineBreaks makes each line break in a paragraph a break, as in a chat reply.
+// lineBreaks makes each line break in a paragraph a break, as in a chat reply. mentions says how
+// the people a comment mentions are named.
 export function Markdown({
   text,
   onLink,
   headingShift = 0,
   lineBreaks = false,
+  mentions,
 }: {
   text: string
   onLink?: LinkHandler
   headingShift?: number
   lineBreaks?: boolean
+  mentions?: MentionNames
 }) {
   return (
     <HeadingShift.Provider value={headingShift}>
       <LineBreaks.Provider value={lineBreaks}>
-        <div className="tt-markdown">{render(parseBlocks(text), onLink)}</div>
+        <Mentions.Provider value={mentions ?? null}>
+          <div className="tt-markdown">{render(parseBlocks(text), onLink)}</div>
+        </Mentions.Provider>
       </LineBreaks.Provider>
     </HeadingShift.Provider>
   )

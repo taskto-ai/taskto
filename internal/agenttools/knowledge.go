@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 	"unicode/utf8"
 
@@ -65,41 +66,121 @@ type searchHit struct {
 	Version   string `json:"version"`
 }
 
+// searchArgs are the arguments of search_docs and search_cards.
+type searchArgs struct {
+	Query string `json:"query"`
+	// SpaceID and Limit are raw to tell "not given" from null and from 0: none of the
+	// latter two is a value (a null space would widen the search to every space).
+	SpaceID json.RawMessage `json:"space_id"`
+	Limit   json.RawMessage `json:"limit"`
+	Offset  int             `json:"offset"`
+}
+
+// searchSpaces checks the arguments of a search, and returns them with the limit and the
+// spaces to search: the one asked for, or every space the user can read in the call's
+// workspace.
+func (s *Service) searchSpaces(ctx context.Context, c *call, args json.RawMessage, off string) (searchArgs, int, []access.Space, error) {
+	var a searchArgs
+	if err := decode(args, &a); err != nil {
+		return a, 0, nil, err
+	}
+	// The schema counts characters and the index bytes: a query is at most search.MaxQueryLen
+	// bytes of UTF-8, which is that many characters only if they are ASCII.
+	if len(a.Query) > search.MaxQueryLen {
+		return a, 0, nil, invalidf("query is at most %d bytes of UTF-8", search.MaxQueryLen)
+	}
+	limit := 10
+	if a.Limit != nil {
+		n, ok := wholeNumber(a.Limit)
+		if !ok || n < 1 || n > maxSearchLimit {
+			return a, 0, nil, invalidf("limit must be 1 to %d", maxSearchLimit)
+		}
+		limit = int(n)
+	}
+	if s.o.Search == nil {
+		return a, 0, nil, errInvalid(off)
+	}
+	if a.SpaceID != nil {
+		id, ok := wholeNumber(a.SpaceID)
+		if !ok || id < 1 {
+			return a, 0, nil, invalidf("space_id must be a space's id, from list_spaces; leave it out to search every space")
+		}
+		sp, err := s.space(ctx, c, id)
+		if err != nil {
+			return a, 0, nil, err
+		}
+		return a, limit, []access.Space{sp}, nil
+	}
+	spaces, err := s.o.Access.Readable(ctx, c.User, c.Workspace)
+	return a, limit, spaces, err
+}
+
+// maxWhole is the largest whole number a JSON number carries exactly (2^53).
+const maxWhole = 1 << 53
+
+// wholeNumber reads a JSON number that is a whole number, as JSON Schema's "integer" says
+// ("10.0" is one): not null, not a string, not fractional or out of range.
+func wholeNumber(raw json.RawMessage) (int64, bool) {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return 0, false
+	}
+	var n float64
+	if json.Unmarshal(raw, &n) != nil || n != math.Trunc(n) || n < -maxWhole || n > maxWhole {
+		return 0, false
+	}
+	return int64(n), true
+}
+
+type cardHit struct {
+	SpaceID   int64  `json:"space_id"`
+	SpaceName string `json:"space_name"`
+	BoardID   int64  `json:"board_id"`
+	BoardName string `json:"board_name"`
+	CardID    int64  `json:"card_id"`
+	Title     string `json:"title"`
+	Column    string `json:"column"`
+	Snippet   string `json:"snippet"`
+}
+
+// searchCards searches the cards of the boards in one space, or in every space the user can
+// read in the call's workspace, by full text.
+func (s *Service) searchCards(ctx context.Context, c *call, args json.RawMessage) (any, error) {
+	a, limit, spaces, err := s.searchSpaces(ctx, c, args, "search is off on this server: use list_boards and list_cards")
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.o.Search.SearchCards(ctx, s.o.Access, c.User, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.Offset})
+	if err != nil {
+		return nil, err
+	}
+	hits := []cardHit{}
+	for _, r := range res.Results {
+		var snippet strings.Builder
+		for _, seg := range r.Snippet {
+			snippet.WriteString(seg.Text)
+		}
+		text, _ := cut(snippet.String(), 1000)
+		hits = append(hits, cardHit{SpaceID: r.SpaceID, SpaceName: r.SpaceName, BoardID: r.BoardID, BoardName: r.BoardName,
+			CardID: r.CardID, Title: r.Title, Column: r.Column, Snippet: text})
+	}
+	reply := map[string]any{"results": hits}
+	if res.Incomplete {
+		reply["incomplete"] = true
+	}
+	if res.NextOffset != nil {
+		reply["next_offset"] = *res.NextOffset
+	}
+	return reply, nil
+}
+
 // searchDocs searches the knowledge base: one space, or every space the user can read in
 // the call's workspace.
 func (s *Service) searchDocs(ctx context.Context, c *call, args json.RawMessage) (any, error) {
-	var a struct {
-		Query   string `json:"query"`
-		SpaceID *int64 `json:"space_id"`
-		Limit   int    `json:"limit"`
-		Offset  int    `json:"offset"`
-	}
-	if err := decode(args, &a); err != nil {
+	a, limit, spaces, err := s.searchSpaces(ctx, c, args, "search is off on this server: use list_docs and read_doc")
+	if err != nil {
 		return nil, err
 	}
-	if a.Limit < 0 || a.Limit > maxSearchLimit {
-		return nil, invalidf("limit must be 1 to %d", maxSearchLimit)
-	}
-	if a.Limit == 0 {
-		a.Limit = 10
-	}
-	if s.o.Search == nil {
-		return nil, errInvalid("search is off on this server: use list_docs and read_doc")
-	}
-	var spaces []access.Space
-	if a.SpaceID != nil {
-		sp, err := s.space(ctx, c, *a.SpaceID)
-		if err != nil {
-			return nil, err
-		}
-		spaces = []access.Space{sp}
-	} else {
-		var err error
-		if spaces, err = s.o.Access.Readable(ctx, c.User, c.Workspace); err != nil {
-			return nil, err
-		}
-	}
-	res, err := s.o.Search.Search(ctx, c.Workspace, spaces, search.Query{Text: a.Query, Limit: a.Limit, Offset: a.Offset})
+	res, err := s.o.Search.Search(ctx, c.Workspace, spaces, search.Query{Text: a.Query, Limit: limit, Offset: a.Offset})
 	if err != nil {
 		return nil, err
 	}
@@ -177,24 +258,19 @@ func (s *Service) readDoc(ctx context.Context, c *call, args json.RawMessage) (a
 	if err != nil {
 		return nil, err
 	}
-	doc, err := s.o.Knowledge.Read(ctx, sp, a.Path, a.At)
+	// The store decides what the file is before it loads it: unversioned, too large for text, not
+	// UTF-8 or with a NUL byte are refused there, whatever the file's name.
+	doc, err := s.o.Knowledge.ReadText(ctx, sp, a.Path, a.At, maxTextFile)
 	if err != nil {
 		return nil, err
 	}
-	if !doc.Versioned {
-		// Its bytes are on disk, not in git, and can be any size: only list_docs shows it.
-		return nil, invalidf("%s is an unversioned file (a large file, audio, video or an archive): it can't be read as text", doc.Path)
-	}
-	if !knowledge.IsMarkdown(doc.Path) {
-		switch {
-		case doc.Size > maxTextFile:
-			return nil, invalidf("%s is %d bytes: only text files up to %d KiB can be read", doc.Path, doc.Size, maxTextFile>>10)
-		case bytes.IndexByte(doc.Content, 0) >= 0 || !utf8.Valid(doc.Content):
-			return nil, invalidf("%s isn't a text file: only Markdown documents and plain-text files can be read", doc.Path)
-		}
-	}
 	if a.Offset < 0 || a.Offset > len(doc.Content) {
 		return nil, invalidf("offset must be 0 to %d, the document's size", len(doc.Content))
+	}
+	// next_offset is always at a character's start, so one that isn't is a made-up number: a read
+	// from inside a character would return replacement characters, not the text.
+	if a.Offset < len(doc.Content) && !utf8.RuneStart(doc.Content[a.Offset]) {
+		return nil, invalidf("offset %d is inside a character: use 0 or a next_offset from an earlier read", a.Offset)
 	}
 	rest := string(doc.Content[a.Offset:])
 	content, more := cut(rest, readChunk)
@@ -255,7 +331,9 @@ func (s *Service) docHistory(ctx context.Context, c *call, args json.RawMessage)
 	return res, err
 }
 
-// moveDoc renames a document or folder, as the user, committed by the agent.
+// moveDoc renames a document or folder, as the user, committed by the agent. A rename that
+// would change a file between versioned and unversioned storage is refused: it takes the file's
+// older versions out of history.
 func (s *Service) moveDoc(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
 		SpaceID     int64  `json:"space_id"`
@@ -275,10 +353,11 @@ func (s *Service) moveDoc(ctx context.Context, c *call, args json.RawMessage) (a
 	if err != nil {
 		return nil, err
 	}
-	return s.o.Knowledge.Move(ctx, sp, a.From, a.To, a.BaseVersion, by, a.Message)
+	return s.o.Knowledge.MoveKept(ctx, sp, a.From, a.To, a.BaseVersion, by, a.Message)
 }
 
-// deleteDoc deletes a document or file; its history stays, so restore_doc brings it back.
+// deleteDoc deletes a document; its history stays, so restore_doc brings it back. An unversioned
+// file is refused: its bytes would be gone for good, and the built-in agent has no one to ask.
 func (s *Service) deleteDoc(ctx context.Context, c *call, args json.RawMessage) (any, error) {
 	var a struct {
 		SpaceID     int64  `json:"space_id"`
@@ -297,7 +376,7 @@ func (s *Service) deleteDoc(ctx context.Context, c *call, args json.RawMessage) 
 	if err != nil {
 		return nil, err
 	}
-	return s.o.Knowledge.Delete(ctx, sp, a.Path, a.BaseVersion, by, a.Message)
+	return s.o.Knowledge.DeleteKept(ctx, sp, a.Path, a.BaseVersion, by, a.Message)
 }
 
 // restoreDoc makes a document what it was at an older commit, as a new commit.
@@ -320,7 +399,7 @@ func (s *Service) restoreDoc(ctx context.Context, c *call, args json.RawMessage)
 	if err != nil {
 		return nil, err
 	}
-	return s.o.Knowledge.Restore(ctx, sp, a.Path, a.Commit, a.BaseVersion, by, a.Message)
+	return s.o.Knowledge.RestoreKept(ctx, sp, a.Path, a.Commit, a.BaseVersion, by, a.Message)
 }
 
 // writeDoc creates or replaces a Markdown document, as the user, committed by the agent.
