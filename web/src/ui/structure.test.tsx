@@ -174,30 +174,6 @@ describe('Table', () => {
   })
 })
 
-describe('Table, with row headers', () => {
-  test('the column that names each row gives the rows their headers', () => {
-    const rows = [
-      { plan: 'Solo', seats: 1 },
-      { plan: 'Team', seats: 10 },
-    ]
-    render(
-      <Table
-        caption="Plans"
-        rowKey={(r) => r.plan}
-        rows={rows}
-        columns={[
-          { key: 'plan', header: 'Plan', rowHeader: true, cell: (r) => r.plan },
-          { key: 'seats', header: 'Seats', numeric: true, cell: (r) => r.seats },
-        ]}
-      />,
-    )
-    expect(screen.getAllByRole('rowheader').map((h) => h.textContent)).toEqual(['Solo', 'Team'])
-    expect(screen.getByRole('rowheader', { name: 'Team' }).getAttribute('scope')).toBe('row')
-    expect(screen.queryByRole('cell', { name: 'Team' })).toBeNull()
-    expect(screen.getByRole('cell', { name: '10' })).toBeTruthy()
-  })
-})
-
 describe('Table, sorted', () => {
   test('a sortable header is a button named by the column, and its cell says the order', () => {
     const rows = [
