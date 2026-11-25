@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useT } from '../i18n'
+import { Button } from '../ui/Button'
 import { liveURL, loadRFB, type RFB, type RFBConstructor } from './novnc'
 
 type State = 'loading' | 'connecting' | 'connected' | 'closed' | 'failed'
@@ -76,27 +77,26 @@ export function LiveView({
 
   const label = LABEL[state]
   return (
-    <div className="tt-live" data-interactive={interactive || undefined}>
+    <div className="ui-browser-live" data-interactive={interactive || undefined}>
       {label && (
-        <p className="tt-muted tt-small" role="status">
+        <p className="ui-browser-note" role="status">
           {t(label)}{' '}
           {(state === 'closed' || state === 'failed') && (
-            <button
-              type="button"
-              className="tt-button"
+            <Button
+              size="sm"
               onClick={() => {
                 setState('loading')
                 setAttempt((n) => n + 1)
               }}
             >
               {t('browser.live.reconnect')}
-            </button>
+            </Button>
           )}
         </p>
       )}
       <div
         ref={screen}
-        className="tt-live-screen"
+        className="ui-browser-screen"
         role="img"
         aria-label={interactive ? t('browser.live.yours') : t('browser.live.watching')}
       />

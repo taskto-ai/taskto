@@ -1,0 +1,80 @@
+/* The agent browser in a conversation: the agent's request to take over, and the panel with the
+   live view. Both sit in the conversation's column of notices, at its reading width. */
+
+@layer screens {
+  .ui-browser-help {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .ui-browser-help-said {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-browser-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-block-start: var(--space-3);
+  }
+
+  .ui-browser {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border: var(--line-thin) solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+  }
+
+  .ui-browser-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .ui-browser-title {
+    flex: 1;
+    min-inline-size: 0;
+  }
+
+  .ui-browser-note {
+    margin: 0;
+    font: var(--type-small);
+    color: var(--color-text-muted);
+  }
+
+  .ui-browser-start {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .ui-browser-live {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  /* noVNC scales the screen to fit this box (scaleViewport). */
+  .ui-browser-screen {
+    block-size: min(45vh, 460px);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-sunken);
+    overflow: hidden;
+  }
+
+  .ui-browser-live[data-interactive] .ui-browser-screen {
+    outline: var(--line-focus) solid var(--color-focus);
+  }
+
+  @media (max-width: 40rem) {
+    .ui-browser-screen {
+      block-size: 40vh;
+    }
+  }
+}
