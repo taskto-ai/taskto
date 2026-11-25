@@ -812,6 +812,9 @@ logs how many records it removed. What it does and doesn't touch:
 - Only records deleted before the window are removed. A live record is never touched, and
   restoring a record inside the window starts its time again if it is deleted later.
 - A record with an effect (a card, a document) still waiting to run is kept until it has run.
+- The newest record of the whole server is kept, even past the window, until a newer one exists,
+  so that the id of a removed record is never given to another (a change still queued on a phone
+  for the removed one can't land on a different record).
 - The receipts of the operations that made a record, which let a phone that was offline send a
   change again safely, are kept for their own 30 days whatever the window, so a late replay is
   answered as it would be (its record may be gone: [docs/offline.md](offline.md)).

@@ -129,12 +129,19 @@ func TestAnInsertAndDeleteLoopDoesNotGrowWithoutBound(t *testing.T) {
 		w.add(w.alice, s, a, d, "1")
 		id, _ := w.idOf(w.alice, s, a, d)
 		expect(t, w.act(w.alice, s, a, "delete_expense", map[string]any{"id": id}, nil), http.StatusOK)
+		// The deletion is stamped by the real clock; stamp it with the simulated day instead.
+		if _, err := w.e.db.Exec(`UPDATE app_rows SET deleted_at = ? WHERE id = ?`, w.e.s.stamp(w.e.s.clock()), id); err != nil {
+			t.Fatal(err)
+		}
 		w.purge()
 		rows := w.count(`SELECT count(*) FROM app_rows WHERE app_id = ?`, a.ID)
 		history := w.count(`SELECT count(*) FROM app_row_history WHERE app_id = ?`, a.ID)
-		// The window holds a week of days, and each record has two history entries.
-		if rows > 8 || history > 16 {
-			t.Fatalf("day %d: %d rows and %d history entries are kept", i, rows, history)
+		// A record goes once it is older than the window, and the clock is read afresh each day,
+		// so the one deleted exactly seven days ago is just past it: today's and the six before
+		// are kept, each with two history entries; before the window is full, all of them.
+		want := min(i+1, 7)
+		if rows != want || history != 2*want {
+			t.Fatalf("day %d: %d rows and %d history entries are kept, want %d and %d", i, rows, history, want, 2*want)
 		}
 	}
 }
@@ -179,6 +186,7 @@ func TestAReceiptOutlivesItsPurgedRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect(t, w.act(w.alice, s, a, "delete_expense", map[string]any{"id": id}, nil), http.StatusOK)
+	w.add(w.alice, s, a, "newer", "1")
 
 	w.at(day(91))
 	if n := w.purge(); n != 1 {
@@ -189,8 +197,8 @@ func TestAReceiptOutlivesItsPurgedRecord(t *testing.T) {
 		t.Fatalf("the receipt is gone or still names the record: %v, %v", record, err)
 	}
 	press() // answered from the receipt: no second record
-	if n := w.count(`SELECT count(*) FROM app_rows WHERE app_id = ?`, a.ID); n != 0 {
-		t.Fatalf("the replay made %d records", n)
+	if n := w.count(`SELECT count(*) FROM app_rows WHERE app_id = ?`, a.ID); n != 1 {
+		t.Fatalf("the replay made records: %d rows, want the newer one", n)
 	}
 }
 
@@ -214,6 +222,7 @@ func TestARecordWithAnEffectThatWaitsIsKept(t *testing.T) {
 		t.Fatal(err)
 	}
 	effectID, _ := effect.LastInsertId()
+	w.add(w.alice, s, a, "newer", "1")
 
 	w.at(day(91))
 	if n := w.purge(); n != 0 {
@@ -246,6 +255,7 @@ func TestAPurgedRecordsPhotosAreSweptAway(t *testing.T) {
 	if len(w.files(s, a)) == 0 {
 		t.Fatal("no files were stored")
 	}
+	w.recordWith(w.alice, s, a)
 
 	w.at(day(91))
 	if n := w.purge(); n != 1 {
@@ -282,5 +292,34 @@ func TestAHistoryKeepsItsNewestRevisions(t *testing.T) {
 	// The record itself and its history's route are as ever.
 	if got := decode[History](t, w.history(w.alice, s, a, id)); len(got.History) == 0 || got.History[0].Revision != int64(newest) {
 		t.Fatalf("history = %+v", got.History)
+	}
+}
+
+// The newest row is kept past the window until a newer one exists, so the id of a purged record is
+// never taken by another: a stale change that names it finds nothing.
+func TestAPurgedRecordsIDIsNeverGivenAgain(t *testing.T) {
+	w := newWorld(t)
+	s := w.shared
+	a := w.editable(w.alice, s)
+	w.add(w.alice, s, a, "first", "1")
+	first, _ := w.idOf(w.alice, s, a, "first")
+	expect(t, w.act(w.alice, s, a, "delete_expense", map[string]any{"id": first}, nil), http.StatusOK)
+
+	w.at(day(91))
+	if n := w.purge(); n != 0 {
+		t.Fatalf("purged %d, the newest row of the table stays", n)
+	}
+	w.add(w.alice, s, a, "second", "2")
+	second, _ := w.idOf(w.alice, s, a, "second")
+	if second <= first {
+		t.Fatalf("the new record has id %d, not after %d", second, first)
+	}
+	if n := w.purge(); n != 1 {
+		t.Fatalf("purged %d once a newer row exists", n)
+	}
+	// A change that names the purged record is refused, and the new one is as it was.
+	expect(t, w.act(w.alice, s, a, "edit_expense", map[string]any{"id": first, "amount": "9"}, nil), http.StatusUnprocessableEntity)
+	if _, rev := w.idOf(w.alice, s, a, "second"); rev != 1 {
+		t.Fatalf("the new record is at revision %d", rev)
 	}
 }
