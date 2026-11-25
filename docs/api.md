@@ -1205,7 +1205,7 @@ membership of it, and of the workspace as an admin, is checked. A space whose me
 stops there and is listed in the manifest as `access_lost`; what was read while the admin was a
 member stays in the zip, as whole files. The membership is read in the same snapshot as each page
 of boards, each page of a board's cards and each card, and checked again once a document is open,
-before it goes into the zip. An admin who is no longer an admin ends the export: that is checked
+before it goes into the zip. An admin who is no longer an admin (demoted, removed or disabled) ends the export: that is checked
 before each page of members, board, card, app and document, and once more before the zip is
 closed, so what is left is a truncated zip that doesn't open, as for any export that fails.
 

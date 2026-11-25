@@ -465,7 +465,8 @@ func (ex *run) adminIn(ctx context.Context, q interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }) error {
 	var admin int
-	err := q.QueryRowContext(ctx, `SELECT count(*) FROM memberships WHERE workspace_id = ? AND user_id = ? AND role = ?`,
+	err := q.QueryRowContext(ctx, `SELECT count(*) FROM memberships m JOIN users u ON u.id = m.user_id
+		WHERE m.workspace_id = ? AND m.user_id = ? AND m.role = ? AND u.disabled_at IS NULL`,
 		ex.ws.WorkspaceID, ex.user.ID, string(auth.RoleAdmin)).Scan(&admin)
 	if err != nil {
 		return fmt.Errorf("checking the admin: %w", err)

@@ -523,7 +523,7 @@ func TestWorkspaceExportChecksTheSpaceAgainAfterOpeningADocument(t *testing.T) {
 	// (the fourth) before the file is opened: the next check of the admin after it is the one that
 	// has to end the document's part in the zip.
 	s.onNth("FROM spaces s", 4, func() {
-		s.hooks.BeforeQuery("AND role = ?", func() {
+		s.hooks.BeforeQuery("m.role = ? AND u.disabled_at IS NULL", func() {
 			s.exec(`DELETE FROM space_members WHERE space_id = ? AND user_id = ?`, s.team, s.alice.id)
 		})
 	})

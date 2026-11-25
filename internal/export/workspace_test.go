@@ -71,7 +71,7 @@ func armNth(h *db.Hooks, fragment string, n int, fn func()) {
 func TestWorkspaceExportChecksTheAdminBeforeTheZipIsClosed(t *testing.T) {
 	ex, sqlDB, hooks := memberless(t, 0)
 	// The members' two checks, then the last one: demoted before it.
-	armNth(hooks, "AND role = ?", 3, func() {
+	armNth(hooks, "m.role = ? AND u.disabled_at IS NULL", 3, func() {
 		if _, err := sqlDB.Exec(`UPDATE memberships SET role = 'member' WHERE user_id = ?`, ex.user.ID); err != nil {
 			t.Error(err)
 		}
@@ -87,7 +87,7 @@ func TestWorkspaceExportChecksTheAdminBeforeTheZipIsClosed(t *testing.T) {
 func TestWorkspaceExportChecksTheAdminForEachPageOfMembers(t *testing.T) {
 	ex, sqlDB, hooks := memberless(t, membersPage+3)
 	// Checks: the first of members, the first page's, then the second page's: demoted before it.
-	armNth(hooks, "AND role = ?", 3, func() {
+	armNth(hooks, "m.role = ? AND u.disabled_at IS NULL", 3, func() {
 		if _, err := sqlDB.Exec(`UPDATE memberships SET role = 'member' WHERE user_id = ?`, ex.user.ID); err != nil {
 			t.Error(err)
 		}
@@ -104,5 +104,19 @@ func TestWorkspaceExportChecksTheAdminForEachPageOfMembers(t *testing.T) {
 	var out bytes.Buffer
 	if err := ex.write(t.Context(), &out); !errors.Is(err, errNotAdmin) {
 		t.Fatalf("export = %v, want errNotAdmin", err)
+	}
+}
+
+// An admin whose account is disabled while the export runs is no admin of it any more.
+func TestWorkspaceExportChecksTheAdminAccountIsNotDisabled(t *testing.T) {
+	ex, sqlDB, hooks := memberless(t, 0)
+	armNth(hooks, "m.role = ? AND u.disabled_at IS NULL", 3, func() {
+		if _, err := sqlDB.Exec(`UPDATE users SET disabled_at = CURRENT_TIMESTAMP WHERE id = ?`, ex.user.ID); err != nil {
+			t.Error(err)
+		}
+	})
+	var out bytes.Buffer
+	if err := ex.write(t.Context(), &out); !errors.Is(err, errNotAdmin) {
+		t.Fatalf("an export whose admin was disabled at its end = %v, want errNotAdmin", err)
 	}
 }
