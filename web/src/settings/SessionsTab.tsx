@@ -5,11 +5,17 @@
 import { api, type Session } from '../api'
 import { type T, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, ConfirmButton, useAction } from './parts'
+import { Badge } from '../ui/Badge'
+import { Button } from '../ui/Button'
+import { useConfirm } from '../ui/ConfirmDialog'
+import { Panel } from '../ui/Panel'
+import { Row, Rows } from '../ui/Rows'
+import { Alert, Loading, SettingsTab, useAction } from './parts'
 
 export function SessionsTab() {
   const sessions = useLoad(() => api<{ sessions: Session[] }>('/api/me/sessions').then((r) => r.sessions), [])
   const action = useAction()
+  const [confirmDialog, confirm] = useConfirm()
   const f = useFormat()
   const t = useT()
 
@@ -19,65 +25,80 @@ export function SessionsTab() {
       sessions.reload()
       return ok
     })
-  const revoke = (s: Session) => run(() => api(`/api/me/sessions/${s.id}`, { method: 'DELETE' }))
-  const revokeOthers = () => run(() => api('/api/me/sessions', { method: 'DELETE' }))
+  const revoke = async (s: Session, device: string) => {
+    const yes = await confirm({
+      title: t('settings.sessions.revokeQuestion', { name: device }),
+      confirmLabel: t('settings.sessions.revokeConfirm'),
+      tone: 'danger',
+    })
+    if (yes) run(() => api(`/api/me/sessions/${s.id}`, { method: 'DELETE' }))
+  }
+  const revokeOthers = async () => {
+    const yes = await confirm({
+      title: t('settings.sessions.revokeOthersQuestion'),
+      confirmLabel: t('settings.sessions.revokeOthersConfirm'),
+      tone: 'danger',
+    })
+    if (yes) run(() => api('/api/me/sessions', { method: 'DELETE' }))
+  }
   const others = sessions.data?.filter((s) => !s.current).length ?? 0
 
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-sessions">
-        <h2 id="tt-sessions">{t('settings.sessions.title')}</h2>
-        <p className="tt-muted tt-small">{t('settings.sessions.intro')}</p>
-        <Alert error={sessions.error ?? action.error} />
-        {!sessions.data && !sessions.error && <p className="tt-muted">{t('app.loading')}</p>}
-        {sessions.data && (
-          <ul className="tt-rows" aria-label={t('settings.sessions.yours')}>
+    <SettingsTab
+      title={t('settings.sessions.title')}
+      help={t('settings.sessions.intro')}
+      actions={
+        others > 0 && (
+          <Button variant="danger" disabled={action.busy} onClick={revokeOthers}>
+            {t('settings.sessions.revokeOthers')}
+          </Button>
+        )
+      }
+    >
+      <Alert error={sessions.error ?? action.error} />
+      {!sessions.data && !sessions.error && <Loading />}
+      {sessions.data && (
+        <Panel>
+          <Rows label={t('settings.sessions.yours')}>
             {sessions.data.map((s) => {
               const device = deviceName(t, s)
               return (
-                <li key={s.id} className="tt-row">
-                  <div className="tt-row-main">
-                    <strong>
-                      {device}
-                      {s.current && <span className="tt-badge"> {t('settings.sessions.current')}</span>}
-                    </strong>
-                    <span className="tt-muted tt-small">
-                      {t('settings.sessions.created', { date: f.dateTime(s.created_at) })}
-                      {' · '}
-                      {t('settings.sessions.lastSeen', { when: f.relative(s.last_seen_at) })}
-                    </span>
-                  </div>
-                  {!s.current && (
-                    <div className="tt-row-actions">
-                      <ConfirmButton
-                        label={t('settings.sessions.revoke')}
-                        name={device}
-                        question={t('settings.sessions.revokeQuestion', { name: device })}
-                        confirm={t('settings.sessions.revokeConfirm')}
+                <Row
+                  key={s.id}
+                  title={device}
+                  detail={`${t('settings.sessions.created', { date: f.dateTime(s.created_at) })} · ${t(
+                    'settings.sessions.lastSeen',
+                    { when: f.relative(s.last_seen_at) },
+                  )}`}
+                  status={
+                    s.current && (
+                      <Badge tone="success" dot>
+                        {t('settings.sessions.current')}
+                      </Badge>
+                    )
+                  }
+                  actions={
+                    !s.current && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={t('common.labelFor', { label: t('settings.sessions.revoke'), name: device })}
                         disabled={action.busy}
-                        onConfirm={() => revoke(s)}
-                      />
-                    </div>
-                  )}
-                </li>
+                        onClick={() => revoke(s, device)}
+                      >
+                        {t('settings.sessions.revoke')}
+                      </Button>
+                    )
+                  }
+                />
               )
             })}
-          </ul>
-        )}
-        {sessions.data &&
-          (others > 0 ? (
-            <ConfirmButton
-              label={t('settings.sessions.revokeOthers')}
-              question={t('settings.sessions.revokeOthersQuestion')}
-              confirm={t('settings.sessions.revokeOthersConfirm')}
-              disabled={action.busy}
-              onConfirm={revokeOthers}
-            />
-          ) : (
-            <p className="tt-muted tt-small">{t('settings.sessions.noOthers')}</p>
-          ))}
-      </section>
-    </div>
+          </Rows>
+        </Panel>
+      )}
+      {sessions.data && others === 0 && <p className="settings-muted">{t('settings.sessions.noOthers')}</p>}
+      {confirmDialog}
+    </SettingsTab>
   )
 }
 

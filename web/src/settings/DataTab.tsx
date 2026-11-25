@@ -7,7 +7,10 @@
 
 import { api, exportPath, workspaceExportPath } from '../api'
 import { useT } from '../i18n'
-import { Alert, useAction } from './parts'
+import { Button } from '../ui/Button'
+import { Notice } from '../ui/Notice'
+import { Panel } from '../ui/Panel'
+import { Alert, FormActions, Section, SettingsTab, useAction } from './parts'
 
 export function DataTab({ workspace, admin = false }: { workspace: number; admin?: boolean }) {
   const t = useT()
@@ -20,40 +23,40 @@ export function DataTab({ workspace, admin = false }: { workspace: number; admin
   const start = () => action.run(startAt(exportPath(workspace)))
   const startWorkspace = () => wsAction.run(startAt(workspaceExportPath(workspace)))
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-data">
-        <h2 id="tt-data">{t('settings.data.title')}</h2>
-        <p className="tt-muted tt-small">{t('settings.data.intro')}</p>
-        <ul>
-          <li>{t('settings.data.documents')}</li>
-          <li>{t('settings.data.boards')}</li>
-          <li>{t('settings.data.conversations')}</li>
-          <li>{t('settings.data.apps')}</li>
-        </ul>
-        <p className="tt-muted tt-small">{t('settings.data.scope')}</p>
-        <p className="tt-muted tt-small">{t('settings.data.never')}</p>
-        <Alert error={action.error} />
-        <p>
-          <button type="button" className="tt-button tt-primary" onClick={start} disabled={action.busy}>
-            {t('settings.data.download')}
-          </button>
-        </p>
-        <p className="tt-hint">{t('settings.data.limit')}</p>
-      </section>
+    <SettingsTab title={t('settings.tabs.data')} help={t('settings.help.data')}>
+      <Section title={t('settings.data.title')} help={t('settings.data.intro')}>
+        <Panel padded className="settings-panel-body">
+          <ul className="settings-list">
+            <li>{t('settings.data.documents')}</li>
+            <li>{t('settings.data.boards')}</li>
+            <li>{t('settings.data.conversations')}</li>
+            <li>{t('settings.data.apps')}</li>
+          </ul>
+          <p className="settings-muted">{t('settings.data.scope')}</p>
+          <p className="settings-muted">{t('settings.data.never')}</p>
+          <Alert error={action.error} />
+          <FormActions>
+            <Button variant="primary" icon="down" onClick={start} loading={action.busy}>
+              {t('settings.data.download')}
+            </Button>
+          </FormActions>
+          <p className="settings-muted">{t('settings.data.limit')}</p>
+        </Panel>
+      </Section>
       {admin && (
-        <section className="tt-panel" aria-labelledby="tt-data-workspace">
-          <h2 id="tt-data-workspace">{t('settings.data.workspace.title')}</h2>
-          <p className="tt-muted tt-small">{t('settings.data.workspace.intro')}</p>
-          <p className="tt-muted tt-small">{t('settings.data.workspace.scope')}</p>
-          <Alert error={wsAction.error} />
-          <p>
-            <button type="button" className="tt-button tt-primary" onClick={startWorkspace} disabled={wsAction.busy}>
-              {t('settings.data.workspace.download')}
-            </button>
-          </p>
-          <p className="tt-hint">{t('settings.data.workspace.limit')}</p>
-        </section>
+        <Section title={t('settings.data.workspace.title')} help={t('settings.data.workspace.intro')}>
+          <Panel padded className="settings-panel-body">
+            <Notice tone="info">{t('settings.data.workspace.scope')}</Notice>
+            <Alert error={wsAction.error} />
+            <FormActions>
+              <Button icon="down" onClick={startWorkspace} loading={wsAction.busy}>
+                {t('settings.data.workspace.download')}
+              </Button>
+            </FormActions>
+            <p className="settings-muted">{t('settings.data.workspace.limit')}</p>
+          </Panel>
+        </Section>
       )}
-    </div>
+    </SettingsTab>
   )
 }

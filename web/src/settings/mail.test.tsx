@@ -5,6 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import type { MailStatus, Me, Workspace } from '../api'
 import { setPreferences } from '../i18n'
 import { fakeFetch } from '../test/fakes'
+import { resetToasts } from '../ui/Toast'
 import { SettingsPage } from './SettingsPage'
 
 const me: Me = {
@@ -18,6 +19,7 @@ const admin: Workspace = { id: 1, name: 'Home', role: 'admin' }
 const member: Workspace = { id: 1, name: 'Home', role: 'member' }
 
 afterEach(() => {
+  act(() => resetToasts())
   cleanup()
   vi.unstubAllGlobals()
 })
@@ -43,7 +45,8 @@ test('admins see where the server sends email through, and send a test to their 
   expect(screen.getByText(/The test goes to your own address, owner@example.com/)).toBeTruthy()
 
   fireEvent.click(screen.getByRole('button', { name: 'Send a test email' }))
-  expect((await screen.findByRole('status')).textContent).toMatch(/Test email sent to owner@example.com/)
+  // Said in a toast.
+  expect(await screen.findByText(/Test email sent to owner@example.com/)).toBeTruthy()
   // The request names no recipient: the server sends to the caller.
   expect(calls.filter((c) => c.method === 'POST').map((c) => [c.path, c.body])).toEqual([
     ['/api/workspaces/1/mail/test', {}],

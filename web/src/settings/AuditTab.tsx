@@ -7,7 +7,14 @@ import { useMemo, useRef, useState } from 'react'
 import { type AuditEntry, type AuditPage, api, type Member, ws } from '../api'
 import { type Format, has, type Key, useFormat, useT } from '../i18n'
 import { useLoad } from '../load'
-import { Alert, useAction } from './parts'
+import { Button } from '../ui/Button'
+import { EmptyState } from '../ui/EmptyState'
+import { Field } from '../ui/Field'
+import { Input } from '../ui/Input'
+import { Panel } from '../ui/Panel'
+import { Select } from '../ui/Select'
+import { Table } from '../ui/Table'
+import { Alert, FormActions, Loading, SettingsTab, useAction } from './parts'
 
 // Every action the server records (internal/audit/actions.go): a test checks that this list, the
 // server's and both languages' labels agree.
@@ -178,90 +185,98 @@ export function AuditTab({ workspace }: { workspace: number }) {
   const filtered = Object.values(filters).some(Boolean)
 
   return (
-    <div className="tt-settings">
-      <section className="tt-panel" aria-labelledby="tt-audit">
-        <h2 id="tt-audit">{t('settings.audit.title')}</h2>
-        <p className="tt-muted">{t('settings.audit.help')}</p>
-        <form className="tt-form tt-inline tt-audit-filters" onSubmit={(e) => e.preventDefault()}>
-          <label>
-            {t('settings.audit.filters.action')}
-            <select value={filters.action} onChange={(e) => change({ action: e.target.value })}>
-              <option value="">{t('settings.audit.filters.any')}</option>
-              {actions.map((a) => (
-                <option key={a} value={a}>
-                  {t(actionKey(a))}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t('settings.audit.filters.actor')}
-            <select value={filters.actor} onChange={(e) => change({ actor: e.target.value })}>
-              <option value="">{t('settings.audit.filters.anyone')}</option>
-              {(members.data ?? []).map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t('settings.audit.filters.target')}
-            <select value={filters.target} onChange={(e) => change({ target: e.target.value })}>
-              <option value="">{t('settings.audit.filters.any')}</option>
-              {AUDIT_TARGETS.map((x) => (
-                <option key={x} value={x}>
-                  {t(targetKey(x))}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t('settings.audit.filters.from')}
-            <input
-              type="date"
-              value={filters.from}
-              max={filters.to || undefined}
-              onChange={(e) => change({ from: e.target.value })}
-            />
-          </label>
-          <label>
-            {t('settings.audit.filters.to')}
-            <input
-              type="date"
-              value={filters.to}
-              min={filters.from || undefined}
-              onChange={(e) => change({ to: e.target.value })}
-            />
-          </label>
-          <div className="tt-row-actions">
-            <button type="button" className="tt-button" disabled={!filtered} onClick={() => change(NONE)}>
-              {t('settings.audit.filters.clear')}
-            </button>
-            <button type="button" className="tt-button" onClick={refresh}>
-              {t('settings.audit.refresh')}
-            </button>
+    <SettingsTab title={t('settings.audit.title')} help={t('settings.help.audit')}>
+      <p className="settings-muted">{t('settings.audit.help')}</p>
+      <Panel padded>
+        <form
+          className="settings-form"
+          onSubmit={(e) => e.preventDefault()}
+          aria-label={t('settings.audit.filters.title')}
+        >
+          <div className="settings-filters">
+            <Field label={t('settings.audit.filters.action')}>
+              <Select value={filters.action} onChange={(e) => change({ action: e.target.value })}>
+                <option value="">{t('settings.audit.filters.any')}</option>
+                {actions.map((a) => (
+                  <option key={a} value={a}>
+                    {t(actionKey(a))}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label={t('settings.audit.filters.actor')}>
+              <Select value={filters.actor} onChange={(e) => change({ actor: e.target.value })}>
+                <option value="">{t('settings.audit.filters.anyone')}</option>
+                {(members.data ?? []).map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label={t('settings.audit.filters.target')}>
+              <Select value={filters.target} onChange={(e) => change({ target: e.target.value })}>
+                <option value="">{t('settings.audit.filters.any')}</option>
+                {AUDIT_TARGETS.map((x) => (
+                  <option key={x} value={x}>
+                    {t(targetKey(x))}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label={t('settings.audit.filters.from')}>
+              <Input
+                type="date"
+                value={filters.from}
+                max={filters.to || undefined}
+                onChange={(e) => change({ from: e.target.value })}
+              />
+            </Field>
+            <Field label={t('settings.audit.filters.to')}>
+              <Input
+                type="date"
+                value={filters.to}
+                min={filters.from || undefined}
+                onChange={(e) => change({ to: e.target.value })}
+              />
+            </Field>
           </div>
+          <FormActions>
+            <Button variant="ghost" disabled={!filtered} onClick={() => change(NONE)}>
+              {t('settings.audit.filters.clear')}
+            </Button>
+            <Button icon="clock" onClick={refresh}>
+              {t('settings.audit.refresh')}
+            </Button>
+          </FormActions>
         </form>
-        <Alert error={first.error ?? members.error ?? action.error} />
-        {!first.data && !first.error && <p className="tt-muted">{t('app.loading')}</p>}
-        {first.data && events.length === 0 && (
-          <p className="tt-muted">{t(filtered ? 'settings.audit.noMatches' : 'settings.audit.empty')}</p>
-        )}
-        {events.length > 0 && (
-          <ul className="tt-rows" aria-label={t('settings.audit.title')}>
-            {events.map((e) => (
-              <Event key={e.id} e={e} />
-            ))}
-          </ul>
-        )}
-        {next && (
-          <button type="button" className="tt-button" disabled={action.busy} onClick={more}>
+      </Panel>
+      <Alert error={first.error ?? members.error ?? action.error} />
+      {!first.data && !first.error && <Loading lines={5} />}
+      {first.data && events.length === 0 && (
+        <EmptyState title={t(filtered ? 'settings.audit.noMatches' : 'settings.audit.empty')} />
+      )}
+      {events.length > 0 && (
+        <Panel>
+          <Table
+            caption={t('settings.audit.title')}
+            rows={events}
+            rowKey={(e) => e.id}
+            columns={[
+              { key: 'event', header: t('settings.audit.event'), cell: (e) => <Event e={e} /> },
+              { key: 'when', header: t('settings.audit.when'), cell: (e) => <When e={e} /> },
+            ]}
+          />
+        </Panel>
+      )}
+      {next && (
+        <FormActions>
+          <Button loading={action.busy} onClick={more}>
             {t('settings.audit.more')}
-          </button>
-        )}
-      </section>
-    </div>
+          </Button>
+        </FormActions>
+      )}
+    </SettingsTab>
   )
 }
 
@@ -279,18 +294,22 @@ function Event({ e }: { e: AuditEntry }) {
   const f = useFormat()
   const label = has(`settings.audit.actions.${e.action}`) ? t(actionKey(e.action)) : e.action
   return (
-    <li className="tt-row">
-      <div className="tt-row-main">
-        <strong>{label}</strong>
-        <span className="tt-small">{who(e, t)}</span>
-        {e.target_id !== null || e.target_type ? <span className="tt-small tt-muted">{what(e, t)}</span> : null}
-        <Details details={e.details} f={f} />
-      </div>
-      <div className="tt-audit-when tt-small tt-muted">
-        <time dateTime={e.at}>{f.dateTime(e.at)}</time>
-        {e.client_addr && <span>{e.client_addr}</span>}
-      </div>
-    </li>
+    <div className="settings-audit-event">
+      <strong>{label}</strong>
+      <span>{who(e, t)}</span>
+      {e.target_id !== null || e.target_type ? <span className="settings-muted">{what(e, t)}</span> : null}
+      <Details details={e.details} f={f} />
+    </div>
+  )
+}
+
+function When({ e }: { e: AuditEntry }) {
+  const f = useFormat()
+  return (
+    <div className="settings-audit-when">
+      <time dateTime={e.at}>{f.dateTime(e.at)}</time>
+      {e.client_addr && <span>{e.client_addr}</span>}
+    </div>
   )
 }
 
@@ -322,7 +341,7 @@ function Details({ details, f }: { details: AuditEntry['details']; f: Format }) 
     return code(name, v)
   }
   return (
-    <dl className="tt-audit-details tt-small tt-muted">
+    <dl className="settings-audit-details">
       {names.map((n) => (
         <div key={n}>
           <dt>{has(`settings.audit.details.${n}`) ? t(detailKey(n)) : n}</dt>
