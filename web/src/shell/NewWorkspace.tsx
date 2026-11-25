@@ -7,10 +7,14 @@
 // address names it) and opens the workspace. A save the person cancelled that still succeeds made a
 // workspace all the same: the account is updated and a toast says so, with a way to open it, but
 // the page stays where the person is. One that fails after Cancel made nothing, and isn't shown.
+// One that ends after the dialog went with the session (logged out, or the session lost) does
+// nothing at all: no toast and no change of address on the login screen, or in the next person's
+// session.
 
 import { type FormEvent, useEffect, useId, useRef, useState } from 'react'
 import { api, errorText, forAccount, type Me, type Workspace } from '../api'
 import { useT } from '../i18n'
+import { useMounted } from '../mounted'
 import { navigate, routePath } from '../router'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
@@ -47,6 +51,7 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
   // belongs to the opening it was started in, and outlives a Cancel: when it ends, it acts on the
   // dialog only if that same opening is still there (not one opened again since).
   const opening = useRef(0)
+  const mounted = useMounted()
 
   // Each opening starts clean: no name, no error and no save left from one before.
   useEffect(() => {
@@ -70,6 +75,7 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
         headers: forAccount(user),
         body: { name: name.trim() },
       })
+      if (!mounted.current) return
       onMe(me)
       if (still()) {
         onClose()
@@ -82,9 +88,9 @@ export function NewWorkspaceDialog({ open, onClose, user, onMe }: NewWorkspaceDi
         })
       }
     } catch (err) {
-      if (still()) setError(errorText(err))
+      if (mounted.current && still()) setError(errorText(err))
     } finally {
-      if (still()) setBusy(false)
+      if (mounted.current && still()) setBusy(false)
     }
   }
 

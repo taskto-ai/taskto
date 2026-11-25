@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from '../App'
-import type { Me } from '../api'
+import { type Me, SESSION_LOST } from '../api'
 import { setPreferences } from '../i18n'
 import { type BeforeLeave, navigate, useBeforeLeave } from '../router'
 import { fakeFetch } from '../test/fakes'
@@ -1052,4 +1052,184 @@ test('someone with no workspace is offered "New workspace" when the server lets 
   render(<App />)
   await screen.findByText(/member of any workspace/)
   expect(screen.queryByRole('button', { name: 'New workspace' })).toBeNull()
+})
+
+// --- Nothing of a session after it ended ---------------------------------------------------
+
+const created = (id: number, name: string) => ({
+  status: 201,
+  body: {
+    workspace: { id, name, role: 'admin' },
+    user: me.user,
+    workspaces: [...me.workspaces, { id, name, role: 'admin' }],
+    can_create_workspace: true,
+  },
+})
+
+// A create held open until the test answers it.
+function heldCreate(extra: Record<string, unknown> = {}) {
+  const held: ((answer: { status: number; body: unknown }) => void)[] = []
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: { ...me, can_create_workspace: true } },
+    'POST /api/workspaces': () => new Promise((done) => held.push(done)),
+    'POST /api/logout': { status: 204 },
+    'GET /api/workspaces/9/conversations': { body: { conversations: [] } },
+    ...pages,
+    ...extra,
+  })
+  return held
+}
+
+async function submitNewWorkspace(name: string): Promise<HTMLElement> {
+  fireEvent.click(within(await openSwitcher()).getByRole('menuitem', { name: 'New workspace' }))
+  const dialog = await screen.findByRole('dialog', { name: 'New workspace' })
+  fireEvent.change(within(dialog).getByLabelText(/^Name of the new workspace/), { target: { value: name } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create workspace' }))
+  return dialog
+}
+
+test('a workspace made after Cancel and a logout is not said on the login screen, and the address stays', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held = heldCreate()
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  const dialog = await submitNewWorkspace('Secret Project Alpha')
+  await waitFor(() => expect(held).toHaveLength(1))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  await screen.findByRole('heading', { name: 'Log in' })
+  const address = window.location.pathname
+
+  await act(async () => held.shift()?.(created(9, 'Secret Project Alpha')))
+  expect(screen.queryByText(/Secret Project Alpha/)).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Open it' })).toBeNull()
+  expect(window.location.pathname).toBe(address)
+  expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
+})
+
+test('a workspace made after the session was lost with the dialog open neither opens it nor says it', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held = heldCreate()
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  await submitNewWorkspace('Secret Project Alpha')
+  await waitFor(() => expect(held).toHaveLength(1))
+  act(() => {
+    window.dispatchEvent(new Event(SESSION_LOST))
+  })
+  await screen.findByRole('heading', { name: 'Log in' })
+
+  await act(async () => held.shift()?.(created(9, 'Secret Project Alpha')))
+  expect(window.location.pathname).toBe('/w/1/conversations')
+  expect(screen.queryByText(/Secret Project Alpha/)).toBeNull()
+  expect(screen.getByRole('heading', { name: 'Log in' })).toBeTruthy()
+})
+
+test('Cancel then reopened at once: a first save that fails leaves the new opening clean', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held = heldCreate()
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  const first = await submitNewWorkspace('First Try')
+  await waitFor(() => expect(held).toHaveLength(1))
+  fireEvent.click(within(first).getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(within(await openSwitcher()).getByRole('menuitem', { name: 'New workspace' }))
+  const second = await screen.findByRole('dialog', { name: 'New workspace' })
+  expect(within(second).getByRole('button', { name: 'Create workspace' }).getAttribute('aria-busy')).toBeNull()
+  fireEvent.change(within(second).getByLabelText(/^Name of the new workspace/), { target: { value: 'Second' } })
+
+  await act(async () => held.shift()?.({ status: 500, body: { error: 'internal error', code: 'internal' } }))
+  expect(within(second).queryByRole('alert')).toBeNull()
+  expect((within(second).getByLabelText(/^Name of the new workspace/) as HTMLInputElement).value).toBe('Second')
+  expect(within(second).getByRole('button', { name: 'Create workspace' }).getAttribute('aria-busy')).toBeNull()
+  expect(window.location.pathname).toBe('/w/1/conversations')
+})
+
+test('a toast of the session goes when the person logs out', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const held = heldCreate()
+  render(<App />)
+  await screen.findByRole('navigation', { name: 'Sections' })
+  const dialog = await submitNewWorkspace('Late')
+  await waitFor(() => expect(held).toHaveLength(1))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await act(async () => held.shift()?.(created(9, 'Late')))
+  expect(await screen.findByText('“Late” was created.')).toBeTruthy()
+
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Log out' }))
+  await screen.findByRole('heading', { name: 'Log in' })
+  expect(screen.queryByText('“Late” was created.')).toBeNull()
+})
+
+test('a language save refused after logout writes nothing and says nothing, even into the next session', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  const other = { ...me, user: { id: 2, email: 'second@example.com', name: 'Second', locale: 'pt-BR' } }
+  let refuse: () => void = () => {}
+  let session: Me | null = me as Me
+  const calls = fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': () => (session ? { body: session } : { status: 401, body: { error: 'not logged in' } }),
+    'PATCH /api/me': () =>
+      new Promise((done) => {
+        refuse = () => done({ status: 500, body: { error: 'internal error', code: 'internal' } })
+      }),
+    'POST /api/logout': () => {
+      session = null
+      return { status: 204 }
+    },
+    'POST /api/login': () => {
+      session = other as Me
+      return { body: other }
+    },
+    ...pages,
+  })
+  render(<App />)
+  await pickInAccount('Português (Brasil)')
+  await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1))
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Sair' }))
+  await screen.findByRole('heading', { name: 'Entrar' })
+
+  // The next person signs in, in their own language.
+  fireEvent.change(screen.getByLabelText('E-mail'), { target: { value: 'second@example.com' } })
+  fireEvent.change(screen.getByLabelText('Senha'), { target: { value: 'their password' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Entrar' }))
+  await screen.findByRole('navigation', { name: 'Seções' }, { timeout: 5000 })
+  const stored = localStorage.getItem('taskto.locale')
+
+  await act(async () => refuse())
+  expect(screen.queryByText(/^(Não foi salvo|Not saved): /)).toBeNull()
+  expect(screen.getByRole('navigation', { name: 'Seções' })).toBeTruthy()
+  expect(document.documentElement.lang).toBe('pt-BR')
+  expect(localStorage.getItem('taskto.locale')).toBe(stored)
+  expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1)
+  await act(() => setPreferences({ user: null }))
+})
+
+test('a language save refused on the login screen writes nothing and says nothing', async () => {
+  window.history.replaceState(null, '', '/w/1/conversations')
+  let refuse: () => void = () => {}
+  fakeFetch({
+    'GET /api/setup': { body: { needed: false } },
+    'GET /api/me': { body: me },
+    'PATCH /api/me': () =>
+      new Promise((done) => {
+        refuse = () => done({ status: 500, body: { error: 'internal error', code: 'internal' } })
+      }),
+    'POST /api/logout': { status: 204 },
+    ...pages,
+  })
+  render(<App />)
+  await pickInAccount('Português (Brasil)')
+  await screen.findByRole('navigation', { name: 'Seções' })
+  fireEvent.click(within(await openAccount()).getByRole('menuitem', { name: 'Sair' }))
+  await screen.findByRole('heading', { name: 'Entrar' })
+  const stored = localStorage.getItem('taskto.locale')
+  const lang = document.documentElement.lang
+
+  await act(async () => refuse())
+  expect(screen.queryByText(/^(Não foi salvo|Not saved): /)).toBeNull()
+  expect(localStorage.getItem('taskto.locale')).toBe(stored)
+  expect(document.documentElement.lang).toBe(lang)
+  await act(() => setPreferences({ user: null }))
 })

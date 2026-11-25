@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { automaticLocale, LOCALES, localeName, setPreferences, type T, useLocale } from '../i18n'
+import { useMounted } from '../mounted'
 import { MenuGroup, MenuItem } from '../ui/Menu'
 
 export interface LanguagePick {
@@ -30,6 +31,9 @@ export function useLanguagePick(initial: string, onRefused: (error: unknown) => 
   const saved = useRef(initial)
   const wanted = useRef(initial)
   const saving = useRef(false)
+  // The menu goes with the session: a save that ends after that (logged out, the session lost)
+  // changes nothing in this browser and says nothing, as the language is the next person's now.
+  const mounted = useMounted()
   // A new value from the server (the account's /api/me again) is the one to show and to go
   // back to, unless a pick is still being saved: that value is from before the pick, which
   // stays the one wanted and shown. A value the account already has (this effect's first run,
@@ -45,17 +49,18 @@ export function useLanguagePick(initial: string, onRefused: (error: unknown) => 
   const save = async () => {
     saving.current = true
     try {
-      while (wanted.current !== saved.current) {
+      while (mounted.current && wanted.current !== saved.current) {
         const tag = wanted.current
         try {
           await api('/api/me', { method: 'PATCH', body: { locale: tag } })
           saved.current = tag
         } catch (e) {
+          if (!mounted.current) return
           if (wanted.current !== tag) continue // a later pick replaced it: send that one
           wanted.current = saved.current
           setChoice(saved.current)
           await setPreferences({ user: saved.current || null })
-          refused.current(e)
+          if (mounted.current) refused.current(e)
         }
       }
     } finally {
@@ -66,7 +71,7 @@ export function useLanguagePick(initial: string, onRefused: (error: unknown) => 
     wanted.current = tag
     setChoice(tag)
     await setPreferences({ user: tag || null })
-    if (!saving.current) await save()
+    if (mounted.current && !saving.current) await save()
   }
   return { choice, pick }
 }

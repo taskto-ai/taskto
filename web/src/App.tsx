@@ -4,7 +4,7 @@
 // without, and then the workspace it joined. A password reset link (/reset-password#<token>)
 // sets the password, and signs in.
 
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api, errorText, forAccount, type Me, SESSION_LOST } from './api'
 import { InviteScreen, LoginScreen, ResetPasswordScreen, SetupScreen } from './auth/AuthScreens'
 import { setPreferences, useT } from './i18n'
@@ -19,6 +19,7 @@ import { approvalOf } from './offline/store'
 import { navigate } from './router'
 import { Shell } from './shell/Shell'
 import { reportTimeZone } from './timezone'
+import { clearToasts } from './ui/Toast'
 import { claimDrafts, forgetDrafts } from './uiState'
 
 // The renderer comes with it: loaded only where it is used, and precached, so it opens offline too.
@@ -103,6 +104,16 @@ export function App() {
   }, [load])
 
   const signedIn = session.state === 'in'
+  // The toasts are the signed-in person's: when the session ends (logged out, lost) or becomes
+  // another account's, theirs go, so nothing of one person's ("“Plans” was created.", with a way
+  // to open it) is left on the login screen or in the next person's session.
+  const account = session.state === 'in' || session.state === 'invite' ? (session.me?.user.id ?? null) : null
+  const shown = useRef(account)
+  useEffect(() => {
+    if (shown.current === account) return
+    shown.current = account
+    clearToasts()
+  }, [account])
   // A click on a push in a window that is open already: heard here, not in the shell, so it isn't
   // lost while the login is showing.
   useOpenFromWorker(session.state === 'in' || session.state === 'login' || session.state === 'loading')

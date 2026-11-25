@@ -94,10 +94,12 @@ export function dismissToast(id: number): void {
   set({ items: state.items.filter((i) => i.id !== id) })
 }
 
-// For tests: no toast, nothing being said.
-export function resetToasts(): void {
+// No toast, nothing being said: when the session ends or becomes another account's (App), so one
+// person's toasts never reach the next; and between tests.
+export function clearToasts(): void {
   set({ items: [], said: [] })
 }
+export const resetToasts = clearToasts
 
 const subscribe = (fn: () => void) => {
   listeners.add(fn)
