@@ -2553,7 +2553,8 @@
     "close": "Fechar",
     "moreActions": "Mais ações",
     "dismiss": "Dispensar",
-    "notifications": "Notificações"
+    "notifications": "Notificações",
+    "menuButtonName": "{label}:"
   },
   "gallery": {
     "title": "Sistema de design",
@@ -2776,7 +2777,9 @@
       "labels": "Etiquetas",
       "assignedToMe": "Atribuídos a mim",
       "addColumn": "Adicionar uma coluna",
-      "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo"
+      "headings": "Tamanhos dos papéis tipográficos: a fonte de títulos a partir de 20px, Inter abaixo",
+      "busyAsk": "Excluir e falhar…",
+      "busyFailed": "Não foi possível excluir o app. Nada foi alterado; tente de novo."
     }
   }
 }

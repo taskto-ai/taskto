@@ -3,7 +3,7 @@
 // its buttons set going (AppEffects), its records (AppRecords) and, quietly at the end, its use
 // offline (OfflinePanel). An app that is offline says so, and those who may publish it restore it.
 
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { type App, api, type Space, ws } from '../api'
 import { useT } from '../i18n'
 import { useLoad } from '../load'
@@ -44,6 +44,8 @@ export function LaunchedApp({
   const [actions, setActions] = useState(0)
   const [recordsOpen, setRecordsOpen] = useState(false)
   const recordsId = useId()
+  // The header's way to the records, which takes the keyboard back when the panel is closed from inside.
+  const recordsToggle = useRef<HTMLButtonElement>(null)
   const back = routePath({ workspace, section: 'apps' })
   const t = useT()
   const data = info.data
@@ -83,6 +85,7 @@ export function LaunchedApp({
                 access={data.access}
                 open={recordsOpen}
                 controls={recordsId}
+                ref={recordsToggle}
                 onToggle={() => setRecordsOpen((o) => !o)}
               />
               {writable && data.access.design && (
@@ -134,7 +137,10 @@ export function LaunchedApp({
           <AppRecords
             id={recordsId}
             open={recordsOpen}
-            onClose={() => setRecordsOpen(false)}
+            onClose={() => {
+              setRecordsOpen(false)
+              recordsToggle.current?.focus()
+            }}
             base={base}
             appId={app}
             access={data.access}

@@ -27,6 +27,12 @@ export function modalClosed(dialog: HTMLElement): void {
   changed()
 }
 
+// A modal the browser closed and the component opened again: it is back in the top layer, and
+// what must stay above it (the toasts) goes back on top.
+export function modalReopened(): void {
+  changed()
+}
+
 export function modalOpen(): boolean {
   return modals.length > 0
 }

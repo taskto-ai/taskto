@@ -5,6 +5,8 @@
 // - Buttons: a tab list over panels on the same page (role tablist), the current tab selected.
 //   One tab stop: the arrow keys, Home and End move to a tab and show it. The screen puts each
 //   panel in an element with tabPanelProps(id, value).
+// - Some items with `href` and some without is a mistake: they are drawn as buttons, and in
+//   development an error says so (Tabs can't be half a navigation).
 //
 // Arrow keys follow the writing direction: in right-to-left, ArrowLeft is the next tab.
 
@@ -56,6 +58,9 @@ const isRtl = (el: Element) => getComputedStyle(el).direction === 'rtl'
 export function Tabs({ label, items, value, onChange, id }: TabsProps) {
   const list = useRef<HTMLDivElement>(null)
   const links = items.every((i) => i.href !== undefined)
+  if (import.meta.env.DEV && !links && items.some((i) => i.href !== undefined)) {
+    console.error('Tabs: every item has an href (links) or none has (buttons); these are drawn as buttons.')
+  }
   const auto = useId()
   const base = id ?? auto
 
@@ -74,7 +79,7 @@ export function Tabs({ label, items, value, onChange, id }: TabsProps) {
 
   const content = (item: TabItem) => (
     <>
-      <span>{item.label}</span>
+      <span className="ui-tab-label">{item.label}</span>
       {item.count !== undefined && <span className="ui-tab-count">{item.count}</span>}
     </>
   )

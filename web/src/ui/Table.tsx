@@ -49,8 +49,8 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
     >
       <table className="ui-table">
         <caption className={showCaption ? 'ui-table-caption' : 'ui-visually-hidden'}>{caption}</caption>
-        <thead>
-          <tr>
+        <thead className="ui-table-header">
+          <tr className="ui-table-row">
             {columns.map((c) => (
               <th
                 key={c.key}
@@ -70,7 +70,7 @@ export function Table<T>({ caption, showCaption = false, columns, rows, rowKey }
             ))}
           </tr>
         </thead>
-        <tbody>
+        <tbody className="ui-table-body">
           {rows.map((row) => (
             <tr key={rowKey(row)} className="ui-table-row">
               {columns.map((c) => (

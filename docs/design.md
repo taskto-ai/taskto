@@ -273,19 +273,30 @@ beside it in `@layer components` and `ui-` class names: `Icon`, `Button` and `Bu
   them is 44px.
 - **States are designed.** Hover, focus (the ring), pressed, disabled (a look of its own on the
   neutral ground, never half-opacity) and, where they apply, loading and invalid.
-- **The old element rules leave them alone.** `styles.css` is in no layer, so its rules that
-  style an element by its name (`h1` to `h3`, `p`, `code`, `pre`, `kbd`, `samp`, `a`, `button`,
-  the fields, a checkbox's label, `fieldset`) would beat every component's own style. Every
-  element a component of `web/src/ui/` draws and styles has a class that starts with `ui-` (a
-  control's native element also has `ui-control`), and each of those rules skips such elements:
-  its subject ends with `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no
-  specificity, and the screens' own elements have no `ui-` class, so they are styled exactly as
-  before. `css-check` fails on an element rule outside `web/src/ui/` that can match anywhere and
-  lacks it, unless its `ELEMENT_RULES` list allows it with the reason (the page's `html` and
-  `body`, and what every field should have: the caret's colour, 16px against iOS's zoom, the
-  search field's clear button); `web/src/ui/elementRules.test.tsx` draws every component and checks
-  that no rule of `styles.css` reaches any of them. A rule scoped by an old container (`.tt-x h2`)
-  still reaches a component put inside that container: a rebuilt screen leaves the container behind.
+- **The old stylesheet's rules leave them alone.** `styles.css` is in no layer, so a rule of it
+  that can match an element wherever it is would beat every component's own style: one by an
+  element's name (`h1` to `h3`, `p`, `code`, `pre`, `kbd`, `samp`, `a`, `button`, the fields, a
+  checkbox's or a radio's label, also under `pointer: coarse`, `fieldset`), by a state or a
+  pseudo-element alone (`:focus-visible`, `::placeholder`), by an attribute alone, by `*` or by
+  `:is()`, or under what wraps every page (`#root`, `.tt-shell`, `.tt-body`, `.tt-page`). Every
+  element a component draws has a class that starts with `ui-` (a control's native element also
+  has `ui-control`), and each of those rules skips such elements: its subject carries
+  `:not(:where([class^="ui-"], [class*=" ui-"]))`. `:where()` adds no specificity, and the
+  screens' own elements have no `ui-` class, so they are styled exactly as before. Each component
+  draws its own focus ring (`--line-focus` in `--color-focus`, 3:1 on every ground). `css-check`
+  fails on such a rule outside `web/src/ui/` without it, unless its `EVERYWHERE` list allows the
+  selector, only for the properties it names, with the reason. `web/src/ui/elementRules.test.tsx`
+  draws every component (each gallery, and the overlays open) and fails when an element a
+  component draws has no `ui-` class or a rule of `styles.css` reaches one;
+  `web/src/ui/controlRules.test.tsx` checks the controls the same way, and that no rule names a
+  `ui-` class outside `:where()`. A rule scoped by an old container (`.tt-x h2`) still reaches a
+  component put inside that container: a rebuilt screen leaves the container behind.
+- **What reaches every element on purpose** (`EVERYWHERE`): the page's `html` and `body`, border-box
+  sizing, the scrollbars' and the selection's colours, the search field's clear button, and two
+  rules for every field: the caret's colour, and 16px text in a window under 48rem (it keeps iOS
+  from zooming in on focus), with a mouse too. A field then has 16px text beside 14px buttons; its
+  height is set by the control scale, not by its text, so a row still lines up. (On a touch screen
+  a field's text is 16px in any window.)
 - **Headings.** The look of a heading comes from the type roles, not from the element: the display
   face only from 20px up (`--type-display`, 24px: `PageHeader`'s title; `--type-title`, 20px: a
   dialog's and a drawer's title) and Inter below. A screen's own heading is `Heading` (`level` for
@@ -297,7 +308,9 @@ and type roles and every component's specimens, with switches for light and dark
 brand and the direction. It collects every `<Name>.gallery.tsx` beside the components
 (`import.meta.glob`), so a new component adds its own file. It exists on the dev server only:
 `main.tsx` opens it under `import.meta.env.DEV`, so a production build has none of its code. The
-query `?theme=dark&brand=harbor&dir=rtl` sets the switches, for captures.
+query `?theme=dark&brand=harbor&dir=rtl` sets the switches, for captures. Its text goes through
+`t()` like every screen's (`gallery.*` in the locale files), so the gallery can be seen in each
+language.
 
 ## The buttons
 
@@ -372,7 +385,12 @@ and lift (the renderer draws it with no border), a disabled button as Button's f
 than half opacity, and the error text as Field's. So an app's controls are drawn as the component
 library's in light, dark and every brand. `web/src/apps/theme.test.ts` checks that every renderer
 component the server's catalog allows is themed, that each control gets the ring and the touch
-height, and that every colour variable is a role.
+height, and that every colour variable is a role; `web/e2e/app/app-rings.e2e.mjs` checks in
+Chromium that no ring is cut, in a launched app and in a Home widget. A box that clips (one that
+scrolls) cuts what reaches past it: so the row of tabs scrolls sideways only and draws a tab's ring
+inside the tab, the launched app's panel scrolls inside its padding, and a screen in a Home widget
+doesn't scroll itself (the widget's body does) and keeps 8px of room for a ring and the primary's
+lift.
 
 The file is in no layer on purpose. The renderer adopts its defaults (`:where(:root) { … }`) and each
 component's rules (`a2ui-basic-button .a2ui-button { … }`) at run time, in no layer and after the
