@@ -2511,7 +2511,7 @@ last digits.
 ### `GET …/apps/{app}/records/{record}/history`
 
 A record's versions, newest first, at most 200 (`truncated` says if older ones were left
-out): `{"record": {…}, "history": [{"revision": 3, "operation": "update", "data": {…},
+out; a record's history holds its newest 500 versions, and drops the oldest as new ones are made): `{"record": {…}, "history": [{"revision": 3, "operation": "update", "data": {…},
 "at": "…", "by": {"id", "name", "agent", "via"}, "action": "edit_expense"}, …],
 "truncated": false}`. `record` is the record as it is now, with its `revision`, `data`,
 who created, changed and deleted it, and `deleted_at` if it is deleted (its history can
@@ -2522,7 +2522,9 @@ for a role that reads no record.
 ### `GET …/apps/{app}/records/deleted`
 
 The app's deleted records the caller may read, most recently deleted first, at most 1,000
-(`truncated`), in the same shape as `GET …/records`.
+(`truncated`), in the same shape as `GET …/records`. A deleted record is kept for **90 days** by
+default (the operator's `-app-deleted-retention`, or for ever with `off`); after that it is
+removed with its history and its photos, and is no longer listed or restorable.
 
 ### `POST …/apps/{app}/records/{record}/restore`
 
@@ -2533,7 +2535,10 @@ record back, with its history, as a new revision, and answers with it. `409` wit
 the app has no room for it; `400` if it no longer fits the live release's collection, which
 changed since (the field's code, such as `app_field_required`; a draft that isn't published
 doesn't count); `409` with `app_offline` while the app is offline, `409 app_not_published`
-before the first release. The history and deleted routes work for an offline app, whose data is kept.
+before the first release. A record deleted longer ago than the retention window (see
+[the deleted ones](#get-appsapprecordsdeleted)) has been removed, and restoring it is `404`, as for
+a record that never was; restoring inside the window works as ever. The history and deleted routes
+work for an offline app, whose data is kept.
 
 ### `GET …/apps/{app}/roles`
 

@@ -628,3 +628,31 @@ func TestWorkspaceCreationSetting(t *testing.T) {
 		}
 	}
 }
+
+func TestAppDeletedRetention(t *testing.T) {
+	if got := load(t, nil, nil).AppDeletedRetention(); got != 90*24*time.Hour {
+		t.Fatalf("by default %v, want 90 days", got)
+	}
+	file := writeConfig(t, `app_deleted_retention = "30"`)
+	if got := load(t, []string{"-config", file}, nil).AppDeletedRetention(); got != 30*24*time.Hour {
+		t.Fatalf("from the file: %v", got)
+	}
+	env := map[string]string{"TASKTO_APP_DELETED_RETENTION": "14"}
+	if got := load(t, []string{"-config", file}, env).AppDeletedRetention(); got != 14*24*time.Hour {
+		t.Fatalf("env over file: %v", got)
+	}
+	if got := load(t, []string{"-config", file, "-app-deleted-retention", "7"}, env).AppDeletedRetention(); got != 7*24*time.Hour {
+		t.Fatalf("flag over env: %v", got)
+	}
+	if got := load(t, []string{"-app-deleted-retention", "off"}, nil).AppDeletedRetention(); got != 0 {
+		t.Fatalf("off: %v, want 0 (for ever)", got)
+	}
+}
+
+func TestAppDeletedRetentionMustBeDaysOrOff(t *testing.T) {
+	for _, bad := range []string{"0", "-5", "abc", "1.5", "40000", "1y", ""} {
+		if _, err := Load([]string{"-app-deleted-retention", bad}, env(nil), io.Discard); err == nil {
+			t.Errorf("-app-deleted-retention %q accepted", bad)
+		}
+	}
+}

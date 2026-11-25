@@ -211,6 +211,9 @@ type Service struct {
 	// quota refuses an upload that would take its space or workspace over a storage quota
 	// (WithQuota); nil for none.
 	quota *quota.Service
+	// deletedRetention is how long a deleted record is kept before PurgeDeleted removes it; zero
+	// keeps them for ever (retention.go).
+	deletedRetention time.Duration
 }
 
 // outboxHooks are for tests to stop the worker where a crash would.
@@ -227,7 +230,8 @@ type outboxHooks struct {
 
 // New returns the apps service over sqlDB, which must be migrated.
 func New(sqlDB *sql.DB, c *access.Checker) *Service {
-	return &Service{db: sqlDB, access: c, clock: time.Now, wake: make(chan struct{}, 1), thumbs: make(chan struct{}, maxThumbnails)}
+	return &Service{db: sqlDB, access: c, clock: time.Now, wake: make(chan struct{}, 1), thumbs: make(chan struct{}, maxThumbnails),
+		deletedRetention: DefaultDeletedRetention}
 }
 
 // timeFormat matches strftime('%Y-%m-%dT%H:%M:%fZ'), the schema's format for times.
@@ -1430,6 +1434,12 @@ func remember(ctx context.Context, tx *sql.Tx, appID, rowID, revision int64, op,
 		INSERT INTO app_row_history (app_id, row_id, revision, operation, data, at, actor, actor_agent, actor_via, action)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		appID, rowID, revision, op, data, at, actor.UserID, actor.Agent, via(actor), actionColumn(ch))
+	if err != nil || revision <= MaxRevisions {
+		return err
+	}
+	// Only the newest MaxRevisions versions are kept, so a record edited in a loop doesn't grow
+	// its history without bound (retention.go). The row's own data is the newest, always kept.
+	_, err = tx.ExecContext(ctx, `DELETE FROM app_row_history WHERE row_id = ? AND revision <= ?`, rowID, revision-MaxRevisions)
 	return err
 }
 

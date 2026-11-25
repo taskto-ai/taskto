@@ -402,7 +402,14 @@ like an insert does. What is defined, and why:
   revision, and the next change to the record is based on that revision. The screen is drawn again
   with it.
 - **Deleting is the server's soft deletion**: the record is a tombstone there, kept with its
-  history and restorable. A fresh download holds no deleted record, so it removes the copy of one
+  history and restorable for the operator's retention window (90 days by default,
+  `-app-deleted-retention`), after which the server removes it. A change queued for a record
+  that was removed meanwhile is answered `app_row_not_found` like one for a record that never
+  was, so it needs attention as *deleted*, and *Restore it and apply my change* is refused
+  (`404`, *refused*), leaving *Discard my change*; a deletion of it has nothing left to send
+  (*Clear this*). An operation's receipt is kept 30 days whatever the window, so a replay of an
+  insert whose record has been removed since is still answered with the receipt and
+  does not make the record again. A fresh download holds no deleted record, so it removes the copy of one
   (a change waiting for it stays, to be settled below, and a synced change to a record the download
   no longer holds goes with it); a download that was cut at 2000 records doesn't say a record that
   isn't in it is gone.

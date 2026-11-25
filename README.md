@@ -133,6 +133,7 @@ the default.
 | `-dictation-cache` | `TASKTO_DICTATION_CACHE` | `dictation_cache` | `<data-dir>/cache/dictation` | where the local speech model's files are kept |
 | `-addons-dir` | `TASKTO_ADDONS_DIR` | `addons_dir` | `<data-dir>/addons` | where the operator installs add-ons such as Desert Ant Voz ([docs/install.md](docs/install.md#dictation)) |
 | `-audit-retention` | `TASKTO_AUDIT_RETENTION` | `audit_retention` | `365` | days the audit log keeps its events, or `off` to stop deleting them by age (a workspace's events still go when it is deleted; [docs/audit.md](docs/audit.md)) |
+| `-app-deleted-retention` | `TASKTO_APP_DELETED_RETENTION` | `app_deleted_retention` | `90` | days a deleted record of an app stays restorable; after them it and its history are removed, or `off` to keep them for ever ([docs/install.md](docs/install.md#deleted-records-of-apps)) |
 | `-push-contact` | `TASKTO_PUSH_CONTACT` | `push_contact` | `https://taskto.ai` | how browsers' push services can reach whoever runs the server (the VAPID contact): a `mailto:` or `https:` URL ([docs/install.md](docs/install.md#web-push-notifications)) |
 | `-config` | `TASKTO_CONFIG` | | | config file to read |
 | `-version` | | | `false` | Print the version and exit |
