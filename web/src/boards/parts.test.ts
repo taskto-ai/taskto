@@ -82,6 +82,14 @@ test('a newer read adds its comments in order, replaces changed ones and keeps t
   ])
 })
 
+test("a read that renames only a comment's mention replaces the comment", () => {
+  const held = { ...comment(1), mentions: [{ id: 5, name: 'Old name' }] }
+  const have = [held]
+  const merged = withComments(have, [{ ...held, mentions: [{ id: 5, name: 'New name' }] }])
+  expect(merged).not.toBe(have)
+  expect(merged[0].mentions).toEqual([{ id: 5, name: 'New name' }])
+})
+
 test('a read with nothing new gives the same thread back', () => {
   const have = [comment(1), comment(2)]
   expect(withComments(have, [comment(1), comment(2)])).toBe(have)
