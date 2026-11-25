@@ -199,6 +199,43 @@ describe('Tooltip', () => {
   })
 })
 
+describe('Tooltip without content', () => {
+  test('never opens and describes nothing, and the control stays the same element when it comes', () => {
+    const { rerender } = render(
+      <Tooltip content={null}>
+        <button type="button">A long name</button>
+      </Tooltip>,
+    )
+    const b = screen.getByRole('button', { name: 'A long name' })
+    expect(b.hasAttribute('aria-describedby')).toBe(false)
+    fireEvent.pointerEnter(b, { pointerType: 'mouse' })
+    act(() => vi.advanceTimersByTime(OPEN_DELAY_MS))
+    fireEvent.focus(b)
+    expect(isOpen()).toBe(false)
+
+    // Its words come (the name is cut now): the same button, which now opens it.
+    rerender(
+      <Tooltip content="A long name, in full">
+        <button type="button">A long name</button>
+      </Tooltip>,
+    )
+    expect(screen.getByRole('button', { name: 'A long name' })).toBe(b)
+    expect(b.getAttribute('aria-describedby')).toBe(tip().id)
+    fireEvent.pointerLeave(b, { pointerType: 'mouse' })
+    fireEvent.pointerEnter(b, { pointerType: 'mouse' })
+    act(() => vi.advanceTimersByTime(OPEN_DELAY_MS))
+    expect(isOpen()).toBe(true)
+
+    // They go while it is open: it closes.
+    rerender(
+      <Tooltip content="">
+        <button type="button">A long name</button>
+      </Tooltip>,
+    )
+    expect(isOpen()).toBe(false)
+  })
+})
+
 describe('IconButton', () => {
   test('its label is its name and its tooltip, said once', () => {
     render(<IconButton icon="edit" label="Rename" />)

@@ -80,14 +80,13 @@
     block-size: var(--space-4);
     margin: 0;
     accent-color: var(--color-accent);
-    translate: 0 2px;
+    translate: 0 var(--line-strong);
   }
 
   .ui-prose-quote {
     display: grid;
     gap: var(--space-2);
     margin: 0;
-    padding-block: 2px;
     padding-inline: var(--space-4) 0;
     border-inline-start: var(--line-strong) solid var(--color-border-strong);
     color: var(--color-text-muted);
@@ -96,7 +95,7 @@
   .ui-prose-code {
     font: var(--type-code);
     font-size: 0.875em;
-    padding: 1px var(--space-1);
+    padding: 0 var(--space-1);
     border-radius: var(--radius-sm);
     background: var(--color-bg-sunken);
   }
@@ -129,9 +128,13 @@
     justify-self: start;
   }
 
+  /* The prose may break a long word anywhere; a table may not: it keeps its words and numbers
+     whole and scrolls in its box. */
   .ui-prose-table table {
     border-collapse: collapse;
     font: var(--type-ui);
+    overflow-wrap: normal;
+    word-break: normal;
   }
 
   .ui-prose-table :is(th, td) {
@@ -149,6 +152,7 @@
   }
 
   .ui-prose-table :is(th, td)[data-numeric] {
+    white-space: nowrap;
     text-align: end;
     font-variant-numeric: tabular-nums;
   }

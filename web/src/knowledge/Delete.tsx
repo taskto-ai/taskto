@@ -102,7 +102,12 @@ export function Deleted({
     }
   }
   if (!versioned) {
-    return <Notice tone="neutral">{t('knowledge.deleted.unversioned', { path })}</Notice>
+    // Neutral (it can't come back, and that is not an error), and said when it appears.
+    return (
+      <div role="status">
+        <Notice tone="neutral">{t('knowledge.deleted.unversioned', { path })}</Notice>
+      </div>
+    )
   }
   return (
     <Notice

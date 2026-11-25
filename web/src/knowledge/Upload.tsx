@@ -138,7 +138,8 @@ export function Upload({
             <span>{t('knowledge.uploadForm.sending', { name: file.name, size: f.bytes(file.size) })}</span>
           </p>
         )}
-        {error && <Notice tone={exists ? 'warning' : 'danger'}>{error}</Notice>}
+        {/* A refusal, "already exists" too: said at once, as an alert. */}
+        {error && <Notice tone="danger">{error}</Notice>}
       </form>
     </Dialog>
   )

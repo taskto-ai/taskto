@@ -161,7 +161,10 @@ export function History({
                   title={c.message || t(c.change ? CHANGE_LABEL[c.change] : 'knowledge.history.changed')}
                   detail={
                     <>
-                      {`${t(c.change ? CHANGE_LABEL[c.change] : 'knowledge.history.changed')} · ${by}`}
+                      {t('knowledge.history.changeBy', {
+                        change: t(c.change ? CHANGE_LABEL[c.change] : 'knowledge.history.changed'),
+                        by,
+                      })}
                       {removedVersion && (
                         <>
                           <br />

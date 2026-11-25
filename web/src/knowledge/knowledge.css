@@ -1,7 +1,14 @@
-/* The knowledge base: on a wide screen two panes, each scrolling on its own (the documents as a
-   tree on the start side, the open document or the search results on the rest); on a phone one
-   at a time, with a way back. */
+/* The knowledge base: with room, two panes, each scrolling on its own (the documents as a tree
+   on the start side, the open document or the search results on the rest); without, one at a
+   time, with a way back. The room is the page's own (a container query), not the window's: the
+   shell's sidebar takes a share of the window that changes with its width. */
 @layer screens {
+  .kb-frame {
+    container: kb / inline-size;
+    block-size: 100%;
+    min-block-size: 0;
+  }
+
   .kb {
     display: grid;
     grid-template-columns: calc(var(--width-sidebar) + var(--space-16) + var(--space-2)) minmax(0, 1fr);
@@ -40,6 +47,10 @@
     outline: none;
   }
 
+  .kb-side > * {
+    min-inline-size: 0;
+  }
+
   .kb-main {
     min-inline-size: 0;
     min-block-size: 0;
@@ -49,20 +60,31 @@
     outline: none;
   }
 
-  /* The tree. */
+  /* The tree. Its one column is never wider than the side: a long name is cut (with an
+     ellipsis), never the reason the column grows. */
   .kb-tree,
   .kb-tree ul {
     display: grid;
-    gap: 1px;
+    grid-template-columns: minmax(0, 1fr);
     margin: 0;
     padding: 0;
     list-style: none;
   }
 
+  .kb-tree li {
+    min-inline-size: 0;
+  }
+
+  .kb-tree .ui-tooltip-anchor {
+    display: block;
+    min-inline-size: 0;
+  }
+
   .kb-tree-item.ui-button {
     inline-size: 100%;
+    min-inline-size: 0;
     justify-content: flex-start;
-    padding-inline: calc(var(--space-2) + var(--kb-depth, 0) * var(--space-5)) var(--space-2);
+    padding-inline: calc(var(--space-2) + var(--kb-depth, 0) * var(--space-4)) var(--space-2);
     border-radius: var(--radius-md);
     color: var(--color-text-soft);
     font: var(--type-ui);
@@ -294,8 +316,8 @@
     color: var(--color-text-muted);
   }
 
-  /* A narrower window: a narrower column, and its title a size down. */
-  @media (max-width: 1100px) {
+  /* Less room: a narrower column, and its title a size down. */
+  @container kb (max-width: 62rem) {
     .kb {
       grid-template-columns: calc(var(--width-sidebar) + var(--space-12)) minmax(0, 1fr);
     }
@@ -305,9 +327,11 @@
     }
   }
 
-  /* A phone: one pane at a time. The list, with what the space is empty of under it; or the
-     document or the results, with the way back. The page scrolls as one. */
-  @media (max-width: 640px) {
+  /* Too little room for the tree and a document of 28rem beside it (the column, the page's
+     padding and 28rem): one pane at a time. The list, with what the space is empty of or the
+     notice of a delete under it; or the document or the results, with the way back. The page
+     scrolls as one. */
+  @container kb (max-width: 50rem) {
     .kb {
       grid-template-columns: minmax(0, 1fr);
       block-size: auto;
@@ -325,7 +349,7 @@
     }
 
     .kb[data-open="main"] > .kb-side,
-    .kb[data-open="list"] > .kb-main:not(:has(.kb-empty)) {
+    .kb[data-open="list"] > .kb-main:not(:has(.kb-empty, .kb-deleted)) {
       display: none;
     }
 

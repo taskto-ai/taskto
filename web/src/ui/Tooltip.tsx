@@ -45,6 +45,8 @@ function spaceToken(name: string): number {
 type Describable = ReactElement<{ 'aria-describedby'?: string }>
 
 export interface TooltipProps {
+  // Nothing (null, false, '') is no tooltip: it never opens and describes nothing. For a tooltip
+  // that is only sometimes needed (a name only when it is cut), so the control isn't drawn again.
   content: ReactNode
   children: Describable
   describes?: boolean
@@ -84,9 +86,13 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
   const hovered = useRef(false)
   const focused = useRef(false)
   const [open, setOpen] = useState(false)
+  const empty = content === null || content === undefined || content === false || content === ''
+  const isEmpty = useRef(empty)
+  isEmpty.current = empty
 
   const show = useCallback((delay: number) => {
     clearTimeout(timer.current)
+    if (isEmpty.current) return
     if (delay === 0) setOpen(true)
     else timer.current = setTimeout(() => setOpen(true), delay)
   }, [])
@@ -108,6 +114,11 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
     listenForInput()
     return () => clearTimeout(timer.current)
   }, [])
+
+  // Its words went away while it was open: so does it.
+  useEffect(() => {
+    if (empty) hide(0)
+  }, [empty, hide])
 
   // Escape closes it, wherever the focus is, until the control is entered or focused again.
   useEffect(() => {
@@ -189,7 +200,9 @@ export function Tooltip({ content, children, describes = true }: TooltipProps) {
     hide(0)
   }
 
-  const describedBy = [children.props['aria-describedby'], describes ? id : undefined].filter(Boolean).join(' ')
+  const describedBy = [children.props['aria-describedby'], describes && !empty ? id : undefined]
+    .filter(Boolean)
+    .join(' ')
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: a box-less wrapper that hears its control's pointer and focus events; the control is what is interactive.

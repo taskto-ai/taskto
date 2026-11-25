@@ -3,7 +3,7 @@
 // reader, the editor, history). Moving and deleting ask in a dialog. On a phone, or when it was
 // opened from search results, its back button returns there.
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { Doc } from '../api'
 import { useFormat, useT } from '../i18n'
 import { Button } from '../ui/Button'
@@ -68,7 +68,8 @@ export function DocView({
   const isEditing = mode === 'edit' && text !== undefined
   const reportEditing = useRef(onEditing)
   reportEditing.current = onEditing
-  useEffect(() => {
+  // Before the screen is painted, so New and Save are never both primary.
+  useLayoutEffect(() => {
     reportEditing.current?.(isEditing)
     return () => reportEditing.current?.(false)
   }, [isEditing])

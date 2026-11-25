@@ -2000,7 +2000,8 @@
       "removedCount_many": "{count} de versões antigas removidas do histórico.",
       "removedNone": "Não havia versões antigas para remover.",
       "restoreTitle": "Restaurar esta versão?",
-      "restoreQuestion": "{path} volta a ser o que era em {time}. A versão que tem agora fica no histórico."
+      "restoreQuestion": "{path} volta a ser o que era em {time}. A versão que tem agora fica no histórico.",
+      "changeBy": "{change} · {by}"
     },
     "emptyHelp": "Escreva um novo documento ou envie um arquivo.",
     "pick": "Escolha um documento para lê-lo.",
@@ -2685,7 +2686,8 @@
       "personB": "Tomás Oliveira",
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
-      "workspaceName": "Acme Studio"
+      "workspaceName": "Acme Studio",
+      "tooltipEmpty": "Sem conteúdo: nenhuma dica"
     },
     "labels": {
       "onboarding": "integração",

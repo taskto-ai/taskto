@@ -266,7 +266,12 @@ function ResultPages({
           {t('search.results.close')}
         </Button>
       </div>
-      {notice && <NoticeBox tone="neutral">{notice}</NoticeBox>}
+      {/* Something that is off, in the neutral tone, and said when it appears or changes. */}
+      {notice && (
+        <div role="status">
+          <NoticeBox tone="neutral">{notice}</NoticeBox>
+        </div>
+      )}
       {(first.error || error) && <NoticeBox tone="danger">{first.error ?? error}</NoticeBox>}
       {!first.data && !first.error && <Searching label={t('search.results.searching')} />}
       {first.data && results.length === 0 && othersAnswered && nothingElse && (

@@ -4,5 +4,7 @@
 export function focusLost(): boolean {
   const at = document.activeElement
   if (!(at instanceof HTMLElement) || at === document.body || !at.isConnected) return true
+  // Inside a part the page hid (the document behind the results), where the browser can't say.
+  if (at.closest('[hidden]')) return true
   return typeof at.checkVisibility === 'function' && !at.checkVisibility()
 }

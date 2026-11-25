@@ -1987,7 +1987,8 @@
       "removedCount_other": "Removed {count} old versions from the history.",
       "removedNone": "There were no old versions to remove.",
       "restoreTitle": "Restore this version?",
-      "restoreQuestion": "{path} becomes again what it was on {time}. The version it has now stays in its history."
+      "restoreQuestion": "{path} becomes again what it was on {time}. The version it has now stays in its history.",
+      "changeBy": "{change} · {by}"
     },
     "emptyHelp": "Write a new document, or upload a file.",
     "pick": "Choose a document to read it.",
@@ -2663,7 +2664,8 @@
       "personB": "Tomás Oliveira",
       "personC": "Kenji Watanabe",
       "personD": "Priya Natarajan",
-      "workspaceName": "Acme Studio"
+      "workspaceName": "Acme Studio",
+      "tooltipEmpty": "Without content: no tooltip"
     },
     "labels": {
       "onboarding": "onboarding",

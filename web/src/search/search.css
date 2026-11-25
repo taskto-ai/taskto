@@ -59,7 +59,6 @@
   }
 
   .search-snippet mark {
-    padding-inline: 1px;
     border-radius: var(--radius-sm);
     background: var(--color-accent-soft);
     color: var(--color-text);

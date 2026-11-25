@@ -94,7 +94,10 @@ test.each([
   const results = await screen.findByRole('region', { name: 'Search results' })
   // Something that is off is said in the neutral tone: a part of the page, not an alert.
   const said = await within(results).findByText(notice)
-  expect(said.closest('[role="alert"], [role="status"]')).toBeNull()
+  // Announced as a status when it comes, never as an alert, and drawn in the neutral tone.
+  expect(said.closest('[role="status"]')).not.toBeNull()
+  expect(said.closest('[role="alert"]')).toBeNull()
+  expect(said.closest('[data-tone]')?.getAttribute('data-tone')).toBe('neutral')
   expect(within(results).getByText('Nothing found.')).toBeTruthy()
 })
 

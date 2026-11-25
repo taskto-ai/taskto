@@ -6,7 +6,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { fakeFetch } from '../test/fakes'
-import { buildTree } from './DocList'
+import { buildTree, type Folder } from './DocList'
 import { KnowledgePage } from './KnowledgePage'
 
 afterEach(() => {
@@ -61,8 +61,8 @@ test('the tree: folders from the paths, first and in order; a closed one says ho
   expect(notes.getAttribute('aria-expanded')).toBe('true')
   expect(notes.textContent).not.toContain('2 documents')
   // Inside it: its folder first, then its document.
-  const inside = [...(notes.nextElementSibling?.querySelectorAll(':scope > li > button') ?? [])].map(
-    (b) => b.textContent,
+  const inside = [...(notes.closest('li')?.querySelectorAll(':scope > ul > li') ?? [])].map(
+    (li) => li.querySelector('button')?.textContent,
   )
   expect(inside[0]).toMatch(/^2026/)
   expect(inside[1]).toMatch(/^plan\.md/)
@@ -257,4 +257,201 @@ test('a document is read in its own look, a column of numbers set to the end', a
   expect((within(article).getByRole('checkbox', { name: 'Done' }) as HTMLInputElement).disabled).toBe(true)
   expect(within(article).getByText('<b>raw</b>')).toBeTruthy()
   expect(article.querySelector('b')).toBeNull()
+})
+
+// Every document in a tree, as the paths its folders make, each once.
+function paths(folder: Folder): string[] {
+  return [
+    ...folder.files.map((d) => d.path),
+    ...folder.folders.flatMap((f) => {
+      const inside = paths(f)
+      expect(inside.every((p) => p.startsWith(`${f.path}/`))).toBe(true)
+      return inside
+    }),
+  ]
+}
+
+test('the tree holds every document once, under the folders its path names', () => {
+  const deep = Array.from({ length: 16 }, (_, i) => `d${i}`).join('/')
+  const all = [
+    'a',
+    'a/b.md',
+    'a/b/c.md',
+    'x/y/z/w.md',
+    `${deep}/bottom.md`,
+    'with space/a name.md',
+    'dots/v1.2.3.tar.gz',
+    '日本語/メモ.md',
+    'العربية/ملاحظة.md',
+    'top.md',
+  ].map((p) => doc(p))
+  const tree = buildTree(all)
+  expect(paths(tree).sort()).toEqual(all.map((d) => d.path).sort())
+  expect(tree.count).toBe(all.length)
+  // A document and a folder of the same name are both there.
+  expect(tree.files.map((d) => d.path)).toContain('a')
+  const a = tree.folders.find((f) => f.name === 'a') as Folder
+  expect(a.files.map((d) => d.path)).toEqual(['a/b.md'])
+  expect(a.folders.map((f) => f.path)).toEqual(['a/b'])
+  expect(a.count).toBe(2)
+  // Sixteen folders deep, the document is at the bottom of them.
+  let at = tree
+  for (let i = 0; i < 16; i++) at = at.folders.find((f) => f.name === `d${i}`) as Folder
+  expect(at.files.map((d) => d.path)).toEqual([`${deep}/bottom.md`])
+  // Each folder's count is every document under it.
+  expect(tree.folders.find((f) => f.name === 'x')?.count).toBe(1)
+  expect(tree.folders.find((f) => f.name === 'd0')?.count).toBe(1)
+})
+
+test('numbers sort as numbers', () => {
+  const tree = buildTree(['q10.md', 'q2.md', 'q1.md'].map((p) => doc(p)))
+  expect(tree.files.map((d) => d.path)).toEqual(['q1.md', 'q2.md', 'q10.md'])
+})
+
+test('a name the column cuts shows in full in a tooltip, and only then', async () => {
+  const long = 'a-folder-name-that-is-much-too-long-for-the-column-of-the-tree'
+  kb('read', { [`GET ${S}/docs`]: { body: { docs: [doc(`${long}/plan.md`), doc('ideas.md')] } } })
+  // jsdom lays nothing out: a name longer than 30 characters is the one the column cuts.
+  const sw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollWidth')
+  const cw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+  Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.textContent?.length ?? 0
+    },
+  })
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+    configurable: true,
+    get() {
+      return 30
+    },
+  })
+  try {
+    render(<KnowledgePage workspace={1} />)
+    const list = await screen.findByRole('list', { name: 'Documents' })
+    const tip = (name: RegExp) =>
+      within(list).getByRole('button', { name }).closest('li')?.querySelector('[role="tooltip"]')?.textContent
+    await waitFor(() => expect(tip(/^a-folder-name/)).toBe(long))
+    expect(tip(/^ideas\.md/)).toBe('')
+  } finally {
+    if (sw) Object.defineProperty(HTMLElement.prototype, 'scrollWidth', sw)
+    if (cw) Object.defineProperty(HTMLElement.prototype, 'clientWidth', cw)
+  }
+})
+
+test('a folder opened in one space is not open in the next', async () => {
+  fakeFetch({
+    'GET /api/workspaces/1/spaces': { body: { spaces: [space('read'), { ...space('read'), id: 4, name: 'Other' }] } },
+    [`GET ${S}/docs`]: { body: { docs } },
+    'GET /api/workspaces/1/spaces/4/docs': { body: { docs } },
+  })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByRole('list', { name: 'Documents' })
+  fireEvent.click(folder('notes'))
+  expect(folder('notes').getAttribute('aria-expanded')).toBe('true')
+  fireEvent.change(screen.getByLabelText('Space'), { target: { value: '4' } })
+  await waitFor(() => expect(folder('notes').getAttribute('aria-expanded')).toBe('false'))
+})
+
+const ideasResult = {
+  space_id: 3,
+  space_name: 'Team',
+  path: 'ideas.md',
+  title: 'Ideas',
+  snippet: [{ text: 'some ' }, { text: 'ideas', match: true }],
+  score: 1,
+  match: 'text',
+  version: V1,
+  commit: 'c1',
+}
+const searchRoutes = {
+  [`GET ${S}/search`]: { body: { results: [ideasResult], mode: 'fulltext' } },
+  [`GET ${S}/search/cards`]: { body: { results: [] } },
+  [`GET ${S}/search/records`]: { body: { results: [] } },
+}
+function searchFor(q: string) {
+  fireEvent.change(screen.getByLabelText('Search the knowledge base'), { target: { value: q } })
+  fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+}
+
+test('a search made while a document is open shows its results, and the document comes back', async () => {
+  kb('read', searchRoutes)
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  searchFor('ideas')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  await within(results).findByRole('button', { name: 'Ideas' })
+  // The document is behind the results, not shown.
+  expect(screen.queryByRole('article')).toBeNull()
+  expect(article.closest('[hidden]')).not.toBeNull()
+  // Closing the results shows it again.
+  fireEvent.click(within(results).getByRole('button', { name: 'Close' }))
+  expect(screen.getByRole('article', { name: 'ideas.md' })).toBe(article)
+})
+
+test('a search made while editing keeps the unsaved text, and Back to the results keeps it too', async () => {
+  const calls = kb('write', searchRoutes)
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  fireEvent.click(await within(article).findByRole('button', { name: 'Edit' }))
+  fireEvent.change(within(article).getByLabelText('Text'), { target: { value: 'Unsaved words.' } })
+
+  searchFor('ideas')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  await within(results).findByRole('button', { name: 'Ideas' })
+  expect(screen.queryByRole('article')).toBeNull()
+  // The search's Close brings the edit back as it was.
+  fireEvent.click(within(results).getByRole('button', { name: 'Close' }))
+  expect((within(article).getByLabelText('Text') as HTMLTextAreaElement).value).toBe('Unsaved words.')
+
+  // Searching again and opening the same document from the results: the edit is there, and Back
+  // to the results, then their Close, keep it too.
+  searchFor('ideas')
+  const again = await screen.findByRole('region', { name: 'Search results' })
+  fireEvent.click(await within(again).findByRole('button', { name: 'Ideas' }))
+  expect(screen.getByRole('article', { name: 'ideas.md' })).toBe(article)
+  expect((within(article).getByLabelText('Text') as HTMLTextAreaElement).value).toBe('Unsaved words.')
+  fireEvent.click(within(article).getByRole('button', { name: 'Back to the results' }))
+  expect(screen.queryByRole('article')).toBeNull()
+  const third = await screen.findByRole('region', { name: 'Search results' })
+  fireEvent.click(within(third).getByRole('button', { name: 'Close' }))
+  expect((within(article).getByLabelText('Text') as HTMLTextAreaElement).value).toBe('Unsaved words.')
+  expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(0)
+})
+
+test('a delete from a search result is said beside the results, with the keyboard on its Restore', async () => {
+  kb('write', { ...searchRoutes, [`DELETE ${S}/docs/ideas.md`]: { body: { commit: 'c3' } } })
+  render(<KnowledgePage workspace={1} />)
+  await screen.findByRole('list', { name: 'Documents' })
+  searchFor('ideas')
+  const results = await screen.findByRole('region', { name: 'Search results' })
+  fireEvent.click(await within(results).findByRole('button', { name: 'Ideas' }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  await within(article).findByRole('button', { name: 'Edit' })
+  fireEvent.click(within(article).getByRole('button', { name: 'More actions' }))
+  fireEvent.click(within(article).getByRole('menuitem', { name: 'Delete' }))
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
+  const said = await screen.findByText(/Deleted ideas\.md/)
+  // In the pane that shows (the results'), not the list's, which a narrow page hides.
+  const pane = await screen.findByRole('region', { name: 'Search results' })
+  expect(said.closest('.ui-page')).toBe(pane.closest('.ui-page'))
+  expect(said.closest('.kb-side')).toBeNull()
+  expect(said.closest('[hidden]')).toBeNull()
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Restore' }))
+})
+
+test('cancelling the delete question deletes nothing', async () => {
+  const calls = kb('write', { [`DELETE ${S}/docs/ideas.md`]: { body: { commit: 'c3' } } })
+  render(<KnowledgePage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: /^ideas\.md/ }))
+  const article = await screen.findByRole('article', { name: 'ideas.md' })
+  await within(article).findByRole('button', { name: 'Edit' })
+  fireEvent.click(within(article).getByRole('button', { name: 'More actions' }))
+  fireEvent.click(within(article).getByRole('menuitem', { name: 'Delete' }))
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }))
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+  expect(screen.getByRole('article', { name: 'ideas.md' })).toBe(article)
+  expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(0)
 })
