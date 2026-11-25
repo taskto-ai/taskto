@@ -61,6 +61,12 @@
       "version": "{operation} · revision {revision} · {when} · {name}",
       "agent": "{name} (through the agent)",
       "unknownUser": "a removed account",
+      "system": {
+        "generic": "an integration",
+        "named": "{name} (integration)",
+        "providerNamed": "{provider} · {name}",
+        "removed": "an integration that was removed"
+      },
       "synthetic": "Made before history was kept: this is the record as it was then.",
       "versionsTruncated": "Only the {count} latest versions are shown."
     },

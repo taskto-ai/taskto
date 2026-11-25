@@ -441,8 +441,13 @@ export type AvailableApp = {
   defaults: { id: number; kind: 'widget' | 'pin'; widget?: string }[]
 }
 
-// Who made a change to an app's record, through the agent or an access token if so.
-export type RecordAuthor = { id: number; name: string; agent: boolean; via?: string }
+// The server acting on its own, as a record's history shows it: an integration. `provider` and
+// `name` label it once the server can name it, `removed` says it no longer exists.
+export type RecordSystemAuthor = { kind: string; id: number; provider?: string; name?: string; removed?: boolean }
+
+// Who made a change to an app's record, through the agent or an access token if so. A change the
+// server made on its own has `system` and no name.
+export type RecordAuthor = { id: number; name: string; agent: boolean; via?: string; system?: RecordSystemAuthor }
 
 // One record of an app, with its revision and who made, changed and deleted it. `data` holds
 // the fields the app's collection declares.

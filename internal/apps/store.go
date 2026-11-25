@@ -28,12 +28,30 @@ type Actor struct {
 
 // Author is who made something: a user, through the agent if Agent is set, and with the
 // access token named Via if one was used. It is nil in replies if the user's account no
-// longer exists.
+// longer exists. A change the server made on its own (the system writer, system.go) has no
+// user: ID is 0, Name is empty and System says who it was.
 type Author struct {
 	ID    int64  `json:"id"`
 	Name  string `json:"name"`
 	Agent bool   `json:"agent"`
 	Via   string `json:"via,omitempty"`
+	// System is set for a change made by the server, and then only it identifies the author.
+	System *SystemAuthor `json:"system,omitempty"`
+}
+
+// SystemAuthor is the server acting on its own, as a record's history shows it: an integration.
+// Provider and Name label it for people once the integration is known to the store that names
+// it (empty until then: the web app says "an integration"), and Removed is set instead if the
+// integration no longer exists.
+type SystemAuthor struct {
+	// Kind is what acted: "integration".
+	Kind string `json:"kind"`
+	ID   int64  `json:"id"`
+	// Provider is the label of the integration's provider, such as "Stripe".
+	Provider string `json:"provider,omitempty"`
+	// Name is the integration's own name in its workspace.
+	Name    string `json:"name,omitempty"`
+	Removed bool   `json:"removed,omitempty"`
 }
 
 // App is an app as a list shows it; Live and Draft carry definitions when one app is read.
@@ -1409,7 +1427,7 @@ func apply(ctx context.Context, tx *sql.Tx, actor Actor, appID int64, def Defini
 			return applied{}, err
 		}
 		_, err = tx.ExecContext(ctx, `
-			UPDATE app_rows SET data = ?, revision = ?, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?, updated_action = ?
+			UPDATE app_rows SET data = ?, revision = ?, updated_at = ?, updated_by = ?, updated_by_agent = ?, updated_via = ?, updated_action = ?, updated_system = NULL
 			WHERE id = ? AND app_id = ?`,
 			string(raw), cur.revision+1, at, actor.UserID, actor.Agent, via(actor), actionColumn(ch), ch.ID, appID)
 		if err != nil {

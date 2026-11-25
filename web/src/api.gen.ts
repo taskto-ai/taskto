@@ -113,6 +113,7 @@ export type AppsAuthor = {
   name: string
   agent: boolean
   via?: string
+  system?: AppsSystemAuthor
 }
 
 export type AppsAvailableDefault = {
@@ -235,6 +236,14 @@ export type AppsSummary = {
   field?: string
   where?: AppsRule
   month_of?: string
+}
+
+export type AppsSystemAuthor = {
+  kind: string
+  id: number
+  provider?: string
+  name?: string
+  removed?: boolean
 }
 
 export type AppsTemplateRoles = {

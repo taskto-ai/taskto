@@ -217,6 +217,64 @@ test('a restore the server refuses is told, translated', async () => {
   expect(restored).not.toHaveBeenCalled()
 })
 
+test('shows a change the server made on its own as an integration, not as a person', async () => {
+  const system = (over: Record<string, unknown> = {}) => ({
+    id: 0,
+    name: '',
+    agent: false,
+    system: { kind: 'integration', id: 7, ...over },
+  })
+  fakeFetch({
+    [`GET ${base}/records/query`]: {
+      body: page([
+        record(4, 4, { description: 'Lunch' }, { updated_by: system({ provider: 'Stripe', name: 'payments' }) }),
+      ]),
+    },
+    [`GET ${base}/records/4/history`]: {
+      body: {
+        record: record(
+          4,
+          4,
+          { description: 'Lunch' },
+          { updated_by: system({ provider: 'Stripe', name: 'payments' }) },
+        ),
+        history: [
+          { revision: 4, operation: 'update', data: {}, at: '2026-11-04T10:00:00.000Z', by: system({ removed: true }) },
+          {
+            revision: 3,
+            operation: 'update',
+            data: {},
+            at: '2026-11-03T10:00:00.000Z',
+            by: system({ name: 'payments' }),
+          },
+          {
+            revision: 2,
+            operation: 'update',
+            data: {},
+            at: '2026-11-02T10:00:00.000Z',
+            by: system({ provider: 'Stripe', name: 'payments' }),
+            action: 'payment.succeeded',
+          },
+          { revision: 1, operation: 'insert', data: {}, at: '2026-11-01T10:00:00.000Z', by: system() },
+        ],
+        truncated: false,
+      },
+    },
+  })
+  renderRecords()
+  openExplorer()
+  fireEvent.click(await screen.findByRole('button', { name: 'Open record 4' }))
+  const versions = within(await screen.findByRole('list', { name: 'History of record 4' })).getAllByRole('listitem')
+  expect(versions.map((v) => v.textContent)).toEqual([
+    expect.stringContaining('an integration that was removed'),
+    expect.stringContaining('payments (integration)'),
+    expect.stringContaining('Stripe · payments'),
+    expect.stringContaining('an integration'),
+  ])
+  // Never as "a removed account", which is what a version without an author means.
+  for (const v of versions) expect(v.textContent).not.toContain('a removed account')
+})
+
 test('shows the history of a record, and offers no restore or edit without the right to change records', async () => {
   fakeFetch({
     [`GET ${base}/records/query`]: { body: page([record(4, 2, { description: 'Lunch', amount: 12.5 })]) },
