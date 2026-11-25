@@ -132,16 +132,28 @@ func (x *Index) SearchConversations(ctx context.Context, userID, workspaceID int
 		return res, nil
 	}
 	var found []ConversationResult
+	// One allowance of transcripts and one deadline for all the search's attempts: what is left
+	// when they are used stays queued for the background sync, and the search says it is
+	// incomplete.
+	allowance := x.conversationSyncLimit
+	syncCtx, stopSync := context.WithTimeout(ctx, conversationSyncBudget)
+	defer stopSync()
 	for try := 1; ; try++ {
-		_, err := x.syncConversations(ctx, src, userID, workspaceID, conversationSyncMax, conversationSyncBudget)
-		if err != nil {
-			if ctx.Err() != nil {
+		if allowance > 0 && syncCtx.Err() == nil {
+			n, err := x.syncConversations(syncCtx, src, userID, workspaceID, allowance)
+			allowance -= n
+			switch {
+			case ctx.Err() != nil:
 				return ConversationResults{}, ctx.Err()
+			case err != nil && syncCtx.Err() != nil:
+				// Out of time: the rest is for the background sync, and found behind.
+			case err != nil:
+				// What is indexed is still searched: some conversations may be missing.
+				x.log.Warn("search: indexing conversations before a search; its results may be behind", "err", err)
 			}
-			// What is indexed is still searched: some conversations may be missing.
-			x.log.Warn("search: indexing conversations before a search; its results may be behind", "err", err)
 		}
 		var behind bool
+		var err error
 		if found, behind, err = x.findConversations(ctx, userID, workspaceID, match, q); err != nil {
 			return ConversationResults{}, err
 		}
@@ -234,7 +246,7 @@ func (x *Index) syncConversationsInBackground(ctx context.Context) {
 	if src == nil {
 		return
 	}
-	if _, err := x.syncConversations(ctx, src, 0, 0, 0, 0); err != nil && ctx.Err() == nil {
+	if _, err := x.syncConversations(ctx, src, 0, 0, 0); err != nil && ctx.Err() == nil {
 		if errors.Is(err, conversations.ErrNoTranscript) {
 			x.log.Debug("search: the agent runtime can't give conversations' transcripts now", "err", err)
 			return
@@ -249,73 +261,64 @@ type queuedConversation struct {
 }
 
 // syncConversations indexes again queued conversations, newest first: userID's in workspaceID,
-// or everyone's if userID is 0, at most limit of them and for at most budget (0: no limit). A
+// or everyone's if userID is 0, at most limit of them (0: no limit) and for as long as ctx lasts. A
 // transcript the agent runtime can't give leaves its conversation queued and the sync goes on with
-// the others, since it may be that conversation's failure alone; after three in a row it is taken
-// for the agent runtime's (it isn't there, or it is starting) and the sync stops. The first error
-// is returned either way. leftOver is true if queued conversations of the scope remain that it
-// didn't index, which it left for the next sync.
-func (x *Index) syncConversations(ctx context.Context, src ConversationSource, userID, workspaceID int64, limit int, budget time.Duration) (leftOver bool, err error) {
-	if budget > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, budget)
-		defer cancel()
-	}
+// the others, since it may be that conversation's failure alone; if the agent runtime as a whole
+// isn't answering (conversations.ErrRuntimeDown: it is off, or starting) the sync stops. The first
+// error is returned either way, with how many transcripts were read, which a search takes from its
+// allowance. What it didn't get to stays queued for the next sync.
+func (x *Index) syncConversations(ctx context.Context, src ConversationSource, userID, workspaceID int64, limit int) (read int, err error) {
 	everyone := userID == 0
 	skip := []int64{}
-	// A transcript the agent runtime can't give is that conversation's own failure, or all of
-	// theirs: after this many in a row, it is taken for the agent runtime's, and the sync stops.
-	const runtimeDown = 3
 	var firstErr error
-	failures := 0
 	for done := 0; ; {
 		if limit > 0 && done >= limit {
-			return true, nil
+			return done, firstErr
 		}
 		skipJSON, err := json.Marshal(skip)
 		if err != nil {
-			return false, err
+			return done, err
 		}
 		batch, err := x.queuedConversations(ctx, everyone, userID, workspaceID, string(skipJSON))
 		if err != nil {
-			return false, err
+			return done, err
 		}
 		if len(batch) == 0 {
-			return firstErr != nil, firstErr
+			return done, firstErr
 		}
 		for _, qc := range batch {
 			if limit > 0 && done >= limit {
-				return true, nil
+				return done, firstErr
 			}
 			done++
 			// The transcript is read outside any transaction: the agent runtime may be slow.
 			text, err := src.Transcript(ctx, qc.agentID)
 			gone := errors.Is(err, conversations.ErrGone)
 			if err != nil && !gone {
-				if ctx.Err() != nil && budget > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					return true, nil // the time for it is up: the rest is for the next sync
+				if ctx.Err() != nil {
+					return done, firstErr // the time for it is up: the rest is for the next sync
 				}
-				// This conversation stays queued, and the others are read: it may be its own failure.
-				// Never the same one again in this sync.
+				// This conversation stays queued. If the agent runtime as a whole isn't answering the
+				// others wouldn't be either: stop. Otherwise it is this one's failure alone, and the
+				// others are read, but never this one again in this sync.
 				if firstErr == nil {
 					firstErr = err
 				}
-				if failures++; failures >= runtimeDown {
-					return true, firstErr
+				if errors.Is(err, conversations.ErrRuntimeDown) {
+					return done, firstErr
 				}
 				skip = append(skip, qc.id)
 				continue
 			}
-			failures = 0
 			if err := x.write(ctx, func(tx *sql.Tx) error { return indexConversation(ctx, tx, qc, text, gone) }); err != nil {
-				return true, err
+				return done, err
 			}
 		}
 		// A conversation marked while it was read is queued still: don't read it again in this
 		// sync. Those taken off the queue need no skipping, which keeps the list short.
 		still, err := x.stillQueued(ctx, batch)
 		if err != nil {
-			return false, err
+			return done, err
 		}
 		skip = append(skip, still...)
 	}

@@ -16,6 +16,11 @@ import (
 // it was never there, was retired, or its data was lost (see conversationError).
 var ErrGone = errors.New("the agent runtime doesn't have this conversation")
 
+// ErrRuntimeDown is joined to ErrNoTranscript when the agent runtime as a whole can't answer now:
+// it is off or starting, or there is no answer from it. Other ErrNoTranscript failures are that one
+// conversation's (the runtime refused to give its messages), and others may still be read.
+var ErrRuntimeDown = errors.New("the agent runtime isn't answering")
+
 // settleWait is how long a message's turn is waited for before the conversation is marked
 // updated anyway: a turn that runs longer is found by the next message's, or by a restart.
 const settleWait = time.Hour
@@ -27,14 +32,19 @@ const settleWait = time.Hour
 // reads it from the conversations table, next to the owner it looks for): nothing here checks
 // who owns it, so a caller passes only the IDs of conversations it has checked.
 //
-// It returns ErrNoTranscript if the agent runtime can't give it now (off, starting, no answer
-// within the time it is given), and ErrGone if the agent runtime doesn't have the conversation.
+// It returns ErrNoTranscript if the agent runtime can't give it now, which is also ErrRuntimeDown
+// if the agent runtime as a whole isn't answering (off, starting, no answer within the time it is
+// given) and not if it refused this conversation alone; and ErrGone if the agent runtime doesn't
+// have the conversation.
 func (s *Service) Transcript(ctx context.Context, agentID int64) (string, error) {
 	if s.agent == nil {
-		return "", fmt.Errorf("%w: the agent runtime is off", ErrNoTranscript)
+		return "", fmt.Errorf("%w: %w: the agent runtime is off", ErrNoTranscript, ErrRuntimeDown)
 	}
 	rt, err := s.exportRuntime(ctx)
 	if err != nil {
+		if errors.Is(err, ErrNoTranscript) {
+			err = fmt.Errorf("%w: %w", ErrRuntimeDown, err)
+		}
 		return "", err
 	}
 	callCtx, cancel := context.WithTimeout(ctx, s.exportTimeout)
@@ -45,10 +55,15 @@ func (s *Service) Transcript(ctx context.Context, agentID int64) (string, error)
 			return "", ctx.Err()
 		}
 		var se *agentrt.StatusError
-		if errors.As(err, &se) && se.Code == http.StatusNotFound {
+		switch {
+		case errors.As(err, &se) && se.Code == http.StatusNotFound:
 			return "", ErrGone
+		case errors.As(err, &se):
+			// The runtime answered, and refused this conversation's messages.
+			return "", fmt.Errorf("%w: %w", ErrNoTranscript, err)
 		}
-		return "", fmt.Errorf("%w: %w", ErrNoTranscript, err)
+		// No answer: it went away, or didn't answer in time.
+		return "", fmt.Errorf("%w: %w: %w", ErrNoTranscript, ErrRuntimeDown, err)
 	}
 	var b strings.Builder
 	for _, m := range msgs {

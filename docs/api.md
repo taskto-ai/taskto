@@ -1807,9 +1807,9 @@ of an app whose live release changes (a publish, a rollback), is queued in the s
 a search indexes the queued records of the apps it looks in before it answers, so it never
 quotes text older than the record. As for cards, a search that still finds some behind says
 `"incomplete": true`, leaves them out, and has no `next_offset`; only the records the caller
-may read can make it so, and so can a change of the caller's access while the search runs (a hit
-that the last access check takes out leaves no `next_offset`, since it would count what the caller
-read when the search began). An app that moves to another space is searched under the access to
+may read can make it so; so can a search that is over its allowance (2,000 records and 20 seconds in
+all, however often it looks again), and a change of the caller's own access while it runs makes it look
+again with the new access, so it never says anything of records the caller no longer reads. An app that moves to another space is searched under the access to
 the space it is in then, and who may read what is checked again, through the same checks, after the
 records are found.
 
@@ -1859,7 +1859,7 @@ The index follows the transcript, which the server doesn't see change as the age
 conversation is marked updated, and so queued, when it is created, renamed or archived, when a
 message is sent to it, and when the agent runtime has dealt with that message (the end of the
 agent's reply); a search first reads again the transcripts of the caller's queued conversations,
-newest first, up to 60 of them and for at most 20 seconds, and never quotes a conversation that is
+newest first, up to 60 transcripts and for at most 20 seconds in all (however often it looks again), and never quotes a conversation that is
 queued. One that can't be read (the agent runtime is off or still starting, or the search ran out of
 time) is left out and the reply says `"incomplete": true`, with no `next_offset`; a later search finds
 it. A conversation the agent runtime has lost leaves the index, and one that is removed takes its

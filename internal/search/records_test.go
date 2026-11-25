@@ -506,9 +506,9 @@ func TestArchivedAppsRecordsAreNotIndexed(t *testing.T) {
 	}
 }
 
-// A hit the last access check drops leaves no offset to continue from: it would count the records
-// the caller read when the search began.
-func TestRecordSearchSaysIncompleteWhenAHitIsDropped(t *testing.T) {
+// A caller who loses the space while the search runs finds nothing in it, and has no offset to
+// continue from: it would count the records they read when the search began.
+func TestRecordSearchHasNoOffsetAfterLosingTheSpace(t *testing.T) {
 	w := newWorld(t)
 	a := w.newApp(w.alice, w.team, "Team expenses", true)
 	w.addRecord(w.alice, w.team, a, "zanzibar one")
@@ -525,7 +525,7 @@ func TestRecordSearchSaysIncompleteWhenAHitIsDropped(t *testing.T) {
 	}
 	defer func() { w.e.idx.afterRecordSync = nil }()
 	res, err := w.e.idx.SearchRecords(ctx, w.e.spaces, w.bob.id, w.ws, spaces, Query{Text: "zanzibar", Limit: 1})
-	if err != nil || len(res.Results) != 0 || !res.Incomplete || res.NextOffset != nil {
+	if err != nil || len(res.Results) != 0 || res.NextOffset != nil {
 		t.Fatalf("after losing the space: %+v, %v", res, err)
 	}
 }
@@ -581,4 +581,42 @@ func TestRecordSearchSharesItsAllowanceAcrossAttempts(t *testing.T) {
 	if r := w.searchRecords(w.alice, nil, "zanzibar"); r.Incomplete || len(r.Results) != 6 {
 		t.Fatalf("next search = %+v", r)
 	}
+}
+
+// A change of the caller's own access while a search runs can't make "incomplete" say that records
+// they no longer read have changed: access is asked again after the page is found, and the search
+// looks again with the new.
+func TestRecordSearchLooksAgainWhenTheCallersAccessChanges(t *testing.T) {
+	w := newWorld(t)
+	w.addMember(w.team, w.mallory, access.RoleEditor)
+	a := w.newApp(w.alice, w.team, "Team expenses", true)
+	w.setAppRoles(w.alice, w.team, a, roleOf(w.alice, access.AppRoles...), roleOf(w.mallory, access.AppReader))
+	if _, err := w.e.db.Exec(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, ?, ?)`,
+		a.ID, `{"description":"zanzibar by mallory","amount":1}`, w.mallory.id); err != nil {
+		t.Fatal(err)
+	}
+	w.addRecord(w.alice, w.team, a, "zanzibar by alice")
+	wantRecords(t, "mallory, a reader", w.searchRecords(w.mallory, nil, "zanzibar"), "zanzibar by alice", "zanzibar by mallory")
+
+	// While mallory's search runs, her role becomes the user's (only her own records), and alice
+	// keeps adding records, which are queued each time the search looks.
+	n := 0
+	w.e.idx.afterRecordSync = func() {
+		n++
+		if n == 1 {
+			if _, err := w.e.db.Exec(`UPDATE app_roles SET role = 'user' WHERE app_id = ? AND user_id = ?`, a.ID, w.mallory.id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := w.e.db.Exec(`INSERT INTO app_rows (app_id, data, created_by) VALUES (?, ?, ?)`,
+			a.ID, fmt.Sprintf(`{"description":"zanzibar later %d","amount":1}`, n), w.alice.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { w.e.idx.afterRecordSync = nil }()
+	r := w.searchRecords(w.mallory, nil, "zanzibar")
+	if r.Incomplete {
+		t.Fatalf("her search says records she no longer reads are changing: %+v", r)
+	}
+	wantRecords(t, "mallory, now a user", r, "zanzibar by mallory")
 }

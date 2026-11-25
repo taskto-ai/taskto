@@ -37,15 +37,20 @@ func TestTranscriptIsWhatWasSaid(t *testing.T) {
 func TestTranscriptSaysWhyItIsNotThere(t *testing.T) {
 	// No agent runtime at all.
 	off := newEnv(t, true)
-	if _, err := off.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) {
+	if _, err := off.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) || !errors.Is(err, ErrRuntimeDown) {
 		t.Fatalf("with the agent runtime off: %v", err)
 	}
 
 	e := newEnv(t, false)
-	// The runtime fails: it can't say now.
+	// The runtime doesn't answer: it can't say now, for any conversation.
 	e.rt.err = errors.New("broken")
-	if _, err := e.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) || errors.Is(err, ErrGone) {
-		t.Fatalf("with a broken agent runtime: %v", err)
+	if _, err := e.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) || !errors.Is(err, ErrRuntimeDown) || errors.Is(err, ErrGone) {
+		t.Fatalf("with an agent runtime that doesn't answer: %v", err)
+	}
+	// It answers, and refuses this conversation: its own failure, not the runtime's.
+	e.rt.err = &agentrt.StatusError{Code: http.StatusInternalServerError, Status: "500", Message: "boom"}
+	if _, err := e.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) || errors.Is(err, ErrRuntimeDown) || errors.Is(err, ErrGone) {
+		t.Fatalf("with a refused conversation: %v", err)
 	}
 	// The runtime doesn't have the conversation: it is gone.
 	e.rt.err = &agentrt.StatusError{Code: http.StatusNotFound, Status: "404 Not Found", Message: "unknown conversation"}
@@ -55,7 +60,7 @@ func TestTranscriptSaysWhyItIsNotThere(t *testing.T) {
 	// Not ready: waited for, then ErrNoTranscript.
 	e.svc.agent = func(context.Context) (Runtime, error) { return nil, errors.New("starting") }
 	e.svc.readyWait = 10 * time.Millisecond
-	if _, err := e.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) {
+	if _, err := e.svc.Transcript(context.Background(), 1); !errors.Is(err, ErrNoTranscript) || !errors.Is(err, ErrRuntimeDown) {
 		t.Fatalf("with the agent runtime starting: %v", err)
 	}
 }

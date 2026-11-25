@@ -406,11 +406,11 @@ func TestAnOlderTranscriptReadNeverReplacesANewerOne(t *testing.T) {
 	held.during = func() {
 		src.set(agent, "new words about numbats")
 		w.mark(c)
-		if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0, 0); err != nil {
+		if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0); err != nil {
 			t.Error(err)
 		}
 	}
-	if _, err := w.e.idx.syncConversations(ctx, held, w.alice.id, w.ws, 0, 0); err != nil {
+	if _, err := w.e.idx.syncConversations(ctx, held, w.alice.id, w.ws, 0); err != nil {
 		t.Fatal(err)
 	}
 	wantConversations(t, "the newer text", w.searchConversations(w.alice, w.ws, "numbats"), "Trip")
@@ -453,7 +453,7 @@ func TestConversationMarksAreNeverReused(t *testing.T) {
 	seen := map[int64]bool{revision(): true}
 	for range 4 {
 		w.mark(c)
-		if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0, 0); err != nil {
+		if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0); err != nil {
 			t.Fatal(err)
 		}
 		n := revision()
@@ -476,10 +476,17 @@ func TestConversationSnippetIsOnlyOfWhatMatched(t *testing.T) {
 		t.Fatalf("a title-only match = %+v", r)
 	}
 	w.conversation(w.alice, w.ws, "Weather", "we talked about the quokka at length", src)
+	seen := false
 	for _, c := range w.searchConversations(w.alice, w.ws, "quokka").Results {
-		if c.Title == "Weather" && !anyMatch(c.Snippet) {
-			t.Fatalf("a body match = %+v", c)
+		if c.Title == "Weather" {
+			seen = true
+			if !anyMatch(c.Snippet) {
+				t.Fatalf("a body match = %+v", c)
+			}
 		}
+	}
+	if !seen {
+		t.Fatal("the conversation whose text matches was not found")
 	}
 }
 
@@ -499,7 +506,7 @@ func TestConversationIndexSkipsAConversationNoLongerQueued(t *testing.T) {
 	src := newFakeTranscripts()
 	w.e.idx.SetConversations(src)
 	c := w.conversation(w.alice, w.ws, "Trip", "words about quokkas", src)
-	if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0, 0); err != nil {
+	if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0); err != nil {
 		t.Fatal(err)
 	}
 	var revision int64
@@ -526,8 +533,8 @@ func TestConversationDrainSkipsOnlyWhatStaysQueued(t *testing.T) {
 	for i := range conversationBatch*3 + 5 {
 		w.conversation(w.alice, w.ws, fmt.Sprintf("Trip %d", i), "words", src)
 	}
-	if left, err := w.e.idx.syncConversations(ctx, src, 0, 0, 0, 0); err != nil || left {
-		t.Fatalf("the drain = %v, %v", left, err)
+	if n, err := w.e.idx.syncConversations(ctx, src, 0, 0, 0); err != nil || n != conversationBatch*3+5 {
+		t.Fatalf("the drain read %d, %v", n, err)
 	}
 	var queued int
 	if err := w.e.db.QueryRow(`SELECT count(*) FROM search_conversation_queue`).Scan(&queued); err != nil || queued != 0 {
@@ -542,7 +549,7 @@ func TestConversationDrainSkipsOnlyWhatStaysQueued(t *testing.T) {
 			w.mark(c)
 		}
 	}
-	if _, err := w.e.idx.syncConversations(ctx, src, 0, 0, 0, 0); err != nil {
+	if _, err := w.e.idx.syncConversations(ctx, src, 0, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	if reads := src.called() - before; reads != 1 {
@@ -561,7 +568,7 @@ func TestConversationSyncGoesOnPastOneFailure(t *testing.T) {
 	good2 := w.conversation(w.alice, w.ws, "Good two", "words about quokkas", src)
 	_ = []int64{good1, good2}
 	src.errOf = map[int64]error{w.agentID(bad): errors.New("this one's history can't be read")}
-	_, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0, 0)
+	_, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0)
 	if err == nil {
 		t.Fatal("the failure was not reported")
 	}
@@ -571,17 +578,64 @@ func TestConversationSyncGoesOnPastOneFailure(t *testing.T) {
 		t.Fatalf("the failed one is left out and the search says so: %+v", r)
 	}
 
-	// Three in a row are the agent runtime's: the sync stops, and doesn't read the rest.
+	// The agent runtime as a whole not answering stops the sync at the first: the others would not
+	// be answered either.
 	src.errOf = nil
-	src.err = errors.New("starting")
+	src.err = fmt.Errorf("%w: %w", conversations.ErrNoTranscript, conversations.ErrRuntimeDown)
 	for i := range 5 {
 		w.conversation(w.alice, w.ws, fmt.Sprintf("Later %d", i), "words", src)
 	}
 	before := src.called()
-	if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0, 0); err == nil {
+	if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0); !errors.Is(err, conversations.ErrRuntimeDown) {
+		t.Fatalf("error = %v", err)
+	}
+	if reads := src.called() - before; reads != 1 {
+		t.Fatalf("the sync read %d transcripts after the agent runtime went away, want 1", reads)
+	}
+
+	// Failures of each conversation alone don't stop it: all of them are tried, and left queued.
+	src.err = nil
+	src.errOf = map[int64]error{}
+	var later []int64
+	rows, err := w.e.db.Query(`SELECT agent_id FROM conversations WHERE title LIKE 'Later%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		later = append(later, id)
+	}
+	_ = rows.Close()
+	for _, id := range later {
+		src.errOf[id] = fmt.Errorf("%w: refused", conversations.ErrNoTranscript)
+	}
+	before = src.called()
+	if _, err := w.e.idx.syncConversations(ctx, src, w.alice.id, w.ws, 0); err == nil {
 		t.Fatal("no error")
 	}
-	if reads := src.called() - before; reads != 3 {
-		t.Fatalf("the sync read %d transcripts after the agent runtime went away, want 3", reads)
+	// Each of them, and the one that failed before, once.
+	if reads := src.called() - before; reads != len(later)+1 {
+		t.Fatalf("the sync read %d transcripts, want each of the %d that failed alone, once", reads, len(later)+1)
+	}
+}
+
+// One search has one allowance of transcripts to read, however many times it looks again.
+func TestConversationSearchSharesItsAllowanceAcrossAttempts(t *testing.T) {
+	w := newWorld(t)
+	src := newFakeTranscripts()
+	w.e.idx.SetConversations(src)
+	for i := range 6 {
+		w.conversation(w.alice, w.ws, fmt.Sprintf("Trip %d", i), "words about quokkas", src)
+	}
+	w.e.idx.conversationSyncLimit = 4
+	r := w.searchConversations(w.alice, w.ws, "quokkas")
+	if !r.Incomplete || len(r.Results) != 4 {
+		t.Fatalf("reply %+v: want 4 found, incomplete (two attempts of four would have read six)", r)
+	}
+	if r := w.searchConversations(w.alice, w.ws, "quokkas"); r.Incomplete || len(r.Results) != 6 {
+		t.Fatalf("next search = %+v", r)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"taskto.ai/taskto/internal/access"
@@ -167,19 +168,26 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 	if reach.none() {
 		return res, nil
 	}
-	allJSON, err := json.Marshal(reach.all)
+	// What the caller reads, as the statements ask for it: the apps of each kind, and the sync's.
+	scopeOf := func(r recordReach) (scope recordScope, appsJSON string, err error) {
+		all, err := json.Marshal(r.all)
+		if err != nil {
+			return scope, "", err
+		}
+		own, err := json.Marshal(r.own)
+		if err != nil {
+			return scope, "", err
+		}
+		both, err := json.Marshal(r.ids())
+		if err != nil {
+			return scope, "", err
+		}
+		return recordScope{spaces: string(spacesJSON), all: string(all), own: string(own), user: userID}, string(both), nil
+	}
+	scope, appsJSON, err := scopeOf(reach)
 	if err != nil {
 		return RecordResults{}, err
 	}
-	ownJSON, err := json.Marshal(reach.own)
-	if err != nil {
-		return RecordResults{}, err
-	}
-	appsJSON, err := json.Marshal(reach.ids())
-	if err != nil {
-		return RecordResults{}, err
-	}
-	scope := recordScope{spaces: string(spacesJSON), all: string(allJSON), own: string(ownJSON), user: userID}
 	var found []RecordResult
 	// One allowance of records and one deadline for all the search's attempts: what is left when
 	// they are used stays queued for the background sync, and the search says it is incomplete.
@@ -188,7 +196,7 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 	defer stopSync()
 	for try := 1; ; try++ {
 		if allowance > 0 && syncCtx.Err() == nil {
-			n, err := x.syncRecordsWithin(syncCtx, string(appsJSON), allowance)
+			n, err := x.syncRecordsWithin(syncCtx, appsJSON, allowance)
 			allowance -= n
 			switch {
 			case ctx.Err() != nil:
@@ -206,6 +214,27 @@ func (x *Index) SearchRecords(ctx context.Context, checker *access.Checker, user
 		var behind bool
 		if found, behind, err = x.findRecords(ctx, scope, match, q); err != nil {
 			return RecordResults{}, err
+		}
+		// What the caller reads is asked again: if it changed while the search ran, what was found,
+		// and whether records were behind, are of the old access, and the flag could say that a
+		// record the caller no longer reads has changed. Look again with the new.
+		now, err := x.reachOf(ctx, checker, userID, string(spacesJSON))
+		if err != nil {
+			return RecordResults{}, err
+		}
+		if !slices.Equal(now.all, reach.all) || !slices.Equal(now.own, reach.own) {
+			reach = now
+			if reach.none() {
+				return res, nil
+			}
+			if scope, appsJSON, err = scopeOf(reach); err != nil {
+				return RecordResults{}, err
+			}
+			if try == recordSyncTries {
+				res.Incomplete = true
+				break
+			}
+			continue
 		}
 		if !behind {
 			break
