@@ -133,8 +133,14 @@ test('the Apps page starts from a template, listing each with what it needs', as
   render(<Routed />)
   fireEvent.click(await screen.findByRole('link', { name: 'Start from a template' }))
   await screen.findByRole('heading', { name: 'Start from a template', level: 1 })
-  const cards = await screen.findAllByRole('heading', { level: 2 })
-  expect(cards.map((c) => c.textContent)).toEqual(['Equipment checkout', 'Expense tracker', 'Inspection'])
+  // A list of choices, each with one way in: no primary button competes on the page.
+  const ways = await screen.findAllByRole('button', { name: /^Use the template/ })
+  expect(ways.map((b) => b.getAttribute('aria-label'))).toEqual([
+    'Use the template Equipment checkout',
+    'Use the template Expense tracker',
+    'Use the template Inspection',
+  ])
+  expect(ways.every((b) => !b.className.includes('ui-button-primary'))).toBe(true)
   const inspection = screen.getByRole('button', { name: 'Use the template Inspection' }).closest('li') as HTMLElement
   expect(within(inspection).getByText(/Needs a board of yours/)).toBeTruthy()
   expect(within(inspection).getByText('Uses your phone for: your position, a signature pad.')).toBeTruthy()
@@ -163,7 +169,7 @@ test('installs into the private space by default and opens the draft with its au
   window.history.replaceState(null, '', '/w/1/apps/templates')
   render(<Routed />)
   fireEvent.click(await screen.findByRole('button', { name: 'Use the template Expense tracker' }))
-  const form = (await screen.findByRole('button', { name: 'Install as a draft' })).closest('form') as HTMLFormElement
+  const form = await screen.findByRole('dialog', { name: 'Use the template Expense tracker' })
   // Private is the default; a shared space is a choice, and a template without a board asks for none.
   expect((within(form).getByLabelText('In my private space') as HTMLInputElement).checked).toBe(true)
   expect(within(form).queryByLabelText('Board for the cards it makes')).toBeNull()
@@ -235,8 +241,8 @@ test('a template that makes cards needs a board the person may write: only those
   window.history.replaceState(null, '', '/w/1/apps/templates')
   render(<Routed />)
   fireEvent.click(await screen.findByRole('button', { name: 'Use the template Inspection' }))
-  const install = (await screen.findByRole('button', { name: 'Install as a draft' })) as HTMLButtonElement
-  const form = install.closest('form') as HTMLFormElement
+  const form = await screen.findByRole('dialog', { name: 'Use the template Inspection' })
+  const install = within(form).getByRole('button', { name: 'Install as a draft' }) as HTMLButtonElement
   const board = (await within(form).findByLabelText('Board for the cards it makes')) as HTMLSelectElement
   await waitFor(() => expect(board.options.length).toBe(3))
   expect([...board.options].map((o) => o.textContent)).toEqual([
@@ -287,7 +293,7 @@ test('a shared space is chosen explicitly, and says which roles the install give
   window.history.replaceState(null, '', '/w/1/apps/templates')
   render(<Routed />)
   fireEvent.click(await screen.findByRole('button', { name: 'Use the template Equipment checkout' }))
-  const form = (await screen.findByRole('button', { name: 'Install as a draft' })).closest('form') as HTMLFormElement
+  const form = await screen.findByRole('dialog', { name: 'Use the template Equipment checkout' })
   // Private is still the default, with a note that this one is made for a team.
   expect((within(form).getByLabelText('In my private space') as HTMLInputElement).checked).toBe(true)
   expect(within(form).getByText(/made for a team in a shared space/)).toBeTruthy()
@@ -362,8 +368,9 @@ test('duplicating an app copies the definition into a space the person picks, pr
   })
   render(<Routed />)
   const team = await screen.findByRole('region', { name: 'Team' })
-  fireEvent.click(await within(team).findByRole('button', { name: 'Duplicate Expenses as a template' }))
-  const form = await within(team).findByRole('form', { name: 'Duplicate Expenses' })
+  fireEvent.click(await within(team).findByRole('button', { name: 'More actions for Expenses' }))
+  fireEvent.click(within(team).getByRole('menuitem', { name: 'Duplicate as template' }))
+  const form = await screen.findByRole('dialog', { name: 'Duplicate Expenses' })
   expect(within(form).getByText(/no records, photos, history or roles come with it/)).toBeTruthy()
   expect((within(form).getByLabelText('Name') as HTMLInputElement).value).toBe('Copy of Expenses')
   // The read-only space isn't a place to put it.
@@ -382,17 +389,18 @@ test('the templates are in Portuguese too', async () => {
   fakeFetch({ ...base, 'GET /api/workspaces/1/spaces/2/apps?archived=true': { body: { apps: [] } } })
   window.history.replaceState(null, '', '/w/1/apps/templates')
   render(<Routed />)
-  expect(await screen.findByRole('heading', { name: 'Controle de despesas', level: 2 })).toBeTruthy()
-  expect(screen.getByRole('heading', { name: 'Retirada de equipamentos', level: 2 })).toBeTruthy()
-  expect(screen.getByRole('heading', { name: 'Inspeção', level: 2 })).toBeTruthy()
+  expect(await screen.findByText('Controle de despesas')).toBeTruthy()
+  expect(screen.getByText('Retirada de equipamentos')).toBeTruthy()
+  expect(screen.getByText('Inspeção')).toBeTruthy()
 })
 
-test('the template screens use logical properties and fit a phone', () => {
-  const css = readFileSync(join(process.cwd(), 'src/styles.css'), 'utf8')
-  const block = css.slice(css.indexOf('/* Templates:'))
-  // One column at 360px: a card is never wider than the screen, whatever the minimum says.
-  expect(block).toContain('minmax(min(100%, 18rem), 1fr)')
-  expect(block).not.toMatch(
-    /(margin|padding)-(left|right)|\b(left|right):|text-align: (left|right)|border-(left|right)|\bwidth:|max-width:/,
+test('the apps screens lay out with logical properties, in the screens layer', () => {
+  const css = readFileSync(join(process.cwd(), 'src/apps/Apps.css'), 'utf8')
+  const code = css.replace(/\/\*[\s\S]*?\*\//g, '')
+  // Everything is inside one @layer screens block, so the components' rules come first.
+  expect(code.trim().startsWith('@layer screens {')).toBe(true)
+  expect(code.match(/@layer/g)).toHaveLength(1)
+  expect(code).not.toMatch(
+    /(margin|padding)-(left|right)|\b(left|right):|text-align: (left|right)|border-(left|right)|\bwidth:|max-width:|\bheight:/,
   )
 })

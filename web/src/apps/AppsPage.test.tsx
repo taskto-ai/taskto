@@ -60,6 +60,23 @@ function Routed() {
 }
 
 beforeEach(() => window.history.replaceState(null, '', '/w/1/apps'))
+
+// The items of an app's "more" menu, which is closed again after.
+async function menuItems(region: HTMLElement, name: string): Promise<string[]> {
+  const button = await within(region).findByRole('button', { name: `More actions for ${name}` })
+  fireEvent.click(button)
+  const items = within(region)
+    .getAllByRole('menuitem')
+    .map((i) => i.textContent ?? '')
+  fireEvent.click(button)
+  return items
+}
+
+// Chooses one item of an app's "more" menu.
+async function choose(region: HTMLElement, name: string, item: string) {
+  fireEvent.click(await within(region).findByRole('button', { name: `More actions for ${name}` }))
+  fireEvent.click(within(region).getByRole('menuitem', { name: item }))
+}
 afterEach(() => {
   cleanup()
   forgetOperations()
@@ -92,27 +109,43 @@ test("lists every space's apps, and changes only the ones the user may", async (
   const team = screen.getByRole('region', { name: 'Team' })
   await within(team).findByText('Team tracker')
   expect(within(team).getByText(/read-only/)).toBeTruthy()
-  expect(within(team).getByText('3 rows')).toBeTruthy()
-  // A viewer launches the team's app, and has nothing to change it with.
-  expect(within(team).getByRole('link', { name: 'Launch Team tracker' })).toBeTruthy()
-  expect(within(team).queryByRole('button', { name: 'Rename' })).toBeNull()
-  expect(within(team).queryByRole('button', { name: /Take offline/ })).toBeNull()
+  expect(within(team).getByText(/^3 rows · published/)).toBeTruthy()
+  // A viewer opens the team's app, and has nothing to change it with: only a copy of their own.
+  expect(within(team).getByRole('link', { name: 'Open Team tracker' })).toBeTruthy()
+  expect(within(team).queryByRole('link', { name: /with AI/ })).toBeNull()
+  expect(await menuItems(team, 'Team tracker')).toEqual(['Duplicate as template'])
 
-  // Rename.
+  // Each app's state is a badge, and its other actions are in its menu.
   await within(mine).findByText('Expenses')
-  fireEvent.click(within(mine).getByRole('button', { name: 'Rename' }))
-  fireEvent.change(within(mine).getByLabelText('Name'), { target: { value: 'Spending' } })
-  fireEvent.click(within(mine).getByRole('button', { name: 'Save' }))
+  expect(within(mine).getByText('Live · release 1')).toBeTruthy()
+  expect(await menuItems(mine, 'Expenses')).toEqual(['History', 'Rename', 'Duplicate as template', 'Take offline'])
+
+  // Rename, in a dialog.
+  await choose(mine, 'Expenses', 'Rename')
+  const rename = await screen.findByRole('dialog', { name: 'Rename Expenses' })
+  fireEvent.change(within(rename).getByLabelText('Name'), { target: { value: 'Spending' } })
+  fireEvent.click(within(rename).getByRole('button', { name: 'Save' }))
   await within(mine).findByText('Spending')
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ version: 1, name: 'Spending' })
 
-  // Offline: no launching it, its rows are still counted; then restored.
-  fireEvent.click(within(mine).getByRole('button', { name: 'Take offline Spending' }))
+  // Taking it offline asks first: cancelled, nothing changes.
+  await choose(mine, 'Spending', 'Take offline')
+  let ask = await screen.findByRole('alertdialog', { name: 'Take Spending offline?' })
+  fireEvent.click(within(ask).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1)
+
+  // Offline: no opening it, its rows are still counted; then restored.
+  await choose(mine, 'Spending', 'Take offline')
+  ask = await screen.findByRole('alertdialog', { name: 'Take Spending offline?' })
+  fireEvent.click(within(ask).getByRole('button', { name: 'Take offline' }))
   const restore = await within(mine).findByRole('button', { name: 'Restore Spending' })
-  expect(within(mine).queryByRole('link', { name: 'Launch Spending' })).toBeNull()
-  expect(within(mine).getByText('1 row · offline')).toBeTruthy()
+  expect(within(mine).queryByRole('link', { name: 'Open Spending' })).toBeNull()
+  expect(within(mine).getByText('Offline')).toBeTruthy()
+  expect(within(mine).getByText(/^1 row/)).toBeTruthy()
   fireEvent.click(restore)
-  await within(mine).findByRole('link', { name: 'Launch Spending' })
+  await within(mine).findByRole('link', { name: 'Open Spending' })
   expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([
     { version: 1, name: 'Spending' },
     { version: 2, archived: true },
@@ -143,7 +176,9 @@ test('an app is shared by moving it to a space the user may write, with its rows
   render(<Routed />)
 
   const private_ = await screen.findByRole('region', { name: 'Private' })
-  const select = await within(private_).findByRole('combobox', { name: 'Move Expenses to' })
+  await choose(private_, 'Expenses', 'Move to a space…')
+  const dialog = await screen.findByRole('dialog', { name: 'Move Expenses to a space' })
+  const select = within(dialog).getByRole('combobox', { name: 'Move Expenses to' })
   // Only the spaces the user may write are offered: not this one, not the team space they view.
   expect(
     within(select)
@@ -151,11 +186,14 @@ test('an app is shared by moving it to a space the user may write, with its rows
       .map((o) => o.textContent),
   ).toEqual(['Move to…', 'Crew'])
   fireEvent.change(select, { target: { value: '4' } })
-  fireEvent.click(within(private_).getByRole('button', { name: 'Move' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
 
   const crewRegion = screen.getByRole('region', { name: 'Crew' })
   await within(crewRegion).findByText('Expenses')
-  await within(private_).findByText('No apps here yet.')
+  // A space left with no apps says what they are for, and how to start one.
+  await within(private_).findByText('No apps in Private yet')
+  expect(within(private_).getByRole('link', { name: 'Build an app' })).toBeTruthy()
+  expect(within(private_).getByRole('link', { name: 'Start from a template' })).toBeTruthy()
   expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ version: 1, space_id: 4 })
 })
 
@@ -168,7 +206,7 @@ test('launching an app draws it with its data', async () => {
     'GET /api/workspaces/1/spaces/2/apps/1/surface?release=1': { body: surface },
   })
   render(<Routed />)
-  fireEvent.click(await screen.findByRole('link', { name: 'Launch Expenses' }))
+  fireEvent.click(await screen.findByRole('link', { name: 'Open Expenses' }))
   expect(window.location.pathname).toBe('/w/1/apps/2-1')
   await screen.findByRole('heading', { name: 'Expenses' })
   await screen.findByText('Coffee')
@@ -221,11 +259,10 @@ test("an app user can launch it but isn't offered what only builders and publish
   })
   render(<Routed />)
   const crew = await screen.findByRole('region', { name: 'Crew' })
-  await within(crew).findByRole('link', { name: 'Launch Expenses' })
-  expect(within(crew).queryByRole('button', { name: 'Rename' })).toBeNull()
-  expect(within(crew).queryByRole('button', { name: /Take offline/ })).toBeNull()
-  expect(within(crew).queryByRole('button', { name: /Roles of/ })).toBeNull()
-  expect(within(crew).queryByRole('combobox')).toBeNull()
+  await within(crew).findByRole('link', { name: 'Open Expenses' })
+  expect(within(crew).queryByRole('link', { name: /with AI/ })).toBeNull()
+  // A copy of their own is all the menu has: no rename, roles, move or taking it offline.
+  expect(await menuItems(crew, 'Expenses')).toEqual(['Duplicate as template'])
 })
 
 test('a builder sets the roles of members of a shared space', async () => {
@@ -247,12 +284,20 @@ test('a builder sets the roles of members of a shared space', async () => {
   })
   render(<Routed />)
   const crew = await screen.findByRole('region', { name: 'Crew' })
-  fireEvent.click(await within(crew).findByRole('button', { name: 'Roles of Expenses' }))
-  const reader = await within(crew).findByRole('checkbox', { name: 'Reader: Everyone else' })
+  await choose(crew, 'Expenses', 'Roles')
+  const dialog = await screen.findByRole('dialog', { name: 'Roles of Expenses' })
+  // A table of people against roles.
+  const table = await within(dialog).findByRole('table', { name: 'Roles of each member in this app' })
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent),
+  ).toEqual(['Member', 'Builder', 'Publisher', 'User', 'Data manager', 'Reader'])
+  const reader = within(table).getByRole('checkbox', { name: 'Reader: Everyone else' })
   expect((reader as HTMLInputElement).checked).toBe(true)
-  fireEvent.click(within(crew).getByRole('checkbox', { name: 'User: Ann' }))
-  fireEvent.click(within(crew).getByRole('button', { name: 'Save' }))
-  await within(crew).findByText('Saved.')
+  fireEvent.click(within(table).getByRole('checkbox', { name: 'User: Ann' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await within(dialog).findByText('Saved.')
   expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({
     grants: [
       { user_id: null, roles: ['reader'] },
@@ -329,26 +374,28 @@ test('shows what is live and what is only a draft, and offers Publish only to th
   await within(crew).findByText('Publishable')
   const row = (name: string) => within(crew).getByText(name).closest('li') as HTMLElement
 
+  const items = (name: string) => menuItems(row(name), name)
+
   // Live release 2, with changes that aren't published: the publisher can publish them.
   expect(within(row('Publishable')).getByText('Live · release 2')).toBeTruthy()
   expect(within(row('Publishable')).getByText('Unpublished changes')).toBeTruthy()
-  expect(within(row('Publishable')).getByRole('button', { name: 'Publish Publishable' })).toBeTruthy()
+  expect(await items('Publishable')).toContain('Publish…')
   // A builder sees the draft differs, and has no Publish.
   expect(within(row('Builders')).getByText('Unpublished changes')).toBeTruthy()
-  expect(within(row('Builders')).queryByRole('button', { name: /^Publish/ })).toBeNull()
+  expect(await items('Builders')).not.toContain('Publish…')
   // A user is told nothing of drafts, and has nothing to publish or review.
   expect(within(row('Users')).getByText('Live · release 1')).toBeTruthy()
   expect(within(row('Users')).queryByText('Unpublished changes')).toBeNull()
-  expect(within(row('Users')).queryByRole('button', { name: /^Publish|Release history/ })).toBeNull()
-  // An app never published: no Launch, a preview of the draft for those who may review it.
+  expect(await items('Users')).toEqual(['Duplicate as template'])
+  // An app never published: no Open, a preview of the draft for those who may review it.
   expect(within(row('Fresh')).getByText('Not published')).toBeTruthy()
-  expect(within(row('Fresh')).queryByRole('link', { name: /^Launch/ })).toBeNull()
+  expect(within(row('Fresh')).queryByRole('link', { name: /^Open/ })).toBeNull()
   expect(within(row('Fresh')).getByRole('link', { name: 'Preview the draft of Fresh' })).toBeTruthy()
-  expect(within(row('Fresh')).getByRole('button', { name: 'Publish Fresh' })).toBeTruthy()
-  expect(within(row('Only builders see it')).queryByRole('button', { name: /^Publish/ })).toBeNull()
+  expect(await items('Fresh')).toContain('Publish…')
+  expect(await items('Only builders see it')).not.toContain('Publish…')
   expect(within(row('Hidden draft')).queryByRole('link')).toBeNull()
   // Nothing to publish: no Publish.
-  expect(within(row('Tidy')).queryByRole('button', { name: /^Publish/ })).toBeNull()
+  expect(await items('Tidy')).not.toContain('Publish…')
 })
 
 // The app as a single read tells it to a publisher: with its draft and where its effects go.
@@ -388,17 +435,18 @@ test('publishing shows what the draft does first, asks to acknowledge the schema
   })
   render(<Routed />)
   const crew = await screen.findByRole('region', { name: 'Crew' })
-  fireEvent.click(await within(crew).findByRole('button', { name: 'Publish Expenses' }))
+  await choose(crew, 'Expenses', 'Publish…')
+  const dialog = await screen.findByRole('dialog', { name: 'Publish Expenses' })
 
   // The draft's effects are said before anything can be published, which hasn't been asked yet.
-  await within(crew).findByText('Creates a card on Maintenance (Field team).')
+  await within(dialog).findByText('Creates a card on Maintenance (Field team).')
   expect(calls.some((c) => c.method === 'POST')).toBe(false)
-  fireEvent.click(within(crew).getByRole('button', { name: 'Review and publish…' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Review and publish…' }))
   expect(calls.some((c) => c.method === 'POST')).toBe(false)
-  fireEvent.click(within(crew).getByRole('button', { name: 'Publish for Crew' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Publish for Crew' }))
 
   // Nothing is published yet: the changes are listed, and the person has to say they understand.
-  const panel = await within(crew).findByRole('group', { name: 'This publish may change how your app treats its data' })
+  const panel = await screen.findByRole('dialog', { name: 'This publish may change how your app treats its data' })
   expect(within(panel).getByText(/“notes” is removed/)).toBeTruthy()
   const go = within(panel).getByRole('button', { name: 'Publish with these changes' }) as HTMLButtonElement
   expect(go.disabled).toBe(true)
@@ -406,7 +454,10 @@ test('publishing shows what the draft does first, asks to acknowledge the schema
   expect(go.disabled).toBe(false)
   fireEvent.click(go)
 
-  await waitFor(() => expect(within(crew).queryByRole('group')).toBeNull())
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: 'This publish may change how your app treats its data' })).toBeNull(),
+  )
+  await within(dialog).findByText(/Published as release 2/)
   expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([
     { version: 5, acknowledge: [] },
     { version: 5, acknowledge: changes },
@@ -432,19 +483,31 @@ test('the release history rolls back, and says why a release is refused', async 
   })
   render(<Routed />)
   const crew = await screen.findByRole('region', { name: 'Crew' })
-  fireEvent.click(await within(crew).findByRole('button', { name: 'Release history of Expenses' }))
-  await within(crew).findByText('Release 3')
+  await choose(crew, 'Expenses', 'History')
+  const dialog = await screen.findByRole('dialog', { name: 'Release history of Expenses' })
+  await within(dialog).findByText('Release 3')
   expect(within(crew).getByText('Live')).toBeTruthy()
   expect(within(crew).getAllByText(/Published by Ann/)).toHaveLength(2)
   expect(within(crew).getByText(/^Published Nov/)).toBeTruthy() // release 2 has no publisher: its account is gone
   // The live release has nothing to roll back to.
   expect(within(crew).getAllByRole('button', { name: /^Roll back to release/ })).toHaveLength(2)
 
+  // Rolling back asks first: cancelled, nothing is sent.
   fireEvent.click(within(crew).getByRole('button', { name: 'Roll back to release 2' }))
+  let ask = await screen.findByRole('alertdialog', { name: 'Roll back to release 2' })
+  fireEvent.click(within(ask).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(calls.some((c) => c.method === 'POST')).toBe(false)
+
+  fireEvent.click(within(crew).getByRole('button', { name: 'Roll back to release 2' }))
+  ask = await screen.findByRole('alertdialog', { name: 'Roll back to release 2' })
+  fireEvent.click(within(ask).getByRole('button', { name: 'Roll back' }))
   expect((await within(crew).findByRole('alert')).textContent).toBe(
     'The app’s data doesn’t fit that release, so it can’t go back to it. Fields that don’t fit: amount.',
   )
   fireEvent.click(within(crew).getByRole('button', { name: 'Roll back to release 1' }))
+  ask = await screen.findByRole('alertdialog', { name: 'Roll back to release 1' })
+  fireEvent.click(within(ask).getByRole('button', { name: 'Roll back' }))
   await waitFor(() => expect(calls.filter((c) => c.method === 'POST')).toHaveLength(2))
   expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([
     { version: 7, release: 2 },
@@ -464,7 +527,8 @@ test('a publisher without the right to design can roll back, and a builder can r
   })
   render(<Routed />)
   const crew = await screen.findByRole('region', { name: 'Crew' })
-  fireEvent.click(await within(crew).findByRole('button', { name: 'Release history of Expenses' }))
+  await choose(crew, 'Expenses', 'History')
+  await screen.findByRole('dialog', { name: 'Release history of Expenses' })
   await within(crew).findByText('Release 2')
   expect(within(crew).queryByRole('button', { name: /^Roll back/ })).toBeNull()
 })
