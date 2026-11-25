@@ -1394,3 +1394,70 @@ test("a card opened from its address is brought into view once the board's cards
     Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
   }
 })
+
+test("a link to a board that is gone still offers the space's one board in the switcher", async () => {
+  server('write')
+  render(<BoardsPage workspace={1} open="3:55:1" />)
+  await screen.findByText(/archived or no longer available/)
+  await choose(document.body, 'Switch board', 'Launch')
+  await screen.findByRole('heading', { level: 1, name: 'Launch' })
+})
+
+test("a card added in one column doesn't close the form opened meanwhile in another", async () => {
+  const { sent } = server('write')
+  const answered = globalThis.fetch
+  let release = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === C && init?.method === 'POST') await held
+    return answered(input, init)
+  })
+  render(<BoardsPage workspace={1} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Add a card to Review' }))
+  const first = screen.getByRole('form', { name: 'New card in Review' })
+  fireEvent.change(within(first).getByLabelText('Title'), { target: { value: 'Proofread' } })
+  fireEvent.click(within(first).getByRole('button', { name: 'Add' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Add a card to Done' }))
+  const second = screen.getByRole('form', { name: 'New card in Done' })
+  fireEvent.change(within(second).getByLabelText('Title'), { target: { value: 'Half typed' } })
+  await act(async () => release())
+  await waitFor(() => expect(sent('POST', C)).toHaveLength(1))
+  await screen.findByRole('region', { name: 'Proofread' })
+  const kept = screen.getByRole('form', { name: 'New card in Done' })
+  expect((within(kept).getByLabelText('Title') as HTMLInputElement).value).toBe('Half typed')
+})
+
+test("a card with only labels is named by its title, not by its labels and who it's for", async () => {
+  server('read', (cards) => {
+    cards[1].labels = ['design']
+    cards[1].assignee = { kind: 'user', id: 5, name: 'Bo' }
+  })
+  render(<BoardsPage workspace={1} />)
+  await screen.findByRole('region', { name: 'To do' })
+  expect(screen.getByRole('button', { name: 'Get approval' })).toBeTruthy()
+})
+
+test('a slow comment leaves the focus where the person went meanwhile', async () => {
+  const { sent } = server('write')
+  const answered = globalThis.fetch
+  let release = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith('/comments') && init?.method === 'POST') await held
+    return answered(input, init)
+  })
+  render(<BoardsPage workspace={1} />)
+  const view = await openCard('Write the post')
+  fireEvent.change(await within(view).findByLabelText('Comment'), { target: { value: 'On my way' } })
+  press(within(view).getByRole('button', { name: 'Comment' }))
+  const path = within(view).getByLabelText('Document path')
+  path.focus()
+  await act(async () => release())
+  await waitFor(() => expect(sent('POST', `${C}/1/comments`)).toHaveLength(1))
+  await within(view).findByText('On my way')
+  expect(document.activeElement).toBe(path)
+})

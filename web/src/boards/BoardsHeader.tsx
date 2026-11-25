@@ -64,7 +64,8 @@ export function BoardsHeader({
       title={board?.name ?? t('shell.sections.boards')}
       titleAction={
         boards &&
-        boards.length > 1 && (
+        // Several boards, or one that isn't the one shown (a link named a board that is gone).
+        (boards.length > 1 || (boards.length > 0 && !board)) && (
           <Menu align="start">
             <MenuButton label={t('boards.switchBoard')} icon="chevron-updown" />
             <MenuList>

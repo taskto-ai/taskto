@@ -58,7 +58,7 @@ export function BoardCard({
     ...(c.blocked ? [t('boards.nameBlocked')] : []),
     ...(due && c.due ? [dueName(t, due, c.due, today, f)] : []),
   ]
-  const name = details.length > 0 ? t('boards.cardName', { title: c.title, details: f.list(details) }) : undefined
+  const name = details.length > 0 ? t('boards.cardName', { title: c.title, details: f.list(details) }) : c.title
   return (
     <li
       className="ui-board-card"

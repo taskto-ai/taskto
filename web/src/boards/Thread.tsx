@@ -62,6 +62,7 @@ export function Composer({
   const [error, setError] = useState<string | null>(null)
   const t = useT()
   const field = useRef<HTMLTextAreaElement>(null)
+  const form = useRef<HTMLFormElement>(null)
   useDraft(body.trim() !== '')
   // Puts the person's mention where the cursor is, and the cursor after it.
   const mention = (who: Person) => {
@@ -85,8 +86,9 @@ export function Composer({
       onAdded(await api<Comment>(url, { method: 'POST', body: { body } }))
       setBody('')
       // Sent, the button can't be pressed again (the box is empty): the focus goes back to the box
-      // for the next comment, rather than to the page.
-      field.current?.focus()
+      // for the next comment, rather than to the page; unless the person went on elsewhere.
+      const now = document.activeElement
+      if (!now || now === document.body || form.current?.contains(now)) field.current?.focus()
     } catch (err) {
       setError(errorText(err))
     } finally {
@@ -94,7 +96,7 @@ export function Composer({
     }
   }
   return (
-    <form className="ui-board-composer" aria-label={t('boards.newComment')} onSubmit={submit}>
+    <form ref={form} className="ui-board-composer" aria-label={t('boards.newComment')} onSubmit={submit}>
       <Textarea
         ref={field}
         aria-label={t('boards.commentField')}

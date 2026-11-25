@@ -185,7 +185,8 @@ export function BoardView({
             onAdding={(on) => setAdding(on ? col.id : null)}
             onOpen={show}
             onAdded={(c) => {
-              setAdding(null)
+              // Only this column's form: another opened while this card was on its way stays.
+              setAdding((now) => (now === col.id ? null : now))
               cards.reload()
               void show(c.id)
             }}
