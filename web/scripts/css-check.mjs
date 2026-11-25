@@ -1090,6 +1090,20 @@ export function check(web) {
 // count, nor does a name that is only the start of a longer one. Only the old classes are held to
 // it: a component's `ui-` class can be built from pieces (`ui-button-${variant}`), which a search
 // for the name doesn't see.
+// The text of an HTML page outside its comments (`<!-- … -->`); an unclosed one runs to the end.
+function outsideHtmlComments(html) {
+  let out = ''
+  let at = 0
+  for (;;) {
+    const open = html.indexOf('<!--', at)
+    if (open < 0) return out + html.slice(at)
+    out += html.slice(at, open)
+    const close = html.indexOf('-->', open + 4)
+    if (close < 0) return out
+    at = close + 3
+  }
+}
+
 export function unusedClassErrors(web) {
   const src = join(web, 'src')
   const code = components(src)
@@ -1097,7 +1111,7 @@ export function unusedClassErrors(web) {
     .map((f) => blankComments(readFileSync(f, 'utf8')))
   // The page's own markup, its comments left out as a module's are.
   const html = join(web, 'index.html')
-  if (existsSync(html)) code.push(readFileSync(html, 'utf8').replace(/<!--[\s\S]*?-->/g, ''))
+  if (existsSync(html)) code.push(outsideHtmlComments(readFileSync(html, 'utf8')))
   const used = new Set(
     code.flatMap((c) => [...c.matchAll(/(?<![\w-])tt-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g)].map((m) => m[0])),
   )
