@@ -2029,6 +2029,26 @@
       "failed": "The boards’ cards could not be searched: {error}",
       "incomplete": "Some cards changed just now and are not in these results. Search again in a moment."
     },
+    "records": {
+      "title": "Records",
+      "label": "Records found",
+      "in": "{space} · {app}",
+      "more": "More records",
+      "searching": "Searching the apps’ records…",
+      "failed": "The apps’ records could not be searched: {error}",
+      "incomplete": "Some records changed just now and are not in these results. Search again in a moment."
+    },
+    "conversations": {
+      "title": "Conversations",
+      "label": "Conversations found",
+      "untitled": "Untitled conversation",
+      "updated": "Updated {when}",
+      "archivedAt": "Archived · updated {when}",
+      "more": "More conversations",
+      "searching": "Searching your conversations…",
+      "failed": "Your conversations could not be searched: {error}",
+      "incomplete": "Some conversations changed just now, or the agent could not be reached, so they are not in these results. Search again in a moment."
+    },
     "notice": {
       "embeddings_off": "Semantic search is off: no embeddings model is set for this workspace. These are full-text results.",
       "embeddings_failed": "The embeddings model didn't answer, so these are full-text results only.",
